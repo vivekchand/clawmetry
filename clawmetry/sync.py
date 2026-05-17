@@ -7918,6 +7918,51 @@ def run_daemon() -> None:
     except Exception as _e:
         log.warning(f"approvals watcher failed to start: {_e}")
 
+    # ── Decision-sampling cron (issue #1615) ──────────────────────────
+    # Daily-at-midnight thread that picks N random sessions from yesterday
+    # per agent_id and inserts them into the review_queue. Idempotent —
+    # ingest_review_sample short-circuits on duplicate session_id, so a
+    # restart mid-day re-runs without churning the queue. Default N=10
+    # (CLAWMETRY_REVIEW_SAMPLE_SIZE env override).
+    try:
+        _review_stop = threading.Event()
+
+        def _review_sampler_worker():
+            from routes.review import sample_yesterday_for_review
+            from datetime import datetime as _r_dt, timedelta as _r_td
+            # Initial delay: let backfill finish so query_sessions_table
+            # returns the full yesterday set, not an empty one.
+            time.sleep(45)
+            while not _review_stop.is_set():
+                try:
+                    result = sample_yesterday_for_review()
+                    log.info(
+                        "review sampler: %d sampled, %d skipped, %d agents",
+                        result.get("sampled", 0),
+                        result.get("skipped", 0),
+                        result.get("agents", 0),
+                    )
+                except Exception as _re:
+                    log.warning(f"review sampler tick failed: {_re}")
+                # Sleep until next local midnight. 24h is the natural cadence;
+                # we use a coarse compute (seconds-until-tomorrow-midnight)
+                # rather than scheduling 1AM cron-style so the math stays in
+                # one place. Daemon restart between ticks is harmless thanks
+                # to ingest idempotency.
+                now_local = _r_dt.now()
+                tomorrow = now_local.date() + _r_td(days=1)
+                next_midnight = _r_dt.combine(tomorrow, _r_dt.min.time())
+                sleep_s = max(60.0, (next_midnight - now_local).total_seconds())
+                _review_stop.wait(timeout=sleep_s)
+
+        t_review = threading.Thread(
+            target=_review_sampler_worker, daemon=True, name="review-sampler"
+        )
+        t_review.start()
+        log.info("review sampler thread started (issue #1615)")
+    except Exception as _e:
+        log.warning(f"review sampler failed to start: {_e}")
+
     # Default to SLOW; flips to FAST after a heartbeat response with
     # `viewer_active: true` (epic #775 PR 2/3, adaptive sync cadence).
     # Seed from the startup heartbeat so the very first cycle picks up

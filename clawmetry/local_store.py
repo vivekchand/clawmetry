@@ -124,7 +124,7 @@ LOCAL_MAX_BYTES = int(
     float(os.environ.get("CLAWMETRY_LOCAL_MAX_GB", "5.0")) * 1024 * 1024 * 1024
 )
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 # ── Two-layer schema (multi-agent) ──────────────────────────────────────────
 #
@@ -551,6 +551,27 @@ _DDL = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_loop_signals_last_seen ON loop_signals(last_seen DESC)",
+    # Issue #1615 — decision sampling workflow. Production-grade monitoring
+    # requires periodic review of random decisions ("did the agent make the
+    # right choice?"). A nightly cron picks N random sessions per agent and
+    # inserts a row here with status='pending'. The Review tab on the
+    # dashboard renders pending rows, lets the user mark each row
+    # correct/wrong/borderline, and aggregates accuracy over a rolling
+    # window. Sampled rows are agent-scoped so multi-agent installs get
+    # per-agent accuracy curves rather than one global blur.
+    """
+    CREATE TABLE IF NOT EXISTS review_queue (
+        session_id      VARCHAR PRIMARY KEY,
+        sampled_at      VARCHAR NOT NULL,
+        agent_id        VARCHAR NOT NULL DEFAULT 'main',
+        agent_type      VARCHAR NOT NULL DEFAULT 'openclaw',
+        status          VARCHAR NOT NULL DEFAULT 'pending',
+        reviewer_notes  VARCHAR,
+        reviewed_at     VARCHAR
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_review_queue_status ON review_queue(status, sampled_at)",
+    "CREATE INDEX IF NOT EXISTS idx_review_queue_agent  ON review_queue(agent_id, sampled_at)",
     """
     CREATE TABLE IF NOT EXISTS schema_version (
         version    INTEGER PRIMARY KEY,
@@ -2021,6 +2042,173 @@ class LocalStore:
             """, [new_status, decision, reason, resolver, resolved_at,
                   str(approval_id)])
         return 1
+
+    # ── review_queue helpers (issue #1615) ────────────────────────────────
+    def ingest_review_sample(self, sample: dict[str, Any]) -> int:
+        """Insert one sampled session into the review queue.
+
+        Required: ``session_id``. Optional: ``sampled_at`` (ISO-8601 string;
+        defaults to now), ``agent_id`` (default ``"main"``), ``agent_type``
+        (default ``"openclaw"``), ``status`` (default ``"pending"``).
+
+        Idempotent: if a row already exists for ``session_id`` the insert
+        is a no-op so the nightly cron can safely re-sample yesterday's
+        sessions without bumping reviewed rows back to pending. Returns
+        1 when a new row was inserted, 0 when skipped.
+        """
+        sid = sample.get("session_id")
+        if not sid:
+            raise ValueError("review sample must include 'session_id'")
+        from datetime import datetime, timezone
+        sampled_at = sample.get("sampled_at") or datetime.now(timezone.utc).isoformat()
+        agent_id = sample.get("agent_id") or "main"
+        agent_type = sample.get("agent_type") or "openclaw"
+        status = sample.get("status") or "pending"
+        with self._write_lock:
+            pre = self._conn.execute(
+                "SELECT 1 FROM review_queue WHERE session_id = ? LIMIT 1",
+                [str(sid)],
+            ).fetchone()
+            if pre:
+                return 0
+            self._conn.execute("""
+                INSERT INTO review_queue (
+                    session_id, sampled_at, agent_id, agent_type, status
+                ) VALUES (?, ?, ?, ?, ?)
+            """, [str(sid), sampled_at, agent_id, agent_type, status])
+        return 1
+
+    def update_review_decision(
+        self,
+        session_id: str,
+        status: str,
+        notes: str | None = None,
+    ) -> int:
+        """Mark a queued review row with the reviewer's verdict.
+
+        ``status`` must be one of ``reviewed_correct`` / ``reviewed_wrong`` /
+        ``reviewed_borderline``. Other values are rejected. Returns 1 on
+        update, 0 when the row is missing. Allows re-decision (reviewer
+        changing their mind) — unlike approvals, reviews are not a
+        first-write-wins race because there's only one reviewer.
+        """
+        if not session_id:
+            return 0
+        allowed = {"reviewed_correct", "reviewed_wrong", "reviewed_borderline"}
+        if status not in allowed:
+            raise ValueError(f"status must be one of {sorted(allowed)}")
+        from datetime import datetime, timezone
+        reviewed_at = datetime.now(timezone.utc).isoformat()
+        with self._write_lock:
+            pre = self._conn.execute(
+                "SELECT 1 FROM review_queue WHERE session_id = ? LIMIT 1",
+                [str(session_id)],
+            ).fetchone()
+            if not pre:
+                return 0
+            self._conn.execute("""
+                UPDATE review_queue
+                SET status         = ?,
+                    reviewer_notes = ?,
+                    reviewed_at    = ?
+                WHERE session_id   = ?
+            """, [status, notes, reviewed_at, str(session_id)])
+        return 1
+
+    def query_review_queue(
+        self,
+        *,
+        status: str | None = None,
+        agent_id: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Read review-queue rows. Defaults to most-recently-sampled first.
+
+        ``status`` filters by stage (``pending`` / ``reviewed_correct`` /
+        ``reviewed_wrong`` / ``reviewed_borderline``). ``agent_id`` scopes
+        the result to a single agent instance.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        if agent_id:
+            clauses.append("agent_id = ?")
+            params.append(agent_id)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT session_id, sampled_at, agent_id, agent_type, status,
+                   reviewer_notes, reviewed_at
+            FROM review_queue
+            {where}
+            ORDER BY COALESCE(sampled_at, '') DESC, session_id
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["session_id", "sampled_at", "agent_id", "agent_type",
+                "status", "reviewer_notes", "reviewed_at"]
+        return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
+
+    def query_review_accuracy(
+        self,
+        *,
+        window_days: int = 30,
+    ) -> dict[str, Any]:
+        """Return per-agent + global accuracy over the trailing window.
+
+        Accuracy = correct / (correct + wrong). Borderline rows are
+        excluded from the denominator (they're "I'm not sure" — counting
+        them as wrong over-penalises, counting them as correct rewards
+        hesitation). Pending rows are likewise excluded. Returns
+        ``{global: {...}, per_agent: [{agent_id, correct, wrong,
+        borderline, accuracy}, ...]}``.
+
+        Safe on an empty queue: zero-division returns ``accuracy=None``
+        which the UI renders as "Not enough reviews yet".
+        """
+        from datetime import datetime, timedelta, timezone
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=int(window_days))).isoformat()
+        sql = """
+            SELECT agent_id,
+                   SUM(CASE WHEN status = 'reviewed_correct'    THEN 1 ELSE 0 END) AS correct,
+                   SUM(CASE WHEN status = 'reviewed_wrong'      THEN 1 ELSE 0 END) AS wrong,
+                   SUM(CASE WHEN status = 'reviewed_borderline' THEN 1 ELSE 0 END) AS borderline
+            FROM review_queue
+            WHERE COALESCE(reviewed_at, sampled_at) >= ?
+            GROUP BY agent_id
+            ORDER BY agent_id
+        """
+        rows = self._fetch(sql, [cutoff])
+        per_agent: list[dict[str, Any]] = []
+        g_correct = g_wrong = g_borderline = 0
+        for agent_id, correct, wrong, borderline in rows:
+            correct = int(correct or 0)
+            wrong = int(wrong or 0)
+            borderline = int(borderline or 0)
+            denom = correct + wrong
+            acc = (correct / denom) if denom else None
+            per_agent.append({
+                "agent_id":   agent_id or "main",
+                "correct":    correct,
+                "wrong":      wrong,
+                "borderline": borderline,
+                "accuracy":   acc,
+            })
+            g_correct += correct
+            g_wrong += wrong
+            g_borderline += borderline
+        g_denom = g_correct + g_wrong
+        return {
+            "window_days": int(window_days),
+            "global": {
+                "correct":    g_correct,
+                "wrong":      g_wrong,
+                "borderline": g_borderline,
+                "accuracy":   (g_correct / g_denom) if g_denom else None,
+            },
+            "per_agent": per_agent,
+        }
 
     def ingest_system_snapshot(self, snap: dict[str, Any]) -> None:
         """Insert one system-snapshot row. Append-only;
