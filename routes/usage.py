@@ -988,6 +988,180 @@ def _try_local_store_skill_attribution():
     }
 
 
+def _try_local_store_skills_fidelity(max_sessions=200):
+    """Fast path for /api/skills/fidelity (Tier-1 #6 from issue #1565).
+
+    Replaces the 200-file × all-lines JSONL walker in
+    ``api_skills_fidelity`` with a single DuckDB read using the canonical
+    ``query_recent_read_tool_calls`` method (already shipped + allowlisted
+    for the daemon proxy — issue #1364). One row per Read-tool invocation
+    in the last 7 days; we bucket them per-skill in-process.
+
+    Status rules match the legacy endpoint contract:
+      * dead   — installed but body fetch count == 0
+      * orphan — body-fetched in sessions but skill dir not on disk
+      * stuck  — body fetched but skill has linked files and none were read
+      * active — otherwise
+
+    Returns ``None`` (defer to JSONL walker) when:
+      * the local store isn't reachable
+      * the canonical method returns ``None`` (daemon down + direct open
+        failed)
+      * NO skills are installed on disk AND zero rows came back (nothing
+        meaningful to report — let the legacy path serve the empty shape)
+
+    Audit imperfection note (issue #1565 audit): the audit hinted this
+    surface was an "extension of skill-attribution". In practice the
+    canonical DuckDB source for body-fetch counts is
+    ``query_recent_read_tool_calls`` (already serving ``/api/skills``),
+    not the cost-aggregation walker in
+    ``_try_local_store_skill_attribution``. Reusing the established path
+    avoids divergence between the two fidelity surfaces.
+    """
+    import dashboard as _d
+    import re as _re
+
+    # 1. Pull the file-path rows the canonical helper provides. Returns
+    # None on store-not-reachable; an empty list is a valid "store is up
+    # but nothing in the 7d window" answer.
+    cutoff_ts = time.time() - 7 * 86400
+    since_iso = datetime.utcfromtimestamp(cutoff_ts).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    rows = _ls_call("query_recent_read_tool_calls", since=since_iso, limit=50_000)
+    if rows is None:
+        return None
+    if not isinstance(rows, list):
+        return None
+
+    # 2. List installed skills (header-always-loaded set). Same logic as
+    # the legacy walker so the dead/active classification matches.
+    workspace = (
+        _d.WORKSPACE
+        or os.environ.get("OPENCLAW_WORKSPACE")
+        or os.environ.get("OPENCLAW_HOME")
+        or os.path.expanduser("~/.openclaw/workspace")
+    )
+    skills_dir = os.path.join(workspace, "skills")
+    installed_skills: set = set()
+    skill_has_linked: dict = {}
+    if os.path.isdir(skills_dir):
+        try:
+            for entry in os.listdir(skills_dir):
+                entry_path = os.path.join(skills_dir, entry)
+                if not os.path.isdir(entry_path):
+                    continue
+                if not os.path.isfile(os.path.join(entry_path, "SKILL.md")):
+                    continue
+                installed_skills.add(entry)
+                try:
+                    linked = [
+                        f for f in os.listdir(entry_path)
+                        if f.upper() != "SKILL.MD"
+                        and not f.startswith('.')
+                        and os.path.isfile(os.path.join(entry_path, f))
+                    ]
+                except OSError:
+                    linked = []
+                skill_has_linked[entry] = bool(linked)
+        except OSError:
+            pass
+
+    # 3. Bucket the Read-tool rows per skill via the parent-dir-name in
+    # ``file_path``. Body fetch = path ends in /SKILL.md; linked fetch =
+    # path is under skills/<name>/<not-SKILL.md>. Matches the legacy
+    # regex pair (case-insensitive, slash-normalised so Windows paths
+    # still hit).
+    SKILL_MD_RE = _re.compile(r'[/\\]([^/\\]+)[/\\]SKILL\.md', _re.IGNORECASE)
+    SKILL_LINKED_RE = _re.compile(
+        r'skills[/\\]([^/\\]+)[/\\]([^/\\\'">\s]{1,80})', _re.IGNORECASE
+    )
+
+    body_fetches: dict = {}    # skill_name -> count
+    linked_fetches: dict = {}  # skill_name -> count
+    skill_sessions: dict = {}  # skill_name -> set of session_ids
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        fp = row.get("file_path") or ""
+        if not isinstance(fp, str) or not fp:
+            continue
+        sid = row.get("session_id") or ""
+        body_match = SKILL_MD_RE.search(fp)
+        if body_match:
+            sname = body_match.group(1)
+            if sname and sname.lower() not in ('skills', ''):
+                body_fetches[sname] = body_fetches.get(sname, 0) + 1
+                if sid:
+                    skill_sessions.setdefault(sname, set()).add(sid)
+        else:
+            # Linked-file path: skills/<name>/<file-not-SKILL.md>
+            linked_match = SKILL_LINKED_RE.search(fp)
+            if linked_match and linked_match.group(2).upper() != 'SKILL.MD':
+                sname = linked_match.group(1)
+                if sname:
+                    linked_fetches[sname] = linked_fetches.get(sname, 0) + 1
+
+    # If nothing on disk AND nothing in events, defer so the legacy path
+    # can serve the empty shape with its own no-data note.
+    if not installed_skills and not body_fetches and not linked_fetches:
+        return None
+
+    # 4. Build per-skill stats + classify. Same rules as the legacy
+    # handler so the response contract doesn't drift.
+    all_names = installed_skills | set(body_fetches) | set(linked_fetches)
+    skills_out = []
+    dead_count = stuck_count = active_count = orphan_count = 0
+    for name in sorted(all_names):
+        installed = name in installed_skills
+        bf = body_fetches.get(name, 0)
+        lf = linked_fetches.get(name, 0)
+        sess = len(skill_sessions.get(name, set()))
+        has_linked = skill_has_linked.get(name, False)
+
+        if installed and bf == 0:
+            status = 'dead'
+            dead_count += 1
+        elif not installed and bf > 0:
+            status = 'orphan'
+            orphan_count += 1
+        elif bf > 0 and has_linked and lf == 0:
+            status = 'stuck'
+            stuck_count += 1
+        else:
+            status = 'active'
+            active_count += 1
+
+        skills_out.append({
+            'name': name,
+            'installed': installed,
+            'body_fetches': bf,
+            'linked_file_fetches': lf,
+            'sessions_seen': sess,
+            'status': status,
+            'token_roi': round(bf / sess, 3) if sess > 0 else None,
+        })
+
+    _STATUS_ORDER = {'dead': 0, 'stuck': 1, 'orphan': 2, 'active': 3}
+    skills_out.sort(key=lambda s: (_STATUS_ORDER[s['status']], -s['body_fetches']))
+
+    return {
+        'skills': skills_out,
+        'dead_count': dead_count,
+        'stuck_count': stuck_count,
+        'active_count': active_count,
+        'orphan_count': orphan_count,
+        'total_installed': len(installed_skills),
+        'note': (
+            'Dead: installed but body never fetched — remove to save header tokens. '
+            'Stuck: body fetched but linked files unread despite existing. '
+            'Orphan: body-fetched in sessions but not installed (skill removed?).'
+        ),
+        '_source': 'local_store',
+    }
+
+
 def _apply_oss_24h_cap(result):
     """Issue #1448 surface 2 — clamp /api/usage history to the last 24h for
     OSS / Cloud-Free callers. Cloud-Pro users (gated by
@@ -2858,6 +3032,15 @@ def api_skills_fidelity():
         max_sessions = max(1, min(int(request.args.get("sessions", 200)), 500))
     except (TypeError, ValueError):
         max_sessions = 200
+
+    # Tier-1 DuckDB fast path (issue #1565 audit #6). Reuses the canonical
+    # ``query_recent_read_tool_calls`` source already serving /api/skills
+    # so both fidelity surfaces stay aligned; ``None`` falls through to
+    # the legacy JSONL walker below.
+    if is_local_store_read_enabled():
+        fast = _try_local_store_skills_fidelity(max_sessions=max_sessions)
+        if fast is not None:
+            return jsonify(fast)
 
     workspace = (
         _d.WORKSPACE
