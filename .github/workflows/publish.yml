@@ -22,8 +22,18 @@ jobs:
         with:
           python-version: "3.11"
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Install build tools
         run: pip install build twine
+
+      - name: Build v2 React bundle
+        run: |
+          cd frontend
+          npm ci
+          npm run build
 
       - name: Verify version matches tag
         if: github.event_name == 'push'
@@ -39,6 +49,32 @@ jobs:
 
       - name: Build package
         run: python3 -m build
+
+      - name: Assert v2 bundle is included in wheel
+        run: |
+          python3 - <<'PY'
+          import glob
+          import zipfile
+
+          wheels = glob.glob("dist/*.whl")
+          assert wheels, "No wheel built in dist/"
+
+          with zipfile.ZipFile(wheels[0]) as wheel:
+              names = set(wheel.namelist())
+
+          required = [
+              "clawmetry/static/v2/dist/index.html",
+          ]
+          missing = [path for path in required if path not in names]
+          assert not missing, f"Missing from wheel: {missing}"
+
+          assert any(
+              name.startswith("clawmetry/static/v2/dist/assets/")
+              for name in names
+          ), "Missing v2 asset files from wheel"
+
+          print("v2 bundle is present in wheel")
+          PY
 
       - name: Publish to PyPI
         env:
