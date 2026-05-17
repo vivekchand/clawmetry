@@ -72,7 +72,16 @@ pytestmark = pytest.mark.skipif(
 )
 
 NODE_ID = "agent+moat-live-e2e"
-SESSIONS_SUBPATH = ("agents", "main", "sessions")
+# Layout note: when ``OPENCLAW_STATE_DIR=<X>`` is set, OpenClaw v3 (verified
+# locally on 2026.5.7) writes a FLAT layout with sessions at
+# ``<X>/agents/main/sessions/``. Without that override, OpenClaw treats
+# ``OPENCLAW_HOME`` as the user's home dir and nests its state under
+# ``<HOME>/.openclaw/agents/main/sessions/`` — that's the path mismatch
+# Debug Eng 1 + Eng 2 traced (band-aid skip in commit 217595f, reverted in
+# 817a4ad). We set BOTH env vars and probe BOTH candidate locations so the
+# fixture is robust to whichever the binary version honours.
+SESSIONS_SUBPATH_FLAT = ("agents", "main", "sessions")
+SESSIONS_SUBPATH_NESTED = (".openclaw", "agents", "main", "sessions")
 MESSAGE_BODY = "MOAT live E2E ping 2026-05-17"
 RECIPIENT = "+15555550199"
 GATEWAY_BOOT_TIMEOUT_SECS = 30
@@ -159,19 +168,33 @@ def _send_message(home: str, message: str) -> subprocess.CompletedProcess:
     """``openclaw agent --local`` writes the session JSONL.
 
     --local is used because the boot-without-setup gateway lacks routing
-    config; embedded agent writes the same JSONL shape. Bogus provider
-    keys make the LLM call fail in ~2s — the on-disk JSONL is the
-    artefact, not the model reply (OpenClaw writes session+user-message
-    rows BEFORE the auth error bubbles up)."""
-    env = {
-        **os.environ,
-        "OPENCLAW_HOME": home,
-        "OPENAI_API_KEY": "sk-fake-clawmetry-moat-e2e",
-        "ANTHROPIC_API_KEY": "sk-ant-fake-clawmetry-moat-e2e",
-        "GEMINI_API_KEY": "fake-clawmetry-moat-e2e",
-        "OPENCLAW_DISABLE_UPDATE_CHECK": "1",
-        "NO_COLOR": "1",
-    }
+    config; embedded agent writes the same JSONL shape. We honour a real
+    ``ANTHROPIC_API_KEY`` (or ``OPENAI_API_KEY``) from the surrounding env
+    when present — that's what CI does via the ``ANTHROPIC_API_KEY`` repo
+    secret (wired in commit baea3c3). Without a real key, OpenClaw v3 fails
+    the LLM call BEFORE writing the canonical ``<sid>.jsonl`` conversation
+    file (Debug Eng 1 verified locally on 2026.5.7), so the assertions
+    below would have nothing to read.
+
+    State-dir layout: ``OPENCLAW_STATE_DIR`` puts sessions at
+    ``<dir>/agents/main/sessions/`` (flat). We also set ``OPENCLAW_HOME``
+    so caches + workspace files land inside the hermetic tmp dir."""
+    state_dir = os.path.join(home, "state")
+    os.makedirs(state_dir, exist_ok=True)
+    env = {**os.environ}
+    # Only inject fakes for providers the caller hasn't supplied a real
+    # key for. CI sets ANTHROPIC_API_KEY via secret, devs run with their
+    # own creds — both paths reach the canonical <sid>.jsonl write.
+    for k, fake in (
+        ("OPENAI_API_KEY", "sk-fake-clawmetry-moat-e2e"),
+        ("ANTHROPIC_API_KEY", "sk-ant-fake-clawmetry-moat-e2e"),
+        ("GEMINI_API_KEY", "fake-clawmetry-moat-e2e"),
+    ):
+        env.setdefault(k, fake)
+    env["OPENCLAW_HOME"] = home
+    env["OPENCLAW_STATE_DIR"] = state_dir
+    env["OPENCLAW_DISABLE_UPDATE_CHECK"] = "1"
+    env["NO_COLOR"] = "1"
     return subprocess.run(
         [
             OPENCLAW_BIN, "agent", "--local",
@@ -182,22 +205,78 @@ def _send_message(home: str, message: str) -> subprocess.CompletedProcess:
     )
 
 
-def _find_session_jsonl(home: str) -> str:
-    """Locate the .jsonl OpenClaw just wrote (skip trajectory sidecar)."""
-    sd = os.path.join(home, *SESSIONS_SUBPATH)
-    if not os.path.isdir(sd):
-        raise AssertionError(
-            f"openclaw did not create sessions dir at {sd!r}; home contents: "
-            f"{os.listdir(home) if os.path.isdir(home) else '<missing>'}"
-        )
-    candidates = [
-        os.path.join(sd, f) for f in os.listdir(sd)
-        if f.endswith(".jsonl") and ".trajectory" not in f
+def _find_session_jsonl(
+    home: str, proc: subprocess.CompletedProcess | None = None
+) -> str:
+    """Locate the canonical conversation ``<sid>.jsonl`` OpenClaw wrote.
+
+    Probes three candidate locations to be robust to OpenClaw version
+    drift on the ``OPENCLAW_HOME`` / ``OPENCLAW_STATE_DIR`` semantics
+    (Debug Eng 1 + Eng 2 traced this):
+
+      1. ``<home>/state/agents/main/sessions/``  — when STATE_DIR override
+         is honoured (preferred, set by ``_send_message`` above)
+      2. ``<home>/.openclaw/agents/main/sessions/`` — nested layout when
+         OpenClaw treats HOME as the user's $HOME and appends .openclaw
+      3. ``<home>/agents/main/sessions/`` — flat layout (older binaries)
+
+    Filters out ``.trajectory.jsonl`` AND ``.trajectory-path.json``
+    sidecars — only the bare ``<sid>.jsonl`` is the canonical
+    conversation file the OSS daemon reads.
+
+    On miss, surfaces subprocess returncode + stderr (1KB) — silent
+    swallow was Debug Eng 3's diagnostic gap.
+    """
+    candidate_dirs = [
+        os.path.join(home, "state", *SESSIONS_SUBPATH_FLAT),
+        os.path.join(home, *SESSIONS_SUBPATH_NESTED),
+        os.path.join(home, *SESSIONS_SUBPATH_FLAT),
     ]
-    if not candidates:
-        raise AssertionError(f"no .jsonl files in {sd!r}: {os.listdir(sd)}")
-    candidates.sort(key=os.path.getmtime, reverse=True)
-    return candidates[0]
+    for sd in candidate_dirs:
+        if not os.path.isdir(sd):
+            continue
+        candidates = [
+            os.path.join(sd, f) for f in os.listdir(sd)
+            if (
+                f.endswith(".jsonl")
+                and not f.endswith(".trajectory.jsonl")
+                and ".trajectory" not in f
+            )
+        ]
+        if candidates:
+            candidates.sort(key=os.path.getmtime, reverse=True)
+            return candidates[0]
+
+    # No canonical jsonl anywhere — surface the most useful diagnostics
+    # we can muster so the next maintainer doesn't have to spelunk
+    # artifacts (Debug Eng 3 callout).
+    tree = []
+    for root, _, files in os.walk(home):
+        rel = os.path.relpath(root, home)
+        for f in files:
+            tree.append(os.path.join(rel, f) if rel != "." else f)
+        if len(tree) > 30:
+            tree.append("... (truncated)")
+            break
+    rc = getattr(proc, "returncode", "<no proc>")
+    stderr_tail = ""
+    stdout_tail = ""
+    if proc is not None:
+        stderr_tail = (proc.stderr or "")[-1024:]
+        stdout_tail = (proc.stdout or "")[-1024:]
+    raise AssertionError(
+        "openclaw did not write a canonical <sid>.jsonl under any known "
+        f"sessions dir.\n"
+        f"  probed: {candidate_dirs}\n"
+        f"  home tree (cap 30): {tree}\n"
+        f"  agent returncode: {rc}\n"
+        f"  agent stderr tail (1KB):\n{stderr_tail}\n"
+        f"  agent stdout tail (1KB):\n{stdout_tail}\n"
+        "Likely causes: (a) no real LLM key in env — set ANTHROPIC_API_KEY "
+        "to a working key so the agent completes the turn and flushes the "
+        "conversation file; (b) OpenClaw on this runner pins a version "
+        "with different state-dir semantics — extend the candidate list."
+    )
 
 
 def _wait_drained(store, timeout: float = 5.0) -> None:
@@ -244,12 +323,14 @@ def live(tmp_path, monkeypatch):
 
     # 2) Real send-message
     proc = _send_message(str(home), MESSAGE_BODY)
-    session_path = _find_session_jsonl(str(home))
+    session_path = _find_session_jsonl(str(home), proc=proc)
     with open(session_path) as fh:
         first_line = fh.readline().strip()
     assert first_line, (
         f"openclaw session JSONL empty: {session_path!r}\n"
-        f"agent stderr (1KB): {(proc.stderr or '')[:1024]}"
+        f"agent returncode: {proc.returncode}\n"
+        f"agent stderr (1KB): {(proc.stderr or '')[:1024]}\n"
+        f"agent stdout (1KB): {(proc.stdout or '')[:1024]}"
     )
     first_obj = json.loads(first_line)
     assert isinstance(first_obj, dict) and first_obj.get("type"), (
