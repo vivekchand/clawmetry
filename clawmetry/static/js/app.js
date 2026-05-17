@@ -3237,12 +3237,23 @@ function renderBrainStream(events) {
             _tlContainerId = 'timeline-' + (te.eventId || '').replace(/[^a-z0-9-]/gi, '').slice(0, 24);
             turnTimeline += '<button onclick="event.stopPropagation();loadLlmCallTimeline(\'' + escHtml(te.eventId) + '\',\'' + escHtml(_tlSid) + '\',\'' + escHtml(_tlContainerId) + '\')" style="flex-shrink:0;padding:1px 7px;border-radius:10px;border:1px solid #22c55e;background:transparent;color:#22c55e;font-size:10px;cursor:pointer;white-space:nowrap;" title="Per-LLM-call lifecycle timeline">&#128202; Timeline</button>';
           }
+          // Issue #563: per-LLM-call Token Confidence button on AGENT rows.
+          // Renders heatmap when upstream captured logprobs; otherwise shows
+          // a single-line "not available" hint with how to enable it.
+          var _tcContainerId = null;
+          if (te.type === 'AGENT') {
+            _tcContainerId = 'tokconf-' + ((te.eventId || (te.time || '') + (te.source || '')) + '').replace(/[^a-z0-9-]/gi, '').slice(0, 24);
+            turnTimeline += '<button onclick="event.stopPropagation();toggleTokenConfidence(this,\'' + escHtml(_tcContainerId) + '\')" data-tc=\'' + escHtml(JSON.stringify(te.token_confidence || null)) + '\' style="flex-shrink:0;padding:1px 7px;border-radius:10px;border:1px solid #38bdf8;background:transparent;color:#38bdf8;font-size:10px;cursor:pointer;white-space:nowrap;" title="How confident was the model in each word?">&#128202; Confidence</button>';
+          }
           turnTimeline += '</div>';
           if (_rcContainerId) {
             turnTimeline += '<div id="' + escHtml(_rcContainerId) + '" style="margin:2px 0 4px 56px;"></div>';
           }
           if (_tlContainerId) {
             turnTimeline += '<div id="' + escHtml(_tlContainerId) + '" class="llm-call-timeline-host" style="margin:2px 0 4px 56px;"></div>';
+          }
+          if (_tcContainerId) {
+            turnTimeline += '<div id="' + escHtml(_tcContainerId) + '" class="token-confidence-host" style="margin:2px 0 4px 56px;"></div>';
           }
         });
         if (currentSubagent) turnTimeline += '</div>'; // close last sub-agent group
@@ -3541,6 +3552,118 @@ function loadLlmCallTimeline(eventId, sessionId, containerId) {
     .catch(function(err) {
       container.innerHTML = '<span style="color:#ef4444;font-size:10px;">Timeline unavailable: ' + escHtml(String(err && err.message ? err.message : err)) + '</span>';
     });
+}
+
+// Issue #563 — Token Probability Visualizer.
+// "How confident was the model in each word?" — per-token heatmap rendered
+// inline below an AGENT row when upstream captured logprobs. When no
+// logprobs are present (every Anthropic call today), we show a single
+// explanatory line with how to enable the feature so the panel is never
+// a dead-end. Plain copy, no em-dashes (memory:
+// feedback_no_em_dashes_in_user_facing_copy.md).
+var _TOKEN_CONF_BAND = {
+  h: { color: '#16a34a', bg: 'rgba(22,163,74,0.18)',  label: 'High'   },
+  m: { color: '#d97706', bg: 'rgba(217,119,6,0.18)',  label: 'Medium' },
+  l: { color: '#ea580c', bg: 'rgba(234,88,12,0.20)',  label: 'Low'    },
+  v: { color: '#dc2626', bg: 'rgba(220,38,38,0.24)',  label: 'Very low' }
+};
+
+function _renderTokenConfidenceHeatmap(payload) {
+  if (!payload || !Array.isArray(payload.tokens) || !payload.tokens.length) return '';
+  var s = payload.summary || {};
+  var avgPct = Math.round(((s.avg_prob || 0) * 100));
+  var headline = 'Avg confidence: ' + avgPct + '% &middot; ' +
+    (s.token_count || 0) + ' tokens';
+  if (s.high_variance_count) {
+    headline += ' &middot; <span style="color:#dc2626;font-weight:600;">' +
+      s.high_variance_count + ' low-confidence</span>';
+  }
+  var html = '<div class="token-confidence-panel" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:11px;">';
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">';
+  html += '<span style="color:var(--text-muted);">' + headline + '</span>';
+  html += '<span style="color:var(--text-faint);font-size:10px;">hover a token to see what else the model considered</span>';
+  html += '</div>';
+  html += '<div class="token-confidence-tokens" style="line-height:1.9;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-word;">';
+  payload.tokens.forEach(function(t) {
+    var cfg = _TOKEN_CONF_BAND[t.band] || _TOKEN_CONF_BAND.m;
+    var pct = Math.round((t.prob || 0) * 100);
+    var icon = (t.band === 'v') ? ' ⚡' : '';
+    // Build tooltip: chosen token + top-k alternatives + cumulative mass.
+    var tipLines = ['"' + (t.token || '') + '"  ' + pct + '%' + (t.rank > 1 ? '  (rank ' + t.rank + ')' : '')];
+    if (Array.isArray(t.top_k) && t.top_k.length) {
+      tipLines.push('');
+      tipLines.push('Top alternatives:');
+      var mass = 0;
+      t.top_k.forEach(function(alt) {
+        var ap = Math.round((alt.prob || 0) * 100);
+        tipLines.push('  ' + ap + '%  "' + (alt.token || '') + '"');
+        mass += (alt.prob || 0);
+      });
+      tipLines.push('');
+      tipLines.push(Math.round(mass * 100) + '% of probability mass in top ' + t.top_k.length);
+    }
+    var visible = (t.token || '').replace(/\n/g, '↵').replace(/\t/g, '→');
+    html += '<span class="token-conf-cell" title="' + escHtml(tipLines.join('\n')) +
+      '" style="display:inline-block;padding:1px 3px;margin:1px 1px;border-radius:3px;background:' +
+      cfg.bg + ';color:' + cfg.color + ';border-bottom:2px solid ' + cfg.color + ';cursor:help;">' +
+      escHtml(visible) + icon + '</span>';
+  });
+  if (payload.truncated) {
+    html += '<span style="color:var(--text-muted);font-style:italic;margin-left:6px;">&hellip; ' +
+      ((s.total_tokens || 0) - (s.token_count || 0)) + ' more tokens</span>';
+  }
+  html += '</div>';
+  // Legend
+  html += '<div style="display:flex;gap:10px;margin-top:8px;font-size:10px;color:var(--text-muted);flex-wrap:wrap;">';
+  ['h','m','l','v'].forEach(function(b) {
+    var cfg = _TOKEN_CONF_BAND[b];
+    html += '<span><span style="display:inline-block;width:10px;height:10px;background:' + cfg.bg +
+      ';border:1px solid ' + cfg.color + ';border-radius:2px;margin-right:3px;vertical-align:middle;"></span>' +
+      escHtml(cfg.label) + '</span>';
+  });
+  html += '</div>';
+  html += '</div>';
+  return html;
+}
+
+function _renderTokenConfidenceUnavailable() {
+  // Friendly explanation when upstream did NOT capture logprobs. Common
+  // case today since Anthropic does not expose per-token logprobs. Keep
+  // it short and tell the user what would unblock it.
+  return '<div class="token-confidence-panel token-confidence-empty" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-size:12px;color:var(--text-secondary);">' +
+    '<div style="font-weight:600;color:var(--text-primary);margin-bottom:4px;">' +
+    '&#128202; Per-token confidence not available for this call</div>' +
+    '<div style="color:var(--text-muted);font-size:11px;line-height:1.5;">' +
+    'How confident was the model in each word? When the API provider returns ' +
+    '<code style="background:var(--bg-primary);padding:1px 4px;border-radius:3px;">logprobs</code>, ' +
+    'we paint a colour-coded heatmap here so you can spot the tokens the model was guessing on. ' +
+    'OpenAI and Gemini compatible providers support this today. ' +
+    'Anthropic does not expose per-token logprobs yet, so Claude calls fall through to this hint. ' +
+    'Track upstream work in <a href="https://github.com/vivekchand/clawmetry/issues/563" target="_blank" rel="noopener" style="color:#60a5fa;">#563</a>.' +
+    '</div></div>';
+}
+
+window.toggleTokenConfidence = function(btn, containerId) {
+  var container = document.getElementById(containerId);
+  if (!container) return;
+  if (container.dataset.loaded === '1') {
+    container.innerHTML = '';
+    container.dataset.loaded = '0';
+    return;
+  }
+  var raw = btn && btn.getAttribute ? btn.getAttribute('data-tc') : null;
+  var payload = null;
+  try { payload = raw ? JSON.parse(raw) : null; } catch (e) { payload = null; }
+  container.innerHTML = payload
+    ? _renderTokenConfidenceHeatmap(payload)
+    : _renderTokenConfidenceUnavailable();
+  container.dataset.loaded = '1';
+};
+
+// Exported for unit tests (Node + jsdom). No-op in the browser global.
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports._renderTokenConfidenceHeatmap = _renderTokenConfidenceHeatmap;
+  module.exports._renderTokenConfidenceUnavailable = _renderTokenConfidenceUnavailable;
 }
 
 function renderBrainChart(events) {
