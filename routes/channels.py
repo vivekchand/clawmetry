@@ -393,6 +393,163 @@ def _try_local_store_provider_messages(
     return _format_local_store_provider_messages(provider, rows, limit, extras)
 
 
+# ── Tier-1 #1565: v3 events-table fallback for channel messages ────────────
+#
+# Background: ``_try_local_store_provider_messages`` above reads from the
+# specialized ``channel_messages`` table (Phase 5). That table can be empty
+# even when the daemon has already captured channel turns into the unified
+# ``events`` table — there are real ingest paths where the chokepoint
+# wrote the ``events`` projection but the ``channel_messages`` UPSERT was
+# skipped (e.g. PRIMARY KEY conflicts on re-ingest after a daemon
+# restart, or a legacy ``ingest`` caller that wrote only the events row).
+#
+# Without this fallback every Telegram / Signal poll would silently fall
+# through to the legacy gateway.log grep + JSONL walker — exactly the
+# silent-zero bug class memory `feedback_synthetic_tests_missed_real_event_shape.md`
+# warns about: synthetic tests pass on the specialised table while real
+# v3 data only lands in ``events``.
+#
+# The chokepoint contract (``LocalStore.ingest_channel_event`` — see PR
+# #1220) stamps EACH channel turn with ``event_type='channel.in'`` or
+# ``'channel.out'`` and embeds the provider tag under ``data.provider``,
+# so we can serve telegram/signal/etc. from a single events query.
+
+# Newest-first window we scan when the dedicated channel_messages table
+# came back empty. Matches ``query_channel_messages``' default page-size
+# upper bound so the today-counters stay accurate.
+_CHANNEL_EVENTS_FAST_PATH_LIMIT = 1000
+
+
+def _format_channel_event_row(ev):
+    """Project one ``events`` row (event_type='channel.in'|'channel.out')
+    into the legacy ``{timestamp, direction, sender, text, chatId,
+    sessionId}`` envelope the per-channel routes return.
+
+    Mirrors ``routes/brain.py`` channel-event enrichment so the field
+    extraction follows a single shared shape. Returns ``None`` if the row
+    is unusable (no data dict / no body anywhere)."""
+    data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+    if not isinstance(data, dict):
+        return None
+    direction = "out" if str(ev.get("event_type") or "").endswith(".out") else "in"
+    # Body lookup order matches the chokepoint write rules
+    # (``ingest_channel_event``): the JSONL/WS path leaves the full payload
+    # under data and the gateway-log path stamps a small breadcrumb.
+    body = (
+        data.get("body")
+        or data.get("text")
+        or data.get("message")
+        or ""
+    )
+    if isinstance(body, dict):
+        body = body.get("text") or body.get("body") or ""
+    body = str(body)[:300]
+    # sender: prefer flat sender_name, fall back to the from/user blocks
+    # the WS-tap path emits (mirrors routes/brain.py logic).
+    sender = data.get("sender_name") or data.get("sender") or ""
+    if not sender:
+        for blk_key in ("from", "user"):
+            blk = data.get(blk_key)
+            if isinstance(blk, dict):
+                sender = (
+                    blk.get("username")
+                    or blk.get("first_name")
+                    or blk.get("name")
+                    or ""
+                )
+                if sender:
+                    break
+    if not sender:
+        sender = "User" if direction == "in" else "Clawd"
+    chat_id = data.get("channel_id") or data.get("chat_id") or ""
+    if not chat_id and isinstance(data.get("chat"), dict):
+        chat_id = data["chat"].get("id") or ""
+    return {
+        "timestamp":  ev.get("ts") or "",
+        "direction":  direction,
+        "sender":     str(sender)[:80],
+        "text":       body,
+        "chatId":     str(chat_id)[:80] if chat_id else "",
+        "sessionId":  ev.get("session_id") or "",
+    }
+
+
+def _try_local_store_channel_events(provider, limit):
+    """Tier-1 #1565 v3 events-table fallback for per-provider channel
+    routes. Used by ``api_channel_telegram`` + ``api_channel_signal``
+    (and ready for the other 6 chat channels) AFTER the
+    ``channel_messages`` fast path returns None.
+
+    Why a second helper instead of just one query:
+    ``_try_local_store_provider_messages`` reads the specialised
+    ``channel_messages`` table, which is the canonical projection but
+    can lag the ``events`` table when an ingest path took the ``ingest``
+    side-door instead of the ``ingest_channel_event`` chokepoint (PR
+    #1220 closed the known gaps but a row can still be in ``events`` and
+    not in ``channel_messages`` on rare schema-drift / re-ingest paths).
+    Without this fallback the route silently falls through to the
+    gateway.log grep + JSONL walker — the same silent-zero hazard memory
+    `feedback_synthetic_tests_missed_real_event_shape.md` warns about.
+
+    Queries both ``channel.in`` and ``channel.out`` events, filters by
+    ``data.provider`` in Python (DuckDB JSON predicate would need an
+    extra ``LocalStore`` helper — keeping the daemon-proxy contract
+    surface minimal), reshapes via ``_format_channel_event_row``, and
+    returns the legacy envelope tagged ``_source: 'local_store_v3'`` so
+    the audit canary can distinguish the events-table path from the
+    specialised-table path.
+
+    Returns ``None`` when ``events`` also has nothing for this provider
+    so callers fall through to the legacy log-grep walker."""
+    provider_key = (provider or "").lower().strip()
+    if not provider_key:
+        return None
+    # ``query_events`` takes a single event_type filter; we make two calls
+    # (cheap — both rows ORDER BY ts DESC + LIMIT N) and merge.
+    rows_in = _ls_call(
+        "query_events",
+        event_type="channel.in",
+        limit=_CHANNEL_EVENTS_FAST_PATH_LIMIT,
+    ) or []
+    rows_out = _ls_call(
+        "query_events",
+        event_type="channel.out",
+        limit=_CHANNEL_EVENTS_FAST_PATH_LIMIT,
+    ) or []
+    matched = []
+    for ev in list(rows_in) + list(rows_out):
+        data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+        if not isinstance(data, dict):
+            continue
+        # Provider tag is stamped by ``ingest_channel_event``'s data
+        # projection (see clawmetry/local_store.py:1233-1248). Case-fold
+        # to defend against legacy producers that wrote mixed case.
+        ev_provider = str(data.get("provider") or "").lower().strip()
+        if ev_provider != provider_key:
+            continue
+        row = _format_channel_event_row(ev)
+        if row is not None:
+            matched.append(row)
+    if not matched:
+        return None
+    # Newest-first across the union of the two event_type pulls.
+    matched.sort(key=lambda r: r.get("timestamp") or "", reverse=True)
+    today = datetime.now().strftime("%Y-%m-%d")
+    today_in = sum(
+        1 for r in matched if r["direction"] == "in" and today in str(r["timestamp"])
+    )
+    today_out = sum(
+        1 for r in matched if r["direction"] == "out" and today in str(r["timestamp"])
+    )
+    return {
+        "messages":  matched[:limit],
+        "total":     len(matched),
+        "todayIn":   today_in,
+        "todayOut":  today_out,
+        "_source":   "local_store_v3",
+    }
+
+
 @bp_channels.route("/api/channels/<provider>/messages")
 def api_channel_messages(provider: str):
     """List recent messages for one provider — DuckDB fast path
@@ -490,6 +647,16 @@ def api_channel_telegram():
             # Honour the legacy ``offset`` paginator the Telegram tab uses
             # for "load more". The other per-provider routes don't expose
             # offset so the shared helper doesn't bake it in.
+            msgs = fast.get("messages") or []
+            fast["messages"] = msgs[offset : offset + limit]
+            return jsonify(fast)
+        # Tier-1 #1565: v3 events-table fallback when the specialised
+        # ``channel_messages`` table is empty but ``events`` carries the
+        # channel.in / channel.out turns the daemon already captured. See
+        # ``_try_local_store_channel_events`` docstring for the silent-zero
+        # bug-class this guards against.
+        fast = _try_local_store_channel_events("telegram", limit + offset)
+        if fast is not None:
             msgs = fast.get("messages") or []
             fast["messages"] = msgs[offset : offset + limit]
             return jsonify(fast)
@@ -987,6 +1154,17 @@ def api_channel_signal():
 
     if _local_store_read_enabled():
         fast = _try_local_store_provider_messages("signal", limit)
+        if fast is not None:
+            return jsonify(fast)
+        # Tier-1 #1565: v3 events-table fallback. Signal DOES land JSONL
+        # under ``~/.openclaw/signal/*.jsonl`` so the legacy walker isn't
+        # purely dead code, but on real OpenClaw v3 installs the daemon
+        # ingests those JSONLs into the ``events`` table directly via the
+        # ``ingest_channel_event`` chokepoint — meaning a daemon that
+        # restarted between channel_messages writes can leave ``events``
+        # populated but ``channel_messages`` empty. Same bug class as the
+        # MOAT silent-zero memory `feedback_synthetic_tests_missed_real_event_shape.md`.
+        fast = _try_local_store_channel_events("signal", limit)
         if fast is not None:
             return jsonify(fast)
 
