@@ -8306,6 +8306,135 @@ def _get_heartbeat_status():
     }
 
 
+# ── Agent-presence detection (no-agent empty-state, sibling of #1604) ──
+# Distinct from ``_get_heartbeat_status``:
+#   * heartbeat-status answers "has THIS install's daemon checked in yet?"
+#     (transient race, resolves in ~30s — drives #1631's onboarding banner)
+#   * detect_agent_install() answers "is there any underlying agent at
+#     all?" (persistent until the user installs one — drives the
+#     "No OpenClaw or NemoClaw detected" page-level empty-state).
+# Cached 60s so every tab switch doesn't re-stat 4+ paths and shell out
+# to ``shutil.which``.
+_agent_presence_cache = {"ts": 0.0, "value": None}
+_AGENT_PRESENCE_TTL_SEC = 60
+
+
+def _detect_openclaw_install():
+    """Return True if OpenClaw appears installed (any of: PID file present,
+    workspace dir exists, session JSONLs exist, OPENCLAW_HOME env set to a
+    real dir). Cheap stat-only checks — no subprocess, no DuckDB."""
+    home = os.environ.get("OPENCLAW_HOME") or os.path.expanduser("~/.openclaw")
+    if not home:
+        return False
+    # 1. Gateway PID file — strongest "openclaw is/was running" signal.
+    pid_path = os.path.join(home, "gateway", "gateway.pid")
+    if os.path.exists(pid_path):
+        return True
+    # 2. Session JSONLs (agent has produced events at some point).
+    sess_dir = os.path.join(home, "agents", "main", "sessions")
+    if os.path.isdir(sess_dir):
+        try:
+            for name in os.listdir(sess_dir):
+                if name.endswith(".jsonl"):
+                    return True
+        except OSError:
+            pass
+    # 3. Workspace marker files (SOUL.md / AGENTS.md / MEMORY.md).
+    ws = os.path.join(home, "workspace")
+    for marker in ("SOUL.md", "AGENTS.md", "MEMORY.md"):
+        if os.path.exists(os.path.join(ws, marker)):
+            return True
+    # 4. ~/.openclaw dir exists with *any* content (catches fresh installs
+    # that haven't run yet but have at least laid down config).
+    if os.path.isdir(home):
+        try:
+            if any(True for _ in os.scandir(home)):
+                return True
+        except OSError:
+            pass
+    return False
+
+
+def _detect_nemoclaw_install():
+    """Return True if NemoClaw appears installed. Defers to the existing
+    ``_detect_nemoclaw`` helper but only needs the boolean — avoids the
+    expensive ``nemoclaw list`` subprocess call by short-circuiting on
+    ``shutil.which`` and the config dir."""
+    import shutil as _shutil
+    if _shutil.which("nemoclaw"):
+        return True
+    cfg = os.path.expanduser("~/.nemoclaw")
+    if os.path.isdir(cfg):
+        try:
+            if any(True for _ in os.scandir(cfg)):
+                return True
+        except OSError:
+            pass
+    return False
+
+
+def _detect_any_local_data():
+    """Return True if local DuckDB store has *any* events row. Used as the
+    third leg of the no-agent decision so that an OpenClaw-less user who
+    is none-the-less getting OTLP traces in still gets the normal UI."""
+    try:
+        from clawmetry import local_store  # type: ignore
+        store = local_store.get_store(read_only=True)
+    except Exception:
+        return False
+    # Best-effort: any of these public query helpers returning a row means
+    # "we have data". Wrapped in try/except so a missing-table on a half-
+    # initialised DB never raises into the UI thread.
+    for method, kwargs in (
+        ("query_events", {"limit": 1}),
+        ("query_heartbeats", {"limit": 1}),
+    ):
+        try:
+            fn = getattr(store, method, None)
+            if fn is None:
+                continue
+            rows = fn(**kwargs)
+            if rows:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def detect_agent_install():
+    """Return ``{openclaw_detected, nemoclaw_detected, any_data, signals}``
+    answering "is there an underlying agent producing data?".
+
+    Cached for ``_AGENT_PRESENCE_TTL_SEC`` (60s) — every tab switch on the
+    dashboard polls this; the underlying filesystem state changes on the
+    order of minutes-hours, not milliseconds.
+    """
+    now = time.time()
+    cached = _agent_presence_cache.get("value")
+    if cached and (now - _agent_presence_cache["ts"]) < _AGENT_PRESENCE_TTL_SEC:
+        return cached
+    openclaw = bool(_detect_openclaw_install())
+    nemoclaw = bool(_detect_nemoclaw_install())
+    any_data = bool(_detect_any_local_data())
+    signals = []
+    if openclaw:
+        signals.append("openclaw")
+    if nemoclaw:
+        signals.append("nemoclaw")
+    if any_data:
+        signals.append("local_data")
+    payload = {
+        "openclaw_detected": openclaw,
+        "nemoclaw_detected": nemoclaw,
+        "any_data": any_data,
+        "signals": signals,
+        "no_agent": not (openclaw or nemoclaw or any_data),
+    }
+    _agent_presence_cache["ts"] = now
+    _agent_presence_cache["value"] = payload
+    return payload
+
+
 # ── OTLP Metrics Store ─────────────────────────────────────────────────
 METRICS_FILE = None  # Set via CLI/env, defaults to {WORKSPACE}/.clawmetry-metrics.json
 _metrics_lock = threading.Lock()
