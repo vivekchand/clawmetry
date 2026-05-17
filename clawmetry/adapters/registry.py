@@ -9,13 +9,12 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import List, Optional
 
 from .base import AgentAdapter, DetectResult
 
 logger = logging.getLogger("clawmetry.adapters")
 
-_adapters: List[AgentAdapter] = []
+_adapters: list[AgentAdapter] = []
 _lock = threading.Lock()
 
 
@@ -42,13 +41,13 @@ def unregister(name: str) -> None:
         _adapters[:] = [a for a in _adapters if a.name != name]
 
 
-def all_adapters() -> List[AgentAdapter]:
+def all_adapters() -> list[AgentAdapter]:
     """Snapshot of registered adapters — safe to iterate without the lock."""
     with _lock:
         return list(_adapters)
 
 
-def get(name: str) -> Optional[AgentAdapter]:
+def get(name: str) -> AgentAdapter | None:
     with _lock:
         for a in _adapters:
             if a.name == name:
@@ -56,13 +55,13 @@ def get(name: str) -> Optional[AgentAdapter]:
     return None
 
 
-def detect_all() -> List[DetectResult]:
+def detect_all() -> list[DetectResult]:
     """Run :meth:`AgentAdapter.detect` on every registered adapter.
 
     Errors are caught and logged — one broken adapter never blocks the
     others. Result order matches registration order.
     """
-    results: List[DetectResult] = []
+    results: list[DetectResult] = []
     for a in all_adapters():
         try:
             results.append(a.detect())

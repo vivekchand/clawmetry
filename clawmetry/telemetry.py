@@ -43,7 +43,6 @@ import time
 import urllib.request
 import uuid
 from pathlib import Path
-from typing import Optional, Tuple
 
 log = logging.getLogger(__name__)
 
@@ -97,7 +96,7 @@ def _is_optout() -> bool:
     return False
 
 
-def _detect_ci() -> Tuple[bool, Optional[str]]:
+def _detect_ci() -> tuple[bool, str | None]:
     """Return (is_ci, provider_name_or_None).
 
     Walks the ``_CI_PROVIDERS`` list in priority order; first hit wins.
@@ -124,7 +123,7 @@ def _detect_agent() -> str:
     return "none"
 
 
-def _ensure_install_id() -> Optional[str]:
+def _ensure_install_id() -> str | None:
     """Read existing install_id, or create one and persist.
 
     Returns ``None`` if we can't write to ``CONFIG_DIR`` (e.g. read-only
@@ -224,7 +223,7 @@ def _send_in_background(version: str) -> None:
         log.debug("telemetry: background failure: %s", e)
 
 
-def maybe_ping(version: str = "unknown") -> Optional[threading.Thread]:
+def maybe_ping(version: str = "unknown") -> threading.Thread | None:
     """Public entry point. Call once on CLI startup.
 
     Returns the thread for testing convenience; ``None`` if telemetry

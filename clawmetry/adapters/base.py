@@ -16,7 +16,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, Iterator, List, Optional, Set
+from typing import Any, Iterator
 
 
 class Capability(str, Enum):
@@ -58,8 +58,8 @@ class Session:
     model: str = ""
     source: str = ""
     started_at: float = 0.0
-    ended_at: Optional[float] = None
-    parent_id: Optional[str] = None
+    ended_at: float | None = None
+    parent_id: str | None = None
     message_count: int = 0
     total_tokens: int = 0
     input_tokens: int = 0
@@ -67,12 +67,12 @@ class Session:
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
     reasoning_tokens: int = 0
-    cost_usd: Optional[float] = None
+    cost_usd: float | None = None
     cost_status: str = ""
     end_reason: str = ""
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         d = {
             "agent": self.agent,
             "id": self.id,
@@ -116,12 +116,12 @@ class Event:
     role: str = ""
     content: str = ""
     tool_name: str = ""
-    tool_calls: List[Dict[str, Any]] = field(default_factory=list)
-    parent_id: Optional[str] = None
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    parent_id: str | None = None
     tokens: int = 0
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         d = {
             "agent": self.agent,
             "sessionId": self.session_id,
@@ -156,10 +156,10 @@ class DetectResult:
     running: bool = False
     workspace: str = ""
     session_count: int = 0
-    capabilities: List[str] = field(default_factory=list)
-    meta: Dict[str, Any] = field(default_factory=dict)
+    capabilities: list[str] = field(default_factory=list)
+    meta: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "displayName": self.display_name,
@@ -194,18 +194,18 @@ class AgentAdapter(ABC):
         ...
 
     @abstractmethod
-    def list_sessions(self, limit: int = 100) -> List[Session]:
+    def list_sessions(self, limit: int = 100) -> list[Session]:
         """Return recent sessions, newest first. Empty list if none."""
         ...
 
-    def read_session(self, session_id: str) -> Optional[Session]:
+    def read_session(self, session_id: str) -> Session | None:
         """Return a single session by native ID, or ``None``."""
         return next(
             (s for s in self.list_sessions(limit=1000) if s.id == session_id),
             None,
         )
 
-    def list_events(self, session_id: str, limit: int = 500) -> List[Event]:
+    def list_events(self, session_id: str, limit: int = 500) -> list[Event]:
         """Return events for a session in chronological order."""
         return []
 
@@ -219,7 +219,7 @@ class AgentAdapter(ABC):
         return iter(())
 
     @abstractmethod
-    def capabilities(self) -> Set[Capability]:
+    def capabilities(self) -> set[Capability]:
         """Return the set of :class:`Capability` flags this adapter exposes."""
         ...
 

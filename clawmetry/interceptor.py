@@ -25,7 +25,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 import re
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -57,7 +57,7 @@ _patched_requests = False
 
 # ── Pricing table (per 1M tokens, USD) ────────────────────────────────────────
 
-_PRICING: Dict[str, Dict[str, float]] = {
+_PRICING: dict[str, dict[str, float]] = {
     # Anthropic
     "claude-opus-4": {"input": 15.0, "output": 75.0},
     "claude-sonnet-4": {"input": 3.0, "output": 15.0},
@@ -86,7 +86,7 @@ _PRICING: Dict[str, Dict[str, float]] = {
 
 def _estimate_cost(
     model: str, input_tokens: int, output_tokens: int
-) -> Optional[float]:
+) -> float | None:
     """Estimate cost in USD for given model and token counts."""
     if not model or (input_tokens == 0 and output_tokens == 0):
         return None
@@ -129,7 +129,7 @@ def _detect_provider(url: str) -> str:
 # ── Request/Response parsing ───────────────────────────────────────────────────
 
 
-def _extract_model_from_body(body_bytes: bytes, url: str) -> Optional[str]:
+def _extract_model_from_body(body_bytes: bytes, url: str) -> str | None:
     """Try to extract model name from request body JSON."""
     if not body_bytes:
         return None
@@ -149,7 +149,7 @@ def _extract_model_from_body(body_bytes: bytes, url: str) -> Optional[str]:
     return None
 
 
-def _extract_tokens_from_response(body_bytes: bytes, provider: str) -> Dict[str, int]:
+def _extract_tokens_from_response(body_bytes: bytes, provider: str) -> dict[str, int]:
     """Extract input/output token counts from response body."""
     result = {"input_tokens": 0, "output_tokens": 0}
     if not body_bytes:
@@ -178,7 +178,7 @@ def _extract_tokens_from_response(body_bytes: bytes, provider: str) -> Dict[str,
     return result
 
 
-def _extract_model_from_response(body_bytes: bytes, provider: str) -> Optional[str]:
+def _extract_model_from_response(body_bytes: bytes, provider: str) -> str | None:
     """Some providers echo the model in the response."""
     if not body_bytes:
         return None
@@ -195,7 +195,7 @@ def _extract_model_from_response(body_bytes: bytes, provider: str) -> Optional[s
 # ── JSONL writer ───────────────────────────────────────────────────────────────
 
 
-def _write_event(event: Dict[str, Any]) -> None:
+def _write_event(event: dict[str, Any]) -> None:
     """Thread-safely append an event to the JSONL output file."""
     try:
         out_file = _get_output_file()
@@ -211,16 +211,16 @@ def _write_event(event: Dict[str, Any]) -> None:
 def _build_event(
     provider: str,
     url: str,
-    model: Optional[str],
+    model: str | None,
     input_tokens: int,
     output_tokens: int,
     latency_ms: float,
     status_code: int,
     library: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Build the event dict to write to JSONL."""
     cost = _estimate_cost(model or "", input_tokens, output_tokens)
-    event: Dict[str, Any] = {
+    event: dict[str, Any] = {
         "type": "llm_call",
         "ts": datetime.now(timezone.utc).isoformat(),
         "provider": provider,
@@ -439,7 +439,7 @@ def _patch_requests() -> bool:
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 
-def activate() -> Dict[str, bool]:
+def activate() -> dict[str, bool]:
     """
     Explicitly activate the interceptor.
 

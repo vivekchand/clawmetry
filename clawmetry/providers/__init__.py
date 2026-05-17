@@ -3,17 +3,16 @@
 from __future__ import annotations
 import logging
 import os
-from typing import Dict, Optional, Type
 
 from clawmetry.providers.base import ClawMetryDataProvider
 
 logger = logging.getLogger("clawmetry.providers")
 
-_registry: Dict[str, Type[ClawMetryDataProvider]] = {}
-_active_provider: Optional[ClawMetryDataProvider] = None
+_registry: dict[str, type[ClawMetryDataProvider]] = {}
+_active_provider: ClawMetryDataProvider | None = None
 
 
-def register_provider(name: str, cls: Type[ClawMetryDataProvider]) -> None:
+def register_provider(name: str, cls: type[ClawMetryDataProvider]) -> None:
     _registry[name] = cls
 
 
@@ -23,7 +22,7 @@ def get_provider(name: str, **kwargs) -> ClawMetryDataProvider:
     return _registry[name](**kwargs)
 
 
-def get_active_provider() -> Optional[ClawMetryDataProvider]:
+def get_active_provider() -> ClawMetryDataProvider | None:
     return _active_provider
 
 
