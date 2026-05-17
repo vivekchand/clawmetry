@@ -7611,14 +7611,45 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _e:
         log.debug("local_store: snapshot/subagent write-through failed: %s", _e)
 
+    # Split encryption from POST so the two failure modes have distinct
+    # diagnostics + dispositions (sibling of #1601 / PR #1624).
+    #   - Encryption failure → park in sync_dlq (corrupt/rotated key, payload
+    #     containing non-JSON-serialisable bytes, missing cryptography wheel).
+    #     The next sync tick's _dlq_replay picks it up automatically — the
+    #     drainer is kind-agnostic and uses each row's stored endpoint.
+    #   - POST failure → existing log.warning + drop. Lower severity than the
+    #     session-batch path because the snapshot is re-emitted every cycle
+    #     (no cumulative loss); cloud catches up on the next heartbeat.
+    blob: str | None = None
+    try:
+        blob = encrypt_payload(payload, enc_key)
+    except Exception as _enc_e:
+        try:
+            _dlq_enqueue_encryption_failure(
+                kind="system_snapshot",
+                endpoint="/ingest/system-snapshot",
+                payload=payload,
+                node_id=node_id,
+                error=str(_enc_e),
+            )
+        except Exception as _dlq_e:
+            log.exception(
+                "E2E encryption AND DLQ persist both failed for "
+                "system_snapshot (snapshot dropped from cloud; next cycle "
+                "will re-emit): enc=%s dlq=%s",
+                _enc_e, _dlq_e,
+            )
+        else:
+            log.error(
+                "E2E encryption failed for system_snapshot — parked in "
+                "sync_dlq for replay (key rotation? corrupt key?): %s",
+                _enc_e,
+            )
+        return 0
     try:
         _post(
             "/ingest/system-snapshot",
-            {
-                "node_id": node_id,
-                "encrypted": True,
-                "blob": encrypt_payload(payload, enc_key),
-            },
+            {"node_id": node_id, "encrypted": True, "blob": blob},
             api_key,
         )
         return 1
