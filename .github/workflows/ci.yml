@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  # ── Fast syntax check (runs in ~10s, blocks everything else) ──────────────
+  # ── Fast syntax check (runs in ~10s, blocks everything else) ───────────────────
   lint:
     name: Syntax & Lint
     runs-on: ubuntu-latest
@@ -103,7 +103,7 @@ jobs:
             Start-Sleep 1
           }
           if (-not $ready) {
-            Write-Host "=== server_out.txt ===" 
+            Write-Host "=== server_out.txt ==="
             if (Test-Path server_out.txt) { Get-Content server_out.txt }
             Write-Host "=== server_err.txt ==="
             if (Test-Path server_err.txt) { Get-Content server_err.txt }
@@ -117,7 +117,7 @@ jobs:
           CLAWMETRY_TOKEN: ci-test-token
         run: python3 -m pytest tests/test_api.py -v --tb=short
 
-  # ── MOAT verifier (hermetic, hard-fail) ──────────────────────────────────
+  # ── MOAT verifier (hermetic, hard-fail) ───────────────────────────────────
   # Issue #1491 / PRD #1133 invariant #3: "A regression in either direction
   # is caught BEFORE merge." These 8 files (58 tests) exercise the
   # OpenClaw → DuckDB → API surface contract end-to-end, plus the lint
@@ -135,7 +135,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Install dependencies
-        run: pip install flask waitress cryptography duckdb pytest requests
+        run: pip install flask waitress cryptography duckdb pytest requests psutil
       - name: Run MOAT verifier suite
         run: |
           python3 -m pytest \
@@ -149,7 +149,7 @@ jobs:
             tests/test_local_query_api.py \
             -q
 
-  # ── E2E Playwright tests (Linux only for speed, allowed to fail) ──────────
+  # ── E2E Playwright tests (Linux only for speed, allowed to fail) ─────────
   e2e-tests:
     name: E2E Browser Tests
     needs: lint
@@ -178,7 +178,7 @@ jobs:
           CLAWMETRY_TOKEN: ci-test-token
         run: python3 -m pytest tests/test_e2e.py -v --tb=short
 
-  # ── pip install smoke test across platforms ───────────────────────────────
+  # ── pip install smoke test across platforms ─────────────────────────────
   pip-install:
     name: pip install (${{ matrix.os }})
     needs: lint
