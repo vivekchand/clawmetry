@@ -229,3 +229,61 @@ jobs:
             exit 1
           fi
           echo "✅ /static/js/app.js served from installed wheel"
+
+  # ── Live OpenClaw E2E ─────────────────────────────────────────────────────
+  # Closes #1544. Boots a real openclaw gateway, sends a real message
+  # through `openclaw agent --local`, drives the daemon's
+  # sync_sessions_recent over the on-disk JSONL, and asserts every
+  # relevant API endpoint returns the real data tagged
+  # _source: 'local_store'.
+  #
+  # Depends on the .github/actions/setup-openclaw composite action (PR
+  # #1545). When that PR lands on main this job goes green the next push;
+  # in the meantime CI runs on Linux only and skips cleanly on macOS /
+  # Windows (no openclaw binary preinstalled, test module skips
+  # gracefully).
+  #
+  # Per #1544 budget: <90s wall-clock. Total job timeout 10 min covers
+  # the cold-cache npm install (~30s) + Python deps (~30s) + the test.
+  live-openclaw-e2e:
+    name: Live OpenClaw E2E (real gateway + real send-message)
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # NON-BLOCKING for now. OpenClaw harness setup in CI is an open
+    # follow-up (see PR #1549 debug-team thread + comment from author).
+    # Synthetic MOAT verifier (#1527) + cloud roundtrip E2E (#917) +
+    # browser golden-path (#918) cover the regression class this would
+    # add defense-in-depth for. Flip to required after local-dev OpenClaw
+    # setup pattern is documented.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Setup OpenClaw
+        # Composite action from PR #1545 — installs `openclaw` via
+        # `npm install -g`, caches per-runner, exposes on PATH.
+        uses: ./.github/actions/setup-openclaw
+        with:
+          version: latest
+          gateway-token: moat-live-e2e-token
+      - name: Install Python deps
+        run: pip install flask pytest waitress duckdb cryptography requests
+      - name: Run live OpenClaw E2E
+        env:
+          # User-provided key (private repo secret) so OpenClaw can make a
+          # real LLM round-trip and write the session row the test asserts
+          # on. Rotate via console.anthropic.com if leaked.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python3 -m pytest tests/test_moat_live_openclaw_e2e.py -v --tb=short
+      - name: Upload gateway logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: moat-live-e2e-logs
+          path: |
+            /tmp/pytest-of-*/pytest-current/**/gateway.log
+          if-no-files-found: warn
+          retention-days: 7
