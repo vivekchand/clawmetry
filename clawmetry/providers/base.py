@@ -3,7 +3,7 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 @dataclass
@@ -16,7 +16,7 @@ class Session:
     total_tokens: int = 0
     kind: str = "direct"
     label: str = ""
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -25,7 +25,7 @@ class Event:
     session_id: str
     event_type: str
     ts: str
-    data: Dict[str, Any] = field(default_factory=dict)
+    data: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -33,17 +33,17 @@ class LogEntry:
     ts: str
     level: str
     message: str
-    channel: Optional[str] = None
-    session_id: Optional[str] = None
-    raw: Dict[str, Any] = field(default_factory=dict)
+    channel: str | None = None
+    session_id: str | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class MemoryFile:
     path: str
     size: int
-    modified: Optional[str] = None
-    content: Optional[str] = None
+    modified: str | None = None
+    content: str | None = None
 
 
 @dataclass
@@ -51,7 +51,7 @@ class MetricPoint:
     metric_type: str
     ts: str
     value: float
-    labels: Dict[str, str] = field(default_factory=dict)
+    labels: dict[str, str] = field(default_factory=dict)
 
 
 class ClawMetryDataProvider(ABC):
@@ -86,18 +86,18 @@ class ClawMetryDataProvider(ABC):
         self,
         limit: int = 30,
         include_subagents: bool = True,
-        since_ms: Optional[int] = None,
-    ) -> List[Session]:
+        since_ms: int | None = None,
+    ) -> list[Session]:
         """Return recent sessions, newest first."""
         ...
 
     @abstractmethod
-    def get_session(self, session_id: str) -> Optional[Session]:
+    def get_session(self, session_id: str) -> Session | None:
         """Return a single session by ID."""
         ...
 
     @abstractmethod
-    def get_session_index(self) -> Dict[str, Dict]:
+    def get_session_index(self) -> dict[str, dict]:
         """Return sessions.json-style map: session_key → metadata dict."""
         ...
 
@@ -105,8 +105,8 @@ class ClawMetryDataProvider(ABC):
 
     @abstractmethod
     def get_events(
-        self, session_id: str, limit: int = 500, tail_bytes: Optional[int] = None
-    ) -> List[Event]:
+        self, session_id: str, limit: int = 500, tail_bytes: int | None = None
+    ) -> list[Event]:
         """Return events for a session. tail_bytes: read only last N bytes of JSONL."""
         ...
 
@@ -114,20 +114,20 @@ class ClawMetryDataProvider(ABC):
 
     @abstractmethod
     def get_log_lines(
-        self, date_str: Optional[str] = None, limit: int = 1000
-    ) -> List[str]:
+        self, date_str: str | None = None, limit: int = 1000
+    ) -> list[str]:
         """Return raw log lines for a date (YYYY-MM-DD). None = today."""
         ...
 
     @abstractmethod
-    def list_log_dates(self, days_back: int = 31) -> List[str]:
+    def list_log_dates(self, days_back: int = 31) -> list[str]:
         """Return list of YYYY-MM-DD strings that have log data."""
         ...
 
     # ── Memory / Workspace ────────────────────────────────────────────────────
 
     @abstractmethod
-    def list_memory_files(self) -> List[MemoryFile]:
+    def list_memory_files(self) -> list[MemoryFile]:
         """Return workspace memory files with metadata."""
         ...
 
@@ -139,12 +139,12 @@ class ClawMetryDataProvider(ABC):
     # ── Crons ─────────────────────────────────────────────────────────────────
 
     @abstractmethod
-    def list_crons(self) -> List[Dict[str, Any]]:
+    def list_crons(self) -> list[dict[str, Any]]:
         """Return cron job definitions."""
         ...
 
     # ── Health ────────────────────────────────────────────────────────────────
 
-    def health_check(self) -> Dict[str, Any]:
+    def health_check(self) -> dict[str, Any]:
         """Return health status. Override for custom checks."""
         return {"provider": self.__class__.__name__, "ok": True}

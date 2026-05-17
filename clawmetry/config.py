@@ -7,7 +7,6 @@ Currently used for type hints and documentation. dashboard.py globals remain unc
 from __future__ import annotations
 import os
 from dataclasses import dataclass, field
-from typing import List, Optional
 
 
 # ── DuckDB local-store fast-path feature gate ──────────────────────────────
@@ -66,13 +65,13 @@ class ClawMetryConfig:
     # Runtime
     model: str = ""
     provider: str = ""
-    channels: List[str] = field(default_factory=list)
+    channels: list[str] = field(default_factory=list)
     host: str = "127.0.0.1"
     port: int = 8900
     debug: bool = False
 
     # Auth
-    auth_token: Optional[str] = None
+    auth_token: str | None = None
 
     def from_globals(self, _dashboard_module=None) -> "ClawMetryConfig":
         """
