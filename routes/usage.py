@@ -720,6 +720,119 @@ def _try_local_store_cost_comparison():
     }
 
 
+def _try_local_store_usage_forecast():
+    """Fast path for /api/usage/forecast (issue #1565, Tier-1).
+
+    Projects current spend trajectory to end-of-month:
+        daily_rate      = sum(cost_usd last 7 days) / 7
+        projected_month = cost_so_far_this_month + daily_rate * days_remaining
+
+    Source preference (matters because of the dedupe-pattern footgun
+    documented in ``feedback_usage_dedupe_pattern.md``):
+
+      1. ``query_aggregates`` — SQL-side dedupe over the FULL events
+         table (every event row that carries ``cost_usd``, billable-turn
+         and non-message rows alike). Safer for cost projection because
+         the daemon stamps ``cost_usd`` on rows the splits walker skips
+         (e.g. tool retries, fallback turns).
+      2. ``query_daily_usage_splits`` — only walks
+         ``_BILLABLE_TURN_EVENT_TYPES``. Used as a fallback so a fresh
+         install (aggregates empty, only events seeded) still produces
+         a forecast.
+
+    Returns ``None`` when no store is reachable so the route can fall
+    back to the JSONL legacy projection. Returns
+    ``{available: False, _source: 'local_store'}`` when the store IS
+    reachable but holds zero usage rows — the forecast is genuinely
+    unavailable, the UI handles this and renders the empty-state copy.
+    """
+    import calendar
+    from datetime import datetime, timedelta, timezone
+
+    store = _ls_get_store()
+    if store is None:
+        return None
+
+    # Pull aggregates first — they cover every cost-bearing row, deduped
+    # at SQL level (see ``feedback_usage_dedupe_pattern.md`` for why
+    # walking only billable turns silently drops ~30% of cost).
+    daily_costs: dict[str, float] = {}
+    try:
+        agg_rows = store.query_aggregates() or []
+    except Exception:
+        agg_rows = []
+    for r in agg_rows:
+        day = r.get("day", "")
+        if day:
+            daily_costs[day] = daily_costs.get(day, 0.0) + float(r.get("cost_usd") or 0)
+
+    # Fresh-install fallback: aggregates table empty → derive from
+    # the splits walker. Splits dedupe sibling pairs but skip non-message
+    # event types; for forecast we're OK with that because the alternative
+    # is no forecast at all on a fresh install.
+    if not daily_costs:
+        try:
+            split_rows = store.query_daily_usage_splits() or []
+        except Exception:
+            split_rows = []
+        for r in split_rows:
+            day = r.get("day", "")
+            if day:
+                daily_costs[day] = daily_costs.get(day, 0.0) + float(r.get("cost_usd") or 0)
+
+    today = datetime.now(timezone.utc).date()
+    window_days = 7
+    window: list[float] = []
+    for i in range(window_days):
+        d = (today - timedelta(days=i)).isoformat()
+        window.append(daily_costs.get(d, 0.0))
+
+    daily_rate = sum(window) / window_days
+    days_in_month = calendar.monthrange(today.year, today.month)[1]
+    days_elapsed = today.day
+    days_remaining = days_in_month - days_elapsed
+    month_str = today.strftime("%Y-%m")
+    cost_this_month = sum(v for k, v in daily_costs.items() if k.startswith(month_str))
+
+    # If the store is reachable but holds zero usage rows AND we have no
+    # spend this month, surface ``available: False`` with the _source
+    # tag — the UI renders the empty-state copy and the audit can still
+    # see the canary.
+    if not daily_costs and cost_this_month == 0 and daily_rate == 0:
+        return {"available": False, "reason": "no_data", "_source": "local_store"}
+
+    projected_month = cost_this_month + daily_rate * days_remaining
+
+    try:
+        import dashboard as _d
+        budget_cfg = _d._get_budget_config()
+    except Exception:
+        budget_cfg = {}
+    monthly_budget = float(budget_cfg.get("monthly_limit") or 0)
+    monthly_cap = float(budget_cfg.get("monthly_cap_usd") or 0)
+    effective_budget = monthly_budget or monthly_cap or 0.0
+
+    budget_exceeded = bool(effective_budget > 0 and projected_month > effective_budget)
+    days_to_budget: float | None = None
+    if effective_budget > 0 and daily_rate > 0:
+        remaining_budget = effective_budget - cost_this_month
+        days_to_budget = max(0.0, remaining_budget / daily_rate)
+
+    return {
+        "available": True,
+        "daily_rate_usd": round(daily_rate, 4),
+        "cost_this_month_usd": round(cost_this_month, 4),
+        "projected_month_usd": round(projected_month, 4),
+        "days_remaining_in_month": days_remaining,
+        "monthly_budget_usd": effective_budget,
+        "budget_exceeded": budget_exceeded,
+        "days_to_budget": round(days_to_budget, 1) if days_to_budget is not None else None,
+        "window_days": window_days,
+        "daily_window": [round(c, 4) for c in reversed(window)],
+        "_source": "local_store",
+    }
+
+
 def _try_local_store_model_attribution():
     """Fast path for /api/model-attribution. Per-model assistant turn count,
     session count, provider tag, and share %. Switches list is best-effort
@@ -1788,72 +1901,30 @@ def api_usage_forecast():
           projected_month = cost_so_far + daily_rate * days_remaining
           days_to_budget = (budget - cost_so_far) / daily_rate
 
+    Issue #1565 (Tier-1): now goes through
+    ``_try_local_store_usage_forecast`` under the standard
+    ``is_local_store_read_enabled()`` gate so the audit canary
+    (``_source: 'local_store'`` in the JSON body) shows up in browser
+    devtools the same way the rest of the Usage tab does.
+
     Returns {available, daily_rate_usd, cost_this_month_usd,
              projected_month_usd, days_remaining_in_month,
              monthly_budget_usd, budget_exceeded, days_to_budget,
              window_days, daily_window, _source}.
-    Returns {available: false} when no local-store data is present.
+    Returns {available: false} when no usage data is present.
     """
-    import calendar
-    import dashboard as _d
-    from datetime import datetime, timedelta, timezone
+    if is_local_store_read_enabled():
+        fast = _try_local_store_usage_forecast()
+        if fast is not None:
+            return jsonify(fast)
 
-    today = datetime.now(timezone.utc).date()
-
-    rows = _ls_call("query_daily_usage_splits") or []
-    if not rows:
-        rows = _ls_call("query_aggregates") or []
-
-    if not rows:
-        return jsonify({"available": False, "reason": "no_data"})
-
-    daily_costs: dict[str, float] = {}
-    for r in rows:
-        day = r.get("day", "")
-        if day:
-            daily_costs[day] = float(r.get("cost_usd") or 0)
-
-    window_days = 7
-    window: list[float] = []
-    for i in range(window_days):
-        d = (today - timedelta(days=i)).isoformat()
-        window.append(daily_costs.get(d, 0.0))
-
-    daily_rate = sum(window) / window_days
-
-    days_in_month = calendar.monthrange(today.year, today.month)[1]
-    days_elapsed = today.day
-    days_remaining = days_in_month - days_elapsed
-
-    month_str = today.strftime("%Y-%m")
-    cost_this_month = sum(v for k, v in daily_costs.items() if k.startswith(month_str))
-
-    projected_month = cost_this_month + daily_rate * days_remaining
-
-    budget_cfg = _d._get_budget_config()
-    monthly_budget = float(budget_cfg.get("monthly_limit") or 0)
-    monthly_cap = float(budget_cfg.get("monthly_cap_usd") or 0)
-    effective_budget = monthly_budget or monthly_cap or 0.0
-
-    budget_exceeded = bool(effective_budget > 0 and projected_month > effective_budget)
-    days_to_budget: float | None = None
-    if effective_budget > 0 and daily_rate > 0:
-        remaining_budget = effective_budget - cost_this_month
-        days_to_budget = max(0.0, remaining_budget / daily_rate)
-
-    return jsonify({
-        "available": True,
-        "daily_rate_usd": round(daily_rate, 4),
-        "cost_this_month_usd": round(cost_this_month, 4),
-        "projected_month_usd": round(projected_month, 4),
-        "days_remaining_in_month": days_remaining,
-        "monthly_budget_usd": effective_budget,
-        "budget_exceeded": budget_exceeded,
-        "days_to_budget": round(days_to_budget, 1) if days_to_budget is not None else None,
-        "window_days": window_days,
-        "daily_window": [round(c, 4) for c in reversed(window)],
-        "_source": "local_store",
-    })
+    # Local store unavailable (no daemon, tests with the flag off): fall
+    # back to a minimal "no data" response so the route never 500s. The
+    # forecast card is a derived view of the existing /api/usage
+    # aggregate — when DuckDB is unreachable, every other Usage-tab
+    # surface degrades the same way (anomalies, by-plugin, attribution),
+    # so a JSONL re-implementation here would be pure duplication.
+    return jsonify({"available": False, "reason": "no_data"})
 
 
 @bp_usage.route("/api/usage/export")
