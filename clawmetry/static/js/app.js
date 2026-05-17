@@ -4009,6 +4009,21 @@ function _drawBrainGraph(ts, now) {
 
 var _brainSSE = null;
 var _brainSSEConnected = false;
+// Issue #1596 — exponential backoff state for SSE reconnect. A single
+// retry chain (no parallel storms): `_brainSSERetryTimer` holds the
+// pending setTimeout id, `_brainSSERetryAttempt` is the current attempt
+// index (0-based; 0 = fresh failure, 5+ = banner). `_brainSSEFirstFailMs`
+// is the wall-clock of the first failure in the current outage so we can
+// surface the "Connection lost" banner after 30s of failed retries.
+var _brainSSERetryTimer = null;
+var _brainSSERetryAttempt = 0;
+var _brainSSEFirstFailMs = 0;
+// Caps: 1s, 2s, 4s, 8s, 16s, then 30s forever. Matches the issue spec.
+var _BRAIN_SSE_BACKOFF_MS = [1000, 2000, 4000, 8000, 16000];
+var _BRAIN_SSE_BACKOFF_MAX_MS = 30000;
+// Banner threshold — surface explicit UI after 30s of failed retries so
+// users on flaky networks know the feed is frozen, not just quiet.
+var _BRAIN_SSE_BANNER_THRESHOLD_MS = 30000;
 
 function _updateBrainLiveIndicator(connected) {
   _brainSSEConnected = connected;
@@ -4019,6 +4034,85 @@ function _updateBrainLiveIndicator(connected) {
   } else {
     el.innerHTML = '<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(100,100,100,0.15);color:#888;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:600;">● POLLING</span>';
   }
+}
+
+// Issue #1596 — backoff math, extracted so the unit test can exercise it
+// without a real EventSource. Returns the ms to wait before attempt
+// `attempt` (0-indexed). Caps at _BRAIN_SSE_BACKOFF_MAX_MS once the
+// table is exhausted.
+function _brainSSEBackoffMs(attempt) {
+  if (attempt < 0) attempt = 0;
+  if (attempt < _BRAIN_SSE_BACKOFF_MS.length) {
+    return _BRAIN_SSE_BACKOFF_MS[attempt];
+  }
+  return _BRAIN_SSE_BACKOFF_MAX_MS;
+}
+
+// Issue #1596 — show/hide the "Connection lost" banner above the brain
+// stream. The banner uses plain-English copy ("Reconnecting...") per
+// feedback_simple_ui_for_nontechnical.md and explicitly avoids em-dashes
+// per feedback_no_em_dashes_in_user_facing_copy.md.
+function _showBrainConnectionLostBanner() {
+  var host = document.getElementById('brain-connection-lost-banner');
+  if (!host) {
+    var streamEl = document.getElementById('brain-stream');
+    if (!streamEl || !streamEl.parentElement) return;
+    host = document.createElement('div');
+    host.id = 'brain-connection-lost-banner';
+    host.style.cssText = 'padding:10px 14px;margin-bottom:8px;font-size:13px;color:#f59e0b;border:1px solid rgba(245,158,11,0.35);border-radius:6px;background:rgba(245,158,11,0.08);display:flex;align-items:center;gap:10px;';
+    streamEl.parentElement.insertBefore(host, streamEl);
+  }
+  host.style.display = 'flex';
+  host.innerHTML =
+    '<span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;animation:livePulse 1.5s ease-in-out infinite;"></span>' +
+    '<span><strong>Connection lost.</strong> Reconnecting…</span>';
+}
+function _hideBrainConnectionLostBanner() {
+  var host = document.getElementById('brain-connection-lost-banner');
+  if (host) host.style.display = 'none';
+}
+
+// Issue #1596 — schedule the next reconnect attempt. Single-chain
+// (clears any pending timer first) so back-to-back errors never spawn
+// parallel reconnect storms. Visibility-aware: when the tab is hidden,
+// the visibility guard above closes the EventSource and we should not
+// burn cycles retrying — defer until the tab regains focus.
+function _scheduleBrainSSEReconnect() {
+  // Single-chain: cancel any pending retry before scheduling a new one.
+  if (_brainSSERetryTimer) {
+    clearTimeout(_brainSSERetryTimer);
+    _brainSSERetryTimer = null;
+  }
+  // Only retry while the user is actually on the brain page; otherwise
+  // the next loadBrainPage() call will kick off a fresh _startBrainSSE.
+  var page = document.getElementById('page-brain');
+  if (!page || !page.classList.contains('active')) return;
+  // Pause retries while the tab is hidden — the visibility guard will
+  // re-trigger _startBrainSSE on focus via loadBrainPage's call site.
+  if (typeof document !== 'undefined' && document.hidden) return;
+  // Banner threshold check: if we've been failing for >30s, show the
+  // explicit "Connection lost" banner so the user knows.
+  if (_brainSSEFirstFailMs && (Date.now() - _brainSSEFirstFailMs) >= _BRAIN_SSE_BANNER_THRESHOLD_MS) {
+    _showBrainConnectionLostBanner();
+  }
+  var delay = _brainSSEBackoffMs(_brainSSERetryAttempt);
+  _brainSSERetryAttempt += 1;
+  _brainSSERetryTimer = setTimeout(function() {
+    _brainSSERetryTimer = null;
+    _startBrainSSE();
+  }, delay);
+}
+
+// Issue #1596 — called from the 'connected' SSE event. Resets backoff
+// state and clears the banner. Idempotent.
+function _resetBrainSSEReconnectState() {
+  if (_brainSSERetryTimer) {
+    clearTimeout(_brainSSERetryTimer);
+    _brainSSERetryTimer = null;
+  }
+  _brainSSERetryAttempt = 0;
+  _brainSSEFirstFailMs = 0;
+  _hideBrainConnectionLostBanner();
 }
 
 function _startBrainSSE() {
@@ -4038,6 +4132,8 @@ function _startBrainSSE() {
 
     es.addEventListener('connected', function() {
       _updateBrainLiveIndicator(true);
+      // Issue #1596 — successful reconnect clears banner + retry state.
+      _resetBrainSSEReconnectState();
     });
 
     es.onmessage = function(e) {
@@ -4073,20 +4169,30 @@ function _startBrainSSE() {
       _updateBrainLiveIndicator(false);
       try { es.close(); } catch(e){}
       _brainSSE = null;
-      // Fall back to polling
+      // Issue #1596 — replace one-shot poll fallback with exponential
+      // backoff reconnect loop. Mark the first-fail timestamp so the
+      // banner-threshold check can surface UI after 30s of failures.
+      // Single retry chain (no parallel storms) — _scheduleBrainSSEReconnect
+      // clears any pending timer before scheduling the next attempt.
+      if (!_brainSSEFirstFailMs) _brainSSEFirstFailMs = Date.now();
+      // Belt-and-braces poll fallback so the feed at least gets one
+      // hydration even if SSE stays broken — but on TOP of the SSE
+      // retry chain, not instead of it.
       if (document.getElementById('page-brain') && document.getElementById('page-brain').classList.contains('active')) {
+        if (_brainRefreshTimer) clearTimeout(_brainRefreshTimer);
         _brainRefreshTimer = setTimeout(function() { loadBrainPage(true); }, 5000);
       }
+      _scheduleBrainSSEReconnect();
     };
 
     es.addEventListener('done', function() {
       _updateBrainLiveIndicator(false);
       try { es.close(); } catch(e){}
       _brainSSE = null;
-      // Reconnect after a short delay
-      if (document.getElementById('page-brain') && document.getElementById('page-brain').classList.contains('active')) {
-        setTimeout(_startBrainSSE, 2000);
-      }
+      // Issue #1596 — route 'done' through the same backoff chain so a
+      // server-side close behaves identically to a network error. The
+      // 'connected' handler resets backoff on the next successful open.
+      _scheduleBrainSSEReconnect();
     });
   } catch(e) {
     _updateBrainLiveIndicator(false);
@@ -4097,6 +4203,16 @@ function _stopBrainSSE() {
   if (_brainSSE) { try { _brainSSE.close(); } catch(e){} }
   _brainSSE = null;
   _updateBrainLiveIndicator(false);
+  // Issue #1596 — leaving the brain page must also tear down the retry
+  // chain + dismiss the banner; otherwise a stale timer can fire after
+  // navigation and reopen an SSE the user no longer wants.
+  if (_brainSSERetryTimer) {
+    clearTimeout(_brainSSERetryTimer);
+    _brainSSERetryTimer = null;
+  }
+  _brainSSERetryAttempt = 0;
+  _brainSSEFirstFailMs = 0;
+  _hideBrainConnectionLostBanner();
 }
 
 function _buildSourcesList(events) {
