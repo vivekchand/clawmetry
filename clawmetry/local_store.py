@@ -113,6 +113,13 @@ def _migrate_legacy_db_path() -> None:
 FLUSH_INTERVAL_SECS = float(os.environ.get("CLAWMETRY_LOCAL_FLUSH_SECS", "2.0"))
 FLUSH_BATCH = int(os.environ.get("CLAWMETRY_LOCAL_FLUSH_BATCH", "1000"))
 RING_MAX = int(os.environ.get("CLAWMETRY_LOCAL_RING_MAX", "10000"))
+# Bounded-retry budget for transient DuckDB write failures (lock contention,
+# brief disk hiccups). Default 3 attempts × ≤1s backoff = ≤1.4s wall. After
+# the budget the flush re-raises and the batch stays queued in the ring for
+# the next tick (or process restart). INSERT OR IGNORE keyed on event id
+# makes any replay a no-op.
+FLUSH_MAX_ATTEMPTS = int(os.environ.get("CLAWMETRY_LOCAL_FLUSH_MAX_ATTEMPTS", "3"))
+FLUSH_RETRY_BASE_SECS = float(os.environ.get("CLAWMETRY_LOCAL_FLUSH_RETRY_BASE_SECS", "0.05"))
 LOCAL_MAX_BYTES = int(
     float(os.environ.get("CLAWMETRY_LOCAL_MAX_GB", "5.0")) * 1024 * 1024 * 1024
 )
@@ -2557,23 +2564,57 @@ class LocalStore:
         """Drain the ring into DuckDB in one transaction. Returns rows written.
         Snapshot-then-pop pattern: events stay in the ring until the COMMIT
         succeeds, so a write failure leaves them queued for the next attempt
-        instead of vanishing."""
+        instead of vanishing.
+
+        Bounded-retry on transient DuckDB write errors (lock contention, brief
+        disk hiccups) so a single flaky tick doesn't drop a batch. After
+        ``FLUSH_MAX_ATTEMPTS`` failures we log and re-raise — the ring still
+        holds the batch, so the next flusher tick (or process restart) gets
+        another shot. INSERT OR IGNORE keyed on the per-event id makes the
+        replay idempotent."""
         with self._ring_lock:
             if not self._ring:
                 return 0
             batch = list(self._ring)
         rows = [_event_to_row(e) for e in batch]
-        with self._write_lock:
-            with _txn(self._conn):
-                self._conn.executemany(
-                    """
-                    INSERT OR IGNORE INTO events
-                      (id, agent_type, node_id, agent_id, session_id, workspace_id,
-                       event_type, ts, data, cost_usd, token_count, model, created_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    """,
-                    rows,
-                )
+        last_exc: Exception | None = None
+        for attempt in range(FLUSH_MAX_ATTEMPTS):
+            try:
+                with self._write_lock:
+                    with _txn(self._conn):
+                        self._conn.executemany(
+                            """
+                            INSERT OR IGNORE INTO events
+                              (id, agent_type, node_id, agent_id, session_id, workspace_id,
+                               event_type, ts, data, cost_usd, token_count, model, created_at)
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                            """,
+                            rows,
+                        )
+                last_exc = None
+                break
+            except Exception as exc:  # noqa: BLE001 — surface any DuckDB error
+                last_exc = exc
+                if attempt + 1 < FLUSH_MAX_ATTEMPTS:
+                    # Exponential backoff: 0.05s, 0.10s, 0.20s, ... capped at 1s.
+                    delay = min(FLUSH_RETRY_BASE_SECS * (2 ** attempt), 1.0)
+                    log.warning(
+                        "local store: flush attempt %d/%d failed (%s); "
+                        "retrying in %.2fs (ring keeps batch)",
+                        attempt + 1, FLUSH_MAX_ATTEMPTS, exc, delay,
+                    )
+                    time.sleep(delay)
+        if last_exc is not None:
+            # All attempts exhausted. The ring still holds the batch (we never
+            # popped), so a subsequent flush — including one triggered by the
+            # next process start after a crash — will retry from the same
+            # rows. Idempotent: INSERT OR IGNORE collapses any double-write.
+            log.error(
+                "local store: flush failed after %d attempts; %d events stay "
+                "queued for next tick (err=%s)",
+                FLUSH_MAX_ATTEMPTS, len(batch), last_exc,
+            )
+            raise last_exc
         with self._ring_lock:
             for _ in range(len(batch)):
                 if self._ring:
@@ -2594,6 +2635,19 @@ class LocalStore:
                     pass  # partial install / approvals.py not importable
                 break  # one kick per batch; coalesces N events into 1 wake
         return len(rows)
+
+    def flush(self) -> int:
+        """Public synchronous flush. Drains the ring into DuckDB now and
+        returns the row count written. Callers that need write-then-checkpoint
+        semantics (e.g. sync.py advancing a JSONL offset only after the rows
+        are durable in DuckDB) MUST call this before persisting their cursor;
+        otherwise a crash between ring-enqueue and the background flusher
+        tick silently drops events even though the offset advanced.
+
+        No-op in read-only mode (returns 0)."""
+        if self._read_only:
+            return 0
+        return self._flush_now()
 
     # ── queries ─────────────────────────────────────────────────────────
 
