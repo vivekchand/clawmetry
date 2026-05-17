@@ -1358,22 +1358,159 @@ def api_cost_optimization():
         )
 
 
+# Tool keys that the legacy log-scanner tracked as "command" patterns. We
+# preserve the exact shape here so the unchanged ``_generate_automation_suggestions``
+# transformer (in ``dashboard.py``) still emits the same suggestion rows
+# for cron / skill candidates (curl, git, npm, systemctl, grep, find, ls).
+# Real OpenClaw v3 tool names are mapped onto these legacy buckets so the
+# fast path produces equivalent recommendations without re-walking
+# moltbot-*.log files that don't exist on most installs.
+_AUTOMATION_TOOL_TO_LEGACY = {
+    # Bash/exec family → "curl"/"git"/"npm"/"systemctl" classification is
+    # delegated to the suggestion transformer via raw tool name. For tools
+    # without a legacy bucket we still surface the pattern but the
+    # transformer skips the cron/skill upsell — fine, the universal
+    # suggestions still land.
+    "Bash": "bash",
+    "exec": "bash",
+    "process": "bash",
+    "Read": "read",
+    "read": "read",
+    "Write": "write",
+    "write": "write",
+    "write_file": "write",
+    "Edit": "edit",
+    "edit": "edit",
+    "Grep": "grep",
+    "grep": "grep",
+    "Glob": "find",
+    "find": "find",
+    "web_search": "curl",       # external HTTP → same bucket as curl
+    "ollama_web_search": "curl",
+    "web_fetch": "curl",
+    "ollama_web_fetch": "curl",
+}
+
+
+def _try_local_store_automation_analysis():
+    """Tier-1 DuckDB fast path for /api/automation-analysis (refs #1565).
+
+    Replaces the legacy ``dashboard._analyze_work_patterns`` scanner,
+    which reads ``~/.openclaw/logs/moltbot-YYYY-MM-DD.log`` files and
+    journalctl output to count tool/command frequency. On modern OpenClaw
+    installs those log files don't exist (the agent runtime now writes
+    structured JSONL events into the session transcripts, ingested into
+    DuckDB by the sync daemon) — so the legacy path silently returns an
+    empty pattern list on every fresh install, which then makes the
+    suggestion transformer emit ONLY universal fallback rows (no
+    tool-driven cron / skill candidates). Same silent-zero hazard as the
+    cost-optimizer in-memory ring (see PR #1576).
+
+    This helper queries the daemon-normalised ``events`` table for the
+    last 7 days of tool invocations, buckets them by tool name, and
+    builds the same ``{title, description, frequency, confidence,
+    priority, type, target}`` rows the legacy scanner produced. The
+    downstream transformer (``_generate_automation_suggestions``) is
+    pure-Python and unchanged — same suggestion shape, same dedupe, same
+    8-row cap.
+
+    Returns ``None`` when:
+      * the daemon proxy is unreachable AND direct DuckDB open fails
+      * the events table has no tool-call rows in the 7d window
+        (caller falls back to the legacy log scanner so journalctl users
+        keep working)
+    """
+    from routes.sessions import _ls_call  # late import: avoid cycle
+    since_iso = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    rows = _ls_call(
+        "query_tool_call_invocations", since=since_iso, limit=50_000
+    ) or []
+    if not rows:
+        return None
+
+    # Bucket invocations by legacy tool key. We accept both the v3 native
+    # name (e.g. "Bash") and the legacy log-scanner key (e.g. "bash") so
+    # the suggestion transformer's hard-coded match list keeps working.
+    freq: dict = {}
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        raw = (r.get("name") or "").strip()
+        if not raw:
+            continue
+        key = _AUTOMATION_TOOL_TO_LEGACY.get(raw, raw.lower())
+        freq[key] = freq.get(key, 0) + 1
+
+    if not freq:
+        return None
+
+    patterns: list = []
+    for cmd, count in freq.items():
+        # Same threshold as the legacy scanner — 5+ uses/week. Keeps the
+        # noise floor identical so callers don't see a flood of new low-
+        # confidence rows just because DuckDB has every event.
+        if count < 5:
+            continue
+        confidence = min(90, count * 10)
+        priority = "high" if count >= 15 else "medium" if count >= 10 else "low"
+        patterns.append({
+            "title": f'Frequent "{cmd}" command usage',
+            "description": (
+                f'Command "{cmd}" has been used {count} times in the past '
+                f'week. This might be a candidate for automation.'
+            ),
+            "frequency": f"{count} times/week",
+            "confidence": confidence,
+            "priority": priority,
+            "type": "command",
+            "target": cmd,
+            "_source": "local_store",
+        })
+
+    if not patterns:
+        return None
+    patterns.sort(
+        key=lambda x: (
+            x["priority"] == "high",
+            x["priority"] == "medium",
+            x["confidence"],
+        ),
+        reverse=True,
+    )
+    return patterns
+
+
 @bp_config.route("/api/automation-analysis")
 def api_automation_analysis():
     """Automation pattern analysis and suggestions for new cron jobs or skills."""
     import dashboard as _d
     try:
-        # Analyze recent patterns
-        patterns = _d._analyze_work_patterns()
+        patterns = None
+        source = None
+        if is_local_store_read_enabled():
+            try:
+                patterns = _try_local_store_automation_analysis()
+            except Exception:
+                patterns = None
+            if patterns is not None:
+                source = "local_store"
+        if patterns is None:
+            # Legacy log-scanner fallback (journalctl + moltbot-*.log).
+            patterns = _d._analyze_work_patterns()
 
-        # Generate automation suggestions
+        # Pure-Python transformer — unchanged shape. Works on both the
+        # DuckDB rows and the legacy log-scanner rows since they share
+        # the same {type, target, ...} schema.
         suggestions = _d._generate_automation_suggestions(patterns)
 
-        return jsonify({
+        body = {
             'patterns': patterns,
             'suggestions': suggestions,
-            'lastAnalysis': datetime.now(timezone.utc).isoformat()
-        })
+            'lastAnalysis': datetime.now(timezone.utc).isoformat(),
+        }
+        if source:
+            body['_source'] = source
+        return jsonify(body)
     except Exception as e:
         return jsonify({
             'patterns': [],
