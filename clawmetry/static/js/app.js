@@ -4067,6 +4067,9 @@ async function loadBrainPage(silent) {
     // last 24h. Render a one-line upgrade CTA above the brain stream so
     // they know full history exists on Cloud-Pro.
     _renderBrainHistoryCap(!!(data && data.capped_at_24h));
+    // NeMo daily-cap banner (issue #1170) — only visible when a free-tier
+    // user has tripped the 1000-events/day NeMo ingest ceiling.
+    _refreshNemoCapBanner('brain-stream');
     // Issue #1195 — One-time "Live event details restored" toast for users
     // who lived through the 0.12.182 empty-detail regression. Fires only if
     // (a) at least one event has a non-empty detail, (b) the user hasn't
@@ -7468,9 +7471,57 @@ async function loadUsage() {
     loadCacheAnalytics();
     // Load cost forecast (issue #1413)
     loadCostForecast();
+    // NeMo daily-cap banner (issue #1170) — only visible when a free-tier
+    // user has tripped the 1000-events/day ceiling.
+    _refreshNemoCapBanner('usage-chart');
   } catch(e) {
     document.getElementById('usage-chart').innerHTML = '<span style="color:#555">No usage data available</span>';
   }
+}
+
+// ── NeMo free-tier daily cap banner (issue #1170) ─────────────────────
+// Polls /api/nemo-cap-status and renders a one-line upsell row above the
+// chosen anchor element (Brain stream or Tokens chart) when a Free user
+// has hit the daily NeMo ingest cap. Pro users + un-tripped Free users
+// see nothing. Re-uses the same upgrade CTA pattern as the approvals
+// upsell row (#1328) for visual consistency.
+function _renderNemoCapBanner(anchorId, snapshot) {
+  var anchor = document.getElementById(anchorId);
+  if (!anchor || !anchor.parentElement) return;
+  var hostId = 'nemo-cap-banner-' + anchorId;
+  var host = document.getElementById(hostId);
+  var shouldShow = !!(snapshot && snapshot.cap_hit && !snapshot.is_pro);
+  if (!shouldShow) {
+    if (host) { host.style.display = 'none'; host.innerHTML = ''; }
+    return;
+  }
+  if (!host) {
+    host = document.createElement('div');
+    host.id = hostId;
+    host.style.cssText = 'padding:10px 12px;margin-bottom:10px;font-size:12px;line-height:1.5;color:var(--text-secondary);border:1px dashed rgba(124,92,255,0.5);border-radius:6px;background:rgba(124,92,255,0.06);';
+    anchor.parentElement.insertBefore(host, anchor);
+  }
+  host.style.display = '';
+  var cap = Number(snapshot.cap) || 1000;
+  var used = Math.min(Number(snapshot.used) || 0, cap);
+  host.innerHTML =
+    '<strong>NeMo daily cap reached (' + used + '/' + cap + ')</strong> '
+    + 'Further NeMo events are dropped until UTC midnight. '
+    + '<a href="https://app.clawmetry.com/upgrade?source=nemo_cap" target="_blank" rel="noopener" '
+    + 'style="color:var(--accent,#7c5cff);font-weight:600;text-decoration:none;">'
+    + 'Upgrade to Pro</a> for unlimited NeMo ingest.';
+}
+
+function _refreshNemoCapBanner(anchorId) {
+  try {
+    if (window.CLOUD_MODE) return;
+    fetch('/api/nemo-cap-status').then(function(r) {
+      if (!r.ok) return null;
+      return r.json();
+    }).then(function(snap) {
+      if (snap) _renderNemoCapBanner(anchorId, snap);
+    }).catch(function() { /* swallow — banner is non-critical */ });
+  } catch (_e) { /* never block render */ }
 }
 
 // Issue #1448 surface 2 — render the OSS / Cloud-Free retention upsell

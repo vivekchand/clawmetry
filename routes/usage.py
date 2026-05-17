@@ -2924,3 +2924,31 @@ def api_token_attribution():
         'messages': messages,
         'totals': totals,
         'session_id': wanted_sid if wanted_sid else None,    })
+
+
+# ── NeMo free-tier cap status (issue #1170) ────────────────────────────
+#
+# Powers the upsell banner that the Brain + Tokens tabs render once a
+# free-tier user trips the 1000-events/day NeMo ingest cap. Returns the
+# same shape ``clawmetry.adapters.nemo.get_nemo_cap_state`` produces so
+# the JS can pass through without any reshape.
+@bp_usage.route("/api/nemo-cap-status")
+def api_nemo_cap_status():
+    """Return the current daily NeMo ingest cap snapshot.
+
+    Cheap, side-effect-free read. Never raises out — on any failure we
+    fall back to a "no cap hit, no Pro" payload so the banner stays
+    hidden rather than spuriously showing up.
+    """
+    try:
+        from clawmetry.adapters.nemo import get_nemo_cap_state, NEMO_FREE_DAILY_CAP
+        return jsonify(get_nemo_cap_state())
+    except Exception:
+        return jsonify({
+            "cap": 1000,
+            "used": 0,
+            "dropped": 0,
+            "is_pro": False,
+            "cap_hit": False,
+            "date": "",
+        })
