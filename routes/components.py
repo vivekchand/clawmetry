@@ -928,7 +928,7 @@ def _try_local_store_component_gateway(limit: int, offset: int):
             return "message", "today_messages"
         if et in _MSG_OUT:
             return "message", "today_messages"
-        if et == "message" and isinstance(data, dict):
+        if et == "message" and isinstance(data, dict):  # v3-shape-gate: allow (reason: defensive — v3 names already handled above via _MSG_IN/_MSG_OUT, this is the legacy fallback in the same classifier)
             inner = data.get("message") if isinstance(data.get("message"), dict) else data
             role = (inner or {}).get("role") if isinstance(inner, dict) else None
             if role in ("user", "assistant"):
@@ -1589,7 +1589,7 @@ def api_component_brain():
 
                         if obj.get("type") != "message":
                             # Track user message timestamps for duration calc
-                            if obj.get("type") == "message" or (
+                            if obj.get("type") == "message" or (  # v3-shape-gate: allow (reason: JSONL on-disk walker; iterates per-line obj from .jsonl file)
                                 isinstance(obj.get("message"), dict)
                                 and obj["message"].get("role") == "user"
                             ):

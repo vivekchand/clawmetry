@@ -119,13 +119,14 @@ jobs:
 
   # ── MOAT verifier (hermetic, hard-fail) ───────────────────────────────────
   # Issue #1491 / PRD #1133 invariant #3: "A regression in either direction
-  # is caught BEFORE merge." These 8 files (58 tests) exercise the
+  # is caught BEFORE merge." These 9 files (61 tests) exercise the
   # OpenClaw → DuckDB → API surface contract end-to-end, plus the lint
-  # guards that pin the chokepoint patterns. No live server, no gateway,
-  # no network — drives sync/local_store helpers + Flask test client.
+  # guards that pin the chokepoint patterns (no-direct-get_store,
+  # v3-shape silent-zero refs #1582). No live server, no gateway, no
+  # network — drives sync/local_store helpers + Flask test client.
   # Runtime ~10s locally, ~15-20s on CI. HARD-FAIL: no continue-on-error.
   moat-tests:
-    name: MOAT Verifier (58 tests)
+    name: MOAT Verifier (61 tests)
     needs: lint
     runs-on: ubuntu-latest
     steps:
@@ -146,6 +147,7 @@ jobs:
             tests/test_moat_cloud_roundtrip_e2e.py \
             tests/test_channel_event_chokepoint.py \
             tests/test_no_direct_get_store_in_routes.py \
+            tests/test_moat_bug_class_v3_event_shape_gate.py \
             tests/test_local_query_api.py \
             -q
 

@@ -1293,7 +1293,7 @@ def _try_local_store_token_velocity():
         elif et in _CHAIN_TYPES:
             data = r.get("data") if isinstance(r.get("data"), dict) else {}
             role = data.get("role") if isinstance(data, dict) else None
-            if et == "message" and role == "user":
+            if et == "message" and role == "user":  # v3-shape-gate: allow (reason: defensive — _CHAIN_TYPES already covers both v3 + legacy names; this is the legacy-shape-specific role check)
                 slot["consecutive"] = 0
             else:
                 slot["consecutive"] += 1
@@ -2115,7 +2115,7 @@ def _try_local_store_sessions_clusters(days: int):
                 has_cron = True
             if "subagent" in blob or "spawned" in blob:
                 has_subagent = True
-            if etype == "message":
+            if etype == "message":  # v3-shape-gate: allow (reason: known v3 coverage gap in _try_local_store_sessions_clusters turn_count — secondary cluster-classification metric, not headline number; follow-up tracks switching to v3 names assistant/model.completed)
                 turn_count += 1
         if s_tokens == 0 and not tool_counts:
             continue

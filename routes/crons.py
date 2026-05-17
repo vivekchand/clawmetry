@@ -923,7 +923,7 @@ def api_cron_run_log():
             for line in f:
                 try:
                     obj = json.loads(line.strip())
-                    if obj.get("type") == "message":
+                    if obj.get("type") == "message":  # v3-shape-gate: allow (reason: JSONL on-disk walker; reads per-line JSON from transcript files)
                         msg = obj.get("message", {})
                         events.append(
                             {
