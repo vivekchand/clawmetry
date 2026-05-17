@@ -627,23 +627,20 @@ def test_every_api_endpoint_returns_correct_data(live):
         f"/api/local/transcript returned 0 events for {sid!r}"
     )
 
-    # /api/session-tools — for a session with zero tool calls the v3 fast
-    # path in routes/sessions.py:_try_local_store_session_tools returns
-    # None and the route falls through to the legacy JSONL parser, which
-    # doesn't tag _source. Accept either as long as the timeline is empty
-    # (legitimate for an auth-failed run) and the shape is correct.
-    # Tracking the fast-path coverage gap as a follow-up.
+    # /api/session-tools — MUST come from the DuckDB fast path now that
+    # _try_local_store_session_tools recognises v3 lifecycle events
+    # (session.started / prompt.submitted / model.completed). A silent
+    # fall-through to the legacy JSONL walker is a MOAT regression.
     r = client.get(f"/api/session-tools?session_id={sid}&include_unpaired=1")
     assert r.status_code == 200, r.get_data(as_text=True)
     body = r.get_json()
     assert "tools" in body and "by_tool" in body and "stats" in body, (
         f"/api/session-tools missing keys: {sorted(body)}"
     )
-    if body.get("tools"):
-        assert body.get("_source") == "local_store", (
-            f"/api/session-tools with tools must come from local_store; "
-            f"_source={body.get('_source')!r}"
-        )
+    assert body.get("_source") == "local_store", (
+        f"/api/session-tools: _source={body.get('_source')!r} "
+        f"(must be local_store; legacy JSONL fallback is a MOAT regression)"
+    )
 
     # /api/usage
     r = client.get("/api/usage")
