@@ -9501,6 +9501,104 @@ async function loadMainActivity() {
 var logStream = null;
 var streamBuffer = [];
 var MAX_STREAM_LINES = 500;
+// Class bug drain (sibling of #1596 / PR #1610) - exponential backoff
+// state for the log SSE reconnect. Before this fix the onerror handler
+// scheduled a single startLogStream() 5s later and went silent forever
+// if that also failed. Same shape as the Brain SSE state: single retry
+// chain, banner-after-30s, visibility-aware.
+var _logSSERetryTimer = null;
+var _logSSERetryAttempt = 0;
+var _logSSEFirstFailMs = 0;
+// Caps: 1s, 2s, 4s, 8s, 16s, then 30s forever. Matches the issue spec.
+var _LOG_SSE_BACKOFF_MS = [1000, 2000, 4000, 8000, 16000];
+var _LOG_SSE_BACKOFF_MAX_MS = 30000;
+var _LOG_SSE_BANNER_THRESHOLD_MS = 30000;
+
+// Sibling of #1610 - pure backoff math, extracted so the unit test can
+// exercise it without a real EventSource.
+function _logSSEBackoffMs(attempt) {
+  if (attempt < 0) attempt = 0;
+  if (attempt < _LOG_SSE_BACKOFF_MS.length) {
+    return _LOG_SSE_BACKOFF_MS[attempt];
+  }
+  return _LOG_SSE_BACKOFF_MAX_MS;
+}
+
+// Sibling of #1610 - show/hide the "Log connection lost" banner above
+// the logs viewport. Plain-English copy per
+// feedback_no_em_dashes_in_user_facing_copy.md and
+// feedback_simple_ui_for_nontechnical.md.
+function _showLogConnectionLostBanner() {
+  var host = document.getElementById('log-connection-lost-banner');
+  if (!host) {
+    // Prefer the full logs tab host; fall back to the overview log host
+    // so a user watching either surface sees the banner.
+    var streamEl = document.getElementById('logs-full') || document.getElementById('ov-logs');
+    if (!streamEl || !streamEl.parentElement) return;
+    host = document.createElement('div');
+    host.id = 'log-connection-lost-banner';
+    host.style.cssText = 'padding:10px 14px;margin-bottom:8px;font-size:13px;color:#f59e0b;border:1px solid rgba(245,158,11,0.35);border-radius:6px;background:rgba(245,158,11,0.08);display:flex;align-items:center;gap:10px;';
+    streamEl.parentElement.insertBefore(host, streamEl);
+  }
+  host.style.display = 'flex';
+  host.innerHTML =
+    '<span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;animation:livePulse 1.5s ease-in-out infinite;"></span>' +
+    '<span><strong>Log connection lost.</strong> Reconnecting\u2026</span>';
+}
+function _hideLogConnectionLostBanner() {
+  var host = document.getElementById('log-connection-lost-banner');
+  if (host) host.style.display = 'none';
+}
+
+// Sibling of #1610 - schedule the next log SSE reconnect attempt.
+// Single-chain (clears any pending timer first) so back-to-back errors
+// never spawn parallel reconnect storms. Visibility-aware: the global
+// SSE visibility guard closes the EventSource on hidden tabs; we should
+// not burn cycles retrying until the tab regains focus.
+function _scheduleLogSSEReconnect() {
+  if (_logSSERetryTimer) {
+    clearTimeout(_logSSERetryTimer);
+    _logSSERetryTimer = null;
+  }
+  if (typeof document !== 'undefined' && document.hidden) return;
+  if (_logSSEFirstFailMs && (Date.now() - _logSSEFirstFailMs) >= _LOG_SSE_BANNER_THRESHOLD_MS) {
+    _showLogConnectionLostBanner();
+  }
+  var delay = _logSSEBackoffMs(_logSSERetryAttempt);
+  _logSSERetryAttempt += 1;
+  _logSSERetryTimer = setTimeout(function() {
+    _logSSERetryTimer = null;
+    startLogStream();
+  }, delay);
+}
+
+// Sibling of #1610 - called from the SSE onopen event. Resets backoff
+// state and clears the banner. Idempotent.
+function _resetLogSSEReconnectState() {
+  if (_logSSERetryTimer) {
+    clearTimeout(_logSSERetryTimer);
+    _logSSERetryTimer = null;
+  }
+  _logSSERetryAttempt = 0;
+  _logSSEFirstFailMs = 0;
+  _hideLogConnectionLostBanner();
+}
+
+// Sibling of #1610 - full teardown. Closes the EventSource, cancels any
+// pending retry, and hides the banner so a stale timer cannot reopen a
+// connection the user no longer wants. No location.reload() anywhere in
+// the retry path (memory: feedback_no_reload_in_bootstrap_e2e).
+function _stopLogStream() {
+  if (logStream) { try { logStream.close(); } catch(e){} }
+  logStream = null;
+  if (_logSSERetryTimer) {
+    clearTimeout(_logSSERetryTimer);
+    _logSSERetryTimer = null;
+  }
+  _logSSERetryAttempt = 0;
+  _logSSEFirstFailMs = 0;
+  _hideLogConnectionLostBanner();
+}
 
 function startLogStream() {
   if (window.CLOUD_MODE) return;
@@ -9512,6 +9610,8 @@ function startLogStream() {
   logStream.onopen = function() {
     var s = document.getElementById('log-stream-status');
     if (s) { s.textContent = '\u25cf Live'; s.style.color = '#22c55e'; }
+    // Sibling of #1610 - successful (re)open clears backoff + banner.
+    _resetLogSSEReconnectState();
   };
   logStream.onmessage = function(e) {
     var data = JSON.parse(e.data);
@@ -9525,7 +9625,11 @@ function startLogStream() {
   logStream.onerror = function() {
     var s = document.getElementById('log-stream-status');
     if (s) { s.textContent = '\u25cf Reconnecting\u2026'; s.style.color = '#f59e0b'; }
-    setTimeout(startLogStream, 5000);
+    // Sibling of #1610 - replace one-shot reconnect with exponential
+    // backoff chain so a sustained outage keeps trying, and surfaces an
+    // explicit banner after 30s instead of staying silently broken.
+    if (!_logSSEFirstFailMs) _logSSEFirstFailMs = Date.now();
+    _scheduleLogSSEReconnect();
   };
 }
 
@@ -9699,6 +9803,103 @@ function hideUnconfiguredChannels(svgRoot) {
   }).catch(function(){});
 }
 
+// Class bug drain (sibling of #1596 / PR #1610) - exponential backoff
+// state for the Flow SSE reconnect. Before this fix _flowSse.onerror
+// scheduled a single _startFlowSse() 5s later and went silent forever
+// if that also failed. Same shape as the Brain SSE state: single retry
+// chain, banner-after-30s, visibility-aware.
+var _flowSSERetryTimer = null;
+var _flowSSERetryAttempt = 0;
+var _flowSSEFirstFailMs = 0;
+// Caps: 1s, 2s, 4s, 8s, 16s, then 30s forever. Matches the issue spec.
+var _FLOW_SSE_BACKOFF_MS = [1000, 2000, 4000, 8000, 16000];
+var _FLOW_SSE_BACKOFF_MAX_MS = 30000;
+var _FLOW_SSE_BANNER_THRESHOLD_MS = 30000;
+
+// Sibling of #1610 - pure backoff math, extracted so the unit test can
+// exercise it without a real EventSource.
+function _flowSSEBackoffMs(attempt) {
+  if (attempt < 0) attempt = 0;
+  if (attempt < _FLOW_SSE_BACKOFF_MS.length) {
+    return _FLOW_SSE_BACKOFF_MS[attempt];
+  }
+  return _FLOW_SSE_BACKOFF_MAX_MS;
+}
+
+// Sibling of #1610 - show/hide the "Flow connection lost" banner above
+// the flow live pane. Plain-English copy per
+// feedback_no_em_dashes_in_user_facing_copy.md and
+// feedback_simple_ui_for_nontechnical.md.
+function _showFlowConnectionLostBanner() {
+  var host = document.getElementById('flow-connection-lost-banner');
+  if (!host) {
+    var streamEl = document.getElementById('flow-live-pane');
+    if (!streamEl || !streamEl.parentElement) return;
+    host = document.createElement('div');
+    host.id = 'flow-connection-lost-banner';
+    host.style.cssText = 'padding:10px 14px;margin-bottom:8px;font-size:13px;color:#f59e0b;border:1px solid rgba(245,158,11,0.35);border-radius:6px;background:rgba(245,158,11,0.08);display:flex;align-items:center;gap:10px;';
+    streamEl.parentElement.insertBefore(host, streamEl);
+  }
+  host.style.display = 'flex';
+  host.innerHTML =
+    '<span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;animation:livePulse 1.5s ease-in-out infinite;"></span>' +
+    '<span><strong>Flow connection lost.</strong> Reconnecting\u2026</span>';
+}
+function _hideFlowConnectionLostBanner() {
+  var host = document.getElementById('flow-connection-lost-banner');
+  if (host) host.style.display = 'none';
+}
+
+// Sibling of #1610 - schedule the next Flow SSE reconnect attempt.
+// Single-chain (clears any pending timer first) so back-to-back errors
+// never spawn parallel reconnect storms. Visibility-aware: the global
+// SSE visibility guard closes the EventSource on hidden tabs; we should
+// not burn cycles retrying until the tab regains focus.
+function _scheduleFlowSSEReconnect() {
+  if (_flowSSERetryTimer) {
+    clearTimeout(_flowSSERetryTimer);
+    _flowSSERetryTimer = null;
+  }
+  if (typeof document !== 'undefined' && document.hidden) return;
+  if (_flowSSEFirstFailMs && (Date.now() - _flowSSEFirstFailMs) >= _FLOW_SSE_BANNER_THRESHOLD_MS) {
+    _showFlowConnectionLostBanner();
+  }
+  var delay = _flowSSEBackoffMs(_flowSSERetryAttempt);
+  _flowSSERetryAttempt += 1;
+  _flowSSERetryTimer = setTimeout(function() {
+    _flowSSERetryTimer = null;
+    _startFlowSse();
+  }, delay);
+}
+
+// Sibling of #1610 - called from the SSE onopen event. Resets backoff
+// state and clears the banner. Idempotent.
+function _resetFlowSSEReconnectState() {
+  if (_flowSSERetryTimer) {
+    clearTimeout(_flowSSERetryTimer);
+    _flowSSERetryTimer = null;
+  }
+  _flowSSERetryAttempt = 0;
+  _flowSSEFirstFailMs = 0;
+  _hideFlowConnectionLostBanner();
+}
+
+// Sibling of #1610 - full teardown. Closes the EventSource, cancels any
+// pending retry, and hides the banner so a stale timer cannot reopen a
+// connection the user no longer wants. No location.reload() anywhere in
+// the retry path (memory: feedback_no_reload_in_bootstrap_e2e).
+function _stopFlowSse() {
+  if (_flowSse) { try { _flowSse.close(); } catch(e){} }
+  _flowSse = null;
+  if (_flowSSERetryTimer) {
+    clearTimeout(_flowSSERetryTimer);
+    _flowSSERetryTimer = null;
+  }
+  _flowSSERetryAttempt = 0;
+  _flowSSEFirstFailMs = 0;
+  _hideFlowConnectionLostBanner();
+}
+
 var _flowSse = null;
 var _flowSseDebounce = {};
 function _startFlowSse() {
@@ -9706,6 +9907,10 @@ function _startFlowSse() {
   if (_flowSse && _flowSse.readyState !== EventSource.CLOSED) return;
   var _fTok = localStorage.getItem('clawmetry-token') || '';
   _flowSse = new EventSource('/api/flow-events' + (_fTok ? '?token=' + encodeURIComponent(_fTok) : ''));
+  _flowSse.onopen = function() {
+    // Sibling of #1610 - successful (re)open clears backoff + banner.
+    _resetFlowSSEReconnectState();
+  };
   _flowSse.onmessage = function(e) {
     try {
       var evt = JSON.parse(e.data);
@@ -9743,7 +9948,13 @@ function _startFlowSse() {
       }
     } catch(e2) {}
   };
-  _flowSse.onerror = function() { setTimeout(_startFlowSse, 5000); };
+  _flowSse.onerror = function() {
+    // Sibling of #1610 - replace one-shot reconnect with exponential
+    // backoff chain so a sustained outage keeps trying, and surfaces an
+    // explicit banner after 30s instead of staying silently broken.
+    if (!_flowSSEFirstFailMs) _flowSSEFirstFailMs = Date.now();
+    _scheduleFlowSSEReconnect();
+  };
 }
 
 // ── Flow sub-tabs (Live | Runs) — issue #611 ────────────────────────────
