@@ -263,7 +263,7 @@ jobs:
           version: latest
           gateway-token: moat-live-e2e-token
       - name: Install Python deps
-        run: pip install flask pytest waitress duckdb cryptography
+        run: pip install flask pytest waitress duckdb cryptography requests
       - name: Run live OpenClaw E2E
         run: python3 -m pytest tests/test_moat_live_openclaw_e2e.py -v --tb=short
       - name: Upload gateway logs on failure
