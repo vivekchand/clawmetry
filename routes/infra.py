@@ -83,6 +83,151 @@ def api_logs():
     return jsonify({"lines": lines, "date": date_str})
 
 
+# Tool-name → flow-tab short key. OpenClaw emits these tool names verified
+# against production session JSONLs. Mapped to the short key our Flow SVG
+# path ids expect (exec / browser / search / memory / session / cron / tts).
+# Shared between the legacy SSE parser and the DuckDB fast-path helper so
+# both surfaces emit the same `tool` field for the front-end.
+_FLOW_TOOL_MAP = {
+    "exec": "exec", "process": "exec", "read": "exec", "write": "exec",
+    "write_file": "exec", "edit": "exec", "Bash": "exec", "Read": "exec",
+    "Write": "exec", "Edit": "exec",
+    "web_search": "search", "ollama_web_search": "search",
+    "web_fetch": "browser", "ollama_web_fetch": "browser",
+    "browser": "browser", "image": "browser",
+    "memory_search": "memory", "memory_get": "memory",
+    "sessions_spawn": "session",
+    "cron": "cron", "tts": "tts",
+}
+
+# Channel-label hints carried inside `Sender (untrusted metadata)` user blocks.
+_FLOW_CHANNEL_LABELS = {
+    "openclaw-tui":        "tui",
+    "openclaw-control-ui": "webchat",
+    "openclaw-webchat":    "webchat",
+}
+
+
+def _try_local_store_flow_events(limit=200, since=None):
+    """DuckDB fast path for /api/flow-events. Returns a chronologically-
+    ordered list of normalised flow events ({type, channel|tool, ts,
+    session_id}) drawn from the daemon-ingested ``events`` table, OR
+    ``None`` when the local store has no relevant rows (callers fall
+    through to the legacy JSONL/gateway-log tail).
+
+    Shape mirrors what the SSE parser yields (msg_in / msg_out /
+    tool_call / tool_result) so downstream consumers can treat the JSON
+    envelope as a snapshot prefix of the live stream. Tagged
+    ``_source: 'local_store'`` by the caller. Closes the Tier-1 audit
+    candidate for `/api/flow-events` (refs #1565)."""
+    from routes.sessions import _ls_call  # late import to avoid cycle
+    rows = _ls_call("query_events", since=since, limit=limit) or []
+    if not rows:
+        return None
+
+    # The daemon-normalised v3 event types that map to flow lanes. Real
+    # OpenClaw v3 ingest emits these (see
+    # reference_openclaw_v3_event_types.md); we also accept legacy and
+    # tool-call alternates so older sessions still surface. If NONE of
+    # the rows match we return None so the legacy parser still drives
+    # the SSE timeline (pre-v3 / non-OpenClaw agents).
+    _FLOW_TYPES = frozenset({
+        "prompt.submitted", "model.completed", "model.changed",
+        "tool.call", "tool_call", "tool.result", "tool_use_result",
+        "message", "assistant", "user",
+    })
+    matched = [r for r in rows if r.get("event_type") in _FLOW_TYPES]
+    if not matched:
+        return None
+
+    def _extract_channel(payload):
+        """Pull a channel hint from a `data` blob. Looks at top-level
+        ``channel``/``provider`` first, then walks Sender-metadata in
+        prompt text the same way the SSE parser does."""
+        if not isinstance(payload, dict):
+            return None
+        for key in ("channel", "provider", "origin"):
+            v = payload.get(key)
+            if isinstance(v, str) and v:
+                lk = v.lower()
+                return _FLOW_CHANNEL_LABELS.get(lk, lk)
+        text = payload.get("finalPromptText") or ""
+        if not isinstance(text, str) or "Sender (untrusted metadata)" not in text:
+            return None
+        try:
+            start = text.index("```json")
+            end = text.index("```", start + 8)
+            meta = json.loads(text[start + 7:end].strip())
+            label = str(meta.get("label") or meta.get("id") or "").lower()
+            return _FLOW_CHANNEL_LABELS.get(label, label) or None
+        except Exception:
+            return None
+
+    events: list = []
+    for row in matched:
+        et = row.get("event_type") or ""
+        data = row.get("data") if isinstance(row.get("data"), dict) else {}
+        sid = row.get("session_id") or ""
+        ts = row.get("ts") or ""
+
+        if et == "prompt.submitted" or (et in ("message", "user")
+                                         and (data.get("role") == "user")):
+            ch = _extract_channel(data) or "telegram"
+            events.append({"type": "msg_in", "channel": ch,
+                           "ts": ts, "session_id": sid,
+                           "_source": "local_store"})
+            continue
+
+        if et == "model.completed" or (et in ("message", "assistant")
+                                        and data.get("role") == "assistant"):
+            # Surface tool invocations carried inside the assistant turn
+            # as separate tool_call events so the Flow timeline matches
+            # the SSE shape. Outer assistant reply itself is the
+            # "gateway bubble" — emitted as msg_out so the channel lane
+            # lights up.
+            tool_metas = []
+            inner = data.get("data") if isinstance(data.get("data"), dict) else {}
+            for src in (data.get("toolMetas"), inner.get("toolMetas")):
+                if isinstance(src, list):
+                    tool_metas.extend(src)
+            for tm in tool_metas:
+                if not isinstance(tm, dict):
+                    continue
+                name = tm.get("name") or ""
+                tool_key = _FLOW_TOOL_MAP.get(name, name)
+                events.append({"type": "tool_call", "tool": tool_key,
+                               "ts": ts, "session_id": sid,
+                               "_source": "local_store"})
+            ch = _extract_channel(data) or "telegram"
+            events.append({"type": "msg_out", "channel": ch,
+                           "ts": ts, "session_id": sid,
+                           "_source": "local_store"})
+            continue
+
+        if et in ("tool.call", "tool_call"):
+            name = (data.get("tool") or data.get("tool_name")
+                    or data.get("name") or "")
+            tool_key = _FLOW_TOOL_MAP.get(name, name)
+            events.append({"type": "tool_call", "tool": tool_key,
+                           "ts": ts, "session_id": sid,
+                           "_source": "local_store"})
+            continue
+
+        if et in ("tool.result", "tool_use_result"):
+            name = (data.get("tool") or data.get("tool_name")
+                    or data.get("name") or "")
+            tool_key = _FLOW_TOOL_MAP.get(name, name or "exec")
+            events.append({"type": "tool_result", "tool": tool_key,
+                           "ts": ts, "session_id": sid,
+                           "_source": "local_store"})
+            continue
+
+    # query_events returns DESC; reverse so the caller gets a
+    # chronological snapshot prefix (matches what the SSE stream emits).
+    events.reverse()
+    return events
+
+
 @bp_logs.route("/api/flow-events")
 @bp_logs.route("/api/flow")
 def api_flow_events():
@@ -94,7 +239,20 @@ def api_flow_events():
     # E2E health checks and non-SSE clients get a lightweight JSON response
     accept = request.headers.get("Accept", "")
     if request.method == "HEAD" or "text/event-stream" not in accept:
-        return jsonify({"ok": True, "type": "flow-events", "streaming": True})
+        envelope = {"ok": True, "type": "flow-events", "streaming": True}
+        # DuckDB fast path (refs #1565). Hydrate the JSON envelope with a
+        # snapshot of recent flow events so callers that can't (or don't
+        # want to) hold an SSE connection still see real data. SSE is the
+        # only path that yields LIVE updates; this path is the snapshot.
+        if is_local_store_read_enabled():
+            try:
+                snap = _try_local_store_flow_events(limit=200)
+            except Exception:
+                snap = None
+            if snap is not None:
+                envelope["events"] = snap
+                envelope["_source"] = "local_store"
+        return jsonify(envelope)
     import glob as _glob
 
     def _find_active_jsonl():
