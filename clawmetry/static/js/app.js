@@ -13614,7 +13614,9 @@ function renderWorkspaceSwitcher() {
     item.onclick = function() { selectWorkspace(w); };
     var name = document.createElement('div');
     name.style.cssText = 'font-weight:600;color:var(--text-primary,#fff);';
-    name.textContent = (isActive ? '• ' : '') + (w.name || 'workspace');
+    // Issue #1172: suffix with "(local)" so users can never confuse this
+    // single-machine profile switcher with Cloud-Pro multi-node fleet view.
+    name.textContent = (isActive ? '• ' : '') + (w.name || 'workspace') + ' (local)';
     var path = document.createElement('div');
     path.style.cssText = 'font-size:10px;color:var(--text-muted,#888);font-family:ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
     path.title = w.path;

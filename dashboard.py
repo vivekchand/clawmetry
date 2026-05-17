@@ -4099,7 +4099,7 @@ function clawmetryLogout(){
   <h1><a href="https://clawmetry.com" style="display:flex;align-items:center;gap:7px;text-decoration:none;color:inherit"><img src="/static/img/logo.svg" width="22" height="22" style="border-radius:4px;vertical-align:middle;flex-shrink:0" alt="ClawMetry"><span><span style="color:#ffffff">Claw</span><span style="color:#E5443A">Metry</span></span></a></h1>
   <span id="version-badge" class="version-badge" title="ClawMetry version">v{{ version }}</span>
   <div id="workspace-switcher" style="display:none;position:relative;margin-left:8px;">
-    <button id="workspace-switcher-btn" onclick="toggleWorkspaceSwitcher(event)" title="Switch profile (this machine)" style="background:var(--button-bg);color:var(--text-tertiary);border:none;border-radius:8px;padding:8px 12px;cursor:pointer;display:flex;align-items:center;box-shadow:var(--card-shadow);transition:all 0.15s;">
+    <button id="workspace-switcher-btn" onclick="toggleWorkspaceSwitcher(event)" title="Switch profile (this machine). Local OpenClaw profiles only. For fleet view across multiple machines, upgrade to Pro." style="background:var(--button-bg);color:var(--text-tertiary);border:none;border-radius:8px;padding:8px 12px;cursor:pointer;display:flex;align-items:center;box-shadow:var(--card-shadow);transition:all 0.15s;">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
       <span id="workspace-switcher-label" style="display:none">default</span>
     </button>
@@ -10356,7 +10356,7 @@ DASHBOARD_HTML = r"""
   <h1><a href="https://clawmetry.com" style="display:flex;align-items:center;gap:7px;text-decoration:none;color:inherit"><img src="/static/img/logo.svg" width="22" height="22" style="border-radius:4px;vertical-align:middle;flex-shrink:0" alt="ClawMetry"><span><span style="color:#ffffff">Claw</span><span style="color:#E5443A">Metry</span></span></a></h1>
   <span id="version-badge" class="version-badge" title="ClawMetry version">v{{ version }}</span>
   <div id="workspace-switcher" style="display:none;position:relative;margin-left:8px;">
-    <button id="workspace-switcher-btn" onclick="toggleWorkspaceSwitcher(event)" title="Switch profile (this machine)" style="background:var(--button-bg);color:var(--text-tertiary);border:none;border-radius:8px;padding:8px 12px;cursor:pointer;display:flex;align-items:center;box-shadow:var(--card-shadow);transition:all 0.15s;">
+    <button id="workspace-switcher-btn" onclick="toggleWorkspaceSwitcher(event)" title="Switch profile (this machine). Local OpenClaw profiles only. For fleet view across multiple machines, upgrade to Pro." style="background:var(--button-bg);color:var(--text-tertiary);border:none;border-radius:8px;padding:8px 12px;cursor:pointer;display:flex;align-items:center;box-shadow:var(--card-shadow);transition:all 0.15s;">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
       <span id="workspace-switcher-label" style="display:none">default</span>
     </button>
