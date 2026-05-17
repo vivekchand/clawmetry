@@ -1621,12 +1621,137 @@ def _scan_spawn_events_from_jsonl(sessions_dir, max_files=None, tail_bytes=None)
     return subs
 
 
+def _try_local_store_subagents():
+    """Fast path for /api/subagents. Reads the pre-aggregated ``subagents``
+    table that the sync daemon write-throughs from each system-snapshot
+    pass (see ``clawmetry/sync.py`` ``ingest_subagent`` call site). Each
+    row carries the same fields the JSONL-walking legacy path derives, so
+    we can serve the dashboard's Subagent Tracker tab without re-scanning
+    every session JSONL on every request.
+
+    Returns ``None`` when the table is empty so the legacy gateway-RPC +
+    JSONL fallback fires for older OpenClaw versions / installs whose
+    daemon hasn't snapshotted yet. Returns a populated shell (subagents=[],
+    counts zero'd) when the daemon HAS run but no subagents have been
+    spawned — keeps the route off the 100-file JSONL walker for the
+    common empty case.
+    """
+    rows = _ls_call("query_subagents", limit=500)
+    # Distinguish "store missing entirely" (rows is None) from "store is
+    # there but no subagent rows yet" (rows == []). Both return None so
+    # the legacy gateway-RPC + JSONL fallback fires — older OpenClaw
+    # installs whose daemon hasn't snapshotted to the table yet still
+    # surface their subagents via the JSONL spawn scan.
+    if not rows:
+        return None
+
+    now_ms = time.time() * 1000
+    subagents: list = []
+    counts = {"total": 0, "active": 0, "idle": 0, "stale": 0, "failed": 0}
+
+    def _parse_ts_ms(ts):
+        if not ts:
+            return 0
+        if isinstance(ts, (int, float)):
+            return int(ts)
+        try:
+            return int(datetime.fromisoformat(
+                str(ts).replace("Z", "+00:00")
+            ).timestamp() * 1000)
+        except Exception:
+            return 0
+
+    for r in rows:
+        sid = r.get("subagent_id") or ""
+        if not sid:
+            continue
+        # ``data`` BLOB carries the fields not promoted to first-class
+        # columns (model, label, displayName, sessionFile, updated_at_ms,
+        # runtime_ms). _decode_data_blob_rows already deserialised it.
+        extra = r.get("data") if isinstance(r.get("data"), dict) else {}
+        updated_at_ms = (extra.get("updated_at_ms")
+                         or _parse_ts_ms(r.get("updated_at"))
+                         or 0)
+        spawned_at_ms = _parse_ts_ms(r.get("spawned_at")) or updated_at_ms
+        runtime_ms = int(extra.get("runtime_ms") or 0)
+        if not runtime_ms and spawned_at_ms:
+            runtime_ms = max(0, int(now_ms - spawned_at_ms))
+
+        # Status: prefer the daemon's explicit classification verbatim
+        # (it may emit ``completed`` / ``running`` / etc. that aren't in
+        # the legacy bucket set — the UI handles those directly).
+        # Fall back to age-derived bucket only when status is missing.
+        status = (r.get("status") or "").strip().lower()
+        if not status:
+            age_ms = now_ms - (updated_at_ms or 0)
+            if age_ms < 120000:
+                status = "active"
+            elif age_ms < 600000:
+                status = "idle"
+            else:
+                status = "stale"
+
+        token_count = int(r.get("token_count") or 0)
+        # Build key in OpenClaw's canonical shape so Active-Tasks modal
+        # lookups keep working when the legacy path falls back later.
+        key = extra.get("key") or f"agent:main:subagent:{sid}"
+        display = (extra.get("displayName") or extra.get("label")
+                   or (r.get("task") or "")[:80] or sid[:20])
+        model = extra.get("model") or "unknown"
+
+        elapsed_s = runtime_ms // 1000
+        if elapsed_s < 60:
+            runtime = f"{elapsed_s}s"
+        elif elapsed_s < 3600:
+            runtime = f"{elapsed_s // 60}m"
+        else:
+            runtime = f"{elapsed_s // 3600}h {(elapsed_s % 3600) // 60}m"
+
+        counts["total"] += 1
+        counts[status] = counts.get(status, 0) + 1
+        subagents.append({
+            "sessionId":        sid,
+            "key":              key,
+            "displayName":      display,
+            "model":            model,
+            "status":           status,
+            "depth":            int(extra.get("depth") or 1),
+            "parent":           r.get("parent_session_id") or extra.get("spawnedBy"),
+            "totalTokens":      token_count,
+            "runtime":          runtime,
+            "runtimeMs":        runtime_ms,
+            "startedAt":        spawned_at_ms or updated_at_ms,
+            "updatedAt":        updated_at_ms,
+            "task":             r.get("task") or "",
+            "error":            extra.get("error") or "",
+            "completionResult": extra.get("completionResult") or "",
+            "completionStatus": extra.get("completionStatus") or "",
+            "completionTs":     extra.get("completionTs") or "",
+            "runtimeFormatted": extra.get("runtimeFormatted") or runtime,
+            "tokensIn":         int(extra.get("tokensIn") or 0),
+            "tokensOut":        int(extra.get("tokensOut") or 0),
+            "spawnAck":         extra.get("spawnAck") or "",
+            "runId":            extra.get("runId") or "",
+        })
+
+    _status_rank = {"active": 0, "idle": 1, "stale": 2, "failed": 3}
+    subagents.sort(key=lambda x: (_status_rank.get(x["status"], 9), x["depth"]))
+    return {
+        "subagents": subagents,
+        "counts":    counts,
+        "_source":   "local_store",
+    }
+
+
 @bp_sessions.route("/api/subagents")
 def api_subagents():
     """Return sub-agent list with depth/parent fields for the tree view.
 
     Data sources merged (in priority order):
 
+    0. DuckDB ``subagents`` table fast path (when the local store is
+       enabled) — pre-aggregated by the sync daemon's snapshot pass, so
+       we don't re-walk every session JSONL on every dashboard render.
     1. OpenClaw's canonical `subagents action=list` registry — live +
        last-30-min recent, with status explicitly.
     2. `sessions_list` gateway RPC filtered by key substring — catches
@@ -1644,6 +1769,16 @@ def api_subagents():
         cached = _SUBAGENTS_CACHE.get("data")
         if cached is not None and (time.time() - float(_SUBAGENTS_CACHE.get("ts") or 0)) < _SUBAGENTS_CACHE_TTL_SECONDS:
             return jsonify(cached)
+
+    # Source 0: DuckDB fast path. Skips the JSONL spawn-scan + gateway RPC
+    # entirely. ``full_scan`` still defers to the legacy path so the "force
+    # a complete JSONL rescan" escape hatch keeps working.
+    if not full_scan and is_local_store_read_enabled():
+        fast = _try_local_store_subagents()
+        if fast is not None:
+            _SUBAGENTS_CACHE["data"] = fast
+            _SUBAGENTS_CACHE["ts"] = time.time()
+            return jsonify(fast)
 
     # Source 1: canonical subagent registry
     reg_active = []
