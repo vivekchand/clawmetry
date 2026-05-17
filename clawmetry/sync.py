@@ -83,6 +83,155 @@ def _release_pid_lock() -> None:
         pass
 
 
+# ── Graceful shutdown — drain ring buffer on SIGTERM/SIGINT/atexit (#1593) ──
+#
+# Without this, any events queued in the LocalStore ring buffer but not yet
+# flushed by the 2s flusher tick are dropped on `kill -TERM`, launchctl
+# bootout, systemctl restart, or any clean shutdown. Bounded data loss of
+# ≤ FLUSH_INTERVAL_SECS × event-rate per shutdown — silent and frequent on
+# macOS where every install.sh upgrade triggers a launchctl bootout/load.
+#
+# Three entry points cover the full exit surface:
+#   1. SIGTERM   — what launchctl/systemctl/`kill` send by default
+#   2. SIGINT    — Ctrl+C in foreground (`clawmetry sync --foreground`)
+#   3. atexit    — belt-and-suspenders for `sys.exit(0)`, uncaught exceptions,
+#                  normal interpreter teardown. atexit is NOT guaranteed to
+#                  run on SIGTERM (Python's default SIGTERM handler bypasses
+#                  it), which is why we need the explicit signal handler too.
+#
+# Re-entrancy guard: signal then atexit, or two signals in a row, both
+# end up here. The flag ensures we drain exactly once.
+#
+# Timeout: a hung DuckDB lock (e.g. another process briefly holding the
+# writer) must not block shutdown indefinitely. Spawn the flush on a
+# background thread, join with a hard 5s budget, then os._exit(0) to
+# force-exit if the flush is still in flight. The events stay in the
+# ring file-of-record (PR #1608 + DuckDB INSERT OR IGNORE make the next
+# start replay idempotent — see `_flush_now_locked` docstring).
+
+_SHUTDOWN_FLUSH_TIMEOUT_SECS = 5.0
+_shutdown_flushed = threading.Event()
+_shutdown_lock = threading.Lock()
+
+
+def _drain_local_store_now() -> tuple[int, float]:
+    """Synchronously drain the LocalStore ring → DuckDB. Returns
+    (rows_written, elapsed_seconds). Safe to call multiple times — the
+    second call is a no-op (the ring is empty after the first commit).
+
+    Pairs with PR #1608's ``_flush_lock`` (issue #1590): ``store.flush()``
+    serialises against any concurrent flusher tick, so we never race the
+    snapshot-then-pop window."""
+    t0 = time.monotonic()
+    try:
+        from clawmetry import local_store as _ls
+        store = _ls.get_store(read_only=False)
+        rows = store.flush()
+    except Exception:
+        log.exception("graceful shutdown: local store flush raised")
+        return (0, time.monotonic() - t0)
+    return (rows, time.monotonic() - t0)
+
+
+def _graceful_shutdown(reason: str, *, force_exit: bool) -> None:
+    """Drain the ring buffer with a hard timeout, then optionally hard-exit.
+
+    ``force_exit=True`` is used by the signal handlers — once we've
+    drained (or timed out), we call ``os._exit(0)`` so the interpreter
+    tears down without re-running other handlers (atexit already
+    skipped, daemon threads die at process exit anyway).
+
+    ``force_exit=False`` is used by the atexit path — the interpreter
+    is already exiting; we just need to drain before it tears down.
+    """
+    # Re-entrancy guard. The first caller wins; subsequent callers
+    # (e.g. atexit firing after a signal handler already drained) see
+    # the flag set and skip.
+    with _shutdown_lock:
+        if _shutdown_flushed.is_set():
+            if force_exit:
+                os._exit(0)
+            return
+        _shutdown_flushed.set()
+
+    log.info("graceful shutdown: %s — draining local store ring", reason)
+
+    # Run the flush on a background thread so we can enforce a wall-clock
+    # timeout. A blocked DuckDB write must not hang launchctl/systemctl
+    # for >5s — the orchestrator will SIGKILL us anyway after its own
+    # grace period (30s on launchd, 90s default on systemd).
+    result: dict[str, object] = {}
+
+    def _runner() -> None:
+        try:
+            result["rows"], result["elapsed"] = _drain_local_store_now()
+        except Exception as e:
+            result["error"] = e
+
+    t = threading.Thread(target=_runner, name="clawmetry-shutdown-flush", daemon=True)
+    t.start()
+    t.join(timeout=_SHUTDOWN_FLUSH_TIMEOUT_SECS)
+
+    if t.is_alive():
+        log.warning(
+            "graceful shutdown: local store flush exceeded %.1fs timeout — "
+            "abandoning; events stay in ring for next start to replay "
+            "(INSERT OR IGNORE makes it idempotent)",
+            _SHUTDOWN_FLUSH_TIMEOUT_SECS,
+        )
+    elif "error" in result:
+        log.warning("graceful shutdown: flush raised: %s", result["error"])
+    else:
+        rows = result.get("rows", 0)
+        elapsed = result.get("elapsed", 0.0)
+        log.info(
+            "graceful shutdown: flushed %s row(s) in %.3fs", rows, elapsed
+        )
+
+    if force_exit:
+        # sys.exit raises SystemExit which other threads can swallow;
+        # os._exit terminates the process immediately. atexit has
+        # already been bypassed (we set the guard above).
+        os._exit(0)
+
+
+def _signal_handler(signum, frame):  # noqa: ARG001 — signal handler signature
+    try:
+        import signal as _signal
+        name = _signal.Signals(signum).name
+    except Exception:
+        name = f"signal {signum}"
+    _graceful_shutdown(name, force_exit=True)
+
+
+def _atexit_handler() -> None:
+    _graceful_shutdown("atexit", force_exit=False)
+
+
+def _install_shutdown_handlers() -> None:
+    """Wire SIGTERM/SIGINT/atexit → graceful drain. Idempotent.
+
+    Skipped when not running on the main thread (signal.signal() raises
+    ValueError off-main) — tests that import sync.py from a worker
+    thread get the atexit hook only, which is enough for `sys.exit()`
+    paths.
+    """
+    import atexit
+    import signal as _signal
+    atexit.register(_atexit_handler)
+    try:
+        _signal.signal(_signal.SIGTERM, _signal_handler)
+        _signal.signal(_signal.SIGINT, _signal_handler)
+    except (ValueError, OSError) as e:
+        # ValueError: not main thread. OSError: SIGTERM/SIGINT not
+        # supported on this platform (some Windows configurations).
+        log.warning(
+            "graceful shutdown: signal handlers not installed (%s) — "
+            "atexit-only fallback (SIGTERM may still drop ring events)",
+            e,
+        )
+
+
 def _validate_log_offsets(state: dict, paths: dict) -> None:
     """Validate stored log offsets on startup.
 
@@ -7537,6 +7686,14 @@ def run_daemon() -> None:
     import atexit
 
     atexit.register(_release_pid_lock)
+    # Issue #1593 — wire SIGTERM/SIGINT/atexit to drain the LocalStore ring
+    # before exit. Without this, `launchctl bootout`, `systemctl stop`,
+    # `kill <pid>`, and Ctrl+C all drop any events buffered in the 2s
+    # flusher window. Register AFTER the PID-lock atexit so the LIFO
+    # ordering drains events first, then releases the lock — that way a
+    # racing supervisor restart sees the lock held until the flush is
+    # done, instead of starting a second daemon mid-drain.
+    _install_shutdown_handlers()
     config = load_config()
     # If node_id looks like email prefix (contains + or @), use hostname instead
     nid = config.get("node_id", "")
