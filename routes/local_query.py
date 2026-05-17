@@ -415,13 +415,18 @@ _DAEMON_METHODS = frozenset({
     # SQL goes through clawmetry/dives_sql_safety.validate_sql() inside the
     # method — SELECT/WITH only, no DDL/DML, no file/HTTP/attach functions.
     "raw_select_safe",
-    # Issue #1615 — decision sampling workflow. Three review-queue methods
+    # Issue #1615 — decision sampling workflow. Four review-queue methods
     # exposed through the daemon proxy so /api/review/* in the dashboard
     # process can hit the writer-locked DuckDB.
     "ingest_review_sample",
     "update_review_decision",
     "query_review_queue",
     "query_review_accuracy",
+    # Issue #1614 — per-session outcome labels (success/failed/escalated/
+    # ongoing) for the Overview tile + /api/outcomes endpoint. Inline-
+    # classifies any unlabeled rows so the dashboard never paints "0%".
+    "query_outcomes",
+    "reclassify_session_outcome",
     "health",
 })
 

@@ -124,7 +124,7 @@ LOCAL_MAX_BYTES = int(
     float(os.environ.get("CLAWMETRY_LOCAL_MAX_GB", "5.0")) * 1024 * 1024 * 1024
 )
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # ── Two-layer schema (multi-agent) ──────────────────────────────────────────
 #
@@ -184,10 +184,17 @@ _DDL = [
         message_count   INTEGER DEFAULT 0,
         metadata        BLOB,
         updated_at      BIGINT NOT NULL,
+        -- Issue #1614 — outcome label set by clawmetry.outcome_classifier.
+        -- Nullable: legacy rows + rows written before the classifier ran stay
+        -- NULL until the next ingest_session() pass fills them in.
+        outcome                 VARCHAR,
+        outcome_confidence      DOUBLE,
+        outcome_classified_at   BIGINT,
         PRIMARY KEY (agent_type, session_id)
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_sessions_active    ON sessions(agent_type, last_active_at)",
+    "CREATE INDEX IF NOT EXISTS idx_sessions_outcome   ON sessions(outcome, last_active_at)",
     "CREATE INDEX IF NOT EXISTS idx_sessions_node      ON sessions(node_id, last_active_at)",
     """
     CREATE TABLE IF NOT EXISTS daily_aggregates (
@@ -596,6 +603,13 @@ _MIGRATIONS_V2 = [
     # PK (agent_id, workspace_id, day); writes from v2 use ON CONFLICT DO
     # UPDATE on the PK that exists. New stores get the v2 PK directly.
     ("daily_aggregates", "agent_type", "VARCHAR DEFAULT 'openclaw'"),
+    # Issue #1614 — outcome labeling (Four-Pillars Outcome Measurement).
+    # Auto-detected per session by ``clawmetry.outcome_classifier``. Stored
+    # so /api/outcomes can SUM(outcome='success') in one query without
+    # re-walking the events table.
+    ("sessions", "outcome",                "VARCHAR"),
+    ("sessions", "outcome_confidence",     "DOUBLE"),
+    ("sessions", "outcome_classified_at",  "BIGINT"),
 ]
 
 
@@ -1072,6 +1086,133 @@ class LocalStore:
                     metadata       = COALESCE(excluded.metadata, sessions.metadata),
                     updated_at     = excluded.updated_at
             """, params)
+
+    def reclassify_session_outcome(
+        self,
+        session_id: str,
+        *,
+        agent_type: str = "openclaw",
+    ) -> tuple[str | None, float | None]:
+        """Re-run the outcome classifier for one session and persist the
+        result. Issue #1614.
+
+        Returns ``(outcome, confidence)`` or ``(None, None)`` if the
+        session row doesn't exist (race with delete) or classifier blows
+        up. Errors are swallowed — outcome labelling is best-effort.
+
+        Cheap to call repeatedly: the per-session event scan is bounded
+        by query_events(limit=200) and the UPDATE only touches one row.
+        """
+        if not session_id:
+            return (None, None)
+        try:
+            from clawmetry.outcome_classifier import classify_session
+        except Exception:
+            return (None, None)
+        try:
+            evs = self.query_events(session_id=session_id, limit=200)
+            # query_events returns newest-first; classifier sorts internally.
+            session_rows = self._fetch(
+                "SELECT status, ended_at, last_active_at FROM sessions "
+                "WHERE agent_type=? AND session_id=? LIMIT 1",
+                [agent_type, session_id],
+            )
+            meta: dict[str, Any] = {}
+            if session_rows:
+                r = session_rows[0]
+                meta = {
+                    "status":         r[0],
+                    "ended_at":       r[1],
+                    "last_active_at": r[2],
+                }
+            else:
+                # No typed row yet — classifier still works off events alone.
+                pass
+            approvals = self._fetch(
+                "SELECT id, status FROM approvals "
+                "WHERE requestor_session_id=? LIMIT 5",
+                [session_id],
+            )
+            appr_rows = [{"id": a[0], "status": a[1]} for a in approvals]
+            outcome, conf = classify_session(evs, meta, approvals=appr_rows)
+        except Exception:
+            return (None, None)
+        now_ms = int(time.time() * 1000)
+        try:
+            with self._write_lock:
+                self._conn.execute(
+                    "UPDATE sessions SET outcome=?, outcome_confidence=?, "
+                    "outcome_classified_at=? "
+                    "WHERE agent_type=? AND session_id=?",
+                    [outcome, float(conf), now_ms, agent_type, session_id],
+                )
+        except Exception:
+            return (outcome, conf)
+        return (outcome, conf)
+
+    def query_outcomes(
+        self,
+        *,
+        agent_type: str = "openclaw",
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 2000,
+    ) -> list[dict[str, Any]]:
+        """Read per-session outcome rows for the dashboard tile / drill-down.
+
+        For sessions where ``outcome`` is NULL (classifier hasn't run yet),
+        we run it inline so the API never returns "unlabeled" — first-load
+        of the dashboard would otherwise show 0% success rate on fresh
+        installs. The inline classification persists the result so the
+        next call is a pure SELECT.
+
+        ``since`` / ``until`` filter on ``last_active_at`` (ISO strings).
+        """
+        clauses: list[str] = ["agent_type = ?"]
+        params: list[Any] = [agent_type]
+        if since:
+            clauses.append("COALESCE(last_active_at, started_at, '') >= ?")
+            params.append(since)
+        if until:
+            clauses.append("COALESCE(last_active_at, started_at, '') <= ?")
+            params.append(until)
+        where = "WHERE " + " AND ".join(clauses)
+        sql = f"""
+            SELECT session_id, title, last_active_at, ended_at, status,
+                   cost_usd, total_tokens,
+                   outcome, outcome_confidence, outcome_classified_at
+            FROM sessions
+            {where}
+            ORDER BY COALESCE(last_active_at, started_at) DESC NULLS LAST
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["session_id", "title", "last_active_at", "ended_at",
+                "status", "cost_usd", "total_tokens",
+                "outcome", "outcome_confidence", "outcome_classified_at"]
+        out: list[dict[str, Any]] = []
+        unlabeled: list[str] = []
+        for r in self._fetch(sql, params):
+            d = dict(zip(cols, r))
+            if d.get("outcome") is None:
+                unlabeled.append(d["session_id"])
+            out.append(d)
+        # Inline-classify any unlabeled rows (bounded — limit kwarg above
+        # caps the work). Cheap: each session reads ≤200 events.
+        for sid in unlabeled[:200]:
+            try:
+                o, c = self.reclassify_session_outcome(
+                    sid, agent_type=agent_type,
+                )
+                if o is not None:
+                    for d in out:
+                        if d["session_id"] == sid:
+                            d["outcome"] = o
+                            d["outcome_confidence"] = c
+                            break
+            except Exception:
+                continue
+        return out
 
     def ingest_memory_blob(self, blob_row: dict[str, Any]) -> None:
         """Upsert one memory blob (e.g. CLAUDE.md, ~/.openclaw/memory/notes.md).
@@ -2843,6 +2984,24 @@ class LocalStore:
                 except Exception:
                     pass  # partial install / approvals.py not importable
                 break  # one kick per batch; coalesces N events into 1 wake
+        # Issue #1614 — re-classify outcome for any session whose
+        # session.ended event just landed. Coalesce so a batch with 50
+        # events for one session triggers one reclassification, not 50.
+        # Errors swallowed inside reclassify_session_outcome — labelling
+        # is best-effort and must never block ingest.
+        ended_sessions: set[tuple[str, str]] = set()
+        for e in batch:
+            et = (e.get("event_type") or "").lower()
+            if et in ("session.ended", "sessionended", "session_end"):
+                sid = e.get("session_id")
+                if sid:
+                    atype = e.get("agent_type") or "openclaw"
+                    ended_sessions.add((atype, sid))
+        for atype, sid in ended_sessions:
+            try:
+                self.reclassify_session_outcome(sid, agent_type=atype)
+            except Exception:
+                pass  # never crash the flusher on a label failure
         return len(rows)
 
     def flush(self) -> int:
