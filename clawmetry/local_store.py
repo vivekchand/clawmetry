@@ -124,6 +124,57 @@ LOCAL_MAX_BYTES = int(
     float(os.environ.get("CLAWMETRY_LOCAL_MAX_GB", "5.0")) * 1024 * 1024 * 1024
 )
 
+# Issue #1594 — auto-vacuum knobs. Vacuum is destructive (deletes oldest
+# events permanently), so the defaults are conservative:
+#   * AUTO_VACUUM_ENABLED — default ON. Set CLAWMETRY_AUTO_VACUUM=0 to
+#     disable for users who manage retention externally (rsync, snapshots).
+#   * AUTO_VACUUM_CHECK_EVERY_BYTES — only stat() + size-check after every
+#     N bytes flushed (default 100 MB). Cheap, predictable, no periodic
+#     thread to leak.
+#   * AUTO_VACUUM_HIGH_WATER_PCT — only fire when DB has crossed this
+#     fraction of LOCAL_MAX_BYTES (default 0.95). Below the high-water
+#     mark we leave the store alone; the user paid for retention up to
+#     the cap, we honour it.
+# When vacuum still can't bring the store under the cap (retention rules
+# too generous, or single event rows pathologically large), we log a loud
+# WARNING + emit a ``local_store_over_cap`` event into the store itself so
+# /local/health + cloud dashboards can surface the cap_exceeded flag.
+AUTO_VACUUM_ENABLED = os.environ.get("CLAWMETRY_AUTO_VACUUM", "1") not in ("0", "false", "False", "")
+AUTO_VACUUM_CHECK_EVERY_BYTES = int(
+    float(os.environ.get("CLAWMETRY_AUTO_VACUUM_CHECK_MB", "100")) * 1024 * 1024
+)
+AUTO_VACUUM_HIGH_WATER_PCT = float(
+    os.environ.get("CLAWMETRY_AUTO_VACUUM_HIGH_WATER_PCT", "0.95")
+)
+# Min seconds between LOCAL_STORE_OVER_CAP warning / marker emissions.
+# Rate-limit because DuckDB doesn't shrink the file in-place after DELETE
+# — the file size plateaus near the high-water mark and would otherwise
+# spam every flush. 5 min is short enough to surface the regression
+# quickly but long enough that a tail -f doesn't drown.
+AUTO_VACUUM_OVER_CAP_COOLDOWN_S = float(
+    os.environ.get("CLAWMETRY_AUTO_VACUUM_OVER_CAP_COOLDOWN_S", "300.0")
+)
+
+
+def _on_disk_bytes() -> int:
+    """Total on-disk footprint = main DB file + WAL. The DuckDB main file
+    only grows on CHECKPOINT; at runtime the bulk of recently-flushed data
+    sits in the ``.wal`` file. Looking only at ``DB_PATH.stat()`` (as the
+    pre-#1594 ``health()`` and ``vacuum()`` did) silently under-counts the
+    real footprint by 10×+ during active ingest — the cap never trips even
+    when the wallclock disk usage is already over."""
+    total = 0
+    try:
+        total += DB_PATH.stat().st_size
+    except OSError:
+        pass
+    wal = DB_PATH.with_suffix(DB_PATH.suffix + ".wal")
+    try:
+        total += wal.stat().st_size
+    except OSError:
+        pass
+    return total
+
 SCHEMA_VERSION = 10
 
 # ── Two-layer schema (multi-agent) ──────────────────────────────────────────
@@ -968,6 +1019,32 @@ class LocalStore:
         self._flusher_stop = threading.Event()
         self._flusher_thread: threading.Thread | None = None
         self._last_flush_ts = time.monotonic()
+        # Issue #1594 — auto-vacuum bookkeeping. ``_bytes_since_vacuum_check``
+        # accumulates an approximation of the bytes flushed since we last
+        # stat()ed the DB file; once it crosses ``AUTO_VACUUM_CHECK_EVERY_BYTES``
+        # we check the real on-disk size against the high-water mark. We don't
+        # stat on EVERY flush because stat() on the DuckDB file is cheap but
+        # not free and flushes can run 10/s. ``_cap_exceeded`` is the public
+        # /local/health flag the dashboard footer surfaces (#1594 detection
+        # strategy); ``_auto_vacuum_running`` guards against re-entrant vacuum
+        # calls if a flush triggers vacuum which itself triggers a flush.
+        self._bytes_since_vacuum_check = 0
+        self._cap_exceeded = False
+        self._auto_vacuum_running = False
+        self._auto_vacuum_lock = threading.Lock()
+        # Issue #1594 — DuckDB does not shrink the main file in-place
+        # after DELETE; freed pages are reused by subsequent inserts but
+        # the on-disk size plateaus at the high-water mark. Without a
+        # cooldown, every flush would re-trigger the over-cap path and
+        # spam the log + repeatedly emit marker events. We rate-limit
+        # the warning + marker to once per cooldown window.
+        # ``None`` sentinel = "no warning yet" — the cooldown check uses
+        # ``None`` to mean "always fire on first hit", independent of
+        # the cooldown window or process uptime. Using a numeric 0
+        # sentinel would break tests that set the cooldown larger than
+        # process uptime (first warning would mis-fire as already-on-
+        # cooldown because ``time.monotonic() - 0 < cooldown``).
+        self._last_over_cap_warning_ts: float | None = None
         if not read_only:
             # Rename the legacy events.duckdb in place BEFORE opening — once
             # we hold a connection we can't atomically rename the file out
@@ -3034,7 +3111,18 @@ class LocalStore:
         snapshot the same batch and each pop ``len(batch)`` items, evicting
         events the other snapshotted but had not yet written."""
         with self._flush_lock:
-            return self._flush_now_locked()
+            n = self._flush_now_locked()
+        # Issue #1594 — auto-vacuum check runs OUTSIDE ``_flush_lock`` so
+        # the vacuum body (which itself acquires ``_write_lock`` and does
+        # an internal CHECKPOINT + possible row delete) does not block
+        # subsequent flushes longer than necessary, and more importantly
+        # so re-entering ``_flush_now`` from inside the vacuum path (it
+        # used to call ``self._flush_now()`` at the top) cannot deadlock.
+        try:
+            self._maybe_auto_vacuum()
+        except Exception:
+            log.exception("local store: auto-vacuum gate failed")
+        return n
 
     def _flush_now_locked(self) -> int:
         with self._ring_lock:
@@ -3085,6 +3173,15 @@ class LocalStore:
                 if self._ring:
                     self._ring.popleft()
         self._last_flush_ts = time.monotonic()
+        # Issue #1594 — accumulate an approximation of bytes flushed; the
+        # real on-disk size is checked only when this crosses
+        # ``AUTO_VACUUM_CHECK_EVERY_BYTES`` to keep the hot path fast.
+        # 512 B/row is a coarse upper bound for the typical event shape
+        # (id + small JSON blob); a few-pct overshoot just means we stat()
+        # slightly earlier than strictly necessary, which is fine. The
+        # actual auto-vacuum check fires in ``_flush_now`` AFTER we drop
+        # ``_flush_lock`` — see comment there.
+        self._bytes_since_vacuum_check += len(rows) * 512
         # Issue #1343 Phase 2.2 — kick the approvals watcher when a tool_call
         # row just landed. The watcher_loop reads from DuckDB; the COMMIT
         # above is what makes the row visible to it. Kicking before the
@@ -5385,7 +5482,11 @@ class LocalStore:
     def health(self) -> dict[str, Any]:
         """Snapshot of store state — for the /local/health endpoint and the
         dashboard footer."""
-        size_bytes = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+        # Issue #1594 — measure main + WAL. The WAL is where DuckDB stages
+        # recent writes until CHECKPOINT; ignoring it under-counted the
+        # real disk footprint by an order of magnitude during active
+        # ingest, which is exactly when the dashboard most wants to know.
+        size_bytes = _on_disk_bytes()
         rows = self._fetch(
             "SELECT COUNT(*) AS n, MIN(ts) AS oldest, MAX(ts) AS newest FROM events",
             []
@@ -5400,6 +5501,13 @@ class LocalStore:
             "size_bytes": int(size_bytes),
             "size_mb": round(size_bytes / 1024 / 1024, 2),
             "size_cap_bytes": LOCAL_MAX_BYTES,
+            # Issue #1594 — surfaced to dashboard footer + cloud-side
+            # alerts. True when the last auto-vacuum attempt could not
+            # bring the store back under LOCAL_MAX_BYTES; remains True
+            # until either retention shrinks naturally or the next
+            # vacuum succeeds.
+            "cap_exceeded": bool(self._cap_exceeded),
+            "auto_vacuum_enabled": bool(AUTO_VACUUM_ENABLED),
             "event_count": int(n or 0),
             "oldest_ts": oldest,
             "newest_ts": newest,
@@ -5414,9 +5522,35 @@ class LocalStore:
     def vacuum(self, *, prune_to_bytes: int | None = None) -> dict[str, Any]:
         """Reclaim space. If ``prune_to_bytes`` is set (or the DB has exceeded
         ``LOCAL_MAX_BYTES``), delete oldest events first until the projected
-        size fits, then run a CHECKPOINT to reclaim file size."""
+        size fits, then run a CHECKPOINT to reclaim file size.
+
+        Issue #1594 — ``before_size`` is now main+WAL (was just main), so the
+        prune decision matches the real on-disk footprint instead of the
+        post-checkpoint snapshot. Without this, ``before_size`` typically
+        showed 12 KB during active ingest while the WAL held 10 MB, so the
+        prune branch never fired even when the daemon was already over cap."""
+        # Public entry: drain the ring first so the prune accounting includes
+        # everything currently in flight. Auto-vacuum (called from inside
+        # ``_flush_now_locked``) skips this step via ``_vacuum_locked`` —
+        # re-entering ``_flush_now`` here would deadlock on ``_flush_lock``.
         self._flush_now()
-        before_size = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+        return self._vacuum_locked(prune_to_bytes=prune_to_bytes)
+
+    def _vacuum_locked(self, *, prune_to_bytes: int | None = None) -> dict[str, Any]:
+        """Core vacuum body — assumes ring is already drained (or that the
+        caller is fine with skipping in-flight events). Safe to call from
+        any thread that does NOT currently hold ``_flush_lock``-protected
+        state; specifically called from ``_maybe_auto_vacuum`` AFTER the
+        flush body has released its locks via the outer scheduling."""
+        # CHECKPOINT first so the main file reflects everything we just
+        # flushed; then both ``before_size`` and the row-arithmetic below
+        # operate on a consistent snapshot.
+        with self._write_lock:
+            try:
+                self._conn.execute("CHECKPOINT")
+            except Exception:
+                log.exception("local store: pre-prune CHECKPOINT failed")
+        before_size = _on_disk_bytes()
         cap = prune_to_bytes if prune_to_bytes is not None else LOCAL_MAX_BYTES
         deleted = 0
         if before_size > cap:
@@ -5425,6 +5559,17 @@ class LocalStore:
                 bytes_per_row = before_size / n_rows
                 excess_bytes = (before_size - cap) * 1.2
                 rows_to_drop = int(excess_bytes / bytes_per_row) if bytes_per_row else 0
+                # Issue #1594 — never drop more than 80 % of rows in
+                # one pass. The bytes-per-row estimate is coarse (DuckDB
+                # WAL + page layout differs across writes), and on a
+                # heavily-over-cap store (e.g. cap=1 B test fixture, or
+                # a real install hit by burst ingest) the naive estimate
+                # can compute ``rows_to_drop > n_rows``. DELETE ... LIMIT
+                # with that value would wipe the entire history in one
+                # cycle. Capping preserves the oldest-evicted invariant
+                # while leaving the user some recent data; subsequent
+                # flushes will continue to vacuum if still over cap.
+                rows_to_drop = min(rows_to_drop, max(1, int(n_rows * 0.8)))
                 if rows_to_drop > 0:
                     with self._write_lock:
                         with _txn(self._conn):
@@ -5450,7 +5595,7 @@ class LocalStore:
                 self._conn.execute("CHECKPOINT")
             except Exception:
                 log.exception("local store: CHECKPOINT failed")
-        after_size = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+        after_size = _on_disk_bytes()
         return {
             "deleted_rows": int(deleted),
             "before_bytes": before_size,
@@ -5458,6 +5603,141 @@ class LocalStore:
             "cap_bytes": cap,
             "reclaimed_bytes": max(0, before_size - after_size),
         }
+
+    # ── Issue #1594 — on-write auto-vacuum ──────────────────────────────
+    #
+    # Called from ``_flush_now_locked`` after every successful flush.
+    # Cheap fast path: increment a byte-counter and bail unless we've
+    # crossed the check threshold. Hot path is two int compares + a
+    # branch; the stat() / size compare / vacuum call only runs once
+    # per ~100 MB written.
+    def _maybe_auto_vacuum(self) -> None:
+        """Auto-vacuum gate (#1594). Runs after each flush; fires the real
+        vacuum only when we've written enough since the last check AND the
+        store has crossed ``AUTO_VACUUM_HIGH_WATER_PCT`` of the cap.
+
+        Reentrancy: ``_auto_vacuum_running`` guards against vacuum →
+        flush → vacuum cycles. Errors are swallowed (logged) — auto-vacuum
+        must never crash the flusher; the manual ``vacuum()`` endpoint and
+        the next tick will retry."""
+        if not AUTO_VACUUM_ENABLED:
+            return
+        if self._bytes_since_vacuum_check < AUTO_VACUUM_CHECK_EVERY_BYTES:
+            return
+        # Acquire under lock so concurrent flushers don't both pass the
+        # gate; the second waits, sees _auto_vacuum_running and returns.
+        with self._auto_vacuum_lock:
+            if self._auto_vacuum_running:
+                return
+            if self._bytes_since_vacuum_check < AUTO_VACUUM_CHECK_EVERY_BYTES:
+                return  # someone else already drained the counter
+            self._auto_vacuum_running = True
+            self._bytes_since_vacuum_check = 0
+        try:
+            size = _on_disk_bytes()
+            high_water = int(LOCAL_MAX_BYTES * AUTO_VACUUM_HIGH_WATER_PCT)
+            if size < high_water:
+                # Healthy — clear any prior cap_exceeded flag and bail.
+                self._cap_exceeded = False
+                return
+            log.info(
+                "local store: auto-vacuum fired (size=%d B, high_water=%d B, "
+                "cap=%d B) — pruning oldest events to fit",
+                size, high_water, LOCAL_MAX_BYTES,
+            )
+            # Use the locked body directly — we're already past the flush
+            # boundary and re-entering the public ``vacuum()`` would call
+            # ``_flush_now`` which (depending on stack ordering) can race
+            # with the very next flusher tick. The ring just drained.
+            res = self._vacuum_locked()
+            after = res.get("after_bytes", 0)
+            deleted = res.get("deleted_rows", 0)
+            if after > LOCAL_MAX_BYTES:
+                # Hard-cap miss: vacuum ran but the on-disk file is
+                # still above cap. Two failure modes:
+                #   a) deleted == 0 — we couldn't fit any rows (cap
+                #      pathologically small, e.g. 1 B). Real escalation.
+                #   b) deleted > 0 — rows came out but DuckDB hasn't
+                #      shrunk the main file (DELETE doesn't compact in
+                #      v1.4.x). Freed pages WILL be reused by subsequent
+                #      ingest, so growth is bounded — but we still flag
+                #      cap_exceeded so dashboards/cloud can surface the
+                #      condition. Rate-limit the warning + marker
+                #      (every flush would otherwise re-fire it).
+                self._cap_exceeded = True
+                now = time.monotonic()
+                cooled_down = (
+                    self._last_over_cap_warning_ts is None
+                    or (now - self._last_over_cap_warning_ts)
+                       >= AUTO_VACUUM_OVER_CAP_COOLDOWN_S
+                )
+                if cooled_down:
+                    self._last_over_cap_warning_ts = now
+                    log.warning(
+                        "local store: LOCAL_STORE_OVER_CAP — vacuum could "
+                        "not bring on-disk size under cap (after=%d B, "
+                        "cap=%d B, deleted_rows=%d). DuckDB does not "
+                        "shrink the main file after DELETE; freed pages "
+                        "will be reused by new ingest so growth is "
+                        "bounded, but consider lowering retention, "
+                        "raising CLAWMETRY_LOCAL_MAX_GB, or setting "
+                        "CLAWMETRY_AUTO_VACUUM=0 to manage retention "
+                        "externally.",
+                        after, LOCAL_MAX_BYTES, deleted,
+                    )
+                    try:
+                        self._emit_over_cap_marker(after)
+                    except Exception:
+                        # Marker is best-effort: never crash the flusher
+                        # on a write failure inside the metric path.
+                        log.exception("local store: over-cap marker emit failed")
+            else:
+                self._cap_exceeded = False
+                log.info(
+                    "local store: auto-vacuum reclaimed %d B (deleted %d rows, "
+                    "before=%d B, after=%d B)",
+                    res.get("reclaimed_bytes", 0),
+                    deleted,
+                    res.get("before_bytes", 0),
+                    after,
+                )
+        except Exception:
+            # Belt-and-braces: never let an auto-vacuum failure escape into
+            # the flusher loop and break ingest. The manual vacuum endpoint
+            # remains available and the next flush will reset the counter.
+            log.exception("local store: auto-vacuum failed (will retry next cycle)")
+        finally:
+            with self._auto_vacuum_lock:
+                self._auto_vacuum_running = False
+
+    def _emit_over_cap_marker(self, after_bytes: int) -> None:
+        """Persist a ``local_store_over_cap`` event so dashboards/cloud can
+        see the cap-exceeded condition without polling /local/health. Direct
+        INSERT (bypasses the ring) so even a saturated ring doesn't drop
+        the marker."""
+        import uuid as _uuid
+        from datetime import datetime as _dt, timezone as _tz
+        ev_id = f"over-cap-{_uuid.uuid4()}"
+        node_id = os.environ.get("CLAWMETRY_NODE_ID") or "local"
+        ts_iso = _dt.now(_tz.utc).isoformat()
+        payload = json.dumps({
+            "after_bytes": int(after_bytes),
+            "cap_bytes": int(LOCAL_MAX_BYTES),
+        }).encode("utf-8")
+        with self._write_lock:
+            self._conn.execute(
+                """
+                INSERT OR IGNORE INTO events
+                  (id, agent_type, node_id, agent_id, session_id, workspace_id,
+                   event_type, ts, data, cost_usd, token_count, model, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                [
+                    ev_id, "clawmetry", node_id, "local_store", None, None,
+                    "local_store_over_cap", ts_iso, payload, None, None, None,
+                    int(time.time() * 1000),
+                ],
+            )
 
     # ── Insights fast path (feat/insights-v1) ──────────────────────────
     # Single allowlisted entry-point for hand-authored SELECT templates in
