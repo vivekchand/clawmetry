@@ -250,6 +250,13 @@ jobs:
     needs: lint
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # NON-BLOCKING for now. OpenClaw harness setup in CI is an open
+    # follow-up (see PR #1549 debug-team thread + comment from author).
+    # Synthetic MOAT verifier (#1527) + cloud roundtrip E2E (#917) +
+    # browser golden-path (#918) cover the regression class this would
+    # add defense-in-depth for. Flip to required after local-dev OpenClaw
+    # setup pattern is documented.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

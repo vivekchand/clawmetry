@@ -195,14 +195,15 @@ def _send_message(home: str, message: str) -> subprocess.CompletedProcess:
     env["OPENCLAW_STATE_DIR"] = state_dir
     env["OPENCLAW_DISABLE_UPDATE_CHECK"] = "1"
     env["NO_COLOR"] = "1"
+    # Force the anthropic harness via env (CLI flag --harness is rejected
+    # by OpenClaw v3). CI does not have the default `codex` harness
+    # registered. ANTHROPIC_API_KEY in env is what the harness reads.
+    # Local dev with codex installed can override via env if needed.
+    env.setdefault("OPENCLAW_HARNESS", "anthropic")
     return subprocess.run(
         [
             OPENCLAW_BIN, "agent", "--local",
             "--message", message, "--to", RECIPIENT,
-            # Force the anthropic harness; CI does not have `codex` (the
-            # default) registered. ANTHROPIC_API_KEY in env is what the
-            # harness reads. See #1549 debug-team root-cause analysis.
-            "--harness", "anthropic",
             "--json", "--timeout", "30",
         ],
         env=env, capture_output=True, text=True, timeout=60,
