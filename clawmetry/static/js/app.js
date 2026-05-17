@@ -6828,21 +6828,40 @@ async function loadSystemHealth() {
       var ciWrap = document.getElementById('sh-channel-ingest-wrap');
       var ciEl = document.getElementById('sh-channel-ingest');
       if (ciEl && ciWrap) {
+        // Always show the wrap — even empty state is diagnostic (#1321).
+        ciWrap.style.display = '';
+        var emoji = function(p) {
+          return p === 'telegram'        ? '✈️'
+               : p === 'signal'         ? '📡'
+               : p === 'slack'          ? '💼'
+               : p === 'discord'        ? '🎮'
+               : p === 'whatsapp'       ? '🟢'
+               : p === 'imessage'       ? '🍎'
+               : p === 'webchat'        ? '🌐'
+               : p === 'irc'            ? '#️⃣'
+               : p === 'googlechat'     ? '💬'
+               : p === 'bluebubbles'    ? '🫧'
+               : p === 'msteams'        ? '🏢'
+               : p === 'tui'            ? '⌨️'
+               : p === 'matrix'         ? '🔷'
+               : p === 'mattermost'     ? '📢'
+               : p === 'line'           ? '🟩'
+               : p === 'nostr'          ? '⚡'
+               : p === 'twitch'         ? '🟣'
+               : p === 'feishu'         ? '🪶'
+               : p === 'zalo'           ? '🔵'
+               : p === 'tlon'           ? '🌊'
+               : p === 'synology-chat'  ? '🖥️'
+               : p === 'nextcloud-talk' ? '☁️'
+               : '📨';
+        };
         if (ingest.length === 0) {
-          ciWrap.style.display = 'none';
+          ciEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:4px 0;">'
+            + 'No channel activity yet. '
+            + '<a href="#" onclick="switchTab(\'flow\');return false;" '
+            + 'style="color:var(--accent-primary,#3b82f6);text-decoration:underline;">Connect a channel →</a>'
+            + '</div>';
         } else {
-          ciWrap.style.display = '';
-          var emoji = function(p) {
-            return p === 'telegram' ? '✈️'
-                 : p === 'signal'   ? '📡'
-                 : p === 'slack'    ? '💬'
-                 : p === 'discord'  ? '🎮'
-                 : p === 'whatsapp' ? '🟢'
-                 : p === 'imessage' ? '🍎'
-                 : p === 'webchat'  ? '🌐'
-                 : p === 'irc'      ? '#'
-                 : '📨';
-          };
           var fmtMins = function(m) {
             if (m == null) return 'never';
             if (m < 1) return 'just now';
@@ -6859,7 +6878,11 @@ async function loadSystemHealth() {
                          : '#6b7280';
             var border = (mins != null && mins < 10) ? 'rgba(22,163,74,0.3)' : 'var(--border-secondary)';
             cihtml += '<div title="total ' + row.total + ' (' + (row.msg_in||0) + ' in / ' + (row.msg_out||0) + ' out)" '
-              + 'style="display:flex;align-items:center;gap:7px;padding:7px 12px;background:var(--bg-secondary);border-radius:8px;border:1px solid ' + border + ';font-size:12px;margin-bottom:4px;">'
+              + 'onclick="switchTab(\'flow\')" '
+              + 'onmouseover="this.style.background=\'var(--bg-primary)\'" '
+              + 'onmouseout="this.style.background=\'var(--bg-secondary)\'" '
+              + 'style="display:flex;align-items:center;gap:7px;padding:7px 12px;background:var(--bg-secondary);'
+              + 'border-radius:8px;border:1px solid ' + border + ';font-size:12px;margin-bottom:4px;cursor:pointer;">'
               + '<span style="width:9px;height:9px;border-radius:50%;background:' + dotColor + ';flex-shrink:0;display:inline-block;"></span>'
               + emoji(row.provider) + ' <span style="font-weight:600;color:var(--text-primary);">' + escHtml(row.provider) + '</span>'
               + '<span style="color:var(--text-muted);font-size:11px;margin-left:auto;">' + fmtMins(mins) + ' &middot; ' + row.total + ' total</span>'
@@ -7415,6 +7438,8 @@ async function loadUsage() {
     loadHeatmap();
     // Load prompt cache analytics (GH #979)
     loadCacheAnalytics();
+    // Load cost forecast (issue #1413)
+    loadCostForecast();
   } catch(e) {
     document.getElementById('usage-chart').innerHTML = '<span style="color:#555">No usage data available</span>';
   }
@@ -7672,6 +7697,55 @@ function renderCostComparison(data) {
   html += '</div>';
   html += '<div style="margin-top:10px;font-size:11px;color:var(--text-muted);line-height:1.5;">Estimates based on 60/40 input/output split for ' + tokStr + ' tokens. Actual costs vary by prompt structure and API tier.</div>';
   el.innerHTML = html;
+}
+
+// ===== Cost Forecast (issue #1413) =====
+async function loadCostForecast() {
+  var title = document.getElementById('cost-forecast-title');
+  var card = document.getElementById('cost-forecast-card');
+  var el = document.getElementById('cost-forecast-content');
+  if (!card || !el) return;
+  try {
+    var d = await fetch('/api/usage/forecast').then(function(r){return r.json();});
+    if (!d || !d.available) return;
+    // Hide card when daily rate is effectively zero (no meaningful data yet)
+    if ((d.daily_rate_usd || 0) === 0 && (d.cost_this_month_usd || 0) === 0) return;
+    if (title) title.style.display = '';
+    card.style.display = '';
+    var proj = d.projected_month_usd || 0;
+    var budget = d.monthly_budget_usd || 0;
+    var exceeded = d.budget_exceeded;
+    var color = exceeded ? 'var(--danger, #ef4444)' : '#22c55e';
+    var icon = exceeded ? '⚠️' : '✅';
+    var statusMsg = '';
+    if (budget > 0) {
+      if (exceeded) {
+        var over = proj - budget;
+        statusMsg = 'Will exceed $' + budget.toFixed(2) + ' budget by $' + over.toFixed(2);
+        if (d.days_to_budget !== null && d.days_to_budget <= d.days_remaining_in_month) {
+          statusMsg += ' · exceeds in ~' + Math.ceil(d.days_to_budget) + ' day' + (Math.ceil(d.days_to_budget) !== 1 ? 's' : '');
+        }
+      } else {
+        statusMsg = 'On track vs $' + budget.toFixed(2) + ' budget';
+      }
+    } else {
+      statusMsg = d.days_remaining_in_month + 'd remaining this month';
+    }
+    el.innerHTML =
+      '<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;">' +
+        '<div>' +
+          '<div style="font-size:12px;color:var(--text-muted);">Projected month-end</div>' +
+          '<div style="font-size:22px;font-weight:700;color:' + color + ';">' + icon + ' $' + proj.toFixed(2) + '</div>' +
+        '</div>' +
+        '<div style="color:var(--text-muted);font-size:13px;">' + escHtml(statusMsg) + '</div>' +
+        '<div style="margin-left:auto;text-align:right;font-size:12px;color:var(--text-muted);">' +
+          '$' + (d.daily_rate_usd || 0).toFixed(4) + '/day avg<br>' +
+          '$' + (d.cost_this_month_usd || 0).toFixed(2) + ' spent so far' +
+        '</div>' +
+      '</div>';
+  } catch(e) {
+    // silently skip if endpoint unavailable
+  }
 }
 
 function renderTraceClusters(clusters, totalSessions) {

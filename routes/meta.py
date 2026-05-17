@@ -639,7 +639,18 @@ def auth_token():
 @bp_auth.route("/")
 def index():
     import dashboard as _d
-    resp = make_response(render_template_string(_d.DASHBOARD_HTML, version=_d.__version__))
+    # v2_enabled gates the unobtrusive "Try v2" link in the v1 sidebar
+    # (week-1 migration plan, README §"What to communicate"). Mirrors the
+    # same env var the v2 blueprint registration in dashboard.py uses, so we
+    # never advertise /v2 to users who'd hit a 404.
+    v2_enabled = os.environ.get("CLAWMETRY_V2") == "1"
+    resp = make_response(
+        render_template_string(
+            _d.DASHBOARD_HTML,
+            version=_d.__version__,
+            v2_enabled=v2_enabled,
+        )
+    )
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     return resp
 

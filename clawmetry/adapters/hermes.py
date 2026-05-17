@@ -27,7 +27,7 @@ import os
 import sqlite3
 import threading
 import time
-from typing import Iterator, List, Optional, Set
+from typing import Iterator
 
 from .base import AgentAdapter, Capability, DetectResult, Event, Session
 
@@ -38,7 +38,7 @@ def _hermes_home() -> str:
     return os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
 
 
-def _state_db_path(home: Optional[str] = None) -> str:
+def _state_db_path(home: str | None = None) -> str:
     return os.path.join(home or _hermes_home(), "state.db")
 
 
@@ -142,7 +142,7 @@ class HermesAdapter(AgentAdapter):
     def __init__(self) -> None:
         self._stream_stop = threading.Event()
 
-    def _db(self) -> Optional[sqlite3.Connection]:
+    def _db(self) -> sqlite3.Connection | None:
         path = _state_db_path()
         if not os.path.isfile(path):
             return None
@@ -204,7 +204,7 @@ class HermesAdapter(AgentAdapter):
         except (OSError, ProcessLookupError):
             return False
 
-    def list_sessions(self, limit: int = 100) -> List[Session]:
+    def list_sessions(self, limit: int = 100) -> list[Session]:
         conn = self._db()
         if conn is None:
             return []
@@ -221,7 +221,7 @@ class HermesAdapter(AgentAdapter):
         finally:
             conn.close()
 
-    def read_session(self, session_id: str) -> Optional[Session]:
+    def read_session(self, session_id: str) -> Session | None:
         conn = self._db()
         if conn is None:
             return None
@@ -238,7 +238,7 @@ class HermesAdapter(AgentAdapter):
         finally:
             conn.close()
 
-    def list_events(self, session_id: str, limit: int = 500) -> List[Event]:
+    def list_events(self, session_id: str, limit: int = 500) -> list[Event]:
         conn = self._db()
         if conn is None:
             return []
@@ -303,7 +303,7 @@ class HermesAdapter(AgentAdapter):
     def stop_stream(self) -> None:
         self._stream_stop.set()
 
-    def capabilities(self) -> Set[Capability]:
+    def capabilities(self) -> set[Capability]:
         # Deliberately narrow for v1: Hermes exposes more data (skills
         # dir, cron tick files, memory markdown) but hooking each one
         # into ClawMetry's tabs needs per-feature engineering. Ship the

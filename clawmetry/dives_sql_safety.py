@@ -35,7 +35,6 @@ in the UI.
 from __future__ import annotations
 
 import re
-from typing import Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -134,13 +133,13 @@ def _split_statements(sanitized: str) -> list[str]:
     return [p for p in parts if p]
 
 
-def _first_keyword(stmt: str) -> Optional[str]:
+def _first_keyword(stmt: str) -> str | None:
     """Return the first SQL identifier token in *stmt*, uppercased."""
     m = _IDENT_RE.search(stmt)
     return m.group(0).upper() if m else None
 
 
-def _contains_banned_function(sanitized: str) -> Optional[str]:
+def _contains_banned_function(sanitized: str) -> str | None:
     """Return the name of a banned function call found in *sanitized*, or None."""
     # Identifier followed by optional whitespace then '(' = function call.
     for m in re.finditer(r"([A-Za-z_][A-Za-z0-9_]*)\s*\(", sanitized):
@@ -150,7 +149,7 @@ def _contains_banned_function(sanitized: str) -> Optional[str]:
     return None
 
 
-def _contains_banned_keyword(sanitized: str) -> Optional[str]:
+def _contains_banned_keyword(sanitized: str) -> str | None:
     """Return any banned statement-level keyword found as a whole token."""
     for m in _IDENT_RE.finditer(sanitized):
         word = m.group(0).upper()
@@ -163,7 +162,7 @@ def _contains_banned_keyword(sanitized: str) -> Optional[str]:
 # Optional sqlglot pass
 # ---------------------------------------------------------------------------
 
-def _sqlglot_check(sql: str) -> Optional[str]:
+def _sqlglot_check(sql: str) -> str | None:
     """Run sqlglot as defence-in-depth. Returns a rejection reason, or None.
 
     If sqlglot isn't installed we skip — the lexical pass already enforces the
@@ -203,7 +202,7 @@ def _sqlglot_check(sql: str) -> Optional[str]:
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def validate_sql(sql: str) -> Tuple[bool, Optional[str]]:
+def validate_sql(sql: str) -> tuple[bool, str | None]:
     """Validate *sql* against the Dives allowlist.
 
     Returns ``(True, None)`` if the query is safe, otherwise ``(False, reason)``.

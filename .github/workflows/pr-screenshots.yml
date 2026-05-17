@@ -35,12 +35,22 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PR_SCREENSHOT_TABS: "overview,flow,brain,approvals,alerts,notifications,context,usage,crons,memory,security"
+  # Tabs to screenshot. Every name MUST match an `id="page-<name>"` in
+  # clawmetry/templates/tabs/*.html and be reachable via window.switchTab().
+  # See routes/* for the API endpoints each tab calls.
+  PR_SCREENSHOT_TABS: "overview,flow,brain,usage,crons,memory,security,subagents,transcripts,logs,skills,models,approvals,alerts,notifications,context,limits,clusters,history"
   HEAD_PORT: "8082"
   BASE_PORT: "8081"
   # Local-store fast-paths must be on so the dashboard renders the seeded
   # synthetic data instead of falling back to gateway/filesystem reads.
   CLAWMETRY_LOCAL_STORE_READ: "1"
+  # CI gateway token. The dashboard requires a gateway token before it will
+  # render past the login/setup overlay (see routes/meta.py:api_auth_check).
+  # Without this, every screenshot was just the mandatory-setup overlay,
+  # so the visual-diff bot was theater not signal (feedback 2026-05-17).
+  # The visual-diff script seeds this same value into localStorage on every
+  # page so the bootstrap JS's /api/auth/check call succeeds.
+  CLAWMETRY_VISUAL_DIFF_TOKEN: "visualdiff-ci-token"
 
 jobs:
   visual-diff:
@@ -118,7 +128,10 @@ jobs:
           CLAWMETRY_LOCAL_STORE_PATH: /tmp/base.duckdb
           CLAWMETRY_LOCAL_STORE_READ: "1"
           CLAWMETRY_HISTORY_DB: /tmp/base-history.db
-          OPENCLAW_GATEWAY_TOKEN: ""
+          # Boot with a known gateway token so the dashboard renders past
+          # its setup/login overlay. The visual-diff script seeds the same
+          # value into localStorage before navigating to each tab.
+          OPENCLAW_GATEWAY_TOKEN: ${{ env.CLAWMETRY_VISUAL_DIFF_TOKEN }}
           CLAWMETRY_ANON: "1"
         run: |
           nohup python dashboard.py --port ${{ env.BASE_PORT }} --no-debug \
@@ -131,7 +144,7 @@ jobs:
           CLAWMETRY_LOCAL_STORE_PATH: /tmp/head.duckdb
           CLAWMETRY_LOCAL_STORE_READ: "1"
           CLAWMETRY_HISTORY_DB: /tmp/head-history.db
-          OPENCLAW_GATEWAY_TOKEN: ""
+          OPENCLAW_GATEWAY_TOKEN: ${{ env.CLAWMETRY_VISUAL_DIFF_TOKEN }}
           CLAWMETRY_ANON: "1"
         run: |
           nohup python dashboard.py --port ${{ env.HEAD_PORT }} --no-debug \
@@ -166,6 +179,11 @@ jobs:
           HEAD_URL: "http://127.0.0.1:${{ env.HEAD_PORT }}"
           OUT_DIR: "${{ github.workspace }}/screenshots"
           PR_SCREENSHOT_TABS: ${{ env.PR_SCREENSHOT_TABS }}
+          # Same token as both dashboards' OPENCLAW_GATEWAY_TOKEN; the
+          # script writes it to localStorage so the dashboard JS's auth
+          # bootstrap (routes/meta.py:api_auth_check) returns valid=true
+          # and dismisses the login overlay before we screenshot.
+          CLAWMETRY_VISUAL_DIFF_TOKEN: ${{ env.CLAWMETRY_VISUAL_DIFF_TOKEN }}
         run: node .github/scripts/visual-diff.mjs
 
       # ── 9. Stop dashboards (best-effort) ────────────────────────────────

@@ -149,12 +149,20 @@ jobs:
             tests/test_local_query_api.py \
             -q
 
-  # ── E2E Playwright tests (Linux only for speed, allowed to fail) ─────────
-  e2e-tests:
-    name: E2E Browser Tests
+  # ── E2E Playwright tests — critical subset (hard-gate, blocks merge) ──────
+  # Per issue #1528: the prior `e2e-tests` job carried `continue-on-error: true`
+  # which silently masked Playwright regressions. We split the suite into:
+  #   1. `e2e-critical` (this job) — TestTabsLoad: page-load + tab-nav smoke
+  #      tests that have been stable. Hard-fails on regression.
+  #   2. `e2e-nightly`  (.github/workflows/e2e-nightly.yml) — the broader
+  #      TestFlowDiagram suite, which depends on SVG rendering of live data
+  #      and is still flaky. Runs on schedule, not per-PR.
+  # If you add a new e2e test, default it to nightly until it has a clean
+  # run history; promote to critical once it has been green for ~1 week.
+  e2e-critical:
+    name: E2E Browser Tests (critical subset)
     needs: lint
     runs-on: ubuntu-latest
-    continue-on-error: true  # Remove once tests are fully stable
 
     steps:
       - uses: actions/checkout@v4
@@ -172,11 +180,11 @@ jobs:
             curl -sf -H "Authorization: Bearer ci-test-token" http://localhost:8900/api/health && break
             sleep 1
           done
-      - name: Run E2E tests
+      - name: Run E2E tests (critical subset only — hard gate)
         env:
           CLAWMETRY_URL: http://localhost:8900
           CLAWMETRY_TOKEN: ci-test-token
-        run: python3 -m pytest tests/test_e2e.py -v --tb=short
+        run: python3 -m pytest tests/test_e2e.py::TestTabsLoad -v --tb=short
 
   # ── pip install smoke test across platforms ─────────────────────────────
   pip-install:
