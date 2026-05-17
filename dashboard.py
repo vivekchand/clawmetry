@@ -4158,6 +4158,15 @@ function clawmetryLogout(){
   <button onclick="dismissUpgradeBanner()" style="background:transparent;color:#93c5fd;border:1px solid #3b82f680;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">Dismiss</button>
 </div>
 
+<!-- Issue #1233: gateway WS tap is now opt-in. Hidden until /api/overview returns
+     _comms.show_gateway_tap_banner=true. Dismiss is sticky via localStorage. -->
+<div id="gw-tap-banner" style="display:none;padding:10px 16px;background:linear-gradient(90deg,#3a2d05 0%,#1a1a2e 100%);border-bottom:2px solid #f59e0b;color:#fbbf24;font-size:13px;font-weight:500;align-items:center;gap:10px;">
+  <span style="font-size:16px;">&#9888;&#65039;</span>
+  <span id="gw-tap-banner-msg" style="flex:1;">Live channel watch (Telegram, Signal, Discord, etc.) is now opt-in for safety. Set <code>CLAWMETRY_ENABLE_WS_TAP=1</code> and restart the sync daemon to re-enable inbound message capture.</span>
+  <a id="gw-tap-banner-pro" href="/cloud/billing" style="display:none;background:#f59e0b;color:#1a1a2e;text-decoration:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Pro enables this by default</a>
+  <button onclick="dismissGwTapBanner()" style="background:transparent;color:#fbbf24;border:1px solid #f59e0b80;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">Dismiss</button>
+</div>
+
 <!-- Budget Settings Modal -->
 <div id="budget-modal" style="display:none;position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;">
   <div style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:16px;width:90%;max-width:560px;padding:24px;box-shadow:0 25px 50px rgba(0,0,0,0.25);">
@@ -6052,6 +6061,13 @@ async function ackAllAlerts() {
   } catch(e) {}
 }
 
+// Issue #1233: sticky dismiss for the gateway-tap opt-in banner.
+function dismissGwTapBanner() {
+  try { localStorage.setItem('gw_tap_banner_dismissed', '1'); } catch(e) {}
+  var el = document.getElementById('gw-tap-banner');
+  if (el) el.style.display = 'none';
+}
+
 // Check alerts every 30s
 setInterval(checkActiveAlerts, 30000);
 setTimeout(checkActiveAlerts, 3000);
@@ -6809,6 +6825,18 @@ async function loadAll() {
       if (i.network) setFlowTextAll('infra-network-text', 'LAN ' + i.network, 18);
       if (i.userName) setFlowTextAll('flow-human-name', i.userName, 10);
     }
+
+    // Issue #1233: surface the opt-in nudge for users impacted by PR #1228
+    // default-OFF flip of the gateway WS tap. Sticky dismiss via localStorage.
+    try {
+      var comms = (overview && overview._comms) || {};
+      var gwBanner = document.getElementById('gw-tap-banner');
+      if (gwBanner && comms.show_gateway_tap_banner && localStorage.getItem('gw_tap_banner_dismissed') !== '1') {
+        gwBanner.style.display = 'flex';
+        var proCta = document.getElementById('gw-tap-banner-pro');
+        if (proCta) proCta.style.display = comms.show_pro_cta ? 'inline-block' : 'none';
+      }
+    } catch(e) { /* never let banner code break overview */ }
 
     // If overview cannot determine model yet, use brain endpoint fallback immediately.
     if (!overview.model || overview.model === 'unknown') {
