@@ -572,6 +572,81 @@ async function checkHeartbeatStatus() {
 visibilitySetInterval(checkHeartbeatStatus, 30000);
 setTimeout(checkHeartbeatStatus, 5000);
 
+// === Onboarding / First-Heartbeat Banner (closes #1604) =====================
+// After a fresh signup the daemon needs ~30s to come up + emit its first
+// heartbeat. Without a banner the dashboard shows empty cards that look
+// broken or - worse - might surface stale data from a prior tenant on the
+// same machine_id. We poll /api/heartbeat-status every 5s and:
+//   * status === "unknown" (no heartbeat yet) -> show "Setting up your node"
+//   * first heartbeat lands -> hide banner + trigger one full loadAll() so
+//     the live cards swap in smoothly instead of waiting for the 30s cycle.
+//   * 90s elapsed with no heartbeat -> switch copy to actionable error.
+var _cmOnboardingFirstSeenMs = 0;
+var _cmOnboardingDismissed = false;
+var _cmOnboardingTimer = null;
+var _CM_ONBOARDING_STALL_MS = 90 * 1000;
+
+async function checkOnboardingStatus() {
+  if (_cmOnboardingDismissed) return;
+  var banner = document.getElementById('onboarding-banner');
+  if (!banner) return;
+  var msgEl = document.getElementById('onboarding-banner-msg');
+  var etaEl = document.getElementById('onboarding-banner-eta');
+  var spinEl = document.getElementById('onboarding-banner-spinner');
+  try {
+    var data = await fetch('/api/heartbeat-status').then(function(r){return r.json();});
+    var firstHeartbeatLanded = (
+      data && data.status && data.status !== 'unknown' &&
+      data.last_heartbeat_ts && data.last_heartbeat_ts > 0
+    );
+    if (firstHeartbeatLanded) {
+      // Smooth handoff: hide the banner, mark as dismissed for this session
+      // so we don't re-flash on a transient blip, and kick a fresh loadAll
+      // so the now-live cards render without waiting for the next 30s tick.
+      banner.style.display = 'none';
+      _cmOnboardingDismissed = true;
+      if (_cmOnboardingTimer) { clearInterval(_cmOnboardingTimer); _cmOnboardingTimer = null; }
+      if (typeof loadAll === 'function') {
+        try { loadAll(); } catch(e) {}
+      }
+      return;
+    }
+    // Still waiting. Show the banner; track when we first saw the empty
+    // state so we can flip to the stall message after 90s.
+    if (_cmOnboardingFirstSeenMs === 0) _cmOnboardingFirstSeenMs = Date.now();
+    var waitedMs = Date.now() - _cmOnboardingFirstSeenMs;
+    banner.style.display = 'flex';
+    if (waitedMs < _CM_ONBOARDING_STALL_MS) {
+      var remainingSec = Math.max(5, Math.round((_CM_ONBOARDING_STALL_MS - waitedMs) / 1000));
+      if (msgEl) msgEl.textContent = 'Setting up your node. First check-in usually arrives in about 30 seconds.';
+      if (etaEl) etaEl.textContent = 'checking again in 5s';
+      if (spinEl) spinEl.style.display = 'inline-block';
+      banner.style.background = 'linear-gradient(90deg,#0c1d3a 0%,#1a1a2e 100%)';
+      banner.style.borderColor = '#3b82f6';
+      banner.style.color = '#93c5fd';
+      void remainingSec;
+    } else {
+      // Stalled past 90s. Swap to actionable copy. No demo data, no
+      // pretend-it-worked - just tell the user what to check.
+      if (msgEl) msgEl.textContent = "Still waiting for your daemon's first check-in. Try: run 'clawmetry status' in a terminal, or restart with 'clawmetry'.";
+      if (etaEl) etaEl.textContent = 'still retrying every 5s';
+      if (spinEl) spinEl.style.display = 'none';
+      banner.style.background = '#3f2a06';
+      banner.style.borderColor = '#f59e0b';
+      banner.style.color = '#fbbf24';
+    }
+  } catch(e) {
+    // Transient fetch failure - keep the banner in its current state, do
+    // NOT dismiss (per feedback_persistent_sessions: don't surface auth /
+    // network blips as terminal user-facing errors).
+  }
+}
+
+// Poll every 5s while the banner is active. First check is fast (300ms)
+// so a returning user with an already-warm daemon barely sees the banner.
+_cmOnboardingTimer = setInterval(checkOnboardingStatus, 5000);
+setTimeout(checkOnboardingStatus, 300);
+
 function dismissPausedBanner() {
   localStorage.setItem('cm_paused_banner_dismissed', String(Date.now()));
   var banner = document.getElementById('paused-banner');

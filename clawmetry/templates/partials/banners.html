@@ -123,6 +123,40 @@
     ">Dismiss</button>
 </div>
 
+<!-- Onboarding / First-Heartbeat Banner (closes #1604) -->
+<!-- Shown on fresh signup until the first heartbeat lands. Auto-refreshes -->
+<!-- every 5s. After 90s with no heartbeat we switch to an actionable error -->
+<!-- so a stuck daemon doesn't masquerade as "loading forever". -->
+<div id="onboarding-banner" style="
+  display:none;
+  padding:12px 16px;
+  border-bottom:2px solid #3b82f6;
+  font-size:13px;
+  font-weight:600;
+  align-items:center;
+  gap:12px;
+  background:linear-gradient(90deg,#0c1d3a 0%,#1a1a2e 100%);
+  color:#93c5fd;
+  ">
+  <span id="onboarding-banner-spinner" style="
+    display:inline-block;
+    width:14px;
+    height:14px;
+    border:2px solid #3b82f680;
+    border-top-color:#60a5fa;
+    border-radius:50%;
+    animation:onboarding-spin 0.9s linear infinite;
+    flex-shrink:0;
+    "></span>
+  <span id="onboarding-banner-msg" style="flex:1;">Setting up your node. First check-in usually arrives in about 30 seconds.</span>
+  <span id="onboarding-banner-eta" style="font-size:11px;font-weight:400;color:#60a5fa;opacity:0.85;"></span>
+</div>
+<style>
+@keyframes onboarding-spin {
+  to { transform: rotate(360deg); }
+}
+</style>
+
 <!-- Heartbeat Gap Banner -->
 <div id="heartbeat-banner" style="
   display:none;
