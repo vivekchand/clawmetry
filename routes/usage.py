@@ -2044,6 +2044,16 @@ def _build_cluster_payload(session_profiles, *, days, now_ts):
     }
 
 
+_CLUSTER_TURN_EVENT_TYPES = frozenset({
+    # Pre-v3 synthetic shape (still used in tests + on-disk JSONL).
+    "message", "user",
+    # v3 daemon-normalised shape (see reference_openclaw_v3_event_types.md).
+    "prompt.submitted",   # user turn
+    "assistant",          # assistant turn (rich envelope)
+    "model.completed",    # assistant turn (slim sibling — deduped before counting)
+})
+
+
 def _try_local_store_sessions_clusters(days: int):
     """Fast path for /api/sessions/clusters. Reads sessions + events from
     DuckDB and runs the same cluster aggregation as the legacy JSONL walker.
@@ -2115,7 +2125,17 @@ def _try_local_store_sessions_clusters(days: int):
                 has_cron = True
             if "subagent" in blob or "spawned" in blob:
                 has_subagent = True
-            if etype == "message":  # v3-shape-gate: allow (reason: known v3 coverage gap in _try_local_store_sessions_clusters turn_count — secondary cluster-classification metric, not headline number; follow-up tracks switching to v3 names assistant/model.completed)
+            # v3-silent-zero fix (issue #1588). Previously this counter
+            # filtered on ``etype == 'message'`` only — the pre-v3
+            # synthetic shape — so every real OpenClaw v3 install reported
+            # ``turn_count == 0`` regardless of how many turns occurred,
+            # which silently mis-classified clusters as 'no-turn' shells.
+            # Count BOTH user-turn (``prompt.submitted`` / pre-v3 'user')
+            # AND assistant-turn (``assistant`` / ``model.completed`` /
+            # pre-v3 'message') event types so the metric reflects real
+            # conversation turns. ``is_sibling_dup`` already filtered the
+            # sibling pair above so we don't double-count assistant turns.
+            if etype in _CLUSTER_TURN_EVENT_TYPES and not is_sibling_dup(ev, bucket_max):
                 turn_count += 1
         if s_tokens == 0 and not tool_counts:
             continue
