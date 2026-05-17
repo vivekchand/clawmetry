@@ -266,6 +266,95 @@ jobs:
           fi
           echo "✅ /static/js/app.js served from installed wheel"
 
+  # ── Eval suite gate (Phase 2 evals, refs #1619 / PR #1626) ───────────────
+  # Runs ClawMetry's own golden suite (tests/data/golden_ci.yaml) through
+  # the `clawmetry eval` CLI on every PR. Catches regressions in:
+  #   * eval_suite_runner.py YAML parsing / runner loop
+  #   * eval_runner.py judge plumbing (rubric, _call_judge, parse_score)
+  #   * cli.py `eval` subcommand wiring (flags, exit codes, error msgs)
+  #
+  # The "agent" in CI is the canned tests/eval_ci_mock_agent.py — no
+  # external LLM call from the agent side, only the judge (Haiku) hits
+  # the network. Cost ceiling: 4 tests × 1 judge call ≈ $0.005 per PR.
+  #
+  # Graceful-skip: when CI_ANTHROPIC_API_KEY is not set (e.g. forks,
+  # community PRs) the job emits an explicit "SKIPPED" warning and exits
+  # 0. The gate hard-fails only when the secret IS set AND any test
+  # fails. This keeps green-checks-only test runs unblocked while still
+  # gating the merge for maintainer-owned PRs.
+  #
+  # To disable the gate temporarily (e.g. during a known-broken judge
+  # provider outage), set the repo variable `CLAWMETRY_EVALS_GATE` to
+  # "off" — the job short-circuits with a SKIPPED warning. Re-enable by
+  # unsetting the variable or setting it to anything other than "off".
+  eval-suite:
+    name: Eval Suite Gate (Phase 2 evals)
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install ClawMetry (editable) + eval deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e . pyyaml httpx
+      - name: Check kill-switch
+        id: gate
+        run: |
+          if [ "${{ vars.CLAWMETRY_EVALS_GATE }}" = "off" ]; then
+            echo "::warning::eval gate SKIPPED — CLAWMETRY_EVALS_GATE repo var set to 'off'"
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=0" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Check for CI_ANTHROPIC_API_KEY
+        if: steps.gate.outputs.skip != '1'
+        id: keycheck
+        env:
+          CI_ANTHROPIC_API_KEY: ${{ secrets.CI_ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$CI_ANTHROPIC_API_KEY" ]; then
+            echo "::warning::eval gate SKIPPED — needs CI_ANTHROPIC_API_KEY repo secret. Set one at Settings → Secrets → Actions to enable the PR quality gate."
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=0" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Run golden_ci suite (hard gate)
+        if: steps.gate.outputs.skip != '1' && steps.keycheck.outputs.skip != '1'
+        env:
+          # Judge call uses the CI-scoped key, namespaced so it can't
+          # collide with the developer's local ANTHROPIC_API_KEY and so
+          # rotating one doesn't disturb the other.
+          ANTHROPIC_API_KEY: ${{ secrets.CI_ANTHROPIC_API_KEY }}
+          # Point the runner at the deterministic mock agent — no real
+          # agent process needed for the gate.
+          CLAWMETRY_EVALS_AGENT_CMD: "python3 tests/eval_ci_mock_agent.py"
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          # --no-persist: CI has no daemon / DuckDB, so suppress the
+          # local_store write warning. The CLI still exits 1 on any
+          # failure, which fails the job and blocks the merge.
+          clawmetry eval --suite tests/data/golden_ci.yaml --no-persist
+      - name: Upload eval result JSON on failure
+        if: failure() && steps.gate.outputs.skip != '1' && steps.keycheck.outputs.skip != '1'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.CI_ANTHROPIC_API_KEY }}
+          CLAWMETRY_EVALS_AGENT_CMD: "python3 tests/eval_ci_mock_agent.py"
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          clawmetry eval --suite tests/data/golden_ci.yaml --no-persist --json > eval-result.json || true
+      - uses: actions/upload-artifact@v4
+        if: failure() && steps.gate.outputs.skip != '1' && steps.keycheck.outputs.skip != '1'
+        with:
+          name: clawmetry-ci-eval-result
+          path: eval-result.json
+          if-no-files-found: warn
+          retention-days: 7
+
   # ── Live OpenClaw E2E ─────────────────────────────────────────────────────
   # Closes #1544. Boots a real openclaw gateway, sends a real message
   # through `openclaw agent --local`, drives the daemon's
