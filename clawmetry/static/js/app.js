@@ -81,7 +81,28 @@ async function loadBudgetConfig() {
     document.getElementById('budget-weekly').value = cfg.weekly_limit || 0;
     document.getElementById('budget-monthly').value = cfg.monthly_limit || 0;
     document.getElementById('budget-warn-pct').value = cfg.warning_threshold_pct || 80;
-    document.getElementById('budget-autopause').checked = cfg.auto_pause_enabled || false;
+    var apEl = document.getElementById('budget-autopause');
+    if (apEl) {
+      apEl.checked = cfg.auto_pause_enabled || false;
+      // Issue #1169: auto-pause is a Cloud Pro feature. For OSS / Free
+      // users, disable the toggle and render an inline upsell. The
+      // warning-only banner path stays free as a teaser.
+      var proOk = !!cfg.auto_pause_pro_enabled;
+      apEl.disabled = !proOk;
+      var upsellId = 'budget-autopause-upsell';
+      var existing = document.getElementById(upsellId);
+      if (existing) existing.parentNode.removeChild(existing);
+      if (!proOk) {
+        apEl.checked = false;
+        var note = document.createElement('div');
+        note.id = upsellId;
+        note.style.cssText = 'margin-top:6px;padding:8px 10px;background:var(--bg-tertiary);border:1px solid var(--border-primary);border-radius:6px;font-size:12px;color:var(--text-secondary);';
+        note.innerHTML = '<span style="font-weight:600;color:var(--text-primary);">Auto-pause is a Cloud Pro feature.</span> '
+          + 'Budget warnings still fire here. To stop the gateway automatically at 100%, '
+          + '<a href="https://app.clawmetry.com/upgrade" target="_blank" rel="noopener" style="color:var(--bg-accent);text-decoration:underline;font-weight:600;">start a 7-day free trial</a>.';
+        if (apEl.parentNode) apEl.parentNode.appendChild(note);
+      }
+    }
   } catch(e) {}
 }
 
@@ -117,7 +138,14 @@ async function saveBudgetConfig() {
     warning_threshold_pct: parseInt(document.getElementById('budget-warn-pct').value) || 80,
     auto_pause_enabled: document.getElementById('budget-autopause').checked,
   };
-  await fetch('/api/budget/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+  try {
+    var resp = await fetch('/api/budget/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)}).then(function(r){return r.json();});
+    if (resp && resp.auto_pause_pro_required) {
+      // Server stripped the toggle because the user isn't Pro yet.
+      // Re-render the config so the disabled state + upsell appear.
+      loadBudgetConfig();
+    }
+  } catch(e) {}
   loadBudgetStatus();
 }
 
