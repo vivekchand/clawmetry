@@ -827,6 +827,17 @@ class LocalStore:
         # All writes go through ``_write_lock``; reads issue cursors which
         # DuckDB makes thread-safe internally.
         self._write_lock = threading.Lock()
+        # Issue #1590 — serialise ``_flush_now`` invocations. The ring
+        # snapshot-then-pop pattern is NOT safe under concurrent flushes:
+        # two flushers can snapshot the same batch independently, each
+        # then pop ``len(batch)`` items, evicting events the OTHER thread
+        # snapshotted but had not yet written. Concretely this fired when
+        # an in-thread auto-flush (line 982-983 of ``ingest``) raced the
+        # background flusher tick — silently dropping the events between
+        # the two snapshot points. ``_flush_lock`` makes ``_flush_now``
+        # one-at-a-time, restoring the snapshot/pop invariant. Cheap
+        # because flushes are at most ~10/s in practice.
+        self._flush_lock = threading.Lock()
         self._dropped = 0
         self._flusher_stop = threading.Event()
         self._flusher_thread: threading.Thread | None = None
@@ -2571,7 +2582,17 @@ class LocalStore:
         ``FLUSH_MAX_ATTEMPTS`` failures we log and re-raise — the ring still
         holds the batch, so the next flusher tick (or process restart) gets
         another shot. INSERT OR IGNORE keyed on the per-event id makes the
-        replay idempotent."""
+        replay idempotent.
+
+        Issue #1590 — wrapped in ``_flush_lock`` so concurrent flushes (e.g.
+        the in-thread auto-flush triggered by ``ingest`` racing the
+        background flusher tick) serialise. Without this, both flushers can
+        snapshot the same batch and each pop ``len(batch)`` items, evicting
+        events the other snapshotted but had not yet written."""
+        with self._flush_lock:
+            return self._flush_now_locked()
+
+    def _flush_now_locked(self) -> int:
         with self._ring_lock:
             if not self._ring:
                 return 0
