@@ -1,4 +1,5 @@
 recursive-include clawmetry/static *
+recursive-include clawmetry/static/v2/dist *
 recursive-include clawmetry/templates *.html
 recursive-include helpers *.py
 recursive-include routes *.py

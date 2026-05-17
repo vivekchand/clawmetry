@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from clawmetry.providers.base import ClawMetryDataProvider, Event, MemoryFile, Session
 
@@ -28,7 +28,7 @@ class LocalDataProvider(ClawMetryDataProvider):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self._sessions_index_cache: Optional[Dict] = None
+        self._sessions_index_cache: dict | None = None
         self._sessions_index_mtime: float = 0
 
     # ── Sessions ──────────────────────────────────────────────────────────────
@@ -40,7 +40,7 @@ class LocalDataProvider(ClawMetryDataProvider):
             else ""
         )
 
-    def get_session_index(self) -> Dict[str, Dict]:
+    def get_session_index(self) -> dict[str, dict]:
         idx_path = self._sessions_index_path()
         if not idx_path or not os.path.exists(idx_path):
             return {}
@@ -58,8 +58,8 @@ class LocalDataProvider(ClawMetryDataProvider):
         self,
         limit: int = 30,
         include_subagents: bool = True,
-        since_ms: Optional[int] = None,
-    ) -> List[Session]:
+        since_ms: int | None = None,
+    ) -> list[Session]:
         index = self.get_session_index()
         sessions = []
         for key, meta in index.items():
@@ -93,7 +93,7 @@ class LocalDataProvider(ClawMetryDataProvider):
         sessions.sort(key=lambda s: s.updated_at, reverse=True)
         return sessions[:limit]
 
-    def get_session(self, session_id: str) -> Optional[Session]:
+    def get_session(self, session_id: str) -> Session | None:
         index = self.get_session_index()
         for key, meta in index.items():
             if not isinstance(meta, dict):
@@ -125,8 +125,8 @@ class LocalDataProvider(ClawMetryDataProvider):
     # ── Events ────────────────────────────────────────────────────────────────
 
     def get_events(
-        self, session_id: str, limit: int = 500, tail_bytes: Optional[int] = None
-    ) -> List[Event]:
+        self, session_id: str, limit: int = 500, tail_bytes: int | None = None
+    ) -> list[Event]:
         if not self.sessions_dir:
             return []
         jsonl_path = os.path.join(self.sessions_dir, f"{session_id}.jsonl")
@@ -165,7 +165,7 @@ class LocalDataProvider(ClawMetryDataProvider):
 
     # ── Logs ──────────────────────────────────────────────────────────────────
 
-    def _log_file_path(self, date_str: str) -> Optional[str]:
+    def _log_file_path(self, date_str: str) -> str | None:
         if not self.log_dir:
             return None
         for prefix in ("openclaw", "moltbot"):
@@ -175,8 +175,8 @@ class LocalDataProvider(ClawMetryDataProvider):
         return None
 
     def get_log_lines(
-        self, date_str: Optional[str] = None, limit: int = 1000
-    ) -> List[str]:
+        self, date_str: str | None = None, limit: int = 1000
+    ) -> list[str]:
         if date_str is None:
             date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         path = self._log_file_path(date_str)
@@ -189,7 +189,7 @@ class LocalDataProvider(ClawMetryDataProvider):
         except Exception:
             return []
 
-    def list_log_dates(self, days_back: int = 31) -> List[str]:
+    def list_log_dates(self, days_back: int = 31) -> list[str]:
         dates = []
         today = datetime.now(timezone.utc)
         for i in range(days_back):
@@ -200,7 +200,7 @@ class LocalDataProvider(ClawMetryDataProvider):
 
     # ── Memory / Workspace ────────────────────────────────────────────────────
 
-    def list_memory_files(self) -> List[MemoryFile]:
+    def list_memory_files(self) -> list[MemoryFile]:
         files = []
         if not self.workspace:
             return files
@@ -251,7 +251,7 @@ class LocalDataProvider(ClawMetryDataProvider):
 
     # ── Crons ─────────────────────────────────────────────────────────────────
 
-    def list_crons(self) -> List[Dict[str, Any]]:
+    def list_crons(self) -> list[dict[str, Any]]:
         # Try cron/jobs.json relative to parent of workspace
         candidates = []
         if self.workspace:
@@ -276,7 +276,7 @@ class LocalDataProvider(ClawMetryDataProvider):
 
     # ── Health ────────────────────────────────────────────────────────────────
 
-    def health_check(self) -> Dict[str, Any]:
+    def health_check(self) -> dict[str, Any]:
         return {
             "provider": "LocalDataProvider",
             "ok": True,

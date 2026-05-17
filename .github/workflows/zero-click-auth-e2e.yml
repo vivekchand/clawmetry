@@ -1,0 +1,62 @@
+name: Zero-click Auth E2E
+
+# Wires tests/e2e/zero-click-auth.mjs into CI — closes PR-E from issue #1356.
+#
+# The mjs spec covers three checks the existing auth-bootstrap-guard.yml
+# (inline node smoke) does NOT:
+#   1. Positive  — fresh browser → localhost dashboard renders without
+#                  the login overlay (overlay hidden, token in
+#                  localStorage, no console errors).
+#   2. Negative  — /api/auth/detected-token refuses callers that spoof
+#                  X-Forwarded-For with a public IP. Catches naive
+#                  implementations that trust XFF over the socket peer.
+#   3. Smoke     — #login-overlay element still exists in the DOM
+#                  (regression guard so test 1 can't silently pass by
+#                  the overlay being deleted).
+#
+# Triggers on any PR touching the auth surfaces (server endpoint,
+# bootstrap script, the test itself, or this workflow). Runs on every
+# matching PR — hard-gates merge if any of the three checks fail.
+
+on:
+  pull_request:
+    paths:
+      - "dashboard.py"
+      - "routes/meta.py"
+      - "clawmetry/static/js/auth-bootstrap.js"
+      - "tests/e2e/zero-click-auth.mjs"
+      - "tests/e2e/package.json"
+      - ".github/workflows/zero-click-auth-e2e.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  zero-click-auth-e2e:
+    name: Zero-click localhost auto-login (positive + XFF refuse)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dashboard runtime deps
+        run: pip install flask waitress cryptography requests
+
+      - name: Install Playwright + Chromium
+        working-directory: tests/e2e
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+
+      - name: Run zero-click-auth E2E
+        working-directory: tests/e2e
+        run: npm run test:zero-click-auth

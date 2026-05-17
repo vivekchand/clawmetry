@@ -1,0 +1,86 @@
+name: "Setup OpenClaw"
+description: "Install OpenClaw (Node CLI) globally and expose it on PATH for downstream E2E steps."
+
+# Why npm and not pip:
+#   OpenClaw is published to npm as `openclaw` (Node 22.16+).
+#   The PyPI package named `openclaw` is an unrelated CMDOP plugin.
+#   See: https://github.com/openclaw/openclaw
+#
+# Why a composite action:
+#   Multiple workflows (pr-screenshots, e2e-nightly, openclaw-boot, future
+#   real-data tests) need a working `openclaw` on PATH. Centralising the
+#   install lets us bump the pin once and cache per-runner.
+
+inputs:
+  version:
+    description: "openclaw npm dist-tag or version (e.g. latest, beta, 2026.5.12)"
+    required: false
+    default: "latest"
+  gateway-token:
+    description: "Value to export as OPENCLAW_GATEWAY_TOKEN for downstream steps."
+    required: false
+    default: "ci-openclaw-token"
+  node-version:
+    description: "Node major to install. OpenClaw requires Node 22.16+."
+    required: false
+    default: "22"
+
+outputs:
+  version:
+    description: "Resolved openclaw version (output of `openclaw --version`)."
+    value: ${{ steps.verify.outputs.version }}
+  gateway-token:
+    description: "Token exported to OPENCLAW_GATEWAY_TOKEN."
+    value: ${{ inputs.gateway-token }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    # Cache the global npm prefix so repeat runs skip the network fetch.
+    # Keyed on (OS, requested version) so a version bump invalidates cleanly.
+    - name: Cache global openclaw install
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.npm-openclaw-global
+        key: openclaw-${{ runner.os }}-${{ inputs.version }}-v1
+
+    - name: Install OpenClaw (npm -g)
+      shell: bash
+      run: |
+        set -e
+        PREFIX="$HOME/.npm-openclaw-global"
+        mkdir -p "$PREFIX"
+        npm config set prefix "$PREFIX"
+        echo "$PREFIX/bin" >> "$GITHUB_PATH"
+        if [ "${{ steps.cache.outputs.cache-hit }}" = "true" ] && [ -x "$PREFIX/bin/openclaw" ]; then
+          echo "openclaw cache hit, skipping install"
+        else
+          npm install -g --no-audit --no-fund "openclaw@${{ inputs.version }}"
+        fi
+
+    - name: Verify openclaw on PATH
+      id: verify
+      shell: bash
+      run: |
+        set -e
+        export PATH="$HOME/.npm-openclaw-global/bin:$PATH"
+        which openclaw
+        ver=$(openclaw --version 2>&1 | head -1)
+        echo "openclaw version: $ver"
+        echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+    - name: Export OPENCLAW_GATEWAY_TOKEN for downstream steps
+      shell: bash
+      run: |
+        # Downstream workflow steps read this to authenticate dashboard
+        # requests against the running gateway. Empty token = dashboard
+        # falls back to anon mode (which is why "the screenshots are
+        # always broken" today: no token, no authed screens).
+        echo "OPENCLAW_GATEWAY_TOKEN=${{ inputs.gateway-token }}" >> "$GITHUB_ENV"

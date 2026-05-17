@@ -1455,34 +1455,80 @@ def _flush_session_batch(
     node_id: str,
     subagent_id: str | None = None,
 ) -> None:
-    # Write-through to local SQLite first (epic #964 / phase 1 / issue #958).
-    # Local is the durable store; cloud is a hot cache. If the cloud POST fails
-    # below, the events are still recorded locally and the dashboard's local
-    # read paths will surface them. Failures here never block cloud sync — the
-    # broad except keeps the legacy behaviour intact for users who somehow
-    # land on a corrupt SQLite or a read-only ~/.clawmetry/.
+    # Write-through to local DuckDB FIRST (epic #964 / phase 1 / issue #958),
+    # then synchronously flush so the rows are durable BEFORE the caller
+    # advances its in-memory JSONL line cursor. Local is the durable store;
+    # cloud is a hot cache. If the cloud POST fails below, the events are
+    # still recorded locally.
+    #
+    # Write-then-ack ordering (audit fix, 2026-05-17):
+    #   The caller (sync_sessions / sync_sessions_recent / …) advances
+    #   ``state["last_event_ids"][fname]`` right after we return, and
+    #   ``save_state(state)`` writes that cursor to disk at the end of the
+    #   tick. ``_local_ingest_session_batch`` only ENQUEUES rows into the
+    #   local-store ring buffer; the background flusher commits them ~2s
+    #   later. If the daemon crashed between enqueue and the next flusher
+    #   tick, the cursor would be durable on disk while the events were lost
+    #   to volatile memory — silent ingest gap until the user manually
+    #   rewound state.json. Calling ``flush()`` here makes the DuckDB COMMIT a
+    #   precondition for the caller's offset advance, so a kill -9 anywhere
+    #   in the path leaves the cursor pointing at lines that are either
+    #   (a) already durable or (b) re-read on restart and idempotently
+    #   collapsed by INSERT OR IGNORE on the canonical event id.
+    #
+    # Cloud-sync independence: local ingest+flush failures are logged but do
+    # not block the cloud POST below. The MOAT mandate is local-first, but
+    # cloud-first behaviour is preserved for users on read-only ~/.clawmetry/
+    # or partial installs without DuckDB. The next flusher tick (or daemon
+    # restart) will retry the local write; INSERT OR IGNORE makes it safe.
     try:
         _local_ingest_session_batch(batch, fname, node_id, subagent_id)
+        from clawmetry import local_store as _ls
+        _ls.get_store().flush()
     except Exception as _e:
-        log.warning("local-store ingest failed (cloud sync continues): %s", _e)
+        log.warning("local-store ingest/flush failed (cloud sync continues): %s", _e)
 
     payload = {"session_file": fname, "node_id": node_id, "events": batch}
     # Include subagent_id so the cloud can correlate blobs → sub-agent sessions.
     # The session key UUID (subagent_id) differs from the .jsonl filename UUID.
     if subagent_id:
         payload["subagent_id"] = subagent_id
-    if enc_key:
-        _post(
-            "/ingest/events",
-            {
-                "node_id": node_id,
-                "encrypted": True,
-                "blob": encrypt_payload(payload, enc_key),
-            },
-            api_key,
+    # Cloud-sync independence (audit fix, 2026-05-17):
+    #   The local DuckDB row above is ALREADY committed at this point, so
+    #   the cloud POST is best-effort relative to the local contract. We
+    #   catch the exception here so:
+    #     1. A cloud outage doesn't propagate out of _flush_session_batch and
+    #        abort the per-file iteration in sync_sessions (which then
+    #        skipped batches 2..N of the SAME file even though local could
+    #        have ingested them just fine).
+    #     2. The caller's cursor (``state["last_event_ids"][fname]``)
+    #        advances based on LOCAL durability, not cloud reachability —
+    #        matching the MOAT mandate that local is the source of truth and
+    #        cloud is a hot cache.
+    #   Known trade-off: with this guard, sustained cloud failure permanently
+    #   drops those events from the cloud (cursor moves past them; we don't
+    #   re-read on next tick). A future PR should add a sidecar cloud-retry
+    #   queue keyed on canonical event id. For today the priority is local
+    #   correctness; cloud catches up when the user re-syncs from local.
+    try:
+        if enc_key:
+            _post(
+                "/ingest/events",
+                {
+                    "node_id": node_id,
+                    "encrypted": True,
+                    "blob": encrypt_payload(payload, enc_key),
+                },
+                api_key,
+            )
+        else:
+            _post("/ingest/events", payload, api_key)
+    except Exception as _cloud_e:
+        log.warning(
+            "cloud /ingest/events POST failed for %s (local DuckDB is "
+            "already durable; cursor will advance based on local success): "
+            "%s", fname, _cloud_e,
         )
-    else:
-        _post("/ingest/events", payload, api_key)
 
 
 def _extract_cost_tokens_model(obj: dict) -> tuple:
@@ -7614,6 +7660,18 @@ def run_daemon() -> None:
         log.warning(f"  Recent log sync error: {e}")
 
     state["last_sync"] = datetime.now(timezone.utc).isoformat()
+    # Force a sync local-store flush before persisting the startup cursor.
+    # Same rationale as the per-tick checkpoint inside the main loop: never
+    # commit an offset to disk while the events it represents are still in
+    # volatile ring memory. INSERT OR IGNORE makes any replay a no-op.
+    try:
+        from clawmetry import local_store as _ls
+        _ls.get_store().flush()
+    except Exception as _flush_e:
+        log.warning(
+            "startup pre-checkpoint local-store flush failed (continuing): %s",
+            _flush_e,
+        )
     save_state(state)
     send_heartbeat(config)
     _record_sync_progress("complete", 0, 0, status="complete")
@@ -7836,6 +7894,22 @@ def run_daemon() -> None:
                 tg = 0
 
             state["last_sync"] = datetime.now(timezone.utc).isoformat()
+            # Audit fix (2026-05-17): force a synchronous local-store flush
+            # BEFORE persisting the cursor state. Belt-and-suspenders to
+            # ``_flush_session_batch``'s own per-batch flush — covers any
+            # ingest path (channels, logs, telegram, …) that mutated state
+            # but routed its DuckDB writes through the ring buffer. If this
+            # fails the cursor still advances (preserves legacy non-fatal
+            # contract), but the next flusher tick + INSERT OR IGNORE keep
+            # the events from being silently dropped.
+            try:
+                from clawmetry import local_store as _ls
+                _ls.get_store().flush()
+            except Exception as _flush_e:
+                log.warning(
+                    "pre-checkpoint local-store flush failed (continuing): %s",
+                    _flush_e,
+                )
             save_state(state)
             if ev or lg or mem or crons or sm or snap or cron_runs or tg or oc_cc:
                 log.info(

@@ -20,12 +20,17 @@ from flask import Blueprint, send_from_directory, abort
 # `static_folder` is resolved relative to this file. After `npm run build`
 # in `frontend/`, the bundle lives at `clawmetry/static/v2/dist/`.
 _DIST_DIR = os.path.join(os.path.dirname(__file__), "..", "static", "v2", "dist")
+_ASSETS_DIR = os.path.join(_DIST_DIR, "assets")
 
+# static_url_path is narrowed to `/v2/assets` so Flask's static dispatcher
+# only handles real hashed asset URLs (Vite emits everything under
+# `/v2/assets/*`). Earlier this was mounted at `/v2`, which preempted the
+# SPA catch-all and 404'd every client-side route like `/v2/trace`.
 bp_v2 = Blueprint(
     "v2",
     __name__,
-    static_folder=_DIST_DIR,
-    static_url_path="/v2",
+    static_folder=_ASSETS_DIR,
+    static_url_path="/v2/assets",
 )
 
 
