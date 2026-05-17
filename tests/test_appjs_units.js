@@ -992,6 +992,114 @@ console.log('renderLlmCallTimeline (issue #568 — per-LLM-call lifecycle bar)')
          'last marker positioned at 100%');
 }
 
+// ── Issue #1616 — Alternatives-considered toggle ──────────────────────
+//
+// Verifies the alternatives renderer + toggle handler:
+//   1. real alternatives payload → renders "Chose X over Y, Z" with
+//      no em-dashes (memory: feedback_no_em_dashes_in_user_facing_copy).
+//   2. empty alternatives → paints the honest "not available" hint with
+//      the #1616 tracking link.
+//   3. toggleToolAlternatives wires the data-ta attribute through and
+//      flips container.dataset.loaded for re-click collapse.
+console.log('tool alternatives toggle (issue #1616)');
+{
+  // Pull both renderers plus escHtml. The toggle handler is window-scoped
+  // and uses document.getElementById, so we stub a minimal DOM.
+  const sandbox = {
+    Date: Date,
+    JSON: JSON,
+    console: console,
+    document: null,
+    window: {},
+  };
+  let code = extractFunction('escHtml') + '\n';
+  code += extractFunction('_renderToolAlternativesPanel') + '\n';
+  code += extractFunction('_renderToolAlternativesUnavailable') + '\n';
+  // Pull the window.toggleToolAlternatives assignment by line range.
+  const lines = src.split('\n');
+  const startIdx = lines.findIndex(function(l) {
+    return l.indexOf('window.toggleToolAlternatives = function') >= 0;
+  });
+  if (startIdx < 0) throw new Error('toggleToolAlternatives not found in app.js');
+  // The function is short — closing "};" is within the next 20 lines.
+  let endIdx = startIdx;
+  for (let j = startIdx; j < startIdx + 25; j++) {
+    if (lines[j] && lines[j].trim() === '};') { endIdx = j; break; }
+  }
+  code += lines.slice(startIdx, endIdx + 1).join('\n') + '\n';
+  code += '\nthis.api = {' +
+          '  panel: _renderToolAlternativesPanel,' +
+          '  unavailable: _renderToolAlternativesUnavailable,' +
+          '  toggle: window.toggleToolAlternatives,' +
+          '};';
+
+  // Minimal stub DOM — single container, ids match what the toggle reads.
+  const containers = {};
+  sandbox.document = {
+    getElementById: function(id) {
+      if (!containers[id]) {
+        containers[id] = {
+          dataset: {},
+          innerHTML: '',
+        };
+      }
+      return containers[id];
+    },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(code, sandbox);
+  const api = sandbox.api;
+
+  // (1) Real alternatives payload renders chosen-over-rejected line.
+  const payload = {
+    chosen: 'create_event',
+    chosen_score: 0.89,
+    source: 'logprobs',
+    alternatives: [
+      { name: 'send_email', score: 0.05 },
+      { name: 'ask_clarification', score: 0.06 },
+    ],
+  };
+  const html = api.panel(payload);
+  truthy(html.indexOf('create_event') !== -1, 'panel includes chosen tool name');
+  truthy(html.indexOf('send_email') !== -1, 'panel includes rejected alternative');
+  truthy(html.indexOf('over') !== -1, 'panel uses "over" phrasing (no em-dash)');
+  // Memory: no em-dashes in user-facing copy.
+  truthy(html.indexOf('—') === -1, 'panel contains NO em-dash');
+  truthy(html.indexOf('logprobs') !== -1, 'panel shows source attribution');
+
+  // (2) Empty alternatives → honest unavailable hint with tracking link.
+  const empty = api.unavailable();
+  truthy(empty.indexOf('not available') !== -1, 'unavailable hint shown');
+  truthy(empty.indexOf('1616') !== -1, 'links to tracking issue #1616');
+  truthy(empty.indexOf('—') === -1, 'unavailable hint contains NO em-dash');
+
+  // (3) toggleToolAlternatives reads data-ta attribute and flips loaded.
+  const fakeBtn = {
+    _attrs: { 'data-ta': JSON.stringify(payload) },
+    getAttribute: function(k) { return this._attrs[k] || null; },
+  };
+  api.toggle(fakeBtn, 'ta-test-1');
+  const c = containers['ta-test-1'];
+  eq(c.dataset.loaded, '1', 'first toggle → loaded=1');
+  truthy(c.innerHTML.indexOf('create_event') !== -1,
+         'first toggle → container shows chosen tool');
+  // Second click collapses (clears innerHTML, dataset.loaded=0).
+  api.toggle(fakeBtn, 'ta-test-1');
+  eq(c.dataset.loaded, '0', 'second toggle → loaded=0');
+  eq(c.innerHTML, '', 'second toggle → container cleared');
+
+  // (4) Toggle with null payload → renders unavailable hint, not crash.
+  const nullBtn = {
+    _attrs: { 'data-ta': 'null' },
+    getAttribute: function(k) { return this._attrs[k] || null; },
+  };
+  api.toggle(nullBtn, 'ta-test-2');
+  const c2 = containers['ta-test-2'];
+  truthy(c2.innerHTML.indexOf('not available') !== -1,
+         'null payload → unavailable hint rendered');
+}
+
 // Auth-bootstrap scenarios above are async — wait for the microtask /
 // macrotask queue to drain before printing the summary. (The previous
 // synchronous test blocks all completed in-tick, so no wait was needed

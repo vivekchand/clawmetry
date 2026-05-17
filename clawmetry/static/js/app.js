@@ -3245,6 +3245,16 @@ function renderBrainStream(events) {
             _tcContainerId = 'tokconf-' + ((te.eventId || (te.time || '') + (te.source || '')) + '').replace(/[^a-z0-9-]/gi, '').slice(0, 24);
             turnTimeline += '<button onclick="event.stopPropagation();toggleTokenConfidence(this,\'' + escHtml(_tcContainerId) + '\')" data-tc=\'' + escHtml(JSON.stringify(te.token_confidence || null)) + '\' style="flex-shrink:0;padding:1px 7px;border-radius:10px;border:1px solid #38bdf8;background:transparent;color:#38bdf8;font-size:10px;cursor:pointer;white-space:nowrap;" title="How confident was the model in each word?">&#128202; Confidence</button>';
           }
+          // Issue #1616: per-tool-call Alternatives toggle on tool rows.
+          // Shows the options the model considered before picking this tool
+          // (from OpenAI logprobs or Claude/Gemini extended-thinking). When
+          // no real alternatives data is available we paint an honest
+          // "not available for this model" hint — never invent options.
+          var _altContainerId = null;
+          if (te.tool_alternatives) {
+            _altContainerId = 'toolalt-' + ((te.eventId || (te.time || '') + (te.source || '')) + '').replace(/[^a-z0-9-]/gi, '').slice(0, 24);
+            turnTimeline += '<button onclick="event.stopPropagation();toggleToolAlternatives(this,\'' + escHtml(_altContainerId) + '\')" data-ta=\'' + escHtml(JSON.stringify(te.tool_alternatives || null)) + '\' style="flex-shrink:0;padding:1px 7px;border-radius:10px;border:1px solid #a78bfa;background:transparent;color:#a78bfa;font-size:10px;cursor:pointer;white-space:nowrap;" title="What other tools did the model consider before picking this one?">&#9879; Alternatives</button>';
+          }
           turnTimeline += '</div>';
           if (_rcContainerId) {
             turnTimeline += '<div id="' + escHtml(_rcContainerId) + '" style="margin:2px 0 4px 56px;"></div>';
@@ -3254,6 +3264,9 @@ function renderBrainStream(events) {
           }
           if (_tcContainerId) {
             turnTimeline += '<div id="' + escHtml(_tcContainerId) + '" class="token-confidence-host" style="margin:2px 0 4px 56px;"></div>';
+          }
+          if (_altContainerId) {
+            turnTimeline += '<div id="' + escHtml(_altContainerId) + '" class="tool-alternatives-host" style="margin:2px 0 4px 56px;"></div>';
           }
         });
         if (currentSubagent) turnTimeline += '</div>'; // close last sub-agent group
@@ -3664,6 +3677,81 @@ window.toggleTokenConfidence = function(btn, containerId) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports._renderTokenConfidenceHeatmap = _renderTokenConfidenceHeatmap;
   module.exports._renderTokenConfidenceUnavailable = _renderTokenConfidenceUnavailable;
+}
+
+// ── Issue #1616 — Alternatives-considered panel ────────────────────────
+// "What else did the agent reject?" Per OpenClaw blog Pillar #2 (Decision
+// Auditing). When the model exposes alternatives (OpenAI logprobs or
+// Claude/Gemini extended-thinking), we paint the chosen tool next to the
+// rejected options so the user can spot training gaps and close calls.
+// Plain copy, no em-dashes (memory: feedback_no_em_dashes_in_user_facing_copy).
+function _renderToolAlternativesPanel(payload) {
+  if (!payload || !payload.chosen) return '';
+  var chosen = payload.chosen;
+  var chosenScore = payload.chosen_score;
+  var alts = Array.isArray(payload.alternatives) ? payload.alternatives : [];
+  var source = payload.source || 'none';
+  if (!alts.length) return _renderToolAlternativesUnavailable();
+  var chosenPct = (chosenScore != null) ? ' (' + Math.round(chosenScore * 100) / 100 + ')' : '';
+  var altText = alts.map(function(a) {
+    var nm = a && a.name ? a.name : '';
+    var sc = (a && a.score != null) ? ' (' + Math.round(a.score * 100) / 100 + ')' : '';
+    return '<code style="background:var(--bg-primary);padding:1px 4px;border-radius:3px;color:#a78bfa;">' +
+      escHtml(nm) + '</code>' + escHtml(sc);
+  }).join(', ');
+  var sourceLabel = (source === 'thinking')
+    ? 'from extended-thinking'
+    : (source === 'logprobs' ? 'from token logprobs' : '');
+  var html = '<div class="tool-alternatives-panel" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:11px;">';
+  html += '<div style="font-size:10px;color:var(--text-muted);margin-bottom:4px;">';
+  html += 'Alternatives are other tools the model evaluated and rejected before picking this one.';
+  html += '</div>';
+  html += '<div style="font-size:12px;color:var(--text-primary);">';
+  html += 'Chose <code style="background:var(--bg-primary);padding:1px 4px;border-radius:3px;color:#22c55e;font-weight:600;">' +
+    escHtml(chosen) + '</code>' + escHtml(chosenPct) + ' over ' + altText + '.';
+  html += '</div>';
+  if (sourceLabel) {
+    html += '<div style="font-size:10px;color:var(--text-faint);margin-top:6px;">Source: ' + escHtml(sourceLabel) + '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function _renderToolAlternativesUnavailable() {
+  // Honest empty state — Anthropic without extended-thinking does not
+  // expose tool-selection alternatives. Don't fabricate options (user
+  // trust > fake completeness, per PR prompt).
+  return '<div class="tool-alternatives-panel tool-alternatives-empty" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-size:12px;color:var(--text-secondary);">' +
+    '<div style="font-weight:600;color:var(--text-primary);margin-bottom:4px;">' +
+    '&#9879; Alternatives data not available for this model</div>' +
+    '<div style="color:var(--text-muted);font-size:11px;line-height:1.5;">' +
+    'Alternatives show what other tools the model considered before picking this one. ' +
+    'We extract them from OpenAI logprobs or Claude/Gemini extended-thinking. ' +
+    'This call did not carry either signal, so no alternatives can be shown. ' +
+    'Track upstream work in <a href="https://github.com/vivekchand/clawmetry/issues/1616" target="_blank" rel="noopener" style="color:#60a5fa;">#1616</a>.' +
+    '</div></div>';
+}
+
+window.toggleToolAlternatives = function(btn, containerId) {
+  var container = document.getElementById(containerId);
+  if (!container) return;
+  if (container.dataset.loaded === '1') {
+    container.innerHTML = '';
+    container.dataset.loaded = '0';
+    return;
+  }
+  var raw = btn && btn.getAttribute ? btn.getAttribute('data-ta') : null;
+  var payload = null;
+  try { payload = raw ? JSON.parse(raw) : null; } catch (e) { payload = null; }
+  container.innerHTML = (payload && Array.isArray(payload.alternatives) && payload.alternatives.length)
+    ? _renderToolAlternativesPanel(payload)
+    : _renderToolAlternativesUnavailable();
+  container.dataset.loaded = '1';
+};
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports._renderToolAlternativesPanel = _renderToolAlternativesPanel;
+  module.exports._renderToolAlternativesUnavailable = _renderToolAlternativesUnavailable;
 }
 
 function renderBrainChart(events) {
