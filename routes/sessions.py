@@ -1354,13 +1354,168 @@ def api_cost_split():
     return jsonify({"sessions": top, "totals": totals})
 
 
+def _try_local_store_task_runs(*, limit, status_filter, parent_filter,
+                               requester_filter):
+    """Fast path for /api/task-runs. Reads the pre-aggregated ``subagents``
+    DuckDB table — the same source PR #1569 wired into
+    ``_try_local_store_subagents``. OpenClaw's ``~/.openclaw/tasks/runs.sqlite``
+    and the subagents snapshot the sync daemon write-throughs from each
+    system-snapshot pass (see ``clawmetry/sync.py`` ``ingest_subagent`` call
+    site) carry the same lifecycle rows — the ``subagents`` table schema
+    comment in ``clawmetry/local_store.py`` calls this out explicitly
+    ("Shared by OpenClaw subagents + Claude Code Task tool.").
+
+    Audit hint for #1565 was "derive from query_events task lifecycle
+    types" — verified 2026-05-17 against ``sync.py::_parse_v3_event``:
+    no ``task.started`` / ``task.completed`` event types exist in v3
+    ingest. The canonical DuckDB source for task lifecycle IS the
+    ``subagents`` table; the audit hint was directionally correct
+    (DuckDB, not sqlite/JSONL) but pointed at the wrong table.
+
+    Returns ``None`` when the table is empty so the legacy
+    ``~/.openclaw/tasks/runs.sqlite`` fallback fires for installs whose
+    daemon hasn't snapshotted yet. Field shape matches the legacy
+    handler's output exactly so the Subagents modal (``app.js``
+    ``renderModalSubagents``) — which keys on ``task_id``,
+    ``parent_task_id``, ``child_session_key``, ``status``,
+    ``duration_ms``, ``label``, ``task``, ``terminal_outcome`` —
+    keeps working bit-for-bit.
+    """
+    rows = _ls_call("query_subagents", limit=max(limit, 500))
+    if not rows:
+        return None
+
+    # Snapshot status (from gateway subagents list) uses a different
+    # vocabulary than runs.sqlite. The UI keys on the runs.sqlite shape
+    # (`running` / `succeeded` / `failed` / `pending`) for colour pills
+    # and the "Failed" stat chip — normalise so the modal renders
+    # consistently across data sources.
+    _status_map = {
+        "active":    "running",
+        "running":   "running",
+        "idle":      "running",
+        "completed": "succeeded",
+        "succeeded": "succeeded",
+        "done":      "succeeded",
+        "failed":    "failed",
+        "error":     "failed",
+        "pending":   "pending",
+        "stale":     "pending",
+    }
+
+    tasks: list = []
+    counts: dict = {}
+    for r in rows:
+        sid = r.get("subagent_id") or ""
+        if not sid:
+            continue
+        extra = r.get("data") if isinstance(r.get("data"), dict) else {}
+
+        # Derive the runs.sqlite field names from subagents columns + data blob.
+        # ``subagent_id`` IS the task_id (one row per task spawn). The
+        # ``child_session_key`` is OpenClaw's canonical key shape; the
+        # parent (``requester_session_key``) is the session that issued
+        # the spawn. ``parent_task_id`` is only set for nested spawns and
+        # may not exist in the snapshot — fall back to extra dict.
+        parent_sid = r.get("parent_session_id") or extra.get("spawnedBy") or ""
+        child_key = extra.get("key") or f"agent:main:subagent:{sid}"
+        requester_key = (extra.get("requester_session_key")
+                         or (f"agent:main:{parent_sid}" if parent_sid else ""))
+
+        # Apply caller filters BEFORE building the row so the response
+        # honours ``status=`` / ``parent_task_id=`` / ``requester_session_key=``
+        # exactly like the legacy sqlite WHERE clause.
+        raw_status = (r.get("status") or "").strip().lower()
+        mapped_status = _status_map.get(raw_status, raw_status or "unknown")
+        if status_filter and mapped_status != status_filter and raw_status != status_filter:
+            continue
+        if parent_filter and (extra.get("parent_task_id") or "") != parent_filter:
+            continue
+        if requester_filter and requester_key != requester_filter:
+            continue
+
+        # started/ended come from the snapshot's ms timestamps (data blob)
+        # when available; spawned_at/ended_at strings are best-effort
+        # ISO fallbacks. duration_ms mirrors the legacy formula.
+        started_ms = int(extra.get("started_at_ms")
+                         or extra.get("updated_at_ms") or 0)
+        ended_ms = int(extra.get("ended_at_ms") or 0)
+        if not started_ms and r.get("spawned_at"):
+            try:
+                started_ms = int(datetime.fromisoformat(
+                    str(r["spawned_at"]).replace("Z", "+00:00")
+                ).timestamp() * 1000)
+            except Exception:
+                started_ms = 0
+        if not ended_ms and r.get("ended_at"):
+            try:
+                ended_ms = int(datetime.fromisoformat(
+                    str(r["ended_at"]).replace("Z", "+00:00")
+                ).timestamp() * 1000)
+            except Exception:
+                ended_ms = 0
+        duration_ms = max(0, ended_ms - started_ms) if started_ms and ended_ms else 0
+
+        task_d = {
+            "task_id":              sid,
+            "parent_task_id":       extra.get("parent_task_id") or "",
+            "child_session_key":    child_key,
+            "requester_session_key": requester_key,
+            "agent_id":             extra.get("agent_id") or "main",
+            "run_id":               extra.get("runId") or extra.get("run_id") or "",
+            "label":                extra.get("label") or extra.get("displayName") or "",
+            "task":                 r.get("task") or "",
+            "status":               mapped_status,
+            "delivery_status":      extra.get("delivery_status") or "",
+            "task_kind":            extra.get("task_kind") or "subagent",
+            "parent_flow_id":       extra.get("parent_flow_id") or "",
+            "created_at":           started_ms,
+            "started_at":           started_ms,
+            "ended_at":             ended_ms,
+            "last_event_at":        int(extra.get("updated_at_ms") or 0),
+            "error":                extra.get("error") or "",
+            "progress_summary":     extra.get("progress_summary") or "",
+            "terminal_summary":     extra.get("terminal_summary")
+                                    or extra.get("completionResult") or "",
+            "terminal_outcome":     extra.get("terminal_outcome")
+                                    or extra.get("completionStatus") or "",
+            "duration_ms":          duration_ms,
+        }
+        tasks.append(task_d)
+        counts[mapped_status] = counts.get(mapped_status, 0) + 1
+        if len(tasks) >= limit:
+            break
+
+    # Sort newest-first by started_at then created_at, matching the
+    # legacy ``ORDER BY COALESCE(started_at, created_at, 0) DESC`` clause.
+    tasks.sort(key=lambda t: t.get("started_at") or t.get("created_at") or 0,
+               reverse=True)
+
+    total = len(tasks)
+    failed = counts.get("failed", 0)
+    err_rate = round(failed / total * 100, 1) if total else 0
+    return {
+        "tasks":   tasks,
+        "counts":  counts,
+        "stats": {
+            "total":          total,
+            "succeeded":      counts.get("succeeded", 0),
+            "failed":         failed,
+            "running":        counts.get("running", 0),
+            "error_rate_pct": err_rate,
+        },
+        "_source": "local_store",
+    }
+
+
 @bp_sessions.route("/api/task-runs")
 def api_task_runs():
-    """Read ~/.openclaw/tasks/runs.sqlite — the canonical subagent/task registry."""
+    """Subagent / task registry. Prefers the DuckDB ``subagents`` table
+    fast path (populated by the sync daemon's snapshot pass); falls
+    back to OpenClaw's ``~/.openclaw/tasks/runs.sqlite`` for installs
+    whose daemon hasn't run yet.
+    """
     import sqlite3
-    p = os.path.expanduser("~/.openclaw/tasks/runs.sqlite")
-    if not os.path.isfile(p):
-        return jsonify({"tasks": [], "counts": {}, "note": "runs.sqlite not found"})
     try:
         limit = max(1, min(int(request.args.get("limit", "500")), 5000))
     except ValueError:
@@ -1368,6 +1523,22 @@ def api_task_runs():
     status_filter = (request.args.get("status", "") or "").strip()
     parent_filter = (request.args.get("parent_task_id", "") or "").strip()
     requester_filter = (request.args.get("requester_session_key", "") or "").strip()
+
+    # DuckDB fast path — skips the sqlite open entirely when the daemon
+    # has snapshotted at least one subagent row.
+    if is_local_store_read_enabled():
+        fast = _try_local_store_task_runs(
+            limit=limit,
+            status_filter=status_filter,
+            parent_filter=parent_filter,
+            requester_filter=requester_filter,
+        )
+        if fast is not None:
+            return jsonify(fast)
+
+    p = os.path.expanduser("~/.openclaw/tasks/runs.sqlite")
+    if not os.path.isfile(p):
+        return jsonify({"tasks": [], "counts": {}, "note": "runs.sqlite not found"})
     where = []
     args = []
     if status_filter:
