@@ -643,7 +643,7 @@ def index():
     # (week-1 migration plan, README §"What to communicate"). Mirrors the
     # same env var the v2 blueprint registration in dashboard.py uses, so we
     # never advertise /v2 to users who'd hit a 404.
-    v2_enabled = os.environ.get("CLAWMETRY_V2") == "1"
+    v2_enabled = os.environ.get("CLAWMETRY_V2_ENABLED") == "1"
     resp = make_response(
         render_template_string(
             _d.DASHBOARD_HTML,

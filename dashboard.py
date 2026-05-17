@@ -9978,15 +9978,16 @@ def detect_config(args=None):
 
     # ── v2 React SPA (opt-in) ───────────────────────────────────────────────
     # Default OFF so existing v1 users notice nothing. Enabled when the user
-    # passes `--v2` to the CLI or sets CLAWMETRY_V2=1. See clawmetry/v2/.
-    if os.environ.get("CLAWMETRY_V2") == "1":
+    # passes `--v2` to the CLI or sets CLAWMETRY_V2_ENABLED=1. See
+    # clawmetry/v2/.
+    if os.environ.get("CLAWMETRY_V2_ENABLED") == "1":
         try:
             from clawmetry.v2.routes import bp_v2 as _bp_v2
             app.register_blueprint(_bp_v2)
         except Exception as _v2_err:  # pragma: no cover - defensive
             import logging as _logging
             _logging.getLogger(__name__).warning(
-                "CLAWMETRY_V2=1 set but v2 blueprint failed to register: %s",
+                "CLAWMETRY_V2_ENABLED=1 set but v2 blueprint failed to register: %s",
                 _v2_err,
             )
 

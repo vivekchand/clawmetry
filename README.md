@@ -79,7 +79,7 @@ Use two terminals while developing:
 
 ```bash
 # Terminal 1: Flask API/server on :8900
-CLAWMETRY_V2=1 python3 dashboard.py
+CLAWMETRY_V2_ENABLED=1 python3 dashboard.py
 ```
 
 ```bash

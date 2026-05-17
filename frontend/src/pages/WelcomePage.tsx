@@ -65,7 +65,7 @@ export function WelcomePage() {
           <span className="cm-badge" style={{ color: "var(--moss)" }}>
             <span className="dot" /> Week 1 · chrome + theme
           </span>
-          <span className="cm-tag">CLAWMETRY_V2=1</span>
+          <span className="cm-tag">CLAWMETRY_V2_ENABLED=1</span>
           <span className="cm-tag">react · vite · ts</span>
         </div>
 

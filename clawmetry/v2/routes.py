@@ -2,10 +2,10 @@
 
 Serves the pre-built React SPA from `clawmetry/static/v2/dist/` at `/v2`.
 Opt-in: `dashboard.py` only registers this blueprint when env var
-`CLAWMETRY_V2=1` is set (or the user passed `--v2` to the CLI). When the
-flag is off, the blueprint is never registered, so `/v2` 404s and the v1
-dashboard is unchanged — matches the "parallel rails" plan in the design
-handoff README.
+`CLAWMETRY_V2_ENABLED=1` is set (or the user passed `--v2` to the CLI).
+When the flag is off, the blueprint is never registered, so `/v2` 404s and
+the v1 dashboard is unchanged — matches the "parallel rails" plan in the
+design handoff README.
 
 SPA routing: `/v2` and `/v2/<anything>` both serve `index.html`; the
 React BrowserRouter (basename="/v2") handles client-side navigation.
