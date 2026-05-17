@@ -194,8 +194,14 @@ jobs:
           [ -n "${HEAD_PID:-}" ] && kill "$HEAD_PID" 2>/dev/null || true
 
       # ── 10. Publish PNGs to orphan pr-screenshots branch ────────────────
+      # GITHUB_TOKEN is read-only for `pull_request` events from forks (GH
+      # security guardrail — declared `permissions:` block does not lift
+      # this for forks). Gate publish + comment steps on same-repo PRs to
+      # avoid 403s. Fork PRs still get screenshots as workflow artifact
+      # (step 12 below). See #1552 (JaiCodes77 fork) for the failure that
+      # surfaced this. Follow-up: workflow_run split for fork PRs.
       - name: Publish screenshots to pr-screenshots branch
-        if: always()
+        if: ${{ always() && !github.event.pull_request.head.repo.fork }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -250,7 +256,11 @@ jobs:
           cat /tmp/visual-diff-body.md
 
       - name: Post / update PR comment
-        if: always()
+        # Skip for fork PRs — GITHUB_TOKEN cannot post comments on
+        # pull_request events from forks. Reviewers download the
+        # screenshots artefact from the workflow run instead. See #1552
+        # (JaiCodes77 fork). Same-repo PRs unaffected.
+        if: ${{ always() && !github.event.pull_request.head.repo.fork }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
