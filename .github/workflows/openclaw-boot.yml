@@ -51,9 +51,15 @@ jobs:
         run: |
           set -e
           mkdir -p /tmp/openclaw-logs
-          # --bind loopback (default) + explicit port so the smoke check
-          # is identical across hosted/self-hosted runners.
+          # --allow-unconfigured: on a fresh CI runner the gateway has
+          # no `openclaw setup` output yet, and the runner has no
+          # interactive shell. The flag is the documented escape hatch
+          # for boot-without-setup (it's what the gateway suggests in
+          # the "Missing config" error). --bind loopback (default) +
+          # explicit port so the smoke check is identical across
+          # hosted/self-hosted runners.
           nohup openclaw gateway --port 18789 --verbose \
+            --allow-unconfigured \
             > /tmp/openclaw-logs/gateway.log 2>&1 &
           echo "GATEWAY_PID=$!" >> "$GITHUB_ENV"
 
