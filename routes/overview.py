@@ -702,6 +702,84 @@ def api_channels():
     return jsonify({"channels": configured})
 
 
+# ── Gateway-tap opt-in comms (issue #1233) ─────────────────────────────────
+#
+# PR #1228 flipped the live WS gateway tap (clawmetry/gateway_tap.py) from
+# default-ON to default-OFF for the OpenClaw scope-grant transition. Users
+# who previously relied on the tap for inbound channel-message bodies
+# (Telegram, Signal, WhatsApp, Discord, ...) now silently see no new rows.
+#
+# We detect the gap from DuckDB: 1+ channel_messages in the prior 7d window
+# AND zero in the last 24h AND the tap env var is not enabled. If all three
+# hold, /api/overview piggybacks a one-line ``_comms.show_gateway_tap_banner``
+# flag so the dashboard frontend can render a dismissible "Channel watch is
+# now opt-in — enable in Settings, or upgrade to Pro for defaults" banner.
+#
+# Cached for 5 min so the dashboard's hot 10s refresh doesn't re-query the
+# store for slow-moving state. Always degrades to ``show=False`` on error
+# (no banner is the safe default — never block the dashboard render).
+_GATEWAY_TAP_COMMS_CACHE = {"ts": 0.0, "value": None}
+_GATEWAY_TAP_COMMS_TTL = 300.0  # 5 min
+
+
+def _compute_gateway_tap_comms() -> dict:
+    """Return ``{"show_gateway_tap_banner": bool, "show_pro_cta": bool}``.
+
+    Heuristic for ``show_gateway_tap_banner``:
+      * The ``CLAWMETRY_ENABLE_WS_TAP`` env var is NOT set (i.e. user is on
+        the post-#1228 default-OFF path).
+      * The DuckDB ``channel_messages`` table has >=1 row in the
+        ``[now-7d, now-24h]`` window (proves the user previously got tap
+        data — they're impacted, not a fresh install).
+      * The DuckDB ``channel_messages`` table has 0 rows in the last 24h
+        (proves the gap is currently active — not a stale historical row).
+
+    ``show_pro_cta`` adds a "Pro defaults this on" hint when the user is not
+    already on Pro. Both flags default to ``False`` on any failure.
+    """
+    now = time.time()
+    cached = _GATEWAY_TAP_COMMS_CACHE.get("value")
+    if cached is not None and (now - _GATEWAY_TAP_COMMS_CACHE["ts"]) < _GATEWAY_TAP_COMMS_TTL:
+        return cached
+
+    out = {"show_gateway_tap_banner": False, "show_pro_cta": False}
+    try:
+        # Tap already opted-in? Nothing to nag about.
+        if os.environ.get("CLAWMETRY_ENABLE_WS_TAP", "").strip() in ("1", "true", "yes"):
+            _GATEWAY_TAP_COMMS_CACHE.update(ts=now, value=out)
+            return out
+
+        # Prior-7d activity (any inbound or outbound channel row).
+        seven_d_iso = datetime.fromtimestamp(now - 7 * 86400, tz=timezone.utc).isoformat()
+        prior = _ls_call("query_channel_messages", since=seven_d_iso, limit=1)
+        if not prior:
+            _GATEWAY_TAP_COMMS_CACHE.update(ts=now, value=out)
+            return out
+
+        # Last-24h activity. If we see ANY row, the tap isn't the gap.
+        one_d_iso = datetime.fromtimestamp(now - 86400, tz=timezone.utc).isoformat()
+        recent = _ls_call("query_channel_messages", since=one_d_iso, limit=1)
+        if recent:
+            _GATEWAY_TAP_COMMS_CACHE.update(ts=now, value=out)
+            return out
+
+        out["show_gateway_tap_banner"] = True
+
+        # Pro CTA — same pattern as routes/alerts.py.
+        try:
+            import dashboard as _d
+            is_pro = bool(_d._is_pro_user())
+        except Exception:
+            is_pro = False
+        out["show_pro_cta"] = not is_pro
+    except Exception:
+        # Never let comms compute break the overview render.
+        out = {"show_gateway_tap_banner": False, "show_pro_cta": False}
+
+    _GATEWAY_TAP_COMMS_CACHE.update(ts=now, value=out)
+    return out
+
+
 def _try_local_store_overview():
     """Epic #964: opt-in local-store fast path for /api/overview.
 
@@ -912,6 +990,8 @@ def _try_local_store_overview():
         "client_health": _detect_anthropic_oauth(),
         # Issue #688: north-star metric. Always present, even on empty data.
         "autonomy": _autonomy_for_overview(),
+        # Issue #1233: opt-in nudge for users impacted by PR #1228 default-OFF flip.
+        "_comms": _compute_gateway_tap_comms(),
         "_source": "local_store",
     }
 
@@ -1066,6 +1146,8 @@ def api_overview():
             "client_health": _detect_anthropic_oauth(),
             # Issue #688: north-star autonomy metric (always present).
             "autonomy": _autonomy_for_overview(),
+            # Issue #1233: opt-in nudge for users impacted by PR #1228 default-OFF flip.
+            "_comms": _compute_gateway_tap_comms(),
         }
     )
 
