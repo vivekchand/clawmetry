@@ -2138,10 +2138,181 @@ def api_heartbeat_ping():
     return jsonify({"ok": True})
 
 
+def _try_local_store_rate_limits():
+    """Fast path for /api/rate-limits — derive rolling 1m/1h utilisation
+    from the DuckDB ``events`` table instead of the per-process in-memory
+    ``metrics_store`` ring buffer.
+
+    Why the migration: the legacy handler aggregates only the LLM
+    token/cost events the *current dashboard process* witnessed via OTLP
+    + the in-process interceptor (see ``dashboard._record_token_event``
+    callers). On a fresh dashboard restart the buffer is empty and the
+    panel reads "0% utilisation" for several minutes until traffic
+    re-populates it; on multi-node fleets the buffer also misses spend
+    that landed on sibling nodes. The DuckDB ``events`` table is the
+    canonical, cross-process, cross-restart store — every cost-bearing
+    event the sync daemon ingests (Anthropic SDK echo, OpenClaw v3
+    ``model.completed`` bubbles, OTLP-relayed metrics) lands there with
+    a stable ``model``/``cost_usd``/``token_count`` column trio plus a
+    ``data`` blob carrying the raw ``usage`` dict for input/output
+    splits.
+
+    AUDIT FALSE-POSITIVE NOTE (refs #1565): Eng C's audit flagged this
+    route as "JSONL-fallback" but the actual legacy path is the
+    in-memory ``metrics_store`` (no JSONL walker). The migration is
+    still worth doing — promoting to the canonical DuckDB helper makes
+    the response visible to the audit canary (_source tag) and survives
+    dashboard restarts — but the audit row should be relabelled
+    "in-memory ring → DuckDB events" rather than "JSONL → DuckDB".
+
+    Returns ``None`` when the store is unreachable so the legacy
+    in-memory aggregation still serves. Returns a populated zero-shell
+    when the store is reachable but no cost-bearing events exist (fresh
+    install) — same shape the legacy handler emits for an empty buffer,
+    so the dashboard panel renders "no traffic" instantly instead of
+    waiting for the legacy path to confirm the same empty answer.
+    """
+    now = time.time()
+    one_min_ago = now - 60
+    one_hour_ago = now - 3600
+    since_iso = datetime.fromtimestamp(one_hour_ago, tz=timezone.utc).isoformat()
+
+    # query_events sorts newest-first and is bounded by the daemon-proxy
+    # row cap. 5k rows ≈ 80+ requests/min for a full hour — plenty of
+    # headroom while keeping the JSON payload modest. Anything older than
+    # 1h doesn't contribute to either rolling window.
+    rows = _ls_call("query_events", since=since_iso, limit=5000)
+    if rows is None:
+        return None
+
+    import dashboard as _d
+
+    # Buckets keyed by canonical provider name (anthropic/openai/google/...).
+    providers: dict = {}
+
+    def _get_p(prov):
+        if prov not in providers:
+            providers[prov] = {
+                'rpm_1m': 0, 'tokens_in_1m': 0, 'tokens_out_1m': 0,
+                'tokens_in_1h': 0, 'tokens_out_1h': 0,
+                'request_count_1h': 0, 'cost_1h': 0.0,
+                'models': set(),
+            }
+        return providers[prov]
+
+    def _row_ts_epoch(ev):
+        ts = ev.get("ts")
+        if isinstance(ts, (int, float)):
+            return float(ts)
+        try:
+            return datetime.fromisoformat(
+                str(ts).replace("Z", "+00:00")
+            ).timestamp()
+        except Exception:
+            return 0.0
+
+    # Event-type filter: only count cost/token-bearing turns. v3 real
+    # data emits ``model.completed`` and bare ``assistant`` (no synthetic
+    # ``message`` rows — per reference_openclaw_v3_event_types.md and
+    # feedback_synthetic_tests_missed_real_event_shape.md). Keep the
+    # legacy ``message`` string for synthetic harnesses.
+    BILLABLE_TYPES = {
+        "message", "assistant", "model.completed",
+        "subagent:assistant", "user",
+    }
+
+    for ev in rows:
+        et = (ev.get("event_type") or "").strip()
+        if et and et not in BILLABLE_TYPES:
+            continue
+        ts = _row_ts_epoch(ev)
+        if ts < one_hour_ago:
+            continue
+
+        # Extract input/output token splits. The ``token_count`` column
+        # is the SUM, the ``data`` blob carries the breakdown. Walk both
+        # the Anthropic-SDK echo shape (data.message.usage) AND the
+        # OpenClaw-native v3 shape (data.assistantMessage.usage) so we
+        # don't silently zero one or the other.
+        data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+        usage = {}
+        msg = data.get("message") if isinstance(data.get("message"), dict) else None
+        am = data.get("assistantMessage") if isinstance(data.get("assistantMessage"), dict) else None
+        if isinstance(msg, dict) and isinstance(msg.get("usage"), dict):
+            usage = msg["usage"]
+        elif isinstance(am, dict) and isinstance(am.get("usage"), dict):
+            usage = am["usage"]
+        elif isinstance(data.get("usage"), dict):
+            usage = data["usage"]
+        in_tok = int(usage.get("input_tokens") or usage.get("input") or 0)
+        out_tok = int(usage.get("output_tokens") or usage.get("output") or 0)
+        # Fall back to the coarse token_count column when the usage dict
+        # is missing entirely (e.g. legacy rows pre-v3).
+        total = int(ev.get("token_count") or 0)
+        if not (in_tok or out_tok) and total:
+            # Best-effort split: count as input (Anthropic-style prompt
+            # counts dominate). Better than zero.
+            in_tok = total
+            out_tok = 0
+
+        model = ev.get("model") or (data.get("model") if isinstance(data.get("model"), str) else "") or "unknown"
+        provider = _d._infer_provider({"provider": data.get("provider"), "model": model})
+
+        p = _get_p(provider)
+        p['models'].add(model)
+        if ts >= one_min_ago:
+            p['rpm_1m'] += 1
+            p['tokens_in_1m'] += in_tok
+            p['tokens_out_1m'] += out_tok
+        p['request_count_1h'] += 1
+        p['tokens_in_1h'] += in_tok
+        p['tokens_out_1h'] += out_tok
+        p['cost_1h'] += float(ev.get("cost_usd") or 0.0)
+
+    result = []
+    for prov, stats in sorted(providers.items()):
+        limits = _d._DEFAULT_RATE_LIMITS.get(
+            prov,
+            {'rpm': 60, 'tpm_input': 100_000, 'tpm_output': 20_000, 'label': prov.title()},
+        )
+        rpm_pct = round(stats['rpm_1m']        / limits['rpm']        * 100, 1) if limits['rpm']        else 0
+        in_pct  = round(stats['tokens_in_1m']  / limits['tpm_input']  * 100, 1) if limits['tpm_input']  else 0
+        out_pct = round(stats['tokens_out_1m'] / limits['tpm_output'] * 100, 1) if limits['tpm_output'] else 0
+        worst = max(rpm_pct, in_pct, out_pct)
+        result.append({
+            'provider': prov,
+            'label':    limits.get('label', prov.title()),
+            'models':   sorted(stats['models']),
+            'rpm':       {'current': stats['rpm_1m'],        'limit': limits['rpm'],        'pct': rpm_pct},
+            'tpm_input': {'current': stats['tokens_in_1m'],  'limit': limits['tpm_input'],  'pct': in_pct},
+            'tpm_output':{'current': stats['tokens_out_1m'], 'limit': limits['tpm_output'], 'pct': out_pct},
+            'hour': {
+                'requests':   stats['request_count_1h'],
+                'tokens_in':  stats['tokens_in_1h'],
+                'tokens_out': stats['tokens_out_1h'],
+                'cost_usd':   round(stats['cost_1h'], 4),
+            },
+            'utilization_pct': worst,
+            'status': 'red' if worst >= 90 else ('amber' if worst >= 70 else 'green'),
+        })
+
+    result.sort(key=lambda x: x['utilization_pct'], reverse=True)
+    return {
+        'providers': result,
+        'timestamp': now,
+        '_source': 'local_store',
+    }
+
+
 @bp_health.route('/api/rate-limits')
 def api_rate_limits():
     """Return rolling 1-minute and 1-hour API rate limit utilisation per provider."""
     import dashboard as _d
+    if is_local_store_read_enabled():
+        fast = _try_local_store_rate_limits()
+        if fast is not None:
+            return jsonify(fast)
+
     now = time.time()
     one_min_ago = now - 60
     one_hour_ago = now - 3600
