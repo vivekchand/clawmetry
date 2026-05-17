@@ -729,12 +729,216 @@ def api_otel_status():
 # ── Version impact analysis ───────────────────────────────────────────────────
 
 
+def _ls_call(method_name, **kwargs):
+    """Cross-process LocalStore call with single-process fallback.
+
+    Mirrors ``routes/usage.py:_ls_call`` — daemon HTTP proxy first
+    (covers the standard install where the daemon owns the DuckDB writer
+    lock), then falls back to a direct read-only open for single-process
+    boots (tests + dev mode). Returns ``None`` on miss so callers defer
+    to the legacy SQLite + JSONL fallback path.
+    """
+    try:
+        from routes.local_query import local_store_via_daemon
+        result = local_store_via_daemon(method_name, **kwargs)
+        if result is not None:
+            return result
+    except Exception:
+        pass
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store(read_only=True)
+        return getattr(store, method_name)(**kwargs)
+    except Exception:
+        return None
+
+
+def _to_epoch(s):
+    """Parse an ISO-8601 timestamp string to a Unix epoch seconds float.
+
+    Returns 0.0 on failure so callers can sort/compare uniformly.
+    """
+    if not s:
+        return 0.0
+    if isinstance(s, (int, float)):
+        return float(s)
+    try:
+        return datetime.fromisoformat(
+            str(s).replace("Z", "+00:00")
+        ).timestamp()
+    except Exception:
+        return 0.0
+
+
+def _try_local_store_version_impact(current_version):
+    """DuckDB fast path for /api/version-impact (Tier-1 #1565).
+
+    Strategy:
+
+    1. Pull every ``session.started`` event (these carry ``data.version``
+       on real OpenClaw v3 installs — see
+       ``clawmetry/sync.py::_parse_v3_event`` and
+       ``reference_openclaw_v3_event_types.md``).
+    2. Group by version → earliest detection timestamp. That gives us the
+       same shape the legacy SQLite ``version_events`` table tracks
+       (version + detected_at), but derived from real session activity
+       rather than per-process polling. Replaces the JSONL re-walk that
+       happened on every request.
+    3. For each adjacent (prev, curr) version pair, aggregate per-session
+       stats (token spend, cost, tool-call count, error count, duration)
+       for sessions that started inside the version's active window.
+       Uses ``query_sessions`` (already sibling-pair deduped at the SQL
+       layer per issue #1460) for cost+tokens, and ``query_events`` for
+       tool/error counts.
+
+    Returns ``None`` when no ``session.started`` events carry a version
+    field — older installs / fresh DuckDB stores fall through to the
+    SQLite + JSONL legacy path so the route never regresses to empty.
+    """
+    started_rows = _ls_call("query_events", event_type="session.started", limit=5000)
+    if started_rows is None:
+        return None
+
+    # Group by version → (earliest_ts, session_ids_seen).
+    versions_seen: dict[str, dict] = {}
+    for row in started_rows:
+        data = row.get("data") if isinstance(row.get("data"), dict) else {}
+        version = (data.get("version") or data.get("openclawVersion")
+                   or data.get("openclaw_version"))
+        if not version:
+            continue
+        version = str(version)
+        ts_epoch = _to_epoch(row.get("ts"))
+        if ts_epoch <= 0:
+            continue
+        entry = versions_seen.setdefault(version, {"earliest": ts_epoch, "sids": set()})
+        if ts_epoch < entry["earliest"]:
+            entry["earliest"] = ts_epoch
+        sid = row.get("session_id")
+        if sid:
+            entry["sids"].add(sid)
+
+    if not versions_seen:
+        # No version-bearing events — defer to SQLite/JSONL fallback.
+        return None
+
+    # Sort versions by earliest-detected ascending — matches the legacy
+    # SQLite ``version_events`` ORDER BY detected_at ASC.
+    version_order = sorted(versions_seen.items(), key=lambda kv: kv[1]["earliest"])
+    now_ts = time.time()
+
+    def _summarise_range(start_ts, end_ts):
+        """Aggregate per-session metrics for sessions started in [start, end)."""
+        since_iso = datetime.fromtimestamp(start_ts, tz=timezone.utc).isoformat()
+        until_iso = datetime.fromtimestamp(end_ts, tz=timezone.utc).isoformat()
+        sessions = _ls_call("query_sessions", since=since_iso, until=until_iso,
+                            limit=10000) or []
+        # tool/error counts come from the raw events table (query_sessions
+        # gives us deduped cost+tokens but not tool-call frequency).
+        events = _ls_call("query_events", since=since_iso, until=until_iso,
+                          limit=20000) or []
+        tool_types = {"tool_call", "tool.call", "toolCall", "tool_use"}
+        error_types = {"error", "session.error", "model.error"}
+        per_sid_tools: dict[str, int] = {}
+        per_sid_errors: dict[str, int] = {}
+        for ev in events:
+            sid = ev.get("session_id")
+            if not sid:
+                continue
+            et = ev.get("event_type") or ""
+            if et in tool_types:
+                per_sid_tools[sid] = per_sid_tools.get(sid, 0) + 1
+            elif et in error_types:
+                per_sid_errors[sid] = per_sid_errors.get(sid, 0) + 1
+
+        total_cost = 0.0
+        total_tokens = 0
+        total_tools = 0
+        total_errors = 0
+        duration_ms_total = 0
+        duration_sessions = 0
+        session_count = 0
+        for s in sessions:
+            sid = s.get("session_id")
+            if not sid:
+                continue
+            session_count += 1
+            total_cost += float(s.get("cost_usd") or 0.0)
+            total_tokens += int(s.get("token_count") or 0)
+            total_tools += per_sid_tools.get(sid, 0)
+            total_errors += per_sid_errors.get(sid, 0)
+            start_s = _to_epoch(s.get("started_at"))
+            end_s = _to_epoch(s.get("updated_at"))
+            if start_s and end_s and end_s > start_s:
+                duration_ms_total += int((end_s - start_s) * 1000)
+                duration_sessions += 1
+        return {
+            "session_count": session_count,
+            "total_cost": total_cost,
+            "total_tokens": total_tokens,
+            "error_count": total_errors,
+            "tool_calls": total_tools,
+            "duration_ms_total": duration_ms_total,
+            "duration_sessions": duration_sessions,
+        }
+
+    import dashboard as _d
+    transitions = []
+    version_history = []
+
+    for i, (version, info) in enumerate(version_order):
+        start_ts = info["earliest"]
+        end_ts = (version_order[i + 1][1]["earliest"]
+                  if i + 1 < len(version_order) else now_ts)
+        version_history.append({
+            "version": version,
+            "detected_at": datetime.fromtimestamp(
+                start_ts, tz=timezone.utc
+            ).isoformat(),
+        })
+        if i == 0:
+            continue
+        prev_version, prev_info = version_order[i - 1]
+        before = _d._stats_to_summary(
+            _summarise_range(prev_info["earliest"], start_ts))
+        after = _d._stats_to_summary(_summarise_range(start_ts, end_ts))
+        transitions.append({
+            "from_version": prev_version,
+            "to_version": version,
+            "upgraded_at": datetime.fromtimestamp(
+                start_ts, tz=timezone.utc
+            ).isoformat(),
+            "before": before,
+            "after": after,
+            "diff": _d._compute_diff(before, after),
+        })
+
+    return {
+        "current_version": (current_version
+                            or version_order[-1][0]
+                            or "unknown"),
+        "version_detected": bool(current_version),
+        "version_history": version_history,
+        "transitions": transitions,
+        "_source": "local_store",
+    }
+
+
 @bp_version_impact.route("/api/version-impact")
 def api_version_impact():
     """Return version transition list with before/after metric comparisons."""
     import dashboard as _d
     current_version = _d._get_openclaw_version()
     _d._record_version_if_changed(current_version)
+
+    # DuckDB fast path: derive version timeline + per-version stats from
+    # session.started events in the local store. Returns None on fresh
+    # installs / pre-v3 data so the legacy SQLite + JSONL walker stays
+    # the canonical fallback.
+    if is_local_store_read_enabled():
+        fast = _try_local_store_version_impact(current_version)
+        if fast is not None:
+            return jsonify(fast)
 
     db = _d._version_impact_db()
     try:
