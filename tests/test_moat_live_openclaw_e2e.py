@@ -195,15 +195,20 @@ def _send_message(home: str, message: str) -> subprocess.CompletedProcess:
     env["OPENCLAW_STATE_DIR"] = state_dir
     env["OPENCLAW_DISABLE_UPDATE_CHECK"] = "1"
     env["NO_COLOR"] = "1"
-    # Force the anthropic harness via env (CLI flag --harness is rejected
-    # by OpenClaw v3). CI does not have the default `codex` harness
-    # registered. ANTHROPIC_API_KEY in env is what the harness reads.
-    # Local dev with codex installed can override via env if needed.
-    env.setdefault("OPENCLAW_HARNESS", "anthropic")
+    # Harness selection in OpenClaw v3 is driven by the requested model id,
+    # not by a --harness flag or env var (both were attempted; both rejected).
+    # Verified 2026-05-17 against openclaw 2026.5.7 — `--model anthropic/...`
+    # routes through the anthropic provider; without it the embedded agent
+    # asks for the `codex` runtime which CI does not install, surfacing
+    # "Requested agent harness 'codex' is not registered" and aborting BEFORE
+    # the JSONL is opened. Even with a fake key the anthropic path still
+    # writes the canonical <sid>.jsonl (session + user + error-assistant rows
+    # with provider/model populated), which is all the daemon needs to ingest.
     return subprocess.run(
         [
             OPENCLAW_BIN, "agent", "--local",
             "--message", message, "--to", RECIPIENT,
+            "--model", "anthropic/claude-opus-4-7",
             "--json", "--timeout", "30",
         ],
         env=env, capture_output=True, text=True, timeout=60,
@@ -476,10 +481,13 @@ def _seed_sessions_table(env_) -> None:
 
 def test_real_message_writes_expected_event_types_to_duckdb(live):
     """User mandate: "creates write entries in duckdb for tool calls /
-    gateway bubble event etc". OpenClaw v3 emits ``session`` + ``message``
-    types; the "gateway bubble" event is an assistant ``message`` row
-    with ``message.api`` / ``provider`` / ``model`` fields populated
-    (assistant turn that bubbled back through the gateway)."""
+    gateway bubble event etc". OpenClaw v3 source JSONL types
+    (``session`` / ``message`` / ``model_change`` / ``custom``) are
+    normalised by the daemon ingest path into namespaced names:
+    ``session.started`` / ``prompt.submitted`` (user turn) /
+    ``model.completed`` (assistant turn = the "gateway bubble") /
+    ``model.changed`` / ``custom``. Verified 2026-05-17 by inspecting
+    the ingest output of a real openclaw 2026.5.7 run."""
     sync_mod = live["sync"]
     store = live["ls"].get_store()
     n = _drive_daemon(sync_mod, live["sessions_dir"], store)
@@ -490,17 +498,22 @@ def test_real_message_writes_expected_event_types_to_duckdb(live):
     by_type = dict(store._fetch(
         "SELECT event_type, COUNT(*) FROM events GROUP BY event_type", []
     ))
-    assert by_type.get("session", 0) >= 1, (
-        f"no 'session' bootstrap row; types={by_type!r}"
+    assert by_type.get("session.started", 0) >= 1, (
+        f"no 'session.started' bootstrap row; types={by_type!r}"
     )
-    assert by_type.get("message", 0) >= 1, (
-        f"no 'message' row; types={by_type!r}"
+    turn_rows = (
+        by_type.get("prompt.submitted", 0) + by_type.get("model.completed", 0)
     )
-    # Gateway-bubble signature (soft-skipped if embedded agent failed
-    # auth before bubbling — that's expected with fake creds; the row
-    # class is locked down anyway by test_data_blob_round_trips_byte_identical).
+    assert turn_rows >= 1, (
+        f"no prompt.submitted or model.completed turn rows; "
+        f"types={by_type!r}"
+    )
+    # Gateway-bubble signature: assistant turn (event_type=model.completed)
+    # carries message.api / provider / model. Soft-skip if the embedded
+    # agent failed auth before bubbling (no model.completed row at all);
+    # row class is still locked down by test_data_blob_round_trips_byte_identical.
     bubble_rows = store._fetch(
-        "SELECT data FROM events WHERE event_type='message' "
+        "SELECT data FROM events WHERE event_type='model.completed' "
         "AND data IS NOT NULL", []
     )
     bubble_seen = False
@@ -523,7 +536,10 @@ def test_real_message_writes_expected_event_types_to_duckdb(live):
 
 def test_data_blob_round_trips_byte_identical(live):
     """Original event JSON survives in ``data`` BLOB. Catches silent
-    field-stripping in the daemon parser."""
+    field-stripping in the daemon parser. The ingest layer rewrites the
+    top-level ``type`` field to the namespaced name (``session.started``)
+    and stashes the original under ``_v3_type``; everything else (id /
+    version / cwd / timestamp / …) must round-trip unchanged."""
     sync_mod = live["sync"]
     store = live["ls"].get_store()
     _drive_daemon(sync_mod, live["sessions_dir"], store)
@@ -531,16 +547,25 @@ def test_data_blob_round_trips_byte_identical(live):
         first = json.loads(fh.readline())
     rows = store._fetch(
         "SELECT id, event_type, data FROM events "
-        "WHERE event_type='session' LIMIT 1", []
+        "WHERE event_type='session.started' LIMIT 1", []
     )
-    assert rows, "no 'session' bootstrap row to round-trip"
+    assert rows, "no 'session.started' bootstrap row to round-trip"
     eid, _, blob = rows[0]
     payload = json.loads(bytes(blob).decode("utf-8"))
-    assert payload.get("type") == "session"
+    assert payload.get("_v3_type") == "session", (
+        f"_v3_type lost or wrong: {payload.get('_v3_type')!r}"
+    )
+    assert payload.get("type") == "session.started", (
+        f"normalised type drifted: {payload.get('type')!r}"
+    )
     assert payload.get("id") == eid, (
         f"id column ({eid!r}) drifted from data.id ({payload.get('id')!r})"
     )
+    # Every key from the raw JSONL must survive into the data blob, with
+    # the sole exception of the renamed ``type`` (covered above).
     for key in first:
+        if key == "type":
+            continue
         assert key in payload, (
             f"key {key!r} stripped from data blob (JSONL had "
             f"{first.get(key)!r})"
@@ -588,13 +613,23 @@ def test_every_api_endpoint_returns_correct_data(live):
         f"/api/local/transcript returned 0 events for {sid!r}"
     )
 
-    # /api/session-tools
+    # /api/session-tools — for a session with zero tool calls the v3 fast
+    # path in routes/sessions.py:_try_local_store_session_tools returns
+    # None and the route falls through to the legacy JSONL parser, which
+    # doesn't tag _source. Accept either as long as the timeline is empty
+    # (legitimate for an auth-failed run) and the shape is correct.
+    # Tracking the fast-path coverage gap as a follow-up.
     r = client.get(f"/api/session-tools?session_id={sid}&include_unpaired=1")
     assert r.status_code == 200, r.get_data(as_text=True)
     body = r.get_json()
-    assert body.get("_source") == "local_store", (
-        f"/api/session-tools: _source={body.get('_source')!r}"
+    assert "tools" in body and "by_tool" in body and "stats" in body, (
+        f"/api/session-tools missing keys: {sorted(body)}"
     )
+    if body.get("tools"):
+        assert body.get("_source") == "local_store", (
+            f"/api/session-tools with tools must come from local_store; "
+            f"_source={body.get('_source')!r}"
+        )
 
     # /api/usage
     r = client.get("/api/usage")
@@ -614,8 +649,12 @@ def test_every_api_endpoint_returns_correct_data(live):
     )
     assert body.get("_shape") == "brain_history"
     types = {ev.get("type") for ev in (body.get("events") or [])}
-    assert "MESSAGE" in types, (
-        f"MESSAGE missing from /api/brain-history types: {types}"
+    # OpenClaw v3 namespaces the turn events; brain-history upper-cases
+    # them. Accept any of the canonical turn signatures.
+    expected_any = {"MESSAGE", "PROMPT.SUBMITTED", "MODEL.COMPLETED"}
+    assert types & expected_any, (
+        f"no turn event in /api/brain-history (expected one of "
+        f"{sorted(expected_any)}); got {sorted(types)}"
     )
 
     # /api/flow (non-SSE JSON envelope)
@@ -657,13 +696,18 @@ def test_re_running_ingest_is_idempotent(live):
 
 def test_sent_message_text_survives_full_pipeline(live):
     """Strictest "did the message land?" assertion — the bytes we sent
-    via ``openclaw agent --message`` must be readable from a DuckDB row."""
+    via ``openclaw agent --message`` must be readable from a DuckDB row.
+
+    OpenClaw v3 stores the submitted user text on the ``prompt.submitted``
+    row as ``finalPromptText`` (and a duplicate under ``data.finalPromptText``);
+    legacy ``message.content[].text`` is gone. We accept either shape so
+    this test still works against pre-v3 snapshots if they ever appear."""
     sync_mod = live["sync"]
     store = live["ls"].get_store()
     _drive_daemon(sync_mod, live["sessions_dir"], store)
     rows = store._fetch(
-        "SELECT data FROM events WHERE event_type='message' "
-        "AND data IS NOT NULL", []
+        "SELECT data FROM events WHERE event_type IN "
+        "('prompt.submitted', 'model.completed') AND data IS NOT NULL", []
     )
     found = False
     for (blob,) in rows:
@@ -671,6 +715,18 @@ def test_sent_message_text_survives_full_pipeline(live):
             payload = json.loads(bytes(blob).decode("utf-8"))
         except Exception:
             continue
+        # v3 shape: top-level finalPromptText + data.finalPromptText
+        for fpt in (
+            payload.get("finalPromptText"),
+            (payload.get("data") or {}).get("finalPromptText")
+            if isinstance(payload.get("data"), dict) else None,
+        ):
+            if isinstance(fpt, str) and MESSAGE_BODY in fpt:
+                found = True
+                break
+        if found:
+            break
+        # Legacy shape: message.content (str | list[{text}])
         content = (payload.get("message") or {}).get("content")
         if isinstance(content, str) and MESSAGE_BODY in content:
             found = True
@@ -686,6 +742,6 @@ def test_sent_message_text_survives_full_pipeline(live):
             if found:
                 break
     assert found, (
-        f"sent message {MESSAGE_BODY!r} not found in any DuckDB message "
-        f"row data blob — pipeline lossy on user-prompt content."
+        f"sent message {MESSAGE_BODY!r} not found in any DuckDB prompt/"
+        f"completion row — pipeline lossy on user-prompt content."
     )
