@@ -2712,6 +2712,69 @@ class LocalStore:
         params.append(int(limit))
         return [_row_to_event(r, _EVENT_COLS) for r in self._fetch(sql, params)]
 
+    def query_events_with_subagents(
+        self,
+        *,
+        session_id: str,
+        limit: int = 10000,
+    ) -> list[dict[str, Any]]:
+        """Return events for ``session_id`` UNIONed with events from every
+        sub-agent session whose ``subagents.parent_session_id`` matches.
+
+        Issue #1597: every per-session tool/cost/transcript read path was
+        scoped to ``WHERE session_id = ?`` on the events table, but
+        sub-agent events live under the sub-agent's OWN ``session_id`` —
+        the parent linkage lives only on the ``subagents`` table. As a
+        result a parent session that delegated 50 tool calls to a child
+        rendered as ``tool_calls=0`` in the UI.
+
+        Events sourced from a child session are tagged with
+        ``data._via_subagent_id`` (carrying the child's session_id) so
+        downstream UI code can render "via sub-agent X" markers without
+        re-querying. Orphan tool calls (no parent_sid linkage) stay where
+        they are — only events whose session is registered as a child of
+        ``session_id`` get rolled up.
+
+        ``limit`` is applied PER source session (parent + each child) so a
+        chatty child can't starve the parent's events out of the result.
+        """
+        # 1. Parent's own events.
+        out: list[dict[str, Any]] = self.query_events(
+            session_id=session_id, limit=limit,
+        )
+
+        # 2. Discover sub-agent sessions whose parent matches.
+        try:
+            subs = self.query_subagents(
+                parent_session_id=session_id, limit=500,
+            )
+        except Exception:
+            subs = []
+
+        # 3. Pull each child's events and tag them with the child's id.
+        for sa in subs:
+            child_sid = sa.get("subagent_id")
+            if not child_sid or child_sid == session_id:
+                continue
+            try:
+                child_rows = self.query_events(
+                    session_id=child_sid, limit=limit,
+                )
+            except Exception:
+                continue
+            for ev in child_rows:
+                data = ev.get("data")
+                if not isinstance(data, dict):
+                    data = {}
+                    ev["data"] = data
+                data["_via_subagent_id"] = child_sid
+                out.append(ev)
+
+        # 4. Re-sort DESC by ts so the merged stream looks like a single
+        # ``query_events`` result to callers that iterate it.
+        out.sort(key=lambda e: (e.get("ts") or ""), reverse=True)
+        return out
+
     def query_sessions(
         self,
         *,

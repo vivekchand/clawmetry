@@ -706,8 +706,21 @@ def _try_local_store_session_tools(sid: str, args_chars: int, result_chars: int,
     the same timeline shape the JSONL parser returns.
 
     Issue #1088 phase 3. Returns ``None`` to defer to the JSONL parser
-    when the events table has no message rows for this session."""
-    rows = _ls_call("query_events", session_id=sid, limit=10000)
+    when the events table has no message rows for this session.
+
+    Issue #1597: ALSO unions in events from any sub-agent session whose
+    ``subagents.parent_session_id`` matches ``sid`` — without this a
+    parent that delegated tool calls to a child rendered ``tool_calls=0``.
+    Sub-agent events are tagged with ``data._via_subagent_id`` upstream
+    so the resulting ``tools[]`` rows carry the same marker for the UI.
+    """
+    rows = _ls_call("query_events_with_subagents", session_id=sid, limit=10000)
+    # Pre-1597 daemons (older wheel running, fresh dashboard) won't have the
+    # helper allowlisted yet — fall back to the parent-only query so the
+    # endpoint still works during a staged rollout. The rollup will simply
+    # under-report sub-agent activity until the daemon is restarted.
+    if rows is None:
+        rows = _ls_call("query_events", session_id=sid, limit=10000)
     if not rows:
         return None
     rows = list(reversed(rows))  # query_events returns DESC
@@ -750,6 +763,10 @@ def _try_local_store_session_tools(sid: str, args_chars: int, result_chars: int,
     for ev in rows:
         et = ev.get("event_type")
         data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+        # Issue #1597: events sourced from a child sub-agent session are
+        # tagged by ``LocalStore.query_events_with_subagents`` so the
+        # rollup can attribute them in the UI ("via sub-agent X").
+        via_subagent_id = data.get("_via_subagent_id") if isinstance(data, dict) else None
         ev_ts_ms = _parse_ts(
             (data.get("timestamp") if isinstance(data, dict) else None)
             or ev.get("ts")
@@ -793,6 +810,7 @@ def _try_local_store_session_tools(sid: str, args_chars: int, result_chars: int,
                 "model":            ev.get("model") or "",
                 "provider":         (data.get("provider") if isinstance(data, dict) else "") or "",
                 "message_cost_usd": float(ev.get("cost_usd") or 0.0),
+                "via_subagent_id":  via_subagent_id or "",
             }
             if result_val is not None or is_error:
                 try:
@@ -877,6 +895,7 @@ def _try_local_store_session_tools(sid: str, args_chars: int, result_chars: int,
                     "model":            msg_model,
                     "provider":         msg_provider,
                     "message_cost_usd": msg_cost,
+                    "via_subagent_id":  via_subagent_id or "",
                 }
             continue
 
@@ -912,6 +931,7 @@ def _try_local_store_session_tools(sid: str, args_chars: int, result_chars: int,
                     "model":            msg_model,
                     "provider":         msg_provider,
                     "message_cost_usd": msg_cost,
+                    "via_subagent_id":  via_subagent_id or "",
                 }
         elif role == "toolResult":
             tcid = msg.get("toolCallId", "")

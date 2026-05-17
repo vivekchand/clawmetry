@@ -346,6 +346,12 @@ _DAEMON_METHODS = frozenset({
     # ``routes/crons.py:_cron_runs_from_duckdb`` via the daemon proxy.
     "query_cron_runs",
     "query_subagents",
+    # Issue #1597: parent session tool-timeline rollup needs to merge in
+    # events from every child sub-agent session (the events table has no
+    # parent_session_id column; the link lives on the subagents table). The
+    # helper UNIONs parent + child query_events() results and tags child
+    # rows with ``data._via_subagent_id``.
+    "query_events_with_subagents",
     "query_memory_blobs",
     "query_system_snapshots",
     # Phase 3 (issue #1088 follow-up, 2026-05-13): per-feature aggregation
