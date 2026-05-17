@@ -73,6 +73,15 @@ def server(base_url, token):
         yield base_url
         return
 
+    # No gateway token available — we're probably running hermetic MOAT /
+    # unit tests (e.g. the MOAT Verifier CI job) that use their own Flask
+    # test clients and don't need a live dashboard server at all. Yield None
+    # so those tests proceed; any test that actually needs a running server
+    # should guard itself with `if server is None: pytest.skip(...)`.
+    if not token:
+        yield None
+        return
+
     # Start the server
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     dashboard = os.path.join(repo_root, "dashboard.py")
