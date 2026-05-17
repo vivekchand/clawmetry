@@ -2660,6 +2660,11 @@ function _extractChannelInfo(ev) {
   if (raw && typeof raw === 'object' && raw.body_capture === 'ack_only') {
     ackOnly = true;
   }
+  // Issue #1203: local-store fast-path strips ev.data so raw_blob is never
+  // present; brain.py now exposes body_capture as a flat field instead.
+  if (!ackOnly && ev.body_capture === 'ack_only') {
+    ackOnly = true;
+  }
   var bodyMissing = direction === 'out' && (ackOnly || !hasBodyText);
 
   return {
@@ -3057,7 +3062,15 @@ function renderBrainStream(events) {
     el.innerHTML = '<div style="color:var(--text-muted);padding:20px">No activity yet</div>';
     return;
   }
+  // Issue #1203: one-line banner when Telegram outbound rows are visible so
+  // users don't mistake the "(no body captured)" affordance for a broken tool.
+  var hasTelegramAck = filtered.some(function(ev) {
+    return (ev.provider === 'telegram' || ev.channel === 'telegram') && ev.direction === 'out';
+  });
   var html = '';
+  if (hasTelegramAck) {
+    html += '<div style="display:flex;align-items:center;gap:6px;padding:5px 10px;margin-bottom:6px;background:rgba(37,99,235,0.08);border:1px solid rgba(37,99,235,0.2);border-radius:6px;font-size:11px;color:#60a5fa;">📱 Telegram body capture pending OpenClaw upstream — outbound counts only</div>';
+  }
   filtered.forEach(function(ev) {
     var color = ev.color || brainSourceColor(ev.source || 'main');
     var evType = ev.type || 'TOOL';

@@ -338,6 +338,12 @@ def _try_local_store_brain(limit, include_artifacts, since=None):
                     chat_id = data["chat"].get("id") or ""
                 if chat_id:
                     row["chat_id"] = str(chat_id)[:80]
+                # Issue #1203: expose body_capture so the browser's
+                # _extractChannelInfo can set ackOnly=true on the local-store
+                # path (where ev.data is stripped and raw_blob isn't available).
+                body_capture = data.get("body_capture")
+                if body_capture:
+                    row["body_capture"] = str(body_capture)
         # Issue #567 — Hallucination Risk Indicator. Compute the score
         # from the RAW DuckDB row (which still carries ``data.params`` /
         # ``data.usage``), then stamp it onto the trimmed output row.
