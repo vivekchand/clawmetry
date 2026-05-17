@@ -644,11 +644,24 @@ def index():
     # same env var the v2 blueprint registration in dashboard.py uses, so we
     # never advertise /v2 to users who'd hit a 404.
     v2_enabled = os.environ.get("CLAWMETRY_V2") == "1"
+    # Issue #1603: server-side Pro-tier gate. Tab templates branch on this
+    # so the Pro-feature DOM (NemoClaw governance shell, alerts rule editor
+    # modal) never enters the page for Free users. Eliminates the first-paint
+    # flash where the full Pro UI rendered, then a client-side overlay slammed
+    # down on top — a frame-perfect click could bypass the gate, and Free
+    # users could screenshot the Pro UI source. Fail-closed: any error in
+    # ``_is_pro_user`` returns False, which matches the conservative default
+    # the helper itself uses.
+    try:
+        is_pro = bool(_d._is_pro_user())
+    except Exception:
+        is_pro = False
     resp = make_response(
         render_template_string(
             _d.DASHBOARD_HTML,
             version=_d.__version__,
             v2_enabled=v2_enabled,
+            is_pro=is_pro,
         )
     )
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"

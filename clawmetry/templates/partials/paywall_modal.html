@@ -1,0 +1,40 @@
+<!--
+  Server-side paywall partial — rendered in place of a Pro-feature DOM
+  shell when ``is_pro`` is False. Replaces the pre-#1603 pattern of
+  rendering the full Pro UI plus a client-side overlay that slammed down
+  on a subsequent tick (the "Pro feature flash" bug).
+
+  Callers pass two optional context vars via Jinja ``with`` blocks:
+    paywall_feature  — feature name shown in the headline (e.g. "NemoClaw
+                       governance"). Defaults to "this feature".
+    paywall_pitch    — short reason this feature is Pro. One line, plain
+                       prose, no em-dashes (memory: no_em_dashes).
+
+  Copy is intentionally upsell-first (memory: free_plan_upsell). Every
+  gated click is a conversion opportunity, not a wall. Keep it readable
+  for non-technical users (memory: simple_ui_for_nontechnical).
+-->
+<div class="page" id="page-{{ paywall_page_id|default('paywall') }}">
+  <div style="max-width:560px;margin:48px auto;padding:32px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:12px;text-align:center;">
+    <div style="font-size:36px;margin-bottom:12px;">🔒</div>
+    <h2 style="margin:0 0 8px 0;font-size:18px;font-weight:700;color:var(--text-primary);">
+      {{ paywall_feature|default('This feature') }} is part of ClawMetry Pro
+    </h2>
+    <p style="margin:0 0 20px 0;font-size:13px;line-height:1.55;color:var(--text-secondary);">
+      {{ paywall_pitch|default('Pro unlocks the full workflow with no caps on history, alerts, or governance policies.') }}
+    </p>
+    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+      <a href="https://app.clawmetry.com/upgrade" target="_blank" rel="noopener"
+         style="background:var(--bg-accent);color:#fff;border:0;border-radius:8px;padding:10px 18px;font-size:13px;font-weight:600;text-decoration:none;cursor:pointer;">
+        Start 7-day free trial
+      </a>
+      <a href="https://clawmetry.com/pricing" target="_blank" rel="noopener"
+         style="background:transparent;color:var(--text-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:10px 18px;font-size:13px;font-weight:600;text-decoration:none;cursor:pointer;">
+        See pricing
+      </a>
+    </div>
+    <div style="margin-top:14px;font-size:11px;color:var(--text-muted);">
+      No credit card required. Cancel anytime.
+    </div>
+  </div>
+</div>
