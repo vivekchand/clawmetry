@@ -1130,6 +1130,18 @@ def _fetch_session_chain(session_id, limit=200):
     with the daemon's writer lock (issue #1088); falls back to direct open
     for single-process boots (tests + dev mode — same pattern as
     ``_try_local_store_brain`` above).
+
+    Issue #1597 class drain — intentionally NOT using
+    ``query_events_with_subagents``: this helper feeds
+    ``_build_llm_call_timeline`` which walks back from an anchor event for
+    the nearest preceding ``prompt.submitted`` row of the SAME LLM call.
+    A single LLM call's lifecycle (prompt → reasoning → completion) lives
+    in one session — sub-agents are separate sessions with their own LLM
+    calls. Rolling parent + child here would mix two unrelated call chains
+    and the "preceding prompt.submitted" walk would jump across sessions.
+    The Brain feed already passes the row's OWN session_id when the user
+    clicks a child chip (see ``app.js::loadLlmCallTimeline``), so child
+    timelines work end-to-end without rollup.
     """
     if not session_id:
         return None

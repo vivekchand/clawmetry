@@ -358,7 +358,14 @@ _DAEMON_METHODS = frozenset({
     # helpers powering the next batch of Bypass-Medium fast-paths.
     "query_compactions",
     "query_cost_split",
+    # Issue #1597 class drain: sister helpers that UNION parent + child
+    # sub-agent rows on per-session reads. Same pattern as
+    # query_events_with_subagents — without these a parent that delegated
+    # cost / model transitions to a Task-tool sub-agent reported zero on
+    # the cost-split + session-model-journey routes.
+    "query_cost_split_with_subagents",
     "query_session_model_journey",
+    "query_session_model_journey_with_subagents",
     # Tier-1 (2026-05-15): /api/context-anatomy session-history bucket
     # off the JSONL scanner. Returns last non-zero usage.input_tokens
     # from the most-recent active session.
