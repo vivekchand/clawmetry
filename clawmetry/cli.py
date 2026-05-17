@@ -2147,6 +2147,13 @@ def _cmd_eval(args) -> None:
     import json as _json
     from clawmetry import eval_suite_runner as esr
 
+    # Phase 3 — regression replay path. Mutually exclusive with --suite
+    # (the two flows produce different table shapes; mixing them in one
+    # invocation only confuses CI logs).
+    if getattr(args, "regression", False):
+        _cmd_eval_regression(args)
+        return
+
     if getattr(args, "list_suites", False):
         suites = esr.list_suites()
         if not suites:
@@ -2207,6 +2214,85 @@ def _cmd_eval(args) -> None:
     run = esr.run_suite(suite, persist=persist)
     _print_result(run)
     sys.exit(run.exit_code)
+
+
+def _cmd_eval_regression(args) -> None:
+    """Phase 3 evals — replay last week's failed sessions against current
+    config. MANUAL invocation only: every replay costs API tokens, so the
+    runner enforces a hard ceiling (CLAWMETRY_EVALS_REGRESSION_MAX or the
+    --limit flag, defaulting to 10).
+
+    Exit code mirrors the eval-suite convention:
+        0 → ran cleanly (any mix of improved/same is fine)
+        1 → at least one regressed/errored row (signal worth investigating)
+    """
+    import json as _json
+    from clawmetry import eval_regression_replay as err
+
+    # Parse --window into days. Reuse the tiny human-readable parser style
+    # from routes/evals.py so flags + URL params behave the same.
+    raw = (getattr(args, "window", None) or "7d").strip().lower()
+    try:
+        if raw.endswith("d"):
+            window_days = int(float(raw[:-1]))
+        elif raw.endswith("h"):
+            window_days = max(1, int(float(raw[:-1]) // 24))
+        else:
+            window_days = int(float(raw))
+    except (TypeError, ValueError):
+        window_days = 7
+    window_days = max(1, min(90, window_days))
+
+    limit = getattr(args, "limit", None)
+    if limit is None:
+        limit = err.DEFAULT_REPLAY_BUDGET
+    limit = max(1, int(limit))
+
+    if not err.is_enabled():
+        print(
+            "Regression replay is disabled "
+            "(CLAWMETRY_EVALS_REGRESSION_ENABLED=0).",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    print(
+        f"Replaying up to {limit} failed session(s) from the last "
+        f"{window_days}d... (manual cost-guarded run)",
+        flush=True,
+    )
+    run = err.run_regression(window_days=window_days, limit=limit)
+
+    if getattr(args, "as_json", False):
+        print(_json.dumps({
+            "ran_at":       run.ran_at,
+            "window_days":  run.window_days,
+            "tested":       run.tested,
+            "improved":     run.improved,
+            "regressed":    run.regressed,
+            "same":         run.same,
+            "errored":      run.errored,
+            "results":      [r.to_dict() for r in run.results],
+        }, indent=2))
+    else:
+        if not run.results:
+            print("No failed sessions in the window. Nothing to replay.")
+        else:
+            for r in run.results:
+                old_s = "-" if r.original_score is None else f"{r.original_score:.1f}"
+                new_s = "-" if r.new_score is None else f"{r.new_score:.1f}"
+                print(
+                    f"  {r.status.upper():<10} {r.session_id[:24]:<24} "
+                    f"{old_s} -> {new_s}  {r.reason[:60]}"
+                )
+            print()
+            print(
+                f"{run.improved} improved, {run.regressed} regressed, "
+                f"{run.same} same, {run.errored} errored "
+                f"({run.tested} tested over last {window_days}d)"
+            )
+    exit_code = 1 if (run.regressed > 0 or run.errored > 0) else 0
+    sys.exit(exit_code)
 
 
 def _cmd_update() -> None:
@@ -2518,6 +2604,34 @@ def main() -> None:
         action="store_true",
         dest="as_json",
         help="Emit machine-readable JSON instead of the table",
+    )
+    # Phase 3 (refs #1619) — regression replay of last week's failed sessions.
+    # MANUAL invocation only by design (no cron): replay costs API tokens, so
+    # the user opts in every time. ``--regression`` is mutually-exclusive with
+    # ``--suite`` at the handler level.
+    p_eval.add_argument(
+        "--regression",
+        action="store_true",
+        dest="regression",
+        help=(
+            "Replay last week's failed sessions against the current "
+            "config (manual cost-guarded; see --window / --limit)"
+        ),
+    )
+    p_eval.add_argument(
+        "--window",
+        metavar="DURATION",
+        default="7d",
+        help="Lookback window for --regression (e.g. 7d, 14d; default 7d)",
+    )
+    p_eval.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help=(
+            "Hard ceiling on replays per --regression invocation "
+            "(default: CLAWMETRY_EVALS_REGRESSION_MAX or 10)"
+        ),
     )
 
     # update — self-update to latest PyPI version

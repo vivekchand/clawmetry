@@ -4455,12 +4455,15 @@ function clawmetryLogout(){
       </div>
       <span class="stats-footer-sub" style="margin-left:auto;" id="reliability-detail"></span>
     </div>
-    <!-- Issue #1619 Phase 1 — eval score tile. Click opens the rubric editor. -->
+    <!-- Issue #1619 Phase 1 — eval score tile. Click opens the rubric editor.
+         Phase 3 adds the ``eval-regression-line`` mini-line under the score,
+         populated by loadEvalRegressionSummary() — silent on a fresh install. -->
     <div class="stats-footer-item" id="eval-card" style="cursor:pointer;" title="Click to edit the rubric" onclick="openEvalRubricModal()">
       <span class="stats-footer-icon">⭐</span>
       <div>
         <div class="stats-footer-label">Eval score (24h)</div>
         <div class="stats-footer-value" id="eval-avg-score">--</div>
+        <div id="eval-regression-line" style="font-size:10px;color:var(--text-muted);margin-top:2px;line-height:1.2;"></div>
       </div>
       <span class="stats-footer-sub" style="margin-left:auto;" id="eval-coverage"></span>
     </div>
