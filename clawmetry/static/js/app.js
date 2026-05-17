@@ -7415,6 +7415,8 @@ async function loadUsage() {
     loadHeatmap();
     // Load prompt cache analytics (GH #979)
     loadCacheAnalytics();
+    // Load cost forecast (issue #1413)
+    loadCostForecast();
   } catch(e) {
     document.getElementById('usage-chart').innerHTML = '<span style="color:#555">No usage data available</span>';
   }
@@ -7672,6 +7674,55 @@ function renderCostComparison(data) {
   html += '</div>';
   html += '<div style="margin-top:10px;font-size:11px;color:var(--text-muted);line-height:1.5;">Estimates based on 60/40 input/output split for ' + tokStr + ' tokens. Actual costs vary by prompt structure and API tier.</div>';
   el.innerHTML = html;
+}
+
+// ===== Cost Forecast (issue #1413) =====
+async function loadCostForecast() {
+  var title = document.getElementById('cost-forecast-title');
+  var card = document.getElementById('cost-forecast-card');
+  var el = document.getElementById('cost-forecast-content');
+  if (!card || !el) return;
+  try {
+    var d = await fetch('/api/usage/forecast').then(function(r){return r.json();});
+    if (!d || !d.available) return;
+    // Hide card when daily rate is effectively zero (no meaningful data yet)
+    if ((d.daily_rate_usd || 0) === 0 && (d.cost_this_month_usd || 0) === 0) return;
+    if (title) title.style.display = '';
+    card.style.display = '';
+    var proj = d.projected_month_usd || 0;
+    var budget = d.monthly_budget_usd || 0;
+    var exceeded = d.budget_exceeded;
+    var color = exceeded ? 'var(--danger, #ef4444)' : '#22c55e';
+    var icon = exceeded ? '⚠️' : '✅';
+    var statusMsg = '';
+    if (budget > 0) {
+      if (exceeded) {
+        var over = proj - budget;
+        statusMsg = 'Will exceed $' + budget.toFixed(2) + ' budget by $' + over.toFixed(2);
+        if (d.days_to_budget !== null && d.days_to_budget <= d.days_remaining_in_month) {
+          statusMsg += ' · exceeds in ~' + Math.ceil(d.days_to_budget) + ' day' + (Math.ceil(d.days_to_budget) !== 1 ? 's' : '');
+        }
+      } else {
+        statusMsg = 'On track vs $' + budget.toFixed(2) + ' budget';
+      }
+    } else {
+      statusMsg = d.days_remaining_in_month + 'd remaining this month';
+    }
+    el.innerHTML =
+      '<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;">' +
+        '<div>' +
+          '<div style="font-size:12px;color:var(--text-muted);">Projected month-end</div>' +
+          '<div style="font-size:22px;font-weight:700;color:' + color + ';">' + icon + ' $' + proj.toFixed(2) + '</div>' +
+        '</div>' +
+        '<div style="color:var(--text-muted);font-size:13px;">' + escHtml(statusMsg) + '</div>' +
+        '<div style="margin-left:auto;text-align:right;font-size:12px;color:var(--text-muted);">' +
+          '$' + (d.daily_rate_usd || 0).toFixed(4) + '/day avg<br>' +
+          '$' + (d.cost_this_month_usd || 0).toFixed(2) + ' spent so far' +
+        '</div>' +
+      '</div>';
+  } catch(e) {
+    // silently skip if endpoint unavailable
+  }
 }
 
 function renderTraceClusters(clusters, totalSessions) {
