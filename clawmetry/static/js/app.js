@@ -647,6 +647,51 @@ async function checkOnboardingStatus() {
 _cmOnboardingTimer = setInterval(checkOnboardingStatus, 5000);
 setTimeout(checkOnboardingStatus, 300);
 
+// === No-Agent-Detected Empty-State Banner ===================================
+// Distinct from the first-heartbeat onboarding banner above:
+//   * onboarding-banner fires when "agent installed but no heartbeat yet"
+//     (transient race that resolves in ~30s)
+//   * no-agent-banner fires when "no agent installed at all" — persistent
+//     until the user installs OpenClaw or NVIDIA NemoClaw.
+// Mutual exclusion: if openclaw or nemoclaw IS detected (heartbeat just
+// hasn't landed yet), we hide this banner and let onboarding-banner do
+// its thing. Polls every 60s — filesystem state for "did the user pip
+// install an agent" changes on the order of minutes, not seconds.
+async function checkAgentPresence() {
+  var banner = document.getElementById('no-agent-banner');
+  if (!banner) return;
+  try {
+    var data = await fetch('/api/agent-presence').then(function(r){return r.json();});
+    var noAgent = !!(data && data.no_agent === true);
+    if (noAgent) {
+      // No OpenClaw, no NemoClaw, no local data — show the persistent
+      // empty-state banner and hide the first-heartbeat one so we don't
+      // double up. Setting _cmOnboardingDismissed stops the 5s poller
+      // from re-flashing the "Setting up your node" copy.
+      var ob = document.getElementById('onboarding-banner');
+      if (ob) ob.style.display = 'none';
+      _cmOnboardingDismissed = true;
+      banner.style.display = 'flex';
+    } else {
+      // Agent appeared. Hide the no-agent banner and (if the dashboard
+      // was already showing it) reload the data so cards render.
+      var wasShown = banner.style.display !== 'none';
+      banner.style.display = 'none';
+      if (wasShown && typeof loadAll === 'function') {
+        try { loadAll(); } catch(e) {}
+      }
+    }
+  } catch(e) {
+    // Transient fetch failure. Per feedback_persistent_sessions: never
+    // surface a network blip as a terminal user-facing error. Keep the
+    // banner in whatever state it was in.
+  }
+}
+// Fast first check (500ms) so brand-new users see the banner before
+// staring at an empty dashboard. Re-poll every 60s thereafter.
+setTimeout(checkAgentPresence, 500);
+visibilitySetInterval(checkAgentPresence, 60000);
+
 function dismissPausedBanner() {
   localStorage.setItem('cm_paused_banner_dismissed', String(Date.now()));
   var banner = document.getElementById('paused-banner');

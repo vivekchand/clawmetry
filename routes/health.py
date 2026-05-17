@@ -12,6 +12,7 @@ Owns the 11 routes registered on bp_health:
   GET  /api/service-status        — compact service_status for fleet heartbeat
   GET  /api/heartbeat-status      — heartbeat gap alerting status
   POST /api/heartbeat-ping        — record a heartbeat from frontend
+  GET  /api/agent-presence        — is any underlying agent (OpenClaw / NemoClaw) installed?
   GET  /api/rate-limits           — rolling 1m/1h API rate-limit utilisation
   GET  /api/health-stream         — SSE auto-refresh of health checks (30s)
   GET  /api/sandbox-status        — sandbox / inference / security posture
@@ -2229,6 +2230,22 @@ def api_heartbeat_ping():
     import dashboard as _d
     _d._record_heartbeat()
     return jsonify({"ok": True})
+
+
+@bp_health.route("/api/agent-presence")
+def api_agent_presence():
+    """Return whether any underlying agent (OpenClaw / NVIDIA NemoClaw) is
+    installed and producing data. Sibling of ``/api/heartbeat-status``
+    that answers a different question (see ``detect_agent_install``
+    docstring in dashboard.py).
+
+    Frontend uses this to render the "No agent detected" page-level empty
+    state when ``no_agent=true``, so users who installed ClawMetry without
+    an agent see actionable copy + install links instead of an empty
+    dashboard that looks broken.
+    """
+    import dashboard as _d
+    return jsonify(_d.detect_agent_install())
 
 
 def _try_local_store_rate_limits():
