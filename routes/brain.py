@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from flask import Blueprint, Response, jsonify, request
 from clawmetry.config import is_local_store_read_enabled
 from clawmetry.risk import compute_hallucination_risk, is_llm_event
+from clawmetry.token_confidence import annotate_events as _annotate_token_confidence
 
 bp_brain = Blueprint('brain', __name__)
 
@@ -1021,6 +1022,17 @@ def api_brain_history():
     # stable either way, and the local-store fast path above already
     # picked up the rich rows.
     _annotate_risk(events)
+
+    # Issue #563 — Token Probability Visualizer. Per-token confidence
+    # heatmap on assistant responses. Only stamps when upstream captured
+    # logprobs (OpenAI / Gemini compatible providers today). Anthropic
+    # calls fall through to a "not available" hint in the frontend.
+    try:
+        _annotate_token_confidence(events)
+    except Exception:
+        # Never crash the Brain feed on annotation failure — the rest of
+        # the payload is still useful even if confidence stamping fails.
+        pass
 
     try:
         _d._ext_emit("brain.event", {"count": len(events)})
