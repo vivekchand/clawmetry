@@ -300,13 +300,19 @@ def _try_local_store_channel_summary():
 #     SQLite). The OpenClaw gateway never sees these messages so the table
 #     would be permanently empty for iMessage. Migrating would break the
 #     macOS-native experience.
-#   * ``/api/channel/bluebubbles`` — calls a third-party REST API for live
-#     chat counts. Same reason: the gateway doesn't proxy BlueBubbles
-#     messages, so DuckDB has no rows to serve.
 #   * ``/api/channel/tui`` — reads ``openclaw-tui``-tagged user messages
 #     directly from session JSONLs. These aren't channel adapter messages
-#     (no "messageChannel=tui" log line) so the ingest hook never picks
-#     them up.
+#     (no "messageChannel=tui" log line, no ``~/.openclaw/tui/`` dir in
+#     ``sync._CHANNEL_DIRS``) so the chokepoint never picks them up.
+#     A future TUI-aware ingest path would lift this; until then the
+#     route stays JSONL-bound on purpose. (Tier-1 audit #1565,
+#     2026-05-17.)
+#
+# Migrated in PR #1585 (Telegram, Signal) and this PR (BlueBubbles):
+# bluebubbles IS in ``sync._CHANNEL_DIRS`` — the daemon ingests its
+# JSONLs into ``channel_messages`` + ``events`` exactly like Telegram,
+# so the same two-tier fast path applies. The legacy REST-API + log-
+# grep path now runs only as a last-resort backstop.
 
 def _format_local_store_provider_messages(
     provider,
@@ -2019,11 +2025,42 @@ def api_channel_googlechat():
 
 @bp_channels.route("/api/channel/bluebubbles")
 def api_channel_bluebubbles():
-    """BlueBubbles channel: try REST API first, fallback to logs."""
+    """BlueBubbles channel: try REST API first, fallback to logs.
+
+    Tier-1 #1565: when ``CLAWMETRY_LOCAL_STORE_READ=1`` and the daemon
+    has already ingested ``~/.openclaw/bluebubbles/*.jsonl`` turns into
+    DuckDB (``bluebubbles`` is in ``sync._CHANNEL_DIRS``), serve from
+    the unified ``channel_messages`` table first, then fall back to the
+    ``events`` table — same dual-tier pattern PR #1585 wired for
+    Telegram + Signal. The legacy BlueBubbles REST API call + log-grep
+    stays as a last resort so an install with the read flag OFF, or a
+    daemon that hasn't caught up yet, still sees the live counts.
+    """
     import dashboard as _d
 
     limit = request.args.get("limit", 50, type=int)
     today = datetime.now().strftime("%Y-%m-%d")
+
+    # Tier-1 #1565 fast paths. Run BEFORE the BlueBubbles REST probe so
+    # a configured server doesn't add a 3s timeout to every poll once
+    # DuckDB has the rows. ``chatCount``/``status`` get a v3-aware
+    # default so the response envelope stays compatible with the UI.
+    if _local_store_read_enabled():
+        fast = _try_local_store_provider_messages("bluebubbles", limit)
+        if fast is not None:
+            fast.setdefault("chatCount", None)
+            fast.setdefault("status", "local_store")
+            return jsonify(fast)
+        # Events-table fallback. Same silent-zero hazard as Telegram/Signal:
+        # the chokepoint dual-writes but a re-ingest after a daemon restart
+        # can leave ``channel_messages`` empty while ``events`` carries the
+        # ``channel.in`` / ``channel.out`` rows. See memory
+        # ``feedback_synthetic_tests_missed_real_event_shape.md``.
+        fast = _try_local_store_channel_events("bluebubbles", limit)
+        if fast is not None:
+            fast.setdefault("chatCount", None)
+            fast.setdefault("status", "local_store_v3")
+            return jsonify(fast)
 
     messages = []
     today_in = 0
