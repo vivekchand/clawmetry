@@ -7848,6 +7848,7 @@ async function loadSystemHealth() {
             return Math.floor(m/1440) + 'd ago';
           };
           var cihtml = '';
+          var silentCount = 0;
           ingest.forEach(function(row) {
             var mins = row.mins_ago;
             // Hot < 10m → green, warm < 60m → amber, stale → muted.
@@ -7855,6 +7856,8 @@ async function loadSystemHealth() {
                          : (mins != null && mins < 60) ? '#d97706'
                          : '#6b7280';
             var border = (mins != null && mins < 10) ? 'rgba(22,163,74,0.3)' : 'var(--border-secondary)';
+            // Amber (≥60m) or never → counts toward the silent-channel alert CTA (#1322)
+            if (mins == null || mins >= 60) silentCount++;
             cihtml += '<div title="total ' + row.total + ' (' + (row.msg_in||0) + ' in / ' + (row.msg_out||0) + ' out)" '
               + 'onclick="switchTab(\'flow\')" '
               + 'onmouseover="this.style.background=\'var(--bg-primary)\'" '
@@ -7866,6 +7869,16 @@ async function loadSystemHealth() {
               + '<span style="color:var(--text-muted);font-size:11px;margin-left:auto;">' + fmtMins(mins) + ' &middot; ' + row.total + ' total</span>'
               + '</div>';
           });
+          // Footer CTA at the silent-channel alert moment (#1322).
+          // Surfaces the Cloud-Pro alert pitch at the exact moment the operator
+          // sees the signal — without this they read "silent" and have no next step.
+          if (silentCount > 0) {
+            cihtml += '<div style="font-size:11px;color:#d97706;padding:6px 10px;border-radius:6px;'
+              + 'background:rgba(217,119,6,0.08);border:1px solid rgba(217,119,6,0.2);margin-top:4px;">'
+              + '&#x26A0;&#xFE0F; ' + silentCount + ' channel' + (silentCount > 1 ? 's' : '') + ' silent &gt;1h &middot; '
+              + '<a href="#" onclick="switchTab(\'alerts\');return false;" '
+              + 'style="color:#d97706;font-weight:600;text-decoration:underline;">Set up alerts &rarr;</a></div>';
+          }
           ciEl.innerHTML = cihtml;
         }
       }
