@@ -1791,11 +1791,12 @@ def api_usage_forecast():
     Returns {available, daily_rate_usd, cost_this_month_usd,
              projected_month_usd, days_remaining_in_month,
              monthly_budget_usd, budget_exceeded, days_to_budget,
-             pro_dispatch_enabled, budget_alert,
+             budget_cross_date, pro_dispatch_enabled, budget_alert,
              window_days, daily_window, _source}.
     Returns {available: false} when no local-store data is present.
     """
     import calendar
+    import math
     import dashboard as _d
     from datetime import datetime, timedelta, timezone
 
@@ -1838,9 +1839,15 @@ def api_usage_forecast():
 
     budget_exceeded = bool(effective_budget > 0 and projected_month > effective_budget)
     days_to_budget: float | None = None
+    budget_cross_date: str | None = None
     if effective_budget > 0 and daily_rate > 0:
         remaining_budget = effective_budget - cost_this_month
         days_to_budget = max(0.0, remaining_budget / daily_rate)
+        if budget_exceeded:
+            cross_offset_days = min(days_remaining, math.ceil(days_to_budget))
+            budget_cross_date = (
+                today + timedelta(days=cross_offset_days)
+            ).isoformat()
 
     try:
         pro_dispatch_enabled = bool(_d._is_pro_user())
@@ -1856,6 +1863,7 @@ def api_usage_forecast():
         "monthly_budget_usd": effective_budget,
         "budget_exceeded": budget_exceeded,
         "days_to_budget": round(days_to_budget, 1) if days_to_budget is not None else None,
+        "budget_cross_date": budget_cross_date,
         "pro_dispatch_enabled": pro_dispatch_enabled,
         "budget_alert": {
             "available": budget_exceeded,

@@ -460,6 +460,7 @@ def test_usage_forecast_surfaces_pro_gate_when_budget_will_be_exceeded(
     _seed_events(ls.get_store(), n=7, base_cost=1.0, base_tokens=10)
 
     import dashboard as _d
+    today = datetime.now(timezone.utc).date().isoformat()
     monkeypatch.setattr(
         _d,
         "_get_budget_config",
@@ -471,6 +472,7 @@ def test_usage_forecast_surfaces_pro_gate_when_budget_will_be_exceeded(
     assert body["_source"] == "local_store"
     assert body["available"] is True
     assert body["budget_exceeded"] is True
+    assert body["budget_cross_date"] == today
     assert body["pro_dispatch_enabled"] is False
     assert body["budget_alert"] == {
         "available": True,

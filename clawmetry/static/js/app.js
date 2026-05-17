@@ -7699,8 +7699,21 @@ async function loadCostForecast() {
       if (exceeded) {
         var over = proj - budget;
         statusMsg = 'Will exceed $' + budget.toFixed(2) + ' budget by $' + over.toFixed(2);
+        var crossDate = '';
+        if (d.budget_cross_date) {
+          var parsedCrossDate = new Date(d.budget_cross_date + 'T00:00:00Z');
+          if (!isNaN(parsedCrossDate.getTime())) {
+            crossDate = parsedCrossDate.toLocaleDateString(undefined, {
+              month: 'short',
+              day: 'numeric',
+              timeZone: 'UTC'
+            });
+          }
+        }
         if (d.days_to_budget !== null && d.days_to_budget <= d.days_remaining_in_month) {
-          statusMsg += ' · exceeds in ~' + Math.ceil(d.days_to_budget) + ' day' + (Math.ceil(d.days_to_budget) !== 1 ? 's' : '');
+          var dayCount = Math.ceil(d.days_to_budget);
+          var dayText = dayCount <= 0 ? 'today' : '~' + dayCount + ' day' + (dayCount !== 1 ? 's' : '');
+          statusMsg += crossDate ? ' · exceeds on ' + crossDate + ' (' + dayText + ')' : ' · exceeds ' + dayText;
         }
       } else {
         statusMsg = 'On track vs $' + budget.toFixed(2) + ' budget';
