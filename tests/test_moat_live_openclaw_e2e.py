@@ -87,6 +87,20 @@ RECIPIENT = "+15555550199"
 GATEWAY_BOOT_TIMEOUT_SECS = 30
 TEST_OVERALL_BUDGET_SECS = 90
 
+# Magic sentinel for the tool-call E2E. We instruct the model to run
+# `echo HELLO_FROM_MOAT_E2E_42`; if the daemon ingests both the tool_use
+# proposal AND the tool_use_result, the literal string must appear in the
+# DuckDB ``tool.result`` row's output. Distinct + searchable on purpose.
+TOOL_CALL_SENTINEL = "HELLO_FROM_MOAT_E2E_42"
+TOOL_CALL_MESSAGE = (
+    f"Run the bash command: echo {TOOL_CALL_SENTINEL} "
+    "and tell me its output. You MUST call the tool — do not just say it."
+)
+# Fake-key marker injected by ``_send_message`` when caller hasn't set a
+# real ANTHROPIC_API_KEY. The tool-call test must skip when this is the
+# only credential available (the auth-error path doesn't reach tool_use).
+_FAKE_ANTHROPIC_KEY = "sk-ant-fake-clawmetry-moat-e2e"
+
 
 # ── Gateway + agent subprocess helpers ────────────────────────────────────
 
@@ -742,3 +756,232 @@ def test_sent_message_text_survives_full_pipeline(live):
         f"sent message {MESSAGE_BODY!r} not found in any DuckDB prompt/"
         f"completion row — pipeline lossy on user-prompt content."
     )
+
+
+# ── Tool-call live E2E (real LLM round-trip required) ─────────────────────
+
+
+def _have_real_anthropic_key() -> bool:
+    """True iff env has a non-fake ``ANTHROPIC_API_KEY`` (>30 chars).
+    Without a real key the LLM 401s before emitting tool_use."""
+    k = os.environ.get("ANTHROPIC_API_KEY", "")
+    return bool(k) and k != _FAKE_ANTHROPIC_KEY and len(k) > 30
+
+
+@pytest.mark.skip(
+    reason=(
+        "`openclaw agent --local` (embedded mode) does not expose tools to the "
+        "model — verified via CI run on PR #1560 commit 5c10e05: assistant "
+        "completes the turn conversationally without ever emitting a `tool_use` "
+        "block, so no `tool.result` / `tool_call` / `toolMetas` row ever lands "
+        "in DuckDB. Reaching a real tool invocation requires switching this "
+        "test to gateway-dispatch mode (`openclaw agent` without `--local`), "
+        "which in turn needs channel routing or `--agent` binding set up in the "
+        "fixture's gateway boot. Tracked as a follow-up; route-side proof "
+        "is already covered by tests/test_session_tools_local_store_v3.py "
+        "(synthetic v3 toolMetas + tool.result row class)."
+    )
+)
+def test_live_tool_call_lands_in_duckdb(tmp_path, monkeypatch):
+    """Closes the second half of the user's MOAT mandate (verbatim):
+    "creates write entries in duckdb for tool calls / gateway bubble event
+    etc". PR #1559 covered the gateway-bubble half. This covers tool-call:
+    agent invokes a tool, tool executes, result lands in DuckDB.
+
+    Skip: requires REAL ``ANTHROPIC_API_KEY``. CI wires via repo secret;
+    local devs without one get a clear skip reason. Synthetic-shape tests
+    miss real regressions (see feedback_synthetic_tests_missed_real_event_shape).
+
+    Accepted DuckDB row classes (daemon may evolve; Eng A's PR
+    ``fix/session-tools-v3-fast-path`` may normalise the shape):
+      1. ``event_type='tool.result'`` with ``data.output|result`` carrying sentinel.
+      2. ``event_type='tool_call'`` (future-shape after Eng A's PR).
+      3. ``model.completed`` with ``data.toolMetas[]`` or
+         ``message.content[].tool_use`` (inline shape via
+         ``_v3_extract_tool_metas``).
+
+    Sentinel ``HELLO_FROM_MOAT_E2E_42`` must surface in tool stdout OR
+    assistant follow-up — proves EXECUTION, not just PROPOSAL."""
+
+    if OPENCLAW_BIN is None:
+        pytest.skip("openclaw binary not on PATH (module skip)")
+    if not _have_real_anthropic_key():
+        pytest.skip(
+            "real ANTHROPIC_API_KEY not set — tool-call E2E needs a live "
+            "LLM round-trip (CI wires the repo secret; set locally to run)"
+        )
+
+    overall_start = time.monotonic()
+    home = tmp_path / "openclaw_home_tools"
+    home.mkdir()
+    port = _free_port()
+    token = "moat-live-tool-e2e-token"
+    gateway_proc = _start_gateway(str(home), port, token)
+    try:
+        _wait_for_gateway(port, token, timeout=GATEWAY_BOOT_TIMEOUT_SECS)
+
+        proc = _send_message(str(home), TOOL_CALL_MESSAGE)
+        session_path = _find_session_jsonl(str(home), proc=proc)
+        session_id = os.path.basename(session_path).rsplit(".jsonl", 1)[0]
+        sessions_dir = os.path.dirname(session_path)
+
+        # Stand up daemon + Flask inline (mirrors `live` fixture).
+        for k, v in (
+            ("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "tools.duckdb")),
+            ("CLAWMETRY_LOCAL_FLUSH_SECS", "0.05"),
+            ("CLAWMETRY_LOCAL_FLUSH_BATCH", "5"),
+            ("CLAWMETRY_LOCAL_STORE_READ", "1"),
+            ("OPENCLAW_HOME", str(home)),
+            ("OPENCLAW_SESSIONS_DIR", sessions_dir),
+        ):
+            monkeypatch.setenv(k, v)
+
+        import clawmetry.local_store as ls
+        importlib.reload(ls)
+        import clawmetry.sync as sync_mod
+        importlib.reload(sync_mod)
+        import routes.local_query as lq
+        importlib.reload(lq)
+        import routes.sessions as sessions_blueprint
+        importlib.reload(sessions_blueprint)
+
+        monkeypatch.setattr(
+            lq, "_DISCOVERY_PATH",
+            str(tmp_path / "no-such-discovery.json"), raising=True,
+        )
+        lq._invalidate_daemon_cache()
+        import dashboard as _d
+        monkeypatch.setattr(_d, "SESSIONS_DIR", sessions_dir, raising=False)
+
+        store = ls.get_store()
+        app = Flask(__name__)
+        app.register_blueprint(lq.bp_local_query)
+        app.register_blueprint(sessions_blueprint.bp_sessions)
+        _drive_daemon(sync_mod, sessions_dir, store)
+
+        # --- Assertion A: tool-call evidence row in DuckDB ----------------
+        rows = store._fetch(
+            "SELECT event_type, data FROM events "
+            "WHERE session_id=? AND data IS NOT NULL", [session_id],
+        )
+        assert rows, f"no events ingested for session {session_id!r}"
+
+        tool_call_shapes_seen: list[str] = []
+        sentinel_in_tool_output = False
+        sentinel_in_assistant_text = False
+        captured_blobs: list[dict] = []  # for fixture dump
+
+        def _maybe_capture(et, p):
+            if len(captured_blobs) < 2:
+                captured_blobs.append({"event_type": et, "data": p})
+
+        for et, blob in rows:
+            try:
+                payload = json.loads(bytes(blob).decode("utf-8"))
+            except Exception:
+                continue
+            d = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+
+            if et == "tool.result":
+                tool_call_shapes_seen.append("tool.result")
+                out = (payload.get("output") or payload.get("result")
+                       or d.get("output") or d.get("result"))
+                if isinstance(out, str) and TOOL_CALL_SENTINEL in out:
+                    sentinel_in_tool_output = True
+                _maybe_capture(et, payload)
+            elif et in ("tool_call", "toolCall"):
+                tool_call_shapes_seen.append(et)
+                _maybe_capture(et, payload)
+            elif et == "model.completed":
+                tms = payload.get("toolMetas") or d.get("toolMetas")
+                if isinstance(tms, list) and tms:
+                    tool_call_shapes_seen.append("model.completed:toolMetas")
+                    _maybe_capture(et, payload)
+                content = (payload.get("message") or {}).get("content")
+                if isinstance(content, list):
+                    for blk in content:
+                        if not isinstance(blk, dict):
+                            continue
+                        if blk.get("type") == "tool_use":
+                            tool_call_shapes_seen.append(
+                                "model.completed:content.tool_use"
+                            )
+                        if (blk.get("type") == "text"
+                                and TOOL_CALL_SENTINEL in str(blk.get("text") or "")):
+                            sentinel_in_assistant_text = True
+                ct = payload.get("completionText") or d.get("completionText")
+                if isinstance(ct, str) and TOOL_CALL_SENTINEL in ct:
+                    sentinel_in_assistant_text = True
+
+        assert tool_call_shapes_seen, (
+            "no tool-call evidence row in DuckDB. Expected one of: "
+            "event_type='tool.result' / 'tool_call' / 'model.completed' with "
+            "toolMetas|tool_use content. Got event types: "
+            f"{sorted({r[0] for r in rows})!r}. Likely model did NOT invoke "
+            "the tool (prompt not forcing enough) OR daemon tool-call ingest "
+            f"regressed. Session: {session_path!r}."
+        )
+
+        # --- Assertion B: tool actually EXECUTED (sentinel present) -------
+        assert sentinel_in_tool_output or sentinel_in_assistant_text, (
+            f"tool proposed (shapes={tool_call_shapes_seen!r}) but sentinel "
+            f"{TOOL_CALL_SENTINEL!r} did not surface in tool output or "
+            "assistant follow-up. Check whether openclaw needs --unsafe / "
+            f"--auto-approve to execute non-interactively. Session: "
+            f"{session_path!r}"
+        )
+
+        # --- Assertion C: /api/session-tools fast path tagged correctly ---
+        # Depends on Eng A's PR fix/session-tools-v3-fast-path; FAIL here
+        # is correct dependency signalling, not a regression.
+        client = app.test_client()
+        r = client.get(
+            f"/api/session-tools?session_id={session_id}&include_unpaired=1"
+        )
+        assert r.status_code == 200, r.get_data(as_text=True)
+        body = r.get_json()
+        assert "tools" in body and "by_tool" in body and "stats" in body, (
+            f"/api/session-tools shape broke: keys={sorted(body)}"
+        )
+        assert body.get("tools"), (
+            "DuckDB has tool-call evidence rows but /api/session-tools "
+            f"returned empty tools[]. shapes_in_duckdb={tool_call_shapes_seen!r}. "
+            "Likely the v3 fast path in routes/sessions.py:"
+            "_try_local_store_session_tools isn't recognising the new "
+            "shapes — coordinate with Eng A's fix/session-tools-v3-fast-path."
+        )
+        assert body.get("_source") == "local_store", (
+            "/api/session-tools returned tools[] but _source != 'local_store' "
+            f"(_source={body.get('_source')!r}). Fast path bypassed → legacy "
+            "JSONL fallback. Coordinate with Eng A's "
+            "fix/session-tools-v3-fast-path PR."
+        )
+
+        # Fixture dump (only if file doesn't exist yet) — gives future
+        # maintainers a real captured shape vs the seeded synthetic one.
+        fix_path = os.path.join(
+            os.path.dirname(__file__), "fixtures",
+            "openclaw_v3_tool_call_shape.json",
+        )
+        if captured_blobs and not os.path.exists(fix_path):
+            os.makedirs(os.path.dirname(fix_path), exist_ok=True)
+            with open(fix_path, "w") as fh:
+                json.dump({
+                    "_note": (
+                        "Captured by test_live_tool_call_lands_in_duckdb "
+                        "against a real anthropic round-trip. Reference only; "
+                        "do NOT reuse in synthetic tests — capture your own."
+                    ),
+                    "events": captured_blobs[:2],
+                }, fh, indent=2)
+
+    finally:
+        _stop_gateway(gateway_proc)
+        try:
+            import clawmetry.local_store as _ls2
+            _ls2.get_store().stop(flush=True)
+            _ls2._reset_singleton_for_tests()
+        except Exception:
+            pass
+        if (time.monotonic() - overall_start) > TEST_OVERALL_BUDGET_SECS:
+            print(f"\n[moat-live-tool-e2e] WARNING: wall-clock exceeded budget")
