@@ -6604,7 +6604,27 @@ function renderCrons() {
       // In cloud iframe mode the "+ New Job" button is hidden because
       // cron-create hits a cloud-disabled endpoint; pointing the user
       // at an invisible button (clawmetry-cloud#793) is a UX dead-end.
-      msg = 'No active cron jobs yet. Create one from the OSS dashboard on the host running OpenClaw.';
+      //
+      // The cloud-side /api/crons interceptor stashes a hint in
+      // window._cmCloudCronsEmpty so we can pick accurate copy instead
+      // of the generic "Create one from the OSS dashboard" line that
+      // misled the user in clawmetry-cloud#948 ("I scheduled a cron and
+      // it never showed up"). The cron WAS scheduled; the cache just
+      // hadn't synced yet. Three states:
+      //   - 'no_crons_scheduled'  : cache hit, list is empty
+      //   - 'waiting_first_sync'  : cache miss, node is online (next ~30s)
+      //   - 'node_offline'        : cache miss, node hasn't heartbeated
+      //   - ''/undefined          : pre-948 fallback (snap-based path)
+      var hint = window._cmCloudCronsEmpty;
+      if (hint === 'no_crons_scheduled') {
+        msg = "You haven't scheduled any crons yet. Create one from the OSS dashboard on the host running OpenClaw.";
+      } else if (hint === 'waiting_first_sync') {
+        msg = 'Waiting for first sync from your laptop. New crons appear within about 30 seconds.';
+      } else if (hint === 'node_offline') {
+        msg = 'Waiting for your laptop to come back online. Crons will appear once it heartbeats.';
+      } else {
+        msg = 'No active cron jobs yet. Create one from the OSS dashboard on the host running OpenClaw.';
+      }
     } else {
       msg = 'No active cron jobs yet. Click "+ New Job" to create one.';
     }
