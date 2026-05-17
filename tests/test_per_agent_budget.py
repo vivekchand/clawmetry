@@ -245,8 +245,11 @@ def test_warning_at_80_percent_no_pause(dashboard_module):
     assert _d._budget_paused is False
 
 
-def test_critical_at_100_percent_pauses_when_enabled(dashboard_module):
+def test_critical_at_100_percent_pauses_when_enabled(dashboard_module,
+                                                       monkeypatch):
     _d = dashboard_module
+    # Issue #1169: auto-pause is Cloud-Pro only. Pro user → pauses.
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: True)
     _d._set_budget_config({"auto_pause_enabled": True})
     _d._set_agent_budget("a-crit", daily_limit_usd=10.0)
     _add_cost(_d, "a-crit", 10.0)  # 100%
@@ -365,8 +368,9 @@ def test_oss_user_does_not_trigger_telegram_on_per_agent_warning(telegram_spy,
 
 def test_oss_user_does_not_trigger_telegram_on_per_agent_critical(telegram_spy,
                                                                    monkeypatch):
-    """Same gate at the 100% / critical tier — banner + auto-pause still
-    work (those are free), but Telegram fan-out is Pro-only."""
+    """Same gate at the 100% / critical tier. Banner alert still fires,
+    but Telegram dispatch is Pro-only AND (issue #1169) so is the
+    actual gateway-stop auto-pause."""
     _d, calls = telegram_spy
     monkeypatch.setattr(_d, "_is_pro_user", lambda: False)
     _d._set_budget_config({"auto_pause_enabled": True})
@@ -375,9 +379,10 @@ def test_oss_user_does_not_trigger_telegram_on_per_agent_critical(telegram_spy,
     _d._budget_check()
 
     assert _count_alerts_for(_d, "oss-crit") >= 1
-    # Auto-pause is a free cost-control feature, must still trigger.
-    assert _d._budget_paused is True
-    # Telegram dispatch is gated.
+    # Issue #1169: auto-pause is Cloud-Pro only — banner fires but the
+    # gateway is left running until the user upgrades.
+    assert _d._budget_paused is False
+    # Telegram dispatch is also gated.
     assert calls == []
 
 
@@ -414,3 +419,98 @@ def test_api_budget_root_surfaces_pro_dispatch_flag(dashboard_module,
     monkeypatch.setattr(_d, "_is_pro_user", lambda: True)
     r2 = client.get("/api/budget")
     assert r2.get_json()["pro_dispatch_enabled"] is True
+
+
+# ── 7. Pro-tier gate on auto-pause itself (issue #1169) ──────────────────
+#
+# Per-agent breach ALERTS are OSS table-stakes. Auto-pausing the gateway
+# in response is a Cloud-Pro hard kill switch. These tests assert that a
+# Free user with auto_pause_enabled=True still gets the breach banner
+# (so the bar paints red) but ``_pause_gateway`` is NOT called and the
+# config setter strips the toggle back to False.
+
+
+def test_free_user_global_breach_does_not_pause(dashboard_module, monkeypatch):
+    """Issue #1169: global daily limit at 100% + auto_pause_enabled=True,
+    Free user. Banner fires, gateway stays up."""
+    _d = dashboard_module
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: False)
+    called = []
+    monkeypatch.setattr(_d, "_pause_gateway", lambda: called.append(1))
+    _d._set_budget_config({
+        "daily_limit": 10.0,
+        "auto_pause_enabled": True,
+    })
+    _add_cost(_d, "main", 12.0)  # 120% of global daily
+    _d._budget_check()
+    assert called == [], "Free user must not trigger _pause_gateway"
+    assert _d._budget_paused is False
+    # Upsell banner row written for visibility.
+    assert _count_alerts_for(_d, "upsell") >= 1
+
+
+def test_pro_user_global_breach_pauses(dashboard_module, monkeypatch):
+    """Issue #1169: same scenario, Pro user → ``_pause_gateway`` IS called."""
+    _d = dashboard_module
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: True)
+    called = []
+    monkeypatch.setattr(_d, "_pause_gateway", lambda: called.append(1))
+    _d._set_budget_config({
+        "daily_limit": 10.0,
+        "auto_pause_enabled": True,
+    })
+    _add_cost(_d, "main", 12.0)
+    _d._budget_check()
+    assert called == [1], "Pro user should trigger _pause_gateway"
+    assert _d._budget_paused is True
+
+
+def test_config_setter_strips_autopause_for_free_user(dashboard_module,
+                                                       monkeypatch):
+    """Issue #1169: POST /api/budget/config with auto_pause_enabled=True
+    from a Free user is accepted (200) but the toggle is silently
+    stripped and the response signals the upsell."""
+    _d = dashboard_module
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: False)
+    client = _make_client(_d)
+    resp = client.post(
+        "/api/budget/config",
+        json={"auto_pause_enabled": True, "daily_limit": 5.0},
+    )
+    assert resp.status_code == 200, resp.data
+    body = resp.get_json()
+    assert body.get("ok") is True
+    assert body.get("auto_pause_pro_required") is True
+    # Confirm the persisted config didn't actually flip the toggle.
+    cfg = _d._get_budget_config()
+    assert cfg.get("auto_pause_enabled") is False
+
+
+def test_config_setter_accepts_autopause_for_pro_user(dashboard_module,
+                                                       monkeypatch):
+    """Issue #1169: same POST from a Pro user persists the toggle."""
+    _d = dashboard_module
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: True)
+    client = _make_client(_d)
+    resp = client.post(
+        "/api/budget/config",
+        json={"auto_pause_enabled": True, "daily_limit": 5.0},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json().get("ok") is True
+    cfg = _d._get_budget_config()
+    assert cfg.get("auto_pause_enabled") is True
+
+
+def test_config_getter_surfaces_autopause_pro_flag(dashboard_module,
+                                                    monkeypatch):
+    """Issue #1169: GET /api/budget/config returns ``auto_pause_pro_enabled``
+    so the UI can disable the toggle + render the upsell."""
+    _d = dashboard_module
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: False)
+    client = _make_client(_d)
+    body = client.get("/api/budget/config").get_json()
+    assert body.get("auto_pause_pro_enabled") is False
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: True)
+    body2 = client.get("/api/budget/config").get_json()
+    assert body2.get("auto_pause_pro_enabled") is True

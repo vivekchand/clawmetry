@@ -203,9 +203,31 @@ def api_budget_config():
         updates = {k: v for k, v in data.items() if k in allowed}
         if not updates:
             return jsonify({"error": "No valid fields provided"}), 400
+        # Issue #1169: refuse to enable auto-pause for non-Pro users.
+        # We accept the rest of the payload so the user can still tune
+        # warning thresholds + limits, but strip the gated toggle and
+        # tell the UI to render the upsell. Free users keep the warning
+        # banner; only the hard kill switch is gated.
+        if updates.get("auto_pause_enabled") and not _d._auto_pause_allowed():
+            updates["auto_pause_enabled"] = False
+            _d._set_budget_config(updates)
+            return jsonify({
+                "ok": True,
+                "auto_pause_pro_required": True,
+                "message": (
+                    "Auto-pause is a Cloud Pro feature. Start a 7-day "
+                    "free trial at https://app.clawmetry.com/upgrade"
+                ),
+            })
         _d._set_budget_config(updates)
         return jsonify({"ok": True})
-    return jsonify(_d._get_budget_config())
+    cfg = _d._get_budget_config()
+    try:
+        cfg = dict(cfg)
+        cfg["auto_pause_pro_enabled"] = bool(_d._auto_pause_allowed())
+    except Exception:
+        pass
+    return jsonify(cfg)
 
 
 @bp_budget.route("/api/budget/status")
