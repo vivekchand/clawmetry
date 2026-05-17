@@ -955,7 +955,18 @@ class LocalStore:
             _migrate_legacy_db_path()
         self._conn = _open_connection(read_only=read_only)
         if not read_only:
-            self._migrate()
+            try:
+                self._migrate()
+            except Exception:
+                # Release the file lock so the next boot can open the
+                # db cleanly and retry the migration (#1602). Without
+                # this, a failed __init__ leaves DuckDB holding the
+                # exclusive lock until GC, blocking restart.
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+                raise
 
     def _migrate(self) -> None:
         """Bring the store schema up to current SCHEMA_VERSION. Order matters:
@@ -995,12 +1006,16 @@ class LocalStore:
                 cur = self._conn.execute("SELECT MAX(version) AS v FROM schema_version")
                 row = cur.fetchone()
                 current = row[0] if row and row[0] is not None else 0
+                migration_failed = False
                 if current < 7:
                     # v6 → v7: collapse Claude Code event duplicates the three
-                    # ingest paths used to produce (#1232). Wrapped in try/except
-                    # so a regex/lock issue doesn't brick daemon startup — the
-                    # write-side fix in sync.py is the real correctness path; this
-                    # cleanup is opportunistic.
+                    # ingest paths used to produce (#1232). If this raises we
+                    # MUST NOT stamp SCHEMA_VERSION — otherwise the next boot
+                    # sees v9+ stamped and skips the migration, leaving the
+                    # schema in a broken half-state (#1602). We log + flip a
+                    # flag, then re-raise after the version-stamp block so the
+                    # transaction rolls back cleanly. Daemon startup propagates
+                    # the failure rather than booting on a half-migrated db.
                     try:
                         before = self._conn.execute(
                             "SELECT COUNT(*) FROM events"
@@ -1023,14 +1038,23 @@ class LocalStore:
                             )
                     except Exception:
                         log.exception(
-                            "local store: v7 dedup migration failed (continuing — "
-                            "future writes still dedup via canonical id)"
+                            "local store: v7 dedup migration FAILED — schema "
+                            "version will NOT be stamped; next boot will retry"
                         )
-                # Step 4: stamp the version.
-                if current < SCHEMA_VERSION:
+                        migration_failed = True
+                # Step 4: stamp the version — ONLY if every gated migration
+                # succeeded. Stamping after a swallowed failure is the #1602
+                # silent-half-state bug.
+                if not migration_failed and current < SCHEMA_VERSION:
                     self._conn.execute(
                         "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
                         [SCHEMA_VERSION, int(time.time() * 1000)],
+                    )
+                if migration_failed:
+                    # Roll back the whole transaction (no partial DDL leaks)
+                    # and surface the failure to the caller.
+                    raise RuntimeError(
+                        "local store: schema migration failed; version not stamped"
                     )
                 self._conn.execute("COMMIT")
             except Exception:
