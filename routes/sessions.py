@@ -4417,12 +4417,84 @@ def _detect_model_transitions(path):
     return transitions
 
 
+def _try_local_store_model_transitions(sid: str):
+    """Tier-1 DuckDB fast path for /api/sessions/<sid>/model-transitions
+    (issue #1565). Reads ``event_type='model.changed'`` rows for one
+    session out of the DuckDB ``events`` table and folds them into the
+    same ``transitions`` shape the legacy JSONL walker produces.
+
+    Real OpenClaw v3 emits an explicit ``model_change`` JSONL event for
+    every model switch, which the sync daemon namespaces to
+    ``model.changed`` (see ``reference_openclaw_v3_event_types.md`` +
+    ``tests/test_v3_schema_parser.py::test_v3_model_change_becomes_model_changed``).
+    Each row's ``data`` blob carries ``modelId`` + ``provider`` — the
+    only fields the response needs. ``turn`` is the 1-based ordinal of
+    the transition (i.e. position in the model.changed sequence) since
+    we no longer have a cheap assistant-message counter without a
+    second query.
+
+    Returns ``None`` when no ``model.changed`` rows exist for the
+    session so the legacy JSONL walker still fires for older OpenClaw
+    installs (pre-v3 daemons, or sessions ingested before the namespace
+    rewrite landed).
+    """
+    if not sid:
+        return None
+    rows = _ls_call(
+        "query_events",
+        session_id=sid,
+        event_type="model.changed",
+        limit=5000,
+    )
+    if not rows:
+        return None
+    # ``query_events`` returns most-recent first; transitions need chronological.
+    rows = sorted(rows, key=lambda r: (r.get("ts") or "", r.get("id") or 0))
+
+    transitions: list = []
+    prev_model = None
+    prev_provider = None
+    turn = 0
+    for r in rows:
+        data = r.get("data") if isinstance(r.get("data"), dict) else {}
+        model = (data.get("modelId") or data.get("model") or r.get("model") or "").strip()
+        provider = (data.get("provider") or "").strip()
+        if not model:
+            continue
+        turn += 1
+        if prev_model is not None and (
+            model != prev_model or provider != prev_provider
+        ):
+            transitions.append({
+                "turn":          turn,
+                "ts":            r.get("ts") or "",
+                "from_model":    prev_model,
+                "from_provider": prev_provider,
+                "to_model":      model,
+                "to_provider":   provider,
+            })
+        prev_model = model
+        prev_provider = provider
+
+    return {
+        "sessionId":       sid,
+        "transitions":     transitions,
+        "count":           len(transitions),
+        "has_transitions": bool(transitions),
+        "_source":         "local_store",
+    }
+
+
 @bp_sessions.route("/api/sessions/<sid>/model-transitions")
 def api_session_model_transitions(sid):
     """Return model/provider transitions detected within a single session."""
     import dashboard as _d
     if not sid or any(c in sid for c in ("/", "\\", "..")):
         return jsonify({"error": "invalid session id"}), 400
+    if is_local_store_read_enabled():
+        fast = _try_local_store_model_transitions(sid)
+        if fast is not None:
+            return jsonify(fast)
     sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
     )
