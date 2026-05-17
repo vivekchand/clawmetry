@@ -730,10 +730,22 @@ def _try_local_store_session_tools(sid: str, args_chars: int, result_chars: int,
             s = str(val)
         return s if len(s) <= limit else s[:limit] + "…"
 
+    # v3 turn / lifecycle event types — presence of ANY of these in DuckDB
+    # for the session means the daemon HAS ingested it. We must therefore
+    # serve from the fast path even when there are zero tool calls, so the
+    # legacy JSONL fallback is reserved for genuinely missing-from-DuckDB
+    # sessions. See reference_openclaw_v3_event_types.md.
+    _V3_TURN_TYPES = frozenset({
+        "session.started", "prompt.submitted", "model.completed",
+        "model.changed", "tool.call", "tool.result", "tool_use",
+        "tool_use_result", "custom",
+    })
+
     calls: dict = {}
     result_by_id: dict = {}
     turn_index = 0
     saw_any = False
+    earliest_ts_ms = 0
     for ev in rows:
         et = ev.get("event_type")
         data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
@@ -741,14 +753,21 @@ def _try_local_store_session_tools(sid: str, args_chars: int, result_chars: int,
             (data.get("timestamp") if isinstance(data, dict) else None)
             or ev.get("ts")
         )
+        if ev_ts_ms and (earliest_ts_ms == 0 or ev_ts_ms < earliest_ts_ms):
+            earliest_ts_ms = ev_ts_ms
+
+        # Any recognised v3 lifecycle / turn event proves the daemon has
+        # ingested this session. Mark saw_any so we return a populated
+        # (possibly tool-empty) structure instead of falling back to JSONL.
+        if et in _V3_TURN_TYPES:
+            saw_any = True
 
         # v3 standalone tool_call row: self-contained call+result pair.
-        # Real OpenClaw v3 emits these instead of the legacy nested
-        # ``data.message.content[].toolCall`` blocks. Synthesize a tcid
-        # from the event id so the pairing logic below treats it as
-        # an immediately-resolved call.
-        if et == "tool_call":
-            saw_any = True
+        # Accepts the legacy ``tool_call`` name AND the daemon-normalised
+        # ``tool.call`` dot.separated name. Synthesize a tcid from the
+        # event id so the pairing logic below treats it as an
+        # immediately-resolved call.
+        if et in ("tool_call", "tool.call"):
             turn_index += 1
             tcid = ev.get("id") or f"tc-{ev_ts_ms}-{len(calls)}"
             tool_name = ""
@@ -759,7 +778,8 @@ def _try_local_store_session_tools(sid: str, args_chars: int, result_chars: int,
                 tool_name = (data.get("tool") or data.get("tool_name")
                              or data.get("name") or "")
                 args_val = (data.get("args") if data.get("args") is not None
-                            else data.get("arguments"))
+                            else data.get("arguments") if data.get("arguments") is not None
+                            else data.get("input"))
                 result_val = data.get("result")
                 is_error = bool(data.get("is_error") or data.get("isError")
                                 or data.get("error"))
@@ -786,7 +806,81 @@ def _try_local_store_session_tools(sid: str, args_chars: int, result_chars: int,
                 }
             continue
 
-        # Legacy: nested toolCall / toolResult inside message blobs.
+        # v3 tool result event: pairs with a prior tool_use block by id.
+        # Daemon-normalised name is ``tool.result``; ``tool_use_result``
+        # is the raw v3 source type (rarely makes it through, but accept
+        # both for safety).
+        if et in ("tool.result", "tool_use_result"):
+            tcid = (data.get("tool_use_id") or data.get("toolUseId")
+                    or data.get("id") or "")
+            if tcid:
+                result_val = (data.get("output") if data.get("output") is not None
+                              else data.get("result"))
+                is_error = bool(data.get("is_error") or data.get("isError"))
+                try:
+                    rs = len(json.dumps(result_val, separators=(",", ":")))
+                except Exception:
+                    rs = len(str(result_val or ""))
+                result_by_id[tcid] = {
+                    "end_ms":         ev_ts_ms,
+                    "is_error":       is_error,
+                    "result_size":    rs,
+                    "result_preview": _truncate(result_val, result_chars),
+                }
+            continue
+
+        # v3 assistant turn (``model.completed``): tool invocations live as
+        # Anthropic-style ``tool_use`` blocks inside ``data.toolMetas`` (the
+        # ingest in clawmetry/sync.py::_v3_extract_tool_metas projects them
+        # to ``{id, name, input}``) and/or inside ``data.data.toolMetas``
+        # / ``data.message.content[]`` for raw envelopes. Walk all known
+        # locations so we don't miss any.
+        if et == "model.completed":
+            turn_index += 1
+            msg_model = (ev.get("model")
+                         or (data.get("modelId") if isinstance(data, dict) else "")
+                         or "")
+            msg_provider = (data.get("provider") if isinstance(data, dict) else "") or ""
+            msg_cost = float(ev.get("cost_usd") or 0.0)
+            tool_metas: list = []
+            inner = data.get("data") if isinstance(data.get("data"), dict) else {}
+            for src in (data.get("toolMetas"), inner.get("toolMetas")):
+                if isinstance(src, list):
+                    tool_metas.extend(src)
+            # Also walk message.content[] for raw Anthropic-shape tool_use.
+            for envelope in (data.get("message"), inner.get("message")):
+                if isinstance(envelope, dict):
+                    content = envelope.get("content")
+                    if isinstance(content, list):
+                        for blk in content:
+                            if isinstance(blk, dict) and blk.get("type") == "tool_use":
+                                tool_metas.append({
+                                    "id":    blk.get("id"),
+                                    "name":  blk.get("name") or "tool",
+                                    "input": blk.get("input") or {},
+                                })
+            seen_ids: set = set()
+            for meta in tool_metas:
+                if not isinstance(meta, dict):
+                    continue
+                tcid = meta.get("id") or ""
+                if not tcid or tcid in seen_ids:
+                    continue
+                seen_ids.add(tcid)
+                calls[tcid] = {
+                    "tool_call_id":     tcid,
+                    "tool_name":        meta.get("name", "") or "",
+                    "arguments":        _truncate(meta.get("input"), args_chars),
+                    "start_ms":         ev_ts_ms,
+                    "turn_index":       turn_index,
+                    "model":            msg_model,
+                    "provider":         msg_provider,
+                    "message_cost_usd": msg_cost,
+                }
+            continue
+
+        # Legacy: nested toolCall / toolResult inside ``message`` event rows
+        # (pre-v3 OpenClaw envelopes — kept for backward compatibility).
         if et != "message":
             continue
         saw_any = True
@@ -872,6 +966,11 @@ def _try_local_store_session_tools(sid: str, args_chars: int, result_chars: int,
     ]
     first_start = min((r["start_ms"] for r in tools if r.get("start_ms")), default=0)
     last_end = max((r.get("end_ms", 0) for r in tools), default=0)
+    # Tool-empty v3 sessions still need a sensible timeline anchor so the
+    # UI can render a "session ran, no tools" state — fall back to the
+    # earliest lifecycle event (typically session.started).
+    if not first_start and earliest_ts_ms:
+        first_start = earliest_ts_ms
     return {
         "session_id": sid,
         "tools": tools,
