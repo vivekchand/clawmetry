@@ -216,13 +216,14 @@ def test_mock_cloud_receives_and_stores_ciphertext(env):
     owner = s._owner_hash_for_token(env["config"]["api_key"])
     cache_key = f"brain:{owner}:node-roundtrip:recent"
     assert cache_key in env["cloud"].cache
-    # Find the brain push by cache_key rather than relying on a fixed index
-    # so this test stays robust as additional cache_pushes are added (e.g.
-    # PR #1639 added a sibling cron push, making len(pushes) >= 2).
-    brain_push = next((p for p in pushes if p.get("cache_key") == cache_key), None)
+    # Find the brain push by its cache key rather than relying on a fixed
+    # index so this test stays robust as additional cache_pushes are added
+    # (e.g. PR #1639 added a sibling cron push, making len(pushes) >= 2).
+    # Push dicts use field name "key" not "cache_key" (see _build_brain_cache_pushes).
+    brain_push = next((p for p in pushes if p.get("key") == cache_key), None)
     assert brain_push is not None, (
         f"brain push not found among cache_pushes; "
-        f"keys={[p.get('cache_key') for p in pushes]}"
+        f"keys={[p.get('key') for p in pushes]}"
     )
     assert env["cloud"].cache[cache_key] == brain_push["blob"]
 
