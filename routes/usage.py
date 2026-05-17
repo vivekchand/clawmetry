@@ -1031,6 +1031,145 @@ def _apply_oss_24h_cap(result):
     return capped
 
 
+def _try_local_store_token_velocity():
+    """Fast path for /api/token-velocity (issue #1565, Tier-1).
+
+    Reads the last ~5 min of events from DuckDB and computes:
+      * ``velocity_2min`` — total tokens billed across the trailing 2-min
+        window (deduped via ``build_sibling_bucket_max`` so v3 sibling
+        pairs aren't counted twice — same risk as
+        ``feedback_usage_dedupe_pattern.md``).
+      * ``flagged_sessions`` — per-session 2-min token burn + tool-chain
+        length. A session is flagged when ``tokens_2min >= WARN_TOKENS``
+        OR ``tool_chain_len >= CRIT_TOOLS``.
+      * ``cost_per_min`` — projected USD/min from the 2-min total.
+
+    Tool-chain length: count the longest consecutive run of tool-call /
+    assistant events within the last 2 min per session, broken by a
+    user-prompt row (matches the legacy JSONL heuristic).
+
+    Returns ``None`` when the store isn't reachable OR when zero events
+    are present in the trailing 5-min window — the legacy JSONL walker
+    is cheap on a quiet system (mtime filter skips every file with no
+    recent writes) so we don't try to short-circuit it with a zero shell.
+    """
+    from datetime import datetime, timezone
+
+    store = _ls_get_store()
+    if store is None:
+        return None
+
+    WARN_TOKENS = 8000
+    CRIT_TOKENS = 15000
+    CRIT_TOOLS = 20
+
+    now = time.time()
+    window_2min = now - 120
+    # Pull 5 min of context so the tool-chain walker has enough history
+    # for the consecutive-run heuristic without re-fetching.
+    since_iso = datetime.fromtimestamp(now - 300, tz=timezone.utc).isoformat()
+
+    try:
+        rows = store.query_events(since=since_iso, limit=5000) or []
+    except Exception:
+        return None
+    if not rows:
+        return None
+
+    # Sort ascending by ts so the consecutive-tool walker sees rows in
+    # write order (query_events returns DESC). Stable on equal ts.
+    def _ts_sec(r):
+        ts = r.get("ts") or ""
+        if not isinstance(ts, str):
+            return 0.0
+        try:
+            return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return 0.0
+
+    rows.sort(key=_ts_sec)
+
+    # Dedupe sibling pairs (assistant + model.completed) — same pattern
+    # as _try_local_store_usage to avoid double-counting v3 tokens.
+    bucket_max = build_sibling_bucket_max(rows)
+
+    # Event types that count as "tool / assistant" rows for the
+    # consecutive-chain heuristic. ``prompt.submitted`` / user rows reset
+    # the run. Tool-call alternates cover legacy + v3 daemon names.
+    _CHAIN_TYPES = frozenset({
+        "assistant", "model.completed", "tool.call", "tool_call",
+        "tool.result", "tool_use_result", "message",
+    })
+    _RESET_TYPES = frozenset({"prompt.submitted", "user"})
+
+    per_session: dict = {}
+    for r in rows:
+        sid = r.get("session_id") or ""
+        if not sid:
+            continue
+        et = (r.get("event_type") or "").strip()
+        ts = _ts_sec(r)
+        slot = per_session.setdefault(sid, {
+            "tokens_2min": 0, "consecutive": 0, "max_chain": 0,
+        })
+        # Chain bookkeeping always runs (over the full 5-min window so
+        # the run survives a tool burst that started >2 min ago).
+        if et in _RESET_TYPES:
+            slot["consecutive"] = 0
+        elif et in _CHAIN_TYPES:
+            data = r.get("data") if isinstance(r.get("data"), dict) else {}
+            role = data.get("role") if isinstance(data, dict) else None
+            if et == "message" and role == "user":
+                slot["consecutive"] = 0
+            else:
+                slot["consecutive"] += 1
+                if slot["consecutive"] > slot["max_chain"]:
+                    slot["max_chain"] = slot["consecutive"]
+        # Token accumulation only inside the 2-min window, deduped.
+        if ts >= window_2min and not is_sibling_dup(r, bucket_max):
+            tok = int(r.get("token_count") or 0)
+            if tok > 0:
+                slot["tokens_2min"] += tok
+
+    try:
+        import dashboard as _d
+        usd_per_token = _d._estimate_usd_per_token()
+    except Exception:
+        usd_per_token = 0.0
+
+    total_tokens_2min = 0
+    flagged: list = []
+    for sid, slot in per_session.items():
+        tokens_2min = int(slot["tokens_2min"])
+        max_chain = int(slot["max_chain"])
+        total_tokens_2min += tokens_2min
+        if tokens_2min >= WARN_TOKENS or max_chain >= CRIT_TOOLS:
+            sess_cpm = round(tokens_2min / 2 * usd_per_token, 5)
+            flagged.append({
+                "id":               sid,
+                "tokens_2min":      tokens_2min,
+                "tool_chain_len":   max_chain,
+                "cost_per_min":     sess_cpm,
+            })
+
+    if (total_tokens_2min >= CRIT_TOKENS
+            or any(s["tool_chain_len"] >= CRIT_TOOLS for s in flagged)):
+        level = "critical"
+    elif total_tokens_2min >= WARN_TOKENS:
+        level = "warning"
+    else:
+        level = "ok"
+
+    return {
+        "alert":            level != "ok",
+        "level":            level,
+        "velocity_2min":    total_tokens_2min,
+        "cost_per_min":     round(total_tokens_2min / 2 * usd_per_token, 5),
+        "flagged_sessions": flagged,
+        "_source":          "local_store",
+    }
+
+
 @bp_usage.route("/api/usage")
 def api_usage():
     """Token/cost tracking from transcript files - Enhanced OTLP workaround."""
@@ -2306,8 +2445,19 @@ def api_token_velocity():
     Thresholds:
       warning:  velocity_2min >= 8000
       critical: velocity_2min >= 15000 OR tool_chain_len >= 20
+
+    Issue #1565 (Tier-1): under ``is_local_store_read_enabled()`` the
+    handler now serves from the DuckDB ``events`` table via
+    ``_try_local_store_token_velocity`` (tagged ``_source: 'local_store'``
+    so the audit canary is discoverable). Falls back to the JSONL scan
+    below when the store is empty or unreachable.
     """
     import dashboard as _d
+
+    if is_local_store_read_enabled():
+        fast = _try_local_store_token_velocity()
+        if fast is not None:
+            return jsonify(fast)
 
     WARN_TOKENS   = 8000
     CRIT_TOKENS   = 15000
