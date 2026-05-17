@@ -82,11 +82,108 @@ so the dashboard renders NeMo sessions identically to OpenClaw sessions.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 import uuid
+from datetime import date
 from typing import Any, Optional
 
 logger = logging.getLogger("clawmetry.adapters.nemo")
+
+
+# ── Free-tier daily ingest cap (issue #1170) ───────────────────────────
+#
+# NeMo Agent Toolkit users are the highest-value paid-conversion segment
+# we observe (enterprise GPU buyers). Shipping the adapter under OSS gave
+# the whole NeMo experience away for free, undercutting the sibling
+# ``integrations/nat/`` Cloud-bound variant. The product-P0 fix caps free
+# ingest at ``NEMO_FREE_DAILY_CAP`` events per UTC day; Pro users ingest
+# unlimited. Counter resets at the UTC date boundary.
+#
+# State lives at module scope (not per-adapter) so that two independent
+# NeMoAdapter instances pointing at the same local store share one cap —
+# the cap is a tenant-level economic gate, not a per-instance throttle.
+NEMO_FREE_DAILY_CAP = 1000
+
+# Internal: lock + counter + date-key for the per-day budget.
+_CAP_LOCK = threading.Lock()
+_CAP_STATE: dict[str, Any] = {
+    "date": "",          # UTC YYYY-MM-DD currently being counted
+    "count": 0,          # events ingested today (Pro + Free both count for telemetry)
+    "dropped": 0,        # events dropped today because cap was hit
+    "warned": False,     # only log the cap-hit WARNING once per day
+    "last_drop_ts": "",  # ISO timestamp of most recent drop (for banner staleness)
+}
+
+
+def _today_key() -> str:
+    """UTC date key used to slice the cap counter."""
+    return date.today().isoformat()
+
+
+def _rollover_locked() -> None:
+    """Reset counters when a new UTC day begins. Caller must hold ``_CAP_LOCK``."""
+    today = _today_key()
+    if _CAP_STATE["date"] != today:
+        _CAP_STATE["date"] = today
+        _CAP_STATE["count"] = 0
+        _CAP_STATE["dropped"] = 0
+        _CAP_STATE["warned"] = False
+        _CAP_STATE["last_drop_ts"] = ""
+
+
+def _is_pro() -> bool:
+    """Best-effort Pro check that fails closed (treats unknown as Free).
+
+    Reuses ``dashboard._is_pro_user()`` — the same helper PR #1553 added
+    for auto-pause gating (#1169) and that #1168 uses for Telegram
+    dispatch. Imported lazily so the adapter never hard-requires
+    ``dashboard`` at module load (the adapter ships in the same wheel but
+    standalone usage shouldn't crash if a downstream user vendored only
+    the package directory).
+    """
+    try:
+        import dashboard as _d  # noqa: WPS433
+        return bool(_d._is_pro_user())
+    except Exception:
+        return False
+
+
+def get_nemo_cap_state() -> dict:
+    """Return a snapshot of the daily cap state for the dashboard banner.
+
+    Shape (stable contract used by ``/api/nemo-cap-status`` and the
+    Brain / Tokens-tab upsell banner)::
+
+        {
+            "cap": 1000,                # int — free-tier daily limit
+            "used": 137,                # int — events ingested today
+            "dropped": 0,               # int — events dropped today (free-tier only)
+            "is_pro": False,            # bool — caller is on Cloud-Pro
+            "cap_hit": False,           # bool — free-tier cap reached today
+            "date": "2026-05-17",       # UTC date key for the current bucket
+        }
+    """
+    with _CAP_LOCK:
+        _rollover_locked()
+        return {
+            "cap": NEMO_FREE_DAILY_CAP,
+            "used": int(_CAP_STATE["count"]),
+            "dropped": int(_CAP_STATE["dropped"]),
+            "is_pro": _is_pro(),
+            "cap_hit": (not _is_pro()) and int(_CAP_STATE["count"]) >= NEMO_FREE_DAILY_CAP,
+            "date": _CAP_STATE["date"] or _today_key(),
+        }
+
+
+def _reset_cap_state_for_tests() -> None:
+    """Test-only hook — wipe cap counters between cases."""
+    with _CAP_LOCK:
+        _CAP_STATE["date"] = ""
+        _CAP_STATE["count"] = 0
+        _CAP_STATE["dropped"] = 0
+        _CAP_STATE["warned"] = False
+        _CAP_STATE["last_drop_ts"] = ""
 
 
 # NeMo event-type → ClawMetry dot.separated event_type.
@@ -297,14 +394,40 @@ class NeMoAdapter:
         required fields, …). Never raises — internal errors are logged
         at ``WARNING`` and swallowed, because losing one telemetry event
         should never crash the host agent.
+
+        Issue #1170: free-tier callers are capped at ``NEMO_FREE_DAILY_CAP``
+        events per UTC day. Once the cap is hit we drop subsequent events
+        and surface a banner via ``/api/nemo-cap-status``. Pro users
+        bypass the cap entirely.
         """
         try:
             row = self.map_event(event)
         except Exception as exc:
-            logger.warning("nemo adapter: map_event raised %r — dropping", exc)
+            logger.warning("nemo adapter: map_event raised %r - dropping", exc)
             return None
         if row is None:
             return None
+        # Free-tier daily cap (#1170). Performed AFTER map_event so we
+        # don't even map events that will be dropped, but BEFORE ingest
+        # so we don't pollute DuckDB beyond the cap.
+        with _CAP_LOCK:
+            _rollover_locked()
+            if not _is_pro() and _CAP_STATE["count"] >= NEMO_FREE_DAILY_CAP:
+                _CAP_STATE["dropped"] = int(_CAP_STATE["dropped"]) + 1
+                _CAP_STATE["last_drop_ts"] = _now_iso()
+                if not _CAP_STATE["warned"]:
+                    _CAP_STATE["warned"] = True
+                    logger.warning(
+                        "nemo adapter: free-tier daily cap reached "
+                        "(%d/%d events today). Further NeMo events are "
+                        "dropped until UTC midnight. Upgrade to Cloud-Pro "
+                        "for unlimited ingest: "
+                        "https://app.clawmetry.com/upgrade?source=nemo_cap",
+                        NEMO_FREE_DAILY_CAP,
+                        NEMO_FREE_DAILY_CAP,
+                    )
+                return None
+            _CAP_STATE["count"] = int(_CAP_STATE["count"]) + 1
         try:
             self._store.ingest(row)
         except Exception as exc:
@@ -507,4 +630,9 @@ class NeMoAdapter:
         return row
 
 
-__all__ = ["NeMoAdapter", "MAPPED_EVENT_TYPES"]
+__all__ = [
+    "NeMoAdapter",
+    "MAPPED_EVENT_TYPES",
+    "NEMO_FREE_DAILY_CAP",
+    "get_nemo_cap_state",
+]

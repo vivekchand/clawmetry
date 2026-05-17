@@ -81,7 +81,28 @@ async function loadBudgetConfig() {
     document.getElementById('budget-weekly').value = cfg.weekly_limit || 0;
     document.getElementById('budget-monthly').value = cfg.monthly_limit || 0;
     document.getElementById('budget-warn-pct').value = cfg.warning_threshold_pct || 80;
-    document.getElementById('budget-autopause').checked = cfg.auto_pause_enabled || false;
+    var apEl = document.getElementById('budget-autopause');
+    if (apEl) {
+      apEl.checked = cfg.auto_pause_enabled || false;
+      // Issue #1169: auto-pause is a Cloud Pro feature. For OSS / Free
+      // users, disable the toggle and render an inline upsell. The
+      // warning-only banner path stays free as a teaser.
+      var proOk = !!cfg.auto_pause_pro_enabled;
+      apEl.disabled = !proOk;
+      var upsellId = 'budget-autopause-upsell';
+      var existing = document.getElementById(upsellId);
+      if (existing) existing.parentNode.removeChild(existing);
+      if (!proOk) {
+        apEl.checked = false;
+        var note = document.createElement('div');
+        note.id = upsellId;
+        note.style.cssText = 'margin-top:6px;padding:8px 10px;background:var(--bg-tertiary);border:1px solid var(--border-primary);border-radius:6px;font-size:12px;color:var(--text-secondary);';
+        note.innerHTML = '<span style="font-weight:600;color:var(--text-primary);">Auto-pause is a Cloud Pro feature.</span> '
+          + 'Budget warnings still fire here. To stop the gateway automatically at 100%, '
+          + '<a href="https://app.clawmetry.com/upgrade" target="_blank" rel="noopener" style="color:var(--bg-accent);text-decoration:underline;font-weight:600;">start a 7-day free trial</a>.';
+        if (apEl.parentNode) apEl.parentNode.appendChild(note);
+      }
+    }
   } catch(e) {}
 }
 
@@ -117,7 +138,14 @@ async function saveBudgetConfig() {
     warning_threshold_pct: parseInt(document.getElementById('budget-warn-pct').value) || 80,
     auto_pause_enabled: document.getElementById('budget-autopause').checked,
   };
-  await fetch('/api/budget/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+  try {
+    var resp = await fetch('/api/budget/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)}).then(function(r){return r.json();});
+    if (resp && resp.auto_pause_pro_required) {
+      // Server stripped the toggle because the user isn't Pro yet.
+      // Re-render the config so the disabled state + upsell appear.
+      loadBudgetConfig();
+    }
+  } catch(e) {}
   loadBudgetStatus();
 }
 
@@ -4039,6 +4067,9 @@ async function loadBrainPage(silent) {
     // last 24h. Render a one-line upgrade CTA above the brain stream so
     // they know full history exists on Cloud-Pro.
     _renderBrainHistoryCap(!!(data && data.capped_at_24h));
+    // NeMo daily-cap banner (issue #1170) — only visible when a free-tier
+    // user has tripped the 1000-events/day NeMo ingest ceiling.
+    _refreshNemoCapBanner('brain-stream');
     // Issue #1195 — One-time "Live event details restored" toast for users
     // who lived through the 0.12.182 empty-detail regression. Fires only if
     // (a) at least one event has a non-empty detail, (b) the user hasn't
@@ -7440,9 +7471,57 @@ async function loadUsage() {
     loadCacheAnalytics();
     // Load cost forecast (issue #1413)
     loadCostForecast();
+    // NeMo daily-cap banner (issue #1170) — only visible when a free-tier
+    // user has tripped the 1000-events/day ceiling.
+    _refreshNemoCapBanner('usage-chart');
   } catch(e) {
     document.getElementById('usage-chart').innerHTML = '<span style="color:#555">No usage data available</span>';
   }
+}
+
+// ── NeMo free-tier daily cap banner (issue #1170) ─────────────────────
+// Polls /api/nemo-cap-status and renders a one-line upsell row above the
+// chosen anchor element (Brain stream or Tokens chart) when a Free user
+// has hit the daily NeMo ingest cap. Pro users + un-tripped Free users
+// see nothing. Re-uses the same upgrade CTA pattern as the approvals
+// upsell row (#1328) for visual consistency.
+function _renderNemoCapBanner(anchorId, snapshot) {
+  var anchor = document.getElementById(anchorId);
+  if (!anchor || !anchor.parentElement) return;
+  var hostId = 'nemo-cap-banner-' + anchorId;
+  var host = document.getElementById(hostId);
+  var shouldShow = !!(snapshot && snapshot.cap_hit && !snapshot.is_pro);
+  if (!shouldShow) {
+    if (host) { host.style.display = 'none'; host.innerHTML = ''; }
+    return;
+  }
+  if (!host) {
+    host = document.createElement('div');
+    host.id = hostId;
+    host.style.cssText = 'padding:10px 12px;margin-bottom:10px;font-size:12px;line-height:1.5;color:var(--text-secondary);border:1px dashed rgba(124,92,255,0.5);border-radius:6px;background:rgba(124,92,255,0.06);';
+    anchor.parentElement.insertBefore(host, anchor);
+  }
+  host.style.display = '';
+  var cap = Number(snapshot.cap) || 1000;
+  var used = Math.min(Number(snapshot.used) || 0, cap);
+  host.innerHTML =
+    '<strong>NeMo daily cap reached (' + used + '/' + cap + ')</strong> '
+    + 'Further NeMo events are dropped until UTC midnight. '
+    + '<a href="https://app.clawmetry.com/upgrade?source=nemo_cap" target="_blank" rel="noopener" '
+    + 'style="color:var(--accent,#7c5cff);font-weight:600;text-decoration:none;">'
+    + 'Upgrade to Pro</a> for unlimited NeMo ingest.';
+}
+
+function _refreshNemoCapBanner(anchorId) {
+  try {
+    if (window.CLOUD_MODE) return;
+    fetch('/api/nemo-cap-status').then(function(r) {
+      if (!r.ok) return null;
+      return r.json();
+    }).then(function(snap) {
+      if (snap) _renderNemoCapBanner(anchorId, snap);
+    }).catch(function() { /* swallow — banner is non-critical */ });
+  } catch (_e) { /* never block render */ }
 }
 
 // Issue #1448 surface 2 — render the OSS / Cloud-Free retention upsell

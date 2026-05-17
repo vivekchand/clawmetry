@@ -720,6 +720,119 @@ def _try_local_store_cost_comparison():
     }
 
 
+def _try_local_store_usage_forecast():
+    """Fast path for /api/usage/forecast (issue #1565, Tier-1).
+
+    Projects current spend trajectory to end-of-month:
+        daily_rate      = sum(cost_usd last 7 days) / 7
+        projected_month = cost_so_far_this_month + daily_rate * days_remaining
+
+    Source preference (matters because of the dedupe-pattern footgun
+    documented in ``feedback_usage_dedupe_pattern.md``):
+
+      1. ``query_aggregates`` — SQL-side dedupe over the FULL events
+         table (every event row that carries ``cost_usd``, billable-turn
+         and non-message rows alike). Safer for cost projection because
+         the daemon stamps ``cost_usd`` on rows the splits walker skips
+         (e.g. tool retries, fallback turns).
+      2. ``query_daily_usage_splits`` — only walks
+         ``_BILLABLE_TURN_EVENT_TYPES``. Used as a fallback so a fresh
+         install (aggregates empty, only events seeded) still produces
+         a forecast.
+
+    Returns ``None`` when no store is reachable so the route can fall
+    back to the JSONL legacy projection. Returns
+    ``{available: False, _source: 'local_store'}`` when the store IS
+    reachable but holds zero usage rows — the forecast is genuinely
+    unavailable, the UI handles this and renders the empty-state copy.
+    """
+    import calendar
+    from datetime import datetime, timedelta, timezone
+
+    store = _ls_get_store()
+    if store is None:
+        return None
+
+    # Pull aggregates first — they cover every cost-bearing row, deduped
+    # at SQL level (see ``feedback_usage_dedupe_pattern.md`` for why
+    # walking only billable turns silently drops ~30% of cost).
+    daily_costs: dict[str, float] = {}
+    try:
+        agg_rows = store.query_aggregates() or []
+    except Exception:
+        agg_rows = []
+    for r in agg_rows:
+        day = r.get("day", "")
+        if day:
+            daily_costs[day] = daily_costs.get(day, 0.0) + float(r.get("cost_usd") or 0)
+
+    # Fresh-install fallback: aggregates table empty → derive from
+    # the splits walker. Splits dedupe sibling pairs but skip non-message
+    # event types; for forecast we're OK with that because the alternative
+    # is no forecast at all on a fresh install.
+    if not daily_costs:
+        try:
+            split_rows = store.query_daily_usage_splits() or []
+        except Exception:
+            split_rows = []
+        for r in split_rows:
+            day = r.get("day", "")
+            if day:
+                daily_costs[day] = daily_costs.get(day, 0.0) + float(r.get("cost_usd") or 0)
+
+    today = datetime.now(timezone.utc).date()
+    window_days = 7
+    window: list[float] = []
+    for i in range(window_days):
+        d = (today - timedelta(days=i)).isoformat()
+        window.append(daily_costs.get(d, 0.0))
+
+    daily_rate = sum(window) / window_days
+    days_in_month = calendar.monthrange(today.year, today.month)[1]
+    days_elapsed = today.day
+    days_remaining = days_in_month - days_elapsed
+    month_str = today.strftime("%Y-%m")
+    cost_this_month = sum(v for k, v in daily_costs.items() if k.startswith(month_str))
+
+    # If the store is reachable but holds zero usage rows AND we have no
+    # spend this month, surface ``available: False`` with the _source
+    # tag — the UI renders the empty-state copy and the audit can still
+    # see the canary.
+    if not daily_costs and cost_this_month == 0 and daily_rate == 0:
+        return {"available": False, "reason": "no_data", "_source": "local_store"}
+
+    projected_month = cost_this_month + daily_rate * days_remaining
+
+    try:
+        import dashboard as _d
+        budget_cfg = _d._get_budget_config()
+    except Exception:
+        budget_cfg = {}
+    monthly_budget = float(budget_cfg.get("monthly_limit") or 0)
+    monthly_cap = float(budget_cfg.get("monthly_cap_usd") or 0)
+    effective_budget = monthly_budget or monthly_cap or 0.0
+
+    budget_exceeded = bool(effective_budget > 0 and projected_month > effective_budget)
+    days_to_budget: float | None = None
+    if effective_budget > 0 and daily_rate > 0:
+        remaining_budget = effective_budget - cost_this_month
+        days_to_budget = max(0.0, remaining_budget / daily_rate)
+
+    return {
+        "available": True,
+        "daily_rate_usd": round(daily_rate, 4),
+        "cost_this_month_usd": round(cost_this_month, 4),
+        "projected_month_usd": round(projected_month, 4),
+        "days_remaining_in_month": days_remaining,
+        "monthly_budget_usd": effective_budget,
+        "budget_exceeded": budget_exceeded,
+        "days_to_budget": round(days_to_budget, 1) if days_to_budget is not None else None,
+        "window_days": window_days,
+        "daily_window": [round(c, 4) for c in reversed(window)],
+        "_source": "local_store",
+    }
+
+
 def _try_local_store_model_attribution():
     """Fast path for /api/model-attribution. Per-model assistant turn count,
     session count, provider tag, and share %. Switches list is best-effort
@@ -875,6 +988,180 @@ def _try_local_store_skill_attribution():
     }
 
 
+def _try_local_store_skills_fidelity(max_sessions=200):
+    """Fast path for /api/skills/fidelity (Tier-1 #6 from issue #1565).
+
+    Replaces the 200-file × all-lines JSONL walker in
+    ``api_skills_fidelity`` with a single DuckDB read using the canonical
+    ``query_recent_read_tool_calls`` method (already shipped + allowlisted
+    for the daemon proxy — issue #1364). One row per Read-tool invocation
+    in the last 7 days; we bucket them per-skill in-process.
+
+    Status rules match the legacy endpoint contract:
+      * dead   — installed but body fetch count == 0
+      * orphan — body-fetched in sessions but skill dir not on disk
+      * stuck  — body fetched but skill has linked files and none were read
+      * active — otherwise
+
+    Returns ``None`` (defer to JSONL walker) when:
+      * the local store isn't reachable
+      * the canonical method returns ``None`` (daemon down + direct open
+        failed)
+      * NO skills are installed on disk AND zero rows came back (nothing
+        meaningful to report — let the legacy path serve the empty shape)
+
+    Audit imperfection note (issue #1565 audit): the audit hinted this
+    surface was an "extension of skill-attribution". In practice the
+    canonical DuckDB source for body-fetch counts is
+    ``query_recent_read_tool_calls`` (already serving ``/api/skills``),
+    not the cost-aggregation walker in
+    ``_try_local_store_skill_attribution``. Reusing the established path
+    avoids divergence between the two fidelity surfaces.
+    """
+    import dashboard as _d
+    import re as _re
+
+    # 1. Pull the file-path rows the canonical helper provides. Returns
+    # None on store-not-reachable; an empty list is a valid "store is up
+    # but nothing in the 7d window" answer.
+    cutoff_ts = time.time() - 7 * 86400
+    since_iso = datetime.utcfromtimestamp(cutoff_ts).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    rows = _ls_call("query_recent_read_tool_calls", since=since_iso, limit=50_000)
+    if rows is None:
+        return None
+    if not isinstance(rows, list):
+        return None
+
+    # 2. List installed skills (header-always-loaded set). Same logic as
+    # the legacy walker so the dead/active classification matches.
+    workspace = (
+        _d.WORKSPACE
+        or os.environ.get("OPENCLAW_WORKSPACE")
+        or os.environ.get("OPENCLAW_HOME")
+        or os.path.expanduser("~/.openclaw/workspace")
+    )
+    skills_dir = os.path.join(workspace, "skills")
+    installed_skills: set = set()
+    skill_has_linked: dict = {}
+    if os.path.isdir(skills_dir):
+        try:
+            for entry in os.listdir(skills_dir):
+                entry_path = os.path.join(skills_dir, entry)
+                if not os.path.isdir(entry_path):
+                    continue
+                if not os.path.isfile(os.path.join(entry_path, "SKILL.md")):
+                    continue
+                installed_skills.add(entry)
+                try:
+                    linked = [
+                        f for f in os.listdir(entry_path)
+                        if f.upper() != "SKILL.MD"
+                        and not f.startswith('.')
+                        and os.path.isfile(os.path.join(entry_path, f))
+                    ]
+                except OSError:
+                    linked = []
+                skill_has_linked[entry] = bool(linked)
+        except OSError:
+            pass
+
+    # 3. Bucket the Read-tool rows per skill via the parent-dir-name in
+    # ``file_path``. Body fetch = path ends in /SKILL.md; linked fetch =
+    # path is under skills/<name>/<not-SKILL.md>. Matches the legacy
+    # regex pair (case-insensitive, slash-normalised so Windows paths
+    # still hit).
+    SKILL_MD_RE = _re.compile(r'[/\\]([^/\\]+)[/\\]SKILL\.md', _re.IGNORECASE)
+    SKILL_LINKED_RE = _re.compile(
+        r'skills[/\\]([^/\\]+)[/\\]([^/\\\'">\s]{1,80})', _re.IGNORECASE
+    )
+
+    body_fetches: dict = {}    # skill_name -> count
+    linked_fetches: dict = {}  # skill_name -> count
+    skill_sessions: dict = {}  # skill_name -> set of session_ids
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        fp = row.get("file_path") or ""
+        if not isinstance(fp, str) or not fp:
+            continue
+        sid = row.get("session_id") or ""
+        body_match = SKILL_MD_RE.search(fp)
+        if body_match:
+            sname = body_match.group(1)
+            if sname and sname.lower() not in ('skills', ''):
+                body_fetches[sname] = body_fetches.get(sname, 0) + 1
+                if sid:
+                    skill_sessions.setdefault(sname, set()).add(sid)
+        else:
+            # Linked-file path: skills/<name>/<file-not-SKILL.md>
+            linked_match = SKILL_LINKED_RE.search(fp)
+            if linked_match and linked_match.group(2).upper() != 'SKILL.MD':
+                sname = linked_match.group(1)
+                if sname:
+                    linked_fetches[sname] = linked_fetches.get(sname, 0) + 1
+
+    # If nothing on disk AND nothing in events, defer so the legacy path
+    # can serve the empty shape with its own no-data note.
+    if not installed_skills and not body_fetches and not linked_fetches:
+        return None
+
+    # 4. Build per-skill stats + classify. Same rules as the legacy
+    # handler so the response contract doesn't drift.
+    all_names = installed_skills | set(body_fetches) | set(linked_fetches)
+    skills_out = []
+    dead_count = stuck_count = active_count = orphan_count = 0
+    for name in sorted(all_names):
+        installed = name in installed_skills
+        bf = body_fetches.get(name, 0)
+        lf = linked_fetches.get(name, 0)
+        sess = len(skill_sessions.get(name, set()))
+        has_linked = skill_has_linked.get(name, False)
+
+        if installed and bf == 0:
+            status = 'dead'
+            dead_count += 1
+        elif not installed and bf > 0:
+            status = 'orphan'
+            orphan_count += 1
+        elif bf > 0 and has_linked and lf == 0:
+            status = 'stuck'
+            stuck_count += 1
+        else:
+            status = 'active'
+            active_count += 1
+
+        skills_out.append({
+            'name': name,
+            'installed': installed,
+            'body_fetches': bf,
+            'linked_file_fetches': lf,
+            'sessions_seen': sess,
+            'status': status,
+            'token_roi': round(bf / sess, 3) if sess > 0 else None,
+        })
+
+    _STATUS_ORDER = {'dead': 0, 'stuck': 1, 'orphan': 2, 'active': 3}
+    skills_out.sort(key=lambda s: (_STATUS_ORDER[s['status']], -s['body_fetches']))
+
+    return {
+        'skills': skills_out,
+        'dead_count': dead_count,
+        'stuck_count': stuck_count,
+        'active_count': active_count,
+        'orphan_count': orphan_count,
+        'total_installed': len(installed_skills),
+        'note': (
+            'Dead: installed but body never fetched — remove to save header tokens. '
+            'Stuck: body fetched but linked files unread despite existing. '
+            'Orphan: body-fetched in sessions but not installed (skill removed?).'
+        ),
+        '_source': 'local_store',
+    }
+
+
 def _apply_oss_24h_cap(result):
     """Issue #1448 surface 2 — clamp /api/usage history to the last 24h for
     OSS / Cloud-Free callers. Cloud-Pro users (gated by
@@ -916,6 +1203,145 @@ def _apply_oss_24h_cap(result):
         capped["days"] = days
     capped["capped_at_24h"] = True
     return capped
+
+
+def _try_local_store_token_velocity():
+    """Fast path for /api/token-velocity (issue #1565, Tier-1).
+
+    Reads the last ~5 min of events from DuckDB and computes:
+      * ``velocity_2min`` — total tokens billed across the trailing 2-min
+        window (deduped via ``build_sibling_bucket_max`` so v3 sibling
+        pairs aren't counted twice — same risk as
+        ``feedback_usage_dedupe_pattern.md``).
+      * ``flagged_sessions`` — per-session 2-min token burn + tool-chain
+        length. A session is flagged when ``tokens_2min >= WARN_TOKENS``
+        OR ``tool_chain_len >= CRIT_TOOLS``.
+      * ``cost_per_min`` — projected USD/min from the 2-min total.
+
+    Tool-chain length: count the longest consecutive run of tool-call /
+    assistant events within the last 2 min per session, broken by a
+    user-prompt row (matches the legacy JSONL heuristic).
+
+    Returns ``None`` when the store isn't reachable OR when zero events
+    are present in the trailing 5-min window — the legacy JSONL walker
+    is cheap on a quiet system (mtime filter skips every file with no
+    recent writes) so we don't try to short-circuit it with a zero shell.
+    """
+    from datetime import datetime, timezone
+
+    store = _ls_get_store()
+    if store is None:
+        return None
+
+    WARN_TOKENS = 8000
+    CRIT_TOKENS = 15000
+    CRIT_TOOLS = 20
+
+    now = time.time()
+    window_2min = now - 120
+    # Pull 5 min of context so the tool-chain walker has enough history
+    # for the consecutive-run heuristic without re-fetching.
+    since_iso = datetime.fromtimestamp(now - 300, tz=timezone.utc).isoformat()
+
+    try:
+        rows = store.query_events(since=since_iso, limit=5000) or []
+    except Exception:
+        return None
+    if not rows:
+        return None
+
+    # Sort ascending by ts so the consecutive-tool walker sees rows in
+    # write order (query_events returns DESC). Stable on equal ts.
+    def _ts_sec(r):
+        ts = r.get("ts") or ""
+        if not isinstance(ts, str):
+            return 0.0
+        try:
+            return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return 0.0
+
+    rows.sort(key=_ts_sec)
+
+    # Dedupe sibling pairs (assistant + model.completed) — same pattern
+    # as _try_local_store_usage to avoid double-counting v3 tokens.
+    bucket_max = build_sibling_bucket_max(rows)
+
+    # Event types that count as "tool / assistant" rows for the
+    # consecutive-chain heuristic. ``prompt.submitted`` / user rows reset
+    # the run. Tool-call alternates cover legacy + v3 daemon names.
+    _CHAIN_TYPES = frozenset({
+        "assistant", "model.completed", "tool.call", "tool_call",
+        "tool.result", "tool_use_result", "message",
+    })
+    _RESET_TYPES = frozenset({"prompt.submitted", "user"})
+
+    per_session: dict = {}
+    for r in rows:
+        sid = r.get("session_id") or ""
+        if not sid:
+            continue
+        et = (r.get("event_type") or "").strip()
+        ts = _ts_sec(r)
+        slot = per_session.setdefault(sid, {
+            "tokens_2min": 0, "consecutive": 0, "max_chain": 0,
+        })
+        # Chain bookkeeping always runs (over the full 5-min window so
+        # the run survives a tool burst that started >2 min ago).
+        if et in _RESET_TYPES:
+            slot["consecutive"] = 0
+        elif et in _CHAIN_TYPES:
+            data = r.get("data") if isinstance(r.get("data"), dict) else {}
+            role = data.get("role") if isinstance(data, dict) else None
+            if et == "message" and role == "user":
+                slot["consecutive"] = 0
+            else:
+                slot["consecutive"] += 1
+                if slot["consecutive"] > slot["max_chain"]:
+                    slot["max_chain"] = slot["consecutive"]
+        # Token accumulation only inside the 2-min window, deduped.
+        if ts >= window_2min and not is_sibling_dup(r, bucket_max):
+            tok = int(r.get("token_count") or 0)
+            if tok > 0:
+                slot["tokens_2min"] += tok
+
+    try:
+        import dashboard as _d
+        usd_per_token = _d._estimate_usd_per_token()
+    except Exception:
+        usd_per_token = 0.0
+
+    total_tokens_2min = 0
+    flagged: list = []
+    for sid, slot in per_session.items():
+        tokens_2min = int(slot["tokens_2min"])
+        max_chain = int(slot["max_chain"])
+        total_tokens_2min += tokens_2min
+        if tokens_2min >= WARN_TOKENS or max_chain >= CRIT_TOOLS:
+            sess_cpm = round(tokens_2min / 2 * usd_per_token, 5)
+            flagged.append({
+                "id":               sid,
+                "tokens_2min":      tokens_2min,
+                "tool_chain_len":   max_chain,
+                "cost_per_min":     sess_cpm,
+            })
+
+    if (total_tokens_2min >= CRIT_TOKENS
+            or any(s["tool_chain_len"] >= CRIT_TOOLS for s in flagged)):
+        level = "critical"
+    elif total_tokens_2min >= WARN_TOKENS:
+        level = "warning"
+    else:
+        level = "ok"
+
+    return {
+        "alert":            level != "ok",
+        "level":            level,
+        "velocity_2min":    total_tokens_2min,
+        "cost_per_min":     round(total_tokens_2min / 2 * usd_per_token, 5),
+        "flagged_sessions": flagged,
+        "_source":          "local_store",
+    }
 
 
 @bp_usage.route("/api/usage")
@@ -1788,72 +2214,30 @@ def api_usage_forecast():
           projected_month = cost_so_far + daily_rate * days_remaining
           days_to_budget = (budget - cost_so_far) / daily_rate
 
+    Issue #1565 (Tier-1): now goes through
+    ``_try_local_store_usage_forecast`` under the standard
+    ``is_local_store_read_enabled()`` gate so the audit canary
+    (``_source: 'local_store'`` in the JSON body) shows up in browser
+    devtools the same way the rest of the Usage tab does.
+
     Returns {available, daily_rate_usd, cost_this_month_usd,
              projected_month_usd, days_remaining_in_month,
              monthly_budget_usd, budget_exceeded, days_to_budget,
              window_days, daily_window, _source}.
-    Returns {available: false} when no local-store data is present.
+    Returns {available: false} when no usage data is present.
     """
-    import calendar
-    import dashboard as _d
-    from datetime import datetime, timedelta, timezone
+    if is_local_store_read_enabled():
+        fast = _try_local_store_usage_forecast()
+        if fast is not None:
+            return jsonify(fast)
 
-    today = datetime.now(timezone.utc).date()
-
-    rows = _ls_call("query_daily_usage_splits") or []
-    if not rows:
-        rows = _ls_call("query_aggregates") or []
-
-    if not rows:
-        return jsonify({"available": False, "reason": "no_data"})
-
-    daily_costs: dict[str, float] = {}
-    for r in rows:
-        day = r.get("day", "")
-        if day:
-            daily_costs[day] = float(r.get("cost_usd") or 0)
-
-    window_days = 7
-    window: list[float] = []
-    for i in range(window_days):
-        d = (today - timedelta(days=i)).isoformat()
-        window.append(daily_costs.get(d, 0.0))
-
-    daily_rate = sum(window) / window_days
-
-    days_in_month = calendar.monthrange(today.year, today.month)[1]
-    days_elapsed = today.day
-    days_remaining = days_in_month - days_elapsed
-
-    month_str = today.strftime("%Y-%m")
-    cost_this_month = sum(v for k, v in daily_costs.items() if k.startswith(month_str))
-
-    projected_month = cost_this_month + daily_rate * days_remaining
-
-    budget_cfg = _d._get_budget_config()
-    monthly_budget = float(budget_cfg.get("monthly_limit") or 0)
-    monthly_cap = float(budget_cfg.get("monthly_cap_usd") or 0)
-    effective_budget = monthly_budget or monthly_cap or 0.0
-
-    budget_exceeded = bool(effective_budget > 0 and projected_month > effective_budget)
-    days_to_budget: float | None = None
-    if effective_budget > 0 and daily_rate > 0:
-        remaining_budget = effective_budget - cost_this_month
-        days_to_budget = max(0.0, remaining_budget / daily_rate)
-
-    return jsonify({
-        "available": True,
-        "daily_rate_usd": round(daily_rate, 4),
-        "cost_this_month_usd": round(cost_this_month, 4),
-        "projected_month_usd": round(projected_month, 4),
-        "days_remaining_in_month": days_remaining,
-        "monthly_budget_usd": effective_budget,
-        "budget_exceeded": budget_exceeded,
-        "days_to_budget": round(days_to_budget, 1) if days_to_budget is not None else None,
-        "window_days": window_days,
-        "daily_window": [round(c, 4) for c in reversed(window)],
-        "_source": "local_store",
-    })
+    # Local store unavailable (no daemon, tests with the flag off): fall
+    # back to a minimal "no data" response so the route never 500s. The
+    # forecast card is a derived view of the existing /api/usage
+    # aggregate — when DuckDB is unreachable, every other Usage-tab
+    # surface degrades the same way (anomalies, by-plugin, attribution),
+    # so a JSONL re-implementation here would be pure duplication.
+    return jsonify({"available": False, "reason": "no_data"})
 
 
 @bp_usage.route("/api/usage/export")
@@ -2235,8 +2619,19 @@ def api_token_velocity():
     Thresholds:
       warning:  velocity_2min >= 8000
       critical: velocity_2min >= 15000 OR tool_chain_len >= 20
+
+    Issue #1565 (Tier-1): under ``is_local_store_read_enabled()`` the
+    handler now serves from the DuckDB ``events`` table via
+    ``_try_local_store_token_velocity`` (tagged ``_source: 'local_store'``
+    so the audit canary is discoverable). Falls back to the JSONL scan
+    below when the store is empty or unreachable.
     """
     import dashboard as _d
+
+    if is_local_store_read_enabled():
+        fast = _try_local_store_token_velocity()
+        if fast is not None:
+            return jsonify(fast)
 
     WARN_TOKENS   = 8000
     CRIT_TOKENS   = 15000
@@ -2638,6 +3033,15 @@ def api_skills_fidelity():
     except (TypeError, ValueError):
         max_sessions = 200
 
+    # Tier-1 DuckDB fast path (issue #1565 audit #6). Reuses the canonical
+    # ``query_recent_read_tool_calls`` source already serving /api/skills
+    # so both fidelity surfaces stay aligned; ``None`` falls through to
+    # the legacy JSONL walker below.
+    if is_local_store_read_enabled():
+        fast = _try_local_store_skills_fidelity(max_sessions=max_sessions)
+        if fast is not None:
+            return jsonify(fast)
+
     workspace = (
         _d.WORKSPACE
         or os.environ.get("OPENCLAW_WORKSPACE")
@@ -2924,3 +3328,31 @@ def api_token_attribution():
         'messages': messages,
         'totals': totals,
         'session_id': wanted_sid if wanted_sid else None,    })
+
+
+# ── NeMo free-tier cap status (issue #1170) ────────────────────────────
+#
+# Powers the upsell banner that the Brain + Tokens tabs render once a
+# free-tier user trips the 1000-events/day NeMo ingest cap. Returns the
+# same shape ``clawmetry.adapters.nemo.get_nemo_cap_state`` produces so
+# the JS can pass through without any reshape.
+@bp_usage.route("/api/nemo-cap-status")
+def api_nemo_cap_status():
+    """Return the current daily NeMo ingest cap snapshot.
+
+    Cheap, side-effect-free read. Never raises out — on any failure we
+    fall back to a "no cap hit, no Pro" payload so the banner stays
+    hidden rather than spuriously showing up.
+    """
+    try:
+        from clawmetry.adapters.nemo import get_nemo_cap_state, NEMO_FREE_DAILY_CAP
+        return jsonify(get_nemo_cap_state())
+    except Exception:
+        return jsonify({
+            "cap": 1000,
+            "used": 0,
+            "dropped": 0,
+            "is_pro": False,
+            "cap_hit": False,
+            "date": "",
+        })
