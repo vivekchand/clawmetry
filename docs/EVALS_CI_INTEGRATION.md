@@ -132,3 +132,25 @@ pass/fail counts via the normal heartbeat relay.
 
 See PR #1623 for the Phase 1 design rationale; this Phase 2 PR (refs
 #1619) layers the golden-bench surface on top.
+
+## How ClawMetry dogfoods this in its OWN CI
+
+The `eval-suite` job in `.github/workflows/ci.yml` runs
+`tests/data/golden_ci.yaml` on every PR against this repo. The suite has
+four tests (simple Q&A, tool-call path, refusal, escalation) and uses
+`tests/eval_ci_mock_agent.py` as a deterministic canned-response agent
+so the runner exercises the eval pipeline end-to-end without booting a
+real LLM agent. Only the judge call (default `claude-haiku-4-5`) makes a
+network request — that's ~$0.005 per PR run.
+
+Two knobs control the gate:
+
+| Knob | Type | Effect |
+|------|------|--------|
+| `CI_ANTHROPIC_API_KEY` | repo secret | When unset, the job logs `eval gate SKIPPED — needs CI_ANTHROPIC_API_KEY` and exits 0 (so fork PRs aren't blocked). When set, the gate is enforced. |
+| `CLAWMETRY_EVALS_GATE` | repo variable | Set to `"off"` to short-circuit the gate during a known judge-provider outage. Any other value (or unset) enables the gate. |
+
+To bypass the gate for a single PR without flipping the repo variable,
+add the `evals-skip` label to the PR — TODO once we wire a label-based
+short-circuit; for now the repo-variable kill-switch is the only
+no-merge-yet escape hatch.
