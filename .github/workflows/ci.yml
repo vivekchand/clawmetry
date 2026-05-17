@@ -126,7 +126,7 @@ jobs:
   # network — drives sync/local_store helpers + Flask test client.
   # Runtime ~10s locally, ~15-20s on CI. HARD-FAIL: no continue-on-error.
   moat-tests:
-    name: MOAT Verifier (61 tests)
+    name: MOAT Verifier (69 tests)
     needs: lint
     runs-on: ubuntu-latest
     steps:
@@ -149,6 +149,8 @@ jobs:
             tests/test_no_direct_get_store_in_routes.py \
             tests/test_moat_bug_class_v3_event_shape_gate.py \
             tests/test_local_query_api.py \
+            tests/test_local_store_concurrent_flush_1590.py \
+            tests/test_moat_perf_benchmark.py \
             -q
 
   # ── E2E Playwright tests — critical subset (hard-gate, blocks merge) ──────
