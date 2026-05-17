@@ -1336,6 +1336,87 @@ def api_system_health():
     )
 
 
+# Freshness window for the DuckDB fast path. The sync daemon captures one
+# ``gateway.metric`` sample every 30s and dedupes near-identical samples for
+# up to 5 min (GATEWAY_METRIC_INTERVAL_SEC + GATEWAY_METRIC_DEDUP_WINDOW_SEC
+# in clawmetry/sync.py). 10 min keeps us safely past the dedupe horizon
+# while still flagging "DuckDB has nothing recent → defer to live psutil".
+_GATEWAY_HEALTH_FAST_PATH_MAX_AGE_SEC = 600
+
+
+def _try_local_store_gateway_health():
+    """Fast path for /api/gateway-health — read the most-recent
+    ``gateway.metric`` event the sync daemon has already captured to
+    DuckDB instead of re-running the psutil/ps live probe on every poll
+    (Tier-1 #1565).
+
+    Why the migration:
+      * The legacy ``compute_gateway_health()`` shells out to ``ps`` (or
+        invokes ``psutil``) every request, which costs ~30-80ms on macOS
+        per call and is the dominant cost when an external monitor polls
+        this endpoint at sub-minute cadence.
+      * On a multi-node fleet, the dashboard process may not see the
+        gateway PID at all (different container / different namespace),
+        producing a misleading ``not_running`` even when DuckDB has
+        recent samples written by the sibling daemon on the host where
+        the gateway actually lives.
+      * The sync daemon already writes ``gateway.metric`` events every
+        30s (clawmetry/sync.py::capture_gateway_metric) with the exact
+        ``{pid, uptime_seconds, rss_mb, cpu_pct}`` quartet we need.
+
+    Returns the canonical ``compute_gateway_health()`` shape with the
+    additional ``_source: 'local_store'`` marker so the audit canary can
+    confirm DuckDB-first service. Returns ``None`` to defer to the live
+    probe when:
+      * DuckDB is unreachable (no daemon, no fallback handle), OR
+      * no ``gateway.metric`` event exists in the freshness window
+        (fresh install or daemon down for >10 min).
+
+    The freshness gate is intentional: a 30-minute-old DuckDB sample is
+    NOT a useful health reading; the operator wants to know the gateway
+    is alive *now*, so we defer to ``compute_gateway_health()`` which
+    will correctly report ``not_running`` instead of returning stale
+    vitals tagged ``healthy``.
+    """
+    cutoff_iso = (
+        datetime.now(timezone.utc)
+        - timedelta(seconds=_GATEWAY_HEALTH_FAST_PATH_MAX_AGE_SEC)
+    ).isoformat()
+    # Pull just enough rows to find the freshest sample (DuckDB returns
+    # newest-first under ``query_events``). limit=1 keeps the daemon-proxy
+    # round-trip cheap.
+    rows = _ls_call(
+        "query_events",
+        event_type="gateway.metric",
+        since=cutoff_iso,
+        limit=1,
+    )
+    if not rows:
+        return None
+    row = rows[0]
+    data = row.get("data") if isinstance(row.get("data"), dict) else {}
+    rss_mb = data.get("rss_mb")
+    cpu_pct = data.get("cpu_pct")
+    pid = data.get("pid")
+    uptime = data.get("uptime_seconds")
+    # The sync daemon never writes a sample with status=not_running
+    # (capture_gateway_metric returns early on that branch), so any row we
+    # find here represents a live gateway as of `ts`. Re-classify from
+    # rss_mb so we honour the same warning/critical thresholds the legacy
+    # path uses.
+    status = _classify_gateway_status(rss_mb, GATEWAY_MEMORY_THRESHOLD_MB)
+    return {
+        "pid": pid,
+        "uptime_seconds": uptime,
+        "rss_mb": rss_mb,
+        "cpu_pct": cpu_pct,
+        "status": status,
+        "memory_threshold_mb": GATEWAY_MEMORY_THRESHOLD_MB,
+        "sample_ts": row.get("ts"),
+        "_source": "local_store",
+    }
+
+
 @bp_health.route("/api/gateway-health")
 def api_gateway_health():
     """Standalone JSON probe for gateway process vitals (#852).
@@ -1343,7 +1424,19 @@ def api_gateway_health():
     Mirrors the ``gateway`` block returned by ``/api/system-health`` so an
     operator (or external monitor) can poll just this surface without
     pulling the full system-health payload.
+
+    Issue #1565 Tier-1: prefer the DuckDB fast path (recent
+    ``gateway.metric`` event written by the sync daemon) when
+    ``CLAWMETRY_LOCAL_STORE_READ=1``. Falls through to the live psutil/ps
+    probe when DuckDB has no recent sample or the env gate is off.
     """
+    if is_local_store_read_enabled():
+        try:
+            fast = _try_local_store_gateway_health()
+        except Exception:
+            fast = None
+        if fast is not None:
+            return jsonify(fast)
     try:
         return jsonify(compute_gateway_health())
     except Exception:
