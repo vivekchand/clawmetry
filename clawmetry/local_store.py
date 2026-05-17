@@ -124,7 +124,7 @@ LOCAL_MAX_BYTES = int(
     float(os.environ.get("CLAWMETRY_LOCAL_MAX_GB", "5.0")) * 1024 * 1024 * 1024
 )
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # ── Two-layer schema (multi-agent) ──────────────────────────────────────────
 #
@@ -578,6 +578,30 @@ _DDL = [
         applied_at BIGINT NOT NULL
     )
     """,
+    # ── Sync dead-letter queue (#1601) ─────────────────────────────────────
+    # Persists payloads whose AES-GCM encryption raised inside the cloud
+    # POST path (rare: malformed payload, key rotation race, corrupt key).
+    # Survives daemon restart so a transient bad-key window doesn't
+    # silently lose batches. Replayed on every sync tick; rows are deleted
+    # only after a successful re-encrypt+POST. ``attempts`` lets the
+    # replayer abandon a permanently-poisoned row after N tries instead of
+    # spinning forever.
+    """
+    CREATE TABLE IF NOT EXISTS sync_dlq (
+        id           VARCHAR PRIMARY KEY,
+        kind         VARCHAR NOT NULL,
+        endpoint     VARCHAR NOT NULL,
+        fname        VARCHAR,
+        node_id      VARCHAR,
+        subagent_id  VARCHAR,
+        payload_json VARCHAR NOT NULL,
+        error        VARCHAR,
+        attempts     INTEGER NOT NULL DEFAULT 0,
+        created_at   BIGINT NOT NULL,
+        last_try_at  BIGINT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_sync_dlq_created ON sync_dlq(created_at)",
 ]
 
 
@@ -4708,6 +4732,91 @@ class LocalStore:
 
     # ── ops / maintenance ──────────────────────────────────────────────
 
+    # ── Sync dead-letter queue (#1601) ──────────────────────────────────
+    # Used by sync.py when AES-GCM encryption fails on the cloud POST path.
+    # Persistent (DuckDB) so a daemon restart can't lose the row; replayed
+    # on every sync tick. ``dlq_enqueue`` is idempotent on ``id``.
+
+    def dlq_enqueue(
+        self,
+        *,
+        dlq_id: str,
+        kind: str,
+        endpoint: str,
+        payload_json: str,
+        fname: str | None = None,
+        node_id: str | None = None,
+        subagent_id: str | None = None,
+        error: str = "",
+    ) -> None:
+        """Persist a payload that failed encryption. Idempotent on dlq_id."""
+        if self._read_only:
+            raise RuntimeError("local_store: dlq_enqueue requires writer mode")
+        now = int(time.time() * 1000)
+        with self._write_lock:
+            self._conn.execute(
+                """
+                INSERT INTO sync_dlq
+                  (id, kind, endpoint, fname, node_id, subagent_id,
+                   payload_json, error, attempts, created_at, last_try_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, NULL)
+                ON CONFLICT (id) DO UPDATE SET
+                  error = excluded.error,
+                  last_try_at = excluded.created_at
+                """,
+                [dlq_id, kind, endpoint, fname, node_id, subagent_id,
+                 payload_json, error[:2000], now],
+            )
+
+    def dlq_list(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Oldest-first list of pending DLQ rows for the replayer."""
+        rows = self._fetch(
+            """
+            SELECT id, kind, endpoint, fname, node_id, subagent_id,
+                   payload_json, attempts, created_at
+            FROM sync_dlq
+            ORDER BY created_at ASC
+            LIMIT ?
+            """,
+            [int(limit)],
+        )
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            out.append({
+                "id": r[0], "kind": r[1], "endpoint": r[2],
+                "fname": r[3], "node_id": r[4], "subagent_id": r[5],
+                "payload_json": r[6], "attempts": int(r[7] or 0),
+                "created_at": int(r[8] or 0),
+            })
+        return out
+
+    def dlq_mark_attempt(self, dlq_id: str, error: str = "") -> None:
+        """Record a failed replay attempt (keep the row, bump attempts)."""
+        if self._read_only:
+            raise RuntimeError("local_store: dlq_mark_attempt requires writer mode")
+        with self._write_lock:
+            self._conn.execute(
+                """
+                UPDATE sync_dlq
+                SET attempts = attempts + 1,
+                    last_try_at = ?,
+                    error = ?
+                WHERE id = ?
+                """,
+                [int(time.time() * 1000), error[:2000], dlq_id],
+            )
+
+    def dlq_delete(self, dlq_id: str) -> None:
+        """Drop a DLQ row after a successful replay (or permanent abandon)."""
+        if self._read_only:
+            raise RuntimeError("local_store: dlq_delete requires writer mode")
+        with self._write_lock:
+            self._conn.execute("DELETE FROM sync_dlq WHERE id = ?", [dlq_id])
+
+    def dlq_count(self) -> int:
+        rows = self._fetch("SELECT COUNT(*) FROM sync_dlq", [])
+        return int(rows[0][0]) if rows else 0
+
     def health(self) -> dict[str, Any]:
         """Snapshot of store state — for the /local/health endpoint and the
         dashboard footer."""
@@ -4734,6 +4843,7 @@ class LocalStore:
             "ring_dropped_total": dropped,
             "schema_version": SCHEMA_VERSION,
             "last_flush_ago_s": round(time.monotonic() - self._last_flush_ts, 2),
+            "sync_dlq_depth": self.dlq_count(),
         }
 
     def vacuum(self, *, prune_to_bytes: int | None = None) -> dict[str, Any]:

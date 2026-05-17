@@ -540,6 +540,141 @@ def decrypt_payload(blob: str, key_b64: str) -> dict:
     return json.loads(cipher.decrypt(nonce, ct, None))
 
 
+# ── Sync DLQ for AES-GCM encryption failures (#1601) ────────────────────────
+# When ``encrypt_payload`` raises inside a write-path POST (rare: corrupt key,
+# key rotation race, payload contains non-JSON-serialisable bytes), the
+# affected batch is parked in the local DuckDB ``sync_dlq`` table instead of
+# being silently dropped. The replay loop (``_dlq_replay``) drains the queue
+# on each sync tick. Persistent across daemon restarts.
+#
+# Metric: ``sync_encryption_failures`` (process-local counter) exposed via
+# ``get_encryption_failure_count`` for dashboards / health probes.
+
+_ENCRYPTION_FAILURE_COUNT = 0
+_DLQ_MAX_ATTEMPTS = int(os.environ.get("CLAWMETRY_SYNC_DLQ_MAX_ATTEMPTS", "10"))
+_DLQ_REPLAY_BATCH = int(os.environ.get("CLAWMETRY_SYNC_DLQ_REPLAY_BATCH", "50"))
+
+
+def get_encryption_failure_count() -> int:
+    """Return the process-local count of AES-GCM encryption failures
+    encountered during write-path sync. Reset on daemon restart; for a
+    durable count consult ``sync_dlq`` row count via local_store.health()."""
+    return _ENCRYPTION_FAILURE_COUNT
+
+
+def _dlq_enqueue_encryption_failure(
+    *,
+    kind: str,
+    endpoint: str,
+    payload: dict,
+    fname: str | None = None,
+    node_id: str | None = None,
+    subagent_id: str | None = None,
+    error: str = "",
+) -> None:
+    """Persist a payload that failed AES-GCM encryption. Best-effort: if the
+    local store itself is unavailable we re-raise so the caller can log."""
+    global _ENCRYPTION_FAILURE_COUNT
+    _ENCRYPTION_FAILURE_COUNT += 1
+    # Stable id: node + fname + first/last event ids if available, else hash.
+    # Makes enqueue idempotent if the same batch fails encryption twice
+    # before the replayer drains the queue.
+    try:
+        body = json.dumps(payload, sort_keys=True, default=str)
+    except Exception:
+        # If even the json dump fails the payload is unrecoverable for cloud;
+        # stash a stringified repr so the user has *something* to debug.
+        body = repr(payload)
+    dlq_id = (
+        f"{kind}:{node_id or 'n'}:{fname or 'f'}:"
+        f"{__import__('hashlib').sha256(body.encode('utf-8', 'replace')).hexdigest()[:16]}"
+    )
+    from clawmetry import local_store as _ls
+    store = _ls.get_store()
+    store.dlq_enqueue(
+        dlq_id=dlq_id,
+        kind=kind,
+        endpoint=endpoint,
+        payload_json=body,
+        fname=fname,
+        node_id=node_id,
+        subagent_id=subagent_id,
+        error=error,
+    )
+
+
+def _dlq_replay(api_key: str, enc_key: str | None) -> int:
+    """Drain the encryption DLQ. Returns the number of rows successfully
+    re-encrypted and POSTed. Called from the sync loop on every tick. Cheap
+    no-op when the queue is empty (single COUNT(*) on a tiny table)."""
+    if not enc_key:
+        return 0  # No key configured — replay is a no-op, rows stay parked.
+    try:
+        from clawmetry import local_store as _ls
+        store = _ls.get_store()
+    except Exception:
+        return 0
+    try:
+        rows = store.dlq_list(limit=_DLQ_REPLAY_BATCH)
+    except Exception as _e:
+        log.debug("dlq_replay: dlq_list failed (continuing): %s", _e)
+        return 0
+    if not rows:
+        return 0
+    replayed = 0
+    for row in rows:
+        dlq_id = row["id"]
+        if row["attempts"] >= _DLQ_MAX_ATTEMPTS:
+            # Abandon rather than spin forever on a permanently-poisoned row.
+            log.error(
+                "sync_dlq: abandoning %s after %d attempts (last err: see DLQ row)",
+                dlq_id, row["attempts"],
+            )
+            try:
+                store.dlq_delete(dlq_id)
+            except Exception:
+                pass
+            continue
+        try:
+            payload = json.loads(row["payload_json"])
+        except Exception as _e:
+            log.warning("sync_dlq: payload not valid JSON for %s — dropping: %s",
+                        dlq_id, _e)
+            try:
+                store.dlq_delete(dlq_id)
+            except Exception:
+                pass
+            continue
+        try:
+            blob = encrypt_payload(payload, enc_key)
+        except Exception as _enc_e:
+            try:
+                store.dlq_mark_attempt(dlq_id, str(_enc_e))
+            except Exception:
+                pass
+            continue  # Still bad key — try next row, leave this one parked.
+        try:
+            _post(
+                row["endpoint"],
+                {"node_id": row["node_id"], "encrypted": True, "blob": blob},
+                api_key,
+            )
+        except Exception as _post_e:
+            try:
+                store.dlq_mark_attempt(dlq_id, f"post: {_post_e}")
+            except Exception:
+                pass
+            continue
+        try:
+            store.dlq_delete(dlq_id)
+        except Exception:
+            pass
+        replayed += 1
+    if replayed:
+        log.info("sync_dlq: replayed %d parked batch(es) to cloud", replayed)
+    return replayed
+
+
 # ── Config ─────────────────────────────────────────────────────────────────────
 
 
@@ -1659,15 +1794,49 @@ def _flush_session_batch(
     #   re-read on next tick). A future PR should add a sidecar cloud-retry
     #   queue keyed on canonical event id. For today the priority is local
     #   correctness; cloud catches up when the user re-syncs from local.
+    # Split encryption from POST so the diagnostic for each path is distinct
+    # and an encryption failure no longer silently drops the batch (#1601).
+    # Encryption can fail on: corrupted/rotated key, payload containing
+    # non-JSON-serialisable bytes, missing cryptography wheel. POST can fail
+    # on: network outage, cloud 5xx. Conflating them sends users on a
+    # wild-goose chase for a network problem when the real issue is the key.
+    blob: str | None = None
+    if enc_key:
+        try:
+            blob = encrypt_payload(payload, enc_key)
+        except Exception as _enc_e:
+            # Persist to local DLQ so the next sync tick (or a daemon restart
+            # after the user rotates the key back) can re-encrypt and POST.
+            # The local DuckDB row is already durable above; this only protects
+            # the cloud side of the pipeline from silent loss.
+            try:
+                _dlq_enqueue_encryption_failure(
+                    kind="session_batch",
+                    endpoint="/ingest/events",
+                    payload=payload,
+                    fname=fname,
+                    node_id=node_id,
+                    subagent_id=subagent_id,
+                    error=str(_enc_e),
+                )
+            except Exception as _dlq_e:
+                log.exception(
+                    "E2E encryption AND DLQ persist both failed for %s "
+                    "(events permanently dropped from cloud): enc=%s dlq=%s",
+                    fname, _enc_e, _dlq_e,
+                )
+            else:
+                log.error(
+                    "E2E encryption failed for %s — batch parked in sync_dlq "
+                    "for replay (key rotation? corrupt key?): %s",
+                    fname, _enc_e,
+                )
+            return
     try:
-        if enc_key:
+        if blob is not None:
             _post(
                 "/ingest/events",
-                {
-                    "node_id": node_id,
-                    "encrypted": True,
-                    "blob": encrypt_payload(payload, enc_key),
-                },
+                {"node_id": node_id, "encrypted": True, "blob": blob},
                 api_key,
             )
         else:
@@ -8012,6 +8181,16 @@ def run_daemon() -> None:
                 capture_gateway_metric(config)
             except Exception as _gm_e:
                 log.debug("gateway.metric capture failed (continuing): %s", _gm_e)
+
+            # ── Drain sync DLQ (#1601) ──
+            # Replay any batches that previously failed AES-GCM encryption
+            # (e.g. a key rotation race). Cheap no-op when the queue is
+            # empty (single COUNT(*) on a tiny table). Failure here is
+            # non-fatal — bad rows stay parked and we try again next tick.
+            try:
+                _dlq_replay(config.get("api_key"), config.get("encryption_key"))
+            except Exception as _dlq_e:
+                log.debug("sync_dlq replay failed (continuing): %s", _dlq_e)
 
             ev = sync_sessions(config, state, paths)
             ev += sync_claude_cli_sessions(config, state, paths)
