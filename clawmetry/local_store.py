@@ -124,7 +124,7 @@ LOCAL_MAX_BYTES = int(
     float(os.environ.get("CLAWMETRY_LOCAL_MAX_GB", "5.0")) * 1024 * 1024 * 1024
 )
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 # ── Two-layer schema (multi-agent) ──────────────────────────────────────────
 #
@@ -614,6 +614,28 @@ _DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_eval_suite_runs_ran_at ON eval_suite_runs(ran_at)",
     "CREATE INDEX IF NOT EXISTS idx_eval_suite_runs_suite  ON eval_suite_runs(suite_name, ran_at)",
+    # Issue #1619 Phase 3 — regression-replay runs. One row per
+    # replayed-failed-session per invocation. Drives the
+    # /api/evals/regression-summary endpoint and the overview tile's
+    # "Regression: X fixed since last week" mini-line. Composes with the
+    # other two eval surfaces: ``sessions.eval_score`` = production scores
+    # (Phase 1), ``eval_suite_runs`` = golden bench (Phase 2),
+    # ``eval_regression_runs`` = "did yesterday's fail get fixed?" (Phase 3).
+    """
+    CREATE TABLE IF NOT EXISTS eval_regression_runs (
+        session_id        VARCHAR NOT NULL,
+        replayed_at       BIGINT  NOT NULL,
+        status            VARCHAR NOT NULL,
+        original_outcome  VARCHAR,
+        new_outcome       VARCHAR,
+        original_score    DOUBLE,
+        new_score         DOUBLE,
+        reason            VARCHAR,
+        PRIMARY KEY (session_id, replayed_at)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_eval_regression_replayed_at ON eval_regression_runs(replayed_at)",
+    "CREATE INDEX IF NOT EXISTS idx_eval_regression_status     ON eval_regression_runs(status, replayed_at)",
     """
     CREATE TABLE IF NOT EXISTS schema_version (
         version    INTEGER PRIMARY KEY,
@@ -4239,6 +4261,73 @@ class LocalStore:
             rows = self._fetch(sql, params)
         except Exception as e:
             log.warning("local store: query_recent_suite_runs failed: %s", e)
+            return []
+        return [dict(zip(cols, r)) for r in rows]
+
+    # ── Issue #1619 Phase 3 — regression replay runs ────────────────────────
+
+    def persist_eval_regression_run(
+        self,
+        *,
+        session_id: str,
+        status: str,
+        original_outcome: str,
+        new_outcome: str,
+        original_score: float | None,
+        new_score: float | None,
+        reason: str,
+        replayed_at: int,
+    ) -> None:
+        """Write one row of the ``eval_regression_runs`` table. Idempotent on
+        ``(session_id, replayed_at)`` — re-running with the same timestamp
+        overwrites in place; a new run gets a new ``replayed_at`` so the
+        trend history grows by one row per (session, replay)."""
+        with self._write_lock:
+            try:
+                self._conn.execute(
+                    """
+                    INSERT OR REPLACE INTO eval_regression_runs
+                        (session_id, replayed_at, status, original_outcome,
+                         new_outcome, original_score, new_score, reason)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        session_id or "",
+                        int(replayed_at),
+                        status or "error",
+                        (original_outcome or "")[:64],
+                        (new_outcome or "")[:64],
+                        None if original_score is None else float(original_score),
+                        None if new_score is None else float(new_score),
+                        (reason or "")[:500],
+                    ],
+                )
+            except Exception:
+                log.exception(
+                    "local store: persist_eval_regression_run failed for %s",
+                    session_id,
+                )
+
+    def query_recent_regression_runs(
+        self,
+        *,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Return recent ``eval_regression_runs`` rows, newest first."""
+        sql = (
+            "SELECT session_id, replayed_at, status, original_outcome, "
+            "       new_outcome, original_score, new_score, reason "
+            "  FROM eval_regression_runs "
+            " ORDER BY replayed_at DESC LIMIT ?"
+        )
+        cols = [
+            "session_id", "replayed_at", "status", "original_outcome",
+            "new_outcome", "original_score", "new_score", "reason",
+        ]
+        try:
+            rows = self._fetch(sql, [int(limit)])
+        except Exception as e:
+            log.warning("local store: query_recent_regression_runs failed: %s", e)
             return []
         return [dict(zip(cols, r)) for r in rows]
 

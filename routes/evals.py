@@ -6,11 +6,12 @@ on the user's own API key; these endpoints just expose the persisted scores
 (local DuckDB) to the dashboard UI and to ad-hoc re-score requests.
 
 Routes:
-  GET   /api/evals/recent           — recent scored sessions
-  GET   /api/evals/summary          — aggregate avg/p50/p10 over a window
-  POST  /api/evals/rescore/<sid>    — manual re-eval trigger for one session
-  GET   /api/evals/rubric           — raw rubric YAML text
-  POST  /api/evals/rubric           — replace rubric YAML text (validates parse)
+  GET   /api/evals/recent              — recent scored sessions
+  GET   /api/evals/summary             — aggregate avg/p50/p10 over a window
+  POST  /api/evals/rescore/<sid>       — manual re-eval trigger for one session
+  GET   /api/evals/rubric              — raw rubric YAML text
+  POST  /api/evals/rubric              — replace rubric YAML text (validates parse)
+  GET   /api/evals/regression-summary  — Phase 3: aggregate replay outcomes
 
 All endpoints degrade gracefully when the local store or eval runner is
 unavailable — the dashboard treats an empty payload as "evals not yet
@@ -126,6 +127,43 @@ def evals_rubric_get():
         "default":        eval_runner.DEFAULT_RUBRIC,
         "enabled":        eval_runner.is_enabled(),
     })
+
+
+@bp_evals.route("/api/evals/regression-summary", methods=["GET"])
+def evals_regression_summary():
+    """Phase 3 (refs #1619) — aggregate replay outcomes over a window.
+
+    ``?window=7d`` (1d, 7d, 30d ok; bounded to 90d). Returns the same
+    payload shape ``run_regression`` builds, except aggregated from the
+    persisted ``eval_regression_runs`` table:
+
+        {tested: N, improved: X, regressed: Y, same: Z, errored: E,
+         window_days: D, last_run_at: <epoch_ms | null>}
+
+    Empty payload (all zeros + ``last_run_at: null``) on a fresh install
+    where the user hasn't run ``clawmetry eval --regression`` yet.
+    """
+    raw = (request.args.get("window") or "7d").strip().lower()
+    days = 7
+    try:
+        if raw.endswith("d"):
+            days = int(float(raw[:-1]))
+        elif raw.endswith("h"):
+            days = max(1, int(float(raw[:-1]) // 24))
+        else:
+            days = int(float(raw))
+    except (TypeError, ValueError):
+        days = 7
+    days = max(1, min(90, days))
+    try:
+        from clawmetry import eval_regression_replay as err
+        payload = err.regression_summary(window_days=days)
+    except Exception:
+        payload = {
+            "tested": 0, "improved": 0, "regressed": 0, "same": 0,
+            "errored": 0, "window_days": days, "last_run_at": None,
+        }
+    return jsonify(payload)
 
 
 @bp_evals.route("/api/evals/rubric", methods=["POST"])

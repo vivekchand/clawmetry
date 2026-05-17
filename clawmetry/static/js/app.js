@@ -2154,6 +2154,8 @@ async function loadMiniWidgets(overview, usage) {
   // Issue #1619 Phase 1 — eval score tile. Lazy, non-blocking; tile shows
   // a dash on miss so a slow daemon doesn't gate the overview render.
   loadEvalSummary();
+  // Phase 3 — regression-replay mini-line under the eval tile.
+  loadEvalRegressionSummary();
 }
 
 // Issue #1619 Phase 1 — pull aggregate score for the overview tile.
@@ -2184,6 +2186,39 @@ async function loadEvalSummary() {
   } catch (e) {
     avgEl.textContent = '--';
     if (covEl) covEl.textContent = '';
+  }
+}
+
+// Issue #1619 Phase 3 — regression-replay summary line under the eval tile.
+// Reads /api/evals/regression-summary?window=7d and renders a single-line
+// status like "Regression: 8 fixed since last week". Silent on a fresh
+// install (tested=0) so the tile doesn't dangle a useless zero.
+async function loadEvalRegressionSummary() {
+  var el = document.getElementById('eval-regression-line');
+  if (!el) return;
+  try {
+    var data = await fetch('/api/evals/regression-summary?window=7d').then(function(r){return r.json();}).catch(function(){return null;});
+    if (!data || typeof data.tested !== 'number' || data.tested === 0) {
+      el.textContent = '';
+      return;
+    }
+    var parts = [];
+    if (data.improved > 0) parts.push(data.improved + ' fixed');
+    if (data.regressed > 0) parts.push(data.regressed + ' regressed');
+    if (data.same > 0) parts.push(data.same + ' same');
+    if (!parts.length) { el.textContent = ''; return; }
+    el.textContent = 'Regression: ' + parts.join(', ') + ' (7d)';
+    // Subtle color signal: red if anything regressed, green if any fixed
+    // and none regressed, muted otherwise.
+    if (data.regressed > 0) {
+      el.style.color = '#ef4444';
+    } else if (data.improved > 0) {
+      el.style.color = '#22c55e';
+    } else {
+      el.style.color = 'var(--text-muted)';
+    }
+  } catch (e) {
+    el.textContent = '';
   }
 }
 
