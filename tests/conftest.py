@@ -10,6 +10,20 @@ import pytest
 import requests
 
 
+def pytest_addoption(parser):
+    """CLI flags shared across the suite.
+
+    ``--update-baseline`` is consumed by
+    ``tests/test_moat_perf_benchmark.py`` to rewrite the committed perf
+    baseline. Declared here because pytest_addoption hooks must live in
+    a conftest (not in the test module itself).
+    """
+    parser.addoption(
+        "--update-baseline", action="store_true", default=False,
+        help="Rewrite tests/data/moat_perf_baseline.json from the current run.",
+    )
+
+
 def _detect_gateway_token():
     """Detect gateway token from OpenClaw config."""
     # Environment variable
