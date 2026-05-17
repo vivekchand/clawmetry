@@ -407,29 +407,79 @@ def _bind_params(now: datetime.datetime) -> dict:
 
 
 # ── Anthropic synthesis ────────────────────────────────────────────────────
+#
+# Two synthesis paths so the first-touch experience needs ZERO setup
+# (#1420 P0b — Anthropic-key friction wall):
+#
+#   1. DIRECT — caller has a local Anthropic key in config / env. Used by
+#      OSS-only nodes and any paired user who prefers their own key (Pro
+#      dispatch fan-out runs against the user's key so cost shows up on
+#      their Anthropic invoice, not ClawMetry's).
+#
+#   2. RELAY — caller is cloud-paired (``cm_`` bearer on disk) but has no
+#      local key. The dashboard POSTs the canned synthesis body to
+#      ``{INGEST_URL}/api/insights/synthesize`` with the user's ``cm_``
+#      bearer; the cloud service runs the LLM call against its pooled
+#      Anthropic key and bills against the user's plan (~$0.05/wk for
+#      Free, included for Pro per ``project_alerts_pro_feature.md``). This
+#      collapses ``pip install clawmetry`` → first weekly digest with full
+#      narratives, no key-setup detour.
+#
+# Forward-compat: if the cloud endpoint isn't deployed yet (404 / network
+# error) we fall back to the same "<n> rows" stub that the no-key path
+# already produces. No new failure modes introduced.
+
+# Cloud-relay endpoint. Env override mirrors clawmetry/sync.py + cli.py.
+INGEST_URL = os.environ.get(
+    "CLAWMETRY_INGEST_URL", "https://ingest.clawmetry.com"
+)
+RELAY_SYNTHESIZE_URL = INGEST_URL.rstrip("/") + "/api/insights/synthesize"
 
 
-def _load_anthropic_key(cfg: dict) -> str | None:
-    """config['anthropic_api_key'] → ``ANTHROPIC_API_KEY`` env. Cloud-Pro
-    users get a relayed key via ``clawmetry connect`` (issue-728 follow-up)."""
+def _resolve_synthesis_credential(cfg: dict) -> tuple[str, str | None]:
+    """Pick the synthesis path. Returns ``(mode, secret)`` where mode is one
+    of ``"direct"`` (local Anthropic key), ``"relay"`` (cloud-paired user
+    with no local key, secret = ``cm_`` bearer), or ``"none"`` (OSS-only,
+    no key set — emit the stub fallback).
+
+    Direct beats relay so a Pro user who explicitly configured their own
+    Anthropic key keeps full cost attribution on their invoice.
+    """
     k = (cfg.get("anthropic_api_key") or "").strip()
     if k:
-        return k
+        return "direct", k
     env = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    return env or None
+    if env:
+        return "direct", env
+    # Fall through to relay only when the node is cloud-paired. Read the
+    # bearer via the same helper dashboard.py uses (``_read_cloud_token``);
+    # any failure (no token, OSS-only) returns ``("none", None)`` so the
+    # user-facing fallback stays the existing "no key" stub.
+    try:
+        import dashboard as _d
+        tok = (_d._read_cloud_token() or "").strip()
+    except Exception:
+        tok = ""
+    if tok.startswith("cm_"):
+        return "relay", tok
+    return "none", None
 
 
-def _synthesize_narrative(
-    api_key: str,
-    title: str,
-    hint: str,
-    rows: list[dict],
-) -> tuple[str, int]:
-    """Sonnet → ≤3-sentence narrative. Returns ``(narrative, tokens_used)``;
-    falls back to ``"<n> rows."`` on any error."""
-    if not rows:
-        return "no data this week.", 0
-    prompt = (
+# Back-compat shim: existing callers / tests import ``_load_anthropic_key``.
+# Keep returning the direct key (or None) so the old code-path is unchanged
+# for OSS-only nodes; the new relay branch is opt-in via
+# ``_resolve_synthesis_credential``.
+def _load_anthropic_key(cfg: dict) -> str | None:
+    mode, secret = _resolve_synthesis_credential(cfg)
+    if mode == "direct":
+        return secret
+    return None
+
+
+def _build_synthesis_prompt(title: str, hint: str, rows: list[dict]) -> str:
+    """Single source of truth for the synthesis prompt — used by both the
+    direct and relay paths so cloud-side output matches local-key output."""
+    return (
         f"You are summarising ONE insight for an engineer's weekly digest.\n\n"
         f"Insight title: {title}\n"
         f"Hint: {hint}\n\n"
@@ -438,32 +488,92 @@ def _synthesize_narrative(
         f"Use concrete numbers from the rows. If the rows are empty or "
         f"all zero, say so plainly."
     )
+
+
+def _synthesize_via_anthropic(
+    api_key: str, title: str, hint: str, rows: list[dict]
+) -> tuple[str, int]:
+    """Direct-mode call to ``api.anthropic.com``."""
     body = {
         "model": SYNTHESIS_MODEL,
         "max_tokens": 220,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": [
+            {"role": "user", "content": _build_synthesis_prompt(title, hint, rows)}
+        ],
     }
     headers = {
         "Content-Type": "application/json",
         "anthropic-version": ANTHROPIC_VERSION,
         "x-api-key": api_key,
     }
+    req = urllib.request.Request(
+        ANTHROPIC_URL,
+        data=json.dumps(body).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=SYNTHESIS_TIMEOUT_SECS) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    blocks = data.get("content") or []
+    text = "".join(b.get("text", "") for b in blocks if isinstance(b, dict)).strip()
+    usage = data.get("usage") or {}
+    tokens = int(usage.get("input_tokens", 0)) + int(usage.get("output_tokens", 0))
+    return text or f"{len(rows)} rows.", tokens
+
+
+def _synthesize_via_relay(
+    cm_token: str, title: str, hint: str, rows: list[dict]
+) -> tuple[str, int]:
+    """Relay-mode call to ``ingest.clawmetry.com/api/insights/synthesize``.
+
+    The cloud service runs the LLM call on the user's behalf using its
+    pooled Anthropic key and bills against the paired plan. Expected
+    response shape: ``{"text": "...", "tokens": <int>}``. Any non-2xx or
+    network error raises and the caller falls back to the stub narrative.
+    """
+    body = {
+        "model": SYNTHESIS_MODEL,
+        "max_tokens": 220,
+        "title": title,
+        "hint": hint,
+        "rows": rows[:20],  # cap mirrors direct path
+        "prompt": _build_synthesis_prompt(title, hint, rows),
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {cm_token}",
+    }
+    req = urllib.request.Request(
+        RELAY_SYNTHESIZE_URL,
+        data=json.dumps(body).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=SYNTHESIS_TIMEOUT_SECS) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    text = (data.get("text") or "").strip()
+    tokens = int(data.get("tokens") or 0)
+    return text or f"{len(rows)} rows.", tokens
+
+
+def _synthesize_narrative(
+    secret: str,
+    title: str,
+    hint: str,
+    rows: list[dict],
+    mode: str = "direct",
+) -> tuple[str, int]:
+    """Sonnet → ≤3-sentence narrative. Returns ``(narrative, tokens_used)``;
+    falls back to ``"<n> rows."`` on any error. ``mode`` selects between
+    the direct Anthropic call and the cloud relay (#1420 P0b)."""
+    if not rows:
+        return "no data this week.", 0
     try:
-        req = urllib.request.Request(
-            ANTHROPIC_URL,
-            data=json.dumps(body).encode("utf-8"),
-            headers=headers,
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=SYNTHESIS_TIMEOUT_SECS) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        blocks = data.get("content") or []
-        text = "".join(b.get("text", "") for b in blocks if isinstance(b, dict)).strip()
-        usage = data.get("usage") or {}
-        tokens = int(usage.get("input_tokens", 0)) + int(usage.get("output_tokens", 0))
-        return text or f"{len(rows)} rows.", tokens
+        if mode == "relay":
+            return _synthesize_via_relay(secret, title, hint, rows)
+        return _synthesize_via_anthropic(secret, title, hint, rows)
     except (urllib.error.HTTPError, urllib.error.URLError, OSError, ValueError) as exc:
-        log.warning("insights: synthesis failed for %r: %s", title, exc)
+        log.warning("insights: synthesis failed for %r (mode=%s): %s", title, mode, exc)
         return f"{len(rows)} rows (LLM synthesis unavailable).", 0
 
 
@@ -492,7 +602,10 @@ class WeeklyDigestGenerator:
             week_end=now.strftime("%Y-%m-%d"),
         )
         params = _bind_params(now)
-        api_key = _load_anthropic_key(self.cfg)
+        # #1420 P0b: pick the synthesis path. Paired users get cloud-relayed
+        # synthesis for free; OSS-only users without a local key still see
+        # the stub-narrative fallback (no crash, no friction wall).
+        mode, secret = _resolve_synthesis_credential(self.cfg)
 
         for key, title, sql, hint in _INSIGHT_TEMPLATES:
             t0 = time.monotonic()
@@ -501,12 +614,19 @@ class WeeklyDigestGenerator:
                 "insights: %s ran in %.0fms, %d rows",
                 key, (time.monotonic() - t0) * 1000, len(rows),
             )
-            if api_key:
-                narrative, tokens = _synthesize_narrative(api_key, title, hint, rows)
+            if mode != "none" and secret:
+                narrative, tokens = _synthesize_narrative(
+                    secret, title, hint, rows, mode=mode,
+                )
                 digest.tokens_used += tokens
             else:
+                # OSS-only with no key — short stub. The CTA points at the
+                # zero-friction option (pair the node) instead of the old
+                # "Set ANTHROPIC_API_KEY" copy that turned ~95% of first-touch
+                # users away per #1420 P0b.
                 narrative = (
-                    f"{len(rows)} rows. (Set ANTHROPIC_API_KEY for narrative summaries.)"
+                    f"{len(rows)} rows. (Connect this node to Cloud for free "
+                    f"AI-written summaries — no Anthropic key required.)"
                     if rows else "no data this week."
                 )
             digest.insights.append(InsightResult(

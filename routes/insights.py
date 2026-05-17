@@ -49,6 +49,14 @@ _UPGRADE_CTA = (
     "Want this delivered to Slack every Monday at 9am? Upgrade to Cloud-Pro."
 )
 
+# OSS-only nodes (no ``cm_`` token on disk) need a different first-touch
+# CTA: pair the node so we can run AI summaries via the cloud relay (no
+# Anthropic key required). Closes the friction wall called out in #1420 P0b.
+_PAIR_CTA = (
+    "Connect this node to Cloud for free AI-written summaries. "
+    "No Anthropic key required."
+)
+
 
 def _feature_enabled() -> bool:
     """Legacy explicit-on env-var override. When set, all gates open
@@ -64,6 +72,17 @@ def _is_pro() -> bool:
     try:
         import dashboard as _d
         return bool(_d._is_pro_user())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _is_paired() -> bool:
+    """True iff a ``cm_`` cloud token is resolvable on disk. Drives the
+    OSS-only vs Cloud-Free copy split on the upsell envelope (#1420 P0b)."""
+    try:
+        import dashboard as _d
+        tok = (_d._read_cloud_token() or "").strip()
+        return tok.startswith("cm_")
     except Exception:  # noqa: BLE001
         return False
 
@@ -86,11 +105,29 @@ def _upgrade_payload() -> dict:
     history / config response when the caller isn't on Cloud-Pro so the
     UI can render a one-line conversion button (per
     ``project_free_plan_upsell.md`` — every click is a conversion event,
-    no silent failures)."""
+    no silent failures).
+
+    Three-state copy split (#1420 P0b):
+
+      - Pro    → no envelope (handled upstream).
+      - Free   → "Upgrade to Pro for Slack/Telegram delivery." (paired,
+                 already gets cloud-relayed AI summaries).
+      - OSS    → "Pair this node to Cloud for free AI summaries." (no
+                 ``cm_`` token yet — fix the first-touch friction wall
+                 before talking dispatch).
+    """
+    if _is_pro():
+        tier = "pro"
+    elif _is_paired():
+        tier = "free"
+    else:
+        tier = "oss"
+    cta = _UPGRADE_CTA if tier == "free" else _PAIR_CTA if tier == "oss" else ""
+    url = "/cloud/billing" if tier == "free" else "/cloud/connect" if tier == "oss" else ""
     return {
-        "_upgrade_cta": _UPGRADE_CTA,
-        "_upgrade_url": "/cloud/billing",
-        "_tier": "pro" if _is_pro() else "free",
+        "_upgrade_cta": cta,
+        "_upgrade_url": url,
+        "_tier": tier,
     }
 
 

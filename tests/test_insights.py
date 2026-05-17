@@ -144,12 +144,14 @@ def test_view_endpoints_open_for_free_tier_with_upsell(
     fresh_insights, monkeypatch
 ):
     """Tier split (#1420 P0a): view endpoints (preview + /insights HTML)
-    are universal — Free / OSS callers see the dashboard digest plus an
+    are universal — paired Free callers see the dashboard digest plus an
     ``_upgrade_cta`` field pointing them at Cloud-Pro for dispatch. The
     legacy ``CLAWMETRY_INSIGHTS=1`` env-var stays as an explicit-on
     override, but is no longer required to read the digest."""
     monkeypatch.delenv("CLAWMETRY_INSIGHTS", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_read_cloud_token", lambda: "cm_fakepaired")
     sys.modules.pop("routes.insights", None)
     from flask import Flask
     from routes.insights import bp_insights
@@ -160,13 +162,36 @@ def test_view_endpoints_open_for_free_tier_with_upsell(
     assert r.status_code == 200, r.data
     body = r.get_json()
     assert "insights" in body
-    # Free tier carries the upsell envelope so the UI can render a
-    # conversion CTA instead of failing silently.
+    # Paired-Free carries the dispatch upsell so the UI can route to Pro.
     assert body.get("_upgrade_cta", "").startswith("Want this delivered")
     assert body.get("_tier") == "free"
     assert body.get("_upgrade_url") == "/cloud/billing"
     r2 = client.get("/insights")
     assert r2.status_code == 200, r2.data
+
+
+def test_oss_only_tier_gets_pair_cta_not_pro_upsell(fresh_insights, monkeypatch):
+    """OSS-only nodes (no ``cm_`` token) need the pair-to-Cloud CTA, not
+    the Slack/dispatch upsell. Closes the first-touch friction wall from
+    #1420 P0b: ask the OSS user to pair (free + zero-config AI summaries)
+    before pitching paid dispatch."""
+    monkeypatch.delenv("CLAWMETRY_INSIGHTS", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_read_cloud_token", lambda: None)
+    sys.modules.pop("routes.insights", None)
+    from flask import Flask
+    from routes.insights import bp_insights
+    app = Flask(__name__)
+    app.register_blueprint(bp_insights)
+    client = app.test_client()
+    r = client.get("/api/insights/preview")
+    assert r.status_code == 200, r.data
+    body = r.get_json()
+    assert body.get("_tier") == "oss"
+    assert body.get("_upgrade_url") == "/cloud/connect"
+    assert "Connect this node" in body.get("_upgrade_cta", "")
+    assert "No Anthropic key required" in body.get("_upgrade_cta", "")
 
 
 def test_send_now_pro_paywall_for_free_tier(fresh_insights, monkeypatch):
@@ -205,6 +230,8 @@ def test_config_get_returns_200_with_upsell_for_free_tier(
     plus an upsell envelope so the nav tab reveals itself and the page
     can render the conversion CTA. POST stays Pro-gated (402)."""
     monkeypatch.delenv("CLAWMETRY_INSIGHTS", raising=False)
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_read_cloud_token", lambda: "cm_fakepaired")
     sys.modules.pop("routes.insights", None)
     from flask import Flask
     from routes.insights import bp_insights
@@ -262,7 +289,101 @@ def test_config_endpoint_redacts_api_key(fresh_insights, monkeypatch):
     assert r.get_json()["anthropic_api_key"] == "***"
 
 
-# ── 6. Scheduler math ──────────────────────────────────────────────────────
+# ── 6. Cloud-relayed synthesis (P0b — no Anthropic-key friction wall) ────
+
+
+def test_resolver_picks_direct_when_local_key_set(fresh_insights, monkeypatch):
+    """Local Anthropic key wins over cloud relay so Pro users keep cost
+    attribution on their own invoice (#1420 P0b)."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-local")
+    mode, secret = fresh_insights._resolve_synthesis_credential({})
+    assert mode == "direct"
+    assert secret == "sk-local"
+
+
+def test_resolver_picks_relay_when_paired_but_no_local_key(
+    fresh_insights, monkeypatch
+):
+    """Cloud-paired node with no local key → relay path. This is the
+    zero-friction first-touch behaviour mandated by #1420 P0b."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_read_cloud_token", lambda: "cm_testtoken")
+    mode, secret = fresh_insights._resolve_synthesis_credential({})
+    assert mode == "relay"
+    assert secret == "cm_testtoken"
+
+
+def test_resolver_picks_none_for_oss_only_node(fresh_insights, monkeypatch):
+    """OSS-only (no key, no pairing) → ``none`` — caller renders the stub
+    narrative without throwing. Worst-case path must not crash."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_read_cloud_token", lambda: None)
+    mode, secret = fresh_insights._resolve_synthesis_credential({})
+    assert mode == "none"
+    assert secret is None
+
+
+def test_synthesize_via_relay_hits_cloud_endpoint(fresh_insights, monkeypatch):
+    """Relay path POSTs to ``{INGEST_URL}/api/insights/synthesize`` with
+    the user's ``cm_`` bearer and parses ``{text, tokens}`` from the
+    response. Validates the wire shape so the cloud-side handler can be
+    built against a fixed contract."""
+    import io
+    import urllib.request
+
+    captured: dict = {}
+
+    class _FakeResp:
+        def read(self):
+            return json.dumps({"text": "synthesised via cloud.", "tokens": 42}).encode()
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    def _fake_urlopen(req, timeout=None):
+        captured["url"] = req.full_url
+        captured["headers"] = dict(req.headers)
+        captured["body"] = json.loads(req.data.decode())
+        return _FakeResp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    text, tokens = fresh_insights._synthesize_via_relay(
+        "cm_testtoken", "Top cost drivers", "hint", [{"x": 1}],
+    )
+    assert text == "synthesised via cloud."
+    assert tokens == 42
+    assert captured["url"].endswith("/api/insights/synthesize")
+    # Bearer goes in Authorization (capitalisation comes from urllib).
+    assert captured["headers"].get("Authorization") == "Bearer cm_testtoken"
+    # Body carries the prompt + raw row preview so the cloud handler has
+    # both shapes available (cheap re-synth without re-running the prompt
+    # builder cloud-side if it prefers).
+    assert "prompt" in captured["body"]
+    assert captured["body"]["rows"] == [{"x": 1}]
+
+
+def test_relay_synthesis_failure_falls_back_to_stub(fresh_insights, monkeypatch):
+    """Cloud endpoint not yet deployed / network error → caller gets the
+    same stub fallback as the no-key path. Forward-compat with cloud
+    rollout so we don't block this PR on a cloud-side merge."""
+    import urllib.error
+    import urllib.request
+
+    def _fake_urlopen(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 404, "not found", {}, None)
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    text, tokens = fresh_insights._synthesize_narrative(
+        "cm_token", "title", "hint", [{"x": 1}], mode="relay",
+    )
+    assert "unavailable" in text
+    assert tokens == 0
+
+
+# ── 7. Scheduler math ──────────────────────────────────────────────────────
 
 
 def test_seconds_until_next_run_rolls_to_next_week():
