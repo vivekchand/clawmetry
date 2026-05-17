@@ -117,6 +117,7 @@ from routes.update_check import bp_update_check, start_update_check_thread
 from routes.workspaces import bp_workspaces
 from routes.bootstrap import bp_bootstrap
 from routes.insights import bp_insights
+from routes.review import bp_review
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -4119,6 +4120,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
     <div class="nav-tab active" onclick="switchTab('overview')">Overview <span id="nav-stuck-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
+    <div class="nav-tab" onclick="switchTab('review')" title="Did the agent make the right choice? Sample 10 random sessions per day.">Review</div>
     <div class="nav-tab" onclick="switchTab('alerts')" title="Get notified when something goes wrong">Alerts <span id="nav-alerts-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('notifications')" title="Slack / Email / PagerDuty / Telegram channels">Notifications</div>
     <div class="nav-tab" onclick="switchTab('context')" title="See what context the LLM receives each turn">Context</div>
@@ -5555,6 +5557,22 @@ function clawmetryLogout(){
   <div id="skills-list"><div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div></div>
 </div><!-- end page-skills -->
 
+<!-- Issue #1615: Review tab — sample 10 random sessions per day,
+     mark correct / wrong / borderline, watch accuracy trend over time. -->
+<div class="page" id="page-review">
+  <div class="refresh-bar">
+    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">&#10067; Did the agent make the right choice?</h2>
+    <button class="refresh-btn" onclick="loadReview()">&#8635; Refresh</button>
+    <button class="refresh-btn" onclick="sampleReviewNow()" title="Pick fresh sessions to review right now">Sample now</button>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 320px;gap:16px;align-items:start;">
+    <div id="review-list"><div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div></div>
+    <div id="review-accuracy" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:16px;">
+      <div style="color:var(--text-muted);font-size:13px;">Loading accuracy...</div>
+    </div>
+  </div>
+</div><!-- end page-review -->
+
 
 <script>
 
@@ -6181,6 +6199,150 @@ function switchTab(name) {
   if (name === 'subagents') { loadSubagents(); if (!_subagentsTimer) _subagentsTimer = setInterval(loadSubagents, 5000); }
   if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
   if (name === 'selfconfig') loadSelfConfig();
+  if (name === 'review') loadReview();
+}
+
+// ── Review tab (issue #1615) ─────────────────────────────────────────────
+function _reviewEscape(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, function(c) {
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+function _reviewStatusLabel(s) {
+  return {
+    'pending':              'Pending',
+    'reviewed_correct':     'Correct',
+    'reviewed_wrong':       'Wrong',
+    'reviewed_borderline':  'Borderline'
+  }[s] || s;
+}
+function _reviewAccuracyHtml(data) {
+  var g = data.global || {};
+  var per = data.per_agent || [];
+  var fmtAcc = function(a, c, w) {
+    if (a == null) return '<span style="color:var(--text-muted);">Not enough reviews yet</span>';
+    var pct = Math.round(a * 100);
+    var color = pct >= 90 ? '#22c55e' : (pct >= 75 ? '#f59e0b' : '#ef4444');
+    return '<span style="color:' + color + ';font-weight:700;">' + pct + '%</span>' +
+           ' <span style="color:var(--text-muted);font-size:11px;">(' + c + '/' + (c + w) + ')</span>';
+  };
+  var html = '<h3 style="margin:0 0 12px 0;font-size:13px;color:var(--text-primary);">' +
+             (data.window_days || 30) + '-day accuracy</h3>';
+  html += '<div style="font-size:24px;margin-bottom:4px;">' +
+          fmtAcc(g.accuracy, g.correct || 0, g.wrong || 0) + '</div>';
+  html += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:16px;">' +
+          'Global accuracy across all agents. Borderline reviews (' +
+          (g.borderline || 0) + ') excluded from the denominator.</div>';
+  if (per.length > 0) {
+    html += '<h4 style="margin:8px 0;font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Per agent</h4>';
+    per.forEach(function(p) {
+      html += '<div style="padding:8px 0;border-top:1px solid var(--border-primary);font-size:12px;">' +
+              '<div style="font-weight:600;color:var(--text-primary);">' + _reviewEscape(p.agent_id) + '</div>' +
+              '<div style="color:var(--text-muted);font-size:11px;margin-top:2px;">' +
+              fmtAcc(p.accuracy, p.correct, p.wrong) +
+              '</div></div>';
+    });
+  }
+  return html;
+}
+async function loadReview() {
+  var listEl = document.getElementById('review-list');
+  var accEl = document.getElementById('review-accuracy');
+  if (!listEl || !accEl) return;
+  listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div>';
+  try {
+    var [queue, accuracy] = await Promise.all([
+      fetch('/api/review/queue').then(function(r){return r.json();}),
+      fetch('/api/review/accuracy?window=30').then(function(r){return r.json();})
+    ]);
+    accEl.innerHTML = _reviewAccuracyHtml(accuracy);
+    var rows = queue.rows || [];
+    if (rows.length === 0) {
+      listEl.innerHTML = '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:24px;text-align:center;color:var(--text-muted);font-size:13px;">' +
+        '<div style="font-size:32px;margin-bottom:8px;">&#128064;</div>' +
+        '<div style="font-weight:600;color:var(--text-primary);margin-bottom:4px;">No sessions to review.</div>' +
+        '<div>Sampling fires nightly. Click <strong>Sample now</strong> to pull yesterday\'s sessions immediately.</div>' +
+        '</div>';
+      return;
+    }
+    var html = '';
+    rows.forEach(function(r) {
+      var s = r.session_summary || {};
+      var title = s.title || r.session_id;
+      var tokens = s.total_tokens || 0;
+      var msgs = s.message_count || 0;
+      var statusBadge = r.status === 'pending' ? '' :
+        '<span style="background:var(--bg-accent);color:#fff;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:600;margin-left:6px;">' +
+        _reviewStatusLabel(r.status) + '</span>';
+      var notes = r.reviewer_notes ?
+        '<div style="margin-top:6px;font-size:12px;color:var(--text-muted);font-style:italic;">' +
+        _reviewEscape(r.reviewer_notes) + '</div>' : '';
+      html += '<div data-review-sid="' + _reviewEscape(r.session_id) + '" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:14px;margin-bottom:10px;">' +
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">' +
+          '<div style="flex:1;min-width:0;">' +
+            '<div style="font-weight:600;color:var(--text-primary);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
+              _reviewEscape(title) + statusBadge +
+            '</div>' +
+            '<div style="color:var(--text-muted);font-size:11px;margin-top:2px;">' +
+              _reviewEscape(r.agent_id) + ' &middot; ' + tokens.toLocaleString() + ' tokens &middot; ' +
+              msgs + ' msgs &middot; sampled ' + _reviewEscape((r.sampled_at || '').slice(0, 10)) +
+            '</div>' +
+            notes +
+          '</div>' +
+          '<a href="#" onclick="switchTab(\'transcripts\');return false;" style="font-size:11px;color:var(--bg-accent);text-decoration:none;white-space:nowrap;">View transcript &rarr;</a>' +
+        '</div>' +
+        '<div style="display:flex;gap:6px;margin-top:10px;align-items:center;">' +
+          '<button onclick="submitReview(\'' + _reviewEscape(r.session_id) + '\',\'reviewed_correct\')" style="background:#16a34a;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;">&#9989; Correct</button>' +
+          '<button onclick="submitReview(\'' + _reviewEscape(r.session_id) + '\',\'reviewed_wrong\')" style="background:#dc2626;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;">&#10060; Wrong</button>' +
+          '<button onclick="submitReview(\'' + _reviewEscape(r.session_id) + '\',\'reviewed_borderline\')" style="background:#f59e0b;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;">&#129300; Borderline</button>' +
+          '<input type="text" id="review-notes-' + _reviewEscape(r.session_id) + '" placeholder="Optional note..." style="flex:1;background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:6px;padding:6px 10px;font-size:12px;color:var(--text-primary);" />' +
+        '</div>' +
+      '</div>';
+    });
+    listEl.innerHTML = html;
+  } catch (err) {
+    listEl.innerHTML = '<div style="color:#ef4444;font-size:13px;padding:16px;">Failed to load reviews: ' +
+                       _reviewEscape(err && err.message || err) + '</div>';
+  }
+}
+async function submitReview(sid, status) {
+  var noteEl = document.getElementById('review-notes-' + sid);
+  var notes = noteEl ? (noteEl.value || '').trim() : '';
+  try {
+    var resp = await fetch('/api/review/' + encodeURIComponent(sid), {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({status: status, notes: notes || null})
+    });
+    if (!resp.ok) {
+      var err = await resp.json().catch(function(){return {};});
+      alert('Could not save review: ' + (err.error || resp.status));
+      return;
+    }
+  } catch (err) {
+    alert('Could not save review: ' + (err && err.message || err));
+    return;
+  }
+  loadReview();
+}
+async function sampleReviewNow() {
+  try {
+    var resp = await fetch('/api/review/sample', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: '{}'
+    });
+    var data = await resp.json().catch(function(){return {};});
+    if (!resp.ok) {
+      alert('Sampler failed: ' + (data.error || resp.status));
+      return;
+    }
+  } catch (err) {
+    alert('Sampler failed: ' + (err && err.message || err));
+    return;
+  }
+  loadReview();
 }
 
 function exportUsageData() {
@@ -10095,6 +10257,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_workspaces)
     app.register_blueprint(bp_bootstrap)
     app.register_blueprint(bp_insights)
+    app.register_blueprint(bp_review)
 
     # ── v2 React SPA (opt-in) ───────────────────────────────────────────────
     # Default OFF so existing v1 users notice nothing. Enabled when the user
@@ -10404,6 +10567,7 @@ DASHBOARD_HTML = r"""
     <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
     <div class="nav-tab active" onclick="switchTab('overview')">Overview <span id="nav-stuck-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
+    <div class="nav-tab" onclick="switchTab('review')" title="Did the agent make the right choice? Sample 10 random sessions per day.">Review</div>
     <div class="nav-tab" onclick="switchTab('alerts')" title="Get notified when something goes wrong">Alerts <span id="nav-alerts-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('notifications')" title="Slack / Email / PagerDuty / Telegram channels">Notifications</div>
     <div class="nav-tab" onclick="switchTab('context')" title="See what context the LLM receives each turn">Context</div>
