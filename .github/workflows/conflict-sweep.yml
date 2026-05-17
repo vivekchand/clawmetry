@@ -1,0 +1,237 @@
+name: Conflict Sweep
+
+on:
+  schedule:
+    - cron: '0 */3 * * *'
+  workflow_dispatch:
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.CONFLICT_SWEEP_PAT || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.email "noreply@anthropic.com"
+          git config user.name "Claude"
+          git remote set-url origin https://x-access-token:${{ secrets.CONFLICT_SWEEP_PAT || secrets.GITHUB_TOKEN }}@github.com/vivekchand/clawmetry.git
+
+      - name: Run conflict sweep
+        env:
+          GH_TOKEN: ${{ secrets.CONFLICT_SWEEP_PAT || secrets.GITHUB_TOKEN }}
+          REPO_WITH_GIT_WRITE: vivekchand/clawmetry
+        run: |
+          python3 << 'PYEOF'
+          import os
+          import subprocess
+          import json
+          from datetime import datetime, timezone
+
+          REPOS = [
+              "vivekchand/clawmetry",
+              "vivekchand/clawmetry-cloud",
+              "vivekchand/clawmetry-landing",
+          ]
+          OWNER = "vivekchand"
+          SKIP_LABELS = {"do-not-merge", "wip", "blocked", "needs-input", "persona-skip"}
+          BOT_AUTHORS = {"dependabot", "dependabot[bot]", "github-actions", "github-actions[bot]"}
+          ACTION_CAP = 5
+          REPO_WITH_GIT_WRITE = os.environ.get("REPO_WITH_GIT_WRITE", "vivekchand/clawmetry")
+
+          def gh(*args):
+              result = subprocess.run(
+                  ["gh"] + list(args), capture_output=True, text=True
+              )
+              if result.returncode != 0:
+                  raise RuntimeError(result.stderr.strip())
+              return result.stdout.strip()
+
+          def gh_json(*args):
+              return json.loads(gh(*args))
+
+          def git(*args):
+              result = subprocess.run(
+                  ["git"] + list(args), capture_output=True, text=True
+              )
+              return result.returncode, result.stdout, result.stderr
+
+          all_conflicting = []
+
+          for repo in REPOS:
+              try:
+                  prs = gh_json(
+                      "pr", "list", "--repo", repo,
+                      "--state", "open", "--limit", "50",
+                      "--json",
+                      "number,title,author,isDraft,headRefName,createdAt,"
+                      "labels,mergeable,additions,deletions,headRepository",
+                  )
+              except Exception as e:
+                  print(f"[WARN] Could not list PRs for {repo}: {e}")
+                  continue
+
+              for pr in prs:
+                  if pr["isDraft"]:
+                      continue
+                  author = pr["author"]["login"]
+                  if author in BOT_AUTHORS or author.endswith("[bot]"):
+                      continue
+                  labels = {l["name"] for l in pr.get("labels", [])}
+                  if labels & SKIP_LABELS:
+                      continue
+                  title = pr["title"]
+                  if "[skip ci]" in title or title.startswith("chore: bump to v"):
+                      continue
+                  if pr.get("mergeable", "").upper() != "CONFLICTING":
+                      continue
+                  all_conflicting.append((repo, pr))
+
+          all_conflicting.sort(key=lambda x: x[1]["createdAt"])
+          deferred = max(0, len(all_conflicting) - ACTION_CAP)
+          to_process = all_conflicting[:ACTION_CAP]
+
+          ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
+
+          if not to_process:
+              print(f"Fire {ts}: 0 conflicting PRs across 3 repos, throttling.")
+              raise SystemExit(0)
+
+          rebased = closed = commented = 0
+
+          for repo, pr in to_process:
+              num = pr["number"]
+              author = pr["author"]["login"]
+              head_ref = pr["headRefName"]
+              head_repo = (
+                  pr.get("headRepository") or {}
+              ).get("nameWithOwner", repo)
+              created = datetime.fromisoformat(
+                  pr["createdAt"].replace("Z", "+00:00")
+              )
+              age_days = (datetime.now(timezone.utc) - created).days
+              loc = pr.get("additions", 0) + pr.get("deletions", 0)
+
+              print(f"\n-- {repo}#{num} age={age_days}d loc={loc} author={author}")
+
+              # External contributor with active "WIP" claim
+              is_external = author != OWNER
+              if is_external:
+                  try:
+                      data = gh_json(
+                          "pr", "view", str(num), "--repo", repo,
+                          "--json", "comments",
+                      )
+                      recent = " ".join(
+                          c["body"].lower()
+                          for c in (data.get("comments") or [])[-5:]
+                      )
+                      wip_signals = [
+                          "picking this up", "working on",
+                          "i'll take", "wip", "i will take",
+                      ]
+                      if any(k in recent for k in wip_signals):
+                          gh(
+                              "pr", "comment", str(num), "--repo", repo,
+                              "--body",
+                              f"Hi @{author} -- this PR has a merge conflict with "
+                              f"current main. Let me know if you need a hand resolving "
+                              f"it, otherwise I'll loop back next cycle.",
+                          )
+                          print("  -> nudge comment (external contributor active)")
+                          commented += 1
+                          continue
+                  except Exception as e:
+                      print(f"  [WARN] Could not check comments: {e}")
+
+              # Close as stale
+              stale_fork = is_external and age_days > 7
+              should_close = age_days > 30 or loc > 50_000 or stale_fork
+              if should_close:
+                  reason = (
+                      "older than 30 days" if age_days > 30
+                      else "larger than 50 000 LOC" if loc > 50_000
+                      else "fork PR with no activity in 7 days"
+                  )
+                  gh(
+                      "pr", "comment", str(num), "--repo", repo,
+                      "--body",
+                      "Closing as stale. This branch has a merge conflict with "
+                      "current main and has not had recent activity "
+                      f"({reason}). Please reopen as a fresh PR off current "
+                      "main if the work is still wanted.",
+                  )
+                  gh("pr", "close", str(num), "--repo", repo)
+                  print(f"  -> closed ({reason})")
+                  closed += 1
+                  continue
+
+              # Rebase path
+              can_rebase = (
+                  author == OWNER
+                  and age_days <= 7
+                  and loc < 500
+                  and head_repo == repo
+                  and repo == REPO_WITH_GIT_WRITE
+              )
+
+              if can_rebase:
+                  try:
+                      rc, _, err = git("fetch", "origin", head_ref)
+                      if rc != 0:
+                          raise RuntimeError(f"fetch: {err}")
+                      rc, _, err = git(
+                          "checkout", "-B", f"rebase-{num}", f"origin/{head_ref}"
+                      )
+                      if rc != 0:
+                          raise RuntimeError(f"checkout: {err}")
+                      rc, out, err = git("rebase", "origin/main")
+                      if rc != 0:
+                          git("rebase", "--abort")
+                          raise RuntimeError(f"conflict during rebase: {err}")
+                      rc, _, err = git(
+                          "push", "--force-with-lease",
+                          "origin", f"rebase-{num}:{head_ref}",
+                      )
+                      if rc != 0:
+                          raise RuntimeError(f"push: {err}")
+                      gh(
+                          "pr", "comment", str(num), "--repo", repo,
+                          "--body",
+                          "Rebased onto current main -- conflict resolved automatically. "
+                          "Please re-review the diff.\n\n"
+                          "Co-Authored-By: Claude <noreply@anthropic.com>",
+                      )
+                      print("  -> rebased and pushed")
+                      rebased += 1
+                      continue
+                  except RuntimeError as e:
+                      print(f"  [WARN] Rebase failed ({e}), falling to comment path")
+
+              # Default: comment + leave open
+              gh(
+                  "pr", "comment", str(num), "--repo", repo,
+                  "--body",
+                  "This PR has a merge conflict with current main. The conflict "
+                  "touches non-trivial code -- human review needed to resolve. "
+                  f"Pinging @{OWNER}.",
+              )
+              print("  -> comment (non-trivial conflict)")
+              commented += 1
+
+          total = rebased + closed + commented
+          deferred_note = (
+              f" {deferred} conflicting PRs deferred to next fire."
+              if deferred > 0 else ""
+          )
+          print(
+              f"\nFire {ts}: {total} actions -- "
+              f"{rebased} rebased, {closed} closed, {commented} commented."
+              + deferred_note
+          )
+          PYEOF
