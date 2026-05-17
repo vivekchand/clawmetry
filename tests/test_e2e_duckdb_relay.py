@@ -378,7 +378,10 @@ def test_duckdb_read_only_handle_sees_committed_rows(pipeline):
         ro.close()
 
     assert n == EXPECTED_TOTAL_EVENTS
-    assert sv == ls.SCHEMA_VERSION == 5
+    # Read the constant rather than hardcoding (#1627) — the version
+    # bumps periodically (5→6→…→9 and counting); the contract being
+    # asserted here is "stamped version matches the module constant".
+    assert sv == ls.SCHEMA_VERSION
 
 
 def test_duckdb_indexes_present(pipeline):
@@ -547,7 +550,8 @@ def test_relay_shape_health(pipeline):
     assert body["_shape"] == "health"
     assert body["engine"] == "duckdb"
     assert body["event_count"] == EXPECTED_TOTAL_EVENTS
-    assert body["schema_version"] == 6
+    # Read the constant rather than hardcoding (#1627).
+    assert body["schema_version"] == pipeline["ls"].SCHEMA_VERSION
     assert body["oldest_ts"] == f"{DAY_A}T10:00:00Z"
     assert body["newest_ts"] == f"{DAY_B}T12:00:00Z"
     assert body["ring_depth"] == 0
