@@ -4596,6 +4596,11 @@ function clawmetryLogout(){
   <div class="card" id="cache-perf-card" style="display:none;">
     <div id="cache-perf-content" style="min-height:48px;color:var(--text-muted);"></div>
   </div>
+  <!-- Cost Forecast (issue #1413) -->
+  <div class="section-title" id="cost-forecast-title" style="display:none;">📈 Cost Forecast <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">projected month-end · based on last 7 days</span></div>
+  <div class="card" id="cost-forecast-card" style="display:none;">
+    <div id="cost-forecast-content" style="min-height:48px;color:var(--text-muted);"></div>
+  </div>
     <div class="section-title">🔮 Trace Clusters <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">auto-group sessions by behavior pattern</span></div>
   <div class="card">
     <div id="trace-clusters-content" style="min-height:60px;color:var(--text-muted);">Loading...</div>
