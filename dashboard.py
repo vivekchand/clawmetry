@@ -4357,6 +4357,30 @@ function clawmetryLogout(){
     </div>
   </div>
 
+  <!-- Outcome tile (Issue #1614): success rate + escalated + failed counts.
+       Renders from /api/outcomes (DuckDB-backed). Click expands the drill-
+       down list of failed/escalated sessions. -->
+  <div id="outcome-card" style="
+    background:var(--bg-secondary);
+    border:1px solid var(--border-primary);
+    border-radius:10px;
+    padding:14px 18px;
+    margin-bottom:10px;
+    box-shadow:var(--card-shadow);
+    cursor:pointer;
+  " onclick="toggleOutcomeDrilldown()" title="Click for details">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+      <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;">
+        <span style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.2px;">Today</span>
+        <span id="outcome-tile-summary" style="font-size:14px;color:var(--text-primary);">Loading task outcomes...</span>
+      </div>
+      <span id="outcome-tile-chevron" style="font-size:11px;color:var(--text-muted);">show details</span>
+    </div>
+    <div id="outcome-drilldown" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border-secondary);font-size:12px;">
+      <div id="outcome-drilldown-body" style="color:var(--text-muted);">Loading...</div>
+    </div>
+  </div>
+
   <div class="refresh-bar" style="margin-bottom:6px;">
     <button class="refresh-btn" onclick="loadAll()" style="padding:4px 12px;font-size:12px;">↻</button>
     <span class="pulse"></span>

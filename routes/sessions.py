@@ -4889,3 +4889,178 @@ def api_spans():
         "_source": "local_store",
         "capped_at_24h": capped_at_24h,
     })
+
+
+# ── Issue #1614 — outcome labeling ──────────────────────────────────────────
+#
+# Every session gets one of: success / failed / escalated / ongoing. Auto-
+# detected by ``clawmetry.outcome_classifier`` from event-stream + approvals
+# table + session metadata. Persisted on the sessions table so the tile
+# query is a one-row roll-up, not a per-session event scan.
+#
+# Two endpoints:
+#   GET /api/outcomes?window=1d        — totals + success-rate (Overview tile)
+#   GET /api/outcomes/timeline?days=7  — per-day series for sparklines
+#
+# Both pre-compute via DuckDB (memory ``feedback_duckdb_first_rule``). When
+# the daemon proxy is unreachable we degrade to ``{available: false}`` rather
+# than 500ing — overview-tab MUST stay responsive (issue #1127 lesson).
+
+_OUTCOME_WINDOW_TO_SECS = {
+    "1h": 3600,
+    "1d": 86400,
+    "24h": 86400,
+    "7d": 7 * 86400,
+    "30d": 30 * 86400,
+}
+
+
+def _outcome_window_to_iso_since(window):
+    """Convert a window shorthand to an ISO ``since`` timestamp.
+
+    Returns None if the window string is invalid — caller treats that as
+    "no time filter" so the tile still renders something useful.
+    """
+    secs = _OUTCOME_WINDOW_TO_SECS.get((window or "").lower())
+    if not secs:
+        return None
+    from datetime import datetime, timedelta, timezone
+    since_dt = datetime.now(timezone.utc) - timedelta(seconds=secs)
+    return since_dt.isoformat().replace("+00:00", "Z")
+
+
+@bp_sessions.route("/api/outcomes")
+def api_outcomes():
+    """Outcome roll-up for the Overview tile.
+
+    Query params:
+      ``window`` — one of ``1h``, ``1d`` (default), ``7d``, ``30d``.
+      ``agent_type`` — default ``openclaw``.
+
+    Returns the shape ``clawmetry.outcome_classifier.aggregate_outcomes``
+    produces plus a ``window`` echo + ``_source`` tag. On total-failure
+    paths (DuckDB unreachable + no fallback) we still 200 with zeros so
+    the tile renders "No completed tasks yet" instead of a JS error.
+    """
+    from clawmetry.outcome_classifier import aggregate_outcomes
+    window = (request.args.get("window") or "1d").lower()
+    agent_type = request.args.get("agent_type") or "openclaw"
+    since = _outcome_window_to_iso_since(window)
+
+    rows = _ls_call(
+        "query_outcomes",
+        agent_type=agent_type,
+        since=since,
+        limit=int(request.args.get("limit") or 1000),
+    )
+    if rows is None:
+        # Daemon proxy unreachable AND no in-process fallback succeeded.
+        # Return a zeroed shell so the UI degrades gracefully.
+        return jsonify({
+            "window": window,
+            "total": 0,
+            "success": 0,
+            "failed": 0,
+            "escalated": 0,
+            "ongoing": 0,
+            "success_rate": 0.0,
+            "needed_human_rate": 0.0,
+            "_source": "unavailable",
+        })
+    agg = aggregate_outcomes(rows)
+    agg["window"] = window
+    agg["_source"] = "local_store"
+    return jsonify(agg)
+
+
+@bp_sessions.route("/api/outcomes/timeline")
+def api_outcomes_timeline():
+    """Per-day outcome series for the drill-down sparkline.
+
+    Buckets every session into a YYYY-MM-DD key by ``last_active_at`` (the
+    same field the Overview Tasks panel uses), then runs the aggregator
+    per day. Returns up to ``days`` days, newest-first.
+    """
+    from clawmetry.outcome_classifier import aggregate_outcomes
+    try:
+        days = max(1, min(90, int(request.args.get("days") or 7)))
+    except (TypeError, ValueError):
+        days = 7
+    agent_type = request.args.get("agent_type") or "openclaw"
+    from datetime import datetime, timedelta, timezone
+    since_dt = datetime.now(timezone.utc) - timedelta(days=days)
+    since_iso = since_dt.isoformat().replace("+00:00", "Z")
+
+    rows = _ls_call(
+        "query_outcomes",
+        agent_type=agent_type,
+        since=since_iso,
+        limit=5000,
+    ) or []
+
+    by_day: dict[str, list[dict]] = {}
+    for r in rows:
+        ts = r.get("last_active_at") or r.get("ended_at") or ""
+        day = ts[:10] if len(ts) >= 10 else ""
+        if not day:
+            continue
+        by_day.setdefault(day, []).append(r)
+    series = []
+    for day in sorted(by_day.keys(), reverse=True):
+        agg = aggregate_outcomes(by_day[day])
+        agg["day"] = day
+        series.append(agg)
+    return jsonify({
+        "days": days,
+        "series": series,
+        "_source": "local_store" if rows else "empty",
+    })
+
+
+@bp_sessions.route("/api/outcomes/sessions")
+def api_outcomes_sessions():
+    """Drill-down list: which sessions failed / escalated. Powers the
+    expanded view when the Overview tile is clicked.
+
+    Query params:
+      ``outcome`` — filter to one outcome (``failed`` / ``escalated`` /
+        ``ongoing`` / ``success``). Default ``failed``.
+      ``window`` — same shorthand as /api/outcomes (default ``1d``).
+      ``limit``  — cap (default 50).
+    """
+    outcome = (request.args.get("outcome") or "failed").lower()
+    window = (request.args.get("window") or "1d").lower()
+    agent_type = request.args.get("agent_type") or "openclaw"
+    try:
+        limit = max(1, min(500, int(request.args.get("limit") or 50)))
+    except (TypeError, ValueError):
+        limit = 50
+    since = _outcome_window_to_iso_since(window)
+    rows = _ls_call(
+        "query_outcomes",
+        agent_type=agent_type,
+        since=since,
+        limit=2000,
+    ) or []
+    filtered = [r for r in rows if (r.get("outcome") or "") == outcome][:limit]
+    # Slim the payload — the drill-down UI needs id/title/cost/timestamp only.
+    out = [
+        {
+            "session_id":      r.get("session_id"),
+            "title":           r.get("title"),
+            "last_active_at":  r.get("last_active_at"),
+            "ended_at":        r.get("ended_at"),
+            "cost_usd":        r.get("cost_usd") or 0,
+            "total_tokens":    r.get("total_tokens") or 0,
+            "outcome":         r.get("outcome"),
+            "confidence":      r.get("outcome_confidence"),
+        }
+        for r in filtered
+    ]
+    return jsonify({
+        "outcome": outcome,
+        "window":  window,
+        "count":   len(out),
+        "sessions": out,
+        "_source": "local_store",
+    })

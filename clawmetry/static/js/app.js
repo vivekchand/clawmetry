@@ -794,6 +794,80 @@ function _friendlyBytes(n) {
 }
 
 // ── Autonomy: how independently your agent runs ──────────────────────────────
+// Issue #1614 — outcome tile loader. Reads /api/outcomes for the "today"
+// window and renders the 1-line summary (Today: N tasks, X% success, Y
+// escalated, Z failed). Drill-down is lazy-loaded on click. Per memory
+// `feedback_no_em_dashes_in_user_facing_copy.md`, copy uses commas not
+// em-dashes.
+async function loadOutcomeTile() {
+  var summaryEl = document.getElementById('outcome-tile-summary');
+  if (!summaryEl) return;
+  try {
+    var d = await fetchJsonWithTimeout('/api/outcomes?window=1d', 3000);
+    if (!d || d.total === 0) {
+      summaryEl.textContent = 'No completed tasks yet today. Outcomes will appear once sessions finish.';
+      return;
+    }
+    var pct = Math.round((d.success_rate || 0) * 100);
+    var parts = [];
+    parts.push(d.total + ' tasks');
+    parts.push(pct + '% success');
+    if (d.escalated > 0) parts.push(d.escalated + ' needed human');
+    if (d.failed > 0) parts.push(d.failed + ' failed');
+    if (d.ongoing > 0) parts.push(d.ongoing + ' running');
+    summaryEl.innerHTML = parts.map(function(p, i){
+      // First chip = primary, success% gets the colored chip.
+      var color = '';
+      if (i === 1) color = pct >= 80 ? 'color:#22c55e;font-weight:700;' : pct >= 60 ? 'color:#f59e0b;font-weight:700;' : 'color:#ef4444;font-weight:700;';
+      return '<span style="' + color + '">' + p + '</span>';
+    }).join('  ·  ');
+  } catch (e) {
+    summaryEl.textContent = 'Task outcomes unavailable right now.';
+  }
+}
+
+// Drill-down: lazy-load failed + escalated lists when the user clicks the tile.
+async function toggleOutcomeDrilldown() {
+  var dd = document.getElementById('outcome-drilldown');
+  var chev = document.getElementById('outcome-tile-chevron');
+  if (!dd) return;
+  if (dd.style.display !== 'none') {
+    dd.style.display = 'none';
+    if (chev) chev.textContent = 'show details';
+    return;
+  }
+  dd.style.display = 'block';
+  if (chev) chev.textContent = 'hide details';
+  var body = document.getElementById('outcome-drilldown-body');
+  if (!body) return;
+  body.textContent = 'Loading...';
+  try {
+    var failed = await fetchJsonWithTimeout('/api/outcomes/sessions?outcome=failed&window=1d&limit=10', 3000).catch(function(){return {sessions:[]};});
+    var esc    = await fetchJsonWithTimeout('/api/outcomes/sessions?outcome=escalated&window=1d&limit=10', 3000).catch(function(){return {sessions:[]};});
+    function row(s) {
+      var title = s.title || s.session_id || 'untitled';
+      var when = s.last_active_at ? (s.last_active_at.slice(11, 16)) : '';
+      return '<div style="padding:4px 0;border-bottom:1px dashed var(--border-secondary);"><span style="color:var(--text-primary);">' + escapeHtml(title) + '</span> <span style="color:var(--text-muted);font-size:11px;">' + when + '</span></div>';
+    }
+    var html = '';
+    if ((failed.sessions || []).length === 0 && (esc.sessions || []).length === 0) {
+      html = '<div style="color:var(--text-muted);">Nothing flagged today. Everything ran clean.</div>';
+    } else {
+      if ((failed.sessions || []).length > 0) {
+        html += '<div style="font-weight:700;color:#ef4444;margin-bottom:4px;">Failed (' + failed.sessions.length + ')</div>';
+        html += failed.sessions.map(row).join('');
+      }
+      if ((esc.sessions || []).length > 0) {
+        html += '<div style="font-weight:700;color:#f59e0b;margin:8px 0 4px;">Needed a human (' + esc.sessions.length + ')</div>';
+        html += esc.sessions.map(row).join('');
+      }
+    }
+    body.innerHTML = html;
+  } catch (e) {
+    body.textContent = 'Could not load drill-down.';
+  }
+}
+
 async function loadAutonomy() {
   var labelEl = document.getElementById('autonomy-score-label');
   var badgeEl = document.getElementById('autonomy-trend-badge');
@@ -1950,6 +2024,8 @@ async function loadAll() {
     if (typeof loadHeartbeat === 'function') loadHeartbeat().catch(function(e){console.warn('heartbeat panel failed',e)});
     if (typeof loadAutonomy === 'function') setTimeout(function(){ loadAutonomy().catch(function(e){console.warn('autonomy failed',e)}); }, 2600);
     if (typeof loadAnomalyPanel === 'function') setTimeout(function(){ loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)}); }, 3600);
+    // Issue #1614 — outcome tile (Today: N tasks, X% success).
+    if (typeof loadOutcomeTile === 'function') setTimeout(function(){ loadOutcomeTile().catch(function(e){console.warn('outcome tile failed',e)}); }, 800);
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
