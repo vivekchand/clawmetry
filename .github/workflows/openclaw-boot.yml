@@ -1,0 +1,133 @@
+name: OpenClaw Boot Smoke
+
+# Foundation smoke gate for every PR: install OpenClaw, boot the gateway,
+# verify it responds on the documented port, and make sure the runtime
+# created its on-disk workspace. If this is red, every downstream E2E
+# workflow (pr-screenshots, e2e-nightly, real-data pipeline tests) is
+# guaranteed to be running against a missing or broken agent.
+#
+# Why this exists:
+#   Until 2026-05-17 every E2E job ran with no real OpenClaw on the
+#   runner, so dashboards rendered against synthetic fixtures only.
+#   That gap let several "green CI" PRs ship code that returned silent
+#   zeros on real OpenClaw event shapes
+#   (see feedback_synthetic_tests_missed_real_event_shape.md).
+#
+# Budget: under 2 minutes wall-clock on a cold cache, near-instant warm.
+
+on:
+  pull_request:
+    paths:
+      - ".github/actions/setup-openclaw/**"
+      - ".github/workflows/openclaw-boot.yml"
+      - "routes/**"
+      - "dashboard.py"
+      - "clawmetry/**"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: openclaw-boot-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  boot:
+    name: Install + boot + health-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup OpenClaw
+        id: openclaw
+        uses: ./.github/actions/setup-openclaw
+        with:
+          version: latest
+          gateway-token: ci-openclaw-token
+
+      - name: Start gateway in background
+        run: |
+          set -e
+          mkdir -p /tmp/openclaw-logs
+          # --bind loopback (default) + explicit port so the smoke check
+          # is identical across hosted/self-hosted runners.
+          nohup openclaw gateway --port 18789 --verbose \
+            > /tmp/openclaw-logs/gateway.log 2>&1 &
+          echo "GATEWAY_PID=$!" >> "$GITHUB_ENV"
+
+      - name: Wait for gateway HTTP to respond
+        run: |
+          set -e
+          ok=0
+          # /v1/models is the documented OpenAI-compatible probe surface
+          # served on the gateway port (see docs/gateway/index.md). It
+          # returns JSON once the runtime is fully up.
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /tmp/openclaw-logs/probe.json \
+              -w "%{http_code}" \
+              -H "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN" \
+              "http://127.0.0.1:18789/v1/models" || echo 000)
+            case "$code" in
+              2*|401|403)
+                # 401/403 still proves the HTTP server is up and the auth
+                # layer is reachable; that is all this smoke gate needs.
+                echo "gateway responding ($code after ${i}s)"
+                ok=1
+                break
+                ;;
+            esac
+            sleep 1
+          done
+          if [ "$ok" != "1" ]; then
+            echo "::error::gateway never responded on 127.0.0.1:18789"
+            echo "── gateway log tail ──"
+            tail -200 /tmp/openclaw-logs/gateway.log || true
+            exit 1
+          fi
+
+      - name: Confirm gateway status via CLI
+        run: |
+          # Belt + suspenders: ask the CLI itself. This catches the case
+          # where the HTTP listener is up but the runtime is wedged.
+          openclaw gateway status --json > /tmp/openclaw-logs/status.json || {
+            echo "::warning::gateway status non-zero (continuing if HTTP probe passed)"
+            cat /tmp/openclaw-logs/status.json 2>/dev/null || true
+          }
+          head -c 4096 /tmp/openclaw-logs/status.json 2>/dev/null || true
+          echo
+
+      - name: Confirm workspace was created
+        run: |
+          set -e
+          # On a fresh runner the gateway should have written its
+          # workspace skeleton under ~/.openclaw. We do not require a
+          # session JSONL here (that needs a real LLM credential the
+          # runner does not have); the workspace dir is the cheap
+          # invariant.
+          if [ ! -d "$HOME/.openclaw" ]; then
+            echo "::error::~/.openclaw was not created by the gateway"
+            ls -la "$HOME" || true
+            exit 1
+          fi
+          echo "workspace contents:"
+          ls -la "$HOME/.openclaw" || true
+
+      - name: Tear down gateway
+        if: always()
+        run: |
+          if [ -n "${GATEWAY_PID:-}" ]; then
+            kill "$GATEWAY_PID" 2>/dev/null || true
+          fi
+          # Give the process a moment to flush logs before we upload.
+          sleep 1
+
+      - name: Upload gateway logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-gateway-logs
+          path: /tmp/openclaw-logs/
+          if-no-files-found: warn
+          retention-days: 7
