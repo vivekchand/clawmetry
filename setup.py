@@ -31,11 +31,17 @@ setup(
             "py.typed",
             "static/**/*",
             "static/**/*.*",
+            # v2 React SPA bundle (pre-built by `cd frontend && npm run build`
+            # before publishing). Shipped inside the wheel so end users never
+            # see a Node toolchain.
+            "static/v2/dist/index.html",
+            "static/v2/dist/assets/*",
             "templates/**/*",
             "templates/**/*.*",
         ],
         "routes":  ["*.py"],
         "helpers": ["*.py"],
+        "clawmetry.v2": ["*.py"],
     },
     include_package_data=True,
     python_requires=">=3.8",

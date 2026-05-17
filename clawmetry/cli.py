@@ -2209,6 +2209,16 @@ def _cmd_update() -> None:
 
 def main() -> None:
     import argparse
+    # --v2 opt-in flag for the React SPA scaffold (see clawmetry/v2/routes.py).
+    # Strip it from argv so dashboard.main's argparse doesn't choke on it.
+    # Sets the env var that dashboard.py checks at blueprint registration time.
+    if "--v2" in sys.argv:
+        sys.argv = [a for a in sys.argv if a != "--v2"]
+        os.environ["CLAWMETRY_V2"] = "1"
+        print(
+            "v2 preview at http://localhost:8900/v2 · back to v1 at /",
+            flush=True,
+        )
     from dashboard import main as dashboard_main
 
     # Anonymous, opt-out, once-per-install ping. See clawmetry/telemetry.py
