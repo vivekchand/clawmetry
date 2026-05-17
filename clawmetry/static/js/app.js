@@ -3600,6 +3600,277 @@ function renderBrainChart(events) {
   ctx.globalAlpha = 1;
 }
 
+// ── Brain Graph (neural-net visualization, refs #53) ──────────────────────
+// Force-directed canvas: each agent source is a glowing "neuron"; recent
+// events orbit their parent as smaller satellite dots; an ambient pulse
+// ripples outward every ~2s on active sources. Toggle via the Graph/List
+// buttons rendered in tabs/brain.html. Pure Canvas 2D — no deps, no WebGL.
+// Reads the existing `_brainAllEvents` array (populated by SSE), so this
+// is purely a presentational alternative to the list view; no new
+// endpoints, no extra DuckDB reads.
+var _brainViewMode = 'list';
+var _brainGraph = {
+  canvas: null, ctx: null, width: 0, height: 500, dpr: 1,
+  lastTs: 0, rafId: 0, animating: false,
+  agents: {}, agentOrder: [], events: [], lastPulseAt: 0
+};
+
+function _brainGraphHash(str) {
+  var h = 2166136261;
+  str = String(str || '');
+  for (var i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+  }
+  return h >>> 0;
+}
+
+function _brainGraphEnsureCanvas() {
+  var canvas = document.getElementById('brain-graph-canvas');
+  if (!canvas) return false;
+  if (!_brainGraph.canvas) {
+    _brainGraph.canvas = canvas;
+    _brainGraph.ctx = canvas.getContext('2d');
+  }
+  var rect = canvas.getBoundingClientRect();
+  var dpr = Math.max(1, window.devicePixelRatio || 1);
+  var w = Math.max(320, Math.floor(rect.width || canvas.clientWidth || 800));
+  var h = 500;
+  if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
+    canvas.width = Math.floor(w * dpr);
+    canvas.height = Math.floor(h * dpr);
+  }
+  _brainGraph.dpr = dpr;
+  _brainGraph.width = w;
+  _brainGraph.height = h;
+  return true;
+}
+
+function setBrainViewMode(mode, btn) {
+  if (mode !== 'graph' && mode !== 'list') mode = 'list';
+  _brainViewMode = mode;
+  var feed = document.getElementById('brain-feed');
+  var wrap = document.getElementById('brain-graph-wrap');
+  if (feed) feed.style.display = mode === 'list' ? '' : 'none';
+  if (wrap) wrap.style.display = mode === 'graph' ? '' : 'none';
+  document.querySelectorAll('.brain-view-btn').forEach(function(b) {
+    b.classList.toggle('active', b.dataset.view === mode);
+  });
+  if (mode === 'graph') {
+    if (typeof syncBrainGraph === 'function') syncBrainGraph(_brainAllEvents);
+    _startBrainGraphLoop();
+  }
+}
+
+function syncBrainGraph(events) {
+  events = Array.isArray(events) ? events : [];
+  var oldAgents = _brainGraph.agents || {};
+  var oldEvents = {};
+  (_brainGraph.events || []).forEach(function(node) { oldEvents[node.id] = node; });
+  var now = Date.now();
+  var centerX = (_brainGraph.width || 900) / 2;
+  var centerY = (_brainGraph.height || 500) / 2;
+  var recent = events.slice(0, 200);
+  var agentMap = {};
+  recent.forEach(function(ev) {
+    var source = ev && ev.source ? ev.source : 'main';
+    if (!agentMap[source]) {
+      agentMap[source] = {id: source, label: ev && ev.sourceLabel ? ev.sourceLabel : source, lastSeen: 0, count: 0};
+    }
+    var ts = ev && ev.time ? (new Date(ev.time).getTime() || 0) : 0;
+    if (ts > agentMap[source].lastSeen) agentMap[source].lastSeen = ts;
+    agentMap[source].count++;
+  });
+  if (!agentMap.main && recent.length) {
+    agentMap.main = {id: 'main', label: 'main', lastSeen: now, count: 1};
+  }
+  var agentIds = Object.keys(agentMap).sort(function(a, b) {
+    var da = agentMap[a], db = agentMap[b];
+    if (db.lastSeen !== da.lastSeen) return db.lastSeen - da.lastSeen;
+    return db.count - da.count;
+  }).slice(0, 20);
+  var chosen = {};
+  agentIds.forEach(function(id) { chosen[id] = true; });
+  var nextAgents = {};
+  var ringR = Math.max(90, Math.min(180, Math.min(centerX, centerY) - 40));
+  agentIds.forEach(function(id, i) {
+    var baseAngle = (Math.PI * 2 * i) / Math.max(1, agentIds.length);
+    var prev = oldAgents[id];
+    nextAgents[id] = {
+      id: id,
+      label: agentMap[id].label || id,
+      lastSeen: agentMap[id].lastSeen || 0,
+      x: prev ? prev.x : centerX + Math.cos(baseAngle) * ringR,
+      y: prev ? prev.y : centerY + Math.sin(baseAngle) * ringR,
+      vx: prev ? prev.vx : 0,
+      vy: prev ? prev.vy : 0,
+      r: 14
+    };
+  });
+  var nextEvents = [];
+  for (var ei = 0; ei < events.length && nextEvents.length < 50; ei++) {
+    var ev = events[ei];
+    var source = ev && ev.source ? ev.source : 'main';
+    if (!chosen[source]) continue;
+    var key = (ev.time || '') + '|' + source + '|' + (ev.type || '') + '|' + (ev.detail || '');
+    var id = 'ev:' + _brainGraphHash(key).toString(16);
+    var prevNode = oldEvents[id];
+    var agent = nextAgents[source];
+    var seed = _brainGraphHash(id);
+    var angle = ((seed % 6283) / 1000);
+    nextEvents.push({
+      id: id, source: source, type: ev.type || 'TOOL',
+      color: ev.color || brainSourceColor(source),
+      x: prevNode ? prevNode.x : (agent.x + Math.cos(angle) * 42),
+      y: prevNode ? prevNode.y : (agent.y + Math.sin(angle) * 42),
+      vx: prevNode ? prevNode.vx : 0,
+      vy: prevNode ? prevNode.vy : 0,
+      orbitR: 34 + (seed % 24),
+      orbitSpeed: 0.00025 + ((seed % 100) / 500000),
+      orbitPhase: angle, r: 4
+    });
+  }
+  _brainGraph.agents = nextAgents;
+  _brainGraph.agentOrder = agentIds;
+  _brainGraph.events = nextEvents;
+}
+
+function _startBrainGraphLoop() {
+  if (_brainGraph.animating) return;
+  _brainGraph.animating = true;
+  _brainGraph.lastTs = 0;
+  _brainGraph.rafId = requestAnimationFrame(_brainGraphTick);
+}
+
+function _brainGraphTick(ts) {
+  _brainGraph.rafId = requestAnimationFrame(_brainGraphTick);
+  if (_brainViewMode !== 'graph') return;
+  var pg = document.getElementById('page-brain');
+  if (!pg || !pg.classList.contains('active')) return;
+  if (!_brainGraphEnsureCanvas()) return;
+  var dt = _brainGraph.lastTs ? Math.min(33, ts - _brainGraph.lastTs) / 16.67 : 1;
+  _brainGraph.lastTs = ts;
+  var now = Date.now();
+  var agents = _brainGraph.agentOrder.map(function(id) { return _brainGraph.agents[id]; }).filter(Boolean);
+  var events = _brainGraph.events;
+  var W = _brainGraph.width, H = _brainGraph.height;
+  var cx = W / 2, cy = H / 2;
+  agents.forEach(function(a) {
+    a.vx += (cx - a.x) * 0.0007 * dt;
+    a.vy += (cy - a.y) * 0.0007 * dt;
+  });
+  for (var i = 0; i < agents.length; i++) {
+    for (var j = i + 1; j < agents.length; j++) {
+      var a = agents[i], b = agents[j];
+      var dx = b.x - a.x, dy = b.y - a.y;
+      var d2 = dx * dx + dy * dy + 0.01;
+      var d = Math.sqrt(d2);
+      var force = Math.min(6, 900 / d2);
+      var fx = (dx / d) * force, fy = (dy / d) * force;
+      a.vx -= fx * dt; a.vy -= fy * dt;
+      b.vx += fx * dt; b.vy += fy * dt;
+    }
+  }
+  if (ts - _brainGraph.lastPulseAt > 2000) {
+    agents.forEach(function(a) {
+      if (now - a.lastSeen < 90000) {
+        if (!a.pulses) a.pulses = [];
+        a.pulses.push({start: ts});
+      }
+    });
+    _brainGraph.lastPulseAt = ts;
+  }
+  agents.forEach(function(a) {
+    a.vx *= 0.9; a.vy *= 0.9;
+    a.x += a.vx * dt; a.y += a.vy * dt;
+    a.x = Math.max(24, Math.min(W - 24, a.x));
+    a.y = Math.max(24, Math.min(H - 24, a.y));
+  });
+  events.forEach(function(ev, idx) {
+    var agent = _brainGraph.agents[ev.source];
+    if (!agent) return;
+    var orbitA = ev.orbitPhase + ts * ev.orbitSpeed;
+    var tx = agent.x + Math.cos(orbitA) * ev.orbitR;
+    var ty = agent.y + Math.sin(orbitA) * ev.orbitR;
+    ev.vx += (tx - ev.x) * 0.04 * dt;
+    ev.vy += (ty - ev.y) * 0.04 * dt;
+    for (var k = idx + 1; k < events.length; k++) {
+      var other = events[k];
+      if (other.source !== ev.source) continue;
+      var rx = other.x - ev.x, ry = other.y - ev.y;
+      var rd2 = rx * rx + ry * ry + 0.01;
+      if (rd2 > 1200) continue;
+      var rf = 20 / rd2;
+      ev.vx -= rx * rf * dt; ev.vy -= ry * rf * dt;
+      other.vx += rx * rf * dt; other.vy += ry * rf * dt;
+    }
+    ev.vx *= 0.88; ev.vy *= 0.88;
+    ev.x += ev.vx * dt; ev.y += ev.vy * dt;
+    ev.x = Math.max(8, Math.min(W - 8, ev.x));
+    ev.y = Math.max(8, Math.min(H - 8, ev.y));
+  });
+  _drawBrainGraph(ts, now);
+}
+
+function _drawBrainGraph(ts, now) {
+  var ctx = _brainGraph.ctx;
+  if (!ctx) return;
+  var dpr = _brainGraph.dpr || 1;
+  var W = _brainGraph.width, H = _brainGraph.height;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(20,23,34,0.35)';
+  ctx.fillRect(0, 0, W, H);
+  _brainGraph.events.forEach(function(ev) {
+    var a = _brainGraph.agents[ev.source];
+    if (!a) return;
+    ctx.strokeStyle = 'rgba(148,163,184,0.22)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(ev.x, ev.y);
+    ctx.stroke();
+  });
+  _brainGraph.events.forEach(function(ev) {
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = ev.color || '#60a5fa';
+    ctx.fillStyle = ev.color || '#60a5fa';
+    ctx.beginPath();
+    ctx.arc(ev.x, ev.y, ev.r, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  _brainGraph.agentOrder.forEach(function(id) {
+    var a = _brainGraph.agents[id];
+    if (!a) return;
+    var active = now - a.lastSeen < 90000;
+    var color = active ? '#a855f7' : '#f59e0b';
+    if (!a.pulses) a.pulses = [];
+    a.pulses = a.pulses.filter(function(p) { return ts - p.start < 1200; });
+    a.pulses.forEach(function(p) {
+      var t = (ts - p.start) / 1200;
+      var radius = a.r + (44 * t);
+      var alpha = Math.max(0, 0.35 * (1 - t));
+      ctx.strokeStyle = active ? 'rgba(168,85,247,' + alpha + ')' : 'rgba(245,158,11,' + alpha + ')';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(a.x, a.y, radius, 0, Math.PI * 2);
+      ctx.stroke();
+    });
+    ctx.shadowBlur = 20;
+    ctx.shadowColor = color;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(a.x, a.y, a.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = 'rgba(230,234,244,0.92)';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText((a.label || a.id || 'agent').slice(0, 20), a.x, a.y + 28);
+  });
+  ctx.shadowBlur = 0;
+}
+
 var _brainSSE = null;
 var _brainSSEConnected = false;
 
