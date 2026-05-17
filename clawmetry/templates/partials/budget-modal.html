@@ -220,6 +220,52 @@
           </div>
         </div>
       </div>
+      <!--
+        Webhook delivery channels (resurrected from dead first-DASHBOARD_HTML).
+        Backend: /api/alert-channels (GET/POST) and /api/alert-channels/test in routes/alerts.py.
+        JS handlers (loadWebhookConfig/saveWebhookConfig/testWebhookConfig) live in app.js.
+        This is the OSS-local direct-webhook channel (paste your own Slack/Discord URL);
+        the Cloud-Pro Alerts Center with cloud routing lives on the Alerts tab.
+      -->
+      <div style="padding:12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;margin-bottom:12px;">
+        <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">Alert Channels (Webhooks)</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;line-height:1.4;">
+          Paste your own Slack or Discord incoming-webhook URL to receive alerts directly.
+          For routed delivery (PagerDuty, email, on-call), see the <b>Alerts</b> tab (Pro).
+        </div>
+        <div style="display:grid;gap:8px;">
+          <div style="display:flex;gap:6px;align-items:center;">
+            <input id="alert-webhook-url" type="text" placeholder="Generic webhook URL (JSON payload)" style="flex:1;padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+            <button onclick="testWebhookConfig('generic')" style="background:#374151;color:#fff;border:none;border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;white-space:nowrap;">Test</button>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <input id="alert-slack-url" type="text" placeholder="Slack incoming webhook URL" style="flex:1;padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+            <button onclick="testWebhookConfig('slack')" style="background:#4a154b;color:#fff;border:none;border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;white-space:nowrap;">Test</button>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <input id="alert-discord-url" type="text" placeholder="Discord webhook URL" style="flex:1;padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+            <button onclick="testWebhookConfig('discord')" style="background:#5865f2;color:#fff;border:none;border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;white-space:nowrap;">Test</button>
+          </div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;">
+            <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-cost-spike"> Cost spike alerts</label>
+            <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-agent-error"> Agent error rate alerts</label>
+            <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-security"> Security posture changes</label>
+          </div>
+          <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+            <label style="font-size:12px;color:var(--text-muted);">Min severity:</label>
+            <select id="alert-min-severity" style="padding:4px 8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);font-size:12px;">
+              <option value="info">Info (all alerts)</option>
+              <option value="warning" selected>Warning and above</option>
+              <option value="critical">Critical only</option>
+            </select>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button onclick="saveWebhookConfig()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Save</button>
+            <button onclick="testWebhookConfig('all')" style="background:#16a34a;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Test All</button>
+            <span id="alert-webhook-status" style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;"></span>
+          </div>
+        </div>
+      </div>
       <div id="alert-rules-list" style="font-size:13px;color:var(--text-secondary);">Loading...</div>
     </div>
     <!-- Telegram Tab -->
