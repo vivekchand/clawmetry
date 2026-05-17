@@ -1185,12 +1185,32 @@ def _try_local_store_cost_split(wanted_sid: str, limit: int):
     walker returns.
 
     Issue #1088 phase 3. Returns ``None`` when the events table has no
-    message rows so the route falls through to the JSONL walker."""
-    rows = _ls_call(
-        "query_cost_split",
-        session_id=wanted_sid or None,
-        limit=limit,
-    )
+    message rows so the route falls through to the JSONL walker.
+
+    Issue #1597 class drain: when scoped to a single session
+    (``wanted_sid``), uses the sub-agent-rollup variant so a parent that
+    delegated cost to a Task-tool child still attributes that cost back.
+    Top-N mode (no ``wanted_sid``) keeps the flat per-session listing —
+    rollup is only meaningful when the caller has a target parent.
+    """
+    if wanted_sid:
+        rows = _ls_call(
+            "query_cost_split_with_subagents",
+            session_id=wanted_sid,
+            limit=limit,
+        )
+        if rows is None:
+            rows = _ls_call(
+                "query_cost_split",
+                session_id=wanted_sid,
+                limit=limit,
+            )
+    else:
+        rows = _ls_call(
+            "query_cost_split",
+            session_id=None,
+            limit=limit,
+        )
     if not rows:
         return None
     # Compute totals (mirrors the legacy path's aggregation).
@@ -3167,8 +3187,15 @@ def _try_local_store_transcript_events(session_id: str):
     Issue #1088: routes through the daemon HTTP proxy first, with the standard
     direct-open fallback inside ``_ls_call``. Returns ``None`` to defer to the
     JSONL parser when the events table has no rows for this session.
+
+    Issue #1597 class drain: UNIONs sub-agent events so the transcript modal
+    on a parent session shows every model/tool turn the parent delegated to a
+    Task-tool child. Falls back to the parent-only query when the daemon
+    predates the helper (staged rollout).
     """
-    rows = _ls_call("query_events", session_id=session_id, limit=10000)
+    rows = _ls_call("query_events_with_subagents", session_id=session_id, limit=10000)
+    if rows is None:
+        rows = _ls_call("query_events", session_id=session_id, limit=10000)
     if not rows:
         return None
     rows = list(reversed(rows))  # query_events is DESC; the modal reads forward.
@@ -3465,12 +3492,24 @@ def _try_local_store_session_model_journey(session_id: str):
     the same ``segments`` shape the JSONL walker produces.
 
     Issue #1088 phase 3. Returns ``None`` when the events table has no
-    matching rows so the route falls through to the JSONL walker."""
+    matching rows so the route falls through to the JSONL walker.
+
+    Issue #1597 class drain: uses the sub-agent-rollup variant so a parent
+    that delegated to a Task-tool child with a different model (e.g. Opus
+    parent → Haiku worker) shows the full model journey instead of just
+    the parent's initial line. Falls back to parent-only on older daemons.
+    """
     rows = _ls_call(
-        "query_session_model_journey",
+        "query_session_model_journey_with_subagents",
         session_id=session_id,
         limit=5000,
     )
+    if rows is None:
+        rows = _ls_call(
+            "query_session_model_journey",
+            session_id=session_id,
+            limit=5000,
+        )
     if not rows:
         return None
 
@@ -3756,8 +3795,14 @@ def _try_local_store_session_cost_breakdown(session_id: str):
       - no events exist for this session_id (fresh sync, etc.)
       - data blobs aren't shaped like assistant messages
       - any unexpected error happens
+
+    Issue #1597 class drain: UNIONs sub-agent events so the per-turn cost
+    breakdown attributes Task-tool sub-agent turns back to the parent.
+    Falls back to the parent-only query on older daemons.
     """
-    evs = _ls_call("query_events", session_id=session_id, limit=5000)
+    evs = _ls_call("query_events_with_subagents", session_id=session_id, limit=5000)
+    if evs is None:
+        evs = _ls_call("query_events", session_id=session_id, limit=5000)
     if not evs:
         return None
     # Walk events oldest-first so turn_index is meaningful.
@@ -4024,8 +4069,15 @@ def _try_local_store_session_export(session_id: str):
       subset" failure mode.
     * Returns ``None`` (not an empty-messages dict) when no attributable
       rows survived, so the JSONL parser fallback fires.
+
+    Issue #1597 class drain: the export now UNIONs sub-agent events so
+    downstream re-import / audit pipelines see the full delegated work, not
+    just the parent's direct turns. Falls back to parent-only on older
+    daemons (pre-#1611 wheel).
     """
-    rows = _ls_call("query_events", session_id=session_id, limit=10000)
+    rows = _ls_call("query_events_with_subagents", session_id=session_id, limit=10000)
+    if rows is None:
+        rows = _ls_call("query_events", session_id=session_id, limit=10000)
     if not rows:
         return None
     rows = list(reversed(rows))  # query_events is DESC; export reads forward.

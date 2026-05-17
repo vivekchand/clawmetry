@@ -3808,6 +3808,60 @@ class LocalStore:
             return out
         return out[:int(limit)]
 
+    def query_cost_split_with_subagents(
+        self,
+        *,
+        session_id: str,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Per-session cost split UNIONed across ``session_id`` + every
+        child sub-agent session (issue #1597 class drain).
+
+        Same shape as ``query_cost_split(session_id=...)`` but the returned
+        rows include sub-agent sessions whose ``subagents.parent_session_id``
+        matches the requested parent. Each child row carries
+        ``_via_subagent_id`` set to the child's session_id so the caller can
+        attribute cost back to the spawning Task tool. The parent's own row
+        keeps ``_via_subagent_id=""``.
+
+        Sub-agent rows are returned as SEPARATE entries (one per child
+        session) rather than collapsed into the parent's totals so the
+        Cost-tab can render "parent: $X / sub-agent A: $Y / sub-agent B: $Z"
+        without re-querying. Callers that want a flat sum should reduce the
+        returned list themselves.
+
+        Behaviour when ``session_id`` has no sub-agent links: identical to
+        ``query_cost_split(session_id=session_id)`` — one row, no children.
+        """
+        out: list[dict[str, Any]] = []
+        own = self.query_cost_split(session_id=session_id, limit=limit)
+        for r in own:
+            r["_via_subagent_id"] = ""
+            out.append(r)
+        try:
+            subs = self.query_subagents(
+                parent_session_id=session_id, limit=500,
+            )
+        except Exception:
+            subs = []
+        for sa in subs:
+            child_sid = sa.get("subagent_id")
+            if not child_sid or child_sid == session_id:
+                continue
+            try:
+                child_rows = self.query_cost_split(
+                    session_id=child_sid, limit=limit,
+                )
+            except Exception:
+                continue
+            for r in child_rows:
+                r["_via_subagent_id"] = child_sid
+                out.append(r)
+        # Re-sort by total_cost_usd desc so the parent's row tends to land
+        # first when it dominates (matches the limit-less filter shape).
+        out.sort(key=lambda r: r.get("total_cost_usd", 0), reverse=True)
+        return out
+
     def query_context_window_peek(
         self,
         *,
@@ -3820,6 +3874,15 @@ class LocalStore:
         non-zero ``usage.input_tokens`` reading from a ``message`` event.
         That number represents the live conversation's running context
         size as observed by the model on its most recent turn.
+
+        Issue #1597 class drain — intentionally NO sub-agent rollup: the
+        gauge measures the LIVE prompt context for a single conversation.
+        A child sub-agent has its OWN context window (separate prompt,
+        separate compaction history), not the parent's. Rolling parent +
+        child would surface the most-recent CHILD's context as if it were
+        the parent's, which is wrong — the parent's context-window
+        pressure is what the user-facing "approaching context limit"
+        banner needs to reflect.
 
         Why a dedicated query: the existing ``query_cost_split`` returns
         SUMMED input_tokens across the whole session, which is the wrong
@@ -4127,6 +4190,60 @@ class LocalStore:
                     "total_cost":   float(cost_obj.get("total", 0) or 0),
                     "ts":           ts,
                 })
+        return out
+
+    def query_session_model_journey_with_subagents(
+        self,
+        *,
+        session_id: str,
+        limit: int = 5000,
+    ) -> list[dict[str, Any]]:
+        """Model + message events for ``session_id`` UNIONed with every
+        child sub-agent session (issue #1597 class drain).
+
+        A parent that delegates to a sub-agent (Task tool spawns a Haiku
+        worker from an Opus parent — a common cost-saver pattern) shows up
+        in the model-journey view as a "transition" only if the child's
+        ``model_change`` / ``message`` events are merged in. Without this
+        rollup the journey for a parent that immediately delegated 100% of
+        work to a child renders as a single-model line.
+
+        Same row shape as ``query_session_model_journey`` plus each row
+        carries ``_via_subagent_id`` (empty for parent rows, the child
+        session_id for child rows) so the UI can paint a sub-agent swimlane
+        without re-querying.
+
+        Re-sorted by ``ts`` ASC at the end so callers can keep their
+        chronological walk untouched.
+        """
+        if not session_id:
+            return []
+        out: list[dict[str, Any]] = []
+        for r in self.query_session_model_journey(
+            session_id=session_id, limit=limit,
+        ):
+            r["_via_subagent_id"] = ""
+            out.append(r)
+        try:
+            subs = self.query_subagents(
+                parent_session_id=session_id, limit=500,
+            )
+        except Exception:
+            subs = []
+        for sa in subs:
+            child_sid = sa.get("subagent_id")
+            if not child_sid or child_sid == session_id:
+                continue
+            try:
+                child_rows = self.query_session_model_journey(
+                    session_id=child_sid, limit=limit,
+                )
+            except Exception:
+                continue
+            for r in child_rows:
+                r["_via_subagent_id"] = child_sid
+                out.append(r)
+        out.sort(key=lambda r: (r.get("ts") or ""))
         return out
 
     def query_daily_usage_splits(
