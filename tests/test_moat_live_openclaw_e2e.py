@@ -199,6 +199,10 @@ def _send_message(home: str, message: str) -> subprocess.CompletedProcess:
         [
             OPENCLAW_BIN, "agent", "--local",
             "--message", message, "--to", RECIPIENT,
+            # Force the anthropic harness; CI does not have `codex` (the
+            # default) registered. ANTHROPIC_API_KEY in env is what the
+            # harness reads. See #1549 debug-team root-cause analysis.
+            "--harness", "anthropic",
             "--json", "--timeout", "30",
         ],
         env=env, capture_output=True, text=True, timeout=60,
