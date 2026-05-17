@@ -2138,6 +2138,77 @@ def _format_uptime(seconds):
     return f"{seconds / 86400:.1f}d"
 
 
+def _cmd_eval(args) -> None:
+    """Run a golden eval suite (Phase 2 evals, refs #1619).
+
+    Exit code is 0 on all-pass, 1 on any-fail. The CI integration template
+    relies on that — see docs/EVALS_CI_INTEGRATION.md.
+    """
+    import json as _json
+    from clawmetry import eval_suite_runner as esr
+
+    if getattr(args, "list_suites", False):
+        suites = esr.list_suites()
+        if not suites:
+            print(
+                f"No suites found in {esr.SUITES_DIR}.\n"
+                f"Create one (see docs/EVALS_CI_INTEGRATION.md) and try again."
+            )
+            sys.exit(0)
+        print("Available suites:")
+        for s in suites:
+            print(f"  {s}")
+        sys.exit(0)
+
+    suite_arg = getattr(args, "suite", None)
+    if not suite_arg:
+        print(
+            "Error: --suite is required (or pass --list to see what's available).",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    # Watch mode wraps the same single-shot pipeline; --json is honoured
+    # on every iteration so the dev loop can be piped into jq.
+    def _print_result(run):
+        if getattr(args, "as_json", False):
+            print(_json.dumps({
+                "suite":   run.suite_name,
+                "ran_at":  run.ran_at,
+                "sha":     run.sha,
+                "passed":  run.passed,
+                "failed":  run.failed,
+                "exit":    run.exit_code,
+                "results": [r.to_dict() for r in run.results],
+            }, indent=2))
+        else:
+            print(esr.format_table(run))
+
+    persist = not getattr(args, "no_persist", False)
+
+    if getattr(args, "watch", False):
+        try:
+            esr.watch_suite(
+                suite_arg,
+                on_run=_print_result,
+                persist=persist,
+            )
+        except KeyboardInterrupt:
+            print("\nWatch stopped.")
+            sys.exit(0)
+        return
+
+    try:
+        suite = esr.load_suite(suite_arg)
+    except (FileNotFoundError, ValueError) as e:
+        # Keep error one-line and readable (per feedback_simple_ui_for_nontechnical).
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(2)
+    run = esr.run_suite(suite, persist=persist)
+    _print_result(run)
+    sys.exit(run.exit_code)
+
+
 def _cmd_update() -> None:
     """Self-update clawmetry to the latest PyPI version."""
     import subprocess
@@ -2415,6 +2486,40 @@ def main() -> None:
         "--loop-detection", choices=["on", "off"], help="Toggle loop detection"
     )
 
+    # eval — run a golden test suite (Phase 2 evals, refs #1619)
+    p_eval = sub.add_parser(
+        "eval",
+        help="Run a golden eval suite (YAML in ~/.clawmetry/evals/)",
+    )
+    p_eval.add_argument(
+        "--suite",
+        metavar="NAME_OR_PATH",
+        help="Suite name (e.g. customer_support) or absolute path to a YAML file",
+    )
+    p_eval.add_argument(
+        "--list",
+        action="store_true",
+        dest="list_suites",
+        help="List available suites and exit",
+    )
+    p_eval.add_argument(
+        "--watch",
+        action="store_true",
+        help="Re-run on every change to the suite file (dev loop)",
+    )
+    p_eval.add_argument(
+        "--no-persist",
+        action="store_true",
+        dest="no_persist",
+        help="Do not write results to DuckDB (useful for dry runs)",
+    )
+    p_eval.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit machine-readable JSON instead of the table",
+    )
+
     # update — self-update to latest PyPI version
     sub.add_parser("update", help="Update clawmetry to the latest version")
 
@@ -2433,6 +2538,7 @@ def main() -> None:
         "sync",
         "status",
         "proxy",
+        "eval",
         "update",
         "uninstall",
         "nemoclaw-daemons",
@@ -2457,6 +2563,8 @@ def main() -> None:
             _cmd_status(args)
         elif args.cmd == "proxy":
             _cmd_proxy(args)
+        elif args.cmd == "eval":
+            _cmd_eval(args)
         elif args.cmd == "update":
             _cmd_update()
         elif args.cmd == "uninstall":
