@@ -26,6 +26,7 @@ import csv
 from datetime import timezone
 from flask import Blueprint, jsonify, request, Response
 from clawmetry.config import is_local_store_read_enabled
+from routes._dedupe import build_sibling_bucket_max, is_sibling_dup
 
 bp_sessions = Blueprint('sessions', __name__)
 
@@ -3983,13 +3984,56 @@ def _try_local_store_session_export(session_id: str):
 
     Reads events from DuckDB and re-projects them into the same export shape
     the JSONL parser produces. Issue #1088 — uses ``_ls_call`` so the daemon
-    HTTP proxy fires under the standard install. Returns ``None`` to defer to
-    the JSONL parser when the events table has no rows for this session.
+    HTTP proxy fires under the standard install.
+
+    v3-silent-zero fix (issue #1588): the legacy version filtered on
+    ``ev_type == 'message'`` which silently matched ZERO rows on every real
+    OpenClaw v3 install (daemon writes ``assistant`` / ``model.completed`` /
+    ``prompt.submitted`` / ``tool.call`` / ``tool.result``). Endpoint
+    returned an empty ``messages`` array and the JSONL fallback never fired.
+    Same family as PR #1583 (token-attribution). This version:
+
+    * Filters on the union of pre-v3 ('message') AND v3 names so both
+      shapes hydrate the export.
+    * Dedupes the v3 sibling pair (``assistant`` + slim ``model.completed``
+      ~100 ms apart) via ``build_sibling_bucket_max`` so we don't emit the
+      same turn twice.
+    * Falls back to the daemon-stamped ``token_count`` / ``cost_usd``
+      scalar columns when a standalone ``model.completed`` row has no rich
+      sibling — defends against the Eng G "replace aggregate with deduped
+      subset" failure mode.
+    * Returns ``None`` (not an empty-messages dict) when no attributable
+      rows survived, so the JSONL parser fallback fires.
     """
     rows = _ls_call("query_events", session_id=session_id, limit=10000)
     if not rows:
         return None
     rows = list(reversed(rows))  # query_events is DESC; export reads forward.
+
+    # Sibling-pair dedupe (issue #1451 family). Build the bucket map BEFORE
+    # the projection loop so we can skip slim ``model.completed`` rows that
+    # have a richer ``assistant`` / ``message`` sibling in the same
+    # (sid, sec±1) window.
+    bucket_max = build_sibling_bucket_max(rows)
+
+    # Event-type → role mapping for v3 + legacy shapes. Tool-result rows
+    # don't carry a "role" in the chat sense — they're attributed under
+    # ``tool_calls`` rather than ``messages``.
+    _MSG_EVENT_TYPES = {
+        "message",          # pre-v3 synthetic
+        "assistant",        # v3 rich envelope
+        "model.completed",  # v3 slim sibling (only used when standalone)
+        "prompt.submitted", # v3 user-turn
+        "user",             # legacy / v3 fallback
+    }
+    _ROLE_BY_EVENT = {
+        "message":          None,           # use msg.role from envelope
+        "assistant":        "assistant",
+        "model.completed":  "assistant",
+        "prompt.submitted": "user",
+        "user":             "user",
+    }
+
     out = {
         "session_id": session_id,
         "exported_at": datetime.now(timezone.utc).isoformat(),
@@ -4021,15 +4065,30 @@ def _try_local_store_session_export(session_id: str):
                 ts_ms = int(datetime.fromisoformat(str(ts_str).replace("Z", "+00:00")).timestamp() * 1000)
             except Exception:
                 ts_ms = None
-        if ev_type == "model_change":
-            if data.get("modelId"):
-                model = data.get("modelId")
+        if ev_type == "model_change" or ev_type == "model.changed":
+            mid = data.get("modelId") or data.get("model")
+            if mid:
+                model = mid
                 out["metadata"]["model"] = model
-        elif ev_type == "message":  # v3-shape-gate: allow (reason: known latent v3 silent-zero in _try_local_store_session_export — DuckDB rows on v3 are assistant/model.completed; follow-up issue tracks fix to filter on v3 names + still emit messages array)
+        elif ev_type in _MSG_EVENT_TYPES:
+            # Skip the slim sibling when a richer envelope already covers
+            # this (sid, sec±1) bucket. Otherwise the same billable turn
+            # would emit two ``messages[]`` entries.
+            if is_sibling_dup(ev, bucket_max):
+                if ts_ms:
+                    if start_time is None or ts_ms < start_time:
+                        start_time = ts_ms
+                    if end_time is None or ts_ms > end_time:
+                        end_time = ts_ms
+                continue
+
             msg = data.get("message") if isinstance(data.get("message"), dict) else {}
-            role = msg.get("role", "")
             content = msg.get("content", [])
             usage = msg.get("usage") or {}
+            # Role: prefer the explicit envelope role; fall back to the
+            # event-type inference so v3 ``prompt.submitted`` rows still
+            # render as ``user`` even when the envelope is bare.
+            role = msg.get("role", "") or _ROLE_BY_EVENT.get(ev_type) or ""
             text_parts: list[str] = []
             tool_calls_in_msg: list[dict] = []
             if isinstance(content, list):
@@ -4049,31 +4108,59 @@ def _try_local_store_session_export(session_id: str):
                         })
             elif isinstance(content, str):
                 text_parts.append(content)
+            # v3 ``prompt.submitted`` carries the user text in
+            # ``data.finalPromptText`` (per reference_openclaw_v3_event_types.md),
+            # not in a chat envelope. Surface it so the export isn't
+            # silently empty for prompt rows.
+            if not text_parts and isinstance(data, dict):
+                fpt = data.get("finalPromptText") or data.get("promptText")
+                if isinstance(fpt, str) and fpt:
+                    text_parts.append(fpt)
             msg_entry = {
                 "timestamp": ts_str if isinstance(ts_str, str) else None,
                 "role": role,
                 "content": "\n".join(text_parts) if text_parts else None,
                 "model": msg.get("model") or model,
             }
+            in_t = out_t = cr_t = cw_t = 0
+            cost_total = 0.0
             if isinstance(usage, dict) and usage:
-                in_t = int(usage.get("input", 0) or 0)
-                out_t = int(usage.get("output", 0) or 0)
-                cr_t = int(usage.get("cacheRead", 0) or 0)
-                cw_t = int(usage.get("cacheWrite", 0) or 0)
+                in_t = int(usage.get("input", 0) or usage.get("input_tokens", 0) or 0)
+                out_t = int(usage.get("output", 0) or usage.get("output_tokens", 0) or 0)
+                cr_t = int(usage.get("cacheRead", 0) or usage.get("cache_read_input_tokens", 0) or 0)
+                cw_t = int(usage.get("cacheWrite", 0) or usage.get("cache_creation_input_tokens", 0) or 0)
+                cost_obj = usage.get("cost") or {}
+                if isinstance(cost_obj, dict):
+                    cost_total = float(cost_obj.get("total", 0) or 0)
+            # Scalar-column fallback (defends against Eng G's
+            # "blind-replace-aggregate-with-deduped-subset" failure mode):
+            # if the data blob carried no usage splits, attribute the
+            # daemon-stamped scalar columns so a standalone
+            # ``model.completed`` row still shows up in the export.
+            if in_t + out_t + cr_t + cw_t == 0:
+                col_tok = int(ev.get("token_count") or 0)
+                if col_tok > 0:
+                    in_t = col_tok
+            if cost_total <= 0:
+                try:
+                    col_cost = float(ev.get("cost_usd") or 0.0)
+                except (TypeError, ValueError):
+                    col_cost = 0.0
+                if col_cost > 0:
+                    cost_total = col_cost
+            if in_t + out_t + cr_t + cw_t > 0 or cost_total > 0:
                 msg_entry["tokens"] = {
                     "input": in_t, "output": out_t,
                     "cache_read": cr_t, "cache_write": cw_t,
-                    "total": usage.get("totalTokens", in_t + out_t),
+                    "total": in_t + out_t + cr_t + cw_t,
                 }
-                cost_obj = usage.get("cost") or {}
-                if isinstance(cost_obj, dict):
-                    msg_entry["cost_usd"] = cost_obj.get("total", 0.0)
-                    out["cost_data"]["total_cost_usd"] += float(cost_obj.get("total", 0) or 0)
-                    out["cost_data"]["input_tokens"] += in_t
-                    out["cost_data"]["output_tokens"] += out_t
-                    out["cost_data"]["cache_read_tokens"] += cr_t
-                    out["cost_data"]["cache_write_tokens"] += cw_t
-                    out["cost_data"]["total_tokens"] += in_t + out_t + cr_t + cw_t
+                msg_entry["cost_usd"] = cost_total
+                out["cost_data"]["total_cost_usd"] += cost_total
+                out["cost_data"]["input_tokens"] += in_t
+                out["cost_data"]["output_tokens"] += out_t
+                out["cost_data"]["cache_read_tokens"] += cr_t
+                out["cost_data"]["cache_write_tokens"] += cw_t
+                out["cost_data"]["total_tokens"] += in_t + out_t + cr_t + cw_t
             out["messages"].append(msg_entry)
             out["metadata"]["message_count"] += 1
             for tc in tool_calls_in_msg:
@@ -4085,11 +4172,31 @@ def _try_local_store_session_export(session_id: str):
                     "model": msg.get("model") or model,
                 })
                 out["metadata"]["tool_call_count"] += 1
+        elif ev_type in ("tool.call", "tool_call"):
+            # v3 explicit tool-call event (outside an assistant envelope).
+            tname = data.get("toolName") or data.get("name") or data.get("tool")
+            if tname:
+                out["tool_calls"].append({
+                    "timestamp": ts_str if isinstance(ts_str, str) else None,
+                    "tool_call_id": data.get("toolCallId") or data.get("id"),
+                    "tool_name": tname,
+                    "arguments": data.get("arguments") or data.get("input") or {},
+                    "model": model,
+                })
+                out["metadata"]["tool_call_count"] += 1
         if ts_ms:
             if start_time is None or ts_ms < start_time:
                 start_time = ts_ms
             if end_time is None or ts_ms > end_time:
                 end_time = ts_ms
+
+    # Return None (not an empty-messages shell) when no projectable rows
+    # survived, so the JSONL parser fallback fires instead of mis-tagging
+    # an empty answer as ``_source: 'local_store'``. This is the exact
+    # mistake the 6 prior fixes (PR #1571/#1576/#1580/#1583/etc.) made.
+    if not out["messages"] and not out["tool_calls"]:
+        return None
+
     out["metadata"]["start_time_ms"] = start_time
     out["metadata"]["end_time_ms"] = end_time
     return out
