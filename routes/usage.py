@@ -1791,6 +1791,7 @@ def api_usage_forecast():
     Returns {available, daily_rate_usd, cost_this_month_usd,
              projected_month_usd, days_remaining_in_month,
              monthly_budget_usd, budget_exceeded, days_to_budget,
+             pro_dispatch_enabled, budget_alert,
              window_days, daily_window, _source}.
     Returns {available: false} when no local-store data is present.
     """
@@ -1841,6 +1842,11 @@ def api_usage_forecast():
         remaining_budget = effective_budget - cost_this_month
         days_to_budget = max(0.0, remaining_budget / daily_rate)
 
+    try:
+        pro_dispatch_enabled = bool(_d._is_pro_user())
+    except Exception:
+        pro_dispatch_enabled = False
+
     return jsonify({
         "available": True,
         "daily_rate_usd": round(daily_rate, 4),
@@ -1850,6 +1856,13 @@ def api_usage_forecast():
         "monthly_budget_usd": effective_budget,
         "budget_exceeded": budget_exceeded,
         "days_to_budget": round(days_to_budget, 1) if days_to_budget is not None else None,
+        "pro_dispatch_enabled": pro_dispatch_enabled,
+        "budget_alert": {
+            "available": budget_exceeded,
+            "pro_required": True,
+            "pro_dispatch_enabled": pro_dispatch_enabled,
+            "upgrade_url": "/cloud/billing",
+        },
         "window_days": window_days,
         "daily_window": [round(c, 4) for c in reversed(window)],
         "_source": "local_store",

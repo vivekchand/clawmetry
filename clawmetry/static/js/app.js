@@ -7708,6 +7708,24 @@ async function loadCostForecast() {
     } else {
       statusMsg = d.days_remaining_in_month + 'd remaining this month';
     }
+    var alertGate = d.budget_alert || {};
+    var alertHtml = '';
+    if (exceeded && budget > 0) {
+      if (alertGate.pro_dispatch_enabled || d.pro_dispatch_enabled) {
+        alertHtml =
+          '<button type="button" onclick="switchTab(&quot;alerts&quot;)" ' +
+          'style="border:1px solid rgba(239,68,68,0.45);background:rgba(239,68,68,0.12);color:#fecaca;border-radius:6px;padding:7px 10px;font-size:12px;font-weight:600;cursor:pointer;">' +
+          'Set alert' +
+          '</button>';
+      } else {
+        var upgradeUrl = alertGate.upgrade_url || '/cloud/billing';
+        alertHtml =
+          '<a href="' + escHtml(upgradeUrl) + '" ' +
+          'style="display:inline-flex;align-items:center;border:1px solid rgba(239,68,68,0.45);background:rgba(239,68,68,0.12);color:#fecaca;border-radius:6px;padding:7px 10px;font-size:12px;font-weight:600;text-decoration:none;">' +
+          'Get alerted in Cloud-Pro' +
+          '</a>';
+      }
+    }
     el.innerHTML =
       '<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;">' +
         '<div>' +
@@ -7715,6 +7733,7 @@ async function loadCostForecast() {
           '<div style="font-size:22px;font-weight:700;color:' + color + ';">' + icon + ' $' + proj.toFixed(2) + '</div>' +
         '</div>' +
         '<div style="color:var(--text-muted);font-size:13px;">' + escHtml(statusMsg) + '</div>' +
+        (alertHtml ? '<div>' + alertHtml + '</div>' : '') +
         '<div style="margin-left:auto;text-align:right;font-size:12px;color:var(--text-muted);">' +
           '$' + (d.daily_rate_usd || 0).toFixed(4) + '/day avg<br>' +
           '$' + (d.cost_this_month_usd || 0).toFixed(2) + ' spent so far' +

@@ -448,6 +448,38 @@ def test_cost_comparison_does_not_double_count_v3_sibling_pairs(fast_path_app):
     )
 
 
+# ── /api/usage/forecast ────────────────────────────────────────────────────
+
+def test_usage_forecast_surfaces_pro_gate_when_budget_will_be_exceeded(
+    fast_path_app, monkeypatch
+):
+    """Forecast response carries the Cloud-Pro dispatch gate used by the
+    Tokens-tab CTA when projected month-end spend crosses the configured
+    monthly budget."""
+    app, ls, _u = fast_path_app
+    _seed_events(ls.get_store(), n=7, base_cost=1.0, base_tokens=10)
+
+    import dashboard as _d
+    monkeypatch.setattr(
+        _d,
+        "_get_budget_config",
+        lambda: {"monthly_limit": 1.0, "monthly_cap_usd": 0.0},
+    )
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: False)
+
+    body = app.test_client().get("/api/usage/forecast").get_json()
+    assert body["_source"] == "local_store"
+    assert body["available"] is True
+    assert body["budget_exceeded"] is True
+    assert body["pro_dispatch_enabled"] is False
+    assert body["budget_alert"] == {
+        "available": True,
+        "pro_required": True,
+        "pro_dispatch_enabled": False,
+        "upgrade_url": "/cloud/billing",
+    }
+
+
 # ── /api/model-attribution ─────────────────────────────────────────────────
 
 def test_model_attribution_fast_path(fast_path_app):
