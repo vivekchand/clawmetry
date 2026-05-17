@@ -927,6 +927,32 @@ def _is_pro_user():
     return False
 
 
+# ── Auto-pause Pro gate (issue #1169) ───────────────────────────────────
+# Auto-pause-on-100% (a hard kill switch on the gateway) is a Cloud-Pro
+# feature, not OSS table-stakes. OSS / Cloud-Free nodes still see the
+# in-app budget banner + alert-history row when limits trip, but the
+# gateway-stop fan-out is gated. This keeps the warning-only path free
+# (a useful teaser) without giving away the FinOps-grade enforcement
+# story enterprises pay for. ``_pause_gateway()`` itself is still safe
+# to call from manual buttons (``/api/budget/pause``); this gate only
+# guards the *automatic* trip wires inside ``_budget_check`` and the
+# alert-daemon sweep.
+
+
+def _auto_pause_allowed():
+    """Fail-closed gate for *automatic* gateway pause.
+
+    Returns True only for Cloud-Pro users. Manual pause buttons bypass
+    this gate (the user already made the call). Failures default to
+    False so a flaky cache never leaks a paid enforcement path onto a
+    free node.
+    """
+    try:
+        return bool(_is_pro_user())
+    except Exception:
+        return False
+
+
 # ── Per-agent budgets (issue #951) ─────────────────────────────────────
 #
 # Per-agent overrides live in the DuckDB ``agent_budgets`` table (see
@@ -1212,11 +1238,19 @@ def _budget_check():
                 agents_to_check.add(entry.get("agent", "main") or "main")
     except Exception:
         pass
+    # Issue #1169: auto-pause is a Cloud-Pro feature. Free / OSS users
+    # still get the breach alert (banner + history row) via the regular
+    # tier-check, but the gateway-stop fan-out is gated. We force
+    # ``auto_pause_enabled=False`` into the per-agent check so it never
+    # returns the "pause" signal, then re-fire a single banner alert
+    # with an upsell message so the user knows enforcement is paused.
+    _auto_pause_cfg = bool(config.get("auto_pause_enabled", False))
+    _auto_pause_ok = _auto_pause_allowed() if _auto_pause_cfg else True
     for agent_id in agents_to_check:
         try:
             if _budget_check_for_agent(
                 agent_id,
-                auto_pause_enabled=config.get("auto_pause_enabled", False),
+                auto_pause_enabled=_auto_pause_cfg and _auto_pause_ok,
                 warning_pct=warning_pct,
                 pause_pct=pause_pct,
             ):
@@ -1230,6 +1264,21 @@ def _budget_check():
         except Exception:
             # Never let one agent's check kill the whole sweep.
             continue
+    if _auto_pause_cfg and not _auto_pause_ok:
+        # Surface the gate so the user understands why enforcement did
+        # not fire even though their toggle is on. Banner-only; no
+        # Telegram fan-out (that is also Pro).
+        _fire_alert(
+            rule_id="budget_autopause_pro_required",
+            alert_type="budget.upsell",
+            message=(
+                "Auto-pause is a Cloud Pro feature. Budget breaches "
+                "still alert here, but the gateway will keep running "
+                "until you upgrade. Start a 7-day free trial at "
+                "https://app.clawmetry.com/upgrade"
+            ),
+            channels=["banner"],
+        )
 
     # Check each period (global)
     for period in ["daily", "weekly", "monthly"]:
@@ -1265,8 +1314,22 @@ def _budget_check():
                 channels=["banner", "telegram"],
             )
 
-        # Auto-pause
+        # Auto-pause (issue #1169: Pro-gated; Free users still get the
+        # banner alert, but the gateway is left running.)
         if pct >= pause_pct and config.get("auto_pause_enabled", False):
+            if not _auto_pause_ok:
+                _fire_alert(
+                    rule_id=f"budget_{period}_exceeded_upsell",
+                    alert_type="budget.upsell",
+                    message=(
+                        f"BUDGET EXCEEDED: {period} spending ${spent:.2f} "
+                        f"is over ${limit:.2f}. Auto-pause is a Cloud Pro "
+                        f"feature. Start a 7-day free trial at "
+                        f"https://app.clawmetry.com/upgrade"
+                    ),
+                    channels=["banner"],
+                )
+                continue
             _budget_paused = True
             _budget_paused_at = time.time()
             _budget_paused_reason = (
@@ -5702,7 +5765,26 @@ async function loadBudgetConfig() {
     document.getElementById('budget-weekly').value = cfg.weekly_limit || 0;
     document.getElementById('budget-monthly').value = cfg.monthly_limit || 0;
     document.getElementById('budget-warn-pct').value = cfg.warning_threshold_pct || 80;
-    document.getElementById('budget-autopause').checked = cfg.auto_pause_enabled || false;
+    var apEl = document.getElementById('budget-autopause');
+    if (apEl) {
+      apEl.checked = cfg.auto_pause_enabled || false;
+      // Issue #1169: auto-pause is a Cloud Pro feature; disable + upsell for Free users.
+      var proOk = !!cfg.auto_pause_pro_enabled;
+      apEl.disabled = !proOk;
+      var upsellId = 'budget-autopause-upsell';
+      var existing = document.getElementById(upsellId);
+      if (existing) existing.parentNode.removeChild(existing);
+      if (!proOk) {
+        apEl.checked = false;
+        var note = document.createElement('div');
+        note.id = upsellId;
+        note.style.cssText = 'margin-top:6px;padding:8px 10px;background:var(--bg-tertiary);border:1px solid var(--border-primary);border-radius:6px;font-size:12px;color:var(--text-secondary);';
+        note.innerHTML = '<span style="font-weight:600;color:var(--text-primary);">Auto-pause is a Cloud Pro feature.</span> '
+          + 'Budget warnings still fire here. To stop the gateway automatically at 100%, '
+          + '<a href="https://app.clawmetry.com/upgrade" target="_blank" rel="noopener" style="color:var(--bg-accent);text-decoration:underline;font-weight:600;">start a 7-day free trial</a>.';
+        if (apEl.parentNode) apEl.parentNode.appendChild(note);
+      }
+    }
   } catch(e) {}
 }
 
@@ -5738,7 +5820,13 @@ async function saveBudgetConfig() {
     warning_threshold_pct: parseInt(document.getElementById('budget-warn-pct').value) || 80,
     auto_pause_enabled: document.getElementById('budget-autopause').checked,
   };
-  await fetch('/api/budget/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+  try {
+    var resp = await fetch('/api/budget/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)}).then(function(r){return r.json();});
+    if (resp && resp.auto_pause_pro_required) {
+      // Issue #1169: server stripped auto-pause; re-render upsell.
+      loadBudgetConfig();
+    }
+  } catch(e) {}
   loadBudgetStatus();
 }
 
@@ -9023,6 +9111,10 @@ def _budget_monitor_loop():
             auto_thr = float(cfg.get("auto_pause_threshold_usd", 0) or 0)
             auto_action = str(cfg.get("auto_pause_action", "pause") or "pause").lower()
             if auto_thr > 0 and status.get("daily_spent", 0) >= auto_thr:
+                # Issue #1169: Pro-gate the auto-pause action. Free users
+                # get the same banner, the gateway just keeps running.
+                if auto_action == "pause" and not _auto_pause_allowed():
+                    auto_action = "alert"
                 if auto_action == "pause" and not _budget_paused:
                     _budget_paused = True
                     _budget_paused_at = now
