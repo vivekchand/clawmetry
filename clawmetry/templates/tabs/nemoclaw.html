@@ -1,3 +1,15 @@
+{# Issue #1603: server-side Pro-tier gate. Pre-fix, the full NemoClaw
+   governance shell (sandbox state, policy hash, drift detection, egress
+   approvals) shipped in the HTML for every user — Free users saw a brief
+   flash of the Pro DOM before the client-side overlay mounted. Fail-closed:
+   if ``is_pro`` is undefined (older render pathway) we treat the user as
+   Free so we never leak Pro DOM by default. #}
+{% if not is_pro %}
+{% with paywall_page_id='nemoclaw', paywall_feature='NemoClaw governance',
+        paywall_pitch='Pro adds the NemoClaw sandbox, policy drift detection, and one-click egress approvals so you can prove your agents are inside the lines.' %}
+  {% include 'partials/paywall_modal.html' %}
+{% endwith %}
+{% else %}
 <div class="page" id="page-nemoclaw">
   <div style="padding:12px 0 8px 0;">
     <!-- Header row -->
@@ -151,3 +163,4 @@
     </div>
   </div>
 </div><!-- end page-nemoclaw (theme 2) -->
+{% endif %}
