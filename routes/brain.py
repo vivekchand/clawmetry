@@ -24,6 +24,7 @@ from flask import Blueprint, Response, jsonify, request
 from clawmetry.config import is_local_store_read_enabled
 from clawmetry.risk import compute_hallucination_risk, is_llm_event
 from clawmetry.token_confidence import annotate_events as _annotate_token_confidence
+from clawmetry.token_confidence import annotate_tool_alternatives as _annotate_tool_alternatives
 
 bp_brain = Blueprint('brain', __name__)
 
@@ -1038,6 +1039,16 @@ def api_brain_history():
     except Exception:
         # Never crash the Brain feed on annotation failure — the rest of
         # the payload is still useful even if confidence stamping fails.
+        pass
+
+    # Issue #1616 — Alternatives-considered. For every tool.call event we
+    # stamp ``ev["tool_alternatives"]`` with the chosen tool + rejected
+    # options the model evaluated (from logprobs or extended-thinking).
+    # Honest empty list when no real data is available — never invent
+    # alternatives.
+    try:
+        _annotate_tool_alternatives(events)
+    except Exception:
         pass
 
     try:
