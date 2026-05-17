@@ -24,6 +24,15 @@ def client(tmp_path, monkeypatch):
     import routes.local_query as lq
     importlib.reload(lq)
 
+    # Issue #1538: isolate fixture from any running clawmetry daemon
+    # on the contributor's machine. Without this, _dispatch tries
+    # _proxy_dispatch first; that reads ~/.clawmetry/local_query.json
+    # and POSTs to the daemon, which then queries ITS production DuckDB
+    # (~/.clawmetry/clawmetry.duckdb) instead of this test's tmp_path
+    # fixture. CI never had a daemon so CI passed; laptops with the
+    # daemon running silently failed 11/16. Force direct-mode always.
+    monkeypatch.setattr(lq, "_read_discovery", lambda: None)
+
     # Pre-#1448 events tests seed historical timestamps that fall outside
     # the OSS 24h retention cap. Default the fixture to Pro so those
     # assertions still pass; the cap tests below monkeypatch
