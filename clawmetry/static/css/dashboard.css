@@ -1353,12 +1353,36 @@
   gap: 1px;
   padding: 2px 0 4px;
 }
+.left-nav-advanced-list[hidden] { display: none; }
 .left-nav-item-sub {
   padding: 7px 12px 7px 24px;
   font-size: 12px;
   font-weight: 500;
   color: var(--text-tertiary);
 }
+/* Live trace expandable group (IA regroup). The Live trace header
+   doubles as the Overview tab launcher; the chevron toggles the list. */
+.left-nav-item-group { position: relative; }
+.left-nav-group-chevron {
+  margin-left: auto;
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: transform 0.18s ease, color 0.18s ease;
+}
+.left-nav-group-chevron:hover { color: var(--text-secondary); }
+.left-nav-group-chevron[aria-expanded="false"] { transform: rotate(-90deg); }
+.left-nav-group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 2px 0 4px;
+}
+.left-nav-group-list[hidden] { display: none; }
 .left-nav-item-link { text-decoration: none; }
 .left-nav-footer {
   margin-top: auto;
