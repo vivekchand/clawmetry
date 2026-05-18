@@ -30,6 +30,8 @@ Opens at **http://localhost:8900** and you're done.
 - **Logs** — Color-coded real-time log streaming
 - **Memory** — Browse SOUL.md, MEMORY.md, AGENTS.md, daily notes
 - **Transcripts** — Chat-bubble UI for reading session histories
+- **Alerts** — Budget caps, error-rate triggers, agent-offline detection; routes to Slack, Discord, PagerDuty, Telegram, Email
+- **Approvals** — Gate destructive deletes, force pushes, DB mutations, sudo, package installs, network calls behind one-click sign-off
 
 ## Screenshots
 
@@ -50,6 +52,12 @@ Opens at **http://localhost:8900** and you're done.
 
 ### 🔐 Security — Posture & audit log
 ![Security tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/security.png)
+
+### 🚨 Alerts — Budget caps, error-rate triggers, webhooks to Slack / Discord / PagerDuty / Email
+![Alerts tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/alerts.png)
+
+### ✋ Approvals — Gate risky tool calls behind manual sign-off; policy-backed protection rules
+![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png)
 
 ## Install
 
