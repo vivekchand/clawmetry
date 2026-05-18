@@ -3716,13 +3716,20 @@ function loadReasoningChain(sessionId, containerId) {
       if (summary.avg_efficiency > 0) {
         html += '<span>&#9889; Efficiency: ' + summary.avg_efficiency + ':1</span>';
       }
+      if (summary.avg_coherence_score !== undefined) {
+        var cScore = summary.avg_coherence_score;
+        var cLabel = summary.avg_coherence_label || 'low';
+        var cCol = cLabel === 'high' ? '#22c55e' : (cLabel === 'medium' ? '#eab308' : '#ef4444');
+        html += '<span title="Coherence: how much thinking vocabulary appeared in the answer (0–100)" style="display:inline-flex;align-items:center;gap:3px;padding:0 6px;border-radius:10px;background:' + cCol + '22;color:' + cCol + ';font-size:9px;font-weight:700;">&#127919; ' + cScore + ' ' + cLabel + '</span>';
+      }
       html += '<span>' + chains.length + ' chain' + (chains.length > 1 ? 's' : '') + '</span>';
       html += '</div>';
       // Render each chain
       chains.forEach(function(chain, ci) {
         html += '<div style="padding:4px 8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;margin-bottom:4px;">';
         if (chains.length > 1) {
-          html += '<div style="font-size:10px;color:var(--text-muted);margin-bottom:3px;">Chain ' + (ci + 1) + ' &mdash; ' + chain.thinking_tokens + ' tokens</div>';
+          var cc = chain.coherence_label === 'high' ? '#22c55e' : (chain.coherence_label === 'medium' ? '#eab308' : '#ef4444');
+          html += '<div style="display:flex;gap:6px;align-items:center;font-size:10px;color:var(--text-muted);margin-bottom:3px;">Chain ' + (ci + 1) + ' — ' + chain.thinking_tokens + ' tokens' + (chain.coherence_score !== undefined ? '<span style="padding:0 5px;border-radius:8px;background:' + cc + '22;color:' + cc + ';font-size:9px;font-weight:700;">' + chain.coherence_score + ' ' + (chain.coherence_label || '') + '</span>' : '') + '</div>';
         }
         (chain.steps || []).forEach(function(step) {
           var col = _rcStepColors[step.type] || '#6b7280';
