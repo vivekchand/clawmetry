@@ -5016,7 +5016,13 @@ def _canonical_args_hash(args: dict) -> str:
 
 def _local_dispatch_fallback(shape: str, args: dict) -> dict:
     """Fallback dispatcher used when `routes.local_query` isn't importable
-    (daemon-only installs). Mirrors the minimal shape→method bridge."""
+    (daemon-only installs). Mirrors the minimal shape→method bridge.
+
+    Cloud-side pending_queries may carry kwargs the local store doesn't
+    recognise (e.g. ``node_id`` — the cloud uses it to route between
+    nodes, but the local DuckDB IS a single-node store). Filter to a
+    per-shape allowlist so those extras don't surface as TypeErrors.
+    """
     from clawmetry import local_store
     store = local_store.get_store(read_only=True)
     if shape == "health":
@@ -5030,8 +5036,28 @@ def _local_dispatch_fallback(shape: str, args: dict) -> dict:
     method = method_map.get(shape)
     if not method:
         raise ValueError(f"unknown shape: {shape}")
-    rows = getattr(store, method)(**(args or {}))
+    rows = getattr(store, method)(**_filter_store_kwargs(shape, args or {}))
     return {"rows": rows, "count": len(rows), "_shape": shape, "_via": "fallback"}
+
+
+# Per-shape allowlist of kwargs accepted by the underlying ``LocalStore``
+# methods. Kept in sync with ``LocalStore.query_*`` signatures in
+# ``clawmetry/local_store.py``. Mirrors ``routes.local_query._coerce_args``
+# but defined here so the daemon-only fallback path doesn't need the
+# routes package on sys.path.
+_SHAPE_ALLOWED_KWARGS = {
+    "events":     {"session_id", "agent_id", "event_type", "since", "until", "limit"},
+    "sessions":   {"agent_id", "since", "until", "limit"},
+    "aggregates": {"agent_id", "since", "until"},
+    "transcript": {"session_id", "limit"},
+}
+
+
+def _filter_store_kwargs(shape: str, args: dict) -> dict:
+    allowed = _SHAPE_ALLOWED_KWARGS.get(shape)
+    if allowed is None:
+        return dict(args)
+    return {k: v for k, v in args.items() if k in allowed}
 
 
 def _channel_enrichment_from_row(r: dict) -> dict:
