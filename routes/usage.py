@@ -2496,14 +2496,68 @@ def api_usage_forecast():
     return jsonify({"available": False, "reason": "no_data"})
 
 
+def _try_local_store_usage_export(window_days: int = 30):
+    """DuckDB fast path for /api/usage/export's daily token + cost rollup.
+
+    Tier-1 Bypass-FS surface (refs #1565 EOD canon). The legacy export
+    handler re-walks every JSONL file in the sessions directory on every
+    request — fine for empty installs but multi-second on a busy
+    workspace, and it returns 0 for the daily totals on real v3
+    OpenClaw installs (events stamp tokens in ``data.message.usage``
+    rather than the top-level legacy keys the walker probes).
+
+    ``query_aggregates`` returns per-day ``token_count`` + ``cost_usd``
+    deduped at SQL level (same dedup the sibling fast paths use), so we
+    project the last ``window_days`` days zero-filled the same way the
+    legacy code did, returning a list of ``{date, tokens, cost}`` rows
+    the CSV writer downstream consumes unchanged.
+
+    Returns ``None`` when DuckDB has zero rows so the caller defers to
+    the legacy JSONL walker (fresh install / dev mode keeps working).
+    """
+    agg_rows = _ls_call("query_aggregates") or []
+    if not agg_rows:
+        return None
+    by_day = {(r.get("day") or ""): r for r in agg_rows if r.get("day")}
+    today = datetime.now()
+    days = []
+    for i in range(window_days, -1, -1):
+        d = today - timedelta(days=i)
+        ds = d.strftime("%Y-%m-%d")
+        row = by_day.get(ds, {})
+        days.append({
+            "date":   ds,
+            "tokens": int(row.get("token_count") or 0),
+            "cost":   round(float(row.get("cost_usd") or 0.0), 4),
+        })
+    return {"days": days, "_source": "local_store"}
+
+
 @bp_usage.route("/api/usage/export")
 def api_usage_export():
-    """Export usage data as CSV."""
+    """Export usage data as CSV.
+
+    Tier-1 DuckDB fast path (refs #1565): the legacy JSONL walker
+    silently returned 0 tokens on real v3 OpenClaw installs (tokens
+    live in ``data.message.usage`` not the top-level keys the walker
+    probes). When ``CLAWMETRY_LOCAL_STORE_READ`` is on and DuckDB has
+    rows we project the per-day rollup via ``query_aggregates``; fall
+    back to the legacy paths otherwise (OTLP ring → JSONL walker) so
+    nothing regresses on a fresh install.
+    """
     import dashboard as _d
 
     try:
-        # Get usage data
-        if _d._has_otel_data():
+        # Get usage data — DuckDB fast path first.
+        data = None
+        if is_local_store_read_enabled():
+            try:
+                data = _try_local_store_usage_export(window_days=30)
+            except Exception:
+                data = None
+        if data is not None:
+            pass  # fast path populated `data`
+        elif _d._has_otel_data():
             data = _d._get_otel_usage_data()
         else:
             # Call the same logic as /api/usage but get full data
