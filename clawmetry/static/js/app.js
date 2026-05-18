@@ -586,6 +586,33 @@ var _cmOnboardingDismissed = false;
 var _cmOnboardingTimer = null;
 var _CM_ONBOARDING_STALL_MS = 90 * 1000;
 
+// P0 user report 2026-05-18: the "Setting up your node" banner kept
+// showing on the cloud Node Detail modal even while MODEL, TOKENS,
+// SPENDING and "Connected, last sync 28s ago" were ALL clearly
+// populated from other endpoints. `/api/heartbeat-status` alone is
+// not authoritative — when any hero card has flipped from its "--"
+// placeholder to a real value, the banner is lying and must dismiss.
+function _cmAnyVisibleDataSignal(){
+  var ids = [
+    'cost-today',       // Spending
+    'model-primary',    // Model
+    'token-rate',       // Tokens
+    'tokens-today',     // Today
+    'hot-sessions-count' // Sessions
+  ];
+  for (var i = 0; i < ids.length; i++){
+    var el = document.getElementById(ids[i]);
+    if (!el) continue;
+    var txt = (el.textContent || '').trim();
+    if (!txt) continue;
+    if (/^[-—\s]*$/.test(txt)) continue;
+    if (/^loading/i.test(txt)) continue;
+    if (txt === '$0.00') continue;      // default Spending placeholder
+    if (/\d/.test(txt) || /[a-z]/i.test(txt)) return true;
+  }
+  return false;
+}
+
 async function checkOnboardingStatus() {
   if (_cmOnboardingDismissed) return;
   var banner = document.getElementById('onboarding-banner');
@@ -593,12 +620,25 @@ async function checkOnboardingStatus() {
   var msgEl = document.getElementById('onboarding-banner-msg');
   var etaEl = document.getElementById('onboarding-banner-eta');
   var spinEl = document.getElementById('onboarding-banner-spinner');
+  // Short-circuit: if any hero card is already showing real data, the
+  // banner is lying — dismiss it permanently for this session.
+  if (_cmAnyVisibleDataSignal()) {
+    banner.style.display = 'none';
+    _cmOnboardingDismissed = true;
+    if (_cmOnboardingTimer) { clearInterval(_cmOnboardingTimer); _cmOnboardingTimer = null; }
+    return;
+  }
   try {
     var data = await fetch('/api/heartbeat-status').then(function(r){return r.json();});
     var firstHeartbeatLanded = (
       data && data.status && data.status !== 'unknown' &&
       data.last_heartbeat_ts && data.last_heartbeat_ts > 0
     );
+    // Belt-and-braces: even if heartbeat-status didn't update, recheck
+    // visible signals after the network round-trip in case they landed.
+    if (!firstHeartbeatLanded && _cmAnyVisibleDataSignal()) {
+      firstHeartbeatLanded = true;
+    }
     if (firstHeartbeatLanded) {
       // Smooth handoff: hide the banner, mark as dismissed for this session
       // so we don't re-flash on a transient blip, and kick a fresh loadAll
