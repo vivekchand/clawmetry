@@ -10797,10 +10797,28 @@ DASHBOARD_HTML = r"""
 <div class="app-shell">
   <aside id="left-nav" role="navigation" aria-label="Primary">
     <div class="left-nav-section">
-      <div class="left-nav-item active" data-tab="overview" onclick="switchTab('overview')" title="Live view of every running agent">
+      <div class="left-nav-item left-nav-item-group active" data-tab="overview" onclick="switchTab('overview')" title="Live view of every running agent">
         <span class="left-nav-icon" aria-hidden="true">&#9679;</span>
         <span class="left-nav-label">Live trace</span>
         <span id="nav-stuck-badge" class="left-nav-badge" style="display:none;">0</span>
+        <button type="button" class="left-nav-group-chevron" id="left-nav-live-toggle" aria-expanded="true" aria-controls="left-nav-live-list" aria-label="Toggle Live trace sub-items" onclick="event.stopPropagation(); toggleLiveDrawer();">&#9662;</button>
+      </div>
+      <div class="left-nav-group-list" id="left-nav-live-list">
+        <div class="left-nav-item left-nav-item-sub" data-tab="flow" onclick="switchTab('flow')">
+          <span class="left-nav-label">Flow</span>
+        </div>
+        <div class="left-nav-item left-nav-item-sub" data-tab="brain" onclick="switchTab('brain')">
+          <span class="left-nav-label">Brain</span>
+        </div>
+        <div class="left-nav-item left-nav-item-sub" data-tab="logs" onclick="switchTab('logs')">
+          <span class="left-nav-label">Logs</span>
+        </div>
+        <div class="left-nav-item left-nav-item-sub" data-tab="models" onclick="switchTab('models')">
+          <span class="left-nav-label">Models</span>
+        </div>
+        <div class="left-nav-item left-nav-item-sub" data-tab="context" onclick="switchTab('context')" title="What the LLM sees on each turn">
+          <span class="left-nav-label">LLM Context</span>
+        </div>
       </div>
       <div class="left-nav-item" data-tab="clusters" onclick="switchTab('clusters')" title="Multi-node fleet overview">
         <span class="left-nav-icon" aria-hidden="true">&#9678;</span>
@@ -10828,6 +10846,14 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-icon" aria-hidden="true">&#8634;</span>
         <span class="left-nav-label">Replay</span>
       </div>
+      <div class="left-nav-item" data-tab="crons" id="crons-tab" onclick="switchTab('crons')" title="Scheduled agent jobs">
+        <span class="left-nav-icon" aria-hidden="true">&#9202;</span>
+        <span class="left-nav-label">Crons</span>
+      </div>
+      <div class="left-nav-item" data-tab="memory" onclick="switchTab('memory')" title="Persistent memory files the agent reads on boot">
+        <span class="left-nav-icon" aria-hidden="true">&#9873;</span>
+        <span class="left-nav-label">Memory</span>
+      </div>
     </div>
 
     <button type="button" class="left-nav-advanced-toggle" id="left-nav-advanced-toggle" onclick="toggleAdvancedDrawer()" aria-expanded="false">
@@ -10835,44 +10861,23 @@ DASHBOARD_HTML = r"""
       <span class="left-nav-advanced-chevron" aria-hidden="true">&#9662;</span>
     </button>
     <div class="left-nav-advanced-list" id="left-nav-advanced-list" hidden>
-      <div class="left-nav-item left-nav-item-sub" data-tab="flow" onclick="switchTab('flow')">
-        <span class="left-nav-label">Flow</span>
-      </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="brain" onclick="switchTab('brain')">
-        <span class="left-nav-label">Brain</span>
-      </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="notifications" onclick="switchTab('notifications')">
         <span class="left-nav-label">Notifications</span>
-      </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="context" onclick="switchTab('context')">
-        <span class="left-nav-label">Context</span>
-      </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="memory" onclick="switchTab('memory')">
-        <span class="left-nav-label">Memory</span>
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="security" onclick="switchTab('security')">
         <span class="left-nav-label">Security</span>
       </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="logs" onclick="switchTab('logs')">
-        <span class="left-nav-label">Logs</span>
-      </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="models" onclick="switchTab('models')">
-        <span class="left-nav-label">Models</span>
-      </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="limits" onclick="switchTab('limits')">
-        <span class="left-nav-label">Rate limits</span>
-      </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="crons" id="crons-tab" onclick="switchTab('crons')">
-        <span class="left-nav-label">Crons</span>
+      <div class="left-nav-item left-nav-item-sub" data-tab="skills" onclick="switchTab('skills')">
+        <span class="left-nav-label">Skills</span>
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="selfevolve" onclick="switchTab('selfevolve')">
-        <span class="left-nav-label">SelfEvolve</span>
+        <span class="left-nav-label">Self-Evolve</span>
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="version-impact" onclick="switchTab('version-impact')">
         <span class="left-nav-label">Version impact</span>
       </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="skills" onclick="switchTab('skills')">
-        <span class="left-nav-label">Skills</span>
+      <div class="left-nav-item left-nav-item-sub" data-tab="limits" onclick="switchTab('limits')">
+        <span class="left-nav-label">Rate limits</span>
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="nemoclaw" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">
         <span class="left-nav-label">NemoClaw</span>

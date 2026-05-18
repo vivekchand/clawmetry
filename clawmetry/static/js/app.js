@@ -923,19 +923,53 @@ function toggleLeftNavMobile() {
   leftNav.classList.toggle('open');
 }
 
-// Restore Advanced drawer state on page load.
-(function _restoreAdvancedDrawer() {
+// Live trace expandable group (IA regroup: Flow/Brain/Logs/Models/LLM Context).
+// Default-expanded; remembers user collapse via localStorage.
+function toggleLiveDrawer() {
+  var btn = document.getElementById('left-nav-live-toggle');
+  var list = document.getElementById('left-nav-live-list');
+  if (!btn || !list) return;
+  var nowOpen = list.hasAttribute('hidden');
+  if (nowOpen) {
+    list.removeAttribute('hidden');
+    btn.setAttribute('aria-expanded', 'true');
+  } else {
+    list.setAttribute('hidden', '');
+    btn.setAttribute('aria-expanded', 'false');
+  }
+  try { localStorage.setItem('cm_live_open', nowOpen ? '1' : '0'); }
+  catch (e) { /* localStorage blocked */ }
+}
+
+// Restore Advanced + Live drawer state on page load.
+(function _restoreNavDrawers() {
   if (typeof document === 'undefined') return;
   var apply = function() {
-    var btn = document.getElementById('left-nav-advanced-toggle');
-    var list = document.getElementById('left-nav-advanced-list');
-    if (!btn || !list) return;
-    var open = false;
-    try { open = localStorage.getItem('cm_advanced_open') === '1'; }
-    catch (e) { /* localStorage blocked */ }
-    if (open) {
-      list.removeAttribute('hidden');
-      btn.setAttribute('aria-expanded', 'true');
+    // Advanced drawer (default-collapsed).
+    var advBtn = document.getElementById('left-nav-advanced-toggle');
+    var advList = document.getElementById('left-nav-advanced-list');
+    if (advBtn && advList) {
+      var advOpen = false;
+      try { advOpen = localStorage.getItem('cm_advanced_open') === '1'; }
+      catch (e) { /* localStorage blocked */ }
+      if (advOpen) {
+        advList.removeAttribute('hidden');
+        advBtn.setAttribute('aria-expanded', 'true');
+      }
+    }
+    // Live trace drawer (default-expanded; collapse only if user explicitly closed).
+    var liveBtn = document.getElementById('left-nav-live-toggle');
+    var liveList = document.getElementById('left-nav-live-list');
+    if (liveBtn && liveList) {
+      var liveOpen = true;
+      try {
+        var v = localStorage.getItem('cm_live_open');
+        if (v === '0') liveOpen = false;
+      } catch (e) { /* localStorage blocked */ }
+      if (!liveOpen) {
+        liveList.setAttribute('hidden', '');
+        liveBtn.setAttribute('aria-expanded', 'false');
+      }
     }
   };
   if (document.readyState === 'loading') {
