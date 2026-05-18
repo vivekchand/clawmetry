@@ -4573,6 +4573,124 @@ def _collect_security_posture() -> dict | None:
         return None
 
 
+# Tool-name classifiers for `_collect_activity_counters_today` (issue #1652).
+# Mirrors the lower-cased substring match used by `routes/brain.py::tool_to_type`
+# so the heartbeat counters line up with the same buckets the OSS Brain page
+# would show. Centralised here so the daemon doesn't have to import routes.
+def _classify_tool_name(name: str) -> str:
+    """Return the activity bucket for a tool ``name``. One of:
+    ``exec``, ``browser``, ``other``. Lower-cased before matching."""
+    tn = (name or "").lower()
+    if not tn:
+        return "other"
+    if tn in ("exec", "process") or "shell" in tn or "bash" in tn:
+        return "exec"
+    if "browser" in tn:
+        return "browser"
+    return "other"
+
+
+# Plaintext message-class events (issue #1652). These are the v3 + legacy
+# event types that count as "the agent did one round-trip with the user or
+# the model". Match the dedup set in `local_store.query_aggregates`.
+_MESSAGE_EVENT_TYPES_TODAY = (
+    "message", "prompt.submitted", "model.completed",
+)
+
+
+def _today_start_iso_utc() -> str:
+    """Midnight-UTC of the current day as ISO-8601, suitable for the
+    ``events.ts`` VARCHAR column's lexical ordering (UTC ISO sorts correctly
+    as strings)."""
+    now = datetime.now(timezone.utc)
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start.isoformat()
+
+
+def _collect_activity_counters_today() -> dict | None:
+    """Plaintext activity counters for the heartbeat envelope (issue #1652).
+
+    Cloud has no plaintext source for real exec/tool-call activity counts —
+    sessions + nodes.metadata carry version/health bits but no per-day
+    counters, and the brain cache push is encrypted (cloud can't read it).
+    This helper aggregates COUNTS (not session content) from the local
+    DuckDB events table for today UTC, so cloud's Flow Exec modal (#953)
+    and adjacent surfaces (#967 messages, #968 browser) can swap from the
+    session-liveness proxy to real numbers in their next iteration.
+
+    Returns a dict with five integer fields (all >= 0):
+
+      * ``tool_calls_today`` — every tool invocation (exec + browser + other)
+      * ``exec_calls_today`` — subset whose name classifies as shell/bash/exec
+      * ``browser_actions_today`` — subset whose name contains ``browser``
+      * ``unique_tools_today`` — count of distinct tool names invoked today
+      * ``messages_today`` — count of ``message`` / ``prompt.submitted`` /
+        ``model.completed`` events today
+
+    Best-effort: returns ``None`` if local_store isn't importable or the
+    underlying read raises — heartbeat MUST succeed even if counters fail.
+    Why plaintext is OK: these are aggregates, not session content.
+    No PII risk — same trust model as the existing `local_store_size_mb`.
+    """
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+    except Exception:
+        return None
+
+    try:
+        since = _today_start_iso_utc()
+
+        # Tool calls: re-use the per-invocation reader so we count once
+        # per ACTUAL tool call, not once per row (an assistant message
+        # carrying 3 toolMetas yields 3 invocations, not 1).
+        try:
+            invs = store.query_tool_call_invocations(since=since, limit=200_000)
+        except Exception:
+            invs = []
+        tool_calls = 0
+        exec_calls = 0
+        browser_actions = 0
+        unique_names: set[str] = set()
+        for row in invs:
+            name = row.get("name") if isinstance(row, dict) else None
+            if not isinstance(name, str) or not name:
+                continue
+            tool_calls += 1
+            unique_names.add(name.lower())
+            bucket = _classify_tool_name(name)
+            if bucket == "exec":
+                exec_calls += 1
+            elif bucket == "browser":
+                browser_actions += 1
+
+        # Messages: count rows directly via query_events. We don't dedup the
+        # assistant/model.completed twin here — message counts are a coarse
+        # "did the agent talk today" signal and the dedupe would obscure
+        # legitimately distinct prompt.submitted rows. Cloud uses this as a
+        # heartbeat liveness proxy, not a billing aggregate.
+        messages_today = 0
+        for et in _MESSAGE_EVENT_TYPES_TODAY:
+            try:
+                rows = store.query_events(
+                    event_type=et, since=since, limit=100_000,
+                )
+            except Exception:
+                continue
+            messages_today += len(rows)
+
+        return {
+            "tool_calls_today":      int(tool_calls),
+            "exec_calls_today":      int(exec_calls),
+            "browser_actions_today": int(browser_actions),
+            "unique_tools_today":    int(len(unique_names)),
+            "messages_today":        int(messages_today),
+        }
+    except Exception as e:
+        log.debug("_collect_activity_counters_today failed: %s", e)
+        return None
+
+
 # Adaptive heartbeat: the most recent /ingest/heartbeat response body so the
 # main loop (and tests) can derive the next sleep interval without changing
 # `send_heartbeat`'s `bool` return type (callers in tests assert `is True`).
@@ -4635,6 +4753,16 @@ def send_heartbeat(config: dict) -> bool:
         payload["local_store_size_mb"] = round(size_mb, 3)
     except Exception:
         pass  # local store optional — never break heartbeat over it
+    # Issue #1652: plaintext per-day activity counters so the cloud Flow Exec
+    # modal (#953/#966), messages widget (#967) and browser widget (#968)
+    # can show REAL numbers instead of inferring from session liveness.
+    # Same trust model as `local_store_size_mb` — counts only, no content.
+    try:
+        counters = _collect_activity_counters_today()
+        if counters:
+            payload.update(counters)
+    except Exception as _ce:
+        log.debug("activity counters build failed (continuing): %s", _ce)
     # Phase 2 of relay-v2 (epic #1032): proactively push the top-50 brain
     # events to the cloud cache so the Brain page paints in <100ms on first
     # load instead of waiting for a relay round-trip. The blob is the same
