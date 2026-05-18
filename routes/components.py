@@ -57,21 +57,52 @@ def _iter_tool_call_blocks(row: dict):
     """Yield ``(tool_name, arguments, status)`` for every tool-call block
     embedded in a DuckDB ``events`` row.
 
-    OpenClaw's transcript shape (verified 2026-05-13 against
-    ``~/.openclaw/agents/main/sessions/*.jsonl``) wraps tool calls inside
-    ``message`` events with ``message.content`` being a list of blocks.
-    A tool call is a block whose ``type`` is ``toolCall`` (current) or
-    ``tool_use`` (Anthropic-style legacy from older transcripts).
+    Three shapes are handled (silent-zero bug-class fix — see
+    ``feedback_synthetic_tests_missed_real_event_shape.md``):
+
+    1. Legacy trajectory ``message`` event — ``data.message.content[]``
+       carries ``toolCall`` (current) or ``tool_use`` (Anthropic-style
+       legacy) blocks.
+    2. v3 daemon-normalised ``model.completed`` event with the nested
+       message preserved — same ``data.message.content[]`` walk as (1).
+    3. v3 daemon-normalised ``model.completed`` event with ONLY
+       ``data.toolMetas[]`` (the post-#1135 normalised shape, where the
+       inner ``message`` block has been stripped). Each toolMeta carries
+       ``{id, name, input}``.
 
     Audit P0 #4: the previous implementation queried for
     ``event_type='tool_call'`` rows that the daemon never writes — every
     row in DuckDB has the raw OpenClaw type (``message`` / ``assistant``
-    / ``user`` / …). All 10 component-tool endpoints fell through to the
-    legacy JSONL parser as a result.
+    / ``model.completed`` / …). All 10 component-tool endpoints fell
+    through to the legacy JSONL parser as a result. Today's silent-zero
+    fix (5th instance) extends that fix to cover model.completed.
     """
     data = row.get("data") if isinstance(row, dict) else None
     if not isinstance(data, dict):
         return
+
+    # Shape 3 — v3 normalised ``toolMetas[]`` on model.completed. Surface
+    # these FIRST so installs with only-normalised events still light up.
+    tool_metas = data.get("toolMetas")
+    if isinstance(tool_metas, list):
+        for meta in tool_metas:
+            if not isinstance(meta, dict):
+                continue
+            tname = meta.get("name") or meta.get("tool") or ""
+            args = meta.get("input") or meta.get("arguments") or {}
+            if not isinstance(args, dict):
+                args = {"_raw": str(args)[:200]}
+            # toolMetas have no error flag — daemon strips it. We default
+            # to ok; if a paired tool.result event later carries
+            # is_error=true, the legacy parser's toolResult branch will
+            # surface that. Fast path keeps the simpler "ok" default.
+            if tname:
+                yield tname, args, "ok"
+
+    # Shapes 1 + 2 — both walk data.message.content[]. May coexist with
+    # toolMetas on a model.completed row; dedupe by tool name+args is
+    # left to the caller (counts are per-block, which matches the legacy
+    # parser).
     msg = data.get("message")
     if not isinstance(msg, dict):
         return
@@ -121,10 +152,18 @@ def _try_local_store_component_tool(name: str):
     # exclusive DuckDB lock (per memory `reference_duckdb_process_lock.md`),
     # forcing the call to error out → fall through to the slow JSONL
     # walker → 7s p95 the latency probe (#1287) surfaced.
+    #
+    # 2026-05-18 silent-zero bug-class fix (5th instance today): also
+    # query ``model.completed`` — the daemon-normalised v3 assistant
+    # event (per memory `reference_openclaw_v3_event_types.md`). Real
+    # user installs in the wild have 0 ``message`` rows + only
+    # ``model.completed`` rows, so the prior two-shape query silently
+    # returned an empty events[] and the caller fell through to the 8s+
+    # JSONL walker → modal stuck on "Loading...".
     rows: list = []
     try:
         from routes.local_query import local_store_via_daemon
-        for et in ("message", "assistant"):
+        for et in ("message", "assistant", "model.completed"):
             try:
                 got = local_store_via_daemon("query_events", event_type=et, limit=2000)
                 if got:
@@ -141,7 +180,7 @@ def _try_local_store_component_tool(name: str):
         try:
             from clawmetry import local_store
             store = local_store.get_store(read_only=True)
-            for et in ("message", "assistant"):
+            for et in ("message", "assistant", "model.completed"):
                 try:
                     rows.extend(store.query_events(event_type=et, limit=2000))
                 except Exception:
@@ -272,8 +311,30 @@ def api_component_tool(name):
     today_calls = 0
     today_errors = 0
 
+    # Hard 5s wall-clock cap on the legacy JSONL walker (silent-zero
+    # bug-class fix, 2026-05-18). With a healthy DuckDB fast path the
+    # walker should never fire, but installs without the daemon — or
+    # with months of accumulated sessions/*.jsonl files — used to hang
+    # the Sessions modal for 8s+ when the fast path missed (eg
+    # model.completed-only stores before today's fix). Better to return
+    # what we have within budget than to leave the UI stuck on
+    # "Loading...".
+    _jsonl_deadline = _time.time() + 5.0
+
     if os.path.isdir(sessions_dir):
-        for fname in os.listdir(sessions_dir):
+        try:
+            _files = os.listdir(sessions_dir)
+        except OSError:
+            _files = []
+        # Bail entirely if there are too many candidate files — opening
+        # + stat-ing 500+ jsonl files in one request blows the 5s budget
+        # before any parsing happens. Return an empty shell so the UI
+        # renders "no recent activity" instead of hanging.
+        if len(_files) > 200:
+            _files = []
+        for fname in _files:
+            if _time.time() > _jsonl_deadline:
+                break  # 5s cap reached → return what we have so far
             if not fname.endswith(".jsonl"):
                 continue
             fpath = os.path.join(sessions_dir, fname)
