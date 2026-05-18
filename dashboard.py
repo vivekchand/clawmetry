@@ -10803,36 +10803,69 @@ DASHBOARD_HTML = r"""
 <div class="app-shell">
   <aside id="left-nav" role="navigation" aria-label="Primary">
     <div class="left-nav-section">
-      <div class="left-nav-item active" data-tab="overview" onclick="switchTab('overview')" title="Live view of every running agent">
-        <span class="left-nav-icon" aria-hidden="true">&#9679;</span>
-        <span class="left-nav-label">Live</span>
-        <span id="nav-stuck-badge" class="left-nav-badge" style="display:none;">0</span>
+      <div class="left-nav-group" data-primary="overview">
+        <div class="left-nav-item active" data-tab="overview" onclick="switchTab('overview')" title="Live view of every running agent">
+          <span class="left-nav-icon" aria-hidden="true">&#9679;</span>
+          <span class="left-nav-label">Live</span>
+          <span id="nav-stuck-badge" class="left-nav-badge" style="display:none;">0</span>
+        </div>
+        <div class="left-nav-sub">
+          <div class="left-nav-item left-nav-item-sub active" data-tab="overview" onclick="switchTab('overview')"><span class="left-nav-label">Overview</span></div>
+          <div class="left-nav-item left-nav-item-sub" data-tab="flow" onclick="switchTab('flow')"><span class="left-nav-label">Flow</span></div>
+          <div class="left-nav-item left-nav-item-sub" data-tab="brain" onclick="switchTab('brain')"><span class="left-nav-label">Brain</span></div>
+          <div class="left-nav-item left-nav-item-sub" data-tab="subagents" onclick="switchTab('subagents')"><span class="left-nav-label">Sub-agents</span></div>
+        </div>
       </div>
-      <div class="left-nav-item" data-tab="transcripts" onclick="switchTab('transcripts')" title="Conversations across 21 chat adapters (Telegram, Signal, WhatsApp, &hellip;)">
-        <span class="left-nav-icon" aria-hidden="true">&#9787;</span>
-        <span class="left-nav-label">Channels</span>
+
+      <div class="left-nav-group" data-primary="transcripts">
+        <div class="left-nav-item" data-tab="transcripts" onclick="switchTab('transcripts')" title="Conversations across 21 chat adapters (Telegram, Signal, WhatsApp, &hellip;)">
+          <span class="left-nav-icon" aria-hidden="true">&#9787;</span>
+          <span class="left-nav-label">Channels</span>
+        </div>
       </div>
-      <div class="left-nav-item" data-tab="usage" onclick="switchTab('usage')" title="Token spend &amp; cost analytics">
-        <span class="left-nav-icon" aria-hidden="true">&#36;</span>
-        <span class="left-nav-label">Cost</span>
+
+      <div class="left-nav-group" data-primary="usage">
+        <div class="left-nav-item" data-tab="usage" onclick="switchTab('usage')" title="Token spend &amp; cost analytics">
+          <span class="left-nav-icon" aria-hidden="true">&#36;</span>
+          <span class="left-nav-label">Cost</span>
+        </div>
+        <div class="left-nav-sub">
+          <div class="left-nav-item left-nav-item-sub" data-tab="usage" onclick="switchTab('usage')"><span class="left-nav-label">Tokens</span></div>
+          <div class="left-nav-item left-nav-item-sub" data-tab="models" onclick="switchTab('models')"><span class="left-nav-label">Models</span></div>
+          <div class="left-nav-item left-nav-item-sub" data-tab="alerts" onclick="switchTab('alerts')"><span class="left-nav-label">Alerts</span></div>
+          <div class="left-nav-item left-nav-item-sub" data-tab="crons" id="crons-tab" onclick="switchTab('crons')"><span class="left-nav-label">Crons</span></div>
+          <div class="left-nav-item left-nav-item-sub" onclick="openBudgetModal()"><span class="left-nav-label">Budget</span></div>
+        </div>
       </div>
-      <div class="left-nav-item" data-tab="approvals" onclick="switchTab('approvals')" title="Approval queue, rules &amp; governance">
-        <span class="left-nav-icon" aria-hidden="true">&#10003;</span>
-        <span class="left-nav-label">Approvals</span>
-        <span id="nav-approvals-badge" class="left-nav-badge" style="display:none;">0</span>
+
+      <div class="left-nav-group" data-primary="approvals">
+        <div class="left-nav-item" data-tab="approvals" onclick="switchTab('approvals')" title="Approval queue, rules &amp; governance">
+          <span class="left-nav-icon" aria-hidden="true">&#10003;</span>
+          <span class="left-nav-label">Approvals</span>
+          <span id="nav-approvals-badge" class="left-nav-badge" style="display:none;">0</span>
+        </div>
+        <div class="left-nav-sub">
+          <div class="left-nav-item left-nav-item-sub" data-tab="approvals" onclick="switchTab('approvals')"><span class="left-nav-label">Pending</span></div>
+          <div class="left-nav-item left-nav-item-sub" data-tab="alerts" onclick="switchTab('alerts')"><span class="left-nav-label">Rules</span></div>
+          <div class="left-nav-item left-nav-item-sub" data-tab="nemoclaw" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;"><span class="left-nav-label">NemoClaw</span></div>
+        </div>
       </div>
-      <div class="left-nav-item" data-tab="memory" onclick="switchTab('memory')" title="Memory, security, nodes, logs &amp; skills">
-        <span class="left-nav-icon" aria-hidden="true">&#9881;</span>
-        <span class="left-nav-label">Settings</span>
+
+      <div class="left-nav-group" data-primary="memory">
+        <div class="left-nav-item" data-tab="memory" onclick="switchTab('memory')" title="Memory, security, nodes, logs &amp; skills">
+          <span class="left-nav-icon" aria-hidden="true">&#9881;</span>
+          <span class="left-nav-label">Settings</span>
+        </div>
+        <div class="left-nav-sub">
+          <div class="left-nav-item left-nav-item-sub" data-tab="memory" onclick="switchTab('memory')"><span class="left-nav-label">Memory</span></div>
+          <div class="left-nav-item left-nav-item-sub" data-tab="security" onclick="switchTab('security')"><span class="left-nav-label">Security</span></div>
+          <div class="left-nav-item left-nav-item-sub" data-tab="clusters" onclick="switchTab('clusters')"><span class="left-nav-label">Nodes</span></div>
+          <div class="left-nav-item left-nav-item-sub" data-tab="logs" onclick="switchTab('logs')"><span class="left-nav-label">Logs</span></div>
+          <div class="left-nav-item left-nav-item-sub" data-tab="skills" onclick="switchTab('skills')"><span class="left-nav-label">Skills</span></div>
+          <a class="left-nav-item left-nav-item-sub left-nav-item-link" id="insights-tab" href="/insights" style="display:none;"><span class="left-nav-label">Insights</span></a>
+        </div>
       </div>
     </div>
-
-    {# Hidden stubs so existing handlers that toggle #crons-tab / #nemoclaw-tab
-       / #insights-tab visibility don't NPE. Real entry points live in the
-       per-page sub-nav (renderPageSubnav). #}
-    <div id="crons-tab" hidden></div>
-    <div id="nemoclaw-tab" hidden></div>
-    <a id="insights-tab" href="/insights" hidden></a>
 
     <div class="left-nav-footer">
       <a href="?legacy_nav=1" class="left-nav-legacy-link" title="Switch back to the classic top-nav layout">Classic nav</a>

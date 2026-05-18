@@ -1409,39 +1409,33 @@
   #left-nav-mobile-toggle { display: flex; align-items: center; justify-content: center; }
 }
 
-/* IA refactor v2: per-page sub-nav pill row. Rendered by
-   _renderPageSubnav() (clawmetry/static/js/app.js) at the top of each
-   primary page that has nested sub-tabs (Live, Cost, Approvals,
-   Settings). Channels has its own channel list, so no sub-nav. */
-.page-subnav {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 4px 10px;
-  margin: 0 0 8px;
-  border-bottom: 1px solid var(--border-secondary);
-  min-height: 30px;
-}
-.page-subnav-item {
-  padding: 5px 12px;
-  border-radius: 999px;
+/* IA v3: nested left-nav. Each .left-nav-group wraps a primary item +
+   its sub-items. Sub-items are always visible (no toggle), indented
+   under the icon column. Parent highlights when any of its children is
+   the active page; the matching child highlights too. */
+.left-nav-group { margin-bottom: 2px; }
+.left-nav-sub { display: flex; flex-direction: column; gap: 1px; margin: 2px 0 6px; }
+.left-nav-item-sub {
+  padding: 4px 12px 4px 38px;
   font-size: 12px;
   font-weight: 500;
   color: var(--text-tertiary);
-  background: transparent;
-  text-decoration: none;
   cursor: pointer;
+  border-radius: 6px;
   transition: background 0.12s ease, color 0.12s ease;
-  border: 1px solid transparent;
-  white-space: nowrap;
+  text-decoration: none;
+  display: block;
 }
-.page-subnav-item:hover {
+.left-nav-item-sub:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
-.page-subnav-item.active {
+.left-nav-item-sub.active {
   background: var(--bg-active, rgba(229, 68, 58, 0.12));
   color: var(--text-primary);
-  border-color: var(--border-primary);
+}
+/* When a sub-item is active, soften the parent so the visual weight
+   sits with the leaf, not the bucket. */
+.left-nav-group.has-active-child > .left-nav-item:not(.active) {
+  color: var(--text-secondary);
 }
