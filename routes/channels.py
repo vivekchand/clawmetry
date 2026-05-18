@@ -1198,6 +1198,18 @@ def api_channel_whatsapp():
         fast = _try_local_store_provider_messages("whatsapp", limit)
         if fast is not None:
             return jsonify(fast)
+        # Tier-2 #1565 v3 events-table fallback (2026-05-18 coverage audit).
+        # WhatsApp is in ``sync._CHANNEL_DIRS`` so the daemon ingests
+        # ``~/.openclaw/whatsapp/*.jsonl`` through ``ingest_channel_event``,
+        # but a daemon restart between the ``channel_messages`` projection
+        # write and the ``events`` chokepoint can leave ``channel_messages``
+        # empty while ``events`` carries the ``channel.in`` / ``channel.out``
+        # rows — same silent-zero hazard memory
+        # ``feedback_synthetic_tests_missed_real_event_shape.md`` warns
+        # about and Telegram / Signal / BlueBubbles already guard for.
+        fast = _try_local_store_channel_events("whatsapp", limit)
+        if fast is not None:
+            return jsonify(fast)
 
     messages = []
     today = datetime.now().strftime("%Y-%m-%d")
