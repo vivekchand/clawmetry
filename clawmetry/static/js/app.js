@@ -15120,9 +15120,20 @@ async function loadHistory() {
     }
     document.getElementById('history-cron-table').innerHTML = cronHtml;
 
-    // Update status
+    // Update status. Empty state copy (2026-05-18): the old line read
+    // "No data yet -- collector polls every 60s", which was misleading on
+    // the default install where no collector runs. New copy tells the
+    // user how to populate the chart and points at the Live trace tab.
     var totalPts = (tokIn.data||[]).length + (costData.data||[]).length;
-    status.textContent = totalPts > 0 ? totalPts + ' data points' : 'No data yet -- collector polls every 60s';
+    if (totalPts > 0) {
+      status.textContent = totalPts + ' data points';
+    } else {
+      status.innerHTML = 'Token usage chart populates as your agent runs. '
+        + 'Send a message in OpenClaw to see the first datapoint, or '
+        + '<a href="#flow" onclick="switchTab(\'flow\');return false;" '
+        + 'style="color:var(--accent-primary,#3b82f6);text-decoration:underline;">'
+        + 'open the Live trace</a>.';
+    }
   } catch(e) {
     status.textContent = 'Error: ' + e.message;
     console.error('History load error:', e);
