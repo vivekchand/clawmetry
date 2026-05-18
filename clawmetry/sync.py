@@ -4336,6 +4336,120 @@ def _flush_log_batch(
 # ── Heartbeat ─────────────────────────────────────────────────────────────────
 
 
+# Agent-install detection (cloud bug fix 2026-05-18). Cloud Run pods can't
+# stat the user's home directory to decide whether OpenClaw / NemoClaw exists
+# — they were hard-coding `no_agent=True` in a shim, which made the cloud
+# "no agent detected" empty-state lie for every user. The daemon already
+# knows (install.sh writes the same paths it checks), so we ride the answer
+# up on the heartbeat envelope and the cloud aggregates across the user's
+# fleet (ANY node with openclaw_detected → user has openclaw).
+#
+# Mirrors ``dashboard.detect_agent_install`` deliberately rather than
+# importing dashboard.py: the daemon process must stay lean (importing
+# dashboard pulls in Flask + 15k LOC) and these are cheap stat-only checks.
+# Cached for ``_AGENT_INSTALL_TTL_SEC`` (60s) — heartbeats fire every 30s
+# (FAST) or 60s (SLOW) so a 60s cache halves the syscalls without making
+# the signal stale.
+_AGENT_INSTALL_TTL_SEC = 60
+_agent_install_cache: dict = {"ts": 0.0, "value": None}
+
+
+def _detect_openclaw_install_for_heartbeat() -> bool:
+    """Stat-only OpenClaw presence check (no subprocess, no DB)."""
+    home = os.environ.get("OPENCLAW_HOME") or os.path.expanduser("~/.openclaw")
+    if not home:
+        return False
+    if os.path.exists(os.path.join(home, "gateway", "gateway.pid")):
+        return True
+    sess_dir = os.path.join(home, "agents", "main", "sessions")
+    if os.path.isdir(sess_dir):
+        try:
+            for name in os.listdir(sess_dir):
+                if name.endswith(".jsonl"):
+                    return True
+        except OSError:
+            pass
+    ws = os.path.join(home, "workspace")
+    for marker in ("SOUL.md", "AGENTS.md", "MEMORY.md"):
+        if os.path.exists(os.path.join(ws, marker)):
+            return True
+    if os.path.isdir(home):
+        try:
+            if any(True for _ in os.scandir(home)):
+                return True
+        except OSError:
+            pass
+    return False
+
+
+def _detect_nemoclaw_install_for_heartbeat() -> bool:
+    """Stat-only NemoClaw presence check."""
+    import shutil as _shutil
+    if _shutil.which("nemoclaw"):
+        return True
+    cfg = os.path.expanduser("~/.nemoclaw")
+    if os.path.isdir(cfg):
+        try:
+            if any(True for _ in os.scandir(cfg)):
+                return True
+        except OSError:
+            pass
+    return False
+
+
+def _detect_any_local_data_for_heartbeat() -> bool:
+    """Return True if local DuckDB store has any rows. Best-effort."""
+    try:
+        from clawmetry import local_store  # type: ignore
+        store = local_store.get_store(read_only=True)
+    except Exception:
+        return False
+    for method, kwargs in (
+        ("query_events", {"limit": 1}),
+        ("query_heartbeats", {"limit": 1}),
+    ):
+        try:
+            fn = getattr(store, method, None)
+            if fn is None:
+                continue
+            rows = fn(**kwargs)
+            if rows:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _detect_agent_install_for_heartbeat() -> dict:
+    """Return ``{openclaw_detected, nemoclaw_detected, any_data, signals,
+    no_agent}`` — the same shape ``dashboard.detect_agent_install`` returns,
+    cached for ``_AGENT_INSTALL_TTL_SEC`` seconds."""
+    now = time.time()
+    cached = _agent_install_cache.get("value")
+    if cached and (now - _agent_install_cache["ts"]) < _AGENT_INSTALL_TTL_SEC:
+        return cached
+    openclaw = bool(_detect_openclaw_install_for_heartbeat())
+    nemoclaw = bool(_detect_nemoclaw_install_for_heartbeat())
+    any_data = bool(_detect_any_local_data_for_heartbeat())
+    signals = []
+    if openclaw:
+        signals.append("openclaw")
+    if nemoclaw:
+        signals.append("nemoclaw")
+    if any_data:
+        signals.append("local_data")
+    payload = {
+        "openclaw_detected": openclaw,
+        "nemoclaw_detected": nemoclaw,
+        "any_data": any_data,
+        "signals": signals,
+        "no_agent": not (openclaw or nemoclaw or any_data),
+    }
+    _agent_install_cache["ts"] = now
+    _agent_install_cache["value"] = payload
+    return payload
+
+
 def _detect_ollama_for_heartbeat():
     """Detect Ollama status for heartbeat reporting."""
     import shutil
@@ -4732,6 +4846,14 @@ def send_heartbeat(config: dict) -> bool:
         "e2e": bool(config.get("encryption_key")),
         "ollama": _detect_ollama_for_heartbeat(),
     }
+    # Agent-install self-report (cloud bug fix 2026-05-18). Cloud Run pods
+    # can't stat the user's home directory, so the daemon tells cloud what
+    # agents exist locally and cloud aggregates across the user's fleet.
+    # Best-effort — heartbeat MUST succeed even if detection raises.
+    try:
+        payload["agent_install"] = _detect_agent_install_for_heartbeat()
+    except Exception as _ai_e:
+        log.debug("agent_install detection failed (continuing): %s", _ai_e)
     # Daemon-collected snapshots (see _collect_security_posture docstring)
     sec = _collect_security_posture()
     if sec is not None:
