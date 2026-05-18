@@ -53,7 +53,7 @@ bp_version_impact = Blueprint('version_impact', __name__)
 bp_cloud_relay = Blueprint('cloud_relay', __name__)
 
 
-# ── Version check & self-update routes ────────────────────────────────────────
+# ── Version check & self-update routes ─────────────────────────────────────────────
 
 
 @bp_version.route("/api/version")
@@ -160,7 +160,7 @@ def api_install_age():
         return {"exists": False, "ctime": None, "mtime": None}
 
 
-# ── Gateway proxy routes ──────────────────────────────────────────────────────
+# ── Gateway proxy routes ────────────────────────────────────────────────────────────────
 
 
 @bp_gateway.route("/api/gw/config", methods=["GET", "POST"])
@@ -313,19 +313,24 @@ def api_gw_rpc():
     return jsonify(result)
 
 
-# ── Auth routes ───────────────────────────────────────────────────────────────
+# ── Auth routes ─────────────────────────────────────────────────────────────────────────
 
 
 @bp_auth.route("/api/auth/check")
 def api_auth_check():
     """Check if auth is required and validate token."""
     import dashboard as _d
-    if not _d.GATEWAY_TOKEN:
+    # Defensive env-var fallback: if _d.GATEWAY_TOKEN is not yet populated
+    # (e.g. visual-diff preflight hits this endpoint before _load_gw_config
+    # has run), read OPENCLAW_GATEWAY_TOKEN directly so CI never returns
+    # needsSetup:true when the token was correctly injected via env.
+    gateway_token = _d.GATEWAY_TOKEN or os.environ.get("OPENCLAW_GATEWAY_TOKEN", "").strip()
+    if not gateway_token:
         return jsonify({"authRequired": True, "valid": False, "needsSetup": True})
     token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
     if not token:
         token = request.args.get("token", "").strip()
-    if token == _d.GATEWAY_TOKEN:
+    if token == gateway_token:
         try:
             _d._ext_emit("auth.check", {"ok": True})
         except Exception:
@@ -479,7 +484,7 @@ def api_auth_detected_token():
     return jsonify({"token": token, "source": _detected_token_source(token)})
 
 
-# ── Anonymous funnel-loss instrumentation (issue #1365) ──────────────────────
+# ── Anonymous funnel-loss instrumentation (issue #1365) ──────────────────────────────────
 # Allowed event names. Keep this tiny — every new value is an analytics
 # schema commitment. Today we only ship the one funnel we got burned on
 # in #1357 (typo'd pgrep killed auto-detect).
@@ -680,7 +685,7 @@ def index():
     return resp
 
 
-# ── OTLP receiver routes ──────────────────────────────────────────────────────
+# ── OTLP receiver routes ──────────────────────────────────────────────────────────────────
 
 
 @bp_otel.route("/v1/metrics", methods=["POST"])
@@ -751,7 +756,7 @@ def api_otel_status():
     )
 
 
-# ── Version impact analysis ───────────────────────────────────────────────────
+# ── Version impact analysis ─────────────────────────────────────────────────────────────────────
 
 
 def _ls_call(method_name, **kwargs):
