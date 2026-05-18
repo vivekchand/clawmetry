@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  # ── Fast syntax check (runs in ~10s, blocks everything else) ───────────────────
+  # ── Fast syntax check (runs in ~10s, blocks everything else) ─────────────────────
   lint:
     name: Syntax & Lint
     runs-on: ubuntu-latest
@@ -51,7 +51,7 @@ jobs:
           done
           echo "✅ JS Syntax OK"
 
-  # ── API tests across all 3 platforms ─────────────────────────────────────
+  # ── API tests across all 3 platforms ───────────────────────────────────────────
   api-tests:
     name: API Tests (${{ matrix.os }})
     needs: lint
@@ -117,7 +117,7 @@ jobs:
           CLAWMETRY_TOKEN: ci-test-token
         run: python3 -m pytest tests/test_api.py -v --tb=short
 
-  # ── MOAT verifier (hermetic, hard-fail) ───────────────────────────────────
+  # ── MOAT verifier (hermetic, hard-fail) ───────────────────────────────────────────
   # Issue #1491 / PRD #1133 invariant #3: "A regression in either direction
   # is caught BEFORE merge." These 9 files (61 tests) exercise the
   # OpenClaw → DuckDB → API surface contract end-to-end, plus the lint
@@ -158,6 +158,7 @@ jobs:
   # which silently masked Playwright regressions. We split the suite into:
   #   1. `e2e-critical` (this job) — TestTabsLoad: page-load + tab-nav smoke
   #      tests that have been stable. Hard-fails on regression.
+  #      TestAllTabsPostAuth: C5 auth-overlay gate (issue #1646).
   #   2. `e2e-nightly`  (.github/workflows/e2e-nightly.yml) — the broader
   #      TestFlowDiagram suite, which depends on SVG rendering of live data
   #      and is still flaky. Runs on schedule, not per-PR.
@@ -184,13 +185,17 @@ jobs:
             curl -sf -H "Authorization: Bearer ci-test-token" http://localhost:8900/api/health && break
             sleep 1
           done
-      - name: Run E2E tests (critical subset only — hard gate)
+      - name: Run E2E tests (critical subset only -- hard gate)
         env:
           CLAWMETRY_URL: http://localhost:8900
           CLAWMETRY_TOKEN: ci-test-token
-        run: python3 -m pytest tests/test_e2e.py::TestTabsLoad -v --tb=short
+        run: |
+          python3 -m pytest \
+            tests/test_e2e.py::TestTabsLoad \
+            tests/test_e2e_oss_all_tabs.py::TestAllTabsPostAuth \
+            -v --tb=short
 
-  # ── pip install smoke test across platforms ─────────────────────────────
+  # ── pip install smoke test across platforms ──────────────────────────────
   pip-install:
     name: pip install (${{ matrix.os }})
     needs: lint
@@ -266,7 +271,7 @@ jobs:
           fi
           echo "✅ /static/js/app.js served from installed wheel"
 
-  # ── Eval suite gate (Phase 2 evals, refs #1619 / PR #1626) ───────────────
+  # ── Eval suite gate (Phase 2 evals, refs #1619 / PR #1626) ─────────────
   # Runs ClawMetry's own golden suite (tests/data/golden_ci.yaml) through
   # the `clawmetry eval` CLI on every PR. Catches regressions in:
   #   * eval_suite_runner.py YAML parsing / runner loop
@@ -355,7 +360,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # ── Live OpenClaw E2E ─────────────────────────────────────────────────────
+  # ── Live OpenClaw E2E ──────────────────────────────────────────────────────
   # Closes #1544. Boots a real openclaw gateway, sends a real message
   # through `openclaw agent --local`, drives the daemon's
   # sync_sessions_recent over the on-disk JSONL, and asserts every
