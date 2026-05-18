@@ -33,6 +33,37 @@ except ImportError:
 BASE_URL = os.environ.get("CLAWMETRY_URL", "http://localhost:8900")
 TOKEN = os.environ.get("CLAWMETRY_TOKEN", "ci-test-token")
 
+
+# Session-scoped Playwright fixtures.
+# sync_playwright() must NOT be called inside a test body when pytest-playwright
+# is loaded -- the plugin runs tests inside an asyncio loop, which blocks the
+# sync API. Confining it to a session fixture mirrors tests/test_e2e.py and
+# avoids "Playwright Sync API inside the asyncio loop" errors.
+@pytest.fixture(scope="session")
+def _overlay_browser():
+    if not _PLAYWRIGHT_AVAILABLE:
+        pytest.skip("playwright not installed")
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        yield browser
+        browser.close()
+
+
+@pytest.fixture
+def _overlay_page(_overlay_browser):
+    ctx = _overlay_browser.new_context(viewport={"width": 1280, "height": 720})
+    # Seed the gateway token into localStorage before any page script runs.
+    # Mirrors the approach in .github/scripts/visual-diff.mjs.
+    ctx.add_init_script(
+        "try { "
+        f"localStorage.setItem('clawmetry-token', {json.dumps(TOKEN)}); "
+        f"localStorage.setItem('clawmetry-gw-token', {json.dumps(TOKEN)}); "
+        "} catch(e) {}"
+    )
+    page = ctx.new_page()
+    yield page
+    ctx.close()
+
 # Canonical tabs that must load without auth overlay post-login.
 # Mirrors DEFAULT_TABS in .github/scripts/visual-diff.mjs.
 CANONICAL_TABS = [
@@ -89,49 +120,33 @@ class TestAllTabsPostAuth:
         )
 
     @pytest.mark.parametrize("tab", CANONICAL_TABS)
-    def test_tab_loads_without_auth_overlay(self, tab):
+    def test_tab_loads_without_auth_overlay(self, _overlay_page, tab):
         """Tab must be reachable and must NOT show an auth-blocking overlay."""
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            ctx = browser.new_context(viewport={"width": 1280, "height": 720})
-            page = ctx.new_page()
+        page = _overlay_page
+        page.goto(BASE_URL + "/", wait_until="domcontentloaded", timeout=15000)
 
-            # Seed the gateway token into localStorage before any page script
-            # runs. Mirrors the approach in .github/scripts/visual-diff.mjs.
-            page.add_init_script(
-                "try { "
-                f"localStorage.setItem('clawmetry-token', {json.dumps(TOKEN)}); "
-                f"localStorage.setItem('clawmetry-gw-token', {json.dumps(TOKEN)}); "
-                "} catch(e) {}"
+        if tab != "overview":
+            page.evaluate(
+                "typeof window.switchTab === 'function' && "
+                f"window.switchTab({json.dumps(tab)})"
             )
 
-            page.goto(BASE_URL + "/", wait_until="domcontentloaded", timeout=15000)
+        page.wait_for_timeout(1000)
 
-            if tab != "overview":
-                page.evaluate(
-                    "typeof window.switchTab === 'function' && "
-                    f"window.switchTab({json.dumps(tab)})"
+        blocking = []
+        for oid in _BLOCKING_OVERLAY_IDS:
+            el = page.query_selector(f"#{oid}")
+            if el is None:
+                continue
+            display = el.evaluate("el => getComputedStyle(el).display")
+            visibility = el.evaluate("el => getComputedStyle(el).visibility")
+            if display != "none" and visibility != "hidden":
+                blocking.append(
+                    f"#{oid} display={display!r} visibility={visibility!r}"
                 )
 
-            page.wait_for_timeout(1000)
-
-            blocking = []
-            for oid in _BLOCKING_OVERLAY_IDS:
-                el = page.query_selector(f"#{oid}")
-                if el is None:
-                    continue
-                display = el.evaluate("el => getComputedStyle(el).display")
-                visibility = el.evaluate("el => getComputedStyle(el).visibility")
-                if display != "none" and visibility != "hidden":
-                    blocking.append(
-                        f"#{oid} display={display!r} visibility={visibility!r}"
-                    )
-
-            ctx.close()
-            browser.close()
-
-            assert not blocking, (
-                f"Tab '{tab}': auth overlay(s) still visible after token injection: "
-                + ", ".join(blocking)
-                + f". Ensure OPENCLAW_GATEWAY_TOKEN={TOKEN!r} matches CLAWMETRY_TOKEN."
-            )
+        assert not blocking, (
+            f"Tab '{tab}': auth overlay(s) still visible after token injection: "
+            + ", ".join(blocking)
+            + f". Ensure OPENCLAW_GATEWAY_TOKEN={TOKEN!r} matches CLAWMETRY_TOKEN."
+        )
