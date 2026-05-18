@@ -4121,7 +4121,6 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
     <div class="nav-tab active" onclick="switchTab('overview')">Overview <span id="nav-stuck-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
-    <div class="nav-tab" onclick="switchTab('review')" title="Did the agent make the right choice? Sample 10 random sessions per day.">Review</div>
     <div class="nav-tab" onclick="switchTab('alerts')" title="Get notified when something goes wrong">Alerts <span id="nav-alerts-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('notifications')" title="Slack / Email / PagerDuty / Telegram channels">Notifications</div>
     <div class="nav-tab" onclick="switchTab('context')" title="See what context the LLM receives each turn">Context</div>
@@ -4130,7 +4129,6 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
-    <a class="nav-tab" id="insights-tab" href="/insights" style="display:none;text-decoration:none;color:inherit;" title="Weekly LLM-over-DuckDB digest (Cloud-Pro adds daily cron + dispatch)">Insights</a>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
@@ -10753,7 +10751,6 @@ DASHBOARD_HTML = r"""
     <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
     <div class="nav-tab active" onclick="switchTab('overview')">Overview <span id="nav-stuck-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
-    <div class="nav-tab" onclick="switchTab('review')" title="Did the agent make the right choice? Sample 10 random sessions per day.">Review</div>
     <div class="nav-tab" onclick="switchTab('alerts')" title="Get notified when something goes wrong">Alerts <span id="nav-alerts-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('notifications')" title="Slack / Email / PagerDuty / Telegram channels">Notifications</div>
     <div class="nav-tab" onclick="switchTab('context')" title="See what context the LLM receives each turn">Context</div>
@@ -10762,7 +10759,6 @@ DASHBOARD_HTML = r"""
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
-    <a class="nav-tab" id="insights-tab" href="/insights" style="display:none;text-decoration:none;color:inherit;" title="Weekly LLM-over-DuckDB digest (Cloud-Pro adds daily cron + dispatch)">Insights</a>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
     {% if v2_enabled %}
@@ -10845,9 +10841,6 @@ DASHBOARD_HTML = r"""
       <div class="left-nav-item left-nav-item-sub" data-tab="brain" onclick="switchTab('brain')">
         <span class="left-nav-label">Brain</span>
       </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="review" onclick="switchTab('review')">
-        <span class="left-nav-label">Review</span>
-      </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="notifications" onclick="switchTab('notifications')">
         <span class="left-nav-label">Notifications</span>
       </div>
@@ -10884,9 +10877,6 @@ DASHBOARD_HTML = r"""
       <div class="left-nav-item left-nav-item-sub" data-tab="nemoclaw" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">
         <span class="left-nav-label">NemoClaw</span>
       </div>
-      <a class="left-nav-item left-nav-item-sub left-nav-item-link" id="insights-tab" href="/insights" style="display:none;">
-        <span class="left-nav-label">Insights</span>
-      </a>
     </div>
 
     <div class="left-nav-footer">
