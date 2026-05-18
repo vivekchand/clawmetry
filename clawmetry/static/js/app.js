@@ -816,9 +816,15 @@ function switchTab(name) {
   if (page) page.classList.add('active');
   var tabs = document.querySelectorAll('.nav-tab');
   tabs.forEach(function(t) { if (t.getAttribute('onclick') && t.getAttribute('onclick').indexOf("'" + name + "'") !== -1) t.classList.add('active'); });
-  var leftItems = document.querySelectorAll('.left-nav-item[data-tab="' + name + '"]');
+  // v2 IA: highlight the primary left-nav bucket that owns this sub-tab,
+  // not just an exact data-tab match (so e.g. switching to Flow keeps
+  // Live highlighted in the sidebar).
+  var primary = _primaryForTab(name);
+  var leftItems = document.querySelectorAll('.left-nav-item[data-tab="' + primary + '"]');
   leftItems.forEach(function(t) { t.classList.add('active'); });
   if (!document.querySelector('.nav-tab.active') && !document.querySelector('.left-nav-item.active') && typeof event !== 'undefined' && event && event.target) event.target.classList.add('active');
+  // v2 IA: render the per-page sub-nav strip + flag the active sub-item.
+  try { _renderPageSubnav(primary, name); } catch (e) { /* defensive */ }
   // Auto-close mobile drawer when a nav item is picked.
   var leftNav = document.getElementById('left-nav');
   if (leftNav && leftNav.classList.contains('open')) leftNav.classList.remove('open');
@@ -860,43 +866,104 @@ function switchTab(name) {
   if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
 }
 
-// ── Left-nav Advanced drawer + mobile toggle (Phase 1 IA refactor #1659) ─
-function toggleAdvancedDrawer() {
-  var btn = document.getElementById('left-nav-advanced-toggle');
-  var list = document.getElementById('left-nav-advanced-list');
-  if (!btn || !list) return;
-  var nowOpen = list.hasAttribute('hidden');
-  if (nowOpen) {
-    list.removeAttribute('hidden');
-    btn.setAttribute('aria-expanded', 'true');
-  } else {
-    list.setAttribute('hidden', '');
-    btn.setAttribute('aria-expanded', 'false');
-  }
-  try { localStorage.setItem('cm_advanced_open', nowOpen ? '1' : '0'); }
-  catch (e) { /* localStorage blocked */ }
-}
-
+// ── Mobile left-nav drawer toggle (IA refactor v1, retained in v2) ───────
 function toggleLeftNavMobile() {
   var leftNav = document.getElementById('left-nav');
   if (!leftNav) return;
   leftNav.classList.toggle('open');
 }
 
-// Restore Advanced drawer state on page load.
-(function _restoreAdvancedDrawer() {
+// Kept for backwards-compat: any external code calling toggleAdvancedDrawer()
+// (e.g. browser bookmarklets, third-party userscripts, stale cached HTML)
+// is a no-op in v2 since the Advanced drawer was eliminated.
+function toggleAdvancedDrawer() { /* removed in IA v2; sub-features now live in per-page sub-nav */ }
+
+// ── IA refactor v2: per-page sub-nav (PRD #1659 v2) ──────────────────────
+// Map every leaf data-tab to its primary left-nav bucket. Anything not in
+// this map falls back to itself (treated as its own primary).
+var _SUBNAV_PRIMARY = {
+  // Live bucket
+  overview: 'overview', flow: 'overview', brain: 'overview', subagents: 'overview',
+  // Channels bucket
+  transcripts: 'transcripts',
+  // Cost bucket
+  usage: 'usage', models: 'usage', crons: 'usage',
+  // Approvals bucket (alerts/rules + nemoclaw nest under it; note: alerts
+  // is also reachable from Cost via a sub-nav link)
+  approvals: 'approvals', alerts: 'approvals', nemoclaw: 'approvals',
+  // Settings bucket
+  memory: 'memory', security: 'memory', clusters: 'memory', logs: 'memory',
+  skills: 'memory'
+};
+function _primaryForTab(name) { return _SUBNAV_PRIMARY[name] || name; }
+
+// Sub-nav definitions per primary bucket. `tab` switches in-app;
+// `onclick` (optional) overrides for actions like opening the budget
+// modal; `href` (optional) is for external/separate pages like /insights.
+// Channels intentionally has no sub-nav — the channel list itself is the
+// sub-navigation surface for that bucket.
+var _PAGE_SUBNAV = {
+  overview: [
+    { tab: 'overview', label: 'Overview' },
+    { tab: 'flow',     label: 'Flow' },
+    { tab: 'brain',    label: 'Brain' },
+    { tab: 'subagents',label: 'Sessions' }
+  ],
+  usage: [
+    { tab: 'usage',  label: 'Tokens' },
+    { tab: 'models', label: 'Models' },
+    { tab: 'alerts', label: 'Alerts' },
+    { tab: 'crons',  label: 'Crons' },
+    { action: 'openBudgetModal()', label: 'Budget' }
+  ],
+  approvals: [
+    { tab: 'approvals', label: 'Pending' },
+    { tab: 'alerts',    label: 'Rules' },
+    { tab: 'nemoclaw',  label: 'NemoClaw' }
+  ],
+  memory: [
+    { tab: 'memory',   label: 'Memory' },
+    { tab: 'security', label: 'Security' },
+    { tab: 'clusters', label: 'Nodes' },
+    { tab: 'logs',     label: 'Logs' },
+    { tab: 'skills',   label: 'Skills' },
+    { href: '/insights', label: 'Insights' }
+  ]
+};
+
+function _renderPageSubnav(primary, activeTab) {
+  // Sync the active class on EVERY pre-rendered sub-nav (cheap; only one
+  // is visible at a time anyway). This keeps Tokens/Crons/Memory
+  // discoverable in the DOM for E2E + a11y, while ensuring the visible
+  // bar's pill shows the right active state.
+  document.querySelectorAll('.page-subnav-item').forEach(function(n) { n.classList.remove('active'); });
+  // Re-render the current primary's sub-nav from scratch so newly-added
+  // sub-tabs (e.g. live conditionals) reflect; cheap DOM op.
+  _renderSubnavForPage(primary, activeTab);
+}
+
+// On first paint the embedded HTML has #page-overview.active already, but
+// no sub-nav was rendered yet (renderPageSubnav runs from switchTab()).
+// Pre-render every primary's sub-nav on DOM-ready so:
+//   1. Default Live > Overview view shows its sub-nav strip immediately.
+//   2. E2E tests + screen-reader users can discover sub-tab labels
+//      (Tokens, Crons, Memory, …) without first activating a primary.
+// Hidden pages keep their sub-nav rendered — display:none on the parent
+// .page hides everything below it for free.
+(function _bootstrapSubnav() {
   if (typeof document === 'undefined') return;
   var apply = function() {
-    var btn = document.getElementById('left-nav-advanced-toggle');
-    var list = document.getElementById('left-nav-advanced-list');
-    if (!btn || !list) return;
-    var open = false;
-    try { open = localStorage.getItem('cm_advanced_open') === '1'; }
-    catch (e) { /* localStorage blocked */ }
-    if (open) {
-      list.removeAttribute('hidden');
-      btn.setAttribute('aria-expanded', 'true');
-    }
+    if (!document.getElementById('left-nav')) return; // legacy_nav=1 path
+    try {
+      var primaries = Object.keys(_PAGE_SUBNAV);
+      for (var i = 0; i < primaries.length; i++) {
+        var p = primaries[i];
+        var active = (p === 'overview') ? 'overview' : p;
+        // Render once per primary; the active sub-item is the bucket's
+        // default landing tab (the primary's own id).
+        _renderSubnavForPage(p, active);
+      }
+    } catch (e) { /* defensive */ }
   };
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', apply);
@@ -904,6 +971,44 @@ function toggleLeftNavMobile() {
     apply();
   }
 })();
+
+// Lower-level renderer that targets a single page without nuking
+// sub-navs on other pages (the bootstrap loop needs this). The
+// switchTab-driven _renderPageSubnav() still wipes-then-renders to
+// keep the active-class in sync as the user moves between primaries.
+function _renderSubnavForPage(primary, activeTab) {
+  var items = _PAGE_SUBNAV[primary];
+  if (!items) return;
+  var page = document.getElementById('page-' + primary);
+  if (!page) return;
+  // Remove any existing sub-nav inside this page (idempotent).
+  var existing = page.querySelector(':scope > .page-subnav');
+  if (existing) existing.remove();
+  var bar = document.createElement('div');
+  bar.className = 'page-subnav';
+  bar.setAttribute('role', 'navigation');
+  bar.setAttribute('aria-label', primary + ' sub-nav');
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i];
+    var el = document.createElement('a');
+    if (it.href) {
+      el.href = it.href;
+    } else {
+      el.href = 'javascript:void(0)';
+      if (it.action) {
+        el.setAttribute('onclick', it.action);
+      } else {
+        el.setAttribute('data-subtab', it.tab);
+        el.setAttribute('onclick', "switchTab('" + it.tab + "')");
+      }
+    }
+    el.className = 'page-subnav-item';
+    if (it.tab && it.tab === activeTab) el.className += ' active';
+    el.textContent = it.label;
+    bar.appendChild(el);
+  }
+  page.insertBefore(bar, page.firstChild);
+}
 
 function exportUsageData() {
   window.location.href = '/api/usage/export';

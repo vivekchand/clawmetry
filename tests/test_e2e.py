@@ -80,12 +80,47 @@ def load_dashboard(page: Page, wait_ms: int = 1500):
 
 
 def click_tab(page: Page, tab_label: str):
-    """Click a nav tab by its text label."""
-    tab = page.locator(f".nav-tab:has-text('{tab_label}')")
-    if tab.count() == 0:
+    """Click a nav tab by its text label.
+
+    IA refactor v2 (PRD #1659) collapsed the horizontal ``.nav-tab`` row
+    into a left sidebar of ``.left-nav-item`` buckets plus a per-page
+    ``.page-subnav-item`` strip. Pre-rendered sub-nav items live inside
+    hidden ``.page`` containers, so a naive ``.click()`` would block
+    waiting for visibility. Walk visible candidates first; if every
+    match is hidden (i.e. the label is a sub-tab on a currently-hidden
+    primary), invoke ``switchTab()`` directly via JS.
+    """
+    selector = (
+        f".nav-tab:has-text('{tab_label}'), "
+        f".left-nav-item:has-text('{tab_label}'), "
+        f".page-subnav-item:has-text('{tab_label}')"
+    )
+    tab = page.locator(selector)
+    total = tab.count()
+    if total == 0:
         pytest.skip(f"Nav tab '{tab_label}' not found")
-    tab.first.click()
-    page.wait_for_timeout(600)
+    # Prefer the first visible candidate.
+    for i in range(total):
+        cand = tab.nth(i)
+        try:
+            if cand.is_visible():
+                cand.click()
+                page.wait_for_timeout(600)
+                return
+        except Exception:
+            continue
+    # All matches are hidden — pull the data-subtab / data-tab off the
+    # first hit and call switchTab() directly. This keeps the test
+    # asserting "this label is reachable" without depending on whether
+    # its bucket is currently the visible primary.
+    target = tab.first.evaluate(
+        "el => el.getAttribute('data-subtab') || el.getAttribute('data-tab') || ''"
+    )
+    if target:
+        page.evaluate(f"switchTab({target!r})")
+        page.wait_for_timeout(600)
+        return
+    pytest.skip(f"Nav tab '{tab_label}' present but unreachable")
 
 
 # ---------------------------------------------------------------------------
@@ -100,9 +135,13 @@ class TestTabsLoad:
         assert page.title() != ""
 
     def test_page_has_nav_tabs(self, page: Page):
-        """Dashboard shows navigation tabs."""
+        """Dashboard shows navigation tabs.
+
+        IA v2 ships ``.left-nav-item`` as the primary nav; the legacy
+        ``.nav-tab`` row is only rendered when ``?legacy_nav=1`` is set.
+        """
         load_dashboard(page)
-        tabs = page.locator(".nav-tab")
+        tabs = page.locator(".nav-tab, .left-nav-item")
         assert tabs.count() > 0, "No nav tabs found in dashboard"
 
     def test_overview_tab_is_default(self, page: Page):
@@ -163,12 +202,16 @@ class TestTabsLoad:
         assert len(critical) == 0, f"Critical JS errors on load: {critical}"
 
     def test_all_nav_tabs_clickable(self, page: Page):
-        """All visible nav tabs can be clicked without JS errors."""
+        """All visible nav tabs can be clicked without JS errors.
+
+        Covers both v2 left-nav buckets (``.left-nav-item``) and the
+        legacy horizontal ``.nav-tab`` row.
+        """
         errors = []
         page.on("pageerror", lambda err: errors.append(str(err)))
         load_dashboard(page)
 
-        tabs = page.locator(".nav-tab")
+        tabs = page.locator(".nav-tab, .left-nav-item")
         count = tabs.count()
         assert count > 0, "No nav tabs found"
 

@@ -1408,3 +1408,40 @@
   #left-nav.open { transform: translateX(0); }
   #left-nav-mobile-toggle { display: flex; align-items: center; justify-content: center; }
 }
+
+/* IA refactor v2: per-page sub-nav pill row. Rendered by
+   _renderPageSubnav() (clawmetry/static/js/app.js) at the top of each
+   primary page that has nested sub-tabs (Live, Cost, Approvals,
+   Settings). Channels has its own channel list, so no sub-nav. */
+.page-subnav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 4px 10px;
+  margin: 0 0 8px;
+  border-bottom: 1px solid var(--border-secondary);
+  min-height: 30px;
+}
+.page-subnav-item {
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  background: transparent;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.page-subnav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.page-subnav-item.active {
+  background: var(--bg-active, rgba(229, 68, 58, 0.12));
+  color: var(--text-primary);
+  border-color: var(--border-primary);
+}

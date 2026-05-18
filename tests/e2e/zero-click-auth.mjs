@@ -172,20 +172,26 @@ async function testZeroClickAutoLogin() {
     overlayHidden ? '' : 'overlay still visible after 5s — auto-login did not fire'
   );
 
-  // Dashboard root rendered. The Overview tab is the canonical landing
-  // tab. The codebase uses `.nav-tab` with `onclick="switchTab('overview')"`,
-  // so match by text rather than the spec's `[data-tab="overview"]` (no
-  // such attribute exists in the embedded frontend).
-  const overviewTab = page.locator('.nav-tab.active', { hasText: /Overview/i }).first();
+  // Dashboard root rendered. The canonical landing bucket is "Live"
+  // (a.k.a. "Overview" in v1 + legacy_nav=1). IA refactor v2 (PRD #1659)
+  // renamed the primary left-nav label to "Live" and surfaces "Overview"
+  // as a sub-nav item, so accept any of:
+  //   - v2 default:    .left-nav-item.active text "Live"
+  //   - v2 sub-nav:    .page-subnav-item.active text "Overview"
+  //   - legacy_nav=1:  .nav-tab.active text "Overview"
+  const overviewTab = page.locator(
+    '.nav-tab.active, .left-nav-item.active, .page-subnav-item.active',
+    { hasText: /(Overview|Live)/i }
+  ).first();
   let overviewVisible = false;
   try {
     await overviewTab.waitFor({ state: 'visible', timeout: 5000 });
     overviewVisible = true;
   } catch {}
   check(
-    'Overview tab is visible — dashboard root rendered',
+    'Overview/Live tab is visible — dashboard root rendered',
     overviewVisible,
-    overviewVisible ? '' : 'no .nav-tab.active with "Overview" text found'
+    overviewVisible ? '' : 'no active nav item with "Overview" or "Live" text found'
   );
 
   // Token must be in localStorage — that's how every later /api/* call

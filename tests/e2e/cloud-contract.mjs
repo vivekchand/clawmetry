@@ -301,7 +301,11 @@ async function testNormalUser() {
   for (const tab of TABS) {
     tabIdx++;
     const errBefore = errors.length;
-    const t = page.locator(`.nav-tab:has-text("${tab}"), [role="tab"]:has-text("${tab}")`).first();
+    // IA v2 (PRD #1659): accept left-nav buckets + per-page sub-nav.
+    const t = page.locator(
+      `.nav-tab:has-text("${tab}"), .left-nav-item:has-text("${tab}"), ` +
+      `.page-subnav-item:has-text("${tab}"), [role="tab"]:has-text("${tab}")`
+    ).first();
     if ((await t.count()) === 0) {
       check(`${tab}: tab visible`, false);
       continue;
@@ -342,7 +346,9 @@ async function testNormalUser() {
   // After seedActivity ran, Brain should have an event row. Click the
   // first one to verify modal/expander opens. Same for Tokens and Crons.
   console.log('\n  ▸ Clicking into Brain feed');
-  await page.locator('.nav-tab:has-text("Brain"), [role="tab"]:has-text("Brain")').first().click().catch(() => undefined);
+  await page.locator(
+    '.nav-tab:has-text("Brain"), .left-nav-item:has-text("Brain"), .page-subnav-item:has-text("Brain"), [role="tab"]:has-text("Brain")'
+  ).first().click().catch(() => undefined);
   await page.waitForTimeout(PAUSE_MS);
   // Brain renders events as cards/rows — click the first interactable one.
   const brainCard = page.locator('.brain-event, .event-card, [data-event-id], .activity-row').first();
@@ -356,7 +362,9 @@ async function testNormalUser() {
   }
 
   console.log('\n  ▸ Clicking into Flow nodes (channels / tools / models)');
-  await page.locator('.nav-tab:has-text("Flow"), [role="tab"]:has-text("Flow")').first().click().catch(() => undefined);
+  await page.locator(
+    '.nav-tab:has-text("Flow"), .left-nav-item:has-text("Flow"), .page-subnav-item:has-text("Flow"), [role="tab"]:has-text("Flow")'
+  ).first().click().catch(() => undefined);
   await page.waitForTimeout(PAUSE_MS);
   // Flow renders nodes for channels, tools, models, etc. Try the click-
   // handler-bearing ID nodes (COMP_MAP, see app.js initCompClickHandlers)
@@ -400,7 +408,9 @@ async function testNormalUser() {
   }
 
   console.log('\n  ▸ Hovering Tokens chart for tooltip');
-  await page.locator('.nav-tab:has-text("Tokens"), [role="tab"]:has-text("Tokens")').first().click().catch(() => undefined);
+  await page.locator(
+    '.nav-tab:has-text("Tokens"), .left-nav-item:has-text("Tokens"), .page-subnav-item:has-text("Tokens"), [role="tab"]:has-text("Tokens")'
+  ).first().click().catch(() => undefined);
   await page.waitForTimeout(PAUSE_MS);
   const tokenChart = page.locator('canvas, svg.chart, [data-chart]').first();
   if ((await tokenChart.count()) > 0) {
@@ -412,7 +422,9 @@ async function testNormalUser() {
   }
 
   console.log('\n  ▸ Crons tab — verify no JS errors on render');
-  await page.locator('.nav-tab:has-text("Crons"), [role="tab"]:has-text("Crons")').first().click().catch(() => undefined);
+  await page.locator(
+    '.nav-tab:has-text("Crons"), .left-nav-item:has-text("Crons"), .page-subnav-item:has-text("Crons"), [role="tab"]:has-text("Crons")'
+  ).first().click().catch(() => undefined);
   await page.waitForTimeout(PAUSE_MS);
   if (screenshotDir) {
     await page.screenshot({ path: `${screenshotDir}/99_crons_final.png` }).catch(() => undefined);

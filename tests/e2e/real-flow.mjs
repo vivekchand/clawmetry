@@ -367,7 +367,12 @@ async function walkDashboard(reg, encKey, sessionId) {
   const TABS = ['Brain', 'Overview', 'Approvals', 'Context', 'Tokens', 'Crons', 'Memory', 'Flow', 'Alerts', 'Notifications'];
   for (const tab of TABS) {
     const errBefore = errors.length;
-    const t = page.locator(`.nav-tab:has-text("${tab}"), [role="tab"]:has-text("${tab}")`).first();
+    // IA v2 (PRD #1659): accept left-nav buckets + per-page sub-nav items
+    // alongside the legacy .nav-tab row.
+    const t = page.locator(
+      `.nav-tab:has-text("${tab}"), .left-nav-item:has-text("${tab}"), ` +
+      `.page-subnav-item:has-text("${tab}"), [role="tab"]:has-text("${tab}")`
+    ).first();
     if ((await t.count()) === 0) {
       check(`${tab}: tab visible`, false);
       continue;
@@ -413,7 +418,9 @@ async function walkDashboard(reg, encKey, sessionId) {
     const p = document.getElementById('pro-upsell-modal');
     if (p) p.style.display = 'none';
   });
-  await page.locator('.nav-tab:has-text("Brain")').first().click({ force: true }).catch(() => undefined);
+  await page.locator(
+    '.nav-tab:has-text("Brain"), .left-nav-item:has-text("Brain"), .page-subnav-item:has-text("Brain")'
+  ).first().click({ force: true }).catch(() => undefined);
   // Wait specifically for Brain's content area, not just any body change.
   await page
     .locator(':has-text("Brain — Unified Activity Stream"), :has-text("Brain – Unified Activity Stream"), :has-text("Brain - Unified Activity")')
@@ -423,7 +430,7 @@ async function walkDashboard(reg, encKey, sessionId) {
   await page.waitForTimeout(PAUSE_MS);
   const brainState = await page.evaluate(() => ({
     body: (document.body.innerText || '').toLowerCase(),
-    activeTab: document.querySelector('.nav-tab.active, [role="tab"][aria-selected="true"]')?.textContent?.trim().toLowerCase() || '',
+    activeTab: document.querySelector('.nav-tab.active, .left-nav-item.active, .page-subnav-item.active, [role="tab"][aria-selected="true"]')?.textContent?.trim().toLowerCase() || '',
   }));
   console.log(`  active tab according to DOM: "${brainState.activeTab}"`);
   check(
@@ -442,7 +449,9 @@ async function walkDashboard(reg, encKey, sessionId) {
   // tab body shows the canonical "Tokens" header — not specific model names
   // (which only show up after the daemon's per-model snapshot fires).
   console.log('\n  ▸ Tokens — tab renders');
-  await page.locator('.nav-tab:has-text("Tokens")').first().click().catch(() => undefined);
+  await page.locator(
+    '.nav-tab:has-text("Tokens"), .left-nav-item:has-text("Tokens"), .page-subnav-item:has-text("Tokens")'
+  ).first().click().catch(() => undefined);
   await page.waitForTimeout(PAUSE_MS);
   const tokensBody = await page.evaluate(() => (document.body.innerText || '').toLowerCase());
   check(
