@@ -4826,6 +4826,18 @@ def send_heartbeat(config: dict) -> bool:
             payload.setdefault("cache_pushes", []).extend(cr_pushes)
     except Exception as _cr_e:
         log.debug("cron-runs cache_push build failed (continuing): %s", _cr_e)
+    # Crons list (cloud#948): push the user's cron job list so the cloud
+    # Crons tab paints from cache. Without this push the cloud handler
+    # returns {data: []} and the browser shows "no cron data" even when
+    # the user has crons scheduled. Always include the entry on every
+    # heartbeat (sync_crons already deduped the JSONL parse upstream, so
+    # this is cheap); the cloud overwrites on each push.
+    try:
+        cron_pushes = _build_crons_cache_pushes(config)
+        if cron_pushes:
+            payload.setdefault("cache_pushes", []).extend(cron_pushes)
+    except Exception as _cl_e:
+        log.debug("crons cache_push build failed (continuing): %s", _cl_e)
     # Local-first: persist this heartbeat to local DuckDB so the dashboard
     # has a per-node liveness history even when offline. Best-effort.
     try:
@@ -5192,6 +5204,142 @@ def _build_memory_cache_pushes(config: dict) -> list:
     return [{
         "key":    f"memory:{owner_hash}:{node_id}:files",
         "ttl_s":  MEMORY_CACHE_TTL_SEC,
+        "blob":   blob,
+    }]
+
+
+# ── Crons list cache push (cloud#948 — Crons tab fix) ───────────────────────
+# Mirrors the cron_runs cache contract documented in clawmetry-cloud
+# routes/cloud.py:cloud_cron_runs, but for the JOB LIST itself. Epic #1032
+# removed the cloud's events-table read for the Crons tab; the comment in
+# /api/cloud/crons promised "data now flows via heartbeat-piggyback /
+# DuckDB relay" but that flow was never wired. This is the OSS push half.
+#
+# Cache key:  crons:{owner_hash}:{node_id}
+# Payload:    {"jobs": [<job dict shaped like /api/crons returns>, ...]}
+# TTL:        6h  (same as Brain / Memory — long enough for a workday pause,
+#                  short enough that decommissioned nodes don't linger).
+
+CRONS_CACHE_TTL_SEC = 21600
+CRONS_CACHE_LIMIT = 500
+
+
+def _build_crons_cache_pushes(config: dict) -> list:
+    """Heartbeat cache_push entry with the encrypted cron job list.
+
+    Returns ``[]`` when:
+      - No encryption key (we never push plaintext).
+      - Local store unimportable / no crons rows yet (fresh install with
+        zero crons — cloud read returns ``cache_pending`` and the JS
+        renders the "no crons scheduled yet" empty state).
+
+    Payload shape mirrors what ``routes/crons.py:_try_local_store_crons``
+    returns (modulo cost attribution, which lives in the gateway-fetch
+    path only), so the cloud-side decrypt can hand the dict straight to
+    the dashboard JS that already renders ``snap.cronJobs``:
+
+        {"jobs": [{id, name, schedule, enabled, createdAtMs,
+                   state: {lastRunAtMs, lastStatus, nextRunAtMs, ...}},
+                  ...],
+         "_source": "local_store",
+         "_shape":  "crons_list"}
+    """
+    enc_key = config.get("encryption_key")
+    if not enc_key:
+        return []
+    api_key = config.get("api_key", "")
+    node_id = config.get("node_id", "")
+    if not (api_key and node_id):
+        return []
+    try:
+        from clawmetry import local_store
+    except Exception:
+        return []
+    try:
+        store = local_store.get_store(read_only=True)
+        rows = store.query_crons(limit=CRONS_CACHE_LIMIT)
+    except Exception:
+        return []
+    # Note: rows == [] is still pushed so the cloud can distinguish "user
+    # has zero crons" (cache hit with empty jobs) from "node never synced
+    # yet" (cache miss / pending). Same UX contract as cron_runs.
+    jobs: list[dict] = []
+    for r in rows or []:
+        try:
+            # Inline the same shaping as routes/crons.py:_row_to_cron_job
+            # so we don't have to import dashboard helpers from the daemon
+            # (circular). Keep the field set narrow — just what the JS
+            # renderer reads (id, name, schedule, enabled, state).
+            extras = r.get("data") if isinstance(r.get("data"), dict) else {}
+            state_extras = {
+                k: extras[k]
+                for k in ("lastDurationMs", "consecutiveFailures",
+                          "lastError", "runHistory", "lastCostUsd")
+                if k in extras
+            }
+            schedule = r.get("schedule")
+            if isinstance(schedule, str):
+                try:
+                    decoded = json.loads(schedule)
+                    if isinstance(decoded, dict):
+                        schedule = decoded
+                except Exception:
+                    pass
+            if schedule is None and isinstance(extras.get("schedule"),
+                                               (dict, str)):
+                schedule = extras["schedule"]
+
+            def _to_ms(v):
+                if v is None or v == "":
+                    return 0
+                try:
+                    return int(v)
+                except (TypeError, ValueError):
+                    try:
+                        from datetime import datetime as _dt
+                        return int(_dt.fromisoformat(
+                            str(v).replace("Z", "+00:00")
+                        ).timestamp() * 1000)
+                    except Exception:
+                        return 0
+
+            job = {
+                "id":          r.get("cron_id", ""),
+                "name":        r.get("name") or r.get("cron_id", ""),
+                "schedule":    schedule or {},
+                "enabled":     bool(r.get("enabled", True)),
+                "createdAtMs": int(extras.get("createdAtMs") or 0),
+                "state": {
+                    "lastRunAtMs": _to_ms(r.get("last_run_at")),
+                    "lastStatus":  r.get("last_status") or "pending",
+                    "nextRunAtMs": _to_ms(r.get("next_run_at")),
+                    **state_extras,
+                },
+            }
+            # Carry through extras the renderer may use (task, channel,
+            # model, prompt, ...). Skip keys we already projected.
+            for k, v in extras.items():
+                if k not in {"createdAtMs", "schedule", "lastDurationMs",
+                             "consecutiveFailures", "lastError",
+                             "runHistory", "lastCostUsd"}:
+                    job.setdefault(k, v)
+            jobs.append(job)
+        except Exception:
+            continue
+    payload = {
+        "jobs":    jobs,
+        "count":   len(jobs),
+        "_source": "local_store",
+        "_shape":  "crons_list",
+    }
+    try:
+        blob = encrypt_payload(payload, enc_key)
+    except Exception:
+        return []
+    owner_hash = _owner_hash_for_token(api_key)
+    return [{
+        "key":    f"crons:{owner_hash}:{node_id}",
+        "ttl_s":  CRONS_CACHE_TTL_SEC,
         "blob":   blob,
     }]
 
