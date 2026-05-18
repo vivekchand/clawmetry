@@ -354,7 +354,91 @@ def test_reclassify_after_new_error_event(isolated_store):
     assert by_id2[sid]["outcome"] == "failed"
 
 
-# ── 6. Bug-class gate (memory: synthetic vs real event shape) ──────────────
+# ── 7. Cognitive loop detection (issue #1706) ──────────────────────────────
+
+
+def _assistant_msg(ts_iso, text, *, session_id="loop-sess", tool_uses=()):
+    """Build a real ``message`` envelope event matching v3 ingest shape."""
+    content = [{"type": "text", "text": text}]
+    for name, file_path in tool_uses:
+        content.append({
+            "type": "tool_use",
+            "name": name,
+            "input": {"file_path": file_path} if file_path else {},
+        })
+    return {
+        "event_type": "message",
+        "ts": ts_iso,
+        "session_id": session_id,
+        "data": {"message": {"role": "assistant", "content": content}},
+    }
+
+
+def test_classify_cognitive_loop_when_assistant_repeats_self():
+    """5 near-identical 'validate the results' messages 60s apart -> loop."""
+    from clawmetry.outcome_classifier import (
+        classify_session,
+        OUTCOME_COGNITIVE_LOOP,
+    )
+    from datetime import datetime, timezone
+
+    now = time.time()
+    events = []
+    for i in range(5):
+        ts = datetime.fromtimestamp(now - (300 - 60 * i), tz=timezone.utc).isoformat()
+        events.append(_assistant_msg(
+            ts, "I should validate the results again to be sure."
+        ))
+    outcome, conf = classify_session(events, {}, now=now)
+    assert outcome == OUTCOME_COGNITIVE_LOOP
+    assert 0.5 < conf <= 1.0
+
+
+def test_classify_distinct_messages_is_ongoing_not_loop():
+    """5 different assistant messages in window -> ongoing, not a loop."""
+    from clawmetry.outcome_classifier import classify_session, OUTCOME_ONGOING
+    from datetime import datetime, timezone
+
+    now = time.time()
+    distinct = [
+        "Let me read the file.",
+        "Now I'll check the database schema.",
+        "Running the test suite next.",
+        "Inspecting the failed assertion.",
+        "Drafting a patch for the bug.",
+    ]
+    events = []
+    for i, txt in enumerate(distinct):
+        ts = datetime.fromtimestamp(now - (300 - 60 * i), tz=timezone.utc).isoformat()
+        events.append(_assistant_msg(ts, txt))
+    outcome, _ = classify_session(events, {}, now=now)
+    assert outcome == OUTCOME_ONGOING
+
+
+def test_classify_repeated_text_with_new_tools_each_time_is_ongoing():
+    """5 identical assistant texts, each invoking a NEW tool/file -> ongoing.
+
+    Forward progress (new tool name OR new file path) shields the session
+    from the cognitive-loop label even if the prose is verbatim repeated.
+    """
+    from clawmetry.outcome_classifier import classify_session, OUTCOME_ONGOING
+    from datetime import datetime, timezone
+
+    now = time.time()
+    tools = ["bash", "read_file", "grep", "edit_file", "write_file"]
+    events = []
+    for i, tn in enumerate(tools):
+        ts = datetime.fromtimestamp(now - (300 - 60 * i), tz=timezone.utc).isoformat()
+        events.append(_assistant_msg(
+            ts,
+            "I should validate the results again to be sure.",
+            tool_uses=[(tn, f"file_{i}.py")],
+        ))
+    outcome, _ = classify_session(events, {}, now=now)
+    assert outcome == OUTCOME_ONGOING
+
+
+# ── 8. Bug-class gate (memory: synthetic vs real event shape) ──────────────
 
 
 def test_classifier_does_not_filter_on_legacy_event_shape_only():
