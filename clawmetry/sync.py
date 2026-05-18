@@ -83,6 +83,155 @@ def _release_pid_lock() -> None:
         pass
 
 
+# ── Graceful shutdown — drain ring buffer on SIGTERM/SIGINT/atexit (#1593) ──
+#
+# Without this, any events queued in the LocalStore ring buffer but not yet
+# flushed by the 2s flusher tick are dropped on `kill -TERM`, launchctl
+# bootout, systemctl restart, or any clean shutdown. Bounded data loss of
+# ≤ FLUSH_INTERVAL_SECS × event-rate per shutdown — silent and frequent on
+# macOS where every install.sh upgrade triggers a launchctl bootout/load.
+#
+# Three entry points cover the full exit surface:
+#   1. SIGTERM   — what launchctl/systemctl/`kill` send by default
+#   2. SIGINT    — Ctrl+C in foreground (`clawmetry sync --foreground`)
+#   3. atexit    — belt-and-suspenders for `sys.exit(0)`, uncaught exceptions,
+#                  normal interpreter teardown. atexit is NOT guaranteed to
+#                  run on SIGTERM (Python's default SIGTERM handler bypasses
+#                  it), which is why we need the explicit signal handler too.
+#
+# Re-entrancy guard: signal then atexit, or two signals in a row, both
+# end up here. The flag ensures we drain exactly once.
+#
+# Timeout: a hung DuckDB lock (e.g. another process briefly holding the
+# writer) must not block shutdown indefinitely. Spawn the flush on a
+# background thread, join with a hard 5s budget, then os._exit(0) to
+# force-exit if the flush is still in flight. The events stay in the
+# ring file-of-record (PR #1608 + DuckDB INSERT OR IGNORE make the next
+# start replay idempotent — see `_flush_now_locked` docstring).
+
+_SHUTDOWN_FLUSH_TIMEOUT_SECS = 5.0
+_shutdown_flushed = threading.Event()
+_shutdown_lock = threading.Lock()
+
+
+def _drain_local_store_now() -> tuple[int, float]:
+    """Synchronously drain the LocalStore ring → DuckDB. Returns
+    (rows_written, elapsed_seconds). Safe to call multiple times — the
+    second call is a no-op (the ring is empty after the first commit).
+
+    Pairs with PR #1608's ``_flush_lock`` (issue #1590): ``store.flush()``
+    serialises against any concurrent flusher tick, so we never race the
+    snapshot-then-pop window."""
+    t0 = time.monotonic()
+    try:
+        from clawmetry import local_store as _ls
+        store = _ls.get_store(read_only=False)
+        rows = store.flush()
+    except Exception:
+        log.exception("graceful shutdown: local store flush raised")
+        return (0, time.monotonic() - t0)
+    return (rows, time.monotonic() - t0)
+
+
+def _graceful_shutdown(reason: str, *, force_exit: bool) -> None:
+    """Drain the ring buffer with a hard timeout, then optionally hard-exit.
+
+    ``force_exit=True`` is used by the signal handlers — once we've
+    drained (or timed out), we call ``os._exit(0)`` so the interpreter
+    tears down without re-running other handlers (atexit already
+    skipped, daemon threads die at process exit anyway).
+
+    ``force_exit=False`` is used by the atexit path — the interpreter
+    is already exiting; we just need to drain before it tears down.
+    """
+    # Re-entrancy guard. The first caller wins; subsequent callers
+    # (e.g. atexit firing after a signal handler already drained) see
+    # the flag set and skip.
+    with _shutdown_lock:
+        if _shutdown_flushed.is_set():
+            if force_exit:
+                os._exit(0)
+            return
+        _shutdown_flushed.set()
+
+    log.info("graceful shutdown: %s — draining local store ring", reason)
+
+    # Run the flush on a background thread so we can enforce a wall-clock
+    # timeout. A blocked DuckDB write must not hang launchctl/systemctl
+    # for >5s — the orchestrator will SIGKILL us anyway after its own
+    # grace period (30s on launchd, 90s default on systemd).
+    result: dict[str, object] = {}
+
+    def _runner() -> None:
+        try:
+            result["rows"], result["elapsed"] = _drain_local_store_now()
+        except Exception as e:
+            result["error"] = e
+
+    t = threading.Thread(target=_runner, name="clawmetry-shutdown-flush", daemon=True)
+    t.start()
+    t.join(timeout=_SHUTDOWN_FLUSH_TIMEOUT_SECS)
+
+    if t.is_alive():
+        log.warning(
+            "graceful shutdown: local store flush exceeded %.1fs timeout — "
+            "abandoning; events stay in ring for next start to replay "
+            "(INSERT OR IGNORE makes it idempotent)",
+            _SHUTDOWN_FLUSH_TIMEOUT_SECS,
+        )
+    elif "error" in result:
+        log.warning("graceful shutdown: flush raised: %s", result["error"])
+    else:
+        rows = result.get("rows", 0)
+        elapsed = result.get("elapsed", 0.0)
+        log.info(
+            "graceful shutdown: flushed %s row(s) in %.3fs", rows, elapsed
+        )
+
+    if force_exit:
+        # sys.exit raises SystemExit which other threads can swallow;
+        # os._exit terminates the process immediately. atexit has
+        # already been bypassed (we set the guard above).
+        os._exit(0)
+
+
+def _signal_handler(signum, frame):  # noqa: ARG001 — signal handler signature
+    try:
+        import signal as _signal
+        name = _signal.Signals(signum).name
+    except Exception:
+        name = f"signal {signum}"
+    _graceful_shutdown(name, force_exit=True)
+
+
+def _atexit_handler() -> None:
+    _graceful_shutdown("atexit", force_exit=False)
+
+
+def _install_shutdown_handlers() -> None:
+    """Wire SIGTERM/SIGINT/atexit → graceful drain. Idempotent.
+
+    Skipped when not running on the main thread (signal.signal() raises
+    ValueError off-main) — tests that import sync.py from a worker
+    thread get the atexit hook only, which is enough for `sys.exit()`
+    paths.
+    """
+    import atexit
+    import signal as _signal
+    atexit.register(_atexit_handler)
+    try:
+        _signal.signal(_signal.SIGTERM, _signal_handler)
+        _signal.signal(_signal.SIGINT, _signal_handler)
+    except (ValueError, OSError) as e:
+        # ValueError: not main thread. OSError: SIGTERM/SIGINT not
+        # supported on this platform (some Windows configurations).
+        log.warning(
+            "graceful shutdown: signal handlers not installed (%s) — "
+            "atexit-only fallback (SIGTERM may still drop ring events)",
+            e,
+        )
+
+
 def _validate_log_offsets(state: dict, paths: dict) -> None:
     """Validate stored log offsets on startup.
 
@@ -389,6 +538,141 @@ def decrypt_payload(blob: str, key_b64: str) -> dict:
     raw = base64.urlsafe_b64decode(blob + "==")
     nonce, ct = raw[:12], raw[12:]
     return json.loads(cipher.decrypt(nonce, ct, None))
+
+
+# ── Sync DLQ for AES-GCM encryption failures (#1601) ────────────────────────
+# When ``encrypt_payload`` raises inside a write-path POST (rare: corrupt key,
+# key rotation race, payload contains non-JSON-serialisable bytes), the
+# affected batch is parked in the local DuckDB ``sync_dlq`` table instead of
+# being silently dropped. The replay loop (``_dlq_replay``) drains the queue
+# on each sync tick. Persistent across daemon restarts.
+#
+# Metric: ``sync_encryption_failures`` (process-local counter) exposed via
+# ``get_encryption_failure_count`` for dashboards / health probes.
+
+_ENCRYPTION_FAILURE_COUNT = 0
+_DLQ_MAX_ATTEMPTS = int(os.environ.get("CLAWMETRY_SYNC_DLQ_MAX_ATTEMPTS", "10"))
+_DLQ_REPLAY_BATCH = int(os.environ.get("CLAWMETRY_SYNC_DLQ_REPLAY_BATCH", "50"))
+
+
+def get_encryption_failure_count() -> int:
+    """Return the process-local count of AES-GCM encryption failures
+    encountered during write-path sync. Reset on daemon restart; for a
+    durable count consult ``sync_dlq`` row count via local_store.health()."""
+    return _ENCRYPTION_FAILURE_COUNT
+
+
+def _dlq_enqueue_encryption_failure(
+    *,
+    kind: str,
+    endpoint: str,
+    payload: dict,
+    fname: str | None = None,
+    node_id: str | None = None,
+    subagent_id: str | None = None,
+    error: str = "",
+) -> None:
+    """Persist a payload that failed AES-GCM encryption. Best-effort: if the
+    local store itself is unavailable we re-raise so the caller can log."""
+    global _ENCRYPTION_FAILURE_COUNT
+    _ENCRYPTION_FAILURE_COUNT += 1
+    # Stable id: node + fname + first/last event ids if available, else hash.
+    # Makes enqueue idempotent if the same batch fails encryption twice
+    # before the replayer drains the queue.
+    try:
+        body = json.dumps(payload, sort_keys=True, default=str)
+    except Exception:
+        # If even the json dump fails the payload is unrecoverable for cloud;
+        # stash a stringified repr so the user has *something* to debug.
+        body = repr(payload)
+    dlq_id = (
+        f"{kind}:{node_id or 'n'}:{fname or 'f'}:"
+        f"{__import__('hashlib').sha256(body.encode('utf-8', 'replace')).hexdigest()[:16]}"
+    )
+    from clawmetry import local_store as _ls
+    store = _ls.get_store()
+    store.dlq_enqueue(
+        dlq_id=dlq_id,
+        kind=kind,
+        endpoint=endpoint,
+        payload_json=body,
+        fname=fname,
+        node_id=node_id,
+        subagent_id=subagent_id,
+        error=error,
+    )
+
+
+def _dlq_replay(api_key: str, enc_key: str | None) -> int:
+    """Drain the encryption DLQ. Returns the number of rows successfully
+    re-encrypted and POSTed. Called from the sync loop on every tick. Cheap
+    no-op when the queue is empty (single COUNT(*) on a tiny table)."""
+    if not enc_key:
+        return 0  # No key configured — replay is a no-op, rows stay parked.
+    try:
+        from clawmetry import local_store as _ls
+        store = _ls.get_store()
+    except Exception:
+        return 0
+    try:
+        rows = store.dlq_list(limit=_DLQ_REPLAY_BATCH)
+    except Exception as _e:
+        log.debug("dlq_replay: dlq_list failed (continuing): %s", _e)
+        return 0
+    if not rows:
+        return 0
+    replayed = 0
+    for row in rows:
+        dlq_id = row["id"]
+        if row["attempts"] >= _DLQ_MAX_ATTEMPTS:
+            # Abandon rather than spin forever on a permanently-poisoned row.
+            log.error(
+                "sync_dlq: abandoning %s after %d attempts (last err: see DLQ row)",
+                dlq_id, row["attempts"],
+            )
+            try:
+                store.dlq_delete(dlq_id)
+            except Exception:
+                pass
+            continue
+        try:
+            payload = json.loads(row["payload_json"])
+        except Exception as _e:
+            log.warning("sync_dlq: payload not valid JSON for %s — dropping: %s",
+                        dlq_id, _e)
+            try:
+                store.dlq_delete(dlq_id)
+            except Exception:
+                pass
+            continue
+        try:
+            blob = encrypt_payload(payload, enc_key)
+        except Exception as _enc_e:
+            try:
+                store.dlq_mark_attempt(dlq_id, str(_enc_e))
+            except Exception:
+                pass
+            continue  # Still bad key — try next row, leave this one parked.
+        try:
+            _post(
+                row["endpoint"],
+                {"node_id": row["node_id"], "encrypted": True, "blob": blob},
+                api_key,
+            )
+        except Exception as _post_e:
+            try:
+                store.dlq_mark_attempt(dlq_id, f"post: {_post_e}")
+            except Exception:
+                pass
+            continue
+        try:
+            store.dlq_delete(dlq_id)
+        except Exception:
+            pass
+        replayed += 1
+    if replayed:
+        log.info("sync_dlq: replayed %d parked batch(es) to cloud", replayed)
+    return replayed
 
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -1510,15 +1794,49 @@ def _flush_session_batch(
     #   re-read on next tick). A future PR should add a sidecar cloud-retry
     #   queue keyed on canonical event id. For today the priority is local
     #   correctness; cloud catches up when the user re-syncs from local.
+    # Split encryption from POST so the diagnostic for each path is distinct
+    # and an encryption failure no longer silently drops the batch (#1601).
+    # Encryption can fail on: corrupted/rotated key, payload containing
+    # non-JSON-serialisable bytes, missing cryptography wheel. POST can fail
+    # on: network outage, cloud 5xx. Conflating them sends users on a
+    # wild-goose chase for a network problem when the real issue is the key.
+    blob: str | None = None
+    if enc_key:
+        try:
+            blob = encrypt_payload(payload, enc_key)
+        except Exception as _enc_e:
+            # Persist to local DLQ so the next sync tick (or a daemon restart
+            # after the user rotates the key back) can re-encrypt and POST.
+            # The local DuckDB row is already durable above; this only protects
+            # the cloud side of the pipeline from silent loss.
+            try:
+                _dlq_enqueue_encryption_failure(
+                    kind="session_batch",
+                    endpoint="/ingest/events",
+                    payload=payload,
+                    fname=fname,
+                    node_id=node_id,
+                    subagent_id=subagent_id,
+                    error=str(_enc_e),
+                )
+            except Exception as _dlq_e:
+                log.exception(
+                    "E2E encryption AND DLQ persist both failed for %s "
+                    "(events permanently dropped from cloud): enc=%s dlq=%s",
+                    fname, _enc_e, _dlq_e,
+                )
+            else:
+                log.error(
+                    "E2E encryption failed for %s — batch parked in sync_dlq "
+                    "for replay (key rotation? corrupt key?): %s",
+                    fname, _enc_e,
+                )
+            return
     try:
-        if enc_key:
+        if blob is not None:
             _post(
                 "/ingest/events",
-                {
-                    "node_id": node_id,
-                    "encrypted": True,
-                    "blob": encrypt_payload(payload, enc_key),
-                },
+                {"node_id": node_id, "encrypted": True, "blob": blob},
                 api_key,
             )
         else:
@@ -7293,14 +7611,45 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _e:
         log.debug("local_store: snapshot/subagent write-through failed: %s", _e)
 
+    # Split encryption from POST so the two failure modes have distinct
+    # diagnostics + dispositions (sibling of #1601 / PR #1624).
+    #   - Encryption failure → park in sync_dlq (corrupt/rotated key, payload
+    #     containing non-JSON-serialisable bytes, missing cryptography wheel).
+    #     The next sync tick's _dlq_replay picks it up automatically — the
+    #     drainer is kind-agnostic and uses each row's stored endpoint.
+    #   - POST failure → existing log.warning + drop. Lower severity than the
+    #     session-batch path because the snapshot is re-emitted every cycle
+    #     (no cumulative loss); cloud catches up on the next heartbeat.
+    blob: str | None = None
+    try:
+        blob = encrypt_payload(payload, enc_key)
+    except Exception as _enc_e:
+        try:
+            _dlq_enqueue_encryption_failure(
+                kind="system_snapshot",
+                endpoint="/ingest/system-snapshot",
+                payload=payload,
+                node_id=node_id,
+                error=str(_enc_e),
+            )
+        except Exception as _dlq_e:
+            log.exception(
+                "E2E encryption AND DLQ persist both failed for "
+                "system_snapshot (snapshot dropped from cloud; next cycle "
+                "will re-emit): enc=%s dlq=%s",
+                _enc_e, _dlq_e,
+            )
+        else:
+            log.error(
+                "E2E encryption failed for system_snapshot — parked in "
+                "sync_dlq for replay (key rotation? corrupt key?): %s",
+                _enc_e,
+            )
+        return 0
     try:
         _post(
             "/ingest/system-snapshot",
-            {
-                "node_id": node_id,
-                "encrypted": True,
-                "blob": encrypt_payload(payload, enc_key),
-            },
+            {"node_id": node_id, "encrypted": True, "blob": blob},
             api_key,
         )
         return 1
@@ -7537,6 +7886,14 @@ def run_daemon() -> None:
     import atexit
 
     atexit.register(_release_pid_lock)
+    # Issue #1593 — wire SIGTERM/SIGINT/atexit to drain the LocalStore ring
+    # before exit. Without this, `launchctl bootout`, `systemctl stop`,
+    # `kill <pid>`, and Ctrl+C all drop any events buffered in the 2s
+    # flusher window. Register AFTER the PID-lock atexit so the LIFO
+    # ordering drains events first, then releases the lock — that way a
+    # racing supervisor restart sees the lock held until the flush is
+    # done, instead of starting a second daemon mid-drain.
+    _install_shutdown_handlers()
     config = load_config()
     # If node_id looks like email prefix (contains + or @), use hostname instead
     nid = config.get("node_id", "")
@@ -7761,6 +8118,51 @@ def run_daemon() -> None:
     except Exception as _e:
         log.warning(f"approvals watcher failed to start: {_e}")
 
+    # ── Decision-sampling cron (issue #1615) ──────────────────────────
+    # Daily-at-midnight thread that picks N random sessions from yesterday
+    # per agent_id and inserts them into the review_queue. Idempotent —
+    # ingest_review_sample short-circuits on duplicate session_id, so a
+    # restart mid-day re-runs without churning the queue. Default N=10
+    # (CLAWMETRY_REVIEW_SAMPLE_SIZE env override).
+    try:
+        _review_stop = threading.Event()
+
+        def _review_sampler_worker():
+            from routes.review import sample_yesterday_for_review
+            from datetime import datetime as _r_dt, timedelta as _r_td
+            # Initial delay: let backfill finish so query_sessions_table
+            # returns the full yesterday set, not an empty one.
+            time.sleep(45)
+            while not _review_stop.is_set():
+                try:
+                    result = sample_yesterday_for_review()
+                    log.info(
+                        "review sampler: %d sampled, %d skipped, %d agents",
+                        result.get("sampled", 0),
+                        result.get("skipped", 0),
+                        result.get("agents", 0),
+                    )
+                except Exception as _re:
+                    log.warning(f"review sampler tick failed: {_re}")
+                # Sleep until next local midnight. 24h is the natural cadence;
+                # we use a coarse compute (seconds-until-tomorrow-midnight)
+                # rather than scheduling 1AM cron-style so the math stays in
+                # one place. Daemon restart between ticks is harmless thanks
+                # to ingest idempotency.
+                now_local = _r_dt.now()
+                tomorrow = now_local.date() + _r_td(days=1)
+                next_midnight = _r_dt.combine(tomorrow, _r_dt.min.time())
+                sleep_s = max(60.0, (next_midnight - now_local).total_seconds())
+                _review_stop.wait(timeout=sleep_s)
+
+        t_review = threading.Thread(
+            target=_review_sampler_worker, daemon=True, name="review-sampler"
+        )
+        t_review.start()
+        log.info("review sampler thread started (issue #1615)")
+    except Exception as _e:
+        log.warning(f"review sampler failed to start: {_e}")
+
     # Default to SLOW; flips to FAST after a heartbeat response with
     # `viewer_active: true` (epic #775 PR 2/3, adaptive sync cadence).
     # Seed from the startup heartbeat so the very first cycle picks up
@@ -7780,6 +8182,13 @@ def run_daemon() -> None:
     # exercise the dispatch path immediately if rules + matching events are
     # already present from startup backfill.
     last_alerts_eval = 0.0
+    # Issue #1619 Phase 1 — LLM-as-judge scheduler. Sister cadence to the
+    # alerts evaluator; 5-minute tick picks up to EVAL_BATCH unscored
+    # completed sessions and persists scores in-process via the user's
+    # existing API key (no cloud roundtrip). Default-on; CLAWMETRY_EVALS_
+    # ENABLED=0 disables cleanly. 0 = fire on first cycle so a daemon
+    # restart scores the backlog without waiting 5 min.
+    last_evals_run = 0.0
 
     while True:
         try:
@@ -7810,6 +8219,16 @@ def run_daemon() -> None:
                 capture_gateway_metric(config)
             except Exception as _gm_e:
                 log.debug("gateway.metric capture failed (continuing): %s", _gm_e)
+
+            # ── Drain sync DLQ (#1601) ──
+            # Replay any batches that previously failed AES-GCM encryption
+            # (e.g. a key rotation race). Cheap no-op when the queue is
+            # empty (single COUNT(*) on a tiny table). Failure here is
+            # non-fatal — bad rows stay parked and we try again next tick.
+            try:
+                _dlq_replay(config.get("api_key"), config.get("encryption_key"))
+            except Exception as _dlq_e:
+                log.debug("sync_dlq replay failed (continuing): %s", _dlq_e)
 
             ev = sync_sessions(config, state, paths)
             ev += sync_claude_cli_sessions(config, state, paths)
@@ -7941,6 +8360,27 @@ def run_daemon() -> None:
                 except Exception:
                     pass
 
+            # ── Eval scheduler (issue #1619 Phase 1) ──
+            # Sister of the alerts evaluator. Picks unscored completed
+            # sessions from DuckDB and runs them through the LLM-as-
+            # judge runner. Failure swallowed so a judge outage can't
+            # take down the sync cycle.
+            now_evals = time.time()
+            if (now_evals - last_evals_run) >= EVAL_INTERVAL_SEC:
+                try:
+                    from clawmetry import eval_runner as _eval_runner
+                    if _eval_runner.is_enabled():
+                        n_scored = _eval_runner.score_pending_sessions(
+                            batch_size=EVAL_BATCH,
+                        )
+                        if n_scored:
+                            log.info(
+                                "evals: scored %d session(s)", n_scored
+                            )
+                except Exception as _ee:
+                    log.warning("evals: scheduler tick errored: %s", _ee)
+                last_evals_run = now_evals
+
             # Re-mirror Docker data if running in Docker mode
             if hasattr(detect_paths, "_docker_cid") or any(
                 "docker-mirror" in str(v) for v in paths.values()
@@ -7998,6 +8438,11 @@ def run_daemon() -> None:
 
 
 # ── Telegram gateway-log ingest (#1192 follow-up) ──────────────────────────
+# DEPRECATED WHEN OPENCLAW PERSISTS: Remove this entire block (down through
+# sync_telegram_from_gateway_log and its helpers) once OpenClaw writes Telegram
+# sessions to disk like every other channel. The ``_CHANNEL_DIRS`` directory
+# watcher in sync.py already covers that future path — on the day OpenClaw
+# persists, this log parser becomes redundant and should be deleted.
 #
 # Why this exists
 # ---------------
@@ -8585,6 +9030,14 @@ def sync_autonomy(config, state, paths):
 
 
 ALERTS_EVAL_INTERVAL_SEC = 60  # Re-evaluate alerts every 60s (PRD #779)
+
+# Issue #1619 Phase 1 — LLM-as-judge eval scheduler cadence. 300s (5 min)
+# matches the PRD: every 5 min, pick up to EVAL_BATCH unscored completed
+# sessions and persist their scores. Lower bound is the rate limiter
+# (100/hour cap in clawmetry/eval_runner.py), so a chatty workspace
+# self-throttles regardless of interval.
+EVAL_INTERVAL_SEC = int(os.environ.get("CLAWMETRY_EVALS_INTERVAL_SEC", "300"))
+EVAL_BATCH = int(os.environ.get("CLAWMETRY_EVALS_BATCH", "10"))
 # Window for the events read from DuckDB on each tick. Wider than the
 # evaluation interval so a slow tick doesn't drop events on the floor.
 _ALERTS_EVENT_LOOKBACK_SEC = 600

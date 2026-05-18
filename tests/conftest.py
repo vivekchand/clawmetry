@@ -10,6 +10,20 @@ import pytest
 import requests
 
 
+def pytest_addoption(parser):
+    """CLI flags shared across the suite.
+
+    ``--update-baseline`` is consumed by
+    ``tests/test_moat_perf_benchmark.py`` to rewrite the committed perf
+    baseline. Declared here because pytest_addoption hooks must live in
+    a conftest (not in the test module itself).
+    """
+    parser.addoption(
+        "--update-baseline", action="store_true", default=False,
+        help="Rewrite tests/data/moat_perf_baseline.json from the current run.",
+    )
+
+
 def _detect_gateway_token():
     """Detect gateway token from OpenClaw config."""
     # Environment variable
@@ -71,6 +85,15 @@ def server(base_url, token):
     """Ensure the ClawMetry server is running before tests."""
     if _is_server_running(base_url, token):
         yield base_url
+        return
+
+    # No gateway token available — we're probably running hermetic MOAT /
+    # unit tests (e.g. the MOAT Verifier CI job) that use their own Flask
+    # test clients and don't need a live dashboard server at all. Yield None
+    # so those tests proceed; any test that actually needs a running server
+    # should guard itself with `if server is None: pytest.skip(...)`.
+    if not token:
+        yield None
         return
 
     # Start the server

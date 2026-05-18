@@ -78,27 +78,31 @@ def _span(**overrides):
 # ── schema / migration ──────────────────────────────────────────────────────
 
 
-def test_schema_version_bumped_to_6(store):
-    """SCHEMA_VERSION must be exactly 6 — issue #1007 bumps 5 → 6
-    (on top of v5 = bootstrap_archive + cron_runs from #1158 / #1160).
+def test_schema_version_stamped_and_idempotent(store):
+    """The current SCHEMA_VERSION must be stamped and re-running
+    _migrate() must not double-stamp.
 
-    Guards against a concurrent migration silently re-bumping us past 6
-    without updating callers / cloud relay that pin schema-aware reads."""
+    Original assertion hardcoded == 6 (#1007); it silently drifted as
+    #1232/#1234/#1626 each bumped the constant without test updates
+    (#1627). Read from the module constant so this assertion auto-
+    tracks future bumps."""
     import clawmetry.local_store as ls
-    assert ls.SCHEMA_VERSION == 6
+    expected = ls.SCHEMA_VERSION
     # And exactly one row stamped — re-running _migrate is idempotent.
     rows = store._fetch(
         "SELECT version FROM schema_version ORDER BY version", []
     )
     versions = [r[0] for r in rows]
-    assert 6 in versions
-    # Re-invoke migrate; the version 6 row must NOT double-up.
+    assert expected in versions
+    # Re-invoke migrate; the current-version row must NOT double-up.
     store._migrate()
     rows2 = store._fetch(
         "SELECT version, COUNT(*) FROM schema_version GROUP BY version", []
     )
     counts = {v: c for v, c in rows2}
-    assert counts.get(6, 0) == 1, f"schema_version row for v6 duplicated: {counts}"
+    assert counts.get(expected, 0) == 1, (
+        f"schema_version row for v{expected} duplicated: {counts}"
+    )
 
 
 def test_spans_table_exists(store):

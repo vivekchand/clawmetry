@@ -572,6 +572,126 @@ async function checkHeartbeatStatus() {
 visibilitySetInterval(checkHeartbeatStatus, 30000);
 setTimeout(checkHeartbeatStatus, 5000);
 
+// === Onboarding / First-Heartbeat Banner (closes #1604) =====================
+// After a fresh signup the daemon needs ~30s to come up + emit its first
+// heartbeat. Without a banner the dashboard shows empty cards that look
+// broken or - worse - might surface stale data from a prior tenant on the
+// same machine_id. We poll /api/heartbeat-status every 5s and:
+//   * status === "unknown" (no heartbeat yet) -> show "Setting up your node"
+//   * first heartbeat lands -> hide banner + trigger one full loadAll() so
+//     the live cards swap in smoothly instead of waiting for the 30s cycle.
+//   * 90s elapsed with no heartbeat -> switch copy to actionable error.
+var _cmOnboardingFirstSeenMs = 0;
+var _cmOnboardingDismissed = false;
+var _cmOnboardingTimer = null;
+var _CM_ONBOARDING_STALL_MS = 90 * 1000;
+
+async function checkOnboardingStatus() {
+  if (_cmOnboardingDismissed) return;
+  var banner = document.getElementById('onboarding-banner');
+  if (!banner) return;
+  var msgEl = document.getElementById('onboarding-banner-msg');
+  var etaEl = document.getElementById('onboarding-banner-eta');
+  var spinEl = document.getElementById('onboarding-banner-spinner');
+  try {
+    var data = await fetch('/api/heartbeat-status').then(function(r){return r.json();});
+    var firstHeartbeatLanded = (
+      data && data.status && data.status !== 'unknown' &&
+      data.last_heartbeat_ts && data.last_heartbeat_ts > 0
+    );
+    if (firstHeartbeatLanded) {
+      // Smooth handoff: hide the banner, mark as dismissed for this session
+      // so we don't re-flash on a transient blip, and kick a fresh loadAll
+      // so the now-live cards render without waiting for the next 30s tick.
+      banner.style.display = 'none';
+      _cmOnboardingDismissed = true;
+      if (_cmOnboardingTimer) { clearInterval(_cmOnboardingTimer); _cmOnboardingTimer = null; }
+      if (typeof loadAll === 'function') {
+        try { loadAll(); } catch(e) {}
+      }
+      return;
+    }
+    // Still waiting. Show the banner; track when we first saw the empty
+    // state so we can flip to the stall message after 90s.
+    if (_cmOnboardingFirstSeenMs === 0) _cmOnboardingFirstSeenMs = Date.now();
+    var waitedMs = Date.now() - _cmOnboardingFirstSeenMs;
+    banner.style.display = 'flex';
+    if (waitedMs < _CM_ONBOARDING_STALL_MS) {
+      var remainingSec = Math.max(5, Math.round((_CM_ONBOARDING_STALL_MS - waitedMs) / 1000));
+      if (msgEl) msgEl.textContent = 'Setting up your node. First check-in usually arrives in about 30 seconds.';
+      if (etaEl) etaEl.textContent = 'checking again in 5s';
+      if (spinEl) spinEl.style.display = 'inline-block';
+      banner.style.background = 'linear-gradient(90deg,#0c1d3a 0%,#1a1a2e 100%)';
+      banner.style.borderColor = '#3b82f6';
+      banner.style.color = '#93c5fd';
+      void remainingSec;
+    } else {
+      // Stalled past 90s. Swap to actionable copy. No demo data, no
+      // pretend-it-worked - just tell the user what to check.
+      if (msgEl) msgEl.textContent = "Still waiting for your daemon's first check-in. Try: run 'clawmetry status' in a terminal, or restart with 'clawmetry'.";
+      if (etaEl) etaEl.textContent = 'still retrying every 5s';
+      if (spinEl) spinEl.style.display = 'none';
+      banner.style.background = '#3f2a06';
+      banner.style.borderColor = '#f59e0b';
+      banner.style.color = '#fbbf24';
+    }
+  } catch(e) {
+    // Transient fetch failure - keep the banner in its current state, do
+    // NOT dismiss (per feedback_persistent_sessions: don't surface auth /
+    // network blips as terminal user-facing errors).
+  }
+}
+
+// Poll every 5s while the banner is active. First check is fast (300ms)
+// so a returning user with an already-warm daemon barely sees the banner.
+_cmOnboardingTimer = setInterval(checkOnboardingStatus, 5000);
+setTimeout(checkOnboardingStatus, 300);
+
+// === No-Agent-Detected Empty-State Banner ===================================
+// Distinct from the first-heartbeat onboarding banner above:
+//   * onboarding-banner fires when "agent installed but no heartbeat yet"
+//     (transient race that resolves in ~30s)
+//   * no-agent-banner fires when "no agent installed at all" — persistent
+//     until the user installs OpenClaw or NVIDIA NemoClaw.
+// Mutual exclusion: if openclaw or nemoclaw IS detected (heartbeat just
+// hasn't landed yet), we hide this banner and let onboarding-banner do
+// its thing. Polls every 60s — filesystem state for "did the user pip
+// install an agent" changes on the order of minutes, not seconds.
+async function checkAgentPresence() {
+  var banner = document.getElementById('no-agent-banner');
+  if (!banner) return;
+  try {
+    var data = await fetch('/api/agent-presence').then(function(r){return r.json();});
+    var noAgent = !!(data && data.no_agent === true);
+    if (noAgent) {
+      // No OpenClaw, no NemoClaw, no local data — show the persistent
+      // empty-state banner and hide the first-heartbeat one so we don't
+      // double up. Setting _cmOnboardingDismissed stops the 5s poller
+      // from re-flashing the "Setting up your node" copy.
+      var ob = document.getElementById('onboarding-banner');
+      if (ob) ob.style.display = 'none';
+      _cmOnboardingDismissed = true;
+      banner.style.display = 'flex';
+    } else {
+      // Agent appeared. Hide the no-agent banner and (if the dashboard
+      // was already showing it) reload the data so cards render.
+      var wasShown = banner.style.display !== 'none';
+      banner.style.display = 'none';
+      if (wasShown && typeof loadAll === 'function') {
+        try { loadAll(); } catch(e) {}
+      }
+    }
+  } catch(e) {
+    // Transient fetch failure. Per feedback_persistent_sessions: never
+    // surface a network blip as a terminal user-facing error. Keep the
+    // banner in whatever state it was in.
+  }
+}
+// Fast first check (500ms) so brand-new users see the banner before
+// staring at an empty dashboard. Re-poll every 60s thereafter.
+setTimeout(checkAgentPresence, 500);
+visibilitySetInterval(checkAgentPresence, 60000);
+
 function dismissPausedBanner() {
   localStorage.setItem('cm_paused_banner_dismissed', String(Date.now()));
   var banner = document.getElementById('paused-banner');
@@ -794,6 +914,80 @@ function _friendlyBytes(n) {
 }
 
 // ── Autonomy: how independently your agent runs ──────────────────────────────
+// Issue #1614 — outcome tile loader. Reads /api/outcomes for the "today"
+// window and renders the 1-line summary (Today: N tasks, X% success, Y
+// escalated, Z failed). Drill-down is lazy-loaded on click. Per memory
+// `feedback_no_em_dashes_in_user_facing_copy.md`, copy uses commas not
+// em-dashes.
+async function loadOutcomeTile() {
+  var summaryEl = document.getElementById('outcome-tile-summary');
+  if (!summaryEl) return;
+  try {
+    var d = await fetchJsonWithTimeout('/api/outcomes?window=1d', 3000);
+    if (!d || d.total === 0) {
+      summaryEl.textContent = 'No completed tasks yet today. Outcomes will appear once sessions finish.';
+      return;
+    }
+    var pct = Math.round((d.success_rate || 0) * 100);
+    var parts = [];
+    parts.push(d.total + ' tasks');
+    parts.push(pct + '% success');
+    if (d.escalated > 0) parts.push(d.escalated + ' needed human');
+    if (d.failed > 0) parts.push(d.failed + ' failed');
+    if (d.ongoing > 0) parts.push(d.ongoing + ' running');
+    summaryEl.innerHTML = parts.map(function(p, i){
+      // First chip = primary, success% gets the colored chip.
+      var color = '';
+      if (i === 1) color = pct >= 80 ? 'color:#22c55e;font-weight:700;' : pct >= 60 ? 'color:#f59e0b;font-weight:700;' : 'color:#ef4444;font-weight:700;';
+      return '<span style="' + color + '">' + p + '</span>';
+    }).join('  ·  ');
+  } catch (e) {
+    summaryEl.textContent = 'Task outcomes unavailable right now.';
+  }
+}
+
+// Drill-down: lazy-load failed + escalated lists when the user clicks the tile.
+async function toggleOutcomeDrilldown() {
+  var dd = document.getElementById('outcome-drilldown');
+  var chev = document.getElementById('outcome-tile-chevron');
+  if (!dd) return;
+  if (dd.style.display !== 'none') {
+    dd.style.display = 'none';
+    if (chev) chev.textContent = 'show details';
+    return;
+  }
+  dd.style.display = 'block';
+  if (chev) chev.textContent = 'hide details';
+  var body = document.getElementById('outcome-drilldown-body');
+  if (!body) return;
+  body.textContent = 'Loading...';
+  try {
+    var failed = await fetchJsonWithTimeout('/api/outcomes/sessions?outcome=failed&window=1d&limit=10', 3000).catch(function(){return {sessions:[]};});
+    var esc    = await fetchJsonWithTimeout('/api/outcomes/sessions?outcome=escalated&window=1d&limit=10', 3000).catch(function(){return {sessions:[]};});
+    function row(s) {
+      var title = s.title || s.session_id || 'untitled';
+      var when = s.last_active_at ? (s.last_active_at.slice(11, 16)) : '';
+      return '<div style="padding:4px 0;border-bottom:1px dashed var(--border-secondary);"><span style="color:var(--text-primary);">' + escapeHtml(title) + '</span> <span style="color:var(--text-muted);font-size:11px;">' + when + '</span></div>';
+    }
+    var html = '';
+    if ((failed.sessions || []).length === 0 && (esc.sessions || []).length === 0) {
+      html = '<div style="color:var(--text-muted);">Nothing flagged today. Everything ran clean.</div>';
+    } else {
+      if ((failed.sessions || []).length > 0) {
+        html += '<div style="font-weight:700;color:#ef4444;margin-bottom:4px;">Failed (' + failed.sessions.length + ')</div>';
+        html += failed.sessions.map(row).join('');
+      }
+      if ((esc.sessions || []).length > 0) {
+        html += '<div style="font-weight:700;color:#f59e0b;margin:8px 0 4px;">Needed a human (' + esc.sessions.length + ')</div>';
+        html += esc.sessions.map(row).join('');
+      }
+    }
+    body.innerHTML = html;
+  } catch (e) {
+    body.textContent = 'Could not load drill-down.';
+  }
+}
+
 async function loadAutonomy() {
   var labelEl = document.getElementById('autonomy-score-label');
   var badgeEl = document.getElementById('autonomy-trend-badge');
@@ -1950,6 +2144,8 @@ async function loadAll() {
     if (typeof loadHeartbeat === 'function') loadHeartbeat().catch(function(e){console.warn('heartbeat panel failed',e)});
     if (typeof loadAutonomy === 'function') setTimeout(function(){ loadAutonomy().catch(function(e){console.warn('autonomy failed',e)}); }, 2600);
     if (typeof loadAnomalyPanel === 'function') setTimeout(function(){ loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)}); }, 3600);
+    // Issue #1614 — outcome tile (Today: N tasks, X% success).
+    if (typeof loadOutcomeTile === 'function') setTimeout(function(){ loadOutcomeTile().catch(function(e){console.warn('outcome tile failed',e)}); }, 800);
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -2074,7 +2270,129 @@ async function loadMiniWidgets(overview, usage) {
   
   // 🐝 Worker Bees (Sub-Agents)
   loadSubAgents();
-  
+
+  // Issue #1619 Phase 1 — eval score tile. Lazy, non-blocking; tile shows
+  // a dash on miss so a slow daemon doesn't gate the overview render.
+  loadEvalSummary();
+  // Phase 3 — regression-replay mini-line under the eval tile.
+  loadEvalRegressionSummary();
+}
+
+// Issue #1619 Phase 1 — pull aggregate score for the overview tile.
+// Reads /api/evals/summary?window=24h and renders avg + coverage. Score
+// is shown as "4.2 / 5" with a color band; coverage as "220 / 247 scored".
+async function loadEvalSummary() {
+  var avgEl = document.getElementById('eval-avg-score');
+  var covEl = document.getElementById('eval-coverage');
+  if (!avgEl) return;
+  try {
+    var data = await fetch('/api/evals/summary?window=24h').then(function(r){return r.json();}).catch(function(){return null;});
+    if (!data || typeof data.scored !== 'number') {
+      avgEl.textContent = '--';
+      if (covEl) covEl.textContent = '';
+      return;
+    }
+    if (data.scored === 0) {
+      avgEl.textContent = '--';
+      avgEl.style.color = 'var(--text-muted)';
+      if (covEl) covEl.textContent = 'no scored sessions yet';
+      return;
+    }
+    var avg = Number(data.avg_score || 0);
+    avgEl.textContent = avg.toFixed(1) + ' / 5';
+    // Color band: 4+ green, 3-4 yellow, <3 red. Matches the per-session pill.
+    avgEl.style.color = avg >= 4 ? '#22c55e' : avg >= 3 ? '#f59e0b' : '#ef4444';
+    if (covEl) covEl.textContent = data.scored + ' / ' + data.total + ' scored';
+  } catch (e) {
+    avgEl.textContent = '--';
+    if (covEl) covEl.textContent = '';
+  }
+}
+
+// Issue #1619 Phase 3 — regression-replay summary line under the eval tile.
+// Reads /api/evals/regression-summary?window=7d and renders a single-line
+// status like "Regression: 8 fixed since last week". Silent on a fresh
+// install (tested=0) so the tile doesn't dangle a useless zero.
+async function loadEvalRegressionSummary() {
+  var el = document.getElementById('eval-regression-line');
+  if (!el) return;
+  try {
+    var data = await fetch('/api/evals/regression-summary?window=7d').then(function(r){return r.json();}).catch(function(){return null;});
+    if (!data || typeof data.tested !== 'number' || data.tested === 0) {
+      el.textContent = '';
+      return;
+    }
+    var parts = [];
+    if (data.improved > 0) parts.push(data.improved + ' fixed');
+    if (data.regressed > 0) parts.push(data.regressed + ' regressed');
+    if (data.same > 0) parts.push(data.same + ' same');
+    if (!parts.length) { el.textContent = ''; return; }
+    el.textContent = 'Regression: ' + parts.join(', ') + ' (7d)';
+    // Subtle color signal: red if anything regressed, green if any fixed
+    // and none regressed, muted otherwise.
+    if (data.regressed > 0) {
+      el.style.color = '#ef4444';
+    } else if (data.improved > 0) {
+      el.style.color = '#22c55e';
+    } else {
+      el.style.color = 'var(--text-muted)';
+    }
+  } catch (e) {
+    el.textContent = '';
+  }
+}
+
+// Issue #1619 Phase 1 — rubric editor. Modal opens with the current YAML;
+// Save POSTs back to /api/evals/rubric which validates parse before write.
+async function openEvalRubricModal() {
+  var modal = document.getElementById('eval-rubric-modal');
+  var ta = document.getElementById('eval-rubric-yaml');
+  var status = document.getElementById('eval-rubric-status');
+  var pathEl = document.getElementById('eval-rubric-path');
+  if (!modal || !ta) return;
+  modal.style.display = 'flex';
+  if (status) status.textContent = 'Loading...';
+  try {
+    var data = await fetch('/api/evals/rubric').then(function(r){return r.json();});
+    ta.value = data.yaml || '';
+    if (pathEl && data.rubric_path) pathEl.textContent = data.rubric_path;
+    if (status) {
+      status.textContent = data.enabled === false
+        ? 'Evals are disabled (CLAWMETRY_EVALS_ENABLED=0).'
+        : 'Loaded.';
+    }
+  } catch (e) {
+    if (status) status.textContent = 'Failed to load: ' + e.message;
+  }
+}
+
+function closeEvalRubricModal() {
+  var modal = document.getElementById('eval-rubric-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function saveEvalRubric() {
+  var ta = document.getElementById('eval-rubric-yaml');
+  var status = document.getElementById('eval-rubric-status');
+  if (!ta) return;
+  var body = JSON.stringify({yaml: ta.value || ''});
+  if (status) status.textContent = 'Saving...';
+  try {
+    var resp = await fetch('/api/evals/rubric', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: body,
+    });
+    var data = await resp.json();
+    if (!resp.ok || data.error) {
+      if (status) status.textContent = 'Save failed: ' + (data.error || resp.status);
+      return;
+    }
+    if (status) status.textContent = 'Saved. New scores use this rubric on the next scheduler tick.';
+    setTimeout(closeEvalRubricModal, 1200);
+  } catch (e) {
+    if (status) status.textContent = 'Save failed: ' + e.message;
+  }
 }
 
 async function loadSubAgents() {
@@ -2688,6 +3006,11 @@ function _extractChannelInfo(ev) {
   if (raw && typeof raw === 'object' && raw.body_capture === 'ack_only') {
     ackOnly = true;
   }
+  // Issue #1203: local-store fast-path strips ev.data so raw_blob is never
+  // present; brain.py now exposes body_capture as a flat field instead.
+  if (!ackOnly && ev.body_capture === 'ack_only') {
+    ackOnly = true;
+  }
   var bodyMissing = direction === 'out' && (ackOnly || !hasBodyText);
 
   return {
@@ -3085,7 +3408,15 @@ function renderBrainStream(events) {
     el.innerHTML = '<div style="color:var(--text-muted);padding:20px">No activity yet</div>';
     return;
   }
+  // Issue #1203: one-line banner when Telegram outbound rows are visible so
+  // users don't mistake the "(no body captured)" affordance for a broken tool.
+  var hasTelegramAck = filtered.some(function(ev) {
+    return (ev.provider === 'telegram' || ev.channel === 'telegram') && ev.direction === 'out';
+  });
   var html = '';
+  if (hasTelegramAck) {
+    html += '<div style="display:flex;align-items:center;gap:6px;padding:5px 10px;margin-bottom:6px;background:rgba(37,99,235,0.08);border:1px solid rgba(37,99,235,0.2);border-radius:6px;font-size:11px;color:#60a5fa;">📱 Telegram body capture pending OpenClaw upstream — outbound counts only</div>';
+  }
   filtered.forEach(function(ev) {
     var color = ev.color || brainSourceColor(ev.source || 'main');
     var evType = ev.type || 'TOOL';
@@ -3224,12 +3555,36 @@ function renderBrainStream(events) {
             _tlContainerId = 'timeline-' + (te.eventId || '').replace(/[^a-z0-9-]/gi, '').slice(0, 24);
             turnTimeline += '<button onclick="event.stopPropagation();loadLlmCallTimeline(\'' + escHtml(te.eventId) + '\',\'' + escHtml(_tlSid) + '\',\'' + escHtml(_tlContainerId) + '\')" style="flex-shrink:0;padding:1px 7px;border-radius:10px;border:1px solid #22c55e;background:transparent;color:#22c55e;font-size:10px;cursor:pointer;white-space:nowrap;" title="Per-LLM-call lifecycle timeline">&#128202; Timeline</button>';
           }
+          // Issue #563: per-LLM-call Token Confidence button on AGENT rows.
+          // Renders heatmap when upstream captured logprobs; otherwise shows
+          // a single-line "not available" hint with how to enable it.
+          var _tcContainerId = null;
+          if (te.type === 'AGENT') {
+            _tcContainerId = 'tokconf-' + ((te.eventId || (te.time || '') + (te.source || '')) + '').replace(/[^a-z0-9-]/gi, '').slice(0, 24);
+            turnTimeline += '<button onclick="event.stopPropagation();toggleTokenConfidence(this,\'' + escHtml(_tcContainerId) + '\')" data-tc=\'' + escHtml(JSON.stringify(te.token_confidence || null)) + '\' style="flex-shrink:0;padding:1px 7px;border-radius:10px;border:1px solid #38bdf8;background:transparent;color:#38bdf8;font-size:10px;cursor:pointer;white-space:nowrap;" title="How confident was the model in each word?">&#128202; Confidence</button>';
+          }
+          // Issue #1616: per-tool-call Alternatives toggle on tool rows.
+          // Shows the options the model considered before picking this tool
+          // (from OpenAI logprobs or Claude/Gemini extended-thinking). When
+          // no real alternatives data is available we paint an honest
+          // "not available for this model" hint — never invent options.
+          var _altContainerId = null;
+          if (te.tool_alternatives) {
+            _altContainerId = 'toolalt-' + ((te.eventId || (te.time || '') + (te.source || '')) + '').replace(/[^a-z0-9-]/gi, '').slice(0, 24);
+            turnTimeline += '<button onclick="event.stopPropagation();toggleToolAlternatives(this,\'' + escHtml(_altContainerId) + '\')" data-ta=\'' + escHtml(JSON.stringify(te.tool_alternatives || null)) + '\' style="flex-shrink:0;padding:1px 7px;border-radius:10px;border:1px solid #a78bfa;background:transparent;color:#a78bfa;font-size:10px;cursor:pointer;white-space:nowrap;" title="What other tools did the model consider before picking this one?">&#9879; Alternatives</button>';
+          }
           turnTimeline += '</div>';
           if (_rcContainerId) {
             turnTimeline += '<div id="' + escHtml(_rcContainerId) + '" style="margin:2px 0 4px 56px;"></div>';
           }
           if (_tlContainerId) {
             turnTimeline += '<div id="' + escHtml(_tlContainerId) + '" class="llm-call-timeline-host" style="margin:2px 0 4px 56px;"></div>';
+          }
+          if (_tcContainerId) {
+            turnTimeline += '<div id="' + escHtml(_tcContainerId) + '" class="token-confidence-host" style="margin:2px 0 4px 56px;"></div>';
+          }
+          if (_altContainerId) {
+            turnTimeline += '<div id="' + escHtml(_altContainerId) + '" class="tool-alternatives-host" style="margin:2px 0 4px 56px;"></div>';
           }
         });
         if (currentSubagent) turnTimeline += '</div>'; // close last sub-agent group
@@ -3530,6 +3885,193 @@ function loadLlmCallTimeline(eventId, sessionId, containerId) {
     });
 }
 
+// Issue #563 — Token Probability Visualizer.
+// "How confident was the model in each word?" — per-token heatmap rendered
+// inline below an AGENT row when upstream captured logprobs. When no
+// logprobs are present (every Anthropic call today), we show a single
+// explanatory line with how to enable the feature so the panel is never
+// a dead-end. Plain copy, no em-dashes (memory:
+// feedback_no_em_dashes_in_user_facing_copy.md).
+var _TOKEN_CONF_BAND = {
+  h: { color: '#16a34a', bg: 'rgba(22,163,74,0.18)',  label: 'High'   },
+  m: { color: '#d97706', bg: 'rgba(217,119,6,0.18)',  label: 'Medium' },
+  l: { color: '#ea580c', bg: 'rgba(234,88,12,0.20)',  label: 'Low'    },
+  v: { color: '#dc2626', bg: 'rgba(220,38,38,0.24)',  label: 'Very low' }
+};
+
+function _renderTokenConfidenceHeatmap(payload) {
+  if (!payload || !Array.isArray(payload.tokens) || !payload.tokens.length) return '';
+  var s = payload.summary || {};
+  var avgPct = Math.round(((s.avg_prob || 0) * 100));
+  var headline = 'Avg confidence: ' + avgPct + '% &middot; ' +
+    (s.token_count || 0) + ' tokens';
+  if (s.high_variance_count) {
+    headline += ' &middot; <span style="color:#dc2626;font-weight:600;">' +
+      s.high_variance_count + ' low-confidence</span>';
+  }
+  var html = '<div class="token-confidence-panel" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:11px;">';
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">';
+  html += '<span style="color:var(--text-muted);">' + headline + '</span>';
+  html += '<span style="color:var(--text-faint);font-size:10px;">hover a token to see what else the model considered</span>';
+  html += '</div>';
+  html += '<div class="token-confidence-tokens" style="line-height:1.9;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-word;">';
+  payload.tokens.forEach(function(t) {
+    var cfg = _TOKEN_CONF_BAND[t.band] || _TOKEN_CONF_BAND.m;
+    var pct = Math.round((t.prob || 0) * 100);
+    var icon = (t.band === 'v') ? ' ⚡' : '';
+    // Build tooltip: chosen token + top-k alternatives + cumulative mass.
+    var tipLines = ['"' + (t.token || '') + '"  ' + pct + '%' + (t.rank > 1 ? '  (rank ' + t.rank + ')' : '')];
+    if (Array.isArray(t.top_k) && t.top_k.length) {
+      tipLines.push('');
+      tipLines.push('Top alternatives:');
+      var mass = 0;
+      t.top_k.forEach(function(alt) {
+        var ap = Math.round((alt.prob || 0) * 100);
+        tipLines.push('  ' + ap + '%  "' + (alt.token || '') + '"');
+        mass += (alt.prob || 0);
+      });
+      tipLines.push('');
+      tipLines.push(Math.round(mass * 100) + '% of probability mass in top ' + t.top_k.length);
+    }
+    var visible = (t.token || '').replace(/\n/g, '↵').replace(/\t/g, '→');
+    html += '<span class="token-conf-cell" title="' + escHtml(tipLines.join('\n')) +
+      '" style="display:inline-block;padding:1px 3px;margin:1px 1px;border-radius:3px;background:' +
+      cfg.bg + ';color:' + cfg.color + ';border-bottom:2px solid ' + cfg.color + ';cursor:help;">' +
+      escHtml(visible) + icon + '</span>';
+  });
+  if (payload.truncated) {
+    html += '<span style="color:var(--text-muted);font-style:italic;margin-left:6px;">&hellip; ' +
+      ((s.total_tokens || 0) - (s.token_count || 0)) + ' more tokens</span>';
+  }
+  html += '</div>';
+  // Legend
+  html += '<div style="display:flex;gap:10px;margin-top:8px;font-size:10px;color:var(--text-muted);flex-wrap:wrap;">';
+  ['h','m','l','v'].forEach(function(b) {
+    var cfg = _TOKEN_CONF_BAND[b];
+    html += '<span><span style="display:inline-block;width:10px;height:10px;background:' + cfg.bg +
+      ';border:1px solid ' + cfg.color + ';border-radius:2px;margin-right:3px;vertical-align:middle;"></span>' +
+      escHtml(cfg.label) + '</span>';
+  });
+  html += '</div>';
+  html += '</div>';
+  return html;
+}
+
+function _renderTokenConfidenceUnavailable() {
+  // Friendly explanation when upstream did NOT capture logprobs. Common
+  // case today since Anthropic does not expose per-token logprobs. Keep
+  // it short and tell the user what would unblock it.
+  return '<div class="token-confidence-panel token-confidence-empty" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-size:12px;color:var(--text-secondary);">' +
+    '<div style="font-weight:600;color:var(--text-primary);margin-bottom:4px;">' +
+    '&#128202; Per-token confidence not available for this call</div>' +
+    '<div style="color:var(--text-muted);font-size:11px;line-height:1.5;">' +
+    'How confident was the model in each word? When the API provider returns ' +
+    '<code style="background:var(--bg-primary);padding:1px 4px;border-radius:3px;">logprobs</code>, ' +
+    'we paint a colour-coded heatmap here so you can spot the tokens the model was guessing on. ' +
+    'OpenAI and Gemini compatible providers support this today. ' +
+    'Anthropic does not expose per-token logprobs yet, so Claude calls fall through to this hint. ' +
+    'Track upstream work in <a href="https://github.com/vivekchand/clawmetry/issues/563" target="_blank" rel="noopener" style="color:#60a5fa;">#563</a>.' +
+    '</div></div>';
+}
+
+window.toggleTokenConfidence = function(btn, containerId) {
+  var container = document.getElementById(containerId);
+  if (!container) return;
+  if (container.dataset.loaded === '1') {
+    container.innerHTML = '';
+    container.dataset.loaded = '0';
+    return;
+  }
+  var raw = btn && btn.getAttribute ? btn.getAttribute('data-tc') : null;
+  var payload = null;
+  try { payload = raw ? JSON.parse(raw) : null; } catch (e) { payload = null; }
+  container.innerHTML = payload
+    ? _renderTokenConfidenceHeatmap(payload)
+    : _renderTokenConfidenceUnavailable();
+  container.dataset.loaded = '1';
+};
+
+// Exported for unit tests (Node + jsdom). No-op in the browser global.
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports._renderTokenConfidenceHeatmap = _renderTokenConfidenceHeatmap;
+  module.exports._renderTokenConfidenceUnavailable = _renderTokenConfidenceUnavailable;
+}
+
+// ── Issue #1616 — Alternatives-considered panel ────────────────────────
+// "What else did the agent reject?" Per OpenClaw blog Pillar #2 (Decision
+// Auditing). When the model exposes alternatives (OpenAI logprobs or
+// Claude/Gemini extended-thinking), we paint the chosen tool next to the
+// rejected options so the user can spot training gaps and close calls.
+// Plain copy, no em-dashes (memory: feedback_no_em_dashes_in_user_facing_copy).
+function _renderToolAlternativesPanel(payload) {
+  if (!payload || !payload.chosen) return '';
+  var chosen = payload.chosen;
+  var chosenScore = payload.chosen_score;
+  var alts = Array.isArray(payload.alternatives) ? payload.alternatives : [];
+  var source = payload.source || 'none';
+  if (!alts.length) return _renderToolAlternativesUnavailable();
+  var chosenPct = (chosenScore != null) ? ' (' + Math.round(chosenScore * 100) / 100 + ')' : '';
+  var altText = alts.map(function(a) {
+    var nm = a && a.name ? a.name : '';
+    var sc = (a && a.score != null) ? ' (' + Math.round(a.score * 100) / 100 + ')' : '';
+    return '<code style="background:var(--bg-primary);padding:1px 4px;border-radius:3px;color:#a78bfa;">' +
+      escHtml(nm) + '</code>' + escHtml(sc);
+  }).join(', ');
+  var sourceLabel = (source === 'thinking')
+    ? 'from extended-thinking'
+    : (source === 'logprobs' ? 'from token logprobs' : '');
+  var html = '<div class="tool-alternatives-panel" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:11px;">';
+  html += '<div style="font-size:10px;color:var(--text-muted);margin-bottom:4px;">';
+  html += 'Alternatives are other tools the model evaluated and rejected before picking this one.';
+  html += '</div>';
+  html += '<div style="font-size:12px;color:var(--text-primary);">';
+  html += 'Chose <code style="background:var(--bg-primary);padding:1px 4px;border-radius:3px;color:#22c55e;font-weight:600;">' +
+    escHtml(chosen) + '</code>' + escHtml(chosenPct) + ' over ' + altText + '.';
+  html += '</div>';
+  if (sourceLabel) {
+    html += '<div style="font-size:10px;color:var(--text-faint);margin-top:6px;">Source: ' + escHtml(sourceLabel) + '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function _renderToolAlternativesUnavailable() {
+  // Honest empty state — Anthropic without extended-thinking does not
+  // expose tool-selection alternatives. Don't fabricate options (user
+  // trust > fake completeness, per PR prompt).
+  return '<div class="tool-alternatives-panel tool-alternatives-empty" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-size:12px;color:var(--text-secondary);">' +
+    '<div style="font-weight:600;color:var(--text-primary);margin-bottom:4px;">' +
+    '&#9879; Alternatives data not available for this model</div>' +
+    '<div style="color:var(--text-muted);font-size:11px;line-height:1.5;">' +
+    'Alternatives show what other tools the model considered before picking this one. ' +
+    'We extract them from OpenAI logprobs or Claude/Gemini extended-thinking. ' +
+    'This call did not carry either signal, so no alternatives can be shown. ' +
+    'Track upstream work in <a href="https://github.com/vivekchand/clawmetry/issues/1616" target="_blank" rel="noopener" style="color:#60a5fa;">#1616</a>.' +
+    '</div></div>';
+}
+
+window.toggleToolAlternatives = function(btn, containerId) {
+  var container = document.getElementById(containerId);
+  if (!container) return;
+  if (container.dataset.loaded === '1') {
+    container.innerHTML = '';
+    container.dataset.loaded = '0';
+    return;
+  }
+  var raw = btn && btn.getAttribute ? btn.getAttribute('data-ta') : null;
+  var payload = null;
+  try { payload = raw ? JSON.parse(raw) : null; } catch (e) { payload = null; }
+  container.innerHTML = (payload && Array.isArray(payload.alternatives) && payload.alternatives.length)
+    ? _renderToolAlternativesPanel(payload)
+    : _renderToolAlternativesUnavailable();
+  container.dataset.loaded = '1';
+};
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports._renderToolAlternativesPanel = _renderToolAlternativesPanel;
+  module.exports._renderToolAlternativesUnavailable = _renderToolAlternativesUnavailable;
+}
+
 function renderBrainChart(events) {
   var canvas = document.getElementById('brain-density-chart');
   if (!canvas || !canvas.getContext) return;
@@ -3600,8 +4142,294 @@ function renderBrainChart(events) {
   ctx.globalAlpha = 1;
 }
 
+// ── Brain Graph (neural-net visualization, refs #53) ──────────────────────
+// Force-directed canvas: each agent source is a glowing "neuron"; recent
+// events orbit their parent as smaller satellite dots; an ambient pulse
+// ripples outward every ~2s on active sources. Toggle via the Graph/List
+// buttons rendered in tabs/brain.html. Pure Canvas 2D — no deps, no WebGL.
+// Reads the existing `_brainAllEvents` array (populated by SSE), so this
+// is purely a presentational alternative to the list view; no new
+// endpoints, no extra DuckDB reads.
+var _brainViewMode = 'list';
+var _brainGraph = {
+  canvas: null, ctx: null, width: 0, height: 500, dpr: 1,
+  lastTs: 0, rafId: 0, animating: false,
+  agents: {}, agentOrder: [], events: [], lastPulseAt: 0
+};
+
+function _brainGraphHash(str) {
+  var h = 2166136261;
+  str = String(str || '');
+  for (var i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+  }
+  return h >>> 0;
+}
+
+function _brainGraphEnsureCanvas() {
+  var canvas = document.getElementById('brain-graph-canvas');
+  if (!canvas) return false;
+  if (!_brainGraph.canvas) {
+    _brainGraph.canvas = canvas;
+    _brainGraph.ctx = canvas.getContext('2d');
+  }
+  var rect = canvas.getBoundingClientRect();
+  var dpr = Math.max(1, window.devicePixelRatio || 1);
+  var w = Math.max(320, Math.floor(rect.width || canvas.clientWidth || 800));
+  var h = 500;
+  if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
+    canvas.width = Math.floor(w * dpr);
+    canvas.height = Math.floor(h * dpr);
+  }
+  _brainGraph.dpr = dpr;
+  _brainGraph.width = w;
+  _brainGraph.height = h;
+  return true;
+}
+
+function setBrainViewMode(mode, btn) {
+  if (mode !== 'graph' && mode !== 'list') mode = 'list';
+  _brainViewMode = mode;
+  var feed = document.getElementById('brain-feed');
+  var wrap = document.getElementById('brain-graph-wrap');
+  if (feed) feed.style.display = mode === 'list' ? '' : 'none';
+  if (wrap) wrap.style.display = mode === 'graph' ? '' : 'none';
+  document.querySelectorAll('.brain-view-btn').forEach(function(b) {
+    b.classList.toggle('active', b.dataset.view === mode);
+  });
+  if (mode === 'graph') {
+    if (typeof syncBrainGraph === 'function') syncBrainGraph(_brainAllEvents);
+    _startBrainGraphLoop();
+  }
+}
+
+function syncBrainGraph(events) {
+  events = Array.isArray(events) ? events : [];
+  var oldAgents = _brainGraph.agents || {};
+  var oldEvents = {};
+  (_brainGraph.events || []).forEach(function(node) { oldEvents[node.id] = node; });
+  var now = Date.now();
+  var centerX = (_brainGraph.width || 900) / 2;
+  var centerY = (_brainGraph.height || 500) / 2;
+  var recent = events.slice(0, 200);
+  var agentMap = {};
+  recent.forEach(function(ev) {
+    var source = ev && ev.source ? ev.source : 'main';
+    if (!agentMap[source]) {
+      agentMap[source] = {id: source, label: ev && ev.sourceLabel ? ev.sourceLabel : source, lastSeen: 0, count: 0};
+    }
+    var ts = ev && ev.time ? (new Date(ev.time).getTime() || 0) : 0;
+    if (ts > agentMap[source].lastSeen) agentMap[source].lastSeen = ts;
+    agentMap[source].count++;
+  });
+  if (!agentMap.main && recent.length) {
+    agentMap.main = {id: 'main', label: 'main', lastSeen: now, count: 1};
+  }
+  var agentIds = Object.keys(agentMap).sort(function(a, b) {
+    var da = agentMap[a], db = agentMap[b];
+    if (db.lastSeen !== da.lastSeen) return db.lastSeen - da.lastSeen;
+    return db.count - da.count;
+  }).slice(0, 20);
+  var chosen = {};
+  agentIds.forEach(function(id) { chosen[id] = true; });
+  var nextAgents = {};
+  var ringR = Math.max(90, Math.min(180, Math.min(centerX, centerY) - 40));
+  agentIds.forEach(function(id, i) {
+    var baseAngle = (Math.PI * 2 * i) / Math.max(1, agentIds.length);
+    var prev = oldAgents[id];
+    nextAgents[id] = {
+      id: id,
+      label: agentMap[id].label || id,
+      lastSeen: agentMap[id].lastSeen || 0,
+      x: prev ? prev.x : centerX + Math.cos(baseAngle) * ringR,
+      y: prev ? prev.y : centerY + Math.sin(baseAngle) * ringR,
+      vx: prev ? prev.vx : 0,
+      vy: prev ? prev.vy : 0,
+      r: 14
+    };
+  });
+  var nextEvents = [];
+  for (var ei = 0; ei < events.length && nextEvents.length < 50; ei++) {
+    var ev = events[ei];
+    var source = ev && ev.source ? ev.source : 'main';
+    if (!chosen[source]) continue;
+    var key = (ev.time || '') + '|' + source + '|' + (ev.type || '') + '|' + (ev.detail || '');
+    var id = 'ev:' + _brainGraphHash(key).toString(16);
+    var prevNode = oldEvents[id];
+    var agent = nextAgents[source];
+    var seed = _brainGraphHash(id);
+    var angle = ((seed % 6283) / 1000);
+    nextEvents.push({
+      id: id, source: source, type: ev.type || 'TOOL',
+      color: ev.color || brainSourceColor(source),
+      x: prevNode ? prevNode.x : (agent.x + Math.cos(angle) * 42),
+      y: prevNode ? prevNode.y : (agent.y + Math.sin(angle) * 42),
+      vx: prevNode ? prevNode.vx : 0,
+      vy: prevNode ? prevNode.vy : 0,
+      orbitR: 34 + (seed % 24),
+      orbitSpeed: 0.00025 + ((seed % 100) / 500000),
+      orbitPhase: angle, r: 4
+    });
+  }
+  _brainGraph.agents = nextAgents;
+  _brainGraph.agentOrder = agentIds;
+  _brainGraph.events = nextEvents;
+}
+
+function _startBrainGraphLoop() {
+  if (_brainGraph.animating) return;
+  _brainGraph.animating = true;
+  _brainGraph.lastTs = 0;
+  _brainGraph.rafId = requestAnimationFrame(_brainGraphTick);
+}
+
+function _brainGraphTick(ts) {
+  _brainGraph.rafId = requestAnimationFrame(_brainGraphTick);
+  if (_brainViewMode !== 'graph') return;
+  var pg = document.getElementById('page-brain');
+  if (!pg || !pg.classList.contains('active')) return;
+  if (!_brainGraphEnsureCanvas()) return;
+  var dt = _brainGraph.lastTs ? Math.min(33, ts - _brainGraph.lastTs) / 16.67 : 1;
+  _brainGraph.lastTs = ts;
+  var now = Date.now();
+  var agents = _brainGraph.agentOrder.map(function(id) { return _brainGraph.agents[id]; }).filter(Boolean);
+  var events = _brainGraph.events;
+  var W = _brainGraph.width, H = _brainGraph.height;
+  var cx = W / 2, cy = H / 2;
+  agents.forEach(function(a) {
+    a.vx += (cx - a.x) * 0.0007 * dt;
+    a.vy += (cy - a.y) * 0.0007 * dt;
+  });
+  for (var i = 0; i < agents.length; i++) {
+    for (var j = i + 1; j < agents.length; j++) {
+      var a = agents[i], b = agents[j];
+      var dx = b.x - a.x, dy = b.y - a.y;
+      var d2 = dx * dx + dy * dy + 0.01;
+      var d = Math.sqrt(d2);
+      var force = Math.min(6, 900 / d2);
+      var fx = (dx / d) * force, fy = (dy / d) * force;
+      a.vx -= fx * dt; a.vy -= fy * dt;
+      b.vx += fx * dt; b.vy += fy * dt;
+    }
+  }
+  if (ts - _brainGraph.lastPulseAt > 2000) {
+    agents.forEach(function(a) {
+      if (now - a.lastSeen < 90000) {
+        if (!a.pulses) a.pulses = [];
+        a.pulses.push({start: ts});
+      }
+    });
+    _brainGraph.lastPulseAt = ts;
+  }
+  agents.forEach(function(a) {
+    a.vx *= 0.9; a.vy *= 0.9;
+    a.x += a.vx * dt; a.y += a.vy * dt;
+    a.x = Math.max(24, Math.min(W - 24, a.x));
+    a.y = Math.max(24, Math.min(H - 24, a.y));
+  });
+  events.forEach(function(ev, idx) {
+    var agent = _brainGraph.agents[ev.source];
+    if (!agent) return;
+    var orbitA = ev.orbitPhase + ts * ev.orbitSpeed;
+    var tx = agent.x + Math.cos(orbitA) * ev.orbitR;
+    var ty = agent.y + Math.sin(orbitA) * ev.orbitR;
+    ev.vx += (tx - ev.x) * 0.04 * dt;
+    ev.vy += (ty - ev.y) * 0.04 * dt;
+    for (var k = idx + 1; k < events.length; k++) {
+      var other = events[k];
+      if (other.source !== ev.source) continue;
+      var rx = other.x - ev.x, ry = other.y - ev.y;
+      var rd2 = rx * rx + ry * ry + 0.01;
+      if (rd2 > 1200) continue;
+      var rf = 20 / rd2;
+      ev.vx -= rx * rf * dt; ev.vy -= ry * rf * dt;
+      other.vx += rx * rf * dt; other.vy += ry * rf * dt;
+    }
+    ev.vx *= 0.88; ev.vy *= 0.88;
+    ev.x += ev.vx * dt; ev.y += ev.vy * dt;
+    ev.x = Math.max(8, Math.min(W - 8, ev.x));
+    ev.y = Math.max(8, Math.min(H - 8, ev.y));
+  });
+  _drawBrainGraph(ts, now);
+}
+
+function _drawBrainGraph(ts, now) {
+  var ctx = _brainGraph.ctx;
+  if (!ctx) return;
+  var dpr = _brainGraph.dpr || 1;
+  var W = _brainGraph.width, H = _brainGraph.height;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(20,23,34,0.35)';
+  ctx.fillRect(0, 0, W, H);
+  _brainGraph.events.forEach(function(ev) {
+    var a = _brainGraph.agents[ev.source];
+    if (!a) return;
+    ctx.strokeStyle = 'rgba(148,163,184,0.22)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(ev.x, ev.y);
+    ctx.stroke();
+  });
+  _brainGraph.events.forEach(function(ev) {
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = ev.color || '#60a5fa';
+    ctx.fillStyle = ev.color || '#60a5fa';
+    ctx.beginPath();
+    ctx.arc(ev.x, ev.y, ev.r, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  _brainGraph.agentOrder.forEach(function(id) {
+    var a = _brainGraph.agents[id];
+    if (!a) return;
+    var active = now - a.lastSeen < 90000;
+    var color = active ? '#a855f7' : '#f59e0b';
+    if (!a.pulses) a.pulses = [];
+    a.pulses = a.pulses.filter(function(p) { return ts - p.start < 1200; });
+    a.pulses.forEach(function(p) {
+      var t = (ts - p.start) / 1200;
+      var radius = a.r + (44 * t);
+      var alpha = Math.max(0, 0.35 * (1 - t));
+      ctx.strokeStyle = active ? 'rgba(168,85,247,' + alpha + ')' : 'rgba(245,158,11,' + alpha + ')';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(a.x, a.y, radius, 0, Math.PI * 2);
+      ctx.stroke();
+    });
+    ctx.shadowBlur = 20;
+    ctx.shadowColor = color;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(a.x, a.y, a.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = 'rgba(230,234,244,0.92)';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText((a.label || a.id || 'agent').slice(0, 20), a.x, a.y + 28);
+  });
+  ctx.shadowBlur = 0;
+}
+
 var _brainSSE = null;
 var _brainSSEConnected = false;
+// Issue #1596 — exponential backoff state for SSE reconnect. A single
+// retry chain (no parallel storms): `_brainSSERetryTimer` holds the
+// pending setTimeout id, `_brainSSERetryAttempt` is the current attempt
+// index (0-based; 0 = fresh failure, 5+ = banner). `_brainSSEFirstFailMs`
+// is the wall-clock of the first failure in the current outage so we can
+// surface the "Connection lost" banner after 30s of failed retries.
+var _brainSSERetryTimer = null;
+var _brainSSERetryAttempt = 0;
+var _brainSSEFirstFailMs = 0;
+// Caps: 1s, 2s, 4s, 8s, 16s, then 30s forever. Matches the issue spec.
+var _BRAIN_SSE_BACKOFF_MS = [1000, 2000, 4000, 8000, 16000];
+var _BRAIN_SSE_BACKOFF_MAX_MS = 30000;
+// Banner threshold — surface explicit UI after 30s of failed retries so
+// users on flaky networks know the feed is frozen, not just quiet.
+var _BRAIN_SSE_BANNER_THRESHOLD_MS = 30000;
 
 function _updateBrainLiveIndicator(connected) {
   _brainSSEConnected = connected;
@@ -3612,6 +4440,85 @@ function _updateBrainLiveIndicator(connected) {
   } else {
     el.innerHTML = '<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(100,100,100,0.15);color:#888;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:600;">● POLLING</span>';
   }
+}
+
+// Issue #1596 — backoff math, extracted so the unit test can exercise it
+// without a real EventSource. Returns the ms to wait before attempt
+// `attempt` (0-indexed). Caps at _BRAIN_SSE_BACKOFF_MAX_MS once the
+// table is exhausted.
+function _brainSSEBackoffMs(attempt) {
+  if (attempt < 0) attempt = 0;
+  if (attempt < _BRAIN_SSE_BACKOFF_MS.length) {
+    return _BRAIN_SSE_BACKOFF_MS[attempt];
+  }
+  return _BRAIN_SSE_BACKOFF_MAX_MS;
+}
+
+// Issue #1596 — show/hide the "Connection lost" banner above the brain
+// stream. The banner uses plain-English copy ("Reconnecting...") per
+// feedback_simple_ui_for_nontechnical.md and explicitly avoids em-dashes
+// per feedback_no_em_dashes_in_user_facing_copy.md.
+function _showBrainConnectionLostBanner() {
+  var host = document.getElementById('brain-connection-lost-banner');
+  if (!host) {
+    var streamEl = document.getElementById('brain-stream');
+    if (!streamEl || !streamEl.parentElement) return;
+    host = document.createElement('div');
+    host.id = 'brain-connection-lost-banner';
+    host.style.cssText = 'padding:10px 14px;margin-bottom:8px;font-size:13px;color:#f59e0b;border:1px solid rgba(245,158,11,0.35);border-radius:6px;background:rgba(245,158,11,0.08);display:flex;align-items:center;gap:10px;';
+    streamEl.parentElement.insertBefore(host, streamEl);
+  }
+  host.style.display = 'flex';
+  host.innerHTML =
+    '<span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;animation:livePulse 1.5s ease-in-out infinite;"></span>' +
+    '<span><strong>Connection lost.</strong> Reconnecting…</span>';
+}
+function _hideBrainConnectionLostBanner() {
+  var host = document.getElementById('brain-connection-lost-banner');
+  if (host) host.style.display = 'none';
+}
+
+// Issue #1596 — schedule the next reconnect attempt. Single-chain
+// (clears any pending timer first) so back-to-back errors never spawn
+// parallel reconnect storms. Visibility-aware: when the tab is hidden,
+// the visibility guard above closes the EventSource and we should not
+// burn cycles retrying — defer until the tab regains focus.
+function _scheduleBrainSSEReconnect() {
+  // Single-chain: cancel any pending retry before scheduling a new one.
+  if (_brainSSERetryTimer) {
+    clearTimeout(_brainSSERetryTimer);
+    _brainSSERetryTimer = null;
+  }
+  // Only retry while the user is actually on the brain page; otherwise
+  // the next loadBrainPage() call will kick off a fresh _startBrainSSE.
+  var page = document.getElementById('page-brain');
+  if (!page || !page.classList.contains('active')) return;
+  // Pause retries while the tab is hidden — the visibility guard will
+  // re-trigger _startBrainSSE on focus via loadBrainPage's call site.
+  if (typeof document !== 'undefined' && document.hidden) return;
+  // Banner threshold check: if we've been failing for >30s, show the
+  // explicit "Connection lost" banner so the user knows.
+  if (_brainSSEFirstFailMs && (Date.now() - _brainSSEFirstFailMs) >= _BRAIN_SSE_BANNER_THRESHOLD_MS) {
+    _showBrainConnectionLostBanner();
+  }
+  var delay = _brainSSEBackoffMs(_brainSSERetryAttempt);
+  _brainSSERetryAttempt += 1;
+  _brainSSERetryTimer = setTimeout(function() {
+    _brainSSERetryTimer = null;
+    _startBrainSSE();
+  }, delay);
+}
+
+// Issue #1596 — called from the 'connected' SSE event. Resets backoff
+// state and clears the banner. Idempotent.
+function _resetBrainSSEReconnectState() {
+  if (_brainSSERetryTimer) {
+    clearTimeout(_brainSSERetryTimer);
+    _brainSSERetryTimer = null;
+  }
+  _brainSSERetryAttempt = 0;
+  _brainSSEFirstFailMs = 0;
+  _hideBrainConnectionLostBanner();
 }
 
 function _startBrainSSE() {
@@ -3631,6 +4538,8 @@ function _startBrainSSE() {
 
     es.addEventListener('connected', function() {
       _updateBrainLiveIndicator(true);
+      // Issue #1596 — successful reconnect clears banner + retry state.
+      _resetBrainSSEReconnectState();
     });
 
     es.onmessage = function(e) {
@@ -3666,20 +4575,30 @@ function _startBrainSSE() {
       _updateBrainLiveIndicator(false);
       try { es.close(); } catch(e){}
       _brainSSE = null;
-      // Fall back to polling
+      // Issue #1596 — replace one-shot poll fallback with exponential
+      // backoff reconnect loop. Mark the first-fail timestamp so the
+      // banner-threshold check can surface UI after 30s of failures.
+      // Single retry chain (no parallel storms) — _scheduleBrainSSEReconnect
+      // clears any pending timer before scheduling the next attempt.
+      if (!_brainSSEFirstFailMs) _brainSSEFirstFailMs = Date.now();
+      // Belt-and-braces poll fallback so the feed at least gets one
+      // hydration even if SSE stays broken — but on TOP of the SSE
+      // retry chain, not instead of it.
       if (document.getElementById('page-brain') && document.getElementById('page-brain').classList.contains('active')) {
+        if (_brainRefreshTimer) clearTimeout(_brainRefreshTimer);
         _brainRefreshTimer = setTimeout(function() { loadBrainPage(true); }, 5000);
       }
+      _scheduleBrainSSEReconnect();
     };
 
     es.addEventListener('done', function() {
       _updateBrainLiveIndicator(false);
       try { es.close(); } catch(e){}
       _brainSSE = null;
-      // Reconnect after a short delay
-      if (document.getElementById('page-brain') && document.getElementById('page-brain').classList.contains('active')) {
-        setTimeout(_startBrainSSE, 2000);
-      }
+      // Issue #1596 — route 'done' through the same backoff chain so a
+      // server-side close behaves identically to a network error. The
+      // 'connected' handler resets backoff on the next successful open.
+      _scheduleBrainSSEReconnect();
     });
   } catch(e) {
     _updateBrainLiveIndicator(false);
@@ -3690,6 +4609,16 @@ function _stopBrainSSE() {
   if (_brainSSE) { try { _brainSSE.close(); } catch(e){} }
   _brainSSE = null;
   _updateBrainLiveIndicator(false);
+  // Issue #1596 — leaving the brain page must also tear down the retry
+  // chain + dismiss the banner; otherwise a stale timer can fire after
+  // navigation and reopen an SSE the user no longer wants.
+  if (_brainSSERetryTimer) {
+    clearTimeout(_brainSSERetryTimer);
+    _brainSSERetryTimer = null;
+  }
+  _brainSSERetryAttempt = 0;
+  _brainSSEFirstFailMs = 0;
+  _hideBrainConnectionLostBanner();
 }
 
 function _buildSourcesList(events) {
@@ -4995,7 +5924,7 @@ async function loadSessions() {
     // In cloud mode: /api/sessions and /api/subagents already handle CLOUD_MODE server-side
     // fetch interceptor appends node_id+token so these hit the cloud endpoints correctly
   }
-  var [sessData, saData, anomalyData, costData, chainData, riskBrain] = await Promise.all([
+  var [sessData, saData, anomalyData, costData, chainData, riskBrain, evalData] = await Promise.all([
     fetch('/api/sessions').then(r => r.json()).catch(function() { return {sessions:[]}; }),
     fetch('/api/subagents').then(r => r.json()).catch(function() { return {subagents:[]}; }),
     fetch('/api/usage/anomalies').then(r => r.json()).catch(function() { return {anomalies:[]}; }),
@@ -5005,8 +5934,17 @@ async function loadSessions() {
     // warning on any session whose latest LLM call tripped the band.
     // 200 events is enough to cover the active window without blowing
     // the page-load budget; the fast path serves this in <50 ms.
-    fetch('/api/brain-history?limit=200').then(r => r.json()).catch(function() { return {events:[]}; })
+    fetch('/api/brain-history?limit=200').then(r => r.json()).catch(function() { return {events:[]}; }),
+    // Issue #1619 Phase 1 — eval scores. Joined client-side onto the
+    // sessions list so the Score column doesn't require a server-side
+    // join with the in-flight #1614 outcome columns.
+    fetch('/api/evals/recent?limit=200').then(r => r.json()).catch(function() { return {evals:[]}; })
   ]);
+  // Build a session_id → eval lookup for O(1) overlay.
+  var evalMap = {};
+  ((evalData && evalData.evals) || []).forEach(function(e) {
+    if (e && e.session_id) evalMap[e.session_id] = e;
+  });
   // Build cost lookup map by session_id suffix
   var costMap = {};
   (costData.sessions || []).forEach(function(c) {
@@ -5062,6 +6000,15 @@ async function loadSessions() {
     if (s.channel !== 'unknown') html += '<span><span class="badge channel">' + s.channel + '</span></span>';
     if (sessCost && sessCost.cost_usd > 0) {
       html += '<span style="font-size:11px;color:var(--text-success);font-weight:600;">💰 $' + Number(sessCost.cost_usd||0).toFixed(4) + ' total</span>';
+    }
+    // Issue #1619 Phase 1 — Score pill. Color band matches the overview
+    // tile (4+ green, 3-4 yellow, <3 red). Hover shows the judge's reason.
+    var evalRow = evalMap[sid];
+    if (evalRow && evalRow.eval_score !== null && evalRow.eval_score !== undefined) {
+      var scoreVal = Number(evalRow.eval_score);
+      var scoreColor = scoreVal >= 4 ? '#22c55e' : scoreVal >= 3 ? '#f59e0b' : '#ef4444';
+      var reason = String(evalRow.eval_reason || '').replace(/"/g, '&quot;');
+      html += '<span title="' + reason + ' (judge: ' + escHtml(evalRow.eval_judge_model || '') + ')" style="font-size:11px;font-weight:700;color:' + scoreColor + ';padding:1px 8px;border:1px solid ' + scoreColor + ';border-radius:10px;">⭐ ' + scoreVal.toFixed(1) + '</span>';
     }
     html += '<span>Updated ' + timeAgo(s.updatedAt) + '</span>';
     html += '</div>';
@@ -6901,6 +7848,7 @@ async function loadSystemHealth() {
             return Math.floor(m/1440) + 'd ago';
           };
           var cihtml = '';
+          var silentCount = 0;
           ingest.forEach(function(row) {
             var mins = row.mins_ago;
             // Hot < 10m → green, warm < 60m → amber, stale → muted.
@@ -6908,6 +7856,8 @@ async function loadSystemHealth() {
                          : (mins != null && mins < 60) ? '#d97706'
                          : '#6b7280';
             var border = (mins != null && mins < 10) ? 'rgba(22,163,74,0.3)' : 'var(--border-secondary)';
+            // Amber (≥60m) or never → counts toward the silent-channel alert CTA (#1322)
+            if (mins == null || mins >= 60) silentCount++;
             cihtml += '<div title="total ' + row.total + ' (' + (row.msg_in||0) + ' in / ' + (row.msg_out||0) + ' out)" '
               + 'onclick="switchTab(\'flow\')" '
               + 'onmouseover="this.style.background=\'var(--bg-primary)\'" '
@@ -6919,6 +7869,16 @@ async function loadSystemHealth() {
               + '<span style="color:var(--text-muted);font-size:11px;margin-left:auto;">' + fmtMins(mins) + ' &middot; ' + row.total + ' total</span>'
               + '</div>';
           });
+          // Footer CTA at the silent-channel alert moment (#1322).
+          // Surfaces the Cloud-Pro alert pitch at the exact moment the operator
+          // sees the signal — without this they read "silent" and have no next step.
+          if (silentCount > 0) {
+            cihtml += '<div style="font-size:11px;color:#d97706;padding:6px 10px;border-radius:6px;'
+              + 'background:rgba(217,119,6,0.08);border:1px solid rgba(217,119,6,0.2);margin-top:4px;">'
+              + '&#x26A0;&#xFE0F; ' + silentCount + ' channel' + (silentCount > 1 ? 's' : '') + ' silent &gt;1h &middot; '
+              + '<a href="#" onclick="switchTab(\'alerts\');return false;" '
+              + 'style="color:#d97706;font-weight:600;text-decoration:underline;">Set up alerts &rarr;</a></div>';
+          }
           ciEl.innerHTML = cihtml;
         }
       }
@@ -8978,6 +9938,104 @@ async function loadMainActivity() {
 var logStream = null;
 var streamBuffer = [];
 var MAX_STREAM_LINES = 500;
+// Class bug drain (sibling of #1596 / PR #1610) - exponential backoff
+// state for the log SSE reconnect. Before this fix the onerror handler
+// scheduled a single startLogStream() 5s later and went silent forever
+// if that also failed. Same shape as the Brain SSE state: single retry
+// chain, banner-after-30s, visibility-aware.
+var _logSSERetryTimer = null;
+var _logSSERetryAttempt = 0;
+var _logSSEFirstFailMs = 0;
+// Caps: 1s, 2s, 4s, 8s, 16s, then 30s forever. Matches the issue spec.
+var _LOG_SSE_BACKOFF_MS = [1000, 2000, 4000, 8000, 16000];
+var _LOG_SSE_BACKOFF_MAX_MS = 30000;
+var _LOG_SSE_BANNER_THRESHOLD_MS = 30000;
+
+// Sibling of #1610 - pure backoff math, extracted so the unit test can
+// exercise it without a real EventSource.
+function _logSSEBackoffMs(attempt) {
+  if (attempt < 0) attempt = 0;
+  if (attempt < _LOG_SSE_BACKOFF_MS.length) {
+    return _LOG_SSE_BACKOFF_MS[attempt];
+  }
+  return _LOG_SSE_BACKOFF_MAX_MS;
+}
+
+// Sibling of #1610 - show/hide the "Log connection lost" banner above
+// the logs viewport. Plain-English copy per
+// feedback_no_em_dashes_in_user_facing_copy.md and
+// feedback_simple_ui_for_nontechnical.md.
+function _showLogConnectionLostBanner() {
+  var host = document.getElementById('log-connection-lost-banner');
+  if (!host) {
+    // Prefer the full logs tab host; fall back to the overview log host
+    // so a user watching either surface sees the banner.
+    var streamEl = document.getElementById('logs-full') || document.getElementById('ov-logs');
+    if (!streamEl || !streamEl.parentElement) return;
+    host = document.createElement('div');
+    host.id = 'log-connection-lost-banner';
+    host.style.cssText = 'padding:10px 14px;margin-bottom:8px;font-size:13px;color:#f59e0b;border:1px solid rgba(245,158,11,0.35);border-radius:6px;background:rgba(245,158,11,0.08);display:flex;align-items:center;gap:10px;';
+    streamEl.parentElement.insertBefore(host, streamEl);
+  }
+  host.style.display = 'flex';
+  host.innerHTML =
+    '<span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;animation:livePulse 1.5s ease-in-out infinite;"></span>' +
+    '<span><strong>Log connection lost.</strong> Reconnecting\u2026</span>';
+}
+function _hideLogConnectionLostBanner() {
+  var host = document.getElementById('log-connection-lost-banner');
+  if (host) host.style.display = 'none';
+}
+
+// Sibling of #1610 - schedule the next log SSE reconnect attempt.
+// Single-chain (clears any pending timer first) so back-to-back errors
+// never spawn parallel reconnect storms. Visibility-aware: the global
+// SSE visibility guard closes the EventSource on hidden tabs; we should
+// not burn cycles retrying until the tab regains focus.
+function _scheduleLogSSEReconnect() {
+  if (_logSSERetryTimer) {
+    clearTimeout(_logSSERetryTimer);
+    _logSSERetryTimer = null;
+  }
+  if (typeof document !== 'undefined' && document.hidden) return;
+  if (_logSSEFirstFailMs && (Date.now() - _logSSEFirstFailMs) >= _LOG_SSE_BANNER_THRESHOLD_MS) {
+    _showLogConnectionLostBanner();
+  }
+  var delay = _logSSEBackoffMs(_logSSERetryAttempt);
+  _logSSERetryAttempt += 1;
+  _logSSERetryTimer = setTimeout(function() {
+    _logSSERetryTimer = null;
+    startLogStream();
+  }, delay);
+}
+
+// Sibling of #1610 - called from the SSE onopen event. Resets backoff
+// state and clears the banner. Idempotent.
+function _resetLogSSEReconnectState() {
+  if (_logSSERetryTimer) {
+    clearTimeout(_logSSERetryTimer);
+    _logSSERetryTimer = null;
+  }
+  _logSSERetryAttempt = 0;
+  _logSSEFirstFailMs = 0;
+  _hideLogConnectionLostBanner();
+}
+
+// Sibling of #1610 - full teardown. Closes the EventSource, cancels any
+// pending retry, and hides the banner so a stale timer cannot reopen a
+// connection the user no longer wants. No location.reload() anywhere in
+// the retry path (memory: feedback_no_reload_in_bootstrap_e2e).
+function _stopLogStream() {
+  if (logStream) { try { logStream.close(); } catch(e){} }
+  logStream = null;
+  if (_logSSERetryTimer) {
+    clearTimeout(_logSSERetryTimer);
+    _logSSERetryTimer = null;
+  }
+  _logSSERetryAttempt = 0;
+  _logSSEFirstFailMs = 0;
+  _hideLogConnectionLostBanner();
+}
 
 function startLogStream() {
   if (window.CLOUD_MODE) return;
@@ -8989,6 +10047,8 @@ function startLogStream() {
   logStream.onopen = function() {
     var s = document.getElementById('log-stream-status');
     if (s) { s.textContent = '\u25cf Live'; s.style.color = '#22c55e'; }
+    // Sibling of #1610 - successful (re)open clears backoff + banner.
+    _resetLogSSEReconnectState();
   };
   logStream.onmessage = function(e) {
     var data = JSON.parse(e.data);
@@ -9002,7 +10062,11 @@ function startLogStream() {
   logStream.onerror = function() {
     var s = document.getElementById('log-stream-status');
     if (s) { s.textContent = '\u25cf Reconnecting\u2026'; s.style.color = '#f59e0b'; }
-    setTimeout(startLogStream, 5000);
+    // Sibling of #1610 - replace one-shot reconnect with exponential
+    // backoff chain so a sustained outage keeps trying, and surfaces an
+    // explicit banner after 30s instead of staying silently broken.
+    if (!_logSSEFirstFailMs) _logSSEFirstFailMs = Date.now();
+    _scheduleLogSSEReconnect();
   };
 }
 
@@ -9176,6 +10240,103 @@ function hideUnconfiguredChannels(svgRoot) {
   }).catch(function(){});
 }
 
+// Class bug drain (sibling of #1596 / PR #1610) - exponential backoff
+// state for the Flow SSE reconnect. Before this fix _flowSse.onerror
+// scheduled a single _startFlowSse() 5s later and went silent forever
+// if that also failed. Same shape as the Brain SSE state: single retry
+// chain, banner-after-30s, visibility-aware.
+var _flowSSERetryTimer = null;
+var _flowSSERetryAttempt = 0;
+var _flowSSEFirstFailMs = 0;
+// Caps: 1s, 2s, 4s, 8s, 16s, then 30s forever. Matches the issue spec.
+var _FLOW_SSE_BACKOFF_MS = [1000, 2000, 4000, 8000, 16000];
+var _FLOW_SSE_BACKOFF_MAX_MS = 30000;
+var _FLOW_SSE_BANNER_THRESHOLD_MS = 30000;
+
+// Sibling of #1610 - pure backoff math, extracted so the unit test can
+// exercise it without a real EventSource.
+function _flowSSEBackoffMs(attempt) {
+  if (attempt < 0) attempt = 0;
+  if (attempt < _FLOW_SSE_BACKOFF_MS.length) {
+    return _FLOW_SSE_BACKOFF_MS[attempt];
+  }
+  return _FLOW_SSE_BACKOFF_MAX_MS;
+}
+
+// Sibling of #1610 - show/hide the "Flow connection lost" banner above
+// the flow live pane. Plain-English copy per
+// feedback_no_em_dashes_in_user_facing_copy.md and
+// feedback_simple_ui_for_nontechnical.md.
+function _showFlowConnectionLostBanner() {
+  var host = document.getElementById('flow-connection-lost-banner');
+  if (!host) {
+    var streamEl = document.getElementById('flow-live-pane');
+    if (!streamEl || !streamEl.parentElement) return;
+    host = document.createElement('div');
+    host.id = 'flow-connection-lost-banner';
+    host.style.cssText = 'padding:10px 14px;margin-bottom:8px;font-size:13px;color:#f59e0b;border:1px solid rgba(245,158,11,0.35);border-radius:6px;background:rgba(245,158,11,0.08);display:flex;align-items:center;gap:10px;';
+    streamEl.parentElement.insertBefore(host, streamEl);
+  }
+  host.style.display = 'flex';
+  host.innerHTML =
+    '<span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;animation:livePulse 1.5s ease-in-out infinite;"></span>' +
+    '<span><strong>Flow connection lost.</strong> Reconnecting\u2026</span>';
+}
+function _hideFlowConnectionLostBanner() {
+  var host = document.getElementById('flow-connection-lost-banner');
+  if (host) host.style.display = 'none';
+}
+
+// Sibling of #1610 - schedule the next Flow SSE reconnect attempt.
+// Single-chain (clears any pending timer first) so back-to-back errors
+// never spawn parallel reconnect storms. Visibility-aware: the global
+// SSE visibility guard closes the EventSource on hidden tabs; we should
+// not burn cycles retrying until the tab regains focus.
+function _scheduleFlowSSEReconnect() {
+  if (_flowSSERetryTimer) {
+    clearTimeout(_flowSSERetryTimer);
+    _flowSSERetryTimer = null;
+  }
+  if (typeof document !== 'undefined' && document.hidden) return;
+  if (_flowSSEFirstFailMs && (Date.now() - _flowSSEFirstFailMs) >= _FLOW_SSE_BANNER_THRESHOLD_MS) {
+    _showFlowConnectionLostBanner();
+  }
+  var delay = _flowSSEBackoffMs(_flowSSERetryAttempt);
+  _flowSSERetryAttempt += 1;
+  _flowSSERetryTimer = setTimeout(function() {
+    _flowSSERetryTimer = null;
+    _startFlowSse();
+  }, delay);
+}
+
+// Sibling of #1610 - called from the SSE onopen event. Resets backoff
+// state and clears the banner. Idempotent.
+function _resetFlowSSEReconnectState() {
+  if (_flowSSERetryTimer) {
+    clearTimeout(_flowSSERetryTimer);
+    _flowSSERetryTimer = null;
+  }
+  _flowSSERetryAttempt = 0;
+  _flowSSEFirstFailMs = 0;
+  _hideFlowConnectionLostBanner();
+}
+
+// Sibling of #1610 - full teardown. Closes the EventSource, cancels any
+// pending retry, and hides the banner so a stale timer cannot reopen a
+// connection the user no longer wants. No location.reload() anywhere in
+// the retry path (memory: feedback_no_reload_in_bootstrap_e2e).
+function _stopFlowSse() {
+  if (_flowSse) { try { _flowSse.close(); } catch(e){} }
+  _flowSse = null;
+  if (_flowSSERetryTimer) {
+    clearTimeout(_flowSSERetryTimer);
+    _flowSSERetryTimer = null;
+  }
+  _flowSSERetryAttempt = 0;
+  _flowSSEFirstFailMs = 0;
+  _hideFlowConnectionLostBanner();
+}
+
 var _flowSse = null;
 var _flowSseDebounce = {};
 function _startFlowSse() {
@@ -9183,6 +10344,10 @@ function _startFlowSse() {
   if (_flowSse && _flowSse.readyState !== EventSource.CLOSED) return;
   var _fTok = localStorage.getItem('clawmetry-token') || '';
   _flowSse = new EventSource('/api/flow-events' + (_fTok ? '?token=' + encodeURIComponent(_fTok) : ''));
+  _flowSse.onopen = function() {
+    // Sibling of #1610 - successful (re)open clears backoff + banner.
+    _resetFlowSSEReconnectState();
+  };
   _flowSse.onmessage = function(e) {
     try {
       var evt = JSON.parse(e.data);
@@ -9220,7 +10385,13 @@ function _startFlowSse() {
       }
     } catch(e2) {}
   };
-  _flowSse.onerror = function() { setTimeout(_startFlowSse, 5000); };
+  _flowSse.onerror = function() {
+    // Sibling of #1610 - replace one-shot reconnect with exponential
+    // backoff chain so a sustained outage keeps trying, and surfaces an
+    // explicit banner after 30s instead of staying silently broken.
+    if (!_flowSSEFirstFailMs) _flowSSEFirstFailMs = Date.now();
+    _scheduleFlowSSEReconnect();
+  };
 }
 
 // ── Flow sub-tabs (Live | Runs) — issue #611 ────────────────────────────

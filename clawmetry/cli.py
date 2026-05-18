@@ -2138,6 +2138,163 @@ def _format_uptime(seconds):
     return f"{seconds / 86400:.1f}d"
 
 
+def _cmd_eval(args) -> None:
+    """Run a golden eval suite (Phase 2 evals, refs #1619).
+
+    Exit code is 0 on all-pass, 1 on any-fail. The CI integration template
+    relies on that — see docs/EVALS_CI_INTEGRATION.md.
+    """
+    import json as _json
+    from clawmetry import eval_suite_runner as esr
+
+    # Phase 3 — regression replay path. Mutually exclusive with --suite
+    # (the two flows produce different table shapes; mixing them in one
+    # invocation only confuses CI logs).
+    if getattr(args, "regression", False):
+        _cmd_eval_regression(args)
+        return
+
+    if getattr(args, "list_suites", False):
+        suites = esr.list_suites()
+        if not suites:
+            print(
+                f"No suites found in {esr.SUITES_DIR}.\n"
+                f"Create one (see docs/EVALS_CI_INTEGRATION.md) and try again."
+            )
+            sys.exit(0)
+        print("Available suites:")
+        for s in suites:
+            print(f"  {s}")
+        sys.exit(0)
+
+    suite_arg = getattr(args, "suite", None)
+    if not suite_arg:
+        print(
+            "Error: --suite is required (or pass --list to see what's available).",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    # Watch mode wraps the same single-shot pipeline; --json is honoured
+    # on every iteration so the dev loop can be piped into jq.
+    def _print_result(run):
+        if getattr(args, "as_json", False):
+            print(_json.dumps({
+                "suite":   run.suite_name,
+                "ran_at":  run.ran_at,
+                "sha":     run.sha,
+                "passed":  run.passed,
+                "failed":  run.failed,
+                "exit":    run.exit_code,
+                "results": [r.to_dict() for r in run.results],
+            }, indent=2))
+        else:
+            print(esr.format_table(run))
+
+    persist = not getattr(args, "no_persist", False)
+
+    if getattr(args, "watch", False):
+        try:
+            esr.watch_suite(
+                suite_arg,
+                on_run=_print_result,
+                persist=persist,
+            )
+        except KeyboardInterrupt:
+            print("\nWatch stopped.")
+            sys.exit(0)
+        return
+
+    try:
+        suite = esr.load_suite(suite_arg)
+    except (FileNotFoundError, ValueError) as e:
+        # Keep error one-line and readable (per feedback_simple_ui_for_nontechnical).
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(2)
+    run = esr.run_suite(suite, persist=persist)
+    _print_result(run)
+    sys.exit(run.exit_code)
+
+
+def _cmd_eval_regression(args) -> None:
+    """Phase 3 evals — replay last week's failed sessions against current
+    config. MANUAL invocation only: every replay costs API tokens, so the
+    runner enforces a hard ceiling (CLAWMETRY_EVALS_REGRESSION_MAX or the
+    --limit flag, defaulting to 10).
+
+    Exit code mirrors the eval-suite convention:
+        0 → ran cleanly (any mix of improved/same is fine)
+        1 → at least one regressed/errored row (signal worth investigating)
+    """
+    import json as _json
+    from clawmetry import eval_regression_replay as err
+
+    # Parse --window into days. Reuse the tiny human-readable parser style
+    # from routes/evals.py so flags + URL params behave the same.
+    raw = (getattr(args, "window", None) or "7d").strip().lower()
+    try:
+        if raw.endswith("d"):
+            window_days = int(float(raw[:-1]))
+        elif raw.endswith("h"):
+            window_days = max(1, int(float(raw[:-1]) // 24))
+        else:
+            window_days = int(float(raw))
+    except (TypeError, ValueError):
+        window_days = 7
+    window_days = max(1, min(90, window_days))
+
+    limit = getattr(args, "limit", None)
+    if limit is None:
+        limit = err.DEFAULT_REPLAY_BUDGET
+    limit = max(1, int(limit))
+
+    if not err.is_enabled():
+        print(
+            "Regression replay is disabled "
+            "(CLAWMETRY_EVALS_REGRESSION_ENABLED=0).",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    print(
+        f"Replaying up to {limit} failed session(s) from the last "
+        f"{window_days}d... (manual cost-guarded run)",
+        flush=True,
+    )
+    run = err.run_regression(window_days=window_days, limit=limit)
+
+    if getattr(args, "as_json", False):
+        print(_json.dumps({
+            "ran_at":       run.ran_at,
+            "window_days":  run.window_days,
+            "tested":       run.tested,
+            "improved":     run.improved,
+            "regressed":    run.regressed,
+            "same":         run.same,
+            "errored":      run.errored,
+            "results":      [r.to_dict() for r in run.results],
+        }, indent=2))
+    else:
+        if not run.results:
+            print("No failed sessions in the window. Nothing to replay.")
+        else:
+            for r in run.results:
+                old_s = "-" if r.original_score is None else f"{r.original_score:.1f}"
+                new_s = "-" if r.new_score is None else f"{r.new_score:.1f}"
+                print(
+                    f"  {r.status.upper():<10} {r.session_id[:24]:<24} "
+                    f"{old_s} -> {new_s}  {r.reason[:60]}"
+                )
+            print()
+            print(
+                f"{run.improved} improved, {run.regressed} regressed, "
+                f"{run.same} same, {run.errored} errored "
+                f"({run.tested} tested over last {window_days}d)"
+            )
+    exit_code = 1 if (run.regressed > 0 or run.errored > 0) else 0
+    sys.exit(exit_code)
+
+
 def _cmd_update() -> None:
     """Self-update clawmetry to the latest PyPI version."""
     import subprocess
@@ -2415,6 +2572,68 @@ def main() -> None:
         "--loop-detection", choices=["on", "off"], help="Toggle loop detection"
     )
 
+    # eval — run a golden test suite (Phase 2 evals, refs #1619)
+    p_eval = sub.add_parser(
+        "eval",
+        help="Run a golden eval suite (YAML in ~/.clawmetry/evals/)",
+    )
+    p_eval.add_argument(
+        "--suite",
+        metavar="NAME_OR_PATH",
+        help="Suite name (e.g. customer_support) or absolute path to a YAML file",
+    )
+    p_eval.add_argument(
+        "--list",
+        action="store_true",
+        dest="list_suites",
+        help="List available suites and exit",
+    )
+    p_eval.add_argument(
+        "--watch",
+        action="store_true",
+        help="Re-run on every change to the suite file (dev loop)",
+    )
+    p_eval.add_argument(
+        "--no-persist",
+        action="store_true",
+        dest="no_persist",
+        help="Do not write results to DuckDB (useful for dry runs)",
+    )
+    p_eval.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit machine-readable JSON instead of the table",
+    )
+    # Phase 3 (refs #1619) — regression replay of last week's failed sessions.
+    # MANUAL invocation only by design (no cron): replay costs API tokens, so
+    # the user opts in every time. ``--regression`` is mutually-exclusive with
+    # ``--suite`` at the handler level.
+    p_eval.add_argument(
+        "--regression",
+        action="store_true",
+        dest="regression",
+        help=(
+            "Replay last week's failed sessions against the current "
+            "config (manual cost-guarded; see --window / --limit)"
+        ),
+    )
+    p_eval.add_argument(
+        "--window",
+        metavar="DURATION",
+        default="7d",
+        help="Lookback window for --regression (e.g. 7d, 14d; default 7d)",
+    )
+    p_eval.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help=(
+            "Hard ceiling on replays per --regression invocation "
+            "(default: CLAWMETRY_EVALS_REGRESSION_MAX or 10)"
+        ),
+    )
+
     # update — self-update to latest PyPI version
     sub.add_parser("update", help="Update clawmetry to the latest version")
 
@@ -2433,6 +2652,7 @@ def main() -> None:
         "sync",
         "status",
         "proxy",
+        "eval",
         "update",
         "uninstall",
         "nemoclaw-daemons",
@@ -2457,6 +2677,8 @@ def main() -> None:
             _cmd_status(args)
         elif args.cmd == "proxy":
             _cmd_proxy(args)
+        elif args.cmd == "eval":
+            _cmd_eval(args)
         elif args.cmd == "update":
             _cmd_update()
         elif args.cmd == "uninstall":

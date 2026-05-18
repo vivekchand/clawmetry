@@ -30,11 +30,16 @@ Flask app, not a Blueprint, so it stays in ``dashboard.py``.
 Pure mechanical move — zero behaviour change.
 """
 
+import collections
+import hashlib
 import html
 import json
+import logging
 import os
 import sys
+import threading
 import time
+import uuid
 from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, make_response, render_template_string, request
@@ -46,6 +51,7 @@ bp_auth = Blueprint('auth', __name__)
 bp_otel = Blueprint('otel', __name__)
 bp_version_impact = Blueprint('version_impact', __name__)
 bp_clusters = Blueprint('clusters', __name__)
+bp_cloud_relay = Blueprint('cloud_relay', __name__)
 
 
 # ── Version check & self-update routes ────────────────────────────────────────
@@ -644,11 +650,24 @@ def index():
     # same env var the v2 blueprint registration in dashboard.py uses, so we
     # never advertise /v2 to users who'd hit a 404.
     v2_enabled = os.environ.get("CLAWMETRY_V2") == "1"
+    # Issue #1603: server-side Pro-tier gate. Tab templates branch on this
+    # so the Pro-feature DOM (NemoClaw governance shell, alerts rule editor
+    # modal) never enters the page for Free users. Eliminates the first-paint
+    # flash where the full Pro UI rendered, then a client-side overlay slammed
+    # down on top — a frame-perfect click could bypass the gate, and Free
+    # users could screenshot the Pro UI source. Fail-closed: any error in
+    # ``_is_pro_user`` returns False, which matches the conservative default
+    # the helper itself uses.
+    try:
+        is_pro = bool(_d._is_pro_user())
+    except Exception:
+        is_pro = False
     resp = make_response(
         render_template_string(
             _d.DASHBOARD_HTML,
             version=_d.__version__,
             v2_enabled=v2_enabled,
+            is_pro=is_pro,
         )
     )
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
@@ -1068,3 +1087,176 @@ def api_clusters():
         )
     except Exception as e:
         return jsonify({"error": str(e), "clusters": []}), 500
+
+
+# ── Heartbeat-piggyback subscribe queue (issue #1595) ────────────────────────
+# The cloud-relay path queues query-shape requests against a per-(owner, node)
+# list that the daemon drains during its next /ingest/heartbeat. With no upper
+# bound, a refresh-happy viewer (5 panels x 12 polls/min x 10 min open) can
+# stuff 500+ stale entries into the queue, starving the freshest subscribes
+# behind dead work. The fix:
+#
+#   * Cap each (owner, node) queue at QUEUE_MAX_LEN (env-overridable).
+#   * On overflow: drop the OLDEST entry (FIFO eviction). Recent subscribes
+#     are more likely to reflect current viewer intent — dropping the
+#     newest would punish the active tab.
+#   * Emit a ``subscribe_queue_overflow`` metric (counter + sample dropped
+#     key) so cloud can alert on stuck viewers.
+#   * Surface ``queue_len`` in the subscribe response so clients can
+#     back off when the queue starts to fill (signal to the polling JS to
+#     slow its auto-refresh until the daemon catches up).
+#
+# The real cloud-side implementation lives in ``clawmetry-cloud``; this OSS
+# copy is the canonical reference + smoke target so we can drift-test the
+# contract from this repo's CI without spinning up the cloud Flask app.
+
+# Per-(owner, node) ring buffer cap. 100 covers a generous 5-panel
+# dashboard burst at the default 60 s drain cadence; lower it in tests
+# via the env var to exercise the overflow path without enqueueing 100
+# entries.
+QUEUE_MAX_LEN = max(1, int(os.environ.get("CLAWMETRY_SUBSCRIBE_QUEUE_MAX", "100")))
+
+# Allowlist mirrors the cloud-side gatekeeper + routes/local_query._SHAPES.
+# Keep these in sync — drift is caught by tests/test_heartbeat_relay_e2e.py.
+_SUBSCRIBE_ALLOWED_SHAPES = frozenset({
+    "events", "sessions", "aggregates", "health", "transcript",
+})
+
+# Module state. The lock is held across the small critical section that
+# coalesces dupes + appends + computes queue_len so two concurrent subscribes
+# can't race past the cap.
+_subscribe_queues: dict = {}            # (owner, node) -> deque[query dict]
+_subscribe_memo: dict = {}              # (owner, node, args_hash) -> cache_key
+_subscribe_lock = threading.Lock()
+
+# Overflow metric. ``count`` ticks once per dropped entry; ``last_dropped``
+# keeps a sample so an operator can see *which* key starved (owner/node/shape
+# + the args_hash that was evicted). Cleared by tests via _reset_subscribe_state.
+subscribe_queue_overflow = {
+    "count": 0,
+    "last_dropped": None,  # {"owner", "node", "shape", "args_hash", "ts"}
+}
+
+_log = logging.getLogger(__name__)
+
+
+def _hash_subscribe_args(shape: str, args: dict) -> str:
+    """Deterministic short hash so identical (shape, args) collapse to one
+    cache_key — matches the cloud-side hashing in
+    ``tests/test_heartbeat_relay_e2e.py:_hash_args``."""
+    payload = json.dumps({"shape": shape, "args": args or {}}, sort_keys=True)
+    return hashlib.sha256(payload.encode()).hexdigest()[:32]
+
+
+def _reset_subscribe_state() -> None:
+    """Test-only helper. Clear queues + memo + overflow metric so each
+    test starts from a clean module state."""
+    with _subscribe_lock:
+        _subscribe_queues.clear()
+        _subscribe_memo.clear()
+        subscribe_queue_overflow["count"] = 0
+        subscribe_queue_overflow["last_dropped"] = None
+
+
+@bp_cloud_relay.route("/api/cloud/subscribe", methods=["POST"])
+def api_cloud_subscribe():
+    """Enqueue a (shape, args) cache_key for the next daemon heartbeat drain.
+
+    Response shape:
+      { cache_key, query_id, status: "queued"|"cache_hit"|"rejected",
+        eta_sec, queue_len }
+
+    ``queue_len`` is the post-append depth of THIS subscribe's
+    (owner, node) queue — the dashboard JS should treat anything
+    >= QUEUE_MAX_LEN * 0.8 as a backpressure signal and slow its
+    auto-refresh until the next drain catches up.
+
+    On overflow the oldest queued entry is dropped (FIFO eviction) and
+    the ``subscribe_queue_overflow`` counter ticks. The newly enqueued
+    subscribe is always accepted — recent intent wins.
+    """
+    body = request.get_json(silent=True) or {}
+    owner = (body.get("owner") or "default").strip() or "default"
+    node_id = (body.get("node_id") or "").strip()
+    shape = body.get("shape")
+    args = body.get("args") or {}
+
+    if not node_id:
+        return jsonify({"error": "node_id required"}), 400
+    if shape not in _SUBSCRIBE_ALLOWED_SHAPES:
+        return jsonify({
+            "error": f"unknown shape: {shape!r}",
+            "allowed_shapes": sorted(_SUBSCRIBE_ALLOWED_SHAPES),
+            "status": "rejected",
+        }), 400
+
+    args_hash = _hash_subscribe_args(shape, args)
+    queue_key = (owner, node_id)
+    memo_key = (owner, node_id, args_hash)
+
+    with _subscribe_lock:
+        # Coalesce: if this exact (owner, node, shape, args) is already
+        # queued, return the same cache_key instead of stacking dupes.
+        existing = _subscribe_memo.get(memo_key)
+        if existing is not None:
+            depth = len(_subscribe_queues.get(queue_key, ()))
+            return jsonify({
+                "cache_key": existing,
+                "query_id": existing,
+                "status": "queued",
+                "eta_sec": 60,
+                "queue_len": depth,
+            })
+
+        cache_key = f"ck_{uuid.uuid4().hex[:24]}"
+        entry = {
+            "id": cache_key,
+            "cache_key": cache_key,
+            "shape": shape,
+            "args": args,
+            "args_hash": args_hash,
+            "enqueued_at": time.time(),
+        }
+
+        q = _subscribe_queues.get(queue_key)
+        if q is None:
+            q = collections.deque(maxlen=QUEUE_MAX_LEN)
+            _subscribe_queues[queue_key] = q
+
+        # Drop-oldest FIFO: if we're at cap, evict head BEFORE appending so
+        # we can capture the dropped entry for the overflow metric. (deque
+        # with maxlen would silently drop on append; doing it explicitly
+        # lets us emit the metric.)
+        if len(q) >= q.maxlen:
+            dropped = q.popleft()
+            # Forget the memo so a re-subscribe for the dropped shape is
+            # accepted rather than coalesced onto a key the daemon will
+            # never see.
+            _subscribe_memo.pop(
+                (owner, node_id, dropped.get("args_hash", "")), None
+            )
+            subscribe_queue_overflow["count"] += 1
+            subscribe_queue_overflow["last_dropped"] = {
+                "owner": owner,
+                "node": node_id,
+                "shape": dropped.get("shape"),
+                "args_hash": dropped.get("args_hash"),
+                "ts": time.time(),
+            }
+            _log.warning(
+                "subscribe_queue_overflow owner=%s node=%s dropped_shape=%s "
+                "queue_cap=%d", owner, node_id,
+                dropped.get("shape"), q.maxlen,
+            )
+
+        q.append(entry)
+        _subscribe_memo[memo_key] = cache_key
+        depth = len(q)
+
+    return jsonify({
+        "cache_key": cache_key,
+        "query_id": cache_key,
+        "status": "queued",
+        "eta_sec": 60,
+        "queue_len": depth,
+    })

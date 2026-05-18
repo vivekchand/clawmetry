@@ -26,6 +26,7 @@ import csv
 from datetime import timezone
 from flask import Blueprint, jsonify, request, Response
 from clawmetry.config import is_local_store_read_enabled
+from routes._dedupe import build_sibling_bucket_max, is_sibling_dup
 
 bp_sessions = Blueprint('sessions', __name__)
 
@@ -705,8 +706,21 @@ def _try_local_store_session_tools(sid: str, args_chars: int, result_chars: int,
     the same timeline shape the JSONL parser returns.
 
     Issue #1088 phase 3. Returns ``None`` to defer to the JSONL parser
-    when the events table has no message rows for this session."""
-    rows = _ls_call("query_events", session_id=sid, limit=10000)
+    when the events table has no message rows for this session.
+
+    Issue #1597: ALSO unions in events from any sub-agent session whose
+    ``subagents.parent_session_id`` matches ``sid`` — without this a
+    parent that delegated tool calls to a child rendered ``tool_calls=0``.
+    Sub-agent events are tagged with ``data._via_subagent_id`` upstream
+    so the resulting ``tools[]`` rows carry the same marker for the UI.
+    """
+    rows = _ls_call("query_events_with_subagents", session_id=sid, limit=10000)
+    # Pre-1597 daemons (older wheel running, fresh dashboard) won't have the
+    # helper allowlisted yet — fall back to the parent-only query so the
+    # endpoint still works during a staged rollout. The rollup will simply
+    # under-report sub-agent activity until the daemon is restarted.
+    if rows is None:
+        rows = _ls_call("query_events", session_id=sid, limit=10000)
     if not rows:
         return None
     rows = list(reversed(rows))  # query_events returns DESC
@@ -749,6 +763,10 @@ def _try_local_store_session_tools(sid: str, args_chars: int, result_chars: int,
     for ev in rows:
         et = ev.get("event_type")
         data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+        # Issue #1597: events sourced from a child sub-agent session are
+        # tagged by ``LocalStore.query_events_with_subagents`` so the
+        # rollup can attribute them in the UI ("via sub-agent X").
+        via_subagent_id = data.get("_via_subagent_id") if isinstance(data, dict) else None
         ev_ts_ms = _parse_ts(
             (data.get("timestamp") if isinstance(data, dict) else None)
             or ev.get("ts")
@@ -792,6 +810,7 @@ def _try_local_store_session_tools(sid: str, args_chars: int, result_chars: int,
                 "model":            ev.get("model") or "",
                 "provider":         (data.get("provider") if isinstance(data, dict) else "") or "",
                 "message_cost_usd": float(ev.get("cost_usd") or 0.0),
+                "via_subagent_id":  via_subagent_id or "",
             }
             if result_val is not None or is_error:
                 try:
@@ -876,6 +895,7 @@ def _try_local_store_session_tools(sid: str, args_chars: int, result_chars: int,
                     "model":            msg_model,
                     "provider":         msg_provider,
                     "message_cost_usd": msg_cost,
+                    "via_subagent_id":  via_subagent_id or "",
                 }
             continue
 
@@ -911,6 +931,7 @@ def _try_local_store_session_tools(sid: str, args_chars: int, result_chars: int,
                     "model":            msg_model,
                     "provider":         msg_provider,
                     "message_cost_usd": msg_cost,
+                    "via_subagent_id":  via_subagent_id or "",
                 }
         elif role == "toolResult":
             tcid = msg.get("toolCallId", "")
@@ -1164,12 +1185,32 @@ def _try_local_store_cost_split(wanted_sid: str, limit: int):
     walker returns.
 
     Issue #1088 phase 3. Returns ``None`` when the events table has no
-    message rows so the route falls through to the JSONL walker."""
-    rows = _ls_call(
-        "query_cost_split",
-        session_id=wanted_sid or None,
-        limit=limit,
-    )
+    message rows so the route falls through to the JSONL walker.
+
+    Issue #1597 class drain: when scoped to a single session
+    (``wanted_sid``), uses the sub-agent-rollup variant so a parent that
+    delegated cost to a Task-tool child still attributes that cost back.
+    Top-N mode (no ``wanted_sid``) keeps the flat per-session listing —
+    rollup is only meaningful when the caller has a target parent.
+    """
+    if wanted_sid:
+        rows = _ls_call(
+            "query_cost_split_with_subagents",
+            session_id=wanted_sid,
+            limit=limit,
+        )
+        if rows is None:
+            rows = _ls_call(
+                "query_cost_split",
+                session_id=wanted_sid,
+                limit=limit,
+            )
+    else:
+        rows = _ls_call(
+            "query_cost_split",
+            session_id=None,
+            limit=limit,
+        )
     if not rows:
         return None
     # Compute totals (mirrors the legacy path's aggregation).
@@ -3146,8 +3187,15 @@ def _try_local_store_transcript_events(session_id: str):
     Issue #1088: routes through the daemon HTTP proxy first, with the standard
     direct-open fallback inside ``_ls_call``. Returns ``None`` to defer to the
     JSONL parser when the events table has no rows for this session.
+
+    Issue #1597 class drain: UNIONs sub-agent events so the transcript modal
+    on a parent session shows every model/tool turn the parent delegated to a
+    Task-tool child. Falls back to the parent-only query when the daemon
+    predates the helper (staged rollout).
     """
-    rows = _ls_call("query_events", session_id=session_id, limit=10000)
+    rows = _ls_call("query_events_with_subagents", session_id=session_id, limit=10000)
+    if rows is None:
+        rows = _ls_call("query_events", session_id=session_id, limit=10000)
     if not rows:
         return None
     rows = list(reversed(rows))  # query_events is DESC; the modal reads forward.
@@ -3298,7 +3346,7 @@ def api_transcript_events(session_id):
                     })
                     continue
 
-                if obj_type == "message":
+                if obj_type == "message":  # v3-shape-gate: allow (reason: JSONL on-disk walker — api_transcript_events iterates per-line obj from .jsonl)
                     msg = obj.get("message", {})
                     role = msg.get("role", "")
                     content = msg.get("content", "")
@@ -3444,12 +3492,24 @@ def _try_local_store_session_model_journey(session_id: str):
     the same ``segments`` shape the JSONL walker produces.
 
     Issue #1088 phase 3. Returns ``None`` when the events table has no
-    matching rows so the route falls through to the JSONL walker."""
+    matching rows so the route falls through to the JSONL walker.
+
+    Issue #1597 class drain: uses the sub-agent-rollup variant so a parent
+    that delegated to a Task-tool child with a different model (e.g. Opus
+    parent → Haiku worker) shows the full model journey instead of just
+    the parent's initial line. Falls back to parent-only on older daemons.
+    """
     rows = _ls_call(
-        "query_session_model_journey",
+        "query_session_model_journey_with_subagents",
         session_id=session_id,
         limit=5000,
     )
+    if rows is None:
+        rows = _ls_call(
+            "query_session_model_journey",
+            session_id=session_id,
+            limit=5000,
+        )
     if not rows:
         return None
 
@@ -3657,7 +3717,7 @@ def api_session_model_journey(session_id):
                     })
                     continue
 
-                if etype == "message":
+                if etype == "message":  # v3-shape-gate: allow (reason: JSONL on-disk walker — api_session_model_journey fallback iterates per-line obj from .jsonl)
                     msg = ev.get("message", {}) or {}
                     if not isinstance(msg, dict):
                         continue
@@ -3735,8 +3795,14 @@ def _try_local_store_session_cost_breakdown(session_id: str):
       - no events exist for this session_id (fresh sync, etc.)
       - data blobs aren't shaped like assistant messages
       - any unexpected error happens
+
+    Issue #1597 class drain: UNIONs sub-agent events so the per-turn cost
+    breakdown attributes Task-tool sub-agent turns back to the parent.
+    Falls back to the parent-only query on older daemons.
     """
-    evs = _ls_call("query_events", session_id=session_id, limit=5000)
+    evs = _ls_call("query_events_with_subagents", session_id=session_id, limit=5000)
+    if evs is None:
+        evs = _ls_call("query_events", session_id=session_id, limit=5000)
     if not evs:
         return None
     # Walk events oldest-first so turn_index is meaningful.
@@ -3983,13 +4049,63 @@ def _try_local_store_session_export(session_id: str):
 
     Reads events from DuckDB and re-projects them into the same export shape
     the JSONL parser produces. Issue #1088 — uses ``_ls_call`` so the daemon
-    HTTP proxy fires under the standard install. Returns ``None`` to defer to
-    the JSONL parser when the events table has no rows for this session.
+    HTTP proxy fires under the standard install.
+
+    v3-silent-zero fix (issue #1588): the legacy version filtered on
+    ``ev_type == 'message'`` which silently matched ZERO rows on every real
+    OpenClaw v3 install (daemon writes ``assistant`` / ``model.completed`` /
+    ``prompt.submitted`` / ``tool.call`` / ``tool.result``). Endpoint
+    returned an empty ``messages`` array and the JSONL fallback never fired.
+    Same family as PR #1583 (token-attribution). This version:
+
+    * Filters on the union of pre-v3 ('message') AND v3 names so both
+      shapes hydrate the export.
+    * Dedupes the v3 sibling pair (``assistant`` + slim ``model.completed``
+      ~100 ms apart) via ``build_sibling_bucket_max`` so we don't emit the
+      same turn twice.
+    * Falls back to the daemon-stamped ``token_count`` / ``cost_usd``
+      scalar columns when a standalone ``model.completed`` row has no rich
+      sibling — defends against the Eng G "replace aggregate with deduped
+      subset" failure mode.
+    * Returns ``None`` (not an empty-messages dict) when no attributable
+      rows survived, so the JSONL parser fallback fires.
+
+    Issue #1597 class drain: the export now UNIONs sub-agent events so
+    downstream re-import / audit pipelines see the full delegated work, not
+    just the parent's direct turns. Falls back to parent-only on older
+    daemons (pre-#1611 wheel).
     """
-    rows = _ls_call("query_events", session_id=session_id, limit=10000)
+    rows = _ls_call("query_events_with_subagents", session_id=session_id, limit=10000)
+    if rows is None:
+        rows = _ls_call("query_events", session_id=session_id, limit=10000)
     if not rows:
         return None
     rows = list(reversed(rows))  # query_events is DESC; export reads forward.
+
+    # Sibling-pair dedupe (issue #1451 family). Build the bucket map BEFORE
+    # the projection loop so we can skip slim ``model.completed`` rows that
+    # have a richer ``assistant`` / ``message`` sibling in the same
+    # (sid, sec±1) window.
+    bucket_max = build_sibling_bucket_max(rows)
+
+    # Event-type → role mapping for v3 + legacy shapes. Tool-result rows
+    # don't carry a "role" in the chat sense — they're attributed under
+    # ``tool_calls`` rather than ``messages``.
+    _MSG_EVENT_TYPES = {
+        "message",          # pre-v3 synthetic
+        "assistant",        # v3 rich envelope
+        "model.completed",  # v3 slim sibling (only used when standalone)
+        "prompt.submitted", # v3 user-turn
+        "user",             # legacy / v3 fallback
+    }
+    _ROLE_BY_EVENT = {
+        "message":          None,           # use msg.role from envelope
+        "assistant":        "assistant",
+        "model.completed":  "assistant",
+        "prompt.submitted": "user",
+        "user":             "user",
+    }
+
     out = {
         "session_id": session_id,
         "exported_at": datetime.now(timezone.utc).isoformat(),
@@ -4021,15 +4137,30 @@ def _try_local_store_session_export(session_id: str):
                 ts_ms = int(datetime.fromisoformat(str(ts_str).replace("Z", "+00:00")).timestamp() * 1000)
             except Exception:
                 ts_ms = None
-        if ev_type == "model_change":
-            if data.get("modelId"):
-                model = data.get("modelId")
+        if ev_type == "model_change" or ev_type == "model.changed":
+            mid = data.get("modelId") or data.get("model")
+            if mid:
+                model = mid
                 out["metadata"]["model"] = model
-        elif ev_type == "message":
+        elif ev_type in _MSG_EVENT_TYPES:
+            # Skip the slim sibling when a richer envelope already covers
+            # this (sid, sec±1) bucket. Otherwise the same billable turn
+            # would emit two ``messages[]`` entries.
+            if is_sibling_dup(ev, bucket_max):
+                if ts_ms:
+                    if start_time is None or ts_ms < start_time:
+                        start_time = ts_ms
+                    if end_time is None or ts_ms > end_time:
+                        end_time = ts_ms
+                continue
+
             msg = data.get("message") if isinstance(data.get("message"), dict) else {}
-            role = msg.get("role", "")
             content = msg.get("content", [])
             usage = msg.get("usage") or {}
+            # Role: prefer the explicit envelope role; fall back to the
+            # event-type inference so v3 ``prompt.submitted`` rows still
+            # render as ``user`` even when the envelope is bare.
+            role = msg.get("role", "") or _ROLE_BY_EVENT.get(ev_type) or ""
             text_parts: list[str] = []
             tool_calls_in_msg: list[dict] = []
             if isinstance(content, list):
@@ -4049,31 +4180,59 @@ def _try_local_store_session_export(session_id: str):
                         })
             elif isinstance(content, str):
                 text_parts.append(content)
+            # v3 ``prompt.submitted`` carries the user text in
+            # ``data.finalPromptText`` (per reference_openclaw_v3_event_types.md),
+            # not in a chat envelope. Surface it so the export isn't
+            # silently empty for prompt rows.
+            if not text_parts and isinstance(data, dict):
+                fpt = data.get("finalPromptText") or data.get("promptText")
+                if isinstance(fpt, str) and fpt:
+                    text_parts.append(fpt)
             msg_entry = {
                 "timestamp": ts_str if isinstance(ts_str, str) else None,
                 "role": role,
                 "content": "\n".join(text_parts) if text_parts else None,
                 "model": msg.get("model") or model,
             }
+            in_t = out_t = cr_t = cw_t = 0
+            cost_total = 0.0
             if isinstance(usage, dict) and usage:
-                in_t = int(usage.get("input", 0) or 0)
-                out_t = int(usage.get("output", 0) or 0)
-                cr_t = int(usage.get("cacheRead", 0) or 0)
-                cw_t = int(usage.get("cacheWrite", 0) or 0)
+                in_t = int(usage.get("input", 0) or usage.get("input_tokens", 0) or 0)
+                out_t = int(usage.get("output", 0) or usage.get("output_tokens", 0) or 0)
+                cr_t = int(usage.get("cacheRead", 0) or usage.get("cache_read_input_tokens", 0) or 0)
+                cw_t = int(usage.get("cacheWrite", 0) or usage.get("cache_creation_input_tokens", 0) or 0)
+                cost_obj = usage.get("cost") or {}
+                if isinstance(cost_obj, dict):
+                    cost_total = float(cost_obj.get("total", 0) or 0)
+            # Scalar-column fallback (defends against Eng G's
+            # "blind-replace-aggregate-with-deduped-subset" failure mode):
+            # if the data blob carried no usage splits, attribute the
+            # daemon-stamped scalar columns so a standalone
+            # ``model.completed`` row still shows up in the export.
+            if in_t + out_t + cr_t + cw_t == 0:
+                col_tok = int(ev.get("token_count") or 0)
+                if col_tok > 0:
+                    in_t = col_tok
+            if cost_total <= 0:
+                try:
+                    col_cost = float(ev.get("cost_usd") or 0.0)
+                except (TypeError, ValueError):
+                    col_cost = 0.0
+                if col_cost > 0:
+                    cost_total = col_cost
+            if in_t + out_t + cr_t + cw_t > 0 or cost_total > 0:
                 msg_entry["tokens"] = {
                     "input": in_t, "output": out_t,
                     "cache_read": cr_t, "cache_write": cw_t,
-                    "total": usage.get("totalTokens", in_t + out_t),
+                    "total": in_t + out_t + cr_t + cw_t,
                 }
-                cost_obj = usage.get("cost") or {}
-                if isinstance(cost_obj, dict):
-                    msg_entry["cost_usd"] = cost_obj.get("total", 0.0)
-                    out["cost_data"]["total_cost_usd"] += float(cost_obj.get("total", 0) or 0)
-                    out["cost_data"]["input_tokens"] += in_t
-                    out["cost_data"]["output_tokens"] += out_t
-                    out["cost_data"]["cache_read_tokens"] += cr_t
-                    out["cost_data"]["cache_write_tokens"] += cw_t
-                    out["cost_data"]["total_tokens"] += in_t + out_t + cr_t + cw_t
+                msg_entry["cost_usd"] = cost_total
+                out["cost_data"]["total_cost_usd"] += cost_total
+                out["cost_data"]["input_tokens"] += in_t
+                out["cost_data"]["output_tokens"] += out_t
+                out["cost_data"]["cache_read_tokens"] += cr_t
+                out["cost_data"]["cache_write_tokens"] += cw_t
+                out["cost_data"]["total_tokens"] += in_t + out_t + cr_t + cw_t
             out["messages"].append(msg_entry)
             out["metadata"]["message_count"] += 1
             for tc in tool_calls_in_msg:
@@ -4085,11 +4244,31 @@ def _try_local_store_session_export(session_id: str):
                     "model": msg.get("model") or model,
                 })
                 out["metadata"]["tool_call_count"] += 1
+        elif ev_type in ("tool.call", "tool_call"):
+            # v3 explicit tool-call event (outside an assistant envelope).
+            tname = data.get("toolName") or data.get("name") or data.get("tool")
+            if tname:
+                out["tool_calls"].append({
+                    "timestamp": ts_str if isinstance(ts_str, str) else None,
+                    "tool_call_id": data.get("toolCallId") or data.get("id"),
+                    "tool_name": tname,
+                    "arguments": data.get("arguments") or data.get("input") or {},
+                    "model": model,
+                })
+                out["metadata"]["tool_call_count"] += 1
         if ts_ms:
             if start_time is None or ts_ms < start_time:
                 start_time = ts_ms
             if end_time is None or ts_ms > end_time:
                 end_time = ts_ms
+
+    # Return None (not an empty-messages shell) when no projectable rows
+    # survived, so the JSONL parser fallback fires instead of mis-tagging
+    # an empty answer as ``_source: 'local_store'``. This is the exact
+    # mistake the 6 prior fixes (PR #1571/#1576/#1580/#1583/etc.) made.
+    if not out["messages"] and not out["tool_calls"]:
+        return None
+
     out["metadata"]["start_time_ms"] = start_time
     out["metadata"]["end_time_ms"] = end_time
     return out
@@ -4185,7 +4364,7 @@ def api_session_export(session_id):
                     if obj.get("modelId"):
                         model = obj.get("modelId")
                         session_data["metadata"]["model"] = model
-                elif ev_type == "message":
+                elif ev_type == "message":  # v3-shape-gate: allow (reason: JSONL on-disk walker — api_session_export fallback iterates per-line obj from .jsonl)
                     msg = obj.get("message", {})
                     role = msg.get("role", "")
                     content = msg.get("content", [])
@@ -4709,4 +4888,179 @@ def api_spans():
         "count":   len(rows),
         "_source": "local_store",
         "capped_at_24h": capped_at_24h,
+    })
+
+
+# ── Issue #1614 — outcome labeling ──────────────────────────────────────────
+#
+# Every session gets one of: success / failed / escalated / ongoing. Auto-
+# detected by ``clawmetry.outcome_classifier`` from event-stream + approvals
+# table + session metadata. Persisted on the sessions table so the tile
+# query is a one-row roll-up, not a per-session event scan.
+#
+# Two endpoints:
+#   GET /api/outcomes?window=1d        — totals + success-rate (Overview tile)
+#   GET /api/outcomes/timeline?days=7  — per-day series for sparklines
+#
+# Both pre-compute via DuckDB (memory ``feedback_duckdb_first_rule``). When
+# the daemon proxy is unreachable we degrade to ``{available: false}`` rather
+# than 500ing — overview-tab MUST stay responsive (issue #1127 lesson).
+
+_OUTCOME_WINDOW_TO_SECS = {
+    "1h": 3600,
+    "1d": 86400,
+    "24h": 86400,
+    "7d": 7 * 86400,
+    "30d": 30 * 86400,
+}
+
+
+def _outcome_window_to_iso_since(window):
+    """Convert a window shorthand to an ISO ``since`` timestamp.
+
+    Returns None if the window string is invalid — caller treats that as
+    "no time filter" so the tile still renders something useful.
+    """
+    secs = _OUTCOME_WINDOW_TO_SECS.get((window or "").lower())
+    if not secs:
+        return None
+    from datetime import datetime, timedelta, timezone
+    since_dt = datetime.now(timezone.utc) - timedelta(seconds=secs)
+    return since_dt.isoformat().replace("+00:00", "Z")
+
+
+@bp_sessions.route("/api/outcomes")
+def api_outcomes():
+    """Outcome roll-up for the Overview tile.
+
+    Query params:
+      ``window`` — one of ``1h``, ``1d`` (default), ``7d``, ``30d``.
+      ``agent_type`` — default ``openclaw``.
+
+    Returns the shape ``clawmetry.outcome_classifier.aggregate_outcomes``
+    produces plus a ``window`` echo + ``_source`` tag. On total-failure
+    paths (DuckDB unreachable + no fallback) we still 200 with zeros so
+    the tile renders "No completed tasks yet" instead of a JS error.
+    """
+    from clawmetry.outcome_classifier import aggregate_outcomes
+    window = (request.args.get("window") or "1d").lower()
+    agent_type = request.args.get("agent_type") or "openclaw"
+    since = _outcome_window_to_iso_since(window)
+
+    rows = _ls_call(
+        "query_outcomes",
+        agent_type=agent_type,
+        since=since,
+        limit=int(request.args.get("limit") or 1000),
+    )
+    if rows is None:
+        # Daemon proxy unreachable AND no in-process fallback succeeded.
+        # Return a zeroed shell so the UI degrades gracefully.
+        return jsonify({
+            "window": window,
+            "total": 0,
+            "success": 0,
+            "failed": 0,
+            "escalated": 0,
+            "ongoing": 0,
+            "success_rate": 0.0,
+            "needed_human_rate": 0.0,
+            "_source": "unavailable",
+        })
+    agg = aggregate_outcomes(rows)
+    agg["window"] = window
+    agg["_source"] = "local_store"
+    return jsonify(agg)
+
+
+@bp_sessions.route("/api/outcomes/timeline")
+def api_outcomes_timeline():
+    """Per-day outcome series for the drill-down sparkline.
+
+    Buckets every session into a YYYY-MM-DD key by ``last_active_at`` (the
+    same field the Overview Tasks panel uses), then runs the aggregator
+    per day. Returns up to ``days`` days, newest-first.
+    """
+    from clawmetry.outcome_classifier import aggregate_outcomes
+    try:
+        days = max(1, min(90, int(request.args.get("days") or 7)))
+    except (TypeError, ValueError):
+        days = 7
+    agent_type = request.args.get("agent_type") or "openclaw"
+    from datetime import datetime, timedelta, timezone
+    since_dt = datetime.now(timezone.utc) - timedelta(days=days)
+    since_iso = since_dt.isoformat().replace("+00:00", "Z")
+
+    rows = _ls_call(
+        "query_outcomes",
+        agent_type=agent_type,
+        since=since_iso,
+        limit=5000,
+    ) or []
+
+    by_day: dict[str, list[dict]] = {}
+    for r in rows:
+        ts = r.get("last_active_at") or r.get("ended_at") or ""
+        day = ts[:10] if len(ts) >= 10 else ""
+        if not day:
+            continue
+        by_day.setdefault(day, []).append(r)
+    series = []
+    for day in sorted(by_day.keys(), reverse=True):
+        agg = aggregate_outcomes(by_day[day])
+        agg["day"] = day
+        series.append(agg)
+    return jsonify({
+        "days": days,
+        "series": series,
+        "_source": "local_store" if rows else "empty",
+    })
+
+
+@bp_sessions.route("/api/outcomes/sessions")
+def api_outcomes_sessions():
+    """Drill-down list: which sessions failed / escalated. Powers the
+    expanded view when the Overview tile is clicked.
+
+    Query params:
+      ``outcome`` — filter to one outcome (``failed`` / ``escalated`` /
+        ``ongoing`` / ``success``). Default ``failed``.
+      ``window`` — same shorthand as /api/outcomes (default ``1d``).
+      ``limit``  — cap (default 50).
+    """
+    outcome = (request.args.get("outcome") or "failed").lower()
+    window = (request.args.get("window") or "1d").lower()
+    agent_type = request.args.get("agent_type") or "openclaw"
+    try:
+        limit = max(1, min(500, int(request.args.get("limit") or 50)))
+    except (TypeError, ValueError):
+        limit = 50
+    since = _outcome_window_to_iso_since(window)
+    rows = _ls_call(
+        "query_outcomes",
+        agent_type=agent_type,
+        since=since,
+        limit=2000,
+    ) or []
+    filtered = [r for r in rows if (r.get("outcome") or "") == outcome][:limit]
+    # Slim the payload — the drill-down UI needs id/title/cost/timestamp only.
+    out = [
+        {
+            "session_id":      r.get("session_id"),
+            "title":           r.get("title"),
+            "last_active_at":  r.get("last_active_at"),
+            "ended_at":        r.get("ended_at"),
+            "cost_usd":        r.get("cost_usd") or 0,
+            "total_tokens":    r.get("total_tokens") or 0,
+            "outcome":         r.get("outcome"),
+            "confidence":      r.get("outcome_confidence"),
+        }
+        for r in filtered
+    ]
+    return jsonify({
+        "outcome": outcome,
+        "window":  window,
+        "count":   len(out),
+        "sessions": out,
+        "_source": "local_store",
     })

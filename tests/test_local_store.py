@@ -267,10 +267,13 @@ def test_health_reports_size_and_count(store):
     h = store.health()
     assert h["event_count"] == 10
     assert h["size_bytes"] > 0
-    # Bumped to 6 by issue #1007 (spans table) on top of v5 (bootstrap_archive
-    # + cron_runs). Re-asserting the version explicitly catches future schema
-    # bumps that forget to update tests.
-    assert h["schema_version"] == 6
+    # Re-assert the version comes out of health() rather than hardcoding it.
+    # Hardcoded values silently drift each time someone bumps SCHEMA_VERSION
+    # (was 6 at #1007, drifted to 9 by #1626; #1627). Reading the constant
+    # lets the assertion auto-track future bumps while still catching the
+    # "schema_version reported wrong" class of bug.
+    from clawmetry.local_store import SCHEMA_VERSION
+    assert h["schema_version"] == SCHEMA_VERSION
     assert h["ring_depth"] == 0
     assert h["ring_dropped_total"] == 0
 

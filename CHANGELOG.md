@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Gateway-tap opt-in nudge for users impacted by PR #1228 default-OFF flip (issue #1233, 2026-05-17)
+- **Why.** PR #1228 flipped the live WS gateway tap (`clawmetry/gateway_tap.py`) from default-ON to default-OFF for the OpenClaw `operator.read` scope-grant transition. Users who previously relied on the tap for inbound channel-message bodies (Telegram, Signal, Discord, etc.) silently lost capture; the fix landed but no upgrade prompt told them how to re-enable.
+- **Detection (DuckDB, cached 5m).** New `_compute_gateway_tap_comms()` in `routes/overview.py`: tap env unset + 1+ `channel_messages` rows in prior 7d + 0 rows in last 24h. Three predicates so we never nag fresh installs or users who already opted back in.
+- **Banner.** `/api/overview` piggybacks `_comms.show_gateway_tap_banner` + `show_pro_cta`. Dashboard renders a dismissible amber strip explaining how to re-enable (`CLAWMETRY_ENABLE_WS_TAP=1`) and offering Pro defaults to non-Pro users. Sticky dismiss via `localStorage`.
+- **Tests.** `tests/test_gateway_tap_opt_in_banner.py` covers banner-fires / no-prior-activity / recent-activity-suppresses / tap-already-enabled cases against an in-memory DuckDB.
+
 ### Alerts comms: PR #1410 ship moment for the no-OTLP cohort (issue #1419, 2026-05-16)
 - **Changelog callout.** Alert rules now fire on real OpenClaw spend, not just OTLP-fed installs. The ~99% of users without the `[otel]` extra had `daily_spent=0` forever, so "alert when spend > $X" rules never triggered until PR #1410 wired the DuckDB events fallback into `_get_budget_status`.
 - **Alerts tab banner.** When a user has 1+ rules, 0 historical fires, and the oldest rule is more than 24h old, `/api/alerts/rules` returns `_comms.show_alerts_comms_banner: true`. The Alerts tab renders a one-line notice that the previous rules should start triggering normally. Dismissible.

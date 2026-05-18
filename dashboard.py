@@ -103,7 +103,7 @@ from routes.overview import bp_overview
 from routes.components import bp_components
 from routes.fleet_history import bp_fleet, bp_history
 from routes.infra import bp_logs, bp_memory, bp_security, bp_config
-from routes.meta import bp_auth, bp_gateway, bp_otel, bp_version, bp_version_impact, bp_clusters
+from routes.meta import bp_auth, bp_cloud_relay, bp_gateway, bp_otel, bp_version, bp_version_impact, bp_clusters
 from routes.nemoclaw import bp_nemoclaw
 from routes.skills import bp_skills
 from routes.heartbeat import bp_heartbeat
@@ -117,6 +117,8 @@ from routes.update_check import bp_update_check, start_update_check_thread
 from routes.workspaces import bp_workspaces
 from routes.bootstrap import bp_bootstrap
 from routes.insights import bp_insights
+from routes.review import bp_review
+from routes.evals import bp_evals
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -144,7 +146,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.12.238"
+__version__ = "0.12.239"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
@@ -4119,6 +4121,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
     <div class="nav-tab active" onclick="switchTab('overview')">Overview <span id="nav-stuck-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
+    <div class="nav-tab" onclick="switchTab('review')" title="Did the agent make the right choice? Sample 10 random sessions per day.">Review</div>
     <div class="nav-tab" onclick="switchTab('alerts')" title="Get notified when something goes wrong">Alerts <span id="nav-alerts-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('notifications')" title="Slack / Email / PagerDuty / Telegram channels">Notifications</div>
     <div class="nav-tab" onclick="switchTab('context')" title="See what context the LLM receives each turn">Context</div>
@@ -4156,6 +4159,15 @@ function clawmetryLogout(){
   <span id="upgrade-banner-msg" style="flex:1;"></span>
   <button onclick="switchTab('version-impact')" style="background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">View Details</button>
   <button onclick="dismissUpgradeBanner()" style="background:transparent;color:#93c5fd;border:1px solid #3b82f680;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">Dismiss</button>
+</div>
+
+<!-- Issue #1233: gateway WS tap is now opt-in. Hidden until /api/overview returns
+     _comms.show_gateway_tap_banner=true. Dismiss is sticky via localStorage. -->
+<div id="gw-tap-banner" style="display:none;padding:10px 16px;background:linear-gradient(90deg,#3a2d05 0%,#1a1a2e 100%);border-bottom:2px solid #f59e0b;color:#fbbf24;font-size:13px;font-weight:500;align-items:center;gap:10px;">
+  <span style="font-size:16px;">&#9888;&#65039;</span>
+  <span id="gw-tap-banner-msg" style="flex:1;">Live channel watch (Telegram, Signal, Discord, etc.) is now opt-in for safety. Set <code>CLAWMETRY_ENABLE_WS_TAP=1</code> and restart the sync daemon to re-enable inbound message capture.</span>
+  <a id="gw-tap-banner-pro" href="/cloud/billing" style="display:none;background:#f59e0b;color:#1a1a2e;text-decoration:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Pro enables this by default</a>
+  <button onclick="dismissGwTapBanner()" style="background:transparent;color:#fbbf24;border:1px solid #f59e0b80;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">Dismiss</button>
 </div>
 
 <!-- Budget Settings Modal -->
@@ -4346,6 +4358,30 @@ function clawmetryLogout(){
     </div>
   </div>
 
+  <!-- Outcome tile (Issue #1614): success rate + escalated + failed counts.
+       Renders from /api/outcomes (DuckDB-backed). Click expands the drill-
+       down list of failed/escalated sessions. -->
+  <div id="outcome-card" style="
+    background:var(--bg-secondary);
+    border:1px solid var(--border-primary);
+    border-radius:10px;
+    padding:14px 18px;
+    margin-bottom:10px;
+    box-shadow:var(--card-shadow);
+    cursor:pointer;
+  " onclick="toggleOutcomeDrilldown()" title="Click for details">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+      <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;">
+        <span style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.2px;">Today</span>
+        <span id="outcome-tile-summary" style="font-size:14px;color:var(--text-primary);">Loading task outcomes...</span>
+      </div>
+      <span id="outcome-tile-chevron" style="font-size:11px;color:var(--text-muted);">show details</span>
+    </div>
+    <div id="outcome-drilldown" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border-secondary);font-size:12px;">
+      <div id="outcome-drilldown-body" style="color:var(--text-muted);">Loading...</div>
+    </div>
+  </div>
+
   <div class="refresh-bar" style="margin-bottom:6px;">
     <button class="refresh-btn" onclick="loadAll()" style="padding:4px 12px;font-size:12px;">↻</button>
     <span class="pulse"></span>
@@ -4418,6 +4454,35 @@ function clawmetryLogout(){
         <div class="stats-footer-value" id="reliability-direction">--</div>
       </div>
       <span class="stats-footer-sub" style="margin-left:auto;" id="reliability-detail"></span>
+    </div>
+    <!-- Issue #1619 Phase 1 — eval score tile. Click opens the rubric editor.
+         Phase 3 adds the ``eval-regression-line`` mini-line under the score,
+         populated by loadEvalRegressionSummary() — silent on a fresh install. -->
+    <div class="stats-footer-item" id="eval-card" style="cursor:pointer;" title="Click to edit the rubric" onclick="openEvalRubricModal()">
+      <span class="stats-footer-icon">⭐</span>
+      <div>
+        <div class="stats-footer-label">Eval score (24h)</div>
+        <div class="stats-footer-value" id="eval-avg-score">--</div>
+        <div id="eval-regression-line" style="font-size:10px;color:var(--text-muted);margin-top:2px;line-height:1.2;"></div>
+      </div>
+      <span class="stats-footer-sub" style="margin-left:auto;" id="eval-coverage"></span>
+    </div>
+  </div>
+
+  <!-- Issue #1619 Phase 1 — rubric editor modal. Loaded lazily; hidden by default. -->
+  <div id="eval-rubric-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center;">
+    <div style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:12px;padding:20px;max-width:640px;width:90%;max-height:80vh;display:flex;flex-direction:column;gap:12px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <h3 style="margin:0;font-size:14px;font-weight:700;color:var(--text-primary);">Eval rubric</h3>
+        <button onclick="closeEvalRubricModal()" style="background:transparent;border:none;color:var(--text-muted);font-size:18px;cursor:pointer;">&times;</button>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);">Edit the YAML rubric used by the local LLM judge. Saved to <code id="eval-rubric-path">~/.clawmetry/evals.yaml</code>. Disable scoring entirely with <code>CLAWMETRY_EVALS_ENABLED=0</code>.</div>
+      <textarea id="eval-rubric-yaml" style="font-family:monospace;font-size:12px;width:100%;min-height:280px;padding:10px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-primary);border-radius:8px;resize:vertical;" spellcheck="false"></textarea>
+      <div id="eval-rubric-status" style="font-size:11px;color:var(--text-muted);min-height:14px;"></div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;">
+        <button onclick="closeEvalRubricModal()" style="background:transparent;color:var(--text-muted);border:1px solid var(--border-primary);border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">Cancel</button>
+        <button onclick="saveEvalRubric()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;">Save</button>
+      </div>
     </div>
   </div>
 
@@ -5546,6 +5611,22 @@ function clawmetryLogout(){
   <div id="skills-list"><div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div></div>
 </div><!-- end page-skills -->
 
+<!-- Issue #1615: Review tab — sample 10 random sessions per day,
+     mark correct / wrong / borderline, watch accuracy trend over time. -->
+<div class="page" id="page-review">
+  <div class="refresh-bar">
+    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">&#10067; Did the agent make the right choice?</h2>
+    <button class="refresh-btn" onclick="loadReview()">&#8635; Refresh</button>
+    <button class="refresh-btn" onclick="sampleReviewNow()" title="Pick fresh sessions to review right now">Sample now</button>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 320px;gap:16px;align-items:start;">
+    <div id="review-list"><div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div></div>
+    <div id="review-accuracy" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:16px;">
+      <div style="color:var(--text-muted);font-size:13px;">Loading accuracy...</div>
+    </div>
+  </div>
+</div><!-- end page-review -->
+
 
 <script>
 
@@ -6052,6 +6133,13 @@ async function ackAllAlerts() {
   } catch(e) {}
 }
 
+// Issue #1233: sticky dismiss for the gateway-tap opt-in banner.
+function dismissGwTapBanner() {
+  try { localStorage.setItem('gw_tap_banner_dismissed', '1'); } catch(e) {}
+  var el = document.getElementById('gw-tap-banner');
+  if (el) el.style.display = 'none';
+}
+
 // Check alerts every 30s
 setInterval(checkActiveAlerts, 30000);
 setTimeout(checkActiveAlerts, 3000);
@@ -6165,6 +6253,150 @@ function switchTab(name) {
   if (name === 'subagents') { loadSubagents(); if (!_subagentsTimer) _subagentsTimer = setInterval(loadSubagents, 5000); }
   if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
   if (name === 'selfconfig') loadSelfConfig();
+  if (name === 'review') loadReview();
+}
+
+// ── Review tab (issue #1615) ─────────────────────────────────────────────
+function _reviewEscape(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, function(c) {
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+function _reviewStatusLabel(s) {
+  return {
+    'pending':              'Pending',
+    'reviewed_correct':     'Correct',
+    'reviewed_wrong':       'Wrong',
+    'reviewed_borderline':  'Borderline'
+  }[s] || s;
+}
+function _reviewAccuracyHtml(data) {
+  var g = data.global || {};
+  var per = data.per_agent || [];
+  var fmtAcc = function(a, c, w) {
+    if (a == null) return '<span style="color:var(--text-muted);">Not enough reviews yet</span>';
+    var pct = Math.round(a * 100);
+    var color = pct >= 90 ? '#22c55e' : (pct >= 75 ? '#f59e0b' : '#ef4444');
+    return '<span style="color:' + color + ';font-weight:700;">' + pct + '%</span>' +
+           ' <span style="color:var(--text-muted);font-size:11px;">(' + c + '/' + (c + w) + ')</span>';
+  };
+  var html = '<h3 style="margin:0 0 12px 0;font-size:13px;color:var(--text-primary);">' +
+             (data.window_days || 30) + '-day accuracy</h3>';
+  html += '<div style="font-size:24px;margin-bottom:4px;">' +
+          fmtAcc(g.accuracy, g.correct || 0, g.wrong || 0) + '</div>';
+  html += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:16px;">' +
+          'Global accuracy across all agents. Borderline reviews (' +
+          (g.borderline || 0) + ') excluded from the denominator.</div>';
+  if (per.length > 0) {
+    html += '<h4 style="margin:8px 0;font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Per agent</h4>';
+    per.forEach(function(p) {
+      html += '<div style="padding:8px 0;border-top:1px solid var(--border-primary);font-size:12px;">' +
+              '<div style="font-weight:600;color:var(--text-primary);">' + _reviewEscape(p.agent_id) + '</div>' +
+              '<div style="color:var(--text-muted);font-size:11px;margin-top:2px;">' +
+              fmtAcc(p.accuracy, p.correct, p.wrong) +
+              '</div></div>';
+    });
+  }
+  return html;
+}
+async function loadReview() {
+  var listEl = document.getElementById('review-list');
+  var accEl = document.getElementById('review-accuracy');
+  if (!listEl || !accEl) return;
+  listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div>';
+  try {
+    var [queue, accuracy] = await Promise.all([
+      fetch('/api/review/queue').then(function(r){return r.json();}),
+      fetch('/api/review/accuracy?window=30').then(function(r){return r.json();})
+    ]);
+    accEl.innerHTML = _reviewAccuracyHtml(accuracy);
+    var rows = queue.rows || [];
+    if (rows.length === 0) {
+      listEl.innerHTML = '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:24px;text-align:center;color:var(--text-muted);font-size:13px;">' +
+        '<div style="font-size:32px;margin-bottom:8px;">&#128064;</div>' +
+        '<div style="font-weight:600;color:var(--text-primary);margin-bottom:4px;">No sessions to review.</div>' +
+        '<div>Sampling fires nightly. Click <strong>Sample now</strong> to pull yesterday\'s sessions immediately.</div>' +
+        '</div>';
+      return;
+    }
+    var html = '';
+    rows.forEach(function(r) {
+      var s = r.session_summary || {};
+      var title = s.title || r.session_id;
+      var tokens = s.total_tokens || 0;
+      var msgs = s.message_count || 0;
+      var statusBadge = r.status === 'pending' ? '' :
+        '<span style="background:var(--bg-accent);color:#fff;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:600;margin-left:6px;">' +
+        _reviewStatusLabel(r.status) + '</span>';
+      var notes = r.reviewer_notes ?
+        '<div style="margin-top:6px;font-size:12px;color:var(--text-muted);font-style:italic;">' +
+        _reviewEscape(r.reviewer_notes) + '</div>' : '';
+      html += '<div data-review-sid="' + _reviewEscape(r.session_id) + '" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:14px;margin-bottom:10px;">' +
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">' +
+          '<div style="flex:1;min-width:0;">' +
+            '<div style="font-weight:600;color:var(--text-primary);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
+              _reviewEscape(title) + statusBadge +
+            '</div>' +
+            '<div style="color:var(--text-muted);font-size:11px;margin-top:2px;">' +
+              _reviewEscape(r.agent_id) + ' &middot; ' + tokens.toLocaleString() + ' tokens &middot; ' +
+              msgs + ' msgs &middot; sampled ' + _reviewEscape((r.sampled_at || '').slice(0, 10)) +
+            '</div>' +
+            notes +
+          '</div>' +
+          '<a href="#" onclick="switchTab(\'transcripts\');return false;" style="font-size:11px;color:var(--bg-accent);text-decoration:none;white-space:nowrap;">View transcript &rarr;</a>' +
+        '</div>' +
+        '<div style="display:flex;gap:6px;margin-top:10px;align-items:center;">' +
+          '<button onclick="submitReview(\'' + _reviewEscape(r.session_id) + '\',\'reviewed_correct\')" style="background:#16a34a;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;">&#9989; Correct</button>' +
+          '<button onclick="submitReview(\'' + _reviewEscape(r.session_id) + '\',\'reviewed_wrong\')" style="background:#dc2626;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;">&#10060; Wrong</button>' +
+          '<button onclick="submitReview(\'' + _reviewEscape(r.session_id) + '\',\'reviewed_borderline\')" style="background:#f59e0b;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;">&#129300; Borderline</button>' +
+          '<input type="text" id="review-notes-' + _reviewEscape(r.session_id) + '" placeholder="Optional note..." style="flex:1;background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:6px;padding:6px 10px;font-size:12px;color:var(--text-primary);" />' +
+        '</div>' +
+      '</div>';
+    });
+    listEl.innerHTML = html;
+  } catch (err) {
+    listEl.innerHTML = '<div style="color:#ef4444;font-size:13px;padding:16px;">Failed to load reviews: ' +
+                       _reviewEscape(err && err.message || err) + '</div>';
+  }
+}
+async function submitReview(sid, status) {
+  var noteEl = document.getElementById('review-notes-' + sid);
+  var notes = noteEl ? (noteEl.value || '').trim() : '';
+  try {
+    var resp = await fetch('/api/review/' + encodeURIComponent(sid), {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({status: status, notes: notes || null})
+    });
+    if (!resp.ok) {
+      var err = await resp.json().catch(function(){return {};});
+      alert('Could not save review: ' + (err.error || resp.status));
+      return;
+    }
+  } catch (err) {
+    alert('Could not save review: ' + (err && err.message || err));
+    return;
+  }
+  loadReview();
+}
+async function sampleReviewNow() {
+  try {
+    var resp = await fetch('/api/review/sample', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: '{}'
+    });
+    var data = await resp.json().catch(function(){return {};});
+    if (!resp.ok) {
+      alert('Sampler failed: ' + (data.error || resp.status));
+      return;
+    }
+  } catch (err) {
+    alert('Sampler failed: ' + (err && err.message || err));
+    return;
+  }
+  loadReview();
 }
 
 function exportUsageData() {
@@ -6809,6 +7041,18 @@ async function loadAll() {
       if (i.network) setFlowTextAll('infra-network-text', 'LAN ' + i.network, 18);
       if (i.userName) setFlowTextAll('flow-human-name', i.userName, 10);
     }
+
+    // Issue #1233: surface the opt-in nudge for users impacted by PR #1228
+    // default-OFF flip of the gateway WS tap. Sticky dismiss via localStorage.
+    try {
+      var comms = (overview && overview._comms) || {};
+      var gwBanner = document.getElementById('gw-tap-banner');
+      if (gwBanner && comms.show_gateway_tap_banner && localStorage.getItem('gw_tap_banner_dismissed') !== '1') {
+        gwBanner.style.display = 'flex';
+        var proCta = document.getElementById('gw-tap-banner-pro');
+        if (proCta) proCta.style.display = comms.show_pro_cta ? 'inline-block' : 'none';
+      }
+    } catch(e) { /* never let banner code break overview */ }
 
     // If overview cannot determine model yet, use brain endpoint fallback immediately.
     if (!overview.model || overview.model === 'unknown') {
@@ -8060,6 +8304,135 @@ def _get_heartbeat_status():
         if _heartbeat_silent_since > 0
         else None,
     }
+
+
+# ── Agent-presence detection (no-agent empty-state, sibling of #1604) ──
+# Distinct from ``_get_heartbeat_status``:
+#   * heartbeat-status answers "has THIS install's daemon checked in yet?"
+#     (transient race, resolves in ~30s — drives #1631's onboarding banner)
+#   * detect_agent_install() answers "is there any underlying agent at
+#     all?" (persistent until the user installs one — drives the
+#     "No OpenClaw or NemoClaw detected" page-level empty-state).
+# Cached 60s so every tab switch doesn't re-stat 4+ paths and shell out
+# to ``shutil.which``.
+_agent_presence_cache = {"ts": 0.0, "value": None}
+_AGENT_PRESENCE_TTL_SEC = 60
+
+
+def _detect_openclaw_install():
+    """Return True if OpenClaw appears installed (any of: PID file present,
+    workspace dir exists, session JSONLs exist, OPENCLAW_HOME env set to a
+    real dir). Cheap stat-only checks — no subprocess, no DuckDB."""
+    home = os.environ.get("OPENCLAW_HOME") or os.path.expanduser("~/.openclaw")
+    if not home:
+        return False
+    # 1. Gateway PID file — strongest "openclaw is/was running" signal.
+    pid_path = os.path.join(home, "gateway", "gateway.pid")
+    if os.path.exists(pid_path):
+        return True
+    # 2. Session JSONLs (agent has produced events at some point).
+    sess_dir = os.path.join(home, "agents", "main", "sessions")
+    if os.path.isdir(sess_dir):
+        try:
+            for name in os.listdir(sess_dir):
+                if name.endswith(".jsonl"):
+                    return True
+        except OSError:
+            pass
+    # 3. Workspace marker files (SOUL.md / AGENTS.md / MEMORY.md).
+    ws = os.path.join(home, "workspace")
+    for marker in ("SOUL.md", "AGENTS.md", "MEMORY.md"):
+        if os.path.exists(os.path.join(ws, marker)):
+            return True
+    # 4. ~/.openclaw dir exists with *any* content (catches fresh installs
+    # that haven't run yet but have at least laid down config).
+    if os.path.isdir(home):
+        try:
+            if any(True for _ in os.scandir(home)):
+                return True
+        except OSError:
+            pass
+    return False
+
+
+def _detect_nemoclaw_install():
+    """Return True if NemoClaw appears installed. Defers to the existing
+    ``_detect_nemoclaw`` helper but only needs the boolean — avoids the
+    expensive ``nemoclaw list`` subprocess call by short-circuiting on
+    ``shutil.which`` and the config dir."""
+    import shutil as _shutil
+    if _shutil.which("nemoclaw"):
+        return True
+    cfg = os.path.expanduser("~/.nemoclaw")
+    if os.path.isdir(cfg):
+        try:
+            if any(True for _ in os.scandir(cfg)):
+                return True
+        except OSError:
+            pass
+    return False
+
+
+def _detect_any_local_data():
+    """Return True if local DuckDB store has *any* events row. Used as the
+    third leg of the no-agent decision so that an OpenClaw-less user who
+    is none-the-less getting OTLP traces in still gets the normal UI."""
+    try:
+        from clawmetry import local_store  # type: ignore
+        store = local_store.get_store(read_only=True)
+    except Exception:
+        return False
+    # Best-effort: any of these public query helpers returning a row means
+    # "we have data". Wrapped in try/except so a missing-table on a half-
+    # initialised DB never raises into the UI thread.
+    for method, kwargs in (
+        ("query_events", {"limit": 1}),
+        ("query_heartbeats", {"limit": 1}),
+    ):
+        try:
+            fn = getattr(store, method, None)
+            if fn is None:
+                continue
+            rows = fn(**kwargs)
+            if rows:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def detect_agent_install():
+    """Return ``{openclaw_detected, nemoclaw_detected, any_data, signals}``
+    answering "is there an underlying agent producing data?".
+
+    Cached for ``_AGENT_PRESENCE_TTL_SEC`` (60s) — every tab switch on the
+    dashboard polls this; the underlying filesystem state changes on the
+    order of minutes-hours, not milliseconds.
+    """
+    now = time.time()
+    cached = _agent_presence_cache.get("value")
+    if cached and (now - _agent_presence_cache["ts"]) < _AGENT_PRESENCE_TTL_SEC:
+        return cached
+    openclaw = bool(_detect_openclaw_install())
+    nemoclaw = bool(_detect_nemoclaw_install())
+    any_data = bool(_detect_any_local_data())
+    signals = []
+    if openclaw:
+        signals.append("openclaw")
+    if nemoclaw:
+        signals.append("nemoclaw")
+    if any_data:
+        signals.append("local_data")
+    payload = {
+        "openclaw_detected": openclaw,
+        "nemoclaw_detected": nemoclaw,
+        "any_data": any_data,
+        "signals": signals,
+        "no_agent": not (openclaw or nemoclaw or any_data),
+    }
+    _agent_presence_cache["ts"] = now
+    _agent_presence_cache["value"] = payload
+    return payload
 
 
 # ── OTLP Metrics Store ─────────────────────────────────────────────────
@@ -10048,6 +10421,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_version)
     app.register_blueprint(bp_version_impact)
     app.register_blueprint(bp_clusters)
+    app.register_blueprint(bp_cloud_relay)
     app.register_blueprint(bp_nemoclaw)
     app.register_blueprint(bp_skills)
     app.register_blueprint(bp_heartbeat)
@@ -10067,6 +10441,8 @@ def detect_config(args=None):
     app.register_blueprint(bp_workspaces)
     app.register_blueprint(bp_bootstrap)
     app.register_blueprint(bp_insights)
+    app.register_blueprint(bp_review)
+    app.register_blueprint(bp_evals)
 
     # ── v2 React SPA (opt-in) ───────────────────────────────────────────────
     # Default OFF so existing v1 users notice nothing. Enabled when the user
@@ -10376,6 +10752,7 @@ DASHBOARD_HTML = r"""
     <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
     <div class="nav-tab active" onclick="switchTab('overview')">Overview <span id="nav-stuck-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
+    <div class="nav-tab" onclick="switchTab('review')" title="Did the agent make the right choice? Sample 10 random sessions per day.">Review</div>
     <div class="nav-tab" onclick="switchTab('alerts')" title="Get notified when something goes wrong">Alerts <span id="nav-alerts-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('notifications')" title="Slack / Email / PagerDuty / Telegram channels">Notifications</div>
     <div class="nav-tab" onclick="switchTab('context')" title="See what context the LLM receives each turn">Context</div>

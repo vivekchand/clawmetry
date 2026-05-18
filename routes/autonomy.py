@@ -132,7 +132,7 @@ def _compute_autonomy(sessions_dir: str) -> dict:
 
                     # Support both bare messages and wrapped {"type":"message","message":{}}
                     if isinstance(ev, dict):
-                        if ev.get("type") == "message":
+                        if ev.get("type") == "message":  # v3-shape-gate: allow (reason: JSONL on-disk walker; transcript files keep pre-v3 shape)
                             msg = ev.get("message") or {}
                         else:
                             msg = ev
@@ -145,7 +145,7 @@ def _compute_autonomy(sessions_dir: str) -> dict:
 
                     ts = _parse_ts(msg, file_mtime)
                     # Also check outer event for timestamp
-                    if ts == file_mtime and isinstance(ev, dict) and ev.get("type") == "message":
+                    if ts == file_mtime and isinstance(ev, dict) and ev.get("type") == "message":  # v3-shape-gate: allow (reason: JSONL on-disk walker; transcript files keep pre-v3 shape)
                         ts = _parse_ts(ev, file_mtime)
 
                     if ts < cutoff_ts:

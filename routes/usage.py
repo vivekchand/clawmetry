@@ -1293,7 +1293,7 @@ def _try_local_store_token_velocity():
         elif et in _CHAIN_TYPES:
             data = r.get("data") if isinstance(r.get("data"), dict) else {}
             role = data.get("role") if isinstance(data, dict) else None
-            if et == "message" and role == "user":
+            if et == "message" and role == "user":  # v3-shape-gate: allow (reason: defensive — _CHAIN_TYPES already covers both v3 + legacy names; this is the legacy-shape-specific role check)
                 slot["consecutive"] = 0
             else:
                 slot["consecutive"] += 1
@@ -1341,6 +1341,242 @@ def _try_local_store_token_velocity():
         "cost_per_min":     round(total_tokens_2min / 2 * usd_per_token, 5),
         "flagged_sessions": flagged,
         "_source":          "local_store",
+    }
+
+
+def _try_local_store_token_attribution(wanted_sid: str = "", limit: int = 100):
+    """Fast path for /api/token-attribution (issue #1565 Tier-1 #7).
+
+    Audit imperfection (#1565) captured here as a silent user-visible
+    bug: the legacy JSONL walker (``api_token_attribution`` below)
+    filters on ``ev['type'] == 'message'``, which is the pre-v3
+    synthetic shape only. On real OpenClaw v3 installs the daemon-
+    normalised event types are ``assistant`` / ``model.completed`` (see
+    ``reference_openclaw_v3_event_types.md``), so the legacy handler
+    silently returns an empty ``messages`` array on every v3 install.
+    Same failure family as Eng G's PR #1571 (forecast) and Eng L's
+    cost-optimizer ring-reset.
+
+    Shape parity contract: ``messages[].{session_id, timestamp, model,
+    role, tokens{}, cost{}, cache_hit_ratio}`` plus ``totals{}`` and
+    ``session_id``.
+
+    Dedupe via ``build_sibling_bucket_max`` (same approach as
+    ``_try_local_store_token_velocity``) — exactly the bug family
+    ``feedback_usage_dedupe_pattern.md`` warns about. Returns ``None``
+    on store-unreachable or zero matching rows so the JSONL walker
+    fires (rather than claiming ``_source: 'local_store'`` falsely on
+    an empty answer).
+    """
+    store = _ls_get_store()
+    if store is None:
+        return None
+
+    # 14-day window matches the headline ``/api/usage`` chart. The legacy
+    # walker has no window cap, but on a busy box it scans 50 mtime-sorted
+    # files anyway — 14d covers every billable turn the cost dashboard
+    # actually charts.
+    cutoff_ts = time.time() - 14 * 86400
+    since_iso = datetime.utcfromtimestamp(cutoff_ts).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+
+    try:
+        if wanted_sid:
+            rows = store.query_events(
+                session_id=wanted_sid, since=since_iso, limit=10000,
+            ) or []
+        else:
+            rows = store.query_events(since=since_iso, limit=10000) or []
+    except Exception:
+        return None
+    if not rows:
+        return None
+
+    # Sibling-pair dedupe (issue #1460 family). assistant/message outrank
+    # model.completed; we drop only the slim sibling when a rich envelope
+    # exists in the same (sid, sec±1) bucket.
+    bucket_max = build_sibling_bucket_max(rows)
+
+    _ROLE_BY_EVENT = {
+        "assistant":        "assistant",
+        "message":          "assistant",  # legacy synthetic
+        "model.completed":  "assistant",
+        "prompt.submitted": "user",
+        "user":             "user",
+    }
+
+    messages = []
+    totals = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "total_tokens": 0,
+        "input_cost": 0.0,
+        "output_cost": 0.0,
+        "cache_read_cost": 0.0,
+        "cache_write_cost": 0.0,
+        "total_cost": 0.0,
+    }
+
+    # Lazy import — only this fast path needs the v3 split extractor.
+    try:
+        from clawmetry.local_store import (
+            _extract_usage_splits, _extract_usage_cost,
+        )
+    except Exception:
+        return None
+
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        if is_sibling_dup(r, bucket_max):
+            continue
+        et = (r.get("event_type") or "").strip()
+        # Only attribute rows that actually carry usage. Tool calls /
+        # session.started / model.changed don't get a row in the legacy
+        # contract either.
+        if et not in _ROLE_BY_EVENT and et not in ("assistant", "message", "model.completed"):
+            continue
+
+        data = r.get("data") if isinstance(r.get("data"), dict) else {}
+        splits = _extract_usage_splits(data) if isinstance(data, dict) else {
+            "input_tokens": 0, "output_tokens": 0,
+            "cache_read_tokens": 0, "cache_write_tokens": 0,
+        }
+        input_tok  = int(splits.get("input_tokens", 0) or 0)
+        output_tok = int(splits.get("output_tokens", 0) or 0)
+        cache_read = int(splits.get("cache_read_tokens", 0) or 0)
+        cache_write = int(splits.get("cache_write_tokens", 0) or 0)
+        total_tok = input_tok + output_tok + cache_read + cache_write
+
+        # Fall back to the daemon-stamped scalar column when the data
+        # blob splits are empty (e.g. slim ``model.completed`` rows that
+        # survived the sibling dedupe because no rich envelope existed).
+        # We attribute the whole row to ``input_tokens`` in that case so
+        # the totals don't drop the row — see Eng G's PR #1571 lesson:
+        # *don't blindly replace an aggregate with a deduped subset*.
+        if total_tok == 0:
+            col_tok = int(r.get("token_count") or 0)
+            if col_tok > 0:
+                input_tok = col_tok
+                total_tok = col_tok
+
+        if total_tok == 0:
+            continue
+
+        # Per-bucket cost split: prefer the v3 ``cost.{input,...}`` shape
+        # under data.message.usage when present, fall back to the
+        # daemon-stamped scalar for total.
+        in_cost = out_cost = cr_cost = cw_cost = 0.0
+        col_cost = 0.0
+        try:
+            col_cost = float(r.get("cost_usd") or 0.0)
+        except (TypeError, ValueError):
+            col_cost = 0.0
+        # Walk message.usage.cost for the per-bucket split (legacy shape).
+        msg_dict = data.get("message") if isinstance(data, dict) else None
+        if isinstance(msg_dict, dict):
+            u = msg_dict.get("usage") or {}
+            if isinstance(u, dict):
+                cost_obj = u.get("cost") or {}
+                if isinstance(cost_obj, dict):
+                    in_cost = float(cost_obj.get("input", 0) or 0)
+                    out_cost = float(cost_obj.get("output", 0) or 0)
+                    cr_cost = float(cost_obj.get("cacheRead", 0) or 0)
+                    cw_cost = float(cost_obj.get("cacheWrite", 0) or 0)
+        # Total: prefer scalar column (the daemon already wrote it from
+        # the cheapest source); fall back to extractor walk for legacy
+        # snapshots; finally sum the per-bucket splits.
+        total_cost = col_cost
+        if total_cost <= 0 and isinstance(data, dict):
+            total_cost = _extract_usage_cost(data)
+        if total_cost <= 0:
+            total_cost = in_cost + out_cost + cr_cost + cw_cost
+
+        # Model: prefer the column; data blob fallback covers older v3
+        # snapshots where the daemon didn't populate the scalar.
+        model = r.get("model") or ""
+        if not model and isinstance(data, dict):
+            if isinstance(msg_dict, dict):
+                model = msg_dict.get("model") or ""
+            if not model:
+                model = data.get("modelId") or data.get("model") or ""
+        model = model or "unknown"
+
+        # Role: prefer the explicit message.role (v3 assistants carry it
+        # in the Anthropic envelope), else infer from event_type.
+        role = "unknown"
+        if isinstance(msg_dict, dict):
+            r_role = msg_dict.get("role")
+            if isinstance(r_role, str) and r_role:
+                role = r_role
+        if role == "unknown":
+            role = _ROLE_BY_EVENT.get(et, "unknown")
+
+        sid = r.get("session_id") or ""
+        ts = r.get("ts") or ""
+        cache_hit_pct = (
+            round(cache_read / (input_tok + cache_read) * 100, 1)
+            if (input_tok + cache_read) > 0 else 0.0
+        )
+        messages.append({
+            "session_id": sid,
+            "timestamp": ts,
+            "model": model,
+            "role": role,
+            "tokens": {
+                "input": input_tok,
+                "output": output_tok,
+                "cache_read": cache_read,
+                "cache_write": cache_write,
+                "total": total_tok,
+            },
+            "cost": {
+                "input": round(in_cost, 8),
+                "output": round(out_cost, 8),
+                "cache_read": round(cr_cost, 8),
+                "cache_write": round(cw_cost, 8),
+                "total": round(total_cost, 8),
+            },
+            "cache_hit_ratio": cache_hit_pct,
+        })
+        totals["input_tokens"]       += input_tok
+        totals["output_tokens"]      += output_tok
+        totals["cache_read_tokens"]  += cache_read
+        totals["cache_write_tokens"] += cache_write
+        totals["total_tokens"]       += total_tok
+        totals["input_cost"]         += in_cost
+        totals["output_cost"]        += out_cost
+        totals["cache_read_cost"]    += cr_cost
+        totals["cache_write_cost"]   += cw_cost
+        totals["total_cost"]         += total_cost
+
+    if not messages:
+        return None
+
+    for k in ("input_cost", "output_cost", "cache_read_cost",
+              "cache_write_cost", "total_cost"):
+        totals[k] = round(totals[k], 6)
+
+    # Sort by timestamp descending and apply limit. ISO-8601 sorts
+    # lexically when zones match — which they always do here since the
+    # daemon writes UTC.
+    messages.sort(key=lambda m: m.get("timestamp") or "", reverse=True)
+    messages = messages[:limit]
+
+    input_plus_cache = totals["input_tokens"] + totals["cache_read_tokens"]
+    totals["cache_hit_ratio_pct"] = (
+        round(totals["cache_read_tokens"] / input_plus_cache * 100, 1)
+        if input_plus_cache else 0.0
+    )
+
+    return {
+        "messages":   messages,
+        "totals":     totals,
+        "session_id": wanted_sid if wanted_sid else None,
+        "_source":    "local_store",
     }
 
 
@@ -1808,6 +2044,16 @@ def _build_cluster_payload(session_profiles, *, days, now_ts):
     }
 
 
+_CLUSTER_TURN_EVENT_TYPES = frozenset({
+    # Pre-v3 synthetic shape (still used in tests + on-disk JSONL).
+    "message", "user",
+    # v3 daemon-normalised shape (see reference_openclaw_v3_event_types.md).
+    "prompt.submitted",   # user turn
+    "assistant",          # assistant turn (rich envelope)
+    "model.completed",    # assistant turn (slim sibling — deduped before counting)
+})
+
+
 def _try_local_store_sessions_clusters(days: int):
     """Fast path for /api/sessions/clusters. Reads sessions + events from
     DuckDB and runs the same cluster aggregation as the legacy JSONL walker.
@@ -1879,7 +2125,17 @@ def _try_local_store_sessions_clusters(days: int):
                 has_cron = True
             if "subagent" in blob or "spawned" in blob:
                 has_subagent = True
-            if etype == "message":
+            # v3-silent-zero fix (issue #1588). Previously this counter
+            # filtered on ``etype == 'message'`` only — the pre-v3
+            # synthetic shape — so every real OpenClaw v3 install reported
+            # ``turn_count == 0`` regardless of how many turns occurred,
+            # which silently mis-classified clusters as 'no-turn' shells.
+            # Count BOTH user-turn (``prompt.submitted`` / pre-v3 'user')
+            # AND assistant-turn (``assistant`` / ``model.completed`` /
+            # pre-v3 'message') event types so the metric reflects real
+            # conversation turns. ``is_sibling_dup`` already filtered the
+            # sibling pair above so we don't double-count assistant turns.
+            if etype in _CLUSTER_TURN_EVENT_TYPES and not is_sibling_dup(ev, bucket_max):
                 turn_count += 1
         if s_tokens == 0 and not tool_counts:
             continue
@@ -3190,6 +3446,20 @@ def api_token_attribution():
         limit = max(1, min(int(request.args.get('limit', '100')), 1000))
     except ValueError:
         limit = 100
+
+    # Tier-1 DuckDB fast path (issue #1565 audit #7). Reads deduped v3
+    # events; tagged ``_source: 'local_store'``. Returns ``None`` to
+    # defer to the JSONL walker when the store is unreachable or empty.
+    # NOTE: the legacy walker only handles the pre-v3 synthetic
+    # ``type=='message'`` shape, so on real v3 installs the fast path is
+    # the ONLY surface that returns rows — see audit-imperfection note
+    # in the helper docstring.
+    if is_local_store_read_enabled():
+        fast = _try_local_store_token_attribution(
+            wanted_sid=wanted_sid, limit=limit,
+        )
+        if fast is not None:
+            return jsonify(fast)
 
     sessions_dir = _d._get_sessions_dir()
     if not os.path.isdir(sessions_dir):

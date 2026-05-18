@@ -23,6 +23,8 @@ from datetime import datetime, timedelta, timezone
 from flask import Blueprint, Response, jsonify, request
 from clawmetry.config import is_local_store_read_enabled
 from clawmetry.risk import compute_hallucination_risk, is_llm_event
+from clawmetry.token_confidence import annotate_events as _annotate_token_confidence
+from clawmetry.token_confidence import annotate_tool_alternatives as _annotate_tool_alternatives
 
 bp_brain = Blueprint('brain', __name__)
 
@@ -338,6 +340,12 @@ def _try_local_store_brain(limit, include_artifacts, since=None):
                     chat_id = data["chat"].get("id") or ""
                 if chat_id:
                     row["chat_id"] = str(chat_id)[:80]
+                # Issue #1203: expose body_capture so the browser's
+                # _extractChannelInfo can set ackOnly=true on the local-store
+                # path (where ev.data is stripped and raw_blob isn't available).
+                body_capture = data.get("body_capture")
+                if body_capture:
+                    row["body_capture"] = str(body_capture)
         # Issue #567 — Hallucination Risk Indicator. Compute the score
         # from the RAW DuckDB row (which still carries ``data.params`` /
         # ``data.usage``), then stamp it onto the trimmed output row.
@@ -1022,6 +1030,27 @@ def api_brain_history():
     # picked up the rich rows.
     _annotate_risk(events)
 
+    # Issue #563 — Token Probability Visualizer. Per-token confidence
+    # heatmap on assistant responses. Only stamps when upstream captured
+    # logprobs (OpenAI / Gemini compatible providers today). Anthropic
+    # calls fall through to a "not available" hint in the frontend.
+    try:
+        _annotate_token_confidence(events)
+    except Exception:
+        # Never crash the Brain feed on annotation failure — the rest of
+        # the payload is still useful even if confidence stamping fails.
+        pass
+
+    # Issue #1616 — Alternatives-considered. For every tool.call event we
+    # stamp ``ev["tool_alternatives"]`` with the chosen tool + rejected
+    # options the model evaluated (from logprobs or extended-thinking).
+    # Honest empty list when no real data is available — never invent
+    # alternatives.
+    try:
+        _annotate_tool_alternatives(events)
+    except Exception:
+        pass
+
     try:
         _d._ext_emit("brain.event", {"count": len(events)})
     except Exception:
@@ -1112,6 +1141,18 @@ def _fetch_session_chain(session_id, limit=200):
     with the daemon's writer lock (issue #1088); falls back to direct open
     for single-process boots (tests + dev mode — same pattern as
     ``_try_local_store_brain`` above).
+
+    Issue #1597 class drain — intentionally NOT using
+    ``query_events_with_subagents``: this helper feeds
+    ``_build_llm_call_timeline`` which walks back from an anchor event for
+    the nearest preceding ``prompt.submitted`` row of the SAME LLM call.
+    A single LLM call's lifecycle (prompt → reasoning → completion) lives
+    in one session — sub-agents are separate sessions with their own LLM
+    calls. Rolling parent + child here would mix two unrelated call chains
+    and the "preceding prompt.submitted" walk would jump across sessions.
+    The Brain feed already passes the row's OWN session_id when the user
+    clicks a child chip (see ``app.js::loadLlmCallTimeline``), so child
+    timelines work end-to-end without rollup.
     """
     if not session_id:
         return None

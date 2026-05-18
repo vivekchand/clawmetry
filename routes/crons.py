@@ -871,8 +871,15 @@ def _try_local_store_cron_run_log(session_id: str):
     with the standard direct-open fallback for single-process boots. Returns
     ``None`` to defer to the JSONL parser when the events table has no
     message rows for this session.
+
+    Issue #1597 class drain: a cron run that delegates work to a Task-tool
+    sub-agent renders as "no messages" in the run-log modal without rollup.
+    UNION sub-agent events so the run log reflects the work actually done.
+    Falls back to parent-only on older daemons.
     """
-    rows = _ls_call("query_events", session_id=session_id, limit=5000)
+    rows = _ls_call("query_events_with_subagents", session_id=session_id, limit=5000)
+    if rows is None:
+        rows = _ls_call("query_events", session_id=session_id, limit=5000)
     if not rows:
         return None
     rows = list(reversed(rows))  # query_events returns DESC
@@ -923,7 +930,7 @@ def api_cron_run_log():
             for line in f:
                 try:
                     obj = json.loads(line.strip())
-                    if obj.get("type") == "message":
+                    if obj.get("type") == "message":  # v3-shape-gate: allow (reason: JSONL on-disk walker; reads per-line JSON from transcript files)
                         msg = obj.get("message", {})
                         events.append(
                             {

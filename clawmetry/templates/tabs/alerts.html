@@ -62,6 +62,16 @@
   </div>
 </div>
 
+{# Issue #1603: server-side gate on the rule editor modal. Free users
+   keep the canned-example teaser shell above (intentional per
+   project_free_plan_upsell memory) but the editor's 6 alert-type buttons,
+   channel picker, and re-alert cadence inputs are Pro-only DOM. Pre-fix,
+   a Free user could open the editor on a frame-perfect click before the
+   client-side paywall mounted, then inspect or screenshot the full Pro
+   composer. The {% if is_pro %} branch keeps the editor entirely out of
+   the page for non-Pro users; alerts.js still calls alertsOpenPaywall()
+   on the + New alert rule button so the upsell flow is unchanged. #}
+{% if is_pro %}
 <!-- ── Rule editor modal (Pro-tier only) ────────────────────────────────── -->
 <div class="alerts-modal-overlay" id="alerts-editor-modal" style="display:none;" onclick="alertsCloseEditor(event)">
   <div class="alerts-editor-card" onclick="event.stopPropagation()">
@@ -115,3 +125,4 @@
     </div>
   </div>
 </div>
+{% endif %}

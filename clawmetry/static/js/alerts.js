@@ -259,6 +259,12 @@
       rule = EXAMPLE_RULES.find(r => r.id === ruleId);
     }
     if (!rule) return;
+    // Issue #1603: the editor modal DOM is server-side gated to Pro users
+    // so Free users get the upsell here instead of a null-deref on
+    // ``alerts-editor-modal``. Matches the alertsHandleNewRule gate above.
+    if (alertsState.tier !== 'pro' && alertsState.tier !== 'trial') {
+      return openPaywall();
+    }
     alertsState.editorRule = rule;
     alertsState.editorType = rule.alert_type;
     openEditor();

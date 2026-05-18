@@ -124,7 +124,58 @@ LOCAL_MAX_BYTES = int(
     float(os.environ.get("CLAWMETRY_LOCAL_MAX_GB", "5.0")) * 1024 * 1024 * 1024
 )
 
-SCHEMA_VERSION = 7
+# Issue #1594 — auto-vacuum knobs. Vacuum is destructive (deletes oldest
+# events permanently), so the defaults are conservative:
+#   * AUTO_VACUUM_ENABLED — default ON. Set CLAWMETRY_AUTO_VACUUM=0 to
+#     disable for users who manage retention externally (rsync, snapshots).
+#   * AUTO_VACUUM_CHECK_EVERY_BYTES — only stat() + size-check after every
+#     N bytes flushed (default 100 MB). Cheap, predictable, no periodic
+#     thread to leak.
+#   * AUTO_VACUUM_HIGH_WATER_PCT — only fire when DB has crossed this
+#     fraction of LOCAL_MAX_BYTES (default 0.95). Below the high-water
+#     mark we leave the store alone; the user paid for retention up to
+#     the cap, we honour it.
+# When vacuum still can't bring the store under the cap (retention rules
+# too generous, or single event rows pathologically large), we log a loud
+# WARNING + emit a ``local_store_over_cap`` event into the store itself so
+# /local/health + cloud dashboards can surface the cap_exceeded flag.
+AUTO_VACUUM_ENABLED = os.environ.get("CLAWMETRY_AUTO_VACUUM", "1") not in ("0", "false", "False", "")
+AUTO_VACUUM_CHECK_EVERY_BYTES = int(
+    float(os.environ.get("CLAWMETRY_AUTO_VACUUM_CHECK_MB", "100")) * 1024 * 1024
+)
+AUTO_VACUUM_HIGH_WATER_PCT = float(
+    os.environ.get("CLAWMETRY_AUTO_VACUUM_HIGH_WATER_PCT", "0.95")
+)
+# Min seconds between LOCAL_STORE_OVER_CAP warning / marker emissions.
+# Rate-limit because DuckDB doesn't shrink the file in-place after DELETE
+# — the file size plateaus near the high-water mark and would otherwise
+# spam every flush. 5 min is short enough to surface the regression
+# quickly but long enough that a tail -f doesn't drown.
+AUTO_VACUUM_OVER_CAP_COOLDOWN_S = float(
+    os.environ.get("CLAWMETRY_AUTO_VACUUM_OVER_CAP_COOLDOWN_S", "300.0")
+)
+
+
+def _on_disk_bytes() -> int:
+    """Total on-disk footprint = main DB file + WAL. The DuckDB main file
+    only grows on CHECKPOINT; at runtime the bulk of recently-flushed data
+    sits in the ``.wal`` file. Looking only at ``DB_PATH.stat()`` (as the
+    pre-#1594 ``health()`` and ``vacuum()`` did) silently under-counts the
+    real footprint by 10×+ during active ingest — the cap never trips even
+    when the wallclock disk usage is already over."""
+    total = 0
+    try:
+        total += DB_PATH.stat().st_size
+    except OSError:
+        pass
+    wal = DB_PATH.with_suffix(DB_PATH.suffix + ".wal")
+    try:
+        total += wal.stat().st_size
+    except OSError:
+        pass
+    return total
+
+SCHEMA_VERSION = 10
 
 # ── Two-layer schema (multi-agent) ──────────────────────────────────────────
 #
@@ -184,11 +235,32 @@ _DDL = [
         message_count   INTEGER DEFAULT 0,
         metadata        BLOB,
         updated_at      BIGINT NOT NULL,
+        -- Issue #1614 — outcome label set by clawmetry.outcome_classifier.
+        -- Nullable: legacy rows + rows written before the classifier ran stay
+        -- NULL until the next ingest_session() pass fills them in.
+        outcome                 VARCHAR,
+        outcome_confidence      DOUBLE,
+        outcome_classified_at   BIGINT,
+        -- Issue #1619 Phase 1 — LLM-as-judge eval scores. Columns are
+        -- populated by clawmetry/eval_runner.py via persist_eval_score().
+        -- Adjacent to (not replacing) the #1614 outcome columns; the two
+        -- views are complementary (outcome = did the session finish well;
+        -- eval = how good was the actual response, 0-5).
+        eval_score              DOUBLE,
+        eval_reason             VARCHAR,
+        eval_judge_model        VARCHAR,
+        eval_scored_at          BIGINT,
+        eval_rubric             VARCHAR,
         PRIMARY KEY (agent_type, session_id)
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_sessions_active    ON sessions(agent_type, last_active_at)",
+    "CREATE INDEX IF NOT EXISTS idx_sessions_outcome   ON sessions(outcome, last_active_at)",
     "CREATE INDEX IF NOT EXISTS idx_sessions_node      ON sessions(node_id, last_active_at)",
+    # Issue #1619 Phase 1 — speeds up /api/evals/recent (ORDER BY
+    # eval_scored_at DESC) and the scheduler's unscored-session probe
+    # (WHERE eval_score IS NULL).
+    "CREATE INDEX IF NOT EXISTS idx_sessions_eval_scored_at ON sessions(eval_scored_at)",
     """
     CREATE TABLE IF NOT EXISTS daily_aggregates (
         agent_type    VARCHAR NOT NULL DEFAULT 'openclaw',
@@ -551,12 +623,100 @@ _DDL = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_loop_signals_last_seen ON loop_signals(last_seen DESC)",
+    # Issue #1615 — decision sampling workflow. Production-grade monitoring
+    # requires periodic review of random decisions ("did the agent make the
+    # right choice?"). A nightly cron picks N random sessions per agent and
+    # inserts a row here with status='pending'. The Review tab on the
+    # dashboard renders pending rows, lets the user mark each row
+    # correct/wrong/borderline, and aggregates accuracy over a rolling
+    # window. Sampled rows are agent-scoped so multi-agent installs get
+    # per-agent accuracy curves rather than one global blur.
+    """
+    CREATE TABLE IF NOT EXISTS review_queue (
+        session_id      VARCHAR PRIMARY KEY,
+        sampled_at      VARCHAR NOT NULL,
+        agent_id        VARCHAR NOT NULL DEFAULT 'main',
+        agent_type      VARCHAR NOT NULL DEFAULT 'openclaw',
+        status          VARCHAR NOT NULL DEFAULT 'pending',
+        reviewer_notes  VARCHAR,
+        reviewed_at     VARCHAR
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_review_queue_status ON review_queue(status, sampled_at)",
+    "CREATE INDEX IF NOT EXISTS idx_review_queue_agent  ON review_queue(agent_id, sampled_at)",
+    # ── Issue #1619 Phase 2 — golden test set runs ────────────────────────
+    # Persists one row per (suite, test, run) so trend analysis can chart
+    # regression-rate over time and the dashboard can show "evals broken
+    # at SHA abc123". status enum: pass / fail / error. Phase 1's
+    # ``sessions.eval_score`` columns measure production traffic; this
+    # table measures the golden test bench. Both feed the same overview
+    # tile but answer different questions.
+    """
+    CREATE TABLE IF NOT EXISTS eval_suite_runs (
+        suite_name   VARCHAR NOT NULL,
+        test_name    VARCHAR NOT NULL,
+        status       VARCHAR NOT NULL,
+        score        DOUBLE,
+        reason       VARCHAR,
+        ran_at       BIGINT  NOT NULL,
+        sha          VARCHAR,
+        PRIMARY KEY (suite_name, test_name, ran_at)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_eval_suite_runs_ran_at ON eval_suite_runs(ran_at)",
+    "CREATE INDEX IF NOT EXISTS idx_eval_suite_runs_suite  ON eval_suite_runs(suite_name, ran_at)",
+    # Issue #1619 Phase 3 — regression-replay runs. One row per
+    # replayed-failed-session per invocation. Drives the
+    # /api/evals/regression-summary endpoint and the overview tile's
+    # "Regression: X fixed since last week" mini-line. Composes with the
+    # other two eval surfaces: ``sessions.eval_score`` = production scores
+    # (Phase 1), ``eval_suite_runs`` = golden bench (Phase 2),
+    # ``eval_regression_runs`` = "did yesterday's fail get fixed?" (Phase 3).
+    """
+    CREATE TABLE IF NOT EXISTS eval_regression_runs (
+        session_id        VARCHAR NOT NULL,
+        replayed_at       BIGINT  NOT NULL,
+        status            VARCHAR NOT NULL,
+        original_outcome  VARCHAR,
+        new_outcome       VARCHAR,
+        original_score    DOUBLE,
+        new_score         DOUBLE,
+        reason            VARCHAR,
+        PRIMARY KEY (session_id, replayed_at)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_eval_regression_replayed_at ON eval_regression_runs(replayed_at)",
+    "CREATE INDEX IF NOT EXISTS idx_eval_regression_status     ON eval_regression_runs(status, replayed_at)",
     """
     CREATE TABLE IF NOT EXISTS schema_version (
         version    INTEGER PRIMARY KEY,
         applied_at BIGINT NOT NULL
     )
     """,
+    # ── Sync dead-letter queue (#1601) ─────────────────────────────────────
+    # Persists payloads whose AES-GCM encryption raised inside the cloud
+    # POST path (rare: malformed payload, key rotation race, corrupt key).
+    # Survives daemon restart so a transient bad-key window doesn't
+    # silently lose batches. Replayed on every sync tick; rows are deleted
+    # only after a successful re-encrypt+POST. ``attempts`` lets the
+    # replayer abandon a permanently-poisoned row after N tries instead of
+    # spinning forever.
+    """
+    CREATE TABLE IF NOT EXISTS sync_dlq (
+        id           VARCHAR PRIMARY KEY,
+        kind         VARCHAR NOT NULL,
+        endpoint     VARCHAR NOT NULL,
+        fname        VARCHAR,
+        node_id      VARCHAR,
+        subagent_id  VARCHAR,
+        payload_json VARCHAR NOT NULL,
+        error        VARCHAR,
+        attempts     INTEGER NOT NULL DEFAULT 0,
+        created_at   BIGINT NOT NULL,
+        last_try_at  BIGINT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_sync_dlq_created ON sync_dlq(created_at)",
 ]
 
 
@@ -575,6 +735,23 @@ _MIGRATIONS_V2 = [
     # PK (agent_id, workspace_id, day); writes from v2 use ON CONFLICT DO
     # UPDATE on the PK that exists. New stores get the v2 PK directly.
     ("daily_aggregates", "agent_type", "VARCHAR DEFAULT 'openclaw'"),
+    # Issue #1614 — outcome labeling (Four-Pillars Outcome Measurement).
+    # Auto-detected per session by ``clawmetry.outcome_classifier``. Stored
+    # so /api/outcomes can SUM(outcome='success') in one query without
+    # re-walking the events table.
+    ("sessions", "outcome",                "VARCHAR"),
+    ("sessions", "outcome_confidence",     "DOUBLE"),
+    ("sessions", "outcome_classified_at",  "BIGINT"),
+    # Issue #1619 Phase 1 — LLM-as-judge eval columns. Idempotent column-adds
+    # so existing v2 stores pick up the eval surface without a fresh DB. The
+    # DDL above carries the same columns for fresh stores. Composes cleanly
+    # with the #1614 outcome-labeling columns above (separate names, same
+    # ALTER pattern — both engineers verified compose-clean before merging).
+    ("sessions", "eval_score",        "DOUBLE"),
+    ("sessions", "eval_reason",       "VARCHAR"),
+    ("sessions", "eval_judge_model",  "VARCHAR"),
+    ("sessions", "eval_scored_at",    "BIGINT"),
+    ("sessions", "eval_rubric",       "VARCHAR"),
 ]
 
 
@@ -827,10 +1004,47 @@ class LocalStore:
         # All writes go through ``_write_lock``; reads issue cursors which
         # DuckDB makes thread-safe internally.
         self._write_lock = threading.Lock()
+        # Issue #1590 — serialise ``_flush_now`` invocations. The ring
+        # snapshot-then-pop pattern is NOT safe under concurrent flushes:
+        # two flushers can snapshot the same batch independently, each
+        # then pop ``len(batch)`` items, evicting events the OTHER thread
+        # snapshotted but had not yet written. Concretely this fired when
+        # an in-thread auto-flush (line 982-983 of ``ingest``) raced the
+        # background flusher tick — silently dropping the events between
+        # the two snapshot points. ``_flush_lock`` makes ``_flush_now``
+        # one-at-a-time, restoring the snapshot/pop invariant. Cheap
+        # because flushes are at most ~10/s in practice.
+        self._flush_lock = threading.Lock()
         self._dropped = 0
         self._flusher_stop = threading.Event()
         self._flusher_thread: threading.Thread | None = None
         self._last_flush_ts = time.monotonic()
+        # Issue #1594 — auto-vacuum bookkeeping. ``_bytes_since_vacuum_check``
+        # accumulates an approximation of the bytes flushed since we last
+        # stat()ed the DB file; once it crosses ``AUTO_VACUUM_CHECK_EVERY_BYTES``
+        # we check the real on-disk size against the high-water mark. We don't
+        # stat on EVERY flush because stat() on the DuckDB file is cheap but
+        # not free and flushes can run 10/s. ``_cap_exceeded`` is the public
+        # /local/health flag the dashboard footer surfaces (#1594 detection
+        # strategy); ``_auto_vacuum_running`` guards against re-entrant vacuum
+        # calls if a flush triggers vacuum which itself triggers a flush.
+        self._bytes_since_vacuum_check = 0
+        self._cap_exceeded = False
+        self._auto_vacuum_running = False
+        self._auto_vacuum_lock = threading.Lock()
+        # Issue #1594 — DuckDB does not shrink the main file in-place
+        # after DELETE; freed pages are reused by subsequent inserts but
+        # the on-disk size plateaus at the high-water mark. Without a
+        # cooldown, every flush would re-trigger the over-cap path and
+        # spam the log + repeatedly emit marker events. We rate-limit
+        # the warning + marker to once per cooldown window.
+        # ``None`` sentinel = "no warning yet" — the cooldown check uses
+        # ``None`` to mean "always fire on first hit", independent of
+        # the cooldown window or process uptime. Using a numeric 0
+        # sentinel would break tests that set the cooldown larger than
+        # process uptime (first warning would mis-fire as already-on-
+        # cooldown because ``time.monotonic() - 0 < cooldown``).
+        self._last_over_cap_warning_ts: float | None = None
         if not read_only:
             # Rename the legacy events.duckdb in place BEFORE opening — once
             # we hold a connection we can't atomically rename the file out
@@ -840,7 +1054,18 @@ class LocalStore:
             _migrate_legacy_db_path()
         self._conn = _open_connection(read_only=read_only)
         if not read_only:
-            self._migrate()
+            try:
+                self._migrate()
+            except Exception:
+                # Release the file lock so the next boot can open the
+                # db cleanly and retry the migration (#1602). Without
+                # this, a failed __init__ leaves DuckDB holding the
+                # exclusive lock until GC, blocking restart.
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+                raise
 
     def _migrate(self) -> None:
         """Bring the store schema up to current SCHEMA_VERSION. Order matters:
@@ -880,12 +1105,16 @@ class LocalStore:
                 cur = self._conn.execute("SELECT MAX(version) AS v FROM schema_version")
                 row = cur.fetchone()
                 current = row[0] if row and row[0] is not None else 0
+                migration_failed = False
                 if current < 7:
                     # v6 → v7: collapse Claude Code event duplicates the three
-                    # ingest paths used to produce (#1232). Wrapped in try/except
-                    # so a regex/lock issue doesn't brick daemon startup — the
-                    # write-side fix in sync.py is the real correctness path; this
-                    # cleanup is opportunistic.
+                    # ingest paths used to produce (#1232). If this raises we
+                    # MUST NOT stamp SCHEMA_VERSION — otherwise the next boot
+                    # sees v9+ stamped and skips the migration, leaving the
+                    # schema in a broken half-state (#1602). We log + flip a
+                    # flag, then re-raise after the version-stamp block so the
+                    # transaction rolls back cleanly. Daemon startup propagates
+                    # the failure rather than booting on a half-migrated db.
                     try:
                         before = self._conn.execute(
                             "SELECT COUNT(*) FROM events"
@@ -908,14 +1137,23 @@ class LocalStore:
                             )
                     except Exception:
                         log.exception(
-                            "local store: v7 dedup migration failed (continuing — "
-                            "future writes still dedup via canonical id)"
+                            "local store: v7 dedup migration FAILED — schema "
+                            "version will NOT be stamped; next boot will retry"
                         )
-                # Step 4: stamp the version.
-                if current < SCHEMA_VERSION:
+                        migration_failed = True
+                # Step 4: stamp the version — ONLY if every gated migration
+                # succeeded. Stamping after a swallowed failure is the #1602
+                # silent-half-state bug.
+                if not migration_failed and current < SCHEMA_VERSION:
                     self._conn.execute(
                         "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
                         [SCHEMA_VERSION, int(time.time() * 1000)],
+                    )
+                if migration_failed:
+                    # Roll back the whole transaction (no partial DDL leaks)
+                    # and surface the failure to the caller.
+                    raise RuntimeError(
+                        "local store: schema migration failed; version not stamped"
                     )
                 self._conn.execute("COMMIT")
             except Exception:
@@ -1040,6 +1278,133 @@ class LocalStore:
                     metadata       = COALESCE(excluded.metadata, sessions.metadata),
                     updated_at     = excluded.updated_at
             """, params)
+
+    def reclassify_session_outcome(
+        self,
+        session_id: str,
+        *,
+        agent_type: str = "openclaw",
+    ) -> tuple[str | None, float | None]:
+        """Re-run the outcome classifier for one session and persist the
+        result. Issue #1614.
+
+        Returns ``(outcome, confidence)`` or ``(None, None)`` if the
+        session row doesn't exist (race with delete) or classifier blows
+        up. Errors are swallowed — outcome labelling is best-effort.
+
+        Cheap to call repeatedly: the per-session event scan is bounded
+        by query_events(limit=200) and the UPDATE only touches one row.
+        """
+        if not session_id:
+            return (None, None)
+        try:
+            from clawmetry.outcome_classifier import classify_session
+        except Exception:
+            return (None, None)
+        try:
+            evs = self.query_events(session_id=session_id, limit=200)
+            # query_events returns newest-first; classifier sorts internally.
+            session_rows = self._fetch(
+                "SELECT status, ended_at, last_active_at FROM sessions "
+                "WHERE agent_type=? AND session_id=? LIMIT 1",
+                [agent_type, session_id],
+            )
+            meta: dict[str, Any] = {}
+            if session_rows:
+                r = session_rows[0]
+                meta = {
+                    "status":         r[0],
+                    "ended_at":       r[1],
+                    "last_active_at": r[2],
+                }
+            else:
+                # No typed row yet — classifier still works off events alone.
+                pass
+            approvals = self._fetch(
+                "SELECT id, status FROM approvals "
+                "WHERE requestor_session_id=? LIMIT 5",
+                [session_id],
+            )
+            appr_rows = [{"id": a[0], "status": a[1]} for a in approvals]
+            outcome, conf = classify_session(evs, meta, approvals=appr_rows)
+        except Exception:
+            return (None, None)
+        now_ms = int(time.time() * 1000)
+        try:
+            with self._write_lock:
+                self._conn.execute(
+                    "UPDATE sessions SET outcome=?, outcome_confidence=?, "
+                    "outcome_classified_at=? "
+                    "WHERE agent_type=? AND session_id=?",
+                    [outcome, float(conf), now_ms, agent_type, session_id],
+                )
+        except Exception:
+            return (outcome, conf)
+        return (outcome, conf)
+
+    def query_outcomes(
+        self,
+        *,
+        agent_type: str = "openclaw",
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 2000,
+    ) -> list[dict[str, Any]]:
+        """Read per-session outcome rows for the dashboard tile / drill-down.
+
+        For sessions where ``outcome`` is NULL (classifier hasn't run yet),
+        we run it inline so the API never returns "unlabeled" — first-load
+        of the dashboard would otherwise show 0% success rate on fresh
+        installs. The inline classification persists the result so the
+        next call is a pure SELECT.
+
+        ``since`` / ``until`` filter on ``last_active_at`` (ISO strings).
+        """
+        clauses: list[str] = ["agent_type = ?"]
+        params: list[Any] = [agent_type]
+        if since:
+            clauses.append("COALESCE(last_active_at, started_at, '') >= ?")
+            params.append(since)
+        if until:
+            clauses.append("COALESCE(last_active_at, started_at, '') <= ?")
+            params.append(until)
+        where = "WHERE " + " AND ".join(clauses)
+        sql = f"""
+            SELECT session_id, title, last_active_at, ended_at, status,
+                   cost_usd, total_tokens,
+                   outcome, outcome_confidence, outcome_classified_at
+            FROM sessions
+            {where}
+            ORDER BY COALESCE(last_active_at, started_at) DESC NULLS LAST
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["session_id", "title", "last_active_at", "ended_at",
+                "status", "cost_usd", "total_tokens",
+                "outcome", "outcome_confidence", "outcome_classified_at"]
+        out: list[dict[str, Any]] = []
+        unlabeled: list[str] = []
+        for r in self._fetch(sql, params):
+            d = dict(zip(cols, r))
+            if d.get("outcome") is None:
+                unlabeled.append(d["session_id"])
+            out.append(d)
+        # Inline-classify any unlabeled rows (bounded — limit kwarg above
+        # caps the work). Cheap: each session reads ≤200 events.
+        for sid in unlabeled[:200]:
+            try:
+                o, c = self.reclassify_session_outcome(
+                    sid, agent_type=agent_type,
+                )
+                if o is not None:
+                    for d in out:
+                        if d["session_id"] == sid:
+                            d["outcome"] = o
+                            d["outcome_confidence"] = c
+                            break
+            except Exception:
+                continue
+        return out
 
     def ingest_memory_blob(self, blob_row: dict[str, Any]) -> None:
         """Upsert one memory blob (e.g. CLAUDE.md, ~/.openclaw/memory/notes.md).
@@ -2011,6 +2376,173 @@ class LocalStore:
                   str(approval_id)])
         return 1
 
+    # ── review_queue helpers (issue #1615) ────────────────────────────────
+    def ingest_review_sample(self, sample: dict[str, Any]) -> int:
+        """Insert one sampled session into the review queue.
+
+        Required: ``session_id``. Optional: ``sampled_at`` (ISO-8601 string;
+        defaults to now), ``agent_id`` (default ``"main"``), ``agent_type``
+        (default ``"openclaw"``), ``status`` (default ``"pending"``).
+
+        Idempotent: if a row already exists for ``session_id`` the insert
+        is a no-op so the nightly cron can safely re-sample yesterday's
+        sessions without bumping reviewed rows back to pending. Returns
+        1 when a new row was inserted, 0 when skipped.
+        """
+        sid = sample.get("session_id")
+        if not sid:
+            raise ValueError("review sample must include 'session_id'")
+        from datetime import datetime, timezone
+        sampled_at = sample.get("sampled_at") or datetime.now(timezone.utc).isoformat()
+        agent_id = sample.get("agent_id") or "main"
+        agent_type = sample.get("agent_type") or "openclaw"
+        status = sample.get("status") or "pending"
+        with self._write_lock:
+            pre = self._conn.execute(
+                "SELECT 1 FROM review_queue WHERE session_id = ? LIMIT 1",
+                [str(sid)],
+            ).fetchone()
+            if pre:
+                return 0
+            self._conn.execute("""
+                INSERT INTO review_queue (
+                    session_id, sampled_at, agent_id, agent_type, status
+                ) VALUES (?, ?, ?, ?, ?)
+            """, [str(sid), sampled_at, agent_id, agent_type, status])
+        return 1
+
+    def update_review_decision(
+        self,
+        session_id: str,
+        status: str,
+        notes: str | None = None,
+    ) -> int:
+        """Mark a queued review row with the reviewer's verdict.
+
+        ``status`` must be one of ``reviewed_correct`` / ``reviewed_wrong`` /
+        ``reviewed_borderline``. Other values are rejected. Returns 1 on
+        update, 0 when the row is missing. Allows re-decision (reviewer
+        changing their mind) — unlike approvals, reviews are not a
+        first-write-wins race because there's only one reviewer.
+        """
+        if not session_id:
+            return 0
+        allowed = {"reviewed_correct", "reviewed_wrong", "reviewed_borderline"}
+        if status not in allowed:
+            raise ValueError(f"status must be one of {sorted(allowed)}")
+        from datetime import datetime, timezone
+        reviewed_at = datetime.now(timezone.utc).isoformat()
+        with self._write_lock:
+            pre = self._conn.execute(
+                "SELECT 1 FROM review_queue WHERE session_id = ? LIMIT 1",
+                [str(session_id)],
+            ).fetchone()
+            if not pre:
+                return 0
+            self._conn.execute("""
+                UPDATE review_queue
+                SET status         = ?,
+                    reviewer_notes = ?,
+                    reviewed_at    = ?
+                WHERE session_id   = ?
+            """, [status, notes, reviewed_at, str(session_id)])
+        return 1
+
+    def query_review_queue(
+        self,
+        *,
+        status: str | None = None,
+        agent_id: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Read review-queue rows. Defaults to most-recently-sampled first.
+
+        ``status`` filters by stage (``pending`` / ``reviewed_correct`` /
+        ``reviewed_wrong`` / ``reviewed_borderline``). ``agent_id`` scopes
+        the result to a single agent instance.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        if agent_id:
+            clauses.append("agent_id = ?")
+            params.append(agent_id)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT session_id, sampled_at, agent_id, agent_type, status,
+                   reviewer_notes, reviewed_at
+            FROM review_queue
+            {where}
+            ORDER BY COALESCE(sampled_at, '') DESC, session_id
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["session_id", "sampled_at", "agent_id", "agent_type",
+                "status", "reviewer_notes", "reviewed_at"]
+        return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
+
+    def query_review_accuracy(
+        self,
+        *,
+        window_days: int = 30,
+    ) -> dict[str, Any]:
+        """Return per-agent + global accuracy over the trailing window.
+
+        Accuracy = correct / (correct + wrong). Borderline rows are
+        excluded from the denominator (they're "I'm not sure" — counting
+        them as wrong over-penalises, counting them as correct rewards
+        hesitation). Pending rows are likewise excluded. Returns
+        ``{global: {...}, per_agent: [{agent_id, correct, wrong,
+        borderline, accuracy}, ...]}``.
+
+        Safe on an empty queue: zero-division returns ``accuracy=None``
+        which the UI renders as "Not enough reviews yet".
+        """
+        from datetime import datetime, timedelta, timezone
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=int(window_days))).isoformat()
+        sql = """
+            SELECT agent_id,
+                   SUM(CASE WHEN status = 'reviewed_correct'    THEN 1 ELSE 0 END) AS correct,
+                   SUM(CASE WHEN status = 'reviewed_wrong'      THEN 1 ELSE 0 END) AS wrong,
+                   SUM(CASE WHEN status = 'reviewed_borderline' THEN 1 ELSE 0 END) AS borderline
+            FROM review_queue
+            WHERE COALESCE(reviewed_at, sampled_at) >= ?
+            GROUP BY agent_id
+            ORDER BY agent_id
+        """
+        rows = self._fetch(sql, [cutoff])
+        per_agent: list[dict[str, Any]] = []
+        g_correct = g_wrong = g_borderline = 0
+        for agent_id, correct, wrong, borderline in rows:
+            correct = int(correct or 0)
+            wrong = int(wrong or 0)
+            borderline = int(borderline or 0)
+            denom = correct + wrong
+            acc = (correct / denom) if denom else None
+            per_agent.append({
+                "agent_id":   agent_id or "main",
+                "correct":    correct,
+                "wrong":      wrong,
+                "borderline": borderline,
+                "accuracy":   acc,
+            })
+            g_correct += correct
+            g_wrong += wrong
+            g_borderline += borderline
+        g_denom = g_correct + g_wrong
+        return {
+            "window_days": int(window_days),
+            "global": {
+                "correct":    g_correct,
+                "wrong":      g_wrong,
+                "borderline": g_borderline,
+                "accuracy":   (g_correct / g_denom) if g_denom else None,
+            },
+            "per_agent": per_agent,
+        }
+
     def ingest_system_snapshot(self, snap: dict[str, Any]) -> None:
         """Insert one system-snapshot row. Append-only;
         (agent_type, node_id, ts, kind) PK silently ignores duplicates."""
@@ -2571,7 +3103,28 @@ class LocalStore:
         ``FLUSH_MAX_ATTEMPTS`` failures we log and re-raise — the ring still
         holds the batch, so the next flusher tick (or process restart) gets
         another shot. INSERT OR IGNORE keyed on the per-event id makes the
-        replay idempotent."""
+        replay idempotent.
+
+        Issue #1590 — wrapped in ``_flush_lock`` so concurrent flushes (e.g.
+        the in-thread auto-flush triggered by ``ingest`` racing the
+        background flusher tick) serialise. Without this, both flushers can
+        snapshot the same batch and each pop ``len(batch)`` items, evicting
+        events the other snapshotted but had not yet written."""
+        with self._flush_lock:
+            n = self._flush_now_locked()
+        # Issue #1594 — auto-vacuum check runs OUTSIDE ``_flush_lock`` so
+        # the vacuum body (which itself acquires ``_write_lock`` and does
+        # an internal CHECKPOINT + possible row delete) does not block
+        # subsequent flushes longer than necessary, and more importantly
+        # so re-entering ``_flush_now`` from inside the vacuum path (it
+        # used to call ``self._flush_now()`` at the top) cannot deadlock.
+        try:
+            self._maybe_auto_vacuum()
+        except Exception:
+            log.exception("local store: auto-vacuum gate failed")
+        return n
+
+    def _flush_now_locked(self) -> int:
         with self._ring_lock:
             if not self._ring:
                 return 0
@@ -2620,6 +3173,15 @@ class LocalStore:
                 if self._ring:
                     self._ring.popleft()
         self._last_flush_ts = time.monotonic()
+        # Issue #1594 — accumulate an approximation of bytes flushed; the
+        # real on-disk size is checked only when this crosses
+        # ``AUTO_VACUUM_CHECK_EVERY_BYTES`` to keep the hot path fast.
+        # 512 B/row is a coarse upper bound for the typical event shape
+        # (id + small JSON blob); a few-pct overshoot just means we stat()
+        # slightly earlier than strictly necessary, which is fine. The
+        # actual auto-vacuum check fires in ``_flush_now`` AFTER we drop
+        # ``_flush_lock`` — see comment there.
+        self._bytes_since_vacuum_check += len(rows) * 512
         # Issue #1343 Phase 2.2 — kick the approvals watcher when a tool_call
         # row just landed. The watcher_loop reads from DuckDB; the COMMIT
         # above is what makes the row visible to it. Kicking before the
@@ -2634,6 +3196,24 @@ class LocalStore:
                 except Exception:
                     pass  # partial install / approvals.py not importable
                 break  # one kick per batch; coalesces N events into 1 wake
+        # Issue #1614 — re-classify outcome for any session whose
+        # session.ended event just landed. Coalesce so a batch with 50
+        # events for one session triggers one reclassification, not 50.
+        # Errors swallowed inside reclassify_session_outcome — labelling
+        # is best-effort and must never block ingest.
+        ended_sessions: set[tuple[str, str]] = set()
+        for e in batch:
+            et = (e.get("event_type") or "").lower()
+            if et in ("session.ended", "sessionended", "session_end"):
+                sid = e.get("session_id")
+                if sid:
+                    atype = e.get("agent_type") or "openclaw"
+                    ended_sessions.add((atype, sid))
+        for atype, sid in ended_sessions:
+            try:
+                self.reclassify_session_outcome(sid, agent_type=atype)
+            except Exception:
+                pass  # never crash the flusher on a label failure
         return len(rows)
 
     def flush(self) -> int:
@@ -2690,6 +3270,69 @@ class LocalStore:
         """
         params.append(int(limit))
         return [_row_to_event(r, _EVENT_COLS) for r in self._fetch(sql, params)]
+
+    def query_events_with_subagents(
+        self,
+        *,
+        session_id: str,
+        limit: int = 10000,
+    ) -> list[dict[str, Any]]:
+        """Return events for ``session_id`` UNIONed with events from every
+        sub-agent session whose ``subagents.parent_session_id`` matches.
+
+        Issue #1597: every per-session tool/cost/transcript read path was
+        scoped to ``WHERE session_id = ?`` on the events table, but
+        sub-agent events live under the sub-agent's OWN ``session_id`` —
+        the parent linkage lives only on the ``subagents`` table. As a
+        result a parent session that delegated 50 tool calls to a child
+        rendered as ``tool_calls=0`` in the UI.
+
+        Events sourced from a child session are tagged with
+        ``data._via_subagent_id`` (carrying the child's session_id) so
+        downstream UI code can render "via sub-agent X" markers without
+        re-querying. Orphan tool calls (no parent_sid linkage) stay where
+        they are — only events whose session is registered as a child of
+        ``session_id`` get rolled up.
+
+        ``limit`` is applied PER source session (parent + each child) so a
+        chatty child can't starve the parent's events out of the result.
+        """
+        # 1. Parent's own events.
+        out: list[dict[str, Any]] = self.query_events(
+            session_id=session_id, limit=limit,
+        )
+
+        # 2. Discover sub-agent sessions whose parent matches.
+        try:
+            subs = self.query_subagents(
+                parent_session_id=session_id, limit=500,
+            )
+        except Exception:
+            subs = []
+
+        # 3. Pull each child's events and tag them with the child's id.
+        for sa in subs:
+            child_sid = sa.get("subagent_id")
+            if not child_sid or child_sid == session_id:
+                continue
+            try:
+                child_rows = self.query_events(
+                    session_id=child_sid, limit=limit,
+                )
+            except Exception:
+                continue
+            for ev in child_rows:
+                data = ev.get("data")
+                if not isinstance(data, dict):
+                    data = {}
+                    ev["data"] = data
+                data["_via_subagent_id"] = child_sid
+                out.append(ev)
+
+        # 4. Re-sort DESC by ts so the merged stream looks like a single
+        # ``query_events`` result to callers that iterate it.
+        out.sort(key=lambda e: (e.get("ts") or ""), reverse=True)
+        return out
 
     def query_sessions(
         self,
@@ -3494,6 +4137,321 @@ class LocalStore:
         cols = ["agent_type", "node_id", "ts", "kind", "data"]
         return _decode_data_blob_rows(self._fetch(sql, params), cols)
 
+    # ── Evals (issue #1619 Phase 1) ──────────────────────────────────────
+
+    def persist_eval_score(
+        self,
+        *,
+        session_id: str,
+        score: float,
+        reason: str,
+        judge_model: str,
+        scored_at: int,
+        rubric: str = "default",
+    ) -> None:
+        """Persist a single LLM-as-judge score onto the ``sessions`` row.
+
+        Writes through the same single-writer connection (guarded by
+        ``_write_lock``) as the regular ingest path so concurrent ticks
+        of the eval scheduler don't trip the DuckDB writer-exclusive
+        lock. Upsert semantics — re-scoring the same session overwrites
+        the prior score in place; we keep one row per session and treat
+        the eval columns as the latest evaluation rather than time-
+        series. (History will land in a sibling ``eval_history`` table
+        in Phase 2; keeping the latest-only shape here matches what the
+        overview tile + sessions list want to render today.)
+        """
+        with self._write_lock:
+            try:
+                self._conn.execute(
+                    """
+                    UPDATE sessions
+                       SET eval_score        = ?,
+                           eval_reason       = ?,
+                           eval_judge_model  = ?,
+                           eval_scored_at    = ?,
+                           eval_rubric       = ?
+                     WHERE session_id        = ?
+                    """,
+                    [float(score), reason or "", judge_model or "",
+                     int(scored_at), rubric or "default", session_id],
+                )
+            except Exception:
+                log.exception("local store: persist_eval_score failed for %s",
+                              session_id)
+
+    def query_unscored_sessions(
+        self,
+        *,
+        limit: int = 10,
+        lookback_hours: int = 24,
+    ) -> list[dict[str, Any]]:
+        """Return up to ``limit`` completed sessions that have NOT been
+        eval-scored yet. Drives the background scheduler.
+
+        Filter logic:
+          * ``eval_score IS NULL`` — un-scored.
+          * ``last_active_at`` within ``lookback_hours`` — bound the
+            backfill so a fresh install doesn't burn through judge spend
+            on stale sessions.
+          * ``ended_at IS NOT NULL OR status IN ('completed', 'failed',
+            'escalated')`` — skip in-flight sessions; their transcript
+            is still mutating.
+        """
+        try:
+            from datetime import datetime, timedelta, timezone
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=lookback_hours)).isoformat()
+        except Exception:
+            cutoff = ""
+        sql = """
+            SELECT session_id, agent_type, agent_id, title, last_active_at,
+                   ended_at, status, total_tokens
+              FROM sessions
+             WHERE eval_score IS NULL
+               AND total_tokens IS NOT NULL
+               AND total_tokens > 0
+               AND (
+                    ended_at IS NOT NULL
+                    OR status IN ('completed', 'failed', 'escalated', 'success', 'error')
+               )
+               AND (? = '' OR COALESCE(last_active_at, started_at, '') >= ?)
+             ORDER BY COALESCE(last_active_at, started_at) DESC NULLS LAST
+             LIMIT ?
+        """
+        rows = self._fetch(sql, [cutoff, cutoff, int(limit)])
+        cols = ["session_id", "agent_type", "agent_id", "title",
+                "last_active_at", "ended_at", "status", "total_tokens"]
+        return [dict(zip(cols, r)) for r in rows]
+
+    def query_recent_evals(
+        self,
+        *,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Return recently-scored sessions, newest first. Drives
+        ``/api/evals/recent``."""
+        sql = """
+            SELECT session_id, agent_type, agent_id, title, last_active_at,
+                   total_tokens, cost_usd,
+                   eval_score, eval_reason, eval_judge_model,
+                   eval_scored_at, eval_rubric
+              FROM sessions
+             WHERE eval_score IS NOT NULL
+             ORDER BY eval_scored_at DESC NULLS LAST
+             LIMIT ?
+        """
+        rows = self._fetch(sql, [int(limit)])
+        cols = ["session_id", "agent_type", "agent_id", "title",
+                "last_active_at", "total_tokens", "cost_usd",
+                "eval_score", "eval_reason", "eval_judge_model",
+                "eval_scored_at", "eval_rubric"]
+        return [dict(zip(cols, r)) for r in rows]
+
+    def query_eval_summary(
+        self,
+        *,
+        window_hours: int = 24,
+    ) -> dict[str, Any]:
+        """Aggregate scores over the recent window. Drives
+        ``/api/evals/summary``.
+
+        Returns ``{avg_score, total, scored, p50, p10, window_hours}``.
+        ``total`` is sessions touched in the window (scored OR not);
+        ``scored`` is the subset with a numeric eval_score. The ratio
+        ``scored/total`` surfaces coverage on the overview tile.
+        """
+        try:
+            from datetime import datetime, timedelta, timezone
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=int(window_hours))).isoformat()
+        except Exception:
+            cutoff = ""
+        # Two queries — one for totals (scored + un-scored), one for the
+        # quantile/avg over the scored subset. Keeps the SQL readable
+        # without a CTE that would have to handle NULLs in two places.
+        try:
+            total_row = self._fetch(
+                """
+                SELECT COUNT(*) AS total,
+                       COUNT(eval_score) AS scored
+                  FROM sessions
+                 WHERE (? = '' OR COALESCE(last_active_at, started_at, '') >= ?)
+                """,
+                [cutoff, cutoff],
+            )
+        except Exception as e:
+            log.warning("local store: eval summary totals failed: %s", e)
+            total_row = [(0, 0)]
+        total = int(total_row[0][0] or 0) if total_row else 0
+        scored = int(total_row[0][1] or 0) if total_row else 0
+
+        avg = 0.0
+        p50 = 0.0
+        p10 = 0.0
+        if scored > 0:
+            try:
+                stats = self._fetch(
+                    """
+                    SELECT AVG(eval_score)                      AS avg_score,
+                           quantile_cont(eval_score, 0.5)       AS p50,
+                           quantile_cont(eval_score, 0.1)       AS p10
+                      FROM sessions
+                     WHERE eval_score IS NOT NULL
+                       AND (? = '' OR COALESCE(last_active_at, started_at, '') >= ?)
+                    """,
+                    [cutoff, cutoff],
+                )
+                if stats:
+                    avg = float(stats[0][0] or 0.0)
+                    p50 = float(stats[0][1] or 0.0)
+                    p10 = float(stats[0][2] or 0.0)
+            except Exception as e:
+                log.warning("local store: eval summary quantiles failed: %s", e)
+        return {
+            "avg_score":     round(avg, 2),
+            "total":         total,
+            "scored":        scored,
+            "p50":           round(p50, 2),
+            "p10":           round(p10, 2),
+            "window_hours":  int(window_hours),
+        }
+
+    # ── Issue #1619 Phase 2 — golden test suite runs ────────────────────────
+
+    def persist_eval_suite_run(
+        self,
+        *,
+        suite_name: str,
+        test_name: str,
+        status: str,
+        score: float | None,
+        reason: str,
+        ran_at: int,
+        sha: str = "",
+    ) -> None:
+        """Write one row of the ``eval_suite_runs`` table. Idempotent on
+        ``(suite_name, test_name, ran_at)`` — re-running with the same
+        timestamp overwrites in place; a new run gets a new ``ran_at`` so
+        the trend history grows by one row per (test, invocation)."""
+        with self._write_lock:
+            try:
+                self._conn.execute(
+                    """
+                    INSERT OR REPLACE INTO eval_suite_runs
+                        (suite_name, test_name, status, score, reason, ran_at, sha)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        suite_name or "",
+                        test_name or "",
+                        status or "error",
+                        None if score is None else float(score),
+                        (reason or "")[:500],
+                        int(ran_at),
+                        (sha or "")[:40],
+                    ],
+                )
+            except Exception:
+                log.exception(
+                    "local store: persist_eval_suite_run failed for %s/%s",
+                    suite_name, test_name,
+                )
+
+    def query_recent_suite_runs(
+        self,
+        *,
+        suite_name: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Return recent ``eval_suite_runs`` rows, newest first. Optional
+        ``suite_name`` filter for the per-suite trend chart."""
+        if suite_name:
+            sql = (
+                "SELECT suite_name, test_name, status, score, reason, ran_at, sha "
+                "FROM eval_suite_runs WHERE suite_name = ? "
+                "ORDER BY ran_at DESC LIMIT ?"
+            )
+            params: list[Any] = [suite_name, int(limit)]
+        else:
+            sql = (
+                "SELECT suite_name, test_name, status, score, reason, ran_at, sha "
+                "FROM eval_suite_runs ORDER BY ran_at DESC LIMIT ?"
+            )
+            params = [int(limit)]
+        cols = ["suite_name", "test_name", "status", "score", "reason", "ran_at", "sha"]
+        try:
+            rows = self._fetch(sql, params)
+        except Exception as e:
+            log.warning("local store: query_recent_suite_runs failed: %s", e)
+            return []
+        return [dict(zip(cols, r)) for r in rows]
+
+    # ── Issue #1619 Phase 3 — regression replay runs ────────────────────────
+
+    def persist_eval_regression_run(
+        self,
+        *,
+        session_id: str,
+        status: str,
+        original_outcome: str,
+        new_outcome: str,
+        original_score: float | None,
+        new_score: float | None,
+        reason: str,
+        replayed_at: int,
+    ) -> None:
+        """Write one row of the ``eval_regression_runs`` table. Idempotent on
+        ``(session_id, replayed_at)`` — re-running with the same timestamp
+        overwrites in place; a new run gets a new ``replayed_at`` so the
+        trend history grows by one row per (session, replay)."""
+        with self._write_lock:
+            try:
+                self._conn.execute(
+                    """
+                    INSERT OR REPLACE INTO eval_regression_runs
+                        (session_id, replayed_at, status, original_outcome,
+                         new_outcome, original_score, new_score, reason)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        session_id or "",
+                        int(replayed_at),
+                        status or "error",
+                        (original_outcome or "")[:64],
+                        (new_outcome or "")[:64],
+                        None if original_score is None else float(original_score),
+                        None if new_score is None else float(new_score),
+                        (reason or "")[:500],
+                    ],
+                )
+            except Exception:
+                log.exception(
+                    "local store: persist_eval_regression_run failed for %s",
+                    session_id,
+                )
+
+    def query_recent_regression_runs(
+        self,
+        *,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Return recent ``eval_regression_runs`` rows, newest first."""
+        sql = (
+            "SELECT session_id, replayed_at, status, original_outcome, "
+            "       new_outcome, original_score, new_score, reason "
+            "  FROM eval_regression_runs "
+            " ORDER BY replayed_at DESC LIMIT ?"
+        )
+        cols = [
+            "session_id", "replayed_at", "status", "original_outcome",
+            "new_outcome", "original_score", "new_score", "reason",
+        ]
+        try:
+            rows = self._fetch(sql, [int(limit)])
+        except Exception as e:
+            log.warning("local store: query_recent_regression_runs failed: %s", e)
+            return []
+        return [dict(zip(cols, r)) for r in rows]
+
     def query_sessions_table(
         self,
         *,
@@ -3724,6 +4682,60 @@ class LocalStore:
             return out
         return out[:int(limit)]
 
+    def query_cost_split_with_subagents(
+        self,
+        *,
+        session_id: str,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Per-session cost split UNIONed across ``session_id`` + every
+        child sub-agent session (issue #1597 class drain).
+
+        Same shape as ``query_cost_split(session_id=...)`` but the returned
+        rows include sub-agent sessions whose ``subagents.parent_session_id``
+        matches the requested parent. Each child row carries
+        ``_via_subagent_id`` set to the child's session_id so the caller can
+        attribute cost back to the spawning Task tool. The parent's own row
+        keeps ``_via_subagent_id=""``.
+
+        Sub-agent rows are returned as SEPARATE entries (one per child
+        session) rather than collapsed into the parent's totals so the
+        Cost-tab can render "parent: $X / sub-agent A: $Y / sub-agent B: $Z"
+        without re-querying. Callers that want a flat sum should reduce the
+        returned list themselves.
+
+        Behaviour when ``session_id`` has no sub-agent links: identical to
+        ``query_cost_split(session_id=session_id)`` — one row, no children.
+        """
+        out: list[dict[str, Any]] = []
+        own = self.query_cost_split(session_id=session_id, limit=limit)
+        for r in own:
+            r["_via_subagent_id"] = ""
+            out.append(r)
+        try:
+            subs = self.query_subagents(
+                parent_session_id=session_id, limit=500,
+            )
+        except Exception:
+            subs = []
+        for sa in subs:
+            child_sid = sa.get("subagent_id")
+            if not child_sid or child_sid == session_id:
+                continue
+            try:
+                child_rows = self.query_cost_split(
+                    session_id=child_sid, limit=limit,
+                )
+            except Exception:
+                continue
+            for r in child_rows:
+                r["_via_subagent_id"] = child_sid
+                out.append(r)
+        # Re-sort by total_cost_usd desc so the parent's row tends to land
+        # first when it dominates (matches the limit-less filter shape).
+        out.sort(key=lambda r: r.get("total_cost_usd", 0), reverse=True)
+        return out
+
     def query_context_window_peek(
         self,
         *,
@@ -3736,6 +4748,15 @@ class LocalStore:
         non-zero ``usage.input_tokens`` reading from a ``message`` event.
         That number represents the live conversation's running context
         size as observed by the model on its most recent turn.
+
+        Issue #1597 class drain — intentionally NO sub-agent rollup: the
+        gauge measures the LIVE prompt context for a single conversation.
+        A child sub-agent has its OWN context window (separate prompt,
+        separate compaction history), not the parent's. Rolling parent +
+        child would surface the most-recent CHILD's context as if it were
+        the parent's, which is wrong — the parent's context-window
+        pressure is what the user-facing "approaching context limit"
+        banner needs to reflect.
 
         Why a dedicated query: the existing ``query_cost_split`` returns
         SUMMED input_tokens across the whole session, which is the wrong
@@ -4045,6 +5066,60 @@ class LocalStore:
                 })
         return out
 
+    def query_session_model_journey_with_subagents(
+        self,
+        *,
+        session_id: str,
+        limit: int = 5000,
+    ) -> list[dict[str, Any]]:
+        """Model + message events for ``session_id`` UNIONed with every
+        child sub-agent session (issue #1597 class drain).
+
+        A parent that delegates to a sub-agent (Task tool spawns a Haiku
+        worker from an Opus parent — a common cost-saver pattern) shows up
+        in the model-journey view as a "transition" only if the child's
+        ``model_change`` / ``message`` events are merged in. Without this
+        rollup the journey for a parent that immediately delegated 100% of
+        work to a child renders as a single-model line.
+
+        Same row shape as ``query_session_model_journey`` plus each row
+        carries ``_via_subagent_id`` (empty for parent rows, the child
+        session_id for child rows) so the UI can paint a sub-agent swimlane
+        without re-querying.
+
+        Re-sorted by ``ts`` ASC at the end so callers can keep their
+        chronological walk untouched.
+        """
+        if not session_id:
+            return []
+        out: list[dict[str, Any]] = []
+        for r in self.query_session_model_journey(
+            session_id=session_id, limit=limit,
+        ):
+            r["_via_subagent_id"] = ""
+            out.append(r)
+        try:
+            subs = self.query_subagents(
+                parent_session_id=session_id, limit=500,
+            )
+        except Exception:
+            subs = []
+        for sa in subs:
+            child_sid = sa.get("subagent_id")
+            if not child_sid or child_sid == session_id:
+                continue
+            try:
+                child_rows = self.query_session_model_journey(
+                    session_id=child_sid, limit=limit,
+                )
+            except Exception:
+                continue
+            for r in child_rows:
+                r["_via_subagent_id"] = child_sid
+                out.append(r)
+        out.sort(key=lambda r: (r.get("ts") or ""))
+        return out
+
     def query_daily_usage_splits(
         self,
         *,
@@ -4319,10 +5394,99 @@ class LocalStore:
 
     # ── ops / maintenance ──────────────────────────────────────────────
 
+    # ── Sync dead-letter queue (#1601) ──────────────────────────────────
+    # Used by sync.py when AES-GCM encryption fails on the cloud POST path.
+    # Persistent (DuckDB) so a daemon restart can't lose the row; replayed
+    # on every sync tick. ``dlq_enqueue`` is idempotent on ``id``.
+
+    def dlq_enqueue(
+        self,
+        *,
+        dlq_id: str,
+        kind: str,
+        endpoint: str,
+        payload_json: str,
+        fname: str | None = None,
+        node_id: str | None = None,
+        subagent_id: str | None = None,
+        error: str = "",
+    ) -> None:
+        """Persist a payload that failed encryption. Idempotent on dlq_id."""
+        if self._read_only:
+            raise RuntimeError("local_store: dlq_enqueue requires writer mode")
+        now = int(time.time() * 1000)
+        with self._write_lock:
+            self._conn.execute(
+                """
+                INSERT INTO sync_dlq
+                  (id, kind, endpoint, fname, node_id, subagent_id,
+                   payload_json, error, attempts, created_at, last_try_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, NULL)
+                ON CONFLICT (id) DO UPDATE SET
+                  error = excluded.error,
+                  last_try_at = excluded.created_at
+                """,
+                [dlq_id, kind, endpoint, fname, node_id, subagent_id,
+                 payload_json, error[:2000], now],
+            )
+
+    def dlq_list(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Oldest-first list of pending DLQ rows for the replayer."""
+        rows = self._fetch(
+            """
+            SELECT id, kind, endpoint, fname, node_id, subagent_id,
+                   payload_json, attempts, created_at
+            FROM sync_dlq
+            ORDER BY created_at ASC
+            LIMIT ?
+            """,
+            [int(limit)],
+        )
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            out.append({
+                "id": r[0], "kind": r[1], "endpoint": r[2],
+                "fname": r[3], "node_id": r[4], "subagent_id": r[5],
+                "payload_json": r[6], "attempts": int(r[7] or 0),
+                "created_at": int(r[8] or 0),
+            })
+        return out
+
+    def dlq_mark_attempt(self, dlq_id: str, error: str = "") -> None:
+        """Record a failed replay attempt (keep the row, bump attempts)."""
+        if self._read_only:
+            raise RuntimeError("local_store: dlq_mark_attempt requires writer mode")
+        with self._write_lock:
+            self._conn.execute(
+                """
+                UPDATE sync_dlq
+                SET attempts = attempts + 1,
+                    last_try_at = ?,
+                    error = ?
+                WHERE id = ?
+                """,
+                [int(time.time() * 1000), error[:2000], dlq_id],
+            )
+
+    def dlq_delete(self, dlq_id: str) -> None:
+        """Drop a DLQ row after a successful replay (or permanent abandon)."""
+        if self._read_only:
+            raise RuntimeError("local_store: dlq_delete requires writer mode")
+        with self._write_lock:
+            self._conn.execute("DELETE FROM sync_dlq WHERE id = ?", [dlq_id])
+
+    def dlq_count(self) -> int:
+        rows = self._fetch("SELECT COUNT(*) FROM sync_dlq", [])
+        return int(rows[0][0]) if rows else 0
+
     def health(self) -> dict[str, Any]:
         """Snapshot of store state — for the /local/health endpoint and the
         dashboard footer."""
-        size_bytes = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+        # Issue #1594 — measure main + WAL. The WAL is where DuckDB stages
+        # recent writes until CHECKPOINT; ignoring it under-counted the
+        # real disk footprint by an order of magnitude during active
+        # ingest, which is exactly when the dashboard most wants to know.
+        size_bytes = _on_disk_bytes()
         rows = self._fetch(
             "SELECT COUNT(*) AS n, MIN(ts) AS oldest, MAX(ts) AS newest FROM events",
             []
@@ -4337,6 +5501,13 @@ class LocalStore:
             "size_bytes": int(size_bytes),
             "size_mb": round(size_bytes / 1024 / 1024, 2),
             "size_cap_bytes": LOCAL_MAX_BYTES,
+            # Issue #1594 — surfaced to dashboard footer + cloud-side
+            # alerts. True when the last auto-vacuum attempt could not
+            # bring the store back under LOCAL_MAX_BYTES; remains True
+            # until either retention shrinks naturally or the next
+            # vacuum succeeds.
+            "cap_exceeded": bool(self._cap_exceeded),
+            "auto_vacuum_enabled": bool(AUTO_VACUUM_ENABLED),
             "event_count": int(n or 0),
             "oldest_ts": oldest,
             "newest_ts": newest,
@@ -4345,14 +5516,41 @@ class LocalStore:
             "ring_dropped_total": dropped,
             "schema_version": SCHEMA_VERSION,
             "last_flush_ago_s": round(time.monotonic() - self._last_flush_ts, 2),
+            "sync_dlq_depth": self.dlq_count(),
         }
 
     def vacuum(self, *, prune_to_bytes: int | None = None) -> dict[str, Any]:
         """Reclaim space. If ``prune_to_bytes`` is set (or the DB has exceeded
         ``LOCAL_MAX_BYTES``), delete oldest events first until the projected
-        size fits, then run a CHECKPOINT to reclaim file size."""
+        size fits, then run a CHECKPOINT to reclaim file size.
+
+        Issue #1594 — ``before_size`` is now main+WAL (was just main), so the
+        prune decision matches the real on-disk footprint instead of the
+        post-checkpoint snapshot. Without this, ``before_size`` typically
+        showed 12 KB during active ingest while the WAL held 10 MB, so the
+        prune branch never fired even when the daemon was already over cap."""
+        # Public entry: drain the ring first so the prune accounting includes
+        # everything currently in flight. Auto-vacuum (called from inside
+        # ``_flush_now_locked``) skips this step via ``_vacuum_locked`` —
+        # re-entering ``_flush_now`` here would deadlock on ``_flush_lock``.
         self._flush_now()
-        before_size = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+        return self._vacuum_locked(prune_to_bytes=prune_to_bytes)
+
+    def _vacuum_locked(self, *, prune_to_bytes: int | None = None) -> dict[str, Any]:
+        """Core vacuum body — assumes ring is already drained (or that the
+        caller is fine with skipping in-flight events). Safe to call from
+        any thread that does NOT currently hold ``_flush_lock``-protected
+        state; specifically called from ``_maybe_auto_vacuum`` AFTER the
+        flush body has released its locks via the outer scheduling."""
+        # CHECKPOINT first so the main file reflects everything we just
+        # flushed; then both ``before_size`` and the row-arithmetic below
+        # operate on a consistent snapshot.
+        with self._write_lock:
+            try:
+                self._conn.execute("CHECKPOINT")
+            except Exception:
+                log.exception("local store: pre-prune CHECKPOINT failed")
+        before_size = _on_disk_bytes()
         cap = prune_to_bytes if prune_to_bytes is not None else LOCAL_MAX_BYTES
         deleted = 0
         if before_size > cap:
@@ -4361,6 +5559,17 @@ class LocalStore:
                 bytes_per_row = before_size / n_rows
                 excess_bytes = (before_size - cap) * 1.2
                 rows_to_drop = int(excess_bytes / bytes_per_row) if bytes_per_row else 0
+                # Issue #1594 — never drop more than 80 % of rows in
+                # one pass. The bytes-per-row estimate is coarse (DuckDB
+                # WAL + page layout differs across writes), and on a
+                # heavily-over-cap store (e.g. cap=1 B test fixture, or
+                # a real install hit by burst ingest) the naive estimate
+                # can compute ``rows_to_drop > n_rows``. DELETE ... LIMIT
+                # with that value would wipe the entire history in one
+                # cycle. Capping preserves the oldest-evicted invariant
+                # while leaving the user some recent data; subsequent
+                # flushes will continue to vacuum if still over cap.
+                rows_to_drop = min(rows_to_drop, max(1, int(n_rows * 0.8)))
                 if rows_to_drop > 0:
                     with self._write_lock:
                         with _txn(self._conn):
@@ -4386,7 +5595,7 @@ class LocalStore:
                 self._conn.execute("CHECKPOINT")
             except Exception:
                 log.exception("local store: CHECKPOINT failed")
-        after_size = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+        after_size = _on_disk_bytes()
         return {
             "deleted_rows": int(deleted),
             "before_bytes": before_size,
@@ -4394,6 +5603,141 @@ class LocalStore:
             "cap_bytes": cap,
             "reclaimed_bytes": max(0, before_size - after_size),
         }
+
+    # ── Issue #1594 — on-write auto-vacuum ──────────────────────────────
+    #
+    # Called from ``_flush_now_locked`` after every successful flush.
+    # Cheap fast path: increment a byte-counter and bail unless we've
+    # crossed the check threshold. Hot path is two int compares + a
+    # branch; the stat() / size compare / vacuum call only runs once
+    # per ~100 MB written.
+    def _maybe_auto_vacuum(self) -> None:
+        """Auto-vacuum gate (#1594). Runs after each flush; fires the real
+        vacuum only when we've written enough since the last check AND the
+        store has crossed ``AUTO_VACUUM_HIGH_WATER_PCT`` of the cap.
+
+        Reentrancy: ``_auto_vacuum_running`` guards against vacuum →
+        flush → vacuum cycles. Errors are swallowed (logged) — auto-vacuum
+        must never crash the flusher; the manual ``vacuum()`` endpoint and
+        the next tick will retry."""
+        if not AUTO_VACUUM_ENABLED:
+            return
+        if self._bytes_since_vacuum_check < AUTO_VACUUM_CHECK_EVERY_BYTES:
+            return
+        # Acquire under lock so concurrent flushers don't both pass the
+        # gate; the second waits, sees _auto_vacuum_running and returns.
+        with self._auto_vacuum_lock:
+            if self._auto_vacuum_running:
+                return
+            if self._bytes_since_vacuum_check < AUTO_VACUUM_CHECK_EVERY_BYTES:
+                return  # someone else already drained the counter
+            self._auto_vacuum_running = True
+            self._bytes_since_vacuum_check = 0
+        try:
+            size = _on_disk_bytes()
+            high_water = int(LOCAL_MAX_BYTES * AUTO_VACUUM_HIGH_WATER_PCT)
+            if size < high_water:
+                # Healthy — clear any prior cap_exceeded flag and bail.
+                self._cap_exceeded = False
+                return
+            log.info(
+                "local store: auto-vacuum fired (size=%d B, high_water=%d B, "
+                "cap=%d B) — pruning oldest events to fit",
+                size, high_water, LOCAL_MAX_BYTES,
+            )
+            # Use the locked body directly — we're already past the flush
+            # boundary and re-entering the public ``vacuum()`` would call
+            # ``_flush_now`` which (depending on stack ordering) can race
+            # with the very next flusher tick. The ring just drained.
+            res = self._vacuum_locked()
+            after = res.get("after_bytes", 0)
+            deleted = res.get("deleted_rows", 0)
+            if after > LOCAL_MAX_BYTES:
+                # Hard-cap miss: vacuum ran but the on-disk file is
+                # still above cap. Two failure modes:
+                #   a) deleted == 0 — we couldn't fit any rows (cap
+                #      pathologically small, e.g. 1 B). Real escalation.
+                #   b) deleted > 0 — rows came out but DuckDB hasn't
+                #      shrunk the main file (DELETE doesn't compact in
+                #      v1.4.x). Freed pages WILL be reused by subsequent
+                #      ingest, so growth is bounded — but we still flag
+                #      cap_exceeded so dashboards/cloud can surface the
+                #      condition. Rate-limit the warning + marker
+                #      (every flush would otherwise re-fire it).
+                self._cap_exceeded = True
+                now = time.monotonic()
+                cooled_down = (
+                    self._last_over_cap_warning_ts is None
+                    or (now - self._last_over_cap_warning_ts)
+                       >= AUTO_VACUUM_OVER_CAP_COOLDOWN_S
+                )
+                if cooled_down:
+                    self._last_over_cap_warning_ts = now
+                    log.warning(
+                        "local store: LOCAL_STORE_OVER_CAP — vacuum could "
+                        "not bring on-disk size under cap (after=%d B, "
+                        "cap=%d B, deleted_rows=%d). DuckDB does not "
+                        "shrink the main file after DELETE; freed pages "
+                        "will be reused by new ingest so growth is "
+                        "bounded, but consider lowering retention, "
+                        "raising CLAWMETRY_LOCAL_MAX_GB, or setting "
+                        "CLAWMETRY_AUTO_VACUUM=0 to manage retention "
+                        "externally.",
+                        after, LOCAL_MAX_BYTES, deleted,
+                    )
+                    try:
+                        self._emit_over_cap_marker(after)
+                    except Exception:
+                        # Marker is best-effort: never crash the flusher
+                        # on a write failure inside the metric path.
+                        log.exception("local store: over-cap marker emit failed")
+            else:
+                self._cap_exceeded = False
+                log.info(
+                    "local store: auto-vacuum reclaimed %d B (deleted %d rows, "
+                    "before=%d B, after=%d B)",
+                    res.get("reclaimed_bytes", 0),
+                    deleted,
+                    res.get("before_bytes", 0),
+                    after,
+                )
+        except Exception:
+            # Belt-and-braces: never let an auto-vacuum failure escape into
+            # the flusher loop and break ingest. The manual vacuum endpoint
+            # remains available and the next flush will reset the counter.
+            log.exception("local store: auto-vacuum failed (will retry next cycle)")
+        finally:
+            with self._auto_vacuum_lock:
+                self._auto_vacuum_running = False
+
+    def _emit_over_cap_marker(self, after_bytes: int) -> None:
+        """Persist a ``local_store_over_cap`` event so dashboards/cloud can
+        see the cap-exceeded condition without polling /local/health. Direct
+        INSERT (bypasses the ring) so even a saturated ring doesn't drop
+        the marker."""
+        import uuid as _uuid
+        from datetime import datetime as _dt, timezone as _tz
+        ev_id = f"over-cap-{_uuid.uuid4()}"
+        node_id = os.environ.get("CLAWMETRY_NODE_ID") or "local"
+        ts_iso = _dt.now(_tz.utc).isoformat()
+        payload = json.dumps({
+            "after_bytes": int(after_bytes),
+            "cap_bytes": int(LOCAL_MAX_BYTES),
+        }).encode("utf-8")
+        with self._write_lock:
+            self._conn.execute(
+                """
+                INSERT OR IGNORE INTO events
+                  (id, agent_type, node_id, agent_id, session_id, workspace_id,
+                   event_type, ts, data, cost_usd, token_count, model, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                [
+                    ev_id, "clawmetry", node_id, "local_store", None, None,
+                    "local_store_over_cap", ts_iso, payload, None, None, None,
+                    int(time.time() * 1000),
+                ],
+            )
 
     # ── Insights fast path (feat/insights-v1) ──────────────────────────
     # Single allowlisted entry-point for hand-authored SELECT templates in

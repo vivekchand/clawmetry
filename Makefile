@@ -1,4 +1,4 @@
-.PHONY: test test-api test-e2e test-fast test-e2e-duckdb dev lint lint-daemon-allowlist
+.PHONY: test test-api test-e2e test-fast test-e2e-duckdb test-moat dev lint lint-daemon-allowlist
 
 dev:
 	OPENCLAW_GATEWAY_TOKEN=dev-token python3 dashboard.py --port 8900
@@ -18,6 +18,22 @@ test-e2e:
 # isolated DuckDB file. No live server, no gateway, no network. ~5s.
 test-e2e-duckdb:
 	python3 -m pytest tests/test_e2e_duckdb_relay.py -v
+
+# MOAT verifier suite (issue #1491 / PRD #1133 invariant #3). Hermetic —
+# no live server, no gateway, no network. ~10s locally. Mirror the CI
+# job in .github/workflows/ci.yml (moat-tests). If you add a file here,
+# add it there too.
+test-moat:
+	python3 -m pytest \
+	    tests/test_moat_send_message_e2e.py \
+	    tests/test_moat_e2e_regression_1129.py \
+	    tests/test_e2e_real_openclaw_pipeline.py \
+	    tests/test_duckdb_fastpath_v3_invariants.py \
+	    tests/test_moat_cloud_roundtrip_e2e.py \
+	    tests/test_channel_event_chokepoint.py \
+	    tests/test_no_direct_get_store_in_routes.py \
+	    tests/test_local_query_api.py \
+	    -q
 
 lint: lint-py lint-js lint-daemon-allowlist
 

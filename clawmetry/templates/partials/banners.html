@@ -123,6 +123,89 @@
     ">Dismiss</button>
 </div>
 
+<!-- No-Agent-Detected Empty-State Banner -->
+<!-- Shown when ClawMetry is installed but NEITHER OpenClaw nor NVIDIA -->
+<!-- NemoClaw is detected on this machine, AND the local store has zero -->
+<!-- events. Distinct from the first-heartbeat-race banner below: -->
+<!--   * this one is persistent (until the user installs an agent) -->
+<!--   * the first-heartbeat one is transient (~30s after install) -->
+<!-- Mutual-exclusion is enforced in app.js so we never show both. -->
+<div id="no-agent-banner" style="
+  display:none;
+  padding:14px 18px;
+  border-bottom:2px solid #f59e0b;
+  font-size:13px;
+  font-weight:600;
+  align-items:center;
+  gap:14px;
+  background:linear-gradient(90deg,#3f2a06 0%,#1a1a2e 100%);
+  color:#fbbf24;
+  flex-wrap:wrap;
+  ">
+  <span style="font-size:18px;">&#9888;&#65039;</span>
+  <span id="no-agent-banner-msg" style="flex:1;min-width:240px;">
+    No OpenClaw or NVIDIA NemoClaw detected. Install one to start seeing data.
+  </span>
+  <a href="https://openclaw.ai/" target="_blank" rel="noopener" style="
+    background:#16a34a;
+    color:#fff;
+    border:none;
+    border-radius:6px;
+    padding:6px 14px;
+    font-size:12px;
+    cursor:pointer;
+    font-weight:600;
+    text-decoration:none;
+    white-space:nowrap;
+    ">Install OpenClaw</a>
+  <a href="https://www.nvidia.com/en-us/ai/nemoclaw/" target="_blank" rel="noopener" style="
+    background:#76b900;
+    color:#000;
+    border:none;
+    border-radius:6px;
+    padding:6px 14px;
+    font-size:12px;
+    cursor:pointer;
+    font-weight:600;
+    text-decoration:none;
+    white-space:nowrap;
+    ">Install NVIDIA NemoClaw</a>
+</div>
+
+<!-- Onboarding / First-Heartbeat Banner (closes #1604) -->
+<!-- Shown on fresh signup until the first heartbeat lands. Auto-refreshes -->
+<!-- every 5s. After 90s with no heartbeat we switch to an actionable error -->
+<!-- so a stuck daemon doesn't masquerade as "loading forever". -->
+<div id="onboarding-banner" style="
+  display:none;
+  padding:12px 16px;
+  border-bottom:2px solid #3b82f6;
+  font-size:13px;
+  font-weight:600;
+  align-items:center;
+  gap:12px;
+  background:linear-gradient(90deg,#0c1d3a 0%,#1a1a2e 100%);
+  color:#93c5fd;
+  ">
+  <span id="onboarding-banner-spinner" style="
+    display:inline-block;
+    width:14px;
+    height:14px;
+    border:2px solid #3b82f680;
+    border-top-color:#60a5fa;
+    border-radius:50%;
+    animation:onboarding-spin 0.9s linear infinite;
+    flex-shrink:0;
+    "></span>
+  <span id="onboarding-banner-msg" style="flex:1;">Setting up your node. First check-in usually arrives in about 30 seconds.</span>
+  <span id="onboarding-banner-eta" style="font-size:11px;font-weight:400;color:#60a5fa;opacity:0.85;"></span>
+</div>
+<style>
+@keyframes onboarding-spin {
+  to { transform: rotate(360deg); }
+}
+</style>
+
 <!-- Heartbeat Gap Banner -->
 <div id="heartbeat-banner" style="
   display:none;
