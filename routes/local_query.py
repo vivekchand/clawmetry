@@ -208,8 +208,24 @@ def _dispatch(shape: str, args: dict) -> dict:
          the DuckDB while it owns the writer lock).
       2. Else fall back to opening the DuckDB directly (single-process
          mode, or daemon temporarily down).
+
+    Arg coercion: callers are NOT required to pre-filter ``args``. Cloud-side
+    callers (heartbeat-piggyback ``pending_queries`` from
+    ``clawmetry-cloud/routes/cloud.py``) sometimes attach metadata like
+    ``node_id`` for cloud-side routing that the local DuckDB-backed
+    ``LocalStore`` methods don't accept. Without coercion that surfaced as
+    a TypeError per heartbeat (one of the root causes behind the 2026-05-18
+    "cloud shows 0 sessions" P0). ``_coerce_args`` runs the per-shape
+    allowlist so unknown kwargs are dropped before the store call.
     """
     started = time.monotonic()
+    try:
+        args = _coerce_args(shape, args or {})
+    except ValueError:
+        # ``_coerce_args`` raises for required-arg violations (e.g. transcript
+        # missing session_id). Let the caller see the original ValueError so
+        # the cloud dispatcher logs a meaningful message.
+        raise
     # Try the daemon proxy first. If it fails for ANY reason, fall
     # through to direct access — the dashboard never goes blank.
     try:
