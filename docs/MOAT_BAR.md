@@ -8,7 +8,7 @@
 | **Owner** | @vivekchand |
 | **Last refreshed** | 2026-05-18 |
 | **Companion** | [MOAT_PERMANENCE_PRD.md](MOAT_PERMANENCE_PRD.md) (architecture deep-dive), [MOAT_COVERAGE.md](MOAT_COVERAGE.md) (per-route matrix) |
-| **Evidence PRs** | OSS [#1672](https://github.com/vivekchand/clawmetry/pull/1672), [#1673](https://github.com/vivekchand/clawmetry/pull/1673), [#1675](https://github.com/vivekchand/clawmetry/pull/1675), [#1678](https://github.com/vivekchand/clawmetry/pull/1678) — Cloud [#975](https://github.com/vivekchand/clawmetry-cloud/pull/975), [#978](https://github.com/vivekchand/clawmetry-cloud/pull/978) |
+| **Evidence PRs** | OSS [#1672](https://github.com/vivekchand/clawmetry/pull/1672), [#1673](https://github.com/vivekchand/clawmetry/pull/1673), [#1675](https://github.com/vivekchand/clawmetry/pull/1675), [#1678](https://github.com/vivekchand/clawmetry/pull/1678). Cloud [#975](https://github.com/vivekchand/clawmetry-cloud/pull/975), [#978](https://github.com/vivekchand/clawmetry-cloud/pull/978) |
 
 ---
 
@@ -16,11 +16,11 @@
 
 The mandate is one sentence repeated three ways so no future contributor can pretend it is ambiguous.
 
-**Every UI element queries local DuckDB.** Not "most." Not "the migrated ones." Every dashboard panel, every chart, every cron list, every channel feed reads through `_try_local_store_*` and lands on the user's local DuckDB via the daemon-proxy at `localhost:4099/local_query/*`. JSONL walkers, in-memory rings, and direct `psutil` historical samples are bugs, not fallbacks. (See `feedback_duckdb_first_rule.md` — "DuckDB-first hard rule for every feature.")
+**Every UI element queries local DuckDB.** Not "most." Not "the migrated ones." Every dashboard panel, every chart, every cron list, every channel feed reads through `_try_local_store_*` and lands on the user's local DuckDB via the daemon-proxy at `localhost:4099/local_query/*`. JSONL walkers, in-memory rings, and direct `psutil` historical samples are bugs, not fallbacks. (See `feedback_duckdb_first_rule.md`, "DuckDB-first hard rule for every feature.")
 
-**Every event writes to DuckDB.** The sync daemon owns the writer lock; OpenClaw v3 events are normalised at the chokepoint in `clawmetry/sync.py::_parse_v3_event` and round-tripped through `query_aggregates` / `query_events`. Synthetic test rows must carry real v3 namespaced types (`model.completed`, `prompt.submitted`, `session.started`) or they pass while production silently flunks. (See `feedback_synthetic_tests_missed_real_event_shape.md` — burned 3 of 7 migrations on 2026-05-15.)
+**Every event writes to DuckDB.** The sync daemon owns the writer lock; OpenClaw v3 events are normalised at the chokepoint in `clawmetry/sync.py::_parse_v3_event` and round-tripped through `query_aggregates` / `query_events`. Synthetic test rows must carry real v3 namespaced types (`model.completed`, `prompt.submitted`, `session.started`) or they pass while production silently flunks. (See `feedback_synthetic_tests_missed_real_event_shape.md`. Burned 3 of 7 migrations on 2026-05-15.)
 
-**Cloud is a display layer over E2E-encrypted aggregates.** Cloud SQL stores `user_id`, `plan_tier`, `last_seen`, and opaque aggregates. The wire format is AES-256-GCM; the key never leaves the customer daemon. Cloud cannot decrypt the heartbeat-piggyback `pending_queries` cache. A breach of Cloud SQL leaks plan tier and a timestamp; it does not leak prompts. (See `project_local_compute_cloud_display.md` — "Local compute, cloud display.")
+**Cloud is a display layer over E2E-encrypted aggregates.** Cloud SQL stores `user_id`, `plan_tier`, `last_seen`, and opaque aggregates. The wire format is AES-256-GCM; the key never leaves the customer daemon. Cloud cannot decrypt the heartbeat-piggyback `pending_queries` cache. A breach of Cloud SQL leaks plan tier and a timestamp; it does not leak prompts. (See `project_local_compute_cloud_display.md`, "Local compute, cloud display.")
 
 If any of those three sentences becomes false on `main`, the MOAT is broken and shipping stops.
 
@@ -79,11 +79,11 @@ In priority order. None of these block the MOAT claim today; all are tracked.
 
 | # | Gap | Status | Owner |
 |---|---|---|---|
-| 1 | **Tier-1 remaining real bypass surfaces** — `GET /api/otel-status` (BYPASS_RING by design, receiver-canary) + `GET /api/usage/cache-trends` (schema gap, needs per-model cache split). | 2 real candidates left after PRs [#1673](https://github.com/vivekchand/clawmetry/pull/1673) + [#1675](https://github.com/vivekchand/clawmetry/pull/1675). 4 more are by-design (SSE, LIVE_PROBE, STATIC bootstrap, Apple SQLite). | Principal #2 audit |
-| 2 | **Tier-2 schema work for `/api/usage/cache-trends`** — `query_daily_usage_splits` needs per-model rows OR new `query_cache_trends`. | MEDIUM confidence; schema-first PR before route migration. | Principal #2 |
-| 3 | **Cloud-side keystone mirror** — `cloud_keystone_e2e.py` equivalent that asserts cloud's display layer never reads event payloads server-side. | In flight as cloud PRs [#975](https://github.com/vivekchand/clawmetry-cloud/pull/975) + [#978](https://github.com/vivekchand/clawmetry-cloud/pull/978) (Principal B). | Principal B |
-| 4 | **Failure-mode keystone coverage** — tool-call probes + subagent failure probes to extend the 13-row bar with stress scenarios. | In flight (Principal A). | Principal A |
-| 5 | **HYBRID channel cleanup** — drop the JSONL augment from 7 channels (`telegram`, `whatsapp`, `signal`, `discord`, `slack`, `irc`, `webchat`) once daemon channel-message ingest catches up. | Tracked separately; not blocking. | — |
+| 1 | **Tier-1 remaining real bypass surfaces**. `GET /api/otel-status` (BYPASS_RING by design, receiver-canary) + `GET /api/usage/cache-trends` (schema gap, needs per-model cache split). | 2 real candidates left after PRs [#1673](https://github.com/vivekchand/clawmetry/pull/1673) + [#1675](https://github.com/vivekchand/clawmetry/pull/1675). 4 more are by-design (SSE, LIVE_PROBE, STATIC bootstrap, Apple SQLite). | Principal #2 audit |
+| 2 | **Tier-2 schema work for `/api/usage/cache-trends`**. `query_daily_usage_splits` needs per-model rows OR new `query_cache_trends`. | MEDIUM confidence; schema-first PR before route migration. | Principal #2 |
+| 3 | **Cloud-side keystone mirror**. `cloud_keystone_e2e.py` equivalent that asserts cloud's display layer never reads event payloads server-side. | In flight as cloud PRs [#975](https://github.com/vivekchand/clawmetry-cloud/pull/975) + [#978](https://github.com/vivekchand/clawmetry-cloud/pull/978) (Principal B). | Principal B |
+| 4 | **Failure-mode keystone coverage**. Tool-call probes + subagent failure probes to extend the 13-row bar with stress scenarios. | In flight (Principal A). | Principal A |
+| 5 | **HYBRID channel cleanup**. Drop the JSONL augment from 7 channels (`telegram`, `whatsapp`, `signal`, `discord`, `slack`, `irc`, `webchat`) once daemon channel-message ingest catches up. | Tracked separately; not blocking. | (unowned) |
 
 ---
 
@@ -121,7 +121,7 @@ python3 scripts/accuracy_harness/keystone_e2e.py
 python3 scripts/accuracy_harness/keystone_e2e.py --dashboard-url http://localhost:8903
 ```
 
-**Proxy-vs-direct rule (load-bearing):** the harness never opens `clawmetry.duckdb` directly. All DuckDB reads go through the daemon's `/__local_query__/<method>` HTTP proxy. DuckDB locks at the **process level**; `read_only=True` does not bypass this. (See `reference_duckdb_process_lock.md` — PR #1253's `read_only=True` workaround was wrong.)
+**Proxy-vs-direct rule (load-bearing):** the harness never opens `clawmetry.duckdb` directly. All DuckDB reads go through the daemon's `/__local_query__/<method>` HTTP proxy. DuckDB locks at the **process level**; `read_only=True` does not bypass this. (See `reference_duckdb_process_lock.md`. PR #1253's `read_only=True` workaround was wrong.)
 
 ### How to interpret a FAIL
 
@@ -169,12 +169,12 @@ Reference harness pattern: see the existing 13 probes in `scripts/accuracy_harne
 
 ## References
 
-- `scripts/accuracy_harness/keystone_e2e.py` — the verifier (PR [#1672](https://github.com/vivekchand/clawmetry/pull/1672))
-- `docs/MOAT_COVERAGE.md` — per-route matrix (PR [#1678](https://github.com/vivekchand/clawmetry/pull/1678))
-- `docs/MOAT_PERMANENCE_PRD.md` — architecture deep-dive + 4-gate permanence stack
-- `feedback_duckdb_first_rule.md` — the hard rule
-- `feedback_synthetic_tests_missed_real_event_shape.md` — predicate-vs-shape skew failure mode
-- `project_local_compute_cloud_display.md` — cloud is a display layer, not a data store
-- `reference_openclaw_v3_event_types.md` — v3 event namespace map
-- `reference_duckdb_process_lock.md` — why daemon-proxy is the only correct read path
-- `feedback_daemon_proxy_pattern.md` — 5-step migration playbook
+- `scripts/accuracy_harness/keystone_e2e.py`: the verifier (PR [#1672](https://github.com/vivekchand/clawmetry/pull/1672))
+- `docs/MOAT_COVERAGE.md`: per-route matrix (PR [#1678](https://github.com/vivekchand/clawmetry/pull/1678))
+- `docs/MOAT_PERMANENCE_PRD.md`: architecture deep-dive + 4-gate permanence stack
+- `feedback_duckdb_first_rule.md`: the hard rule
+- `feedback_synthetic_tests_missed_real_event_shape.md`: predicate-vs-shape skew failure mode
+- `project_local_compute_cloud_display.md`: cloud is a display layer, not a data store
+- `reference_openclaw_v3_event_types.md`: v3 event namespace map
+- `reference_duckdb_process_lock.md`: why daemon-proxy is the only correct read path
+- `feedback_daemon_proxy_pattern.md`: 5-step migration playbook
