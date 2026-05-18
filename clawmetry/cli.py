@@ -2371,7 +2371,7 @@ def main() -> None:
     # Sets the env var that dashboard.py checks at blueprint registration time.
     if "--v2" in sys.argv:
         sys.argv = [a for a in sys.argv if a != "--v2"]
-        os.environ["CLAWMETRY_V2"] = "1"
+        os.environ["CLAWMETRY_V2_ENABLED"] = "1"
         print(
             "v2 preview at http://localhost:8900/v2 · back to v1 at /",
             flush=True,

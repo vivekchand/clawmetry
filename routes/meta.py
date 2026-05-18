@@ -649,7 +649,7 @@ def index():
     # (week-1 migration plan, README §"What to communicate"). Mirrors the
     # same env var the v2 blueprint registration in dashboard.py uses, so we
     # never advertise /v2 to users who'd hit a 404.
-    v2_enabled = os.environ.get("CLAWMETRY_V2") == "1"
+    v2_enabled = os.environ.get("CLAWMETRY_V2_ENABLED") == "1"
     # Issue #1603: server-side Pro-tier gate. Tab templates branch on this
     # so the Pro-feature DOM (NemoClaw governance shell, alerts rule editor
     # modal) never enters the page for Free users. Eliminates the first-paint
