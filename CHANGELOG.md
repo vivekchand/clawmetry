@@ -489,3 +489,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - New `--enc-key` flag: non-interactive connect for sandboxes
 - Only sandboxes appear in app.clawmetry.com, not the host
 - Clean end message after NemoClaw install
+
+## v0.12.244 (re-cut: workflow ate the previous bump)
+- Re-trigger PyPI publish so cloud auto-pin picks up the v0.12.243 sync.py drift fix at v0.12.244
