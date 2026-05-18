@@ -497,3 +497,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - fix(sync): daemon uploads per-session event_count + size_bytes (#1697) — Embodied tab now shows real counts on cloud
 - feat(replay): Replay tab queries DuckDB instead of optional SQLite collector (#1698) — chart populates out of the box
 - fix(nav): rename 'Rules' to 'Alerts' to match page content (#1696)
+
+## v0.12.246
+- feat(ia): nav regroup — Flow/Brain/Logs/Models/LLM Context under Live; Crons + Memory promoted top-level (#1702)
+- fix(cloud-nav): Version impact hidden in cloud mode (#1700)
+- fix(advisor): Self-Evolve auto-detects Anthropic key from OpenClaw config; no more blocking takeover panel (#1703)
+- fix(skills): Skills tab now discovers ~/.openclaw/plugin-skills/ (was returning 0 even with installed skills) (#1703)
