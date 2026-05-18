@@ -8451,6 +8451,44 @@ def run_daemon() -> None:
     except Exception as _e:
         log.warning("daemon-error event handler: failed to install: %s", _e)
 
+    # ── Eagerly take the DuckDB writer lock BEFORE any read-only opener ──
+    # DuckDB enforces a PROCESS-level lock on the file. Two failure modes
+    # this warm-up addresses:
+    #
+    # 1. INTRA-process (the original bug): once a RO handle exists in THIS
+    #    process, no RW handle can be opened (the singleton in
+    #    ``local_store.get_store`` raises "cannot open writer — read-only
+    #    handle already exists in this process"). Several startup paths
+    #    request a RO store (heartbeat agent-install detection, cache push
+    #    builders), and the main loop later tries to flush via the writer.
+    #    Opening the writer FIRST means ``get_store(read_only=True)`` callers
+    #    in this process transparently share the writer connection (see
+    #    ``local_store.get_store`` lines 960-963) and no path is blocked.
+    #
+    # 2. INTER-process: a stray dashboard / second daemon / orphaned worktree
+    #    can still own the writer lock. DuckDB then raises ``IO Error: Could
+    #    not set lock on file ... Conflicting lock is held in <path> (PID
+    #    <pid>) ...``. We surface that as an ERROR (not WARNING) with
+    #    triage breadcrumbs because EVERY downstream writer call will fail
+    #    until the offender exits, and the cascade of generic warnings
+    #    elsewhere ("channel sync error", "telegram-gw-log unavailable",
+    #    "pre-checkpoint flush failed") doesn't name the offending PID.
+    try:
+        from clawmetry import local_store as _ls_warmup
+        _ls_warmup.get_store(read_only=False)
+        log.info("local_store writer warm-up: owned (intra-process RO upgrades will share this handle)")
+    except Exception as _ws_e:
+        _msg = str(_ws_e)
+        if "Conflicting lock" in _msg or "Could not set lock" in _msg:
+            log.error(
+                "local_store writer warm-up: ANOTHER PROCESS HOLDS THE "
+                "DUCKDB WRITER LOCK. ALL writes will fail until it exits. "
+                "Check the offending PID in: %s",
+                _msg,
+            )
+        else:
+            log.warning("local_store writer warm-up failed (continuing): %s", _ws_e)
+
     # ── Startup sync: recent-first so Brain feed shows current activity ──
     send_heartbeat(config)
     log.info("Initial heartbeat sent")
