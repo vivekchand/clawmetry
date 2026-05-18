@@ -10,6 +10,21 @@ import pytest
 import requests
 
 
+# Playwright's sync API can only be entered once per process. Share a single
+# browser across all E2E test modules via this session-scoped fixture; each
+# module owns its own contexts off the shared browser.
+@pytest.fixture(scope="session")
+def _shared_chromium():
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        pytest.skip("playwright not installed")
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        yield browser
+        browser.close()
+
+
 def pytest_addoption(parser):
     """CLI flags shared across the suite.
 

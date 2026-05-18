@@ -36,23 +36,21 @@ GATEWAY_TOKEN = _detect_gateway_token()
 
 
 @pytest.fixture(scope="session")
-def browser_context():
-    """Launch Chromium, inject auth token into localStorage."""
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        ctx = browser.new_context(base_url=BASE_URL)
+def browser_context(_shared_chromium):
+    """New Chromium context off the shared session browser; seeds auth token."""
+    ctx = _shared_chromium.new_context(base_url=BASE_URL)
 
-        # Inject auth token into localStorage before tests
-        if GATEWAY_TOKEN:
-            setup_page = ctx.new_page()
-            setup_page.goto(BASE_URL, wait_until="domcontentloaded")
-            setup_page.evaluate(
-                f"localStorage.setItem('clawmetry-token', '{GATEWAY_TOKEN}')"
-            )
-            setup_page.close()
+    # Inject auth token into localStorage before tests
+    if GATEWAY_TOKEN:
+        setup_page = ctx.new_page()
+        setup_page.goto(BASE_URL, wait_until="domcontentloaded")
+        setup_page.evaluate(
+            f"localStorage.setItem('clawmetry-token', '{GATEWAY_TOKEN}')"
+        )
+        setup_page.close()
 
-        yield ctx
-        browser.close()
+    yield ctx
+    ctx.close()
 
 
 @pytest.fixture

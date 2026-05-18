@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * visual-diff.mjs — capture full-page screenshots of the same dashboard
+ * visual-diff.mjs -- capture full-page screenshots of the same dashboard
  * "tabs" on two running clawmetry dashboards (BASE_URL vs HEAD_URL),
  * pixel-diff them, and write artefacts under OUT_DIR.
  *
- * The clawmetry dashboard is a single-page Flask app — every tab lives at
+ * The clawmetry dashboard is a single-page Flask app -- every tab lives at
  * `/` and is switched via the global `switchTab(name)` JS function (no
  * query-string, no hash routing). So we navigate once per tab to `/`, then
  * call `switchTab(<name>)` via Playwright `evaluate`, settle, and screenshot.
@@ -24,12 +24,14 @@
  *   $OUT_DIR/<view>__<slug>__before.png
  *   $OUT_DIR/<view>__<slug>__after.png
  *   $OUT_DIR/<view>__<slug>__diff.png
- *   $OUT_DIR/manifest.json — [{view, tab, slug, diffPct, hasDiff,
+ *   $OUT_DIR/manifest.json -- [{view, tab, slug, diffPct, hasDiff,
  *                              baseOk, headOk, baseStatus, headStatus}]
  *
  * Exits 0 on clean run (with or without pixel diffs).
- * Exits 3 if any '/' fetch came back non-200 (auth gap): the workflow
- *   surfaces this as a clear failure so the bot isn't silently green.
+ * Exits 2 if either server is unreachable before screenshots start.
+ * Exits 3 if any auth gap is detected: HTTP non-200 response, auth overlay
+ *   still visible after token injection, OR pre-flight /api/auth/check
+ *   rejection (token mismatch caught before screenshot loop starts).
  */
 import { chromium } from "playwright";
 import pixelmatch from "pixelmatch";
@@ -47,7 +49,7 @@ const AUTH_TOKEN = process.env.CLAWMETRY_VISUAL_DIFF_TOKEN || "";
 
 // Tabs that actually exist on the OSS dashboard nav (see dashboard.py
 // switchTab() handlers + the .nav-tab buttons). `overview` is the implicit
-// default — listed first so we get a `root` baseline shot.
+// default -- listed first so we get a `root` baseline shot.
 const DEFAULT_TABS =
   "overview,flow,brain,usage,crons,memory,security,subagents,transcripts,logs,skills,models,approvals,alerts,notifications,context,limits,clusters,history";
 const TABS = (process.env.PR_SCREENSHOT_TABS || DEFAULT_TABS)
@@ -76,6 +78,34 @@ async function reachable(url) {
     return r.status < 500;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Pre-flight: call /api/auth/check with the token and return an error string
+ * if the token is rejected, or null if auth is accepted.
+ *
+ * Must run BEFORE the browser loop so a token mismatch fails fast instead
+ * of producing a wall of identical login-overlay screenshots with exit 0.
+ * (The overlay sets ok=false in shoot() but HTTP status is still 200, so
+ * the old authGaps check never fired -- the script exited 0 silently.)
+ */
+async function preflightAuth(url, token) {
+  if (!token) return null; // no token configured -- auth is optional on this instance
+  try {
+    const params = `?token=${encodeURIComponent(token)}`;
+    const r = await fetch(`${url}/api/auth/check${params}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await r.json().catch(() => ({}));
+    if (data.valid === true) return null; // accepted
+    return (
+      `${url}: /api/auth/check returned valid=${data.valid}` +
+      (data.needsSetup ? " needsSetup=true" : "") +
+      ". Ensure OPENCLAW_GATEWAY_TOKEN on the server matches CLAWMETRY_VISUAL_DIFF_TOKEN."
+    );
+  } catch (e) {
+    return `${url}: /api/auth/check threw: ${e && e.message}`;
   }
 }
 
@@ -204,7 +234,7 @@ async function diffPair(beforeFile, afterFile, diffFile) {
   const a = PNG.sync.read(await fs.readFile(beforeFile));
   const b = PNG.sync.read(await fs.readFile(afterFile));
   if (a.width !== b.width || a.height !== b.height) {
-    // Different page heights — declare full diff and copy "after" as the
+    // Different page heights -- declare full diff and copy "after" as the
     // visual diff for the reviewer to eyeball.
     await fs.copyFile(afterFile, diffFile);
     return 1.0;
@@ -230,9 +260,31 @@ async function main() {
     ["HEAD", HEAD_URL],
   ]) {
     if (!(await reachable(url + "/"))) {
-      console.error(`${label} server unreachable at ${url}/ — aborting.`);
+      console.error(`${label} server unreachable at ${url}/ -- aborting.`);
       process.exit(2);
     }
+  }
+
+  // Pre-flight: verify the gateway token is accepted by both servers BEFORE
+  // starting the screenshot loop. Previously, a token mismatch would silently
+  // produce a wall of identical login-overlay PNGs and exit 0 (because
+  // HTTP 200 is still returned by the SPA root even with the overlay up, so
+  // the old status-only authGaps check never fired). Fail early and loudly.
+  if (AUTH_TOKEN) {
+    const preflightErrors = [];
+    for (const [label, url] of [["BASE", BASE_URL], ["HEAD", HEAD_URL]]) {
+      const err = await preflightAuth(url, AUTH_TOKEN);
+      if (err) preflightErrors.push(`${label}: ${err}`);
+    }
+    if (preflightErrors.length > 0) {
+      console.error(
+        "\nPre-flight auth check FAILED. The gateway token is not accepted.\n" +
+        "Every screenshot would just be the login overlay -- aborting early.\n" +
+        preflightErrors.map((s) => "  " + s).join("\n") + "\n"
+      );
+      process.exit(3);
+    }
+    console.log("[preflight] auth OK on BASE and HEAD");
   }
 
   const browser = await chromium.launch();
@@ -250,14 +302,22 @@ async function main() {
       const headRes = await shoot(browser, HEAD_URL, view, tab, afterFile);
       const diffPct = await diffPair(beforeFile, afterFile, diffFile);
 
-      // Sanity gate: '/' must return HTTP 200. Anything else (3xx redirect,
-      // 401, 5xx) means the dashboard didn't render the SPA and we just
-      // captured a login/error page. Collect and fail the workflow at the
-      // end so reviewers see one clear message instead of N silent overlays.
+      // Sanity gate: '/' must return HTTP 200 AND no auth overlay must be
+      // visible. A non-200 means the SPA didn't render. ok=false with HTTP 200
+      // means an overlay was visible after token injection (shoot() sets
+      // ok=false when #login-overlay / #gw-setup-overlay is visible, but the
+      // old code never added that to authGaps -- fixed here).
       for (const [label, res] of [["base", baseRes], ["head", headRes]]) {
         if (res.status !== 200) {
           authGaps.push(
             `${label} ${view.name}/${tab}: HTTP ${res.status || "no-response"} (expected 200)`
+          );
+        } else if (!res.ok) {
+          // HTTP 200 but ok=false: shoot() detected an auth overlay or render
+          // error. Treat as an auth gap so the workflow fails loudly instead of
+          // silently posting overlay screenshots with a green exit code.
+          authGaps.push(
+            `${label} ${view.name}/${tab}: auth overlay visible or render error (token not accepted)`
           );
         }
       }
@@ -291,10 +351,10 @@ async function main() {
 
   if (authGaps.length > 0) {
     console.error(
-      "\nAuth gap: one or more routes returned a non-200 response. " +
-        "The gateway token wasn't honored, so the captured PNGs are likely " +
-        "login overlays, not real tabs. Fix the boot config "+
-        "(OPENCLAW_GATEWAY_TOKEN + CLAWMETRY_VISUAL_DIFF_TOKEN must match)."
+      "\nAuth gap: one or more tabs had a non-200 response or a visible auth overlay.\n" +
+        "The gateway token was not accepted. Captured PNGs are likely login overlays,\n" +
+        "not real tab content. Fix the boot config:\n" +
+        "OPENCLAW_GATEWAY_TOKEN + CLAWMETRY_VISUAL_DIFF_TOKEN must match."
     );
     for (const gap of authGaps) console.error("  - " + gap);
     process.exit(3);
