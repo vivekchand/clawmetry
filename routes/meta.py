@@ -662,12 +662,19 @@ def index():
         is_pro = bool(_d._is_pro_user())
     except Exception:
         is_pro = False
+    # Phase-1 IA refactor (issue #1659): power-user opt-out via `?legacy_nav=1`
+    # falls back to the old top-nav layout. Default is the new 7-item left-nav
+    # + Advanced drawer. Boolean-coerce so any truthy value in the query string
+    # ("1", "true", "yes") flips the legacy template branch on.
+    legacy_nav_raw = request.args.get("legacy_nav", "")
+    legacy_nav = legacy_nav_raw.lower() in ("1", "true", "yes", "on")
     resp = make_response(
         render_template_string(
             _d.DASHBOARD_HTML,
             version=_d.__version__,
             v2_enabled=v2_enabled,
             is_pro=is_pro,
+            legacy_nav=legacy_nav,
         )
     )
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"

@@ -1243,3 +1243,168 @@
   display: flex; justify-content: flex-end; gap: 8px;
   padding: 16px 22px; border-top: 1px solid var(--border-secondary);
 }
+
+/* === Left Nav (Phase 1 IA refactor, issue #1659) ====================== */
+/* 220px sidebar + remainder for content. Grid is the right primitive
+   here so the sidebar pins to the viewport top and the content area
+   keeps its own scroll context. The .page rule above sets max-width
+   1200px and margin:0 auto on each tab body — that still works inside
+   the grid cell because the cell is wider than 1200px on any reasonable
+   desktop, and the auto margins re-center the content. */
+.app-shell {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 0;
+  min-height: calc(100vh - 56px);
+  align-items: stretch;
+}
+.app-shell-content { min-width: 0; min-height: 0; }
+#left-nav {
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-primary);
+  padding: 14px 10px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  position: sticky;
+  top: 56px;
+  height: calc(100vh - 56px);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.left-nav-section { display: flex; flex-direction: column; gap: 2px; }
+.left-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  user-select: none;
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.left-nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.left-nav-item.active {
+  background: var(--bg-accent);
+  color: #fff;
+  border-color: var(--bg-accent);
+}
+.left-nav-item.active .left-nav-icon { color: #fff; }
+.left-nav-icon {
+  width: 18px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 14px;
+  text-align: center;
+}
+.left-nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.left-nav-beta {
+  font-size: 10px;
+  color: var(--text-warning);
+  font-weight: 700;
+  margin-left: 4px;
+}
+.left-nav-badge {
+  background: #ef4444;
+  color: #fff;
+  border-radius: 10px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  min-width: 18px;
+  text-align: center;
+}
+.left-nav-advanced-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin-top: 10px;
+  padding: 8px 12px;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  font-family: inherit;
+}
+.left-nav-advanced-toggle:hover { color: var(--text-secondary); background: var(--bg-hover); }
+.left-nav-advanced-chevron {
+  display: inline-block;
+  font-size: 12px;
+  transition: transform 0.18s ease;
+}
+.left-nav-advanced-toggle[aria-expanded="true"] .left-nav-advanced-chevron {
+  transform: rotate(180deg);
+}
+.left-nav-advanced-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 2px 0 4px;
+}
+.left-nav-item-sub {
+  padding: 7px 12px 7px 24px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+}
+.left-nav-item-link { text-decoration: none; }
+.left-nav-footer {
+  margin-top: auto;
+  padding: 10px 12px 4px;
+  border-top: 1px solid var(--border-secondary);
+}
+.left-nav-legacy-link {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-decoration: none;
+  display: inline-block;
+}
+.left-nav-legacy-link:hover { color: var(--text-secondary); text-decoration: underline; }
+
+/* Mobile: collapse sidebar to an off-canvas drawer, toggled by a
+   hamburger button pinned to the top-left under the header. Tap any
+   left-nav item or the dimmer to close. */
+#left-nav-mobile-toggle {
+  display: none;
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  z-index: 50;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid var(--border-primary);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 18px;
+  cursor: pointer;
+  box-shadow: var(--card-shadow);
+}
+@media (max-width: 768px) {
+  .app-shell { grid-template-columns: minmax(0, 1fr); }
+  #left-nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 240px;
+    z-index: 60;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    box-shadow: 4px 0 18px rgba(0,0,0,0.25);
+  }
+  #left-nav.open { transform: translateX(0); }
+  #left-nav-mobile-toggle { display: flex; align-items: center; justify-content: center; }
+}
