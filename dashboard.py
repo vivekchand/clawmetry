@@ -10747,6 +10747,7 @@ DASHBOARD_HTML = r"""
     <span class="zoom-level" id="zoom-level" title="Current zoom level. Ctrl/Cmd + 0 to reset">100%</span>
     <button class="zoom-btn" onclick="zoomIn()" title="Zoom in (Ctrl/Cmd + +)">+</button>
   </div>
+  {% if legacy_nav %}
   <div class="nav-tabs">
     <div class="nav-tab" onclick="switchTab('flow')">Flow</div>
     <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
@@ -10770,6 +10771,19 @@ DASHBOARD_HTML = r"""
   <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>
   <div id="cloud-connected-badge" onclick="window.open('https://app.clawmetry.com/cloud','_blank')" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(34,197,94,0.4);border-radius:8px;font-size:12px;font-weight:600;color:#22c55e;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(34,197,94,0.08)'" onmouseout="this.style.background='transparent'">&#9679; Cloud Connected</div>
   </div>
+  {% else %}
+  {# Phase-1 IA refactor (issue #1659): the top-nav keeps the logo / zoom
+     / theme toggles, but tab navigation moves to the left sidebar below.
+     Hidden chrome (cloud CTA, cloud-connected badge, v2 link) stays in the
+     header because the rest of the JS still hides/shows them by id. #}
+  <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
+    {% if v2_enabled %}
+    <a class="nav-tab v1-to-v2-link" href="/v2" style="text-decoration:none;color:#E5443A;border-color:rgba(229,68,58,0.35);" title="Open the v2 (beta) dashboard">&#10024; Try v2 (beta) &#8599;</a>
+    {% endif %}
+    <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>
+    <div id="cloud-connected-badge" onclick="window.open('https://app.clawmetry.com/cloud','_blank')" style="display:none;cursor:pointer;padding:6px 12px;border:1px solid rgba(34,197,94,0.4);border-radius:8px;font-size:12px;font-weight:600;color:#22c55e;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(34,197,94,0.08)'" onmouseout="this.style.background='transparent'">&#9679; Cloud Connected</div>
+  </div>
+  {% endif %}
 </div>
 {% include 'partials/cloud-modal.html' %}
 
@@ -10777,6 +10791,110 @@ DASHBOARD_HTML = r"""
 {% include 'partials/banners.html' %}
 
 {% include 'partials/budget-modal.html' %}
+
+{% if not legacy_nav %}
+{# Phase-1 IA refactor (issue #1659): 220px left sidebar + content grid.
+   Primary nav holds 7 buckets; everything else lives in the Advanced
+   drawer. Mobile (<=768px) collapses sidebar to an off-canvas hamburger
+   triggered by #left-nav-mobile-toggle. #}
+<button id="left-nav-mobile-toggle" type="button" aria-label="Open navigation" onclick="toggleLeftNavMobile()">&#9776;</button>
+<div class="app-shell">
+  <aside id="left-nav" role="navigation" aria-label="Primary">
+    <div class="left-nav-section">
+      <div class="left-nav-item active" data-tab="overview" onclick="switchTab('overview')" title="Live view of every running agent">
+        <span class="left-nav-icon" aria-hidden="true">&#9679;</span>
+        <span class="left-nav-label">Live trace</span>
+        <span id="nav-stuck-badge" class="left-nav-badge" style="display:none;">0</span>
+      </div>
+      <div class="left-nav-item" data-tab="clusters" onclick="switchTab('clusters')" title="Multi-node fleet overview">
+        <span class="left-nav-icon" aria-hidden="true">&#9678;</span>
+        <span class="left-nav-label">Fleet sonar</span>
+      </div>
+      <div class="left-nav-item" data-tab="approvals" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">
+        <span class="left-nav-icon" aria-hidden="true">&#10003;</span>
+        <span class="left-nav-label">Approvals</span>
+        <span id="nav-approvals-badge" class="left-nav-badge" style="display:none;">0</span>
+      </div>
+      <div class="left-nav-item" data-tab="alerts" onclick="switchTab('alerts')" title="Custom alert rules">
+        <span class="left-nav-icon" aria-hidden="true">&#9873;</span>
+        <span class="left-nav-label">Rules</span>
+        <span id="nav-alerts-badge" class="left-nav-badge" style="display:none;">0</span>
+      </div>
+      <div class="left-nav-item" data-tab="usage" onclick="switchTab('usage')" title="Token spend &amp; cost analytics">
+        <span class="left-nav-icon" aria-hidden="true">&#36;</span>
+        <span class="left-nav-label">Cost</span>
+      </div>
+      <div class="left-nav-item" data-tab="transcripts" onclick="switchTab('transcripts')" title="Conversations across channels (Telegram, Signal, WhatsApp, &hellip;)">
+        <span class="left-nav-icon" aria-hidden="true">&#9787;</span>
+        <span class="left-nav-label">Embodied <span class="left-nav-beta">&#946;</span></span>
+      </div>
+      <div class="left-nav-item" data-tab="history" onclick="switchTab('history')" title="Time-series replay of past activity">
+        <span class="left-nav-icon" aria-hidden="true">&#8634;</span>
+        <span class="left-nav-label">Replay</span>
+      </div>
+    </div>
+
+    <button type="button" class="left-nav-advanced-toggle" id="left-nav-advanced-toggle" onclick="toggleAdvancedDrawer()" aria-expanded="false">
+      <span class="left-nav-label">Advanced</span>
+      <span class="left-nav-advanced-chevron" aria-hidden="true">&#9662;</span>
+    </button>
+    <div class="left-nav-advanced-list" id="left-nav-advanced-list" hidden>
+      <div class="left-nav-item left-nav-item-sub" data-tab="flow" onclick="switchTab('flow')">
+        <span class="left-nav-label">Flow</span>
+      </div>
+      <div class="left-nav-item left-nav-item-sub" data-tab="brain" onclick="switchTab('brain')">
+        <span class="left-nav-label">Brain</span>
+      </div>
+      <div class="left-nav-item left-nav-item-sub" data-tab="review" onclick="switchTab('review')">
+        <span class="left-nav-label">Review</span>
+      </div>
+      <div class="left-nav-item left-nav-item-sub" data-tab="notifications" onclick="switchTab('notifications')">
+        <span class="left-nav-label">Notifications</span>
+      </div>
+      <div class="left-nav-item left-nav-item-sub" data-tab="context" onclick="switchTab('context')">
+        <span class="left-nav-label">Context</span>
+      </div>
+      <div class="left-nav-item left-nav-item-sub" data-tab="memory" onclick="switchTab('memory')">
+        <span class="left-nav-label">Memory</span>
+      </div>
+      <div class="left-nav-item left-nav-item-sub" data-tab="security" onclick="switchTab('security')">
+        <span class="left-nav-label">Security</span>
+      </div>
+      <div class="left-nav-item left-nav-item-sub" data-tab="logs" onclick="switchTab('logs')">
+        <span class="left-nav-label">Logs</span>
+      </div>
+      <div class="left-nav-item left-nav-item-sub" data-tab="models" onclick="switchTab('models')">
+        <span class="left-nav-label">Models</span>
+      </div>
+      <div class="left-nav-item left-nav-item-sub" data-tab="limits" onclick="switchTab('limits')">
+        <span class="left-nav-label">Rate limits</span>
+      </div>
+      <div class="left-nav-item left-nav-item-sub" data-tab="crons" id="crons-tab" onclick="switchTab('crons')">
+        <span class="left-nav-label">Crons</span>
+      </div>
+      <div class="left-nav-item left-nav-item-sub" data-tab="selfevolve" onclick="switchTab('selfevolve')">
+        <span class="left-nav-label">SelfEvolve</span>
+      </div>
+      <div class="left-nav-item left-nav-item-sub" data-tab="version-impact" onclick="switchTab('version-impact')">
+        <span class="left-nav-label">Version impact</span>
+      </div>
+      <div class="left-nav-item left-nav-item-sub" data-tab="skills" onclick="switchTab('skills')">
+        <span class="left-nav-label">Skills</span>
+      </div>
+      <div class="left-nav-item left-nav-item-sub" data-tab="nemoclaw" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">
+        <span class="left-nav-label">NemoClaw</span>
+      </div>
+      <a class="left-nav-item left-nav-item-sub left-nav-item-link" id="insights-tab" href="/insights" style="display:none;">
+        <span class="left-nav-label">Insights</span>
+      </a>
+    </div>
+
+    <div class="left-nav-footer">
+      <a href="?legacy_nav=1" class="left-nav-legacy-link" title="Switch back to the classic top-nav layout">Classic nav</a>
+    </div>
+  </aside>
+  <main class="app-shell-content">
+{% endif %}
 
 <!-- OVERVIEW (Split-Screen Hacker Dashboard) -->
 {% include 'tabs/overview.html' %}
@@ -10845,6 +10963,10 @@ DASHBOARD_HTML = r"""
 
 {% include 'tabs/logs.html' %}
 
+{% if not legacy_nav %}
+  </main>
+</div> <!-- end app-shell -->
+{% endif %}
 <script src="{{ url_for('static', filename='js/app.js', v=version) }}"></script>
 </div> <!-- end zoom-wrapper -->
 

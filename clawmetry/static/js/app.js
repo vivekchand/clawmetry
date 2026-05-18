@@ -810,11 +810,18 @@ function switchTab(name) {
   cancelAllPendingSSEDwell();
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  // Phase-1 IA refactor (issue #1659): also clear/set .active on left-nav.
+  document.querySelectorAll('.left-nav-item').forEach(function(t) { t.classList.remove('active'); });
   var page = document.getElementById('page-' + name);
   if (page) page.classList.add('active');
   var tabs = document.querySelectorAll('.nav-tab');
   tabs.forEach(function(t) { if (t.getAttribute('onclick') && t.getAttribute('onclick').indexOf("'" + name + "'") !== -1) t.classList.add('active'); });
-  if (!document.querySelector('.nav-tab.active') && typeof event !== 'undefined' && event && event.target) event.target.classList.add('active');
+  var leftItems = document.querySelectorAll('.left-nav-item[data-tab="' + name + '"]');
+  leftItems.forEach(function(t) { t.classList.add('active'); });
+  if (!document.querySelector('.nav-tab.active') && !document.querySelector('.left-nav-item.active') && typeof event !== 'undefined' && event && event.target) event.target.classList.add('active');
+  // Auto-close mobile drawer when a nav item is picked.
+  var leftNav = document.getElementById('left-nav');
+  if (leftNav && leftNav.classList.contains('open')) leftNav.classList.remove('open');
   // Stop cron auto-refresh when leaving crons tab
   if (name !== 'crons' && _cronAutoRefreshTimer) { clearInterval(_cronAutoRefreshTimer); _cronAutoRefreshTimer = null; }
   if (name === 'overview') loadAll();
@@ -852,6 +859,51 @@ function switchTab(name) {
   if (name === 'subagents') { loadSubagents(); if (!_subagentsTimer) _subagentsTimer = visibilitySetInterval(loadSubagents, 5000); }
   if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
 }
+
+// ── Left-nav Advanced drawer + mobile toggle (Phase 1 IA refactor #1659) ─
+function toggleAdvancedDrawer() {
+  var btn = document.getElementById('left-nav-advanced-toggle');
+  var list = document.getElementById('left-nav-advanced-list');
+  if (!btn || !list) return;
+  var nowOpen = list.hasAttribute('hidden');
+  if (nowOpen) {
+    list.removeAttribute('hidden');
+    btn.setAttribute('aria-expanded', 'true');
+  } else {
+    list.setAttribute('hidden', '');
+    btn.setAttribute('aria-expanded', 'false');
+  }
+  try { localStorage.setItem('cm_advanced_open', nowOpen ? '1' : '0'); }
+  catch (e) { /* localStorage blocked */ }
+}
+
+function toggleLeftNavMobile() {
+  var leftNav = document.getElementById('left-nav');
+  if (!leftNav) return;
+  leftNav.classList.toggle('open');
+}
+
+// Restore Advanced drawer state on page load.
+(function _restoreAdvancedDrawer() {
+  if (typeof document === 'undefined') return;
+  var apply = function() {
+    var btn = document.getElementById('left-nav-advanced-toggle');
+    var list = document.getElementById('left-nav-advanced-list');
+    if (!btn || !list) return;
+    var open = false;
+    try { open = localStorage.getItem('cm_advanced_open') === '1'; }
+    catch (e) { /* localStorage blocked */ }
+    if (open) {
+      list.removeAttribute('hidden');
+      btn.setAttribute('aria-expanded', 'true');
+    }
+  };
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', apply);
+  } else {
+    apply();
+  }
+})();
 
 function exportUsageData() {
   window.location.href = '/api/usage/export';
