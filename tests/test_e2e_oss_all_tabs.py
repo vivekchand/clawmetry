@@ -24,7 +24,7 @@ import urllib.request
 import pytest
 
 try:
-    from playwright.sync_api import sync_playwright
+    import playwright  # noqa: F401  -- used by _shared_chromium fixture
 
     _PLAYWRIGHT_AVAILABLE = True
 except ImportError:
@@ -34,24 +34,12 @@ BASE_URL = os.environ.get("CLAWMETRY_URL", "http://localhost:8900")
 TOKEN = os.environ.get("CLAWMETRY_TOKEN", "ci-test-token")
 
 
-# Session-scoped Playwright fixtures.
-# sync_playwright() must NOT be called inside a test body when pytest-playwright
-# is loaded -- the plugin runs tests inside an asyncio loop, which blocks the
-# sync API. Confining it to a session fixture mirrors tests/test_e2e.py and
-# avoids "Playwright Sync API inside the asyncio loop" errors.
-@pytest.fixture(scope="session")
-def _overlay_browser():
-    if not _PLAYWRIGHT_AVAILABLE:
-        pytest.skip("playwright not installed")
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        yield browser
-        browser.close()
-
-
+# Per-test page off the session-shared Chromium (defined in conftest.py).
+# sync_playwright() can only be entered once per process, so we reuse the
+# shared browser rather than calling sync_playwright() here.
 @pytest.fixture
-def _overlay_page(_overlay_browser):
-    ctx = _overlay_browser.new_context(viewport={"width": 1280, "height": 720})
+def _overlay_page(_shared_chromium):
+    ctx = _shared_chromium.new_context(viewport={"width": 1280, "height": 720})
     # Seed the gateway token into localStorage before any page script runs.
     # Mirrors the approach in .github/scripts/visual-diff.mjs.
     ctx.add_init_script(
