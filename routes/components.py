@@ -37,6 +37,13 @@ _api_tool_cache_time = {}
 
 # Map tool key to tool names in transcripts (also used by the local-store
 # fast path so the fast path stays in lock-step with the legacy parser).
+#
+# Coverage for both OpenClaw-native tool ids (``exec`` / ``web_search`` /
+# ``web_fetch``) and the claude-cli runner's canonical PascalCase ids
+# (``Bash`` / ``WebSearch`` / ``WebFetch`` / ``Grep``). The keystone E2E
+# silent-zero probe in ``scripts/accuracy_harness/keystone_e2e.py`` flags
+# any new on-the-wire tool name that isn't surfaced under one of these
+# families — keep the two in lock-step.
 _TOOL_MAP = {
     "session": [
         "sessions_spawn",
@@ -44,9 +51,9 @@ _TOOL_MAP = {
         "sessions_list",
         "sessions_poll",
     ],
-    "exec": ["exec", "process"],
-    "browser": ["browser", "web_fetch"],
-    "search": ["web_search"],
+    "exec": ["exec", "process", "Bash", "bash"],
+    "browser": ["browser", "web_fetch", "WebFetch", "webfetch"],
+    "search": ["web_search", "WebSearch", "websearch", "Grep", "grep"],
     "cron": ["cron"],
     "tts": ["tts"],
     "memory": ["Read", "read", "Write", "write", "Edit", "edit"],
@@ -160,10 +167,25 @@ def _try_local_store_component_tool(name: str):
     # ``model.completed`` rows, so the prior two-shape query silently
     # returned an empty events[] and the caller fell through to the 8s+
     # JSONL walker → modal stuck on "Loading...".
+    #
+    # ``subagent:assistant`` is included alongside ``message`` / ``assistant``
+    # because OpenClaw v3's sub-agent turns carry the bulk of tool_use
+    # blocks on real installs (per the keystone E2E silent-zero probe in
+    # ``scripts/accuracy_harness/keystone_e2e.py`` and memory
+    # ``feedback_synthetic_tests_missed_real_event_shape.md``). Without it,
+    # WebSearch / WebFetch / Bash / Grep invocations from sub-agents
+    # disappeared from /api/component/tool/<family> even though the
+    # daemon's ``query_tool_call_invocations`` index found them.
     rows: list = []
+    _TOOL_HOST_EVENT_TYPES = (
+        "message",
+        "assistant",
+        "model.completed",      # from #1663 — daemon-normalised v3 assistant event
+        "subagent:assistant",   # from #1682 — sub-agent tool_use blocks
+    )
     try:
         from routes.local_query import local_store_via_daemon
-        for et in ("message", "assistant", "model.completed"):
+        for et in _TOOL_HOST_EVENT_TYPES:
             try:
                 got = local_store_via_daemon("query_events", event_type=et, limit=2000)
                 if got:
@@ -180,7 +202,7 @@ def _try_local_store_component_tool(name: str):
         try:
             from clawmetry import local_store
             store = local_store.get_store(read_only=True)
-            for et in ("message", "assistant", "model.completed"):
+            for et in _TOOL_HOST_EVENT_TYPES:
                 try:
                     rows.extend(store.query_events(event_type=et, limit=2000))
                 except Exception:

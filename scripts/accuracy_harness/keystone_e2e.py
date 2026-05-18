@@ -298,6 +298,115 @@ def check_component_tool(dashboard: str) -> Check:
                  f"today_calls={(payload.get('stats') or {}).get('today_calls')}")
 
 
+def check_component_tool_vs_ground_truth(dashboard: str, daemon: dict,
+                                         drove_tools: bool) -> Check:
+    """Silent-zero guard for /api/component/tool/<name>.
+
+    The plain shape probe (``check_component_tool``) accepts zero events as
+    legitimate. That's fragile when the route's predicate drifts away from
+    the on-the-wire event shape — the route returns 0 forever, the harness
+    keeps passing, and the user sees an empty Tools panel.
+
+    This probe closes the loop by cross-checking the route response against
+    DuckDB ground truth via the daemon proxy:
+
+      1. Ask ``LocalStore.query_tool_call_invocations(since=today)`` for the
+         raw count of tool-call rows the daemon ingested today.
+      2. Walk every tool family in ``_TOOL_FAMILIES`` (the same map
+         ``routes/components.py:_TOOL_MAP`` uses) and sum
+         ``stats.today_calls`` across the matching /api/component/tool/<name>
+         responses.
+      3. Compare:
+         * route_total > 0  → PASS (tools are visible to the user).
+         * route_total == 0 and ground_truth == 0 → PASS as "legit zero"
+           (genuinely no tool calls today; nothing to surface).
+         * route_total == 0 and ground_truth > 0 → FAIL — true silent zero:
+           DuckDB has the rows, the route's predicate is dropping them.
+
+    When the harness did NOT drive a tool-using turn (``--no-drive`` or the
+    openclaw CLI was missing), the legit-zero branch fires by design.
+    """
+    ep = "/api/component/tool/<families>"
+
+    # 1) Ground truth from the daemon's tool-call invocation index.
+    #    Filter to tool *names* the route is actually meant to surface
+    #    (the union of every family in ``_TOOL_MAP``). Names like ``Agent``
+    #    or ``ToolSearch`` aren't in any family today, so counting them in
+    #    the ground-truth total would generate false-positive silent-zero
+    #    alarms even when every family route is healthy.
+    today = time.strftime("%Y-%m-%d")
+    # Keep in lock-step with ``routes/components.py:_TOOL_MAP``. Spelling
+    # variants (case + snake/camel) all live here so a "real silent zero"
+    # in the route shows up as a real drift here, not as a probe false-
+    # positive from spelling skew.
+    _KNOWN_TOOL_NAMES = {
+        "exec", "process", "Bash", "bash",
+        "Read", "read", "Write", "write", "Edit", "edit",
+        "browser", "web_fetch", "WebFetch", "webfetch",
+        "web_search", "WebSearch", "websearch",
+        "cron",
+        "tts",
+        "sessions_spawn", "sessions_send", "sessions_list", "sessions_poll",
+    }
+    try:
+        rows = daemon_call(daemon, "query_tool_call_invocations",
+                            since=today, limit=10000) or []
+    except (RuntimeError, urllib.error.URLError, TimeoutError) as e:
+        return Check(ep, "ground-truth", "skip",
+                     f"daemon query_tool_call_invocations failed: {e}")
+    if not isinstance(rows, list):
+        rows = []
+    ground_truth = sum(1 for r in rows if (r or {}).get("name") in _KNOWN_TOOL_NAMES)
+
+    # 2) Route-side total across every tool family the dashboard surfaces.
+    #    Keep this set in lock-step with ``routes/components.py:_TOOL_MAP``.
+    _TOOL_FAMILIES = ("exec", "memory", "browser", "search",
+                       "session", "cron", "tts")
+    route_total = 0
+    per_family: dict[str, int] = {}
+    for fam in _TOOL_FAMILIES:
+        body, ferr = _safe_get(dashboard, f"/api/component/tool/{fam}")
+        if ferr or not isinstance(body, dict):
+            continue
+        n = int((body.get("stats") or {}).get("today_calls") or 0)
+        per_family[fam] = n
+        route_total += n
+
+    # 3) The verdict.
+    #    * route_total == 0 and ground_truth == 0 → legit zero (PASS).
+    #    * route_total == 0 and ground_truth > 0  → true silent zero (FAIL).
+    #    * route_total > 0 and route_total < ground_truth * 0.5 →
+    #      partial silent zero (FAIL) — the route is surfacing SOME tool
+    #      calls but missing more than half of what DuckDB has. This caught
+    #      PR #1672's regression where the route queried ``message`` /
+    #      ``assistant`` event types only, missing the ``subagent:assistant``
+    #      rows that hold ~90% of tool calls on OpenClaw v3.
+    #    * otherwise → PASS.
+    if route_total == 0:
+        if ground_truth == 0:
+            legit_label = ("no in-family tool calls in DuckDB today — legit zero"
+                           if not drove_tools
+                           else "drove but DuckDB still empty — legit zero "
+                                "(claude-cli provider hides tool_use blocks)")
+            return Check(ep, "events==0", "pass", legit_label)
+        return Check(ep, "silent-zero", "fail",
+                     f"DuckDB has {ground_truth} in-family tool-call rows today "
+                     f"but every /api/component/tool/<family> returned 0 "
+                     f"(per_family={per_family}) — predicate vs shape skew in "
+                     f"routes/components.py:_iter_tool_call_blocks")
+    # route_total > 0
+    if ground_truth > 0 and route_total < max(2, ground_truth // 2):
+        return Check(ep, "partial-silent-zero", "fail",
+                     f"route_total={route_total} but DuckDB has {ground_truth} "
+                     f"in-family tool-call rows today (route surfaces "
+                     f"<50%). per_family={per_family}. Likely cause: route "
+                     f"queries 'message'/'assistant' event types but tool "
+                     f"calls live in 'subagent:assistant' on this v3 install.")
+    return Check(ep, "events>0", "pass",
+                 f"route_total={route_total} ground_truth={ground_truth} "
+                 f"per_family={per_family}")
+
+
 def check_component_simple(dashboard: str, path: str) -> Check:
     payload, err = _safe_get(dashboard, path)
     if err:
@@ -342,6 +451,59 @@ def check_subagents(dashboard: str) -> Check:
     # Empty subagents is legitimate — pass on shape alone.
     return Check(ep, "shape", "pass",
                  f"counts={payload.get('counts')} count={len(payload.get('subagents') or [])}")
+
+
+def check_subagents_vs_ground_truth(dashboard: str, daemon: dict,
+                                    drove_subagent: bool) -> Check:
+    """Silent-zero guard for /api/subagents.
+
+    Same pattern as ``check_component_tool_vs_ground_truth``: the shape-only
+    probe is too forgiving. A real user staring at an empty Subagent Tracker
+    needs the harness to flag whether DuckDB's pre-aggregated ``subagents``
+    table has rows the route is failing to surface.
+
+    Three outcomes:
+      * route count > 0 → PASS — the user can see at least one subagent.
+      * route count == 0 and DuckDB ``subagents`` table empty → PASS as
+        legit zero (no subagents spawned recently).
+      * route count == 0 and DuckDB has rows → FAIL — true silent zero in
+        ``routes/sessions.py:_try_local_store_subagents``.
+
+    When ``drove_subagent`` is True we expect ground_truth to climb, so a
+    flat-zero ground_truth there is also flagged (sync daemon failed to
+    snapshot the spawn into the ``subagents`` table — distinct from a
+    route-side bug but equally a silent surface for the user).
+    """
+    ep = "/api/subagents (ground-truth)"
+
+    payload, err = _safe_get(dashboard, "/api/subagents")
+    if err or not isinstance(payload, dict):
+        return Check(ep, "fetch", "skip", err or "non-dict payload")
+    route_count = len(payload.get("subagents") or [])
+
+    try:
+        rows = daemon_call(daemon, "query_subagents", limit=500) or []
+    except (RuntimeError, urllib.error.URLError, TimeoutError) as e:
+        return Check(ep, "ground-truth", "skip",
+                     f"daemon query_subagents failed: {e}")
+    ground_truth = len(rows) if isinstance(rows, list) else 0
+
+    if route_count > 0:
+        return Check(ep, "subagents>0", "pass",
+                     f"route_count={route_count} ground_truth={ground_truth}")
+    if ground_truth == 0:
+        if drove_subagent:
+            return Check(ep, "spawn-not-snapshotted", "fail",
+                         "drove a subagent-spawning turn but DuckDB "
+                         "subagents table is still empty — sync daemon "
+                         "snapshot pass never ran (see "
+                         "clawmetry/sync.py:ingest_subagent call site)")
+        return Check(ep, "subagents==0", "pass",
+                     "no subagents in DuckDB today — legit zero")
+    return Check(ep, "silent-zero", "fail",
+                 f"DuckDB subagents table has {ground_truth} rows but "
+                 f"/api/subagents returned 0 — predicate vs shape skew "
+                 f"in routes/sessions.py:_try_local_store_subagents")
 
 
 def check_crons(dashboard: str) -> Check:
@@ -420,7 +582,7 @@ def run(args) -> int:
 
     # ─── Hit-list (the 10 endpoints the dashboard reads on page load) ───
     print()
-    print("[keystone] Probing 10 API surfaces…")
+    print("[keystone] Probing API surfaces + silent-zero guards…")
     sessions_check, sid = check_sessions(dashboard)
     checks: list[Check] = [
         check_brain_history(dashboard),
@@ -437,6 +599,27 @@ def run(args) -> int:
         check_crons(dashboard),
         check_memory_files(dashboard),
     ]
+
+    # ─── Failure-mode probes (silent-zero guards) ──────────────────────
+    # Both endpoints below shape-pass with empty results, which let two
+    # categories of bug slip through (memory:
+    # feedback_synthetic_tests_missed_real_event_shape.md):
+    #   1. predicate vs on-the-wire shape skew in the route handler
+    #   2. sync daemon failing to populate the snapshot table the route reads
+    # These probes cross-check the route's response against DuckDB ground
+    # truth via the daemon proxy so we can tell legit zero apart from silent
+    # zero. ``drove_tools`` / ``drove_subagent`` reflect whether THIS run's
+    # drive turn was shaped to spawn tool calls / subagents — the default
+    # "PONG keystone" drive does neither, so both remain False until a
+    # future flag (``--drive-tools`` / ``--drive-subagent``) wires them up.
+    drove_tools = False
+    drove_subagent = False
+    checks.append(check_component_tool_vs_ground_truth(
+        dashboard, daemon, drove_tools=drove_tools,
+    ))
+    checks.append(check_subagents_vs_ground_truth(
+        dashboard, daemon, drove_subagent=drove_subagent,
+    ))
 
     print()
     print("[keystone] Per-endpoint results:")
