@@ -10811,9 +10811,9 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-label">Approvals</span>
         <span id="nav-approvals-badge" class="left-nav-badge" style="display:none;">0</span>
       </div>
-      <div class="left-nav-item" data-tab="alerts" onclick="switchTab('alerts')" title="Custom alert rules">
+      <div class="left-nav-item" data-tab="alerts" onclick="switchTab('alerts')" title="Get notified when something goes wrong with your agents">
         <span class="left-nav-icon" aria-hidden="true">&#9873;</span>
-        <span class="left-nav-label">Rules</span>
+        <span class="left-nav-label">Alerts</span>
         <span id="nav-alerts-badge" class="left-nav-badge" style="display:none;">0</span>
       </div>
       <div class="left-nav-item" data-tab="usage" onclick="switchTab('usage')" title="Token spend &amp; cost analytics">
