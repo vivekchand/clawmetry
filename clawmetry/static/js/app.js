@@ -5040,9 +5040,13 @@ async function selfevolveProbe() {
     var empty = document.getElementById('selfevolve-empty');
     var runBtn = document.getElementById('selfevolve-run-btn');
     if (!s || !s.available) {
+      // Inline hint stays at the top of the page; the Analyze button
+      // stays enabled so the user sees the 412 error inline if they
+      // click it. Don't block the rest of the surface.
       if (hint) hint.style.display = 'none';
       if (noauth) noauth.style.display = '';
-      if (runBtn) runBtn.disabled = true;
+      if (empty) empty.style.display = '';
+      if (runBtn) runBtn.disabled = false;
       return;
     }
     if (hint) hint.style.display = '';

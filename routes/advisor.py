@@ -43,23 +43,90 @@ REQUEST_TIMEOUT_SEC = 30
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
 
+def _read_anthropic_key_from_openclaw_config() -> str | None:
+    """Best-effort scan of OpenClaw's config + insights store for an
+    Anthropic API key the operator has already set up.
+
+    We only look in well-known dashboard-managed JSON files; we never
+    parse arbitrary user config blobs. Order is most-specific to most-
+    general so a per-feature key (insights) wins over a global plugin
+    key.
+
+    Returns the raw key string or ``None`` if nothing usable is found.
+    The key never leaves the process via /api/* responses (the only
+    caller is the LLM dispatcher).
+    """
+    candidates: list[str] = []
+
+    # 1. Insights config -- the user may have pasted a key here already.
+    try:
+        ins_path = os.path.expanduser(
+            "~/.openclaw/.clawmetry/insights_config.json"
+        )
+        if os.path.isfile(ins_path):
+            with open(ins_path) as f:
+                cfg = json.load(f)
+            k = (cfg.get("anthropic_api_key") or "").strip()
+            if k:
+                candidates.append(k)
+    except Exception:
+        pass
+
+    # 2. OpenClaw root config -- gateway-pooled key paths used by the
+    # anthropic plugin. We probe a small, conservative set of paths
+    # rather than walking the whole tree; new ones can be added as we
+    # discover them across installs.
+    try:
+        oc_path = os.path.expanduser("~/.openclaw/openclaw.json")
+        if os.path.isfile(oc_path):
+            with open(oc_path) as f:
+                oc = json.load(f)
+            probes = (
+                ((oc.get("plugins") or {}).get("entries") or {}).get("anthropic") or {},
+                ((oc.get("providers") or {}).get("anthropic") or {}),
+                ((oc.get("auth") or {}).get("profiles") or {}).get("anthropic:api-key") or {},
+            )
+            for blob in probes:
+                if not isinstance(blob, dict):
+                    continue
+                for field in ("apiKey", "api_key", "key", "token"):
+                    v = blob.get(field)
+                    if isinstance(v, str) and v.strip().startswith("sk-"):
+                        candidates.append(v.strip())
+    except Exception:
+        pass
+
+    return candidates[0] if candidates else None
+
+
 def _load_anthropic_auth() -> tuple[str | None, str | None]:
     """Return (mode, credential).
 
     mode is one of:
-      - "api_key"     : direct /v1/messages call with ANTHROPIC_API_KEY
+      - "api_key"     : direct /v1/messages call with an Anthropic API key
+                        (from ANTHROPIC_API_KEY, the Insights config, or
+                        an OpenClaw plugin/provider config)
       - "claude_cli"  : shell out to `claude -p`; uses whatever OpenClaw's
                         claude-cli profile is already authenticated with
                         (works for OAuth users with no extra config)
-      - None          : nothing configured; UI stays hidden
+      - None          : nothing configured; UI shows a single-line hint
+                        instead of a blocking modal
     """
+    # 1. Explicit env var wins -- operator-controlled, easy to override.
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if api_key:
         return "api_key", api_key
 
-    # `claude` CLI usually bundles an OAuth token after the user runs
-    # `/login` once. Detect the binary presence -- actual auth is
-    # validated at call time and we surface any error to the UI.
+    # 2. Auto-detect a key the user already configured in OpenClaw / the
+    # dashboard's Insights tab. This is the "show some magic" path: a
+    # fresh dashboard user who already has OpenClaw running with a key
+    # gets Self-Evolve / Advisor working with zero extra input.
+    auto_key = _read_anthropic_key_from_openclaw_config()
+    if auto_key:
+        return "api_key", auto_key
+
+    # 3. claude CLI OAuth fallback. The binary uses whatever profile the
+    # user already authenticated, so OAuth-only users still work.
     claude_bin = shutil.which("claude")
     if claude_bin:
         profile_path = os.path.expanduser(

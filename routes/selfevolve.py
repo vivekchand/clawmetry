@@ -355,9 +355,9 @@ def api_selfevolve_analyze():
                 {
                     "error": "no_auth",
                     "message": (
-                        "Self-Evolve needs an Anthropic credential. "
-                        "Run `claude` CLI to set up OAuth, "
-                        "or export ANTHROPIC_API_KEY."
+                        "Self-Evolve needs an Anthropic key. Set "
+                        "ANTHROPIC_API_KEY in your shell, "
+                        "or paste one in Settings."
                     ),
                 }
             ),
