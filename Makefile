@@ -1,4 +1,4 @@
-.PHONY: test test-api test-e2e test-fast test-e2e-duckdb test-moat dev lint lint-daemon-allowlist
+.PHONY: test test-api test-e2e test-fast test-e2e-duckdb test-moat moat-check moat-check-drive dev lint lint-daemon-allowlist
 
 dev:
 	OPENCLAW_GATEWAY_TOKEN=dev-token python3 dashboard.py --port 8900
@@ -34,6 +34,27 @@ test-moat:
 	    tests/test_no_direct_get_store_in_routes.py \
 	    tests/test_local_query_api.py \
 	    -q
+
+# MOAT keystone bar (docs/MOAT_BAR.md Section 5, AC#1). The 13-endpoint
+# verifier that drives a real openclaw turn (or skips it via --no-drive)
+# and asserts every UI-backing API surface returns non-zero, correctly
+# shaped data. Hard-gate on every PR via the moat-keystone job in
+# .github/workflows/ci.yml. ~2s in --no-drive mode against a warm
+# DuckDB; 30-60s when driving a real openclaw turn.
+#
+# Requires: dashboard listening on 127.0.0.1:8900 AND sync daemon
+# running (writes ~/.clawmetry/local_query.json). Locally:
+#   make dev   # starts dashboard
+#   python3 -m clawmetry.sync   # starts daemon
+#   make moat-check
+moat-check:
+	@python3 scripts/accuracy_harness/keystone_e2e.py --no-drive
+
+# Drive mode (real openclaw agent turn -> +2 events in DuckDB -> 13
+# probes). Costs LLM tokens, so runs nightly on main via
+# .github/workflows/moat-keystone-drive-nightly.yml — never per-PR.
+moat-check-drive:
+	@python3 scripts/accuracy_harness/keystone_e2e.py
 
 lint: lint-py lint-js lint-daemon-allowlist
 
