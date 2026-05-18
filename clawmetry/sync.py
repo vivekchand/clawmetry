@@ -6644,6 +6644,19 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                 # pick the dominant one as the primary.
                 model_tokens: dict = {}
                 last_seen_model = ""
+                # event_count (= JSONL line count) is the "messages" badge
+                # the Embodied tab renders. The cloud Postgres copy of the
+                # sessions table was previously plaintext-blank for this
+                # column because the daemon never uploaded it, so every
+                # cloud row showed "0 messages" even on actively chatting
+                # sessions (cloud fix/embodied-tab-zeros). Counting bytes
+                # too lets the cloud render "8.4 KB" rather than "0 B".
+                event_count = 0
+                size_bytes = 0
+                try:
+                    size_bytes = int(fpath.stat().st_size)
+                except Exception:
+                    pass
 
                 # Scan session file for metadata, tokens, cost, model
                 # Read head for start info, scan all for usage, tail for end
@@ -6652,6 +6665,7 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                         raw = raw.strip()
                         if not raw:
                             continue
+                        event_count += 1
                         try:
                             ev = json.loads(raw)
                         except Exception:
@@ -6711,6 +6725,11 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                         "total_cost": total_cost,
                         "started_at": started_at,
                         "updated_at": updated_at,
+                        # Plaintext aggregates so the cloud Embodied tab can
+                        # render real "55 messages, 8.4 KB" rows instead of
+                        # zeros. Older cloud servers ignore unknown keys.
+                        "event_count": event_count,
+                        "size_bytes": size_bytes,
                     }
                 )
                 last_mtimes[fpath.name] = current_mtime
