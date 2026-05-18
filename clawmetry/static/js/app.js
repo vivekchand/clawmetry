@@ -14837,6 +14837,17 @@ async function bootDashboard() {
   setTimeout(_safeFinishBoot, 180);
 }
 
+// Version impact is a per-OpenClaw-release report — only meaningful when the
+// user controls their own OpenClaw install. In cloud mode ClawMetry manages
+// versions, so the tab is irrelevant. Hide nav item + page (deep-link too).
+function _hideCloudIrrelevantNav() {
+  if (!window.CLOUD_MODE) return;
+  var navItem = document.querySelector('.left-nav-item[data-tab="version-impact"]');
+  if (navItem) navItem.style.display = 'none';
+  var page = document.getElementById('page-version-impact');
+  if (page) page.style.display = 'none';
+}
+
 document.addEventListener('DOMContentLoaded', function() {
   initTheme();
   initZoom();
@@ -14847,6 +14858,7 @@ document.addEventListener('DOMContentLoaded', function() {
   bootDashboard();
   // Issue #950: multi-profile workspace switcher
   try { initWorkspaceSwitcher(); } catch (e) { /* non-fatal */ }
+  try { _hideCloudIrrelevantNav(); } catch (e) { /* non-fatal */ }
 });
 
 // ── Workspace switcher (issue #950) ───────────────────────────────────
