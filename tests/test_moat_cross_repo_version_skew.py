@@ -134,6 +134,10 @@ class _CloudState:
             "security_posture", "local_store", "local_store_size_mb",
             "cache_pushes", "node_meta", "hostname",
             "auto_update", "events", "blob", "encrypted",
+            # Issue #1652 activity counters (cloud Flow Exec / messages /
+            # browser widgets read these directly off nodes.metadata).
+            "tool_calls_today", "exec_calls_today", "browser_actions_today",
+            "unique_tools_today", "messages_today",
         }
 
 
