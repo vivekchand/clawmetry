@@ -556,6 +556,175 @@ def _try_local_store_channel_events(provider, limit):
     }
 
 
+# ── Issue #1656: DuckDB fast path for /api/channel/tui ─────────────────────
+#
+# Unlike Telegram / Signal / BlueBubbles, the OpenClaw TUI does NOT have a
+# dedicated channel adapter directory under ``~/.openclaw/`` — it writes
+# directly into the active session JSONL with a ``Sender (untrusted
+# metadata)`` JSON preamble tagged ``openclaw-tui``. That means there is
+# no ``channel.in`` / ``channel.out`` event for TUI turns, so
+# ``_try_local_store_channel_events`` cannot serve them.
+#
+# However the daemon's v3 mapper (``sync._parse_v3_event``) ALREADY
+# normalises every session-JSONL ``message`` line into ``prompt.submitted``
+# (user role) and ``model.completed`` (assistant role), preserving the
+# raw ``finalPromptText`` verbatim — Sender block included. So the TUI
+# marker survives the ingest and we can query DuckDB for the same rows
+# the legacy JSONL walker reconstructs from disk, just without the
+# O(sessions) directory scan.
+#
+# This is the MOAT-first read path for #1656: try DuckDB first, fall
+# back to the legacy session-JSONL walker when the daemon hasn't
+# ingested anything yet (fresh install / read flag OFF / daemon down).
+
+_TUI_MARKER = "openclaw-tui"
+
+
+def _strip_tui_sender_block(text: str) -> str:
+    """Remove the ```json {...}``` Sender preamble from a TUI prompt body
+    so the bubble shows the user's real message. Mirrors the legacy
+    ``_strip_sender_block`` inside ``api_channel_tui``."""
+    import re as _re
+    if not isinstance(text, str):
+        return text
+    m = _re.search(r"```json\s*\{[^`]*?\}\s*```\s*", text, _re.DOTALL)
+    return (text[m.end():] if m else text).strip()
+
+
+def _try_local_store_channel_tui(limit):
+    """Issue #1656 DuckDB fast path for the TUI channel.
+
+    Reads ``prompt.submitted`` events whose ``data.finalPromptText`` carries
+    the ``openclaw-tui`` marker (the same Sender-block preamble the JSONL
+    walker matched on at routes/channels.py:2318) and pairs each one with
+    the next ``model.completed`` event in the same ``session_id`` as the
+    outbound reply.
+
+    Same dual-tier contract memory ``feedback_synthetic_tests_missed_real_event_shape.md``
+    warns about: read against the REAL OpenClaw v3 event shape
+    (``prompt.submitted`` / ``model.completed``) — not a synthetic
+    ``channel.*`` row that production never writes for TUI.
+
+    Returns ``None`` when DuckDB has no TUI-tagged prompts so the route
+    falls through to the legacy JSONL walker."""
+    prompts = _ls_call(
+        "query_events",
+        event_type="prompt.submitted",
+        limit=_CHANNEL_EVENTS_FAST_PATH_LIMIT,
+    ) or []
+    # Filter to TUI-tagged prompts in Python (DuckDB JSON predicate would
+    # need an extra LocalStore helper — keep the daemon-proxy surface
+    # minimal, same pattern as ``_try_local_store_channel_events``).
+    tui_prompts = []
+    sessions_with_tui = set()
+    for ev in prompts:
+        data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+        if not isinstance(data, dict):
+            continue
+        # ``finalPromptText`` lives at either ``data.finalPromptText`` or
+        # ``data.data.finalPromptText`` — ``_parse_v3_event`` dual-writes
+        # so either lookup works, but check both for resilience against
+        # future shape drift.
+        text = data.get("finalPromptText") or ""
+        if not text:
+            inner = data.get("data") if isinstance(data.get("data"), dict) else {}
+            text = inner.get("finalPromptText") or ""
+        if not isinstance(text, str) or _TUI_MARKER not in text:
+            continue
+        tui_prompts.append((ev, text))
+        sid = ev.get("session_id") or ""
+        if sid:
+            sessions_with_tui.add(sid)
+
+    if not tui_prompts:
+        return None
+
+    # Pull completions for the sessions we have TUI prompts in so we can
+    # pair each prompt with the next assistant reply by timestamp.
+    completions_by_session: dict[str, list[dict]] = {}
+    if sessions_with_tui:
+        # ``query_events`` doesn't take a session-IN filter; pull a
+        # generous global window and bucket in Python. Cheap because
+        # _CHANNEL_EVENTS_FAST_PATH_LIMIT caps both pulls at 1000 each.
+        completions = _ls_call(
+            "query_events",
+            event_type="model.completed",
+            limit=_CHANNEL_EVENTS_FAST_PATH_LIMIT,
+        ) or []
+        for ev in completions:
+            sid = ev.get("session_id") or ""
+            if sid in sessions_with_tui:
+                completions_by_session.setdefault(sid, []).append(ev)
+        # Sort each session's completions OLDEST-FIRST so the pairing loop
+        # can pop the first one strictly after each TUI prompt's ts.
+        for sid in completions_by_session:
+            completions_by_session[sid].sort(key=lambda e: e.get("ts") or "")
+
+    messages = []
+    today = datetime.now().strftime("%Y-%m-%d")
+    today_in = 0
+    today_out = 0
+    used_completion_ids: set[str] = set()
+
+    for ev, text in tui_prompts:
+        ts = ev.get("ts") or ""
+        body = _strip_tui_sender_block(text)
+        messages.append({
+            "timestamp": ts,
+            "direction": "in",
+            "sender":    "User",
+            "text":      body,
+        })
+        if today and today in str(ts):
+            today_in += 1
+
+        sid = ev.get("session_id") or ""
+        for c_ev in completions_by_session.get(sid, []):
+            c_id = c_ev.get("id") or ""
+            if c_id in used_completion_ids:
+                continue
+            c_ts = c_ev.get("ts") or ""
+            if c_ts <= ts:
+                # ISO strings sort lexicographically; skip completions
+                # that came BEFORE this prompt.
+                continue
+            c_data = c_ev.get("data") if isinstance(c_ev.get("data"), dict) else {}
+            reply = ""
+            if isinstance(c_data, dict):
+                reply = c_data.get("completionText") or ""
+                if not reply:
+                    inner = c_data.get("data") if isinstance(c_data.get("data"), dict) else {}
+                    reply = inner.get("completionText") or ""
+            if not reply:
+                # Empty completion (tool-only turn). Mark consumed so we
+                # don't re-pair it with a later TUI prompt, then move on.
+                used_completion_ids.add(c_id)
+                continue
+            messages.append({
+                "timestamp": c_ts,
+                "direction": "out",
+                "sender":    "Clawd",
+                "text":      str(reply),
+            })
+            if today and today in str(c_ts):
+                today_out += 1
+            used_completion_ids.add(c_id)
+            break
+
+    # Newest-first, cap to ``limit``.
+    messages.sort(key=lambda m: m.get("timestamp") or "", reverse=True)
+    capped = messages[:limit]
+
+    return {
+        "messages": capped,
+        "total":    len(messages),
+        "todayIn":  today_in,
+        "todayOut": today_out,
+        "status":   "local_store_v3",
+        "_source":  "local_store_v3",
+    }
+
+
 @bp_channels.route("/api/channels/<provider>/messages")
 def api_channel_messages(provider: str):
     """List recent messages for one provider — DuckDB fast path
@@ -2259,12 +2428,28 @@ def api_channel_tui():
     Unlike Telegram/Signal/etc which have dedicated channel adapters and
     log to `gateway.log`, the OpenClaw TUI writes directly into the active
     session JSONL — so we reconstruct the conversation from there.
+
+    Issue #1656 DuckDB fast path: when the daemon has already ingested
+    the same session JSONLs into the local store (`prompt.submitted` +
+    `model.completed` events tagged with the `openclaw-tui` Sender
+    marker), serve from DuckDB first to avoid the O(sessions) directory
+    scan on every poll. Falls through to the legacy JSONL walker on
+    miss so fresh installs (daemon hasn't caught up) still work.
     """
     import dashboard as _d
     import re as _re
 
     limit = request.args.get("limit", 50, type=int)
     today = datetime.now().strftime("%Y-%m-%d")
+
+    # MOAT-first read path (#1656). Mirrors the bluebubbles/telegram/signal
+    # sibling pattern at routes/channels.py:2048-2063 — try the v3 events
+    # table FIRST; only fall through to the legacy walker if DuckDB has no
+    # TUI-tagged prompts yet.
+    if _local_store_read_enabled():
+        fast = _try_local_store_channel_tui(limit)
+        if fast is not None:
+            return jsonify(fast)
 
     sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
