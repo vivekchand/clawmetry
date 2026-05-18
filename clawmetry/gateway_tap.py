@@ -48,9 +48,11 @@ Failure modes
 Disable
 -------
 
-Set ``CLAWMETRY_ENABLE_WS_TAP=1`` in the environment to opt in.
-Default is OFF until the upstream OpenClaw server grants the
-required ``operator.read`` scope.
+Default is ON. Set ``CLAWMETRY_ENABLE_WS_TAP=0`` in the environment to
+opt out. When the upstream OpenClaw server has not yet granted the
+required ``operator.read`` scope the tap connects in degraded mode
+(no message bodies, one WARNING logged) — same observable behaviour as
+when the tap is disabled, but future scope grants start working immediately.
 """
 
 from __future__ import annotations
@@ -107,7 +109,7 @@ _BACKOFF_INITIAL_SEC = 2.0
 _BACKOFF_MAX_SEC = 60.0
 
 
-# Enable env var (feature is default-OFF until upstream grants scopes).
+# Opt-out env var (feature is default-ON; set to "0"/"false"/"no" to disable).
 _ENABLE_ENV = "CLAWMETRY_ENABLE_WS_TAP"
 
 
@@ -577,8 +579,9 @@ def start(config: dict) -> GatewayTap | None:
     from the live OpenClaw config (mirroring dashboard's
     ``_detect_gateway_token`` / ``_detect_gateway_port``).
     """
-    if os.environ.get(_ENABLE_ENV, "").strip() not in ("1", "true", "yes"):
-        log.debug("gateway WS tap disabled (set CLAWMETRY_ENABLE_WS_TAP=1 to enable)")
+    if os.environ.get(_ENABLE_ENV, "1").strip().lower() in ("0", "false", "no"):
+        log.debug("gateway WS tap disabled (CLAWMETRY_ENABLE_WS_TAP=%s)",
+                  os.environ.get(_ENABLE_ENV, "1"))
         return None
 
     url, token = _detect_gateway_endpoint()
