@@ -285,25 +285,57 @@ async function testNormalUser() {
     await page.screenshot({ path: `${screenshotDir}/00_landing.png` });
   }
   console.log('\n  ▸ Walking free-tier tabs');
+  // IA refactor (OSS PRs #1660 + #1668, v0.12.240+) moved the flat
+  // .nav-tab strip into a left-rail .left-nav-item layout where every
+  // item carries data-tab="<key>" and several sub-items live inside a
+  // collapsible "Advanced" drawer (#left-nav-advanced-list, hidden by
+  // default). The labels also changed: "Overview" → "Live trace",
+  // "Tokens" → "Cost", "Alerts" → "Rules". To stay green across both the
+  // legacy .nav-tab layout (legacy_nav=1, OSS ≤0.12.239 cloud pin) and
+  // the new IA, each contract tab now resolves through:
+  //   1. New IA   — [data-tab="<key>"] (top-level OR sub)
+  //   2. Legacy   — .nav-tab:has-text("<label>"), [role="tab"]:has-text("<label>")
+  // We also proactively expand the Advanced drawer so sub-tabs are
+  // interactable on the new IA. Drawer-open is idempotent.
   const TABS = [
-    'Flow',
-    'Brain',
-    'Overview',
-    'Approvals',
-    'Alerts',
-    'Notifications',
-    'Context',
-    'Tokens',
-    'Crons',
-    'Memory',
+    { label: 'Flow',          key: 'flow' },
+    { label: 'Brain',         key: 'brain' },
+    { label: 'Overview',      key: 'overview' },
+    { label: 'Approvals',     key: 'approvals' },
+    { label: 'Alerts',        key: 'alerts' },
+    { label: 'Notifications', key: 'notifications' },
+    { label: 'Context',       key: 'context' },
+    { label: 'Tokens',        key: 'usage' },
+    { label: 'Crons',         key: 'crons' },
+    { label: 'Memory',        key: 'memory' },
   ];
+  // Open the Advanced drawer up front (new IA). Safe no-op on legacy.
+  await page.evaluate(() => {
+    try {
+      const list = document.getElementById('left-nav-advanced-list');
+      const btn = document.getElementById('left-nav-advanced-toggle');
+      if (list && list.hasAttribute('hidden')) {
+        list.removeAttribute('hidden');
+        if (btn) btn.setAttribute('aria-expanded', 'true');
+      }
+    } catch (e) { /* legacy nav, no drawer */ }
+  });
+  function tabLocator(page, label, key) {
+    const sel = [
+      `.left-nav-item[data-tab="${key}"]`,
+      `[data-tab="${key}"]`,
+      `.nav-tab:has-text("${label}")`,
+      `[role="tab"]:has-text("${label}")`,
+    ].join(', ');
+    return page.locator(sel).first();
+  }
   let tabIdx = 0;
-  for (const tab of TABS) {
+  for (const { label: tab, key } of TABS) {
     tabIdx++;
     const errBefore = errors.length;
-    const t = page.locator(`.nav-tab:has-text("${tab}"), [role="tab"]:has-text("${tab}")`).first();
+    const t = tabLocator(page, tab, key);
     if ((await t.count()) === 0) {
-      check(`${tab}: tab visible`, false);
+      check(`${tab}: tab visible`, false, `no [data-tab="${key}"] or .nav-tab "${tab}" found`);
       continue;
     }
     await t.click({ timeout: 5000 }).catch(() => undefined);
@@ -342,7 +374,7 @@ async function testNormalUser() {
   // After seedActivity ran, Brain should have an event row. Click the
   // first one to verify modal/expander opens. Same for Tokens and Crons.
   console.log('\n  ▸ Clicking into Brain feed');
-  await page.locator('.nav-tab:has-text("Brain"), [role="tab"]:has-text("Brain")').first().click().catch(() => undefined);
+  await tabLocator(page, 'Brain', 'brain').click({ timeout: 5000 }).catch(() => undefined);
   await page.waitForTimeout(PAUSE_MS);
   // Brain renders events as cards/rows — click the first interactable one.
   const brainCard = page.locator('.brain-event, .event-card, [data-event-id], .activity-row').first();
@@ -356,7 +388,7 @@ async function testNormalUser() {
   }
 
   console.log('\n  ▸ Clicking into Flow nodes (channels / tools / models)');
-  await page.locator('.nav-tab:has-text("Flow"), [role="tab"]:has-text("Flow")').first().click().catch(() => undefined);
+  await tabLocator(page, 'Flow', 'flow').click({ timeout: 5000 }).catch(() => undefined);
   await page.waitForTimeout(PAUSE_MS);
   // Flow renders nodes for channels, tools, models, etc. Try the click-
   // handler-bearing ID nodes (COMP_MAP, see app.js initCompClickHandlers)
@@ -400,7 +432,7 @@ async function testNormalUser() {
   }
 
   console.log('\n  ▸ Hovering Tokens chart for tooltip');
-  await page.locator('.nav-tab:has-text("Tokens"), [role="tab"]:has-text("Tokens")').first().click().catch(() => undefined);
+  await tabLocator(page, 'Tokens', 'usage').click({ timeout: 5000 }).catch(() => undefined);
   await page.waitForTimeout(PAUSE_MS);
   const tokenChart = page.locator('canvas, svg.chart, [data-chart]').first();
   if ((await tokenChart.count()) > 0) {
@@ -412,7 +444,7 @@ async function testNormalUser() {
   }
 
   console.log('\n  ▸ Crons tab — verify no JS errors on render');
-  await page.locator('.nav-tab:has-text("Crons"), [role="tab"]:has-text("Crons")').first().click().catch(() => undefined);
+  await tabLocator(page, 'Crons', 'crons').click({ timeout: 5000 }).catch(() => undefined);
   await page.waitForTimeout(PAUSE_MS);
   if (screenshotDir) {
     await page.screenshot({ path: `${screenshotDir}/99_crons_final.png` }).catch(() => undefined);
