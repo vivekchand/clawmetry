@@ -492,3 +492,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## v0.12.244 (re-cut: workflow ate the previous bump)
 - Re-trigger PyPI publish so cloud auto-pin picks up the v0.12.243 sync.py drift fix at v0.12.244
+
+## v0.12.245
+- fix(sync): daemon uploads per-session event_count + size_bytes (#1697) — Embodied tab now shows real counts on cloud
+- feat(replay): Replay tab queries DuckDB instead of optional SQLite collector (#1698) — chart populates out of the box
+- fix(nav): rename 'Rules' to 'Alerts' to match page content (#1696)
