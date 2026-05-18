@@ -604,11 +604,10 @@ def _dlq_enqueue_encryption_failure(
 
 
 def _dlq_replay(api_key: str, enc_key: str | None) -> int:
-    """Drain the encryption DLQ. Returns the number of rows successfully
-    re-encrypted and POSTed. Called from the sync loop on every tick. Cheap
-    no-op when the queue is empty (single COUNT(*) on a tiny table)."""
-    if not enc_key:
-        return 0  # No key configured — replay is a no-op, rows stay parked.
+    """Drain the sync DLQ. Returns the number of rows successfully replayed.
+    Handles both encryption_failure rows (re-encrypt + POST, requires enc_key)
+    and post_failure rows (retry the cloud POST, with or without encryption).
+    Called from the sync loop on every tick; cheap no-op when queue is empty."""
     try:
         from clawmetry import local_store as _ls
         store = _ls.get_store()
@@ -624,6 +623,11 @@ def _dlq_replay(api_key: str, enc_key: str | None) -> int:
     replayed = 0
     for row in rows:
         dlq_id = row["id"]
+        is_post_failure = row.get("kind") == "post_failure"
+        # Encryption-failure rows need enc_key to re-encrypt; defer them until
+        # the user restores the key. post_failure rows can replay without it.
+        if not enc_key and not is_post_failure:
+            continue
         if row["attempts"] >= _DLQ_MAX_ATTEMPTS:
             # Abandon rather than spin forever on a permanently-poisoned row.
             log.error(
@@ -645,26 +649,37 @@ def _dlq_replay(api_key: str, enc_key: str | None) -> int:
             except Exception:
                 pass
             continue
-        try:
-            blob = encrypt_payload(payload, enc_key)
-        except Exception as _enc_e:
+        if enc_key:
             try:
-                store.dlq_mark_attempt(dlq_id, str(_enc_e))
-            except Exception:
-                pass
-            continue  # Still bad key — try next row, leave this one parked.
-        try:
-            _post(
-                row["endpoint"],
-                {"node_id": row["node_id"], "encrypted": True, "blob": blob},
-                api_key,
-            )
-        except Exception as _post_e:
+                blob = encrypt_payload(payload, enc_key)
+            except Exception as _enc_e:
+                try:
+                    store.dlq_mark_attempt(dlq_id, str(_enc_e))
+                except Exception:
+                    pass
+                continue  # Still bad key — try next row, leave this one parked.
             try:
-                store.dlq_mark_attempt(dlq_id, f"post: {_post_e}")
-            except Exception:
-                pass
-            continue
+                _post(
+                    row["endpoint"],
+                    {"node_id": row["node_id"], "encrypted": True, "blob": blob},
+                    api_key,
+                )
+            except Exception as _post_e:
+                try:
+                    store.dlq_mark_attempt(dlq_id, f"post: {_post_e}")
+                except Exception:
+                    pass
+                continue
+        else:
+            # post_failure row with no encryption configured — replay as plain POST.
+            try:
+                _post(row["endpoint"], payload, api_key)
+            except Exception as _post_e:
+                try:
+                    store.dlq_mark_attempt(dlq_id, f"post: {_post_e}")
+                except Exception:
+                    pass
+                continue
         try:
             store.dlq_delete(dlq_id)
         except Exception:
@@ -1789,11 +1804,10 @@ def _flush_session_batch(
     #        advances based on LOCAL durability, not cloud reachability —
     #        matching the MOAT mandate that local is the source of truth and
     #        cloud is a hot cache.
-    #   Known trade-off: with this guard, sustained cloud failure permanently
-    #   drops those events from the cloud (cursor moves past them; we don't
-    #   re-read on next tick). A future PR should add a sidecar cloud-retry
-    #   queue keyed on canonical event id. For today the priority is local
-    #   correctness; cloud catches up when the user re-syncs from local.
+    #   Cloud POST failures are now queued in sync_dlq (kind="post_failure")
+    #   and replayed on the next tick by _dlq_replay, closing the silent-drop
+    #   gap described in #1592. Local correctness is still the primary contract;
+    #   cloud is a hot cache that self-heals via the DLQ retry loop.
     # Split encryption from POST so the diagnostic for each path is distinct
     # and an encryption failure no longer silently drops the batch (#1601).
     # Encryption can fail on: corrupted/rotated key, payload containing
@@ -1842,11 +1856,28 @@ def _flush_session_batch(
         else:
             _post("/ingest/events", payload, api_key)
     except Exception as _cloud_e:
-        log.warning(
-            "cloud /ingest/events POST failed for %s (local DuckDB is "
-            "already durable; cursor will advance based on local success): "
-            "%s", fname, _cloud_e,
-        )
+        try:
+            _dlq_enqueue_encryption_failure(
+                kind="post_failure",
+                endpoint="/ingest/events",
+                payload=payload,
+                fname=fname,
+                node_id=node_id,
+                subagent_id=subagent_id,
+                error=str(_cloud_e),
+            )
+        except Exception as _dlq_e:
+            log.warning(
+                "cloud /ingest/events POST failed AND DLQ park failed for %s "
+                "(events permanently dropped from cloud): post=%s dlq=%s",
+                fname, _cloud_e, _dlq_e,
+            )
+        else:
+            log.warning(
+                "cloud /ingest/events POST failed for %s — parked in sync_dlq "
+                "for retry on next tick: %s",
+                fname, _cloud_e,
+            )
 
 
 def _extract_cost_tokens_model(obj: dict) -> tuple:
@@ -8033,8 +8064,7 @@ def run_daemon() -> None:
     # memory; gateway.log only carries outbound ACKs (no body), and no
     # JSONL is written for inbound. Without this tap, ClawMetry can
     # NEVER show real Telegram conversations on the Brain tab.
-    # Default-OFF until upstream grants scopes; opt in via
-    # CLAWMETRY_ENABLE_WS_TAP=1.
+    # Default-ON; opt out via CLAWMETRY_ENABLE_WS_TAP=0.
     try:
         from clawmetry import gateway_tap as _gw_tap
         _gw_tap.start(config)

@@ -46,6 +46,39 @@ _CONCLUSION_RE = re.compile(
 )
 
 
+_STOP_WORDS = frozenset({
+    "that", "this", "with", "from", "have", "been", "they", "what",
+    "when", "will", "also", "more", "some", "your", "like", "their",
+    "into", "than", "then", "these", "those", "such", "just", "about",
+    "which", "where", "here", "there", "over", "only", "both", "each",
+    "most", "other", "same", "very", "well", "make", "made", "want",
+    "would", "could", "should", "need", "does", "done", "used", "using",
+    "after", "before", "while", "being", "because", "through",
+})
+
+
+def _coherence_score(thinking_text: str, answer_text: str):
+    """Keyword-overlap coherence score (0–100) between thinking and answer.
+
+    Extracts ≥4-char non-stop words from each side and measures how many
+    answer keywords appear in the thinking.  High overlap = thinking drove the
+    answer; low overlap = possible post-hoc rationalization.
+
+    Returns (score_int, label_str) where label is 'high', 'medium', or 'low'.
+    """
+    def _kw(text):
+        return {w for w in re.findall(r"\b[a-zA-Z]{4,}\b", text.lower())
+                if w not in _STOP_WORDS}
+
+    think_kw = _kw(thinking_text)
+    answer_kw = _kw(answer_text)
+    if not answer_kw:
+        return 0, "low"
+    score = min(100, int(len(think_kw & answer_kw) / len(answer_kw) * 100))
+    label = "high" if score >= 70 else ("medium" if score >= 35 else "low")
+    return score, label
+
+
 def _classify_step(text):
     """Classify a thinking step using keyword heuristics."""
     if _PREMISE_RE.search(text):
@@ -142,6 +175,7 @@ def _parse_session_reasoning(session_id):
         # Collect thinking + answer blocks from this assistant turn
         thinking_blocks = []
         answer_word_count = 0
+        answer_parts: list[str] = []
 
         for block in content_obj:
             if not isinstance(block, dict):
@@ -154,7 +188,9 @@ def _parse_session_reasoning(session_id):
             elif btype == "text":
                 text = block.get("text", "") or ""
                 answer_word_count += len(text.split())
+                answer_parts.append(text)
 
+        answer_text = " ".join(answer_parts)
         for thinking_text in thinking_blocks:
             steps = _segment_thinking(thinking_text)
             thinking_word_count = sum(s["word_count"] for s in steps)
@@ -163,6 +199,7 @@ def _parse_session_reasoning(session_id):
             efficiency_ratio = (
                 round(thinking_tokens / answer_tokens, 1) if answer_tokens > 0 else 0.0
             )
+            c_score, c_label = _coherence_score(thinking_text, answer_text)
             chains.append(
                 {
                     "timestamp": ts or "",
@@ -171,6 +208,8 @@ def _parse_session_reasoning(session_id):
                     "efficiency_ratio": efficiency_ratio,
                     "steps": steps,
                     "raw_thinking": thinking_text,
+                    "coherence_score": c_score,
+                    "coherence_label": c_label,
                 }
             )
 
@@ -235,6 +274,7 @@ def _try_local_store_reasoning(session_id: str):
 
         thinking_blocks = []
         answer_word_count = 0
+        answer_parts: list[str] = []
         for block in content_obj:
             if not isinstance(block, dict):
                 continue
@@ -246,8 +286,10 @@ def _try_local_store_reasoning(session_id: str):
             elif btype == "text":
                 text = block.get("text", "") or ""
                 answer_word_count += len(text.split())
+                answer_parts.append(text)
 
         ts = r.get("ts") or ""
+        answer_text = " ".join(answer_parts)
         for thinking_text in thinking_blocks:
             steps = _segment_thinking(thinking_text)
             thinking_word_count = sum(s["word_count"] for s in steps)
@@ -256,6 +298,7 @@ def _try_local_store_reasoning(session_id: str):
             efficiency_ratio = (
                 round(thinking_tokens / answer_tokens, 1) if answer_tokens > 0 else 0.0
             )
+            c_score, c_label = _coherence_score(thinking_text, answer_text)
             chains.append({
                 "timestamp":        ts,
                 "thinking_tokens":  thinking_tokens,
@@ -263,6 +306,8 @@ def _try_local_store_reasoning(session_id: str):
                 "efficiency_ratio": efficiency_ratio,
                 "steps":            steps,
                 "raw_thinking":     thinking_text,
+                "coherence_score":  c_score,
+                "coherence_label":  c_label,
             })
 
     if not chains:
@@ -274,6 +319,9 @@ def _try_local_store_reasoning(session_id: str):
         round(total_thinking_tokens / total_answer_tokens, 1)
         if total_answer_tokens > 0 else 0.0
     )
+    scored = [c["coherence_score"] for c in chains if c.get("coherence_score", 0) > 0]
+    avg_coherence_score = int(sum(scored) / len(scored)) if scored else 0
+    avg_coherence_label = "high" if avg_coherence_score >= 70 else ("medium" if avg_coherence_score >= 35 else "low")
     return {
         "session_id": session_id,
         "chains":     chains,
@@ -282,6 +330,8 @@ def _try_local_store_reasoning(session_id: str):
             "total_answer_tokens":   total_answer_tokens,
             "avg_efficiency":        avg_efficiency,
             "chain_count":           len(chains),
+            "avg_coherence_score":   avg_coherence_score,
+            "avg_coherence_label":   avg_coherence_label,
         },
         "_source": "local_store",
     }
@@ -311,6 +361,9 @@ def api_reasoning():
         if total_answer_tokens > 0
         else 0.0
     )
+    scored = [c["coherence_score"] for c in chains if c.get("coherence_score", 0) > 0]
+    avg_coherence_score = int(sum(scored) / len(scored)) if scored else 0
+    avg_coherence_label = "high" if avg_coherence_score >= 70 else ("medium" if avg_coherence_score >= 35 else "low")
 
     return jsonify(
         {
@@ -321,6 +374,8 @@ def api_reasoning():
                 "total_answer_tokens": total_answer_tokens,
                 "avg_efficiency": avg_efficiency,
                 "chain_count": len(chains),
+                "avg_coherence_score": avg_coherence_score,
+                "avg_coherence_label": avg_coherence_label,
             },
         }
     )
