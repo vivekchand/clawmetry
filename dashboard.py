@@ -10813,7 +10813,6 @@ DASHBOARD_HTML = r"""
           <div class="left-nav-item left-nav-item-sub active" data-tab="overview" onclick="switchTab('overview')"><span class="left-nav-label">Overview</span></div>
           <div class="left-nav-item left-nav-item-sub" data-tab="flow" onclick="switchTab('flow')"><span class="left-nav-label">Flow</span></div>
           <div class="left-nav-item left-nav-item-sub" data-tab="brain" onclick="switchTab('brain')"><span class="left-nav-label">Brain</span></div>
-          <div class="left-nav-item left-nav-item-sub" data-tab="subagents" onclick="switchTab('subagents')"><span class="left-nav-label">Sub-agents</span></div>
         </div>
       </div>
 

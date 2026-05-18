@@ -1396,14 +1396,32 @@ def _try_local_store_component_brain(limit: int, offset: int):
     # Issue #1256: route through daemon HTTP proxy. Direct get_store()
     # raises IOException on multi-process installs (DuckDB's file lock is
     # exclusive across processes; read_only=True doesn't bypass it).
+    #
+    # OpenClaw v3 + Claude Code daemon-normalised event types split into
+    # three shapes for assistant turns (per reference_openclaw_v3_event_types
+    # + feedback_synthetic_tests_missed_real_event_shape):
+    #   * "message"        — legacy installs, data.message.{role,usage,model}
+    #   * "assistant"      — Claude Code, data.message.{usage,model}, no role
+    #   * "model.completed"— OpenClaw v3, NO data.message; model on top-level
+    #                        row.model, data.modelId, data.completionText,
+    #                        no usage block at this layer
+    # Old fast-path queried only "message" → 0 rows on real installs →
+    # /api/component/brain returned "unknown" while /api/usage (which already
+    # reads all 3 shapes) correctly surfaced claude-opus-4-7.
     try:
         from routes.local_query import local_store_via_daemon
-        rows = local_store_via_daemon("query_events", event_type="message", limit=2000)
-        if rows is None:
+        rows = []
+        for et in ("message", "assistant", "model.completed"):
+            sub = local_store_via_daemon("query_events", event_type=et, limit=2000)
+            if sub:
+                rows.extend(sub)
+        if not rows:
             # Daemon unreachable → single-process fallback (tests/dev mode).
             from clawmetry import local_store
             store = local_store.get_store(read_only=True)
-            rows = store.query_events(event_type="message", limit=2000)
+            for et in ("message", "assistant", "model.completed"):
+                sub = store.query_events(event_type=et, limit=2000) or []
+                rows.extend(sub)
     except Exception:
         return None
     if not rows:
@@ -1426,16 +1444,33 @@ def _try_local_store_component_brain(limit: int, offset: int):
         data = r.get("data") if isinstance(r, dict) else None
         if not isinstance(data, dict):
             continue
+        # Three event shapes carry assistant-turn data:
+        #   * data.message dict (legacy "message" + Claude-Code "assistant")
+        #   * top-level row + data.modelId (OpenClaw v3 "model.completed")
         msg = data.get("message") if isinstance(data.get("message"), dict) else data
         if not isinstance(msg, dict):
             continue
         if msg.get("role") and msg.get("role") != "assistant":
             continue
+
+        # Pull model name first — it's the cheap signal the Flow viz uses
+        # to replace "unknown". Try every reasonable carrier before giving up.
+        model = (
+            msg.get("model")
+            or r.get("model")
+            or data.get("modelId")
+            or "unknown"
+        )
+
         usage = msg.get("usage")
         if not isinstance(usage, dict):
+            # model.completed has no usage block at this layer; still record
+            # the model so primary_model() resolves. Token + cost accounting
+            # is owned by /api/usage, which reads its own splits.
+            if model and model != "unknown":
+                models_seen.add(model)
             continue
 
-        model = msg.get("model") or r.get("model") or "unknown"
         models_seen.add(model)
         tokens_in = (usage.get("input", 0) + usage.get("cacheRead", 0)
                      + usage.get("cacheWrite", 0))
@@ -1487,7 +1522,30 @@ def _try_local_store_component_brain(limit: int, offset: int):
             "stop_reason": msg.get("stopReason", ""),
         })
 
-    if not calls:
+    # If today had no events at all, fall back to the most-recent model
+    # name from ANY day. The Flow viz's "AI Model: <name>" label is a
+    # what-does-the-agent-use signal, not a today-only stat — showing
+    # "unknown" when the user simply hasn't run an agent today is wrong.
+    if not models_seen:
+        for r in rows:
+            m = (
+                (isinstance(r.get("data"), dict) and r["data"].get("modelId"))
+                or r.get("model")
+                or (isinstance(r.get("data"), dict)
+                    and isinstance(r["data"].get("message"), dict)
+                    and r["data"]["message"].get("model"))
+            )
+            if m:
+                models_seen.add(m)
+                break  # rows are pre-sorted ts DESC by query_events
+
+    # No usage-bearing calls AND no model names seen at all → defer to
+    # legacy fallback (which probably also fails, but preserves prior
+    # behavior). When we DO have at least one model name (from a
+    # model.completed event), keep going so the Flow viz can replace
+    # "unknown" with the actual model — even if the call list is empty
+    # because /api/usage owns the token accounting.
+    if not calls and not models_seen:
         return None
 
     calls.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
