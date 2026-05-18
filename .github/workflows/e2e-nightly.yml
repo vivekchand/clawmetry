@@ -34,7 +34,30 @@ jobs:
         run: pip install flask pytest pytest-playwright requests
       - name: Install Playwright browsers
         run: python3 -m playwright install chromium --with-deps
+
+      # Install OpenClaw + export OPENCLAW_GATEWAY_TOKEN so the dashboard
+      # and gateway agree on a single bearer token (issue #1546).
       - uses: ./.github/actions/setup-openclaw
+
+      # Boot a real OpenClaw gateway in the background (issue #1546). The
+      # dashboard renders gateway-backed surfaces (Brain, Flow, Crons,
+      # Approvals) by calling http://127.0.0.1:18789 with the bearer
+      # token. Without a live gateway those tabs render empty / error
+      # states even though the auth check passes.
+      #
+      # --dev: create a throwaway dev config + workspace on the CI runner
+      # --force: kill any prior listener on the port (defensive)
+      # --auth token: enforce token mode (env supplies OPENCLAW_GATEWAY_TOKEN)
+      # continue-on-error: dashboard still renders DuckDB surfaces if the
+      # gateway fails to start.
+      - name: Boot OpenClaw gateway (background)
+        continue-on-error: true
+        run: |
+          nohup openclaw gateway --dev --force --auth token --port 18789 --verbose \
+            > /tmp/openclaw-gateway.log 2>&1 &
+          sleep 5
+          openclaw gateway status || true
+
       - name: Start server
         run: |
           OPENCLAW_GATEWAY_TOKEN=$OPENCLAW_GATEWAY_TOKEN python3 dashboard.py --port 8900 --no-debug &
@@ -47,3 +70,7 @@ jobs:
           CLAWMETRY_URL: http://localhost:8900
           CLAWMETRY_TOKEN: ${{ env.OPENCLAW_GATEWAY_TOKEN }}
         run: python3 -m pytest tests/test_e2e.py -v --tb=short
+      - name: Tail gateway log on failure
+        if: failure()
+        run: |
+          tail -200 /tmp/openclaw-gateway.log || true
