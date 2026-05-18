@@ -4659,6 +4659,14 @@ def send_heartbeat(config: dict) -> bool:
             payload.setdefault("cache_pushes", []).extend(mem_pushes)
     except Exception as _mp_e:
         log.debug("memory cache_push build failed (continuing): %s", _mp_e)
+    # Phase 6 of relay-v2 (#1640): cron-run history per job so the cloud Cron
+    # modal paints run timelines from cache instead of showing cache_pending.
+    try:
+        cr_pushes = _build_cron_runs_cache_pushes(config)
+        if cr_pushes:
+            payload.setdefault("cache_pushes", []).extend(cr_pushes)
+    except Exception as _cr_e:
+        log.debug("cron-runs cache_push build failed (continuing): %s", _cr_e)
     # Local-first: persist this heartbeat to local DuckDB so the dashboard
     # has a per-node liveness history even when offline. Best-effort.
     try:
@@ -5425,6 +5433,78 @@ def _build_approvals_cache_pushes(config: dict) -> list:
         "ttl_s":  APPROVALS_CACHE_TTL_SEC,
         "blob":   blob,
     }]
+
+
+# ── Phase 6: proactive cron-runs cache_push (issue #1640) ────────────────────
+# Cloud READ path (routes/cloud.py:cloud_cron_runs) reads from
+# ``cron_runs:{owner_hash}:{node_id}:{job_id}``.  Without this push the
+# cloud Cron modal shows perpetual ``cache_pending`` for every job's run
+# history.  One encrypted blob per distinct job_id; capped at
+# CRON_RUNS_JOB_LIMIT jobs so heartbeat payload size stays bounded.
+CRON_RUNS_CACHE_TTL_SEC = 300   # 5 min — runs change frequently
+CRON_RUNS_JOB_LIMIT = 20        # max distinct jobs per heartbeat
+CRON_RUNS_LIMIT_PER_JOB = 20    # most-recent runs included per job
+
+
+def _build_cron_runs_cache_pushes(config: dict) -> list:
+    """Return heartbeat ``cache_pushes`` entries for cron-run history.
+
+    One entry per distinct ``job_id`` found in the local store, keyed as
+    ``cron_runs:{owner_hash}:{node_id}:{job_id}``.  Returns an empty list
+    when encryption key is absent, the local store is unavailable, or no
+    cron runs have been ingested yet.
+    """
+    enc_key = config.get("encryption_key")
+    if not enc_key:
+        return []
+    api_key = config.get("api_key", "")
+    if not api_key:
+        return []
+    node_id = config.get("node_id", "")
+    try:
+        from clawmetry import local_store
+    except Exception:
+        return []
+    owner_hash = _owner_hash_for_token(api_key)
+    try:
+        store = local_store.get_store(read_only=True)
+        all_runs = store.query_cron_runs(
+            limit=CRON_RUNS_JOB_LIMIT * CRON_RUNS_LIMIT_PER_JOB
+        )
+    except Exception:
+        return []
+    if not all_runs:
+        return []
+    # Group by job_id (query already returns rows ORDER BY started_at DESC).
+    by_job: dict[str, list] = {}
+    for run in all_runs:
+        jid = run.get("job_id") or ""
+        if not jid:
+            continue
+        if jid not in by_job:
+            if len(by_job) >= CRON_RUNS_JOB_LIMIT:
+                continue
+            by_job[jid] = []
+        if len(by_job[jid]) < CRON_RUNS_LIMIT_PER_JOB:
+            by_job[jid].append(run)
+    pushes = []
+    for jid, runs in by_job.items():
+        payload = {
+            "runs":    runs,
+            "count":   len(runs),
+            "_source": "local_store",
+            "_shape":  "cron_runs",
+        }
+        try:
+            blob = encrypt_payload(payload, enc_key)
+        except Exception:
+            continue
+        pushes.append({
+            "key":   f"cron_runs:{owner_hash}:{node_id}:{jid}",
+            "ttl_s": CRON_RUNS_CACHE_TTL_SEC,
+            "blob":  blob,
+        })
+    return pushes
 
 
 def _dispatch_pending_queries(config: dict, pending: list) -> None:
