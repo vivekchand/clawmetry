@@ -22,6 +22,30 @@ Config in ~/.clawmetry/proxy.json:
             "openai": { "api_key_env": "OPENAI_API_KEY", "base_url": "https://api.openai.com" }
         }
     }
+
+BUDGET_EXCEEDED abort contract (G3 of #1708):
+    When ``budget.action == "block"`` and the daily/monthly cap is hit,
+    the proxy returns HTTP 429 with a structured abort envelope so the
+    agent runtime can hard-stop instead of retrying forever:
+
+        Status: 429
+        Header: X-Clawmetry-Budget-Status: exceeded
+        Body  : {
+            "type":  "error",
+            "error": {"type": "budget_exceeded", "message": "<reason>"},
+            "code":  "BUDGET_EXCEEDED",
+            "should_abort":        true,
+            "retry_after_seconds": null,
+            "spent_today":         <float>,
+            "budget_today":        <float>,
+            "message":             "Daily budget reached. Halting agent. ..."
+        }
+
+    Agent runtimes SHOULD check for ``code == "BUDGET_EXCEEDED"`` (or
+    the ``X-Clawmetry-Budget-Status`` header) and stop their loop.
+    Runtimes that ignore these fields fall back to the legacy 429
+    retry path, preserving backward compatibility with non-budget
+    rate-limit semantics.
 """
 
 from __future__ import annotations
@@ -791,9 +815,21 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
     _stats_lock = threading.Lock()
 
     def _error_response(
-        status_code: int, error_type: str, message: str, provider: str = "anthropic"
+        status_code: int,
+        error_type: str,
+        message: str,
+        provider: str = "anthropic",
+        extra: Optional[dict] = None,
+        extra_headers: Optional[dict] = None,
     ) -> Response:
-        """Return an error response in the provider's expected format."""
+        """Return an error response in the provider's expected format.
+
+        ``extra``: top-level fields merged into the JSON body (used to surface
+        the structured ``BUDGET_EXCEEDED`` abort envelope per G3 of #1708).
+        ``extra_headers``: additional response headers (e.g.
+        ``X-Clawmetry-Budget-Status: exceeded`` so HTTP clients that respect
+        headers can short-circuit retries without parsing the body).
+        """
         if provider == "openai":
             body = {
                 "error": {
@@ -810,10 +846,50 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                     "message": message,
                 },
             }
-        return Response(
+        if extra:
+            body.update(extra)
+        resp = Response(
             json.dumps(body),
             status=status_code,
             content_type="application/json",
+        )
+        if extra_headers:
+            for k, v in extra_headers.items():
+                resp.headers[k] = v
+        return resp
+
+    def _budget_abort_response(reason: str, provider: str) -> Response:
+        """Structured BUDGET_EXCEEDED abort signal (G3 of #1708).
+
+        Agent runtimes that wrap the proxy should branch on either
+        ``code == "BUDGET_EXCEEDED"`` in the JSON body or the
+        ``X-Clawmetry-Budget-Status: exceeded`` response header and STOP
+        their retry loop. Plain 429 retry behaviour is preserved for
+        runtimes that do not read these fields, so the contract is
+        backward compatible with non-budget rate limits.
+        """
+        status = budget.get_status()
+        spent = status.get("daily_spent", 0.0)
+        limit = status.get("daily_limit", 0.0)
+        message = (
+            "Daily budget reached. Halting agent. "
+            "Raise the budget in ClawMetry Cloud settings to resume."
+        )
+        extra = {
+            "code":                "BUDGET_EXCEEDED",
+            "should_abort":        True,
+            "retry_after_seconds": None,
+            "spent_today":         spent,
+            "budget_today":        limit,
+            "message":             message,
+        }
+        return _error_response(
+            429,
+            "budget_exceeded",
+            reason,
+            provider,
+            extra=extra,
+            extra_headers={"X-Clawmetry-Budget-Status": "exceeded"},
         )
 
     def _get_upstream_url(provider: str, path: str) -> str:
@@ -1070,7 +1146,7 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
             elif config.budget.action == "warn":
                 pass  # Allow through with warning
             else:
-                return _error_response(429, "budget_exceeded", reason, provider)
+                return _budget_abort_response(reason, provider)
 
         # ── Loop detection ─────────────────────────────────────────────
         req_hash = compute_request_hash(body)
