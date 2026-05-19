@@ -2998,6 +2998,7 @@ var _brainFilter = 'all';
 var _brainTypeFilter = 'all';
 var _brainChannelFilter = 'all';
 var _brainAllEvents = [];
+var _brainSSEEverConnected = false;
 
 // Provider → emoji + display name. Mirrors routes/brain.py `_CHANNEL_ICON`
 // and clawmetry/sync.py `_CHANNEL_DIRS` (the canonical 21-adapter list).
@@ -4672,6 +4673,16 @@ function _startBrainSSE() {
       _updateBrainLiveIndicator(true);
       // Issue #1596 — successful reconnect clears banner + retry state.
       _resetBrainSSEReconnectState();
+      // Issue #1606 — on reconnect (not first connect), the server may have
+      // restarted with a changed event shape. Flush the stale cache and
+      // reload so chip filters don't compute against a mixed old+new array.
+      if (_brainSSEEverConnected) {
+        _brainAllEvents = [];
+        _brainFilter = 'all';
+        _brainTypeFilter = 'all';
+        loadBrainPage(true);
+      }
+      _brainSSEEverConnected = true;
     });
 
     es.onmessage = function(e) {
