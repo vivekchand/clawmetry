@@ -173,10 +173,12 @@ async function testZeroClickAutoLogin() {
   );
 
   // Dashboard root rendered. The Overview tab is the canonical landing
-  // tab. The codebase uses `.nav-tab` with `onclick="switchTab('overview')"`,
-  // so match by text rather than the spec's `[data-tab="overview"]` (no
-  // such attribute exists in the embedded frontend).
-  const overviewTab = page.locator('.nav-tab.active', { hasText: /Overview/i }).first();
+  // tab. IA refactor v2 (PR #1662) introduced a sidebar `.left-nav-item`
+  // alongside the legacy top `.nav-tab`. Both classes get `.active` toggled
+  // by switchTab() — match either so this test survives nav restructures.
+  const overviewTab = page
+    .locator('.nav-tab.active, .left-nav-item.active', { hasText: /Overview/i })
+    .first();
   let overviewVisible = false;
   try {
     await overviewTab.waitFor({ state: 'visible', timeout: 5000 });
@@ -185,7 +187,7 @@ async function testZeroClickAutoLogin() {
   check(
     'Overview tab is visible — dashboard root rendered',
     overviewVisible,
-    overviewVisible ? '' : 'no .nav-tab.active with "Overview" text found'
+    overviewVisible ? '' : 'no .nav-tab.active or .left-nav-item.active with "Overview" text found'
   );
 
   // Token must be in localStorage — that's how every later /api/* call
