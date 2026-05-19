@@ -31,21 +31,34 @@
       </button>
     </div>
 
-    <!-- Inline no-auth hint (single line, non-blocking). Resolution
-         order is documented at the top of the file. -->
+    <!-- Issue #1721: when auto-detect comes up empty, render the same
+         OpenClaw-setup CTA other panels use (no raw input box, no "paste
+         a key" prompt). Populated by selfevolveProbe() from /status's
+         setup_hint payload. -->
     <div id="selfevolve-noauth" style="
       display:none;
       background:var(--bg-secondary);
       border:1px solid var(--border);
-      border-radius:6px;
-      padding:10px 14px;
+      border-radius:8px;
+      padding:14px 16px;
       color:var(--text-muted);
-      font-size:12px;
+      font-size:12.5px;
+      line-height:1.55;
       margin-bottom:12px;
       ">
-      Self-Evolve needs an Anthropic key. Set
-      <code style="background:var(--bg-primary);padding:1px 5px;border-radius:3px;">ANTHROPIC_API_KEY</code>
-      in your shell, or paste one in Settings.
+      <div id="selfevolve-noauth-headline" style="font-weight:600;color:var(--text-primary);margin-bottom:4px;">
+        Self-Evolve needs an Anthropic credential.
+      </div>
+      <div id="selfevolve-noauth-subhead">
+        Run <code style="background:var(--bg-primary);padding:1px 5px;border-radius:3px;">claude</code>
+        once to sign in with OAuth (free, recommended), or export
+        <code style="background:var(--bg-primary);padding:1px 5px;border-radius:3px;">ANTHROPIC_API_KEY</code>
+        in your shell. We auto-detect, no copy/paste here.
+      </div>
+      <details style="margin-top:8px;">
+        <summary style="cursor:pointer;font-size:11px;color:var(--text-muted);">Where we looked</summary>
+        <ul id="selfevolve-noauth-probed" style="margin:6px 0 0 0;padding-left:18px;font-size:11px;color:var(--text-muted);font-family:ui-monospace,Menlo,monospace;"></ul>
+      </details>
     </div>
 
     <!-- Status line (analyzed at, model, event count) -->
