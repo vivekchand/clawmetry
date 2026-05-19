@@ -27,6 +27,7 @@ mechanical move — zero behaviour change.
 import json
 import os
 import select
+import sqlite3
 import subprocess
 import time
 from datetime import datetime, timedelta, timezone
@@ -1092,6 +1093,151 @@ def api_memory_analytics():
 
     files = _d._get_memory_files()
     return jsonify(_build_memory_analytics(files, bloat_warn_kb, bloat_crit_kb))
+
+
+# ── Memory RAG / SQLite inspector (issue #610) ─────────────────────────────
+
+
+def _open_rag_db():
+    """Open ~/.openclaw/memory/main.sqlite read-only.
+
+    Returns a sqlite3.Connection, or None when the file is absent, the
+    memory dir is unknown, or any other error prevents opening (we prefer a
+    graceful empty response over a 500).
+    """
+    import dashboard as _d
+    mem_dir = getattr(_d, "MEMORY_DIR", None) or ""
+    if not mem_dir:
+        return None
+    db_path = os.path.join(mem_dir, "main.sqlite")
+    if not os.path.isfile(db_path):
+        return None
+    try:
+        uri = f"file:{db_path}?mode=ro"
+        return sqlite3.connect(uri, uri=True, timeout=2.0)
+    except Exception:
+        return None
+
+
+@bp_memory.route("/api/memory-rag")
+def api_memory_rag():
+    """Return RAG document-store stats and file list from main.sqlite.
+
+    Response shape:
+      {"available": bool, "stats": {...}, "files": [...]}
+    When main.sqlite does not exist, returns {"available": false, ...} with
+    HTTP 200 so the frontend can render a "not yet indexed" state without
+    treating it as an error.
+    """
+    conn = _open_rag_db()
+    if conn is None:
+        return jsonify({"available": False, "stats": {}, "files": []})
+
+    try:
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        try:
+            file_rows = cur.execute(
+                "SELECT f.path, f.size, f.mtime, COUNT(c.id) AS chunk_count "
+                "FROM files f LEFT JOIN chunks c ON c.file_id = f.id "
+                "GROUP BY f.id ORDER BY f.size DESC"
+            ).fetchall()
+            files = [
+                {
+                    "path": r["path"],
+                    "size": r["size"] or 0,
+                    "mtime": r["mtime"] or 0,
+                    "chunkCount": r["chunk_count"] or 0,
+                }
+                for r in file_rows
+            ]
+        except Exception:
+            files = []
+
+        stats: dict = {}
+        try:
+            agg = cur.execute(
+                "SELECT COUNT(*) AS file_count, "
+                "       COALESCE(SUM(size), 0) AS total_bytes, "
+                "       MAX(mtime) AS last_indexed "
+                "FROM files"
+            ).fetchone()
+            stats = {
+                "fileCount": agg["file_count"] or 0,
+                "totalBytes": agg["total_bytes"] or 0,
+                "lastIndexed": agg["last_indexed"],
+            }
+        except Exception:
+            pass
+
+        try:
+            chunk_row = cur.execute("SELECT COUNT(*) AS n FROM chunks").fetchone()
+            stats["chunkCount"] = chunk_row["n"] or 0
+        except Exception:
+            pass
+
+        return jsonify({"available": True, "stats": stats, "files": files})
+    except Exception as exc:
+        return jsonify({"available": False, "error": str(exc), "stats": {}, "files": []})
+    finally:
+        conn.close()
+
+
+@bp_memory.route("/api/memory-rag/search")
+def api_memory_rag_search():
+    """FTS5 full-text search over RAG chunks.
+
+    Query params:
+      q      — search terms (required)
+      limit  — max results (default 20, max 100)
+
+    Result shape:
+      {"available": bool, "query": str, "total": int, "results": [
+        {"path": str, "snippet": str, "rank": float}, ...
+      ]}
+    """
+    q = (request.args.get("q") or "").strip()
+    if not q:
+        return jsonify({"available": True, "query": "", "total": 0, "results": []})
+
+    try:
+        limit = min(int(request.args.get("limit", 20)), 100)
+    except ValueError:
+        limit = 20
+
+    conn = _open_rag_db()
+    if conn is None:
+        return jsonify({"available": False, "query": q, "total": 0, "results": []})
+
+    try:
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        try:
+            rows = cur.execute(
+                "SELECT f.path, "
+                "       snippet(chunks_fts, 0, '<mark>', '</mark>', '...', 16) AS snippet, "
+                "       rank "
+                "FROM chunks_fts "
+                "JOIN chunks c  ON c.id  = chunks_fts.rowid "
+                "JOIN files  f  ON f.id  = c.file_id "
+                "WHERE chunks_fts MATCH ? "
+                "ORDER BY rank "
+                "LIMIT ?",
+                (q, limit),
+            ).fetchall()
+            results = [
+                {"path": r["path"], "snippet": r["snippet"], "rank": r["rank"]}
+                for r in rows
+            ]
+        except Exception as exc:
+            return jsonify({
+                "available": True, "query": q, "total": 0,
+                "results": [], "error": str(exc),
+            })
+        return jsonify({"available": True, "query": q, "total": len(results), "results": results})
+    finally:
+        conn.close()
 
 
 # ── Security ───────────────────────────────────────────────────────────────
