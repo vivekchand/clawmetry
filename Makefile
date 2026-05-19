@@ -1,9 +1,9 @@
-.PHONY: test test-api test-e2e test-fast test-e2e-duckdb test-moat test-moat-real moat-check moat-check-drive dev lint lint-daemon-allowlist
+.PHONY: test test-api test-e2e test-e2e-duckdb test-fast test-workflow test-moat test-moat-real moat-check moat-check-drive dev lint lint-daemon-allowlist
 
 dev:
 	OPENCLAW_GATEWAY_TOKEN=dev-token python3 dashboard.py --port 8900
 
-test: test-api test-e2e test-e2e-duckdb
+test: test-api test-e2e test-e2e-duckdb test-workflow
 
 test-fast:
 	CLAWMETRY_URL=http://localhost:8900 CLAWMETRY_TOKEN=dev-token python3 -m pytest tests/test_api.py -v
@@ -18,6 +18,9 @@ test-e2e:
 # isolated DuckDB file. No live server, no gateway, no network. ~5s.
 test-e2e-duckdb:
 	python3 -m pytest tests/test_e2e_duckdb_relay.py -v
+
+test-workflow:
+	python3 -m pytest tests/test_e2e_nightly_workflow.py -v
 
 # MOAT verifier suite (issue #1491 / PRD #1133 invariant #3). Hermetic —
 # no live server, no gateway, no network. ~10s locally. Mirror the CI

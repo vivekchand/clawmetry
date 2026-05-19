@@ -34,15 +34,16 @@ jobs:
         run: pip install flask pytest pytest-playwright requests
       - name: Install Playwright browsers
         run: python3 -m playwright install chromium --with-deps
+      - uses: ./.github/actions/setup-openclaw
       - name: Start server
         run: |
-          OPENCLAW_GATEWAY_TOKEN=ci-test-token python3 dashboard.py --port 8900 --no-debug &
+          OPENCLAW_GATEWAY_TOKEN=$OPENCLAW_GATEWAY_TOKEN python3 dashboard.py --port 8900 --no-debug &
           for i in $(seq 1 30); do
-            curl -sf -H "Authorization: Bearer ci-test-token" http://localhost:8900/api/health && break
+            curl -sf -H "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN" http://localhost:8900/api/health && break
             sleep 1
           done
       - name: Run full E2E suite
         env:
           CLAWMETRY_URL: http://localhost:8900
-          CLAWMETRY_TOKEN: ci-test-token
+          CLAWMETRY_TOKEN: ${{ env.OPENCLAW_GATEWAY_TOKEN }}
         run: python3 -m pytest tests/test_e2e.py -v --tb=short
