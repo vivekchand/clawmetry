@@ -327,12 +327,38 @@ def _extract_findings(raw_text: str) -> tuple[list[dict], dict]:
 def api_selfevolve_status():
     mode, credential = _load_anthropic_auth()
     cached = _load_cached()
+
+    # Issue #1721: when auto-detect comes up empty, give the UI enough info
+    # to render the same OpenClaw-setup CTA the rest of the dashboard uses
+    # (not a "paste your API key here" input box). The hint surfaces what
+    # paths were probed so a curious operator can see exactly where to drop
+    # the credential -- zero-config first, then opt-in env var, never a
+    # blocking modal.
+    home = os.environ.get("OPENCLAW_HOME") or os.path.expanduser("~/.openclaw")
+    setup_hint = None
+    if not credential:
+        setup_hint = {
+            "headline": "Self-Evolve needs an Anthropic credential.",
+            "subhead": (
+                "Run `claude` once to sign in with OAuth (free, recommended), "
+                "or export ANTHROPIC_API_KEY in your shell."
+            ),
+            "probed": [
+                "$ANTHROPIC_API_KEY / $ANTHROPIC_AUTH_TOKEN / $CLAUDE_API_KEY",
+                os.path.join(home, ".clawmetry", "insights_config.json"),
+                os.path.join(home, "openclaw.json"),
+                os.path.join(home, "service-env", "ai.openclaw.gateway.env"),
+                os.path.join(home, "agents", "main", "agent", "auth-profiles.json"),
+            ],
+            "claude_cli_url": "https://docs.anthropic.com/en/docs/claude-code",
+        }
     return jsonify(
         {
             "available": bool(credential),
             "auth_mode": mode or "none",
             "has_cached": bool(cached),
             "cached_at": (cached or {}).get("generated_at"),
+            "setup_hint": setup_hint,
         }
     )
 
