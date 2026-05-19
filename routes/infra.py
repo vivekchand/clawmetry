@@ -330,6 +330,64 @@ def _try_local_store_cost_optimizer():
     }
 
 
+def _try_local_store_cost_optimization():
+    """DuckDB fast path for /api/cost-optimization's data slice.
+
+    Sibling of ``_try_local_store_cost_optimizer`` (which serves
+    /api/cost-optimizer). Both endpoints suffer the same in-memory-ring
+    silent-zero hazard: ``dashboard._get_cost_summary`` and
+    ``_get_expensive_operations`` both read ``metrics_store`` which
+    resets on every dashboard restart, so the panel renders $0 even
+    when DuckDB holds weeks of usage rows. This route returns a
+    different envelope shape (``costs`` dict with today/week/month/
+    projected) so we extend the sibling's projection with week+month
+    rollups derived from the same ``query_aggregates`` rows.
+
+    Returns ``{"costs": {today, week, month, projected}, "expensiveOps":
+    [...], "_source": "local_store"}`` when DuckDB has rows; ``None``
+    otherwise (no canary on empty store — caller defers to the legacy
+    in-memory path, matching the pattern pinned by
+    ``test_cost_optimizer_local_store_v3``).
+    """
+    from routes.sessions import _ls_call  # late import to avoid cycle
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+
+    # Sibling handles today + projected + expensiveOps from the same
+    # query_aggregates + query_events rows; reuse it so the two
+    # endpoints can't drift.
+    sibling = _try_local_store_cost_optimizer()
+    if sibling is None:
+        return None
+
+    # Compute the week + month rollups the sibling doesn't surface.
+    agg_rows = _ls_call("query_aggregates") or []
+    now = _dt.now(_tz.utc)
+    week_start = (now - _td(days=7)).date().isoformat()
+    month_start = (now - _td(days=30)).date().isoformat()
+    week_cost = 0.0
+    month_cost = 0.0
+    for r in agg_rows:
+        day = (r.get("day") or "")
+        if not day:
+            continue
+        c = float(r.get("cost_usd") or 0.0)
+        if day >= week_start:
+            week_cost += c
+        if day >= month_start:
+            month_cost += c
+
+    return {
+        "costs": {
+            "today":     sibling["todayCost"],
+            "week":      round(week_cost, 4),
+            "month":     round(month_cost, 4),
+            "projected": sibling["projectedMonthlyCost"],
+        },
+        "expensiveOps": sibling["expensiveOps"],
+        "_source": "local_store",
+    }
+
+
 @bp_logs.route("/api/flow-events")
 @bp_logs.route("/api/flow")
 def api_flow_events():
@@ -1323,7 +1381,17 @@ def api_cost_optimizer():
 
 @bp_config.route("/api/cost-optimization")
 def api_cost_optimization():
-    """Cost optimization analysis and local model fallback recommendations."""
+    """Cost optimization analysis and local model fallback recommendations.
+
+    Tier-1 DuckDB fast path (refs #1565): the legacy ``_get_cost_summary``
+    / ``_get_expensive_operations`` helpers read ``dashboard._metrics_store``
+    (an in-memory ring populated by the HTTP interceptor) which resets on
+    every dashboard restart — the panel renders $0 with no candidates even
+    when DuckDB holds weeks of real usage rows. When the local store has
+    data, swap in its values for the data-derived slice (costs +
+    expensiveOps). Falls back to the legacy in-memory ring on empty store
+    or when ``CLAWMETRY_LOCAL_STORE_READ`` is off.
+    """
     import dashboard as _d
     try:
         # Get cost metrics
@@ -1338,6 +1406,30 @@ def api_cost_optimization():
         # Get recent expensive operations
         expensive_ops = _d._get_expensive_operations()
 
+        # DuckDB fast path — swap in DuckDB-derived values for the data
+        # slice when the local store has rows. Keeps host-state slices
+        # (localModels / llmfit / ollamaInstalled / savingsOpportunities)
+        # on the legacy path; only swaps the data-derived fields.
+        source_local = False
+        if is_local_store_read_enabled():
+            try:
+                ls_slice = _try_local_store_cost_optimization()
+            except Exception:
+                ls_slice = None
+            if ls_slice is not None:
+                costs = ls_slice["costs"]
+                # Only override expensiveOps when DuckDB actually surfaced
+                # candidates — mirrors the sibling cost-optimizer behavior
+                # so a populated store with no $0.01+ rows keeps the ring.
+                if ls_slice.get("expensiveOps"):
+                    expensive_ops = ls_slice["expensiveOps"]
+                # Recompute recommendations against the DuckDB costs so the
+                # banner copy matches the displayed numbers.
+                recommendations = _d._generate_cost_recommendations(
+                    costs, local_models_ollama
+                )
+                source_local = True
+
         # Get llmfit local model recommendations
         llmfit_data = _d._get_llmfit_recommendations()
 
@@ -1347,18 +1439,19 @@ def api_cost_optimization():
         # Build savings opportunities
         savings = _d._generate_savings_opportunities()
 
-        return jsonify(
-            {
-                "costs": costs,
-                "localModels": local_models_ollama,
-                "recommendations": recommendations,
-                "expensiveOps": expensive_ops,
-                "llmfit": llmfit_data,
-                "ollamaInstalled": ollama_installed,
-                "llmfitAvailable": llmfit_data.get("available", False),
-                "savingsOpportunities": savings,
-            }
-        )
+        payload = {
+            "costs": costs,
+            "localModels": local_models_ollama,
+            "recommendations": recommendations,
+            "expensiveOps": expensive_ops,
+            "llmfit": llmfit_data,
+            "ollamaInstalled": ollama_installed,
+            "llmfitAvailable": llmfit_data.get("available", False),
+            "savingsOpportunities": savings,
+        }
+        if source_local:
+            payload["_source"] = "local_store"
+        return jsonify(payload)
     except Exception as e:
         return jsonify(
             {
