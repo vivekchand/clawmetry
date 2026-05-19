@@ -2988,6 +2988,60 @@ def api_token_velocity():
     })
 
 
+# ── Forward-progress signal (issue #1707) ──────────────────────────────
+# ratio = tokens per state delta (new tool, new file, new error type).
+# Higher = more "spinning" (burn without progress). Brain badge colours
+# stay aligned with the Pro alert default (>= 50k = red).
+_FWDPROG_GREEN_MAX  = 5_000
+_FWDPROG_YELLOW_MAX = 50_000
+
+
+def _fwdprog_badge(ratio: float) -> str:
+    if ratio < _FWDPROG_GREEN_MAX:  return "green"
+    if ratio < _FWDPROG_YELLOW_MAX: return "yellow"
+    return "red"
+
+
+@bp_usage.route("/api/forward-progress")
+def api_forward_progress():
+    """Per-session forward-progress signal (issue #1707). Args: ``since``,
+    ``until`` (ISO-8601), ``session_id``. Default window: last 10 min."""
+    since = request.args.get("since") or None
+    until = request.args.get("until") or None
+    session_id = request.args.get("session_id") or None
+    if not since:
+        from datetime import datetime, timedelta, timezone
+        since = (datetime.now(timezone.utc) - timedelta(minutes=10)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ")
+    kwargs = {"since": since, "until": until, "session_id": session_id}
+    rows = None
+    try:
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_forward_progress", **kwargs)
+        if rows is None:
+            # Single-process fallback. Reuse writer if open to avoid
+            # DuckDB's "same file, different config" connection error;
+            # fall back to read_only only when no writer exists yet.
+            from clawmetry import local_store
+            try:
+                store = local_store.get_store()
+            except Exception:
+                store = local_store.get_store(read_only=True)
+            rows = store.query_forward_progress(**kwargs)
+    except Exception as e:
+        return jsonify({"rows": [], "_source": "error", "error": str(e)[:200]}), 200
+    enriched = []
+    for r in rows or []:
+        try:
+            r = dict(r)
+            r["badge"] = _fwdprog_badge(float(r.get("ratio", 0.0)))
+            enriched.append(r)
+        except Exception:
+            continue
+    return jsonify({"rows": enriched, "count": len(enriched),
+                    "since": since, "until": until, "_source": "local_store"})
+
+
 # ── Prompt-cache analytics (GH #851) ────────────────────────────────────
 
 
