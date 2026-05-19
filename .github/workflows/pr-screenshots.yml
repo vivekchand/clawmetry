@@ -232,7 +232,32 @@ jobs:
           cp "${GITHUB_WORKSPACE}/screenshots/manifest.json" "$DEST_DIR/manifest.json"
           git add -A
           git commit -m "visual diff: PR #${PR_NUMBER} @ ${SHORT_SHA}" || { echo "no changes"; exit 0; }
-          git push "$REMOTE" "HEAD:pr-screenshots"
+          # Concurrent PR builds race to push to the shared pr-screenshots
+          # ref. Each PR writes to its own pr/<N>/<sha>/ subdir, so rebase
+          # is always conflict-free. Retry with rebase up to 6 attempts +
+          # jittered backoff. If we still lose the race the screenshots are
+          # uploaded as a workflow artifact (step 12), so don't fail the job.
+          for attempt in 1 2 3 4 5 6; do
+            if git push "$REMOTE" "HEAD:pr-screenshots" 2>push.err; then
+              echo "pushed pr-screenshots on attempt ${attempt}"
+              exit 0
+            fi
+            cat push.err
+            if ! grep -qE "rejected|non-fast-forward|fetch first" push.err; then
+              echo "push failed for a non-race reason; bailing"
+              exit 1
+            fi
+            echo "race lost (attempt ${attempt}/6) — fetching remote tip and rebasing"
+            git fetch --depth=50 "$REMOTE" pr-screenshots
+            if ! git rebase FETCH_HEAD; then
+              git rebase --abort || true
+              echo "::warning::pr-screenshots rebase conflict (unexpected since dirs are per-PR); skipping publish"
+              exit 0
+            fi
+            sleep $(( attempt * 3 + RANDOM % 4 ))
+          done
+          echo "::warning::pr-screenshots push lost the race after 6 attempts; screenshots are still available as a workflow artifact"
+          exit 0
 
       # ── 11. Render and post the comment ─────────────────────────────────
       - name: Render comment body
