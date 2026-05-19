@@ -5864,6 +5864,25 @@ class LocalStore:
             out.append({c: _coerce_value(v) for c, v in zip(cols, r)})
         return out
 
+    def dives_table_columns(self, table: str) -> list[dict]:
+        """Return column metadata for *table* via ``PRAGMA table_info``.
+
+        Used by ``clawmetry.dives_prompt.build_schema_descriptor`` to build an
+        accurate schema block for the Dives LLM prompt.  Only column names and
+        SQL types are returned — never data values.
+
+        Raises:
+            ValueError: if *table* is not in the Dives allowlist.
+        """
+        from clawmetry.dives_sql_safety import ALLOWED_TABLES
+        if table not in ALLOWED_TABLES:
+            raise ValueError(
+                f"dives_table_columns: {table!r} is not an allowlisted Dives table"
+            )
+        rows = self._fetch(f"PRAGMA table_info('{table}')", [])
+        # PRAGMA table_info columns: cid, name, type, notnull, dflt_value, pk
+        return [{"name": r[1], "ctype": r[2]} for r in rows]
+
     # ── internals ───────────────────────────────────────────────────────
 
     def _fetch(self, sql: str, params: list[Any]) -> list[tuple]:
