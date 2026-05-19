@@ -73,13 +73,45 @@ def _find_openclaw_binary() -> str | None:
 
 OPENCLAW_BIN = _find_openclaw_binary()
 
-pytestmark = pytest.mark.skipif(
-    OPENCLAW_BIN is None,
-    reason=(
-        "openclaw binary not on PATH; install via `brew install openclaw` "
-        "or `npm install -g openclaw`. CI: use .github/actions/setup-openclaw."
+
+# Real LLM credentials required: the canonical ``<sid>.jsonl`` only flushes
+# after the model call returns. Fake key -> 401 -> no file -> fixture asserts
+# explode. GitHub Actions does not expose repo secrets to PRs from forks,
+# so external-contributor PRs cannot satisfy this. Skip the whole module
+# with a clear reason so contributor CI stays green.
+REQUIRED_LLM_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_API_KEY")
+_FAKE_LLM_KEY_MARKERS = ("fake-clawmetry", "sk-ant-fake", "sk-fake")
+
+
+def _have_real_llm_key() -> bool:
+    """True iff env has a non-empty, non-fake LLM key on any accepted alias."""
+    for name in REQUIRED_LLM_ENV:
+        v = os.environ.get(name, "")
+        if v and not any(m in v for m in _FAKE_LLM_KEY_MARKERS):
+            return True
+    return False
+
+
+pytestmark = [
+    pytest.mark.skipif(
+        OPENCLAW_BIN is None,
+        reason=(
+            "openclaw binary not on PATH; install via `brew install openclaw` "
+            "or `npm install -g openclaw`. CI: use .github/actions/setup-openclaw."
+        ),
     ),
-)
+    pytest.mark.skipif(
+        not _have_real_llm_key(),
+        reason=(
+            "Real MOAT E2E needs a real LLM key (ANTHROPIC_API_KEY, "
+            "ANTHROPIC_AUTH_TOKEN, or CLAUDE_API_KEY). GitHub Actions does not "
+            "expose repo secrets to PRs from forks, so this is expected on "
+            "contributor PRs. It runs on push to main and on PRs from the main "
+            "repo where the secret is available. Set ANTHROPIC_API_KEY locally "
+            "to run it during development."
+        ),
+    ),
+]
 
 
 # ── Constants ─────────────────────────────────────────────────────────────

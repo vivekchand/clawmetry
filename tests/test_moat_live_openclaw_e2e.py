@@ -63,13 +63,48 @@ def _find_openclaw_binary() -> str | None:
 
 OPENCLAW_BIN = _find_openclaw_binary()
 
-pytestmark = pytest.mark.skipif(
-    OPENCLAW_BIN is None,
-    reason=(
-        "openclaw binary not on PATH; install via `npm install -g openclaw` "
-        "or use the `setup-openclaw` composite action in CI"
+
+# Real LLM credentials required: the canonical ``<sid>.jsonl`` is only
+# flushed AFTER the model call completes. With a fake key OpenClaw 401s
+# before that flush, and ``_find_session_jsonl`` then has nothing to read.
+# GitHub Actions does not expose repo secrets to PRs from forks, so an
+# external contributor's PR cannot reach this code path. Skip the whole
+# module with a clear reason instead of failing the run.
+REQUIRED_LLM_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_API_KEY")
+_FAKE_LLM_KEY_MARKERS = ("fake-clawmetry", "sk-ant-fake", "sk-fake")
+
+
+def _have_real_llm_key() -> bool:
+    """True iff env has a non-empty, non-fake LLM key on any accepted alias.
+    Fake markers are filtered so the module's own ``_send_message`` default
+    keys don't accidentally satisfy this gate."""
+    for name in REQUIRED_LLM_ENV:
+        v = os.environ.get(name, "")
+        if v and not any(m in v for m in _FAKE_LLM_KEY_MARKERS):
+            return True
+    return False
+
+
+pytestmark = [
+    pytest.mark.skipif(
+        OPENCLAW_BIN is None,
+        reason=(
+            "openclaw binary not on PATH; install via `npm install -g openclaw` "
+            "or use the `setup-openclaw` composite action in CI"
+        ),
     ),
-)
+    pytest.mark.skipif(
+        not _have_real_llm_key(),
+        reason=(
+            "Live OpenClaw E2E needs a real LLM key (ANTHROPIC_API_KEY, "
+            "ANTHROPIC_AUTH_TOKEN, or CLAUDE_API_KEY). GitHub Actions does not "
+            "expose repo secrets to PRs from forks, so this is expected on "
+            "contributor PRs. It runs on push to main and on PRs from the main "
+            "repo where the secret is available. Set ANTHROPIC_API_KEY locally "
+            "to run it during development."
+        ),
+    ),
+]
 
 NODE_ID = "agent+moat-live-e2e"
 # Layout note: when ``OPENCLAW_STATE_DIR=<X>`` is set, OpenClaw v3 (verified
