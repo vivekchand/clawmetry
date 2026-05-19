@@ -4321,15 +4321,33 @@ class LocalStore:
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         """Return recently-scored sessions, newest first. Drives
-        ``/api/evals/recent``."""
+        ``/api/evals/recent``.
+
+        MOAT epic #1743: bridge ``total_tokens`` + ``cost_usd`` via
+        GREATEST(stored, SUM(events.field)) so eval rows never show
+        ``$0 / 0 tokens`` for sessions whose stored aggregates drifted
+        (e.g. gateway-ingested sessions where the typed row was upserted
+        before the event stream caught up).
+        """
         sql = """
-            SELECT session_id, agent_type, agent_id, title, last_active_at,
-                   total_tokens, cost_usd,
-                   eval_score, eval_reason, eval_judge_model,
-                   eval_scored_at, eval_rubric
-              FROM sessions
-             WHERE eval_score IS NOT NULL
-             ORDER BY eval_scored_at DESC NULLS LAST
+            SELECT s.session_id, s.agent_type, s.agent_id, s.title, s.last_active_at,
+                   GREATEST(
+                       COALESCE(s.total_tokens, 0),
+                       COALESCE((SELECT SUM(e.token_count) FROM events e
+                                  WHERE e.session_id = s.session_id
+                                    AND e.agent_type  = s.agent_type), 0)
+                   ) AS total_tokens,
+                   GREATEST(
+                       COALESCE(s.cost_usd, 0.0),
+                       COALESCE((SELECT SUM(e.cost_usd) FROM events e
+                                  WHERE e.session_id = s.session_id
+                                    AND e.agent_type  = s.agent_type), 0.0)
+                   ) AS cost_usd,
+                   s.eval_score, s.eval_reason, s.eval_judge_model,
+                   s.eval_scored_at, s.eval_rubric
+              FROM sessions s
+             WHERE s.eval_score IS NOT NULL
+             ORDER BY s.eval_scored_at DESC NULLS LAST
              LIMIT ?
         """
         rows = self._fetch(sql, [int(limit)])
@@ -4584,9 +4602,31 @@ class LocalStore:
         # correlated subquery against ``events`` and fall back to the stored
         # column for agents that DO populate it (e.g. ingest from sync.py
         # where the events table may be empty).
+        #
+        # MOAT epic #1743 / triggering bug #1725: ``sessions.total_tokens``
+        # and ``sessions.cost_usd`` have the same drift class — sessions
+        # ingested via the gateway path (e.g. in-memory Telegram sessions)
+        # arrive with both columns = 0 because the gateway metadata doesn't
+        # always include token/cost totals. Apply the same
+        # GREATEST(stored, SUM(events.field)) bridge so any session whose
+        # events ARE in the local events table reports correct figures.
+        # Events get cost_usd + token_count daemon-stamped by
+        # _coerce_event_metrics() from ``usage.cost.*`` payloads at ingest.
         sql = f"""
             SELECT s.agent_type, s.session_id, s.agent_id, s.title, s.started_at,
-                   s.last_active_at, s.ended_at, s.status, s.total_tokens, s.cost_usd,
+                   s.last_active_at, s.ended_at, s.status,
+                   GREATEST(
+                       COALESCE(s.total_tokens, 0),
+                       COALESCE((SELECT SUM(e.token_count) FROM events e
+                                  WHERE e.session_id = s.session_id
+                                    AND e.agent_type  = s.agent_type), 0)
+                   ) AS total_tokens,
+                   GREATEST(
+                       COALESCE(s.cost_usd, 0.0),
+                       COALESCE((SELECT SUM(e.cost_usd) FROM events e
+                                  WHERE e.session_id = s.session_id
+                                    AND e.agent_type  = s.agent_type), 0.0)
+                   ) AS cost_usd,
                    GREATEST(
                        COALESCE(s.message_count, 0),
                        (SELECT COUNT(*) FROM events e
