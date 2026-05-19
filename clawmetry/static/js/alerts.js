@@ -322,6 +322,10 @@
       cta.textContent   = 'Start 7-day free trial';
       cta.dataset.action = 'upgrade';
     }
+    // #zoom-wrapper can have CSS transform (boot animation, zoom feature).
+    // position:fixed inside a transformed ancestor is fixed to that ancestor,
+    // not the viewport. Move to body so inset:0 anchors to the viewport. (#1717)
+    if (modal.parentElement !== document.body) document.body.appendChild(modal);
     modal.style.display = 'flex';
   }
 
@@ -343,7 +347,11 @@
   // ── Editor modal (Pro tier) ───────────────────────────────────────────────
 
   function openEditor() {
-    document.getElementById('alerts-editor-modal').style.display = 'flex';
+    const modal = document.getElementById('alerts-editor-modal');
+    if (!modal) return; // server-side gated to Pro users
+    // Same viewport-escape as openPaywall (#1717).
+    if (modal.parentElement !== document.body) document.body.appendChild(modal);
+    modal.style.display = 'flex';
     document.getElementById('alerts-editor-title').textContent =
       alertsState.editorRule ? 'Edit alert rule' : 'New alert rule';
     setActiveType(alertsState.editorType);
@@ -494,4 +502,13 @@
       return iso;
     }
   }
+
+  // ESC closes whichever alerts modal is open (#1717).
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    const editor  = document.getElementById('alerts-editor-modal');
+    const paywall = document.getElementById('alerts-paywall-modal');
+    if (editor  && editor.style.display  !== 'none') window.alertsCloseEditor();
+    else if (paywall && paywall.style.display !== 'none') window.alertsClosePaywall();
+  });
 })();
