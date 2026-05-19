@@ -3156,6 +3156,78 @@ def _summarise_cache_bucket(label, b, key):
     }
 
 
+def _try_local_store_cache_trends(days: int):
+    """Fast path for /api/usage/cache-trends (issue #1778, Tier-1 #1).
+
+    Mirrors the JSONL walker shape exactly: ``{days, daily[], by_model[],
+    totals, recommendations}`` where every bucket carries the same
+    ``input_tokens / output_tokens / cache_read_tokens / cache_write_tokens
+    + per-component cost + cache_hit_ratio_pct + est_savings`` columns the
+    legacy path emits. Backed by ``LocalStore.query_cache_metrics`` which
+    runs one SQL pass and applies the same v3 sibling-pair dedupe
+    (``assistant`` + ``model.completed`` 100-300 ms apart) as
+    ``query_daily_usage_splits`` — without dedupe the cache-hit ratio
+    silently lies by 2×.
+
+    Returns ``None`` to defer to the legacy walker when the store is
+    unreachable. Returns the full envelope (with ``_source: 'local_store'``
+    canary) when the store IS reachable, even if no events match — that
+    keeps the audit grep at ``reference_duckdb_coverage_audit.md`` from
+    re-categorising the surface as ``JSONL_FALLBACK_ONLY``.
+    """
+    rows = _ls_call("query_cache_metrics", days=int(days))
+    if rows is None:
+        return None
+
+    daily: dict = {}
+    by_model: dict = {}
+    for r in rows:
+        d_key = r.get("day", "")
+        m_key = r.get("model", "unknown")
+        for bucket in (
+            daily.setdefault(d_key, _empty_cache_bucket()),
+            by_model.setdefault(m_key, _empty_cache_bucket()),
+        ):
+            bucket["input_tokens"]       += int(r.get("input_tokens") or 0)
+            bucket["output_tokens"]      += int(r.get("output_tokens") or 0)
+            bucket["cache_read_tokens"]  += int(r.get("cache_read_tokens") or 0)
+            bucket["cache_write_tokens"] += int(r.get("cache_write_tokens") or 0)
+            bucket["input_cost"]         += float(r.get("input_cost") or 0.0)
+            bucket["output_cost"]        += float(r.get("output_cost") or 0.0)
+            bucket["cache_read_cost"]    += float(r.get("cache_read_cost") or 0.0)
+            bucket["cache_write_cost"]   += float(r.get("cache_write_cost") or 0.0)
+            bucket["total_cost"]         += float(r.get("total_cost") or 0.0)
+
+    today = datetime.now()
+    daily_out = []
+    for i in range(days - 1, -1, -1):
+        d = today - timedelta(days=i)
+        ds = d.strftime("%Y-%m-%d")
+        daily_out.append(
+            _summarise_cache_bucket(ds, daily.get(ds, _empty_cache_bucket()), key="date")
+        )
+
+    by_model_out = [
+        _summarise_cache_bucket(m, b, key="model")
+        for m, b in sorted(by_model.items(), key=lambda kv: -kv[1]["total_cost"])
+    ]
+
+    totals_bucket = _empty_cache_bucket()
+    for b in daily.values():
+        for k in totals_bucket:
+            totals_bucket[k] += b[k]
+    totals_out = _summarise_cache_bucket("totals", totals_bucket, key="label")
+
+    return {
+        "days": days,
+        "daily": daily_out,
+        "by_model": by_model_out,
+        "totals": totals_out,
+        "recommendations": _cache_recommendations(totals_out, by_model_out),
+        "_source": "local_store",
+    }
+
+
 def _cache_recommendations(totals, by_model):
     tips = []
     hit = totals.get("cache_hit_ratio_pct", 0.0)
@@ -3230,6 +3302,16 @@ def api_usage_cache_trends():
         days = max(1, min(int(request.args.get("days", "14")), 90))
     except ValueError:
         days = 14
+
+    # Tier-1 DuckDB fast path (issue #1778 audit #1). Same dedupe shape as
+    # ``_try_local_store_usage_forecast`` — one SQL pass + sibling-pair
+    # collapse, vs. the JSONL walker below which re-parses every session
+    # file on every call. Returns ``None`` to defer when the store is
+    # unreachable.
+    if is_local_store_read_enabled():
+        fast = _try_local_store_cache_trends(days)
+        if fast is not None:
+            return jsonify(fast)
 
     sessions_dir = _d._get_sessions_dir()
     cutoff_ts = time.time() - (days * 86400)
