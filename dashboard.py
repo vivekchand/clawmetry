@@ -1904,6 +1904,40 @@ def _budget_monitor_loop():
                                 f"(threshold: {int(threshold):,}/min){sid_hint}"
                             )
                             fired = True
+                elif rtype == "unproductive_burn":
+                    # Issue #1707 — forward-progress signal. Fires when any
+                    # session burns >= ``threshold`` tokens per state delta
+                    # over the last 10 min window (genuine spinning, not just
+                    # busy productive burn). Pro rule.
+                    try:
+                        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+                        from routes.local_query import local_store_via_daemon
+                        since_iso = (_dt.now(_tz.utc) - _td(minutes=10)).strftime(
+                            "%Y-%m-%dT%H:%M:%SZ"
+                        )
+                        rows = local_store_via_daemon(
+                            "query_forward_progress", since=since_iso,
+                        ) or []
+                        worst = None
+                        for r in rows:
+                            try:
+                                if float(r.get("ratio") or 0) >= float(threshold):
+                                    if worst is None or r["ratio"] > worst["ratio"]:
+                                        worst = r
+                            except (TypeError, ValueError):
+                                continue
+                        if worst:
+                            sid = (worst.get("session_id") or "")[:12]
+                            msg = (
+                                f"Unproductive burn: session {sid} burned "
+                                f"{int(worst['tokens']):,} tokens with "
+                                f"{int(worst['state_deltas'])} state deltas "
+                                f"(ratio: {int(worst['ratio']):,} tok/delta, "
+                                f"threshold: {int(threshold):,})"
+                            )
+                            fired = True
+                    except Exception:
+                        pass
 
                 if fired:
                     _budget_alert_cooldowns[rule_id] = now
@@ -9590,6 +9624,40 @@ def _budget_monitor_loop():
                                 f"(threshold: {int(threshold):,}/min){sid_hint}"
                             )
                             fired = True
+                elif rtype == "unproductive_burn":
+                    # Issue #1707 — forward-progress signal. Fires when any
+                    # session burns >= ``threshold`` tokens per state delta
+                    # over the last 10 min window (genuine spinning, not just
+                    # busy productive burn). Pro rule.
+                    try:
+                        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+                        from routes.local_query import local_store_via_daemon
+                        since_iso = (_dt.now(_tz.utc) - _td(minutes=10)).strftime(
+                            "%Y-%m-%dT%H:%M:%SZ"
+                        )
+                        rows = local_store_via_daemon(
+                            "query_forward_progress", since=since_iso,
+                        ) or []
+                        worst = None
+                        for r in rows:
+                            try:
+                                if float(r.get("ratio") or 0) >= float(threshold):
+                                    if worst is None or r["ratio"] > worst["ratio"]:
+                                        worst = r
+                            except (TypeError, ValueError):
+                                continue
+                        if worst:
+                            sid = (worst.get("session_id") or "")[:12]
+                            msg = (
+                                f"Unproductive burn: session {sid} burned "
+                                f"{int(worst['tokens']):,} tokens with "
+                                f"{int(worst['state_deltas'])} state deltas "
+                                f"(ratio: {int(worst['ratio']):,} tok/delta, "
+                                f"threshold: {int(threshold):,})"
+                            )
+                            fired = True
+                    except Exception:
+                        pass
 
                 if fired:
                     _budget_alert_cooldowns[rule_id] = now

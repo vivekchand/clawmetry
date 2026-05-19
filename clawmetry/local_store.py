@@ -3082,6 +3082,98 @@ class LocalStore:
                 out.append({"ts": ts, "name": name})
         return out
 
+    def query_forward_progress(
+        self,
+        *,
+        since: str | None = None,
+        until: str | None = None,
+        session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Per-session "forward-progress" signal (issue #1707).
+
+        Returns one row per session within ``[since, until]`` of shape
+        ``{session_id, tokens, state_deltas, ratio, window_start,
+        window_end}``. ``ratio = tokens / max(state_deltas, 1)`` — a high
+        ratio means the agent is burning tokens without producing new
+        state. Sessions with zero billable tokens in the window are
+        dropped (skip, never divide-by-zero).
+
+        State delta sources (each first-seen counts as ``+1``):
+          * New tool name in the window.
+          * New file path touched (tool arg ``input.{file_path,path,filename}``).
+          * New error event_type surfaced (``error``, ``error.*``, ``*.failed``).
+
+        Distinct from the existing token-velocity alert which fires on
+        any busy agent — this signal only flags genuine spinning.
+        """
+        clauses, params = [], []
+        if since:
+            clauses.append("ts >= ?"); params.append(since)
+        if until:
+            clauses.append("ts <= ?"); params.append(until)
+        if session_id:
+            clauses.append("session_id = ?"); params.append(session_id)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = (f"SELECT session_id, ts, event_type, data, token_count "
+               f"FROM events {where} ORDER BY session_id ASC, ts ASC")
+        rows = self._fetch(sql, params)
+
+        per_session: dict[str, dict[str, Any]] = {}
+        seen: dict[str, dict[str, set]] = {}
+
+        for sid, ts, ev_type, raw, tok_col in rows:
+            if not sid:
+                continue
+            b = per_session.setdefault(sid, {
+                "session_id": sid, "tokens": 0, "state_deltas": 0,
+                "window_start": ts, "window_end": ts,
+            })
+            if ts and ts < b["window_start"]: b["window_start"] = ts
+            if ts and ts > b["window_end"]:   b["window_end"]   = ts
+            sets = seen.setdefault(sid, {"tools": set(), "paths": set(), "errors": set()})
+
+            data: dict[str, Any] = {}
+            if raw is not None:
+                try:
+                    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    parsed = json.loads(text) if text else {}
+                    if isinstance(parsed, dict):
+                        data = parsed
+                except (ValueError, TypeError, UnicodeDecodeError):
+                    data = {}
+
+            try:
+                tok = int(tok_col or 0)
+            except (TypeError, ValueError):
+                tok = 0
+            if tok <= 0 and data:
+                sp = _extract_usage_splits(data)
+                tok = int(sp.get("input_tokens", 0)) + int(sp.get("output_tokens", 0))
+            if tok > 0:
+                b["tokens"] += tok
+
+            for name in _iter_tool_invocation_names(ev_type, data):
+                n = (name or "").lower()
+                if n and n not in sets["tools"]:
+                    sets["tools"].add(n); b["state_deltas"] += 1
+            for p in _iter_tool_file_paths(ev_type, data):
+                if p and p not in sets["paths"]:
+                    sets["paths"].add(p); b["state_deltas"] += 1
+            et = (ev_type or "").lower()
+            if et and (et == "error" or et.startswith("error.") or et.endswith(".failed")):
+                if et not in sets["errors"]:
+                    sets["errors"].add(et); b["state_deltas"] += 1
+
+        out = []
+        for b in per_session.values():
+            tokens = int(b["tokens"])
+            if tokens <= 0:
+                continue
+            b["ratio"] = float(tokens) / float(max(int(b["state_deltas"]), 1))
+            out.append(b)
+        out.sort(key=lambda r: r["ratio"], reverse=True)
+        return out
+
     # ── flush ───────────────────────────────────────────────────────────
 
     def _flusher_loop(self) -> None:
@@ -6377,6 +6469,49 @@ def _iter_read_tool_paths(event_type: str | None, data: dict) -> Iterable[str]:
                 if (blk.get("name") or "").lower() not in _READ_TOOL_NAMES:
                     continue
                 p = _path_from_input(blk.get("input") or blk.get("arguments"))
+                if p:
+                    yield p
+
+
+def _iter_tool_file_paths(event_type: str | None, data: dict) -> Iterable[str]:
+    """Yield ANY file_path/path/filename argument from any tool call
+    (issue #1707 — forward-progress signal). Tool-agnostic superset of
+    :func:`_iter_read_tool_paths`. Probes the same three on-the-wire
+    shapes: top-level tool.call, ``toolMetas[*].input``, and legacy
+    assistant ``content[*]`` blocks."""
+    if not isinstance(data, dict):
+        return
+    et = (event_type or "").lower()
+
+    def _path(inp: Any) -> str:
+        if isinstance(inp, str):
+            try:
+                inp = json.loads(inp)
+            except (ValueError, TypeError):
+                return ""
+        if not isinstance(inp, dict):
+            return ""
+        for key in ("file_path", "path", "filename"):
+            v = inp.get(key)
+            if isinstance(v, str) and v:
+                return v
+        return ""
+
+    if et in ("tool.call", "toolcall", "tool_use"):
+        p = _path(data.get("input") or data.get("arguments"))
+        if p:
+            yield p
+        return
+    for m in (data.get("toolMetas") or []):
+        if isinstance(m, dict):
+            p = _path(m.get("input"))
+            if p:
+                yield p
+    msg = data.get("message")
+    if isinstance(msg, dict) and msg.get("role") == "assistant":
+        for blk in (msg.get("content") or []):
+            if isinstance(blk, dict) and blk.get("type") in ("toolCall", "tool_use"):
+                p = _path(blk.get("input") or blk.get("arguments"))
                 if p:
                     yield p
 
