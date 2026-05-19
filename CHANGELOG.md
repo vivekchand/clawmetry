@@ -503,3 +503,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - fix(cloud-nav): Version impact hidden in cloud mode (#1700)
 - fix(advisor): Self-Evolve auto-detects Anthropic key from OpenClaw config; no more blocking takeover panel (#1703)
 - fix(skills): Skills tab now discovers ~/.openclaw/plugin-skills/ (was returning 0 even with installed skills) (#1703)
+
+## v0.12.247
+- feat(classifier): cognitive_loop 6th outcome class. Catches recursive self-validation, the Wolfgang's burnout case) (#1709)
+- feat(brain): forward-progress signal (tokens per state delta) + Pro alert + DuckDB query (#1710)
+- fix(ci): auto-deploy-cloud workflow now watches CHANGELOG.md so [RELEASE] PRs auto-fire cloud pin
