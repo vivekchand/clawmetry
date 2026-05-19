@@ -112,6 +112,30 @@ DEFAULT_ALERT_RULES = [
             "Catches genuine spinning, not just busy productive burn."
         ),
     },
+    # G3 of #1708 (Wolfgang burnout): the proxy now emits a structured
+    # BUDGET_EXCEEDED abort signal when the daily cap is hit. This seed
+    # rule surfaces those aborts in the alerts UI as an opt-in template
+    # so a user who configured a budget sees a one-click way to be
+    # notified when their agent actually got halted. NOT default-enabled
+    # because most users don't run the proxy yet.
+    {
+        "id":           "agent_halted_budget_default",
+        "type":         "budget_abort",
+        "event_type":   "budget_blocked",
+        "window_hours": 24,
+        "threshold":    1,
+        "channels":     ["banner", "telegram"],
+        "cooldown_min": 60,
+        "enabled":      False,
+        "pro_only":     True,
+        "label":        "Agent halted by budget",
+        "description": (
+            "Fires when the Pro proxy emits at least one BUDGET_EXCEEDED "
+            "abort in the last 24 hours. Use this to confirm the daily "
+            "cap actually stopped a runaway agent, not just logged a "
+            "warning."
+        ),
+    },
 ]
 
 

@@ -296,13 +296,31 @@ def _try_local_store_autonomy() -> dict | None:
     # Issue #1256: route through daemon HTTP proxy. Direct get_store()
     # raises IOException on multi-process installs (DuckDB's file lock is
     # exclusive across processes; read_only=True doesn't bypass it).
+    #
+    # 2026-05-18 silent-zero bug-class fix (6th instance today, per memory
+    # ``feedback_synthetic_tests_missed_real_event_shape.md`` +
+    # ``reference_openclaw_v3_event_types.md``). User turns land in DuckDB
+    # under THREE different ``event_type`` values depending on the agent
+    # runtime:
+    #   * ``message``         — legacy installs; data.message.role=="user"
+    #   * ``user``            — Claude Code daemon-normalised
+    #   * ``prompt.submitted``— OpenClaw v3 daemon-normalised (no role
+    #                           field; presence implies user turn)
+    # Querying only ``message`` returned 0 rows on real installs → the
+    # Overview "How independent is your agent?" widget rendered blank ``—``.
     try:
         from routes.local_query import local_store_via_daemon
-        rows = local_store_via_daemon("query_events", event_type="message", limit=5000)
-        if rows is None:
+        rows = []
+        for et in ("message", "user", "prompt.submitted"):
+            sub = local_store_via_daemon("query_events", event_type=et, limit=5000)
+            if sub:
+                rows.extend(sub)
+        if not rows:
             # Daemon unreachable → single-process fallback (tests/dev mode).
             store = local_store.get_store(read_only=True)
-            rows = store.query_events(event_type="message", limit=5000)
+            for et in ("message", "user", "prompt.submitted"):
+                sub = store.query_events(event_type=et, limit=5000) or []
+                rows.extend(sub)
     except Exception:
         return None
     if not rows:
@@ -326,9 +344,27 @@ def _try_local_store_autonomy() -> dict | None:
         data = r.get("data") if isinstance(r, dict) else None
         if not isinstance(data, dict):
             continue
-        msg = data.get("message") if isinstance(data.get("message"), dict) else data
-        role = msg.get("role") if isinstance(msg, dict) else None
-        if role != "user":
+        # User-turn detection across three event shapes (silent-zero fix):
+        #   * legacy ``message`` event → data.message.role=="user"
+        #   * Claude Code ``user`` event → top-level event_type already says
+        #     user; data.message may be absent or carry role=="user"
+        #   * v3 ``prompt.submitted`` event → no role field; the event_type
+        #     itself is the user-turn marker. data.finalPromptText is set.
+        et = (r.get("event_type") or "").lower()
+        is_user_turn = False
+        if et == "prompt.submitted":
+            is_user_turn = True
+        elif et == "user":  # v3-shape-gate: allow (reason: handles legacy+v3 in same fn — prompt.submitted branch above covers v3)
+            # Claude Code daemon event. Accept unless an inner role
+            # contradicts (defensive — should never happen).
+            inner = data.get("message") if isinstance(data.get("message"), dict) else None
+            role = inner.get("role") if isinstance(inner, dict) else None
+            is_user_turn = role in (None, "", "user")
+        else:
+            msg = data.get("message") if isinstance(data.get("message"), dict) else data
+            role = msg.get("role") if isinstance(msg, dict) else None
+            is_user_turn = (role == "user")
+        if not is_user_turn:
             continue
         sid = r.get("session_id") or ""
         per_session[sid].append(ts)
