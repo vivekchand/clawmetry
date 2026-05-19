@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -56,13 +57,12 @@ def _read_anthropic_key_from_openclaw_config() -> str | None:
     The key never leaves the process via /api/* responses (the only
     caller is the LLM dispatcher).
     """
+    home = os.environ.get("OPENCLAW_HOME") or os.path.expanduser("~/.openclaw")
     candidates: list[str] = []
 
     # 1. Insights config -- the user may have pasted a key here already.
     try:
-        ins_path = os.path.expanduser(
-            "~/.openclaw/.clawmetry/insights_config.json"
-        )
+        ins_path = os.path.join(home, ".clawmetry", "insights_config.json")
         if os.path.isfile(ins_path):
             with open(ins_path) as f:
                 cfg = json.load(f)
@@ -77,7 +77,7 @@ def _read_anthropic_key_from_openclaw_config() -> str | None:
     # rather than walking the whole tree; new ones can be added as we
     # discover them across installs.
     try:
-        oc_path = os.path.expanduser("~/.openclaw/openclaw.json")
+        oc_path = os.path.join(home, "openclaw.json")
         if os.path.isfile(oc_path):
             with open(oc_path) as f:
                 oc = json.load(f)
@@ -93,6 +93,28 @@ def _read_anthropic_key_from_openclaw_config() -> str | None:
                     v = blob.get(field)
                     if isinstance(v, str) and v.strip().startswith("sk-"):
                         candidates.append(v.strip())
+    except Exception:
+        pass
+
+    # 3. Gateway service-env shell file -- launchd / systemd installs put
+    # provider creds here so the gateway sees them. Issue #1721: zero-config
+    # principle says any key on disk should "just work" -- we already
+    # auto-detect the gateway token here, the Anthropic key sits in the
+    # same file family. Parse with a strict regex so we never execute the
+    # shell or pick up unrelated lines.
+    try:
+        env_path = os.path.join(home, "service-env", "ai.openclaw.gateway.env")
+        if os.path.isfile(env_path):
+            with open(env_path) as f:
+                txt = f.read()
+            for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_API_KEY"):
+                m = re.search(
+                    r"^\s*(?:export\s+)?" + re.escape(name) + r"\s*=\s*['\"]?(sk-[A-Za-z0-9\-_]+)",
+                    txt,
+                    re.MULTILINE,
+                )
+                if m:
+                    candidates.append(m.group(1))
     except Exception:
         pass
 
@@ -113,9 +135,13 @@ def _load_anthropic_auth() -> tuple[str | None, str | None]:
                         instead of a blocking modal
     """
     # 1. Explicit env var wins -- operator-controlled, easy to override.
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if api_key:
-        return "api_key", api_key
+    # Issue #1721: also honour the alternate names Claude CLI / Anthropic
+    # SDKs read so users who exported one of the well-known aliases don't
+    # have to set a second env var to make Self-Evolve work.
+    for env_name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_API_KEY"):
+        api_key = os.environ.get(env_name, "").strip()
+        if api_key:
+            return "api_key", api_key
 
     # 2. Auto-detect a key the user already configured in OpenClaw / the
     # dashboard's Insights tab. This is the "show some magic" path: a

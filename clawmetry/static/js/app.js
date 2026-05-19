@@ -5040,17 +5040,48 @@ async function selfevolveProbe() {
     var empty = document.getElementById('selfevolve-empty');
     var runBtn = document.getElementById('selfevolve-run-btn');
     if (!s || !s.available) {
-      // Inline hint stays at the top of the page; the Analyze button
-      // stays enabled so the user sees the 412 error inline if they
-      // click it. Don't block the rest of the surface.
+      // Issue #1721: zero-config principle — render the same OpenClaw-
+      // setup CTA other panels use instead of a "paste your key" prompt.
+      // /status now ships a setup_hint payload listing the paths the
+      // backend probed so the operator can see exactly where to drop a
+      // credential; the Analyze button is disabled to prevent the 412
+      // round-trip (the inline CTA is the actionable surface here).
       if (hint) hint.style.display = 'none';
-      if (noauth) noauth.style.display = '';
-      if (empty) empty.style.display = '';
-      if (runBtn) runBtn.disabled = false;
+      if (noauth) {
+        noauth.style.display = '';
+        var sh = s && s.setup_hint;
+        if (sh) {
+          var hl = document.getElementById('selfevolve-noauth-headline');
+          if (hl && sh.headline) hl.textContent = sh.headline;
+          var sub = document.getElementById('selfevolve-noauth-subhead');
+          if (sub && sh.subhead) sub.textContent = sh.subhead;
+          var probed = document.getElementById('selfevolve-noauth-probed');
+          if (probed && Array.isArray(sh.probed)) {
+            probed.innerHTML = sh.probed.map(function (p) {
+              return '<li>' + String(p).replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</li>';
+            }).join('');
+          }
+        }
+      }
+      if (empty) empty.style.display = 'none';
+      if (runBtn) {
+        runBtn.disabled = true;
+        runBtn.style.opacity = '0.5';
+        runBtn.style.cursor = 'not-allowed';
+        runBtn.title = 'Sign in with claude or export ANTHROPIC_API_KEY first';
+      }
       return;
     }
     if (hint) hint.style.display = '';
     if (noauth) noauth.style.display = 'none';
+    // Re-enable the Analyze button in case a prior probe disabled it
+    // (e.g. credentials added between page loads without a full refresh).
+    if (runBtn) {
+      runBtn.disabled = false;
+      runBtn.style.opacity = '';
+      runBtn.style.cursor = '';
+      runBtn.title = '';
+    }
     if (s.has_cached) {
       try {
         var cached = await fetchJsonWithTimeout('/api/selfevolve/latest', 3000);
