@@ -40,7 +40,7 @@ jobs:
       # dashboard JS bundle died, stranding every user on the boot
       # overlay. `node --check` catches this in <1s. Required gate.
       - name: Setup Node (for JS syntax check)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "20"
       - name: Check JS syntax (all clawmetry/static/js/*.js)
