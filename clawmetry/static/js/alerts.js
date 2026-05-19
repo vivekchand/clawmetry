@@ -306,8 +306,24 @@
 
   // ── Paywall modal ─────────────────────────────────────────────────────────
 
+  // Issue #1717: the alerts modal nodes are templated inside #zoom-wrapper,
+  // which gets `transform: scale(currentZoom)` applied unconditionally by
+  // app.js applyZoom() at boot — even when currentZoom === 1. Any non-`none`
+  // transform creates a containing block for descendants with `position:
+  // fixed`, so `inset: 0` no longer means viewport — it means the wrapper.
+  // Result: the modal renders pinned to the wrapper's top-left (which
+  // scrolls with the page) instead of centered in the viewport. Reparent
+  // the modal to <body> on first open to escape the transform.
+  function detachModalToBody(modalId) {
+    const modal = document.getElementById(modalId);
+    if (modal && modal.parentNode !== document.body) {
+      document.body.appendChild(modal);
+    }
+    return modal;
+  }
+
   function openPaywall() {
-    const modal = document.getElementById('alerts-paywall-modal');
+    const modal = detachModalToBody('alerts-paywall-modal');
     const title = document.getElementById('alerts-paywall-title');
     const body  = document.getElementById('alerts-paywall-body');
     const cta   = document.getElementById('alerts-paywall-cta');
@@ -343,7 +359,10 @@
   // ── Editor modal (Pro tier) ───────────────────────────────────────────────
 
   function openEditor() {
-    document.getElementById('alerts-editor-modal').style.display = 'flex';
+    // See detachModalToBody() above re: #zoom-wrapper transform / issue #1717.
+    const modal = detachModalToBody('alerts-editor-modal');
+    if (!modal) return; // editor markup only renders for Pro (is_pro)
+    modal.style.display = 'flex';
     document.getElementById('alerts-editor-title').textContent =
       alertsState.editorRule ? 'Edit alert rule' : 'New alert rule';
     setActiveType(alertsState.editorType);

@@ -79,13 +79,56 @@ def load_dashboard(page: Page, wait_ms: int = 1500):
     page.wait_for_timeout(wait_ms)
 
 
+def nav_tabs_locator(page: Page):
+    """Locator for nav tabs across both flat and nested IA.
+
+    New IA (PR #1660 onward): tabs live in a left-nav with
+    `.left-nav-item` (top-level) and `.left-nav-item-sub` (children),
+    each carrying a stable `data-tab="<key>"`. Legacy flat IA used
+    `.nav-tab`. The union selector covers both so tests pass on either.
+    """
+    return page.locator("[data-tab], .nav-tab")
+
+
+# Label to stable data-tab key. Labels rename across IA migrations, the
+# data-tab key does not. Keep in lockstep with switchTab() callers.
+_TAB_KEY = {
+    "Flow": "flow",
+    "Brain": "brain",
+    "Overview": "overview",
+    "Approvals": "approvals",
+    "Alerts": "alerts",
+    "Tokens": "usage",
+    "Cost": "usage",
+    "Crons": "crons",
+    "Memory": "memory",
+    "Security": "security",
+    "Logs": "logs",
+    "Health": "health",
+    "Sessions": "sessions",
+    "Subagents": "subagents",
+    "Skills": "skills",
+}
+
+
 def click_tab(page: Page, tab_label: str):
-    """Click a nav tab by its text label."""
-    tab = page.locator(f".nav-tab:has-text('{tab_label}')")
-    if tab.count() == 0:
-        pytest.skip(f"Nav tab '{tab_label}' not found")
-    tab.first.click()
-    page.wait_for_timeout(600)
+    """Click a nav tab by its text label.
+
+    Tries the new IA `[data-tab=<key>]` first, falls back to legacy
+    `.nav-tab` text match, then skips cleanly.
+    """
+    key = _TAB_KEY.get(tab_label, tab_label.lower())
+    by_key = page.locator(f"[data-tab='{key}']")
+    if by_key.count() > 0:
+        by_key.first.click()
+        page.wait_for_timeout(600)
+        return
+    by_text = page.locator(f".nav-tab:has-text('{tab_label}')")
+    if by_text.count() > 0:
+        by_text.first.click()
+        page.wait_for_timeout(600)
+        return
+    pytest.skip(f"Nav tab '{tab_label}' (key={key}) not found")
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +145,7 @@ class TestTabsLoad:
     def test_page_has_nav_tabs(self, page: Page):
         """Dashboard shows navigation tabs."""
         load_dashboard(page)
-        tabs = page.locator(".nav-tab")
+        tabs = nav_tabs_locator(page)
         assert tabs.count() > 0, "No nav tabs found in dashboard"
 
     def test_overview_tab_is_default(self, page: Page):
@@ -168,13 +211,14 @@ class TestTabsLoad:
         page.on("pageerror", lambda err: errors.append(str(err)))
         load_dashboard(page)
 
-        tabs = page.locator(".nav-tab")
+        tabs = nav_tabs_locator(page)
         count = tabs.count()
         assert count > 0, "No nav tabs found"
 
         for i in range(count):
             tab = tabs.nth(i)
-            # Skip tabs hidden via display:none (e.g. NemoClaw tab before NemoClaw connects)
+            # Skip tabs hidden via display:none (e.g. collapsed left-nav-sub group
+            # before its parent is expanded, or NemoClaw tab before connect).
             if not tab.is_visible():
                 continue
             tab.click()
