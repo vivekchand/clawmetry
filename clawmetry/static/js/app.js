@@ -872,7 +872,6 @@ function switchTab(name) {
   if (name === 'memory') loadMemory();
   if (name === 'transcripts') loadTranscripts();
   if (name === 'version-impact') loadVersionImpact();
-  if (name === 'clusters') loadClusters();
   if (name === 'limits') loadRateLimits();
   if (name === 'flow') initFlow();
   if (name === 'context') loadContextInspector();
@@ -9851,7 +9850,6 @@ async function loadVersionImpact() {
   }
 }
 
-// ── Session Clusters Panel ─────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════
 // Rate Limit Monitor — GH#67
 // ═══════════════════════════════════════════════════════════════════════════
@@ -9939,53 +9937,9 @@ function _rateLimitBar(label, current, limit, pct) {
   return html;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-async function loadClusters() {
-  var el = document.getElementById('clusters-content');
-  if (!el) return;
-  el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Analyzing session patterns...</div>';
-  try {
-    var data = await fetch('/api/clusters').then(r => r.json());
-    if (!data.clusters || data.clusters.length === 0) {
-      el.innerHTML = '<div class="card" style="padding:20px;text-align:center;"><div style="font-size:13px;color:var(--text-muted);">No sessions found to cluster.</div></div>';
-      return;
-    }
-    var clusterColors = {'browsing-heavy':'#60a5fa','code-heavy':'#34d399','messaging':'#f472b6','doc-analysis':'#a78bfa','mixed-research':'#fbbf24','cron-light':'#94a3b8','expensive-outlier':'#ef4444','general':'#6b7280'};
-    var html = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin-bottom:16px;">';
-    data.clusters.forEach(function(cl) {
-      var color = clusterColors[cl.label] || '#6b7280';
-      var errorPct = (cl.error_rate * 100).toFixed(0);
-      html += '<div class="card" style="padding:16px;border-top:3px solid ' + color + ';">';
-      html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">';
-      html += '<div><div style="font-size:14px;font-weight:700;color:var(--text-primary);">' + escHtml(cl.label) + '</div>';
-      html += '<div style="font-size:12px;color:var(--text-muted);">' + cl.session_count + ' session' + (cl.session_count !== 1 ? 's' : '') + '</div></div>';
-      html += '<div style="background:' + color + '22;color:' + color + ';padding:4px 8px;border-radius:12px;font-size:11px;font-weight:600;">' + cl.session_count + '</div>';
-      html += '</div>';
-      html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">';
-      html += '<div style="font-size:12px;"><span style="color:var(--text-muted);">Avg cost:</span> <span style="font-weight:600;color:var(--text-primary);">$' + cl.avg_cost.toFixed(4) + '</span></div>';
-      html += '<div style="font-size:12px;"><span style="color:var(--text-muted);">Avg tokens:</span> <span style="font-weight:600;color:var(--text-primary);">' + (cl.avg_tokens / 1000).toFixed(1) + 'K</span></div>';
-      html += '<div style="font-size:12px;"><span style="color:var(--text-muted);">Error rate:</span> <span style="font-weight:600;">' + errorPct + '%</span></div>';
-      if (cl.rep_session) {
-        html += '<div style="font-size:12px;"><span style="color:var(--text-muted);">Top session:</span> <span style="font-family:monospace;color:var(--text-accent);" title="' + escHtml(cl.rep_session.id) + '">' + escHtml(cl.rep_session.id.substring(0,8)) + '</span></div>';
-      }
-      html += '</div>';
-      if (cl.rep_session && cl.rep_session.tools && cl.rep_session.tools.length > 0) {
-        html += '<div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap;">';
-        cl.rep_session.tools.slice(0,5).forEach(function(t) {
-          html += '<span style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:4px;font-size:10px;padding:2px 6px;color:var(--text-muted);">' + escHtml(t) + '</span>';
-        });
-        html += '</div>';
-      }
-      html += '</div>';
-    });
-    html += '</div>';
-    var total = data.clusters.reduce(function(s, c) { return s + c.session_count; }, 0);
-    html += '<div class="card" style="padding:12px 16px;font-size:12px;color:var(--text-muted);">Total: <strong style="color:var(--text-primary);">' + total + ' sessions</strong> across <strong style="color:var(--text-primary);">' + data.clusters.length + ' clusters</strong></div>';
-    el.innerHTML = html;
-  } catch(e) {
-    el.innerHTML = '<div style="padding:16px;color:var(--text-error);">Failed to load clusters</div>';
-  }
-}
+// loadClusters() / Fleet Sonar removed 2026-05-19 (issue #1716). The Trace
+// Clusters card on the Usage tab is a different surface — it stays and is
+// rendered by renderTraceClusters() against /api/sessions/clusters.
 
 var _overviewRefreshRunning = false;
 function startOverviewRefresh() {

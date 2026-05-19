@@ -103,7 +103,7 @@ from routes.overview import bp_overview
 from routes.components import bp_components
 from routes.fleet_history import bp_fleet, bp_history
 from routes.infra import bp_logs, bp_memory, bp_security, bp_config
-from routes.meta import bp_auth, bp_cloud_relay, bp_gateway, bp_otel, bp_version, bp_version_impact, bp_clusters
+from routes.meta import bp_auth, bp_cloud_relay, bp_gateway, bp_otel, bp_version, bp_version_impact
 from routes.nemoclaw import bp_nemoclaw
 from routes.skills import bp_skills
 from routes.heartbeat import bp_heartbeat
@@ -4890,17 +4890,6 @@ function clawmetryLogout(){
   </div>
 </div>
 
-<!-- SESSION CLUSTERS -->
-<div class="page" id="page-clusters">
-  <div class="refresh-bar">
-    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">&#129492; Session Clusters</h2>
-    <button class="refresh-btn" onclick="loadClusters()">&#8635; Refresh</button>
-  </div>
-  <div id="clusters-content" style="padding:8px 0;">
-    <div style="color:var(--text-muted);font-size:13px;">Loading...</div>
-  </div>
-</div>
-
 <!-- HISTORY -->
 
 <!-- RATE LIMITS -->
@@ -6271,7 +6260,6 @@ function switchTab(name) {
   if (name === 'memory') loadMemory();
   if (name === 'transcripts') loadTranscripts();
   if (name === 'version-impact') loadVersionImpact();
-  if (name === 'clusters') loadClusters();
   if (name === 'limits') loadRateLimits();
   if (name === 'flow') initFlow();
   if (name === 'history') loadHistory();
@@ -10486,7 +10474,6 @@ def detect_config(args=None):
     app.register_blueprint(bp_usage)
     app.register_blueprint(bp_version)
     app.register_blueprint(bp_version_impact)
-    app.register_blueprint(bp_clusters)
     app.register_blueprint(bp_cloud_relay)
     app.register_blueprint(bp_nemoclaw)
     app.register_blueprint(bp_skills)
@@ -10888,10 +10875,6 @@ DASHBOARD_HTML = r"""
           <span class="left-nav-label">LLM Context</span>
         </div>
       </div>
-      <div class="left-nav-item" data-tab="clusters" onclick="switchTab('clusters')" title="Multi-node fleet overview">
-        <span class="left-nav-icon" aria-hidden="true">&#9678;</span>
-        <span class="left-nav-label">Fleet sonar</span>
-      </div>
       <div class="left-nav-item" data-tab="approvals" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">
         <span class="left-nav-icon" aria-hidden="true">&#10003;</span>
         <span class="left-nav-label">Approvals</span>
@@ -10980,9 +10963,6 @@ DASHBOARD_HTML = r"""
 
 <!-- UPGRADE IMPACT -->
 {% include 'tabs/version-impact.html' %}
-
-<!-- SESSION CLUSTERS -->
-{% include 'tabs/clusters.html' %}
 
 <!-- HISTORY -->
 
@@ -11221,7 +11201,6 @@ from flask import Blueprint as _Blueprint
 # bp_usage moved to routes/usage.py
 # bp_version moved to routes/meta.py
 # bp_version_impact moved to routes/meta.py
-# bp_clusters moved to routes/meta.py
 # bp_nemoclaw moved to routes/nemoclaw.py
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -14805,234 +14784,15 @@ def _compute_diff(before, after):
 # (bp_version_impact handler moved to routes/meta.py: /api/version-impact)
 
 
-# ── Trace Clustering (GH #406) ───────────────────────────────────────────────
-
-_CLUSTER_TOOL_GROUPS = {
-    "browsing": {"browser", "web_fetch", "web_search"},
-    "coding": {"exec", "Read", "Write", "Edit", "process"},
-    "messaging": {"message", "tts"},
-    "pdf": {"pdf", "image"},
-    "files": {"Read", "Write", "Edit"},
-}
-
-_CLUSTER_PATTERNS = [
-    # (cluster_label, dominant_tools_required, min_fraction)
-    ("browsing-heavy", {"browser", "web_fetch", "web_search"}, 0.4),
-    ("code-heavy", {"exec", "Read", "Write", "Edit"}, 0.4),
-    ("messaging", {"message", "tts"}, 0.3),
-    ("doc-analysis", {"pdf", "image"}, 0.2),
-    ("mixed-research", {"web_search", "exec", "Read"}, 0.15),
-    ("cron-light", set(), 0.0),  # fallback for very short sessions
-]
-
-
-def _extract_session_fingerprint(fpath):
-    """Extract tool call sequence, cost, tokens, error presence from a session JSONL file."""
-    tools_seq = []
-    cost = 0.0
-    tokens = 0
-    has_error = False
-    first_ts = None
-    last_ts = None
-
-    try:
-        with open(fpath, "r", errors="replace") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    ev = json.loads(line)
-                except Exception:
-                    continue
-
-                ts_str = ev.get("timestamp", "")
-                if ts_str:
-                    try:
-                        ts_f = datetime.fromisoformat(
-                            ts_str.replace("Z", "+00:00")
-                        ).timestamp()
-                        if first_ts is None or ts_f < first_ts:
-                            first_ts = ts_f
-                        if last_ts is None or ts_f > last_ts:
-                            last_ts = ts_f
-                    except Exception:
-                        pass
-
-                ev_type = ev.get("type", "")
-                if ev_type == "error":
-                    has_error = True
-                elif ev_type == "message":
-                    msg = ev.get("message", {})
-                    if msg.get("role") == "assistant":
-                        usage = msg.get("usage", {})
-                        if isinstance(usage, dict):
-                            cost_obj = usage.get("cost", {})
-                            if isinstance(cost_obj, dict):
-                                cost += float(cost_obj.get("total", 0))
-                            tok_in = (
-                                usage.get("input", 0)
-                                or usage.get("inputTokens", 0)
-                                or 0
-                            )
-                            tok_out = (
-                                usage.get("output", 0)
-                                or usage.get("outputTokens", 0)
-                                or 0
-                            )
-                            tokens += int(tok_in) + int(tok_out)
-                        if isinstance(msg.get("content"), list):
-                            for part in msg["content"]:
-                                if (
-                                    isinstance(part, dict)
-                                    and part.get("type") == "toolCall"
-                                ):
-                                    tn = part.get("name", "")
-                                    if tn:
-                                        tools_seq.append(tn)
-    except Exception:
-        pass
-
-    duration_ms = (
-        int((last_ts - first_ts) * 1000)
-        if (first_ts and last_ts and last_ts > first_ts)
-        else 0
-    )
-
-    # Cost bucket (calibrated to typical agent session costs)
-    if cost < 0.10:
-        cost_bucket = "low"
-    elif cost < 1.0:
-        cost_bucket = "medium"
-    else:
-        cost_bucket = "high"
-
-    return {
-        "tools_seq": tools_seq,
-        "tool_set": list(set(tools_seq)),
-        "cost": round(cost, 6),
-        "tokens": tokens,
-        "has_error": has_error,
-        "cost_bucket": cost_bucket,
-        "duration_ms": duration_ms,
-        "tool_count": len(tools_seq),
-    }
-
-
-def _assign_cluster_label(fp):
-    """Assign a cluster label to a session based on its fingerprint."""
-    tools = set(fp["tool_set"])
-    n = fp["tool_count"]
-    cost = fp["cost"]
-    has_error = fp["has_error"]
-
-    if n == 0:
-        return "cron-light"
-
-    # Score each cluster pattern by fraction of required tools present in session tool set
-    best_label = "general"
-    best_score = 0.0
-
-    for label, required_tools, min_frac in _CLUSTER_PATTERNS:
-        if not required_tools:
-            continue
-        # Fraction of required_tools that appear in the session (0..1)
-        overlap = len(tools & required_tools)
-        frac = overlap / len(required_tools) if required_tools else 0.0
-        if frac >= min_frac and frac > best_score:
-            best_score = frac
-            best_label = label
-
-    # Override only truly extreme outliers (cost > $5 or pure exec-only)
-    if cost > 5.0:
-        best_label = "expensive-outlier"
-
-    # Suffix for error-heavy sessions
-    if has_error and best_label not in ("expensive-outlier",):
-        best_label += "+errors"
-
-    return best_label
-
-
-def _build_clusters(sessions_dir, limit=200):
-    """Analyze recent sessions and return cluster groups."""
-    if not sessions_dir or not os.path.isdir(sessions_dir):
-        return {}
-
-    files = sorted(
-        [
-            f
-            for f in os.listdir(sessions_dir)
-            if f.endswith(".jsonl") and "deleted" not in f
-        ],
-        key=lambda f: os.path.getmtime(os.path.join(sessions_dir, f)),
-        reverse=True,
-    )[:limit]
-
-    clusters = {}  # label -> {sessions, total_cost, total_tokens, error_count, rep_session}
-
-    for fname in files:
-        fpath = os.path.join(sessions_dir, fname)
-        sid = fname.replace(".jsonl", "")
-        fp = _extract_session_fingerprint(fpath)
-        label = _assign_cluster_label(fp)
-
-        if label not in clusters:
-            clusters[label] = {
-                "label": label,
-                "sessions": [],
-                "total_cost": 0.0,
-                "total_tokens": 0,
-                "error_count": 0,
-                "rep_session": None,
-            }
-
-        c = clusters[label]
-        c["sessions"].append(
-            {
-                "id": sid,
-                "cost": fp["cost"],
-                "tokens": fp["tokens"],
-                "tools": fp["tool_set"][:8],
-                "has_error": fp["has_error"],
-                "cost_bucket": fp["cost_bucket"],
-                "duration_ms": fp["duration_ms"],
-            }
-        )
-        c["total_cost"] += fp["cost"]
-        c["total_tokens"] += fp["tokens"]
-        if fp["has_error"]:
-            c["error_count"] += 1
-        # Representative session: highest cost/complexity
-        if c["rep_session"] is None or fp["cost"] > c["rep_session"].get("cost", 0):
-            c["rep_session"] = {
-                "id": sid,
-                "cost": fp["cost"],
-                "tools": fp["tool_set"][:8],
-            }
-
-    # Compute summaries
-    result = []
-    for label, c in sorted(
-        clusters.items(), key=lambda x: len(x[1]["sessions"]), reverse=True
-    ):
-        n = len(c["sessions"])
-        result.append(
-            {
-                "label": label,
-                "session_count": n,
-                "avg_cost": round(c["total_cost"] / n, 6),
-                "avg_tokens": int(c["total_tokens"] / n),
-                "error_rate": round(c["error_count"] / n, 3),
-                "rep_session": c["rep_session"],
-                "sessions": c["sessions"][:20],  # cap for response size
-            }
-        )
-
-    return result
-
-
-# (bp_clusters handler moved to routes/meta.py: /api/clusters)
+# ── Fleet Sonar / Session Clusters: removed 2026-05-19 (issue #1716) ──────────
+# The "Fleet sonar" left-nav entry pointed at the Session Clusters tab
+# (``/api/clusters`` + ``_build_clusters`` + ``_extract_session_fingerprint``
+# + ``_assign_cluster_label`` + ``_CLUSTER_PATTERNS``). The label promised
+# multi-node fleet observability but rendered an unrelated JSONL-walked
+# behaviour-clustering view. Per the issue, users have better signals via the
+# Fleet (multi-node) view at ``/api/nodes`` and the system-health stream, so
+# the whole surface was deleted. The Trace Clusters card on the Usage tab is
+# unrelated — it uses ``/api/sessions/clusters`` (routes/usage.py) and stays.
 
 
 def _build_context_inspector_data():

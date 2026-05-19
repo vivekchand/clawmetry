@@ -40,7 +40,6 @@ landed under epics #964 and #1032.
 | `/api/sessions/cost-breakdown` | `_compute_transcript_analytics()` | Easy | routes/sessions.py:1474 |
 | `/api/sessions/<id>/export` | JSONL parse, JSON/CSV dump | Easy | routes/sessions.py:2297 |
 | `/api/heatmap` | log files + JSONL files | Easy | routes/health.py:208 |
-| `/api/clusters` | `_build_clusters(sessions_dir)` | Easy | routes/meta.py:511 |
 | `/api/cron-run-log` | JSONL parse for cron session | Easy | routes/crons.py:591 |
 | `/api/agents/<name>/sessions` | adapter `list_sessions()` | Easy | routes/agents.py:43 |
 | `/api/sessions/clusters` | JSONL scan + clustering | Easy | routes/usage.py:1028 |
