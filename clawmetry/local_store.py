@@ -3907,33 +3907,85 @@ class LocalStore:
         ``limit`` defaults to 50 (one page in the timeline UI) and is
         clamped to ``[1, 500]``. Callers wanting a full sweep should
         page; we deliberately keep the upper bound modest so a buggy
-        client can't yank megabytes of run history in one shot."""
+        client can't yank megabytes of run history in one shot.
+
+        MOAT epic #1743 / sub-issue #1756: ``cron_runs.{token_count,
+        cost_usd}`` are written from the JSONL ``usage`` block at ingest
+        time. Two failure modes drift the stored aggregate below truth:
+          1. The JSONL line predates the ``usage`` field on a given
+             gateway version (some early writers shipped status + duration
+             only).
+          2. Cost/token accounting from the underlying model call landed
+             in the ``events`` table (``event_type='cron_run'``) AFTER
+             the cron-runs JSONL line, e.g. because the gateway WS
+             delivered the rollup separately.
+        Per @vivekchand on #1725 ("shouldn't all info / events be just
+        pushed to DuckDB & then run queries on them to find total token
+        usage per session, per agent, overall etc?") the source of truth
+        is the events table. Bridge both numeric columns via
+        ``GREATEST(stored, SUM(events.field))`` over events scoped to
+        this cron run by ``(agent_id = cr.job_id, agent_type, event_type
+        = 'cron_run', ts within [started_at, ended_at])``. The time
+        window is the disambiguator that prevents two same-job runs from
+        cross-pollinating each other's totals.
+
+        Matches the bridge pattern proven by PR #1754 on
+        ``query_sessions_table`` (#1725) — same GREATEST envelope, same
+        per-row correlated subquery."""
         clauses: list[str] = []
         params: list[Any] = []
         if job_id:
-            clauses.append("job_id = ?"); params.append(str(job_id))
+            clauses.append("cr.job_id = ?"); params.append(str(job_id))
         if agent_type:
-            clauses.append("agent_type = ?"); params.append(agent_type)
+            clauses.append("cr.agent_type = ?"); params.append(agent_type)
         if agent_id:
-            clauses.append("agent_id = ?"); params.append(agent_id)
+            clauses.append("cr.agent_id = ?"); params.append(agent_id)
         if since:
-            clauses.append("started_at >= ?"); params.append(since)
+            clauses.append("cr.started_at >= ?"); params.append(since)
         if until:
-            clauses.append("started_at <= ?"); params.append(until)
+            clauses.append("cr.started_at <= ?"); params.append(until)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         try:
             lim = int(limit)
         except (TypeError, ValueError):
             lim = 50
         lim = max(1, min(500, lim))
+        # ``event_type = 'cron_run'`` matches the contract documented by
+        # ``routes/crons.py:_try_local_store_cron_runs`` — the gateway
+        # emits one ``cron_run`` event per run with ``agent_id`` set to
+        # the cron's job_id. We additionally require the event's ts to
+        # fall inside the cron-run window so two consecutive runs of the
+        # same job stay isolated. ``ended_at`` may be NULL on an in-flight
+        # row; in that case COALESCE pins the upper bound to ``9999`` so
+        # a still-running cron picks up any events emitted after its
+        # start (overwriting only on the next sync once ended_at lands).
         sql = f"""
-            SELECT id, node_id, agent_type, agent_id, job_id,
-                   started_at, ended_at, duration_ms, status, error_message,
-                   token_count, cost_usd, delivered_at, next_run_at,
-                   raw_jsonl_line, data, created_at
-            FROM cron_runs
+            SELECT cr.id, cr.node_id, cr.agent_type, cr.agent_id, cr.job_id,
+                   cr.started_at, cr.ended_at, cr.duration_ms, cr.status,
+                   cr.error_message,
+                   GREATEST(
+                       COALESCE(cr.token_count, 0),
+                       COALESCE((SELECT SUM(e.token_count) FROM events e
+                                  WHERE e.event_type = 'cron_run'
+                                    AND e.agent_id   = cr.job_id
+                                    AND e.agent_type = cr.agent_type
+                                    AND e.ts        >= cr.started_at
+                                    AND e.ts        <= COALESCE(cr.ended_at, '9999-12-31T23:59:59Z')), 0)
+                   ) AS token_count,
+                   GREATEST(
+                       COALESCE(cr.cost_usd, 0.0),
+                       COALESCE((SELECT SUM(e.cost_usd) FROM events e
+                                  WHERE e.event_type = 'cron_run'
+                                    AND e.agent_id   = cr.job_id
+                                    AND e.agent_type = cr.agent_type
+                                    AND e.ts        >= cr.started_at
+                                    AND e.ts        <= COALESCE(cr.ended_at, '9999-12-31T23:59:59Z')), 0.0)
+                   ) AS cost_usd,
+                   cr.delivered_at, cr.next_run_at,
+                   cr.raw_jsonl_line, cr.data, cr.created_at
+            FROM cron_runs cr
             {where}
-            ORDER BY started_at DESC, id DESC
+            ORDER BY cr.started_at DESC, cr.id DESC
             LIMIT ?
         """
         params.append(lim)
