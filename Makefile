@@ -1,4 +1,4 @@
-.PHONY: test test-api test-e2e test-fast test-e2e-duckdb test-moat moat-check moat-check-drive dev lint lint-daemon-allowlist
+.PHONY: test test-api test-e2e test-fast test-e2e-duckdb test-moat test-moat-real moat-check moat-check-drive dev lint lint-daemon-allowlist
 
 dev:
 	OPENCLAW_GATEWAY_TOKEN=dev-token python3 dashboard.py --port 8900
@@ -34,6 +34,16 @@ test-moat:
 	    tests/test_no_direct_get_store_in_routes.py \
 	    tests/test_local_query_api.py \
 	    -q
+
+# MOAT real-data E2E (2026-05-19 mandate). Drives a REAL ``openclaw agent
+# --local`` turn, ingests via the daemon, then asserts every endpoint
+# called out in the user mandate (overview / channels / crons /
+# system-health on top of the sibling test's sessions / transcript /
+# usage / brain-history / flow). Requires the ``openclaw`` binary on
+# PATH (skipped cleanly otherwise). ~45s end-to-end. Memory pin:
+# feedback_synthetic_tests_missed_real_event_shape.md.
+test-moat-real:
+	python3 -m pytest tests/test_moat_real_e2e.py -v
 
 # MOAT keystone bar (docs/MOAT_BAR.md Section 5, AC#1). The 13-endpoint
 # verifier that drives a real openclaw turn (or skips it via --no-drive)
