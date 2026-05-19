@@ -4,17 +4,22 @@
   Where the Brain tab's Advisor answers ad-hoc questions in prose, this tab
   surfaces structured findings (cost hotspots, failing tools, looping paths,
   over-eager models) that the operator can act on. Same LLM auth as Advisor:
-  uses claude CLI OAuth or ANTHROPIC_API_KEY transparently.
+  resolves a credential in this order (no prompts, no blocking modals):
+    1. ANTHROPIC_API_KEY env var
+    2. anthropic_api_key in ~/.openclaw/.clawmetry/insights_config.json
+    3. anthropic plugin / provider key in ~/.openclaw/openclaw.json
+    4. claude CLI OAuth profile (~/.openclaw/agents/main/agent/auth-profiles.json)
 
-  Empty-state guidance lives here too — when no Anthropic credential is
-  configured the user sees a single instruction line, not a broken card.
+  If none of those resolve we show a single inline hint at the top of the
+  page (NOT a takeover panel) so the rest of the dashboard stays usable.
 -->
 
 <div class="page" id="page-selfevolve">
   <div style="padding:12px 0 8px 0;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
       <div>
-        <div style="font-size:14px;font-weight:700;color:var(--text-primary);">🔄 Self-Evolve -- How your agent could improve</div>
+        <div style="font-size:14px;font-weight:700;color:var(--text-primary);">🔄 Self-Evolve</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">How your agent could improve.</div>
         <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">
           Structured review of recent activity. Each finding has evidence and a concrete action.
         </div>
@@ -26,24 +31,21 @@
       </button>
     </div>
 
-    <!-- Empty / no-auth state -->
+    <!-- Inline no-auth hint (single line, non-blocking). Resolution
+         order is documented at the top of the file. -->
     <div id="selfevolve-noauth" style="
       display:none;
       background:var(--bg-secondary);
       border:1px solid var(--border);
-      border-radius:8px;
-      padding:24px;
-      text-align:center;
+      border-radius:6px;
+      padding:10px 14px;
       color:var(--text-muted);
-      font-size:13px;
+      font-size:12px;
+      margin-bottom:12px;
       ">
-      <div style="font-size:24px;margin-bottom:8px;">🔒</div>
-      <div style="margin-bottom:6px;">Self-Evolve needs an Anthropic credential to call the analysis LLM.</div>
-      <div style="font-size:12px;">
-        Either run <code style="background:var(--bg-primary);padding:2px 6px;border-radius:4px;">claude</code>
-        once to set up OAuth, or export <code style="background:var(--bg-primary);padding:2px 6px;border-radius:4px;">ANTHROPIC_API_KEY</code>
-        in your shell.
-      </div>
+      Self-Evolve needs an Anthropic key. Set
+      <code style="background:var(--bg-primary);padding:1px 5px;border-radius:3px;">ANTHROPIC_API_KEY</code>
+      in your shell, or paste one in Settings.
     </div>
 
     <!-- Status line (analyzed at, model, event count) -->

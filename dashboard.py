@@ -146,7 +146,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.12.242"
+__version__ = "0.12.252"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
@@ -1904,6 +1904,40 @@ def _budget_monitor_loop():
                                 f"(threshold: {int(threshold):,}/min){sid_hint}"
                             )
                             fired = True
+                elif rtype == "unproductive_burn":
+                    # Issue #1707 — forward-progress signal. Fires when any
+                    # session burns >= ``threshold`` tokens per state delta
+                    # over the last 10 min window (genuine spinning, not just
+                    # busy productive burn). Pro rule.
+                    try:
+                        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+                        from routes.local_query import local_store_via_daemon
+                        since_iso = (_dt.now(_tz.utc) - _td(minutes=10)).strftime(
+                            "%Y-%m-%dT%H:%M:%SZ"
+                        )
+                        rows = local_store_via_daemon(
+                            "query_forward_progress", since=since_iso,
+                        ) or []
+                        worst = None
+                        for r in rows:
+                            try:
+                                if float(r.get("ratio") or 0) >= float(threshold):
+                                    if worst is None or r["ratio"] > worst["ratio"]:
+                                        worst = r
+                            except (TypeError, ValueError):
+                                continue
+                        if worst:
+                            sid = (worst.get("session_id") or "")[:12]
+                            msg = (
+                                f"Unproductive burn: session {sid} burned "
+                                f"{int(worst['tokens']):,} tokens with "
+                                f"{int(worst['state_deltas'])} state deltas "
+                                f"(ratio: {int(worst['ratio']):,} tok/delta, "
+                                f"threshold: {int(threshold):,})"
+                            )
+                            fired = True
+                    except Exception:
+                        pass
 
                 if fired:
                     _budget_alert_cooldowns[rule_id] = now
@@ -9590,6 +9624,40 @@ def _budget_monitor_loop():
                                 f"(threshold: {int(threshold):,}/min){sid_hint}"
                             )
                             fired = True
+                elif rtype == "unproductive_burn":
+                    # Issue #1707 — forward-progress signal. Fires when any
+                    # session burns >= ``threshold`` tokens per state delta
+                    # over the last 10 min window (genuine spinning, not just
+                    # busy productive burn). Pro rule.
+                    try:
+                        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+                        from routes.local_query import local_store_via_daemon
+                        since_iso = (_dt.now(_tz.utc) - _td(minutes=10)).strftime(
+                            "%Y-%m-%dT%H:%M:%SZ"
+                        )
+                        rows = local_store_via_daemon(
+                            "query_forward_progress", since=since_iso,
+                        ) or []
+                        worst = None
+                        for r in rows:
+                            try:
+                                if float(r.get("ratio") or 0) >= float(threshold):
+                                    if worst is None or r["ratio"] > worst["ratio"]:
+                                        worst = r
+                            except (TypeError, ValueError):
+                                continue
+                        if worst:
+                            sid = (worst.get("session_id") or "")[:12]
+                            msg = (
+                                f"Unproductive burn: session {sid} burned "
+                                f"{int(worst['tokens']):,} tokens with "
+                                f"{int(worst['state_deltas'])} state deltas "
+                                f"(ratio: {int(worst['ratio']):,} tok/delta, "
+                                f"threshold: {int(threshold):,})"
+                            )
+                            fired = True
+                    except Exception:
+                        pass
 
                 if fired:
                     _budget_alert_cooldowns[rule_id] = now
@@ -10797,10 +10865,28 @@ DASHBOARD_HTML = r"""
 <div class="app-shell">
   <aside id="left-nav" role="navigation" aria-label="Primary">
     <div class="left-nav-section">
-      <div class="left-nav-item active" data-tab="overview" onclick="switchTab('overview')" title="Live view of every running agent">
+      <div class="left-nav-item left-nav-item-group active" data-tab="overview" onclick="switchTab('overview')" title="Live view of every running agent">
         <span class="left-nav-icon" aria-hidden="true">&#9679;</span>
         <span class="left-nav-label">Live trace</span>
         <span id="nav-stuck-badge" class="left-nav-badge" style="display:none;">0</span>
+        <button type="button" class="left-nav-group-chevron" id="left-nav-live-toggle" aria-expanded="true" aria-controls="left-nav-live-list" aria-label="Toggle Live trace sub-items" onclick="event.stopPropagation(); toggleLiveDrawer();">&#9662;</button>
+      </div>
+      <div class="left-nav-group-list" id="left-nav-live-list">
+        <div class="left-nav-item left-nav-item-sub" data-tab="flow" onclick="switchTab('flow')">
+          <span class="left-nav-label">Flow</span>
+        </div>
+        <div class="left-nav-item left-nav-item-sub" data-tab="brain" onclick="switchTab('brain')">
+          <span class="left-nav-label">Brain</span>
+        </div>
+        <div class="left-nav-item left-nav-item-sub" data-tab="logs" onclick="switchTab('logs')">
+          <span class="left-nav-label">Logs</span>
+        </div>
+        <div class="left-nav-item left-nav-item-sub" data-tab="models" onclick="switchTab('models')">
+          <span class="left-nav-label">Models</span>
+        </div>
+        <div class="left-nav-item left-nav-item-sub" data-tab="context" onclick="switchTab('context')" title="What the LLM sees on each turn">
+          <span class="left-nav-label">LLM Context</span>
+        </div>
       </div>
       <div class="left-nav-item" data-tab="clusters" onclick="switchTab('clusters')" title="Multi-node fleet overview">
         <span class="left-nav-icon" aria-hidden="true">&#9678;</span>
@@ -10811,9 +10897,9 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-label">Approvals</span>
         <span id="nav-approvals-badge" class="left-nav-badge" style="display:none;">0</span>
       </div>
-      <div class="left-nav-item" data-tab="alerts" onclick="switchTab('alerts')" title="Custom alert rules">
+      <div class="left-nav-item" data-tab="alerts" onclick="switchTab('alerts')" title="Get notified when something goes wrong with your agents">
         <span class="left-nav-icon" aria-hidden="true">&#9873;</span>
-        <span class="left-nav-label">Rules</span>
+        <span class="left-nav-label">Alerts</span>
         <span id="nav-alerts-badge" class="left-nav-badge" style="display:none;">0</span>
       </div>
       <div class="left-nav-item" data-tab="usage" onclick="switchTab('usage')" title="Token spend &amp; cost analytics">
@@ -10828,6 +10914,14 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-icon" aria-hidden="true">&#8634;</span>
         <span class="left-nav-label">Replay</span>
       </div>
+      <div class="left-nav-item" data-tab="crons" id="crons-tab" onclick="switchTab('crons')" title="Scheduled agent jobs">
+        <span class="left-nav-icon" aria-hidden="true">&#9202;</span>
+        <span class="left-nav-label">Crons</span>
+      </div>
+      <div class="left-nav-item" data-tab="memory" onclick="switchTab('memory')" title="Persistent memory files the agent reads on boot">
+        <span class="left-nav-icon" aria-hidden="true">&#9873;</span>
+        <span class="left-nav-label">Memory</span>
+      </div>
     </div>
 
     <button type="button" class="left-nav-advanced-toggle" id="left-nav-advanced-toggle" onclick="toggleAdvancedDrawer()" aria-expanded="false">
@@ -10835,44 +10929,23 @@ DASHBOARD_HTML = r"""
       <span class="left-nav-advanced-chevron" aria-hidden="true">&#9662;</span>
     </button>
     <div class="left-nav-advanced-list" id="left-nav-advanced-list" hidden>
-      <div class="left-nav-item left-nav-item-sub" data-tab="flow" onclick="switchTab('flow')">
-        <span class="left-nav-label">Flow</span>
-      </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="brain" onclick="switchTab('brain')">
-        <span class="left-nav-label">Brain</span>
-      </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="notifications" onclick="switchTab('notifications')">
         <span class="left-nav-label">Notifications</span>
-      </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="context" onclick="switchTab('context')">
-        <span class="left-nav-label">Context</span>
-      </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="memory" onclick="switchTab('memory')">
-        <span class="left-nav-label">Memory</span>
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="security" onclick="switchTab('security')">
         <span class="left-nav-label">Security</span>
       </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="logs" onclick="switchTab('logs')">
-        <span class="left-nav-label">Logs</span>
-      </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="models" onclick="switchTab('models')">
-        <span class="left-nav-label">Models</span>
-      </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="limits" onclick="switchTab('limits')">
-        <span class="left-nav-label">Rate limits</span>
-      </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="crons" id="crons-tab" onclick="switchTab('crons')">
-        <span class="left-nav-label">Crons</span>
+      <div class="left-nav-item left-nav-item-sub" data-tab="skills" onclick="switchTab('skills')">
+        <span class="left-nav-label">Skills</span>
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="selfevolve" onclick="switchTab('selfevolve')">
-        <span class="left-nav-label">SelfEvolve</span>
+        <span class="left-nav-label">Self-Evolve</span>
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="version-impact" onclick="switchTab('version-impact')">
         <span class="left-nav-label">Version impact</span>
       </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="skills" onclick="switchTab('skills')">
-        <span class="left-nav-label">Skills</span>
+      <div class="left-nav-item left-nav-item-sub" data-tab="limits" onclick="switchTab('limits')">
+        <span class="left-nav-label">Rate limits</span>
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="nemoclaw" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">
         <span class="left-nav-label">NemoClaw</span>

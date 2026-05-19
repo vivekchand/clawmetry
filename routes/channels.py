@@ -802,6 +802,102 @@ def api_channels_summary():
     })
 
 
+@bp_channels.route("/api/channel-delivery-health")
+def api_channel_delivery_health():
+    """Aggregate outbound message delivery integrity across all channels.
+
+    Scans the past 48 h of log files for send-success, send-failure, and
+    run-start events grouped by channel.  Returns per-channel counts:
+
+    - ``intents``     — detected run-starts (agent began handling a channel msg)
+    - ``ok``          — confirmed outbound deliveries
+    - ``failed``      — explicit send failures logged by the adapter
+    - ``unconfirmed`` — intents with no matching ok/failed entry (the gap)
+    - ``success_rate`` — ok / (ok + failed), null when no sends recorded
+
+    Addresses issue #978: channel delivery failures were logged per-adapter
+    but never surfaced in an aggregate view.
+    """
+    import re
+    import dashboard as _d
+
+    _CH_TAG      = re.compile(r"messageChannel=([\w-]+)", re.IGNORECASE)
+    _TG_OK       = re.compile(r"sendMessage\s+ok", re.IGNORECASE)
+    _TG_FAIL     = re.compile(r"sendMessage.*?fail|telegram message failed", re.IGNORECASE)
+    _DELIVER_FAIL = re.compile(r"deliver.*?fail|fail.*?deliver", re.IGNORECASE)
+    _DELIVER_OK  = re.compile(r"\bdeliver\b", re.IGNORECASE)
+    _RUN_START   = re.compile(r"\brun start\b", re.IGNORECASE)
+
+    log_dirs   = _d._get_log_dirs()
+    log_files: list = []
+    for ld in log_dirs:
+        if os.path.isdir(ld):
+            for f in sorted(glob.glob(os.path.join(ld, "*.log")), reverse=True)[:3]:
+                log_files.append(f)
+
+    counts: dict = {}
+
+    def _bucket(ch: str) -> dict:
+        if ch not in counts:
+            counts[ch] = {"intents": 0, "ok": 0, "failed": 0}
+        return counts[ch]
+
+    for lf in log_files:
+        try:
+            lines = _d._grep_log_file(lf, r"sendMessage\|messageChannel\|deliver")
+            for raw in lines:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    obj = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                msg = obj.get("1", "") or obj.get("0", "") or ""
+                if not msg:
+                    continue
+
+                # Telegram logs sendMessage ok/failed without a messageChannel= tag
+                if _TG_OK.search(msg):
+                    _bucket("telegram")["ok"] += 1
+                    continue
+                if _TG_FAIL.search(msg):
+                    _bucket("telegram")["failed"] += 1
+                    continue
+
+                ch_m = _CH_TAG.search(msg)
+                if not ch_m:
+                    continue
+                ch = ch_m.group(1).lower()
+
+                if _DELIVER_FAIL.search(msg):
+                    _bucket(ch)["failed"] += 1
+                elif _DELIVER_OK.search(msg):
+                    _bucket(ch)["ok"] += 1
+                elif _RUN_START.search(msg):
+                    _bucket(ch)["intents"] += 1
+        except Exception:
+            pass
+
+    result = []
+    for ch, c in sorted(counts.items()):
+        total_sends = c["ok"] + c["failed"]
+        result.append({
+            "channel":      ch,
+            "intents":      c["intents"],
+            "ok":           c["ok"],
+            "failed":       c["failed"],
+            "unconfirmed":  max(0, c["intents"] - total_sends),
+            "success_rate": round(c["ok"] / total_sends, 3) if total_sends else None,
+        })
+
+    return jsonify({
+        "channels":          result,
+        "log_files_scanned": len(log_files),
+        "ts":                datetime.now().isoformat(),
+    })
+
+
 @bp_channels.route("/api/channel/telegram")
 def api_channel_telegram():
     """Parse logs and session transcripts for Telegram message activity.

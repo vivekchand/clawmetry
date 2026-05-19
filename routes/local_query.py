@@ -208,8 +208,24 @@ def _dispatch(shape: str, args: dict) -> dict:
          the DuckDB while it owns the writer lock).
       2. Else fall back to opening the DuckDB directly (single-process
          mode, or daemon temporarily down).
+
+    Arg coercion: callers are NOT required to pre-filter ``args``. Cloud-side
+    callers (heartbeat-piggyback ``pending_queries`` from
+    ``clawmetry-cloud/routes/cloud.py``) sometimes attach metadata like
+    ``node_id`` for cloud-side routing that the local DuckDB-backed
+    ``LocalStore`` methods don't accept. Without coercion that surfaced as
+    a TypeError per heartbeat (one of the root causes behind the 2026-05-18
+    "cloud shows 0 sessions" P0). ``_coerce_args`` runs the per-shape
+    allowlist so unknown kwargs are dropped before the store call.
     """
     started = time.monotonic()
+    try:
+        args = _coerce_args(shape, args or {})
+    except ValueError:
+        # ``_coerce_args`` raises for required-arg violations (e.g. transcript
+        # missing session_id). Let the caller see the original ValueError so
+        # the cloud dispatcher logs a meaningful message.
+        raise
     # Try the daemon proxy first. If it fails for ANY reason, fall
     # through to direct access — the dashboard never goes blank.
     try:
@@ -333,6 +349,13 @@ _DAEMON_METHODS = frozenset({
     "query_daily_usage_splits",
     "query_heartbeats",
     "query_channels",
+    # MOAT Tier-1 sweep (refs #1565): /api/flow/runs was opening DuckDB
+    # directly via ``local_store.get_store(read_only=True)`` — fails on
+    # multi-process installs because DuckDB's exclusive lock blocks even
+    # read-only opens (per memory ``reference_duckdb_process_lock.md``).
+    # Routed through the daemon proxy so the Flow tab "Past flow runs"
+    # list serves fast on the standard launchd / systemd install.
+    "query_flow_runs",
     # Issue #1256 follow-up: alert_rules + channel_config_status. PR #1258
     # routed /api/alerts/rules and /api/channels/status through the daemon
     # proxy but missed adding the methods to the allowlist — every call
@@ -410,6 +433,10 @@ _DAEMON_METHODS = frozenset({
     # Plugins-tab render. Returns one row per tool-call so the route can
     # bucket per-plugin counts via substring matching.
     "query_tool_call_invocations",
+    # Issue #1707 — forward-progress signal. Tokens-per-state-delta per
+    # session, computed off the events table. Powers /api/forward-progress
+    # + the Brain-tab Progress badge.
+    "query_forward_progress",
     # Weekly Insights Digest (feat/insights-v1): one allowlisted entry-point
     # for the 10 hand-authored canned-query templates in clawmetry/insights.py.
     # SQL goes through clawmetry/dives_sql_safety.validate_sql() inside the

@@ -923,19 +923,53 @@ function toggleLeftNavMobile() {
   leftNav.classList.toggle('open');
 }
 
-// Restore Advanced drawer state on page load.
-(function _restoreAdvancedDrawer() {
+// Live trace expandable group (IA regroup: Flow/Brain/Logs/Models/LLM Context).
+// Default-expanded; remembers user collapse via localStorage.
+function toggleLiveDrawer() {
+  var btn = document.getElementById('left-nav-live-toggle');
+  var list = document.getElementById('left-nav-live-list');
+  if (!btn || !list) return;
+  var nowOpen = list.hasAttribute('hidden');
+  if (nowOpen) {
+    list.removeAttribute('hidden');
+    btn.setAttribute('aria-expanded', 'true');
+  } else {
+    list.setAttribute('hidden', '');
+    btn.setAttribute('aria-expanded', 'false');
+  }
+  try { localStorage.setItem('cm_live_open', nowOpen ? '1' : '0'); }
+  catch (e) { /* localStorage blocked */ }
+}
+
+// Restore Advanced + Live drawer state on page load.
+(function _restoreNavDrawers() {
   if (typeof document === 'undefined') return;
   var apply = function() {
-    var btn = document.getElementById('left-nav-advanced-toggle');
-    var list = document.getElementById('left-nav-advanced-list');
-    if (!btn || !list) return;
-    var open = false;
-    try { open = localStorage.getItem('cm_advanced_open') === '1'; }
-    catch (e) { /* localStorage blocked */ }
-    if (open) {
-      list.removeAttribute('hidden');
-      btn.setAttribute('aria-expanded', 'true');
+    // Advanced drawer (default-collapsed).
+    var advBtn = document.getElementById('left-nav-advanced-toggle');
+    var advList = document.getElementById('left-nav-advanced-list');
+    if (advBtn && advList) {
+      var advOpen = false;
+      try { advOpen = localStorage.getItem('cm_advanced_open') === '1'; }
+      catch (e) { /* localStorage blocked */ }
+      if (advOpen) {
+        advList.removeAttribute('hidden');
+        advBtn.setAttribute('aria-expanded', 'true');
+      }
+    }
+    // Live trace drawer (default-expanded; collapse only if user explicitly closed).
+    var liveBtn = document.getElementById('left-nav-live-toggle');
+    var liveList = document.getElementById('left-nav-live-list');
+    if (liveBtn && liveList) {
+      var liveOpen = true;
+      try {
+        var v = localStorage.getItem('cm_live_open');
+        if (v === '0') liveOpen = false;
+      } catch (e) { /* localStorage blocked */ }
+      if (!liveOpen) {
+        liveList.setAttribute('hidden', '');
+        liveBtn.setAttribute('aria-expanded', 'false');
+      }
     }
   };
   if (document.readyState === 'loading') {
@@ -2965,6 +2999,7 @@ var _brainFilter = 'all';
 var _brainTypeFilter = 'all';
 var _brainChannelFilter = 'all';
 var _brainAllEvents = [];
+var _brainSSEEverConnected = false;
 
 // Provider → emoji + display name. Mirrors routes/brain.py `_CHANNEL_ICON`
 // and clawmetry/sync.py `_CHANNEL_DIRS` (the canonical 21-adapter list).
@@ -4639,6 +4674,16 @@ function _startBrainSSE() {
       _updateBrainLiveIndicator(true);
       // Issue #1596 — successful reconnect clears banner + retry state.
       _resetBrainSSEReconnectState();
+      // Issue #1606 — on reconnect (not first connect), the server may have
+      // restarted with a changed event shape. Flush the stale cache and
+      // reload so chip filters don't compute against a mixed old+new array.
+      if (_brainSSEEverConnected) {
+        _brainAllEvents = [];
+        _brainFilter = 'all';
+        _brainTypeFilter = 'all';
+        loadBrainPage(true);
+      }
+      _brainSSEEverConnected = true;
     });
 
     es.onmessage = function(e) {
@@ -5006,9 +5051,13 @@ async function selfevolveProbe() {
     var empty = document.getElementById('selfevolve-empty');
     var runBtn = document.getElementById('selfevolve-run-btn');
     if (!s || !s.available) {
+      // Inline hint stays at the top of the page; the Analyze button
+      // stays enabled so the user sees the 412 error inline if they
+      // click it. Don't block the rest of the surface.
       if (hint) hint.style.display = 'none';
       if (noauth) noauth.style.display = '';
-      if (runBtn) runBtn.disabled = true;
+      if (empty) empty.style.display = '';
+      if (runBtn) runBtn.disabled = false;
       return;
     }
     if (hint) hint.style.display = '';
@@ -14837,6 +14886,17 @@ async function bootDashboard() {
   setTimeout(_safeFinishBoot, 180);
 }
 
+// Version impact is a per-OpenClaw-release report — only meaningful when the
+// user controls their own OpenClaw install. In cloud mode ClawMetry manages
+// versions, so the tab is irrelevant. Hide nav item + page (deep-link too).
+function _hideCloudIrrelevantNav() {
+  if (!window.CLOUD_MODE) return;
+  var navItem = document.querySelector('.left-nav-item[data-tab="version-impact"]');
+  if (navItem) navItem.style.display = 'none';
+  var page = document.getElementById('page-version-impact');
+  if (page) page.style.display = 'none';
+}
+
 document.addEventListener('DOMContentLoaded', function() {
   initTheme();
   initZoom();
@@ -14847,6 +14907,7 @@ document.addEventListener('DOMContentLoaded', function() {
   bootDashboard();
   // Issue #950: multi-profile workspace switcher
   try { initWorkspaceSwitcher(); } catch (e) { /* non-fatal */ }
+  try { _hideCloudIrrelevantNav(); } catch (e) { /* non-fatal */ }
 });
 
 // ── Workspace switcher (issue #950) ───────────────────────────────────
@@ -15120,9 +15181,20 @@ async function loadHistory() {
     }
     document.getElementById('history-cron-table').innerHTML = cronHtml;
 
-    // Update status
+    // Update status. Empty state copy (2026-05-18): the old line read
+    // "No data yet -- collector polls every 60s", which was misleading on
+    // the default install where no collector runs. New copy tells the
+    // user how to populate the chart and points at the Live trace tab.
     var totalPts = (tokIn.data||[]).length + (costData.data||[]).length;
-    status.textContent = totalPts > 0 ? totalPts + ' data points' : 'No data yet -- collector polls every 60s';
+    if (totalPts > 0) {
+      status.textContent = totalPts + ' data points';
+    } else {
+      status.innerHTML = 'Token usage chart populates as your agent runs. '
+        + 'Send a message in OpenClaw to see the first datapoint, or '
+        + '<a href="#flow" onclick="switchTab(\'flow\');return false;" '
+        + 'style="color:var(--accent-primary,#3b82f6);text-decoration:underline;">'
+        + 'open the Live trace</a>.';
+    }
   } catch(e) {
     status.textContent = 'Error: ' + e.message;
     console.error('History load error:', e);

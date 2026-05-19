@@ -3082,6 +3082,98 @@ class LocalStore:
                 out.append({"ts": ts, "name": name})
         return out
 
+    def query_forward_progress(
+        self,
+        *,
+        since: str | None = None,
+        until: str | None = None,
+        session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Per-session "forward-progress" signal (issue #1707).
+
+        Returns one row per session within ``[since, until]`` of shape
+        ``{session_id, tokens, state_deltas, ratio, window_start,
+        window_end}``. ``ratio = tokens / max(state_deltas, 1)`` — a high
+        ratio means the agent is burning tokens without producing new
+        state. Sessions with zero billable tokens in the window are
+        dropped (skip, never divide-by-zero).
+
+        State delta sources (each first-seen counts as ``+1``):
+          * New tool name in the window.
+          * New file path touched (tool arg ``input.{file_path,path,filename}``).
+          * New error event_type surfaced (``error``, ``error.*``, ``*.failed``).
+
+        Distinct from the existing token-velocity alert which fires on
+        any busy agent — this signal only flags genuine spinning.
+        """
+        clauses, params = [], []
+        if since:
+            clauses.append("ts >= ?"); params.append(since)
+        if until:
+            clauses.append("ts <= ?"); params.append(until)
+        if session_id:
+            clauses.append("session_id = ?"); params.append(session_id)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = (f"SELECT session_id, ts, event_type, data, token_count "
+               f"FROM events {where} ORDER BY session_id ASC, ts ASC")
+        rows = self._fetch(sql, params)
+
+        per_session: dict[str, dict[str, Any]] = {}
+        seen: dict[str, dict[str, set]] = {}
+
+        for sid, ts, ev_type, raw, tok_col in rows:
+            if not sid:
+                continue
+            b = per_session.setdefault(sid, {
+                "session_id": sid, "tokens": 0, "state_deltas": 0,
+                "window_start": ts, "window_end": ts,
+            })
+            if ts and ts < b["window_start"]: b["window_start"] = ts
+            if ts and ts > b["window_end"]:   b["window_end"]   = ts
+            sets = seen.setdefault(sid, {"tools": set(), "paths": set(), "errors": set()})
+
+            data: dict[str, Any] = {}
+            if raw is not None:
+                try:
+                    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    parsed = json.loads(text) if text else {}
+                    if isinstance(parsed, dict):
+                        data = parsed
+                except (ValueError, TypeError, UnicodeDecodeError):
+                    data = {}
+
+            try:
+                tok = int(tok_col or 0)
+            except (TypeError, ValueError):
+                tok = 0
+            if tok <= 0 and data:
+                sp = _extract_usage_splits(data)
+                tok = int(sp.get("input_tokens", 0)) + int(sp.get("output_tokens", 0))
+            if tok > 0:
+                b["tokens"] += tok
+
+            for name in _iter_tool_invocation_names(ev_type, data):
+                n = (name or "").lower()
+                if n and n not in sets["tools"]:
+                    sets["tools"].add(n); b["state_deltas"] += 1
+            for p in _iter_tool_file_paths(ev_type, data):
+                if p and p not in sets["paths"]:
+                    sets["paths"].add(p); b["state_deltas"] += 1
+            et = (ev_type or "").lower()
+            if et and (et == "error" or et.startswith("error.") or et.endswith(".failed")):
+                if et not in sets["errors"]:
+                    sets["errors"].add(et); b["state_deltas"] += 1
+
+        out = []
+        for b in per_session.values():
+            tokens = int(b["tokens"])
+            if tokens <= 0:
+                continue
+            b["ratio"] = float(tokens) / float(max(int(b["state_deltas"]), 1))
+            out.append(b)
+        out.sort(key=lambda r: r["ratio"], reverse=True)
+        return out
+
     # ── flush ───────────────────────────────────────────────────────────
 
     def _flusher_loop(self) -> None:
@@ -3370,6 +3462,15 @@ class LocalStore:
         # model.completed). ``event_count`` stays RAW (it's "how many rows
         # did we record", not "how many billable turns") — only cost_usd
         # + token_count come from the deduped CTE.
+        #
+        # Issue #1718: add ``message_count`` (renderable-turns count) so
+        # ``/api/transcripts`` can show a row count that matches what
+        # ``/api/transcript/<sid>`` will actually render in the detail
+        # modal. The legacy ``event_count`` is preserved (still raw row
+        # count) so existing callers that want the unfiltered number
+        # (telemetry, audit) keep their semantics; new callers should
+        # prefer ``message_count``.
+        renderable_in = _sql_in_clause(_RENDERABLE_EVENT_TYPES)
         sql = f"""
             WITH ranked AS (
               SELECT
@@ -3414,6 +3515,8 @@ class LocalStore:
               MIN(r.ts)                     AS started_at,
               MAX(r.ts)                     AS updated_at,
               COUNT(r.id)                   AS event_count,
+              SUM(CASE WHEN r.event_type IN {renderable_in}
+                       THEN 1 ELSE 0 END)   AS message_count,
               COALESCE(ds.cost_usd_d, 0)    AS cost_usd,
               COALESCE(ds.token_count_d, 0) AS token_count
             FROM ranked r
@@ -3424,7 +3527,7 @@ class LocalStore:
         """
         params.append(int(limit))
         return [_row_to_dict(r, ["session_id","agent_id","started_at","updated_at",
-                                  "event_count","cost_usd","token_count"])
+                                  "event_count","message_count","cost_usd","token_count"])
                 for r in self._fetch(sql, params)]
 
     def query_heartbeats(
@@ -4229,15 +4332,33 @@ class LocalStore:
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         """Return recently-scored sessions, newest first. Drives
-        ``/api/evals/recent``."""
+        ``/api/evals/recent``.
+
+        MOAT epic #1743: bridge ``total_tokens`` + ``cost_usd`` via
+        GREATEST(stored, SUM(events.field)) so eval rows never show
+        ``$0 / 0 tokens`` for sessions whose stored aggregates drifted
+        (e.g. gateway-ingested sessions where the typed row was upserted
+        before the event stream caught up).
+        """
         sql = """
-            SELECT session_id, agent_type, agent_id, title, last_active_at,
-                   total_tokens, cost_usd,
-                   eval_score, eval_reason, eval_judge_model,
-                   eval_scored_at, eval_rubric
-              FROM sessions
-             WHERE eval_score IS NOT NULL
-             ORDER BY eval_scored_at DESC NULLS LAST
+            SELECT s.session_id, s.agent_type, s.agent_id, s.title, s.last_active_at,
+                   GREATEST(
+                       COALESCE(s.total_tokens, 0),
+                       COALESCE((SELECT SUM(e.token_count) FROM events e
+                                  WHERE e.session_id = s.session_id
+                                    AND e.agent_type  = s.agent_type), 0)
+                   ) AS total_tokens,
+                   GREATEST(
+                       COALESCE(s.cost_usd, 0.0),
+                       COALESCE((SELECT SUM(e.cost_usd) FROM events e
+                                  WHERE e.session_id = s.session_id
+                                    AND e.agent_type  = s.agent_type), 0.0)
+                   ) AS cost_usd,
+                   s.eval_score, s.eval_reason, s.eval_judge_model,
+                   s.eval_scored_at, s.eval_rubric
+              FROM sessions s
+             WHERE s.eval_score IS NOT NULL
+             ORDER BY s.eval_scored_at DESC NULLS LAST
              LIMIT ?
         """
         rows = self._fetch(sql, [int(limit)])
@@ -4492,14 +4613,46 @@ class LocalStore:
         # correlated subquery against ``events`` and fall back to the stored
         # column for agents that DO populate it (e.g. ingest from sync.py
         # where the events table may be empty).
+        #
+        # MOAT epic #1743 / triggering bug #1725: ``sessions.total_tokens``
+        # and ``sessions.cost_usd`` have the same drift class — sessions
+        # ingested via the gateway path (e.g. in-memory Telegram sessions)
+        # arrive with both columns = 0 because the gateway metadata doesn't
+        # always include token/cost totals. Apply the same
+        # GREATEST(stored, SUM(events.field)) bridge so any session whose
+        # events ARE in the local events table reports correct figures.
+        # Events get cost_usd + token_count daemon-stamped by
+        # _coerce_event_metrics() from ``usage.cost.*`` payloads at ingest.
+        #
+        # Issue #1718: filter the correlated COUNT(*) to ``_RENDERABLE_EVENT_TYPES``
+        # so the value matches what the transcript detail modal renders.
+        # The previous raw COUNT(*) counted every event (``session.started``,
+        # ``channel.in/out``, ``model.changed``, ``thinking_level_change``,
+        # …) and inflated the per-session message_count, e.g. a session
+        # with 6 raw events that renders 2 turns showed "6 messages" in
+        # the list but "0 messages" / "2 messages" in the detail page.
+        renderable_in = _sql_in_clause(_RENDERABLE_EVENT_TYPES)
         sql = f"""
             SELECT s.agent_type, s.session_id, s.agent_id, s.title, s.started_at,
-                   s.last_active_at, s.ended_at, s.status, s.total_tokens, s.cost_usd,
+                   s.last_active_at, s.ended_at, s.status,
+                   GREATEST(
+                       COALESCE(s.total_tokens, 0),
+                       COALESCE((SELECT SUM(e.token_count) FROM events e
+                                  WHERE e.session_id = s.session_id
+                                    AND e.agent_type  = s.agent_type), 0)
+                   ) AS total_tokens,
+                   GREATEST(
+                       COALESCE(s.cost_usd, 0.0),
+                       COALESCE((SELECT SUM(e.cost_usd) FROM events e
+                                  WHERE e.session_id = s.session_id
+                                    AND e.agent_type  = s.agent_type), 0.0)
+                   ) AS cost_usd,
                    GREATEST(
                        COALESCE(s.message_count, 0),
                        (SELECT COUNT(*) FROM events e
                           WHERE e.session_id = s.session_id
-                            AND e.agent_type = s.agent_type)
+                            AND e.agent_type = s.agent_type
+                            AND e.event_type IN {renderable_in})
                    ) AS message_count,
                    s.metadata
             FROM sessions s
@@ -5772,6 +5925,25 @@ class LocalStore:
             out.append({c: _coerce_value(v) for c, v in zip(cols, r)})
         return out
 
+    def dives_table_columns(self, table: str) -> list[dict]:
+        """Return column metadata for *table* via ``PRAGMA table_info``.
+
+        Used by ``clawmetry.dives_prompt.build_schema_descriptor`` to build an
+        accurate schema block for the Dives LLM prompt.  Only column names and
+        SQL types are returned — never data values.
+
+        Raises:
+            ValueError: if *table* is not in the Dives allowlist.
+        """
+        from clawmetry.dives_sql_safety import ALLOWED_TABLES
+        if table not in ALLOWED_TABLES:
+            raise ValueError(
+                f"dives_table_columns: {table!r} is not an allowlisted Dives table"
+            )
+        rows = self._fetch(f"PRAGMA table_info('{table}')", [])
+        # PRAGMA table_info columns: cid, name, type, notnull, dflt_value, pk
+        return [{"name": r[1], "ctype": r[2]} for r in rows]
+
     # ── internals ───────────────────────────────────────────────────────
 
     def _fetch(self, sql: str, params: list[Any]) -> list[tuple]:
@@ -6093,6 +6265,55 @@ _TOOL_CALL_TOPLEVEL_EVENT_TYPES = (
     "tool.call", "toolCall", "tool_use", "tool_call",
 )
 
+# Issue #1718: event_types whose ``data`` is rendered as a turn by the
+# transcript detail view (``routes/sessions.py:_try_local_store_transcript``
+# + ``_expand_openclaw_event``). The transcript LIST view (``/api/transcripts``
+# → ``query_sessions``) must report a ``message_count`` filtered by this set,
+# NOT raw ``COUNT(events.id)`` — otherwise the list-vs-detail counts diverge
+# (e.g. a session with 6 raw events but only ``prompt.submitted`` +
+# ``model.completed`` renderables shows 6 in the list and 2 in the modal).
+#
+# Keep this list aligned with the renderable arms of
+# ``_expand_openclaw_event`` AND the Anthropic-style fallback in
+# ``_try_local_store_transcript`` (which renders any non-dotted ``event_type``
+# whose ``data.role`` is user/assistant/system, OR whose payload carries
+# ``tool_calls``/``tool_use``). Non-renderable types (``session.*``,
+# ``agent.heartbeat``, ``context.compiled``, ``model.changed``,
+# ``thinking_level_change``, ``channel.in``/``.out``, ``custom``,
+# ``custom_message``, ``trace.heartbeat``, …) are excluded by construction.
+_RENDERABLE_EVENT_TYPES = (
+    # Anthropic-style (no dotted type) → role-bearing turns.
+    "message",
+    "user",
+    "assistant",
+    "system",
+    "tool",
+    "tool_result",
+    # Tool-call variants matching ``_TOOL_CALL_TOPLEVEL_EVENT_TYPES`` —
+    # different ingest paths stamp the row with whichever form the source
+    # payload used. All four render as tool bubbles in the transcript.
+    "tool_call",
+    "toolCall",
+    "tool_use",
+    # Hyphenated variant seen in real OpenClaw Claude-Code fanout (#1226).
+    "tool-result",
+    # OpenClaw v3 / dotted types — must match _expand_openclaw_event arms.
+    "prompt.submitted",
+    "trace.artifacts",
+    "model.completed",
+    "tool.call",
+    "tool.invoked",
+    "tool.result",
+    "tool.completed",
+    # Compactions render as a special bubble in the replay scrubber.
+    "compaction",
+    # Subagent fan-out — child turns surface in the parent's transcript
+    # via ``query_events_with_subagents`` (#1597); count them so the
+    # list-vs-detail check stays accurate for parents that delegated.
+    "subagent:assistant",
+    "subagent:user",
+)
+
 
 def _sql_in_clause(values: tuple[str, ...]) -> str:
     """Render a fixed list of literal event_type strings as a SQL IN(...)
@@ -6377,6 +6598,49 @@ def _iter_read_tool_paths(event_type: str | None, data: dict) -> Iterable[str]:
                 if (blk.get("name") or "").lower() not in _READ_TOOL_NAMES:
                     continue
                 p = _path_from_input(blk.get("input") or blk.get("arguments"))
+                if p:
+                    yield p
+
+
+def _iter_tool_file_paths(event_type: str | None, data: dict) -> Iterable[str]:
+    """Yield ANY file_path/path/filename argument from any tool call
+    (issue #1707 — forward-progress signal). Tool-agnostic superset of
+    :func:`_iter_read_tool_paths`. Probes the same three on-the-wire
+    shapes: top-level tool.call, ``toolMetas[*].input``, and legacy
+    assistant ``content[*]`` blocks."""
+    if not isinstance(data, dict):
+        return
+    et = (event_type or "").lower()
+
+    def _path(inp: Any) -> str:
+        if isinstance(inp, str):
+            try:
+                inp = json.loads(inp)
+            except (ValueError, TypeError):
+                return ""
+        if not isinstance(inp, dict):
+            return ""
+        for key in ("file_path", "path", "filename"):
+            v = inp.get(key)
+            if isinstance(v, str) and v:
+                return v
+        return ""
+
+    if et in ("tool.call", "toolcall", "tool_use"):
+        p = _path(data.get("input") or data.get("arguments"))
+        if p:
+            yield p
+        return
+    for m in (data.get("toolMetas") or []):
+        if isinstance(m, dict):
+            p = _path(m.get("input"))
+            if p:
+                yield p
+    msg = data.get("message")
+    if isinstance(msg, dict) and msg.get("role") == "assistant":
+        for blk in (msg.get("content") or []):
+            if isinstance(blk, dict) and blk.get("type") in ("toolCall", "tool_use"):
+                p = _path(blk.get("input") or blk.get("arguments"))
                 if p:
                     yield p
 

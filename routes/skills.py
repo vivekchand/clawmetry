@@ -136,24 +136,65 @@ def _ts_to_epoch(ts_raw: str) -> float:
         return 0.0
 
 
-def _get_skills_dir():
-    """Return the skills directory, trying common locations."""
+def _get_skills_dirs():
+    """Return ALL skills directories that exist on disk.
+
+    OpenClaw v3 splits installed skills across two locations:
+      - ``<workspace>/skills`` and ``~/.openclaw/skills`` for user-installed
+        skills (the legacy ``_get_skills_dir`` path)
+      - ``~/.openclaw/plugin-skills`` for plugin-bundled skills (e.g.
+        ``browser-automation``) that the gateway symlinks in from the
+        OpenClaw node_modules install
+
+    The previous helper returned a single path and stopped at the first
+    candidate that existed, so plugin-skills were invisible to the Skills
+    tab on any host that didn't ALSO create ``~/.openclaw/skills``. This
+    helper enumerates every candidate that exists; callers walk the union.
+    """
     import dashboard as _d
 
     workspace = _d.WORKSPACE or ""
-
-    # If WORKSPACE already points at ~/.openclaw (contains agents/ memory/ etc.)
-    # then skills are at WORKSPACE/skills
     candidates = [
         os.path.join(workspace, "skills") if workspace else None,
         os.path.expanduser("~/.openclaw/skills"),
+        os.path.expanduser("~/.openclaw/plugin-skills"),
         os.path.expanduser("~/.clawdbot/skills"),
     ]
+    out = []
+    seen = set()
     for c in candidates:
-        if c and os.path.isdir(c):
-            return c
-    # Return first non-None candidate as a best guess (may not exist)
-    return next((c for c in candidates if c), os.path.expanduser("~/.openclaw/skills"))
+        if not c:
+            continue
+        rp = os.path.realpath(c)
+        if rp in seen:
+            continue
+        if os.path.isdir(c):
+            out.append(c)
+            seen.add(rp)
+    return out
+
+
+def _get_skills_dir():
+    """Back-compat shim: first existing skills directory, or best guess."""
+    dirs = _get_skills_dirs()
+    if dirs:
+        return dirs[0]
+    return os.path.expanduser("~/.openclaw/skills")
+
+
+def _find_skill_dir(skill_name):
+    """Locate ``skill_name`` across every candidate skills directory.
+
+    Returns the absolute skill directory path or ``None`` if the skill
+    isn't installed in any candidate.
+    """
+    for base in _get_skills_dirs():
+        candidate = os.path.join(base, skill_name)
+        if os.path.isdir(candidate) and os.path.isfile(
+            os.path.join(candidate, "SKILL.md")
+        ):
+            return candidate
+    return None
 
 
 def _parse_skill_md(skill_md_path):
@@ -349,24 +390,29 @@ def api_skills():
         "wasted_header_tokens": 0,
     }
 
-    skills_dir = _get_skills_dir()
-    if not skills_dir or not os.path.isdir(skills_dir):
+    skills_dirs = _get_skills_dirs()
+    if not skills_dirs:
         return jsonify({"skills": [], "summary": empty_summary})
 
-    # Discover installed skills
-    try:
-        entries = os.listdir(skills_dir)
-    except OSError:
-        return jsonify({"skills": [], "summary": empty_summary})
-
+    # Discover installed skills across every candidate directory. First
+    # match wins on name collisions so the user-installed copy in
+    # ``skills/`` shadows a plugin-skill with the same name (parity with
+    # how the gateway resolves skill imports).
     skill_dirs_map = {}  # name -> absolute path
-    for entry in sorted(entries):
-        entry_path = os.path.join(skills_dir, entry)
-        if not os.path.isdir(entry_path):
+    for base in skills_dirs:
+        try:
+            entries = os.listdir(base)
+        except OSError:
             continue
-        skill_md = os.path.join(entry_path, "SKILL.md")
-        if os.path.isfile(skill_md):
-            skill_dirs_map[entry] = entry_path
+        for entry in sorted(entries):
+            if entry in skill_dirs_map:
+                continue
+            entry_path = os.path.join(base, entry)
+            if not os.path.isdir(entry_path):
+                continue
+            skill_md = os.path.join(entry_path, "SKILL.md")
+            if os.path.isfile(skill_md):
+                skill_dirs_map[entry] = entry_path
 
     if not skill_dirs_map:
         return jsonify({"skills": [], "summary": empty_summary})
@@ -489,14 +535,10 @@ def api_skill_detail(skill_name):
     """
     import dashboard as _d
 
-    skills_dir = _get_skills_dir()
-    if not skills_dir:
-        return jsonify({"error": "skills directory not found"}), 404
-
-    skill_dir = os.path.join(skills_dir, skill_name)
-    skill_md_path = os.path.join(skill_dir, "SKILL.md")
-    if not os.path.isdir(skill_dir) or not os.path.isfile(skill_md_path):
+    skill_dir = _find_skill_dir(skill_name)
+    if not skill_dir:
         return jsonify({"error": "skill not found"}), 404
+    skill_md_path = os.path.join(skill_dir, "SKILL.md")
 
     now_ts = time.time()
     cutoff_7d = now_ts - 7 * 86400
@@ -581,11 +623,8 @@ def api_skill_detail(skill_name):
 def api_skill_file(skill_name):
     """Return the content of a file within a skill directory."""
     from flask import request
-    skills_dir = _get_skills_dir()
-    if not skills_dir:
-        return jsonify({"error": "skills directory not found"}), 404
-    skill_dir = os.path.join(skills_dir, skill_name)
-    if not os.path.isdir(skill_dir):
+    skill_dir = _find_skill_dir(skill_name)
+    if not skill_dir:
         return jsonify({"error": "skill not found"}), 404
 
     file_path = request.args.get("path", "SKILL.md")
