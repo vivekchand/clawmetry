@@ -4584,9 +4584,23 @@ class LocalStore:
         # correlated subquery against ``events`` and fall back to the stored
         # column for agents that DO populate it (e.g. ingest from sync.py
         # where the events table may be empty).
+        #
+        # ``sessions.total_tokens`` has the same problem (#1725): sessions
+        # ingested via the gateway path (e.g. in-memory Telegram sessions)
+        # arrive with ``total_tokens=0`` because the gateway doesn't always
+        # return token counts in the session metadata. Apply the same
+        # GREATEST(stored, computed-from-events) fallback so sessions whose
+        # events ARE in the local events table report correct token totals.
         sql = f"""
             SELECT s.agent_type, s.session_id, s.agent_id, s.title, s.started_at,
-                   s.last_active_at, s.ended_at, s.status, s.total_tokens, s.cost_usd,
+                   s.last_active_at, s.ended_at, s.status,
+                   GREATEST(
+                       COALESCE(s.total_tokens, 0),
+                       COALESCE((SELECT SUM(e.token_count) FROM events e
+                                  WHERE e.session_id = s.session_id
+                                    AND e.agent_type  = s.agent_type), 0)
+                   ) AS total_tokens,
+                   s.cost_usd,
                    GREATEST(
                        COALESCE(s.message_count, 0),
                        (SELECT COUNT(*) FROM events e
