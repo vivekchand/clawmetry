@@ -2530,6 +2530,83 @@ def api_session_stop(session_id):
     )
 
 
+# Issue #1718: event_types whose ``data`` is a transcript-renderable turn.
+# Single source of truth for THREE places that must agree:
+#   1. ``LocalStore.query_sessions`` ``message_count`` (SQL CASE WHEN).
+#   2. ``_try_local_store_transcript`` (DuckDB detail path — early skip).
+#   3. ``_count_jsonl_renderable_lines`` (legacy JSONL list fallback).
+# Keep aligned with ``LocalStore._RENDERABLE_EVENT_TYPES`` in
+# ``clawmetry/local_store.py``. The two lists are deliberately duplicated
+# so each layer can evolve without a cross-module import cycle.
+_RENDERABLE_TRANSCRIPT_EVENT_TYPES = frozenset({
+    # Anthropic-style (no dotted type) → role-bearing turns.
+    "message", "user", "assistant", "system", "tool", "tool_result",
+    # Tool-call variants (see ``_TOOL_CALL_TOPLEVEL_EVENT_TYPES`` in
+    # ``clawmetry/local_store.py``) — different ingest paths use different
+    # spellings; all four are renderable.
+    "tool_call", "toolCall", "tool_use", "tool-result",
+    # OpenClaw v3 / dotted types — must match _expand_openclaw_event arms.
+    "prompt.submitted", "trace.artifacts", "model.completed",
+    "tool.call", "tool.invoked", "tool.result", "tool.completed",
+    "compaction",
+    # Subagent fan-out — child turns surface in the parent's transcript
+    # via ``query_events_with_subagents`` (#1597).
+    "subagent:assistant", "subagent:user",
+})
+
+# Issue #1718: OpenClaw event types whose JSONL line maps to a transcript
+# turn — the dotted-type subset of ``_RENDERABLE_TRANSCRIPT_EVENT_TYPES``.
+_RENDERABLE_JSONL_OPENCLAW_TYPES = frozenset({
+    "prompt.submitted", "trace.artifacts", "model.completed",
+    "tool.call", "tool.invoked", "tool.result", "tool.completed",
+    "compaction",
+})
+_RENDERABLE_JSONL_ANTHROPIC_ROLES = frozenset({
+    "user", "assistant", "system", "tool", "tool_result",
+})
+
+
+def _count_jsonl_renderable_lines(fpath: str) -> int:
+    """Count session-JSONL lines that map to a transcript turn.
+
+    Cheap streaming parse: each line is JSON-decoded once and matched
+    against the same renderable predicate ``LocalStore.query_sessions``
+    applies at the SQL layer. Lines that fail to parse, lack both a role
+    and a recognised OpenClaw ``type``, or carry plumbing-only types
+    (``session.*``, ``model.changed``, ``thinking_level_change``,
+    ``context.compiled``, ``agent.heartbeat``, ``channel.in``/``.out``,
+    ``custom``/``custom_message``) do NOT count.
+
+    Caller catches all exceptions and falls back to 0 on a corrupt file.
+    """
+    count = 0
+    with open(fpath) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                # A non-JSON line is never renderable — skip.
+                continue
+            if not isinstance(obj, dict):
+                continue
+            role = obj.get("role")
+            if isinstance(role, str) and role in _RENDERABLE_JSONL_ANTHROPIC_ROLES:
+                count += 1
+                continue
+            # Tool-bearing assistant rows (some Anthropic shapes ship
+            # ``tool_calls`` / ``tool_use`` without a top-level role).
+            if obj.get("tool_calls") or obj.get("tool_use"):
+                count += 1
+                continue
+            etype = obj.get("type")
+            if isinstance(etype, str) and etype in _RENDERABLE_JSONL_OPENCLAW_TYPES:
+                count += 1
+    return count
+
+
 def _try_local_store_transcripts():
     """Fast path for /api/transcripts. Lists distinct sessions with their
     event counts + most-recent ts, straight from DuckDB.
@@ -2562,10 +2639,18 @@ def _try_local_store_transcripts():
                 )
             except Exception:
                 modified_ms = 0
+        # Issue #1718: prefer the SQL-filtered ``message_count`` (renderable-
+        # event count, matches the detail modal) over the legacy raw
+        # ``event_count``. The OR-fallback keeps callers running against
+        # an older daemon that hasn't picked up the schema bump yet —
+        # they still see the pre-fix inflated count, but no crash.
+        msg_count = r.get("message_count")
+        if msg_count is None:
+            msg_count = r.get("event_count") or 0
         transcripts.append({
             "id": sid,
             "name": sid[:40],
-            "messages": int(r.get("event_count") or 0),
+            "messages": int(msg_count or 0),
             "size": 0,  # unknown from DuckDB; UI shows "—" when 0
             "modified": modified_ms,
         })
@@ -2597,10 +2682,14 @@ def api_transcripts():
                 continue
             fpath = os.path.join(sessions_dir, fname)
             try:
-                msg_count = 0
-                with open(fpath) as f:
-                    for _ in f:
-                        msg_count += 1
+                # Issue #1718: count only the JSONL lines the transcript
+                # detail view will actually render as messages — i.e. skip
+                # plumbing rows like ``session.started`` / ``model.changed``
+                # / ``thinking_level_change`` / ``custom`` / ``channel.*``.
+                # Mirrors the SQL filter in ``LocalStore.query_sessions``
+                # so the legacy JSONL fallback agrees with the DuckDB fast
+                # path (and with what ``/api/transcript/<sid>`` returns).
+                msg_count = _count_jsonl_renderable_lines(fpath)
                 transcripts.append(
                     {
                         "id": fname.replace(".jsonl", ""),
@@ -2964,6 +3053,37 @@ def _try_local_store_transcript(session_id: str):
     for ev in rows:
         obj = ev.get("data")
         if not isinstance(obj, dict):
+            continue
+        # Issue #1718: skip plumbing event_types (``session.started``,
+        # ``model.changed``, ``thinking_level_change``, ``channel.in/out``,
+        # ``custom``/``custom_message``, ``queue-operation``, ``attachment``,
+        # …) so the transcript modal stops rendering non-message noise as
+        # ``{role: "custom_message", ...}`` chat bubbles. The list endpoint
+        # (``/api/transcripts``) applies the SAME predicate at the SQL
+        # layer, so list-vs-detail counts now agree.
+        #
+        # Discriminator order (renderable if ANY matches):
+        #   1. outer ``event_type`` — production ingest stamps this from
+        #      ``data.type`` (real OpenClaw v3 + Claude Code rows).
+        #   2. inner ``data.type`` — some older ingest paths and a handful
+        #      of test fixtures store a coarse outer type (``"brain"``)
+        #      with the real type buried in ``data.type``.
+        #   3. inner ``data.role`` — Anthropic-shape rows have no
+        #      ``type`` field; they're identified by their top-level role
+        #      (``user``/``assistant``/``system``/``tool``/…) and are
+        #      always renderable.
+        et = (ev.get("event_type") or "").strip()
+        inner_type = obj.get("type") if isinstance(obj.get("type"), str) else ""
+        inner_role = obj.get("role") if isinstance(obj.get("role"), str) else ""
+        renderable = (
+            (et and et in _RENDERABLE_TRANSCRIPT_EVENT_TYPES)
+            or (inner_type and inner_type in _RENDERABLE_TRANSCRIPT_EVENT_TYPES)
+            or (inner_role and inner_role in _RENDERABLE_JSONL_ANTHROPIC_ROLES)
+            # Anthropic ``tool_calls``/``tool_use`` rows often omit the
+            # top-level role but still render as tool turns.
+            or bool(obj.get("tool_calls") or obj.get("tool_use"))
+        )
+        if not renderable:
             continue
         ts = obj.get("timestamp") or obj.get("time") or obj.get("created_at") or ev.get("ts")
         ts_ms = None

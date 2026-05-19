@@ -572,6 +572,33 @@ def run(args) -> int:
     baseline = daemon_event_count(daemon)
     print(f"[keystone] Baseline event_count = {baseline}")
 
+    # ── CI empty-DB skip gate ──────────────────────────────────────────
+    # The keystone probes are designed to fail loud when the DuckDB
+    # events table is empty (silent-zero detector), which is the right
+    # behaviour on a real install but a guaranteed false-positive in CI
+    # where the dashboard boots against an empty ~/.clawmetry/clawmetry.duckdb.
+    # When --no-drive is set (the CI smoke invocation) AND --require-data
+    # is NOT set AND we can confirm the table is truly empty via the
+    # daemon proxy, exit 0 with an explicit SKIP banner instead of
+    # cascading "silent zero" failures. The nightly drive-mode workflow
+    # never trips this branch because it runs without --no-drive and
+    # drives a real openclaw turn to populate the table.
+    if args.no_drive and not args.require_data:
+        try:
+            sample = daemon_call(daemon, "query_events", limit=1)
+        except (RuntimeError, urllib.error.URLError, TimeoutError,
+                ConnectionError, OSError) as e:
+            sample = None
+            print(f"[keystone]   daemon query_events probe failed ({e}); "
+                  f"continuing with full run")
+        if isinstance(sample, list) and not sample:
+            print("[keystone] DuckDB events table is EMPTY (no events ingested).")
+            print("[keystone] Skipping in-CI run — the silent-zero probes only "
+                  "have signal when there is data to verify.")
+            print("[keystone] Re-run with --require-data after seeding events "
+                  "(e.g. `make moat-check-drive`) to force the strict gate.")
+            return 0
+
     usage = None if args.no_drive else drive_one_message(args)
 
     if usage is not None:
@@ -658,6 +685,13 @@ def main() -> int:
     p.add_argument("--no-drive", action="store_true",
                    help="Skip the openclaw drive; verify against existing "
                    "DuckDB rows only (CI smoke mode)")
+    p.add_argument("--require-data", action="store_true",
+                   help="Force the strict gate even when --no-drive is set "
+                   "and the DuckDB events table is empty. Without this flag, "
+                   "an empty events table under --no-drive (typical in CI) "
+                   "triggers a SKIP rather than cascading silent-zero "
+                   "failures. The nightly drive-mode workflow never trips "
+                   "the skip because it drives a real openclaw turn first.")
     args = p.parse_args()
     return run(args)
 
