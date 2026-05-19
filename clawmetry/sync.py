@@ -8610,6 +8610,34 @@ def run_daemon() -> None:
         else:
             log.warning("local_store writer warm-up failed (continuing): %s", _ws_e)
 
+    # ── Local query HTTP server (cross-process DuckDB read fix) ────────
+    # Daemon owns the DuckDB writer lock; the dashboard process can't
+    # open the same file (DuckDB exclusive lock blocks RO too). We host
+    # the same routes/local_query.py shapes on a localhost port; the
+    # dashboard's /api/local/* proxies through. Discovery+auth via
+    # ~/.clawmetry/local_query.json. Failure here is non-fatal — the
+    # dashboard falls back to direct DuckDB access (works in
+    # single-process mode).
+    #
+    # MUST run BEFORE send_heartbeat(). The initial heartbeat is a
+    # synchronous HTTP POST with `timeout=45` and up to 3 retries
+    # (1s + 2s backoff) — i.e. ~135s worst-case when the ingest URL
+    # is unreachable (offline laptop, CI smoke gate pointing at
+    # 127.0.0.1:9, cloud cold start, PgBouncer flap). API Latency
+    # Smoke gates on `~/.clawmetry/local_query.json` appearing
+    # within 30s, and the cross-process dashboard's /api/local/*
+    # proxy needs the discovery file too. Bringing the local query
+    # server up FIRST decouples local-dashboard usability from any
+    # cloud-side hiccup. Same class of "publish discovery before
+    # blocking I/O" bug as PR #1762, just on the sister code path.
+    try:
+        from clawmetry import local_server as _local_server
+        _ls_port = _local_server.start()
+        if _ls_port:
+            log.info("local query server: listening on 127.0.0.1:%d", _ls_port)
+    except Exception as _e:
+        log.warning("local query server: failed to start: %s", _e)
+
     # ── Startup sync: recent-first so Brain feed shows current activity ──
     send_heartbeat(config)
     log.info("Initial heartbeat sent")
@@ -8625,22 +8653,6 @@ def run_daemon() -> None:
     # the heartbeat response and answered via /ingest/cache (issue #1053).
     # `clawmetry/relay.py` is retained as a stub so any third-party
     # importers don't crash, but `start_relay_thread` is no longer called.
-
-    # ── Local query HTTP server (cross-process DuckDB read fix) ────────
-    # Daemon owns the DuckDB writer lock; the dashboard process can't
-    # open the same file (DuckDB exclusive lock blocks RO too). We host
-    # the same routes/local_query.py shapes on a localhost port; the
-    # dashboard's /api/local/* proxies through. Discovery+auth via
-    # ~/.clawmetry/local_query.json. Failure here is non-fatal — the
-    # dashboard falls back to direct DuckDB access (works in
-    # single-process mode).
-    try:
-        from clawmetry import local_server as _local_server
-        _ls_port = _local_server.start()
-        if _ls_port:
-            log.info("local query server: listening on 127.0.0.1:%d", _ls_port)
-    except Exception as _e:
-        log.warning("local query server: failed to start: %s", _e)
 
     # ── Live gateway WS tap (capture in-memory channel messages) ────────
     # OpenClaw stores Telegram + sibling-channel chats entirely in
