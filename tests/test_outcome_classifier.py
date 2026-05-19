@@ -465,3 +465,188 @@ def test_classifier_does_not_filter_on_legacy_event_shape_only():
     ]
     assert classify_session(legacy, {})[0] == classify_session(v3, {})[0]
     assert classify_session(legacy, {})[0] == "failed"
+
+
+# ── 4. Stuck tool-call detection (issue #1648) ─────────────────────────────
+
+
+def _iso(epoch: float) -> str:
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
+
+
+def test_find_stuck_tool_calls_unanswered_invocation():
+    """Top-level toolCall event with no matching tool.result older than the
+    threshold → returned by find_stuck_tool_calls."""
+    from clawmetry.outcome_classifier import find_stuck_tool_calls
+
+    now = time.time()
+    events = [
+        {"event_type": "tool.call", "ts": _iso(now - 600),
+         "data": {"id": "call_abc", "name": "bash", "input": {"cmd": "sleep 9999"}}},
+    ]
+    stuck = find_stuck_tool_calls(events, now=now, threshold_seconds=120)
+    assert len(stuck) == 1
+    assert stuck[0][0] == "call_abc"
+    assert stuck[0][1] >= 120
+
+
+def test_find_stuck_tool_calls_skips_when_result_present():
+    """An invocation that DOES have a matching tool.result is not stuck —
+    irrespective of how long ago the invocation fired."""
+    from clawmetry.outcome_classifier import find_stuck_tool_calls
+
+    now = time.time()
+    events = [
+        {"event_type": "tool.call", "ts": _iso(now - 600),
+         "data": {"id": "call_done", "name": "bash"}},
+        {"event_type": "tool.result", "ts": _iso(now - 500),
+         "data": {"tool_call_id": "call_done", "status": "ok"}},
+    ]
+    assert find_stuck_tool_calls(events, now=now, threshold_seconds=120) == []
+
+
+def test_find_stuck_tool_calls_skips_recent_invocation():
+    """Below-threshold age → not stuck yet."""
+    from clawmetry.outcome_classifier import find_stuck_tool_calls
+
+    now = time.time()
+    events = [
+        {"event_type": "tool.call", "ts": _iso(now - 30),
+         "data": {"id": "call_recent", "name": "bash"}},
+    ]
+    assert find_stuck_tool_calls(events, now=now, threshold_seconds=120) == []
+
+
+def test_find_stuck_tool_calls_message_envelope_shape():
+    """Anthropic-shape tool_use block inside an assistant message event
+    with a later tool_result block carrying tool_use_id — matched."""
+    from clawmetry.outcome_classifier import find_stuck_tool_calls
+
+    now = time.time()
+    events = [
+        {"event_type": "message", "ts": _iso(now - 600),
+         "data": {"message": {"role": "assistant", "content": [
+             {"type": "tool_use", "id": "tu_xyz", "name": "bash", "input": {}},
+         ]}}},
+        # Result block carried in a later (user-role) message turn.
+        {"event_type": "message", "ts": _iso(now - 500),
+         "data": {"message": {"role": "user", "content": [
+             {"type": "tool_result", "tool_use_id": "tu_xyz", "content": "ok"},
+         ]}}},
+    ]
+    assert find_stuck_tool_calls(events, now=now, threshold_seconds=120) == []
+
+
+def test_find_stuck_tool_calls_multiple_calls_only_unanswered():
+    """Two invocations, one answered + one not — only the unanswered one
+    is returned, with age measured from the earlier of duplicate emits."""
+    from clawmetry.outcome_classifier import find_stuck_tool_calls
+
+    now = time.time()
+    events = [
+        {"event_type": "tool.call", "ts": _iso(now - 800),
+         "data": {"id": "call_a", "name": "bash"}},
+        {"event_type": "tool.call", "ts": _iso(now - 600),
+         "data": {"id": "call_b", "name": "bash"}},
+        # Only call_a returned.
+        {"event_type": "tool.result", "ts": _iso(now - 700),
+         "data": {"tool_call_id": "call_a", "status": "ok"}},
+    ]
+    stuck = find_stuck_tool_calls(events, now=now, threshold_seconds=120)
+    assert [c for c, _ in stuck] == ["call_b"]
+
+
+def test_find_stuck_tool_calls_skips_calls_without_id():
+    """An invocation without a parseable id cannot be matched to a result;
+    we can't tell whether it ever completed, so we don't flag it as stuck.
+    Conservative on purpose."""
+    from clawmetry.outcome_classifier import find_stuck_tool_calls
+
+    now = time.time()
+    events = [
+        {"event_type": "tool.call", "ts": _iso(now - 600),
+         "data": {"id": "", "name": "bash"}},
+    ]
+    assert find_stuck_tool_calls(events, now=now, threshold_seconds=120) == []
+
+
+def test_classify_session_returns_tool_call_stuck():
+    """An ongoing-looking session with an unmatched tool invocation older
+    than the threshold → tool_call_stuck (not ``ongoing``)."""
+    from clawmetry.outcome_classifier import (
+        classify_session, OUTCOME_TOOL_CALL_STUCK,
+    )
+
+    now = time.time()
+    events = [
+        {"event_type": "session.started", "ts": _iso(now - 700)},
+        {"event_type": "tool.call", "ts": _iso(now - 600),
+         "data": {"id": "call_stuck", "name": "bash"}},
+        # No tool.result; session.ended also absent. Last event is recent
+        # enough that the old classifier would have called this "ongoing".
+        {"event_type": "model.completed", "ts": _iso(now - 30),
+         "data": {"modelId": "claude-opus-4", "text": "still waiting..."}},
+    ]
+    outcome, conf = classify_session(events, {}, now=now)
+    assert outcome == OUTCOME_TOOL_CALL_STUCK
+    assert conf >= 0.7
+
+
+def test_classify_session_completed_tool_is_not_stuck():
+    """Same shape as the stuck-tool test, but with a result event — the
+    session should NOT be flagged as tool_call_stuck."""
+    from clawmetry.outcome_classifier import (
+        classify_session, OUTCOME_TOOL_CALL_STUCK,
+    )
+
+    now = time.time()
+    events = [
+        {"event_type": "session.started", "ts": _iso(now - 700)},
+        {"event_type": "tool.call", "ts": _iso(now - 600),
+         "data": {"id": "call_done", "name": "bash"}},
+        {"event_type": "tool.result", "ts": _iso(now - 590),
+         "data": {"tool_call_id": "call_done", "status": "ok"}},
+        {"event_type": "model.completed", "ts": _iso(now - 30),
+         "data": {"modelId": "claude-opus-4", "text": "done"}},
+    ]
+    outcome, _ = classify_session(events, {}, now=now)
+    assert outcome != OUTCOME_TOOL_CALL_STUCK
+
+
+def test_classify_session_terminal_session_ended_wins_over_stuck():
+    """Once the session emits ``session.ended``, the run is no longer
+    in-flight; a tail tool_result-shaped failure should classify cleanly
+    as success/failed via the existing rules, not as tool_call_stuck."""
+    from clawmetry.outcome_classifier import (
+        classify_session, OUTCOME_TOOL_CALL_STUCK,
+    )
+
+    now = time.time()
+    events = [
+        {"event_type": "tool.call", "ts": _iso(now - 600),
+         "data": {"id": "call_orphan", "name": "bash"}},
+        # Session ended without a matching tool.result. Operator decided
+        # to terminate — we don't double-flag this as stuck.
+        {"event_type": "session.ended", "ts": _iso(now - 60)},
+    ]
+    outcome, _ = classify_session(events, {}, now=now)
+    assert outcome != OUTCOME_TOOL_CALL_STUCK
+
+
+def test_aggregate_outcomes_counts_tool_call_stuck_against_success_rate():
+    """tool_call_stuck IS counted in the success-rate denominator — a tool
+    that never returned is a failure mode the user cares about (matches
+    OpenClaw's ``blocked_tool_call`` triage class)."""
+    from clawmetry.outcome_classifier import aggregate_outcomes
+
+    rows = (
+        [{"outcome": "success"}] * 80
+        + [{"outcome": "failed"}] * 15
+        + [{"outcome": "tool_call_stuck"}] * 5
+    )
+    agg = aggregate_outcomes(rows)
+    assert agg["total"] == 100
+    assert agg["tool_call_stuck"] == 5
+    # 80 / (80 + 15 + 5) = 0.80
+    assert agg["success_rate"] == 0.8
