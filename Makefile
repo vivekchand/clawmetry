@@ -26,6 +26,7 @@ test-e2e-duckdb:
 test-moat:
 	python3 -m pytest \
 	    tests/test_moat_send_message_e2e.py \
+	    tests/test_moat_event_shape_manifest_guard.py \
 	    tests/test_moat_e2e_regression_1129.py \
 	    tests/test_e2e_real_openclaw_pipeline.py \
 	    tests/test_duckdb_fastpath_v3_invariants.py \
