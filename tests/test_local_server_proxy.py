@@ -164,6 +164,56 @@ def test_proxy_falls_back_when_daemon_dead(isolated_store, tmp_path, monkeypatch
     assert elapsed < 1.0, f"Fallback took {elapsed:.2f}s — should be near-instant"
 
 
+def test_start_bootstraps_writer_on_fresh_install(tmp_path, monkeypatch):
+    """Regression: keystone CI / fresh user install boots local_server.start()
+    in a brand-new process with no DuckDB file present. Before the fix
+    (clawmetry/local_server.py pre-warm), the daemon's request handlers
+    called ``_store()`` → ``get_store(read_only=True)`` on a non-existent
+    file → ``IO Error: Cannot open database … in read-only mode: database
+    does not exist`` → every /__local_query__/<method> returned 500. That
+    broke the MOAT Keystone CI gate (and every PR's required check)
+    after #1672 wired the verifier.
+
+    Post-fix: ``start()`` pre-warms the writer LocalStore (this process
+    owns the writer lock by definition — it IS the daemon), so the file
+    exists by the time the first request arrives.
+    """
+    db = tmp_path / "events.duckdb"
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(db))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    import clawmetry.local_store as ls
+    importlib.reload(ls)
+    ls._reset_singleton_for_tests()
+    # CRITICAL: do NOT call get_store() here — the bug only repros when
+    # start() runs against a process with no pre-existing writer.
+    assert not db.exists(), "pre-condition: DB file must not exist yet"
+    monkeypatch.setattr(
+        "clawmetry.local_server.DISCOVERY_PATH",
+        tmp_path / "local_query.json",
+        raising=False,
+    )
+    import clawmetry.local_server as srv
+    importlib.reload(srv)
+    monkeypatch.setattr(srv, "DISCOVERY_PATH", tmp_path / "local_query.json", raising=False)
+    port = srv.start()
+    try:
+        assert port, "local_server.start() must succeed on fresh install"
+        time.sleep(0.3)
+        token = srv.get_token()
+        # Hit each shape of endpoint that was 500'ing in CI.
+        for method in ("health", "query_events", "query_sessions", "query_subagents"):
+            r = requests.post(
+                f"http://127.0.0.1:{port}/__local_query__/{method}",
+                json={"kwargs": {}},
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=2,
+            )
+            assert r.status_code == 200, f"{method} returned {r.status_code}: {r.text[:200]}"
+    finally:
+        srv._cleanup_discovery_file()
+        ls._reset_singleton_for_tests()
+
+
 def test_proxy_falls_back_when_no_discovery(tmp_path, monkeypatch):
     """No discovery file at all → direct fallback."""
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "events.duckdb"))

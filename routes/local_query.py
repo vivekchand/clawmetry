@@ -349,6 +349,13 @@ _DAEMON_METHODS = frozenset({
     "query_daily_usage_splits",
     "query_heartbeats",
     "query_channels",
+    # MOAT Tier-1 sweep (refs #1565): /api/flow/runs was opening DuckDB
+    # directly via ``local_store.get_store(read_only=True)`` — fails on
+    # multi-process installs because DuckDB's exclusive lock blocks even
+    # read-only opens (per memory ``reference_duckdb_process_lock.md``).
+    # Routed through the daemon proxy so the Flow tab "Past flow runs"
+    # list serves fast on the standard launchd / systemd install.
+    "query_flow_runs",
     # Issue #1256 follow-up: alert_rules + channel_config_status. PR #1258
     # routed /api/alerts/rules and /api/channels/status through the daemon
     # proxy but missed adding the methods to the allowlist — every call
