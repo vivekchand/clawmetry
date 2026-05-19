@@ -219,6 +219,22 @@ This layout keeps the install story simple while letting each feature evolve in 
 
 The HTML/CSS/JS dashboard is embedded as template strings inside `dashboard.py`.
 
+### Event Data Source Contract
+OSS API routes that serve event-derived dashboard data must tag their JSON
+response with `_source: "local_store"`. This proves the endpoint used the
+local DuckDB store instead of silently falling back to gateway, JSONL, OTLP, or
+cloud-only paths.
+
+`routes/__init__.py` provides two route markers for this contract:
+- `@event_data` marks new event-derived endpoints for the source canary.
+- `@source_exempt(reason="...")` documents intentional exceptions such as
+  gateway pass-throughs or OTLP receivers.
+
+`tests/test_oss_routes_source_canary.py` walks Flask's registered URL map,
+builds canary URLs from endpoint names, and fails with guidance when an
+event-data response omits `_source` or reports anything other than
+`local_store`.
+
 ### Dependencies
 Minimal by design:
 - **Flask** — Web server
