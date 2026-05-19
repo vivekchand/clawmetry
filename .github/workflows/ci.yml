@@ -450,7 +450,7 @@ jobs:
           GITHUB_SHA: ${{ github.sha }}
         run: |
           clawmetry eval --suite tests/data/golden_ci.yaml --no-persist --json > eval-result.json || true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure() && steps.gate.outputs.skip != '1' && steps.keycheck.outputs.skip != '1'
         with:
           name: clawmetry-ci-eval-result
@@ -508,7 +508,7 @@ jobs:
         run: python3 -m pytest tests/test_moat_live_openclaw_e2e.py -v --tb=short
       - name: Upload gateway logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: moat-live-e2e-logs
           path: |
