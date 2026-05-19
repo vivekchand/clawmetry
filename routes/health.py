@@ -1927,14 +1927,32 @@ def _try_local_store_service_status():
     Returns ``None`` when no recent heartbeat exists — the legacy handler
     will then live-probe the gateway port + run pgrep, which is the right
     behaviour for a node that has never written to the local store.
+
+    MOAT Tier-1 sweep (refs #1565): route through the daemon HTTP proxy
+    first. The previous direct ``local_store.get_store(read_only=True)``
+    open silently failed on multi-process installs (DuckDB exclusive lock
+    blocks even RO opens — see memory ``reference_duckdb_process_lock.md``),
+    forcing /api/service-status to fall through to a live gateway probe
+    + pgrep on every poll for every standard launchd / systemd user.
     """
-    try:
-        from clawmetry import local_store
-        # CRITICAL: read_only=True — see #1228.
-        store = local_store.get_store(read_only=True)
-        hb_rows = store.query_heartbeats(limit=1)
-    except Exception:
-        return None
+    from routes.local_query import local_store_via_daemon
+
+    def _query(method, **kwargs):
+        """Daemon proxy first, single-process direct open as fallback."""
+        try:
+            rows = local_store_via_daemon(method, **kwargs)
+            if rows is not None:
+                return rows
+        except Exception:
+            pass
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            return getattr(store, method)(**kwargs)
+        except Exception:
+            return None
+
+    hb_rows = _query("query_heartbeats", limit=1)
     if not hb_rows:
         return None
     hb = hb_rows[0]
@@ -1956,13 +1974,10 @@ def _try_local_store_service_status():
     node_id = hb.get("node_id")
 
     def _latest_snapshot(kind: str):
-        try:
-            rows = store.query_system_snapshots(node_id=node_id, kind=kind, limit=1)
-            if not rows:
-                rows = store.query_system_snapshots(kind=kind, limit=1)
-            return rows[0] if rows else None
-        except Exception:
-            return None
+        rows = _query("query_system_snapshots", node_id=node_id, kind=kind, limit=1)
+        if not rows:
+            rows = _query("query_system_snapshots", kind=kind, limit=1)
+        return rows[0] if rows else None
 
     gw_snap = _latest_snapshot("gateway")
     if gw_snap and isinstance(gw_snap.get("data"), dict):
