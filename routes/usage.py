@@ -363,13 +363,22 @@ def _ls_top_sessions_by_cost(limit=20):
                 model = evs[0].get("model") or ""
         except Exception:
             model = ""
+        # Issue #1718: ``query_sessions`` now exposes a renderable
+        # ``message_count`` distinct from the raw ``event_count``. Prefer
+        # the new column so per-session "message_count" rendered in the
+        # cost page matches what the transcript detail modal will show
+        # (and what the transcripts list now reports). Fall back to the
+        # old raw count when an older daemon hasn't picked up the bump.
+        msg_count = s.get("message_count")
+        if msg_count is None:
+            msg_count = s.get("event_count") or 0
         out.append({
             "session_id":      sid,
             "agent_id":        s.get("agent_id") or "",
             "model":           model,
             "total_tokens":    int(s.get("token_count") or 0),
             "total_cost_usd":  round(float(s.get("cost_usd") or 0.0), 6),
-            "message_count":   int(s.get("event_count") or 0),
+            "message_count":   int(msg_count or 0),
             "started_at":      s.get("started_at") or "",
         })
     return out
