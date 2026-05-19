@@ -5,18 +5,22 @@ Each test verifies the new ``_try_local_store_*`` fast path returns
 assert the tag + a couple of structural keys — the legacy paths are
 covered by their own existing tests.
 
-Surfaces under test (7 of the 8 from issue #1088):
+Surfaces under test (6 of the 8 from issue #1088):
   - /api/transcript-events/<id>            routes/sessions.py
   - /api/sessions/<id>/export              routes/sessions.py
   - /api/cron-run-log                      routes/crons.py
   - /api/agents/<name>/sessions            routes/agents.py
   - /api/timeline                          routes/overview.py
   - /api/sessions/clusters                 routes/usage.py
-  - /api/clusters                          routes/meta.py
 
 /api/version-impact is intentionally excluded — its before/after stats
 sit on a separate SQLite ``version_events`` table that DuckDB does not
 mirror (Bypass-Medium per issue #1088 follow-up).
+
+/api/clusters was removed in issue #1716 (Fleet Sonar deletion) — its
+test (``test_clusters_fast_path``) went with it. The Trace Clusters
+surface on the Usage tab is unrelated and still covered above by
+``test_sessions_clusters_fast_path``.
 """
 
 from __future__ import annotations
@@ -250,32 +254,4 @@ def test_sessions_clusters_fast_path(fresh_store):
     assert "sess-cl" in cl["session_ids"]
 
 
-# ── /api/clusters ──────────────────────────────────────────────────────────
-
-
-def test_clusters_fast_path(fresh_store):
-    store = fresh_store.get_store()
-    today_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-    store.ingest({
-        "id": "ev-cl2-1", "node_id": "agent+test", "agent_id": "main",
-        "session_id": "sess-cl2", "event_type": "message",
-        "ts": today_iso,
-        "model": "claude-opus-4-7",
-        "cost_usd": 0.05, "token_count": 1500,
-        "data": {
-            "type": "message",
-            "message": {
-                "role": "assistant",
-                "model": "claude-opus-4-7",
-                "content": [{"type": "toolCall", "name": "exec", "arguments": {}}],
-                "usage": {"input": 1000, "output": 500, "cost": {"total": 0.05}},
-            },
-        },
-    })
-    _wait_flush(store)
-    c = _client("routes.meta", "bp_clusters")
-    r = c.get("/api/clusters")
-    assert r.status_code == 200
-    body = r.get_json()
-    assert body.get("_source") == "local_store"
-    assert body["total_clusters"] >= 1
+# /api/clusters test removed 2026-05-19 (issue #1716, Fleet Sonar deletion).

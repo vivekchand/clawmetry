@@ -29,8 +29,10 @@ export const NAV_ITEMS: NavItem[] = [
   { id: "skills", label: "Skills", icon: "✎", section: "history", issue: 1511 },
 
   // FLEET — multi-node + governance
+  // (Fleet sonar removed 2026-05-19, issue #1716 — surface never rendered
+  // anything useful; users get multi-node observability via the Fleet view
+  // backed by /api/nodes and the system-health stream.)
   { id: "ops", label: "Ops", icon: "◍", section: "fleet", issue: 1512 },
-  { id: "fleet", label: "Fleet sonar", icon: "◌", section: "fleet", badge: "PRO", issue: 1513 },
   { id: "rules", label: "Rules", icon: "⚙", section: "fleet", badge: "PRO", issue: 1514 },
   { id: "settings", label: "Settings", icon: "⌥", section: "fleet", issue: 1515 },
 ];

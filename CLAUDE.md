@@ -36,7 +36,7 @@ All HTTP endpoints live here, organised by feature. Each module owns one or more
 | `routes/infra.py` | ~785 | `bp_logs` + `bp_memory` + `bp_security` + `bp_config` — logs stream, memory files, security posture, cost-optimizer |
 | `routes/overview.py` | ~585 | `bp_overview` — main dashboard endpoint, channels list, timeline, cloud-CTA OTP |
 | `routes/crons.py` | ~530 | `bp_crons` — cron CRUD + run log + health summary |
-| `routes/meta.py` | ~520 | `bp_auth` + `bp_gateway` + `bp_otel` + `bp_version` + `bp_version_impact` + `bp_clusters` — auth, gateway proxy, OTLP ingestion, version meta |
+| `routes/meta.py` | ~460 | `bp_auth` + `bp_gateway` + `bp_otel` + `bp_version` + `bp_version_impact` — auth, gateway proxy, OTLP ingestion, version meta |
 | `routes/alerts.py` | ~400 | `bp_alerts` + `bp_budget` — alert rules, webhooks, velocity, budget config |
 | `routes/fleet_history.py` | ~310 | `bp_fleet` + `bp_history` — multi-node fleet + SQLite time-series |
 | `routes/nemoclaw.py` | ~290 | `bp_nemoclaw` — NeMo Guardrails governance + approval queue |

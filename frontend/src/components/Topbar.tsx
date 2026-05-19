@@ -29,7 +29,6 @@ const ROUTE_META: Record<string, RouteMeta> = {
   subagents: { title: "Sub agents", subtitle: "7-day swimlanes" },
   skills: { title: "Skills", subtitle: "IDE for the agent's playbook" },
   ops: { title: "Ops", subtitle: "heartbeats and crons" },
-  fleet: { title: "Fleet sonar", subtitle: "multi-node radar" },
   rules: { title: "Rules", subtitle: "guardrails as a graph" },
   settings: { title: "Settings", subtitle: "workspace, team, billing" },
 };

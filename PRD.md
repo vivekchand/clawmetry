@@ -75,7 +75,11 @@ Each row describes one user-visible feature. **Surface** is where the user encou
 | **History** | Time-series metrics over 1h/6h/24h/7d/30d (requires SQLite history backend) | Sub-tab | Both | free | `history.py`, `routes/fleet_history.py` |
 | **Version Impact** | Diff agent behaviour between two model versions | Sub-tab | Both | free | `routes/meta.py:bp_version_impact` |
 | **NemoClaw** | Per-sandbox governance, policy editor, sandbox health | Tab | Cloud only | **Pro** | `routes/nemoclaw.py` |
-| **Clusters** | Cluster sessions by behavioural similarity | Sub-tab | Both | free | `templates/tabs/clusters.html` |
+
+(The standalone **Session Clusters / Fleet Sonar** tab was removed
+2026-05-19, issue #1716 — it never rendered anything useful. The
+behavioural Trace Clusters card on the Cost/Usage tab is unaffected and
+still backed by `/api/sessions/clusters` in `routes/usage.py`.)
 
 ### 4.2 Sync daemon — what gets shipped to cloud
 
