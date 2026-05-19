@@ -235,58 +235,104 @@ def _try_local_store_reasoning(session_id: str):
     # on multi-process installs (launchd/systemd). Try the daemon HTTP
     # proxy first; fall back to a direct read-only open for single-process
     # boots (tests, dev mode).
+    #
+    # 2026-05-18 silent-zero bug-class fix (7th instance today, per memory
+    # ``feedback_synthetic_tests_missed_real_event_shape.md`` +
+    # ``reference_openclaw_v3_event_types.md``). Assistant turns land in
+    # DuckDB under THREE different ``event_type`` values:
+    #   * ``message``         — legacy installs, data.message.content[]
+    #   * ``assistant``       — Claude Code daemon-normalised
+    #   * ``model.completed`` — OpenClaw v3 daemon-normalised (no nested
+    #                           message; thinking lives in
+    #                           data.assistantTexts + data.completionText)
+    # Querying only ``message`` returned 0 rows on real installs → the
+    # Brain tab reasoning view rendered an empty timeline.
+    rows = []
     try:
         from routes.local_query import local_store_via_daemon
-        rows = local_store_via_daemon(
-            "query_events",
-            session_id=session_id, event_type="message", limit=2000,
-        )
+        for et in ("message", "assistant", "model.completed"):
+            sub = local_store_via_daemon(
+                "query_events",
+                session_id=session_id, event_type=et, limit=2000,
+            )
+            if sub:
+                rows.extend(sub)
     except Exception:
-        rows = None
-    if rows is None:
+        rows = []
+    if not rows:
         try:
             from clawmetry import local_store
             store = local_store.get_store(read_only=True)
-            rows = store.query_events(
-                session_id=session_id, event_type="message", limit=2000,
-            )
+            for et in ("message", "assistant", "model.completed"):
+                sub = store.query_events(
+                    session_id=session_id, event_type=et, limit=2000,
+                ) or []
+                rows.extend(sub)
         except Exception:
             return None
     if not rows:
         return None
 
     # query_events returns most-recent-first; reasoning chains read forward
-    # in time (legacy parser walks the JSONL top-to-bottom).
-    rows = list(reversed(rows))
+    # in time (legacy parser walks the JSONL top-to-bottom). Sort the
+    # unioned list by ts to keep that contract when the three event-type
+    # buckets above were merged out of order.
+    rows = sorted(rows, key=lambda r: (r.get("ts") or ""))
     chains = []
     for r in rows:
         data = r.get("data") if isinstance(r, dict) else None
         if not isinstance(data, dict):
             continue
-        msg = data.get("message") if isinstance(data.get("message"), dict) else data
-        if not isinstance(msg, dict):
-            continue
-        if msg.get("role") and msg.get("role") != "assistant":
-            continue
-        content_obj = msg.get("content")
-        if not isinstance(content_obj, list):
-            continue
 
-        thinking_blocks = []
+        # Resolve thinking + answer text across three shapes:
+        #   (A) data.message.content = list of {type:thinking|text} blocks
+        #       (legacy ``message`` + Claude-Code ``assistant``)
+        #   (B) v3 ``model.completed`` with NO data.message — thinking +
+        #       answer live in top-level data.{assistantTexts,
+        #       completionText}. assistantTexts is a list[str] of extracted
+        #       thinking; completionText is the final answer text. The
+        #       daemon never emits separate ``{type:thinking}`` blocks for
+        #       this shape, so we treat assistantTexts entries as
+        #       independent thinking blocks.
+        thinking_blocks: list[str] = []
         answer_word_count = 0
         answer_parts: list[str] = []
-        for block in content_obj:
-            if not isinstance(block, dict):
+
+        msg = data.get("message") if isinstance(data.get("message"), dict) else None
+        content_obj = msg.get("content") if isinstance(msg, dict) else None
+
+        if isinstance(content_obj, list):
+            # Shape A — content-block walk
+            if isinstance(msg, dict) and msg.get("role") and msg.get("role") != "assistant":
                 continue
-            btype = block.get("type", "")
-            if btype == "thinking":
-                tt = block.get("thinking", "")
-                if tt:
-                    thinking_blocks.append(tt)
-            elif btype == "text":
-                text = block.get("text", "") or ""
-                answer_word_count += len(text.split())
-                answer_parts.append(text)
+            for block in content_obj:
+                if not isinstance(block, dict):
+                    continue
+                btype = block.get("type", "")
+                if btype == "thinking":
+                    tt = block.get("thinking", "")
+                    if tt:
+                        thinking_blocks.append(tt)
+                elif btype == "text":
+                    text = block.get("text", "") or ""
+                    answer_word_count += len(text.split())
+                    answer_parts.append(text)
+        else:
+            # Shape B — v3 model.completed. Skip non-assistant events that
+            # leaked into the union (eg legacy ``message`` with role=user
+            # and string content).
+            et = (r.get("event_type") or "").lower()
+            if et not in ("model.completed", "assistant"):
+                continue
+            atexts = data.get("assistantTexts")
+            if isinstance(atexts, list):
+                for t in atexts:
+                    if isinstance(t, str) and t:
+                        thinking_blocks.append(t)
+            answer = data.get("completionText")
+            if isinstance(answer, str) and answer:
+                answer_word_count = len(answer.split())
+                answer_parts.append(answer)
 
         ts = r.get("ts") or ""
         answer_text = " ".join(answer_parts)
