@@ -948,11 +948,21 @@ def get_store(read_only: bool = False) -> "LocalStore":
         with _store_lock:
             if _store_rw is None:
                 if _store_ro is not None:
-                    raise RuntimeError(
-                        "local_store: cannot open writer — read-only handle "
-                        "already exists in this process. Get a fresh process "
-                        "to write."
-                    )
+                    # Evict the cached RO handle so we can open the writer.
+                    # DuckDB forbids RW+RO on the same file in the same
+                    # process; without this eviction the daemon brick-locks
+                    # itself the moment any startup code path opens read-only
+                    # before the writer (see #1771: 21h silent ingest outage
+                    # on dev because a non-critical read cached _store_ro,
+                    # then every subsequent write attempt raised and the
+                    # daemon logged 37,728 warnings without recovering).
+                    # Future RO callers fall through to the _store_rw branch
+                    # below — the writer connection serves reads fine.
+                    try:
+                        _store_ro.stop(flush=False)
+                    except Exception:
+                        pass
+                    _store_ro = None
                 _store_rw = LocalStore(read_only=False)
                 _store_rw.start()
             return _store_rw
