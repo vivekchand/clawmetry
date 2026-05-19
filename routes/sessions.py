@@ -253,6 +253,14 @@ def api_sessions():
             _merge_unregistered_jsonls(fast["sessions"])
             capped = _apply_24h_retention_cap(fast["sessions"])
             fast["capped_at_24h"] = capped
+            # Issue #1773: honest envelope marker. The fast path tags itself
+            # local_store, but _merge_unregistered_jsonls may have appended
+            # filesystem_unregistered rows. Recompute from the row markers so
+            # operators see the actual data path (vs. a misleading
+            # "local_store" envelope that hides an ingest outage).
+            fast["_source"] = _derive_envelope_source(
+                fast["sessions"], fallback="local_store"
+            )
             return jsonify(fast)
     gw_data = _d._gw_invoke("sessions_list", {"limit": 20, "messageLimit": 0})
     if gw_data and "sessions" in gw_data:
@@ -277,6 +285,39 @@ def api_sessions():
     _merge_unregistered_jsonls(sessions)
     capped = _apply_24h_retention_cap(sessions)
     return jsonify({"sessions": sessions, "capped_at_24h": capped})
+
+
+def _derive_envelope_source(rows: list, fallback: str = "local_store") -> str:
+    """Compute an honest envelope ``_source`` from per-row markers.
+
+    Issue #1773: ``/api/sessions`` (and any other route that unions multiple
+    backends) used to hard-code ``_source: "local_store"`` at the envelope
+    while individual rows might carry a different per-row marker
+    (e.g. ``filesystem_unregistered`` from the JSONL fallback). That misled
+    operators into thinking DuckDB was the source of truth when an ingest
+    outage had silently demoted the response to a filesystem scan.
+
+    Returns:
+      - ``fallback`` when ``rows`` is empty (nothing to derive from).
+      - The single source string when every row agrees.
+      - ``"mixed:a,b,..."`` (sources sorted alphabetically) when rows disagree.
+
+    Rows without a ``_source`` key are treated as ``fallback`` so we don't
+    over-claim purity for rows that simply forgot to tag themselves.
+    """
+    if not rows:
+        return fallback
+    sources = set()
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        src = r.get("_source") or fallback
+        sources.add(src)
+    if not sources:
+        return fallback
+    if len(sources) == 1:
+        return next(iter(sources))
+    return "mixed:" + ",".join(sorted(sources))
 
 
 def _merge_unregistered_jsonls(sessions: list) -> None:
