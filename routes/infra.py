@@ -626,19 +626,43 @@ def api_flow_runs():
             since = cap_iso
             capped_at_24h = True
 
-    runs: list = []
+    # MOAT Tier-1 sweep (refs #1565): route through the daemon HTTP proxy
+    # first. The previous direct ``local_store.get_store(read_only=True)``
+    # open silently failed on multi-process installs (DuckDB exclusive lock
+    # blocks even RO opens — see memory
+    # ``reference_duckdb_process_lock.md``), so every standard launchd /
+    # systemd user saw an empty Past-flow-runs list. The daemon owns the
+    # writer connection and serves reads via HTTP from the same process.
+    runs: list | None = None
     source = "empty"
     try:
-        from clawmetry import local_store
-        store = local_store.get_store(read_only=True)
-        runs = store.query_flow_runs(
+        from routes.local_query import local_store_via_daemon
+        runs = local_store_via_daemon(
+            "query_flow_runs",
             agent_id=agent_id, since=since, until=until, limit=limit,
-        ) or []
-        if runs:
-            source = "local_store"
+        )
     except Exception:
-        runs = []
-        source = "empty"
+        runs = None
+    if runs is None:
+        # Single-process fallback (tests / dev mode with no sync daemon).
+        # NB: this path WILL fail on a multi-process install because of the
+        # DuckDB process lock — but in that scenario the daemon proxy above
+        # should always succeed. Logging here surfaces drift if it doesn't.
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            runs = store.query_flow_runs(
+                agent_id=agent_id, since=since, until=until, limit=limit,
+            ) or []
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "api_flow_runs: daemon proxy AND direct DuckDB open both "
+                "failed — returning empty list (%s)", exc,
+            )
+            runs = []
+    if runs:
+        source = "local_store"
 
     return jsonify({
         "runs": runs,
