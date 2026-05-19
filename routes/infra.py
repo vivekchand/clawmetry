@@ -399,7 +399,12 @@ def api_flow_events():
     # E2E health checks and non-SSE clients get a lightweight JSON response
     accept = request.headers.get("Accept", "")
     if request.method == "HEAD" or "text/event-stream" not in accept:
-        envelope = {"ok": True, "type": "flow-events", "streaming": True}
+        # Always include `events` (default empty list) so the JSON envelope
+        # shape is stable for non-SSE callers — including the keystone E2E
+        # verifier. Without this, an empty/disabled local store would emit
+        # `{ok, streaming, type}` and the verifier's shape probe would fail
+        # on the missing `.events` key (refs #1763).
+        envelope = {"ok": True, "type": "flow-events", "streaming": True, "events": []}
         # DuckDB fast path (refs #1565). Hydrate the JSON envelope with a
         # snapshot of recent flow events so callers that can't (or don't
         # want to) hold an SSE connection still see real data. SSE is the
@@ -1009,7 +1014,12 @@ def api_memory_files():
         fast = _try_local_store_memory_files()
         if fast is not None:
             return jsonify({"files": fast, "_source": "local_store"})
-    return jsonify(_d._get_memory_files())
+    # Wrap the workspace-scan fallback in the same `{files: [...]}` envelope
+    # the fast path returns, so the on-the-wire shape is stable regardless
+    # of whether the local store is enabled. The bare-list fallback used to
+    # break the keystone E2E verifier's shape probe (refs #1763) and any
+    # caller that already correctly handled the local_store shape.
+    return jsonify({"files": _d._get_memory_files()})
 
 
 @bp_memory.route("/api/file", methods=["GET"])
