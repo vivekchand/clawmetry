@@ -4163,8 +4163,6 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
-    <!-- History tab hidden until mature -->
-    <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
 </div>
 
@@ -4901,8 +4899,6 @@ function clawmetryLogout(){
   </div>
 </div>
 
-<!-- HISTORY -->
-
 <!-- RATE LIMITS -->
 <div class="page" id="page-limits">
   <div class="refresh-bar">
@@ -4914,62 +4910,6 @@ function clawmetryLogout(){
     <div class="card" style="padding:24px;text-align:center;color:var(--text-muted);">Loading rate limit data...</div>
   </div>
   <div id="rate-limits-hourly" style="margin-top:16px;"></div>
-</div>
-
-<div class="page" id="page-history">
-  <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;flex-wrap:wrap;">
-    <h2 style="font-size:18px;font-weight:700;color:var(--text-primary);margin:0;">&#128202; History</h2>
-    <div style="display:flex;gap:4px;flex-wrap:wrap;" id="time-range-picker">
-      <button class="time-btn active" onclick="setTimeRange(3600,this)">1h</button>
-      <button class="time-btn" onclick="setTimeRange(21600,this)">6h</button>
-      <button class="time-btn" onclick="setTimeRange(86400,this)">24h</button>
-      <button class="time-btn" onclick="setTimeRange(604800,this)">7d</button>
-      <button class="time-btn" onclick="setTimeRange(2592000,this)">30d</button>
-      <button class="time-btn" onclick="showCustomRange()">Custom</button>
-    </div>
-    <div id="custom-range-picker" style="display:none;gap:8px;align-items:center;">
-      <input type="datetime-local" id="history-from" style="padding:4px 8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);font-size:12px;">
-      <span style="color:var(--text-muted);">to</span>
-      <input type="datetime-local" id="history-to" style="padding:4px 8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);font-size:12px;">
-      <button class="time-btn" onclick="applyCustomRange()">Apply</button>
-    </div>
-    <div id="history-status" style="font-size:12px;color:var(--text-muted);margin-left:auto;"></div>
-  </div>
-
-  <!-- Token Usage Chart -->
-  <div class="card" style="margin-bottom:16px;padding:16px;">
-    <h3 style="font-size:14px;font-weight:600;color:var(--text-primary);margin:0 0 12px 0;">Token Usage Over Time</h3>
-    <canvas id="history-tokens-chart" height="200"></canvas>
-  </div>
-
-  <!-- Cost Chart -->
-  <div class="card" style="margin-bottom:16px;padding:16px;">
-    <h3 style="font-size:14px;font-weight:600;color:var(--text-primary);margin:0 0 12px 0;">Cost Over Time</h3>
-    <canvas id="history-cost-chart" height="180"></canvas>
-  </div>
-
-  <!-- Sessions & Crons side by side -->
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
-    <div class="card" style="padding:16px;">
-      <h3 style="font-size:14px;font-weight:600;color:var(--text-primary);margin:0 0 12px 0;">Active Sessions</h3>
-      <canvas id="history-sessions-chart" height="160"></canvas>
-    </div>
-    <div class="card" style="padding:16px;">
-      <h3 style="font-size:14px;font-weight:600;color:var(--text-primary);margin:0 0 12px 0;">Cron Runs</h3>
-      <div id="history-cron-table" style="max-height:300px;overflow-y:auto;font-size:13px;color:var(--text-secondary);">Loading...</div>
-    </div>
-  </div>
-
-  <!-- Snapshot drilldown modal -->
-  <div id="snapshot-modal" style="display:none;position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;">
-    <div style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:16px;width:90%;max-width:800px;max-height:80vh;padding:24px;overflow-y:auto;box-shadow:0 25px 50px rgba(0,0,0,0.25);">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-        <h3 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;" id="snapshot-title">Snapshot</h3>
-        <button onclick="document.getElementById('snapshot-modal').style.display='none'" style="background:var(--button-bg);border:1px solid var(--border-primary);border-radius:8px;width:32px;height:32px;cursor:pointer;font-size:18px;color:var(--text-tertiary);">&times;</button>
-      </div>
-      <pre id="snapshot-content" style="font-size:12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:16px;overflow-x:auto;white-space:pre-wrap;color:var(--text-secondary);max-height:60vh;"></pre>
-    </div>
-  </div>
 </div>
 
 <!-- FLOW -->
@@ -6274,7 +6214,6 @@ function switchTab(name) {
   if (name === 'clusters') loadClusters();
   if (name === 'limits') loadRateLimits();
   if (name === 'flow') initFlow();
-  if (name === 'history') loadHistory();
   if (name === 'brain') { if (typeof loadBrainPage === 'function') loadBrainPage(); loadContextAnatomy(); }
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
   if (name === 'actions') loadQAHistory();
@@ -10827,8 +10766,6 @@ DASHBOARD_HTML = r"""
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
-    <!-- History tab hidden until mature -->
-    <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
     {% if v2_enabled %}
     <a class="nav-tab v1-to-v2-link" href="/v2" style="text-decoration:none;color:#E5443A;border-color:rgba(229,68,58,0.35);" title="Open the v2 (beta) dashboard">&#10024; Try v2 (beta) &#8599;</a>
     {% endif %}
@@ -10910,10 +10847,6 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-icon" aria-hidden="true">&#9787;</span>
         <span class="left-nav-label">Embodied <span class="left-nav-beta">&#946;</span></span>
       </div>
-      <div class="left-nav-item" data-tab="history" onclick="switchTab('history')" title="Time-series replay of past activity">
-        <span class="left-nav-icon" aria-hidden="true">&#8634;</span>
-        <span class="left-nav-label">Replay</span>
-      </div>
       <div class="left-nav-item" data-tab="crons" id="crons-tab" onclick="switchTab('crons')" title="Scheduled agent jobs">
         <span class="left-nav-icon" aria-hidden="true">&#9202;</span>
         <span class="left-nav-label">Crons</span>
@@ -10984,12 +10917,8 @@ DASHBOARD_HTML = r"""
 <!-- SESSION CLUSTERS -->
 {% include 'tabs/clusters.html' %}
 
-<!-- HISTORY -->
-
 <!-- RATE LIMITS -->
 {% include 'tabs/limits.html' %}
-
-{% include 'tabs/history.html' %}
 
 <!-- FLOW -->
 {% include 'tabs/flow.html' %}
