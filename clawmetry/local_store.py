@@ -4014,22 +4014,92 @@ class LocalStore:
         status: str | None = None,
         limit: int = 200,
     ) -> list[dict[str, Any]]:
-        """Subagent rollup rows."""
+        """Subagent rollup rows.
+
+        MOAT epic #1743 / issue #1755: ``cost_usd`` + ``token_count`` are
+        derived from the ``events`` table on read rather than the cached
+        columns on ``subagents``. The cache drifts low whenever the daemon
+        ingests an event but is SIGKILLed before the matching
+        ``record_subagent()`` aggregate-update lands. Events are the source
+        of truth (#1725).
+
+        Join key: events for a sub-agent are written with
+        ``events.session_id = subagents.subagent_id`` — see
+        ``clawmetry/sync.py::_local_ingest_session_batch`` where
+        ``session_id = subagent_id or session_file.split(".jsonl", 1)[0]``.
+        Confirmed by ``tests/test_subagent_attribution_v3.py``.
+
+        Dedupe: on real v3 OpenClaw installs each LLM turn emits BOTH an
+        ``assistant`` row AND a sibling ``model.completed`` row ~100 ms
+        apart, both stamped with the same ``token_count`` + ``cost_usd``.
+        A naive ``SUM`` doubles every billable turn — mirror the
+        (session_id, ts_sec, envelope_rank) bucket-dedupe used by
+        ``query_sessions`` + ``query_aggregates``.
+
+        Bridge: ``GREATEST(stored, events-sum)`` keeps the cached column
+        as a fallback for rows whose events haven't ingested yet, while
+        guaranteeing we never under-report once events arrive (per
+        PR #1754 pattern). Drop-the-column work is Phase C of #1743.
+        """
         clauses: list[str] = []
         params: list[Any] = []
         if parent_session_id:
-            clauses.append("parent_session_id = ?"); params.append(parent_session_id)
+            clauses.append("s.parent_session_id = ?"); params.append(parent_session_id)
         if agent_type:
-            clauses.append("agent_type = ?"); params.append(agent_type)
+            clauses.append("s.agent_type = ?"); params.append(agent_type)
         if status:
-            clauses.append("status = ?"); params.append(status)
+            clauses.append("s.status = ?"); params.append(status)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         sql = f"""
-            SELECT agent_type, subagent_id, parent_session_id, spawned_at,
-                   ended_at, task, status, cost_usd, token_count, data, updated_at
-            FROM subagents
+            WITH ranked_events AS (
+              SELECT
+                e.session_id, e.agent_type, e.cost_usd, e.token_count,
+                CASE e.event_type
+                  WHEN 'assistant'        THEN 2
+                  WHEN 'message'          THEN 2
+                  WHEN 'model.completed'  THEN 1
+                  ELSE 0
+                END AS envelope_rank,
+                CAST(EXTRACT(EPOCH FROM CAST(e.ts AS TIMESTAMP)) AS BIGINT)
+                                                 AS ts_sec
+              FROM events e
+            ),
+            bucket_max AS (
+              SELECT session_id, ts_sec, MAX(envelope_rank) AS max_rank
+              FROM ranked_events
+              GROUP BY session_id, ts_sec
+            ),
+            deduped_events AS (
+              SELECT r.session_id, r.agent_type, r.cost_usd, r.token_count
+              FROM ranked_events r
+              JOIN bucket_max bm USING (session_id, ts_sec)
+              WHERE NOT (r.envelope_rank = 1 AND bm.max_rank = 2)
+            ),
+            event_sums AS (
+              SELECT session_id, agent_type,
+                     COALESCE(SUM(cost_usd), 0)    AS cost_usd_d,
+                     COALESCE(SUM(token_count), 0) AS token_count_d
+              FROM deduped_events
+              GROUP BY session_id, agent_type
+            )
+            SELECT
+                s.agent_type, s.subagent_id, s.parent_session_id,
+                s.spawned_at, s.ended_at, s.task, s.status,
+                GREATEST(
+                    COALESCE(s.cost_usd, 0.0),
+                    COALESCE(es.cost_usd_d, 0.0)
+                ) AS cost_usd,
+                GREATEST(
+                    COALESCE(s.token_count, 0),
+                    COALESCE(es.token_count_d, 0)
+                ) AS token_count,
+                s.data, s.updated_at
+            FROM subagents s
+            LEFT JOIN event_sums es
+              ON es.session_id = s.subagent_id
+             AND es.agent_type = s.agent_type
             {where}
-            ORDER BY spawned_at DESC
+            ORDER BY s.spawned_at DESC
             LIMIT ?
         """
         params.append(int(limit))
