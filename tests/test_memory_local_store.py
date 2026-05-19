@@ -119,15 +119,15 @@ def test_memory_alias_route_also_fast_paths(app):
 
 def test_memory_files_disabled_without_flag(app_no_flag):
     """Flag unset → no fast path even if writes would land in the store.
-    Falls through to the filesystem helper which returns a bare list (no
-    `_source` tag)."""
+    Falls through to the filesystem helper, but the response is still
+    wrapped in the ``{files: [...]}`` envelope so the on-the-wire shape is
+    stable across both paths (refs #1763 — keystone E2E verifier expects
+    a dict, not the bare list the legacy helper used to return)."""
     a, _ls = app_no_flag
     body = a.test_client().get("/api/memory-files").get_json()
-    if isinstance(body, dict):
-        assert body.get("_source") != "local_store"
-    else:
-        # bare list = legacy filesystem return shape
-        assert isinstance(body, list)
+    assert isinstance(body, dict), f"expected dict envelope, got {type(body).__name__}"
+    assert body.get("_source") != "local_store"
+    assert isinstance(body.get("files"), list)
 
 
 # ── /api/file (GET) ────────────────────────────────────────────────────────
