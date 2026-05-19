@@ -3462,6 +3462,15 @@ class LocalStore:
         # model.completed). ``event_count`` stays RAW (it's "how many rows
         # did we record", not "how many billable turns") — only cost_usd
         # + token_count come from the deduped CTE.
+        #
+        # Issue #1718: add ``message_count`` (renderable-turns count) so
+        # ``/api/transcripts`` can show a row count that matches what
+        # ``/api/transcript/<sid>`` will actually render in the detail
+        # modal. The legacy ``event_count`` is preserved (still raw row
+        # count) so existing callers that want the unfiltered number
+        # (telemetry, audit) keep their semantics; new callers should
+        # prefer ``message_count``.
+        renderable_in = _sql_in_clause(_RENDERABLE_EVENT_TYPES)
         sql = f"""
             WITH ranked AS (
               SELECT
@@ -3506,6 +3515,8 @@ class LocalStore:
               MIN(r.ts)                     AS started_at,
               MAX(r.ts)                     AS updated_at,
               COUNT(r.id)                   AS event_count,
+              SUM(CASE WHEN r.event_type IN {renderable_in}
+                       THEN 1 ELSE 0 END)   AS message_count,
               COALESCE(ds.cost_usd_d, 0)    AS cost_usd,
               COALESCE(ds.token_count_d, 0) AS token_count
             FROM ranked r
@@ -3516,7 +3527,7 @@ class LocalStore:
         """
         params.append(int(limit))
         return [_row_to_dict(r, ["session_id","agent_id","started_at","updated_at",
-                                  "event_count","cost_usd","token_count"])
+                                  "event_count","message_count","cost_usd","token_count"])
                 for r in self._fetch(sql, params)]
 
     def query_heartbeats(
@@ -4612,6 +4623,15 @@ class LocalStore:
         # events ARE in the local events table reports correct figures.
         # Events get cost_usd + token_count daemon-stamped by
         # _coerce_event_metrics() from ``usage.cost.*`` payloads at ingest.
+        #
+        # Issue #1718: filter the correlated COUNT(*) to ``_RENDERABLE_EVENT_TYPES``
+        # so the value matches what the transcript detail modal renders.
+        # The previous raw COUNT(*) counted every event (``session.started``,
+        # ``channel.in/out``, ``model.changed``, ``thinking_level_change``,
+        # …) and inflated the per-session message_count, e.g. a session
+        # with 6 raw events that renders 2 turns showed "6 messages" in
+        # the list but "0 messages" / "2 messages" in the detail page.
+        renderable_in = _sql_in_clause(_RENDERABLE_EVENT_TYPES)
         sql = f"""
             SELECT s.agent_type, s.session_id, s.agent_id, s.title, s.started_at,
                    s.last_active_at, s.ended_at, s.status,
@@ -4631,7 +4651,8 @@ class LocalStore:
                        COALESCE(s.message_count, 0),
                        (SELECT COUNT(*) FROM events e
                           WHERE e.session_id = s.session_id
-                            AND e.agent_type = s.agent_type)
+                            AND e.agent_type = s.agent_type
+                            AND e.event_type IN {renderable_in})
                    ) AS message_count,
                    s.metadata
             FROM sessions s
@@ -6242,6 +6263,55 @@ _BILLABLE_TURN_EVENT_TYPES = (
 )
 _TOOL_CALL_TOPLEVEL_EVENT_TYPES = (
     "tool.call", "toolCall", "tool_use", "tool_call",
+)
+
+# Issue #1718: event_types whose ``data`` is rendered as a turn by the
+# transcript detail view (``routes/sessions.py:_try_local_store_transcript``
+# + ``_expand_openclaw_event``). The transcript LIST view (``/api/transcripts``
+# → ``query_sessions``) must report a ``message_count`` filtered by this set,
+# NOT raw ``COUNT(events.id)`` — otherwise the list-vs-detail counts diverge
+# (e.g. a session with 6 raw events but only ``prompt.submitted`` +
+# ``model.completed`` renderables shows 6 in the list and 2 in the modal).
+#
+# Keep this list aligned with the renderable arms of
+# ``_expand_openclaw_event`` AND the Anthropic-style fallback in
+# ``_try_local_store_transcript`` (which renders any non-dotted ``event_type``
+# whose ``data.role`` is user/assistant/system, OR whose payload carries
+# ``tool_calls``/``tool_use``). Non-renderable types (``session.*``,
+# ``agent.heartbeat``, ``context.compiled``, ``model.changed``,
+# ``thinking_level_change``, ``channel.in``/``.out``, ``custom``,
+# ``custom_message``, ``trace.heartbeat``, …) are excluded by construction.
+_RENDERABLE_EVENT_TYPES = (
+    # Anthropic-style (no dotted type) → role-bearing turns.
+    "message",
+    "user",
+    "assistant",
+    "system",
+    "tool",
+    "tool_result",
+    # Tool-call variants matching ``_TOOL_CALL_TOPLEVEL_EVENT_TYPES`` —
+    # different ingest paths stamp the row with whichever form the source
+    # payload used. All four render as tool bubbles in the transcript.
+    "tool_call",
+    "toolCall",
+    "tool_use",
+    # Hyphenated variant seen in real OpenClaw Claude-Code fanout (#1226).
+    "tool-result",
+    # OpenClaw v3 / dotted types — must match _expand_openclaw_event arms.
+    "prompt.submitted",
+    "trace.artifacts",
+    "model.completed",
+    "tool.call",
+    "tool.invoked",
+    "tool.result",
+    "tool.completed",
+    # Compactions render as a special bubble in the replay scrubber.
+    "compaction",
+    # Subagent fan-out — child turns surface in the parent's transcript
+    # via ``query_events_with_subagents`` (#1597); count them so the
+    # list-vs-detail check stays accurate for parents that delegated.
+    "subagent:assistant",
+    "subagent:user",
 )
 
 

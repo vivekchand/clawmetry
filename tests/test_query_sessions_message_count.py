@@ -40,13 +40,17 @@ def _wait(s, timeout=2.0):
 
 
 def _ingest_event(s, sid, *, ts="2026-05-13T10:00:00Z", agent_type="openclaw"):
+    # Issue #1718: message_count is now restricted to renderable event_types
+    # (the ones ``_try_local_store_transcript`` actually emits as turns).
+    # ``brain`` is NOT renderable — use ``model.completed`` so the count
+    # reflects something the user would actually see in the modal.
     s.ingest({
         "id": str(uuid.uuid4()),
         "node_id": "agent+test",
         "agent_id": "main",
         "agent_type": agent_type,
         "session_id": sid,
-        "event_type": "brain",
+        "event_type": "model.completed",
         "ts": ts,
         "data": {"type": "model.completed", "data": {"text": "x"}},
     })
