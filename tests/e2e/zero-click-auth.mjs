@@ -172,12 +172,14 @@ async function testZeroClickAutoLogin() {
     overlayHidden ? '' : 'overlay still visible after 5s — auto-login did not fire'
   );
 
-  // Dashboard root rendered. The Overview tab is the canonical landing
-  // tab. IA refactor v2 (PR #1662) introduced a sidebar `.left-nav-item`
-  // alongside the legacy top `.nav-tab`. Both classes get `.active` toggled
-  // by switchTab() — match either so this test survives nav restructures.
+  // Dashboard root rendered. The overview tab is the canonical landing
+  // tab. Select by `data-tab="overview"` because IA refactor v2 (PR #1662)
+  // renamed the visible label to "Live trace" — text matching no longer
+  // works. Both the legacy top `.nav-tab` and the IA-v2 sidebar
+  // `.left-nav-item` get `.active` toggled by switchTab() and both
+  // carry data-tab.
   const overviewTab = page
-    .locator('.nav-tab.active, .left-nav-item.active', { hasText: /Overview/i })
+    .locator('.nav-tab.active[data-tab="overview"], .left-nav-item.active[data-tab="overview"]')
     .first();
   let overviewVisible = false;
   try {
@@ -187,7 +189,7 @@ async function testZeroClickAutoLogin() {
   check(
     'Overview tab is visible — dashboard root rendered',
     overviewVisible,
-    overviewVisible ? '' : 'no .nav-tab.active or .left-nav-item.active with "Overview" text found'
+    overviewVisible ? '' : 'no .nav-tab.active or .left-nav-item.active with data-tab="overview" found'
   );
 
   // Token must be in localStorage — that's how every later /api/* call
