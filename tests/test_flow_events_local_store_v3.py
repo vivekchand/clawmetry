@@ -90,7 +90,11 @@ def _row(event_id, sid, event_type, ts, data, **extra):
 def test_empty_local_store_returns_legacy_envelope(app):
     """When DuckDB has zero flow-relevant rows the helper returns None and
     the route falls back to the static envelope. Critical: this keeps the
-    legacy SSE-only behaviour intact for fresh installs."""
+    legacy SSE-only behaviour intact for fresh installs.
+
+    The envelope still includes ``events: []`` so the on-the-wire shape is
+    stable for non-SSE callers (refs #1763 — keystone E2E verifier expects
+    ``.events`` / ``.ok`` keys regardless of local-store state)."""
     a, _ls = app
     r = a.test_client().get("/api/flow-events", headers={"Accept": "application/json"})
     assert r.status_code == 200, r.get_data(as_text=True)
@@ -98,9 +102,9 @@ def test_empty_local_store_returns_legacy_envelope(app):
     assert body.get("ok") is True
     assert body.get("type") == "flow-events"
     assert body.get("streaming") is True
-    # No DuckDB rows → no _source tag, no events list.
+    # No DuckDB rows → no _source tag, but events is always present (empty).
     assert "_source" not in body
-    assert "events" not in body
+    assert body.get("events") == []
 
 
 def test_populated_local_store_hydrates_envelope(app):
