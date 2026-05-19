@@ -1,0 +1,196 @@
+name: MOAT Keystone (drive mode, nightly)
+
+# Companion to the per-PR `moat-keystone` job in ci.yml.
+#
+# Per-PR runs `--no-drive`: verifies every probe against whatever DuckDB
+# rows the daemon's startup bootstrap already landed. That catches
+# regressions in routes/* and the local_store reader path, but it cannot
+# catch regressions in the actual write path (openclaw -> daemon ingest
+# -> DuckDB row), because no fresh event is generated.
+#
+# This workflow runs FULL drive mode: a real `openclaw agent --message`
+# turn, polls the daemon until the event lands, then runs all 13
+# probes. Costs ~1 LLM round-trip per night (Anthropic, sub-cent) so
+# nightly + main-only is the right cadence. If the drive fails, this
+# job auto-files a P0 GitHub issue mirroring the
+# `accuracy_harness/all.py` consolidated-issue pattern.
+#
+# Acceptance criterion: docs/MOAT_BAR.md Section 5, AC#4.
+
+on:
+  schedule:
+    # 04:00 UTC daily, off the e2e-nightly :17 minute slot.
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: moat-keystone-drive-nightly
+  cancel-in-progress: false
+
+jobs:
+  drive:
+    name: Keystone Drive (real openclaw turn -> 13 probes)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Nightly informational at the workflow level, but we still auto-file
+    # a P0 issue on failure so a human picks it up within the SLA.
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: "Guard: keystone harness file present"
+        # Until PR #1672 merges, the script lives only on its feature
+        # branch. Skip gracefully (with a warning) on commits where it
+        # is absent; gate becomes active automatically once #1672 lands.
+        run: |
+          if [ ! -f scripts/accuracy_harness/keystone_e2e.py ]; then
+            echo "::warning::scripts/accuracy_harness/keystone_e2e.py not present yet. Merge PR #1672 to activate the nightly drive gate."
+            echo "KEYSTONE_PRESENT=0" >> "$GITHUB_ENV"
+          else
+            echo "KEYSTONE_PRESENT=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Setup OpenClaw
+        if: env.KEYSTONE_PRESENT == '1'
+        uses: ./.github/actions/setup-openclaw
+        with:
+          version: latest
+          gateway-token: moat-keystone-drive-token
+
+      - name: Install Python deps
+        if: env.KEYSTONE_PRESENT == '1'
+        run: pip install flask waitress cryptography duckdb requests psutil
+
+      - name: Start dashboard
+        if: env.KEYSTONE_PRESENT == '1'
+        run: |
+          OPENCLAW_GATEWAY_TOKEN=moat-keystone-drive-token python3 dashboard.py --port 8900 --no-debug \
+            > /tmp/dashboard.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf -H "Authorization: Bearer moat-keystone-drive-token" http://localhost:8900/api/health && echo "Dashboard ready" && break
+            sleep 1
+          done
+
+      - name: Start local_server (DuckDB query proxy)
+        if: env.KEYSTONE_PRESENT == '1'
+        # Same minimum-viable-daemon trick as the per-PR job: boot just
+        # the local_query HTTP proxy so the keystone's discover_daemon()
+        # call resolves. The full sync daemon needs `clawmetry connect`
+        # which CI does not have.
+        run: |
+          nohup python3 -c "
+          import os, time, json, pathlib
+          from clawmetry import local_server
+          port = local_server.start()
+          assert port, 'local_server failed to start'
+          disc = pathlib.Path.home() / '.clawmetry' / 'local_query.json'
+          d = json.loads(disc.read_text())
+          d['pid'] = os.getpid()
+          disc.write_text(json.dumps(d))
+          while True: time.sleep(60)
+          " > /tmp/local_server.log 2>&1 &
+          for i in $(seq 1 10); do
+            [ -f "$HOME/.clawmetry/local_query.json" ] && echo "local_query.json present" && break
+            sleep 1
+          done
+
+      - name: Run keystone verifier (drive mode)
+        if: env.KEYSTONE_PRESENT == '1'
+        id: drive
+        env:
+          CLAWMETRY_URL: http://localhost:8900
+          # Real LLM call -- uses the same secret the live-openclaw-e2e
+          # job in ci.yml uses. Rotate via console.anthropic.com if leaked.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set +e
+          python3 scripts/accuracy_harness/keystone_e2e.py 2>&1 | tee /tmp/keystone-drive.log
+          echo "EXIT_CODE=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          exit ${PIPESTATUS[0]}
+
+      - name: Dashboard log tail (on failure)
+        if: failure() && env.KEYSTONE_PRESENT == '1'
+        run: |
+          echo "── dashboard.log tail ──"
+          tail -200 /tmp/dashboard.log || true
+          echo "── local_server.log tail ──"
+          tail -200 /tmp/local_server.log || true
+
+      - name: File P0 issue on failure
+        # Mirror of scripts/accuracy_harness/all.py file_consolidated_issue
+        # pattern: idempotent per UTC date (search by date-prefixed title,
+        # edit in place if present, create otherwise). Label: P0 so the
+        # issue-picker cron (feedback_issue_picker_cron.md) dispatches a
+        # subagent within the hour.
+        if: failure() && env.KEYSTONE_PRESENT == '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TODAY=$(date -u +%Y-%m-%d)
+          TITLE_PREFIX="[moat-keystone-drive ${TODAY}]"
+          TITLE="${TITLE_PREFIX} nightly drive failed (see workflow logs)"
+          LOG_TAIL=$(tail -200 /tmp/keystone-drive.log 2>/dev/null | head -c 60000 || echo '(no log captured)')
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          BODY=$(cat <<EOF
+          ## MOAT keystone drive failed nightly run
+
+          - Date (UTC): ${TODAY}
+          - Workflow run: ${RUN_URL}
+          - Exit code: ${{ steps.drive.outputs.EXIT_CODE }}
+
+          ### What this means
+
+          The keystone drive job runs a real \`openclaw agent --message\` turn and
+          asserts all 13 dashboard-backing API surfaces returned shape + non-zero
+          data. A failure here means either the openclaw -> daemon -> DuckDB
+          write path is broken OR one of the 13 read-side routes regressed.
+
+          Per \`docs/MOAT_BAR.md\` Section 5 AC#4 this is P0.
+
+          ### Verifier log tail
+
+          \`\`\`
+          ${LOG_TAIL}
+          \`\`\`
+
+          ### Runbook
+
+          1. Reproduce locally:
+             \`\`\`
+             make dev &
+             python3 -m clawmetry.sync &
+             make moat-check-drive
+             \`\`\`
+          2. If the FAIL line points at a specific endpoint, the harness prints
+             the DuckDB \`event_type\` histogram inline as the very next line.
+             That distinguishes silent-zero (rows present, route returns 0) from
+             write-path failure (no rows).
+          3. Mark this issue closed once the next nightly run goes green or
+             you cut a fix PR with the keystone re-verified locally.
+          EOF
+          )
+
+          # Idempotent per UTC date: edit in place if today's issue exists.
+          EXISTING=$(gh issue list --repo "${{ github.repository }}" \
+            --state open --search "${TITLE_PREFIX} in:title" \
+            --json number --jq '.[0].number' || echo "")
+          if [ -n "$EXISTING" ]; then
+            gh issue edit "$EXISTING" --repo "${{ github.repository }}" \
+              --title "$TITLE" --body "$BODY"
+            echo "edited existing issue #$EXISTING"
+          else
+            # Try with P0 label; fall back to no label if repo lacks it.
+            gh issue create --repo "${{ github.repository }}" \
+              --title "$TITLE" --body "$BODY" \
+              --label "P0" --label "moat-keystone" || \
+            gh issue create --repo "${{ github.repository }}" \
+              --title "$TITLE" --body "$BODY"
+          fi

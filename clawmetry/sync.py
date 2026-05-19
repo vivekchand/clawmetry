@@ -9,6 +9,7 @@ the local machine — cloud stores ciphertext only.
 from __future__ import annotations
 import json
 import os
+import random
 import sys
 import time
 import glob
@@ -761,7 +762,80 @@ def _record_sync_progress(
 # ── HTTP ──────────────────────────────────────────────────────────────────────
 
 
+# ── HTTP retry policy (MOAT robustness, 2026-05-19) ──────────────────────────
+# All retryable failures (network flap, Cloud Run cold start, PgBouncer
+# restart returning 5xx, transient 429) are retried up to 4 times with
+# exponential backoff + jitter. Total worst-case wait: ~12s. After that the
+# caller's exception handler parks the payload in sync_dlq for the next tick.
+#
+# Retry budget (seconds, with ~25% jitter):
+#   attempt 1 fail -> sleep ~1s
+#   attempt 2 fail -> sleep ~2s
+#   attempt 3 fail -> sleep ~4s
+#   attempt 4 fail -> sleep ~8s
+#   attempt 5 fail -> raise (caller parks in DLQ)
+#
+# Retryable status codes:
+#   401 - cloud cold start (auth lookup races deploy)
+#   408 - request timeout
+#   425 - too early (very rare)
+#   429 - rate limit (honors Retry-After header up to 60s cap)
+#   500, 502, 503, 504 - cloud transient (PgBouncer restart, cold start)
+#
+# Non-retryable: 400, 403, 404, 409, 410, 413, 422 (client error, bad payload,
+# unknown endpoint). Raising immediately surfaces the bug rather than burning
+# the retry budget on a permanently-broken request.
+#
+# Network errors (URLError, socket.timeout, ConnectionResetError) are always
+# retryable; they're indistinguishable from a transient cloud hiccup.
+
+_HTTP_RETRYABLE_CODES = frozenset({401, 408, 425, 429, 500, 502, 503, 504})
+_HTTP_MAX_ATTEMPTS = int(os.environ.get("CLAWMETRY_SYNC_HTTP_MAX_ATTEMPTS", "5"))
+_HTTP_BASE_BACKOFF_S = float(os.environ.get("CLAWMETRY_SYNC_HTTP_BASE_BACKOFF_S", "1.0"))
+_HTTP_MAX_BACKOFF_S = float(os.environ.get("CLAWMETRY_SYNC_HTTP_MAX_BACKOFF_S", "30.0"))
+_HTTP_RETRY_AFTER_CAP_S = 60.0
+
+
+def _compute_backoff(attempt: int, retry_after_hdr: str | None = None) -> float:
+    """Exponential backoff with ~25% jitter; honors Retry-After header.
+
+    ``attempt`` is 1-indexed (first failed attempt = 1). Returns the
+    number of seconds to sleep before the next retry. Capped at
+    ``_HTTP_MAX_BACKOFF_S`` so a server with a 24h Retry-After hint
+    doesn't stall the daemon for a day.
+    """
+    if retry_after_hdr:
+        try:
+            # RFC 7231 lets Retry-After be either a delta in seconds or an
+            # HTTP-date. We only honor the seconds form; daemons should not
+            # block waiting for an absolute timestamp.
+            ra = float(retry_after_hdr.strip())
+            return min(max(0.0, ra), _HTTP_RETRY_AFTER_CAP_S)
+        except (ValueError, TypeError):
+            pass
+    # 2^(attempt-1) * base, jittered by [-25%, +25%].
+    base = _HTTP_BASE_BACKOFF_S * (2 ** max(0, attempt - 1))
+    jitter = base * 0.25 * (2 * random.random() - 1)
+    return max(0.1, min(_HTTP_MAX_BACKOFF_S, base + jitter))
+
+
 def _post(path: str, payload: dict, api_key: str, timeout: int = 45) -> dict:
+    """POST a payload to the cloud ingest endpoint.
+
+    Hardening (MOAT 2026-05-19):
+      * Up to ``_HTTP_MAX_ATTEMPTS`` retries on transient HTTP codes
+        (401, 408, 425, 429, 5xx) and any network-level error
+        (URLError, socket.timeout, ConnectionResetError, BrokenPipeError).
+      * Exponential backoff with ~25% jitter; honors the server's
+        ``Retry-After`` header (seconds form only, capped at 60s).
+      * 429 still updates ``_TRIAL_STATE`` so subsequent calls short-
+        circuit before paying the network round-trip, but we now retry
+        the 429 itself so a transient throttle (e.g. a fleet-wide
+        spike) doesn't immediately abandon the payload to the DLQ.
+      * Client errors (400, 403, 404, 409, 410, 413, 422) raise
+        immediately — burning retries on a permanently-broken request
+        wastes the daemon's budget and delays the next legitimate call.
+    """
     url = INGEST_URL.rstrip("/") + path
     body = json.dumps(payload).encode()
     headers = {"Content-Type": "application/json", "X-Api-Key": api_key}
@@ -773,8 +847,8 @@ def _post(path: str, payload: dict, api_key: str, timeout: int = 45) -> dict:
         headers=headers,
         method="POST",
     )
-    last_err = None
-    for attempt in range(2):
+    last_err: Exception = RuntimeError(f"POST {url} never attempted")
+    for attempt in range(1, _HTTP_MAX_ATTEMPTS + 1):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 resp_body = json.loads(resp.read())
@@ -788,17 +862,21 @@ def _post(path: str, payload: dict, api_key: str, timeout: int = 45) -> dict:
             return resp_body
         except urllib.error.HTTPError as e:
             code = e.code
-            msg = e.read().decode()[:200]
+            try:
+                msg = e.read().decode()[:200]
+            except Exception:
+                msg = ""
+            retry_after_hdr = None
+            try:
+                retry_after_hdr = e.headers.get("Retry-After") if e.headers else None
+            except Exception:
+                retry_after_hdr = None
             last_err = RuntimeError(f"HTTP {code} from {url}: {msg}")
-            # Retry on 401/503 (cloud cold-start transient errors)
-            if code in (401, 503) and attempt == 0:
-                time.sleep(2)
-                continue
-            # Server-side throttle — surface a friendly "upgrade to resume"
-            # message and remember we're paused so next call short-circuits.
+            # 429: cache the plan-paused signal so further calls short-circuit,
+            # then fall through into the retryable branch below.
             if code == 429:
                 try:
-                    plan = json.loads(msg).get("plan", "")
+                    plan = json.loads(msg).get("plan", "") if msg else ""
                 except Exception:
                     plan = ""
                 _update_trial_state({
@@ -806,6 +884,30 @@ def _post(path: str, payload: dict, api_key: str, timeout: int = 45) -> dict:
                     "plan": plan or "trial_expired",
                     "upgrade_url": "https://app.clawmetry.com/cloud",
                 })
+            if code in _HTTP_RETRYABLE_CODES and attempt < _HTTP_MAX_ATTEMPTS:
+                sleep_s = _compute_backoff(attempt, retry_after_hdr)
+                log.debug(
+                    "sync._post: %s returned %d (attempt %d/%d) — retrying in %.1fs",
+                    path, code, attempt, _HTTP_MAX_ATTEMPTS, sleep_s,
+                )
+                time.sleep(sleep_s)
+                continue
+            raise last_err
+        except (urllib.error.URLError, TimeoutError, ConnectionError,
+                BrokenPipeError, OSError) as e:
+            # Network-level error: DNS failure, connection reset, TLS error,
+            # socket timeout, broken pipe (PgBouncer killed the connection
+            # mid-write). All retryable; the daemon can't distinguish a
+            # cloud cold start from a real outage.
+            last_err = RuntimeError(f"network error POSTing {url}: {e}")
+            if attempt < _HTTP_MAX_ATTEMPTS:
+                sleep_s = _compute_backoff(attempt, None)
+                log.debug(
+                    "sync._post: %s network error (attempt %d/%d) — retrying in %.1fs: %s",
+                    path, attempt, _HTTP_MAX_ATTEMPTS, sleep_s, e,
+                )
+                time.sleep(sleep_s)
+                continue
             raise last_err
     raise last_err
 
@@ -5016,7 +5118,13 @@ def _canonical_args_hash(args: dict) -> str:
 
 def _local_dispatch_fallback(shape: str, args: dict) -> dict:
     """Fallback dispatcher used when `routes.local_query` isn't importable
-    (daemon-only installs). Mirrors the minimal shape→method bridge."""
+    (daemon-only installs). Mirrors the minimal shape→method bridge.
+
+    Cloud-side pending_queries may carry kwargs the local store doesn't
+    recognise (e.g. ``node_id`` — the cloud uses it to route between
+    nodes, but the local DuckDB IS a single-node store). Filter to a
+    per-shape allowlist so those extras don't surface as TypeErrors.
+    """
     from clawmetry import local_store
     store = local_store.get_store(read_only=True)
     if shape == "health":
@@ -5030,8 +5138,28 @@ def _local_dispatch_fallback(shape: str, args: dict) -> dict:
     method = method_map.get(shape)
     if not method:
         raise ValueError(f"unknown shape: {shape}")
-    rows = getattr(store, method)(**(args or {}))
+    rows = getattr(store, method)(**_filter_store_kwargs(shape, args or {}))
     return {"rows": rows, "count": len(rows), "_shape": shape, "_via": "fallback"}
+
+
+# Per-shape allowlist of kwargs accepted by the underlying ``LocalStore``
+# methods. Kept in sync with ``LocalStore.query_*`` signatures in
+# ``clawmetry/local_store.py``. Mirrors ``routes.local_query._coerce_args``
+# but defined here so the daemon-only fallback path doesn't need the
+# routes package on sys.path.
+_SHAPE_ALLOWED_KWARGS = {
+    "events":     {"session_id", "agent_id", "event_type", "since", "until", "limit"},
+    "sessions":   {"agent_id", "since", "until", "limit"},
+    "aggregates": {"agent_id", "since", "until"},
+    "transcript": {"session_id", "limit"},
+}
+
+
+def _filter_store_kwargs(shape: str, args: dict) -> dict:
+    allowed = _SHAPE_ALLOWED_KWARGS.get(shape)
+    if allowed is None:
+        return dict(args)
+    return {k: v for k, v in args.items() if k in allowed}
 
 
 def _channel_enrichment_from_row(r: dict) -> dict:
@@ -6618,6 +6746,19 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                 # pick the dominant one as the primary.
                 model_tokens: dict = {}
                 last_seen_model = ""
+                # event_count (= JSONL line count) is the "messages" badge
+                # the Embodied tab renders. The cloud Postgres copy of the
+                # sessions table was previously plaintext-blank for this
+                # column because the daemon never uploaded it, so every
+                # cloud row showed "0 messages" even on actively chatting
+                # sessions (cloud fix/embodied-tab-zeros). Counting bytes
+                # too lets the cloud render "8.4 KB" rather than "0 B".
+                event_count = 0
+                size_bytes = 0
+                try:
+                    size_bytes = int(fpath.stat().st_size)
+                except Exception:
+                    pass
 
                 # Scan session file for metadata, tokens, cost, model
                 # Read head for start info, scan all for usage, tail for end
@@ -6626,6 +6767,7 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                         raw = raw.strip()
                         if not raw:
                             continue
+                        event_count += 1
                         try:
                             ev = json.loads(raw)
                         except Exception:
@@ -6685,6 +6827,11 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                         "total_cost": total_cost,
                         "started_at": started_at,
                         "updated_at": updated_at,
+                        # Plaintext aggregates so the cloud Embodied tab can
+                        # render real "55 messages, 8.4 KB" rows instead of
+                        # zeros. Older cloud servers ignore unknown keys.
+                        "event_count": event_count,
+                        "size_bytes": size_bytes,
                     }
                 )
                 last_mtimes[fpath.name] = current_mtime
@@ -8425,6 +8572,72 @@ def run_daemon() -> None:
     except Exception as _e:
         log.warning("daemon-error event handler: failed to install: %s", _e)
 
+    # ── Eagerly take the DuckDB writer lock BEFORE any read-only opener ──
+    # DuckDB enforces a PROCESS-level lock on the file. Two failure modes
+    # this warm-up addresses:
+    #
+    # 1. INTRA-process (the original bug): once a RO handle exists in THIS
+    #    process, no RW handle can be opened (the singleton in
+    #    ``local_store.get_store`` raises "cannot open writer — read-only
+    #    handle already exists in this process"). Several startup paths
+    #    request a RO store (heartbeat agent-install detection, cache push
+    #    builders), and the main loop later tries to flush via the writer.
+    #    Opening the writer FIRST means ``get_store(read_only=True)`` callers
+    #    in this process transparently share the writer connection (see
+    #    ``local_store.get_store`` lines 960-963) and no path is blocked.
+    #
+    # 2. INTER-process: a stray dashboard / second daemon / orphaned worktree
+    #    can still own the writer lock. DuckDB then raises ``IO Error: Could
+    #    not set lock on file ... Conflicting lock is held in <path> (PID
+    #    <pid>) ...``. We surface that as an ERROR (not WARNING) with
+    #    triage breadcrumbs because EVERY downstream writer call will fail
+    #    until the offender exits, and the cascade of generic warnings
+    #    elsewhere ("channel sync error", "telegram-gw-log unavailable",
+    #    "pre-checkpoint flush failed") doesn't name the offending PID.
+    try:
+        from clawmetry import local_store as _ls_warmup
+        _ls_warmup.get_store(read_only=False)
+        log.info("local_store writer warm-up: owned (intra-process RO upgrades will share this handle)")
+    except Exception as _ws_e:
+        _msg = str(_ws_e)
+        if "Conflicting lock" in _msg or "Could not set lock" in _msg:
+            log.error(
+                "local_store writer warm-up: ANOTHER PROCESS HOLDS THE "
+                "DUCKDB WRITER LOCK. ALL writes will fail until it exits. "
+                "Check the offending PID in: %s",
+                _msg,
+            )
+        else:
+            log.warning("local_store writer warm-up failed (continuing): %s", _ws_e)
+
+    # ── Local query HTTP server (cross-process DuckDB read fix) ────────
+    # Daemon owns the DuckDB writer lock; the dashboard process can't
+    # open the same file (DuckDB exclusive lock blocks RO too). We host
+    # the same routes/local_query.py shapes on a localhost port; the
+    # dashboard's /api/local/* proxies through. Discovery+auth via
+    # ~/.clawmetry/local_query.json. Failure here is non-fatal — the
+    # dashboard falls back to direct DuckDB access (works in
+    # single-process mode).
+    #
+    # MUST run BEFORE send_heartbeat(). The initial heartbeat is a
+    # synchronous HTTP POST with `timeout=45` and up to 3 retries
+    # (1s + 2s backoff) — i.e. ~135s worst-case when the ingest URL
+    # is unreachable (offline laptop, CI smoke gate pointing at
+    # 127.0.0.1:9, cloud cold start, PgBouncer flap). API Latency
+    # Smoke gates on `~/.clawmetry/local_query.json` appearing
+    # within 30s, and the cross-process dashboard's /api/local/*
+    # proxy needs the discovery file too. Bringing the local query
+    # server up FIRST decouples local-dashboard usability from any
+    # cloud-side hiccup. Same class of "publish discovery before
+    # blocking I/O" bug as PR #1762, just on the sister code path.
+    try:
+        from clawmetry import local_server as _local_server
+        _ls_port = _local_server.start()
+        if _ls_port:
+            log.info("local query server: listening on 127.0.0.1:%d", _ls_port)
+    except Exception as _e:
+        log.warning("local query server: failed to start: %s", _e)
+
     # ── Startup sync: recent-first so Brain feed shows current activity ──
     send_heartbeat(config)
     log.info("Initial heartbeat sent")
@@ -8440,22 +8653,6 @@ def run_daemon() -> None:
     # the heartbeat response and answered via /ingest/cache (issue #1053).
     # `clawmetry/relay.py` is retained as a stub so any third-party
     # importers don't crash, but `start_relay_thread` is no longer called.
-
-    # ── Local query HTTP server (cross-process DuckDB read fix) ────────
-    # Daemon owns the DuckDB writer lock; the dashboard process can't
-    # open the same file (DuckDB exclusive lock blocks RO too). We host
-    # the same routes/local_query.py shapes on a localhost port; the
-    # dashboard's /api/local/* proxies through. Discovery+auth via
-    # ~/.clawmetry/local_query.json. Failure here is non-fatal — the
-    # dashboard falls back to direct DuckDB access (works in
-    # single-process mode).
-    try:
-        from clawmetry import local_server as _local_server
-        _ls_port = _local_server.start()
-        if _ls_port:
-            log.info("local query server: listening on 127.0.0.1:%d", _ls_port)
-    except Exception as _e:
-        log.warning("local query server: failed to start: %s", _e)
 
     # ── Live gateway WS tap (capture in-memory channel messages) ────────
     # OpenClaw stores Telegram + sibling-channel chats entirely in

@@ -110,6 +110,10 @@ Before submitting, test these scenarios:
    - Check browser console for JS errors
    - Test with/without OpenClaw running
 
+MOAT tests that add or change synthetic `event_type` shapes must also update
+`tests/MOAT_EVENT_SHAPES.md`. Each synthetic shape needs a live-fixture sibling
+listed in the manifest so real OpenClaw event-shape drift is covered.
+
 ### **Adding New Features**
 
 If you want to add a new tab or major feature:

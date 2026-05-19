@@ -119,14 +119,14 @@ jobs:
 
   # ── MOAT verifier (hermetic, hard-fail) ───────────────────────────────────────────
   # Issue #1491 / PRD #1133 invariant #3: "A regression in either direction
-  # is caught BEFORE merge." These 9 files (61 tests) exercise the
+  # is caught BEFORE merge." These files exercise the
   # OpenClaw → DuckDB → API surface contract end-to-end, plus the lint
   # guards that pin the chokepoint patterns (no-direct-get_store,
   # v3-shape silent-zero refs #1582). No live server, no gateway, no
   # network — drives sync/local_store helpers + Flask test client.
   # Runtime ~10s locally, ~15-20s on CI. HARD-FAIL: no continue-on-error.
   moat-tests:
-    name: MOAT Verifier (69 tests)
+    name: MOAT Verifier (72 tests)
     needs: lint
     runs-on: ubuntu-latest
     steps:
@@ -141,6 +141,7 @@ jobs:
         run: |
           python3 -m pytest \
             tests/test_moat_send_message_e2e.py \
+            tests/test_moat_event_shape_manifest_guard.py \
             tests/test_moat_e2e_regression_1129.py \
             tests/test_e2e_real_openclaw_pipeline.py \
             tests/test_duckdb_fastpath_v3_invariants.py \
@@ -152,6 +153,104 @@ jobs:
             tests/test_local_store_concurrent_flush_1590.py \
             tests/test_moat_perf_benchmark.py \
             -q
+
+  # ── MOAT keystone (DuckDB-first invariant, 13-endpoint bar) ──────────────
+  # Implements `docs/MOAT_BAR.md` Section 5 acceptance criterion #1:
+  # `keystone_e2e.py --no-drive` exits 0 on every PR. The keystone is the
+  # canonical 13-endpoint verifier (PR #1672) that asserts every
+  # UI-backing API surface returns non-zero, correctly shaped data
+  # against live DuckDB rows.
+  #
+  # Why this gate exists: PR #1682 found a silent-zero bug in
+  # `/api/component/tool/exec` AFTER it shipped to main because the
+  # keystone was only being hand-run by Principal A. Wiring it as a
+  # required CI check stops that class of regression at the PR boundary.
+  #
+  # Boot pattern mirrors the existing `api-tests` job: dashboard on 8900
+  # with a deterministic gateway token, then a minimal local_query
+  # server (writes ~/.clawmetry/local_query.json which the keystone
+  # discovers). `--no-drive` skips the real openclaw turn (LLM budget)
+  # and instead verifies every probe against whatever rows the daemon's
+  # startup bootstrap landed. Drive mode runs nightly via
+  # `.github/workflows/moat-keystone-drive-nightly.yml`.
+  moat-keystone:
+    name: MOAT Keystone (13-endpoint bar)
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install flask waitress cryptography duckdb requests psutil
+
+      - name: "Guard: keystone harness file present"
+        # Until PR #1672 merges, the keystone script lives only on the
+        # feat/moat-keystone-e2e-verifier branch. Once that PR lands on
+        # main, this guard becomes a no-op pass and the job becomes a
+        # hard gate. Until then, this surfaces an explicit warning rather
+        # than a confusing "file not found" failure.
+        run: |
+          if [ ! -f scripts/accuracy_harness/keystone_e2e.py ]; then
+            echo "::warning::scripts/accuracy_harness/keystone_e2e.py not present on this commit. Merge PR #1672 first to activate the keystone gate."
+            echo "KEYSTONE_PRESENT=0" >> "$GITHUB_ENV"
+          else
+            echo "KEYSTONE_PRESENT=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Start dashboard
+        if: env.KEYSTONE_PRESENT == '1'
+        run: |
+          OPENCLAW_GATEWAY_TOKEN=ci-test-token python3 dashboard.py --port 8900 --no-debug \
+            > /tmp/dashboard.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf -H "Authorization: Bearer ci-test-token" http://localhost:8900/api/health && echo "Dashboard ready" && break
+            sleep 1
+          done
+
+      - name: Start local_server (DuckDB query proxy for keystone)
+        if: env.KEYSTONE_PRESENT == '1'
+        # The full sync daemon needs a configured node (clawmetry connect)
+        # which CI doesn't have. The keystone only depends on the
+        # `local_query` HTTP proxy (writes ~/.clawmetry/local_query.json);
+        # we boot just that piece in a background process. This matches
+        # the in-process startup the real daemon does at sync.py:8452.
+        run: |
+          nohup python3 -c "
+          import os, time, json, pathlib
+          from clawmetry import local_server
+          port = local_server.start()
+          assert port, 'local_server failed to start'
+          # Re-stamp pid so discover_daemon() resolves to a live process.
+          disc = pathlib.Path.home() / '.clawmetry' / 'local_query.json'
+          d = json.loads(disc.read_text())
+          d['pid'] = os.getpid()
+          disc.write_text(json.dumps(d))
+          while True: time.sleep(60)
+          " > /tmp/local_server.log 2>&1 &
+          for i in $(seq 1 10); do
+            [ -f "$HOME/.clawmetry/local_query.json" ] && echo "local_query.json present" && break
+            sleep 1
+          done
+
+      - name: Run keystone verifier (--no-drive)
+        if: env.KEYSTONE_PRESENT == '1'
+        env:
+          CLAWMETRY_URL: http://localhost:8900
+        run: make moat-check
+
+      - name: Dashboard log tail (on failure)
+        if: failure() && env.KEYSTONE_PRESENT == '1'
+        run: |
+          echo "── dashboard.log tail ──"
+          tail -200 /tmp/dashboard.log || true
+          echo "── local_server.log tail ──"
+          tail -200 /tmp/local_server.log || true
 
   # ── E2E Playwright tests — critical subset (hard-gate, blocks merge) ──────
   # Per issue #1528: the prior `e2e-tests` job carried `continue-on-error: true`

@@ -88,6 +88,45 @@ def _try_local_store_alert_rules():
     return {"rules": rows or [], "_source": "local_store"}
 
 
+# ── Default alert-rule seed list (issue #1707) ─────────────────────────────
+#
+# Templates the dashboard offers as one-click seed rules on the Alerts
+# tab. Each entry mirrors the POST /api/alerts/rules body, plus a
+# ``pro_only`` gate the UI uses to render the upsell. The cloud
+# dashboard hits ``/api/alerts/defaults`` on first paint for Pro users
+# and installs any missing rules via the standard POST path.
+
+DEFAULT_ALERT_RULES = [
+    {
+        "id":           "unproductive_burn_default",
+        "type":         "unproductive_burn",
+        "threshold":    50_000,
+        "channels":     ["banner", "telegram"],
+        "cooldown_min": 15,
+        "enabled":      True,
+        "pro_only":     True,
+        "label":        "Unproductive burn > 50k tok / 10min",
+        "description": (
+            "Fires when any session burns 50,000+ tokens with zero new "
+            "tools, files, or error types in the last 10 minutes. "
+            "Catches genuine spinning, not just busy productive burn."
+        ),
+    },
+]
+
+
+@bp_alerts.route("/api/alerts/defaults")
+def api_alerts_defaults():
+    """Default seed-rule templates (issue #1707).
+
+    Surfaced in the Alerts tab so the dashboard can offer one-click
+    install. Pro-only rules carry ``pro_only: true`` so the UI can
+    render the Cloud Pro upsell instead of the install button for free
+    users.
+    """
+    return jsonify({"rules": DEFAULT_ALERT_RULES})
+
+
 # ── PR #1410 comms envelope (issue #1419) ─────────────────────────────────
 # Before PR #1410, the alert evaluator only saw ``daily_spent`` from the
 # OTLP metrics buffer — installs without ``[otel]`` had ``daily_spent=0``
@@ -466,7 +505,8 @@ def api_alert_rules():
         channels = data.get("channels", ["banner"])
         cooldown = data.get("cooldown_min", 30)
         enabled = data.get("enabled", True)
-        if rtype not in ("threshold", "spike", "token_spike", "anomaly", "agent_down"):
+        if rtype not in ("threshold", "spike", "token_spike", "anomaly",
+                         "agent_down", "unproductive_burn"):
             return jsonify({"error": "Invalid alert type"}), 400
         if not isinstance(threshold, (int, float)) or threshold <= 0:
             return jsonify({"error": "Threshold must be a positive number"}), 400

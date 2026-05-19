@@ -151,6 +151,27 @@ def start() -> Optional[int]:
         if _server_thread is not None and _server_thread.is_alive():
             log.debug("local_server: already running on port %d", _port)
             return _port
+        # Pre-warm the writer LocalStore. The process hosting local_server
+        # IS the daemon (only it answers /__local_query__/<method>), so it
+        # owns the DuckDB writer lock by definition. Without this, the
+        # ``_store()`` call inside routes/local_query.py opens DuckDB
+        # read-only — which raises ``IO Error: Cannot open database … in
+        # read-only mode: database does not exist`` on first-boot setups
+        # where no .duckdb file has been created yet (CI keystone job,
+        # fresh user install before any sync). Result: every
+        # /__local_query__/<method> request 500s and the dashboard +
+        # keystone E2E verifier silently fail. Idempotent — when the sync
+        # daemon already opened the writer earlier in boot this is a
+        # no-op singleton fetch.
+        try:
+            from clawmetry import local_store as _ls
+            _ls.get_store(read_only=False)
+        except Exception as e:
+            log.warning(
+                "local_server: failed to pre-warm writer store (%s) — "
+                "request handlers will surface this as 500s",
+                e,
+            )
         try:
             app = _make_app()
         except Exception as e:
