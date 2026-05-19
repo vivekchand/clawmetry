@@ -429,7 +429,22 @@ def api_brain_history():
     if is_local_store_read_enabled():
         fast = _try_local_store_brain(limit, include_artifacts, since=cap_since)
         if fast is not None:
+            # Issue #1772: if the fast path returned an empty event list
+            # AND the writer is offline, surface a 503 so the UI can render
+            # an "ingest offline" banner. Empty-but-healthy returns 200 as
+            # before so a brand-new install isn't penalised.
+            if not fast.get("events"):
+                from routes.local_query import is_local_store_alive, ingest_outage_response
+                if not is_local_store_alive():
+                    return ingest_outage_response()
             return jsonify(fast)
+        # Issue #1772: fast path returned None (empty store, no since
+        # filter). If the writer is offline too, surface 503 instead of
+        # letting the legacy JSONL parser run (which would happily render
+        # historical on-disk transcripts while masking the ingest outage).
+        from routes.local_query import is_local_store_alive, ingest_outage_response
+        if not is_local_store_alive():
+            return ingest_outage_response()
     cache_key = (limit, include_artifacts, bool(cap_since))
     cached = _BRAIN_HISTORY_CACHE.get(cache_key)
     now_cache = time.time()

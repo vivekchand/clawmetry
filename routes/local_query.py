@@ -572,6 +572,87 @@ def local_store_via_daemon(method_name: str, **kwargs):
     return body.get("result")
 
 
+# ── Ingest-outage probe (issue #1772) ──────────────────────────────────────
+#
+# Detail endpoints (``/api/transcript``, ``/api/session-tools``,
+# ``/api/brain-history``, ``/api/usage``, ``/api/subagents``,
+# ``/api/flow-events``) call ``is_local_store_alive()`` BEFORE returning an
+# empty result. If the store is unreachable AND the result is empty, the
+# endpoint returns ``ingest_outage_response()`` (HTTP 503) instead of a
+# bare ``[]``. This stops the UI from showing "0 messages / 0 tokens /
+# 0 tools" on a session that DOES have data on disk — which to a user
+# looks like a successful agent run that did nothing, instead of an
+# obvious data-pipeline outage.
+
+# Per-process cache so we don't probe the daemon on every API hit. 1 s
+# matches the per-instance cache inside LocalStore.is_writer_alive().
+_WRITER_ALIVE_CACHE: dict = {"ts": 0.0, "alive": False}
+_WRITER_ALIVE_CACHE_TTL_SECS = 1.0
+
+
+def is_local_store_alive() -> bool:
+    """Return True iff the local DuckDB store can answer a trivial probe.
+
+    Routing order mirrors ``_dispatch``:
+      1. If the daemon HTTP proxy is discoverable, ask it to call
+         ``LocalStore.is_writer_alive()``. Round-trip is well under 5 ms
+         on the unix socket loopback path, and the daemon caches the
+         result for 1 s on its own side.
+      2. Else open the DuckDB RO handle in-process and probe directly.
+         This works in single-process tests + dev mode.
+
+    Cached for 1 s so a burst of detail-endpoint hits during one page
+    render doesn't fan out into 6 probes.
+    """
+    import time as _t
+    now = _t.monotonic()
+    cached_ts = _WRITER_ALIVE_CACHE.get("ts") or 0.0
+    if (now - cached_ts) < _WRITER_ALIVE_CACHE_TTL_SECS:
+        return bool(_WRITER_ALIVE_CACHE.get("alive"))
+    # Try the daemon proxy first.
+    alive: bool | None = None
+    try:
+        result = local_store_via_daemon("is_writer_alive")
+        if isinstance(result, bool):
+            alive = result
+    except Exception:
+        alive = None
+    if alive is None:
+        # Fall through to direct open (single-process mode).
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            alive = bool(store.is_writer_alive())
+        except Exception:
+            alive = False
+    _WRITER_ALIVE_CACHE["ts"] = now
+    _WRITER_ALIVE_CACHE["alive"] = bool(alive)
+    return bool(alive)
+
+
+def ingest_outage_response(extra: dict | None = None):
+    """Return the standard 503 ``(body, status)`` tuple for detail-endpoint
+    callers. ``extra`` is merged into the body so the caller can add e.g.
+    a ``since_ts`` last-known-event timestamp.
+
+    The body's ``error`` field is the load-bearing string the dashboard JS
+    matches on; do not change it without updating ``static/js/app.js``.
+    """
+    body = {
+        "error":         "local_store ingest is offline",
+        "writer_status": "down",
+        "_source":       "ingest_outage",
+    }
+    if extra:
+        for k, v in extra.items():
+            body[k] = v
+    return jsonify(body), 503
+
+
+# Allow ``is_writer_alive`` to flow through the daemon proxy.
+_DAEMON_METHODS = frozenset(set(_DAEMON_METHODS) | {"is_writer_alive"})
+
+
 # ── Public hook for the future WS relay (#960 phase B) ─────────────────────
 
 def relay_dispatch(shape: str, args: dict) -> dict:

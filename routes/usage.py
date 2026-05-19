@@ -1600,7 +1600,20 @@ def api_usage():
     if is_local_store_read_enabled():
         fast = _try_local_store_usage()
         if fast is not None:
+            # Issue #1772: empty-but-offline → 503 so the dashboard can
+            # render an ingest-outage banner instead of "0 tokens" that
+            # looks like the user is not using their agent.
+            if not int(fast.get("month") or 0) and not int(fast.get("week") or 0) and not int(fast.get("today") or 0):
+                from routes.local_query import is_local_store_alive, ingest_outage_response
+                if not is_local_store_alive():
+                    return ingest_outage_response()
             return jsonify(_apply_oss_24h_cap(fast))
+        # Issue #1772: fast path returned None (empty aggregates + empty
+        # events). If the writer is offline too, 503 instead of falling
+        # through to the OTLP/JSONL scan which masks the ingest outage.
+        from routes.local_query import is_local_store_alive, ingest_outage_response
+        if not is_local_store_alive():
+            return ingest_outage_response()
 
     now = _time.time()
     if (

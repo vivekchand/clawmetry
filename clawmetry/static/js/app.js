@@ -9720,10 +9720,24 @@ async function viewTranscript(sessionId) {
   window._replayFilter = 'all';
   try {
     // Fetch transcript and compaction markers in parallel
-    var [data, compactionsData] = await Promise.all([
-      fetch('/api/transcript/' + encodeURIComponent(sessionId)).then(r => r.json()),
+    var [tResp, compactionsData] = await Promise.all([
+      fetch('/api/transcript/' + encodeURIComponent(sessionId)).then(async r => ({status: r.status, body: await r.json()})),
       fetch('/api/compactions?session_id=' + encodeURIComponent(sessionId) + '&summary_chars=5000').then(r => r.json()).catch(() => ({compactions: []}))
     ]);
+    var data = tResp.body || {};
+    // Issue #1772: detail endpoints return 503 with the "local_store
+    // ingest is offline" envelope when the daemon writer is poisoned.
+    // Show an inline banner so the user knows the dashboard is rendering
+    // last-known state rather than a healthy "0 messages" panel.
+    if (tResp.status === 503 && data && data.error === 'local_store ingest is offline') {
+      document.getElementById('transcript-messages').innerHTML =
+        '<div style="background:#fff7ed;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:6px;margin:12px;">' +
+        '<strong>Ingest temporarily offline.</strong> Displaying last known state. ' +
+        'The local_store writer is not responding; new events may not appear until the daemon recovers.' +
+        '</div>';
+      document.getElementById('replay-controls').style.display = 'none';
+      return;
+    }
     var compactions = compactionsData.compactions || [];
     // Metadata
     var metaHtml = '<div class="stat-row"><span class="stat-label">Session</span><span class="stat-val">' + escHtml(data.name) + '</span></div>';

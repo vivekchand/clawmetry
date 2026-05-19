@@ -5883,6 +5883,49 @@ class LocalStore:
         rows = self._fetch("SELECT COUNT(*) FROM sync_dlq", [])
         return int(rows[0][0]) if rows else 0
 
+    def is_writer_alive(self) -> bool:
+        """Cheap probe used by detail endpoints to decide whether an empty
+        result reflects a healthy-but-empty store, or a poisoned ingest path.
+
+        Returns True iff:
+
+        * the connection is open (i.e. ``self._conn`` exists), AND
+        * a ``SELECT 1`` against the connection succeeds.
+
+        Result is cached for 1 s to avoid hammering the connection from a
+        burst of API hits. The cache is intentionally per-instance, not
+        process-global: a transient bad open and a recovered re-open both
+        flip ``is_writer_alive`` quickly without process restart. Issue
+        #1772.
+
+        The probe is read-only on purpose — it lets the read-only handle in
+        the dashboard process answer "is the writer-side reachable" without
+        attempting a write (which would always fail for a RO handle). The
+        signal we care about is "can DuckDB respond at all"; a connection
+        that has been left in a poisoned state by a failed migration / lock
+        contention / crashed daemon will fail this probe.
+        """
+        now = time.monotonic()
+        cached = getattr(self, "_is_writer_alive_cache", None)
+        if cached is not None:
+            cached_ts, cached_val = cached
+            if (now - cached_ts) < 1.0:
+                return cached_val
+        try:
+            conn = getattr(self, "_conn", None)
+            if conn is None:
+                alive = False
+            else:
+                # ``execute`` returns a result object on success; on a
+                # poisoned connection it raises (DuckDB IOException,
+                # ConnectionException, etc). Any exception → not alive.
+                conn.execute("SELECT 1").fetchone()
+                alive = True
+        except Exception:
+            alive = False
+        self._is_writer_alive_cache = (now, alive)
+        return alive
+
     def health(self) -> dict[str, Any]:
         """Snapshot of store state — for the /local/health endpoint and the
         dashboard footer."""

@@ -1072,7 +1072,22 @@ def api_session_tools():
     if is_local_store_read_enabled():
         fast = _try_local_store_session_tools(sid, args_chars, result_chars, include_unpaired)
         if fast is not None:
+            # Issue #1772: hard-fail visibly when local_store is poisoned
+            # and the result happens to be empty. See ``api_transcript`` for
+            # the full rationale (we never want "0 tools" to silently look
+            # like "agent ran no tools" when ingest is actually offline).
+            if not fast.get("tools") and not fast.get("by_tool"):
+                from routes.local_query import is_local_store_alive, ingest_outage_response
+                if not is_local_store_alive():
+                    return ingest_outage_response({"session_id": sid})
             return jsonify(fast)
+        # Issue #1772: fast path returned None (DuckDB had no rows for this
+        # session). If the writer is offline too, surface a 503 so the user
+        # doesn't get the misleading "session not found" 404 when in fact
+        # ingest just hasn't run yet.
+        from routes.local_query import is_local_store_alive, ingest_outage_response
+        if not is_local_store_alive():
+            return ingest_outage_response({"session_id": sid})
 
     sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
@@ -2029,9 +2044,23 @@ def api_subagents():
     if not full_scan and is_local_store_read_enabled():
         fast = _try_local_store_subagents()
         if fast is not None:
+            # Issue #1772: 503 on empty-and-offline so the UI surfaces a
+            # banner instead of pretending the agent never spawned any
+            # subagents.
+            rows = fast.get("subagents") or fast.get("rows") or []
+            if not rows:
+                from routes.local_query import is_local_store_alive, ingest_outage_response
+                if not is_local_store_alive():
+                    return ingest_outage_response()
             _SUBAGENTS_CACHE["data"] = fast
             _SUBAGENTS_CACHE["ts"] = time.time()
             return jsonify(fast)
+        # Issue #1772: fast path returned None (empty subagents table).
+        # If the writer is offline too, 503 instead of falling through to
+        # gateway RPC + JSONL spawn scan (which mask the ingest outage).
+        from routes.local_query import is_local_store_alive, ingest_outage_response
+        if not is_local_store_alive():
+            return ingest_outage_response()
 
     # Source 1: canonical subagent registry
     reg_active = []
@@ -3371,7 +3400,23 @@ def api_transcript(session_id):
     if is_local_store_read_enabled():
         fast = _try_local_store_transcript(session_id)
         if fast is not None:
+            # Issue #1772: when the fast path returned an empty shell AND
+            # the local_store writer is offline, surface a 503 so the UI
+            # can render an inline "ingest offline" banner instead of a
+            # silent "0 messages / 0 tokens" panel that looks like a
+            # successful agent run that did nothing.
+            if not fast.get("messages") and not int(fast.get("totalTokens") or fast.get("total_tokens") or 0):
+                from routes.local_query import is_local_store_alive, ingest_outage_response
+                if not is_local_store_alive():
+                    return ingest_outage_response({"session_id": session_id})
             return jsonify(fast)
+        # Issue #1772: fast path returned None (couldn't open DuckDB at
+        # all — daemon down, file missing). If the writer is offline too,
+        # 503 instead of falling through to the JSONL walker which masks
+        # the ingest outage as "Transcript not found".
+        from routes.local_query import is_local_store_alive, ingest_outage_response
+        if not is_local_store_alive():
+            return ingest_outage_response({"session_id": session_id})
     sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
     )

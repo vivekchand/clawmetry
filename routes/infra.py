@@ -418,6 +418,13 @@ def api_flow_events():
             if snap is not None:
                 envelope["events"] = snap
                 envelope["_source"] = "local_store"
+            # Issue #1772: snap is None OR empty → check writer health.
+            # If the writer is offline, surface a 503 so the UI shows an
+            # ingest-outage banner instead of a stuck "0 events" panel.
+            if not envelope.get("events"):
+                from routes.local_query import is_local_store_alive, ingest_outage_response
+                if not is_local_store_alive():
+                    return ingest_outage_response()
         return jsonify(envelope)
     import glob as _glob
 
