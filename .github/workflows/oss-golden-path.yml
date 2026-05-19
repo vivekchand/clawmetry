@@ -1,0 +1,179 @@
+name: OSS Golden Path (C1)
+
+# C1 gate: wheel install + real OpenClaw + synthetic session + 9 tabs render
+# without auth errors. Hard gate on every PR, no continue-on-error.
+# Budget: 5 minutes wall-clock.
+# Tracking: vivekchand/clawmetry#1646 (C1)
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: oss-golden-path-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  oss-golden-path:
+    name: OSS golden path (wheel + OpenClaw + 9 tabs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Step 1 -- build the wheel from source and install into an isolated venv.
+      # This proves the wheel ships all runtime assets (same surface as the
+      # wheel-install job in ci.yml) AND that the installed package can drive
+      # the full E2E flow.
+      - name: Build wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel
+
+      - name: Install wheel in isolated venv
+        run: |
+          python -m venv /tmp/oss-golden
+          /tmp/oss-golden/bin/pip install --upgrade pip
+          /tmp/oss-golden/bin/pip install \
+            dist/clawmetry-*.whl \
+            flask waitress cryptography duckdb requests \
+            pytest pytest-playwright
+
+      # Step 2 -- boot real OpenClaw gateway.
+      # setup-openclaw installs the npm package, puts openclaw on PATH, and
+      # exports OPENCLAW_GATEWAY_TOKEN for all subsequent steps.
+      - name: Setup OpenClaw
+        uses: ./.github/actions/setup-openclaw
+        with:
+          version: latest
+          gateway-token: ci-golden-token
+
+      - name: Start OpenClaw gateway
+        run: |
+          mkdir -p /tmp/openclaw-logs
+          nohup openclaw gateway --port 18789 --allow-unconfigured \
+            > /tmp/openclaw-logs/gateway.log 2>&1 &
+          echo "OPENCLAW_GATEWAY_PID=$!" >> "$GITHUB_ENV"
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "Authorization: Bearer ci-golden-token" \
+              "http://127.0.0.1:18789/v1/models" 2>/dev/null || echo "000")
+            case "$code" in 2*|401|403) echo "gateway up ($code after ${i}s)"; break;; esac
+            sleep 1
+          done
+
+      # Step 3 -- seed a synthetic OpenClaw session JSONL.
+      # Mirrors the real event shape the daemon ingests (same keys used by
+      # test_moat_send_message_e2e.py). Seeded BEFORE the dashboard starts
+      # so the startup sync picks it up immediately.
+      - name: Seed synthetic OpenClaw session
+        shell: python
+        run: |
+          import json, datetime, pathlib
+          home = pathlib.Path.home() / ".openclaw" / "agents" / "main" / "sessions"
+          home.mkdir(parents=True, exist_ok=True)
+          sid = "aaaaaaaa-0001-0001-0001-000000000001"
+          now = datetime.datetime.now(datetime.timezone.utc)
+          def ts(s):
+              return (now - datetime.timedelta(seconds=s)).isoformat().replace("+00:00", "Z")
+          events = [
+              {
+                  "id": "ev-start", "type": "session_start",
+                  "timestamp": ts(600), "workspace": "ws-golden",
+                  "title": "Golden Path E2E",
+              },
+              {
+                  "id": "ev-tool", "type": "tool_call",
+                  "timestamp": ts(500), "workspace": "ws-golden",
+                  "tool": "Bash", "args": {"cmd": "echo hello"}, "result": "hello",
+                  "cost_usd": 0.001, "tokens": 42, "model": "claude-opus-4-7",
+              },
+              {
+                  "id": "ev-msg", "type": "message",
+                  "timestamp": ts(400), "workspace": "ws-golden",
+                  "role": "assistant", "text": "Done.",
+                  "cost_usd": 0.002, "tokens": 50, "model": "claude-opus-4-7",
+              },
+          ]
+          f = home / f"{sid}.jsonl"
+          f.write_text("\n".join(json.dumps(e) for e in events))
+          print(f"Seeded {len(events)} events to {f}")
+
+      # Step 4 -- start the dashboard from the installed wheel (NOT from the
+      # source checkout). This is the key C1 invariant: the installed package
+      # must serve all tabs correctly, not just the in-repo version.
+      - name: Start dashboard from installed wheel
+        run: |
+          OPENCLAW_GATEWAY_TOKEN=ci-golden-token \
+          /tmp/oss-golden/bin/python -c "import dashboard; dashboard.main()" \
+            --port 8920 --no-debug \
+            > /tmp/oss-golden-dashboard.log 2>&1 &
+          echo "DASHBOARD_PID=$!" >> "$GITHUB_ENV"
+          for i in $(seq 1 30); do
+            curl -sf -H "Authorization: Bearer ci-golden-token" \
+              http://localhost:8920/api/health && echo "Dashboard ready after ${i}s" && break
+            sleep 1
+          done
+
+      # Step 5 -- wait for the daemon sync thread to ingest the seeded JSONL.
+      # The dashboard starts a background sync loop on boot that watches
+      # ~/.openclaw/agents/main/sessions/. We poll /api/sessions up to 30s.
+      - name: Wait for session sync
+        run: |
+          for i in $(seq 1 30); do
+            count=$(
+              curl -s -H "Authorization: Bearer ci-golden-token" \
+                http://localhost:8920/api/sessions \
+                | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('sessions', [])))" \
+                2>/dev/null || echo 0
+            )
+            if [ "${count:-0}" -ge 1 ]; then
+              echo "Session sync complete: $count session(s) in DuckDB"
+              break
+            fi
+            sleep 1
+          done
+
+      # Step 6 -- Playwright tab sweep across all 9 C1 tabs.
+      - name: Install Playwright browsers
+        run: /tmp/oss-golden/bin/python -m playwright install chromium --with-deps
+
+      - name: Run OSS golden path test
+        env:
+          CLAWMETRY_URL: http://localhost:8920
+          CLAWMETRY_TOKEN: ci-golden-token
+        run: |
+          /tmp/oss-golden/bin/python -m pytest \
+            tests/test_e2e_oss_golden_path.py \
+            -v --tb=short
+
+      - name: Dashboard and gateway logs on failure
+        if: failure()
+        run: |
+          echo "==== dashboard log ===="
+          tail -150 /tmp/oss-golden-dashboard.log || true
+          echo "==== openclaw gateway log ===="
+          tail -100 /tmp/openclaw-logs/gateway.log || true
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: c1-golden-path-logs
+          path: |
+            /tmp/oss-golden-dashboard.log
+            /tmp/openclaw-logs/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Tear down
+        if: always()
+        run: |
+          kill "$OPENCLAW_GATEWAY_PID" 2>/dev/null || true
+          kill "$DASHBOARD_PID" 2>/dev/null || true
