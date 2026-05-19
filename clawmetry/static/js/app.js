@@ -3202,6 +3202,28 @@ var _brainTypeIcons = {
 };
 
 
+// Issue #53 — apply the same filter pills that drive the list view to the
+// graph view, so toggling a source/type/channel hides matching neurons.
+function _brainApplyFilters(events) {
+  var out = Array.isArray(events) ? events : [];
+  if (_brainFilter && _brainFilter !== 'all') {
+    out = out.filter(function(ev) { return ev && ev.source === _brainFilter; });
+  }
+  if (_brainTypeFilter && _brainTypeFilter !== 'all') {
+    out = out.filter(function(ev) { return ev && ev.type === _brainTypeFilter; });
+  }
+  if (_brainChannelFilter && _brainChannelFilter !== 'all') {
+    out = out.filter(function(ev) { return ev && (ev.channel || '') === _brainChannelFilter; });
+  }
+  return out;
+}
+function _brainRefreshGraphIfActive() {
+  if (_brainViewMode !== 'graph') return;
+  if (typeof syncBrainGraph === 'function') {
+    syncBrainGraph(_brainApplyFilters(_brainAllEvents));
+  }
+}
+
 function setBrainTypeFilter(type, btn) {
   _brainTypeFilter = type;
   document.querySelectorAll('.brain-type-chip').forEach(function(b) {
@@ -3210,6 +3232,7 @@ function setBrainTypeFilter(type, btn) {
     b.style.fontWeight = isActive ? '600' : '400';
   });
   renderBrainFeed();
+  _brainRefreshGraphIfActive();
 }
 function setBrainFilter(source, btn) {
   _brainFilter = source;
@@ -3224,6 +3247,7 @@ function setBrainFilter(source, btn) {
   btn.style.fontWeight = '700';
   btn.style.boxShadow = '0 0 8px ' + (btn.style.borderColor || '#a855f7');
   renderBrainStream(_brainAllEvents);
+  _brainRefreshGraphIfActive();
 }
 
 function scrollBrainToTop() {
@@ -3351,6 +3375,7 @@ function setBrainChannelFilter(ch, btn) {
   _brainChannelFilter = ch;
   renderBrainChannelChips(window._brainChannelCounts || {});
   renderBrainStream(_brainAllEvents);
+  _brainRefreshGraphIfActive();
 }
 
 // Collapse runs of body-less outbound channel events from the same chat
@@ -4333,8 +4358,9 @@ function setBrainViewMode(mode, btn) {
     b.classList.toggle('active', b.dataset.view === mode);
   });
   if (mode === 'graph') {
-    if (typeof syncBrainGraph === 'function') syncBrainGraph(_brainAllEvents);
+    if (typeof syncBrainGraph === 'function') syncBrainGraph(_brainApplyFilters(_brainAllEvents));
     _startBrainGraphLoop();
+    _ensureBrainGraphClickHandler();
   }
 }
 
@@ -4403,7 +4429,9 @@ function syncBrainGraph(events) {
       vy: prevNode ? prevNode.vy : 0,
       orbitR: 34 + (seed % 24),
       orbitSpeed: 0.00025 + ((seed % 100) / 500000),
-      orbitPhase: angle, r: 4
+      orbitPhase: angle, r: 4,
+      // Keep the raw event so clicking a neuron can show its detail.
+      raw: ev
     });
   }
   _brainGraph.agents = nextAgents;
@@ -4546,6 +4574,89 @@ function _drawBrainGraph(ts, now) {
   });
   ctx.shadowBlur = 0;
 }
+
+// Issue #53 — click a neuron to open a detail panel with the raw event.
+// Hit-test in canvas coordinates; events first (smaller, on top), then
+// agents (larger, central). Keep this single-bind so re-entering the
+// graph view doesn't stack listeners.
+function _ensureBrainGraphClickHandler() {
+  var canvas = document.getElementById('brain-graph-canvas');
+  if (!canvas || canvas._brainClickBound) return;
+  canvas._brainClickBound = true;
+  canvas.style.cursor = 'pointer';
+  canvas.addEventListener('click', function(e) {
+    var rect = canvas.getBoundingClientRect();
+    var x = e.clientX - rect.left;
+    var y = e.clientY - rect.top;
+    var hitEv = null, hitDist = 1e9;
+    (_brainGraph.events || []).forEach(function(ev) {
+      var d = Math.hypot(ev.x - x, ev.y - y);
+      if (d < 14 && d < hitDist) { hitDist = d; hitEv = ev; }
+    });
+    if (hitEv) { _showBrainGraphDetail(hitEv.raw, hitEv); return; }
+    var hitAgent = null;
+    (_brainGraph.agentOrder || []).forEach(function(id) {
+      var a = _brainGraph.agents[id];
+      if (!a) return;
+      var d = Math.hypot(a.x - x, a.y - y);
+      if (d < (a.r + 6) && d < hitDist) { hitDist = d; hitAgent = a; }
+    });
+    if (hitAgent) {
+      _showBrainGraphDetail({
+        source: hitAgent.id,
+        sourceLabel: hitAgent.label,
+        type: 'AGENT',
+        detail: 'Agent ' + (hitAgent.label || hitAgent.id) +
+                ' — ' + ((_brainAllEvents || []).filter(function(e){return e && e.source === hitAgent.id;}).length) +
+                ' recent events'
+      }, hitAgent);
+    } else {
+      _hideBrainGraphDetail();
+    }
+  });
+}
+
+function _showBrainGraphDetail(rawEv, node) {
+  if (!rawEv) return;
+  var wrap = document.getElementById('brain-graph-wrap');
+  if (!wrap) return;
+  var panel = document.getElementById('brain-graph-detail');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = 'brain-graph-detail';
+    panel.style.cssText = 'position:absolute;top:10px;right:10px;max-width:380px;max-height:460px;overflow:auto;' +
+      'background:rgba(20,23,34,0.96);border:1px solid var(--border);border-radius:8px;padding:12px 14px;' +
+      'font-size:12px;color:var(--text-primary);box-shadow:0 6px 24px rgba(0,0,0,0.45);z-index:5;';
+    if (getComputedStyle(wrap).position === 'static') wrap.style.position = 'relative';
+    wrap.appendChild(panel);
+  }
+  var typeLabel = String(rawEv.type || 'EVENT');
+  var srcLabel = String(rawEv.sourceLabel || rawEv.source || '');
+  var when = rawEv.time ? new Date(rawEv.time).toLocaleString() : '';
+  var detailText = String(rawEv.detail || rawEv.text || '');
+  // Cheap escape to avoid HTML injection from event detail payloads.
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function(c) {
+      return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+    });
+  }
+  panel.innerHTML =
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
+      '<span style="font-weight:700;color:#c4b5fd;">' + esc(typeLabel) + '</span>' +
+      '<button onclick="_hideBrainGraphDetail()" ' +
+        'style="background:transparent;border:none;color:var(--text-muted);font-size:14px;cursor:pointer;">×</button>' +
+    '</div>' +
+    (srcLabel ? '<div style="color:var(--text-muted);font-size:11px;margin-bottom:4px;">source: ' + esc(srcLabel) + '</div>' : '') +
+    (when ? '<div style="color:var(--text-muted);font-size:11px;margin-bottom:8px;">' + esc(when) + '</div>' : '') +
+    '<div style="white-space:pre-wrap;word-break:break-word;line-height:1.5;">' + esc(detailText || '(no detail)') + '</div>';
+  panel.style.display = '';
+}
+function _hideBrainGraphDetail() {
+  var panel = document.getElementById('brain-graph-detail');
+  if (panel) panel.style.display = 'none';
+}
+// Expose for onclick attribute in the panel header.
+window._hideBrainGraphDetail = _hideBrainGraphDetail;
 
 var _brainSSE = null;
 var _brainSSEConnected = false;
@@ -4697,7 +4808,7 @@ function _startBrainSSE() {
         // Re-render with current filters
         renderBrainStream(_brainAllEvents);
         renderBrainChart(_brainAllEvents);
-        if (typeof syncBrainGraph === 'function') syncBrainGraph(_brainAllEvents);
+        if (typeof syncBrainGraph === 'function') syncBrainGraph(_brainApplyFilters(_brainAllEvents));
         // Update source chips if new source
         var known = document.querySelector('[data-source="' + ev.source + '"]');
         if (!known && ev.source !== 'all') {
@@ -5136,7 +5247,7 @@ async function loadBrainPage(silent) {
     }
     renderBrainChannelChips(window._brainChannelCounts);
     renderBrainChart(events);
-    if (typeof syncBrainGraph === 'function') syncBrainGraph(events);
+    if (typeof syncBrainGraph === 'function') syncBrainGraph(_brainApplyFilters(events));
     var streamEl = document.getElementById('brain-stream');
     var wasAtTop = !streamEl || streamEl.scrollTop < 40;
     renderBrainStream(events);
