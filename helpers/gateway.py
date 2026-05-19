@@ -64,7 +64,18 @@ def _gw_ws_connect(url=None, token=None):
         ws.settimeout(5)
         # Read challenge event
         ws.recv()
-        # Send connect
+        # Send connect.
+        #
+        # Issue #1720: the OpenClaw gateway only honours requested scopes
+        # (``operator.read`` / ``operator.admin``) when the connecting
+        # client identifies itself as ``openclaw-control-ui``. Any other
+        # ``client.id`` (we previously sent ``cli``) gets an OK connect
+        # response with an empty ``auth.scopes`` array, and every
+        # subsequent ``cron.list`` / ``sessions.list`` call fails with
+        # ``INVALID_REQUEST: missing scope: operator.read`` — surfacing as
+        # empty Crons / Sessions tabs in the dashboard. The bundled
+        # control UI is the only client the gateway whitelists for those
+        # scopes, so we mimic its identity for our read-only RPCs.
         connect_msg = {
             "type": "req",
             "id": "clawmetry-connect",
@@ -73,10 +84,10 @@ def _gw_ws_connect(url=None, token=None):
                 "minProtocol": 3,
                 "maxProtocol": 3,
                 "client": {
-                    "id": "cli",
+                    "id": "openclaw-control-ui",
                     "version": _d.__version__,
                     "platform": _d._CURRENT_PLATFORM,
-                    "mode": "cli",
+                    "mode": "webchat",
                     "instanceId": f"clawmetry-{_d._uuid.uuid4().hex[:8]}",
                 },
                 "role": "operator",
