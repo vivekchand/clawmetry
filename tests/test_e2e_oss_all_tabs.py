@@ -1,18 +1,22 @@
 """
 OSS all-tabs post-auth gate (E2E criterion C5).
 
-Verifies that every canonical dashboard tab renders without an auth overlay
-when the gateway token is correctly passed. Acceptance gate for:
+Verifies that every dashboard tab covered by the visual-diff bot renders
+without a global auth overlay when the gateway token is correctly passed.
 
   C5: Every OSS dashboard tab must screenshot post-login.
-  (User-reported 2026-05-17: "gateway token not passed for OSS,
-   it never displays other screens".)
+  Root cause (2026-05-17): gateway token was not passed to the dashboard on
+  boot, so every tab showed the login overlay instead of real content.
+
+CANONICAL_TABS matches PR_SCREENSHOT_TABS in
+.github/workflows/pr-screenshots.yml (19 tabs). Any tab added to the
+visual-diff workflow must be added here too.
 
 Run against a booted dashboard:
     OPENCLAW_GATEWAY_TOKEN=ci-test-token python dashboard.py --port 8900 --no-debug &
     pytest tests/test_e2e_oss_all_tabs.py -v
 
-Environment variables (mirrors tests/test_e2e.py):
+Environment variables:
     CLAWMETRY_URL   -- base URL of the running dashboard (default: http://localhost:8900)
     CLAWMETRY_TOKEN -- gateway token (default: ci-test-token)
 """
@@ -52,8 +56,12 @@ def _overlay_page(_shared_chromium):
     yield page
     ctx.close()
 
-# Canonical tabs that must load without auth overlay post-login.
-# Mirrors DEFAULT_TABS in .github/scripts/visual-diff.mjs.
+# All tabs captured by the visual-diff bot (PR_SCREENSHOT_TABS in
+# .github/workflows/pr-screenshots.yml). Every entry must render without a
+# global auth overlay after the gateway token is injected into localStorage.
+# Tab-specific paywalls (alerts Pro modal, approvals cloud-only modal) are
+# intentionally excluded from the overlay check -- they indicate missing
+# features, not broken auth.
 CANONICAL_TABS = [
     "overview",
     "flow",
@@ -64,15 +72,25 @@ CANONICAL_TABS = [
     "security",
     "subagents",
     "transcripts",
+    "logs",
+    "skills",
+    "models",
+    "approvals",
+    "alerts",
+    "notifications",
+    "context",
+    "limits",
+    "clusters",
+    "history",
 ]
 
-# Overlay element IDs that signal the auth overlay is blocking the UI.
-# Any of these being visible after token injection means the token was not accepted.
+# Global auth overlay IDs that signal a token-auth failure.
+# Only login-overlay and gw-setup-overlay exist in the dashboard HTML
+# (dashboard.py lines 4013 and 11094). "auth-overlay" and "setup-overlay"
+# were phantom IDs that never existed -- removed to prevent false negatives.
 _BLOCKING_OVERLAY_IDS = [
     "login-overlay",
     "gw-setup-overlay",
-    "auth-overlay",
-    "setup-overlay",
 ]
 
 pytestmark = pytest.mark.skipif(
