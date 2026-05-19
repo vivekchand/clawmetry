@@ -103,6 +103,39 @@ jobs:
             pngjs@7.0.0
           npx --yes playwright install --with-deps chromium
 
+      # ── 5b. Install OpenClaw + export gateway token (issue #1546) ───────
+      # The composite action installs `openclaw` globally and exports
+      # OPENCLAW_GATEWAY_TOKEN via $GITHUB_ENV. We pin the token value to
+      # the same CLAWMETRY_VISUAL_DIFF_TOKEN the dashboards + diff script
+      # already use so every layer (gateway, dashboard, browser) agrees.
+      - name: Setup OpenClaw
+        uses: ./head/.github/actions/setup-openclaw
+        with:
+          gateway-token: ${{ env.CLAWMETRY_VISUAL_DIFF_TOKEN }}
+
+      # ── 5c. Boot a real OpenClaw gateway in the background (#1546) ──────
+      # The dashboard renders gateway-backed surfaces (Brain, Flow, Crons,
+      # Approvals) by calling http://127.0.0.1:18789 with the bearer token.
+      # Without a live gateway those tabs render empty / error states even
+      # though the auth check passes. Boot once, both dashboards share it.
+      #
+      # --dev: create a throwaway dev config + workspace on the CI runner
+      # --force: kill any prior listener on the port (defensive)
+      # --auth token: enforce token mode (env supplies OPENCLAW_GATEWAY_TOKEN)
+      # The job is allowed to continue if gateway boot fails — the dashboard
+      # still renders the seeded-DuckDB surfaces with the fake token alone.
+      - name: Boot OpenClaw gateway (background)
+        continue-on-error: true
+        env:
+          OPENCLAW_GATEWAY_TOKEN: ${{ env.CLAWMETRY_VISUAL_DIFF_TOKEN }}
+        run: |
+          nohup openclaw gateway --dev --force --auth token --port 18789 --verbose \
+            > /tmp/openclaw-gateway.log 2>&1 &
+          echo "OPENCLAW_GW_PID=$!" >> $GITHUB_ENV
+          # Give the gateway a beat to bind the port — non-blocking.
+          sleep 5
+          openclaw gateway status || true
+
       # ── 6. Seed a synthetic DuckDB fixture, then clone it per-server ────
       # scripts/seed_smoke_duckdb.py (issue #1241) creates 1k events / 200
       # heartbeats / 50 memory blobs / 5 sessions and releases the writer
@@ -186,12 +219,13 @@ jobs:
           CLAWMETRY_VISUAL_DIFF_TOKEN: ${{ env.CLAWMETRY_VISUAL_DIFF_TOKEN }}
         run: node .github/scripts/visual-diff.mjs
 
-      # ── 9. Stop dashboards (best-effort) ────────────────────────────────
+      # ── 9. Stop dashboards + gateway (best-effort) ──────────────────────
       - name: Stop dashboards
         if: always()
         run: |
           [ -n "${BASE_PID:-}" ] && kill "$BASE_PID" 2>/dev/null || true
           [ -n "${HEAD_PID:-}" ] && kill "$HEAD_PID" 2>/dev/null || true
+          [ -n "${OPENCLAW_GW_PID:-}" ] && kill "$OPENCLAW_GW_PID" 2>/dev/null || true
 
       # ── 10. Publish PNGs to orphan pr-screenshots branch ────────────────
       # GITHUB_TOKEN is read-only for `pull_request` events from forks (GH
@@ -292,3 +326,4 @@ jobs:
         run: |
           echo "── base server log ──"; tail -200 /tmp/base-server.log || true
           echo "── head server log ──"; tail -200 /tmp/head-server.log || true
+          echo "── openclaw gateway log ──"; tail -200 /tmp/openclaw-gateway.log || true
