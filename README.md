@@ -33,6 +33,8 @@ Opens at **http://localhost:8900** and you're done.
 - **Alerts** — Budget caps, error-rate triggers, agent-offline detection; routes to Slack, Discord, PagerDuty, Telegram, Email
 - **Approvals** — Gate destructive deletes, force pushes, DB mutations, sudo, package installs, network calls behind one-click sign-off
 
+For a concrete networked-plugin trace, see the [Agent Observability guide](./OBSERVABILITY.md#networked-plugin-smoke-test).
+
 ## Screenshots
 
 ### 🧠 Brain — Live agent event stream

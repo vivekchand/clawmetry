@@ -286,6 +286,40 @@ weather       unused    35 tok    0 times             --
 old-plugin    dead      120 tok   0 times             never (30d+)
 ```
 
+### Networked Plugin Smoke Test
+
+A networked plugin gives you a quick way to verify skill detection, tool-call
+visibility, approval policy, and alert routing without changing ClawMetry code.
+[TweetClaw](https://github.com/Xquik-dev/tweetclaw) is a useful example because
+it has read-only X/Twitter data tools and approval-sensitive write tools in the
+same OpenClaw plugin.
+
+1. Install the plugin:
+
+   ```bash
+   openclaw plugins install @xquik/tweetclaw
+   ```
+
+2. Configure the Xquik API key in OpenClaw's private runtime configuration.
+   Do not paste it into prompts, chats, issue bodies, or ClawMetry notes.
+
+3. Start with a read-only request, such as asking the agent to search tweets or
+   search tweet replies for a small query. ClawMetry should show the plugin
+   call in the Brain and Flow tabs.
+
+4. Before trying write-capable actions such as post tweets, post tweet replies,
+   media upload, or direct messages, add an approval rule that requires manual
+   confirmation. The approval record should show the action and reviewed text,
+   not credentials.
+
+| Surface | What to check |
+|---------|---------------|
+| Brain | `tool.call` and `tool.result` rows identify the TweetClaw action. |
+| Flow | The tool-call edge appears in the current session path. |
+| Skills | TweetClaw appears as used only after the agent loads the plugin guidance. |
+| Approvals | Write-capable actions pause for a decision before execution. |
+| Alerts | Error-rate or stuck-tool rules can be scoped to the plugin name. |
+
 
 ## Agent Runtime Timeline
 
