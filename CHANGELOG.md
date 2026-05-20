@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Cloud Self-Evolve: the daemon asks OpenClaw itself (2026-05-20)
+- **Why.** The cloud Self-Evolve tab dead-ended on "Self-Evolve needs an Anthropic credential" — the cloud server has no model credential, and ClawMetry's gateway token is read-only (`operator.read`), so neither the cloud nor a ClawMetry gateway connection can run the review.
+- **What.** The daemon now delegates the review to **OpenClaw itself**: `openclaw agent --session-id clawmetry-selfevolve --json` runs a real, isolated agent turn on OpenClaw's OWN credentials, and the structured findings are parsed and shipped in the encrypted system snapshot (`selfEvolve`). The session transcript also lands on disk -> DuckDB, so it flows local -> Redis -> cloud while ClawMetry stays read-only on the gateway (it only invokes OpenClaw's own owner-access CLI). Refresh is gated (6h) + backgrounded; context is built on the daemon's own store handle in the snapshot thread (a read-only re-open / worker-thread query deadlocks the writer); cold start falls back to the on-disk cache so the cloud renders instantly. clawmetry-cloud intercepts `/api/selfevolve/{status,latest,analyze}` and renders `snap.selfEvolve`.
+- **Verified.** Live against app.clawmetry.com: the node's encrypted snapshot decrypts to `selfEvolve.status.available=true` + findings; a fresh `openclaw agent` run produced well-formed JSON findings (loop/model/cost/reliability) parsed cleanly. Carries PR #1806.
+
 ### Cloud Embodied: per-session transcripts via snapshot (2026-05-20)
 - The cloud Embodied tab showed "No messages in this transcript" because `/api/transcript/<id>` read the cloud's empty filesystem. The daemon now puts recent per-session transcripts (capped 80 messages, ~8 most-recent sessions) in the encrypted snapshot, built on its own store handle. clawmetry-cloud intercepts the fetch and renders them. Verified: cloud renders the same messages as local.
 
