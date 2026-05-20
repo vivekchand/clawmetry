@@ -184,6 +184,166 @@ _COL_DOCS: dict[str, dict[str, str]] = {
 SUPPORTED_CHART_TYPES: tuple[str, ...] = ("bar", "line", "pie", "table", "number")
 
 # ---------------------------------------------------------------------------
+# Suggested questions gallery (issue #1004)
+# ---------------------------------------------------------------------------
+
+# Eight curated questions shown in the Dives UI as one-click starters.
+# Each entry carries a pre-validated golden SQL + chart spec so the UI can
+# render the answer immediately (no round-trip to the LLM needed).
+# The SQL for every entry is regression-tested by the CI suite
+# (test_dives_prompt.py::test_suggested_questions_sql_passes_validator).
+SUGGESTED_QUESTIONS: list[dict] = [
+    {
+        "question": "Total cost per agent today",
+        "answer": {
+            "sql": (
+                "SELECT agent_type, SUM(cost_usd) AS cost "
+                "FROM events "
+                "WHERE DATE(ts) = CURRENT_DATE "
+                "  AND cost_usd IS NOT NULL "
+                "GROUP BY agent_type "
+                "ORDER BY cost DESC "
+                "LIMIT 50"
+            ),
+            "chart_type": "bar",
+            "x": "agent_type",
+            "y": "cost",
+            "title": "Total cost per agent today",
+            "description": "Cumulative LLM cost grouped by agent runtime for today.",
+        },
+    },
+    {
+        "question": "Top 10 most-used tools this week",
+        "answer": {
+            "sql": (
+                "SELECT json_extract_string(data, '$.tool_name') AS tool, "
+                "       COUNT(*) AS calls "
+                "FROM events "
+                "WHERE event_type = 'tool_call' "
+                "  AND ts >= CAST(DATE_TRUNC('week', CURRENT_DATE) AS VARCHAR) "
+                "  AND json_extract_string(data, '$.tool_name') IS NOT NULL "
+                "GROUP BY tool "
+                "ORDER BY calls DESC "
+                "LIMIT 10"
+            ),
+            "chart_type": "bar",
+            "x": "tool",
+            "y": "calls",
+            "title": "Top 10 tools this week",
+            "description": "Tool call frequency ranked highest to lowest for the current week.",
+        },
+    },
+    {
+        "question": "Sessions started in the last 24h, by status",
+        "answer": {
+            "sql": (
+                "SELECT status, COUNT(*) AS n "
+                "FROM sessions "
+                "WHERE started_at >= CAST(NOW() - INTERVAL '24 hours' AS VARCHAR) "
+                "GROUP BY status "
+                "ORDER BY n DESC "
+                "LIMIT 20"
+            ),
+            "chart_type": "pie",
+            "x": "status",
+            "y": "n",
+            "title": "Session status in last 24h",
+            "description": "Distribution of session outcomes started in the last 24 hours.",
+        },
+    },
+    {
+        "question": "Token cost trend over the last 30 days",
+        "answer": {
+            "sql": (
+                "SELECT DATE(ts) AS day, SUM(cost_usd) AS cost_usd "
+                "FROM events "
+                "WHERE ts >= CAST(NOW() - INTERVAL '30 days' AS VARCHAR) "
+                "  AND cost_usd IS NOT NULL "
+                "GROUP BY day "
+                "ORDER BY day "
+                "LIMIT 31"
+            ),
+            "chart_type": "line",
+            "x": "day",
+            "y": "cost_usd",
+            "title": "Daily cost over the last 30 days",
+            "description": "LLM spend per calendar day for the past month.",
+        },
+    },
+    {
+        "question": "Sub-agent failures grouped by parent session",
+        "answer": {
+            "sql": (
+                "SELECT parent_session_id, COUNT(*) AS failures "
+                "FROM subagents "
+                "WHERE status = 'error' "
+                "GROUP BY parent_session_id "
+                "ORDER BY failures DESC "
+                "LIMIT 50"
+            ),
+            "chart_type": "table",
+            "x": "parent_session_id",
+            "y": "failures",
+            "title": "Sub-agent failures by parent session",
+            "description": "Number of errored sub-agents grouped by the session that spawned them.",
+        },
+    },
+    {
+        "question": "Heartbeat history for this node (e2e status, version)",
+        "answer": {
+            "sql": (
+                "SELECT ts, version, e2e "
+                "FROM heartbeats "
+                "ORDER BY ts DESC "
+                "LIMIT 100"
+            ),
+            "chart_type": "table",
+            "x": "ts",
+            "y": "e2e",
+            "title": "Heartbeat history",
+            "description": "Most recent heartbeats with end-to-end status and ClawMetry version.",
+        },
+    },
+    {
+        "question": "Memory file changes in the last 7 days",
+        "answer": {
+            "sql": (
+                "SELECT path, ts, size_bytes "
+                "FROM memory_blobs "
+                "WHERE ts >= CAST(NOW() - INTERVAL '7 days' AS VARCHAR) "
+                "ORDER BY ts DESC "
+                "LIMIT 100"
+            ),
+            "chart_type": "table",
+            "x": "path",
+            "y": "size_bytes",
+            "title": "Memory file changes (last 7 days)",
+            "description": "Memory files updated in the past week, newest first.",
+        },
+    },
+    {
+        "question": "Average session length per agent_type",
+        "answer": {
+            "sql": (
+                "SELECT agent_type, "
+                "       AVG(epoch(CAST(ended_at AS TIMESTAMP)) "
+                "           - epoch(CAST(started_at AS TIMESTAMP))) AS avg_duration_seconds "
+                "FROM sessions "
+                "WHERE ended_at IS NOT NULL "
+                "GROUP BY agent_type "
+                "ORDER BY avg_duration_seconds DESC "
+                "LIMIT 20"
+            ),
+            "chart_type": "bar",
+            "x": "agent_type",
+            "y": "avg_duration_seconds",
+            "title": "Average session duration per agent type",
+            "description": "Mean session length in seconds for each agent runtime.",
+        },
+    },
+]
+
+# ---------------------------------------------------------------------------
 # Few-shot examples
 # ---------------------------------------------------------------------------
 
@@ -367,6 +527,7 @@ def build_dives_prompt(
 __all__ = [
     "PROMPT_VERSION",
     "SUPPORTED_CHART_TYPES",
+    "SUGGESTED_QUESTIONS",
     "build_schema_descriptor",
     "build_dives_prompt",
 ]

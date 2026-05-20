@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from clawmetry.dives_prompt import (  # noqa: E402
     PROMPT_VERSION,
+    SUGGESTED_QUESTIONS,
     SUPPORTED_CHART_TYPES,
     _DIVES_TABLES,
     _FEW_SHOT_EXAMPLES,
@@ -177,3 +178,45 @@ def test_build_dives_prompt_whitespace_only_raises():
 def test_build_dives_prompt_store_none_works():
     result = build_dives_prompt("How many events today?", store=None)
     assert result["user"] == "How many events today?"
+
+
+# ---------------------------------------------------------------------------
+# Suggested questions gallery (issue #1004)
+# ---------------------------------------------------------------------------
+
+
+def test_suggested_questions_count():
+    assert len(SUGGESTED_QUESTIONS) == 8
+
+
+@pytest.mark.parametrize("sq", SUGGESTED_QUESTIONS)
+def test_suggested_questions_required_keys(sq):
+    assert "question" in sq, "missing 'question' key"
+    assert sq["question"].strip(), "question must be non-empty"
+    required_answer_keys = {"sql", "chart_type", "x", "y", "title", "description"}
+    assert required_answer_keys.issubset(sq["answer"].keys()), (
+        f"Missing answer keys: {required_answer_keys - sq['answer'].keys()}"
+    )
+
+
+@pytest.mark.parametrize("sq", SUGGESTED_QUESTIONS)
+def test_suggested_questions_sql_passes_validator(sq):
+    sql = sq["answer"]["sql"]
+    ok, reason = validate_sql(sql)
+    assert ok, (
+        f"Suggested question {sq['question']!r} SQL failed validator: {reason!r}\n"
+        f"SQL:\n{sql}"
+    )
+
+
+@pytest.mark.parametrize("sq", SUGGESTED_QUESTIONS)
+def test_suggested_questions_chart_type_supported(sq):
+    ct = sq["answer"]["chart_type"]
+    assert ct in SUPPORTED_CHART_TYPES, (
+        f"Suggested question {sq['question']!r} has unsupported chart_type {ct!r}"
+    )
+
+
+def test_suggested_questions_unique():
+    questions = [sq["question"] for sq in SUGGESTED_QUESTIONS]
+    assert len(questions) == len(set(questions)), "Duplicate suggested questions detected"
