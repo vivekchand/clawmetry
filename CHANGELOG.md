@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Cloud parity: overview overlap, Logs removal, Models attribution (2026-05-20)
+- **Overview overlap.** `.overview-split` was a fixed-height grid; a tall System Health panel overflowed it and collided with the "Is your agent alive?" heartbeat panel below. Now grows (`height:auto` + `min-height`) with a flow-pane `min-height` so it can't collapse.
+- **Logs tab removed.** Added no value (cloud dead-end + local duplicate of the Flow/Brain live stream). Nav item, page, and the "tools" KPI redirect to Brain.
+- **Models attribution → cloud.** The cloud Models tab was empty because `/api/model-attribution` needs per-turn data that only lives in local DuckDB. The daemon now puts `modelAttribution` (per-turn turns/sessions/switches) in the encrypted snapshot, computed on its own store handle (a read-only re-open deadlocks the daemon write lock). clawmetry-cloud renders it. Verified the cloud snapshot decrypts to the same numbers as local.
+
 ### Cloud Diagnostics: sync detected-config so the cloud panel isn't a dead-end (2026-05-20)
 - **Why.** Paid cloud nodes saw "Diagnostics are local-only, open the dashboard on the host" because the detected-config data was never synced. The Security posture panel (which also inspects local config) already syncs and renders fine, proving config inspection can ride the encrypted snapshot.
 - **What.** `sync_system_snapshot` now includes a `diagnostics` block (gateway URL/port, workspace path, auth-token presence only, never the token value, OpenClaw env flags, and `validate_configuration()` warnings) mirroring the OSS `/api/diagnostics` shape. clawmetry-cloud renders it client-side from the decrypted snapshot.
