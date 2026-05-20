@@ -1,98 +1,98 @@
 {
   "automation_analysis": {
-    "captured_at": "2026-05-17",
-    "captured_sha": "c7e06c3",
-    "fast_path_ms_p50": 6.974,
+    "captured_at": "2026-05-20",
+    "captured_sha": "e77c721",
+    "fast_path_ms_p50": 10.141,
     "url": "/api/automation-analysis"
   },
   "channel_signal": {
-    "captured_at": "2026-05-17",
-    "captured_sha": "c7e06c3",
-    "fast_path_ms_p50": 806.589,
+    "captured_at": "2026-05-20",
+    "captured_sha": "e77c721",
+    "fast_path_ms_p50": 5.167,
     "url": "/api/channel/signal?limit=100"
   },
   "channel_telegram": {
-    "captured_at": "2026-05-17",
-    "captured_sha": "c7e06c3",
-    "fast_path_ms_p50": 396.583,
+    "captured_at": "2026-05-20",
+    "captured_sha": "e77c721",
+    "fast_path_ms_p50": 5.42,
     "url": "/api/channel/telegram?limit=100"
   },
   "component_gateway": {
-    "captured_at": "2026-05-17",
-    "captured_sha": "c7e06c3",
-    "fast_path_ms_p50": 4.249,
+    "captured_at": "2026-05-20",
+    "captured_sha": "e77c721",
+    "fast_path_ms_p50": 4.34,
     "url": "/api/component/gateway"
   },
   "cost_optimizer": {
-    "captured_at": "2026-05-17",
-    "captured_sha": "c7e06c3",
-    "fast_path_ms_p50": 369.362,
+    "captured_at": "2026-05-20",
+    "captured_sha": "e77c721",
+    "fast_path_ms_p50": 24.379,
     "url": "/api/cost-optimizer"
   },
   "flow_events": {
-    "captured_at": "2026-05-17",
-    "captured_sha": "c7e06c3",
-    "fast_path_ms_p50": 1.967,
+    "captured_at": "2026-05-20",
+    "captured_sha": "e77c721",
+    "fast_path_ms_p50": 3.799,
     "url": "/api/flow-events?limit=200"
   },
   "gateway_health": {
-    "captured_at": "2026-05-17",
-    "captured_sha": "c7e06c3",
-    "fast_path_ms_p50": 73.185,
+    "captured_at": "2026-05-20",
+    "captured_sha": "e77c721",
+    "fast_path_ms_p50": 5.634,
     "url": "/api/gateway-health"
   },
   "model_transitions": {
-    "captured_at": "2026-05-17",
-    "captured_sha": "c7e06c3",
-    "fast_path_ms_p50": 1.291,
+    "captured_at": "2026-05-20",
+    "captured_sha": "e77c721",
+    "fast_path_ms_p50": 2.649,
     "url": "/api/sessions/perf-sess-0000-aaaa-bbbb-cccc-dddddddddddd/model-transitions"
   },
   "rate_limits": {
-    "captured_at": "2026-05-17",
-    "captured_sha": "c7e06c3",
-    "fast_path_ms_p50": 1.748,
+    "captured_at": "2026-05-20",
+    "captured_sha": "e77c721",
+    "fast_path_ms_p50": 3.741,
     "url": "/api/rate-limits"
   },
   "skills_fidelity": {
-    "captured_at": "2026-05-17",
-    "captured_sha": "c7e06c3",
-    "fast_path_ms_p50": 8.346,
+    "captured_at": "2026-05-20",
+    "captured_sha": "e77c721",
+    "fast_path_ms_p50": 11.1,
     "url": "/api/skills/fidelity"
   },
   "subagents": {
-    "captured_at": "2026-05-17",
-    "captured_sha": "c7e06c3",
-    "fast_path_ms_p50": 1.747,
+    "captured_at": "2026-05-20",
+    "captured_sha": "e77c721",
+    "fast_path_ms_p50": 2.38,
     "url": "/api/subagents"
   },
   "task_runs": {
-    "captured_at": "2026-05-17",
-    "captured_sha": "c7e06c3",
-    "fast_path_ms_p50": 3.269,
+    "captured_at": "2026-05-20",
+    "captured_sha": "e77c721",
+    "fast_path_ms_p50": 10.177,
     "url": "/api/task-runs?limit=200"
   },
   "token_attribution": {
-    "captured_at": "2026-05-17",
-    "captured_sha": "c7e06c3",
-    "fast_path_ms_p50": 33.857,
+    "captured_at": "2026-05-20",
+    "captured_sha": "e77c721",
+    "fast_path_ms_p50": 50.569,
     "url": "/api/token-attribution?limit=100"
   },
   "token_velocity": {
-    "captured_at": "2026-05-17",
-    "captured_sha": "c7e06c3",
-    "fast_path_ms_p50": 1.207,
+    "captured_at": "2026-05-20",
+    "captured_sha": "e77c721",
+    "fast_path_ms_p50": 3.293,
     "url": "/api/token-velocity"
   },
   "usage_forecast": {
-    "captured_at": "2026-05-17",
-    "captured_sha": "c7e06c3",
-    "fast_path_ms_p50": 4.218,
+    "captured_at": "2026-05-20",
+    "captured_sha": "e77c721",
+    "fast_path_ms_p50": 8.662,
     "url": "/api/usage/forecast"
   },
   "version_impact": {
-    "captured_at": "2026-05-17",
-    "captured_sha": "c7e06c3",
-    "fast_path_ms_p50": 1.539,
+    "captured_at": "2026-05-20",
+    "captured_sha": "e77c721",
+    "fast_path_ms_p50": 3.144,
     "url": "/api/version-impact"
   }
 }
