@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Cloud Diagnostics: sync detected-config so the cloud panel isn't a dead-end (2026-05-20)
+- **Why.** Paid cloud nodes saw "Diagnostics are local-only, open the dashboard on the host" because the detected-config data was never synced. The Security posture panel (which also inspects local config) already syncs and renders fine, proving config inspection can ride the encrypted snapshot.
+- **What.** `sync_system_snapshot` now includes a `diagnostics` block (gateway URL/port, workspace path, auth-token presence only, never the token value, OpenClaw env flags, and `validate_configuration()` warnings) mirroring the OSS `/api/diagnostics` shape. clawmetry-cloud renders it client-side from the decrypted snapshot.
+- **Verified.** Live against app.clawmetry.com: the node's encrypted `system_snapshot` decrypts with the node key and now carries the `diagnostics` block. Carries PR #1791.
+
 ### MOAT EOD refire: PyPI 0.12.249 carries PR #1730 + PR #1732 (issue #1746, 2026-05-19)
 - **Why.** PRs #1723, #1730, #1732 all merged within 35s tonight. All three release-on-merge runs computed `NEW=0.12.248` from the same starting main, then each tried `twine upload --skip-existing`. PyPI accepted #1723's wheel first; the other two were silently skipped. Net result: PyPI 0.12.248 only carried #1723's alerts-modal centering fix, while main moved to v0.12.248 with the #1732 commit.
 - **What this release does.** No code change beyond this CHANGELOG entry — exists purely to re-fire `release-on-merge.yml` so v0.12.249 picks up the missing #1730 (DuckDB daemon-proxy for service-status + flow/runs) and #1732 (gateway WS `client.id="openclaw-control-ui"` so crons/sessions/messages reads return scopes) commits that already landed in main.
