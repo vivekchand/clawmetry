@@ -13,4 +13,5 @@ so OpenClaw event-shape drift cannot be hidden by synthetic-only tests.
 | session.ended | tests/test_moat_e2e_regression_1129.py | tests/test_moat_live_openclaw_e2e.py | 2026-05-18 |
 | session_start | tests/test_moat_send_message_e2e.py | tests/test_moat_live_openclaw_e2e.py | 2026-05-18 |
 | tool_call | tests/test_moat_e2e_regression_1129.py, tests/test_moat_send_message_e2e.py | tests/test_moat_live_openclaw_e2e.py | 2026-05-18 |
+| test.crash_recovery | tests/test_moat_daemon_crash_recovery.py | tests/test_moat_live_openclaw_e2e.py | 2026-05-20 |
 | trace.artifacts | tests/test_moat_e2e_regression_1129.py | tests/test_moat_live_openclaw_e2e.py | 2026-05-18 |
