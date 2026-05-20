@@ -10813,9 +10813,6 @@ DASHBOARD_HTML = r"""
         <div class="left-nav-item left-nav-item-sub" data-tab="brain" onclick="switchTab('brain')">
           <span class="left-nav-label">Brain</span>
         </div>
-        <div class="left-nav-item left-nav-item-sub" data-tab="logs" onclick="switchTab('logs')">
-          <span class="left-nav-label">Logs</span>
-        </div>
         <div class="left-nav-item left-nav-item-sub" data-tab="models" onclick="switchTab('models')">
           <span class="left-nav-label">Models</span>
         </div>
@@ -10952,7 +10949,6 @@ DASHBOARD_HTML = r"""
 <!-- SKILLS FIDELITY (#687) -->
 {% include 'tabs/skills.html' %}
 
-{% include 'tabs/logs.html' %}
 
 {% if not legacy_nav %}
   </main>
