@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Cloud Pro: Agent Reliability score (P1, ClawBench-style) (2026-05-21)
+- New `_build_reliability()` scores recent session traces on deterministic checks (tool_success, recovered, read_before_write, no_loop, acted) into a 0-100 Reliability Score + grade + failure taxonomy, shipped in the snapshot (no LLM, daemon's own store handle). clawmetry-cloud renders it as a score card on the Self-Evolve page. First slice of PRD-cloud-pro-agent-reliability.md.
+
 ### Writer-steal fix completed: role gate set before dashboard import (#1814, 2026-05-20)
 - Follow-up to #1810. The `CLAWMETRY_ROLE=dashboard` gate was set just before `dashboard_main()`, but `from dashboard import main` runs earlier and dashboard.py has module-level/handler `get_store()` calls — so the dashboard could still race in and grab the DuckDB writer before the gate was active (Models/Embodied/Cost-history intermittently blanked). Setting the env before the import closes it. Verified live: daemon keeps the writer across restarts; Models, Embodied, and the Cost 14-day history all render correctly in cloud.
 
