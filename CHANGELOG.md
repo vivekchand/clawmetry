@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Cloud Embodied: per-session transcripts via snapshot (2026-05-20)
+- The cloud Embodied tab showed "No messages in this transcript" because `/api/transcript/<id>` read the cloud's empty filesystem. The daemon now puts recent per-session transcripts (capped 80 messages, ~8 most-recent sessions) in the encrypted snapshot, built on its own store handle. clawmetry-cloud intercepts the fetch and renders them. Verified: cloud renders the same messages as local.
+
 ### Cloud parity: overview overlap, Logs removal, Models attribution (2026-05-20)
 - **Overview overlap.** `.overview-split` was a fixed-height grid; a tall System Health panel overflowed it and collided with the "Is your agent alive?" heartbeat panel below. Now grows (`height:auto` + `min-height`) with a flow-pane `min-height` so it can't collapse.
 - **Logs tab removed.** Added no value (cloud dead-end + local duplicate of the Flow/Brain live stream). Nav item, page, and the "tools" KPI redirect to Brain.
