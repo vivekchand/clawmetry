@@ -53,7 +53,8 @@ def _overlay_page(_shared_chromium):
     ctx.close()
 
 # Canonical tabs that must load without auth overlay post-login.
-# Mirrors DEFAULT_TABS in .github/scripts/visual-diff.mjs.
+# Matches PR_SCREENSHOT_TABS in .github/workflows/pr-screenshots.yml
+# so the Playwright gate covers the same surface as the visual-diff workflow.
 CANONICAL_TABS = [
     "overview",
     "flow",
@@ -64,6 +65,16 @@ CANONICAL_TABS = [
     "security",
     "subagents",
     "transcripts",
+    "logs",
+    "skills",
+    "models",
+    "approvals",
+    "alerts",
+    "notifications",
+    "context",
+    "limits",
+    "clusters",
+    "history",
 ]
 
 # Overlay element IDs that signal the auth overlay is blocking the UI.
