@@ -3189,7 +3189,7 @@ def _extract_decoding_params(obj):
     return out
 
 
-def _try_local_store_transcript(session_id: str):
+def _try_local_store_transcript(session_id: str, _events=None):
     """Read a session transcript directly from the DuckDB events table.
 
     Returns the same response shape as the JSONL parser. Returns ``None``
@@ -3209,13 +3209,14 @@ def _try_local_store_transcript(session_id: str):
     # `reference_duckdb_process_lock.md`), forced fall-through to the JSONL
     # walker → 5.5s p95 the latency probe (#1287) surfaced for
     # ``sessions.api_transcript``.
-    rows = None
-    try:
-        from routes.local_query import local_store_via_daemon
-        rows = local_store_via_daemon(
-            "query_events", session_id=session_id, limit=10000)
-    except Exception:
-        rows = None
+    rows = _events
+    if rows is None:
+        try:
+            from routes.local_query import local_store_via_daemon
+            rows = local_store_via_daemon(
+                "query_events", session_id=session_id, limit=10000)
+        except Exception:
+            rows = None
     if rows is None:
         # Single-process fallback (tests/dev with no sync daemon).
         try:

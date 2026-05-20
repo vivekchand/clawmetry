@@ -7386,6 +7386,53 @@ def _build_model_attribution():
         return {}
 
 
+def _build_transcripts(limit_sessions=8, msg_cap=80):
+    """Recent per-session transcripts for the cloud Embodied tab.
+
+    Built on the daemon's OWN store handle (a read-only re-open deadlocks the
+    write lock — same trap as model attribution). Returns ``{session_id:
+    <transcript dict>}`` for the most-recent sessions, message-capped to bound
+    the encrypted snapshot size. The transcript dict matches what
+    ``/api/transcript/<id>`` returns, so the cloud just hands it to the
+    existing Embodied renderer. Best-effort -> {}.
+    """
+    try:
+        from clawmetry import local_store as _ls
+        import routes.sessions as _s
+
+        store = _ls.get_store()
+        if store is None:
+            return {}
+        evs = store.query_events(limit=5000)  # DESC by ts (most recent first)
+        if not evs:
+            return {}
+        recent_sids = []
+        for e in evs:
+            sid = (e.get("session_id") or "").strip()
+            if sid and sid not in recent_sids:
+                recent_sids.append(sid)
+            if len(recent_sids) >= limit_sessions:
+                break
+        out = {}
+        for sid in recent_sids:
+            try:
+                rows = store.query_events(session_id=sid, limit=10000)
+                t = _s._try_local_store_transcript(sid, _events=rows)
+            except Exception:
+                t = None
+            if t and t.get("messages"):
+                msgs = t["messages"]
+                if len(msgs) > msg_cap:
+                    t = dict(t)
+                    t["messages"] = msgs[-msg_cap:]
+                    t["_truncated"] = True
+                out[sid] = t
+        return out
+    except Exception as _e:
+        log.debug("transcripts snapshot build failed: %s", _e)
+        return {}
+
+
 def _build_memory_files(workspace):
     """Build memory file list for the Memory popup."""
     if not workspace or not os.path.isdir(workspace):
@@ -8287,6 +8334,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "ollamaInfo": _detect_ollama_for_heartbeat(),
         "diagnostics": _build_diagnostics(paths.get("workspace")),
         "modelAttribution": _build_model_attribution(),
+        "transcripts": _build_transcripts(),
     }
 
     # ── NemoClaw / sandbox enrichment ────────────────────────────────────────
