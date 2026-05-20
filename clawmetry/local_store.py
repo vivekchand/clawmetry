@@ -984,7 +984,14 @@ def get_store(read_only: bool = False) -> "LocalStore":
         # to read_only — in the daemon this branch is skipped (it called
         # mark_writer_owner()), and in single-process boots no live owner is
         # registered so the writer still opens.
-        if not _writer_owner and _daemon_registered():
+        if not _writer_owner and (
+            os.environ.get("CLAWMETRY_ROLE") == "dashboard"
+            or _daemon_registered()
+        ):
+            # The dashboard process is structurally barred from the writer
+            # (CLAWMETRY_ROLE), which also closes the cold-start race where
+            # local_query.json is briefly absent. The daemon is unaffected: it
+            # calls mark_writer_owner() so _writer_owner short-circuits this.
             read_only = True
         else:
           with _store_lock:
