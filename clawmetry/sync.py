@@ -7327,6 +7327,65 @@ def _build_diagnostics(workspace=None):
         return {}
 
 
+def _build_model_attribution():
+    """Per-turn model attribution for the cloud Models tab.
+
+    Mirrors the OSS ``/api/model-attribution`` shape (``{models:[{model,turns,
+    sessions,share_pct}], switches, total_turns, primary_model}``) so cloud
+    renders the exact data OSS shows. The Models tab needs PER-TURN
+    attribution, which only lives in the local DuckDB (the cloud sessions
+    table only has per-session primary model).
+
+    Computed on the daemon's OWN store handle (the DuckDB writer connection),
+    NOT routes.usage._try_local_store_model_attribution() — that does a
+    read-only re-open which conflicts with the daemon's write lock (DuckDB
+    locks at the process level) and silently returns empty inside the daemon.
+    Best-effort: any failure yields {} (cloud falls back to its empty state).
+    """
+    try:
+        from collections import defaultdict
+        from clawmetry import local_store as _ls
+
+        store = _ls.get_store()
+        if store is None:
+            return {}
+        evs = store.query_events(limit=20000)
+        if not evs:
+            return {}
+        model_turns: dict = {}
+        sess_models = defaultdict(list)
+        saw_any = False
+        for ev in sorted(evs, key=lambda e: (e.get("session_id") or "", e.get("ts") or "")):
+            m = (ev.get("model") or "").strip()
+            if not m:
+                continue
+            saw_any = True
+            model_turns[m] = model_turns.get(m, 0) + 1
+            sid = ev.get("session_id") or ""
+            if sid and (not sess_models[sid] or sess_models[sid][-1] != m):
+                sess_models[sid].append(m)
+        if not saw_any:
+            return {}
+        model_sessions: dict = {}
+        switches = []
+        for sid, mlist in sess_models.items():
+            model_sessions[mlist[0]] = model_sessions.get(mlist[0], 0) + 1
+            for prev, nxt in zip(mlist, mlist[1:]):
+                switches.append({"session": sid, "from_model": prev, "to_model": nxt})
+        total_turns = sum(model_turns.values())
+        sorted_models = sorted(model_turns.items(), key=lambda x: -x[1])
+        primary_model = sorted_models[0][0] if sorted_models else ""
+        models_out = [{
+            "model": m, "turns": t, "sessions": model_sessions.get(m, 0),
+            "share_pct": round(t / total_turns * 100, 2) if total_turns else 0,
+        } for m, t in sorted_models]
+        return {"models": models_out, "switches": switches,
+                "total_turns": total_turns, "primary_model": primary_model}
+    except Exception as _e:
+        log.debug("model attribution snapshot build failed: %s", _e)
+        return {}
+
+
 def _build_memory_files(workspace):
     """Build memory file list for the Memory popup."""
     if not workspace or not os.path.isdir(workspace):
@@ -8227,6 +8286,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "channelList": _build_channel_list(config),
         "ollamaInfo": _detect_ollama_for_heartbeat(),
         "diagnostics": _build_diagnostics(paths.get("workspace")),
+        "modelAttribution": _build_model_attribution(),
     }
 
     # ── NemoClaw / sandbox enrichment ────────────────────────────────────────
