@@ -7743,6 +7743,221 @@ def _build_daily_usage(days=14):
         return {}
 
 
+def _reliability_score_session(events):
+    """ClawBench-style deterministic trace checks for ONE session.
+
+    Returns (checks, signals). ``checks`` maps a check name to True/False/None
+    (None = not applicable to this session). Walks the Claude-format message
+    blocks (``data.message.content``) for tool_use / tool_result, plus
+    ``model.completed.stopReason``. See PRD-cloud-pro-agent-reliability.md.
+    """
+    from collections import Counter
+
+    tool_uses = []      # (name, input_signature)
+    tool_results = 0
+    tool_errors = 0
+    bad_stop = 0
+    completed = False
+    for e in events:
+        d = e.get("data") or {}
+        et = (e.get("event_type") or "").lower()
+        if et == "model.completed":
+            completed = True
+            sr = str(d.get("stopReason") or "").lower()
+            if sr in ("error", "max_tokens", "content_filter", "refusal"):
+                bad_stop += 1
+        msg = d.get("message")
+        if isinstance(msg, dict):
+            content = msg.get("content")
+            if isinstance(content, list):
+                for b in content:
+                    if not isinstance(b, dict):
+                        continue
+                    bt = b.get("type")
+                    if bt == "tool_use":
+                        nm = str(b.get("name") or "").lower()
+                        try:
+                            sig = json.dumps(b.get("input") or {}, sort_keys=True)[:160]
+                        except Exception:
+                            sig = ""
+                        tool_uses.append((nm, sig))
+                    elif bt == "tool_result":
+                        tool_results += 1
+                        if b.get("is_error"):
+                            tool_errors += 1
+
+    READ = {"read", "grep", "glob", "ls", "cat", "search", "web_search",
+            "web_fetch", "memory_search"}
+    WRITE = {"write", "edit", "multiedit", "str_replace", "str_replace_editor",
+             "apply_patch"}
+    names = [n for n, _ in tool_uses]
+    errored = tool_errors > 0 or bad_stop > 0
+    looped = any(c >= 4 for c in Counter(tool_uses).values())
+
+    checks = {}
+    # acted: the agent actually did work, not just talk.
+    checks["acted"] = len(tool_uses) > 0
+    # read_before_write: never wrote/edited before reading first.
+    wrote = any(n in WRITE for n in names)
+    if wrote:
+        seen_read = False
+        ok = True
+        for n in names:
+            if n in READ:
+                seen_read = True
+            if n in WRITE and not seen_read:
+                ok = False
+                break
+        checks["read_before_write"] = ok
+    else:
+        checks["read_before_write"] = None
+    # tool_success: tool calls returned without error.
+    checks["tool_success"] = (tool_errors == 0) if tool_results > 0 else None
+    # recovered: hit an error but still finished cleanly.
+    checks["recovered"] = (completed and bad_stop == 0) if errored else None
+    # no_loop: didn't repeat the same tool call 4+ times.
+    checks["no_loop"] = (not looped)
+
+    signals = {
+        "tool_uses": len(tool_uses),
+        "tool_results": tool_results,
+        "tool_errors": tool_errors,
+        "errored": errored,
+        "looped": looped,
+        "completed": completed,
+    }
+    return checks, signals
+
+
+# Display weights for the aggregate Reliability Score (0-100).
+_RELIABILITY_WEIGHTS = {
+    "tool_success": 0.30,
+    "recovered": 0.20,
+    "read_before_write": 0.20,
+    "no_loop": 0.20,
+    "acted": 0.10,
+}
+# Human-readable failure-mode labels (the ClawBench-style taxonomy, P1 subset).
+_RELIABILITY_FAILURE_LABELS = {
+    "tool_success": "Tool calls errored",
+    "recovered": "Errored without recovering",
+    "read_before_write": "Wrote before reading",
+    "no_loop": "Repeated the same action (loop)",
+    "acted": "All talk, no action",
+}
+
+
+def _build_reliability(limit_sessions=25, min_sessions=4):
+    """Agent Reliability score for the cloud Pro Reliability tab (P1).
+
+    Deterministic, trace-based score over recent sessions — no LLM, cheap
+    enough to run every snapshot. Built on the daemon's OWN store handle.
+    Returns {score, grade, confidence, sessions_scored, checks[], taxonomy[]}.
+    Best-effort -> {}.  See PRD-cloud-pro-agent-reliability.md (P1).
+    """
+    try:
+        from clawmetry import local_store as _ls
+
+        store = _ls.get_store()
+        if store is None:
+            return {}
+        evs = store.query_events(limit=8000)  # DESC by ts
+        if not evs:
+            return {}
+        # Group most-recent sessions (skip the ClawMetry helper sessions so we
+        # score the user's real agent, not our own selfevolve/probe runs).
+        order = []
+        by_sid = {}
+        for e in evs:
+            sid = (e.get("session_id") or "").strip()
+            if not sid or sid.startswith("clawmetry-"):
+                continue
+            if sid not in by_sid:
+                by_sid[sid] = []
+                order.append(sid)
+            by_sid[sid].append(e)
+            if len(order) > limit_sessions and sid not in order[:limit_sessions]:
+                pass
+        sids = order[:limit_sessions]
+
+        # pass/applicable tallies per check + per-check failing-session count.
+        passes = {k: 0 for k in _RELIABILITY_WEIGHTS}
+        applic = {k: 0 for k in _RELIABILITY_WEIGHTS}
+        fails = {k: 0 for k in _RELIABILITY_WEIGHTS}
+        scored = 0
+        for sid in sids:
+            sess = list(reversed(by_sid[sid]))  # chronological
+            checks, _sig = _reliability_score_session(sess)
+            # Only count a session that did SOMETHING (has tool activity or a
+            # completion) so empty/queue-only sessions don't dilute the score.
+            if not (checks.get("acted") or _sig.get("completed")):
+                continue
+            scored += 1
+            for k in _RELIABILITY_WEIGHTS:
+                v = checks.get(k)
+                if v is None:
+                    continue
+                applic[k] += 1
+                if v:
+                    passes[k] += 1
+                else:
+                    fails[k] += 1
+
+        if scored == 0:
+            return {
+                "score": None,
+                "grade": "—",
+                "confidence": "no_data",
+                "sessions_scored": 0,
+                "checks": [],
+                "taxonomy": [],
+            }
+
+        # Weighted score across checks that were applicable at least once.
+        num = 0.0
+        den = 0.0
+        checks_out = []
+        for k, w in _RELIABILITY_WEIGHTS.items():
+            if applic[k] == 0:
+                continue
+            rate = passes[k] / applic[k]
+            num += w * rate
+            den += w
+            checks_out.append({
+                "key": k,
+                "label": _RELIABILITY_FAILURE_LABELS.get(k, k),
+                "pass_pct": round(rate * 100, 1),
+                "applicable": applic[k],
+            })
+        score = round((num / den) * 100) if den > 0 else None
+
+        def _grade(s):
+            if s is None:
+                return "—"
+            return ("A" if s >= 90 else "B" if s >= 80 else "C" if s >= 70
+                    else "D" if s >= 60 else "F")
+
+        taxonomy = sorted(
+            [
+                {"key": k, "label": _RELIABILITY_FAILURE_LABELS[k], "count": c}
+                for k, c in fails.items() if c > 0
+            ],
+            key=lambda x: -x["count"],
+        )
+        return {
+            "score": score,
+            "grade": _grade(score),
+            # Honest about seed noise: a handful of sessions can't be trusted.
+            "confidence": "low" if scored < min_sessions else "ok",
+            "sessions_scored": scored,
+            "checks": checks_out,
+            "taxonomy": taxonomy,
+        }
+    except Exception as _e:
+        log.debug("reliability snapshot build failed: %s", _e)
+        return {}
+
+
 def _build_memory_files(workspace):
     """Build memory file list for the Memory popup."""
     if not workspace or not os.path.isdir(workspace):
@@ -8702,6 +8917,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         ),
         "selfEvolve": _build_selfevolve(paths.get("workspace")),
         "dailyUsage": _build_daily_usage(),
+        "reliability": _build_reliability(),
     }
 
     # ── NemoClaw / sandbox enrichment ────────────────────────────────────────
