@@ -10519,7 +10519,11 @@ def detect_config(args=None):
         from flask import jsonify as _jsonify
         try:
             from clawmetry import local_store
-            return _jsonify(local_store.get_store().health())
+            # read_only=True: this health endpoint runs in the dashboard
+            # process, which must NEVER open the DuckDB writer (it would steal
+            # the lock from the sync daemon during a restart window and blank
+            # every snapshot read). health() is a read; RO is sufficient.
+            return _jsonify(local_store.get_store(read_only=True).health())
         except Exception as _e:
             return _jsonify({"error": str(_e)[:300]}), 503
 

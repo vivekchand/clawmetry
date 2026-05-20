@@ -42,7 +42,6 @@ process. Port file is removed atexit (best-effort).
 
 from __future__ import annotations
 
-import atexit
 import json
 import logging
 import os
@@ -118,13 +117,6 @@ def _write_discovery_file(port: int, token: str) -> None:
     os.replace(tmp, DISCOVERY_PATH)
 
 
-def _cleanup_discovery_file() -> None:
-    """Remove the discovery file at process exit. Best-effort."""
-    try:
-        if DISCOVERY_PATH.exists():
-            DISCOVERY_PATH.unlink()
-    except Exception:
-        pass
 
 
 def _serve_forever(app, port: int) -> None:
@@ -165,6 +157,10 @@ def start() -> Optional[int]:
         # no-op singleton fetch.
         try:
             from clawmetry import local_store as _ls
+            # This process hosts local_server -> it IS the daemon and owns the
+            # writer. Mark it so get_store() opens the writer here and refuses
+            # to let other processes (the dashboard) steal it during a restart.
+            _ls.mark_writer_owner()
             _ls.get_store(read_only=False)
         except Exception as e:
             log.warning(
@@ -188,7 +184,13 @@ def start() -> Optional[int]:
             _write_discovery_file(_port, _token)
         except Exception as e:
             log.warning("local_server: failed to write discovery file: %s", e)
-        atexit.register(_cleanup_discovery_file)
+        # NOTE: intentionally do NOT delete the discovery file on exit. During
+        # a daemon restart the brief gap between old-exit and new-write would
+        # leave the file missing — and a missing file makes get_store()'s
+        # writer guard think "no daemon present", letting the dashboard grab
+        # the writer in that window (the recurring Models/Embodied breakage).
+        # The next daemon overwrites the file on start; a stale entry is
+        # harmless (proxy clients already fall back on a dead port).
         return _port
 
 

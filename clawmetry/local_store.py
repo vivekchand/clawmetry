@@ -927,6 +927,40 @@ _store_ro: "LocalStore | None" = None
 _store_lock = threading.Lock()
 
 
+_writer_owner = False
+
+
+def mark_writer_owner() -> None:
+    """Declare THIS process the DuckDB writer owner. Called by
+    ``local_server.start()`` — the process hosting the local-query server is
+    the sync daemon, which owns the writer lock. Lets ``get_store()`` open the
+    writer here while refusing to steal it from a live daemon in any other
+    process (the dashboard)."""
+    global _writer_owner
+    _writer_owner = True
+
+
+def _daemon_registered() -> bool:
+    """True when a daemon has registered as the DuckDB writer owner — i.e.
+    ``~/.clawmetry/local_query.json`` exists for a DIFFERENT pid.
+
+    Deliberately does NOT check pid liveness: during a daemon restart the file
+    still names the just-exited pid, and that is exactly the window where a
+    non-owner (the dashboard) must NOT grab the writer — the daemon is coming
+    right back to reclaim it. Stealing it there starves the daemon's ingest and
+    blanks every snapshot read (Models/Embodied go empty). Only a true
+    single-process boot (no file at all — tests / dev / first run) lets a
+    non-owner open the writer. Best-effort; any error -> False (allow)."""
+    try:
+        import json as _j
+
+        with open(os.path.expanduser("~/.clawmetry/local_query.json")) as _f:
+            pid = _j.load(_f).get("pid")
+        return bool(pid) and int(pid) != os.getpid()
+    except Exception:
+        return False
+
+
 def get_store(read_only: bool = False) -> "LocalStore":
     """Lazy-init the process-wide singleton. Cheap to call repeatedly.
 
@@ -944,7 +978,23 @@ def get_store(read_only: bool = False) -> "LocalStore":
     if not read_only:
         if _store_rw is not None:
             return _store_rw
-        with _store_lock:
+        # Never steal the writer from a live daemon. A non-owner process (the
+        # dashboard) that opens the writer during a daemon-restart window
+        # starves the daemon's ingest and blanks every snapshot read. Downgrade
+        # to read_only — in the daemon this branch is skipped (it called
+        # mark_writer_owner()), and in single-process boots no live owner is
+        # registered so the writer still opens.
+        if not _writer_owner and (
+            os.environ.get("CLAWMETRY_ROLE") == "dashboard"
+            or _daemon_registered()
+        ):
+            # The dashboard process is structurally barred from the writer
+            # (CLAWMETRY_ROLE), which also closes the cold-start race where
+            # local_query.json is briefly absent. The daemon is unaffected: it
+            # calls mark_writer_owner() so _writer_owner short-circuits this.
+            read_only = True
+        else:
+          with _store_lock:
             if _store_rw is None:
                 if _store_ro is not None:
                     # Evict the cached RO handle so we can open the writer.

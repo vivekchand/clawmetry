@@ -2687,6 +2687,11 @@ def main() -> None:
             _register_nemoclaw_sandbox_daemons()
     else:
         # Fall through to dashboard (handles --host, --port, --version, start, stop, etc.)
+        # Tag this process as the dashboard so local_store.get_store() never
+        # opens the DuckDB writer here — only the sync daemon writes. The
+        # daemon (-m clawmetry.sync) doesn't take this path, and even if it
+        # inherited the env it calls mark_writer_owner() which overrides.
+        os.environ["CLAWMETRY_ROLE"] = "dashboard"
         dashboard_main()
 
 
