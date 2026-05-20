@@ -61,7 +61,13 @@ def _store_call(method_name, **kwargs):
         pass
     try:
         from clawmetry import local_store
-        store = local_store.get_store(read_only=False)
+        # read_only=True so a NON-daemon process (the dashboard) never grabs
+        # the DuckDB writer lock and starves the sync daemon — that steals the
+        # writer during a daemon-restart window and blanks every snapshot read
+        # (Models/Embodied go empty). In the daemon get_store(read_only=True)
+        # returns the existing writer, so writes here still work; in the
+        # dashboard writes go through the daemon proxy above.
+        store = local_store.get_store(read_only=True)
         return getattr(store, method_name)(**kwargs)
     except Exception:
         return None
