@@ -266,7 +266,7 @@ jobs:
       # lives in one file (tests/e2e/cloud-contract.mjs) and both
       # pipelines pick it up automatically.
       - name: Set up Node for cloud-contract spec
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
 
