@@ -7670,6 +7670,79 @@ def _build_selfevolve(workspace=None):
         return {}
 
 
+def _build_daily_usage(days=14):
+    """14-day token/cost history for the cloud Cost tab.
+
+    Sourced from DuckDB ``query_aggregates`` (events bucketed by their OWN ts =
+    the correct historical truth). The cloud Cost tab previously rendered a
+    today-collapsed approximation (all tokens looked like they happened today);
+    shipping the real per-day rollup here -> snapshot -> Redis -> cloud fixes
+    that. Shape matches ``/api/usage`` so the cloud just hands it to the
+    existing renderer. Built on the daemon's OWN store handle. Best-effort
+    -> {}."""
+    try:
+        from datetime import datetime, timedelta
+
+        from clawmetry import local_store as _ls
+
+        store = _ls.get_store()
+        if store is None:
+            return {}
+        daily_tok: dict = {}
+        daily_cost: dict = {}
+        for r in (store.query_aggregates() or []):
+            d = r.get("day") or ""
+            if not d:
+                continue
+            daily_tok[d] = daily_tok.get(d, 0) + int(r.get("token_count") or 0)
+            daily_cost[d] = daily_cost.get(d, 0.0) + float(r.get("cost_usd") or 0.0)
+        di: dict = {}
+        do: dict = {}
+        dcr: dict = {}
+        dcw: dict = {}
+        try:
+            for s in (store.query_daily_usage_splits() or []):
+                d = s.get("day")
+                if not d:
+                    continue
+                di[d] = int(s.get("input_tokens") or 0)
+                do[d] = int(s.get("output_tokens") or 0)
+                dcr[d] = int(s.get("cache_read_tokens") or 0)
+                dcw[d] = int(s.get("cache_write_tokens") or 0)
+                if daily_cost.get(d, 0.0) <= 0 and float(s.get("cost_usd") or 0) > 0:
+                    daily_cost[d] = float(s.get("cost_usd"))
+        except Exception:
+            pass
+        now = datetime.now()
+        out_days = []
+        for i in range(days - 1, -1, -1):
+            ds = (now - timedelta(days=i)).strftime("%Y-%m-%d")
+            out_days.append({
+                "date": ds,
+                "tokens": int(daily_tok.get(ds, 0)),
+                "cost": round(float(daily_cost.get(ds, 0.0)), 6),
+                "inputTokens": di.get(ds, 0),
+                "outputTokens": do.get(ds, 0),
+                "cacheReadTokens": dcr.get(ds, 0),
+                "cacheWriteTokens": dcw.get(ds, 0),
+            })
+        tstr = now.strftime("%Y-%m-%d")
+        wk = (now - timedelta(days=now.weekday())).strftime("%Y-%m-%d")
+        mo = now.strftime("%Y-%m-01")
+        return {
+            "days": out_days,
+            "today": int(daily_tok.get(tstr, 0)),
+            "week": int(sum(v for k, v in daily_tok.items() if k >= wk)),
+            "month": int(sum(v for k, v in daily_tok.items() if k >= mo)),
+            "todayCost": round(float(daily_cost.get(tstr, 0.0)), 6),
+            "weekCost": round(sum(v for k, v in daily_cost.items() if k >= wk), 6),
+            "monthCost": round(sum(v for k, v in daily_cost.items() if k >= mo), 6),
+        }
+    except Exception as _e:
+        log.debug("daily usage snapshot build failed: %s", _e)
+        return {}
+
+
 def _build_memory_files(workspace):
     """Build memory file list for the Memory popup."""
     if not workspace or not os.path.isdir(workspace):
@@ -8628,6 +8701,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
             ]
         ),
         "selfEvolve": _build_selfevolve(paths.get("workspace")),
+        "dailyUsage": _build_daily_usage(),
     }
 
     # ── NemoClaw / sandbox enrichment ────────────────────────────────────────
