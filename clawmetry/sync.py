@@ -7433,6 +7433,233 @@ def _build_transcripts(limit_sessions=8, msg_cap=80):
         return {}
 
 
+# ── Self-Evolve: delegate the review to OpenClaw itself ──────────────────────
+# The cloud server has no model credential, and ClawMetry's gateway token is
+# read-only (operator.read) — so neither can run the Self-Evolve LLM review.
+# OpenClaw can: the daemon shells out to ``openclaw agent`` (a real, isolated
+# session on OpenClaw's OWN credentials), parses the findings, and ships them
+# in the snapshot. The session transcript also lands on disk -> DuckDB, so the
+# whole thing flows local -> Redis -> cloud while ClawMetry stays read-only on
+# the gateway (it only invokes OpenClaw's own owner-access CLI, never opens a
+# write connection). Refresh is gated + backgrounded so we never re-bill on
+# every heartbeat or block the snapshot loop.
+
+_SE_SESSION_ID = "clawmetry-selfevolve"
+_SE_REFRESH_SEC = 6 * 3600
+_SE_LOCK = threading.Lock()
+_SE_STATE = {"payload": None, "computed_at": 0.0, "running": False}
+
+
+def _resolve_openclaw_bin():
+    """Find the ``openclaw`` binary. The daemon runs under launchd with a
+    minimal PATH, so ``shutil.which`` alone often misses Homebrew installs."""
+    import shutil
+
+    found = shutil.which("openclaw")
+    if found:
+        return found
+    for cand in (
+        "/opt/homebrew/bin/openclaw",
+        "/usr/local/bin/openclaw",
+        os.path.expanduser("~/.local/bin/openclaw"),
+        "/usr/bin/openclaw",
+    ):
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
+def _selfevolve_build_context(workspace=None):
+    """Compact telemetry context for the review, built on the daemon's OWN
+    store handle (never a read-only re-open — that deadlocks the write lock).
+    Best-effort -> {}."""
+    ctx = {}
+    try:
+        ctx["models"] = _build_model_attribution()
+    except Exception:
+        pass
+    try:
+        ctx["diagnostics"] = _build_diagnostics(workspace)
+    except Exception:
+        pass
+    try:
+        from collections import Counter
+        from clawmetry import local_store as _ls
+
+        store = _ls.get_store()
+        if store is not None:
+            evs = store.query_events(limit=400)
+            errs = [
+                e
+                for e in evs
+                if str(e.get("status", "")).lower() in ("error", "failed")
+                or e.get("is_error")
+            ]
+            type_counts = Counter(
+                (e.get("event_type") or e.get("_v3_type") or "other") for e in evs
+            )
+            ctx["events_summary"] = {
+                "recent_events": len(evs),
+                "errors": len(errs),
+                "by_type": dict(type_counts.most_common(12)),
+            }
+    except Exception:
+        pass
+    return ctx
+
+
+def _selfevolve_compute_via_openclaw(ctx, timeout=200):
+    """Run the Self-Evolve review by asking OpenClaw itself via ``openclaw
+    agent``. ``ctx`` is the telemetry context built in the MAIN snapshot thread
+    (DuckDB connections aren't thread-safe — building it here in the background
+    thread races the snapshot thread and yields empty context -> the agent
+    rightly returns ``insufficient``). Returns a payload matching
+    ``/api/selfevolve/analyze`` or None."""
+    try:
+        import subprocess
+
+        binp = _resolve_openclaw_bin()
+        if not binp:
+            return None
+        import routes.selfevolve as _se
+
+        ctx = ctx or {}
+        # ``openclaw agent`` takes a single --message, so fold the JSON-shape
+        # system instructions into the prompt body.
+        message = (
+            _se.SYSTEM_PROMPT
+            + "\n\n=== Aggregated telemetry for this agent ===\n"
+            + json.dumps(ctx, default=str, indent=2)[:6000]
+            + "\n\nReturn ONLY the JSON described above. No preamble, no "
+            "markdown fences."
+        )
+        # ``openclaw`` is a Node script; under the daemon's minimal launchd
+        # PATH ``node`` isn't found (rc 127). Prepend the openclaw bin dir
+        # (Homebrew puts ``node`` there too) plus the usual Node locations.
+        env = dict(os.environ)
+        node_dirs = [
+            os.path.dirname(binp),
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            os.path.expanduser("~/.local/bin"),
+        ]
+        env["PATH"] = os.pathsep.join(
+            node_dirs + [env.get("PATH", "/usr/bin:/bin")]
+        )
+        proc = subprocess.run(
+            [
+                binp,
+                "agent",
+                "--session-id",
+                _SE_SESSION_ID,
+                "--message",
+                message,
+                "--json",
+                "--timeout",
+                str(timeout),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout + 30,
+            env=env,
+        )
+        if proc.returncode != 0:
+            log.debug(
+                "openclaw agent selfevolve rc=%s err=%s",
+                proc.returncode,
+                (proc.stderr or "")[:200],
+            )
+            return None
+        out = json.loads(proc.stdout)
+        result = out.get("result") or {}
+        meta = result.get("meta") or {}
+        raw = ""
+        payloads = result.get("payloads") or []
+        if payloads:
+            raw = payloads[0].get("text") or ""
+        if not raw:
+            raw = meta.get("finalAssistantVisibleText") or ""
+        findings, fmeta = _se._extract_findings(raw)
+        return {
+            "findings": findings,
+            "insufficient": fmeta.get("insufficient", False),
+            "reason": fmeta.get("reason", ""),
+            "generated_at": int(time.time()),
+            "model": (meta.get("systemPromptReport") or {}).get(
+                "model", "openclaw-agent"
+            ),
+            "events_considered": (ctx.get("events_summary") or {}).get(
+                "recent_events", 0
+            ),
+            "source": "openclaw-agent",
+            "run_id": out.get("runId", ""),
+            "session_id": _SE_SESSION_ID,
+        }
+    except Exception as _e:
+        log.debug("selfevolve openclaw compute failed: %s", _e)
+        return None
+
+
+def _selfevolve_refresh_async(ctx):
+    """Kick a background Self-Evolve run (at most one in flight). ``ctx`` is the
+    telemetry context, pre-built in the caller's (main snapshot) thread."""
+
+    def _run():
+        payload = _selfevolve_compute_via_openclaw(ctx)
+        with _SE_LOCK:
+            _SE_STATE["running"] = False
+            _SE_STATE["computed_at"] = time.time()
+            # Only replace the cache with a result that actually has findings.
+            # A transient empty/insufficient run (e.g. sparse context) must not
+            # blow away a good prior payload.
+            if payload and payload.get("findings"):
+                _SE_STATE["payload"] = payload
+
+    with _SE_LOCK:
+        if _SE_STATE["running"]:
+            return
+        _SE_STATE["running"] = True
+    threading.Thread(target=_run, daemon=True, name="selfevolve-refresh").start()
+
+
+def _build_selfevolve(workspace=None):
+    """Self-Evolve findings for the cloud Self-Evolve tab — computed by asking
+    OpenClaw itself (see module note above). Best-effort -> {}."""
+    try:
+        with _SE_LOCK:
+            payload = _SE_STATE["payload"]
+            computed_at = _SE_STATE["computed_at"]
+        # Cold start: fall back to whatever the local dashboard cached on disk
+        # so the cloud renders immediately while the first fresh run is queued.
+        if payload is None:
+            try:
+                import routes.selfevolve as _se
+
+                payload = _se._load_cached()
+            except Exception:
+                payload = None
+        can_run = bool(_resolve_openclaw_bin())
+        if can_run and (time.time() - computed_at > _SE_REFRESH_SEC):
+            # Build the context HERE, in the snapshot thread, before handing it
+            # to the background runner — DuckDB connections aren't thread-safe,
+            # so querying the store from the worker thread races this thread and
+            # returns empty context (the agent then reports "insufficient").
+            ctx = _selfevolve_build_context(workspace)
+            _selfevolve_refresh_async(ctx)
+        latest = payload or {"findings": [], "cached": False}
+        status = {
+            "available": bool(can_run or (payload and payload.get("findings"))),
+            "auth_mode": "openclaw-agent",
+            "has_cached": bool(payload and payload.get("findings")),
+            "cached_at": (payload or {}).get("generated_at"),
+            "setup_hint": None,
+        }
+        return {"status": status, "latest": latest}
+    except Exception as _e:
+        log.debug("selfevolve snapshot build failed: %s", _e)
+        return {}
+
+
 def _build_memory_files(workspace):
     """Build memory file list for the Memory popup."""
     if not workspace or not os.path.isdir(workspace):
@@ -8335,6 +8562,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "diagnostics": _build_diagnostics(paths.get("workspace")),
         "modelAttribution": _build_model_attribution(),
         "transcripts": _build_transcripts(),
+        "selfEvolve": _build_selfevolve(paths.get("workspace")),
     }
 
     # ── NemoClaw / sandbox enrichment ────────────────────────────────────────
