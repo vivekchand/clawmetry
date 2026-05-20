@@ -235,6 +235,33 @@ def _fetch_cloud_policies(api_key: str) -> list[dict]:
 
 # ── Match engine ──────────────────────────────────────────────────────────
 
+# Harness-agnostic tool categories. Approval policies are authored against
+# OpenClaw's tool names (``exec``, ``read``, …), but other harnesses emit the
+# SAME semantic tool under a different name — claude-cli/Claude Code calls the
+# shell ``Bash``, Codex ``shell``, etc. Without this map a policy with
+# ``tool: exec`` silently never matches a ``Bash`` toolCall, so no approval
+# ever fires (the recurring "I toggled rules but never see a pending
+# approval" bug). Map both sides to a canonical category before comparing.
+_TOOL_CANON = {}
+for _canon, _aliases in {
+    "exec": ["exec", "bash", "sh", "shell", "zsh", "fish", "powershell", "pwsh",
+             "cmd", "command", "run", "run_command", "run_terminal_cmd",
+             "terminal", "execute", "shell_command", "bashtool"],
+    "read": ["read", "cat", "view", "open", "read_file", "get_file", "fs_read"],
+    "write": ["write", "edit", "multiedit", "str_replace", "str_replace_editor",
+              "create", "apply_patch", "write_file", "fs_write"],
+    "web": ["web_fetch", "webfetch", "fetch", "curl", "wget", "http",
+            "web_search", "websearch", "browser", "browse"],
+    "search": ["grep", "glob", "ls", "find", "search", "memory_search"],
+}.items():
+    for _a in _aliases:
+        _TOOL_CANON[_a] = _canon
+
+
+def _canonical_tool(name: str) -> str:
+    """Map a harness-specific tool name to its canonical category (or itself)."""
+    return _TOOL_CANON.get((name or "").strip().lower(), (name or "").strip().lower())
+
 
 def _extract_command(tool_name: str, args: dict) -> str:
     """Best-effort: derive the human-readable 'command' string from toolCall args.
@@ -269,7 +296,10 @@ def match_policy(policies: list[dict], tool_name: str, args: dict):
     except Exception:
         pass
     for p in policies:
-        if p.get("tool") and tool_name.lower() != p["tool"].lower():
+        # Harness-agnostic tool match: a policy authored for ``exec`` matches a
+        # ``Bash`` / ``shell`` toolCall (see _canonical_tool). Falls back to a
+        # plain case-insensitive compare when neither side maps to a category.
+        if p.get("tool") and _canonical_tool(tool_name) != _canonical_tool(p["tool"]):
             continue
         if p.get("command_regex") and not p["command_regex"].search(cmd):
             continue
