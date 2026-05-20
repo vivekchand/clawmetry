@@ -6074,7 +6074,7 @@ function openDetailView(type) {
   } else if (type === 'sessions') {
     showSessionsModal();
   } else if (type === 'tools') {
-    switchTab('logs');
+    switchTab('brain');
   } else {
     // For thinking feed and models, stay on overview but could expand in future
     alert('Detail view for ' + type + ' coming soon!');
