@@ -1874,13 +1874,18 @@ def _scan_spawn_events_from_jsonl(sessions_dir, max_files=None, tail_bytes=None)
     return subs
 
 
-def _try_local_store_subagents():
+def _try_local_store_subagents(_rows=None):
     """Fast path for /api/subagents. Reads the pre-aggregated ``subagents``
     table that the sync daemon write-throughs from each system-snapshot
     pass (see ``clawmetry/sync.py`` ``ingest_subagent`` call site). Each
     row carries the same fields the JSONL-walking legacy path derives, so
     we can serve the dashboard's Subagent Tracker tab without re-scanning
     every session JSONL on every request.
+
+    ``_rows`` lets a caller pass ``query_subagents`` rows it already has
+    (e.g. the sync daemon building the snapshot on its OWN store handle,
+    where the cross-process ``_ls_call`` proxy is the wrong tool). When
+    omitted we fetch via the daemon proxy as usual.
 
     Returns ``None`` when the table is empty so the legacy gateway-RPC +
     JSONL fallback fires for older OpenClaw versions / installs whose
@@ -1889,7 +1894,7 @@ def _try_local_store_subagents():
     spawned — keeps the route off the 100-file JSONL walker for the
     common empty case.
     """
-    rows = _ls_call("query_subagents", limit=500)
+    rows = _rows if _rows is not None else _ls_call("query_subagents", limit=500)
     # Distinguish "store missing entirely" (rows is None) from "store is
     # there but no subagent rows yet" (rows == []). Both return None so
     # the legacy gateway-RPC + JSONL fallback fires — older OpenClaw
