@@ -3615,8 +3615,12 @@ DASHBOARD_HTML = r"""
   .zoom-wrapper { transform-origin: top left; transition: transform 0.3s ease; }
 
   /* === Split-Screen Overview === */
-  .overview-split { display: grid; grid-template-columns: 60fr 1px 40fr; gap: 0; margin-bottom: 0; height: calc(100vh - 175px); }
-  .overview-flow-pane { position: relative; border: 1px solid var(--border-primary); border-radius: 8px 0 0 8px; overflow: hidden; background: var(--bg-secondary); padding: 4px; }
+  /* height:auto + min-height (not a fixed height): when the left column's
+     System Health panel is tall it must grow the grid, not overflow it and
+     collide with #heartbeat-panel below (the flow-pane keeps its own
+     min-height so flex:3 can't collapse it in an auto-height grid). */
+  .overview-split { display: grid; grid-template-columns: 60fr 1px 40fr; gap: 0; margin-bottom: 0; height: auto; min-height: calc(100vh - 175px); }
+  .overview-flow-pane { position: relative; border: 1px solid var(--border-primary); border-radius: 8px 0 0 8px; overflow: hidden; background: var(--bg-secondary); padding: 4px; min-height: 55vh; }
   .overview-flow-pane .flow-container { height: 100%; }
   .overview-flow-pane svg { width: 100%; height: 100%; min-width: 0 !important; }
   .overview-divider { background: var(--border-primary); width: 1px; }
