@@ -10,6 +10,7 @@ and they are all auth/meta/observability plumbing:
   bp_auth           (3)  — /api/auth/check, /auth, /  (main page)
   bp_otel           (3)  — /v1/metrics, /v1/traces, /api/otel-status
   bp_version_impact (1)  — /api/version-impact
+  bp_cloud_relay    (1)  — /api/cloud/subscribe
 
 Module-level helpers (``_auto_discover_gateway``, ``_gw_invoke_docker``,
 ``_gw_invoke``, ``_gw_ws_rpc``, ``_load_gw_config``, ``_ext_emit``,
