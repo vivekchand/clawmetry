@@ -7386,7 +7386,7 @@ def _build_model_attribution():
         return {}
 
 
-def _build_transcripts(limit_sessions=8, msg_cap=80):
+def _build_transcripts(limit_sessions=8, msg_cap=80, extra_sids=None):
     """Recent per-session transcripts for the cloud Embodied tab.
 
     Built on the daemon's OWN store handle (a read-only re-open deadlocks the
@@ -7394,7 +7394,12 @@ def _build_transcripts(limit_sessions=8, msg_cap=80):
     <transcript dict>}`` for the most-recent sessions, message-capped to bound
     the encrypted snapshot size. The transcript dict matches what
     ``/api/transcript/<id>`` returns, so the cloud just hands it to the
-    existing Embodied renderer. Best-effort -> {}.
+    existing Embodied renderer.
+
+    ``extra_sids`` are session ids that MUST be included even if they fall
+    outside the most-recent-N window — e.g. ACTIVE sub-agents, so the cloud
+    Active Tasks click-through ("see what this sub-agent is doing") has a
+    transcript to render. Best-effort -> {}.
     """
     try:
         from clawmetry import local_store as _ls
@@ -7404,15 +7409,20 @@ def _build_transcripts(limit_sessions=8, msg_cap=80):
         if store is None:
             return {}
         evs = store.query_events(limit=5000)  # DESC by ts (most recent first)
-        if not evs:
-            return {}
         recent_sids = []
-        for e in evs:
+        for e in (evs or []):
             sid = (e.get("session_id") or "").strip()
             if sid and sid not in recent_sids:
                 recent_sids.append(sid)
             if len(recent_sids) >= limit_sessions:
                 break
+        # Always include explicitly-requested sessions (active sub-agents).
+        for sid in (extra_sids or []):
+            sid = (sid or "").strip()
+            if sid and sid not in recent_sids:
+                recent_sids.append(sid)
+        if not recent_sids:
+            return {}
         out = {}
         for sid in recent_sids:
             try:
@@ -8494,6 +8504,55 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         except Exception as e:
             log.debug(f"Session index read error: {e}")
 
+    # jsonl -> DuckDB -> snapshot. Write each sub-agent into the local store,
+    # then read them BACK from DuckDB so the cloud snapshot and the OSS
+    # /api/subagents fast path share ONE source (query_subagents). Previously
+    # the snapshot shipped the filesystem-built list directly, bypassing
+    # DuckDB — the data path is now jsonl -> duckdb -> redis -> cloud,
+    # identical in OSS and cloud.
+    try:
+        from clawmetry import local_store as _ls_sa
+
+        _sa_store = _ls_sa.get_store()
+        for _sa in subagents_list:
+            _sid = _sa.get("sessionId") or _sa.get("key")
+            if not _sid:
+                continue
+            _sa_store.ingest_subagent(
+                {
+                    "subagent_id": _sid,
+                    "agent_type": "openclaw",
+                    "task": _sa.get("task", ""),
+                    "status": _sa.get("status", ""),
+                    "token_count": _sa.get("tokens", 0),
+                    "model": _sa.get("model", ""),
+                    "label": _sa.get("label", ""),
+                    "displayName": _sa.get("displayName", ""),
+                    "session_file": _sa.get("sessionFile", ""),
+                    "updated_at_ms": _sa.get("updatedAt", 0),
+                    "runtime_ms": _sa.get("runtimeMs", 0),
+                }
+            )
+    except Exception as _e:
+        log.debug("local_store: subagent ingest failed: %s", _e)
+    try:
+        import routes.sessions as _sa_routes
+        from clawmetry import local_store as _ls_rb
+
+        # Pass rows from the daemon's OWN store handle — the cross-process
+        # _ls_call proxy is unreliable when called from inside the daemon.
+        _duck_rows = _ls_rb.get_store().query_subagents(limit=500)
+        _duck = _sa_routes._try_local_store_subagents(_rows=_duck_rows)
+        if _duck and isinstance(_duck.get("subagents"), list):
+            # Keep the filesystem list only if the DuckDB read came back empty
+            # while the FS had rows (defensive — never blank a live workforce).
+            if _duck["subagents"] or not subagents_list:
+                subagents_list = _duck["subagents"]
+                _dc = _duck.get("counts") or {}
+                active_count = _dc.get("active", active_count)
+    except Exception as _e:
+        log.debug("subagents read-back from DuckDB failed: %s", _e)
+
     # Crons
     cron_enabled = 0
     cron_disabled = 0
@@ -8561,7 +8620,13 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "ollamaInfo": _detect_ollama_for_heartbeat(),
         "diagnostics": _build_diagnostics(paths.get("workspace")),
         "modelAttribution": _build_model_attribution(),
-        "transcripts": _build_transcripts(),
+        "transcripts": _build_transcripts(
+            extra_sids=[
+                s["sessionId"]
+                for s in subagents_list
+                if s.get("status") in ("active", "idle") and s.get("sessionId")
+            ]
+        ),
         "selfEvolve": _build_selfevolve(paths.get("workspace")),
     }
 
@@ -8636,23 +8701,10 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
             "active_subagents":  active_count,
         })
 
-        for sa in subagents_list:
-            sid = sa.get("sessionId") or sa.get("key")
-            if not sid:
-                continue
-            _store.ingest_subagent({
-                "subagent_id":       sid,
-                "agent_type":        "openclaw",
-                "task":              sa.get("task", ""),
-                "status":            sa.get("status", ""),
-                "token_count":       sa.get("tokens", 0),
-                "model":             sa.get("model", ""),
-                "label":             sa.get("label", ""),
-                "displayName":       sa.get("displayName", ""),
-                "session_file":      sa.get("sessionFile", ""),
-                "updated_at_ms":     sa.get("updatedAt", 0),
-                "runtime_ms":        sa.get("runtimeMs", 0),
-            })
+        # Sub-agent ingest moved EARLIER (right after the session-index read)
+        # so the snapshot reads sub-agents back from DuckDB. Re-ingesting here
+        # would corrupt the rows — subagents_list now carries the DuckDB shape
+        # (displayName/totalTokens), not the filesystem shape (label/tokens).
     except Exception as _e:
         log.debug("local_store: snapshot/subagent write-through failed: %s", _e)
 
