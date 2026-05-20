@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Writer-steal fix completed: role gate set before dashboard import (#1814, 2026-05-20)
+- Follow-up to #1810. The `CLAWMETRY_ROLE=dashboard` gate was set just before `dashboard_main()`, but `from dashboard import main` runs earlier and dashboard.py has module-level/handler `get_store()` calls — so the dashboard could still race in and grab the DuckDB writer before the gate was active (Models/Embodied/Cost-history intermittently blanked). Setting the env before the import closes it. Verified live: daemon keeps the writer across restarts; Models, Embodied, and the Cost 14-day history all render correctly in cloud.
+
 ### Cloud parity: sub-agents, writer-lock stability, Cost history (2026-05-20)
 - **Active Tasks / sub-agents (#1809).** The cloud Active Tasks panel showed "No active tasks" while sub-agents ran (`/api/subagents` read the cloud's empty filesystem). Sub-agents now flow jsonl -> DuckDB -> snapshot -> Redis -> cloud (read back via `query_subagents`); active sub-agents' transcripts ride the snapshot too so the click-through shows what each one is doing.
 - **Stop the dashboard stealing the DuckDB writer (#1810).** Root cause of "Models/Embodied randomly go empty in cloud": the dashboard process grabbed the DuckDB *writer* lock, starving the sync daemon so every snapshot read returned empty. Only the daemon writes now — a `CLAWMETRY_ROLE=dashboard` gate + a daemon-registered guard + no longer deleting the local-query discovery file on exit (that gap was the steal window). Verified the daemon keeps the writer across repeated restarts.
