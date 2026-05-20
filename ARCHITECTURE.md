@@ -249,6 +249,22 @@ An optional companion that adds persistent time-series:
 - Session history with cost trends
 - Cron execution history
 
+### LocalStore Durability Contract
+
+`clawmetry/local_store.py` provides the write-side durability guarantee for the sync daemon.
+
+**Ring-buffer → flush → WAL model**:
+1. `LocalStore.ingest(event)` appends the event to an in-memory `deque` (ring buffer, max 10 000 slots).
+2. When the ring reaches `FLUSH_BATCH` entries (default 1 000) **or** the background flusher timer fires (every 2 s), `_flush_now_locked()` writes the batch to DuckDB inside an explicit `BEGIN / COMMIT` transaction.
+3. DuckDB writes the commit to its WAL synchronously before returning. The data is durable: even a `SIGKILL` immediately after `COMMIT` will not lose the row.
+
+**Crash and replay**:
+- Events **in the ring buffer at crash time** (not yet flushed) are lost from DuckDB's perspective.
+- The daemon source (JSONL transcripts) is never mutated — on restart the daemon re-reads from the beginning and re-ingests all events.
+- `INSERT OR IGNORE` on `events.id` (the PRIMARY KEY) makes every re-ingest idempotent: already-committed rows are silently skipped, missing rows are inserted. Final count is always exactly N.
+
+**Invariant asserted in CI**: `tests/test_moat_daemon_crash_recovery.py` — SIGKILL mid-burst + full source replay → `COUNT(*) = COUNT(DISTINCT id) = N`.
+
 ### Performance
 - **Memory**: ~30-80MB typical
 - **CPU**: Negligible (event-driven, no polling loops except health)
