@@ -806,18 +806,31 @@ def api_channels_summary():
 def api_channel_delivery_health():
     """Aggregate outbound message delivery integrity across all channels.
 
-    Scans the past 48 h of log files for send-success, send-failure, and
-    run-start events grouped by channel.  Returns per-channel counts:
+    DuckDB fast-path (issue #1757): tries ``query_channel_delivery_health``
+    first. Falls back to log-file scanning when DuckDB has no delivery events
+    yet (i.e. before adapter instrumentation ships).
 
-    - ``intents``     — detected run-starts (agent began handling a channel msg)
+    Returns per-channel counts:
+    - ``intents``     — run-starts (agent began handling a channel msg)
     - ``ok``          — confirmed outbound deliveries
-    - ``failed``      — explicit send failures logged by the adapter
-    - ``unconfirmed`` — intents with no matching ok/failed entry (the gap)
+    - ``failed``      — explicit send failures
+    - ``unconfirmed`` — intents with no matching ok/failed entry
     - ``success_rate`` — ok / (ok + failed), null when no sends recorded
 
     Addresses issue #978: channel delivery failures were logged per-adapter
     but never surfaced in an aggregate view.
     """
+    # ── DuckDB fast-path ──────────────────────────────────────────────────
+    store_rows = _ls_call("query_channel_delivery_health", since_hours=48)
+    if store_rows:
+        return jsonify({
+            "channels":          store_rows,
+            "log_files_scanned": 0,
+            "_source":           "local_store",
+            "ts":                datetime.now().isoformat(),
+        })
+
+    # ── DEPRECATED FALLBACK — delete after adapters emit delivery events ──
     import re
     import dashboard as _d
 

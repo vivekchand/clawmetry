@@ -4102,6 +4102,70 @@ class LocalStore:
                 "last_test_error", "updated_at"]
         return [_row_to_dict(r, cols) for r in self._fetch(sql, params)]
 
+    def query_channel_delivery_health(
+        self,
+        since_hours: int = 48,
+    ) -> list[dict[str, Any]]:
+        """Per-channel delivery counts from DuckDB (issue #1757 fast-path).
+
+        Queries events rows with event_type in ('delivery.ok',
+        'delivery.failed', 'delivery.intent'), grouped by the ``provider``
+        field inside the ``data`` BLOB.  Returns an empty list when no such
+        events exist in the window — the caller (api_channel_delivery_health)
+        should fall back to log-file scanning in that case.
+
+        This method is the DuckDB-first counterpart to the log-scan path that
+        PR #1740 introduced.  It becomes the primary data source once channel
+        adapters emit delivery events; until then it returns [] and the
+        legacy fallback fires.
+        """
+        from datetime import datetime, timedelta, timezone
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(hours=int(since_hours))
+        ).isoformat()
+        rows = self._fetch(
+            "SELECT event_type, data FROM events "
+            "WHERE event_type IN ('delivery.ok','delivery.failed','delivery.intent') "
+            "AND ts >= ?",
+            [cutoff],
+        )
+        decoded = _decode_data_blob_rows(rows, ["event_type", "data"])
+
+        counts: dict[str, dict[str, int]] = {}
+        for row in decoded:
+            data = row.get("data") or {}
+            if not isinstance(data, dict):
+                continue
+            provider = str(
+                data.get("provider") or data.get("channel") or ""
+            ).lower().strip()
+            if not provider:
+                continue
+            if provider not in counts:
+                counts[provider] = {"ok": 0, "failed": 0, "intents": 0}
+            et = row["event_type"]
+            if et == "delivery.ok":
+                counts[provider]["ok"] += 1
+            elif et == "delivery.failed":
+                counts[provider]["failed"] += 1
+            elif et == "delivery.intent":
+                counts[provider]["intents"] += 1
+
+        result = []
+        for ch, c in sorted(counts.items()):
+            total_sends = c["ok"] + c["failed"]
+            result.append({
+                "channel": ch,
+                "intents": c["intents"],
+                "ok": c["ok"],
+                "failed": c["failed"],
+                "unconfirmed": max(0, c["intents"] - total_sends),
+                "success_rate": (
+                    round(c["ok"] / total_sends, 3) if total_sends else None
+                ),
+            })
+        return result
+
     def query_alert_rules(
         self,
         *,
