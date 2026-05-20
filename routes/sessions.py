@@ -3241,18 +3241,13 @@ def _try_local_store_transcript(session_id: str):
         except Exception:
             return None
     if not rows:
-        # Empty is a legitimate "no events for this session yet" — return a
-        # populated shell so the JSONL walker doesn't get a second chance
-        # to do the same 5.5s walk for the same empty answer (PR #1266
-        # pattern). Caller decorates with `_source: "local_store"`.
-        return {
-            "messages":     [],
-            "model":        None,
-            "total_tokens": 0,
-            "first_ts":     None,
-            "last_ts":      None,
-            "_source":      "local_store",
-        }
+        # Return None so the caller falls through to the JSONL parser.
+        # When DuckDB has no events for a session (broken ingest pipeline or
+        # genuinely new session), the JSONL fallback will either serve the
+        # real transcript from disk (#1772) or return 404 if no file exists —
+        # both are correct. Returning an empty shell here blocks the fallback
+        # and produces silent zeros when the pipeline is offline.
+        return None
     # query_events returns DESC by ts; transcripts read forward.
     rows = list(reversed(rows))
     messages: list[dict] = []
