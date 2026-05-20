@@ -1,5 +1,5 @@
 """
-routes/meta.py — Auth / gateway / OTLP / version / clusters / version-impact.
+routes/meta.py — Auth / gateway / OTLP / version / version-impact.
 
 Extracted from dashboard.py as Phase 5.12 of the incremental modularisation.
 Six small Blueprints bundled into one file because each is tiny (1-3 routes)
@@ -10,14 +10,14 @@ and they are all auth/meta/observability plumbing:
   bp_auth           (3)  — /api/auth/check, /auth, /  (main page)
   bp_otel           (3)  — /v1/metrics, /v1/traces, /api/otel-status
   bp_version_impact (1)  — /api/version-impact
-  bp_clusters       (1)  — /api/clusters
+  bp_cloud_relay    (1)  — /api/cloud/subscribe
 
 Module-level helpers (``_auto_discover_gateway``, ``_gw_invoke_docker``,
 ``_gw_invoke``, ``_gw_ws_rpc``, ``_load_gw_config``, ``_ext_emit``,
 ``_process_otlp_metrics``, ``_process_otlp_traces``, ``_has_otel_data``,
 ``_get_openclaw_version``, ``_record_version_if_changed``,
 ``_version_impact_db``, ``_compute_session_stats_in_range``,
-``_stats_to_summary``, ``_compute_diff``, ``_build_clusters``) and module
+``_stats_to_summary``, ``_compute_diff``) and module
 state (``GATEWAY_URL``, ``GATEWAY_TOKEN``, ``_ws_client``, ``_ws_connected``,
 ``_GW_CONFIG_FILE``, ``_CURRENT_PLATFORM``, ``__version__``, ``_pypi_cache``,
 ``_budget_paused``, ``_HAS_OTEL_PROTO``, ``_metrics_lock``, ``metrics_store``,
@@ -50,7 +50,6 @@ bp_gateway = Blueprint('gateway', __name__)
 bp_auth = Blueprint('auth', __name__)
 bp_otel = Blueprint('otel', __name__)
 bp_version_impact = Blueprint('version_impact', __name__)
-bp_clusters = Blueprint('clusters', __name__)
 bp_cloud_relay = Blueprint('cloud_relay', __name__)
 
 
@@ -1045,55 +1044,6 @@ def api_version_impact():
             "transitions": transitions,
         }
     )
-
-
-# ── Trace clustering ──────────────────────────────────────────────────────────
-
-
-@bp_clusters.route("/api/clusters")
-def api_clusters():
-    """Return session clusters grouped by tool call pattern, cost, and error types."""
-    import dashboard as _d
-    sessions_dir = getattr(_d, "SESSIONS_DIR", None) or os.path.expanduser(
-        "~/.openclaw/agents/main/sessions"
-    )
-    # Issue #1088: opt-in DuckDB fast path. Delegates to the same DuckDB-driven
-    # clustering used by /api/sessions/clusters and exposes a thinner shape
-    # (clusters + total_clusters) — _source: "local_store" for tests.
-    if is_local_store_read_enabled():
-        try:
-            from routes.usage import _try_local_store_sessions_clusters
-            fast = _try_local_store_sessions_clusters(30)
-            if fast is not None:
-                return jsonify({
-                    "clusters": fast.get("clusters", []),
-                    "total_clusters": len(fast.get("clusters", [])),
-                    "sessions_dir": sessions_dir,
-                    "_source": "local_store",
-                })
-        except Exception:
-            pass
-    # Cloud's dashboard.py doesn't ship _build_clusters; fall through to an
-    # empty 200 instead of leaking a 500 with an AttributeError body into the
-    # user's console. (When cloud_route_policy is loaded, this endpoint is
-    # normally returned as 410 by the policy enforcer; this guard is the
-    # defence-in-depth path for environments where the policy isn't active.)
-    build_clusters = getattr(_d, "_build_clusters", None)
-    if build_clusters is None:
-        return jsonify(
-            {"clusters": [], "total_clusters": 0, "sessions_dir": sessions_dir}
-        )
-    try:
-        clusters = build_clusters(sessions_dir)
-        return jsonify(
-            {
-                "clusters": clusters,
-                "total_clusters": len(clusters),
-                "sessions_dir": sessions_dir,
-            }
-        )
-    except Exception as e:
-        return jsonify({"error": str(e), "clusters": []}), 500
 
 
 # ── Heartbeat-piggyback subscribe queue (issue #1595) ────────────────────────
