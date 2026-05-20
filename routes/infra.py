@@ -41,7 +41,7 @@ bp_security = Blueprint('security', __name__)
 bp_config = Blueprint('config', __name__)
 
 
-# ── Logs / Flow SSE ────────────────────────────────────────────────────────
+# ── Logs / Flow SSE ─────────────────────────────────────────────────────────────────
 
 
 @bp_logs.route("/api/logs")
@@ -793,7 +793,7 @@ def api_logs_stream():
     )
 
 
-# ── Memory files ───────────────────────────────────────────────────────────
+# ── Memory files ───────────────────────────────────────────────────────────────────────
 #
 # Local-store fast path (DuckDB MOAT mandate): when
 # CLAWMETRY_LOCAL_STORE_READ=1 AND the local memory_blobs table has rows for
@@ -1103,7 +1103,7 @@ def api_memory_analytics():
     return jsonify(_build_memory_analytics(files, bloat_warn_kb, bloat_crit_kb))
 
 
-# ── Memory RAG / SQLite inspector (issue #610) ─────────────────────────────
+# ── Memory RAG / SQLite inspector (issue #610) ──────────────────────────────────────────
 
 
 def _open_rag_db():
@@ -1248,7 +1248,7 @@ def api_memory_rag_search():
         conn.close()
 
 
-# ── Security ───────────────────────────────────────────────────────────────
+# ── Security ──────────────────────────────────────────────────────────────────────────
 
 
 @bp_security.route("/api/security/threats")
@@ -1312,7 +1312,7 @@ def api_security_posture():
         return jsonify({"error": str(e), "score": "U", "checks": []}), 500
 
 
-# ── Config / Cost optimization ─────────────────────────────────────────────
+# ── Config / Cost optimization ───────────────────────────────────────────────────────────
 
 
 @bp_config.route("/api/llmfit")
