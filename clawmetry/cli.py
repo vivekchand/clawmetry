@@ -2376,6 +2376,13 @@ def main() -> None:
             "v2 preview at http://localhost:8900/v2 · back to v1 at /",
             flush=True,
         )
+    # Tag this process as the dashboard BEFORE importing dashboard, so every
+    # get_store() in dashboard.py (module-level + handlers) is barred from the
+    # DuckDB writer — only the sync daemon writes. Set before the import or a
+    # module-level open would race in before the gate is active. The daemon
+    # (-m clawmetry.sync) never takes this path and calls mark_writer_owner(),
+    # which overrides the gate.
+    os.environ["CLAWMETRY_ROLE"] = "dashboard"
     from dashboard import main as dashboard_main
 
     # Anonymous, opt-out, once-per-install ping. See clawmetry/telemetry.py
