@@ -454,6 +454,26 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
         "policy_name": policy["name"],
         "timeout": policy["timeout"],
     }
+    # Persist to local DuckDB so the daemon's heartbeat cache_push surfaces
+    # this in the cloud Approvals inbox — which reads the
+    # approvals:{owner_hash}:queue Redis key, NOT the legacy
+    # _post_approval_request endpoint. Without this the watcher fired but the
+    # inbox stayed empty ("toggled rules but never see a pending approval").
+    try:
+        import hashlib as _hl
+        from clawmetry import local_store as _lsa
+        _lsa.get_store().ingest_approval({
+            "id": approval_id,
+            "owner_hash": _hl.sha256((api_key or "").encode()).hexdigest(),
+            "requestor_session_id": session_id,
+            "action": f"{tool_name}: {cmd_preview}",
+            "args": args,
+            "status": "pending",
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        })
+    except Exception as _ae:
+        log.debug("approval DuckDB persist failed: %s", _ae)
+
     resp = _post_approval_request(api_key, req)
     if not resp:
         # Cloud unreachable — fail-open by default (don't block the agent)
@@ -469,6 +489,14 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
     killed = False
     if decision == "denied":
         killed = _kill_session(session_id)
+    # Mirror the resolution into DuckDB so the approval leaves the cloud
+    # pending queue (the next cache_push won't re-surface it as pending).
+    try:
+        from clawmetry import local_store as _lsa2
+        _lsa2.get_store().update_approval_decision(
+            approval_id, decision, "cloud", None)
+    except Exception as _ue:
+        log.debug("approval decision update failed: %s", _ue)
     result = {"decision": decision, "policy": policy["name"], "killed": killed,
               "approval_id": approval_id}
     log.info(f"[approval] {approval_id} → {decision}, killed={killed}")
