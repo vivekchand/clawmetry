@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout OSS repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Get OSS version
         id: oss_version
@@ -26,7 +26,7 @@ jobs:
           echo "OSS version: $VERSION"
 
       - name: Checkout cloud repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: vivekchand/clawmetry-cloud
           token: ${{ secrets.CLOUD_REPO_PAT }}
