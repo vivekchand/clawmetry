@@ -1,6 +1,6 @@
 # ClawMetry — Product Requirements Document
 
-**Status:** living document · last updated 2026-05-10
+**Status:** living document · last updated 2026-05-20
 **Scope:** every shipped feature across OSS (`pip install clawmetry`) and Cloud (`app.clawmetry.com`)
 **Purpose:** the contract that any refactor (most urgently the local-first refactor in #964) must not silently break
 
@@ -164,18 +164,29 @@ These do not exist in OSS and require a `cm_…` token + a Cloud account.
 - `~/.clawmetry/sync.log` — daemon log
 - `~/.clawmetry/sync-state.json` — last_event_ids per file, backfill cursors
 
-### Cloud (Cloud SQL Postgres, behind PgBouncer sidecar)
-- `users` — email, api_key, api_key_hash, plan, stripe_customer_id, trial_end, status
-- `nodes` — node_id, owner_hash, hostname, version, last_seen_at, security_posture, metadata
-- `sessions` — session metadata per node (model, total_tokens, cost_usd, status)
-- `events` — encrypted blobs (encrypted_events / encrypted_logs / encrypted_memory) + plaintext tool_call / cron_run / heartbeat
-- `node_metrics` — OTLP time-series (temporary; gets aggregated)
-- `node_registry` — machine-id deduplication
-- `autonomy_snapshots` — daily roll-ups
-- `approvals`, `alert_rules`, `alert_history`, `notification_channels`, `policies`
-- `otp_store`, `connect_otps`, `coupon_codes`
+### Cloud storage policy (2026-05-20)
+**Principle:** Cloud SQL holds *account / cloud-product data only*. Everything OpenClaw (events, logs, model names, sessions, snapshots, memory, crons) is **read from local files into the daemon's DuckDB, cached to Redis via heartbeat `cache_pushes`, and the UI reads only Redis** — so the UI indirectly reads from the local DuckDB. This keeps the cloud a lightweight cache, preserves E2E privacy (cloud holds ciphertext only), and lets new harnesses (OpenClaw, Hermes, Claude Code, Codex, …) plug in via daemon adapters with no cloud/UI hardcoding.
 
-The `events` table is the dominant cost driver and the primary target of the local-first refactor.
+### Redis cache — the OpenClaw data layer (`routes/heartbeat_relay.py`)
+Daemon `cache_pushes` (clawmetry/sync.py `_build_*_cache_pushes`) write encrypted blobs the browser decrypts with the per-account key:
+- `brain:{owner_hash}:{node_id}:recent` — recent reasoning / tool events
+- `memory:{owner_hash}:{node_id}:files` — memory files
+- `snapshot:{owner_hash}:{node_id}:latest` — system snapshot (system rows, subagents, cronJobs, **diagnostics**, memoryFiles, toolStats, …)
+- channel-config / alert-rules / approvals cache entries
+
+`owner_hash = sha256(token)`; the browser `cm_token` equals the daemon api key, so ingest-side and read-side hashes match.
+
+### Cloud SQL Postgres — account / cloud-product only (behind PgBouncer sidecar)
+- `users` — email, api_key, api_key_hash, plan, stripe_customer_id, trial_end, status
+- `nodes`, `node_registry`, `installs` — node registry + machine-id dedup + install tracking
+- `notification_channels`, `approvals`, `approval_policies`, `approval_integrations`, `alerts`, `alert_history`, `budget_config` — cloud-mediated features (config + queues)
+- `otp_store`, `connect_otps`, `push_tokens`, `trial_emails` — auth / lifecycle
+- `analytics_events` — ClawMetry's *own* product analytics (admin page); not OpenClaw data
+- `sessions` — **still present (76 MB), still active**: written by ingest, read by `alerts.py` / admin / `api_v1`. OpenClaw data → slated to move to the Redis/DuckDB path then deprecate. Not dropped (load-bearing today).
+
+**Retired:**
+- `events` (was **1.36 TB** — encrypted_events 1.14 TB, encrypted_logs 130 GB, cron_state 15.8 M rows, encrypted_memory, system_snapshot) — **DROPPED 2026-05-20**. It had been 100% write-only since epic #1032 removed every read; all of it now flows via Redis. `db_write` carries a guard that skips any `events` write. (cron + logs had no tables of their own — they were event_types *inside* `events`, so they went with it.)
+- Dormant 0-row tables (`metrics`, `node_metrics`, `chat_messages`, `autonomy_snapshots`, `brain_blobs`, `alert_rules`, `*_pre_drift_fix`) — drop candidates after their remaining code refs are removed.
 
 ---
 
@@ -197,6 +208,19 @@ The `events` table is the dominant cost driver and the primary target of the loc
 
 ## 7. Roadmap (open work, in priority order)
 
+### Cloud-storage migration: Cloud SQL → Redis/DuckDB (active, 2026-05-20)
+Goal: Cloud SQL holds account/cloud-product data only; all OpenClaw data flows DuckDB → Redis → UI; harness-agnostic, no hardcoding.
+
+**Done:** system snapshot → Redis (cloud #1010); Diagnostics rendered from snapshot (OSS 0.12.254 + cloud); `events` table writes stopped + **DROPPED** (1.36 TB reclaimed, cloud #1011); brain + memory already on Redis cache_push.
+
+**Next (each = OSS daemon cache_push + cloud serve-from-Redis + UI):**
+1. **Logs** — daemon pushes recent logs (from DuckDB) to `logs:{owner}:{node}:recent`; cloud serves from Redis; replace the "Full logs are not available in cloud view" dead-end. (logs were never their own table — they were `encrypted_logs` rows in the dropped `events`.)
+2. **Models** — model-mix per session from DuckDB → Redis (works locally, empty in cloud today).
+3. **Transcript + Replay** — per-session transcript → `transcript:{owner}:{node}:{session}` → client decrypt (fixes Embodied "No messages" + replay scrubber).
+4. **Deprecate dead Postgres** — remove the write code + DROP the dormant 0-row tables (`metrics`, `node_metrics`, `chat_messages`, `autonomy_snapshots`, `brain_blobs`, `alert_rules`, `*_pre_drift_fix`) and the `cron_state` / `encrypted_logs` ingest paths. Keep `analytics_events` (ClawMetry product analytics).
+5. **`sessions` table** — migrate its readers (`alerts.py`, admin, `api_v1`) to the Redis/DuckDB path, then drop.
+
+### Other open work
 The active roadmap lives under the `roadmap-now` GitHub label. Top items:
 
 - **#964 [EPIC] Local-first telemetry** — the cluster (#957–#963) that flips storage onto the node, with cloud as hot-cache + relay. Cost-driven; reduces cloud `events` table by 10–50× per user.
