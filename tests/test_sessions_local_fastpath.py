@@ -232,3 +232,105 @@ def test_sessions_api_does_not_duplicate_registered(tmp_path, monkeypatch):
     ]
     assert len(matches) == 1, f"expected 1 row for {sid}, got {len(matches)}"
     assert matches[0]["displayName"] == "Real Session"
+
+
+def test_derive_envelope_source_unit():
+    """Issue #1773: envelope marker must reflect per-row sources honestly.
+
+    Pure unit test for ``_derive_envelope_source`` — exercises the all-same,
+    mixed, empty, and missing-marker branches without spinning up a route.
+    """
+    import routes.sessions as sessions_mod
+    derive = sessions_mod._derive_envelope_source
+
+    # Empty input falls back to the supplied default.
+    assert derive([], fallback="local_store") == "local_store"
+
+    # Homogeneous rows surface the single source unchanged.
+    assert derive([{"_source": "local_store"}, {"_source": "local_store"}]) == "local_store"
+
+    # Mixed sources emit a deterministic, alphabetically sorted "mixed:" tag.
+    mixed = derive([
+        {"_source": "local_store"},
+        {"_source": "filesystem_unregistered"},
+    ])
+    assert mixed == "mixed:filesystem_unregistered,local_store"
+
+    # Rows without a marker inherit the fallback (and merge with markers).
+    inherited = derive([
+        {"_source": "filesystem_unregistered"},
+        {"no_source_key": True},
+    ], fallback="local_store")
+    assert inherited == "mixed:filesystem_unregistered,local_store"
+
+
+def test_sessions_envelope_source_mixed_when_unregistered_present(tmp_path, monkeypatch):
+    """Issue #1773: when ``/api/sessions`` unions DuckDB rows with on-disk
+    JSONL fallbacks, the envelope ``_source`` must NOT lie. It used to
+    hard-code ``"local_store"`` even though appended rows carried
+    ``"filesystem_unregistered"``, masking ingest outages.
+    """
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "events.duckdb"))
+    monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_SECS", "0.05")
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "1")
+
+    # Sessions dir with one orphan JSONL — simulates a session that wrote
+    # to disk but daemon ingest never registered it.
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    orphan_sid = "moat-eod-1773-orphan"
+    (sessions_dir / f"{orphan_sid}.jsonl").write_text("{}\n")
+    monkeypatch.setenv("OPENCLAW_SESSIONS_DIR", str(sessions_dir))
+
+    import dashboard as _d
+    monkeypatch.setattr(_d, "SESSIONS_DIR", str(sessions_dir), raising=False)
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: True)
+
+    import clawmetry.local_store as ls
+    importlib.reload(ls)
+    # Neutralise any real local-query daemon on the dev machine so the
+    # fast path opens our hermetic DuckDB instead of the real one. Reload
+    # the module FIRST, then patch + invalidate the cache (same dance as
+    # tests/test_moat_send_message_e2e.py — reloading after the patch
+    # would restore the production default).
+    import routes.local_query as lq
+    importlib.reload(lq)
+    monkeypatch.setattr(
+        lq, "_DISCOVERY_PATH", str(tmp_path / "no-such-discovery.json"),
+        raising=True,
+    )
+    lq._invalidate_daemon_cache()
+    import routes.sessions as sessions_mod
+    importlib.reload(sessions_mod)
+
+    # Seed one DuckDB-backed session so the fast path returns non-None.
+    store = ls.get_store()
+    store.ingest_session({
+        "session_id": "sess-ingested",
+        "agent_type": "openclaw",
+        "title": "Ingested OK",
+        "started_at": "2026-05-11T10:00:00Z",
+        "last_active_at": "2026-05-11T10:30:00Z",
+    })
+
+    a = Flask(__name__)
+    a.register_blueprint(sessions_mod.bp_sessions)
+    r = a.test_client().get("/api/sessions")
+    assert r.status_code == 200
+    body = r.get_json() or {}
+
+    # Both rows must be present.
+    sids = {s.get("session_id") or s.get("sessionId") for s in body.get("sessions", [])}
+    assert "sess-ingested" in sids
+    assert orphan_sid in sids
+
+    # Envelope must reflect the hybrid reality, not silently claim
+    # "local_store" purity.
+    assert body.get("_source") == "mixed:filesystem_unregistered,local_store", (
+        f"expected mixed envelope marker, got {body.get('_source')!r}"
+    )
+
+    try:
+        store.stop(flush=True)
+    except Exception:
+        pass

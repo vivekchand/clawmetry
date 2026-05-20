@@ -948,11 +948,21 @@ def get_store(read_only: bool = False) -> "LocalStore":
         with _store_lock:
             if _store_rw is None:
                 if _store_ro is not None:
-                    raise RuntimeError(
-                        "local_store: cannot open writer — read-only handle "
-                        "already exists in this process. Get a fresh process "
-                        "to write."
-                    )
+                    # Evict the cached RO handle so we can open the writer.
+                    # DuckDB forbids RW+RO on the same file in the same
+                    # process; without this eviction the daemon brick-locks
+                    # itself the moment any startup code path opens read-only
+                    # before the writer (see #1771: 21h silent ingest outage
+                    # on dev because a non-critical read cached _store_ro,
+                    # then every subsequent write attempt raised and the
+                    # daemon logged 37,728 warnings without recovering).
+                    # Future RO callers fall through to the _store_rw branch
+                    # below — the writer connection serves reads fine.
+                    try:
+                        _store_ro.stop(flush=False)
+                    except Exception:
+                        pass
+                    _store_ro = None
                 _store_rw = LocalStore(read_only=False)
                 _store_rw.start()
             return _store_rw
@@ -3907,33 +3917,85 @@ class LocalStore:
         ``limit`` defaults to 50 (one page in the timeline UI) and is
         clamped to ``[1, 500]``. Callers wanting a full sweep should
         page; we deliberately keep the upper bound modest so a buggy
-        client can't yank megabytes of run history in one shot."""
+        client can't yank megabytes of run history in one shot.
+
+        MOAT epic #1743 / sub-issue #1756: ``cron_runs.{token_count,
+        cost_usd}`` are written from the JSONL ``usage`` block at ingest
+        time. Two failure modes drift the stored aggregate below truth:
+          1. The JSONL line predates the ``usage`` field on a given
+             gateway version (some early writers shipped status + duration
+             only).
+          2. Cost/token accounting from the underlying model call landed
+             in the ``events`` table (``event_type='cron_run'``) AFTER
+             the cron-runs JSONL line, e.g. because the gateway WS
+             delivered the rollup separately.
+        Per @vivekchand on #1725 ("shouldn't all info / events be just
+        pushed to DuckDB & then run queries on them to find total token
+        usage per session, per agent, overall etc?") the source of truth
+        is the events table. Bridge both numeric columns via
+        ``GREATEST(stored, SUM(events.field))`` over events scoped to
+        this cron run by ``(agent_id = cr.job_id, agent_type, event_type
+        = 'cron_run', ts within [started_at, ended_at])``. The time
+        window is the disambiguator that prevents two same-job runs from
+        cross-pollinating each other's totals.
+
+        Matches the bridge pattern proven by PR #1754 on
+        ``query_sessions_table`` (#1725) — same GREATEST envelope, same
+        per-row correlated subquery."""
         clauses: list[str] = []
         params: list[Any] = []
         if job_id:
-            clauses.append("job_id = ?"); params.append(str(job_id))
+            clauses.append("cr.job_id = ?"); params.append(str(job_id))
         if agent_type:
-            clauses.append("agent_type = ?"); params.append(agent_type)
+            clauses.append("cr.agent_type = ?"); params.append(agent_type)
         if agent_id:
-            clauses.append("agent_id = ?"); params.append(agent_id)
+            clauses.append("cr.agent_id = ?"); params.append(agent_id)
         if since:
-            clauses.append("started_at >= ?"); params.append(since)
+            clauses.append("cr.started_at >= ?"); params.append(since)
         if until:
-            clauses.append("started_at <= ?"); params.append(until)
+            clauses.append("cr.started_at <= ?"); params.append(until)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         try:
             lim = int(limit)
         except (TypeError, ValueError):
             lim = 50
         lim = max(1, min(500, lim))
+        # ``event_type = 'cron_run'`` matches the contract documented by
+        # ``routes/crons.py:_try_local_store_cron_runs`` — the gateway
+        # emits one ``cron_run`` event per run with ``agent_id`` set to
+        # the cron's job_id. We additionally require the event's ts to
+        # fall inside the cron-run window so two consecutive runs of the
+        # same job stay isolated. ``ended_at`` may be NULL on an in-flight
+        # row; in that case COALESCE pins the upper bound to ``9999`` so
+        # a still-running cron picks up any events emitted after its
+        # start (overwriting only on the next sync once ended_at lands).
         sql = f"""
-            SELECT id, node_id, agent_type, agent_id, job_id,
-                   started_at, ended_at, duration_ms, status, error_message,
-                   token_count, cost_usd, delivered_at, next_run_at,
-                   raw_jsonl_line, data, created_at
-            FROM cron_runs
+            SELECT cr.id, cr.node_id, cr.agent_type, cr.agent_id, cr.job_id,
+                   cr.started_at, cr.ended_at, cr.duration_ms, cr.status,
+                   cr.error_message,
+                   GREATEST(
+                       COALESCE(cr.token_count, 0),
+                       COALESCE((SELECT SUM(e.token_count) FROM events e
+                                  WHERE e.event_type = 'cron_run'
+                                    AND e.agent_id   = cr.job_id
+                                    AND e.agent_type = cr.agent_type
+                                    AND e.ts        >= cr.started_at
+                                    AND e.ts        <= COALESCE(cr.ended_at, '9999-12-31T23:59:59Z')), 0)
+                   ) AS token_count,
+                   GREATEST(
+                       COALESCE(cr.cost_usd, 0.0),
+                       COALESCE((SELECT SUM(e.cost_usd) FROM events e
+                                  WHERE e.event_type = 'cron_run'
+                                    AND e.agent_id   = cr.job_id
+                                    AND e.agent_type = cr.agent_type
+                                    AND e.ts        >= cr.started_at
+                                    AND e.ts        <= COALESCE(cr.ended_at, '9999-12-31T23:59:59Z')), 0.0)
+                   ) AS cost_usd,
+                   cr.delivered_at, cr.next_run_at,
+                   cr.raw_jsonl_line, cr.data, cr.created_at
+            FROM cron_runs cr
             {where}
-            ORDER BY started_at DESC, id DESC
+            ORDER BY cr.started_at DESC, cr.id DESC
             LIMIT ?
         """
         params.append(lim)
@@ -5465,6 +5527,195 @@ class LocalStore:
 
         return sorted(day_bucket.values(), key=lambda r: r["day"], reverse=True)
 
+    def query_cache_metrics(
+        self,
+        *,
+        days: int = 14,
+        agent_id: str | None = None,
+        limit_events: int = 50000,
+    ) -> list[dict[str, Any]]:
+        """Per-(day, model) prompt-cache + cost split for /api/usage/cache-trends.
+
+        Tier-1 surface from the 2026-05-19 DuckDB coverage audit (issue
+        #1778). The JSONL walker in ``routes/usage.py:api_usage_cache_trends``
+        re-parses every session file on every call; this helper streams the
+        same numbers off the events table in one SQL pass + a single Python
+        bucketing pass, with the same v3 sibling-pair dedupe as
+        ``query_daily_usage_splits``.
+
+        Returns ``[{day:'YYYY-MM-DD', model, input_tokens, output_tokens,
+        cache_read_tokens, cache_write_tokens, input_cost, output_cost,
+        cache_read_cost, cache_write_cost, total_cost}]`` sorted by day
+        desc, model asc. Empty list when no billable-turn events fall in
+        the window (caller falls back to the legacy walker).
+
+        Dedup: real OpenClaw v3 emits BOTH an ``assistant`` (Anthropic-SDK
+        envelope, carries cache splits) AND a sibling ``model.completed``
+        (slim, no cache) for the SAME LLM turn ~100-300 ms apart. Counting
+        both doubles input/output and inflates total_cost. Mirrors the
+        bucket-and-pick-richest logic in ``query_daily_usage_splits`` so
+        the two surfaces report consistent splits.
+        """
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+        try:
+            window_days = max(1, min(int(days), 365))
+        except (TypeError, ValueError):
+            window_days = 14
+        since_iso = (
+            _dt.now(_tz.utc) - _td(days=window_days)
+        ).isoformat()
+
+        clauses: list[str] = [f"event_type IN {_sql_in_clause(_BILLABLE_TURN_EVENT_TYPES)}"]
+        params: list[Any] = []
+        if agent_id:
+            clauses.append("agent_id = ?")
+            params.append(agent_id)
+        clauses.append("ts >= ?")
+        params.append(since_iso)
+        where = "WHERE " + " AND ".join(clauses)
+        sql = f"""
+            SELECT id, ts, session_id, event_type, data, cost_usd, model
+            FROM events
+            {where}
+            ORDER BY ts ASC, id ASC
+            LIMIT ?
+        """
+        params.append(int(max(1, limit_events)))
+        rows = self._fetch(sql, params)
+
+        DEDUP_WINDOW_S = 1
+
+        def _priority(et: str | None) -> int:
+            et = (et or "").lower()
+            if et in ("assistant", "subagent:assistant", "message"):
+                return 2
+            if et == "model.completed":
+                return 1
+            return 0
+
+        def _ts_to_epoch_s(ts_str: str) -> int | None:
+            if not ts_str:
+                return None
+            try:
+                s = ts_str.replace("Z", "+00:00") if ts_str.endswith("Z") else ts_str
+                return int(_dt.fromisoformat(s).timestamp())
+            except (TypeError, ValueError):
+                return None
+
+        chosen: dict[tuple[str, int], dict[str, Any]] = {}
+        loose: list[dict[str, Any]] = []
+
+        for ev_id, ts, sid, etype, raw, col_cost, model_col in rows:
+            data: dict[str, Any] = {}
+            if raw is not None:
+                try:
+                    text = (
+                        raw.decode("utf-8")
+                        if isinstance(raw, (bytes, bytearray))
+                        else raw
+                    )
+                    parsed = json.loads(text) if text else {}
+                    if isinstance(parsed, dict):
+                        data = parsed
+                except (ValueError, TypeError, UnicodeDecodeError):
+                    continue
+            splits = _extract_usage_splits(data)
+            if splits["input_tokens"] <= 0 and splits["output_tokens"] <= 0:
+                continue
+            day = (ts or "")[:10]
+            if not day:
+                continue
+
+            cost_split = _extract_usage_cost_split(data)
+            try:
+                col_cost_f = float(col_cost or 0.0)
+            except (TypeError, ValueError):
+                col_cost_f = 0.0
+            # Prefer the per-component cost block from the data blob. Fall
+            # back to the daemon-stamped ``cost_usd`` column when no split
+            # is available (UI still gets a sensible total bar).
+            if cost_split["total"] <= 0 and col_cost_f > 0:
+                cost_split = {
+                    "input": 0.0, "output": 0.0,
+                    "cache_read": 0.0, "cache_write": 0.0,
+                    "total": col_cost_f,
+                }
+
+            # Resolve a model label. Prefer the dedicated ``model`` column
+            # (stamped by sync.py at ingest), fall back to data.message.model
+            # for older daemons that didn't populate the column.
+            model = (model_col or "").strip()
+            if not model:
+                msg = data.get("message") if isinstance(data, dict) else None
+                if isinstance(msg, dict):
+                    model = (msg.get("model") or "").strip()
+            if not model:
+                model = "unknown"
+
+            payload = {
+                "priority":   _priority(etype),
+                "splits":     splits,
+                "cost_split": cost_split,
+                "day":        day,
+                "model":      model,
+                "etype":      etype,
+                "ts":         ts,
+            }
+
+            epoch_s = _ts_to_epoch_s(ts)
+            if epoch_s is None or not sid:
+                loose.append(payload)
+                continue
+
+            collision_key: tuple[str, int] | None = None
+            for delta in range(-DEDUP_WINDOW_S, DEDUP_WINDOW_S + 1):
+                k = (sid, epoch_s + delta)
+                if k in chosen:
+                    collision_key = k
+                    break
+
+            if collision_key is None:
+                chosen[(sid, epoch_s)] = payload
+                continue
+
+            existing = chosen[collision_key]
+            if payload["priority"] > existing["priority"]:
+                chosen[collision_key] = payload
+
+        # Aggregate into (day, model) buckets.
+        bucket: dict[tuple[str, str], dict[str, Any]] = {}
+        for p in list(chosen.values()) + loose:
+            key = (p["day"], p["model"])
+            row = bucket.setdefault(key, {
+                "day": p["day"],
+                "model": p["model"],
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": 0,
+                "input_cost": 0.0,
+                "output_cost": 0.0,
+                "cache_read_cost": 0.0,
+                "cache_write_cost": 0.0,
+                "total_cost": 0.0,
+            })
+            row["input_tokens"]       += p["splits"]["input_tokens"]
+            row["output_tokens"]      += p["splits"]["output_tokens"]
+            row["cache_read_tokens"]  += p["splits"]["cache_read_tokens"]
+            row["cache_write_tokens"] += p["splits"]["cache_write_tokens"]
+            row["input_cost"]         += p["cost_split"]["input"]
+            row["output_cost"]        += p["cost_split"]["output"]
+            row["cache_read_cost"]    += p["cost_split"]["cache_read"]
+            row["cache_write_cost"]   += p["cost_split"]["cache_write"]
+            row["total_cost"]         += p["cost_split"]["total"]
+
+        return sorted(
+            bucket.values(),
+            key=lambda r: (r["day"], r["model"]),
+            reverse=False,
+        )
+
     def query_aggregates(
         self,
         *,
@@ -6527,6 +6778,72 @@ def _extract_usage_cost(data: dict) -> float:
         elif isinstance(cost, (int, float)) and cost > 0:
             return float(cost)
     return 0.0
+
+
+def _extract_usage_cost_split(data: dict) -> dict[str, float]:
+    """Per-component cost breakdown ({input, output, cache_read, cache_write,
+    total}) extracted from an event ``data`` blob.
+
+    Companion to ``_extract_usage_cost`` — the JSONL walker in
+    ``api_usage_cache_trends`` needs the four sub-costs (not just the
+    total) so the cache-savings line can compute ``cache_read_cost`` vs.
+    ``input_cost``. Walks the same shape priority list:
+    ``data.message.usage.cost``, ``data.usage.cost``,
+    ``data.promptCache.lastCallUsage.cost``. First envelope whose
+    ``total`` (or sum of sub-keys) is > 0 wins.
+
+    Returns all-zero floats on absence so the caller can simply ``+=``.
+    """
+    out = {
+        "input": 0.0,
+        "output": 0.0,
+        "cache_read": 0.0,
+        "cache_write": 0.0,
+        "total": 0.0,
+    }
+    if not isinstance(data, dict):
+        return out
+
+    candidates: list[Any] = []
+    msg = data.get("message")
+    if isinstance(msg, dict):
+        u = msg.get("usage")
+        if isinstance(u, dict):
+            candidates.append(u.get("cost"))
+    u2 = data.get("usage")
+    if isinstance(u2, dict):
+        candidates.append(u2.get("cost"))
+    pc = data.get("promptCache")
+    if isinstance(pc, dict):
+        lcu = pc.get("lastCallUsage")
+        if isinstance(lcu, dict):
+            candidates.append(lcu.get("cost"))
+
+    def _f(v: Any) -> float:
+        try:
+            return float(v or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    for cost in candidates:
+        if not isinstance(cost, dict):
+            continue
+        in_c   = _f(cost.get("input"))
+        out_c  = _f(cost.get("output"))
+        cr_c   = _f(cost.get("cacheRead"))
+        cw_c   = _f(cost.get("cacheWrite"))
+        tot_c  = _f(cost.get("total"))
+        if tot_c <= 0:
+            tot_c = in_c + out_c + cr_c + cw_c
+        if tot_c > 0:
+            return {
+                "input": in_c,
+                "output": out_c,
+                "cache_read": cr_c,
+                "cache_write": cw_c,
+                "total": tot_c,
+            }
+    return out
 
 
 _READ_TOOL_NAMES = frozenset({"read", "readfile", "read_file"})

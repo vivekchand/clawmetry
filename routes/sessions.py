@@ -253,6 +253,14 @@ def api_sessions():
             _merge_unregistered_jsonls(fast["sessions"])
             capped = _apply_24h_retention_cap(fast["sessions"])
             fast["capped_at_24h"] = capped
+            # Issue #1773: honest envelope marker. The fast path tags itself
+            # local_store, but _merge_unregistered_jsonls may have appended
+            # filesystem_unregistered rows. Recompute from the row markers so
+            # operators see the actual data path (vs. a misleading
+            # "local_store" envelope that hides an ingest outage).
+            fast["_source"] = _derive_envelope_source(
+                fast["sessions"], fallback="local_store"
+            )
             return jsonify(fast)
     gw_data = _d._gw_invoke("sessions_list", {"limit": 20, "messageLimit": 0})
     if gw_data and "sessions" in gw_data:
@@ -277,6 +285,39 @@ def api_sessions():
     _merge_unregistered_jsonls(sessions)
     capped = _apply_24h_retention_cap(sessions)
     return jsonify({"sessions": sessions, "capped_at_24h": capped})
+
+
+def _derive_envelope_source(rows: list, fallback: str = "local_store") -> str:
+    """Compute an honest envelope ``_source`` from per-row markers.
+
+    Issue #1773: ``/api/sessions`` (and any other route that unions multiple
+    backends) used to hard-code ``_source: "local_store"`` at the envelope
+    while individual rows might carry a different per-row marker
+    (e.g. ``filesystem_unregistered`` from the JSONL fallback). That misled
+    operators into thinking DuckDB was the source of truth when an ingest
+    outage had silently demoted the response to a filesystem scan.
+
+    Returns:
+      - ``fallback`` when ``rows`` is empty (nothing to derive from).
+      - The single source string when every row agrees.
+      - ``"mixed:a,b,..."`` (sources sorted alphabetically) when rows disagree.
+
+    Rows without a ``_source`` key are treated as ``fallback`` so we don't
+    over-claim purity for rows that simply forgot to tag themselves.
+    """
+    if not rows:
+        return fallback
+    sources = set()
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        src = r.get("_source") or fallback
+        sources.add(src)
+    if not sources:
+        return fallback
+    if len(sources) == 1:
+        return next(iter(sources))
+    return "mixed:" + ",".join(sorted(sources))
 
 
 def _merge_unregistered_jsonls(sessions: list) -> None:
@@ -2193,14 +2234,167 @@ def api_subagents():
     return jsonify(payload)
 
 
+def _try_local_store_delegation_tree():
+    """Fast path for /api/delegation-tree (Tier-1 from #1778 punch list).
+
+    Reads the pre-aggregated ``subagents`` table (same source as
+    ``_try_local_store_subagents``) and groups by ``parent_session_id``
+    to produce the per-chain token + cost totals. Skips the JSONL spawn
+    walker + sessions.json index read entirely — the daemon's snapshot
+    pass already computed both ``cost_usd`` and ``token_count`` per
+    subagent row, so chain totals are a server-side sum.
+
+    Returns ``None`` when the ``subagents`` table is empty so the
+    legacy ``sessions.json`` fallback fires for installs whose daemon
+    hasn't snapshotted yet. Returns a populated empty shell only when
+    the store is reachable AND no subagents have been spawned, which
+    is the right answer (the legacy path would also return empty).
+    """
+    import dashboard as _d
+    rows = _ls_call("query_subagents", limit=500)
+    if rows is None:
+        # Store unreachable. Defer to legacy so older installs keep working.
+        return None
+    if not rows:
+        # Store reachable, just empty. Serve the empty shell directly so
+        # we don't trigger an unnecessary sessions.json open + walk.
+        return {
+            "chains": [],
+            "total_subagents": 0,
+            "total_chain_cost_usd": 0.0,
+            "_source": "local_store",
+        }
+
+    # Fall back to the OSS pricing estimator only when the row lacks a
+    # daemon-computed ``cost_usd``. Cloud's dashboard.py doesn't export
+    # this helper; guard with getattr so we degrade to zero rather than 500.
+    _estimate_usd_per_token = getattr(_d, "_estimate_usd_per_token", None)
+    usd_per_tok = _estimate_usd_per_token() if _estimate_usd_per_token else 3.0 / 1_000_000.0
+    now_ms = time.time() * 1000
+
+    chains_map: dict = {}
+    parent_display_map: dict = {}
+
+    for r in rows:
+        sid = r.get("subagent_id") or ""
+        if not sid:
+            continue
+        extra = r.get("data") if isinstance(r.get("data"), dict) else {}
+        # The daemon stores parent_session_id as a bare session id; the
+        # legacy route grouped by ``spawnedBy`` (a full canonical key). Prefer
+        # the full key from the ``data`` blob when present so the response
+        # shape stays byte-compatible with the legacy walker.
+        parent_key = (extra.get("spawnedBy")
+                      or r.get("parent_session_id")
+                      or "unknown")
+        token_count = int(r.get("token_count") or 0)
+        # The daemon's cost_usd column is already deduped (issue #1460
+        # sibling-pair fix landed in query_sessions); prefer it verbatim and
+        # fall back to the token-based estimator only when the daemon
+        # snapshotted a row without cost (older sync.py builds).
+        cost_usd = r.get("cost_usd")
+        if cost_usd is None or cost_usd == 0:
+            cost_usd = round(token_count * usd_per_tok, 6)
+        else:
+            cost_usd = float(cost_usd)
+
+        # Status: prefer daemon classification, fall back to age bucket.
+        status = (r.get("status") or "").strip().lower()
+        if not status:
+            updated_ms = extra.get("updated_at_ms") or 0
+            try:
+                if not updated_ms and r.get("updated_at"):
+                    updated_ms = int(datetime.fromisoformat(
+                        str(r["updated_at"]).replace("Z", "+00:00")
+                    ).timestamp() * 1000)
+            except Exception:
+                updated_ms = 0
+            age_ms = now_ms - (updated_ms or 0)
+            if age_ms < 120000:
+                status = "active"
+            elif age_ms < 600000:
+                status = "idle"
+            else:
+                status = "stale"
+
+        key = extra.get("key") or f"agent:main:subagent:{sid}"
+        label = extra.get("label") or extra.get("displayName") or key.split(":")[-1]
+        model = extra.get("model") or "unknown"
+        try:
+            updated_iso = r.get("updated_at")
+            updated_at = (int(datetime.fromisoformat(
+                str(updated_iso).replace("Z", "+00:00")
+            ).timestamp() * 1000)
+                          if updated_iso else (extra.get("updated_at_ms") or 0))
+        except Exception:
+            updated_at = extra.get("updated_at_ms") or 0
+
+        chains_map.setdefault(parent_key, []).append({
+            "key":               key,
+            "label":             label,
+            "model":             model,
+            "prov_agent_type":   "subagent",
+            "prov_session_turn": 2,
+            "prov_parent_key":   parent_key,
+            "prov_total_tokens": token_count,
+            "input_tokens":      int(extra.get("tokensIn") or extra.get("inputTokens") or 0),
+            "output_tokens":     int(extra.get("tokensOut") or extra.get("outputTokens") or 0),
+            "total_tokens":      token_count,
+            "cost_usd":          round(float(cost_usd), 6),
+            "status":            status,
+            "updated_at":        updated_at,
+        })
+        if "displayName" in extra or "subject" in extra:
+            parent_display_map.setdefault(parent_key,
+                                          extra.get("displayName") or extra.get("subject"))
+
+    chains = []
+    total_chain_cost = 0.0
+    for parent_key, children in chains_map.items():
+        parts = parent_key.split(":")
+        channel = parts[2] if len(parts) > 2 else "unknown"
+        display = parts[-1] if parts else parent_key
+        chain_tokens = sum(c["total_tokens"] for c in children)
+        chain_cost = round(sum(c["cost_usd"] for c in children), 6)
+        total_chain_cost += chain_cost
+        chains.append({
+            "parent_key":      parent_key,
+            "parent_display":  parent_display_map.get(parent_key) or display,
+            "parent_channel":  channel,
+            "children":        sorted(children, key=lambda x: x["total_tokens"], reverse=True),
+            "chain_tokens":    chain_tokens,
+            "chain_cost_usd":  chain_cost,
+            "child_count":     len(children),
+        })
+
+    chains.sort(key=lambda x: x["chain_tokens"], reverse=True)
+    return {
+        "chains":               chains,
+        "total_subagents":      len(rows),
+        "total_chain_cost_usd": round(total_chain_cost, 4),
+        "_source":              "local_store",
+    }
+
+
 @bp_sessions.route("/api/delegation-tree")
 def api_delegation_tree():
     """Agent delegation chains -- inspired by AgentWeave provenance tracing.
 
-    Reads sessions.json, groups subagents by their spawnedBy parent key,
-    and returns per-chain token totals and estimated cost.
+    Source 0 (DuckDB fast path): groups the ``subagents`` table by
+    ``parent_session_id``; per-chain token + cost totals come from the
+    daemon-aggregated columns (no JSONL re-walk).
+
+    Source 1 (legacy fallback): reads sessions.json, groups subagents
+    by their ``spawnedBy`` parent key. Kept so older OpenClaw installs
+    without the local store keep rendering this view.
     """
     import dashboard as _d
+    # Source 0: DuckDB fast path. Skips sessions.json entirely.
+    if is_local_store_read_enabled():
+        fast = _try_local_store_delegation_tree()
+        if fast is not None:
+            return jsonify(fast)
+
     # Cloud's dashboard.py is a different module than OSS's; some helpers
     # (e.g. _get_sessions_dir, _estimate_usd_per_token) only exist in OSS.
     # Guard with getattr so we degrade to an empty response instead of 500.
