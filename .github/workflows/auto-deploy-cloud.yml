@@ -50,13 +50,24 @@ jobs:
           git add Dockerfile
           git diff --staged --quiet && echo "No change needed" && exit 0
           git commit -m "chore: auto-pin clawmetry==${{ steps.oss_version.outputs.version }} from OSS"
-          git push origin "$BRANCH"
-          gh pr create \
-            --repo vivekchand/clawmetry-cloud \
-            --title "chore: auto-pin clawmetry==${{ steps.oss_version.outputs.version }}" \
-            --body "Automated version pin from OSS release ${{ steps.oss_version.outputs.version }}. Merge to deploy." \
-            --base main \
-            --head "$BRANCH"
-          echo "✅ PR opened to pin clawmetry==${{ steps.oss_version.outputs.version }}"
+          # Force-push: this automation-owned branch may already exist from a
+          # prior run for the same version (re-fired release, retried merge).
+          # A plain push is rejected ("fetch first") and the whole job goes red,
+          # which is why the cloud pin silently drifted. Overwrite is safe.
+          git push -f origin "$BRANCH"
+          # Idempotent PR create: gh pr create errors if a PR is already open
+          # for this head. Skip in that case (the force-push already refreshed
+          # the branch, so the existing PR now carries the latest pin).
+          if [ -n "$(gh pr list --repo vivekchand/clawmetry-cloud --head "$BRANCH" --state open --json number -q '.[0].number')" ]; then
+            echo "PR already open for $BRANCH; refreshed via force-push."
+          else
+            gh pr create \
+              --repo vivekchand/clawmetry-cloud \
+              --title "chore: auto-pin clawmetry==${{ steps.oss_version.outputs.version }}" \
+              --body "Automated version pin from OSS release ${{ steps.oss_version.outputs.version }}. Merge to deploy." \
+              --base main \
+              --head "$BRANCH"
+            echo "✅ PR opened to pin clawmetry==${{ steps.oss_version.outputs.version }}"
+          fi
         env:
           GH_TOKEN: ${{ secrets.CLOUD_REPO_PAT }}
