@@ -7275,6 +7275,58 @@ def _build_runtime_info():
         return {"items": []}
 
 
+def _build_diagnostics(workspace=None):
+    """Build the Diagnostics snapshot (detected config) for the cloud panel.
+
+    Mirrors the OSS ``/api/diagnostics`` endpoint (routes/health.py) so cloud
+    users see the same detected-config view the host shows, instead of the old
+    "Diagnostics are local-only" dead-end. The auth-token VALUE is never
+    included — only whether one is present. Best-effort: any failure yields an
+    empty dict and the cloud falls back to its hint copy. Late-imports
+    ``dashboard`` (the daemon can already import it for capture_gateway_metric).
+    """
+    try:
+        import dashboard as _d
+
+        gw_port = _d._detect_gateway_port()
+        gw_url = _d.GATEWAY_URL or f"http://localhost:{gw_port}"
+        auto_detected = []
+        if not _d.GATEWAY_URL:
+            auto_detected.append("gateway_port")
+        ws = _d.WORKSPACE or workspace or os.getcwd()
+        if _d.WORKSPACE or workspace:
+            auto_detected.append("workspace")
+        token = _d.GATEWAY_TOKEN or os.environ.get("OPENCLAW_GATEWAY_TOKEN", "").strip()
+        auth_token_status = "present" if token else "missing"
+        openclaw_flags = {}
+        flag_map = {
+            "OPENCLAW_MODEL": "model",
+            "OPENCLAW_REASONING": "reasoning",
+            "OPENCLAW_THINKING": "thinking",
+            "OPENCLAW_MAX_TOKENS": "max_tokens",
+        }
+        for env_key, flag_name in flag_map.items():
+            val = os.environ.get(env_key, "").strip()
+            if val:
+                openclaw_flags[flag_name] = val
+        try:
+            warnings_list, _tips = _d.validate_configuration()
+        except Exception:
+            warnings_list = []
+        return {
+            "gateway_url": gw_url,
+            "gateway_port": gw_port,
+            "workspace_path": ws,
+            "auth_token_status": auth_token_status,
+            "openclaw_flags": openclaw_flags,
+            "warnings": warnings_list,
+            "auto_detected": auto_detected,
+        }
+    except Exception as _e:
+        log.debug("diagnostics snapshot build failed: %s", _e)
+        return {}
+
+
 def _build_memory_files(workspace):
     """Build memory file list for the Memory popup."""
     if not workspace or not os.path.isdir(workspace):
@@ -8174,6 +8226,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "machineInfo": _build_machine_info(),
         "channelList": _build_channel_list(config),
         "ollamaInfo": _detect_ollama_for_heartbeat(),
+        "diagnostics": _build_diagnostics(paths.get("workspace")),
     }
 
     # ── NemoClaw / sandbox enrichment ────────────────────────────────────────
