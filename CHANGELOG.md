@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Alerts: toggle reflects saved rules (flatten condition_json) (2026-05-21)
+- The daemon nests alert_type/threshold inside condition_json; the toggle render checked top-level alert_type and never matched, so a saved rule showed OFF. Flatten condition_json. Completes the alerts toggle e2e.
+
 ### Alerts: saved rules render on load (decrypt key fix) (2026-05-21)
 - loadAlertsPage decrypted the E2E rules_blob via a helper with the wrong key name + a missing decryptBlob, so saved rules silently never rendered. Self-contained decrypt mirroring the cm-cloud interceptors. This is the fix that makes Enable/toggle stick across reloads.
 
