@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Replay: tool turns as compact chips (2026-05-21)
+- Empty tool_use/tool_result bubbles now render as compact role-accented chips instead of blank boxes.
+
 ### Perf: tab-scope system-health fan-out (2026-05-21)
 - loadSystemHealth (4 endpoints) polled on every tab; gated to Overview.
 
