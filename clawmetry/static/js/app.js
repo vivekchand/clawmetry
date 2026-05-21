@@ -9718,10 +9718,11 @@ async function viewTranscript(sessionId) {
   window._replayIndex = 0;
   window._replayFilter = 'all';
   try {
-    // Fetch transcript and compaction markers in parallel
-    var [data, compactionsData] = await Promise.all([
+    // Fetch transcript, compaction markers, and config-drift data in parallel
+    var [data, compactionsData, driftData] = await Promise.all([
       fetch('/api/transcript/' + encodeURIComponent(sessionId)).then(r => r.json()),
-      fetch('/api/compactions?session_id=' + encodeURIComponent(sessionId) + '&summary_chars=5000').then(r => r.json()).catch(() => ({compactions: []}))
+      fetch('/api/compactions?session_id=' + encodeURIComponent(sessionId) + '&summary_chars=5000').then(r => r.json()).catch(() => ({compactions: []})),
+      fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/config-drift').then(r => r.json()).catch(() => ({has_drift: false}))
     ]);
     var compactions = compactionsData.compactions || [];
     // Metadata
@@ -9735,6 +9736,16 @@ async function viewTranscript(sessionId) {
       var totalCompacted = compactions.reduce(function(sum, c) { return sum + (c.tokens_before || 0); }, 0);
       metaHtml += '<div class="stat-row" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border-secondary);">';
       metaHtml += '<span class="stat-label">💾 Compactions</span><span class="stat-val">' + compactions.length + ' (' + (totalCompacted/1000).toFixed(1) + 'K tokens)</span>';
+      metaHtml += '</div>';
+    }
+    // Config-drift banner — fires when the session switched providers with changed sampling params
+    if (driftData && driftData.has_drift) {
+      var driftN = driftData.drift_count || 1;
+      var driftKeys = (driftData.drifts && driftData.drifts[0] && driftData.drifts[0].changed_keys || []).join(', ');
+      metaHtml += '<div style="margin-top:10px;padding:7px 10px;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);border-radius:6px;font-size:11px;color:#d97706;line-height:1.4;">';
+      metaHtml += '⚠ <strong>Config Drift</strong>: provider switched ' + driftN + '× with changed sampling params';
+      if (driftKeys) metaHtml += ' (' + escHtml(driftKeys) + ')';
+      metaHtml += '. Different providers interpret the same temperature differently — check the ⚙ pills below to confirm the intended config.';
       metaHtml += '</div>';
     }
     document.getElementById('transcript-meta').innerHTML = metaHtml;
