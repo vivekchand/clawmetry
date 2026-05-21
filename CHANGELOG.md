@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Alerts: fix toggle row layout (restore status dot for the grid) (2026-05-21)
+- The always-show-toggles render dropped the status dot; the row is a 5-column grid so the title column collapsed and wrapped. Re-added the dot.
+
 ### Alerts: all types always shown as toggles (Approvals pattern) (2026-05-21)
 - The Alerts tab now always lists the canonical alert types as on/off toggles (default OFF), mapping each to a saved rule so types stay visible after you enable one (previously enabling one hid the rest). Optimistic flip + delayed reload so the switch responds instantly.
 
