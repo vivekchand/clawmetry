@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Alerts: on/off toggle switch (default OFF), matching Approvals (2026-05-21)
+- The Alerts tab now uses the same on/off slider as the Approvals protection rules instead of an Enable button. Examples render OFF; flipping the slider POST-creates+enables the rule (OFF->ON) or disables it (ON->OFF), with a delayed reload so it flips without a manual refresh. Approval protection policies now also seed DISABLED (opt-in) by default.
+
 ### Alerts: saved rules now render (decrypt the E2E rules_blob) (2026-05-21)
 - Follow-up to the alerts Enable fix. The Alerts tab read plaintext `data.alerts`, but a cache hit returns the rule list as an E2E-encrypted `rules_blob` only the browser can decrypt — so a rule the user just enabled was created + cached but never rendered (tab stayed on canned examples). loadAlertsPage now decrypts `rules_blob` via unwrapListAsync. Completes the Enable -> Enabled (with Disable) e2e.
 
