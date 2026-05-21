@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Alerts: toggle persists through cache lag + dedup (2026-05-21)
+- Optimistic toggle state now survives the cloud-cache-warm window (no flicker-revert) and rapid clicks no longer create duplicate rules.
+
 ### Alerts: fix toggle row layout (restore status dot for the grid) (2026-05-21)
 - The always-show-toggles render dropped the status dot; the row is a 5-column grid so the title column collapsed and wrapped. Re-added the dot.
 
