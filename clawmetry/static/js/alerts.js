@@ -90,7 +90,16 @@
 
     try {
       const data = await fetch('/api/cloud-proxy/api/alerts').then(r => r.json());
-      alertsState.rules = data.alerts || [];
+      // Cache hit returns an E2E-encrypted ``rules_blob`` ({rules:[...]}) that
+      // only the browser can decrypt; cache miss returns plaintext
+      // ``{alerts:[]}``. Reading data.alerts alone meant a saved rule (which
+      // arrives encrypted) never rendered — the tab stayed on canned examples
+      // forever. Decrypt the blob when present.
+      if (data.rules_blob && typeof window.unwrapListAsync === 'function') {
+        alertsState.rules = (await window.unwrapListAsync(data, 'rules', 'rules_blob')) || [];
+      } else {
+        alertsState.rules = data.alerts || data.rules || [];
+      }
     } catch {
       alertsState.rules = [];
     }
