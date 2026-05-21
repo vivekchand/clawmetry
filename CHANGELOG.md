@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Perf: tab-scope tool prefetch (2026-05-21)
+- _prefetchToolData polled 12 component/tool endpoints every 30s on every tab; gated to Flow/Overview.
+
 ### Perf: tab-scope updateFlowStats (2026-05-21)
 - The Flow-tab live-stats timer polled /api/overview on every tab. Gated to Flow/Overview.
 
