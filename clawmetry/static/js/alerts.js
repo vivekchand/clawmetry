@@ -169,34 +169,42 @@
 
   function renderRules() {
     const wrap = document.getElementById('alerts-rules-list');
-    if (!alertsState.rules.length) {
-      renderCannedExamples();
-      return;
-    }
-    wrap.innerHTML = alertsState.rules.map(rule => {
-      const meta = RULE_TYPE_LABELS[rule.alert_type] || { icon: '🔔', verb: rule.alert_type };
-      const channelPills = (rule.channel_ids || []).map(id => {
-        const ch = alertsState.channels.find(c => c.id === id);
-        if (!ch) return '';
-        return `<span class="alerts-chan-pill">${chTypeIcon(ch.channel_type)} ${escape(ch.name)}</span>`;
-      }).join('');
-      const dotCls = rule.enabled ? 'on' : 'off';
-      const ts = rule.last_triggered_at
-        ? `Last: ${formatTimeAgo(rule.last_triggered_at)} · ${rule.trigger_count}× total`
-        : `Never triggered`;
-      const toggleLabel = rule.enabled ? 'Disable' : 'Enable';
-      const toggleCls = rule.enabled ? 'alerts-btn-ghost' : 'alerts-btn-primary';
+    // Approvals-style: ALWAYS show the canonical alert types as on/off
+    // toggles (default OFF). Each maps to a matching saved rule by
+    // alert_type so the toggle reflects its real state; an OFF row uses the
+    // example template and creates the rule on toggle-on. This keeps all
+    // types visible after you enable one (the old render hid the rest).
+    wrap.innerHTML = EXAMPLE_RULES.map(ex => {
+      const real = alertsState.rules.find(r => r.alert_type === ex.alert_type);
+      const on = !!(real && real.enabled);
+      const id = real ? real.id : ex.id;
+      const meta = RULE_TYPE_LABELS[ex.alert_type] || { icon: '🔔', verb: ex.alert_type };
+      const name = real ? real.name : ex.name;
+      const threshold = real ? real.threshold_value : ex.threshold_value;
+      const unit = (real ? real.threshold_unit : ex.threshold_unit) || '';
+      let metaLine;
+      if (real && real.last_triggered_at) {
+        metaLine = `Last: ${formatTimeAgo(real.last_triggered_at)} · ${real.trigger_count}× total`;
+      } else {
+        metaLine = `${meta.verb} ${threshold}${unit ? ' ' + escape(unit) : ''}`
+          + (real ? ' · never triggered' : '');
+      }
+      const channelPills = real
+        ? (real.channel_ids || []).map(cid => {
+            const ch = alertsState.channels.find(c => c.id === cid);
+            return ch ? `<span class="alerts-chan-pill">${chTypeIcon(ch.channel_type)} ${escape(ch.name)}</span>` : '';
+          }).join('')
+        : `<span class="alerts-chan-pill off">${ex._exampleChannels}</span>`;
+      const badge = real ? '' : '<span class="alerts-rule-example-badge">example</span>';
       return `
-        <div class="alerts-rule-row" data-rule-id="${rule.id}">
-          <div class="alerts-rule-dot ${dotCls}" title="${rule.enabled ? 'Enabled' : 'Disabled'}"
-               onclick="alertsToggleRule('${rule.id}', ${!rule.enabled})"></div>
+        <div class="alerts-rule-row${real ? '' : ' alerts-rule-example'}" data-rule-id="${id}">
           <div class="alerts-rule-main">
-            <div class="alerts-rule-title">${meta.icon} ${escape(rule.name)}</div>
-            <div class="alerts-rule-meta">${meta.verb} ${rule.threshold_value}${rule.threshold_unit ? ' ' + escape(rule.threshold_unit) : ''} · ${ts}</div>
+            <div class="alerts-rule-title">${meta.icon} ${escape(name)} ${badge}</div>
+            <div class="alerts-rule-meta">${metaLine}</div>
           </div>
           <div class="alerts-rule-chan">${channelPills || '<span class="alerts-chan-pill off">no channels</span>'}</div>
-          ${toggleSwitch(rule.id, rule.enabled)}
-          <button class="alerts-btn-ghost" onclick="alertsHandleEdit('${rule.id}')">Edit</button>
+          ${toggleSwitch(id, on)}
+          <button class="alerts-btn-ghost" onclick="alertsHandleEdit('${id}')">Edit</button>
         </div>
       `;
     }).join('');
@@ -342,11 +350,21 @@
         return openPaywall();
       }
       if (!resp.ok) throw new Error('toggle failed: HTTP ' + resp.status);
-      // The cloud cache warms a few seconds behind the write (daemon
-      // heartbeat cache_push), so an immediate reload still shows the old
-      // state. Reload now (cheap) AND again after the cache catches up so the
-      // toggle visibly flips without a manual refresh.
-      window.loadAlertsPage();
+      // Optimistic update: the cloud cache warms a few seconds behind the
+      // write (daemon heartbeat cache_push), so reflect the new state locally
+      // and re-render NOW so the switch flips instantly; the delayed reloads
+      // then reconcile against the warmed cache.
+      if (ex && newEnabled && !alertsState.rules.find(r => r.alert_type === ex.alert_type)) {
+        alertsState.rules.push({
+          id: 'pending-' + ruleId, alert_type: ex.alert_type, name: ex.name,
+          threshold_value: ex.threshold_value, threshold_unit: ex.threshold_unit || '',
+          enabled: true, channel_ids: [],
+        });
+      } else {
+        const r = alertsState.rules.find(x => x.id === ruleId);
+        if (r) r.enabled = newEnabled;
+      }
+      renderRules();
       setTimeout(function () { window.loadAlertsPage(); }, 2500);
       setTimeout(function () { window.loadAlertsPage(); }, 6000);
     } catch (e) {
