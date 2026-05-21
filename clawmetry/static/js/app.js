@@ -14077,7 +14077,14 @@ document.addEventListener('DOMContentLoaded', function() {
   // when the browser tab is hidden — completes the lazy-load Phase 2
   // sweep this PR is closing out. Page-load fires once so no-leak risk
   // (no per-visit re-arming), but the visibility-gate is still the win.
-  visibilitySetInterval(_prefetchToolData, 30000); // refresh cache every 30s
+  // Tab-scoped: this prefetches 12 /api/component/tool/<t> endpoints to make
+  // the Flow component modals open instantly. The modals only exist on the
+  // Flow / Overview diagrams, so only refresh there — it was firing 12
+  // requests/30s on every tab (Memory, Alerts, …) for nothing.
+  visibilitySetInterval(function() {
+    if (window._cmCurrentTab && window._cmCurrentTab !== 'flow' && window._cmCurrentTab !== 'overview') return;
+    _prefetchToolData();
+  }, 30000); // refresh cache every 30s
 });
 
 function openTaskModal(sessionId, taskName, sessionKey) {
