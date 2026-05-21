@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Alerts: saved rules now render (decrypt the E2E rules_blob) (2026-05-21)
+- Follow-up to the alerts Enable fix. The Alerts tab read plaintext `data.alerts`, but a cache hit returns the rule list as an E2E-encrypted `rules_blob` only the browser can decrypt — so a rule the user just enabled was created + cached but never rendered (tab stayed on canned examples). loadAlertsPage now decrypts `rules_blob` via unwrapListAsync. Completes the Enable -> Enabled (with Disable) e2e.
+
 ### Alerts Enable works e2e + dashboard no longer locks the DuckDB writer (2026-05-21)
 - "Clicking Enable does nothing" was three bugs: (1) **writer-lock root cause** — the dashboard's `get_store()` opened a DuckDB handle, and even a read-only handle takes a process-level lock that blocks the daemon's writer (stalling ingestion + blanking Models/Embodied/Cost/alerts); `get_store()` in a non-writer process now returns a proxy that forwards to the daemon HTTP query server and opens NO handle. (2) the cloud relay `alert_rule_upsert` body lacked owner_hash so rules were stored NULL and the cache_push filter dropped them — the daemon now stamps its own owner_hash. (3) the frontend "Enable" PUT a non-existent example id (404, swallowed) — it now POSTs a real rule from the template. Verified e2e: POST -> daemon upsert -> cache_push -> cloud Alerts tab shows the rule.
 
