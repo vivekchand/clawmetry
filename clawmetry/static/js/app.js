@@ -11123,6 +11123,10 @@ function enhanceArchitectureClarity() {
 }
 
 function updateFlowStats() {
+  // Tab-scoped: this polls /api/overview for the Flow tab's live stats. It
+  // must NOT fire on every other screen — it was hitting /api/overview ~9x/15s
+  // on unrelated tabs (e.g. Memory). Pause off Flow/Overview; resume on return.
+  if (window._cmCurrentTab && window._cmCurrentTab !== 'flow' && window._cmCurrentTab !== 'overview') return;
   var now = Date.now();
   flowStats.msgTimestamps = flowStats.msgTimestamps.filter(function(t){return now - t < 60000;});
   var el1 = document.getElementById('flow-msg-rate');
