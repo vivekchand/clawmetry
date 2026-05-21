@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Perf: tab-scoped Overview polling (2026-05-21)
+- The Overview refresh fan-out (loadAll: health/heartbeat/diagnostics/skills/reliability/…, the brain stream, overview-tasks, token-velocity) polled regardless of the active tab, bursting requests on every screen. Now gated on the active tab so they pause off Overview.
+
 ### Alerts: toggle reflects saved rules (flatten condition_json) (2026-05-21)
 - The daemon nests alert_type/threshold inside condition_json; the toggle render checked top-level alert_type and never matched, so a saved rule showed OFF. Flatten condition_json. Completes the alerts toggle e2e.
 
