@@ -198,6 +198,7 @@
       const badge = real ? '' : '<span class="alerts-rule-example-badge">example</span>';
       return `
         <div class="alerts-rule-row${real ? '' : ' alerts-rule-example'}" data-rule-id="${id}">
+          <div class="alerts-rule-dot ${on ? 'on' : 'off'}" title="${on ? 'Enabled' : 'Disabled'}"></div>
           <div class="alerts-rule-main">
             <div class="alerts-rule-title">${meta.icon} ${escape(name)} ${badge}</div>
             <div class="alerts-rule-meta">${metaLine}</div>
