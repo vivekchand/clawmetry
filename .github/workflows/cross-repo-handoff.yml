@@ -30,6 +30,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: vivekchand/clawmetry-cloud
+          token: ${{ secrets.CLOUD_REPO_PAT }}
           path: cloud
 
       - uses: actions/setup-python@v6
