@@ -51,7 +51,14 @@
       const txt = new TextDecoder().decode(
         await crypto.subtle.decrypt({ name: 'AES-GCM', iv: raw.slice(0, 12) }, ck, raw.slice(12)));
       const payload = JSON.parse(txt);
-      return payload.rules || payload.alerts || [];
+      const rules = payload.rules || payload.alerts || [];
+      // The daemon stores the full cloud rule body inside ``condition_json``
+      // (the top level only has id/name/enabled), so alert_type / threshold /
+      // channel_ids live one level down. Flatten it up — otherwise the
+      // merge-render's ``find(r.alert_type === ...)`` never matches and the
+      // toggle stays OFF even though the rule exists. Top-level id/name/enabled
+      // win (they're the authoritative live state).
+      return rules.map(r => Object.assign({}, r.condition_json || {}, r));
     } catch (e) {
       return [];
     }
