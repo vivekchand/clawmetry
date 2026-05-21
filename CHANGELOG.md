@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Release: Self-Evolve "Fix with AI" (local + cloud relay) (2026-05-21)
+- Publishes the Fix-button feature (#1876 local, #1878 cloud relay + daemon `selfevolve_fix` action) and the daemon gateway-token detection fix.
+
 ### Self-Evolve: "Fix with AI" cloud relay (2026-05-21)
 - The Fix button now works from app.clawmetry.com: the cloud queues an authenticated, owner-scoped `selfevolve_fix` action on the heartbeat-piggyback relay; the local daemon runs `openclaw agent` in a background thread and posts the E2E-encrypted result to the cloud cache, which the browser polls + decrypts. Button is no longer gated to the local dashboard.
 
