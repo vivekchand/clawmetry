@@ -5793,7 +5793,14 @@ def _dispatch_pending_action(config: dict, action: dict) -> None:
         _action_channel_test(config, action)
         return
     if atype in ("alert_rule_upsert", "alert_rule_delete"):
-        _apply_pending_write(atype, action)
+        # Stamp THIS node's owner_hash: the cloud relay body carries no
+        # owner_hash, so without this the rule lands with owner_hash=NULL and
+        # _build_alert_rules_cache_pushes' owner_hash filter silently drops it
+        # (the cloud Alerts tab then never shows the rule the user just saved).
+        _apply_pending_write(
+            atype, action,
+            owner_hash=_owner_hash_for_token(config.get("api_key", "")),
+        )
         return
     if atype == "approval_decision":
         _apply_approval_decision(action)
@@ -6161,7 +6168,7 @@ def _dispatch_pending_queries(config: dict, pending: list) -> None:
 # (clawmetry-cloud/routes/alerts.py:_enqueue_alert_rule_change).
 
 
-def _apply_pending_write(qtype: str, q: dict) -> None:
+def _apply_pending_write(qtype: str, q: dict, owner_hash: str | None = None) -> None:
     """Apply one cloud-authored write to the local DuckDB.
 
     Routed by ``type``:
@@ -6183,7 +6190,7 @@ def _apply_pending_write(qtype: str, q: dict) -> None:
         # the evaluator + dashboard get everything without a follow-up fetch.
         rule = {
             "id":            body.get("id") or q.get("id"),
-            "owner_hash":    body.get("owner_hash"),
+            "owner_hash":    body.get("owner_hash") or owner_hash,
             "name":          body.get("name"),
             "condition_json": body,
             "enabled":       body.get("enabled", True),
