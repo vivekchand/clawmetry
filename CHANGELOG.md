@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Alerts: saved rules render on load (decrypt key fix) (2026-05-21)
+- loadAlertsPage decrypted the E2E rules_blob via a helper with the wrong key name + a missing decryptBlob, so saved rules silently never rendered. Self-contained decrypt mirroring the cm-cloud interceptors. This is the fix that makes Enable/toggle stick across reloads.
+
 ### Alerts: toggle persists through cache lag + dedup (2026-05-21)
 - Optimistic toggle state now survives the cloud-cache-warm window (no flicker-revert) and rapid clicks no longer create duplicate rules.
 
