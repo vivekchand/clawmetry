@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Alerts: all types always shown as toggles (Approvals pattern) (2026-05-21)
+- The Alerts tab now always lists the canonical alert types as on/off toggles (default OFF), mapping each to a saved rule so types stay visible after you enable one (previously enabling one hid the rest). Optimistic flip + delayed reload so the switch responds instantly.
+
 ### Alerts: on/off toggle switch (default OFF), matching Approvals (2026-05-21)
 - The Alerts tab now uses the same on/off slider as the Approvals protection rules instead of an Enable button. Examples render OFF; flipping the slider POST-creates+enables the rule (OFF->ON) or disables it (ON->OFF), with a delayed reload so it flips without a manual refresh. Approval protection policies now also seed DISABLED (opt-in) by default.
 
