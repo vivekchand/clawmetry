@@ -1,6 +1,8 @@
-# Agents — Ways of Working (ClawMetry OSS)
+# FLYWHEEL.md — ClawMetry
 
-How an autonomous agent should ship a change in this repo **end to end**: code → PR → green CI → merge → `[RELEASE]` → PyPI → promote to clawmetry-cloud → verify live. Read this with `CLAUDE.md` (architecture) and the cloud repo's `agents-ways-of-working.md` (the other half of the loop).
+> 🌀 ClawMetry's adoption of the **[FLYWHEEL.md](https://flywheel.md)** convention — the third file in the agent canon: `AGENTS.md` (what to do), `SOUL.md` (who to be), `FLYWHEEL.md` (how to ship). ClawMetry is its first adopter. This is our tailored instance; yours will differ — keep the bar.
+
+How an autonomous agent should ship a change in this repo **end to end**: code → PR → green CI → merge → `[RELEASE]` → PyPI → promote to clawmetry-cloud → verify live. Read this with `CLAUDE.md` (architecture) and the cloud repo's `FLYWHEEL.md` (the other half of the loop).
 
 The north star: **don't stop at "code compiles." Stop at "verified working in production, by me, with evidence."** Use `/goal` and keep iterating until that's true.
 
@@ -96,7 +98,7 @@ gh pr create --title "[RELEASE] <summary> (carries #<feature-pr>)" --body "…"
 
 ## 6. Promote to clawmetry-cloud
 
-Hand off to the cloud repo's `agents-ways-of-working.md`. In short: bump `clawmetry==<new>` in the cloud `Dockerfile` *only when the daemon code changed* (a cloud-only render fix that reads an already-shipped snapshot key needs no bump), add the matching `cm-cloud-*` interceptor + route-policy entry, get cloud CI green, and verify the deploy.
+Hand off to the cloud repo's `FLYWHEEL.md`. In short: bump `clawmetry==<new>` in the cloud `Dockerfile` *only when the daemon code changed* (a cloud-only render fix that reads an already-shipped snapshot key needs no bump), add the matching `cm-cloud-*` interceptor + route-policy entry, get cloud CI green, and verify the deploy.
 
 ## 7. Verify in production (the part that's non-negotiable)
 
