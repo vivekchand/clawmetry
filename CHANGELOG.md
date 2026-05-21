@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Alerts Enable works e2e + dashboard no longer locks the DuckDB writer (2026-05-21)
+- "Clicking Enable does nothing" was three bugs: (1) **writer-lock root cause** — the dashboard's `get_store()` opened a DuckDB handle, and even a read-only handle takes a process-level lock that blocks the daemon's writer (stalling ingestion + blanking Models/Embodied/Cost/alerts); `get_store()` in a non-writer process now returns a proxy that forwards to the daemon HTTP query server and opens NO handle. (2) the cloud relay `alert_rule_upsert` body lacked owner_hash so rules were stored NULL and the cache_push filter dropped them — the daemon now stamps its own owner_hash. (3) the frontend "Enable" PUT a non-existent example id (404, swallowed) — it now POSTs a real rule from the template. Verified e2e: POST -> daemon upsert -> cache_push -> cloud Alerts tab shows the rule.
+
 ### Approvals actually fire + surface in the cloud inbox (2026-05-21)
 - Fixed the recurring "protection rules toggled but never see a pending approval." Three stacked bugs: (1) the watcher matched policies by exact tool name, so OpenClaw-authored `exec` policies never matched the claude-cli `Bash` tool (now harness-agnostic via tool categories); (2) `process_tool_call` only POSTed to a legacy endpoint and never wrote the DuckDB `approvals` table that the heartbeat cache_push surfaces in the cloud inbox (now `ingest_approval` on match + `update_approval_decision` on resolve); (3) a dashboard process holding the DuckDB writer could stall ingestion so the watcher saw nothing (role-gate writer fix). Verified e2e: `rm -rf` -> watcher match -> DuckDB pending -> cache_push -> cloud inbox shows the decrypted pending approval.
 
