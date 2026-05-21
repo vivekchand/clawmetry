@@ -95,13 +95,22 @@
       // ``{alerts:[]}``. Reading data.alerts alone meant a saved rule (which
       // arrives encrypted) never rendered — the tab stayed on canned examples
       // forever. Decrypt the blob when present.
+      let serverRules;
       if (data.rules_blob && typeof window.unwrapListAsync === 'function') {
-        alertsState.rules = (await window.unwrapListAsync(data, 'rules', 'rules_blob')) || [];
+        serverRules = (await window.unwrapListAsync(data, 'rules', 'rules_blob')) || [];
       } else {
-        alertsState.rules = data.alerts || data.rules || [];
+        serverRules = data.alerts || data.rules || [];
       }
+      // Preserve optimistic ``pending-`` rules until the cloud cache catches
+      // up (the daemon cache_push lags the write by ~2 heartbeats). Without
+      // this the toggle visibly flips back OFF on the reconcile reload before
+      // the rule appears — looking exactly like "Enable does nothing".
+      const pending = (alertsState.rules || []).filter(r =>
+        String(r.id).startsWith('pending-') &&
+        !serverRules.find(s => s.alert_type === r.alert_type));
+      alertsState.rules = serverRules.concat(pending);
     } catch {
-      alertsState.rules = [];
+      // keep existing (incl. optimistic) rules on a transient fetch error
     }
     renderRules();
 
@@ -317,6 +326,16 @@
     if (alertsState.tier !== 'pro' && alertsState.tier !== 'trial') {
       return openPaywall();
     }
+    // An optimistic ``pending-`` rule has no server id yet — its real create
+    // is still in flight. Just adjust local state (remove on toggle-off) so a
+    // double-click doesn't PUT a non-existent id; the reconcile reload syncs.
+    if (String(ruleId).startsWith('pending-')) {
+      if (!newEnabled) {
+        alertsState.rules = alertsState.rules.filter(r => r.id !== ruleId);
+        renderRules();
+      }
+      return;
+    }
     try {
       // Enabling a canned EXAMPLE creates a real rule from the template.
       // The old code PUT '/api/alerts/example_cost' which 404s ("unknown
@@ -324,6 +343,12 @@
       // (already-saved) rule still goes through the PUT toggle path.
       const ex = EXAMPLE_RULES.find(r => r.id === ruleId);
       const isExample = !!ex && !alertsState.rules.find(r => r.id === ruleId);
+      // Dedup: never POST a second rule for a type that already has one
+      // (rapid clicks before the cache warms created duplicates).
+      if (isExample && newEnabled &&
+          alertsState.rules.find(r => r.alert_type === ex.alert_type)) {
+        return;
+      }
       let resp;
       if (isExample && newEnabled) {
         resp = await fetch('/api/cloud-proxy/api/alerts', {
