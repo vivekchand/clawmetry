@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Brain: hide gateway.metric as plumbing so the activity stream isn't buried (2026-05-21)
+- The Brain "Unified Activity Stream" only treated queue-operation as plumbing; `gateway.metric` (a CPU/RAM ping emitted ~every 40s) stayed visible and flooded the feed when the agent was idle, burying real ASSISTANT/USER/EXEC events (localhost looked far noisier than the cloud). `_isPlumbingEvent` now also matches `gateway.metric` (separator-insensitive), folding it into the existing "Show plumbing" toggle. Verified on a live node: 85/300 events hidden (45 gateway.metric + 40 queue-operation), 215 real events shown. (#1877)
+
 ### Self-Evolve: "Fix with AI" button on findings (2026-05-21)
 - Each Self-Evolve finding now has a "✨ Fix with AI" button. Clicking it (after a confirm) dispatches the finding's suggestion to your local agent via `openclaw agent` (OpenClaw's own creds — ClawMetry's gateway token is read-only), which actually applies the change. Status shows Queued → Agent working → ✅ <summary>. Local dashboard for now; the cloud relay is a follow-up. New endpoints: `POST /api/selfevolve/fix`, `GET /api/selfevolve/fix/status`.
 
