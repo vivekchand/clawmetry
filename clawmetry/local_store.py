@@ -961,6 +961,41 @@ def _daemon_registered() -> bool:
         return False
 
 
+# Cached proxy singleton (the dashboard's stand-in for the writer-owning daemon).
+_store_proxy = None
+
+
+class _ProxyStore:
+    """Stand-in returned by ``get_store()`` in a NON-writer process (the
+    dashboard) when a daemon owns the DuckDB writer.
+
+    DuckDB locks at the PROCESS level: opening *any* handle here — even
+    read-only — takes a file lock that blocks the daemon's writer, which
+    starves ingestion and silently breaks Models/Embodied/Cost/alerts.
+    Downgrading to read_only is NOT enough (that's the recurring bug). So
+    instead of opening DuckDB we forward every method call to the daemon's
+    HTTP query proxy. Read methods (``query_*``) work; the dashboard must not
+    write, so write methods just no-op via the proxy (returns None)."""
+
+    _read_only = True
+
+    def __getattr__(self, name):
+        def _forward(*args, **kwargs):
+            try:
+                from routes.local_query import local_store_via_daemon
+                return local_store_via_daemon(name, **kwargs)
+            except Exception:
+                return None
+        return _forward
+
+    def health(self):
+        try:
+            from routes.local_query import local_store_via_daemon
+            return local_store_via_daemon("health") or {"ok": False, "_via": "proxy"}
+        except Exception:
+            return {"ok": False, "_via": "proxy"}
+
+
 def get_store(read_only: bool = False) -> "LocalStore":
     """Lazy-init the process-wide singleton. Cheap to call repeatedly.
 
@@ -974,27 +1009,26 @@ def get_store(read_only: bool = False) -> "LocalStore":
     handle to the same file in the same process). All read-paths on
     LocalStore work the same regardless of mode; ingest() raises in RO mode.
     """
-    global _store_rw, _store_ro
+    global _store_rw, _store_ro, _store_proxy
+    # Writer-owner (daemon) or single-process boot already holds the writer.
+    if _store_rw is not None:
+        return _store_rw
+    # NON-writer process with a daemon present (or tagged as the dashboard):
+    # NEVER open a DuckDB handle — even a read-only handle takes a
+    # process-level lock that blocks the daemon's writer (the recurring
+    # ingest-stall / Models / Embodied / alerts breakage; downgrading to
+    # read_only was not enough). Return a proxy that forwards to the daemon's
+    # HTTP query server. The daemon itself called mark_writer_owner() so
+    # _writer_owner short-circuits this and it opens the real writer below.
+    if not _writer_owner and (
+        os.environ.get("CLAWMETRY_ROLE") == "dashboard"
+        or _daemon_registered()
+    ):
+        if _store_proxy is None:
+            _store_proxy = _ProxyStore()
+        return _store_proxy
     if not read_only:
-        if _store_rw is not None:
-            return _store_rw
-        # Never steal the writer from a live daemon. A non-owner process (the
-        # dashboard) that opens the writer during a daemon-restart window
-        # starves the daemon's ingest and blanks every snapshot read. Downgrade
-        # to read_only — in the daemon this branch is skipped (it called
-        # mark_writer_owner()), and in single-process boots no live owner is
-        # registered so the writer still opens.
-        if not _writer_owner and (
-            os.environ.get("CLAWMETRY_ROLE") == "dashboard"
-            or _daemon_registered()
-        ):
-            # The dashboard process is structurally barred from the writer
-            # (CLAWMETRY_ROLE), which also closes the cold-start race where
-            # local_query.json is briefly absent. The daemon is unaffected: it
-            # calls mark_writer_owner() so _writer_owner short-circuits this.
-            read_only = True
-        else:
-          with _store_lock:
+        with _store_lock:
             if _store_rw is None:
                 if _store_ro is not None:
                     # Evict the cached RO handle so we can open the writer.
@@ -1034,7 +1068,7 @@ def get_store(read_only: bool = False) -> "LocalStore":
 def _reset_singleton_for_tests() -> None:
     """Test-only helper. Drops the cached stores so the next get_store() picks
     up new env vars (DB path, flush knobs)."""
-    global _store_rw, _store_ro
+    global _store_rw, _store_ro, _store_proxy
     with _store_lock:
         for name in ("_store_rw", "_store_ro"):
             store = globals().get(name)
@@ -1045,6 +1079,7 @@ def _reset_singleton_for_tests() -> None:
                     pass
         _store_rw = None
         _store_ro = None
+        _store_proxy = None
 
 
 class LocalStore:

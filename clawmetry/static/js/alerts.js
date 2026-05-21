@@ -288,11 +288,34 @@
       return openPaywall();
     }
     try {
-      const resp = await fetch('/api/cloud-proxy/api/alerts/' + ruleId, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: newEnabled }),
-      });
+      // Enabling a canned EXAMPLE creates a real rule from the template.
+      // The old code PUT '/api/alerts/example_cost' which 404s ("unknown
+      // example id"), caught + swallowed -> "Enable does nothing". A real
+      // (already-saved) rule still goes through the PUT toggle path.
+      const ex = EXAMPLE_RULES.find(r => r.id === ruleId);
+      const isExample = !!ex && !alertsState.rules.find(r => r.id === ruleId);
+      let resp;
+      if (isExample && newEnabled) {
+        resp = await fetch('/api/cloud-proxy/api/alerts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            alert_type: ex.alert_type,
+            name: ex.name,
+            threshold_value: ex.threshold_value,
+            threshold_unit: ex.threshold_unit || '',
+            enabled: true,
+            channel_ids: [],
+            re_alert_policy: 'once',
+          }),
+        });
+      } else {
+        resp = await fetch('/api/cloud-proxy/api/alerts/' + ruleId, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: newEnabled }),
+        });
+      }
       if (resp.status === 402) {
         // Hit the Free-tier cap server-side
         return openPaywall();
