@@ -15291,3 +15291,102 @@ function _ncEsc(s) {
     }).catch(function(){});
   } catch(e) {}
 })();
+
+// ── Update banner (PyPI version check + one-click upgrade) ─────────────
+// Functions are referenced from clawmetry/templates/partials/banners.html.
+// /api/update-check/status decides visibility; /api/update runs pip install.
+async function checkUpdateStatus() {
+  try {
+    var data = await fetch('/api/update-check/status').then(function(r){return r.json();});
+    var banner = document.getElementById('update-banner');
+    var msg = document.getElementById('update-banner-msg');
+    if (data.show_banner && banner && msg) {
+      var latest = (data.latest_check && data.latest_check.latest) || 'newer';
+      var current = (data.latest_check && data.latest_check.current) || '';
+      msg.textContent = 'Update available: v' + latest + ' is out. You are on v' + current + '.';
+      banner.style.display = 'flex';
+    }
+  } catch(e) {}
+}
+
+async function dismissUpdateBanner() {
+  try {
+    var data = await fetch('/api/update-check/status').then(function(r){return r.json();});
+    if (data.latest_check && data.latest_check.latest) {
+      await fetch('/api/update-check/dismiss', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({version: data.latest_check.latest})
+      });
+    }
+    var banner = document.getElementById('update-banner');
+    if (banner) banner.style.display = 'none';
+  } catch(e) {}
+}
+
+async function updateFromBanner() {
+  var btn = document.getElementById('update-banner-update-btn');
+  var msg = document.getElementById('update-banner-msg');
+  var changelog = document.getElementById('update-banner-changelog');
+  if (!btn) return;
+  var target = '';
+  try {
+    var s = await fetch('/api/update-check/status').then(function(r){return r.json();});
+    target = (s && s.latest_check && s.latest_check.latest) || '';
+  } catch(e) {}
+  if (!confirm('Update ClawMetry' + (target ? ' to v' + target : '') + ' now?\n\nThe dashboard and sync daemon will restart. In-flight requests may be interrupted.')) return;
+  btn.disabled = true;
+  btn.textContent = 'Updating...';
+  btn.style.cursor = 'wait';
+  btn.style.opacity = '0.7';
+  if (changelog) changelog.style.display = 'none';
+  if (msg) msg.textContent = 'Running pip install -U clawmetry. This usually takes 10-30 seconds...';
+  try {
+    var resp = await fetch('/api/update', {method: 'POST'});
+    var d = await resp.json().catch(function(){return {};});
+    if (resp.ok && d.ok) {
+      if (msg) msg.textContent = 'Updated to v' + (d.new_version || target) + '. Restarting dashboard...';
+      var reloaded = false;
+      var attempts = 0;
+      var poll = setInterval(function(){
+        attempts++;
+        fetch('/api/version', {cache: 'no-store'}).then(function(r){
+          if (!r.ok) throw new Error('not-ok');
+          return r.json();
+        }).then(function(v){
+          if (reloaded) return;
+          if (v && v.current && (!target || v.current === target)) {
+            reloaded = true;
+            clearInterval(poll);
+            window.location.reload();
+          }
+        }).catch(function(){});
+        if (attempts > 60) {
+          clearInterval(poll);
+          if (msg) msg.textContent = 'Restart taking longer than expected. Refresh the page manually.';
+          btn.disabled = false;
+          btn.textContent = 'Update now';
+          btn.style.cursor = 'pointer';
+          btn.style.opacity = '1';
+        }
+      }, 1000);
+    } else {
+      if (msg) msg.textContent = 'Update failed: ' + ((d && d.error) || ('HTTP ' + resp.status));
+      btn.disabled = false;
+      btn.textContent = 'Update now';
+      btn.style.cursor = 'pointer';
+      btn.style.opacity = '1';
+      if (changelog) changelog.style.display = '';
+    }
+  } catch(e) {
+    if (msg) msg.textContent = 'Update failed: ' + (e && e.message ? e.message : 'network error');
+    btn.disabled = false;
+    btn.textContent = 'Update now';
+    btn.style.cursor = 'pointer';
+    btn.style.opacity = '1';
+    if (changelog) changelog.style.display = '';
+  }
+}
+
+setInterval(checkUpdateStatus, 3600000);
+setTimeout(checkUpdateStatus, 5000);

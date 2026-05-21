@@ -127,10 +127,27 @@ def api_update():
     except Exception:
         pass
 
-    # Schedule restart after response is sent
+    # Schedule restart after response is sent.
+    # CRITICAL: kick the sync daemon FIRST. Otherwise it keeps the OLD wheel in
+    # memory until launchctl restarts it on next boot (see
+    # ``feedback_restart_both_processes_after_upgrade.md``).
     def _restart():
         import os as _os
+        import platform as _pl
 
+        if _pl.system() == "Darwin":
+            try:
+                uid = _os.getuid()
+                _sp.run(
+                    ["launchctl", "kickstart", "-k",
+                     f"gui/{uid}/com.clawmetry.sync"],
+                    timeout=5,
+                    stdout=_sp.DEVNULL,
+                    stderr=_sp.DEVNULL,
+                    check=False,
+                )
+            except Exception:
+                pass  # daemon may not be running; dashboard restart is enough
         _os._exit(0)
 
     _thr.Timer(2.0, _restart).start()
