@@ -9581,6 +9581,25 @@ function _renderReplayEvent(ev, highlighted) {
   if (role === 'compaction') {
     return _renderCompactionEvent(ev, highlighted);
   }
+  // Tool turns (assistant tool_use / user tool_result) carry no prose, so they
+  // used to render as blank bubbles with just a role + timestamp — looking
+  // broken. Render them as a compact, labelled chip instead so the real
+  // (prose) turns stand out and the timeline reads cleanly.
+  var _c = ev.content;
+  if (!_c || !String(_c).trim()) {
+    var chipLabel = role === 'assistant' ? '🔧 Tool call'
+                  : role === 'user' ? '↩ Tool result'
+                  : role === 'system' ? '⚙ System'
+                  : (escHtml(role) + ' · no text');
+    var chipTs = ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString() : '';
+    var chipRing = highlighted ? 'box-shadow:0 0 0 2px #6366f1;' : '';
+    var chipSide = role === 'user' ? 'flex-end' : 'flex-start';
+    return '<div class="chat-tool-chip ' + (role === 'user' ? 'tc-user' : 'tc-asst') + '" id="replay-msg-' + ev.originalIndex + '" style="align-self:' + chipSide + ';' + chipRing + '">'
+      + '<span class="chat-tool-chip-label">' + chipLabel + '</span>'
+      + (ev.tokens ? '<span class="chat-tool-chip-meta">' + ev.tokens + ' tok</span>' : '')
+      + (chipTs ? '<span class="chat-tool-chip-meta">' + chipTs + '</span>' : '')
+      + '</div>';
+  }
   var cls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'system' ? 'system' : 'tool';
   var content = ev.content;
   var needsTruncate = content.length > 800;

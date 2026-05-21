@@ -554,6 +554,14 @@
   .chat-msg.system { background: #2a2a1a; border: 1px solid #4a4a2a; color: #f0e0a0; align-self: center; font-size: 12px; font-style: italic; max-width: 90%; }
   .chat-msg.tool { background: #1a1a24; border: 1px solid #2a2a3a; color: #a0a0b0; align-self: flex-start; font-family: 'SF Mono', monospace; font-size: 12px; border-left: 3px solid #555; }
   .chat-role { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; opacity: 0.7; }
+  /* Compact chip for tool turns (no prose) so they don't render as blank
+     bubbles. Role-accented left border keeps them consistent with the prose
+     bubbles while reading as secondary. */
+  .chat-tool-chip { display: inline-flex; align-items: center; gap: 10px; max-width: 85%; padding: 5px 12px; border-radius: 9px; font-size: 11px; background: rgba(255,255,255,0.025); border: 1px solid #2a2a3a; }
+  .chat-tool-chip.tc-asst { border-left: 3px solid #2a5a3a; }
+  .chat-tool-chip.tc-user { border-left: 3px solid #2a4a7a; }
+  .chat-tool-chip-label { font-weight: 600; letter-spacing: 0.3px; color: #b8c0cc; }
+  .chat-tool-chip-meta { opacity: 0.55; font-size: 10px; color: #888; font-variant-numeric: tabular-nums; }
   .chat-ts { font-size: 10px; color: #555; margin-top: 6px; text-align: right; }
   .chat-expand { display: inline-block; color: #f0c040; font-size: 11px; cursor: pointer; margin-top: 4px; }
   .chat-expand:hover { text-decoration: underline; }
