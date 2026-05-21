@@ -7304,6 +7304,16 @@ def _build_diagnostics(workspace=None):
         if _d.WORKSPACE or workspace:
             auto_detected.append("workspace")
         token = _d.GATEWAY_TOKEN or os.environ.get("OPENCLAW_GATEWAY_TOKEN", "").strip()
+        # The daemon process never runs the dashboard's startup token detection,
+        # so _d.GATEWAY_TOKEN is None here and (under launchd) the env var is
+        # unset — auth_token_status was wrongly "missing" in the snapshot even
+        # when openclaw.json has a gateway token. Fall back to the same detector
+        # the dashboard and security posture use (reads gateway.auth.token).
+        if not token:
+            try:
+                token = _d._detect_gateway_token() or ""
+            except Exception:
+                token = ""
         auth_token_status = "present" if token else "missing"
         openclaw_flags = {}
         flag_map = {
