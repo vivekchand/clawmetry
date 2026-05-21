@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Perf: tab-scope updateFlowStats (2026-05-21)
+- The Flow-tab live-stats timer polled /api/overview on every tab. Gated to Flow/Overview.
+
 ### Perf: tab-scoped Overview polling (2026-05-21)
 - The Overview refresh fan-out (loadAll: health/heartbeat/diagnostics/skills/reliability/…, the brain stream, overview-tasks, token-velocity) polled regardless of the active tab, bursting requests on every screen. Now gated on the active tab so they pause off Overview.
 
