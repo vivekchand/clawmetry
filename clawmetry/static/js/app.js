@@ -384,6 +384,15 @@ function visibilitySetInterval(fn, ms) {
   }, ms);
 }
 
+// Tab-scoped polling. Heavy pollers (the Overview loadAll() fan-out) gate on
+// the active tab so they don't fire on every other screen. ``_cmCurrentTab``
+// is set by switchTab(); it's null on first boot, where Overview is the
+// default landing tab — so the gate treats "unset" as Overview.
+var _cmCurrentTab = null;
+function _cmIsOverviewTab() {
+  return !_cmCurrentTab || _cmCurrentTab === 'overview';
+}
+
 // Check alerts every 30s
 visibilitySetInterval(checkActiveAlerts, 30000);
 setTimeout(checkActiveAlerts, 3000);
@@ -846,6 +855,9 @@ function cancelAllPendingSSEDwell() {
 }
 
 function switchTab(name) {
+  // Track the active tab so tab-scoped pollers (Overview loadAll, etc.) only
+  // run on their own screen instead of on every tab.
+  _cmCurrentTab = name;
   // Phase 3: kill any pending SSE-open dwell from the tab we're leaving.
   cancelAllPendingSSEDwell();
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -865,7 +877,7 @@ function switchTab(name) {
   // Stop cron auto-refresh when leaving crons tab
   if (name !== 'crons' && _cronAutoRefreshTimer) { clearInterval(_cronAutoRefreshTimer); _cronAutoRefreshTimer = null; }
   if (name === 'overview') loadAll();
-  if (name === 'overview') { if (typeof _velocityPollTimer !== 'undefined' && _velocityPollTimer) clearInterval(_velocityPollTimer); if (typeof loadTokenVelocity === 'function') _velocityPollTimer = visibilitySetInterval(loadTokenVelocity, 30000); }
+  if (name === 'overview') { if (typeof _velocityPollTimer !== 'undefined' && _velocityPollTimer) clearInterval(_velocityPollTimer); if (typeof loadTokenVelocity === 'function') _velocityPollTimer = visibilitySetInterval(function() { if (!_cmIsOverviewTab()) return; loadTokenVelocity(); }, 30000); }
   if (name === 'usage') loadUsage();
   if (name === 'skills') loadSkills();
   if (name === 'crons') loadCrons();
@@ -10144,13 +10156,22 @@ function startOverviewRefresh() {
   // Don't fire loadAll() immediately -- bootDashboard already called it
   if (window._overviewTimer) clearInterval(window._overviewTimer);
   window._overviewTimer = visibilitySetInterval(async function() {
+    // Tab-scoped: loadAll() refreshes the whole Overview (health, heartbeat,
+    // diagnostics, skills, reliability, …). Only poll it while the user is
+    // actually on Overview — otherwise these dozen requests fire on every
+    // other tab too (the "ton of requests on the LLM Context screen" report).
+    // _cmCurrentTab is unset on first boot, where Overview is the default.
+    if (!_cmIsOverviewTab()) return;
     if (_overviewRefreshRunning) return;
     _overviewRefreshRunning = true;
     try { await loadAll(); } finally { _overviewRefreshRunning = false; }
   }, 10000);
   loadMainActivity();
   if (window._mainActivityTimer) clearInterval(window._mainActivityTimer);
-  window._mainActivityTimer = visibilitySetInterval(loadMainActivity, 5000);
+  window._mainActivityTimer = visibilitySetInterval(function() {
+    if (!_cmIsOverviewTab()) return;
+    loadMainActivity();
+  }, 5000);
 }
 
 // Overview right-panel Brain stream: reuses /api/brain-history (same source as
@@ -11920,7 +11941,10 @@ async function loadOverviewTasks() {
 function startOverviewTasksRefresh() {
   loadOverviewTasks();
   if (_ovTasksTimer) clearInterval(_ovTasksTimer);
-  _ovTasksTimer = visibilitySetInterval(loadOverviewTasks, 10000);
+  _ovTasksTimer = visibilitySetInterval(function() {
+    if (!_cmIsOverviewTab()) return;
+    loadOverviewTasks();
+  }, 10000);
 }
 
 // === Task Detail Modal ===
