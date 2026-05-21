@@ -3520,17 +3520,25 @@ function sessionHasHighRisk(events, sessionId) {
   return false;
 }
 
-// Plumbing event types: internal queue housekeeping that's noise to anyone
-// debugging an actual conversation. Hidden by default; toggle in the Brain
-// header reveals them. Match is case-insensitive on type AND detail to
-// catch QUEUE-OPERATION / queue_operation / "queue-operation" alike.
+// Plumbing event types: internal queue housekeeping + gateway CPU/RAM metrics
+// that are noise to anyone debugging an actual conversation. Hidden by default;
+// toggle in the Brain header reveals them. Match is case-insensitive and
+// separator-insensitive on type AND role to catch QUEUE-OPERATION /
+// queue_operation and GATEWAY.METRIC / gateway_metric alike.
 function _isPlumbingEvent(ev) {
   if (!ev) return false;
-  var t = String(ev.type || '').toLowerCase().replace(/[_-]/g, '');
-  if (t === 'queueoperation') return true;
-  // Belt-and-suspenders: some ingests stuff "queue-operation" into role/detail
-  var role = String(ev.role || '').toLowerCase().replace(/[_-]/g, '');
-  if (role === 'queueoperation') return true;
+  // Infra/plumbing event types: machine noise, not agent content, so they're
+  // hidden by default behind "Show plumbing". gateway.metric is a CPU/RAM ping
+  // emitted ~every 40s — left unfiltered it floods the stream and buries real
+  // activity (the Brain tab looked broken when the agent was idle).
+  // Normalise (lowercase, drop . _ -) so "gateway.metric", "GATEWAY.METRIC"
+  // and "queue-operation" all collapse to one comparable token.
+  var PLUMBING = { queueoperation: 1, gatewaymetric: 1 };
+  var t = String(ev.type || '').toLowerCase().replace(/[._-]/g, '');
+  if (PLUMBING[t]) return true;
+  // Belt-and-suspenders: some ingests stuff the type into role/detail.
+  var role = String(ev.role || '').toLowerCase().replace(/[._-]/g, '');
+  if (PLUMBING[role]) return true;
   return false;
 }
 
