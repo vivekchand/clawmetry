@@ -5129,7 +5129,8 @@ function selfevolveRenderFindings(payload) {
     container.innerHTML = '<div style="padding:10px 12px;color:var(--text-muted);font-size:12px;">' +
       'No findings yet. Click Analyze to review recent activity.</div>';
   } else {
-    findings.forEach(function (f) {
+    window._seFindings = findings;
+    findings.forEach(function (f, _fidx) {
       var col = selfevolveSeverityColor(f.severity);
       var card = document.createElement('div');
       card.style.cssText =
@@ -5148,8 +5149,16 @@ function selfevolveRenderFindings(payload) {
         (f.evidence ? '<div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;line-height:1.5;">' +
           '<strong style="color:var(--text-secondary);">Evidence:</strong> ' + escapeHtml(f.evidence) + '</div>' : '') +
         (f.suggestion ? '<div style="font-size:12px;color:var(--text-primary);line-height:1.5;">' +
-          '<strong style="color:#60a5fa;">Try:</strong> ' + escapeHtml(f.suggestion) + '</div>' : '');
+          '<strong style="color:#60a5fa;">Try:</strong> ' + escapeHtml(f.suggestion) + '</div>' : '') +
+        ((f.suggestion && !window.CLOUD_MODE) ?
+          '<div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+            '<button class="se-fix-btn" data-fidx="' + _fidx + '" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;cursor:pointer;background:#2563eb;color:#fff;border:none;border-radius:6px;padding:6px 12px;">✨ Fix with AI</button>' +
+            '<span class="se-fix-status" style="font-size:12px;color:var(--text-muted);"></span>' +
+          '</div>' : '');
       container.appendChild(card);
+    });
+    container.querySelectorAll('.se-fix-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () { selfevolveFixClick(parseInt(btn.dataset.fidx, 10), btn); });
     });
   }
   if (status) {
@@ -5159,6 +5168,78 @@ function selfevolveRenderFindings(payload) {
     if (payload.model) meta.push(payload.model);
     status.textContent = meta.join(' · ');
   }
+}
+
+// ── "Fix with AI": dispatch a finding's suggestion to the local agent ──────────
+// Confirms first (the agent makes a real change), POSTs to /api/selfevolve/fix,
+// then polls /api/selfevolve/fix/status until done/error. Local-only for now;
+// the cloud relay routes the same intent through a node command.
+function selfevolveFixClick(idx, btn) {
+  var f = (window._seFindings || [])[idx];
+  if (!f) return;
+  _seFixConfirm(f, function () { _seFixRun(f, btn); });
+}
+function _seFixConfirm(f, onYes) {
+  var ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px;';
+  var box = document.createElement('div');
+  box.style.cssText = 'max-width:460px;width:100%;background:var(--bg-secondary,#161b22);border:1px solid var(--border-primary,#30363d);border-radius:10px;padding:20px;';
+  box.innerHTML =
+    '<div style="font-size:15px;font-weight:700;color:var(--text-primary,#e6edf3);margin-bottom:8px;">✨ Send this fix to your agent?</div>' +
+    '<div style="font-size:12px;color:var(--text-muted,#8b949e);margin-bottom:6px;">Your OpenClaw agent will apply this change on your machine:</div>' +
+    '<div style="font-size:13px;color:var(--text-primary,#e6edf3);background:var(--bg-primary,#0d1117);border:1px solid var(--border-primary,#30363d);border-radius:6px;padding:10px 12px;margin-bottom:16px;line-height:1.5;">' + escapeHtml(f.suggestion || '') + '</div>' +
+    '<div style="display:flex;justify-content:flex-end;gap:8px;">' +
+      '<button id="se-fix-cancel" style="font-size:13px;padding:7px 14px;border-radius:6px;border:1px solid var(--border-primary,#30363d);background:transparent;color:var(--text-secondary,#9ca3af);cursor:pointer;">Cancel</button>' +
+      '<button id="se-fix-go" style="font-size:13px;font-weight:600;padding:7px 16px;border-radius:6px;border:none;background:#2563eb;color:#fff;cursor:pointer;">Send to agent</button>' +
+    '</div>';
+  ov.appendChild(box);
+  document.body.appendChild(ov);
+  function close() { ov.remove(); }
+  ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
+  box.querySelector('#se-fix-cancel').addEventListener('click', close);
+  box.querySelector('#se-fix-go').addEventListener('click', function () { close(); onYes(); });
+}
+function _seFixRun(f, btn) {
+  var statusEl = btn.parentElement.querySelector('.se-fix-status');
+  btn.disabled = true; btn.style.opacity = '0.6';
+  if (statusEl) { statusEl.textContent = '⏳ Queued…'; statusEl.style.color = 'var(--text-muted)'; }
+  fetch('/api/selfevolve/fix', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: f.title, suggestion: f.suggestion, category: f.category, evidence: f.evidence }) })
+    .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (res) {
+      if (!res.ok || !res.j.job_id) {
+        if (statusEl) { statusEl.textContent = '⚠️ ' + (res.j.message || 'Could not start'); statusEl.style.color = '#f59e0b'; }
+        btn.disabled = false; btn.style.opacity = '1'; return;
+      }
+      _seFixPoll(res.j.job_id, statusEl, btn);
+    })
+    .catch(function () {
+      if (statusEl) { statusEl.textContent = '⚠️ Network error'; statusEl.style.color = '#ef4444'; }
+      btn.disabled = false; btn.style.opacity = '1';
+    });
+}
+function _seFixPoll(jobId, statusEl, btn) {
+  var tries = 0;
+  var iv = setInterval(function () {
+    tries++;
+    fetch('/api/selfevolve/fix/status?job_id=' + encodeURIComponent(jobId))
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (j.status === 'running') {
+          if (statusEl) { statusEl.textContent = '⚙️ Agent working…'; statusEl.style.color = '#60a5fa'; }
+        } else if (j.status === 'done') {
+          clearInterval(iv);
+          if (statusEl) { statusEl.textContent = '✅ ' + (j.summary || 'Done'); statusEl.style.color = '#22c55e'; }
+          if (btn) { btn.textContent = '✅ Fixed'; }
+        } else if (j.status === 'error') {
+          clearInterval(iv);
+          if (statusEl) { statusEl.textContent = '⚠️ ' + (j.error || 'Failed'); statusEl.style.color = '#ef4444'; }
+          if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+        }
+      })
+      .catch(function () {});
+    if (tries > 200) { clearInterval(iv); }  // ~10 min cap
+  }, 3000);
 }
 // Self-Evolve is intentionally NOT in the top nav (option C: discoverable via
 // a contextual link on the Brain tab + deep-link). The probe's job here is
