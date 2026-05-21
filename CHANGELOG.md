@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Fix: daemon detects gateway token (snapshot auth_token_status was false "missing") (2026-05-21)
+- `_build_diagnostics()` runs in the sync daemon, where `dashboard.GATEWAY_TOKEN` is never populated (the daemon doesn't run the dashboard's startup detection) and `OPENCLAW_GATEWAY_TOKEN` is unset under launchd — so the snapshot reported `auth_token_status="missing"` even when `openclaw.json` has a gateway token. Cloud showed "Auth token: missing" and Self-Evolve generated false HIGH-severity findings. Now falls back to `_detect_gateway_token()` (the same detector the dashboard + Security posture use).
+
 ### Replay: tool turns as compact chips (2026-05-21)
 - Empty tool_use/tool_result bubbles now render as compact role-accented chips instead of blank boxes.
 
