@@ -5379,3 +5379,61 @@ def api_outcomes_sessions():
         "sessions": out,
         "_source": "local_store",
     })
+
+
+@bp_sessions.route("/api/outcomes/impact")
+def api_outcomes_impact():
+    """Impact-taxonomy breakdown for sessions in the requested window (issue #1649).
+
+    Classifies non-success sessions into OpenClaw's failure-mode labels:
+    message-loss, session-state, crash-loop, auth-provider, security.
+    A session may carry multiple tags.
+
+    Query params:
+      window     — 1h / 1d (default) / 7d / 30d
+      agent_type — default openclaw
+      limit      — max sessions to classify (default 50, cap 50)
+    """
+    from clawmetry.outcome_classifier import (
+        classify_session_impact,
+        aggregate_impacts,
+        OUTCOME_SUCCESS,
+        OUTCOME_ONGOING,
+    )
+    window = (request.args.get("window") or "1d").lower()
+    agent_type = request.args.get("agent_type") or "openclaw"
+    try:
+        limit = max(1, min(50, int(request.args.get("limit") or 50)))
+    except (TypeError, ValueError):
+        limit = 50
+    since = _outcome_window_to_iso_since(window)
+
+    outcome_rows = _ls_call(
+        "query_outcomes",
+        agent_type=agent_type,
+        since=since,
+        limit=500,
+    ) or []
+
+    # Only classify sessions that didn't simply succeed / are still ongoing —
+    # keeps the per-session event queries bounded to the interesting minority.
+    candidates = [
+        r for r in outcome_rows
+        if (r.get("outcome") or "") not in (OUTCOME_SUCCESS, OUTCOME_ONGOING, "")
+    ][:limit]
+
+    pairs: list[tuple[str, list[str]]] = []
+    for row in candidates:
+        sid = row.get("session_id")
+        if not sid:
+            continue
+        evs = _ls_call("query_events", session_id=sid, limit=200) or []
+        meta = {k: row.get(k) for k in ("status", "ended_at", "last_active_at")}
+        tags = classify_session_impact(evs, meta)
+        pairs.append((sid, tags))
+
+    agg = aggregate_impacts(pairs)
+    agg["window"] = window
+    agg["total_sessions_in_window"] = len(outcome_rows)
+    agg["_source"] = "local_store" if outcome_rows else "empty"
+    return jsonify(agg)

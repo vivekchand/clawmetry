@@ -711,3 +711,183 @@ def aggregate_outcomes(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "success_rate": round(success_rate, 4),
         "needed_human_rate": round(needed_human, 4),
     }
+
+
+# ── Impact taxonomy (issue #1649) ──────────────────────────────────────────
+# Sessions can carry zero or more impact tags simultaneously — categories are
+# not mutually exclusive. The taxonomy mirrors OpenClaw's failure-mode label
+# set so each flagged ClawMetry session is a pre-triaged repro candidate.
+
+IMPACT_MESSAGE_LOSS  = "message-loss"
+IMPACT_SESSION_STATE = "session-state"
+IMPACT_CRASH_LOOP    = "crash-loop"
+IMPACT_AUTH_PROVIDER = "auth-provider"
+IMPACT_SECURITY      = "security"
+
+VALID_IMPACTS: frozenset = frozenset({
+    IMPACT_MESSAGE_LOSS, IMPACT_SESSION_STATE, IMPACT_CRASH_LOOP,
+    IMPACT_AUTH_PROVIDER, IMPACT_SECURITY,
+})
+
+# Auth-failure substrings looked for in tool result content (case-insensitive).
+_AUTH_ERROR_SIGNALS = (
+    "401", "403", "unauthorized", "authentication failed",
+    "auth error", "invalid token", "invalid api key",
+    "forbidden", "access denied",
+)
+
+# Classic prompt-injection phrases in user-sourced events.
+_INJECTION_SIGNALS = (
+    "ignore previous instructions",
+    "ignore all previous",
+    "disregard previous",
+    "you are now a",
+    "jailbreak",
+    "act as if you",
+    "forget your",
+)
+
+# Channel-send tool name prefixes that indicate a message-send intent.
+_CHANNEL_SEND_PREFIXES = (
+    "mcp__telegram__send",
+    "mcp__discord__send",
+    "mcp__slack__send",
+    "mcp__signal__send",
+    "mcp__whatsapp__send",
+    "mcp__imessage__send",
+    "mcp__webchat__send",
+)
+
+_SESSION_RESTART_ETS = frozenset({
+    "session.started", "session.restarted", "session.reset",
+})
+
+_USER_SOURCE_ETS = frozenset({
+    "prompt.submitted", "user", "message",
+    "channel.message", "channel.receive",
+})
+
+
+def classify_session_impact(
+    events: list[dict[str, Any]] | None,
+    session_meta: dict[str, Any] | None = None,
+) -> list[str]:
+    """Return zero or more impact tags for one session (issue #1649).
+
+    Tags mirror OpenClaw's failure-mode impact label set. A session may
+    carry multiple tags. Conservative: prefers false negatives over false
+    positives (same philosophy as ``classify_session``).
+    """
+    evs = list(events or [])
+    try:
+        evs.sort(key=lambda e: e.get("ts") or "")
+    except Exception:
+        pass
+
+    found: set[str] = set()
+
+    # crash-loop: multiple session.started / restarted events in the stream.
+    restart_count = sum(
+        1 for ev in evs
+        if (ev.get("event_type") or "").lower() in _SESSION_RESTART_ETS
+    )
+    if restart_count >= 2:
+        found.add(IMPACT_CRASH_LOOP)
+
+    # auth-provider: 401/403 or auth-error text in a tool.result content field.
+    for ev in evs:
+        et = (ev.get("event_type") or "").lower()
+        if et not in _TOOL_RESULT_EVENT_TYPES:
+            continue
+        data = ev.get("data") or {}
+        if isinstance(data, dict):
+            raw = (
+                data.get("content") or data.get("output") or
+                data.get("error") or data.get("error_message") or ""
+            )
+            if isinstance(raw, list):
+                raw = " ".join(
+                    b.get("text", "") if isinstance(b, dict) else str(b)
+                    for b in raw
+                )
+            content = str(raw).lower()
+        else:
+            content = str(data).lower()
+        if any(sig in content for sig in _AUTH_ERROR_SIGNALS):
+            found.add(IMPACT_AUTH_PROVIDER)
+            break
+
+    # session-state: (a) tool invocation with no matching result — threshold=1 s
+    # treats any unmatched call in a completed session as a missing terminal event.
+    stuck = find_stuck_tool_calls(evs, threshold_seconds=1.0)
+    if stuck:
+        found.add(IMPACT_SESSION_STATE)
+    else:
+        # (b) duplicate turn IDs on model.completed / assistant events.
+        seen_ids: set[str] = set()
+        for ev in evs:
+            et = (ev.get("event_type") or "").lower()
+            if et not in ("model.completed", "assistant"):
+                continue
+            eid = ev.get("id") or ev.get("event_id")
+            if eid:
+                if eid in seen_ids:
+                    found.add(IMPACT_SESSION_STATE)
+                    break
+                seen_ids.add(eid)
+
+    # message-loss: a channel-send tool call that received an error result.
+    pending_sends: dict[str, bool] = {}
+    for ev in evs:
+        et = (ev.get("event_type") or "").lower()
+        data = ev.get("data") or {}
+        if not isinstance(data, dict):
+            continue
+        if et in _TOOL_INVOCATION_EVENT_TYPES:
+            tn = (data.get("name") or data.get("tool_name") or "").lower()
+            if any(tn.startswith(p) for p in _CHANNEL_SEND_PREFIXES):
+                for cid in _iter_invocation_tool_call_ids(ev):
+                    pending_sends[cid] = True
+        elif et in _TOOL_RESULT_EVENT_TYPES:
+            for cid in _iter_result_tool_call_ids(ev):
+                if cid in pending_sends:
+                    del pending_sends[cid]
+                    if _is_tool_error(ev):
+                        found.add(IMPACT_MESSAGE_LOSS)
+
+    # security: prompt-injection phrases in user-sourced events.
+    for ev in evs:
+        et = (ev.get("event_type") or "").lower()
+        if et not in _USER_SOURCE_ETS:
+            continue
+        data = ev.get("data") or {}
+        text = (
+            _extract_text(data).lower() if isinstance(data, dict)
+            else str(data).lower()
+        )
+        if any(sig in text for sig in _INJECTION_SIGNALS):
+            found.add(IMPACT_SECURITY)
+            break
+
+    return sorted(found)
+
+
+def aggregate_impacts(
+    sessions_with_impacts: list[tuple[str, list[str]]],
+) -> dict[str, Any]:
+    """Roll up ``(session_id, [impact, …])`` pairs into dashboard counters."""
+    counts: dict[str, int] = {k: 0 for k in sorted(VALID_IMPACTS)}
+    total = 0
+    with_any = 0
+    for _sid, imps in sessions_with_impacts:
+        total += 1
+        if imps:
+            with_any += 1
+            for tag in imps:
+                if tag in counts:
+                    counts[tag] += 1
+    return {
+        "total_classified": total,
+        "sessions_with_any_impact": with_any,
+        "impacts": counts,
+    }
