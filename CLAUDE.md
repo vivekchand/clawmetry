@@ -1,7 +1,7 @@
 # CLAUDE.md — ClawMetry
 
 ## What is this?
-ClawMetry is an open-source, real-time observability dashboard for [OpenClaw](https://github.com/openclaw/openclaw) AI agents. `pip install clawmetry && clawmetry` — that's it. Zero config, single-file core, read-only by default.
+ClawMetry is an open-source, real-time observability dashboard for [OpenClaw](https://github.com/openclaw/openclaw) AI agents. `pip install clawmetry && clawmetry` — that's it. Zero config, read-only by default.
 
 ## Architecture
 See `ARCHITECTURE.md` for the full deep dive. TL;DR:
@@ -9,16 +9,16 @@ See `ARCHITECTURE.md` for the full deep dive. TL;DR:
 - **Per-feature route modules** under `routes/` — `routes/sessions.py`, `routes/usage.py`, etc. — each owns one Blueprint and the endpoints registered on it. New endpoints land in their feature's module so parallel PRs don't stomp on each other.
 - **Shared helpers** stay in `dashboard.py` for now and are accessed from route modules via late `import dashboard as _d`. (Helpers will migrate to `helpers/` over time.)
 - **Zero config** — auto-detects OpenClaw workspace, gateway, sessions, logs
-- **Read-only** — reads OpenClaw's filesystem + connects to gateway WebSocket
-- **No database** — optional `history.py` adds SQLite time-series
-- **Three data sources**: filesystem, gateway WebSocket (JSON-RPC), and optional OTLP receiver
+- **Read-only** — observes OpenClaw, never modifies it (except cron management via gateway RPC)
+- **DuckDB-first** — the sync daemon ingests filesystem/gateway/OTLP into a local **DuckDB** store (`clawmetry/local_store.py`; the daemon owns the writer lock). Request handlers read from DuckDB via `routes/local_query.py`, **not** raw files — reading raw JSONL/logs inside a handler works locally but returns empty in cloud (the container has no `~/.openclaw`). Optional `history.py` adds a separate SQLite time-series.
+- **Three ingest sources** (all land in DuckDB): filesystem (JSONL/logs), gateway WebSocket (JSON-RPC), optional OTLP receiver
 
 ## Key Files
 
 ### Core
 | File | Lines | Purpose |
 |------|-------|---------|
-| `dashboard.py` | ~15,000 | Flask app, blueprint registration, embedded HTML/CSS/JS, shared helpers |
+| `dashboard.py` | ~17,300 | Flask app, blueprint registration, shared helpers (live frontend now lives in `static/` + `templates/`) |
 | `dashboard_claudecode.py` | ~1,350 | Claude Code session dashboard variant (standalone or Blueprint) |
 | `history.py` | ~555 | Optional time-series collector (SQLite, polls gateway every 60s) |
 
@@ -33,6 +33,7 @@ All HTTP endpoints live here, organised by feature. Each module owns one or more
 | `routes/usage.py` | ~1,070 | `bp_usage` — token/cost analytics, anomaly detection, model + skill attribution |
 | `routes/health.py` | ~920 | `bp_health` — system-health, reliability, diagnostics, rate-limits, sandbox-status, health-stream (SSE) |
 | `routes/brain.py` | ~1,030 | `bp_brain` — `/api/brain-history` + `/api/brain-stream` (SSE) |
+| `routes/local_query.py` | ~585 | `bp_local_query` — `/api/local/*` DuckDB read API + the daemon-proxy `_dispatch` (shape→store bridge shared by HTTP and the cloud relay) |
 | `routes/infra.py` | ~785 | `bp_logs` + `bp_memory` + `bp_security` + `bp_config` — logs stream, memory files, security posture, cost-optimizer |
 | `routes/overview.py` | ~585 | `bp_overview` — main dashboard endpoint, channels list, timeline, cloud-CTA OTP |
 | `routes/crons.py` | ~530 | `bp_crons` — cron CRUD + run log + health summary |
@@ -46,7 +47,9 @@ All HTTP endpoints live here, organised by feature. Each module owns one or more
 | File | Lines | Purpose |
 |------|-------|---------|
 | `cli.py` | ~1,900 | CLI entry point — `clawmetry`, `clawmetry connect`, `clawmetry sync`, `clawmetry status` |
-| `sync.py` | ~3,880 | Cloud sync daemon — E2E encrypted (AES-256-GCM) session streaming to `ingest.clawmetry.com` |
+| `sync.py` | ~10,600 | Cloud sync daemon — ingests into DuckDB, owns the writer lock, E2E-encrypted (AES-256-GCM) snapshot streaming to `ingest.clawmetry.com` |
+| `local_store.py` | ~7,300 | **DuckDB store** — the single data layer features read/write (daemon holds the writer lock) |
+| `local_server.py` | ~200 | Daemon-hosted localhost query server (`/__local_query__/<method>`) so the dashboard/sync read DuckDB without grabbing the writer lock |
 | `proxy.py` | ~1,290 | Enforcement proxy — budget limits, loop detection, model routing (port 4100) |
 | `interceptor.py` | ~465 | Zero-config HTTP monkey-patching for LLM cost tracking (patches httpx/requests) |
 | `providers_pricing.py` | ~134 | Multi-provider pricing table (Anthropic, OpenAI, Google, OpenRouter, etc.) |
@@ -74,15 +77,17 @@ All HTTP endpoints live here, organised by feature. Each module owns one or more
 | `CLOUD_EXTENSION_DESIGN.md` | Cloud feature design |
 
 ## How it works
-1. Reads session transcripts from `~/.openclaw/agents/main/sessions/*.jsonl`
-2. Reads chat-channel transcripts from `~/.openclaw/<channel>/*.jsonl` —
+The **sync daemon** (`clawmetry/sync.py`) ingests these sources into the local **DuckDB** store; the Flask app reads DuckDB (via `routes/local_query.py`) to serve the UI:
+1. Session transcripts from `~/.openclaw/agents/main/sessions/*.jsonl`
+2. Chat-channel transcripts from `~/.openclaw/<channel>/*.jsonl` —
    one directory per adapter (`telegram/`, `signal/`, `whatsapp/`,
    `discord/`, `slack/`, `irc/`, `imessage/`, `webchat/`, …). The 21
    adapter directories match the routes in `routes/channels.py`. New
    adapter? Add its dir name to `_CHANNEL_DIRS` in `clawmetry/sync.py`.
-3. Connects to OpenClaw gateway via WebSocket (JSON-RPC, port 18789) for live data
-4. Optionally receives OpenTelemetry metrics/traces on `/v1/metrics` and `/v1/traces`
-5. Serves dashboard UI at `http://localhost:8900`
+3. OpenClaw gateway via WebSocket (JSON-RPC, port 18789) for live data
+4. Optional OpenTelemetry metrics/traces on `/v1/metrics` and `/v1/traces`
+
+The daemon owns the DuckDB writer lock and runs a localhost query server so the dashboard reads through it. The dashboard serves the UI at `http://localhost:8900`; for cloud, the daemon also pushes an E2E-encrypted snapshot to `ingest.clawmetry.com` (decrypted client-side in the browser).
 
 ## API Endpoints (key ones)
 - `/api/overview` — Main dashboard data (sessions, tokens, crons, health)
@@ -139,7 +144,7 @@ Tests use `CLAWMETRY_URL` and `CLAWMETRY_TOKEN` env vars. Test matrix in CI: 3 O
 ## Deploy
 - **PyPI**: `pip install clawmetry && clawmetry`
 - **Docker**: `docker build -t clawmetry . && docker run -p 8900:8900 -v ~/.openclaw:/root/.openclaw:ro clawmetry`
-- **Current version**: `0.12.162` (in `dashboard.py` `__version__`)
+- **Current version**: `0.12.275` (in `dashboard.py` `__version__`)
 
 ## CI/CD (GitHub Actions)
 - `ci.yml` — Lint + test matrix on push/PR
@@ -162,7 +167,7 @@ DEBUG=1                                # Enable debug logging
 
 ## Conventions
 - **Per-feature route modules** — new endpoints live in `routes/<feature>.py`, registered on a feature Blueprint that `dashboard.py` imports and registers. This replaces the old "single file" rule, which became counterproductive at ~33K lines (illegible to humans, constant PR conflicts on a single anchor point). Helpers and shared state stay in `dashboard.py` for now and are accessed from route modules via late `import dashboard as _d` to avoid circular imports.
-- **Embedded frontend** — HTML/CSS/JS still lives inside Python template strings in `dashboard.py`. No build step, no npm, no webpack.
+- **Embedded frontend, no build step** — the live UI is served from `clawmetry/static/` (`static/css/dashboard.css`, `static/js/app.js`) + `clawmetry/templates/tabs/*.html`. (`dashboard.py` defines `DASHBOARD_HTML` twice; the **second** wins and loads the static/template files — the earlier inline `<style>`/HTML is dead, so edit the static/template files.) No npm, no webpack.
 - **Minimal dependencies** — Flask + waitress + cryptography. Don't add heavy libraries.
 - **Read-only by default** — ClawMetry observes, it doesn't modify agent behavior (except cron management via gateway RPC).
 - **Auto-detect everything** — users should never need to configure anything manually.
