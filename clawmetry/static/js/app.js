@@ -5158,7 +5158,7 @@ function selfevolveRenderFindings(payload) {
           '<strong style="color:var(--text-secondary);">Evidence:</strong> ' + escapeHtml(f.evidence) + '</div>' : '') +
         (f.suggestion ? '<div style="font-size:12px;color:var(--text-primary);line-height:1.5;">' +
           '<strong style="color:#60a5fa;">Try:</strong> ' + escapeHtml(f.suggestion) + '</div>' : '') +
-        ((f.suggestion && !window.CLOUD_MODE) ?
+        (f.suggestion ?
           '<div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
             '<button class="se-fix-btn" data-fidx="' + _fidx + '" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;cursor:pointer;background:#2563eb;color:#fff;border:none;border-radius:6px;padding:6px 12px;">✨ Fix with AI</button>' +
             '<span class="se-fix-status" style="font-size:12px;color:var(--text-muted);"></span>' +

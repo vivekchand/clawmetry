@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Self-Evolve: "Fix with AI" cloud relay (2026-05-21)
+- The Fix button now works from app.clawmetry.com: the cloud queues an authenticated, owner-scoped `selfevolve_fix` action on the heartbeat-piggyback relay; the local daemon runs `openclaw agent` in a background thread and posts the E2E-encrypted result to the cloud cache, which the browser polls + decrypts. Button is no longer gated to the local dashboard.
+
 ### Self-Evolve: "Fix with AI" button on findings (2026-05-21)
 - Each Self-Evolve finding now has a "✨ Fix with AI" button. Clicking it (after a confirm) dispatches the finding's suggestion to your local agent via `openclaw agent` (OpenClaw's own creds — ClawMetry's gateway token is read-only), which actually applies the change. Status shows Queued → Agent working → ✅ <summary>. Local dashboard for now; the cloud relay is a follow-up. New endpoints: `POST /api/selfevolve/fix`, `GET /api/selfevolve/fix/status`.
 
