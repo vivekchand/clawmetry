@@ -8463,7 +8463,13 @@ async function _loadReliabilityWidget() {
 function startSystemHealthRefresh() {
   loadSystemHealth();
   if (window._sysHealthTimer) clearInterval(window._sysHealthTimer);
-  window._sysHealthTimer = visibilitySetInterval(loadSystemHealth, 30000);
+  // Tab-scoped: loadSystemHealth fans out to system-health + delegation-tree
+  // + handler-latency + reliability (4 endpoints) and is an Overview widget.
+  // Only refresh on Overview; it was firing all 4 on every tab.
+  window._sysHealthTimer = visibilitySetInterval(function() {
+    if (window._cmCurrentTab && window._cmCurrentTab !== 'overview') return;
+    loadSystemHealth();
+  }, 30000);
 }
 
 async function loadDiagnostics() {
