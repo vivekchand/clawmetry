@@ -155,6 +155,18 @@
     error_rate:       { icon: '🛠', verb: 'Tool error rate >' },
   };
 
+  // On/off slider that matches the Approvals protection-rule toggle. Clicking
+  // it flips the rule: OFF (example/disabled) -> creates+enables the rule;
+  // ON -> disables it. ``alertsToggleRule`` handles create-from-example.
+  function toggleSwitch(ruleId, on) {
+    return '<div class="alerts-toggle-switch" onclick="event.stopPropagation();alertsToggleRule(\'' + ruleId + '\', ' + (on ? 'false' : 'true') + ')"'
+      + ' title="' + (on ? 'Enabled — click to disable' : 'Disabled — click to enable') + '"'
+      + ' style="position:relative;width:42px;height:24px;cursor:pointer;flex-shrink:0;">'
+      + '<div style="position:absolute;inset:0;background:' + (on ? '#3b82f6' : '#374151') + ';border-radius:12px;transition:background 0.2s;"></div>'
+      + '<div style="position:absolute;top:3px;left:' + (on ? '21px' : '3px') + ';width:18px;height:18px;background:#fff;border-radius:50%;transition:left 0.2s;box-shadow:0 1px 3px rgba(0,0,0,0.3);"></div>'
+      + '</div>';
+  }
+
   function renderRules() {
     const wrap = document.getElementById('alerts-rules-list');
     if (!alertsState.rules.length) {
@@ -183,7 +195,7 @@
             <div class="alerts-rule-meta">${meta.verb} ${rule.threshold_value}${rule.threshold_unit ? ' ' + escape(rule.threshold_unit) : ''} · ${ts}</div>
           </div>
           <div class="alerts-rule-chan">${channelPills || '<span class="alerts-chan-pill off">no channels</span>'}</div>
-          <button class="${toggleCls}" onclick="alertsToggleRule('${rule.id}', ${!rule.enabled})">${toggleLabel}</button>
+          ${toggleSwitch(rule.id, rule.enabled)}
           <button class="alerts-btn-ghost" onclick="alertsHandleEdit('${rule.id}')">Edit</button>
         </div>
       `;
@@ -204,7 +216,7 @@
             <div class="alerts-rule-meta">Tap to customize — saves require Cloud Pro</div>
           </div>
           <div class="alerts-rule-chan"><span class="alerts-chan-pill off">${ex._exampleChannels}</span></div>
-          <button class="alerts-btn-primary" onclick="event.stopPropagation();alertsToggleRule('${ex.id}', true)">Enable</button>
+          ${toggleSwitch(ex.id, false)}
           <button class="alerts-btn-ghost" onclick="event.stopPropagation();alertsHandleEdit('${ex.id}')">Edit</button>
         </div>
       `;
@@ -330,7 +342,13 @@
         return openPaywall();
       }
       if (!resp.ok) throw new Error('toggle failed: HTTP ' + resp.status);
+      // The cloud cache warms a few seconds behind the write (daemon
+      // heartbeat cache_push), so an immediate reload still shows the old
+      // state. Reload now (cheap) AND again after the cache catches up so the
+      // toggle visibly flips without a manual refresh.
       window.loadAlertsPage();
+      setTimeout(function () { window.loadAlertsPage(); }, 2500);
+      setTimeout(function () { window.loadAlertsPage(); }, 6000);
     } catch (e) {
       console.warn(e);
     }
