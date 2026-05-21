@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Perf: tab-scope system-health fan-out (2026-05-21)
+- loadSystemHealth (4 endpoints) polled on every tab; gated to Overview.
+
 ### Perf: tab-scope tool prefetch (2026-05-21)
 - _prefetchToolData polled 12 component/tool endpoints every 30s on every tab; gated to Flow/Overview.
 
