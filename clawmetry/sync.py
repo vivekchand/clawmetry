@@ -7709,6 +7709,74 @@ def _build_memory_access(limit=200):
         return []
 
 
+def _build_skills(file_cap=40000, total_cap=400000):
+    """Skills list + per-skill file contents for the cloud Skills tab.
+
+    Reuses routes.skills.compute_skills_payload() (single source of truth) for
+    the list/summary, then attaches a file tree + capped file contents per skill
+    so the cloud cm-cloud-skills interceptor can render the browser. Built in the
+    daemon, where get_store(read_only=True) returns the writer handle (no
+    brick-lock). Best-effort -> {}.
+    """
+    try:
+        import routes.skills as _sk
+        payload = _sk.compute_skills_payload()
+    except Exception as _e:
+        log.debug("skills snapshot build failed: %s", _e)
+        return {}
+    _lang = {"py": "python", "sh": "bash", "js": "javascript", "ts": "typescript",
+             "json": "json", "yaml": "yaml", "yml": "yaml", "md": "markdown",
+             "toml": "toml"}
+    detail = {}
+    total = 0
+    for s in (payload.get("skills") or []):
+        name = s.get("name")
+        if not name:
+            continue
+        try:
+            sdir = _sk._find_skill_dir(name)
+        except Exception:
+            sdir = None
+        if not sdir:
+            continue
+        files, contents = [], {}
+        try:
+            for root, _dirs, fnames in os.walk(sdir):
+                rel = os.path.relpath(root, sdir)
+                depth = 0 if rel == "." else rel.count(os.sep) + 1
+                for fn in sorted(fnames):
+                    fp = os.path.join(root, fn)
+                    frel = os.path.relpath(fp, sdir)
+                    try:
+                        fsize = os.path.getsize(fp)
+                    except OSError:
+                        fsize = 0
+                    files.append({"path": frel, "size": fsize, "depth": depth})
+                    if total < total_cap and 0 < fsize <= file_cap:
+                        try:
+                            with open(fp, "r", errors="replace") as fh:
+                                txt = fh.read(file_cap)
+                            ext = os.path.splitext(frel)[1].lstrip(".").lower()
+                            contents[frel] = {"path": frel, "content": txt,
+                                              "language": _lang.get(ext, "text"),
+                                              "size": len(txt)}
+                            total += len(txt)
+                        except OSError:
+                            pass
+        except Exception:
+            pass
+        detail[name] = {
+            "name": name, "description": s.get("description", ""),
+            "skill_dir": sdir, "header_tokens": s.get("header_tokens", 0),
+            "has_body": s.get("has_body"), "has_linked_files": s.get("has_linked_files"),
+            "body_fetch_count_7d": s.get("body_fetch_count_7d", 0),
+            "linked_file_read_count_7d": s.get("linked_file_read_count_7d", 0),
+            "last_used_ts": s.get("last_used_ts"), "status": s.get("status"),
+            "files": files, "fileContents": contents,
+        }
+    return {"list": payload, "detail": detail}
+
+
 def _build_traces(limit_traces=5, span_cap=100):
     """Trace list + capped per-trace details for the cloud Tracing tab (#1903).
 
@@ -9243,6 +9311,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "reliability": _build_reliability(),
         "memoryAccess": _build_memory_access(),
         "traces": _build_traces(),
+        "skills": _build_skills(),
     }
 
     # ── NemoClaw / sandbox enrichment ────────────────────────────────────────

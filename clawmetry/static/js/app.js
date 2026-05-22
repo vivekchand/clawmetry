@@ -1860,15 +1860,10 @@ async function loadSkills() {
   var summaryEl = document.getElementById('skills-summary-row');
   var listEl = document.getElementById('skills-list');
   if (!summaryEl || !listEl) return;
-  // Cloud iframes don't have access to the local skills filesystem — the
-  // cloud server returns 410 Gone for /api/skills, which the browser logs
-  // as a console error every time the user opens the Skills tab. Render
-  // an inline empty-state instead so the network call never fires.
-  if (window.CLOUD_MODE) {
-    listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Skills inspector is local-only. Open the dashboard on the host running OpenClaw to view installed skills.</div>';
-    summaryEl.innerHTML = '';
-    return;
-  }
+  // Cloud serves skills from the encrypted snapshot via the cm-cloud-skills
+  // interceptor (the daemon ships snapshot.skills). When the snapshot is cold
+  // the route is oss-passthrough and returns an empty list (graceful), so the
+  // fetch is safe in cloud too — no more "local-only" dead end.
   listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div>';
   try {
     var data = await fetch('/api/skills').then(function(r) { return r.json(); });
