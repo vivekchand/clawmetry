@@ -1,5 +1,17 @@
 ## [Unreleased]
 
+### Release: Tracing tab + memory access log + internal-session hiding (2026-05-22)
+- Publishes three changes: the Tracing tab (#1903), the memory access log (#1900, closes #1896), and hiding ClawMetry's own helper sessions from user-facing views (#1902).
+
+### Tracing: Phoenix/Arize-style Tracing tab (2026-05-22)
+- New Tracing tab under Live trace: a list of every trace (session), and on click a span waterfall, a span tree, and an agent graph (main → sub-agents). Events-first, so it works without any OTLP exporter; OTel spans merge in when present. New endpoints `/api/traces` and `/api/trace/<id>`, DuckDB-first.
+
+### Memory: access log (when memory was read + which conversation triggered it) (2026-05-22)
+- The Memory tab has a new "Access log" view showing every memory tool access (memory_search / memory_get) with its query, time, and originating session. Click a row to open the conversation that triggered it. New `/api/memory-access` endpoint, DuckDB-first.
+
+### Sessions: hide ClawMetry's own helper sessions from user-facing views (2026-05-22)
+- Sessions ClawMetry spawns to do its own work (Self-Evolve, Fix-with-AI, memory probes — all named `clawmetry-*`) were leaking into stuck-session alerts, the transcripts list, the active-sessions list, the Brain feed, and the memory access log. They are now hidden by default (override with `CLAWMETRY_SHOW_INTERNAL_SESSIONS=1`) so our plumbing doesn't mix with the user's agent activity.
+
 ### Release: Transcript raw payload toggle (2026-05-22)
 - Publishes the raw ↔ pretty transcript toggle (#1898, closes #1895): see the exact JSON payload OpenClaw recorded for each turn, with a Copy button.
 
