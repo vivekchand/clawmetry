@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: Transcript raw payload toggle (2026-05-22)
+- Publishes the raw ↔ pretty transcript toggle (#1898, closes #1895): see the exact JSON payload OpenClaw recorded for each turn, with a Copy button.
+
+### Transcript: raw ↔ pretty payload toggle (2026-05-22)
+- The transcript viewer has a new "{ } Raw" toggle that flips the whole conversation between the beautified turns and the verbatim JSON payload OpenClaw recorded for each turn — requested by users who want to study OpenClaw's exact behavior, not just read a cleaned-up transcript. The raw payload is capped per-message (12 KB, with a truncation marker) so it never bloats the response or the cloud snapshot it rides into. Adds a `raw` field to `/api/transcript/<id>` messages, populated DuckDB-first from the already-ingested event data.
+
 ### Release: Self-Evolve on-demand only (2026-05-22)
 - Publishes the on-demand Self-Evolve change (#1892): no more hourly Opus auto-run; runs only when you click Analyze/Re-analyze.
 
