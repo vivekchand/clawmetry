@@ -7595,11 +7595,14 @@ def _build_transcripts(limit_sessions=8, msg_cap=80, extra_sids=None):
         store = _ls.get_store()
         if store is None:
             return {}
+        from clawmetry.config import hide_clawmetry_session
         evs = store.query_events(limit=5000)  # DESC by ts (most recent first)
         recent_sids = []
         for e in (evs or []):
             sid = (e.get("session_id") or "").strip()
-            if sid and sid not in recent_sids:
+            # Hide ClawMetry's own helper sessions (clawmetry-*) from the cloud
+            # snapshot too — they're plumbing, not the user's agent activity.
+            if sid and not hide_clawmetry_session(sid) and sid not in recent_sids:
                 recent_sids.append(sid)
             if len(recent_sids) >= limit_sessions:
                 break
@@ -7621,13 +7624,100 @@ def _build_transcripts(limit_sessions=8, msg_cap=80, extra_sids=None):
                 msgs = t["messages"]
                 if len(msgs) > msg_cap:
                     t = dict(t)
-                    t["messages"] = msgs[-msg_cap:]
+                    msgs = msgs[-msg_cap:]
+                    t["messages"] = msgs
                     t["_truncated"] = True
+                # Perf: the per-message `raw` payload (#1895) can be ~12 KB each.
+                # Shipping it for 8 sessions × 80 msgs would bloat the shared
+                # snapshot from ~170 KB to multiple MB. The raw toggle is a
+                # local-dashboard feature; strip raw from the cloud snapshot and
+                # let the cloud toggle degrade gracefully.
+                t["messages"] = [
+                    {k: v for k, v in m.items() if k != "raw"} if isinstance(m, dict) else m
+                    for m in msgs
+                ]
                 out[sid] = t
         return out
     except Exception as _e:
         log.debug("transcripts snapshot build failed: %s", _e)
         return {}
+
+
+def _build_memory_access(limit=200):
+    """Memory access log for the cloud Memory tab (issue #1896).
+
+    Built on the daemon's OWN store handle. Mirrors the OSS /api/memory-access
+    endpoint by reusing routes.infra._extract_memory_accesses, so the cloud
+    cm-cloud-memory-access interceptor can serve the same shape. Best-effort -> [].
+    """
+    try:
+        from clawmetry import local_store as _ls
+        import routes.infra as _inf
+        store = _ls.get_store()
+        if store is None:
+            return []
+        rows = store.query_events(limit=12000)
+        return _inf._extract_memory_accesses(rows, limit=limit)
+    except Exception as _e:
+        log.debug("memory-access snapshot build failed: %s", _e)
+        return []
+
+
+def _build_traces(limit_traces=5, span_cap=100):
+    """Trace list + capped per-trace details for the cloud Tracing tab (#1903).
+
+    Built on the daemon's OWN store handle. Reuses routes.tracing helpers so the
+    cloud cm-cloud-tracing interceptor serves the same shape as /api/traces and
+    /api/trace/<id>. Per-trace spans are capped to bound the encrypted snapshot.
+    Returns {"list": [...], "detail": {trace_id: {...}}}. Best-effort -> empty.
+    """
+    try:
+        from clawmetry import local_store as _ls
+        from clawmetry.config import hide_clawmetry_session
+        import routes.tracing as _tr
+        store = _ls.get_store()
+        if store is None:
+            return {"list": [], "detail": {}}
+        rows = store.query_events(limit=14000)
+        by_sid = {}
+        for e in (rows or []):
+            sid = (e.get("session_id") or "").strip()
+            if not sid or hide_clawmetry_session(sid):
+                continue
+            by_sid.setdefault(sid, []).append(e)
+        summaries = [_tr._summarize_trace(s, ev) for s, ev in by_sid.items()]
+        summaries = [t for t in summaries if t["span_count"] > 0]
+        summaries.sort(key=lambda t: (t.get("start_ms") or 0), reverse=True)
+        summaries = summaries[:limit_traces]
+        detail = {}
+        for t in summaries:
+            sid = t["trace_id"]
+            spans, roots = _tr._build_spans(by_sid.get(sid, []))
+            truncated = len(spans) > span_cap
+            if truncated:
+                spans = spans[:span_cap]
+                ids = {s["span_id"] for s in spans}
+                for s in spans:
+                    if s["parent_span_id"] and s["parent_span_id"] not in ids:
+                        s["parent_span_id"] = None
+                roots = [s["span_id"] for s in spans if not s["parent_span_id"]]
+            # Perf: drop the per-span free-text payload from the snapshot — it's
+            # the bulk of the size. Cloud renders the waterfall/tree/graph from
+            # the metadata; the full text is a local-dashboard detail.
+            for s in spans:
+                s.pop("detail", None)
+            detail[sid] = {
+                "trace_id": sid,
+                "summary": t,
+                "spans": spans,
+                "root_span_ids": roots,
+                "agent_graph": _tr._build_agent_graph(spans),
+                "_truncated": truncated,
+            }
+        return {"list": summaries, "detail": detail}
+    except Exception as _e:
+        log.debug("traces snapshot build failed: %s", _e)
+        return {"list": [], "detail": {}}
 
 
 # ── Self-Evolve: delegate the review to OpenClaw itself ──────────────────────
@@ -8943,8 +9033,13 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
             with open(index_path) as f:
                 index = _json.load(f)
             now_ms = time.time() * 1000
+            from clawmetry.config import hide_clawmetry_session
             for key, meta in index.items():
                 if not isinstance(meta, dict):
+                    continue
+                # Skip ClawMetry's own helper sessions (clawmetry-*) so they
+                # don't inflate counts/tokens or surface as activity in cloud.
+                if hide_clawmetry_session(key.split(":")[-1]) or "clawmetry-" in key:
                     continue
                 session_count += 1
                 if ":subagent:" in key:
@@ -9113,6 +9208,8 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "selfEvolve": _build_selfevolve(paths.get("workspace")),
         "dailyUsage": _build_daily_usage(),
         "reliability": _build_reliability(),
+        "memoryAccess": _build_memory_access(),
+        "traces": _build_traces(),
     }
 
     # ── NemoClaw / sandbox enrichment ────────────────────────────────────────
