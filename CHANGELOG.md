@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Release: cloud snapshot — traces + memory-access keys, snapshot perf fix (2026-05-22)
+- Publishes #1905: the daemon now ships `traces` and `memoryAccess` in the snapshot (cloud half of the Tracing tab and Memory access log), hides `clawmetry-*` helper sessions from the snapshot, and strips the per-message `raw` payload from snapshot transcripts to keep the shared snapshot small (the raw toggle stays a local-dashboard feature).
+
 ### Release: Tracing tab + memory access log + internal-session hiding (2026-05-22)
 - Publishes three changes: the Tracing tab (#1903), the memory access log (#1900, closes #1896), and hiding ClawMetry's own helper sessions from user-facing views (#1902).
 
