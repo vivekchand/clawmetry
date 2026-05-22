@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Release: Skills in cloud + remove Classic nav (2026-05-23)
+- Publishes #1926 (skills ship in the cloud snapshot so the Skills tab works on app.clawmetry.com) and #1927 (removed the dead Classic-nav link).
+
 ### Release: cron Calendar with notification counts + month grid (2026-05-22)
 - Publishes #1923. The Crons Calendar sub-tab now shows "Fired so far" (lifetime runs) and "Upcoming (30d)" (predicted fires across all active jobs over the next 30 days), plus a current-month grid marking past actual runs (green / red on failure) and future predicted fires (blue) per day. New `_cronEnumerateFiresMs` walks the schedule forward (capped); the run loader widened from 7 to ~40 days so past runs land on the right cells. Counts work in cloud too (future fires are computed client-side from the schedule).
 
