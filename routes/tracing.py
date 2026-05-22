@@ -74,9 +74,12 @@ def _ts_ms(ts):
 
 def _span_kind(event_type, is_subagent):
     et = (event_type or "").lower()
-    if "prompt.submitted" in et or et.endswith("user") or et == "user":
+    # Classify span kind from BOTH v3 (prompt.submitted/model.completed) and
+    # legacy (user/assistant) event-type names. This is a both-shapes display
+    # classifier, not a row-dropping filter, so it never silent-zeros on v3.
+    if "prompt.submitted" in et or et.endswith("user") or et == "user":  # v3-shape-gate: allow (reason: span-kind classifier matches both v3 prompt.submitted and legacy user)
         return "prompt"
-    if "model.completed" in et or "assistant" in et:
+    if "model.completed" in et or "assistant" in et:  # v3-shape-gate: allow (reason: span-kind classifier matches both v3 model.completed and legacy assistant)
         return "llm"
     if "tool" in et:
         return "tool"
