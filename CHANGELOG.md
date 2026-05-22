@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Release: Self-Evolve on-demand only (2026-05-22)
+- Publishes the on-demand Self-Evolve change (#1892): no more hourly Opus auto-run; runs only when you click Analyze/Re-analyze.
+
 ### Self-Evolve: on-demand only (no more hourly auto-run) (2026-05-22)
 - Self-Evolve no longer runs on a timer — it was spending Opus turns on a schedule (the job flagged itself for it) and re-ran on every daemon restart (in-memory clock). It now runs ONLY when you click Analyze/Re-analyze. Local uses /api/selfevolve/analyze; cloud uses a new `selfevolve_analyze` heartbeat-relay action so the Re-analyze button triggers a fresh run on the daemon. Opt back into periodic refresh with CLAWMETRY_SELFEVOLVE_AUTO=1.
 
