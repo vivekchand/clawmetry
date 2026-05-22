@@ -107,6 +107,8 @@
   "usage.otlp_data_source": "Data source: OpenTelemetry OTLP - real-time metrics from OpenClaw",
   "usage.cost_comparison": "Cost Comparison",
   "usage.cost_comparison_hint": "what same workload costs elsewhere · 30 days",
+  "usage.spend_optimization": "Spend Optimization",
+  "usage.spend_optimization_hint": "model downgrade suggestions · 30 days",
   "usage.trace_clusters": "Trace Clusters",
   "usage.trace_clusters_hint": "auto-group sessions by behavior pattern",
   "usage.activity_heatmap": "Activity Heatmap",

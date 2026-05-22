@@ -3825,3 +3825,132 @@ def api_nemo_cap_status():
             "cap_hit": False,
             "date": "",
         })
+
+
+# ── Spend Optimization Recommendations (issue #1415) ────────────────────────
+#
+# Reads spans for the last 30 days and applies a static heuristic to rank
+# tools by potential savings from routing to a cheaper model tier.
+# Pure read-path: no writes, no LLM calls, no new dependencies.
+
+# Tools whose outputs are deterministic / structural — cheaper models
+# produce equivalent results and can safely replace heavier ones.
+_SPEND_OPT_TOOL_DOWNGRADE: dict = {
+    "bash":               "haiku",
+    "read":               "haiku",
+    "ls":                 "haiku",
+    "list_files":         "haiku",
+    "ls_files":           "haiku",
+    "find_files":         "haiku",
+    "glob":               "haiku",
+    "search_files":       "haiku",
+    "computer":           "haiku",
+    "write":              "sonnet",
+    "edit":               "sonnet",
+    "str_replace_editor": "sonnet",
+    "create_file":        "sonnet",
+    "multiedit":          "sonnet",
+}
+
+# Relative input-token price ratios: haiku = 1.0 baseline.
+_SPEND_OPT_MODEL_RATIO: dict = {
+    "haiku":  1.0,
+    "sonnet": 12.0,
+    "opus":   60.0,
+}
+
+
+def _spend_opt_model_tier(model: str) -> str:
+    """Map a raw model string to haiku / sonnet / opus (or unknown)."""
+    m = (model or "").lower()
+    if "haiku" in m:
+        return "haiku"
+    if "sonnet" in m:
+        return "sonnet"
+    if "opus" in m:
+        return "opus"
+    return "unknown"
+
+
+def _try_local_store_spend_optimization():
+    """Fast-path: aggregate spans → ranked model-downgrade recommendations."""
+    import time as _time
+    from collections import defaultdict
+
+    since = _time.time() - 30 * 86400  # 30-day look-back (unix seconds)
+    spans = _ls_call("query_recent_spans", since=since, limit=5000)
+    if not spans:
+        return None
+
+    agg: dict = defaultdict(lambda: {"calls": 0, "cost_usd": 0.0})
+    for s in spans:
+        tool = (s.get("tool_name") or "").strip()
+        model = (s.get("model") or "").strip()
+        cost = s.get("cost_usd") or 0.0
+        if not tool or not model or cost <= 0:
+            continue
+        key = (tool, model)
+        agg[key]["calls"] += 1
+        agg[key]["cost_usd"] += cost
+
+    if not agg:
+        return None
+
+    recs: list = []
+    for (tool, model), stats in agg.items():
+        target_tier = _SPEND_OPT_TOOL_DOWNGRADE.get(tool)
+        if not target_tier:
+            continue
+        cur_tier = _spend_opt_model_tier(model)
+        if cur_tier == "unknown" or cur_tier == target_tier:
+            continue
+        cur_ratio = _SPEND_OPT_MODEL_RATIO.get(cur_tier, 1.0)
+        tgt_ratio = _SPEND_OPT_MODEL_RATIO.get(target_tier, 1.0)
+        if cur_ratio <= tgt_ratio:
+            continue  # already on a cheaper or equivalent tier
+        savings_frac = 1.0 - tgt_ratio / cur_ratio
+        projected_save = stats["cost_usd"] * savings_frac
+        if projected_save < 0.005:
+            continue  # skip sub-cent savings
+        recs.append({
+            "tool":                      tool,
+            "current_model":             model,
+            "suggested_model_tier":      target_tier,
+            "call_count":                stats["calls"],
+            "current_cost_usd_30d":      round(stats["cost_usd"], 4),
+            "projected_savings_usd_30d": round(projected_save, 4),
+            "savings_pct":               round(savings_frac * 100, 1),
+        })
+
+    recs.sort(key=lambda r: -r["projected_savings_usd_30d"])
+    recs = recs[:5]
+    total_save = sum(r["projected_savings_usd_30d"] for r in recs)
+    total_cost = sum(r["current_cost_usd_30d"] for r in recs)
+    return {
+        "recommendations":               recs,
+        "total_projected_savings_usd_30d": round(total_save, 4),
+        "total_analyzed_cost_usd_30d":   round(total_cost, 4),
+        "window_days":                   30,
+        "_source":                       "local_store",
+    }
+
+
+@bp_usage.route("/api/usage/optimization-recommendations")
+def api_usage_optimization_recommendations():
+    """Spend-optimization tile: per-tool model-downgrade suggestions.
+
+    Reads spans for the last 30 days (no writes, no LLM calls) and applies
+    a static heuristic to surface tools that can safely be routed to a
+    cheaper model tier with the projected monthly savings.  Issue #1415.
+    """
+    if is_local_store_read_enabled():
+        fast = _try_local_store_spend_optimization()
+        if fast is not None:
+            return jsonify(fast)
+    return jsonify({
+        "recommendations":               [],
+        "total_projected_savings_usd_30d": 0,
+        "total_analyzed_cost_usd_30d":   0,
+        "window_days":                   30,
+        "note": "Enable clawmetry connect to see recommendations.",
+    })
