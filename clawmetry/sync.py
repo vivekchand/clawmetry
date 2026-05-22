@@ -7582,6 +7582,45 @@ def _build_model_attribution():
         return {}
 
 
+# #1911: bound the tool deep-dive detail before it rides the shared ~170 KB
+# encrypted snapshot. The local dashboard keeps the full input/output
+# (``_TOOL_DETAIL_CAP`` in routes/sessions.py); the cloud Embodied tab gets a
+# preview within a per-transcript budget and an "open locally" hint.
+_SNAP_TOOL_FIELD_CAP = 600   # per tool input/output preview
+_SNAP_TOOL_BUDGET = 8000     # per-transcript total tool-detail budget
+
+
+def _project_snapshot_messages(msgs):
+    """Strip the raw payload (#1895, ~12 KB each) and trim each tool turn's
+    input/output to a budgeted preview so the Embodied transcripts stay small in
+    the shared snapshot. Tool *names* are always kept — they're the headline of
+    the deep-dive and cost nothing."""
+    out = []
+    spent = 0
+    for m in msgs:
+        if not isinstance(m, dict):
+            out.append(m)
+            continue
+        m = {k: v for k, v in m.items() if k != "raw"}
+        tool = m.get("tool")
+        if isinstance(tool, dict):
+            tool = dict(tool)
+            for fld in ("input", "output"):
+                v = tool.get(fld)
+                if not isinstance(v, str) or not v:
+                    continue
+                if spent >= _SNAP_TOOL_BUDGET:
+                    tool[fld] = "… (open locally for full tool detail)"
+                    continue
+                cap = min(_SNAP_TOOL_FIELD_CAP, _SNAP_TOOL_BUDGET - spent)
+                if len(v) > cap:
+                    tool[fld] = v[:cap] + f"\n… (truncated, {len(v)} chars; open locally)"
+                spent += min(len(v), cap)
+            m["tool"] = tool
+        out.append(m)
+    return out
+
+
 def _build_transcripts(limit_sessions=8, msg_cap=80, extra_sids=None):
     """Recent per-session transcripts for the cloud Embodied tab.
 
@@ -7636,15 +7675,13 @@ def _build_transcripts(limit_sessions=8, msg_cap=80, extra_sids=None):
                     msgs = msgs[-msg_cap:]
                     t["messages"] = msgs
                     t["_truncated"] = True
-                # Perf: the per-message `raw` payload (#1895) can be ~12 KB each.
-                # Shipping it for 8 sessions × 80 msgs would bloat the shared
-                # snapshot from ~170 KB to multiple MB. The raw toggle is a
-                # local-dashboard feature; strip raw from the cloud snapshot and
-                # let the cloud toggle degrade gracefully.
-                t["messages"] = [
-                    {k: v for k, v in m.items() if k != "raw"} if isinstance(m, dict) else m
-                    for m in msgs
-                ]
+                # Perf: the per-message `raw` payload (#1895) can be ~12 KB each
+                # and the tool deep-dive (#1911) carries input/output; shipping
+                # them in full for 8 sessions × 80 msgs would bloat the shared
+                # snapshot from ~170 KB to multiple MB. Strip raw and trim tool
+                # detail to a budgeted preview; the full detail stays on the
+                # local dashboard.
+                t["messages"] = _project_snapshot_messages(msgs)
                 out[sid] = t
         return out
     except Exception as _e:

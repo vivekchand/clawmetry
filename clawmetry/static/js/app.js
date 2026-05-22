@@ -9940,7 +9940,10 @@ window._replayFilter = 'all';
 function _buildReplayEvent(m, idx) {
   var role = m.role || 'unknown';
   // Determine event type for filtering
-  var type = role;
+  var type = m.type || role;
+  // #1911: tool turns carry a structured `tool` object (name + input/output);
+  // classify them as tool_use so the "Tools" filter and deep-dive chip pick up.
+  if (m.tool) type = 'tool_use';
   if (role === 'assistant' && m.content && m.content.indexOf('[tool_use]') !== -1) type = 'tool_use';
   if (role === 'assistant' && m.content && m.content.indexOf('<antml_thinking>') !== -1) type = 'thinking';
   if (role === 'compaction') type = 'compaction';
@@ -9962,6 +9965,8 @@ function _buildReplayEvent(m, idx) {
     timestamp: m.timestamp,
     tokens: m.tokens || null,
     params: m.params || null,
+    // #1911: structured tool call/result detail for the deep-dive chip.
+    tool: m.tool || null,
     // Issue #1895: verbatim event payload for the Raw/Pretty toggle.
     raw: (m.raw !== undefined ? m.raw : null),
     originalIndex: idx,
@@ -10034,6 +10039,45 @@ function _fmtDecodingParams(p) {
   return '⚙ ' + parts.join(' · ');
 }
 
+// #1911: render a tool call/result as a named, expandable deep-dive chip.
+// The header shows the tool name (and an error badge for failed results); the
+// body — the exact input args or result output — toggles open on click.
+function _renderToolDiveChip(ev, highlighted) {
+  var t = ev.tool || {};
+  var isResult = t.kind === 'result';
+  var name = escHtml(t.name || 'tool');
+  var icon = isResult ? '↩' : '🔧';
+  var side = isResult ? 'flex-end' : 'flex-start';
+  var ring = highlighted ? 'box-shadow:0 0 0 2px #6366f1;' : '';
+  var ts = ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString() : '';
+  var body = isResult ? (t.output || '') : (t.input || '');
+  var hasBody = !!(body && String(body).trim());
+  var did = 'tooldive-' + ev.originalIndex;
+  var labelText = isResult ? (name + ' · result') : name;
+  var html = '<div class="chat-tool-chip chat-tool-dive ' + (isResult ? 'tc-user' : 'tc-asst') + '"'
+    + ' id="replay-msg-' + ev.originalIndex + '" style="align-self:' + side + ';' + ring + '">';
+  html += '<div class="ctd-head"' + (hasBody ? ' onclick="toggleToolDive(\'' + did + '\')"' : '') + '>';
+  html += '<span class="chat-tool-chip-label">' + icon + ' ' + labelText + '</span>';
+  if (isResult && t.is_error) html += '<span class="chat-tool-chip-meta" style="color:#e0625a;">error</span>';
+  if (hasBody) html += '<span class="ctd-caret" id="' + did + '-caret">▸</span>';
+  if (ts) html += '<span class="chat-tool-chip-meta">' + ts + '</span>';
+  html += '</div>';
+  if (hasBody) {
+    html += '<pre class="ctd-body" id="' + did + '" style="display:none;">' + escHtml(String(body)) + '</pre>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function toggleToolDive(id) {
+  var pre = document.getElementById(id);
+  var caret = document.getElementById(id + '-caret');
+  if (!pre) return;
+  var open = pre.style.display !== 'none';
+  pre.style.display = open ? 'none' : 'block';
+  if (caret) caret.textContent = open ? '▸' : '▾';
+}
+
 function _renderReplayEvent(ev, highlighted) {
   var role = ev.role;
   // Handle compaction events specially
@@ -10055,6 +10099,12 @@ function _renderReplayEvent(ev, highlighted) {
         + (rTs ? '<div class="chat-ts">' + rTs + '</div>' : '')
         + '</div>';
     }
+  }
+  // #1911: a tool turn carries a structured `tool` object (name + input or
+  // output). Render an expandable deep-dive chip — the tool name up front, the
+  // exact args/result one click away — instead of a nameless "Tool call".
+  if (ev.tool) {
+    return _renderToolDiveChip(ev, highlighted);
   }
   // Tool turns (assistant tool_use / user tool_result) carry no prose, so they
   // used to render as blank bubbles with just a role + timestamp — looking
