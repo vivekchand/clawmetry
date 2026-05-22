@@ -210,7 +210,11 @@ def api_traces():
     except (ValueError, TypeError):
         limit = 100
 
-    rows = _events_for(limit=14000)
+    # Scan a bounded window of recent events to group into the trace list.
+    # 14000 was needlessly heavy on the shared DuckDB connection (it's the
+    # main contributor to proxy-timeout empties); 6000 still covers far more
+    # than the ``limit`` traces we return, most-recent first.
+    rows = _events_for(limit=6000)
     if rows is None:
         return jsonify({"available": False, "traces": [], "total": 0})
 
