@@ -367,9 +367,13 @@ def _scan_fidelity_events(sessions_dir, skill_dirs_map, cutoff_ts):
     return stats
 
 
-@bp_skills.route("/api/skills")
-def api_skills():
-    """List all installed skills with fidelity stats.
+def compute_skills_payload():
+    """Plain (no-Flask) skills list + summary.
+
+    Single source of truth shared by the ``/api/skills`` route AND the cloud
+    snapshot builder (``sync._build_skills``), so cloud renders the same shape
+    the local dashboard does. Reads the filesystem + DuckDB; never raises out
+    of the route (callers wrap).
 
     Returns:
         {
@@ -392,7 +396,7 @@ def api_skills():
 
     skills_dirs = _get_skills_dirs()
     if not skills_dirs:
-        return jsonify({"skills": [], "summary": empty_summary})
+        return {"skills": [], "summary": empty_summary}
 
     # Discover installed skills across every candidate directory. First
     # match wins on name collisions so the user-installed copy in
@@ -415,7 +419,7 @@ def api_skills():
                 skill_dirs_map[entry] = entry_path
 
     if not skill_dirs_map:
-        return jsonify({"skills": [], "summary": empty_summary})
+        return {"skills": [], "summary": empty_summary}
 
     now_ts = time.time()
     cutoff_7d = now_ts - 7 * 86400
@@ -523,7 +527,13 @@ def api_skills():
         "wasted_header_tokens": wasted_header_tokens,
     }
 
-    return jsonify({"skills": skills_out, "summary": summary})
+    return {"skills": skills_out, "summary": summary}
+
+
+@bp_skills.route("/api/skills")
+def api_skills():
+    """List all installed skills with fidelity stats."""
+    return jsonify(compute_skills_payload())
 
 
 @bp_skills.route("/api/skills/<skill_name>")
