@@ -7955,6 +7955,10 @@ function _traceFmtDur(ms) {
   return (ms / 86400000).toFixed(1) + 'd';
 }
 
+window._allTraces = [];
+window._traceListFilter = 'recent';
+window._traceListSearch = '';
+
 async function loadTracing() {
   tracingShowList();
   var el = document.getElementById('trace-list');
@@ -7962,7 +7966,7 @@ async function loadTracing() {
   el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">Loading traces&hellip;</div>';
   var data;
   try {
-    data = await fetch('/api/traces?limit=150').then(function(r){ return r.json(); });
+    data = await fetch('/api/traces?limit=200').then(function(r){ return r.json(); });
   } catch (e) {
     el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">Could not load traces.</div>';
     return;
@@ -7971,35 +7975,83 @@ async function loadTracing() {
     el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-secondary);font-size:13px;">Traces read from the local event store, which is not available here.</div>';
     return;
   }
-  var traces = data.traces || [];
-  if (!traces.length) {
+  window._allTraces = data.traces || [];
+  if (!window._allTraces.length) {
     el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-secondary);font-size:13px;">No traces yet. They appear here once your agent runs.</div>';
     return;
   }
-  var html = '<div style="display:flex;flex-direction:column;">';
-  html += '<div style="display:flex;gap:12px;padding:8px 14px;border-bottom:1px solid var(--border-primary);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-muted);">'
-    + '<span style="flex:1;">Trace</span><span style="width:70px;text-align:right;">Spans</span><span style="width:80px;text-align:right;">Duration</span><span style="width:80px;text-align:right;">Tokens</span><span style="width:140px;">Model</span></div>';
+  el.style.cssText = 'padding:0;overflow:hidden;';
+  // Filter bar (chips + search) rendered once so the search box keeps focus.
+  function chip(id, label) {
+    var on = window._traceListFilter === id;
+    return '<div class="trace-filter-chip" data-f="' + id + '" onclick="traceListFilter(\'' + id + '\')" style="padding:5px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:' + (on ? '#6366f1' : 'transparent') + ';color:' + (on ? '#fff' : 'var(--text-muted)') + ';border:1px solid ' + (on ? '#6366f1' : 'var(--border-secondary)') + ';">' + label + '</div>';
+  }
+  el.innerHTML =
+    '<div style="display:flex;gap:6px;align-items:center;padding:10px 12px;flex-wrap:wrap;border-bottom:1px solid var(--border-primary);">'
+    + chip('recent', 'Recent') + chip('errors', 'Errors') + chip('slowest', 'Slowest') + chip('costliest', 'Costliest')
+    + '<input id="trace-search" type="text" placeholder="Search trace / model&hellip;" value="' + escHtml(window._traceListSearch || '') + '" oninput="traceListSearch(this.value)" style="margin-left:auto;flex:0 0 200px;padding:5px 10px;border-radius:6px;border:1px solid var(--border-secondary);background:var(--bg-primary);color:var(--text-primary);font-size:12px;">'
+    + '</div>'
+    + '<div id="trace-rows"></div>';
+  _renderTraceRows();
+}
+
+function traceListFilter(f) {
+  window._traceListFilter = f;
+  document.querySelectorAll('.trace-filter-chip').forEach(function(c) {
+    var on = c.getAttribute('data-f') === f;
+    c.style.background = on ? '#6366f1' : 'transparent';
+    c.style.color = on ? '#fff' : 'var(--text-muted)';
+    c.style.borderColor = on ? '#6366f1' : 'var(--border-secondary)';
+  });
+  _renderTraceRows();
+}
+
+function traceListSearch(v) {
+  window._traceListSearch = (v || '').toLowerCase();
+  _renderTraceRows();  // rows only — leaves the focused search input untouched
+}
+
+function _renderTraceRows() {
+  var box = document.getElementById('trace-rows');
+  if (!box) return;
+  var traces = (window._allTraces || []).slice();
+  var f = window._traceListFilter, q = window._traceListSearch;
+  if (q) traces = traces.filter(function(t) {
+    return (((t.trace_id || '') + ' ' + (t.model || '')).toLowerCase().indexOf(q) !== -1);
+  });
+  if (f === 'errors') traces = traces.filter(function(t) { return t.status === 'error'; });
+  if (f === 'slowest') traces.sort(function(a, b) { return (b.duration_ms || 0) - (a.duration_ms || 0); });
+  else if (f === 'costliest') traces.sort(function(a, b) { return (b.total_cost_usd || 0) - (a.total_cost_usd || 0); });
+  else traces.sort(function(a, b) { return (b.start_ms || 0) - (a.start_ms || 0); });
+
+  var html = '<div style="display:flex;gap:12px;padding:8px 14px;border-bottom:1px solid var(--border-primary);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-muted);">'
+    + '<span style="flex:1;">Trace</span><span style="width:64px;text-align:right;">Spans</span><span style="width:74px;text-align:right;">Duration</span><span style="width:64px;text-align:right;">Tokens</span><span style="width:70px;text-align:right;">Cost</span><span style="width:130px;">Model</span></div>';
+  if (!traces.length) {
+    box.innerHTML = html + '<div style="padding:24px;text-align:center;color:var(--text-secondary);font-size:13px;">No matching traces.</div>';
+    return;
+  }
   traces.forEach(function(t) {
     var when = t.start_ms ? new Date(t.start_ms).toLocaleString() : '';
     var statusDot = t.status === 'error' ? '#ef4444' : '#22c55e';
+    var cost = t.total_cost_usd || 0;
+    var costStr = cost ? '$' + (cost < 0.01 ? cost.toFixed(4) : cost.toFixed(3)) : '&mdash;';
     html += '<div onclick="viewTrace(\'' + escHtml(t.trace_id) + '\')" '
       + 'style="display:flex;gap:12px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border-secondary);cursor:pointer;" '
       + 'onmouseover="this.style.background=\'var(--bg-tertiary,#1e293b)\'" onmouseout="this.style.background=\'\'">'
       + '<span style="flex:1;min-width:0;">'
         + '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + statusDot + ';margin-right:8px;"></span>'
-        + '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;color:var(--text-primary);">' + escHtml((t.name || t.trace_id).slice(0, 28)) + '</span>'
+        + '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;color:var(--text-primary);">' + escHtml((t.name || t.trace_id).slice(0, 26)) + '</span>'
         + (t.has_subagents ? '<span style="margin-left:8px;background:rgba(245,158,11,0.15);color:#f59e0b;border-radius:6px;padding:1px 6px;font-size:10px;font-weight:600;">sub-agents</span>' : '')
         + '<span style="margin-left:8px;color:var(--text-muted);font-size:11px;">' + escHtml(when) + '</span>'
       + '</span>'
-      + '<span style="width:70px;text-align:right;color:var(--text-secondary);font-size:12px;">' + (t.span_count || 0) + '</span>'
-      + '<span style="width:80px;text-align:right;color:var(--text-secondary);font-size:12px;">' + _traceFmtDur(t.duration_ms) + '</span>'
-      + '<span style="width:80px;text-align:right;color:var(--text-secondary);font-size:12px;">' + ((t.total_tokens || 0) / 1000).toFixed(1) + 'K</span>'
-      + '<span style="width:140px;color:var(--text-muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(t.model || '') + '</span>'
+      + '<span style="width:64px;text-align:right;color:var(--text-secondary);font-size:12px;">' + (t.span_count || 0) + '</span>'
+      + '<span style="width:74px;text-align:right;color:var(--text-secondary);font-size:12px;">' + _traceFmtDur(t.duration_ms) + '</span>'
+      + '<span style="width:64px;text-align:right;color:var(--text-secondary);font-size:12px;">' + ((t.total_tokens || 0) / 1000).toFixed(1) + 'K</span>'
+      + '<span style="width:70px;text-align:right;color:var(--text-secondary);font-size:12px;">' + costStr + '</span>'
+      + '<span style="width:130px;color:var(--text-muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(t.model || '') + '</span>'
       + '</div>';
   });
-  html += '</div>';
-  el.style.cssText = 'padding:0;overflow:hidden;';
-  el.innerHTML = html;
+  box.innerHTML = html;
 }
 
 function tracingShowList() {
@@ -8154,19 +8206,34 @@ function traceShowSpan(spanId) {
   var drawer = document.getElementById('trace-span-drawer');
   if (!drawer) return;
   drawer.style.display = '';
-  drawer.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
-    + '<div style="font-weight:700;font-size:14px;color:var(--text-primary);">' + escHtml(s.name) + '</div>'
-    + '<button onclick="document.getElementById(\'trace-span-drawer\').style.display=\'none\'" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;">&times;</button>'
+  var isErr = s.status === 'error';
+  var cost = _traceCost(s), tok = _traceTokens(s);
+  // kind-aware metric chips
+  function chip(label, val, color) {
+    return '<span style="background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;padding:3px 9px;font-size:11px;color:' + (color || 'var(--text-secondary)') + ';"><span style="color:var(--text-muted);">' + label + '</span> ' + val + '</span>';
+  }
+  var chips = [
+    chip('kind', '<b style="color:' + _traceColor(s) + '">' + _traceIcon(s) + ' ' + escHtml(s.kind) + '</b>'),
+    chip('duration', _traceFmtDur(s.duration_ms)),
+  ];
+  if (isErr) chips.unshift(chip('status', '<b>error ⚠</b>', '#f87171'));
+  if (tok) chips.push(chip('tokens', (tok / 1000).toFixed(2) + 'K' + (s.rolled_tokens != null ? ' (incl. children)' : '')));
+  if (cost) chips.push(chip('cost', '$' + (cost < 0.01 ? cost.toFixed(4) : cost.toFixed(3)) + (s.rolled_cost != null ? ' (incl. children)' : '')));
+  if (s.model) chips.push(chip('model', escHtml(s.model)));
+  if (s.tool) chips.push(chip('tool', escHtml(s.tool)));
+  // body label by kind
+  var bodyLabel = s.kind === 'tool' ? 'Tool input'
+                : s.kind === 'llm' ? 'Message / output'
+                : s.kind === 'prompt' ? 'Prompt' : 'Detail';
+  drawer.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
+    + '<div style="font-weight:700;font-size:14px;color:' + (isErr ? '#f87171' : 'var(--text-primary)') + ';">' + _traceIcon(s) + ' ' + escHtml(s.name) + '</div>'
+    + '<button onclick="document.getElementById(\'trace-span-drawer\').style.display=\'none\'" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:16px;">&times;</button>'
     + '</div>'
-    + '<div style="display:flex;gap:20px;flex-wrap:wrap;font-size:12px;color:var(--text-secondary);margin-bottom:8px;">'
-      + '<span>kind: <b style="color:' + _traceColor(s) + '">' + escHtml(s.kind) + '</b></span>'
-      + '<span>type: ' + escHtml(s.event_type || '') + '</span>'
-      + '<span>duration: ' + _traceFmtDur(s.duration_ms) + '</span>'
-      + (s.tokens ? '<span>tokens: ' + s.tokens + '</span>' : '')
-      + (s.model ? '<span>model: ' + escHtml(s.model) + '</span>' : '')
-      + '<span>span: ' + escHtml((s.span_id || '').slice(0, 16)) + '</span>'
-    + '</div>'
-    + (s.detail ? '<pre style="white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--text-secondary);margin:0;max-height:240px;overflow:auto;">' + escHtml(s.detail) + '</pre>' : '<div style="color:var(--text-muted);font-size:12px;">No text payload for this span.</div>');
+    + '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;">' + chips.join('') + '</div>'
+    + (s.detail
+        ? '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-muted);margin-bottom:4px;">' + bodyLabel + '</div>'
+          + '<pre style="white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--text-secondary);margin:0;max-height:300px;overflow:auto;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;padding:8px 10px;">' + escHtml(s.detail) + '</pre>'
+        : '<div style="color:var(--text-muted);font-size:12px;">No captured payload for this span. (Full LLM input/output capture is local-only and follows the E2E path in cloud.)</div>');
 }
 
 // Entry point called by nav switchTab + loadAll bootstrap.
@@ -15598,23 +15665,7 @@ document.addEventListener('DOMContentLoaded', function() {
   // Issue #950: multi-profile workspace switcher
   try { initWorkspaceSwitcher(); } catch (e) { /* non-fatal */ }
   try { _hideCloudIrrelevantNav(); } catch (e) { /* non-fatal */ }
-  try { _applyTracingFlag(); } catch (e) { /* non-fatal */ }
 });
-
-// The Tracing tab is gated behind a flag while the span tree is being polished
-// (the parentId chain renders as a deep diagonal staircase today). Hidden from
-// the nav by default; reveal it with ?tracing=1 (persisted to localStorage) or
-// when landing directly on ?tab=tracing. Disable again with ?tracing=0.
-function _applyTracingFlag() {
-  var p = new URLSearchParams(window.location.search);
-  if (p.get('tracing') === '1') { try { localStorage.setItem('cm-ff-tracing', '1'); } catch (e) {} }
-  if (p.get('tracing') === '0') { try { localStorage.removeItem('cm-ff-tracing'); } catch (e) {} }
-  var on = false;
-  try { on = localStorage.getItem('cm-ff-tracing') === '1'; } catch (e) {}
-  if (p.get('tab') === 'tracing') on = true;
-  var el = document.getElementById('left-nav-tracing');
-  if (el) el.style.display = on ? '' : 'none';
-}
 
 // ── Workspace switcher (issue #950) ───────────────────────────────────
 // Discovers all OpenClaw workspaces on this machine and lets power users
