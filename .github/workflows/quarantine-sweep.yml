@@ -1,0 +1,132 @@
+name: Quarantine Sweep
+
+# C7 gate: daily sweep of quarantined tests.
+# "Flaky failures are quarantined within 24h, not silently retried forever."
+# Tracking: vivekchand/clawmetry#1646
+#
+# How it works:
+#   Tests in tests/quarantine.txt are marked with pytest.mark.quarantine
+#   (via tests/conftest.py) and skipped in the main PR gate with
+#   -m 'not quarantine'. This workflow runs them daily (up to 3 attempts).
+#   It exits 0 if ANY attempt passes -- the test is still flaky but not
+#   broken. It hard-fails only when ALL 3 attempts fail, which means the
+#   test is now permanently broken and must be investigated within 24h.
+#
+# Non-blocking on PRs. Alerting is via GitHub job failure + email.
+# Remove continue-on-error once the team is comfortable with the signal.
+
+on:
+  schedule:
+    - cron: "23 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  quarantine-sweep:
+    name: Quarantine sweep (daily)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          pip install flask pytest pytest-playwright requests \
+            duckdb waitress cryptography
+
+      - name: Install Playwright browsers
+        run: python3 -m playwright install chromium --with-deps
+
+      - name: Check quarantine list
+        id: check
+        run: |
+          count=$(grep -cEv '^\s*(#|$)' tests/quarantine.txt 2>/dev/null || echo 0)
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "Quarantined tests: $count"
+          if [ "$count" -eq 0 ]; then
+            echo "No quarantined tests -- nothing to sweep."
+          else
+            grep -v '^\s*#' tests/quarantine.txt | grep -v '^\s*$' | while read -r t; do
+              echo "  - $t"
+            done
+          fi
+
+      - name: Start dashboard
+        if: steps.check.outputs.count != '0'
+        run: |
+          OPENCLAW_GATEWAY_TOKEN=ci-quarantine-token \
+            python3 dashboard.py --port 8900 --no-debug \
+            > /tmp/dashboard.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf -H "Authorization: Bearer ci-quarantine-token" \
+              http://localhost:8900/api/health && break
+            sleep 1
+          done
+
+      - name: Run quarantined tests (attempt 1 of 3)
+        if: steps.check.outputs.count != '0'
+        id: run1
+        continue-on-error: true
+        env:
+          CLAWMETRY_URL: http://localhost:8900
+          CLAWMETRY_TOKEN: ci-quarantine-token
+        run: |
+          python3 -m pytest -m quarantine -v --tb=short 2>&1 | tee /tmp/sweep-run1.txt
+
+      - name: Run quarantined tests (attempt 2 of 3)
+        if: steps.check.outputs.count != '0' && steps.run1.outcome == 'failure'
+        id: run2
+        continue-on-error: true
+        env:
+          CLAWMETRY_URL: http://localhost:8900
+          CLAWMETRY_TOKEN: ci-quarantine-token
+        run: |
+          python3 -m pytest -m quarantine -v --tb=short 2>&1 | tee /tmp/sweep-run2.txt
+
+      - name: Run quarantined tests (attempt 3 of 3)
+        if: |
+          steps.check.outputs.count != '0' &&
+          steps.run1.outcome == 'failure' &&
+          steps.run2.outcome == 'failure'
+        id: run3
+        env:
+          CLAWMETRY_URL: http://localhost:8900
+          CLAWMETRY_TOKEN: ci-quarantine-token
+        run: |
+          echo "::error::Quarantined test(s) failed all 3 attempts."
+          echo "::error::They are BROKEN (not just flaky). Investigate and fix within 24h."
+          echo "::error::See tests/quarantine.txt for the test list."
+          python3 -m pytest -m quarantine -v --tb=long 2>&1 | tee /tmp/sweep-run3.txt
+          exit 1
+
+      - name: Sweep summary
+        if: always() && steps.check.outputs.count != '0'
+        run: |
+          r1="${{ steps.run1.outcome }}"
+          r2="${{ steps.run2.outcome }}"
+          r3="${{ steps.run3.outcome }}"
+          if [ "$r1" = "success" ]; then
+            echo "All quarantined tests passed on attempt 1 (flakiness resolved? consider un-quarantining)."
+          elif [ "$r2" = "success" ]; then
+            echo "Quarantined tests passed on attempt 2 -- still flaky but not broken."
+          elif [ "$r3" = "success" ]; then
+            echo "Quarantined tests passed on attempt 3 -- still flaky."
+          else
+            echo "ALERT: quarantined test(s) BROKEN (all 3 attempts failed). See run3 log."
+          fi
+
+      - name: Upload sweep logs
+        if: always() && steps.check.outputs.count != '0'
+        uses: actions/upload-artifact@v7
+        with:
+          name: quarantine-sweep-logs-${{ github.run_number }}
+          path: |
+            /tmp/sweep-run*.txt
+            /tmp/dashboard.log
+          if-no-files-found: warn
+          retention-days: 14
