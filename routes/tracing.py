@@ -101,6 +101,40 @@ def _walk_tool_uses(node):
             yield from _walk_tool_uses(item)
 
 
+def _walk_tool_results(node):
+    """Yield (tool_use_id, is_error) for tool_result blocks anywhere in ``node``.
+
+    The join key for span reconstruction: an assistant tool_use.id is closed by
+    the later user event whose tool_result.tool_use_id matches it.
+    """
+    if isinstance(node, dict):
+        if node.get("type") == "tool_result" and node.get("tool_use_id"):
+            yield node.get("tool_use_id"), bool(node.get("is_error"))
+        for v in node.values():
+            yield from _walk_tool_results(v)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _walk_tool_results(item)
+
+
+def _tool_label(name):
+    return (name or "tool").replace("mcp__openclaw__", "")
+
+
+def _short_input(inp):
+    """One-line summary of a tool_use input dict for the span detail/name."""
+    if not isinstance(inp, dict):
+        return ""
+    for k in ("file_path", "path", "command", "query", "url", "pattern", "name"):
+        v = inp.get(k)
+        if isinstance(v, str) and v:
+            return f"{k}={v[:140]}"
+    try:
+        return json.dumps(inp)[:160]
+    except Exception:
+        return ""
+
+
 def _short_name(event_type, data, is_subagent):
     """Human-readable span name."""
     kind = _span_kind(event_type, is_subagent)
@@ -198,69 +232,140 @@ def api_traces():
 
 
 def _build_spans(rows):
-    """Turn a session's events into span dicts + a parent→child tree.
+    """Reconstruct a semantic OTel-style span tree from session events.
 
-    Returns (spans_list, root_ids). Each span:
-      {span_id, parent_span_id, name, kind, start_ms, duration_ms,
-       model, tokens, cost, status, is_subagent, detail}
-    Durations are wall-clock gaps to the next event (event-based tracing),
-    which gives a usable waterfall without explicit span end markers.
+    Produces ``invoke_agent → chat → execute_tool`` nesting (PRD-tracing.md §5)
+    using the tool_use.id ↔ tool_result.tool_use_id join, NOT the data.parentId
+    conversation chain (which staircases 1399-deep). Sub-agent activity nests
+    under its own ``invoke_agent`` span. Cost/tokens/duration roll up
+    child→parent (``rolled_*`` fields on parents).
+
+    Each span: {span_id, parent_span_id, name, kind, event_type, start_ms,
+    duration_ms, model, tokens, cost, status, is_subagent, detail, tool,
+    rolled_tokens?, rolled_cost?}. Returns (spans_list, root_ids).
     """
-    # Sort ascending by ts so gap-based durations are forward-looking.
     evs = sorted(
         (e for e in rows if (e.get("event_type") or "") not in _TRACE_PLUMBING_TYPES),
         key=lambda e: _ts_ms(e.get("ts")) or 0,
     )
-    spans = []
+    if not evs:
+        return [], []
     order_ms = [(_ts_ms(e.get("ts")) or 0) for e in evs]
-    trace_end = max(order_ms) if order_ms else 0
-    # Semantic tree, NOT the raw data.parentId chain. In OpenClaw v3 each
-    # event's parentId points to the immediately-preceding event, so following
-    # it nests every turn one level deeper — a 1399-deep diagonal staircase.
-    # Instead: main-agent turns are roots (a flat, time-ordered list), and a
-    # burst of sub-agent spans nests one level under the main turn that was
-    # active when it ran (so you see which turn spawned the sub-agent work).
-    last_main_id = None
-    seen_ids = set()
+    t0, t1 = order_ms[0], order_ms[-1]
+    spans = []
+    by_id = {}
+    seen = set()
+
+    def _mk(span_id, parent, name, kind, start, end, *, is_sub=False, model="",
+            tokens=0, cost=0.0, status="ok", detail="", tool="", event_type=""):
+        sid = str(span_id)
+        while sid in seen:
+            sid += "_"
+        seen.add(sid)
+        s = {
+            "span_id": sid, "parent_span_id": (str(parent) if parent else None),
+            "name": name, "kind": kind, "event_type": event_type,
+            "start_ms": start, "duration_ms": max(0, (end or start) - start),
+            "model": model, "tokens": int(tokens or 0),
+            "cost": round(float(cost or 0.0), 6), "status": status,
+            "is_subagent": is_sub, "detail": (detail or "")[:240], "tool": tool,
+        }
+        spans.append(s)
+        by_id[sid] = s
+        return s
+
+    # Agent root spans: main always; sub-agent created lazily on first subagent event.
+    main_root = _mk("agent-main", None, "invoke_agent main", "agent", t0, t1)
+    sub_root = None
+    tool_spans = {}  # tool_use_id -> execute_tool span (closed on its result)
+
     for i, e in enumerate(evs):
         d = e.get("data") if isinstance(e.get("data"), dict) else {}
         et = e.get("event_type") or ""
-        is_sub = et.startswith("subagent:")
-        sid = str(d.get("id") or e.get("id") or f"span-{i}")
-        if sid in seen_ids:  # guarantee unique span ids for clean nesting
-            sid = f"{sid}-{i}"
-        seen_ids.add(sid)
+        low = et.lower()
+        is_sub = low.startswith("subagent:")
         start = order_ms[i]
-        # gap to next event = nominal duration; floor for visibility, cap at trace end
-        nxt = order_ms[i + 1] if i + 1 < len(order_ms) else trace_end
-        dur = max(0, (nxt - start)) if nxt and start else 0
-        if is_sub:
-            parent_span_id = last_main_id  # nest under the active main turn
-        else:
-            parent_span_id = None          # main turns are roots
-            last_main_id = sid
-        detail = ""
+        nxt = order_ms[i + 1] if i + 1 < len(order_ms) else t1
+        eid = str(d.get("id") or e.get("id") or f"ev-{i}")
+        text = ""
         msg = d.get("message")
-        if isinstance(msg, dict):
-            c = msg.get("content")
-            if isinstance(c, str):
-                detail = c[:240]
-        spans.append({
-            "span_id": sid,
-            "parent_span_id": parent_span_id,
-            "name": _short_name(et, d, is_sub),
-            "kind": _span_kind(et, is_sub),
-            "event_type": et,
-            "start_ms": start,
-            "duration_ms": dur,
-            "model": e.get("model") or "",
-            "tokens": int(e.get("token_count") or 0),
-            "cost": round(float(e.get("cost_usd") or 0.0), 6),
-            "status": "error" if (d.get("isError") or d.get("is_error")) else "ok",
-            "is_subagent": is_sub,
-            "detail": detail,
-        })
+        if isinstance(msg, dict) and isinstance(msg.get("content"), str):
+            text = msg["content"]
+        elif isinstance(d.get("finalPromptText"), str):
+            text = d["finalPromptText"]
+
+        if is_sub and sub_root is None:
+            sub_root = _mk("agent-sub", main_root["span_id"],
+                           "invoke_agent sub-agent", "agent", start, t1, is_sub=True)
+        agent_parent = (sub_root or main_root)["span_id"] if is_sub else main_root["span_id"]
+
+        is_assistant = ("assistant" in low) or ("model.completed" in low)
+        is_user = low.endswith("user") or low == "user" or "prompt" in low
+
+        # Close execute_tool spans whose result just arrived (the join).
+        results = list(_walk_tool_results(d))
+        if results:
+            for tuid, is_err in results:
+                ts = tool_spans.get(tuid)
+                if ts is not None:
+                    ts["duration_ms"] = max(0, start - ts["start_ms"])
+                    if is_err:
+                        ts["status"] = "error"
+            if is_user and not text.strip():
+                continue  # pure tool-result turn → no span of its own
+
+        if is_assistant:
+            chat = _mk(eid, agent_parent,
+                       ("chat " + (e.get("model") or "")).strip() or "chat",
+                       "llm", start, nxt, is_sub=is_sub, model=e.get("model") or "",
+                       tokens=e.get("token_count"), cost=e.get("cost_usd"),
+                       status="error" if (d.get("isError") or d.get("is_error")) else "ok",
+                       detail=text, event_type=et)
+            for j, tu in enumerate(_walk_tool_uses(d)):
+                tuid = tu.get("id") or f"{eid}-tu-{j}"
+                tname = _tool_label(tu.get("name"))
+                ts = _mk(tuid, chat["span_id"], "execute_tool " + tname, "tool",
+                         start, nxt, is_sub=is_sub, tool=tname,
+                         detail=_short_input(tu.get("input")), event_type=et)
+                tool_spans[tu.get("id") or tuid] = ts
+            continue
+
+        if is_user and text.strip():
+            _mk(eid, agent_parent, "prompt", "prompt", start, nxt, is_sub=is_sub,
+                detail=text, event_type=et)
+            continue
+
+        # Fallback: any other renderable event as a child of its agent root.
+        _mk(eid, agent_parent, (et or "event"), _span_kind(et, is_sub), start, nxt,
+            is_sub=is_sub, model=e.get("model") or "", tokens=e.get("token_count"),
+            cost=e.get("cost_usd"), detail=text, event_type=et)
+
+    # Roll cost/tokens/duration child→parent; propagate error to agent parents.
+    children = {}
+    for s in spans:
+        if s["parent_span_id"]:
+            children.setdefault(s["parent_span_id"], []).append(s["span_id"])
+
+    def _rollup(sid):
+        s = by_id[sid]
+        tok, cost = s["tokens"], s["cost"]
+        end = s["start_ms"] + s["duration_ms"]
+        err = s["status"] == "error"
+        for c in children.get(sid, []):
+            ct, cc, ce, cerr = _rollup(c)
+            tok += ct; cost += cc; end = max(end, ce); err = err or cerr
+        if children.get(sid):
+            s["rolled_tokens"] = tok
+            s["rolled_cost"] = round(cost, 6)
+            if end > s["start_ms"] + s["duration_ms"]:
+                s["duration_ms"] = end - s["start_ms"]
+            if err and s["kind"] == "agent":
+                s["status"] = "error"
+        return tok, cost, end, err
+
     roots = [s["span_id"] for s in spans if not s["parent_span_id"]]
+    for r in roots:
+        _rollup(r)
     return spans, roots
 
 

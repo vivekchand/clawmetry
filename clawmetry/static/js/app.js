@@ -7930,13 +7930,22 @@ window._traceData = null;
 window._traceView = 'waterfall';
 
 var _TRACE_KIND_COLORS = {
-  prompt: '#3b82f6', llm: '#8b5cf6', tool: '#10b981',
-  attachment: '#6b7280', event: '#94a3b8'
+  agent: '#ec4899', prompt: '#3b82f6', llm: '#8b5cf6', tool: '#10b981',
+  retrieval: '#06b6d4', attachment: '#6b7280', event: '#94a3b8'
+};
+var _TRACE_KIND_ICONS = {
+  agent: '🤖', llm: '🧠', tool: '🔧', prompt: '💬', retrieval: '📚',
+  attachment: '📎', event: '•'
 };
 function _traceColor(s) {
-  if (s.is_subagent) return '#f59e0b';
+  // Sub-agent ROOT span is orange; everything else (incl. spans inside a
+  // sub-agent) is colored by its kind so chat/tool stay readable.
+  if (s.kind === 'agent' && s.is_subagent) return '#f59e0b';
   return _TRACE_KIND_COLORS[s.kind] || '#94a3b8';
 }
+function _traceIcon(s) { return _TRACE_KIND_ICONS[s.kind] || '•'; }
+function _traceCost(s) { return (s.rolled_cost != null ? s.rolled_cost : s.cost) || 0; }
+function _traceTokens(s) { return (s.rolled_tokens != null ? s.rolled_tokens : s.tokens) || 0; }
 function _traceFmtDur(ms) {
   ms = ms || 0;
   if (ms < 1000) return ms + 'ms';
@@ -8096,11 +8105,16 @@ function _traceRenderTree(spans, roots) {
   });
   function row(s, depth) {
     var color = _traceColor(s);
-    var h = '<div onclick="traceShowSpan(\'' + escHtml(s.span_id) + '\')" style="display:flex;align-items:center;gap:8px;padding:4px 8px;cursor:pointer;border-radius:4px;" onmouseover="this.style.background=\'var(--bg-tertiary,#1e293b)\'" onmouseout="this.style.background=\'\'">'
-      + '<span style="padding-left:' + (depth * 18) + 'px;"></span>'
+    var isErr = s.status === 'error';
+    var cost = _traceCost(s);
+    var costStr = cost ? '$' + (cost < 0.01 ? cost.toFixed(4) : cost.toFixed(3)) : '';
+    var h = '<div onclick="traceShowSpan(\'' + escHtml(s.span_id) + '\')" style="display:flex;align-items:center;gap:8px;padding:4px 8px;cursor:pointer;border-radius:4px;' + (isErr ? 'background:rgba(239,68,68,0.08);' : '') + '" onmouseover="this.style.background=\'var(--bg-tertiary,#1e293b)\'" onmouseout="this.style.background=\'' + (isErr ? 'rgba(239,68,68,0.08)' : '') + '\'">'
+      + '<span style="padding-left:' + (depth * 16) + 'px;"></span>'
       + '<span style="width:9px;height:9px;border-radius:2px;background:' + color + ';flex-shrink:0;"></span>'
-      + '<span style="flex:1;font-size:13px;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(s.name) + '</span>'
-      + (s.tokens ? '<span style="font-size:11px;color:var(--text-muted);">' + s.tokens + ' tok</span>' : '')
+      + '<span style="flex-shrink:0;font-size:11px;width:14px;text-align:center;">' + _traceIcon(s) + '</span>'
+      + '<span style="flex:1;font-size:13px;color:' + (isErr ? '#f87171' : 'var(--text-primary)') + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(s.name) + (isErr ? ' ⚠' : '') + '</span>'
+      + (_traceTokens(s) ? '<span style="font-size:11px;color:var(--text-muted);width:64px;text-align:right;">' + (_traceTokens(s) / 1000).toFixed(1) + 'K tok</span>' : '<span style="width:64px;"></span>')
+      + '<span style="font-size:11px;color:var(--text-muted);width:64px;text-align:right;">' + costStr + '</span>'
       + '<span style="font-size:11px;color:var(--text-muted);width:60px;text-align:right;">' + _traceFmtDur(s.duration_ms) + '</span>'
       + '</div>';
     (children[s.span_id] || []).forEach(function(c){ h += row(c, depth + 1); });
