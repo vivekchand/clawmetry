@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Release: cron schedule renders correctly + run-history no longer 502s (2026-05-22)
+- Publishes #1908. Two cron-tab bugs: (1) a cron's schedule rendered as a literal `{}` because the sync daemon flattened OpenClaw's structured schedule to a string and read the wrong field name (`cron` instead of `expr`), collapsing to an empty dict; the daemon now persists the full `{kind,expr,tz}` schedule and the frontend `formatSchedule` is hardened to never print raw JSON. (2) Clicking a cron row showed "Could not load run history (HTTP 502)" because the frontend threw on the legacy gateway endpoint (which always 502s in cloud); it's now best-effort so the DuckDB-backed timeline drives rendering and shows "No run history yet" instead. Also teaches `cronToHuman` the hour-range form (e.g. `37 9-21 * * *` becomes "at :37 hourly, 09:00 to 21:00").
+
 ### Release: cloud snapshot — traces + memory-access keys, snapshot perf fix (2026-05-22)
 - Publishes #1905: the daemon now ships `traces` and `memoryAccess` in the snapshot (cloud half of the Tracing tab and Memory access log), hides `clawmetry-*` helper sessions from the snapshot, and strips the per-message `raw` payload from snapshot transcripts to keep the shared snapshot small (the raw toggle stays a local-dashboard feature).
 
