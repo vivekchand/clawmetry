@@ -1,4 +1,4 @@
-name: PR Screenshots — Visual Diff
+name: PR Screenshots -- Visual Diff
 
 # Spins the clawmetry dashboard twice (PR head + base branch) against the
 # same seeded synthetic DuckDB fixture, screenshots every nav tab on both,
@@ -60,21 +60,21 @@ jobs:
     continue-on-error: true
 
     steps:
-      # ── 1. Check out PR head ────────────────────────────────────────────
+      # -- 1. Check out PR head ------------------------------------------------
       - name: Checkout PR head
         uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           path: head
 
-      # ── 2. Check out PR base for "before" screenshots ───────────────────
+      # -- 2. Check out PR base for "before" screenshots ----------------------
       - name: Checkout PR base
         uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: base
 
-      # ── 3. Toolchains ───────────────────────────────────────────────────
+      # -- 3. Toolchains -------------------------------------------------------
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -83,7 +83,7 @@ jobs:
         with:
           node-version: "20"
 
-      # ── 4. Python deps (shared — both checkouts pin identical core libs) ─
+      # -- 4. Python deps (shared -- both checkouts pin identical core libs) ---
       # Install head's requirements; if base differs in a relevant way it
       # still boots because dashboard.py only needs flask+waitress+duckdb.
       - name: Install Python deps
@@ -92,7 +92,7 @@ jobs:
           pip install -r head/requirements.txt
           pip install duckdb requests
 
-      # ── 5. Node deps (Playwright + pixelmatch + pngjs) ──────────────────
+      # -- 5. Node deps (Playwright + pixelmatch + pngjs) ----------------------
       - name: Install Node deps
         working-directory: head
         run: |
@@ -103,17 +103,26 @@ jobs:
             pngjs@7.0.0
           npx --yes playwright install --with-deps chromium
 
-      # ── 5b. Install OpenClaw + export gateway token (issue #1546) ───────
-      # The composite action installs `openclaw` globally and exports
-      # OPENCLAW_GATEWAY_TOKEN via $GITHUB_ENV. We pin the token value to
-      # the same CLAWMETRY_VISUAL_DIFF_TOKEN the dashboards + diff script
-      # already use so every layer (gateway, dashboard, browser) agrees.
+      # -- 5b. Install OpenClaw + export gateway token -------------------------
+      # continue-on-error: true so a transient npm registry miss does not
+      # kill the job before screenshots are taken (C5 fix, issue #1832).
+      # The auth check (routes/meta.py:api_auth_check) compares the token
+      # directly against OPENCLAW_GATEWAY_TOKEN in env -- the gateway
+      # process itself is NOT in the auth-check path.
       - name: Setup OpenClaw
+        continue-on-error: true
         uses: ./head/.github/actions/setup-openclaw
         with:
           gateway-token: ${{ env.CLAWMETRY_VISUAL_DIFF_TOKEN }}
 
-      # ── 5c. Boot a real OpenClaw gateway in the background (#1546) ──────
+      # Guarantee the token is in GITHUB_ENV even when Setup OpenClaw
+      # fails above. A failed composite action does not execute its own
+      # internal token-export step, so without this fallback the dashboard
+      # boots with no token and every screenshot is the login overlay.
+      - name: Export gateway token (CI auth fallback)
+        run: echo "OPENCLAW_GATEWAY_TOKEN=${{ env.CLAWMETRY_VISUAL_DIFF_TOKEN }}" >> "$GITHUB_ENV"
+
+      # -- 5c. Boot a real OpenClaw gateway in the background ----------------
       # The dashboard renders gateway-backed surfaces (Brain, Flow, Crons,
       # Approvals) by calling http://127.0.0.1:18789 with the bearer token.
       # Without a live gateway those tabs render empty / error states even
@@ -122,7 +131,7 @@ jobs:
       # --dev: create a throwaway dev config + workspace on the CI runner
       # --force: kill any prior listener on the port (defensive)
       # --auth token: enforce token mode (env supplies OPENCLAW_GATEWAY_TOKEN)
-      # The job is allowed to continue if gateway boot fails — the dashboard
+      # The job is allowed to continue if gateway boot fails -- the dashboard
       # still renders the seeded-DuckDB surfaces with the fake token alone.
       - name: Boot OpenClaw gateway (background)
         continue-on-error: true
@@ -132,11 +141,11 @@ jobs:
           nohup openclaw gateway --dev --force --auth token --port 18789 --verbose \
             > /tmp/openclaw-gateway.log 2>&1 &
           echo "OPENCLAW_GW_PID=$!" >> $GITHUB_ENV
-          # Give the gateway a beat to bind the port — non-blocking.
+          # Give the gateway a beat to bind the port -- non-blocking.
           sleep 5
           openclaw gateway status || true
 
-      # ── 6. Seed a synthetic DuckDB fixture, then clone it per-server ────
+      # -- 6. Seed a synthetic DuckDB fixture, then clone it per-server -------
       # scripts/seed_smoke_duckdb.py (issue #1241) creates 1k events / 200
       # heartbeats / 50 memory blobs / 5 sessions and releases the writer
       # lock at the end so the dashboard processes can open it read-only.
@@ -152,7 +161,7 @@ jobs:
           cp /tmp/seed.duckdb /tmp/head.duckdb
           ls -lh /tmp/*.duckdb
 
-      # ── 7. Boot both dashboards (background) ────────────────────────────
+      # -- 7. Boot both dashboards (background) --------------------------------
       # Each on its own DuckDB path so they don't race on the process-level
       # file lock. --no-debug disables flask reloader + sets waitress.
       - name: Start BASE dashboard (port ${{ env.BASE_PORT }})
@@ -198,13 +207,13 @@ jobs:
             done
             if [ "$ok" != "1" ]; then
               echo "::error::Dashboard never came up at $url"
-              echo "── base log ──"; tail -200 /tmp/base-server.log || true
-              echo "── head log ──"; tail -200 /tmp/head-server.log || true
+              echo "-- base log --"; tail -200 /tmp/base-server.log || true
+              echo "-- head log --"; tail -200 /tmp/head-server.log || true
               exit 1
             fi
           done
 
-      # ── 8. Capture + diff ───────────────────────────────────────────────
+      # -- 8. Capture + diff ---------------------------------------------------
       - name: Run visual-diff
         working-directory: head
         env:
@@ -219,7 +228,7 @@ jobs:
           CLAWMETRY_VISUAL_DIFF_TOKEN: ${{ env.CLAWMETRY_VISUAL_DIFF_TOKEN }}
         run: node .github/scripts/visual-diff.mjs
 
-      # ── 9. Stop dashboards + gateway (best-effort) ──────────────────────
+      # -- 9. Stop dashboards + gateway (best-effort) -------------------------
       - name: Stop dashboards
         if: always()
         run: |
@@ -227,9 +236,9 @@ jobs:
           [ -n "${HEAD_PID:-}" ] && kill "$HEAD_PID" 2>/dev/null || true
           [ -n "${OPENCLAW_GW_PID:-}" ] && kill "$OPENCLAW_GW_PID" 2>/dev/null || true
 
-      # ── 10. Publish PNGs to orphan pr-screenshots branch ────────────────
+      # -- 10. Publish PNGs to orphan pr-screenshots branch -------------------
       # GITHUB_TOKEN is read-only for `pull_request` events from forks (GH
-      # security guardrail — declared `permissions:` block does not lift
+      # security guardrail -- declared `permissions:` block does not lift
       # this for forks). Gate publish + comment steps on same-repo PRs to
       # avoid 403s. Fork PRs still get screenshots as workflow artifact
       # (step 12 below). See #1552 (JaiCodes77 fork) for the failure that
@@ -243,7 +252,7 @@ jobs:
         run: |
           set -e
           if [ ! -f "${GITHUB_WORKSPACE}/screenshots/manifest.json" ]; then
-            echo "no manifest.json — skipping publish"
+            echo "no manifest.json -- skipping publish"
             exit 0
           fi
           SHORT_SHA="${HEAD_SHA:0:12}"
@@ -281,7 +290,7 @@ jobs:
               echo "push failed for a non-race reason; bailing"
               exit 1
             fi
-            echo "race lost (attempt ${attempt}/6) — fetching remote tip and rebasing"
+            echo "race lost (attempt ${attempt}/6) -- fetching remote tip and rebasing"
             git fetch --depth=50 "$REMOTE" pr-screenshots
             if ! git rebase FETCH_HEAD; then
               git rebase --abort || true
@@ -293,7 +302,7 @@ jobs:
           echo "::warning::pr-screenshots push lost the race after 6 attempts; screenshots are still available as a workflow artifact"
           exit 0
 
-      # ── 11. Render and post the comment ─────────────────────────────────
+      # -- 11. Render and post the comment ------------------------------------
       - name: Render comment body
         if: always()
         env:
@@ -315,7 +324,7 @@ jobs:
           cat /tmp/visual-diff-body.md
 
       - name: Post / update PR comment
-        # Skip for fork PRs — GITHUB_TOKEN cannot post comments on
+        # Skip for fork PRs -- GITHUB_TOKEN cannot post comments on
         # pull_request events from forks. Reviewers download the
         # screenshots artefact from the workflow run instead. See #1552
         # (JaiCodes77 fork). Same-repo PRs unaffected.
@@ -335,7 +344,7 @@ jobs:
             gh pr comment "$PR" --repo "${{ github.repository }}" --body "$BODY"
           fi
 
-      # ── 12. Belt + suspenders: upload PNGs as artefact ──────────────────
+      # -- 12. Belt + suspenders: upload PNGs as artefact ----------------------
       - name: Upload screenshots artefact
         if: always()
         uses: actions/upload-artifact@v7
@@ -345,10 +354,10 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      # ── 13. Tail server logs on failure ─────────────────────────────────
+      # -- 13. Tail server logs on failure ------------------------------------
       - name: Tail dashboard logs on failure
         if: failure()
         run: |
-          echo "── base server log ──"; tail -200 /tmp/base-server.log || true
-          echo "── head server log ──"; tail -200 /tmp/head-server.log || true
-          echo "── openclaw gateway log ──"; tail -200 /tmp/openclaw-gateway.log || true
+          echo "-- base server log --"; tail -200 /tmp/base-server.log || true
+          echo "-- head server log --"; tail -200 /tmp/head-server.log || true
+          echo "-- openclaw gateway log --"; tail -200 /tmp/openclaw-gateway.log || true
