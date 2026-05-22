@@ -692,6 +692,20 @@ _DDL = [
         applied_at BIGINT NOT NULL
     )
     """,
+    # ── Schema migration history (#1598) ───────────────────────────────────
+    # Records every version-gated migration attempt. Success rows are written
+    # inside the main transaction (committed with the version stamp). Failure
+    # rows are written in a separate transaction after ROLLBACK so they survive
+    # the rollback and give operators a permanent audit trail.
+    """
+    CREATE TABLE IF NOT EXISTS migration_status (
+        migration_version INTEGER NOT NULL,
+        attempted_at      BIGINT NOT NULL,
+        completed_at      BIGINT,
+        error_msg         TEXT,
+        PRIMARY KEY (migration_version, attempted_at)
+    )
+    """,
     # ── Sync dead-letter queue (#1601) ─────────────────────────────────────
     # Persists payloads whose AES-GCM encryption raised inside the cloud
     # POST path (rare: malformed payload, key rotation race, corrupt key).
@@ -1194,12 +1208,13 @@ class LocalStore:
             # the second concurrent process blocks here until the first
             # commits; it then re-reads schema_version and sees the already-
             # stamped version, skipping the migration body entirely.
+            migration_failed = False
+            _migration_err: str | None = None
             self._conn.execute("BEGIN TRANSACTION")
             try:
                 cur = self._conn.execute("SELECT MAX(version) AS v FROM schema_version")
                 row = cur.fetchone()
                 current = row[0] if row and row[0] is not None else 0
-                migration_failed = False
                 if current < 7:
                     # v6 → v7: collapse Claude Code event duplicates the three
                     # ingest paths used to produce (#1232). If this raises we
@@ -1218,6 +1233,13 @@ class LocalStore:
                             "SELECT COUNT(*) FROM events"
                         ).fetchone()[0]
                         deleted = max(0, before - after)
+                        _now_ms = int(time.time() * 1000)
+                        self._conn.execute(
+                            "INSERT OR IGNORE INTO migration_status"
+                            " (migration_version, attempted_at, completed_at, error_msg)"
+                            " VALUES (7, ?, ?, NULL)",
+                            [_now_ms, _now_ms],
+                        )
                         if deleted:
                             log.info(
                                 "local store: v7 dedup migration removed %d "
@@ -1229,12 +1251,13 @@ class LocalStore:
                                 "local store: v7 dedup migration found no dupes (rows=%d)",
                                 after,
                             )
-                    except Exception:
+                    except Exception as exc:
                         log.exception(
                             "local store: v7 dedup migration FAILED — schema "
                             "version will NOT be stamped; next boot will retry"
                         )
                         migration_failed = True
+                        _migration_err = str(exc)
                 # Step 4: stamp the version — ONLY if every gated migration
                 # succeeded. Stamping after a swallowed failure is the #1602
                 # silent-half-state bug.
@@ -1252,6 +1275,22 @@ class LocalStore:
                 self._conn.execute("COMMIT")
             except Exception:
                 self._conn.execute("ROLLBACK")
+                if migration_failed and _migration_err is not None:
+                    _err_ms = int(time.time() * 1000)
+                    try:
+                        self._conn.execute("BEGIN TRANSACTION")
+                        self._conn.execute(
+                            "INSERT OR IGNORE INTO migration_status"
+                            " (migration_version, attempted_at, completed_at, error_msg)"
+                            " VALUES (7, ?, NULL, ?)",
+                            [_err_ms, _migration_err],
+                        )
+                        self._conn.execute("COMMIT")
+                    except Exception:
+                        log.debug(
+                            "local store: could not persist migration_status"
+                            " failure row (best-effort)"
+                        )
                 raise
 
     # ── lifecycle ────────────────────────────────────────────────────────
