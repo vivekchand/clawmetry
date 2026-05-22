@@ -21,7 +21,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, Response, jsonify, request
-from clawmetry.config import is_local_store_read_enabled
+from clawmetry.config import is_local_store_read_enabled, hide_clawmetry_session
 from clawmetry.risk import compute_hallucination_risk, is_llm_event
 from clawmetry.token_confidence import annotate_events as _annotate_token_confidence
 from clawmetry.token_confidence import annotate_tool_alternatives as _annotate_tool_alternatives
@@ -279,6 +279,10 @@ def _try_local_store_brain(limit, include_artifacts, since=None):
     # the dashboard JS expects (time/type/detail/src/sessionId/...).
     out = []
     for r in rows:
+        # Hide ClawMetry's own helper sessions (clawmetry-fix / -selfevolve /
+        # -mem-probe …) so our plumbing doesn't show up in the Brain feed.
+        if hide_clawmetry_session(r.get("session_id")):
+            continue
         # P0 regression fix (#1143): the v3 sync mapper nests content under
         # ``data.data`` and the legacy trajectory parser nests it under
         # ``data.message.content`` — neither exposes the flat ``input/summary/
@@ -1003,6 +1007,16 @@ def api_brain_history():
         m = _skill_pat.search(detail)
         if m:
             ev["skill"] = m.group(1)
+
+    # Hide ClawMetry's own helper sessions (clawmetry-fix / -selfevolve /
+    # -mem-probe …) from the Brain feed — plumbing, not the user's activity.
+    # (The local-store fast path above already excludes them at the source.)
+    events = [
+        ev for ev in events
+        if not hide_clawmetry_session(
+            ev.get("sessionId") or ev.get("source") or ev.get("src")
+        )
+    ]
 
     # OSS 24h cap (issue #1448): drop any JSONL-sourced event older than
     # the cap before we count + ship. CONTEXT pseudo-events have no

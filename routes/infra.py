@@ -33,7 +33,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, Response, jsonify, request
-from clawmetry.config import is_local_store_read_enabled
+from clawmetry.config import is_local_store_read_enabled, hide_clawmetry_session
 
 bp_logs = Blueprint('logs', __name__)
 bp_memory = Blueprint('memory', __name__)
@@ -1272,6 +1272,11 @@ def _extract_memory_accesses(rows, limit=200):
     """
     accesses = []
     for ev in rows or []:
+        # Hide ClawMetry's own helper sessions (clawmetry-selfevolve /
+        # clawmetry-mem-probe …) — their memory reads are plumbing, not the
+        # user's activity. Override: CLAWMETRY_SHOW_INTERNAL_SESSIONS=1.
+        if hide_clawmetry_session(ev.get("session_id")):
+            continue
         data = ev.get("data")
         if not isinstance(data, dict):
             continue

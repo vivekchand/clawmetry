@@ -40,6 +40,33 @@ def is_local_store_read_enabled() -> bool:
         not in _LOCAL_STORE_DISABLE_VALUES
 
 
+# ── ClawMetry-internal session filter ──────────────────────────────────────
+# Sessions ClawMetry itself spawns to drive OpenClaw (Self-Evolve, Fix-with-AI,
+# memory probes, …) all use a "clawmetry-" session-id prefix. They are our own
+# plumbing, not the user's agent activity, so user-facing views (transcripts,
+# brain feed, stuck-session alerts) hide them by default. Set
+# CLAWMETRY_SHOW_INTERNAL_SESSIONS=1 to surface them (debugging ClawMetry itself).
+CLAWMETRY_INTERNAL_SESSION_PREFIX = "clawmetry-"
+_SHOW_INTERNAL_ENABLE_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
+def is_clawmetry_internal_session(session_id) -> bool:
+    """True for sessions ClawMetry spawns to invoke OpenClaw (clawmetry-fix,
+    clawmetry-selfevolve, clawmetry-mem-probe, …)."""
+    return bool(session_id) and str(session_id).startswith(
+        CLAWMETRY_INTERNAL_SESSION_PREFIX
+    )
+
+
+def hide_clawmetry_session(session_id) -> bool:
+    """Whether to hide ``session_id`` from user-facing views because it's
+    ClawMetry's own plumbing. Override with CLAWMETRY_SHOW_INTERNAL_SESSIONS=1."""
+    if not is_clawmetry_internal_session(session_id):
+        return False
+    return os.environ.get("CLAWMETRY_SHOW_INTERNAL_SESSIONS", "").strip().lower() \
+        not in _SHOW_INTERNAL_ENABLE_VALUES
+
+
 @dataclass
 class ClawMetryConfig:
     """

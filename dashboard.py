@@ -8685,6 +8685,12 @@ def _check_stuck_sessions() -> None:
         sid = s.get("sessionId", "")
         if not sid:
             continue
+        # Don't alert on ClawMetry's own helper sessions (clawmetry-fix /
+        # clawmetry-selfevolve / clawmetry-mem-probe …) — they're our plumbing,
+        # not the user's agent activity. Override: CLAWMETRY_SHOW_INTERNAL_SESSIONS=1.
+        from clawmetry.config import hide_clawmetry_session
+        if hide_clawmetry_session(sid):
+            continue
         updated_ms = s.get("updatedAt") or 0
         if not updated_ms:
             continue

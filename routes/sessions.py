@@ -25,7 +25,7 @@ from datetime import datetime
 import csv
 from datetime import timezone
 from flask import Blueprint, jsonify, request, Response
-from clawmetry.config import is_local_store_read_enabled
+from clawmetry.config import is_local_store_read_enabled, hide_clawmetry_session
 from routes._dedupe import build_sibling_bucket_max, is_sibling_dup
 
 bp_sessions = Blueprint('sessions', __name__)
@@ -261,6 +261,7 @@ def api_sessions():
             fast["_source"] = _derive_envelope_source(
                 fast["sessions"], fallback="local_store"
             )
+            fast["sessions"] = _filter_internal_sessions(fast["sessions"])
             return jsonify(fast)
     gw_data = _d._gw_invoke("sessions_list", {"limit": 20, "messageLimit": 0})
     if gw_data and "sessions" in gw_data:
@@ -283,8 +284,27 @@ def api_sessions():
     # registrar runs). Without this merge those sessions stay invisible until
     # the registrar catches up — see MOAT_E2E_REPORT_2026-05-13 root-cause #3.
     _merge_unregistered_jsonls(sessions)
+    sessions = _filter_internal_sessions(sessions)
     capped = _apply_24h_retention_cap(sessions)
     return jsonify({"sessions": sessions, "capped_at_24h": capped})
+
+
+def _filter_internal_sessions(rows: list) -> list:
+    """Drop ClawMetry's own helper sessions (clawmetry-fix / -selfevolve /
+    -mem-probe …) from a session-row list so our plumbing doesn't mix with the
+    user's agent activity. Honors CLAWMETRY_SHOW_INTERNAL_SESSIONS=1."""
+    out = []
+    for s in rows or []:
+        if not isinstance(s, dict):
+            out.append(s)
+            continue
+        sid = (
+            s.get("sessionId") or s.get("id") or s.get("session_id") or s.get("key")
+        )
+        if hide_clawmetry_session(sid):
+            continue
+        out.append(s)
+    return out
 
 
 def _derive_envelope_source(rows: list, fallback: str = "local_store") -> str:
@@ -2826,6 +2846,11 @@ def _try_local_store_transcripts():
         sid = r.get("session_id") or ""
         if not sid:
             continue
+        # Issue #1896 follow-up: hide ClawMetry's own helper sessions
+        # (clawmetry-fix / clawmetry-selfevolve / clawmetry-mem-probe …) so
+        # our plumbing doesn't mix with the user's agent activity.
+        if hide_clawmetry_session(sid):
+            continue
         # Coerce ts (ISO string) to ms-since-epoch for parity with the
         # legacy ``int(os.path.getmtime(fpath) * 1000)`` shape.
         modified_ms = 0
@@ -2878,6 +2903,9 @@ def api_transcripts():
             reverse=True,
         ):
             if not fname.endswith(".jsonl") or "deleted" in fname:
+                continue
+            # Hide ClawMetry's own helper sessions (see _try_local_store_transcripts).
+            if hide_clawmetry_session(fname.replace(".jsonl", "")):
                 continue
             fpath = os.path.join(sessions_dir, fname)
             try:
