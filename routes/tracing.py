@@ -2,8 +2,9 @@
 routes/tracing.py — Phoenix/Arize-style tracing endpoints.
 
 A *trace* is one OpenClaw session; each event in that session becomes a
-*span*. Spans are linked into a tree via ``data.parentId`` and laid out on a
-wall-clock timeline (waterfall) by their ``ts``. Sub-agent events
+*span*. Spans form a semantic tree (main-agent turns are roots; a sub-agent
+burst nests under the turn that ran it) and are laid out on a wall-clock
+timeline (waterfall) by their ``ts``. Sub-agent events
 (``subagent:*``) form the agent graph.
 
 Events-first by design: this reads the OpenClaw events ClawMetry already
@@ -213,16 +214,31 @@ def _build_spans(rows):
     spans = []
     order_ms = [(_ts_ms(e.get("ts")) or 0) for e in evs]
     trace_end = max(order_ms) if order_ms else 0
+    # Semantic tree, NOT the raw data.parentId chain. In OpenClaw v3 each
+    # event's parentId points to the immediately-preceding event, so following
+    # it nests every turn one level deeper — a 1399-deep diagonal staircase.
+    # Instead: main-agent turns are roots (a flat, time-ordered list), and a
+    # burst of sub-agent spans nests one level under the main turn that was
+    # active when it ran (so you see which turn spawned the sub-agent work).
+    last_main_id = None
+    seen_ids = set()
     for i, e in enumerate(evs):
         d = e.get("data") if isinstance(e.get("data"), dict) else {}
         et = e.get("event_type") or ""
         is_sub = et.startswith("subagent:")
-        sid = d.get("id") or e.get("id") or f"span-{i}"
-        parent = d.get("parentId") or d.get("parentUuid")
+        sid = str(d.get("id") or e.get("id") or f"span-{i}")
+        if sid in seen_ids:  # guarantee unique span ids for clean nesting
+            sid = f"{sid}-{i}"
+        seen_ids.add(sid)
         start = order_ms[i]
         # gap to next event = nominal duration; floor for visibility, cap at trace end
         nxt = order_ms[i + 1] if i + 1 < len(order_ms) else trace_end
         dur = max(0, (nxt - start)) if nxt and start else 0
+        if is_sub:
+            parent_span_id = last_main_id  # nest under the active main turn
+        else:
+            parent_span_id = None          # main turns are roots
+            last_main_id = sid
         detail = ""
         msg = d.get("message")
         if isinstance(msg, dict):
@@ -230,8 +246,8 @@ def _build_spans(rows):
             if isinstance(c, str):
                 detail = c[:240]
         spans.append({
-            "span_id": str(sid),
-            "parent_span_id": str(parent) if parent else None,
+            "span_id": sid,
+            "parent_span_id": parent_span_id,
             "name": _short_name(et, d, is_sub),
             "kind": _span_kind(et, is_sub),
             "event_type": et,
@@ -244,13 +260,7 @@ def _build_spans(rows):
             "is_subagent": is_sub,
             "detail": detail,
         })
-    # Only keep parent links that resolve to a span in this trace.
-    ids = {s["span_id"] for s in spans}
-    roots = []
-    for s in spans:
-        if not s["parent_span_id"] or s["parent_span_id"] not in ids:
-            s["parent_span_id"] = None
-            roots.append(s["span_id"])
+    roots = [s["span_id"] for s in spans if not s["parent_span_id"]]
     return spans, roots
 
 
