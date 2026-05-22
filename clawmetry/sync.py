@@ -6491,19 +6491,22 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
         events = []
         emitted_job_ids: list = []
         for j in jobs:
-            sched = j.get("schedule", {})
+            sched = j.get("schedule", {}) or {}
             kind = sched.get("kind", "")
-            expr = (
-                sched.get("interval", "")
-                if kind == "interval"
-                else (
-                    f"at {sched.get('at', '')}"
-                    if kind == "at"
-                    else sched.get("cron", "")
-                    if kind == "cron"
-                    else ""
-                )
-            )
+            # OpenClaw's on-disk schedule shapes:
+            #   {"kind":"cron","expr":"37 9-21 * * *","tz":"..."}
+            #   {"kind":"every","everyMs":3600000} | {"kind":"interval","interval":"1h"}
+            #   {"kind":"at","atMs":...} | {"kind":"at","at":"..."}
+            # The cron field is `expr`, NOT `cron` -- reading the wrong name
+            # produced an empty string that collapsed to `{}` in the UI.
+            if kind == "cron":
+                expr = sched.get("expr") or sched.get("cron") or ""
+            elif kind in ("interval", "every"):
+                expr = str(sched.get("interval") or sched.get("everyMs") or "")
+            elif kind == "at":
+                expr = f"at {sched.get('at') or sched.get('atMs') or ''}"
+            else:
+                expr = ""
             job_state = j.get("state", {})
             job_id = j.get("id", "")
             event_data = {
@@ -6556,7 +6559,13 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
                     "cron_id":     job_id,
                     "agent_type":  "openclaw",
                     "name":        j.get("name", ""),
-                    "schedule":    expr,
+                    # Persist the FULL structured schedule (not the lossy
+                    # flattened expr) so the dashboard's formatSchedule +
+                    # next-fire predictor get {kind,expr,tz} back. Readers
+                    # (_row_to_cron_job / _build_crons_cache_pushes) json.loads
+                    # it to a dict. A bare expr string here is what made the
+                    # schedule render as `{}`.
+                    "schedule":    json.dumps(sched) if sched else "",
                     "enabled":     bool(j.get("enabled", True)),
                     "last_run_at": str(job_state.get("lastRunAtMs") or ""),
                     "last_status": str(job_state.get("lastStatus") or ""),
@@ -8833,19 +8842,6 @@ def _build_cron_jobs(paths):
         jobs = data.get("jobs", []) if isinstance(data, dict) else data
         result = []
         for j in jobs:
-            sched = j.get("schedule", {})
-            kind = sched.get("kind", "")
-            expr = (
-                sched.get("interval", "")
-                if kind == "interval"
-                else (
-                    f"at {sched.get('at', '')}"
-                    if kind == "at"
-                    else sched.get("cron", "")
-                    if kind == "cron"
-                    else ""
-                )
-            )
             sched_obj = j.get("schedule", {})
             result.append(
                 {

@@ -7392,9 +7392,14 @@ async function loadCronRuns(jobId) {
     var timelinePromise = fetch('/api/crons/' + encodeURIComponent(jobId) + '/runs?limit=30')
       .then(function(r) { return r.ok ? r.json() : {runs:[]}; })
       .catch(function() { return {runs:[]}; });
-    var resp = await fetch('/api/cron/' + encodeURIComponent(jobId) + '/runs');
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    var data = await resp.json();
+    // The legacy gateway-derived endpoint is BEST-EFFORT only -- it 502s in
+    // cloud (no gateway reachable) and may be offline locally. Never let its
+    // failure surface an error: the DuckDB-backed timeline endpoint above is
+    // the real source. Falling through to {runs:[]} yields the friendly
+    // "No run history yet" empty state instead of a scary 502.
+    var data = await fetch('/api/cron/' + encodeURIComponent(jobId) + '/runs')
+      .then(function(r) { return r.ok ? r.json() : {runs:[]}; })
+      .catch(function() { return {runs:[]}; });
     var timelineData = await timelinePromise;
     var timelineRuns = (timelineData && timelineData.runs) || [];
     var el = document.getElementById('cron-runs-' + jobId);
@@ -7676,21 +7681,39 @@ function showCronToast(msg) {
 }
 
 function formatSchedule(s) {
+  // Defensive: never render a raw `{}` or JSON blob. Schedules can arrive as
+  // a structured dict (the blessed shape), a bare cron-expr string (legacy
+  // store rows), or empty (data not yet synced). Handle all three.
+  if (s == null) return 'no schedule';
+  if (typeof s === 'string') {
+    if (!s.trim()) return 'no schedule';
+    var hs = cronToHuman(s);
+    return hs ? ('cron: ' + s + ' \u00b7 ' + hs) : ('cron: ' + s);
+  }
+  if (typeof s !== 'object') return String(s);
   if (s.kind === 'cron') {
-    var expr = s.expr;
+    var expr = s.expr || s.cron || '';
+    if (!expr) return 'cron (no expression)';
     var human = cronToHuman(expr);
     var label = 'cron: ' + expr;
-    if (human) label += ' \u2014 ' + human;
+    if (human) label += ' \u00b7 ' + human;
     if (s.tz) label += ' (' + s.tz + ')';
     return label;
   }
-  if (s.kind === 'every') {
-    var mins = s.everyMs / 60000;
-    if (mins >= 60) return 'every ' + (mins/60).toFixed(0) + 'h';
-    return 'every ' + mins + ' min';
+  if (s.kind === 'every' || s.kind === 'interval') {
+    var ms = (typeof s.everyMs === 'number') ? s.everyMs : null;
+    if (ms != null) {
+      var mins = ms / 60000;
+      if (mins >= 60) return 'every ' + (mins/60).toFixed(0) + 'h';
+      return 'every ' + mins + ' min';
+    }
+    if (s.interval) return 'every ' + s.interval;
   }
-  if (s.kind === 'at') return 'once at ' + formatTime(s.atMs);
-  return JSON.stringify(s);
+  if (s.kind === 'at') return 'once at ' + formatTime(s.atMs || s.at);
+  // Last-ditch: surface any expr-ish field rather than the raw object.
+  if (s.expr || s.cron) return 'cron: ' + (s.expr || s.cron);
+  if (s.interval) return 'every ' + s.interval;
+  return Object.keys(s).length ? 'custom schedule' : 'no schedule';
 }
 
 function cronToHuman(expr) {
@@ -7712,6 +7735,11 @@ function cronToHuman(expr) {
   if (evHr && dom === '*' && mon === '*' && dow === '*') {
     if (min === '0') return 'every ' + evHr[1] + ' hours';
     return 'every ' + evHr[1] + ' hours at :' + min.padStart(2,'0');
+  }
+  // Minute X past every hour within an hour range (e.g. "37 9-21 * * *")
+  var hrRange = hr.match(/^(\d{1,2})-(\d{1,2})$/);
+  if (hrRange && dom === '*' && mon === '*' && dow === '*' && /^\d+$/.test(min)) {
+    return 'at :' + min.padStart(2,'0') + ' hourly, ' + hrRange[1].padStart(2,'0') + ':00 to ' + hrRange[2].padStart(2,'0') + ':00';
   }
   // Daily
   if (dom === '*' && mon === '*' && dow === '*' && /^\d+$/.test(hr) && /^\d+$/.test(min)) {
