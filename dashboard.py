@@ -10891,10 +10891,6 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-label">NemoClaw</span>
       </div>
     </div>
-
-    <div class="left-nav-footer">
-      <a href="?legacy_nav=1" class="left-nav-legacy-link" title="Switch back to the classic top-nav layout">Classic nav</a>
-    </div>
   </aside>
   <main class="app-shell-content">
 {% endif %}
