@@ -2968,6 +2968,26 @@ def _stringify_content(content) -> str:
     return str(content) if content else ""
 
 
+# Issue #1895: expose the verbatim event payload so the transcript viewer can
+# toggle between the beautified turn and the exact JSON OpenClaw recorded/sent
+# upstream (requested by users studying OpenClaw's behavior). Capped per-message
+# so attaching it to every turn never bloats the response or the cloud snapshot
+# it rides into.
+_RAW_PAYLOAD_CAP = 12000
+
+
+def _bounded_raw_payload(obj, cap: int = _RAW_PAYLOAD_CAP):
+    """Return ``obj`` for inline raw-payload display, or a small truncation
+    marker when its serialized form exceeds ``cap`` bytes. Never raises."""
+    try:
+        serialized = json.dumps(obj, default=str)
+    except Exception:
+        return None
+    if len(serialized) > cap:
+        return {"_raw_truncated": True, "_raw_bytes": len(serialized)}
+    return obj
+
+
 def _expand_openclaw_event(obj: dict, ts_ms):
     """Map one OpenClaw event into zero or more transcript turns.
 
@@ -3308,17 +3328,21 @@ def _try_local_store_transcript(session_id: str, _events=None):
             # Issue #564: surface decoding params on assistant turns so the UI
             # can show the "T=… top_p=… max=…" pill inline with the reply.
             decoding = _extract_decoding_params(obj)
+            raw_payload = _bounded_raw_payload(obj)
             for turn in _expand_openclaw_event(obj, ts_ms):
                 if not turn.get("content", "").strip():
                     continue
                 if decoding and turn.get("role") == "assistant":
                     turn["params"] = decoding
+                if raw_payload is not None:
+                    turn["raw"] = raw_payload
                 messages.append(turn)
             continue
 
         # Anthropic-style fallback (existing logic).
         role = obj.get("role", obj.get("type", "unknown"))
         content = _stringify_content(obj.get("content", ""))
+        raw_payload = _bounded_raw_payload(obj)
         if obj.get("tool_calls") or obj.get("tool_use"):
             tools = obj.get("tool_calls") or obj.get("tool_use") or []
             if isinstance(tools, list):
@@ -3328,6 +3352,7 @@ def _try_local_store_transcript(session_id: str, _events=None):
                         "role": "tool",
                         "content": f"[Tool Call: {tname}]\n{json.dumps(tc.get('input', tc.get('arguments', {})), indent=2)[:500]}",
                         "timestamp": ts_ms,
+                        "raw": _bounded_raw_payload(tc),
                     })
         if role == "tool_result":
             role = "tool"
@@ -3344,6 +3369,8 @@ def _try_local_store_transcript(session_id: str, _events=None):
                 decoding = _extract_decoding_params(obj)
                 if decoding:
                     msg_entry["params"] = decoding
+            if raw_payload is not None:
+                msg_entry["raw"] = raw_payload
             messages.append(msg_entry)
     duration = None
     if first_ts and last_ts and last_ts > first_ts:
@@ -3420,6 +3447,7 @@ def api_transcript(session_id):
                                         "content": f"[Tool Call: {tname}]\n{json.dumps(tc.get('input', tc.get('arguments', {})), indent=2)[:500]}",
                                         "timestamp": obj.get("timestamp")
                                         or obj.get("time"),
+                                        "raw": _bounded_raw_payload(tc),
                                     }
                                 )
                     if role == "tool_result":
@@ -3467,6 +3495,10 @@ def api_transcript(session_id):
                             decoding = _extract_decoding_params(obj)
                             if decoding:
                                 msg_entry["params"] = decoding
+                        # Issue #1895: verbatim payload for the raw/pretty toggle.
+                        raw_payload = _bounded_raw_payload(obj)
+                        if raw_payload is not None:
+                            msg_entry["raw"] = raw_payload
                         messages.append(msg_entry)
                 except (json.JSONDecodeError, ValueError):
                     pass

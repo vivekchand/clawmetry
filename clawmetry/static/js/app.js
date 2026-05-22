@@ -9643,9 +9643,60 @@ function _buildReplayEvent(m, idx) {
     timestamp: m.timestamp,
     tokens: m.tokens || null,
     params: m.params || null,
+    // Issue #1895: verbatim event payload for the Raw/Pretty toggle.
+    raw: (m.raw !== undefined ? m.raw : null),
     originalIndex: idx,
     extra: extra
   };
+}
+
+// ── Raw payload toggle (issue #1895) ───────────────────────────────────────
+// Lets users flip the whole transcript between the beautified turns and the
+// exact JSON payload OpenClaw recorded/sent upstream. Requested by users who
+// want to study OpenClaw's behavior, not just read a cleaned-up conversation.
+window._transcriptRawMode = false;
+
+function toggleTranscriptRaw() {
+  window._transcriptRawMode = !window._transcriptRawMode;
+  var btn = document.getElementById('replay-raw-toggle');
+  if (btn) {
+    var on = window._transcriptRawMode;
+    btn.style.background = on ? '#6366f1' : 'var(--button-bg)';
+    btn.style.color = on ? '#fff' : 'var(--text-secondary)';
+    btn.style.borderColor = on ? '#6366f1' : 'var(--border-secondary)';
+    btn.textContent = on ? '{ } Raw ✓' : '{ } Raw';
+  }
+  if (typeof _replayRenderCurrent === 'function') _replayRenderCurrent();
+}
+
+// Render the verbatim JSON body for a turn (raw mode). Returns '' when the
+// turn carries no captured payload so the caller can fall back to pretty.
+function _renderRawPayload(ev) {
+  var raw = ev && ev.raw;
+  if (raw == null) return '';
+  if (raw && typeof raw === 'object' && raw._raw_truncated) {
+    return '<div style="font-size:11px;color:var(--text-muted);font-style:italic;">'
+      + 'Raw payload too large to show inline (' + (raw._raw_bytes || 0)
+      + ' bytes). Open this transcript locally to view the full payload.</div>';
+  }
+  var pretty;
+  try { pretty = JSON.stringify(raw, null, 2); }
+  catch (e) { pretty = String(raw); }
+  var html = '<button type="button" onclick="copyTranscriptRaw(this)" style="float:right;background:none;border:1px solid var(--border-secondary);color:var(--text-muted);border-radius:5px;padding:1px 7px;font-size:10px;cursor:pointer;">Copy</button>';
+  html += '<pre style="white-space:pre-wrap;word-break:break-word;font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text-secondary);margin:0;overflow-x:auto;max-height:420px;">' + escHtml(pretty) + '</pre>';
+  return html;
+}
+
+function copyTranscriptRaw(btn) {
+  try {
+    var pre = btn.parentElement.querySelector('pre');
+    if (pre && navigator.clipboard) {
+      navigator.clipboard.writeText(pre.textContent);
+      var orig = btn.textContent;
+      btn.textContent = 'Copied';
+      setTimeout(function () { btn.textContent = orig; }, 1200);
+    }
+  } catch (e) {}
 }
 
 // Format the decoding-params dict into a compact inline pill. Returns ''
@@ -9669,6 +9720,22 @@ function _renderReplayEvent(ev, highlighted) {
   // Handle compaction events specially
   if (role === 'compaction') {
     return _renderCompactionEvent(ev, highlighted);
+  }
+  // Raw mode (#1895): show the verbatim payload bubble when this turn has one.
+  // Compaction markers carry no captured payload, so they fall through above.
+  if (window._transcriptRawMode && ev.raw != null) {
+    var rawBody = _renderRawPayload(ev);
+    if (rawBody) {
+      var rRing = highlighted ? 'box-shadow:0 0 0 2px #6366f1;' : '';
+      var rTs = ev.timestamp ? new Date(ev.timestamp).toLocaleString() : '';
+      var rCls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant'
+               : role === 'system' ? 'system' : 'tool';
+      return '<div class="chat-msg ' + rCls + '" id="replay-msg-' + ev.originalIndex + '" style="' + rRing + '">'
+        + '<div class="chat-role">' + escHtml(role) + ' · raw</div>'
+        + rawBody
+        + (rTs ? '<div class="chat-ts">' + rTs + '</div>' : '')
+        + '</div>';
+    }
   }
   // Tool turns (assistant tool_use / user tool_result) carry no prose, so they
   // used to render as blank bubbles with just a role + timestamp — looking
