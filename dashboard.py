@@ -65,6 +65,7 @@ from flask import (
 # Late-imports inside each handler keep dashboard.py as the single source of
 # truth for module-level helpers — see routes/sessions.py for the pattern.
 from routes.sessions import bp_sessions
+from routes.tracing import bp_tracing
 from routes.brain import bp_brain
 from routes.advisor import bp_advisor
 from routes.selfevolve import bp_selfevolve
@@ -10424,6 +10425,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_overview)
     app.register_blueprint(bp_security)
     app.register_blueprint(bp_sessions)
+    app.register_blueprint(bp_tracing)
     app.register_blueprint(bp_usage)
     app.register_blueprint(bp_version)
     app.register_blueprint(bp_version_impact)
@@ -10829,6 +10831,9 @@ DASHBOARD_HTML = r"""
         <div class="left-nav-item left-nav-item-sub" data-tab="context" onclick="switchTab('context')" title="What the LLM sees on each turn">
           <span class="left-nav-label">LLM Context</span>
         </div>
+        <div class="left-nav-item left-nav-item-sub" data-tab="tracing" onclick="switchTab('tracing')" title="Every trace: span waterfall, tree, and agent graph">
+          <span class="left-nav-label">Tracing</span>
+        </div>
       </div>
 
       <div class="left-nav-item" data-tab="approvals" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">
@@ -10940,6 +10945,9 @@ DASHBOARD_HTML = r"""
 
 <!-- CONTEXT INSPECTOR -->
 {% include 'tabs/context.html' %}
+
+<!-- TRACING (Phoenix/Arize-style: span waterfall + tree + agent graph) -->
+{% include 'tabs/tracing.html' %}
 
 <!-- SECURITY -->
 {% include 'tabs/security.html' %}

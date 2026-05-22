@@ -888,6 +888,7 @@ function switchTab(name) {
   if (name === 'limits') loadRateLimits();
   if (name === 'flow') initFlow();
   if (name === 'context') loadContextInspector();
+  if (name === 'tracing') loadTracing();
   if (name === 'brain') loadBrainPage();
   if (name === 'selfevolve') loadSelfEvolvePage();
   if (name === 'notifications') { if (typeof loadNotificationsPage === 'function') loadNotificationsPage(); }
@@ -7892,6 +7893,238 @@ function memoryOpenAccessConversation(sessionId) {
   if (!sessionId) return;
   if (typeof switchTab === 'function') switchTab('transcripts');
   setTimeout(function(){ if (typeof viewTranscript === 'function') viewTranscript(sessionId); }, 60);
+}
+
+// ── Tracing tab (Phoenix/Arize-style) ──────────────────────────────────────
+// Trace list → span waterfall + span tree + agent graph. Events-first: a trace
+// is one session, each event is a span, linked by parentId.
+window._traceData = null;
+window._traceView = 'waterfall';
+
+var _TRACE_KIND_COLORS = {
+  prompt: '#3b82f6', llm: '#8b5cf6', tool: '#10b981',
+  attachment: '#6b7280', event: '#94a3b8'
+};
+function _traceColor(s) {
+  if (s.is_subagent) return '#f59e0b';
+  return _TRACE_KIND_COLORS[s.kind] || '#94a3b8';
+}
+function _traceFmtDur(ms) {
+  ms = ms || 0;
+  if (ms < 1000) return ms + 'ms';
+  if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+  if (ms < 3600000) return (ms / 60000).toFixed(1) + 'm';
+  if (ms < 86400000) return (ms / 3600000).toFixed(1) + 'h';
+  return (ms / 86400000).toFixed(1) + 'd';
+}
+
+async function loadTracing() {
+  tracingShowList();
+  var el = document.getElementById('trace-list');
+  if (!el) return;
+  el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">Loading traces&hellip;</div>';
+  var data;
+  try {
+    data = await fetch('/api/traces?limit=150').then(function(r){ return r.json(); });
+  } catch (e) {
+    el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">Could not load traces.</div>';
+    return;
+  }
+  if (!data || data.available === false) {
+    el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-secondary);font-size:13px;">Traces read from the local event store, which is not available here.</div>';
+    return;
+  }
+  var traces = data.traces || [];
+  if (!traces.length) {
+    el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-secondary);font-size:13px;">No traces yet. They appear here once your agent runs.</div>';
+    return;
+  }
+  var html = '<div style="display:flex;flex-direction:column;">';
+  html += '<div style="display:flex;gap:12px;padding:8px 14px;border-bottom:1px solid var(--border-primary);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-muted);">'
+    + '<span style="flex:1;">Trace</span><span style="width:70px;text-align:right;">Spans</span><span style="width:80px;text-align:right;">Duration</span><span style="width:80px;text-align:right;">Tokens</span><span style="width:140px;">Model</span></div>';
+  traces.forEach(function(t) {
+    var when = t.start_ms ? new Date(t.start_ms).toLocaleString() : '';
+    var statusDot = t.status === 'error' ? '#ef4444' : '#22c55e';
+    html += '<div onclick="viewTrace(\'' + escHtml(t.trace_id) + '\')" '
+      + 'style="display:flex;gap:12px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border-secondary);cursor:pointer;" '
+      + 'onmouseover="this.style.background=\'var(--bg-tertiary,#1e293b)\'" onmouseout="this.style.background=\'\'">'
+      + '<span style="flex:1;min-width:0;">'
+        + '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + statusDot + ';margin-right:8px;"></span>'
+        + '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;color:var(--text-primary);">' + escHtml((t.name || t.trace_id).slice(0, 28)) + '</span>'
+        + (t.has_subagents ? '<span style="margin-left:8px;background:rgba(245,158,11,0.15);color:#f59e0b;border-radius:6px;padding:1px 6px;font-size:10px;font-weight:600;">sub-agents</span>' : '')
+        + '<span style="margin-left:8px;color:var(--text-muted);font-size:11px;">' + escHtml(when) + '</span>'
+      + '</span>'
+      + '<span style="width:70px;text-align:right;color:var(--text-secondary);font-size:12px;">' + (t.span_count || 0) + '</span>'
+      + '<span style="width:80px;text-align:right;color:var(--text-secondary);font-size:12px;">' + _traceFmtDur(t.duration_ms) + '</span>'
+      + '<span style="width:80px;text-align:right;color:var(--text-secondary);font-size:12px;">' + ((t.total_tokens || 0) / 1000).toFixed(1) + 'K</span>'
+      + '<span style="width:140px;color:var(--text-muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(t.model || '') + '</span>'
+      + '</div>';
+  });
+  html += '</div>';
+  el.style.cssText = 'padding:0;overflow:hidden;';
+  el.innerHTML = html;
+}
+
+function tracingShowList() {
+  var list = document.getElementById('trace-list');
+  var detail = document.getElementById('trace-detail');
+  var back = document.getElementById('trace-back-btn');
+  if (list) list.style.display = '';
+  if (detail) detail.style.display = 'none';
+  if (back) back.style.display = 'none';
+}
+
+async function viewTrace(traceId) {
+  var list = document.getElementById('trace-list');
+  var detail = document.getElementById('trace-detail');
+  var back = document.getElementById('trace-back-btn');
+  if (list) list.style.display = 'none';
+  if (detail) detail.style.display = '';
+  if (back) back.style.display = '';
+  var wf = document.getElementById('trace-waterfall');
+  if (wf) wf.innerHTML = '<div style="padding:18px;color:var(--text-muted);">Loading trace&hellip;</div>';
+  var drawer = document.getElementById('trace-span-drawer');
+  if (drawer) drawer.style.display = 'none';
+  var data;
+  try {
+    data = await fetch('/api/trace/' + encodeURIComponent(traceId)).then(function(r){ return r.json(); });
+  } catch (e) {
+    if (wf) wf.innerHTML = '<div style="padding:18px;color:var(--text-muted);">Could not load trace.</div>';
+    return;
+  }
+  window._traceData = data;
+  var s = data.summary || {};
+  var meta = document.getElementById('trace-detail-meta');
+  if (meta) {
+    meta.innerHTML = '<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;">'
+      + '<div><div style="font-size:11px;color:var(--text-muted);">Trace</div><div style="font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--text-primary);">' + escHtml((data.trace_id || '').slice(0, 32)) + '</div></div>'
+      + '<div><div style="font-size:11px;color:var(--text-muted);">Spans</div><div style="font-size:14px;font-weight:600;">' + (s.span_count || (data.spans || []).length) + '</div></div>'
+      + '<div><div style="font-size:11px;color:var(--text-muted);">Duration</div><div style="font-size:14px;font-weight:600;">' + _traceFmtDur(s.duration_ms) + '</div></div>'
+      + '<div><div style="font-size:11px;color:var(--text-muted);">Tokens</div><div style="font-size:14px;font-weight:600;">' + ((s.total_tokens || 0) / 1000).toFixed(1) + 'K</div></div>'
+      + '<div><div style="font-size:11px;color:var(--text-muted);">Model</div><div style="font-size:13px;">' + escHtml(s.model || '') + '</div></div>'
+      + '</div>';
+  }
+  window._traceView = 'waterfall';
+  tracingSwitchView('waterfall');
+}
+
+function tracingSwitchView(view) {
+  window._traceView = view;
+  document.querySelectorAll('.trace-view-tab').forEach(function(t) {
+    var active = t.getAttribute('data-view') === view;
+    t.style.background = active ? '#6366f1' : 'transparent';
+    t.style.color = active ? '#fff' : 'var(--text-muted)';
+    t.style.borderColor = active ? '#6366f1' : 'var(--border-secondary)';
+  });
+  var wf = document.getElementById('trace-waterfall');
+  var tree = document.getElementById('trace-tree');
+  var graph = document.getElementById('trace-graph');
+  if (wf) wf.style.display = view === 'waterfall' ? '' : 'none';
+  if (tree) tree.style.display = view === 'tree' ? '' : 'none';
+  if (graph) graph.style.display = view === 'graph' ? '' : 'none';
+  var d = window._traceData;
+  if (!d) return;
+  if (view === 'waterfall') _traceRenderWaterfall(d.spans || []);
+  else if (view === 'tree') _traceRenderTree(d.spans || [], d.root_span_ids || []);
+  else if (view === 'graph') _traceRenderGraph(d.agent_graph || {nodes: [], edges: []});
+}
+
+function _traceRenderWaterfall(spans) {
+  var el = document.getElementById('trace-waterfall');
+  if (!el) return;
+  if (!spans.length) { el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">No spans in this trace.</div>'; return; }
+  var ordered = spans.slice().sort(function(a, b){ return (a.start_ms || 0) - (b.start_ms || 0); });
+  var t0 = ordered[0].start_ms || 0;
+  var t1 = 0;
+  ordered.forEach(function(s){ t1 = Math.max(t1, (s.start_ms || 0) + (s.duration_ms || 0)); });
+  var total = Math.max(1, t1 - t0);
+  var html = '<div style="min-width:680px;">';
+  ordered.forEach(function(s) {
+    var left = ((s.start_ms - t0) / total) * 100;
+    var width = Math.max(0.6, ((s.duration_ms || 0) / total) * 100);
+    if (left + width > 100) width = Math.max(0.6, 100 - left);
+    var color = _traceColor(s);
+    html += '<div onclick="traceShowSpan(\'' + escHtml(s.span_id) + '\')" style="display:flex;align-items:center;gap:8px;padding:3px 8px;cursor:pointer;border-radius:4px;" onmouseover="this.style.background=\'var(--bg-tertiary,#1e293b)\'" onmouseout="this.style.background=\'\'">'
+      + '<span style="width:230px;flex-shrink:0;font-size:12px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' + (s.is_subagent ? 'padding-left:14px;' : '') + '" title="' + escHtml(s.name) + '">' + escHtml(s.name) + '</span>'
+      + '<span style="flex:1;position:relative;height:16px;background:var(--bg-primary);border-radius:3px;">'
+        + '<span style="position:absolute;left:' + left.toFixed(2) + '%;width:' + width.toFixed(2) + '%;top:2px;height:12px;background:' + color + ';border-radius:3px;min-width:2px;" title="' + _traceFmtDur(s.duration_ms) + '"></span>'
+      + '</span>'
+      + '<span style="width:64px;flex-shrink:0;text-align:right;font-size:11px;color:var(--text-muted);">' + _traceFmtDur(s.duration_ms) + '</span>'
+      + '</div>';
+  });
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+function _traceRenderTree(spans, roots) {
+  var el = document.getElementById('trace-tree');
+  if (!el) return;
+  if (!spans.length) { el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">No spans in this trace.</div>'; return; }
+  var byId = {}; spans.forEach(function(s){ byId[s.span_id] = s; });
+  var children = {};
+  spans.forEach(function(s) {
+    var p = s.parent_span_id;
+    if (p && byId[p]) { (children[p] = children[p] || []).push(s); }
+  });
+  function row(s, depth) {
+    var color = _traceColor(s);
+    var h = '<div onclick="traceShowSpan(\'' + escHtml(s.span_id) + '\')" style="display:flex;align-items:center;gap:8px;padding:4px 8px;cursor:pointer;border-radius:4px;" onmouseover="this.style.background=\'var(--bg-tertiary,#1e293b)\'" onmouseout="this.style.background=\'\'">'
+      + '<span style="padding-left:' + (depth * 18) + 'px;"></span>'
+      + '<span style="width:9px;height:9px;border-radius:2px;background:' + color + ';flex-shrink:0;"></span>'
+      + '<span style="flex:1;font-size:13px;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(s.name) + '</span>'
+      + (s.tokens ? '<span style="font-size:11px;color:var(--text-muted);">' + s.tokens + ' tok</span>' : '')
+      + '<span style="font-size:11px;color:var(--text-muted);width:60px;text-align:right;">' + _traceFmtDur(s.duration_ms) + '</span>'
+      + '</div>';
+    (children[s.span_id] || []).forEach(function(c){ h += row(c, depth + 1); });
+    return h;
+  }
+  var html = '';
+  (roots && roots.length ? roots : spans.filter(function(s){return !s.parent_span_id;}).map(function(s){return s.span_id;}))
+    .forEach(function(rid){ if (byId[rid]) html += row(byId[rid], 0); });
+  el.innerHTML = html || '<div style="padding:18px;color:var(--text-muted);">No span tree.</div>';
+}
+
+function _traceRenderGraph(graph) {
+  var el = document.getElementById('trace-graph');
+  if (!el) return;
+  var nodes = graph.nodes || [];
+  if (!nodes.length) { el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">No agents in this trace.</div>'; return; }
+  var html = '<div style="display:flex;align-items:center;gap:0;flex-wrap:wrap;padding:20px;">';
+  nodes.forEach(function(n, i) {
+    var color = n.kind === 'subagent' ? '#f59e0b' : '#6366f1';
+    if (i > 0) {
+      html += '<span style="color:var(--text-muted);font-size:22px;margin:0 6px;">&rarr;</span>';
+    }
+    html += '<div style="border:2px solid ' + color + ';border-radius:10px;padding:12px 18px;background:' + color + '14;min-width:140px;">'
+      + '<div style="font-weight:700;font-size:14px;color:var(--text-primary);">' + escHtml(n.label) + '</div>'
+      + '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + (n.span_count || 0) + ' spans &middot; ' + ((n.tokens || 0) / 1000).toFixed(1) + 'K tok</div>'
+      + '</div>';
+  });
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+function traceShowSpan(spanId) {
+  var d = window._traceData;
+  if (!d) return;
+  var s = (d.spans || []).find(function(x){ return x.span_id === spanId; });
+  if (!s) return;
+  var drawer = document.getElementById('trace-span-drawer');
+  if (!drawer) return;
+  drawer.style.display = '';
+  drawer.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
+    + '<div style="font-weight:700;font-size:14px;color:var(--text-primary);">' + escHtml(s.name) + '</div>'
+    + '<button onclick="document.getElementById(\'trace-span-drawer\').style.display=\'none\'" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;">&times;</button>'
+    + '</div>'
+    + '<div style="display:flex;gap:20px;flex-wrap:wrap;font-size:12px;color:var(--text-secondary);margin-bottom:8px;">'
+      + '<span>kind: <b style="color:' + _traceColor(s) + '">' + escHtml(s.kind) + '</b></span>'
+      + '<span>type: ' + escHtml(s.event_type || '') + '</span>'
+      + '<span>duration: ' + _traceFmtDur(s.duration_ms) + '</span>'
+      + (s.tokens ? '<span>tokens: ' + s.tokens + '</span>' : '')
+      + (s.model ? '<span>model: ' + escHtml(s.model) + '</span>' : '')
+      + '<span>span: ' + escHtml((s.span_id || '').slice(0, 16)) + '</span>'
+    + '</div>'
+    + (s.detail ? '<pre style="white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--text-secondary);margin:0;max-height:240px;overflow:auto;">' + escHtml(s.detail) + '</pre>' : '<div style="color:var(--text-muted);font-size:12px;">No text payload for this span.</div>');
 }
 
 // Entry point called by nav switchTab + loadAll bootstrap.
