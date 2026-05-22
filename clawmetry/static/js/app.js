@@ -15665,7 +15665,23 @@ document.addEventListener('DOMContentLoaded', function() {
   // Issue #950: multi-profile workspace switcher
   try { initWorkspaceSwitcher(); } catch (e) { /* non-fatal */ }
   try { _hideCloudIrrelevantNav(); } catch (e) { /* non-fatal */ }
+  try { _applyTracingFlag(); } catch (e) { /* non-fatal */ }
 });
+
+// The Tracing tab stays gated while it's being polished (PRD-tracing.md phases
+// 3-4 + the daemon-proxy reliability fix). Hidden from the nav by default;
+// reveal it with ?tracing=1 (persisted to localStorage) or ?tab=tracing.
+// Disable again with ?tracing=0.
+function _applyTracingFlag() {
+  var p = new URLSearchParams(window.location.search);
+  if (p.get('tracing') === '1') { try { localStorage.setItem('cm-ff-tracing', '1'); } catch (e) {} }
+  if (p.get('tracing') === '0') { try { localStorage.removeItem('cm-ff-tracing'); } catch (e) {} }
+  var on = false;
+  try { on = localStorage.getItem('cm-ff-tracing') === '1'; } catch (e) {}
+  if (p.get('tab') === 'tracing') on = true;
+  var el = document.getElementById('left-nav-tracing');
+  if (el) el.style.display = on ? '' : 'none';
+}
 
 // ── Workspace switcher (issue #950) ───────────────────────────────────
 // Discovers all OpenClaw workspaces on this machine and lets power users

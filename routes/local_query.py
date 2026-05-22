@@ -70,6 +70,40 @@ import os as _os
 
 _DISCOVERY_PATH = _os.path.expanduser("~/.clawmetry/local_query.json")
 _PROXY_TIMEOUT_SECS = 5.0
+# The daemon's local_server is threaded, but DuckDB serializes queries on its
+# single connection — so heavy reads (e.g. query_events) under a page-load
+# fan-out can queue past the timeout and surface as a transient EMPTY result
+# (urlopen raises → caller returns None → blank tab). Retry on TIMEOUTS only
+# (contended DuckDB) with backoff + a longer per-attempt timeout; fail fast on
+# connection errors (daemon down → fall through to direct open).
+_PROXY_TIMEOUTS = (5.0, 9.0)  # per-attempt seconds; len() == max attempts
+
+
+def _is_timeout_err(e):
+    import socket as _socket
+    if isinstance(e, (_socket.timeout, TimeoutError)):
+        return True
+    return isinstance(getattr(e, "reason", None), (_socket.timeout, TimeoutError))
+
+
+def _urlopen_retry(req):
+    """POST to the daemon with timeout-aware retry. Returns the parsed JSON
+    body or raises the last exception. Retries only on timeouts (contended
+    DuckDB), not connection errors (which mean the daemon is down)."""
+    import urllib.request
+    last = None
+    n = len(_PROXY_TIMEOUTS)
+    for i, t in enumerate(_PROXY_TIMEOUTS):
+        try:
+            with urllib.request.urlopen(req, timeout=t) as resp:
+                return _json.loads(resp.read().decode("utf-8"))
+        except Exception as e:  # noqa: BLE001 — re-raised below
+            last = e
+            if _is_timeout_err(e) and i < n - 1:
+                time.sleep(0.2 * (i + 1))
+                continue
+            raise
+    raise last
 
 
 def _read_discovery():
@@ -120,8 +154,7 @@ def _proxy_dispatch(shape: str, args: dict):
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=_PROXY_TIMEOUT_SECS) as resp:
-        return _json.loads(resp.read().decode("utf-8"))
+    return _urlopen_retry(req)
 
 
 def _coerce_args(shape: str, raw: dict) -> dict:
@@ -560,11 +593,10 @@ def local_store_via_daemon(method_name: str, **kwargs):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=_PROXY_TIMEOUT_SECS) as resp:
-            body = _json.loads(resp.read().decode("utf-8"))
+        body = _urlopen_retry(req)
     except (urllib.error.URLError, OSError, ValueError):
-        # Stale port / daemon restarted / network gremlin — drop the cache
-        # so the next call re-reads the discovery file.
+        # Stale port / daemon restarted / network gremlin (after retrying
+        # timeouts) — drop the cache so the next call re-reads discovery.
         _invalidate_daemon_cache()
         return None
     if "error" in body:
