@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Self-Evolve: on-demand only (no more hourly auto-run) (2026-05-22)
+- Self-Evolve no longer runs on a timer — it was spending Opus turns on a schedule (the job flagged itself for it) and re-ran on every daemon restart (in-memory clock). It now runs ONLY when you click Analyze/Re-analyze. Local uses /api/selfevolve/analyze; cloud uses a new `selfevolve_analyze` heartbeat-relay action so the Re-analyze button triggers a fresh run on the daemon. Opt back into periodic refresh with CLAWMETRY_SELFEVOLVE_AUTO=1.
+
 ### Release: Self-Evolve "Fix with AI" (local + cloud relay) (2026-05-21)
 - Publishes the Fix-button feature (#1876 local, #1878 cloud relay + daemon `selfevolve_fix` action) and the daemon gateway-token detection fix.
 
