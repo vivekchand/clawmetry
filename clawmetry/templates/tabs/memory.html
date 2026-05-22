@@ -7,6 +7,7 @@
     <div style="display:flex;gap:6px;align-items:center;">
       <div class="mem-view-tab" data-view="summary" onclick="memorySwitchView('summary')" style="padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:var(--bg-secondary);border:1px solid var(--border-primary);color:var(--text-primary);">Summary</div>
       <div class="mem-view-tab" data-view="all" onclick="memorySwitchView('all')" style="padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:transparent;border:1px solid transparent;color:var(--text-muted);">All files</div>
+      <div class="mem-view-tab" data-view="access" onclick="memorySwitchView('access')" style="padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:transparent;border:1px solid transparent;color:var(--text-muted);">Access log</div>
       <button class="refresh-btn" onclick="loadMemory()" style="margin-left:8px;">&#8635;</button>
     </div>
   </div>
@@ -83,6 +84,12 @@
 
       </div>
     </div>
+  </div>
+
+  <!-- ACCESS LOG VIEW (issue #1896) -->
+  <div id="memory-access-view" style="display:none;">
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">When OpenClaw read its memory (via memory_search / memory_get), and which conversation triggered it. Click a row to open that conversation.</div>
+    <div class="card" id="memory-access-list" style="color:var(--text-muted);font-size:13px;">Loading memory accesses…</div>
   </div>
 
   <!-- ALL FILES VIEW -->

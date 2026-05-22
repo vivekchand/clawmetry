@@ -1240,6 +1240,111 @@ def api_memory_rag_search():
         conn.close()
 
 
+# ── Memory access history (issue #1896) ────────────────────────────────────
+# OpenClaw reads memory via the MCP tools mcp__openclaw__memory_get /
+# memory_search. Each call shows up as a `tool_use` block in the assistant
+# turn that triggered it, carrying the search query (or fetched key) plus the
+# session id + timestamp. We surface those as an access timeline so users can
+# see when a memory was accessed and click through to the conversation that
+# triggered it (verified against real events 2026-05-22).
+_MEMORY_TOOL_PREFIX = "mcp__openclaw__memory_"
+
+
+def _walk_tool_uses(node):
+    """Yield every dict in ``node`` whose type is 'tool_use' (depth-first).
+    Handles the nested message/content shapes OpenClaw v3 + claude-cli use."""
+    if isinstance(node, dict):
+        if node.get("type") == "tool_use" and node.get("name"):
+            yield node
+        for v in node.values():
+            yield from _walk_tool_uses(v)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _walk_tool_uses(item)
+
+
+def _extract_memory_accesses(rows, limit=200):
+    """Pull memory tool calls out of raw events into access records.
+
+    Returns a recent-first list of
+    ``{op, target, session_id, ts, tool_use_id}``. ``op`` is "search"/"get",
+    ``target`` is the search query or fetched key. Never raises.
+    """
+    accesses = []
+    for ev in rows or []:
+        data = ev.get("data")
+        if not isinstance(data, dict):
+            continue
+        try:
+            tool_uses = list(_walk_tool_uses(data))
+        except Exception:
+            tool_uses = []
+        for tu in tool_uses:
+            name = tu.get("name") or ""
+            if not name.startswith(_MEMORY_TOOL_PREFIX):
+                continue
+            op = name[len(_MEMORY_TOOL_PREFIX):] or "access"  # "search" / "get"
+            inp = tu.get("input") if isinstance(tu.get("input"), dict) else {}
+            target = (
+                inp.get("query") or inp.get("key") or inp.get("id")
+                or inp.get("name") or inp.get("path") or ""
+            )
+            if not target and inp:
+                try:
+                    target = json.dumps(inp)[:200]
+                except Exception:
+                    target = ""
+            accesses.append({
+                "op": op,
+                "target": str(target)[:300],
+                "session_id": ev.get("session_id") or "",
+                "ts": ev.get("ts"),
+                "tool_use_id": tu.get("id") or "",
+            })
+    # Recent-first. ``ts`` is an ISO-8601 string for v3 events; sort as string
+    # which is chronologically correct for that format, defensive for others.
+    accesses.sort(key=lambda a: str(a.get("ts") or ""), reverse=True)
+    return accesses[:limit]
+
+
+@bp_memory.route("/api/memory-access")
+def api_memory_access():
+    """Timeline of memory tool accesses (memory_get / memory_search).
+
+    DuckDB-first: reads already-ingested events via the daemon proxy and
+    extracts memory tool calls. Returns HTTP 200 with ``available: false``
+    when the store can't be read so the UI degrades gracefully.
+
+    Query params:
+      limit — max records (default 200, max 1000)
+    """
+    try:
+        limit = min(int(request.args.get("limit", 200)), 1000)
+    except (ValueError, TypeError):
+        limit = 200
+
+    rows = None
+    try:
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_events", limit=12000)
+    except Exception:
+        rows = None
+    if rows is None and is_local_store_read_enabled():
+        # Single-process fallback (tests/dev with no sync daemon), mirroring
+        # routes.sessions._try_local_store_transcript.
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            rows = store.query_events(limit=12000)
+        except Exception:
+            rows = None
+    if rows is None:
+        return jsonify({"available": False, "accesses": [], "total": 0})
+
+    accesses = _extract_memory_accesses(rows, limit=limit)
+    return jsonify({"available": True, "accesses": accesses, "total": len(accesses)})
+
+
 # ── Security ───────────────────────────────────────────────────────────────
 
 
