@@ -7821,8 +7821,10 @@ async function loadMemoryAnalytics() {
 function memorySwitchView(view) {
   var summary = document.getElementById('memory-summary-view');
   var all = document.getElementById('memory-all-view');
+  var access = document.getElementById('memory-access-view');
   if (summary) summary.style.display = view === 'summary' ? 'block' : 'none';
   if (all) all.style.display = view === 'all' ? 'block' : 'none';
+  if (access) access.style.display = view === 'access' ? 'block' : 'none';
   document.querySelectorAll('.mem-view-tab').forEach(function(t) {
     var active = t.getAttribute('data-view') === view;
     t.style.background = active ? 'var(--bg-secondary)' : 'transparent';
@@ -7831,9 +7833,65 @@ function memorySwitchView(view) {
   });
   if (view === 'summary') {
     if (typeof loadSelfConfig === 'function') loadSelfConfig();
+  } else if (view === 'access') {
+    loadMemoryAccess();
   } else {
     _loadMemoryAllFiles();
   }
+}
+
+// ── Memory access log (issue #1896) ────────────────────────────────────────
+// Shows when OpenClaw read memory (memory_search / memory_get) and lets the
+// user click through to the conversation that triggered each access.
+async function loadMemoryAccess() {
+  var el = document.getElementById('memory-access-list');
+  if (!el) return;
+  el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">Loading memory accesses…</div>';
+  var data;
+  try {
+    data = await fetch('/api/memory-access?limit=300').then(function(r){ return r.json(); });
+  } catch (e) {
+    el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">Could not load memory accesses.</div>';
+    return;
+  }
+  if (!data || data.available === false) {
+    el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-secondary);font-size:13px;">Memory access history reads from the local event store, which is not available here.</div>';
+    return;
+  }
+  var rows = data.accesses || [];
+  if (!rows.length) {
+    el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-secondary);font-size:13px;">No memory accesses recorded yet. They appear here once your agent reads its memory.</div>';
+    return;
+  }
+  var html = '<div style="display:flex;flex-direction:column;">';
+  rows.forEach(function(a) {
+    var op = a.op || 'access';
+    var opColor = op === 'search' ? '#6366f1' : op === 'get' ? '#10b981' : '#6b7280';
+    var opLabel = op === 'search' ? '🔍 search' : op === 'get' ? '📄 get' : op;
+    var when = a.ts ? new Date(a.ts).toLocaleString() : '';
+    var sid = a.session_id || '';
+    var sidShort = sid ? escHtml(sid.slice(0, 12)) : '(unknown session)';
+    var canOpen = !!sid;
+    html += '<div onclick="' + (canOpen ? "memoryOpenAccessConversation('" + escHtml(sid) + "')" : '') + '" '
+      + 'style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--border-secondary);'
+      + (canOpen ? 'cursor:pointer;' : '') + '" '
+      + (canOpen ? 'onmouseover="this.style.background=\'var(--bg-tertiary,#1e293b)\'" onmouseout="this.style.background=\'\'"' : '') + '>'
+      + '<span style="flex-shrink:0;background:' + opColor + '22;color:' + opColor + ';border-radius:6px;padding:2px 8px;font-size:11px;font-weight:600;white-space:nowrap;">' + opLabel + '</span>'
+      + '<span style="flex:1;color:var(--text-primary);font-size:13px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + escHtml(a.target || '') + '">' + (a.target ? escHtml(a.target) : '<span style="color:var(--text-muted);">(no query)</span>') + '</span>'
+      + '<span style="flex-shrink:0;color:var(--text-muted);font-size:11px;white-space:nowrap;">' + escHtml(when) + '</span>'
+      + '<span style="flex-shrink:0;color:var(--text-secondary);font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap;">' + sidShort + (canOpen ? ' ›' : '') + '</span>'
+      + '</div>';
+  });
+  html += '</div>';
+  el.style.cssText = 'padding:0;overflow:hidden;';
+  el.innerHTML = html;
+}
+
+// Deep-link from a memory access to the conversation that triggered it.
+function memoryOpenAccessConversation(sessionId) {
+  if (!sessionId) return;
+  if (typeof switchTab === 'function') switchTab('transcripts');
+  setTimeout(function(){ if (typeof viewTranscript === 'function') viewTranscript(sessionId); }, 60);
 }
 
 // Entry point called by nav switchTab + loadAll bootstrap.
