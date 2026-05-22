@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Replay: tool turns deep-dive into name + args + result (2026-05-22)
+- The Embodied/replay tab rendered every tool turn as a generic "Tool call" / "Tool result" chip with no tool name, input, or output. Root cause was a data bug, not cosmetics: Claude-Code rows nest the Anthropic message under `data.message` and record tools as content blocks (`tool_use` / `tool_result`), but the transcript builder only read top-level `content` and a top-level `tool_calls` key, so it dropped the name/args/result entirely (verified on real data: 13/15 turns of one session arrived blank, another was 118/178 blank). The builder now lifts each tool block into a named turn carrying its input/output, the replay renders an expandable deep-dive chip (tool name in the header, exact args/result one click away), and the duplicate empty-noise turns those rows used to produce are gone. Cloud-snapshot tool detail is bounded (600-char preview within an 8 KB/transcript budget) so it never bloats the shared snapshot; full detail stays on the local dashboard.
+
+### Release: replay tool deep-dive (name + args + result) (2026-05-22)
+- Publishes #1912 (closes #1911): the Embodied/replay tool turns now show the tool name and expandable input/result instead of nameless "Tool call"/"Tool result" chips.
+
 ### Release: gate the Tracing tab behind a flag (2026-05-22)
 - Publishes #1914: the Tracing tab is hidden from the nav by default and revealed only with ?tracing=1 (or ?tab=tracing) while the span-tree view is reworked.
 
