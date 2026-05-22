@@ -6588,6 +6588,9 @@ var _cronView = 'active'; // 'active' | 'paused' | 'calendar'
 // activity in the Calendar's "Recently ran" section, including failures.
 var _cronRecentRunsCache = {};
 var _cronRecentRunsLoaded = false;
+// Lifetime run totals per job_id (the daemon ships `total_count` alongside the
+// capped recent-runs list). Falls back to the cached-run count when absent.
+var _cronRunTotals = {};
 
 function setCronView(view) {
   _cronView = view;
@@ -6609,21 +6612,37 @@ async function _loadAllCronRecentRuns() {
   _cronRecentRunsLoaded = true;
   try {
     var active = (_cronJobs || []).filter(function(j) { return j.enabled !== false; });
-    var sevenDaysAgo = Date.now() - 7 * 86400000;
+    // Cover the whole month grid + a margin (not just 7 days) so past fires
+    // land on the right calendar cells. The DuckDB-backed timeline endpoint
+    // (/api/crons/<id>/runs) is preferred; the legacy one is best-effort.
+    var windowStart = Date.now() - 40 * 86400000;
     var results = await Promise.all(active.map(function(j) {
-      return fetch('/api/cron/' + encodeURIComponent(j.id) + '/runs')
-        .then(function(r) { return r.ok ? r.json() : {runs:[]}; })
-        .catch(function() { return {runs:[]}; });
+      return fetch('/api/crons/' + encodeURIComponent(j.id) + '/runs?limit=200')
+        .then(function(r) { return r.ok ? r.json() : null; })
+        .catch(function() { return null; })
+        .then(function(d) {
+          if (d && (d.runs || []).length) return d;
+          // fall back to the legacy endpoint when the timeline is empty
+          return fetch('/api/cron/' + encodeURIComponent(j.id) + '/runs')
+            .then(function(r) { return r.ok ? r.json() : {runs:[]}; })
+            .catch(function() { return {runs:[]}; });
+        });
     }));
     active.forEach(function(j, i) {
-      var runs = ((results[i] || {}).runs || [])
+      var resp = results[i] || {};
+      var runs = (resp.runs || [])
         .map(function(r) {
           var ts = r.startedAt ? Date.parse(r.startedAt)
                  : r.timestamp || r.ts || 0;
           return { ts: ts, status: r.status || 'unknown' };
         })
-        .filter(function(r) { return r.ts >= sevenDaysAgo && r.ts <= Date.now(); });
+        .filter(function(r) { return r.ts >= windowStart && r.ts <= Date.now(); });
       _cronRecentRunsCache[j.id] = runs;
+      // Lifetime total if the backend reports one (daemon ships total_count);
+      // otherwise leave unset so the renderer falls back to the cached count.
+      var total = (resp.total_count != null) ? resp.total_count
+                : (resp.count != null ? resp.count : null);
+      if (total != null) _cronRunTotals[j.id] = total;
     });
   } catch (e) {
     // non-fatal: Calendar still renders predictions, just no past runs
@@ -6773,6 +6792,23 @@ function _cronComputeNextFireMs(schedule, fromMs) {
     return 0;
   }
   return 0;
+}
+
+// Enumerate every fire time of a schedule within [fromMs, untilMs], capped so
+// a "* * * * *" job can't enumerate tens of thousands of entries. Reuses the
+// single-next predictor, advancing the cursor to each fire. Used by the
+// Calendar's "upcoming" count + month-grid future markers.
+function _cronEnumerateFiresMs(schedule, fromMs, untilMs, cap) {
+  cap = cap || 500;
+  var fires = [];
+  var t = fromMs;
+  for (var i = 0; i < cap; i++) {
+    var next = _cronComputeNextFireMs(schedule, t);
+    if (!next || next > untilMs || next <= t) break;
+    fires.push(next);
+    t = next;
+  }
+  return fires;
 }
 
 function toggleCronAutoRefresh() {
@@ -7134,6 +7170,51 @@ function _cronGroupByDay(items) {
   return groups;
 }
 
+function _renderCronMonthGrid(monthStart, monthEnd, now, pastByDay, futureByDay) {
+  function _dk(ts) { var d = new Date(ts); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); }
+  var first = new Date(monthStart);
+  var monthName = first.toLocaleString(undefined, {month:'long', year:'numeric'});
+  var daysInMonth = new Date(first.getFullYear(), first.getMonth()+1, 0).getDate();
+  var leadBlanks = first.getDay(); // 0 = Sunday
+  var todayKey = _dk(now);
+  var dows = ['S','M','T','W','T','F','S'];
+  var h = '<div class="cron-cal-section">&#x1F4C5; ' + escHtml(monthName) + '</div>';
+  h += '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--text-muted);margin:2px 0 10px;">'
+     + '<span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#22c55e;vertical-align:middle;margin-right:4px;"></span>ran</span>'
+     + '<span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#ef4444;vertical-align:middle;margin-right:4px;"></span>failed</span>'
+     + '<span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#60a5fa;vertical-align:middle;margin-right:4px;"></span>upcoming</span>'
+     + '</div>';
+  h += '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;max-width:520px;margin-bottom:6px;">';
+  dows.forEach(function(d) { h += '<div style="text-align:center;font-size:10px;color:var(--text-muted);padding:2px 0;">' + d + '</div>'; });
+  for (var b = 0; b < leadBlanks; b++) h += '<div></div>';
+  for (var day = 1; day <= daysInMonth; day++) {
+    var ts = new Date(first.getFullYear(), first.getMonth(), day).getTime();
+    var k = _dk(ts);
+    var pd = pastByDay[k];
+    var fc = futureByDay[k] || 0;
+    var isToday = (k === todayKey);
+    var bg = 'var(--bg-secondary)', fg = 'var(--text-muted)', badge = '', title = k;
+    if (pd && pd.count) {
+      bg = pd.error ? 'rgba(239,68,68,0.18)' : 'rgba(34,197,94,0.18)';
+      fg = 'var(--text-primary)';
+      badge = '<div style="font-size:10px;font-weight:700;color:' + (pd.error ? '#ef4444' : '#22c55e') + ';">' + pd.count + (pd.error ? ' ✗' : '') + '</div>';
+      title = k + ': ' + pd.count + ' run' + (pd.count > 1 ? 's' : '') + (pd.error ? ' (had a failure)' : '');
+    } else if (fc) {
+      bg = 'rgba(96,165,250,0.14)';
+      fg = 'var(--text-secondary)';
+      badge = '<div style="font-size:10px;font-weight:700;color:#60a5fa;">' + fc + '</div>';
+      title = k + ': ' + fc + ' upcoming fire' + (fc > 1 ? 's' : '');
+    }
+    var border = isToday ? '2px solid #60a5fa' : '1px solid transparent';
+    h += '<div title="' + escHtml(title) + '" style="background:' + bg + ';border:' + border + ';border-radius:6px;min-height:40px;padding:3px 4px;display:flex;flex-direction:column;justify-content:space-between;">';
+    h += '<div style="font-size:10px;color:' + fg + ';' + (isToday ? 'font-weight:700;' : '') + '">' + day + '</div>';
+    h += badge;
+    h += '</div>';
+  }
+  h += '</div>';
+  return h;
+}
+
 function renderCronCalendar(jobs) {
   var listEl = document.getElementById('crons-list');
   if (!listEl) return;
@@ -7145,6 +7226,21 @@ function renderCronCalendar(jobs) {
   var upcoming = [];
   var recent = [];
   var predictedCount = 0;
+
+  // Lifetime "fired so far" + "upcoming (30d)" counts, and per-day buckets for
+  // the month grid (current month only): pastByDay[k]={count,error},
+  // futureByDay[k]=count.
+  var firedSoFar = 0;
+  var upcoming30 = 0;
+  var horizon30 = now + 30 * dayMs;
+  var dRef = new Date();
+  var monthStart = new Date(dRef.getFullYear(), dRef.getMonth(), 1).getTime();
+  var monthEnd = new Date(dRef.getFullYear(), dRef.getMonth() + 1, 1).getTime();
+  var enumUntil = Math.max(horizon30, monthEnd);
+  var pastByDay = {};
+  var futureByDay = {};
+  function _dk(ts) { var d = new Date(ts); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); }
+
   jobs.forEach(function(j) {
     var nextMs = j.state && j.state.nextRunAtMs;
     var predicted = false;
@@ -7152,7 +7248,7 @@ function renderCronCalendar(jobs) {
       // No agent-reported next run -- compute it from the schedule so the
       // Calendar populates immediately for jobs that have never landed a
       // run record yet. This is the difference between "Coming up: 0" and
-      // showing all 17 actively-scheduled jobs grouped by day.
+      // showing all actively-scheduled jobs grouped by day.
       var pred = _cronComputeNextFireMs(j.schedule, now);
       if (pred) { nextMs = pred; predicted = true; }
     }
@@ -7173,27 +7269,49 @@ function renderCronCalendar(jobs) {
         recent.push({ts: r.ts, job: j, status: r.status});
       }
     });
+
+    // Lifetime fired-so-far: prefer the daemon's total_count, else cached runs.
+    firedSoFar += (_cronRunTotals[j.id] != null) ? _cronRunTotals[j.id] : cached.length;
+
+    // Past runs -> month-grid cells (this month only).
+    cached.forEach(function(r) {
+      if (r.ts >= monthStart && r.ts < monthEnd) {
+        var k = _dk(r.ts);
+        if (!pastByDay[k]) pastByDay[k] = {count: 0, error: false};
+        pastByDay[k].count++;
+        if (r.status === 'error') pastByDay[k].error = true;
+      }
+    });
+
+    // Future predicted fires -> upcoming-30d count + month-grid future cells.
+    _cronEnumerateFiresMs(j.schedule, now, enumUntil, 800).forEach(function(ts) {
+      if (ts <= horizon30) upcoming30++;
+      if (ts >= monthStart && ts < monthEnd && ts > now) {
+        var k2 = _dk(ts);
+        futureByDay[k2] = (futureByDay[k2] || 0) + 1;
+      }
+    });
   });
   upcoming.sort(function(a,b){return a.ts - b.ts;});
   recent.sort(function(a,b){return b.ts - a.ts;});
 
   var html = '<div style="padding:12px;">';
 
-  // Summary tiles
+  // Summary tiles: lifetime + forward-looking notification counts.
   html += '<div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;">';
   [
-    {label:'Coming up (7d)', val: upcoming.length},
-    {label:'Ran (last 7d)',   val: recent.length},
-    {label:'Active jobs',     val: jobs.length},
+    {label:'Fired so far',   val: firedSoFar, tip:'Total runs recorded across all active jobs'},
+    {label:'Upcoming (30d)', val: upcoming30, tip:'Predicted fires across all active jobs over the next 30 days'},
+    {label:'Active jobs',    val: jobs.length, tip:'Enabled cron jobs'},
   ].forEach(function(t) {
-    html += '<div style="background:var(--bg-secondary);border-radius:8px;padding:10px 16px;flex:1;min-width:130px;">';
+    html += '<div title="' + escHtml(t.tip) + '" style="background:var(--bg-secondary);border-radius:8px;padding:10px 16px;flex:1;min-width:130px;">';
     html += '<div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">' + t.label + '</div>';
-    html += '<div style="font-size:22px;font-weight:700;color:var(--text-primary);margin-top:2px;">' + t.val + '</div>';
+    html += '<div style="font-size:22px;font-weight:700;color:var(--text-primary);margin-top:2px;">' + (t.val || 0).toLocaleString() + '</div>';
     html += '</div>';
   });
   html += '</div>';
 
-  if (upcoming.length === 0 && recent.length === 0) {
+  if (upcoming.length === 0 && recent.length === 0 && upcoming30 === 0 && firedSoFar === 0) {
     html += '<div style="background:var(--bg-secondary);border-radius:8px;padding:24px;text-align:center;color:var(--text-muted);font-size:13px;line-height:1.6;">';
     html += '<div style="font-size:30px;margin-bottom:8px;">&#x1F4C5;</div>';
     html += '<div><strong style="color:var(--text-primary);">No schedule data available yet.</strong></div>';
@@ -7202,6 +7320,10 @@ function renderCronCalendar(jobs) {
     listEl.innerHTML = html;
     return;
   }
+
+  // Month grid: past actual runs (green / red on failure) + future predicted
+  // fires (blue), with a per-day count.
+  html += _renderCronMonthGrid(monthStart, monthEnd, now, pastByDay, futureByDay);
 
   if (upcoming.length > 0) {
     html += '<div class="cron-cal-section">&#x1F552; Coming up</div>';
