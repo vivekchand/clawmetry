@@ -33,6 +33,26 @@ jobs:
           token: ${{ secrets.CLOUD_REPO_PAT }}
           path: cloud
 
+      - name: Patch run_cloud.py throttle stub (node_id kwarg compat)
+        run: |
+          python - <<'EOF'
+          import pathlib
+          p = pathlib.Path("cloud/tests/e2e_browser/run_cloud.py")
+          if not p.exists():
+              print("run_cloud.py not found — skipping patch")
+              exit(0)
+          t = p.read_text()
+          t = t.replace(
+              "def _throttle_patched(token):",
+              "def _throttle_patched(token, node_id=None):"
+          ).replace(
+              "return _orig_throttle(token)",
+              "return _orig_throttle(token, node_id=node_id)"
+          )
+          p.write_text(t)
+          print("patched _throttle_patched: added node_id kwarg")
+          EOF
+
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
