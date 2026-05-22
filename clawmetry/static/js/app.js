@@ -384,6 +384,15 @@ function visibilitySetInterval(fn, ms) {
   }, ms);
 }
 
+// Tab-scoped polling. Heavy pollers (the Overview loadAll() fan-out) gate on
+// the active tab so they don't fire on every other screen. ``_cmCurrentTab``
+// is set by switchTab(); it's null on first boot, where Overview is the
+// default landing tab — so the gate treats "unset" as Overview.
+var _cmCurrentTab = null;
+function _cmIsOverviewTab() {
+  return !_cmCurrentTab || _cmCurrentTab === 'overview';
+}
+
 // Check alerts every 30s
 visibilitySetInterval(checkActiveAlerts, 30000);
 setTimeout(checkActiveAlerts, 3000);
@@ -846,6 +855,9 @@ function cancelAllPendingSSEDwell() {
 }
 
 function switchTab(name) {
+  // Track the active tab so tab-scoped pollers (Overview loadAll, etc.) only
+  // run on their own screen instead of on every tab.
+  _cmCurrentTab = name;
   // Phase 3: kill any pending SSE-open dwell from the tab we're leaving.
   cancelAllPendingSSEDwell();
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -865,7 +877,7 @@ function switchTab(name) {
   // Stop cron auto-refresh when leaving crons tab
   if (name !== 'crons' && _cronAutoRefreshTimer) { clearInterval(_cronAutoRefreshTimer); _cronAutoRefreshTimer = null; }
   if (name === 'overview') loadAll();
-  if (name === 'overview') { if (typeof _velocityPollTimer !== 'undefined' && _velocityPollTimer) clearInterval(_velocityPollTimer); if (typeof loadTokenVelocity === 'function') _velocityPollTimer = visibilitySetInterval(loadTokenVelocity, 30000); }
+  if (name === 'overview') { if (typeof _velocityPollTimer !== 'undefined' && _velocityPollTimer) clearInterval(_velocityPollTimer); if (typeof loadTokenVelocity === 'function') _velocityPollTimer = visibilitySetInterval(function() { if (!_cmIsOverviewTab()) return; loadTokenVelocity(); }, 30000); }
   if (name === 'usage') loadUsage();
   if (name === 'skills') loadSkills();
   if (name === 'crons') loadCrons();
@@ -3508,17 +3520,25 @@ function sessionHasHighRisk(events, sessionId) {
   return false;
 }
 
-// Plumbing event types: internal queue housekeeping that's noise to anyone
-// debugging an actual conversation. Hidden by default; toggle in the Brain
-// header reveals them. Match is case-insensitive on type AND detail to
-// catch QUEUE-OPERATION / queue_operation / "queue-operation" alike.
+// Plumbing event types: internal queue housekeeping + gateway CPU/RAM metrics
+// that are noise to anyone debugging an actual conversation. Hidden by default;
+// toggle in the Brain header reveals them. Match is case-insensitive and
+// separator-insensitive on type AND role to catch QUEUE-OPERATION /
+// queue_operation and GATEWAY.METRIC / gateway_metric alike.
 function _isPlumbingEvent(ev) {
   if (!ev) return false;
-  var t = String(ev.type || '').toLowerCase().replace(/[_-]/g, '');
-  if (t === 'queueoperation') return true;
-  // Belt-and-suspenders: some ingests stuff "queue-operation" into role/detail
-  var role = String(ev.role || '').toLowerCase().replace(/[_-]/g, '');
-  if (role === 'queueoperation') return true;
+  // Infra/plumbing event types: machine noise, not agent content, so they're
+  // hidden by default behind "Show plumbing". gateway.metric is a CPU/RAM ping
+  // emitted ~every 40s — left unfiltered it floods the stream and buries real
+  // activity (the Brain tab looked broken when the agent was idle).
+  // Normalise (lowercase, drop . _ -) so "gateway.metric", "GATEWAY.METRIC"
+  // and "queue-operation" all collapse to one comparable token.
+  var PLUMBING = { queueoperation: 1, gatewaymetric: 1 };
+  var t = String(ev.type || '').toLowerCase().replace(/[._-]/g, '');
+  if (PLUMBING[t]) return true;
+  // Belt-and-suspenders: some ingests stuff the type into role/detail.
+  var role = String(ev.role || '').toLowerCase().replace(/[._-]/g, '');
+  if (PLUMBING[role]) return true;
   return false;
 }
 
@@ -5117,7 +5137,8 @@ function selfevolveRenderFindings(payload) {
     container.innerHTML = '<div style="padding:10px 12px;color:var(--text-muted);font-size:12px;">' +
       'No findings yet. Click Analyze to review recent activity.</div>';
   } else {
-    findings.forEach(function (f) {
+    window._seFindings = findings;
+    findings.forEach(function (f, _fidx) {
       var col = selfevolveSeverityColor(f.severity);
       var card = document.createElement('div');
       card.style.cssText =
@@ -5136,8 +5157,16 @@ function selfevolveRenderFindings(payload) {
         (f.evidence ? '<div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;line-height:1.5;">' +
           '<strong style="color:var(--text-secondary);">Evidence:</strong> ' + escapeHtml(f.evidence) + '</div>' : '') +
         (f.suggestion ? '<div style="font-size:12px;color:var(--text-primary);line-height:1.5;">' +
-          '<strong style="color:#60a5fa;">Try:</strong> ' + escapeHtml(f.suggestion) + '</div>' : '');
+          '<strong style="color:#60a5fa;">Try:</strong> ' + escapeHtml(f.suggestion) + '</div>' : '') +
+        (f.suggestion ?
+          '<div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+            '<button class="se-fix-btn" data-fidx="' + _fidx + '" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;cursor:pointer;background:#2563eb;color:#fff;border:none;border-radius:6px;padding:6px 12px;">✨ Fix with AI</button>' +
+            '<span class="se-fix-status" style="font-size:12px;color:var(--text-muted);"></span>' +
+          '</div>' : '');
       container.appendChild(card);
+    });
+    container.querySelectorAll('.se-fix-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () { selfevolveFixClick(parseInt(btn.dataset.fidx, 10), btn); });
     });
   }
   if (status) {
@@ -5147,6 +5176,78 @@ function selfevolveRenderFindings(payload) {
     if (payload.model) meta.push(payload.model);
     status.textContent = meta.join(' · ');
   }
+}
+
+// ── "Fix with AI": dispatch a finding's suggestion to the local agent ──────────
+// Confirms first (the agent makes a real change), POSTs to /api/selfevolve/fix,
+// then polls /api/selfevolve/fix/status until done/error. Local-only for now;
+// the cloud relay routes the same intent through a node command.
+function selfevolveFixClick(idx, btn) {
+  var f = (window._seFindings || [])[idx];
+  if (!f) return;
+  _seFixConfirm(f, function () { _seFixRun(f, btn); });
+}
+function _seFixConfirm(f, onYes) {
+  var ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px;';
+  var box = document.createElement('div');
+  box.style.cssText = 'max-width:460px;width:100%;background:var(--bg-secondary,#161b22);border:1px solid var(--border-primary,#30363d);border-radius:10px;padding:20px;';
+  box.innerHTML =
+    '<div style="font-size:15px;font-weight:700;color:var(--text-primary,#e6edf3);margin-bottom:8px;">✨ Send this fix to your agent?</div>' +
+    '<div style="font-size:12px;color:var(--text-muted,#8b949e);margin-bottom:6px;">Your OpenClaw agent will apply this change on your machine:</div>' +
+    '<div style="font-size:13px;color:var(--text-primary,#e6edf3);background:var(--bg-primary,#0d1117);border:1px solid var(--border-primary,#30363d);border-radius:6px;padding:10px 12px;margin-bottom:16px;line-height:1.5;">' + escapeHtml(f.suggestion || '') + '</div>' +
+    '<div style="display:flex;justify-content:flex-end;gap:8px;">' +
+      '<button id="se-fix-cancel" style="font-size:13px;padding:7px 14px;border-radius:6px;border:1px solid var(--border-primary,#30363d);background:transparent;color:var(--text-secondary,#9ca3af);cursor:pointer;">Cancel</button>' +
+      '<button id="se-fix-go" style="font-size:13px;font-weight:600;padding:7px 16px;border-radius:6px;border:none;background:#2563eb;color:#fff;cursor:pointer;">Send to agent</button>' +
+    '</div>';
+  ov.appendChild(box);
+  document.body.appendChild(ov);
+  function close() { ov.remove(); }
+  ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
+  box.querySelector('#se-fix-cancel').addEventListener('click', close);
+  box.querySelector('#se-fix-go').addEventListener('click', function () { close(); onYes(); });
+}
+function _seFixRun(f, btn) {
+  var statusEl = btn.parentElement.querySelector('.se-fix-status');
+  btn.disabled = true; btn.style.opacity = '0.6';
+  if (statusEl) { statusEl.textContent = '⏳ Queued…'; statusEl.style.color = 'var(--text-muted)'; }
+  fetch('/api/selfevolve/fix', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: f.title, suggestion: f.suggestion, category: f.category, evidence: f.evidence }) })
+    .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (res) {
+      if (!res.ok || !res.j.job_id) {
+        if (statusEl) { statusEl.textContent = '⚠️ ' + (res.j.message || 'Could not start'); statusEl.style.color = '#f59e0b'; }
+        btn.disabled = false; btn.style.opacity = '1'; return;
+      }
+      _seFixPoll(res.j.job_id, statusEl, btn);
+    })
+    .catch(function () {
+      if (statusEl) { statusEl.textContent = '⚠️ Network error'; statusEl.style.color = '#ef4444'; }
+      btn.disabled = false; btn.style.opacity = '1';
+    });
+}
+function _seFixPoll(jobId, statusEl, btn) {
+  var tries = 0;
+  var iv = setInterval(function () {
+    tries++;
+    fetch('/api/selfevolve/fix/status?job_id=' + encodeURIComponent(jobId))
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (j.status === 'running') {
+          if (statusEl) { statusEl.textContent = '⚙️ Agent working…'; statusEl.style.color = '#60a5fa'; }
+        } else if (j.status === 'done') {
+          clearInterval(iv);
+          if (statusEl) { statusEl.textContent = '✅ ' + (j.summary || 'Done'); statusEl.style.color = '#22c55e'; }
+          if (btn) { btn.textContent = '✅ Fixed'; }
+        } else if (j.status === 'error') {
+          clearInterval(iv);
+          if (statusEl) { statusEl.textContent = '⚠️ ' + (j.error || 'Failed'); statusEl.style.color = '#ef4444'; }
+          if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+        }
+      })
+      .catch(function () {});
+    if (tries > 200) { clearInterval(iv); }  // ~10 min cap
+  }, 3000);
 }
 // Self-Evolve is intentionally NOT in the top nav (option C: discoverable via
 // a contextual link on the Brain tab + deep-link). The probe's job here is
@@ -8451,7 +8552,13 @@ async function _loadReliabilityWidget() {
 function startSystemHealthRefresh() {
   loadSystemHealth();
   if (window._sysHealthTimer) clearInterval(window._sysHealthTimer);
-  window._sysHealthTimer = visibilitySetInterval(loadSystemHealth, 30000);
+  // Tab-scoped: loadSystemHealth fans out to system-health + delegation-tree
+  // + handler-latency + reliability (4 endpoints) and is an Overview widget.
+  // Only refresh on Overview; it was firing all 4 on every tab.
+  window._sysHealthTimer = visibilitySetInterval(function() {
+    if (window._cmCurrentTab && window._cmCurrentTab !== 'overview') return;
+    loadSystemHealth();
+  }, 30000);
 }
 
 async function loadDiagnostics() {
@@ -9563,6 +9670,25 @@ function _renderReplayEvent(ev, highlighted) {
   if (role === 'compaction') {
     return _renderCompactionEvent(ev, highlighted);
   }
+  // Tool turns (assistant tool_use / user tool_result) carry no prose, so they
+  // used to render as blank bubbles with just a role + timestamp — looking
+  // broken. Render them as a compact, labelled chip instead so the real
+  // (prose) turns stand out and the timeline reads cleanly.
+  var _c = ev.content;
+  if (!_c || !String(_c).trim()) {
+    var chipLabel = role === 'assistant' ? '🔧 Tool call'
+                  : role === 'user' ? '↩ Tool result'
+                  : role === 'system' ? '⚙ System'
+                  : (escHtml(role) + ' · no text');
+    var chipTs = ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString() : '';
+    var chipRing = highlighted ? 'box-shadow:0 0 0 2px #6366f1;' : '';
+    var chipSide = role === 'user' ? 'flex-end' : 'flex-start';
+    return '<div class="chat-tool-chip ' + (role === 'user' ? 'tc-user' : 'tc-asst') + '" id="replay-msg-' + ev.originalIndex + '" style="align-self:' + chipSide + ';' + chipRing + '">'
+      + '<span class="chat-tool-chip-label">' + chipLabel + '</span>'
+      + (ev.tokens ? '<span class="chat-tool-chip-meta">' + ev.tokens + ' tok</span>' : '')
+      + (chipTs ? '<span class="chat-tool-chip-meta">' + chipTs + '</span>' : '')
+      + '</div>';
+  }
   var cls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'system' ? 'system' : 'tool';
   var content = ev.content;
   var needsTruncate = content.length > 800;
@@ -10144,13 +10270,22 @@ function startOverviewRefresh() {
   // Don't fire loadAll() immediately -- bootDashboard already called it
   if (window._overviewTimer) clearInterval(window._overviewTimer);
   window._overviewTimer = visibilitySetInterval(async function() {
+    // Tab-scoped: loadAll() refreshes the whole Overview (health, heartbeat,
+    // diagnostics, skills, reliability, …). Only poll it while the user is
+    // actually on Overview — otherwise these dozen requests fire on every
+    // other tab too (the "ton of requests on the LLM Context screen" report).
+    // _cmCurrentTab is unset on first boot, where Overview is the default.
+    if (!_cmIsOverviewTab()) return;
     if (_overviewRefreshRunning) return;
     _overviewRefreshRunning = true;
     try { await loadAll(); } finally { _overviewRefreshRunning = false; }
   }, 10000);
   loadMainActivity();
   if (window._mainActivityTimer) clearInterval(window._mainActivityTimer);
-  window._mainActivityTimer = visibilitySetInterval(loadMainActivity, 5000);
+  window._mainActivityTimer = visibilitySetInterval(function() {
+    if (!_cmIsOverviewTab()) return;
+    loadMainActivity();
+  }, 5000);
 }
 
 // Overview right-panel Brain stream: reuses /api/brain-history (same source as
@@ -11102,6 +11237,10 @@ function enhanceArchitectureClarity() {
 }
 
 function updateFlowStats() {
+  // Tab-scoped: this polls /api/overview for the Flow tab's live stats. It
+  // must NOT fire on every other screen — it was hitting /api/overview ~9x/15s
+  // on unrelated tabs (e.g. Memory). Pause off Flow/Overview; resume on return.
+  if (window._cmCurrentTab && window._cmCurrentTab !== 'flow' && window._cmCurrentTab !== 'overview') return;
   var now = Date.now();
   flowStats.msgTimestamps = flowStats.msgTimestamps.filter(function(t){return now - t < 60000;});
   var el1 = document.getElementById('flow-msg-rate');
@@ -11920,7 +12059,10 @@ async function loadOverviewTasks() {
 function startOverviewTasksRefresh() {
   loadOverviewTasks();
   if (_ovTasksTimer) clearInterval(_ovTasksTimer);
-  _ovTasksTimer = visibilitySetInterval(loadOverviewTasks, 10000);
+  _ovTasksTimer = visibilitySetInterval(function() {
+    if (!_cmIsOverviewTab()) return;
+    loadOverviewTasks();
+  }, 10000);
 }
 
 // === Task Detail Modal ===
@@ -14049,7 +14191,14 @@ document.addEventListener('DOMContentLoaded', function() {
   // when the browser tab is hidden — completes the lazy-load Phase 2
   // sweep this PR is closing out. Page-load fires once so no-leak risk
   // (no per-visit re-arming), but the visibility-gate is still the win.
-  visibilitySetInterval(_prefetchToolData, 30000); // refresh cache every 30s
+  // Tab-scoped: this prefetches 12 /api/component/tool/<t> endpoints to make
+  // the Flow component modals open instantly. The modals only exist on the
+  // Flow / Overview diagrams, so only refresh there — it was firing 12
+  // requests/30s on every tab (Memory, Alerts, …) for nothing.
+  visibilitySetInterval(function() {
+    if (window._cmCurrentTab && window._cmCurrentTab !== 'flow' && window._cmCurrentTab !== 'overview') return;
+    _prefetchToolData();
+  }, 30000); // refresh cache every 30s
 });
 
 function openTaskModal(sessionId, taskName, sessionKey) {
@@ -15291,3 +15440,102 @@ function _ncEsc(s) {
     }).catch(function(){});
   } catch(e) {}
 })();
+
+// ── Update banner (PyPI version check + one-click upgrade) ─────────────
+// Functions are referenced from clawmetry/templates/partials/banners.html.
+// /api/update-check/status decides visibility; /api/update runs pip install.
+async function checkUpdateStatus() {
+  try {
+    var data = await fetch('/api/update-check/status').then(function(r){return r.json();});
+    var banner = document.getElementById('update-banner');
+    var msg = document.getElementById('update-banner-msg');
+    if (data.show_banner && banner && msg) {
+      var latest = (data.latest_check && data.latest_check.latest) || 'newer';
+      var current = (data.latest_check && data.latest_check.current) || '';
+      msg.textContent = 'Update available: v' + latest + ' is out. You are on v' + current + '.';
+      banner.style.display = 'flex';
+    }
+  } catch(e) {}
+}
+
+async function dismissUpdateBanner() {
+  try {
+    var data = await fetch('/api/update-check/status').then(function(r){return r.json();});
+    if (data.latest_check && data.latest_check.latest) {
+      await fetch('/api/update-check/dismiss', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({version: data.latest_check.latest})
+      });
+    }
+    var banner = document.getElementById('update-banner');
+    if (banner) banner.style.display = 'none';
+  } catch(e) {}
+}
+
+async function updateFromBanner() {
+  var btn = document.getElementById('update-banner-update-btn');
+  var msg = document.getElementById('update-banner-msg');
+  var changelog = document.getElementById('update-banner-changelog');
+  if (!btn) return;
+  var target = '';
+  try {
+    var s = await fetch('/api/update-check/status').then(function(r){return r.json();});
+    target = (s && s.latest_check && s.latest_check.latest) || '';
+  } catch(e) {}
+  if (!confirm('Update ClawMetry' + (target ? ' to v' + target : '') + ' now?\n\nThe dashboard and sync daemon will restart. In-flight requests may be interrupted.')) return;
+  btn.disabled = true;
+  btn.textContent = 'Updating...';
+  btn.style.cursor = 'wait';
+  btn.style.opacity = '0.7';
+  if (changelog) changelog.style.display = 'none';
+  if (msg) msg.textContent = 'Running pip install -U clawmetry. This usually takes 10-30 seconds...';
+  try {
+    var resp = await fetch('/api/update', {method: 'POST'});
+    var d = await resp.json().catch(function(){return {};});
+    if (resp.ok && d.ok) {
+      if (msg) msg.textContent = 'Updated to v' + (d.new_version || target) + '. Restarting dashboard...';
+      var reloaded = false;
+      var attempts = 0;
+      var poll = setInterval(function(){
+        attempts++;
+        fetch('/api/version', {cache: 'no-store'}).then(function(r){
+          if (!r.ok) throw new Error('not-ok');
+          return r.json();
+        }).then(function(v){
+          if (reloaded) return;
+          if (v && v.current && (!target || v.current === target)) {
+            reloaded = true;
+            clearInterval(poll);
+            window.location.reload();
+          }
+        }).catch(function(){});
+        if (attempts > 60) {
+          clearInterval(poll);
+          if (msg) msg.textContent = 'Restart taking longer than expected. Refresh the page manually.';
+          btn.disabled = false;
+          btn.textContent = 'Update now';
+          btn.style.cursor = 'pointer';
+          btn.style.opacity = '1';
+        }
+      }, 1000);
+    } else {
+      if (msg) msg.textContent = 'Update failed: ' + ((d && d.error) || ('HTTP ' + resp.status));
+      btn.disabled = false;
+      btn.textContent = 'Update now';
+      btn.style.cursor = 'pointer';
+      btn.style.opacity = '1';
+      if (changelog) changelog.style.display = '';
+    }
+  } catch(e) {
+    if (msg) msg.textContent = 'Update failed: ' + (e && e.message ? e.message : 'network error');
+    btn.disabled = false;
+    btn.textContent = 'Update now';
+    btn.style.cursor = 'pointer';
+    btn.style.opacity = '1';
+    if (changelog) changelog.style.display = '';
+  }
+}
+
+setInterval(checkUpdateStatus, 3600000);
+setTimeout(checkUpdateStatus, 5000);

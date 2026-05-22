@@ -1,5 +1,38 @@
 ## [Unreleased]
 
+### Release: Self-Evolve "Fix with AI" (local + cloud relay) (2026-05-21)
+- Publishes the Fix-button feature (#1876 local, #1878 cloud relay + daemon `selfevolve_fix` action) and the daemon gateway-token detection fix.
+
+### Self-Evolve: "Fix with AI" cloud relay (2026-05-21)
+- The Fix button now works from app.clawmetry.com: the cloud queues an authenticated, owner-scoped `selfevolve_fix` action on the heartbeat-piggyback relay; the local daemon runs `openclaw agent` in a background thread and posts the E2E-encrypted result to the cloud cache, which the browser polls + decrypts. Button is no longer gated to the local dashboard.
+
+### Self-Evolve: "Fix with AI" button on findings (2026-05-21)
+- Each Self-Evolve finding now has a "✨ Fix with AI" button. Clicking it (after a confirm) dispatches the finding's suggestion to your local agent via `openclaw agent` (OpenClaw's own creds — ClawMetry's gateway token is read-only), which actually applies the change. Status shows Queued → Agent working → ✅ <summary>. Local dashboard for now; the cloud relay is a follow-up. New endpoints: `POST /api/selfevolve/fix`, `GET /api/selfevolve/fix/status`.
+
+### Fix: daemon detects gateway token (snapshot auth_token_status was false "missing") (2026-05-21)
+- `_build_diagnostics()` runs in the sync daemon, where `dashboard.GATEWAY_TOKEN` is never populated (the daemon doesn't run the dashboard's startup detection) and `OPENCLAW_GATEWAY_TOKEN` is unset under launchd — so the snapshot reported `auth_token_status="missing"` even when `openclaw.json` has a gateway token. Cloud showed "Auth token: missing" and Self-Evolve generated false HIGH-severity findings. Now falls back to `_detect_gateway_token()` (the same detector the dashboard + Security posture use).
+
+### Replay: tool turns as compact chips (2026-05-21)
+- Empty tool_use/tool_result bubbles now render as compact role-accented chips instead of blank boxes.
+
+### Perf: tab-scope system-health fan-out (2026-05-21)
+- loadSystemHealth (4 endpoints) polled on every tab; gated to Overview.
+
+### Perf: tab-scope tool prefetch (2026-05-21)
+- _prefetchToolData polled 12 component/tool endpoints every 30s on every tab; gated to Flow/Overview.
+
+### Perf: tab-scope updateFlowStats (2026-05-21)
+- The Flow-tab live-stats timer polled /api/overview on every tab. Gated to Flow/Overview.
+
+### Perf: tab-scoped Overview polling (2026-05-21)
+- The Overview refresh fan-out (loadAll: health/heartbeat/diagnostics/skills/reliability/…, the brain stream, overview-tasks, token-velocity) polled regardless of the active tab, bursting requests on every screen. Now gated on the active tab so they pause off Overview.
+
+### Alerts: toggle reflects saved rules (flatten condition_json) (2026-05-21)
+- The daemon nests alert_type/threshold inside condition_json; the toggle render checked top-level alert_type and never matched, so a saved rule showed OFF. Flatten condition_json. Completes the alerts toggle e2e.
+
+### Alerts: saved rules render on load (decrypt key fix) (2026-05-21)
+- loadAlertsPage decrypted the E2E rules_blob via a helper with the wrong key name + a missing decryptBlob, so saved rules silently never rendered. Self-contained decrypt mirroring the cm-cloud interceptors. This is the fix that makes Enable/toggle stick across reloads.
+
 ### Alerts: toggle persists through cache lag + dedup (2026-05-21)
 - Optimistic toggle state now survives the cloud-cache-warm window (no flicker-revert) and rapid clicks no longer create duplicate rules.
 

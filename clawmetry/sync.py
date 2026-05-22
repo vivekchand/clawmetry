@@ -5620,6 +5620,7 @@ _PENDING_ACTIONS = frozenset({
     "alert_rule_upsert",
     "alert_rule_delete",
     "approval_decision",
+    "selfevolve_fix",
 })
 
 
@@ -5805,6 +5806,117 @@ def _dispatch_pending_action(config: dict, action: dict) -> None:
     if atype == "approval_decision":
         _apply_approval_decision(action)
         return
+    if atype == "selfevolve_fix":
+        _action_selfevolve_fix(config, action)
+        return
+
+
+def _selfevolve_fix_summary(stdout: str) -> str:
+    """Pull a human summary from the `openclaw agent --json` envelope."""
+    import re as _re
+
+    try:
+        out = json.loads(stdout)
+    except Exception:
+        return ((stdout or "").strip()[:600]) or "Done."
+    result = out.get("result") or {}
+    txt = ""
+    for p in result.get("payloads") or []:
+        if isinstance(p, dict) and p.get("text"):
+            txt = p["text"]
+    txt = txt or result.get("text") or out.get("text") or ""
+    m = _re.search(r"DONE:.*", txt or "")
+    return (m.group(0).strip()[:600] if m else (txt or "Done.").strip()[:600]) or "Done."
+
+
+def _action_selfevolve_fix(config: dict, action: dict) -> None:
+    """Cloud-relayed Self-Evolve "Fix with AI": run a finding's suggestion via
+    ``openclaw agent`` (OpenClaw's own creds — the gateway token is read-only)
+    and post the E2E-encrypted result to ``/ingest/cache`` under the action's
+    ``cache_key`` so the cloud dashboard can poll + decrypt it. Runs in a
+    background thread so a ~15s agent turn never blocks the heartbeat loop.
+
+    Wire shape (queued cloud-side by /api/cloud/selfevolve-fix):
+        {type:"selfevolve_fix", id, cache_key, suggestion, title, category, evidence}
+    """
+    cache_key = action.get("cache_key")
+    suggestion = (action.get("suggestion") or "").strip()
+    enc_key = config.get("encryption_key")
+    api_key = config.get("api_key", "")
+    node_id = config.get("node_id", "")
+    if not (cache_key and suggestion and enc_key and api_key):
+        return
+    title = (action.get("title") or "").strip()
+    category = (action.get("category") or "").strip()
+    evidence = (action.get("evidence") or "").strip()
+    aid = action.get("id")
+
+    def _run():
+        status, summary = "error", ""
+        try:
+            binp = _resolve_openclaw_bin()
+            if not binp:
+                summary = "openclaw CLI not found on this machine"
+            else:
+                message = (
+                    "You are ClawMetry Self-Evolve in FIX mode. Apply the "
+                    "recommended change to your OpenClaw setup now, using your "
+                    "tools (edit config, adjust model routing, set values).\n\n"
+                    "Finding (" + (category or "general") + "): " + title + "\n"
+                    "Evidence: " + (evidence or "(none)") + "\n"
+                    "Recommended action: " + suggestion + "\n\n"
+                    "Make the concrete change. If a step needs a human decision "
+                    "you cannot safely make on your own, do what you safely can "
+                    "and state what remains. End with a one-line summary that "
+                    "starts with 'DONE:' describing exactly what you changed."
+                )
+                env = dict(os.environ)
+                node_dirs = [
+                    os.path.dirname(binp),
+                    "/opt/homebrew/bin",
+                    "/usr/local/bin",
+                    os.path.expanduser("~/.local/bin"),
+                ]
+                env["PATH"] = os.pathsep.join(
+                    node_dirs + [env.get("PATH", "/usr/bin:/bin")]
+                )
+                proc = subprocess.run(
+                    [
+                        binp, "agent", "--session-id", "clawmetry-fix",
+                        "--message", message, "--json", "--timeout", "300",
+                    ],
+                    capture_output=True, text=True, timeout=330, env=env,
+                )
+                if proc.returncode != 0:
+                    summary = (
+                        proc.stderr or ("agent exited %d" % proc.returncode)
+                    )[:400]
+                else:
+                    status = "done"
+                    summary = _selfevolve_fix_summary(proc.stdout)
+        except Exception as e:  # never raise from the worker thread
+            summary = str(e)[:400]
+        try:
+            blob = encrypt_payload(
+                {"status": status, "summary": summary, "_shape": "selfevolve_fix"},
+                enc_key,
+            )
+            _post(
+                "/ingest/cache",
+                {
+                    "node_id": node_id,
+                    "id": aid,
+                    "cache_key": cache_key,
+                    "blob": blob,
+                    "shape": "selfevolve_fix",
+                    "ttl": 3600,
+                },
+                api_key,
+            )
+        except Exception as e:
+            log.warning("selfevolve_fix cache post failed: %s", e)
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 def _action_channel_config_upsert(config: dict, action: dict) -> None:
@@ -7304,6 +7416,16 @@ def _build_diagnostics(workspace=None):
         if _d.WORKSPACE or workspace:
             auto_detected.append("workspace")
         token = _d.GATEWAY_TOKEN or os.environ.get("OPENCLAW_GATEWAY_TOKEN", "").strip()
+        # The daemon process never runs the dashboard's startup token detection,
+        # so _d.GATEWAY_TOKEN is None here and (under launchd) the env var is
+        # unset — auth_token_status was wrongly "missing" in the snapshot even
+        # when openclaw.json has a gateway token. Fall back to the same detector
+        # the dashboard and security posture use (reads gateway.auth.token).
+        if not token:
+            try:
+                token = _d._detect_gateway_token() or ""
+            except Exception:
+                token = ""
         auth_token_status = "present" if token else "missing"
         openclaw_flags = {}
         flag_map = {

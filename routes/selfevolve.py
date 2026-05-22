@@ -434,3 +434,189 @@ def api_selfevolve_analyze():
     }
     _save_cached(payload)
     return jsonify(payload)
+
+
+# ── "Fix with AI": apply a finding by dispatching it to the local agent ────────
+# A finding's suggestion is sent to `openclaw agent` (OpenClaw's own creds —
+# ClawMetry's gateway token is read-only), the same mechanism Self-Evolve uses
+# to *generate* findings. The agent actually makes the change. Jobs run in a
+# background thread; the UI polls /api/selfevolve/fix/status. Local-only: on a
+# host with no `openclaw` CLI (e.g. the cloud server) this returns 412 and the
+# cloud relay path (queue a node command) takes over instead.
+
+import threading as _threading
+import subprocess as _subprocess
+
+_FIX_JOBS: dict = {}  # job_id -> {status, summary, error, started_at}
+_FIX_LOCK = _threading.Lock()
+_FIX_MAX = 50
+_FIX_SESSION_ID = "clawmetry-fix"
+
+
+def _resolve_openclaw_bin_local():
+    import shutil
+
+    found = shutil.which("openclaw")
+    if found:
+        return found
+    for cand in (
+        "/opt/homebrew/bin/openclaw",
+        "/usr/local/bin/openclaw",
+        os.path.expanduser("~/.local/bin/openclaw"),
+        "/usr/bin/openclaw",
+    ):
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
+def _build_fix_message(title, suggestion, category, evidence):
+    return (
+        "You are ClawMetry Self-Evolve in FIX mode. A review of your own agent "
+        "telemetry surfaced the finding below. Apply the recommended change to "
+        "your OpenClaw setup now, using your tools (edit config files, adjust "
+        "model routing, set values, etc.).\n\n"
+        "Finding (" + (category or "general") + "): " + (title or "") + "\n"
+        "Evidence: " + (evidence or "(none)") + "\n"
+        "Recommended action: " + (suggestion or "") + "\n\n"
+        "Make the concrete change. If a step needs a human decision you cannot "
+        "safely make on your own, do what you safely can and clearly state what "
+        "remains for the operator. Keep it tight. End with a one-line summary "
+        "that starts with 'DONE:' describing exactly what you changed."
+    )
+
+
+def _extract_fix_summary(stdout):
+    """Pull a human summary from the `openclaw agent --json` envelope."""
+    try:
+        out = json.loads(stdout)
+    except Exception:
+        return ((stdout or "").strip()[:600]) or "Done."
+    result = out.get("result") or {}
+    txt = ""
+    for p in result.get("payloads") or []:
+        if isinstance(p, dict) and p.get("text"):
+            txt = p["text"]
+    txt = txt or result.get("text") or out.get("text") or ""
+    m = re.search(r"DONE:.*", txt or "")
+    if m:
+        return m.group(0).strip()[:600]
+    return ((txt or "Done.").strip()[:600]) or "Done."
+
+
+def _run_fix_job(job_id, message, timeout=300):
+    binp = _resolve_openclaw_bin_local()
+    if not binp:
+        with _FIX_LOCK:
+            _FIX_JOBS[job_id].update(
+                status="error", error="openclaw CLI not found on this machine"
+            )
+        return
+    # `openclaw` is a Node script; under launchd's minimal PATH `node` isn't
+    # found (rc 127). Prepend the bin dir + the usual Node locations.
+    env = dict(os.environ)
+    node_dirs = [
+        os.path.dirname(binp),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        os.path.expanduser("~/.local/bin"),
+    ]
+    env["PATH"] = os.pathsep.join(node_dirs + [env.get("PATH", "/usr/bin:/bin")])
+    with _FIX_LOCK:
+        _FIX_JOBS[job_id].update(status="running")
+    try:
+        proc = _subprocess.run(
+            [
+                binp,
+                "agent",
+                "--session-id",
+                _FIX_SESSION_ID,
+                "--message",
+                message,
+                "--json",
+                "--timeout",
+                str(timeout),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout + 30,
+            env=env,
+        )
+        if proc.returncode != 0:
+            with _FIX_LOCK:
+                _FIX_JOBS[job_id].update(
+                    status="error",
+                    error=(proc.stderr or ("agent exited %d" % proc.returncode))[:400],
+                )
+            return
+        summary = _extract_fix_summary(proc.stdout)
+        with _FIX_LOCK:
+            _FIX_JOBS[job_id].update(status="done", summary=summary)
+    except _subprocess.TimeoutExpired:
+        with _FIX_LOCK:
+            _FIX_JOBS[job_id].update(status="error", error="agent timed out")
+    except Exception as e:  # never crash the worker thread
+        with _FIX_LOCK:
+            _FIX_JOBS[job_id].update(status="error", error=str(e)[:400])
+
+
+@bp_selfevolve.route("/api/selfevolve/fix", methods=["POST"])
+def api_selfevolve_fix():
+    """Dispatch a finding's suggestion to the local agent to apply it."""
+    if _resolve_openclaw_bin_local() is None:
+        return (
+            jsonify(
+                {
+                    "error": "no_agent",
+                    "message": (
+                        "OpenClaw CLI not found on this machine. Run the fix from "
+                        "the host where your agent lives."
+                    ),
+                }
+            ),
+            412,
+        )
+    body = request.get_json(silent=True) or {}
+    suggestion = (body.get("suggestion") or "").strip()
+    if not suggestion:
+        return jsonify({"error": "bad_request", "message": "suggestion is required"}), 400
+    import secrets as _secrets
+
+    job_id = _secrets.token_hex(8)
+    message = _build_fix_message(
+        (body.get("title") or "").strip(),
+        suggestion,
+        (body.get("category") or "").strip(),
+        (body.get("evidence") or "").strip(),
+    )
+    with _FIX_LOCK:
+        if len(_FIX_JOBS) >= _FIX_MAX:
+            stale = sorted(_FIX_JOBS, key=lambda j: _FIX_JOBS[j].get("started_at", 0))
+            for k in stale[: len(_FIX_JOBS) - _FIX_MAX + 1]:
+                _FIX_JOBS.pop(k, None)
+        _FIX_JOBS[job_id] = {
+            "status": "queued",
+            "summary": "",
+            "error": "",
+            "started_at": time.time(),
+        }
+    _threading.Thread(
+        target=_run_fix_job, args=(job_id, message), daemon=True
+    ).start()
+    return jsonify({"job_id": job_id, "status": "queued"})
+
+
+@bp_selfevolve.route("/api/selfevolve/fix/status")
+def api_selfevolve_fix_status():
+    job_id = request.args.get("job_id", "")
+    with _FIX_LOCK:
+        job = _FIX_JOBS.get(job_id)
+    if not job:
+        return jsonify({"error": "not_found"}), 404
+    return jsonify(
+        {
+            "status": job["status"],
+            "summary": job.get("summary", ""),
+            "error": job.get("error", ""),
+        }
+    )

@@ -23,6 +23,47 @@
     editorType: 'node_offline',
   };
 
+  // Decrypt the E2E rules_blob the cloud returns on a cache hit. The shared
+  // unwrapListAsync() can't do it here: it reads the key as
+  // ``cm-enc-key-{node_id}`` and calls window.decryptBlob, but the real key
+  // is ``cm-enc-key-{node_id}-{token_prefix}`` and decryptBlob no longer
+  // exists — so it silently returned [] and saved rules never rendered. This
+  // mirrors the working cm-cloud-* interceptor decrypt (_cmNormKey +
+  // crypto.subtle). Returns the rules array, or [] on any failure.
+  async function alertsDecryptRulesBlob(blobB64) {
+    try {
+      const nid = window.CLOUD_NODE_ID || '';
+      const tok = window.CLOUD_TOKEN || '';
+      const ac = tok.slice(0, 16);
+      const kn = nid && ac ? ('cm-enc-key-' + nid + '-' + ac) : null;
+      const k = kn ? localStorage.getItem(kn) : '';
+      if (!k || typeof window._cmNormKey !== 'function') return [];
+      const nk = await window._cmNormKey(k);
+      const b64u = (s) => {
+        s = s.replace(/-/g, '+').replace(/_/g, '/');
+        while (s.length % 4) s += '=';
+        const b = atob(s), a = new Uint8Array(b.length);
+        for (let i = 0; i < b.length; i++) a[i] = b.charCodeAt(i);
+        return a.buffer;
+      };
+      const ck = await crypto.subtle.importKey('raw', b64u(nk), { name: 'AES-GCM' }, false, ['decrypt']);
+      const raw = new Uint8Array(b64u(blobB64));
+      const txt = new TextDecoder().decode(
+        await crypto.subtle.decrypt({ name: 'AES-GCM', iv: raw.slice(0, 12) }, ck, raw.slice(12)));
+      const payload = JSON.parse(txt);
+      const rules = payload.rules || payload.alerts || [];
+      // The daemon stores the full cloud rule body inside ``condition_json``
+      // (the top level only has id/name/enabled), so alert_type / threshold /
+      // channel_ids live one level down. Flatten it up — otherwise the
+      // merge-render's ``find(r.alert_type === ...)`` never matches and the
+      // toggle stays OFF even though the rule exists. Top-level id/name/enabled
+      // win (they're the authoritative live state).
+      return rules.map(r => Object.assign({}, r.condition_json || {}, r));
+    } catch (e) {
+      return [];
+    }
+  }
+
   // Canned example rules shown to OSS-only / no-cloud users. Users can edit
   // these (change threshold, channels, name) before being asked to sign up --
   // investing in configuration first improves conversion.
@@ -96,8 +137,8 @@
       // arrives encrypted) never rendered — the tab stayed on canned examples
       // forever. Decrypt the blob when present.
       let serverRules;
-      if (data.rules_blob && typeof window.unwrapListAsync === 'function') {
-        serverRules = (await window.unwrapListAsync(data, 'rules', 'rules_blob')) || [];
+      if (data.rules_blob) {
+        serverRules = await alertsDecryptRulesBlob(data.rules_blob);
       } else {
         serverRules = data.alerts || data.rules || [];
       }

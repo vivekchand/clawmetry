@@ -7,6 +7,14 @@ The north star: **don't stop at "code compiles." Stop at "verified working in pr
 > ## ⛔ The "done" bar (non-negotiable)
 > **Never tell the user a fix is "done" until it is MERGED, RELEASED to PyPI, the cloud has DEPLOYED it, and you have VERIFIED it live (decrypt the snapshot AND/OR a browser screenshot of the actual tab).** "PR is up / CI green / merged" is *not* done — code that isn't deployed helps nobody. A diagnosis is not a fix; a merge is not a deploy; a deploy is not a verification. Land the whole chain, then say done — once, plainly, with the evidence.
 
+> ## ⚡ Performance is a feature — and a cost (non-negotiable)
+> **The app must stay snappy and cheap to run. At $5/node/mo we cannot make hundreds of API calls per minute.** Every poller and every fetch is money. Treat request volume like a budget you can blow.
+> - **Share, don't duplicate:** one fetch of a shared blob (e.g. the 173 kB `system-snapshot`) serves all consumers — cache it with a TTL + in-flight dedup. Never let N components each re-fetch the same thing (we shipped exactly that bug: 7 interceptors × the snapshot = ~17 fetches/cycle → cut to ~2).
+> - **Scope to the screen:** only the active tab polls its own data. Gate heavy pollers on the current tab and pause them off-tab (and when the browser tab is hidden). The Overview fan-out (`loadAll`) must not fire on the LLM Context screen.
+> - **Cache + dedup by default:** respect TTLs, dedup in-flight requests, prefer one batched call over many.
+> - **Before adding any poller/fetch, ask:** does this need to run on *every* tab? every *N* seconds? can it reuse an existing fetch or the snapshot?
+> - **Measure before shipping:** open the Network panel / Resource Timing and confirm no endpoint is fetched N× per cycle and no background poller fires off its own screen. "It works" is not enough — "it works without a request storm" is the bar.
+
 ---
 
 ## 0. Before you touch anything
