@@ -630,10 +630,85 @@ def api_component_tool(name):
     return jsonify(result)
 
 
+def _try_local_store_component_runtime():
+    """Tier-1 DuckDB fast path for /api/component/runtime.
+
+    Reads the latest system snapshot from DuckDB (written each sync cycle by
+    the daemon). The daemon enriches the ``infra`` blob with python_version,
+    os_name, os_release, arch, node_version, openclaw_version alongside the
+    existing disk/RAM/uptime rows. Returns ``None`` to defer to the live-probe
+    fallback if the snapshot is absent or pre-dates the new infra fields.
+    """
+    try:
+        from routes.local_query import local_store_via_daemon
+        snaps = local_store_via_daemon("query_system_snapshots", kind="system", limit=1)
+        if snaps is None:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            snaps = store.query_system_snapshots(kind="system", limit=1)
+    except Exception:
+        return None
+    if not snaps:
+        return None
+
+    snap = snaps[0]
+    infra = snap.get("infra") or {}
+    py_ver = infra.get("python_version") or ""
+    if not py_ver:
+        # Snapshot predates the infra-enrichment change — fall through to live probe.
+        return None
+
+    items = []
+    items.append({"label": "Python", "value": py_ver, "status": "ok"})
+
+    os_name = infra.get("os_name") or ""
+    os_rel = infra.get("os_release") or ""
+    if os_name:
+        items.append({"label": "OS", "value": f"{os_name} {os_rel}".strip(), "status": "ok"})
+
+    arch = infra.get("arch") or ""
+    if arch:
+        items.append({"label": "Architecture", "value": arch, "status": "ok"})
+
+    oc_ver = infra.get("openclaw_version") or ""
+    items.append({
+        "label": "OpenClaw",
+        "value": oc_ver or "unknown",
+        "status": "ok" if oc_ver else "warning",
+    })
+
+    # Disk, RAM, Uptime rows are already probed by the daemon each cycle.
+    color_map = {"green": "ok", "yellow": "warning", "red": "critical", "": "ok"}
+    label_remap = {"RAM": "Memory"}
+    for row in (snap.get("rows") or []):
+        if not (isinstance(row, list) and len(row) >= 2):
+            continue
+        label = row[0]
+        if label not in ("Disk /", "RAM", "Uptime"):
+            continue
+        status = color_map.get(row[2] if len(row) > 2 else "", "ok")
+        items.append({
+            "label": label_remap.get(label, label),
+            "value": row[1],
+            "status": status,
+        })
+
+    node_ver = infra.get("node_version") or ""
+    if node_ver:
+        items.append({"label": "Node.js", "value": node_ver, "status": "ok"})
+
+    return {"items": items, "_source": "local_store"}
+
+
 @bp_components.route("/api/component/runtime")
 def api_component_runtime():
     """Return runtime environment info."""
     import platform
+
+    if is_local_store_read_enabled():
+        fast = _try_local_store_component_runtime()
+        if fast is not None:
+            return jsonify(fast)
 
     items = []
     items.append(
