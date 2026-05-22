@@ -5621,6 +5621,7 @@ _PENDING_ACTIONS = frozenset({
     "alert_rule_delete",
     "approval_decision",
     "selfevolve_fix",
+    "selfevolve_analyze",
 })
 
 
@@ -5809,6 +5810,9 @@ def _dispatch_pending_action(config: dict, action: dict) -> None:
     if atype == "selfevolve_fix":
         _action_selfevolve_fix(config, action)
         return
+    if atype == "selfevolve_analyze":
+        _action_selfevolve_analyze(config, action)
+        return
 
 
 def _selfevolve_fix_summary(stdout: str) -> str:
@@ -5915,6 +5919,60 @@ def _action_selfevolve_fix(config: dict, action: dict) -> None:
             )
         except Exception as e:
             log.warning("selfevolve_fix cache post failed: %s", e)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _action_selfevolve_analyze(config: dict, action: dict) -> None:
+    """Cloud-relayed on-demand Self-Evolve re-analyze (the Re-analyze button).
+
+    Self-Evolve no longer runs on a timer (see _build_selfevolve) — this is the
+    only thing that triggers a fresh review on cloud. Context is built on THIS
+    (heartbeat) thread because DuckDB isn't thread-safe; the agent runs in a
+    background thread (so a ~15s turn never blocks heartbeats), updates _SE_STATE
+    so the next snapshot carries the fresh findings, and posts the E2E-encrypted
+    findings to the action's cache_key for immediate cloud feedback.
+    """
+    cache_key = action.get("cache_key")
+    enc_key = config.get("encryption_key")
+    api_key = config.get("api_key", "")
+    node_id = config.get("node_id", "")
+    if not (cache_key and enc_key and api_key):
+        return
+    try:
+        ctx = _selfevolve_build_context()
+    except Exception:
+        ctx = {}
+    aid = action.get("id")
+
+    def _run():
+        payload = None
+        try:
+            payload = _selfevolve_compute_via_openclaw(ctx)
+        except Exception as e:
+            log.warning("selfevolve_analyze compute failed: %s", e)
+        if payload:
+            with _SE_LOCK:
+                _SE_STATE["payload"] = payload
+                _SE_STATE["computed_at"] = time.time()
+        out = payload or {"findings": [], "insufficient": True,
+                          "reason": "analysis failed — check the agent / gateway"}
+        try:
+            blob = encrypt_payload(out, enc_key)
+            _post(
+                "/ingest/cache",
+                {
+                    "node_id": node_id,
+                    "id": aid,
+                    "cache_key": cache_key,
+                    "blob": blob,
+                    "shape": "selfevolve_analyze",
+                    "ttl": 3600,
+                },
+                api_key,
+            )
+        except Exception as e:
+            log.warning("selfevolve_analyze cache post failed: %s", e)
 
     threading.Thread(target=_run, daemon=True).start()
 
@@ -7778,7 +7836,15 @@ def _build_selfevolve(workspace=None):
             except Exception:
                 payload = None
         can_run = bool(_resolve_openclaw_bin())
-        if can_run and (time.time() - computed_at > _SE_REFRESH_SEC):
+        # Self-Evolve no longer auto-runs on a timer. It spends Opus turns on a
+        # schedule (the job repeatedly flagged itself for exactly that), and the
+        # in-memory _SE_STATE meant every daemon restart reset the clock and
+        # triggered an immediate run. It now runs ONLY on demand — the
+        # Analyze/Re-analyze button (local: /api/selfevolve/analyze; cloud: the
+        # `selfevolve_analyze` relay action). Opt back into the periodic refresh
+        # with CLAWMETRY_SELFEVOLVE_AUTO=1 (interval CLAWMETRY_SELFEVOLVE_INTERVAL_SEC).
+        _auto = os.environ.get("CLAWMETRY_SELFEVOLVE_AUTO", "").strip().lower() in ("1", "true", "yes", "on")
+        if can_run and _auto and (time.time() - computed_at > _SE_REFRESH_SEC):
             # Build the context HERE, in the snapshot thread, before handing it
             # to the background runner — DuckDB connections aren't thread-safe,
             # so querying the store from the worker thread races this thread and
