@@ -562,6 +562,13 @@
   .chat-tool-chip.tc-user { border-left: 3px solid #2a4a7a; }
   .chat-tool-chip-label { font-weight: 600; letter-spacing: 0.3px; color: #b8c0cc; }
   .chat-tool-chip-meta { opacity: 0.55; font-size: 10px; color: #888; font-variant-numeric: tabular-nums; }
+  /* #1911: expandable tool deep-dive chip — name in the header, exact
+     args/result in the collapsible body. */
+  .chat-tool-dive { display: flex; flex-direction: column; align-items: stretch; gap: 0; max-width: 90%; }
+  .chat-tool-dive .ctd-head { display: flex; align-items: center; gap: 10px; }
+  .chat-tool-dive .ctd-head[onclick] { cursor: pointer; }
+  .ctd-caret { margin-left: auto; opacity: 0.5; font-size: 10px; }
+  .ctd-body { margin: 8px 0 0; padding: 8px 10px; background: rgba(0,0,0,0.28); border: 1px solid #242433; border-radius: 7px; font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text-secondary); white-space: pre-wrap; word-break: break-word; max-height: 360px; overflow: auto; }
   .chat-ts { font-size: 10px; color: #555; margin-top: 6px; text-align: right; }
   .chat-expand { display: inline-block; color: #f0c040; font-size: 11px; cursor: pointer; margin-top: 4px; }
   .chat-expand:hover { text-decoration: underline; }

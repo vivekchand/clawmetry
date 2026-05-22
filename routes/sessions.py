@@ -3016,6 +3016,91 @@ def _bounded_raw_payload(obj, cap: int = _RAW_PAYLOAD_CAP):
     return obj
 
 
+# Issue #1911: Anthropic Messages content-block tools. Claude-Code rows nest the
+# real message under ``data.message`` and record each tool as a *content block*
+# (``{"type":"tool_use","name","input"}`` / ``{"type":"tool_result",
+# "tool_use_id","content"}``) rather than a top-level ``tool_calls`` key. The
+# flat transcript path missed these entirely, so tool-heavy sessions replayed as
+# a wall of nameless "Tool call"/"Tool result" chips. We lift each block into a
+# real turn carrying the tool name + input/output so the replay can deep-dive
+# into what actually happened.
+_TOOL_DETAIL_CAP = 4000
+
+
+def _cap_text(s, cap: int = _TOOL_DETAIL_CAP) -> str:
+    """Truncate a string to ``cap`` chars with a visible marker. Never raises."""
+    s = s if isinstance(s, str) else str(s)
+    if len(s) > cap:
+        return s[:cap] + f"\n… (truncated, {len(s)} chars total)"
+    return s
+
+
+def _pretty_json(x, cap: int = _TOOL_DETAIL_CAP) -> str:
+    """Pretty-print a tool input/output payload to a capped string for inline
+    display. Falls back to ``str()`` for anything not JSON-serializable."""
+    try:
+        s = json.dumps(x, indent=2, default=str)
+    except (TypeError, ValueError):
+        s = str(x)
+    return _cap_text(s, cap)
+
+
+def _anthropic_tool_turns(blocks, ts_ms, name_by_id):
+    """Map an Anthropic message ``content`` block list to ``(tool_turns, text)``.
+
+    ``tool_turns`` is one turn per ``tool_use`` / ``tool_result`` block, each
+    carrying a ``tool`` dict (``{kind, name, input|output}``) the replay renders
+    as an expandable deep-dive. ``text`` is the joined text blocks, used only
+    when the session has no v3 prose event (pure Claude Code) so we never double
+    the assistant reply. ``name_by_id`` maps a ``tool_use`` id to its name so
+    the matching ``tool_result`` (which only references the id) can show which
+    tool it came from.
+    """
+    tool_turns: list[dict] = []
+    texts: list[str] = []
+    if not isinstance(blocks, list):
+        return tool_turns, ""
+    for b in blocks:
+        if not isinstance(b, dict):
+            continue
+        bt = b.get("type")
+        if bt == "text":
+            t = b.get("text")
+            if t:
+                texts.append(t if isinstance(t, str) else str(t))
+        elif bt == "tool_use":
+            name = b.get("name") or "tool"
+            tid = b.get("id")
+            if tid:
+                name_by_id[tid] = name
+            tool_turns.append({
+                "role": "assistant",
+                "content": "",
+                "timestamp": ts_ms,
+                "type": "tool_use",
+                "tool": {
+                    "kind": "call",
+                    "name": name,
+                    "input": _pretty_json(b.get("input") or {}),
+                },
+            })
+        elif bt == "tool_result":
+            name = name_by_id.get(b.get("tool_use_id"), "")
+            tool_turns.append({
+                "role": "tool",
+                "content": "",
+                "timestamp": ts_ms,
+                "type": "tool_use",
+                "tool": {
+                    "kind": "result",
+                    "name": name,
+                    "output": _cap_text(_stringify_content(b.get("content"))),
+                    "is_error": bool(b.get("is_error")),
+                },
+            })
+    return tool_turns, "\n".join(texts)
+
+
 def _expand_openclaw_event(obj: dict, ts_ms):
     """Map one OpenClaw event into zero or more transcript turns.
 
@@ -3293,6 +3378,18 @@ def _try_local_store_transcript(session_id: str, _events=None):
     total_tokens = 0
     first_ts = None
     last_ts = None
+    # Anthropic ``tool_result`` blocks reference their call by id only; map
+    # id→name as we see ``tool_use`` blocks so results show which tool ran.
+    tool_name_by_id: dict = {}
+    # When v3 (``model.completed`` / ``prompt.submitted``) events are present
+    # they already supply the prose for Claude-Code sessions, so we take *tools*
+    # from the raw ``message`` rows but skip their text to avoid doubling the
+    # reply. Pure Claude-Code sessions (no v3 events) keep their message text.
+    has_v3_messages = any(
+        isinstance(r.get("data"), dict)
+        and r["data"].get("_v3_type") == "message"
+        for r in rows
+    )
     for ev in rows:
         obj = ev.get("data")
         if not isinstance(obj, dict):
@@ -3365,6 +3462,38 @@ def _try_local_store_transcript(session_id: str, _events=None):
                 if raw_payload is not None:
                     turn["raw"] = raw_payload
                 messages.append(turn)
+            continue
+
+        # Claude-Code shape (#1911): the real Anthropic message is nested under
+        # ``data.message`` and tools are content blocks, not top-level keys.
+        # Lift each tool_use/tool_result block into a named, deep-divable turn;
+        # emit prose only when no v3 event already covered it.
+        msg_obj = obj.get("message") if isinstance(obj.get("message"), dict) else None
+        if msg_obj is not None:
+            raw_payload = _bounded_raw_payload(obj)
+            role = msg_obj.get("role") or obj.get("type") or "assistant"
+            if not model:
+                model = msg_obj.get("model") or obj.get("model") or ev.get("model")
+            usage = msg_obj.get("usage")
+            if isinstance(usage, dict):
+                total_tokens += usage.get("total_tokens", 0) or (
+                    (usage.get("input_tokens", 0) or 0)
+                    + (usage.get("output_tokens", 0) or 0)
+                )
+            tool_turns, block_text = _anthropic_tool_turns(
+                msg_obj.get("content"), ts_ms, tool_name_by_id)
+            for tt in tool_turns:
+                if raw_payload is not None:
+                    tt["raw"] = raw_payload
+                messages.append(tt)
+            if block_text.strip() and not has_v3_messages:
+                entry = {"role": role, "content": block_text, "timestamp": ts_ms}
+                decoding = _extract_decoding_params(obj)
+                if decoding and role == "assistant":
+                    entry["params"] = decoding
+                if raw_payload is not None:
+                    entry["raw"] = raw_payload
+                messages.append(entry)
             continue
 
         # Anthropic-style fallback (existing logic).
