@@ -5195,6 +5195,128 @@ def api_session_model_transitions(sid):
     )
 
 
+def _diff_params(p1, p2):
+    """Return list of decoding-param keys that differ between p1 and p2.
+
+    Compares temperature, top_p, top_k, and max_tokens. A missing key is
+    treated as None — a key present in one dict but not the other counts as
+    a change.  Floats are compared exactly (provider-switch drift is typically
+    a deliberate user change, not floating-point noise).
+    """
+    changed = []
+    for k in ("temperature", "top_p", "top_k", "max_tokens"):
+        v1 = (p1 or {}).get(k)
+        v2 = (p2 or {}).get(k)
+        if v1 != v2 and not (v1 is None and v2 is None):
+            changed.append(k)
+    return changed
+
+
+def _detect_config_drift_jsonl(path):
+    """Scan a session JSONL for provider switches that also changed decoding params.
+
+    A "config drift" event fires when both of these are true at the same turn:
+      1. The provider field changed from the previous assistant turn.
+      2. At least one of temperature / top_p / top_k / max_tokens differs.
+
+    Returns a dict ``{has_drift, drift_count, drifts}`` where each drift entry
+    is ``{turn, ts, from_provider, to_provider, from_params, to_params,
+    changed_keys}``.  Always returns a result dict (never raises).
+    """
+    drifts = []
+    prev_provider = None
+    prev_params: dict = {}
+    turn = 0
+    try:
+        with open(path, "r", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                msg = obj
+                if obj.get("type") in ("message", "user", "assistant") and isinstance(
+                    obj.get("message"), dict
+                ):
+                    msg = obj["message"]
+                if msg.get("role") != "assistant":
+                    continue
+                turn += 1
+                provider = (msg.get("provider") or "").strip()
+                params = _extract_decoding_params(obj)
+                ts = (
+                    obj.get("timestamp")
+                    or obj.get("time")
+                    or msg.get("timestamp")
+                    or ""
+                )
+                if (
+                    prev_provider is not None
+                    and provider
+                    and prev_provider
+                    and provider != prev_provider
+                ):
+                    changed = _diff_params(prev_params, params)
+                    if changed:
+                        drifts.append(
+                            {
+                                "turn": turn,
+                                "ts": ts,
+                                "from_provider": prev_provider,
+                                "to_provider": provider,
+                                "from_params": prev_params,
+                                "to_params": params,
+                                "changed_keys": changed,
+                            }
+                        )
+                if provider:
+                    prev_provider = provider
+                    prev_params = params
+                elif prev_provider is None:
+                    prev_provider = ""
+                    prev_params = params
+    except Exception:
+        pass
+    return {
+        "has_drift": bool(drifts),
+        "drift_count": len(drifts),
+        "drifts": drifts,
+    }
+
+
+@bp_sessions.route("/api/sessions/<sid>/config-drift")
+def api_session_config_drift(sid):
+    """Return provider-switch config-drift events for a session (issue #570).
+
+    A drift fires when the provider changes between assistant turns AND at
+    least one decoding param (temperature, top_p, top_k, max_tokens) also
+    changes.  Different providers interpret the same temperature value
+    differently, so a silent param change at a provider switch can alter
+    model behaviour in ways that are hard to spot turn-by-turn.
+
+    Response: ``{sessionId, has_drift, drift_count, drifts: [{turn, ts,
+    from_provider, to_provider, from_params, to_params, changed_keys}]}``.
+    """
+    import dashboard as _d
+    if not sid or any(c in sid for c in ("/", "\\", "..")):
+        return jsonify({"error": "invalid session id"}), 400
+    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    path = os.path.join(sessions_dir, sid + ".jsonl")
+    path = os.path.normpath(path)
+    if not path.startswith(os.path.normpath(sessions_dir)):
+        return jsonify({"error": "access denied"}), 403
+    if not os.path.isfile(path):
+        return jsonify({"sessionId": sid, "has_drift": False, "drift_count": 0, "drifts": []})
+    result = _detect_config_drift_jsonl(path)
+    result["sessionId"] = sid
+    return jsonify(result)
+
+
 def _try_local_store_fallbacks(limit: int, top: int):
     """Tier-1 DuckDB fast path for /api/fallbacks.
 
