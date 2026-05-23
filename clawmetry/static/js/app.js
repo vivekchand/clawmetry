@@ -10524,11 +10524,13 @@ function _renderToolDiveChip(ev, highlighted) {
   html += '<div class="ctd-head"' + (hasBody ? ' onclick="toggleToolDive(\'' + did + '\')"' : '') + '>';
   html += '<span class="chat-tool-chip-label">' + icon + ' ' + labelText + '</span>';
   if (isResult && t.is_error) html += '<span class="chat-tool-chip-meta" style="color:#e0625a;">error</span>';
-  if (hasBody) html += '<span class="ctd-caret" id="' + did + '-caret">▸</span>';
+  if (hasBody) html += '<span class="ctd-caret" id="' + did + '-caret">▾</span>';
   if (ts) html += '<span class="chat-tool-chip-meta">' + ts + '</span>';
   html += '</div>';
   if (hasBody) {
-    html += '<pre class="ctd-body" id="' + did + '" style="display:none;">' + escHtml(String(body)) + '</pre>';
+    // Default expanded so the args/output (the debugging signal) are visible
+    // without an extra click. Click the header to collapse a noisy tool turn.
+    html += '<pre class="ctd-body" id="' + did + '" style="display:block;">' + escHtml(String(body)) + '</pre>';
   }
   html += '</div>';
   return html;
