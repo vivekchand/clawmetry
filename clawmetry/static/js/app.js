@@ -2530,10 +2530,18 @@ async function saveEvalRubric() {
 
 async function loadSubAgents() {
   try {
-    var data = await fetch('/api/subagents').then(r => r.json());
+    var _saResp = await fetch('/api/subagents').then(async function(r) { return {s: r.status, b: await r.json()}; });
+    var data = _saResp.b || {};
+    // Issue #1804: show outage banner when ingest is offline (503 envelope).
+    if (_saResp.s === 503 && data && data.error === 'local_store ingest is offline') {
+      document.getElementById('subagents-status').textContent = 'Ingest offline';
+      var _saPrev = document.getElementById('subagents-preview');
+      if (_saPrev) _saPrev.innerHTML = '<div style="background:#fff7ed;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:6px;font-size:12px;"><strong>Ingest temporarily offline.</strong> Sub-agent data unavailable; the local_store writer is not responding.</div>';
+      return;
+    }
     var counts = data.counts;
     var subagents = data.subagents;
-    
+
     // Update main counter
     document.getElementById('subagents-count').textContent = counts.total;
     
@@ -5357,7 +5365,20 @@ async function loadBrainPage(silent) {
   }
   if (!silent) { advisorProbe(); selfevolveProbe(); }
   try {
-    var data = await fetchJsonWithTimeout('/api/brain-history?limit=300', 20000);
+    // Issue #1804: use raw fetch so response.status is preserved; a 503
+    // ingest-outage shows a banner instead of falling to the error handler.
+    var _bhCtrl = new AbortController();
+    var _bhTimer = setTimeout(function(){_bhCtrl.abort('timeout');}, 20000);
+    var _bhRaw;
+    try { _bhRaw = await fetch('/api/brain-history?limit=300', {signal: _bhCtrl.signal}); }
+    finally { clearTimeout(_bhTimer); }
+    var data = await _bhRaw.json();
+    if (_bhRaw.status === 503 && data && data.error === 'local_store ingest is offline') {
+      var _bhEl = document.getElementById('brain-stream');
+      if (_bhEl) _bhEl.innerHTML = '<div style="background:#fff7ed;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:6px;margin:12px;"><strong>Ingest temporarily offline.</strong> Brain history unavailable; the local_store writer is not responding. New events will appear once the daemon recovers.</div>';
+      _renderBrainHistoryCap(false);
+      return;
+    }
     var events = (data.events || []).slice().sort(function(a,b){
       var ta = a.time ? new Date(a.time).getTime() : 0;
       var tb = b.time ? new Date(b.time).getTime() : 0;
@@ -9263,10 +9284,17 @@ async function loadHeatmap(days) {
 // ===== Usage / Token Tracking =====
 async function loadUsage() {
   try {
-    var [data, byPlugin] = await Promise.all([
-      fetch('/api/usage').then(r => r.json()),
+    var [_uResp, byPlugin] = await Promise.all([
+      fetch('/api/usage').then(async function(r) { return {s: r.status, b: await r.json()}; }),
       fetch('/api/usage/by-plugin').then(r => r.json()).catch(function(){ return {plugins: []}; })
     ]);
+    var data = _uResp.b || {};
+    // Issue #1804: show outage banner when ingest is offline (503 envelope).
+    if (_uResp.s === 503 && data && data.error === 'local_store ingest is offline') {
+      var _uChart = document.getElementById('usage-chart');
+      if (_uChart) _uChart.innerHTML = '<div style="background:#fff7ed;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:6px;"><strong>Ingest temporarily offline.</strong> Token usage data unavailable; the local_store writer is not responding.</div>';
+      return;
+    }
     function fmtTokens(n) { return n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(0) + 'K' : String(n); }
     function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
     document.getElementById('usage-today').textContent = fmtTokens(data.today);
@@ -11695,6 +11723,17 @@ function initFlow() {
   // Populate skills in Flow diagram
   _populateFlowSkills();
 
+  // Issue #1804: probe the JSON snapshot path of flow-events before starting
+  // SSE. On 503+outage, inject a banner into the live feed. Fire-and-forget
+  // so SSE startup is not blocked.
+  fetch('/api/flow-events').then(async function(r) {
+    if (r.status !== 503) return;
+    var _ffBody = await r.json().catch(function(){return {};});
+    if (_ffBody && _ffBody.error === 'local_store ingest is offline') {
+      var _ffEl = document.getElementById('flow-live-feed');
+      if (_ffEl) _ffEl.innerHTML = '<div style="background:#fff7ed;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:6px;"><strong>Ingest temporarily offline.</strong> Live flow events unavailable; the local_store writer is not responding.</div>';
+    }
+  }).catch(function(){});
   // Connect to the typed flow-events SSE (tails gateway.log + session JSONL)
   _startFlowSse();
   // Active Tools + Live Tool Call Stream — DuckDB-backed (issue #1127).
@@ -15373,6 +15412,11 @@ async function renderModalTools(el) {
   try {
     var r = await fetch('/api/session-tools?session_id=' + encodeURIComponent(_modalSessionId) + '&args_chars=200&result_chars=200&include_unpaired=1');
     data = await r.json();
+    // Issue #1804: show outage banner when ingest is offline (503 envelope).
+    if (r.status === 503 && data && data.error === 'local_store ingest is offline') {
+      el.innerHTML = '<div style="background:#fff7ed;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:6px;margin:12px;"><strong>Ingest temporarily offline.</strong> Tool timeline unavailable; the local_store writer is not responding.</div>';
+      return;
+    }
   } catch(e) {
     el.innerHTML = '<div style="padding:24px;color:#ef5350">Failed to load tool timeline.</div>';
     return;
