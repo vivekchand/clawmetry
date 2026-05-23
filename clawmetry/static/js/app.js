@@ -344,7 +344,35 @@ async function checkActiveAlerts() {
     }
     // Show most recent alert
     var latest = alerts[0];
-    document.getElementById('alert-banner-msg').textContent = latest.message;
+    var msgEl = document.getElementById('alert-banner-msg');
+    msgEl.textContent = latest.message;
+    // Stuck-session deep-link: dashboard.py:_check_stuck_sessions emits
+    // rule_id = `stuck_session_<full-session-id>`. Surface an "Open session →"
+    // button on the banner so users go from "what's wrong" to "look at it"
+    // in one click. Idempotent across polls — remove any prior button first.
+    var existingOpen = document.getElementById('alert-banner-open-session');
+    if (existingOpen && existingOpen.parentNode) existingOpen.parentNode.removeChild(existingOpen);
+    if (latest && latest.type === 'stuck_session' && typeof latest.rule_id === 'string') {
+      var sid = latest.rule_id.indexOf('stuck_session_') === 0
+        ? latest.rule_id.slice('stuck_session_'.length) : '';
+      if (sid) {
+        var openBtn = document.createElement('button');
+        openBtn.id = 'alert-banner-open-session';
+        openBtn.textContent = 'Open session →';
+        openBtn.style.cssText = 'margin-left:12px;background:transparent;border:1px solid rgba(255,255,255,0.3);color:inherit;border-radius:6px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer;';
+        openBtn.onclick = function () {
+          // Deep-link via hash so the Session-replay tab can pick it up
+          // either on first paint (window.location.hash) or via the
+          // hashchange listener if the tab is already mounted.
+          try { window.location.hash = 'session=' + encodeURIComponent(sid); } catch(e) {}
+          if (typeof switchTab === 'function') switchTab('transcripts');
+        };
+        // Insert before the Dismiss / ack button so it reads left-to-right.
+        var ackBtn = document.getElementById('alert-resume-btn');
+        if (ackBtn && ackBtn.parentNode) ackBtn.parentNode.insertBefore(openBtn, ackBtn);
+        else if (msgEl && msgEl.parentNode) msgEl.parentNode.appendChild(openBtn);
+      }
+    }
     banner.style.display = 'flex';
     // Show resume button if gateway is paused
     var status = await fetch('/api/budget/status').then(function(r){return r.json();});
@@ -6098,52 +6126,76 @@ async function ncReject(sandbox, chunkId, btn) {
   }
 }
 
+// Security posture renderer — elevates the WARN/FAIL items that need
+// attention, collapses the passing items behind a one-line "show all"
+// disclosure, and condenses the hero card so the action items aren't
+// buried under a wall of green PASS cards.
 async function loadSecurityPosture() {
-  // Cloud mode no longer short-circuits this — the daemon now collects
-  // posture locally and pushes on its heartbeat, cloud stores it per node,
-  // and `/api/security/posture` returns the synced snapshot. The cloud-
-  // mode fetch shim auto-injects ?node_id=<current> + &token=<cm_> so the
-  // call works against either OSS-local OR cloud-served handler.
   try {
     var data = await fetchJsonWithTimeout('/api/security/posture', 25000);
     var badge = document.getElementById('posture-score-badge');
+    if (!badge) return;
     var label = document.getElementById('posture-score-label');
     var bar = document.getElementById('posture-score-bar');
     var passedEl = document.getElementById('posture-passed');
     var warnEl = document.getElementById('posture-warnings');
     var failedEl = document.getElementById('posture-failed');
     var listEl = document.getElementById('posture-checks-list');
-    if (!badge) return;
+
     badge.textContent = data.score || '?';
     badge.style.background = data.score_color || '#64748b';
-    label.textContent = (data.score_label || 'Unknown') + ' (' + (data.score_pct || 0) + '%)' + (data.config_path ? ' — ' + data.config_path : '');
+    var labelTxt = (data.score_label || 'Unknown') + ' · ' + (data.score_pct || 0) + '%';
+    label.innerHTML = escHtml(labelTxt) +
+      (data.config_path ? '<span style="color:var(--text-muted);margin-left:8px;font-size:10px;font-family:ui-monospace,Menlo,monospace;">' + escHtml(data.config_path) + '</span>' : '');
     bar.style.width = (data.score_pct || 0) + '%';
     bar.style.background = data.score_color || '#64748b';
     passedEl.textContent = data.passed || 0;
     warnEl.textContent = data.warnings || 0;
     failedEl.textContent = data.failed || 0;
-    var checks = data.checks || [];
-    var html = '';
-    var statusIcons = {'pass': '&#9989;', 'warn': '&#9888;&#65039;', 'fail': '&#10060;'};
-    var statusColors = {'pass': '#22c55e', 'warn': '#f59e0b', 'fail': '#ef4444'};
-    // Show failed first, then warnings, then passed
-    checks.sort(function(a,b) {
-      var order = {'fail': 0, 'warn': 1, 'pass': 2};
-      return (order[a.status] || 2) - (order[b.status] || 2);
-    });
-    checks.forEach(function(c) {
-      var icon = statusIcons[c.status] || '&#10067;';
-      var color = statusColors[c.status] || '#64748b';
-      html += '<div style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;border-left:3px solid ' + color + ';">';
-      html += '<span style="font-size:14px;flex-shrink:0;">' + icon + '</span>';
-      html += '<div style="flex:1;min-width:0;">';
-      html += '<div style="font-size:12px;font-weight:600;color:var(--text-primary);">' + escHtml(c.label) + ' <span style="font-size:10px;color:' + color + ';font-weight:700;text-transform:uppercase;">' + escHtml(c.status) + '</span></div>';
-      html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">' + escHtml(c.detail) + '</div>';
+
+    var checks = (data.checks || []).slice();
+    var fails = checks.filter(function(c){ return c.status === 'fail'; });
+    var warns = checks.filter(function(c){ return c.status === 'warn'; });
+    var passes = checks.filter(function(c){ return c.status === 'pass'; });
+
+    function row(c, color, accent) {
+      var h = '<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:' + (accent || 'var(--bg-primary)') + ';border:1px solid var(--border);border-left:3px solid ' + color + ';border-radius:6px;">';
+      h += '<div style="flex:1;min-width:0;">';
+      h += '<div style="font-size:13px;font-weight:600;color:var(--text-primary);">' + escHtml(c.label) + '</div>';
+      h += '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">' + escHtml(c.detail || '') + '</div>';
       if (c.remediation) {
-        html += '<div style="font-size:10px;color:#3b82f6;margin-top:3px;font-family:monospace;background:rgba(59,130,246,0.08);padding:3px 6px;border-radius:3px;">&#128736; ' + escHtml(c.remediation) + '</div>';
+        h += '<div style="font-size:10px;color:#a5b4fc;margin-top:6px;font-family:ui-monospace,Menlo,monospace;background:rgba(99,102,241,0.10);padding:5px 8px;border-radius:4px;line-height:1.45;">→ ' + escHtml(c.remediation) + '</div>';
       }
+      h += '</div></div>';
+      return h;
+    }
+    function passPill(c) {
+      return '<span title="' + escHtml(c.detail || '') + '" style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:14px;background:rgba(34,197,94,0.10);border:1px solid rgba(34,197,94,0.3);color:#86efac;font-size:11px;font-weight:500;">✓ ' + escHtml(c.label) + '</span>';
+    }
+
+    var html = '';
+    // Section 1: needs review — failures first, then warnings. Only renders
+    // when there's something actionable.
+    if (fails.length || warns.length) {
+      html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-muted);margin:4px 0 8px;">Needs review · ' + (fails.length + warns.length) + '</div>';
+      html += '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;">';
+      fails.forEach(function(c){ html += row(c, '#ef4444', 'rgba(239,68,68,0.06)'); });
+      warns.forEach(function(c){ html += row(c, '#f59e0b', 'rgba(245,158,11,0.05)'); });
+      html += '</div>';
+    } else if (passes.length) {
+      html += '<div style="padding:12px 14px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.25);border-radius:6px;color:#86efac;font-size:13px;font-weight:600;margin-bottom:14px;">✓ All ' + passes.length + ' security checks passing — nothing to review.</div>';
+    }
+
+    // Section 2: passing — collapsed by default as compact pills.
+    if (passes.length) {
+      var openByDefault = !(fails.length || warns.length); // open only when no warnings
+      html += '<div>';
+      html += '<button type="button" onclick="(function(b){var t=document.getElementById(\'posture-passing-list\');var open=t.style.display!==\'none\';t.style.display=open?\'none\':\'\';b.querySelector(\'.chev\').textContent=open?\'▸\':\'▾\';})(this)" style="display:inline-flex;align-items:center;gap:8px;background:none;border:none;color:var(--text-muted);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;cursor:pointer;padding:4px 0;">';
+      html += '<span class="chev">' + (openByDefault ? '▾' : '▸') + '</span> Passing · ' + passes.length + '</button>';
+      html += '<div id="posture-passing-list" style="display:' + (openByDefault ? 'flex' : 'none') + ';flex-wrap:wrap;gap:6px;margin-top:6px;">';
+      passes.forEach(function(c){ html += passPill(c); });
       html += '</div></div>';
-    });
+    }
     listEl.innerHTML = html;
   } catch(e) {
     var panel = document.getElementById('security-posture-panel');
@@ -6164,6 +6216,27 @@ async function loadSecurityPage(silent) {
     document.getElementById('sec-clean-count').textContent = counts.clean_sessions || 0;
     var scanTime = document.getElementById('security-scan-time');
     if (scanTime) scanTime.textContent = 'Scanned ' + new Date().toLocaleTimeString();
+    // Compact "all-clear" UI when there's nothing to triage: hide the four
+    // zero-tiles + severity filter + "Scanning..." placeholder; show one
+    // calm green line instead.
+    var nThreats = (counts.critical || 0) + (counts.high || 0) + (counts.medium || 0) + (threats.length || 0);
+    var summaryEl = document.getElementById('security-summary');
+    var filterEl = document.getElementById('security-filter-pills');
+    var listWrap = document.getElementById('security-threat-list');
+    var allclear = document.getElementById('security-allclear');
+    if (allclear) {
+      if (nThreats === 0) {
+        if (summaryEl) summaryEl.style.display = 'none';
+        if (filterEl) filterEl.style.display = 'none';
+        if (listWrap) listWrap.style.display = 'none';
+        allclear.style.display = 'block';
+      } else {
+        if (summaryEl) summaryEl.style.display = '';
+        if (filterEl) filterEl.style.display = '';
+        if (listWrap) listWrap.style.display = '';
+        allclear.style.display = 'none';
+      }
+    }
     renderSecurityThreats(threats);
   } catch(e) {
     if (!silent) {
@@ -10250,6 +10323,20 @@ async function loadTranscripts() {
     document.getElementById('transcript-list').style.display = '';
     document.getElementById('transcript-viewer').style.display = 'none';
     document.getElementById('transcript-back-btn').style.display = 'none';
+    // Deep-link support: if the URL hash carries `#session=<id>` (set by the
+    // alerts-banner "Open session →" button or any other surface that wants
+    // to jump straight to a specific session), open that transcript now and
+    // clear the hash so a reload doesn't keep re-opening it.
+    try {
+      var h = (window.location.hash || '').replace(/^#/, '');
+      var m = h.split('&').reduce(function(acc, p) {
+        var kv = p.split('='); if (kv[0]) acc[kv[0]] = decodeURIComponent(kv[1] || ''); return acc;
+      }, {});
+      if (m.session && typeof viewTranscript === 'function') {
+        viewTranscript(m.session);
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+      }
+    } catch (e) {}
   } catch(e) {
     document.getElementById('transcript-list').innerHTML = '<div style="padding:16px;color:#666;">Failed to load transcripts</div>';
   }
