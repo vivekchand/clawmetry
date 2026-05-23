@@ -10992,9 +10992,13 @@ DASHBOARD_HTML = r"""
       <div class="left-nav-item left-nav-item-sub" data-tab="version-impact" onclick="switchTab('version-impact')">
         <span class="left-nav-label">Version impact</span>
       </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="limits" onclick="switchTab('limits')">
-        <span class="left-nav-label">Rate limits</span>
-      </div>
+      <!-- Rate limits tab removed: cloud endpoint is hard-disabled by design
+           (rate-limit state is per-node, doesn't ride the snapshot), and
+           the local panel rendered empty for ~95% of users because the
+           feed requires either OTLP exporter on the gateway or the opt-in
+           clawmetry.track interceptor. Per-provider spend already lives on
+           the Cost tab; 429s surface in Brain + Reliability. The
+           /api/rate-limits endpoint stays for power users scripting it. -->
       <div class="left-nav-item left-nav-item-sub" data-tab="nemoclaw" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">
         <span class="left-nav-label">NemoClaw</span>
       </div>
@@ -11030,8 +11034,7 @@ DASHBOARD_HTML = r"""
 
 <!-- HISTORY -->
 
-<!-- RATE LIMITS -->
-{% include 'tabs/limits.html' %}
+<!-- Rate limits panel removed -- see sidebar comment above. -->
 
 {% include 'tabs/history.html' %}
 
