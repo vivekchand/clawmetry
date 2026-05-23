@@ -913,7 +913,6 @@ function switchTab(name) {
   if (name === 'transcripts') loadTranscripts();
   if (name === 'version-impact') loadVersionImpact();
   if (name === 'clusters') loadClusters();
-  if (name === 'limits') loadRateLimits();
   if (name === 'flow') initFlow();
   if (name === 'context') loadContextInspector();
   if (name === 'tracing') loadTracing();
@@ -11191,92 +11190,6 @@ async function loadVersionImpact() {
 
 // ── Session Clusters Panel ─────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════
-// Rate Limit Monitor — GH#67
-// ═══════════════════════════════════════════════════════════════════════════
-
-var _rateLimitTimer = null;
-
-async function loadRateLimits() {
-  var container = document.getElementById('rate-limits-content');
-  var hourlyEl = document.getElementById('rate-limits-hourly');
-  if (!container) return;
-  try {
-    var data = await fetch('/api/rate-limits').then(function(r) { return r.json(); });
-    var providers = data.providers || [];
-
-    if (providers.length === 0) {
-      container.innerHTML = '<div class="card" style="padding:24px;text-align:center;color:var(--text-muted);">No API usage data yet. Rate limits will appear once OTLP metrics flow from the OpenClaw gateway.</div>';
-      if (hourlyEl) hourlyEl.innerHTML = '';
-      return;
-    }
-
-    var html = '<div class="grid">';
-    providers.forEach(function(p) {
-      var statusColor = p.status === 'red' ? '#ef4444' : (p.status === 'amber' ? '#f59e0b' : '#22c55e');
-      var statusBg = p.status === 'red' ? 'rgba(239,68,68,0.1)' : (p.status === 'amber' ? 'rgba(245,158,11,0.1)' : 'rgba(34,197,94,0.1)');
-      var statusBorder = p.status === 'red' ? 'rgba(239,68,68,0.3)' : (p.status === 'amber' ? 'rgba(245,158,11,0.3)' : 'rgba(34,197,94,0.15)');
-      var statusLabel = p.status === 'red' ? '\uD83D\uDD34 HIGH' : (p.status === 'amber' ? '\uD83D\uDFE1 MODERATE' : '\uD83D\uDFE2 OK');
-      html += '<div class="card" style="border:1px solid ' + statusBorder + ';background:' + statusBg + ';">';
-      html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">';
-      html += '<div class="card-title" style="margin:0;">' + escHtml(p.label) + '</div>';
-      html += '<span style="font-size:11px;font-weight:700;color:' + statusColor + ';">' + statusLabel + '</span>';
-      html += '</div>';
-      html += _rateLimitBar('RPM (1 min)', p.rpm.current, p.rpm.limit, p.rpm.pct);
-      html += _rateLimitBar('Input TPM (1 min)', p.tpm_input.current, p.tpm_input.limit, p.tpm_input.pct);
-      html += _rateLimitBar('Output TPM (1 min)', p.tpm_output.current, p.tpm_output.limit, p.tpm_output.pct);
-      if (p.models && p.models.length > 0) {
-        html += '<div style="margin-top:8px;font-size:11px;color:var(--text-muted);">Models: ';
-        p.models.forEach(function(m) {
-          html += '<span style="display:inline-block;padding:2px 6px;margin:2px;background:var(--bg-secondary);border-radius:4px;font-size:10px;">' + escHtml(m) + '</span>';
-        });
-        html += '</div>';
-      }
-      html += '</div>';
-    });
-    html += '</div>';
-    container.innerHTML = html;
-
-    // Hourly summary
-    var hourlyHtml = '<div class="section-title">&#128202; Last Hour Summary</div><div class="grid">';
-    var totalReqs = 0, totalCost = 0;
-    providers.forEach(function(p) { totalReqs += p.hour.requests; totalCost += p.hour.cost_usd; });
-    hourlyHtml += '<div class="card"><div class="card-title"><span class="icon">&#128232;</span> Requests (1h)</div><div class="card-value">' + totalReqs.toLocaleString() + '</div></div>';
-    hourlyHtml += '<div class="card"><div class="card-title"><span class="icon">&#128176;</span> Cost (1h)</div><div class="card-value">$' + totalCost.toFixed(4) + '</div></div>';
-    providers.forEach(function(p) {
-      hourlyHtml += '<div class="card"><div class="card-title"><span class="icon">&#128279;</span> ' + escHtml(p.label) + '</div>';
-      hourlyHtml += '<div class="card-value">' + p.hour.requests + ' reqs</div>';
-      hourlyHtml += '<div class="card-sub">' + p.hour.tokens_in.toLocaleString() + ' in / ' + p.hour.tokens_out.toLocaleString() + ' out &middot; $' + p.hour.cost_usd.toFixed(4) + '</div></div>';
-    });
-    hourlyHtml += '</div>';
-    if (hourlyEl) hourlyEl.innerHTML = hourlyHtml;
-
-    // Auto-refresh every 30s while tab is active
-    if (_rateLimitTimer) clearInterval(_rateLimitTimer);
-    _rateLimitTimer = visibilitySetInterval(function() {
-      var limitsPage = document.getElementById('page-limits');
-      if (limitsPage && limitsPage.classList.contains('active')) loadRateLimits();
-      else { clearInterval(_rateLimitTimer); _rateLimitTimer = null; }
-    }, 30000);
-  } catch(e) {
-    if (container) container.innerHTML = '<div class="card" style="padding:16px;color:#ef4444;">Failed to load rate limits: ' + escHtml(String(e)) + '</div>';
-  }
-}
-
-function _rateLimitBar(label, current, limit, pct) {
-  var barColor = pct >= 90 ? '#ef4444' : (pct >= 70 ? '#f59e0b' : '#22c55e');
-  var w = Math.min(pct, 100);
-  var fmt = typeof current === 'number' ? (current >= 1000 ? (current/1000).toFixed(1) + 'k' : String(current)) : String(current);
-  var limFmt = typeof limit === 'number' ? (limit >= 1000 ? (limit/1000).toFixed(0) + 'k' : String(limit)) : String(limit);
-  var html = '<div style="margin-bottom:8px;">';
-  html += '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted);margin-bottom:3px;">';
-  html += '<span>' + escHtml(label) + '</span><span style="color:' + barColor + ';font-weight:600;">' + fmt + ' / ' + limFmt + ' (' + pct + '%)</span>';
-  html += '</div>';
-  html += '<div style="background:var(--bg-secondary);border-radius:4px;height:6px;overflow:hidden;">';
-  html += '<div style="width:' + w + '%;height:100%;background:' + barColor + ';border-radius:4px;transition:width 0.4s;"></div>';
-  html += '</div></div>';
-  return html;
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 async function loadClusters() {
   var el = document.getElementById('clusters-content');
