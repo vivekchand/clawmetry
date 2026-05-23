@@ -476,16 +476,89 @@ def _cmd_connect(args) -> None:
     # `--force` flag lets the user override after explicit confirmation.
     from clawmetry.config import is_cloud_disabled, NOCLOUD_MARKER_PATH
     if is_cloud_disabled() and not getattr(args, "force", False):
-        print("Cloud sync is disabled on this machine (local-only mode).")
-        print(f"  Marker: {NOCLOUD_MARKER_PATH}")
-        print( "  Env:    CLAWMETRY_NO_CLOUD=" + (os.environ.get("CLAWMETRY_NO_CLOUD") or "(unset)"))
+        # Two cases here:
+        #
+        # (A) AUTOMATED invocation -- install.sh / curl|bash / wrappers that
+        #     pass --key-only, --no-daemon, --key, or --enc-key. Refuse
+        #     silently: the WHOLE point of #1937 was that updates must not
+        #     silently re-prompt for an email. install.sh's `|| true`
+        #     swallows the exit so the install completes cleanly.
+        #
+        # (B) INTERACTIVE invocation -- a human typed `clawmetry connect` in
+        #     a terminal. Offer a one-time conversion choice: sign up for
+        #     cloud (which removes the marker and proceeds with the normal
+        #     flow), or stay local-only (which exits gracefully). This is the
+        #     conversion moment without re-introducing the #1937 silent
+        #     re-prompt.
+        _automation_flag = (
+            getattr(args, "key_only", False)
+            or getattr(args, "no_daemon", False)
+            or getattr(args, "key", None)
+            or getattr(args, "enc_key", None)
+        )
+        _has_tty = sys.stdin.isatty()
+        if not _has_tty:
+            try:
+                _tty_test = open("/dev/tty", "r")
+                _tty_test.close()
+                _has_tty = True
+            except OSError:
+                _has_tty = False
+
+        if _automation_flag or not _has_tty:
+            # Case A: silent refuse (preserves #1937 fix for install.sh).
+            print("Cloud sync is disabled on this machine (local-only mode).")
+            print(f"  Marker: {NOCLOUD_MARKER_PATH}")
+            print( "  Env:    CLAWMETRY_NO_CLOUD=" + (os.environ.get("CLAWMETRY_NO_CLOUD") or "(unset)"))
+            print()
+            print("The local dashboard at http://localhost:8900 keeps working.")
+            print("To re-enable cloud sync, remove the marker and re-run:")
+            print(f"    rm {NOCLOUD_MARKER_PATH}")
+            print( "    clawmetry connect")
+            print("or run `clawmetry connect --force` to override once.")
+            return
+
+        # Case B: interactive conversion prompt.
         print()
-        print("The local dashboard at http://localhost:8900 keeps working.")
-        print("To re-enable cloud sync, remove the marker and re-run:")
-        print(f"    rm {NOCLOUD_MARKER_PATH}")
-        print( "    clawmetry connect")
-        print("or run `clawmetry connect --force` to override once.")
-        return
+        print("✨ ClawMetry is currently in LOCAL-ONLY mode.")
+        print(f"   (marker: {NOCLOUD_MARKER_PATH})")
+        print()
+        print("Cloud sync is opt-in. With it you get:")
+        print("   • a hosted dashboard at https://app.clawmetry.com/cloud")
+        print("   • E2E-encrypted snapshot (your key never leaves the machine)")
+        print("   • alerts, multi-node fleet view, weekly insights")
+        print()
+        print("What would you like to do?")
+        print("   [1] Sign up for cloud (free trial, ~30s)")
+        print("   [2] Keep local-only (no change)")
+        print()
+        try:
+            _choice_src = (
+                open("/dev/tty", "r") if not sys.stdin.isatty() else sys.stdin
+            )
+            sys.stdout.write("Choice [1/2]: ")
+            sys.stdout.flush()
+            _choice = (_choice_src.readline() or "").strip()
+        except (OSError, KeyboardInterrupt, EOFError):
+            _choice = ""
+
+        if _choice != "1":
+            print()
+            print("Staying local-only. Dashboard: http://localhost:8900")
+            print(f"(To convert later: rm {NOCLOUD_MARKER_PATH} && clawmetry connect)")
+            return
+
+        # User chose cloud signup -- remove the marker, then fall through to
+        # the normal connect flow below (it'll prompt for email + OTP).
+        try:
+            os.unlink(NOCLOUD_MARKER_PATH)
+            print(f"✅ Removed local-only marker ({NOCLOUD_MARKER_PATH})")
+        except FileNotFoundError:
+            pass
+        except OSError as _e:
+            print(f"⚠️  Could not remove marker: {_e}")
+            print("    Continuing anyway -- the connect flow may re-fail.")
+        print()
     # Support piped stdin (curl | bash) — read from /dev/tty if needed
     _tty = None
     if not sys.stdin.isatty():
