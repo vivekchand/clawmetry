@@ -1,4 +1,11 @@
 ## [Unreleased]
+
+### Perf: gate background pollers + coalesce loadAll fan-out (2026-05-23)
+- The dashboard was firing a request storm regardless of the active tab and while the browser tab was hidden — in a 25-second sample: `/api/local/health` × 13, `/api/sync-progress` × 12, `/api/cloud/approvals` × 5, `/api/overview` × 3 in a single second, `/api/budget/status` × 3. Four ungated/uncoalesced pollers that pre-dated PRD #1252's visibility wrapper. Fixed: routed `_cmSyncTick` and `_cmOnboardingTimer` through `visibilitySetInterval` and bumped them to 15 s (banners still self-dismiss on the verified/heartbeat-landed state, so on-tab time-to-clear is unchanged); added a `document.hidden` gate on the approvals nav-badge poll; added an in-flight Promise reuse + 2 s recently-completed coalesce window to `loadAll()` so heartbeat-landed / connection-restored / switchTab / periodic-interval bursts share one fetch instead of stampeding. (#1970, closes #1969)
+
+### Release: gate background pollers (2026-05-23)
+- Publishes #1970 (closes #1969): the dashboard no longer fires `/api/local/health` and `/api/sync-progress` every 2.5 s on every tab — gated on the visible tab and slowed to 15 s, with `loadAll()` callers coalesced so they share one fetch instead of bursting.
+
 - **Improved:** `clawmetry connect` now offers a one-time conversion choice when the local-only marker is set AND a human typed the command in a terminal: `[1] Sign up for cloud` (removes the marker, proceeds with email/OTP) or `[2] Keep local-only`. Automated callers — `install.sh`, `curl | bash`, any invocation with `--key-only` / `--no-daemon` / `--key=` / `--enc-key=`, or any non-TTY environment — still silent-refuse, preserving the #1937 fix so updates never re-prompt. `--force` keeps its one-shot bypass. (#1966)
 - **Improved:** Session-replay (Embodied) list now renders ChatGPT-style titles (first user prompt, truncated) on top with the UUID demoted to a muted sub-line. Snapshot-side derivation in `clawmetry/sync.py:_build_transcripts`; renderer in `static/js/app.js:loadTranscripts`. Backwards-compatible — old snapshots still render, just with "Untitled session". (#1962)
 
