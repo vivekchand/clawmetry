@@ -209,8 +209,6 @@ _budget_alert_cooldowns = {}  # rule_id -> last_fired_timestamp
 _AGENT_DOWN_SECONDS = 300  # 5 min with no OTLP data = agent down alert
 _ALERTS_CONFIG_FILE = os.path.expanduser("~/.openclaw/clawmetry-alerts.json")
 _security_posture_hash = ""
-_ALERTS_CONFIG_FILE = os.path.expanduser("~/.openclaw/clawmetry-alerts.json")
-_security_posture_hash = ""
 # Token velocity alert thresholds (GH#313)
 _VELOCITY_TOKENS_PER_2MIN = 10000  # tokens in any 2-minute window
 _VELOCITY_CONSECUTIVE_TOOLS = 20  # consecutive tool calls without human turn
@@ -12047,8 +12045,6 @@ _usage_cache = {"data": None, "ts": 0}
 _USAGE_CACHE_TTL = 60  # seconds
 _sessions_cache = {"data": None, "ts": 0}
 _SESSIONS_CACHE_TTL = 10  # seconds
-_transcript_analytics_cache = {"data": None, "ts": 0}
-_TRANSCRIPT_ANALYTICS_TTL = 60  # seconds
 
 
 def _get_sessions_dir():
