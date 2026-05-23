@@ -67,6 +67,9 @@
       color:var(--text-primary);
       margin-bottom:10px;
       ">Threat Detection &amp; Anomaly Alerts</div>
+    <!-- All-clear placeholder: replaces the 0/0/0/0 stat tiles when nothing's wrong.
+         JS toggles this with #security-summary + #security-filter-pills + #security-threat-list. -->
+    <div id="security-allclear" style="display:none;padding:12px 14px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.25);border-radius:6px;color:#86efac;font-size:13px;font-weight:600;margin-bottom:14px;">&#10003; No threats detected &middot; scanning agent activity continuously.</div>
     <div id="security-summary" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
       <div style="
         background:var(--bg-secondary);
