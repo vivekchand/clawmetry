@@ -5473,6 +5473,141 @@ def api_session_config_drift(sid):
     return jsonify(result)
 
 
+# ---------------------------------------------------------------------------
+# Lexical drift endpoint — TF-IDF cosine similarity vs anchor turn (issue #569)
+# ---------------------------------------------------------------------------
+
+def _compute_lexical_drift(fpath: str, threshold: float = 0.1):
+    """Return per-turn lexical drift relative to the first message turn.
+
+    Uses smoothed TF-IDF cosine similarity (pure Python, zero deps). Labeled
+    as *lexical* drift — vocabulary overlap, not semantic embedding similarity.
+    Threshold default 0.1 is calibrated for TF-IDF on short conversation texts;
+    values differ from semantic-embedding cosine similarity.
+    """
+    import math
+    import re as _re
+
+    def _tokenize(text: str):
+        return _re.findall(r"[a-z0-9]+", text.lower())
+
+    def _tfidf(docs):
+        N = len(docs)
+        df: dict = {}
+        for doc in docs:
+            for term in set(doc):
+                df[term] = df.get(term, 0) + 1
+        idf = {t: math.log(1 + N / f) for t, f in df.items() if f > 0}
+        vecs = []
+        for doc in docs:
+            tf: dict = {}
+            for term in doc:
+                tf[term] = tf.get(term, 0) + 1
+            total = len(doc) or 1
+            vecs.append({t: (c / total) * idf.get(t, 0.0) for t, c in tf.items()})
+        return vecs
+
+    def _cosine(v1: dict, v2: dict) -> float:
+        dot = sum(v1.get(t, 0.0) * v for t, v in v2.items())
+        n1 = math.sqrt(sum(x * x for x in v1.values()))
+        n2 = math.sqrt(sum(x * x for x in v2.values()))
+        if n1 == 0.0 or n2 == 0.0:
+            return 0.0
+        return dot / (n1 * n2)
+
+    entries: list = []
+    try:
+        with open(fpath, "r", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                if obj.get("type") != "message":
+                    continue
+                role = obj.get("role", "")
+                if role not in ("user", "assistant"):
+                    continue
+                content = obj.get("content", "")
+                if isinstance(content, str):
+                    text = content
+                elif isinstance(content, list):
+                    parts = []
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            parts.append(block.get("text", ""))
+                        elif isinstance(block, str):
+                            parts.append(block)
+                    text = " ".join(parts)
+                else:
+                    continue
+                text = text.strip()
+                if text:
+                    entries.append({"role": role, "text": text})
+    except OSError:
+        return None
+
+    if len(entries) < 2:
+        return {
+            "turns": [],
+            "avg_similarity": None,
+            "min_similarity": None,
+            "min_turn": None,
+            "has_drift": False,
+            "message_count": len(entries),
+            "threshold": threshold,
+            "_note": "too few messages",
+        }
+
+    docs = [_tokenize(e["text"]) for e in entries]
+    vecs = _tfidf(docs)
+    anchor = vecs[0]
+
+    turns = []
+    for i, (entry, vec) in enumerate(zip(entries, vecs)):
+        sim = 1.0 if i == 0 else round(_cosine(anchor, vec), 4)
+        turns.append({"turn": i, "role": entry["role"], "similarity": sim, "flagged": i > 0 and sim < threshold})
+
+    sims = [t["similarity"] for t in turns]
+    avg_sim = round(sum(sims) / len(sims), 4)
+    min_sim = round(min(sims), 4)
+    min_turn = sims.index(min_sim)
+
+    return {
+        "turns": turns,
+        "avg_similarity": avg_sim,
+        "min_similarity": min_sim,
+        "min_turn": min_turn,
+        "has_drift": any(t["flagged"] for t in turns),
+        "message_count": len(entries),
+        "threshold": threshold,
+    }
+
+
+@bp_sessions.route("/api/sessions/<session_id>/lexical-drift")
+def api_session_lexical_drift(session_id):
+    """Return per-turn lexical drift (TF-IDF cosine vs anchor) for a session."""
+    import dashboard as _d
+    if not session_id or any(c in session_id for c in ("/", "\\", "..")):
+        return jsonify({"error": "invalid session id"}), 400
+    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    fpath = os.path.normpath(os.path.join(sessions_dir, session_id + ".jsonl"))
+    if not fpath.startswith(os.path.normpath(sessions_dir)):
+        return jsonify({"error": "access denied"}), 403
+    if not os.path.isfile(fpath):
+        return jsonify({"error": "session not found"}), 404
+    result = _compute_lexical_drift(fpath)
+    if result is None:
+        return jsonify({"error": "could not read session"}), 500
+    result["session_id"] = session_id
+    return jsonify(result)
+
+
 def _try_local_store_fallbacks(limit: int, top: int):
     """Tier-1 DuckDB fast path for /api/fallbacks.
 
