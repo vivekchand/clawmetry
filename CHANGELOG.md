@@ -1,4 +1,7 @@
 ## [Unreleased]
+
+### Release: Transparent sync-status banner (2026-05-23)
+- Publishes #1943: first-install "Syncing your OpenClaw workspace" banner with a 5-step stepper (Discovering → Indexing events → Aggregating → Pushing snapshot → Verified), live counts and honest ETA from the daemon's existing /api/sync-progress + /api/local/health signals, an expandable structured log (no PII), and an actionable error card when sync queues a retry or stalls. Auto-clears on three independent signals. No new endpoints. PRD-sync-status.md ships alongside.
 - **Fixed:** Alerts tab on OSS shows the Approvals-style 6-toggle list again. PR #1885 had silently rewritten `alerts.js` end-to-end (+333/-484) while claiming a one-block scope, reverting #1840 / #1847 / #1851 / #1854. Restored the pre-#1885 file and re-applied only the intended Manage-channels patch. (#1944)
 
 ### Release: Self-Evolve accuracy fix + backlog (2026-05-23)
