@@ -1165,7 +1165,15 @@
   border-bottom: 1px solid var(--border-secondary); font-size: 13px;
 }
 .alerts-hist-row:last-child { border-bottom: 0; }
+.alerts-hist-row[title] { cursor: help; }
 .alerts-hist-time { color: var(--text-muted); font-size: 12px; }
+/* #1954: "× N" badge on consecutive identical alerts (dedupe collapse). */
+.alerts-hist-count {
+  display: inline-block; margin-left: 4px; padding: 1px 7px;
+  font-size: 11px; font-weight: 600; color: var(--text-muted);
+  background: rgba(255,255,255,0.06); border-radius: 9px;
+  font-variant-numeric: tabular-nums;
+}
 .sev-red   { color: var(--text-error); }
 .sev-amber { color: var(--text-warning); }
 .sev-green { color: var(--text-success); }

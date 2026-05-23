@@ -282,20 +282,66 @@
     }).join('');
   }
 
+  // #1954: short one-line explanations for each alert type, shown as a hover
+  // tooltip on the history row so "what does stuck_session even mean" stops
+  // being a user question. Keys match the `type` / `payload.name` strings the
+  // evaluator writes.
+  const ALERT_TYPE_HINTS = {
+    stuck_session:    'A session went silent past the timeout — the agent likely stalled (no new events).',
+    token_velocity:   'Runaway-loop guard — tokens/min crossed your threshold (agent burning tokens in a loop).',
+    daily_spend:      'Daily spend crossed your budget.',
+    session_cost:     'A single session’s cost crossed your threshold.',
+    session_duration: 'A session ran longer than your threshold.',
+    node_offline:     'An agent node hasn’t pinged in longer than your threshold.',
+    cron_failure:     'A cron job failed more times than your threshold.',
+    error_rate:       'Tool error rate crossed your threshold.',
+    subagent_depth:   'Sub-agent nesting depth crossed your threshold.',
+  };
+  // Hide alerts older than this from the history view. Stops the list from
+  // accumulating forever; the user only cares about recent activity.
+  const ALERTS_HISTORY_MAX_AGE_MS = 3 * 86400 * 1000;
+
   function renderHistory() {
     const wrap = document.getElementById('alerts-history-list');
-    if (!alertsState.history.length) {
-      return renderHistoryEmpty('No alerts have fired yet.');
+    // #1954: filter ancient entries (>3d) so the list stays useful, then
+    // collapse runs of consecutive identical alerts (same type + same message)
+    // into a single row with a "× N" counter — kills the "5 identical
+    // token_velocity rows" fatigue without losing the signal that it fired.
+    const now = Date.now();
+    const fresh = (alertsState.history || []).filter(h => {
+      const ms = new Date(_alertsTsMs(h.fired_at)).getTime();
+      return !isFinite(ms) || (now - ms) <= ALERTS_HISTORY_MAX_AGE_MS;
+    });
+    if (!fresh.length) {
+      return renderHistoryEmpty('No alerts in the last 3 days.');
     }
-    wrap.innerHTML = alertsState.history.map(h => {
+    const grouped = [];
+    for (const h of fresh) {
+      const p = h.payload || {};
+      const key = (p.name || h.alert_id || '') + '|' + String(p.actual_value ?? '');
+      const last = grouped[grouped.length - 1];
+      if (last && last._key === key) {
+        last._count += 1;
+        last._latestFiredAt = h.fired_at;
+      } else {
+        grouped.push({ ...h, _key: key, _count: 1, _latestFiredAt: h.fired_at });
+      }
+    }
+    wrap.innerHTML = grouped.map(h => {
       const sev = h.resolved_at ? 'sev-green' : 'sev-red';
-      const dot = h.resolved_at ? '●' : '●';
+      const dot = '●';
       const payload = h.payload || {};
+      const typeName = payload.name || h.alert_id || '';
+      const hint = ALERT_TYPE_HINTS[typeName] || '';
+      const countBadge = h._count > 1
+        ? ` <span class="alerts-hist-count" title="Fired ${h._count} times in a row">× ${h._count}</span>`
+        : '';
+      const rowTitle = hint ? ` title="${escape(hint)}"` : '';
       return `
-        <div class="alerts-hist-row">
+        <div class="alerts-hist-row"${rowTitle}>
           <span class="${sev}">${dot}</span>
-          <span class="alerts-hist-time">${formatTimeAgo(h.fired_at)}</span>
-          <span class="alerts-hist-text"><b>${escape(payload.name || h.alert_id)}</b>
+          <span class="alerts-hist-time">${formatTimeAgo(h._latestFiredAt)}</span>
+          <span class="alerts-hist-text"><b>${escape(typeName)}</b>${countBadge}
             → ${escape(String(payload.actual_value ?? ''))} ${escape(payload.threshold_unit || '')}</span>
         </div>
       `;
@@ -640,17 +686,31 @@
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
     );
   }
+  // #1954: `fired_at` from /api/alerts/history is epoch SECONDS (REAL column
+  // written by time.time()), but JS Date() treats a bare number as ms. Without
+  // this normalization every row rendered as "20576d ago" (epoch zero → now).
+  // Treat numbers below ~year 33658 as seconds and scale to ms. ISO strings
+  // and ms-scale numbers pass through unchanged.
+  function _alertsTsMs(v) {
+    if (typeof v === 'number') return v < 1e12 ? v * 1000 : v;
+    if (typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v)) {
+      const n = Number(v);
+      return n < 1e12 ? n * 1000 : n;
+    }
+    return v;
+  }
   function formatTimeAgo(iso) {
     if (!iso) return '';
     try {
-      const ts = new Date(iso);
-      const sec = Math.floor((Date.now() - ts.getTime()) / 1000);
+      const ms = new Date(_alertsTsMs(iso)).getTime();
+      if (!isFinite(ms)) return '';
+      const sec = Math.floor((Date.now() - ms) / 1000);
       if (sec < 60) return 'just now';
       if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
       if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
       return Math.floor(sec / 86400) + 'd ago';
     } catch {
-      return iso;
+      return '';
     }
   }
 })();

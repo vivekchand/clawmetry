@@ -52,10 +52,22 @@ _SHOW_INTERNAL_ENABLE_VALUES = frozenset({"1", "true", "yes", "on"})
 
 def is_clawmetry_internal_session(session_id) -> bool:
     """True for sessions ClawMetry spawns to invoke OpenClaw (clawmetry-fix,
-    clawmetry-selfevolve, clawmetry-mem-probe, …)."""
-    return bool(session_id) and str(session_id).startswith(
-        CLAWMETRY_INTERNAL_SESSION_PREFIX
-    )
+    clawmetry-selfevolve, clawmetry-mem-probe, …).
+
+    Matches both the bare id (``clawmetry-fix``) and the full OpenClaw
+    session-id form (``agent:main:explicit:clawmetry-fix``), where the base id
+    is the last ``:``-delimited segment. Without the segment check the full
+    form leaked into user-facing views: the cloud Embodied list showed it as a
+    ghost session with an empty transcript (cloud-side fix landed in #1063),
+    and ``_check_stuck_sessions`` fired nuisance stuck-session alerts for the
+    helpers themselves (#1954).
+    """
+    if not session_id:
+        return False
+    sid = str(session_id)
+    return sid.startswith(CLAWMETRY_INTERNAL_SESSION_PREFIX) or (
+        ":" + CLAWMETRY_INTERNAL_SESSION_PREFIX
+    ) in sid
 
 
 def hide_clawmetry_session(session_id) -> bool:
