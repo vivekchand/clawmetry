@@ -10737,6 +10737,174 @@ async function checkUpgradeBanner() {
 }
 setTimeout(checkUpgradeBanner, 3000);
 
+// ── Sync Status Banner (PRD-sync-status.md) ───────────────────────────────
+// First-install transparency: render the daemon's real per-phase progress so a
+// blank dashboard doesn't read as broken. Sources the 7 named phases from
+// /api/sync-progress (plus /api/local/health for event_count + sync_dlq_depth)
+// and rolls them up into 5 user-facing steps. Auto-clears the moment we have
+// real data; fail-safes to an actionable error after the install grace window.
+window._cmSync = {
+  // 5 user-facing steps. Each maps to one-or-more daemon phases.
+  STEPS: [
+    { id: 'discovering', label: 'Discovering',        phases: ['sessions_recent'] },
+    { id: 'indexing',    label: 'Indexing events',    phases: ['sessions_recent', 'session_metadata'] },
+    { id: 'aggregating', label: 'Aggregating',        phases: ['memory', 'crons', 'channel_messages'] },
+    { id: 'pushing',     label: 'Pushing snapshot',   phases: ['sessions', 'complete'] },
+    { id: 'verified',    label: 'Verified',           phases: ['complete'] },
+  ],
+  PHASE_ORDER: ['sessions_recent', 'session_metadata', 'memory', 'crons', 'channel_messages', 'sessions', 'complete'],
+  startedAt: 0,
+  pollTimer: null,
+  detailsOpen: false,
+  done: false,
+};
+
+function cmSyncToggleDetails() {
+  var d = document.getElementById('sync-status-details');
+  var btn = document.getElementById('sync-status-toggle');
+  if (!d || !btn) return;
+  window._cmSync.detailsOpen = !window._cmSync.detailsOpen;
+  d.style.display = window._cmSync.detailsOpen ? 'block' : 'none';
+  btn.setAttribute('aria-expanded', String(window._cmSync.detailsOpen));
+  btn.textContent = window._cmSync.detailsOpen ? 'Hide details' : 'Show details';
+}
+
+function _cmSyncDismiss() {
+  var el = document.getElementById('sync-status-banner');
+  if (el) el.style.display = 'none';
+  if (window._cmSync.pollTimer) { clearInterval(window._cmSync.pollTimer); window._cmSync.pollTimer = null; }
+  window._cmSync.done = true;
+  try { localStorage.setItem('cm-sync-verified-ts', String(Date.now())); } catch (e) {}
+}
+
+function _cmSyncRender(prog, health) {
+  var bar = document.getElementById('sync-status-banner');
+  if (!bar) return;
+  var sub = document.getElementById('sync-status-subtitle');
+  var details = document.getElementById('sync-status-details');
+  var stepper = document.getElementById('sync-status-stepper');
+  var errBox = document.getElementById('sync-status-error');
+  var title = document.getElementById('sync-status-title');
+  if (!sub || !details || !stepper || !errBox || !title) return;
+
+  // Determine the active phase: highest-index phase that's running/complete.
+  var phase = (prog && prog.phase) || '';
+  var idx = window._cmSync.PHASE_ORDER.indexOf(phase);
+  // Decide each step's state by whether any of its phases has run.
+  var html = '';
+  var maxReached = idx;
+  var hasErr = (health && (health.sync_dlq_depth || 0) > 0) ||
+               (prog && prog.error);
+  window._cmSync.STEPS.forEach(function(step) {
+    var stepMax = Math.max.apply(null, step.phases.map(function(p) {
+      return window._cmSync.PHASE_ORDER.indexOf(p);
+    }));
+    var state = 'pending';
+    if (step.id === 'verified') {
+      state = (prog && prog.status === 'complete' && health && (health.event_count || 0) > 0) ? 'done' : 'pending';
+    } else if (maxReached >= stepMax) state = 'done';
+    else if (maxReached >= 0 && step.phases.indexOf(phase) !== -1) state = 'active';
+    var mark = state === 'done' ? '✓' : state === 'active' ? '···' : '·';
+    html += '<span class="cm-sync-step" data-state="' + state + '">' + mark + ' ' + step.label + '</span>';
+  });
+  stepper.innerHTML = html;
+
+  // Subtitle: counts + ETA
+  var elapsed = Math.max(0, (Date.now() - window._cmSync.startedAt) / 1000);
+  var pct = (idx + 1) / window._cmSync.PHASE_ORDER.length;
+  var etaTxt = '';
+  if (pct > 0.05 && pct < 1) {
+    var remaining = Math.max(2, Math.round(elapsed * (1 - pct) / pct));
+    etaTxt = ' · about ' + (remaining < 60 ? remaining + 's' : Math.round(remaining/60) + 'm') + ' remaining';
+  }
+  var counts = '';
+  if (prog && (prog.total || prog.done)) {
+    counts = ' · ' + (prog.done || 0) + (prog.total ? ' / ' + prog.total : '') + ' items';
+  }
+  var phaseLabel = phase ? phase.replace(/_/g, ' ') : 'starting';
+  sub.textContent = 'Step: ' + phaseLabel + counts + etaTxt;
+
+  // Details log (structured)
+  var ts = new Date().toLocaleTimeString();
+  var line = ts + '  → phase=' + (phase || '-') +
+             '  done=' + (prog && prog.done || 0) +
+             (prog && prog.total ? '/' + prog.total : '') +
+             '  events=' + (health && health.event_count || 0) +
+             '  ring=' + (health && health.ring_depth || 0) +
+             '  dlq=' + (health && health.sync_dlq_depth || 0);
+  // Keep the latest 20 lines (auto-bound, no PII).
+  var prev = (details.dataset.lines || '').split('\n').filter(Boolean);
+  prev.push(line);
+  if (prev.length > 20) prev = prev.slice(-20);
+  details.dataset.lines = prev.join('\n');
+  details.textContent = prev.join('\n');
+
+  // Error surface
+  if (hasErr) {
+    var msg = prog && prog.error
+      ? String(prog.error)
+      : 'Sync queued ' + (health && health.sync_dlq_depth || 0) + ' batches for retry — the daemon will keep trying.';
+    errBox.innerHTML = '<div style="font-weight:600;margin-bottom:4px;">⚠️ Sync needs attention</div>'
+      + '<div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;white-space:pre-wrap;word-break:break-word;">' + escHtml(msg) + '</div>'
+      + '<div style="margin-top:6px;font-size:11px;"><a href="https://github.com/vivekchand/clawmetry#troubleshooting" target="_blank" rel="noopener" style="color:#fca5a5;">Open troubleshooting docs →</a></div>';
+    errBox.style.display = 'block';
+    title.textContent = 'Sync needs attention';
+    bar.style.background = 'linear-gradient(90deg,#3b1416 0%,#1a0e15 100%)';
+    bar.style.borderBottom = '1px solid #7f1d1d';
+  }
+
+  // Hard fail-safe: if no progress for 90s after start, surface an error.
+  if (!hasErr && elapsed > 90 && (!prog || !prog.phase)) {
+    errBox.innerHTML = '<div style="font-weight:600;margin-bottom:4px;">⚠️ Sync hasn’t reported progress yet</div>'
+      + '<div style="font-size:12px;">Check that the daemon is running. On macOS: <code>launchctl kickstart -k gui/$(id -u)/com.clawmetry.sync</code></div>';
+    errBox.style.display = 'block';
+  }
+
+  // Auto-clear when verified (3 independent signals).
+  var verified = prog && prog.status === 'complete' &&
+                 health && (health.event_count || 0) > 0;
+  if (verified) {
+    title.textContent = '✓ Verified — your data is live';
+    sub.textContent = (health.event_count || 0).toLocaleString() + ' events indexed';
+    setTimeout(_cmSyncDismiss, 1500);
+  }
+}
+
+async function _cmSyncTick() {
+  if (window._cmSync.done) return;
+  try {
+    var [prog, health] = await Promise.all([
+      fetch('/api/sync-progress').then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; }),
+      fetch('/api/local/health').then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; }),
+    ]);
+    _cmSyncRender(prog, health);
+  } catch (e) {}
+}
+
+async function cmSyncInit() {
+  // Cloud mode keeps its existing cm-sync-bar (Phase 2 promotes this component).
+  if (window.CLOUD_MODE) return;
+  // Only show on a cold install: no events yet, or a sync explicitly in progress.
+  var health = await fetch('/api/local/health').then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
+  var prog = await fetch('/api/sync-progress').then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
+  var cold = !health || (health.event_count || 0) === 0;
+  var syncing = prog && prog.phase && prog.status !== 'complete';
+  // Don't show again for 1 hour after we last cleared.
+  var lastVerified = 0;
+  try { lastVerified = parseInt(localStorage.getItem('cm-sync-verified-ts') || '0', 10) || 0; } catch (e) {}
+  var recentlyVerified = lastVerified && (Date.now() - lastVerified < 3600000);
+  if (recentlyVerified && !syncing) return;
+  if (!cold && !syncing) return;
+  // Show + start polling.
+  var el = document.getElementById('sync-status-banner');
+  if (!el) return;
+  el.style.display = 'block';
+  window._cmSync.startedAt = Date.now();
+  _cmSyncRender(prog, health);
+  window._cmSync.pollTimer = setInterval(_cmSyncTick, 2500);
+}
+setTimeout(function(){ try { cmSyncInit(); } catch (e) {} }, 800);
+
 // ── Sub-Agent Tree ────────────────────────────────────────────────────────
 var _subagentsTimer = null;
 var _subagentsExpanded = {};
