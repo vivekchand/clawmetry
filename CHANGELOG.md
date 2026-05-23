@@ -1,4 +1,5 @@
 ## [Unreleased]
+- **Improved:** Stuck-session banner now shows the actual task (first user prompt > displayName > channel·agent·model > UUID), an "Open session →" button that deep-links to the transcript, and renames the left-nav tab from "Embodied β" to "Session replay (beta)" — the universal name used by LogRocket/Hotjar/Sentry/Datadog. (#1952)
 - **Fixed:** In-app "Update now" was failing with `No module named pip` on uv-provisioned daemon venvs (every user on the uv-bootstrapped install). Bootstrap pip via stdlib `ensurepip --upgrade --default-pip` first, capture pip's real stderr so the banner shows *why* it failed instead of just `exit 1`, and pass `--no-cache-dir` to dodge the uv-cache-stale race. (#1948)
 
 ### Release: Transparent sync-status banner (2026-05-23)
