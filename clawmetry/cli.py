@@ -470,6 +470,22 @@ def _verify_key_ownership(api_key: str) -> None:
 
 def _cmd_connect(args) -> None:
     """clawmetry connect — validate key, save config, start daemon."""
+    # #1937: respect the persistent local-only marker. If the user did
+    # `clawmetry disconnect` (or set CLAWMETRY_NO_CLOUD=1), don't silently
+    # re-prompt for an email on the next update / install.sh run. The
+    # `--force` flag lets the user override after explicit confirmation.
+    from clawmetry.config import is_cloud_disabled, NOCLOUD_MARKER_PATH
+    if is_cloud_disabled() and not getattr(args, "force", False):
+        print("Cloud sync is disabled on this machine (local-only mode).")
+        print(f"  Marker: {NOCLOUD_MARKER_PATH}")
+        print( "  Env:    CLAWMETRY_NO_CLOUD=" + (os.environ.get("CLAWMETRY_NO_CLOUD") or "(unset)"))
+        print()
+        print("The local dashboard at http://localhost:8900 keeps working.")
+        print("To re-enable cloud sync, remove the marker and re-run:")
+        print(f"    rm {NOCLOUD_MARKER_PATH}")
+        print( "    clawmetry connect")
+        print("or run `clawmetry connect --force` to override once.")
+        return
     # Support piped stdin (curl | bash) — read from /dev/tty if needed
     _tty = None
     if not sys.stdin.isatty():
@@ -962,6 +978,34 @@ def _cmd_disconnect(args) -> None:
         print(f"✅  Removed config ({CONFIG_FILE})")
     if STATE_FILE.exists():
         STATE_FILE.unlink()
+
+    # Drop the stale sync-progress file so the dashboard banner ("Step:
+    # crons · about 2m remaining") doesn't freeze on the last phase the
+    # daemon was in before we unloaded it. The file only ever describes
+    # cloud-sync progress; with cloud off it's pure misinformation.
+    from pathlib import Path as _Path
+    _prog = _Path.home() / ".clawmetry" / "sync_progress.json"
+    if _prog.exists():
+        try:
+            _prog.unlink()
+            print(f"✅  Cleared sync-progress file ({_prog})")
+        except Exception as _e:
+            print(f"⚠️  Could not remove {_prog}: {_e}")
+
+    # Drop the persistent local-only marker so a future `clawmetry update`
+    # / `install.sh` / `clawmetry connect` won't silently re-prompt for an
+    # email and reconnect. Survives across updates. Undo with:
+    #     rm ~/.clawmetry/nocloud
+    # or env CLAWMETRY_NO_CLOUD=0 for a one-off override (#1937).
+    from clawmetry.config import NOCLOUD_MARKER_PATH
+    try:
+        _Path(NOCLOUD_MARKER_PATH).parent.mkdir(parents=True, exist_ok=True)
+        _Path(NOCLOUD_MARKER_PATH).touch()
+        print(f"✅  Cloud sync disabled persistently ({NOCLOUD_MARKER_PATH})")
+        print("   The local dashboard at http://localhost:8900 still works.")
+        print(f"   To re-enable later: rm {NOCLOUD_MARKER_PATH} && clawmetry connect")
+    except Exception as _e:
+        print(f"⚠️  Could not write opt-out marker: {_e}")
 
     print("Disconnected from ClawMetry Cloud.")
 
@@ -2487,6 +2531,11 @@ def main() -> None:
         metavar="NAME",
         dest="custom_node_id",
         help="Custom node name (default: hostname)",
+    )
+    p_connect.add_argument(
+        "--force",
+        action="store_true",
+        help="Override the persistent local-only marker (#1937) and connect anyway",
     )
 
     # setup — alias for onboard (new user-facing name)

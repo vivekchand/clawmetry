@@ -4918,14 +4918,30 @@ async function loadContextInspector() {
     var ov = await fetchJsonWithTimeout('/api/overview', 5000).catch(function(){return {};});
     // Fetch brain history for compaction events + turn count
     var brain = await fetchJsonWithTimeout('/api/brain-history?limit=300', 8000).catch(function(){return {events:[]};});
-    // Fetch skills for header token count. /api/skills is cloud-disabled
-    // (410 Gone) — skip the network call in cloud mode and use empty totals.
-    var skills = window.CLOUD_MODE
-      ? {skills:[],summary:{}}
-      : await fetch('/api/skills').then(function(r){return r.json();}).catch(function(){return {skills:[],summary:{}};});
+    // Skills header token count. Prefer the OSS↔cloud-shared
+    // `skillHeaderTokens` now exposed by /api/overview + the snapshot
+    // (2026-05-23 OSS↔cloud parity fix) so both sides render the same
+    // value. We only need to hit /api/skills when the daemon is too
+    // old to publish that field AND we're not in cloud (where the
+    // endpoint is 410 Gone). Cloud mode without the field falls back
+    // to an empty stub — the bar then uses the contextWindow*0.008
+    // approximation instead of returning a misleading 1.6K.
+    var skills;
+    if (typeof ov.skillHeaderTokens === 'number') {
+      skills = {skills:[], summary:{total_header_tokens: ov.skillHeaderTokens}};
+    } else if (window.CLOUD_MODE) {
+      skills = {skills:[], summary:{}};
+    } else {
+      skills = await fetch('/api/skills').then(function(r){return r.json();}).catch(function(){return {skills:[],summary:{}};});
+    }
 
     var contextWindow = ov.contextWindow || 200000;
-    var mainTokens = ov.mainTokens || 0;
+    // Prefer `currentContextTokens` (the latest assistant turn's actual
+    // input_tokens, capped naturally at the model's context window) over
+    // `mainTokens` (cumulative session total, which can exceed the
+    // window and gave the gauge a misleading "204K/200K (100%)" reading).
+    // Falls back to mainTokens for daemons older than the field.
+    var mainTokens = ov.currentContextTokens || ov.mainTokens || 0;
     var model = ov.model || 'unknown';
     // brain may be either {events:[...]} (legacy/local_store) or
     // {_source:"cache", events_blob:"..."} (cache hit on cloud). Use the

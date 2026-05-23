@@ -822,6 +822,11 @@ def _compute_backoff(attempt: int, retry_after_hdr: str | None = None) -> float:
 def _post(path: str, payload: dict, api_key: str, timeout: int = 45) -> dict:
     """POST a payload to the cloud ingest endpoint.
 
+    Local-only mode (#1937): if the user has opted out of cloud sync via
+    CLAWMETRY_NO_CLOUD=1 or the ~/.clawmetry/nocloud marker, no-op and
+    return a sentinel envelope so callers self-throttle without crashing.
+    Local DuckDB ingestion (which doesn't go through _post) continues.
+
     Hardening (MOAT 2026-05-19):
       * Up to ``_HTTP_MAX_ATTEMPTS`` retries on transient HTTP codes
         (401, 408, 425, 429, 5xx) and any network-level error
@@ -836,6 +841,14 @@ def _post(path: str, payload: dict, api_key: str, timeout: int = 45) -> dict:
         immediately — burning retries on a permanently-broken request
         wastes the daemon's budget and delays the next legitimate call.
     """
+    # Local-only short-circuit. Cheap (env + isfile); checked on every POST
+    # so the marker can be flipped without a daemon restart.
+    try:
+        from clawmetry.config import is_cloud_disabled
+        if is_cloud_disabled():
+            return {"_cloud_disabled": True, "sync_allowed": False}
+    except Exception:
+        pass
     url = INGEST_URL.rstrip("/") + path
     body = json.dumps(payload).encode()
     headers = {"Content-Type": "application/json", "X-Api-Key": api_key}
@@ -4946,7 +4959,17 @@ def send_heartbeat(config: dict) -> bool:
     Side effect: on success, stashes the parsed response body in
     `_LAST_HEARTBEAT_RESPONSE` so the main loop can read `viewer_active`
     via `_pick_heartbeat_interval()` and adapt the next sleep interval.
+
+    Local-only mode (#1937): if the user opted out of cloud, skip entirely
+    without paying the payload-build cost. Returns False so the main loop
+    treats it like a no-op tick.
     """
+    try:
+        from clawmetry.config import is_cloud_disabled
+        if is_cloud_disabled():
+            return False
+    except Exception:
+        pass
     global _LAST_HEARTBEAT_RESPONSE
     payload = {
         "node_id": config["node_id"],
@@ -8976,7 +8999,16 @@ def _build_cron_jobs(paths):
 def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     """Push system info + subagent data as encrypted snapshot.
 
-    Skipped when sync is paused (expired trial)."""
+    Skipped when sync is paused (expired trial), or when the user has opted
+    out of cloud entirely (#1937, local-only mode) -- snapshot construction
+    is expensive (multi-hundred-KB AES-encrypted blob) and pointless in
+    local mode since nothing reads it."""
+    try:
+        from clawmetry.config import is_cloud_disabled
+        if is_cloud_disabled():
+            return 0
+    except Exception:
+        pass
     if not _sync_allowed():
         return 0
     import subprocess, platform, json as _json
@@ -9289,6 +9321,33 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     # Spending (from state if available)
     spending = state.get("spending", {"today": 0, "week": 0, "month": 0})
 
+    # LLM Context Inspector parity (2026-05-23): expose the SAME fields
+    # the OSS /api/overview now adds so the Context tab reads one value
+    # on both sides instead of computing different numbers locally vs
+    # cloud. Both built on the daemon's OWN store handle (no read-only
+    # re-open → no writer-lock brick; see FLYWHEEL.md §1).
+    current_context_tokens = 0
+    try:
+        from clawmetry import local_store as _ls_ctx
+        _ctx_store = _ls_ctx.get_store()
+        if _ctx_store is not None:
+            _peek = _ctx_store.query_context_window_peek(
+                scan_sessions=5, exclude_clawmetry=True,
+            ) or {}
+            current_context_tokens = int(_peek.get("input_tokens") or 0)
+    except Exception as _e:
+        log.debug("snapshot: query_context_window_peek failed: %s", _e)
+
+    skill_header_tokens = 0
+    try:
+        from routes.skills import compute_skills_payload as _csp
+        _sk = _csp() or {}
+        skill_header_tokens = int(
+            (_sk.get("summary") or {}).get("total_header_tokens") or 0
+        )
+    except Exception as _e:
+        log.debug("snapshot: compute_skills_payload failed: %s", _e)
+
     payload = {
         "system": system,
         "infra": infra,
@@ -9296,6 +9355,8 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "provider": "",
         "sessionCount": session_count,
         "mainTokens": main_tokens,
+        "currentContextTokens": current_context_tokens,
+        "skillHeaderTokens": skill_header_tokens,
         "contextWindow": 200000,
         "cronCount": cron_enabled + cron_disabled,
         "cronEnabled": cron_enabled,
@@ -9710,7 +9771,19 @@ def run_daemon() -> None:
         log.info(f"Auto-set node_id:  → {config['node_id']!r}")
     paths = detect_paths()
     enc = "🔒 E2E encrypted" if config.get("encryption_key") else "⚠️  unencrypted"
-    log.info(f"Starting sync daemon — node={config['node_id']} → {INGEST_URL} ({enc})")
+    try:
+        from clawmetry.config import is_cloud_disabled as _is_cd
+        _local_only = _is_cd()
+    except Exception:
+        _local_only = False
+    if _local_only:
+        log.info(
+            f"Starting sync daemon — node={config['node_id']} "
+            f"(LOCAL-ONLY mode: cloud sync disabled, "
+            f"ingesting into local DuckDB only)"
+        )
+    else:
+        log.info(f"Starting sync daemon — node={config['node_id']} → {INGEST_URL} ({enc})")
 
     # ── Install daemon-error → DuckDB tee (PRD #1133 layer 4, daemon side) ──
     # Must happen AFTER the start-banner so we don't tee that line as an
