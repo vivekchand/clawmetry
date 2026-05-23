@@ -104,13 +104,39 @@ def api_update():
     import threading as _thr
 
     old_version = _d.__version__
+    py = sys.executable
+    # Bootstrap pip via the stdlib's ensurepip first. The daemon's venv at
+    # ~/.clawmetry/bin/python3 is provisioned WITHOUT pip by uv-style
+    # installers (uv venv defaults to --no-pip), so `python -m pip ...`
+    # exits 1 with "No module named pip" — which the banner used to surface
+    # as just "Command [...] returned non-zero exit status 1." with no
+    # actionable detail (stderr was piped to DEVNULL). ensurepip is in the
+    # stdlib, idempotent if pip already exists, and cheap. Burned 2026-05-23.
     try:
-        _sp.check_call(
-            [sys.executable, "-m", "pip", "install", "--upgrade", "clawmetry"],
-            timeout=120,
-            stdout=_sp.DEVNULL,
-            stderr=_sp.STDOUT,
+        _sp.run(
+            [py, "-m", "ensurepip", "--upgrade", "--default-pip"],
+            timeout=60, capture_output=True,
         )
+    except Exception:
+        # If ensurepip itself isn't available the pip call below will surface
+        # a real error message via capture_output, which we now return verbatim.
+        pass
+    try:
+        proc = _sp.run(
+            # --no-cache-dir dodges the uv-cache-stale-after-[RELEASE] race
+            # (see feedback_uv_cache_stale_after_release.md): a fresh PyPI
+            # publish is sometimes shadowed by uv's "already at latest" cache.
+            [py, "-m", "pip", "install", "--upgrade", "--no-cache-dir", "clawmetry"],
+            timeout=180, capture_output=True, text=True,
+        )
+        if proc.returncode != 0:
+            # Surface pip's actual last lines so the banner is actionable —
+            # the old code swallowed everything into DEVNULL.
+            tail = ((proc.stdout or "") + (proc.stderr or "")).strip()[-800:]
+            return {"ok": False,
+                    "error": f"pip exit {proc.returncode}: {tail or '(no output)'}"}, 500
+    except _sp.TimeoutExpired:
+        return {"ok": False, "error": "pip install timed out after 180s"}, 500
     except Exception as exc:
         return {"ok": False, "error": str(exc)}, 500
     # Re-read new version from pip metadata
