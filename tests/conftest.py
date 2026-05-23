@@ -6,6 +6,7 @@ import sys
 import json
 import subprocess
 import time
+from pathlib import Path
 import pytest
 import requests
 
@@ -23,6 +24,38 @@ def _shared_chromium():
         browser = p.chromium.launch(headless=True)
         yield browser
         browser.close()
+
+
+def pytest_configure(config):
+    """Register the 'quarantine' mark so -m 'not quarantine' works cleanly."""
+    config.addinivalue_line(
+        "markers",
+        "quarantine: test quarantined from main PR gate due to known flakiness; "
+        "see tests/quarantine.txt",
+    )
+
+
+def pytest_collection_modifyitems(items):
+    """Apply 'quarantine' mark to tests listed in tests/quarantine.txt.
+
+    Quarantined tests are excluded from the main PR gate via
+    -m 'not quarantine'. They still run daily in quarantine-sweep.yml,
+    which hard-fails if they go from flaky to permanently broken.
+    """
+    quarantine_path = Path(__file__).parent / "quarantine.txt"
+    if not quarantine_path.exists():
+        return
+    quarantined = {
+        line.strip()
+        for line in quarantine_path.read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    }
+    if not quarantined:
+        return
+    quarantine_mark = pytest.mark.quarantine
+    for item in items:
+        if item.nodeid in quarantined:
+            item.add_marker(quarantine_mark)
 
 
 def pytest_addoption(parser):
@@ -102,7 +135,7 @@ def server(base_url, token):
         yield base_url
         return
 
-    # No gateway token available — we're probably running hermetic MOAT /
+    # No gateway token available -- we're probably running hermetic MOAT /
     # unit tests (e.g. the MOAT Verifier CI job) that use their own Flask
     # test clients and don't need a live dashboard server at all. Yield None
     # so those tests proceed; any test that actually needs a running server

@@ -1,0 +1,23 @@
+# Quarantine register: tests excluded from the main PR gate due to known flakiness.
+#
+# Format: one pytest node id per line.
+# Example: tests/test_e2e.py::TestFlowDiagram::test_flow_svg_renders
+#
+# To quarantine a test:
+#   1. Add its node id here (one per line).
+#   2. Open a PR so the change is code-reviewed.
+#
+# To un-quarantine:
+#   Remove the line once the root cause of the flakiness is fixed and
+#   the test has a clean run history (>= 3 consecutive green runs).
+#
+# Quarantined tests still run daily in .github/workflows/quarantine-sweep.yml.
+# That workflow retries each test up to 3 times. If ALL 3 attempts fail,
+# the sweep job hard-fails to alert the team that the test is now permanently
+# broken (not just intermittent) and needs investigation within 24h.
+#
+# The CI main-gate jobs pass -m 'not quarantine' so quarantined tests are
+# skipped in the per-PR runs. This prevents one flaky test from blocking
+# all PRs while still surfacing it daily.
+#
+# Last triage: 2026-05-22. No tests currently quarantined.
