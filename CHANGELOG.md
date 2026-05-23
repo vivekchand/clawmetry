@@ -1,4 +1,5 @@
 ## [Unreleased]
+- **Improved:** `clawmetry connect` now offers a one-time conversion choice when the local-only marker is set AND a human typed the command in a terminal: `[1] Sign up for cloud` (removes the marker, proceeds with email/OTP) or `[2] Keep local-only`. Automated callers — `install.sh`, `curl | bash`, any invocation with `--key-only` / `--no-daemon` / `--key=` / `--enc-key=`, or any non-TTY environment — still silent-refuse, preserving the #1937 fix so updates never re-prompt. `--force` keeps its one-shot bypass. (#1966)
 - **Improved:** Session-replay (Embodied) list now renders ChatGPT-style titles (first user prompt, truncated) on top with the UUID demoted to a muted sub-line. Snapshot-side derivation in `clawmetry/sync.py:_build_transcripts`; renderer in `static/js/app.js:loadTranscripts`. Backwards-compatible — old snapshots still render, just with "Untitled session". (#1962)
 
 ### Alerts: kill alert fatigue (2026-05-23)
