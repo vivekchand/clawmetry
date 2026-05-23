@@ -8045,6 +8045,17 @@ function memoryOpenAccessConversation(sessionId) {
 // is one session, each event is a span, linked by parentId.
 window._traceData = null;
 window._traceView = 'waterfall';
+window._traceCollapsed = {};
+
+function _traceToggle(spanId) {
+  var childrenEl = document.querySelector('[data-children-of="' + spanId + '"]');
+  if (!childrenEl) return;
+  var nowCollapsed = childrenEl.style.display !== 'none';
+  childrenEl.style.display = nowCollapsed ? 'none' : '';
+  window._traceCollapsed[spanId] = nowCollapsed;
+  var btn = document.querySelector('[data-toggle-for="' + spanId + '"]');
+  if (btn) btn.textContent = nowCollapsed ? '▶' : '▼';
+}
 
 var _TRACE_KIND_COLORS = {
   agent: '#ec4899', prompt: '#3b82f6', llm: '#8b5cf6', tool: '#10b981',
@@ -8272,13 +8283,27 @@ function _traceRenderTree(spans, roots) {
     var p = s.parent_span_id;
     if (p && byId[p]) { (children[p] = children[p] || []).push(s); }
   });
+  // Auto-collapse for large traces so the initial render isn't overwhelming.
+  window._traceCollapsed = {};
+  if (spans.length > 500) {
+    spans.forEach(function(s) {
+      if (children[s.span_id] && children[s.span_id].length) window._traceCollapsed[s.span_id] = true;
+    });
+  }
   function row(s, depth) {
     var color = _traceColor(s);
     var isErr = s.status === 'error';
     var cost = _traceCost(s);
     var costStr = cost ? '$' + (cost < 0.01 ? cost.toFixed(4) : cost.toFixed(3)) : '';
-    var h = '<div onclick="traceShowSpan(\'' + escHtml(s.span_id) + '\')" style="display:flex;align-items:center;gap:8px;padding:4px 8px;cursor:pointer;border-radius:4px;' + (isErr ? 'background:rgba(239,68,68,0.08);' : '') + '" onmouseover="this.style.background=\'var(--bg-tertiary,#1e293b)\'" onmouseout="this.style.background=\'' + (isErr ? 'rgba(239,68,68,0.08)' : '') + '\'">'
+    var hasKids = !!(children[s.span_id] && children[s.span_id].length);
+    var isCollapsed = !!window._traceCollapsed[s.span_id];
+    var sid = escHtml(s.span_id);
+    var h = '<div>'
+      + '<div onclick="traceShowSpan(\'' + sid + '\')" style="display:flex;align-items:center;gap:6px;padding:4px 8px;cursor:pointer;border-radius:4px;' + (isErr ? 'background:rgba(239,68,68,0.08);' : '') + '" onmouseover="this.style.background=\'var(--bg-tertiary,#1e293b)\'" onmouseout="this.style.background=\'' + (isErr ? 'rgba(239,68,68,0.08)' : '') + '\'">'
       + '<span style="padding-left:' + (depth * 16) + 'px;"></span>'
+      + (hasKids
+          ? '<span data-toggle-for="' + sid + '" onclick="event.stopPropagation();_traceToggle(\'' + sid + '\')" style="width:14px;height:14px;flex-shrink:0;font-size:10px;color:var(--text-muted);text-align:center;line-height:14px;cursor:pointer;user-select:none;">' + (isCollapsed ? '▶' : '▼') + '</span>'
+          : '<span style="width:14px;flex-shrink:0;"></span>')
       + '<span style="width:9px;height:9px;border-radius:2px;background:' + color + ';flex-shrink:0;"></span>'
       + '<span style="flex-shrink:0;font-size:11px;width:14px;text-align:center;">' + _traceIcon(s) + '</span>'
       + '<span style="flex:1;font-size:13px;color:' + (isErr ? '#f87171' : 'var(--text-primary)') + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(s.name) + (isErr ? ' ⚠' : '') + '</span>'
@@ -8286,12 +8311,17 @@ function _traceRenderTree(spans, roots) {
       + '<span style="font-size:11px;color:var(--text-muted);width:64px;text-align:right;">' + costStr + '</span>'
       + '<span style="font-size:11px;color:var(--text-muted);width:60px;text-align:right;">' + _traceFmtDur(s.duration_ms) + '</span>'
       + '</div>';
-    (children[s.span_id] || []).forEach(function(c){ h += row(c, depth + 1); });
+    if (hasKids) {
+      h += '<div data-children-of="' + sid + '"' + (isCollapsed ? ' style="display:none;"' : '') + '>';
+      children[s.span_id].forEach(function(c){ h += row(c, depth + 1); });
+      h += '</div>';
+    }
+    h += '</div>';
     return h;
   }
   var html = '';
-  (roots && roots.length ? roots : spans.filter(function(s){return !s.parent_span_id;}).map(function(s){return s.span_id;}))
-    .forEach(function(rid){ if (byId[rid]) html += row(byId[rid], 0); });
+  var rootIds = (roots && roots.length) ? roots : spans.filter(function(s){return !s.parent_span_id;}).map(function(s){return s.span_id;});
+  rootIds.forEach(function(rid){ if (byId[rid]) html += row(byId[rid], 0); });
   el.innerHTML = html || '<div style="padding:18px;color:var(--text-muted);">No span tree.</div>';
 }
 
