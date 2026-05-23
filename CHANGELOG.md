@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Release: Self-Evolve accuracy fix + backlog (2026-05-23)
+- Publishes the Self-Evolve accuracy hardening (#1929 — no more false "broken/regression" findings from absence-of-usage) plus a merged backlog: OTel spans from JSONL (#1931), tabbed span-detail panel (#1936), /api/dives (#1932), config-drift badge (#1826), /api/component/mcp (#1827), runtime DuckDB fast-path (#1887), outcomes impact API (#1824), 503-banner wiring (#1825), alerts manage-channels (#1885), and CI/e2e hardening (#1850/#1886/#1888/#1889/#1891).
+
 ### Release: Skills in cloud + remove Classic nav (2026-05-23)
 - Publishes #1926 (skills ship in the cloud snapshot so the Skills tab works on app.clawmetry.com) and #1927 (removed the dead Classic-nav link).
 
