@@ -10324,12 +10324,25 @@ async function loadTranscripts() {
   try {
     var data = await fetch('/api/transcripts').then(r => r.json());
     var html = '';
+    // ChatGPT-style row: derived title on top (first user prompt, when the
+    // daemon shipped one in the snapshot), with the full session id demoted
+    // to a small muted sub-line. Falls back to t.name/"Untitled session" so
+    // older snapshots (before #1959) don't go blank. Looks-like-an-id detector
+    // catches the "name === sid" / "name === sid[:40]" cases the legacy
+    // endpoint emits.
+    var UUIDISH = /^[0-9a-f]{6,}([-_][0-9a-f]+)*$/i;
     data.transcripts.forEach(function(t) {
-      html += '<div class="transcript-item" onclick="viewTranscript(\'' + escHtml(t.id) + '\')">';
-      html += '<div><div class="transcript-name">' + escHtml(t.name) + '</div>';
-      html += '<div class="transcript-meta-row">';
+      var raw = String(t.id || '');
+      var titleSrc = (t.title && String(t.title).trim()) || (t.name && String(t.name).trim()) || '';
+      var looksLikeId = !titleSrc || titleSrc === raw || UUIDISH.test(titleSrc) || raw.indexOf(titleSrc) === 0;
+      var title = looksLikeId ? 'Untitled session' : titleSrc;
+      html += '<div class="transcript-item" onclick="viewTranscript(\'' + escHtml(raw) + '\')">';
+      html += '<div style="min-width:0;flex:1;">';
+      html += '<div class="transcript-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(title) + '</div>';
+      html += '<div class="transcript-meta-row" style="gap:10px;">';
+      html += '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text-muted,#888);font-size:11px;" title="' + escHtml(raw) + '">' + escHtml(raw.slice(0, 8)) + '</span>';
       html += '<span>' + t.messages + ' messages</span>';
-      html += '<span>' + (t.size > 1024 ? (t.size/1024).toFixed(1) + ' KB' : t.size + ' B') + '</span>';
+      if (t.size > 0) html += '<span>' + (t.size > 1024 ? (t.size/1024).toFixed(1) + ' KB' : t.size + ' B') + '</span>';
       html += '<span>' + timeAgo(t.modified) + '</span>';
       html += '</div></div>';
       html += '<span style="color:#444;font-size:18px;">▸</span>';

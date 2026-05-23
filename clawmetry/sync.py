@@ -7652,6 +7652,58 @@ def _project_snapshot_messages(msgs):
     return out
 
 
+_TITLE_MAX_CHARS = 80
+
+
+def _derive_transcript_title(msgs):
+    """Return a ChatGPT-style title for the session from the first user message.
+
+    The transcript dict produced by ``_try_local_store_transcript`` normalises
+    both Anthropic-shape (``role: user``, ``content`` str or block list) and
+    OpenClaw v3 (``prompt.submitted`` events surfaced with ``role: user``).
+    We just need the first text we can extract from those user turns; anything
+    else (system/assistant/tool/error) is skipped. Stripped of leading/trailing
+    whitespace, collapsed-newlines, capped to ``_TITLE_MAX_CHARS`` with an
+    ellipsis when truncated. Returns ``""`` when nothing usable is found — the
+    renderer falls back to the legacy display label.
+    """
+    if not isinstance(msgs, (list, tuple)):
+        return ""
+    for m in msgs:
+        if not isinstance(m, dict):
+            continue
+        if m.get("role") != "user":
+            continue
+        c = m.get("content")
+        text = ""
+        if isinstance(c, str):
+            text = c
+        elif isinstance(c, list):
+            for block in c:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    t = block.get("text")
+                    if isinstance(t, str) and t.strip():
+                        text = t
+                        break
+                elif isinstance(block, str) and block.strip():
+                    text = block
+                    break
+        if not text:
+            # Some adapters write the prompt under a sibling key.
+            for fld in ("text", "prompt", "finalPromptText"):
+                v = m.get(fld)
+                if isinstance(v, str) and v.strip():
+                    text = v
+                    break
+        text = " ".join((text or "").split())  # collapse all whitespace runs
+        if not text:
+            continue
+        if len(text) > _TITLE_MAX_CHARS:
+            return text[: _TITLE_MAX_CHARS - 1].rstrip() + "…"
+        return text
+    return ""
+
+
 def _build_transcripts(limit_sessions=8, msg_cap=80, extra_sids=None):
     """Recent per-session transcripts for the cloud Embodied tab.
 
@@ -7701,6 +7753,17 @@ def _build_transcripts(limit_sessions=8, msg_cap=80, extra_sids=None):
                 t = None
             if t and t.get("messages"):
                 msgs = t["messages"]
+                # ChatGPT-style title: derive from the first user message on the
+                # FULL message list (before we cap to the last msg_cap turns —
+                # otherwise long sessions lose their title because the opening
+                # prompt got dropped). +~60 bytes per session in the snapshot;
+                # well under the field-bloat budget, see
+                # feedback_snapshot_transcript_field_bloat.md. Frontend falls
+                # back to t.name/sid when absent (old daemons / old snapshots).
+                try:
+                    title = _derive_transcript_title(msgs)
+                except Exception:
+                    title = ""
                 if len(msgs) > msg_cap:
                     t = dict(t)
                     msgs = msgs[-msg_cap:]
@@ -7713,6 +7776,8 @@ def _build_transcripts(limit_sessions=8, msg_cap=80, extra_sids=None):
                 # detail to a budgeted preview; the full detail stays on the
                 # local dashboard.
                 t["messages"] = _project_snapshot_messages(msgs)
+                if title:
+                    t["title"] = title
                 out[sid] = t
         return out
     except Exception as _e:
