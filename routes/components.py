@@ -9,6 +9,7 @@ Owns the 5 routes registered on ``bp_components``:
   GET  /api/component/machine      — machine/host hardware info (CPU, GPU, load)
   GET  /api/component/gateway      — gateway routing events + stats
   GET  /api/component/brain        — LLM API call details (tokens, cost, duration)
+  GET  /api/component/mcp          — MCP server aggregates (call counts, error rates, top tools)
 
 Module-level helpers (``SESSIONS_DIR``, ``LOG_DIR``, ``_get_log_dirs``,
 ``_grep_log_file``, ``_record_heartbeat``, ``_provider_from_model``,
@@ -34,6 +35,10 @@ bp_components = Blueprint('components', __name__)
 _api_tool_cache = {}
 _api_tool_cache_time = {}
 
+# Per-MCP response cache (15s TTL) — used by api_component_mcp
+_api_mcp_cache: dict = {}
+_api_mcp_cache_time: float = 0.0
+
 
 # Map tool key to tool names in transcripts (also used by the local-store
 # fast path so the fast path stays in lock-step with the legacy parser).
@@ -58,6 +63,14 @@ _TOOL_MAP = {
     "tts": ["tts"],
     "memory": ["Read", "read", "Write", "write", "Edit", "edit"],
 }
+
+
+def _mcp_server_from_tool_name(name: str):
+    """Return the MCP server slug from ``mcp__<server>__<tool>``, or None."""
+    parts = name.split("__", 2)
+    if len(parts) >= 3 and parts[0] == "mcp" and parts[1]:
+        return parts[1]
+    return None
 
 
 def _iter_tool_call_blocks(row: dict):
@@ -1832,3 +1845,127 @@ def api_component_brain():
         "total": total,
     }
     return jsonify(result)
+
+
+def _try_local_store_component_mcp():
+    """DuckDB fast path for /api/component/mcp.
+
+    Walks the same event shapes as _try_local_store_component_tool, extracts
+    every tool call whose name matches ``mcp__<server>__<tool>``, and groups
+    them by server: call count, error count, error_rate, top-5 tools, last_seen.
+
+    Returns None on any unexpected failure so the caller can surface an empty
+    response rather than 500-ing.
+    """
+    from collections import defaultdict
+
+    _HOST_EVENT_TYPES = (
+        "message",
+        "assistant",
+        "model.completed",
+        "subagent:assistant",
+    )
+    rows: list = []
+    try:
+        from routes.local_query import local_store_via_daemon
+        for et in _HOST_EVENT_TYPES:
+            try:
+                got = local_store_via_daemon("query_events", event_type=et, limit=2000)
+                if got:
+                    rows.extend(got)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    if not rows:
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            for et in _HOST_EVENT_TYPES:
+                try:
+                    rows.extend(store.query_events(event_type=et, limit=2000))
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    server_calls: dict = defaultdict(int)
+    server_errors: dict = defaultdict(int)
+    server_tools: dict = defaultdict(lambda: defaultdict(int))
+    server_tool_errors: dict = defaultdict(lambda: defaultdict(int))
+    server_last_seen: dict = {}
+
+    for r in rows:
+        ts = r.get("ts") or ""
+        for tool_name, _args, status in _iter_tool_call_blocks(r):
+            server = _mcp_server_from_tool_name(tool_name)
+            if server is None:
+                continue
+            bare_tool = tool_name.split("__", 2)[2] if tool_name.count("__") >= 2 else tool_name
+            server_calls[server] += 1
+            server_tools[server][bare_tool] += 1
+            if status == "error":
+                server_errors[server] += 1
+                server_tool_errors[server][bare_tool] += 1
+            if ts and (server not in server_last_seen or ts > server_last_seen[server]):
+                server_last_seen[server] = ts
+
+    servers = []
+    for server in sorted(server_calls.keys()):
+        calls = server_calls[server]
+        errors = server_errors[server]
+        tools_sorted = sorted(
+            server_tools[server].items(), key=lambda x: x[1], reverse=True
+        )
+        top_tools = [
+            {
+                "tool": tool,
+                "calls": cnt,
+                "errors": server_tool_errors[server].get(tool, 0),
+            }
+            for tool, cnt in tools_sorted[:5]
+        ]
+        servers.append({
+            "server": server,
+            "calls": calls,
+            "errors": errors,
+            "error_rate": round(errors / calls, 3) if calls else 0.0,
+            "top_tools": top_tools,
+            "last_seen": server_last_seen.get(server, ""),
+        })
+    servers.sort(key=lambda s: s["calls"], reverse=True)
+
+    return {
+        "servers": servers,
+        "total_calls": sum(server_calls.values()),
+        "total_errors": sum(server_errors.values()),
+        "_source": "local_store",
+    }
+
+
+@bp_components.route("/api/component/mcp")
+def api_component_mcp():
+    """Aggregate MCP server usage across all recorded events. Cached 15s."""
+    global _api_mcp_cache_time
+    now = time.time()
+    if _api_mcp_cache and (now - _api_mcp_cache_time) < 15:
+        return jsonify(_api_mcp_cache)
+
+    if is_local_store_read_enabled():
+        try:
+            result = _try_local_store_component_mcp()
+            if result is not None:
+                _api_mcp_cache.clear()
+                _api_mcp_cache.update(result)
+                _api_mcp_cache_time = now
+                return jsonify(result)
+        except Exception:
+            pass
+
+    return jsonify({
+        "servers": [],
+        "total_calls": 0,
+        "total_errors": 0,
+        "_source": "unavailable",
+    })
