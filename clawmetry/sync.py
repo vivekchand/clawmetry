@@ -2613,6 +2613,14 @@ def _local_ingest_session_batch(
         })
     if rows:
         store.ingest_many(rows)
+    # Reconstruct OTel-compatible spans from this batch (issue #1010 / Trace 4).
+    # Non-fatal: span failures never block event ingest.
+    try:
+        from clawmetry.adapters.openclaw import OpenClawAdapter
+        for sp in OpenClawAdapter._build_spans_from_events(batch, session_id):
+            store.ingest_span(sp)
+    except Exception as _e:
+        log.debug("span reconstruction skipped (non-fatal): %s", _e)
 
 
 def _local_ingest_sessions_batch(rows: list, node_id: str) -> None:
