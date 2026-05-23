@@ -38,8 +38,23 @@ def overview_app(tmp_path, monkeypatch):
 
     import clawmetry.local_store as ls
     importlib.reload(ls)
+    # Hermetic isolation: on a dev machine the running sync daemon
+    # publishes ~/.clawmetry/local_query.json which trips
+    # `_daemon_registered()` and steers `get_store()` to a
+    # `_ProxyStore` that forwards into the *real* DuckDB. Force the
+    # writer-owner path so the fixture's tmp_path store gets opened
+    # in this process (matches the single-process boot semantics CI
+    # already runs under).
+    ls.mark_writer_owner()
     import routes.overview as ov
     importlib.reload(ov)
+    # Same fix on the routes side: the fast-path call goes through
+    # `local_store_via_daemon`, which would also hit the real
+    # daemon's HTTP proxy. Stub both discovery hooks so it falls
+    # through to the direct open via `get_store(read_only=True)`.
+    import routes.local_query as lq
+    monkeypatch.setattr(lq, "_read_discovery", lambda: None)
+    monkeypatch.setattr(lq, "_cached_discovery", lambda: None)
 
     a = Flask(__name__)
     a.register_blueprint(ov.bp_overview)
@@ -119,6 +134,7 @@ def test_overview_fast_path_returns_local_store_data(overview_app):
         "cost_usd": 1.7,
         "message_count": 30,
     })
+    _wait_flush(store)
 
     c = a.test_client()
     r = c.get("/api/overview")
@@ -159,6 +175,66 @@ def test_overview_fast_path_falls_back_when_store_empty(overview_app):
     # Fast path returned None → fell through to legacy gateway path, which
     # does NOT add the _source tag.
     assert body.get("_source") != "local_store"
+
+
+def test_overview_excludes_clawmetry_internal_sessions(overview_app):
+    """OSS↔cloud parity regression (2026-05-23).
+
+    Before the fix, /api/overview picked the most-recently-active
+    non-subagent session as ``main`` — but ClawMetry's own plumbing
+    sessions (``clawmetry-selfevolve``, ``clawmetry-fix``, …) qualified
+    and would crowd out the user's real agent. A ``clawmetry-selfevolve``
+    run with 204K cumulative tokens then flowed through ``mainTokens``
+    and the LLM Context Inspector showed "204K / 200K (100%)" even
+    though the user's actual session was idle. The cloud snapshot
+    already filtered them (clawmetry/sync.py:9167), so the two
+    dashboards disagreed.
+
+    This test pins the new filter: ``hide_clawmetry_session`` excludes
+    ``clawmetry-*`` sessions from both the main-session pick and the
+    user-facing ``sessionCount``.
+    """
+    a, ls = overview_app
+    store = ls.get_store()
+
+    # Plumbing session: most recent, biggest token count. MUST NOT win.
+    store.ingest_session({
+        "session_id": "clawmetry-selfevolve",
+        "agent_type": "openclaw",
+        "title": "SelfEvolve plumbing run",
+        "started_at": "2026-05-23T10:00:00+00:00",
+        "last_active_at": "2026-05-23T11:00:00+00:00",
+        "status": "active",
+        "total_tokens": 204476,
+        "metadata": {"model": "claude-opus-4-7"},
+    })
+    # User's real session: older, smaller. SHOULD win.
+    store.ingest_session({
+        "session_id": "sess-user-real",
+        "agent_type": "openclaw",
+        "title": "User's actual agent",
+        "started_at": "2026-05-23T08:00:00+00:00",
+        "last_active_at": "2026-05-23T09:00:00+00:00",
+        "status": "active",
+        "total_tokens": 37763,
+        "metadata": {"model": "claude-opus-4-7"},
+    })
+
+    body = a.test_client().get("/api/overview").get_json()
+    assert body.get("_source") == "local_store"
+    # mainTokens reflects the user's session, NOT the plumbing one.
+    assert body["mainTokens"] == 37763, (
+        f"clawmetry-* session leaked into mainTokens: {body['mainTokens']}"
+    )
+    # User-facing session count also excludes the plumbing entry.
+    assert body["sessionCount"] == 1, (
+        f"clawmetry-* session leaked into sessionCount: {body['sessionCount']}"
+    )
+    # New OSS↔cloud parity fields are always present (default 0).
+    assert "currentContextTokens" in body
+    assert "skillHeaderTokens" in body
+    assert isinstance(body["currentContextTokens"], int)
+    assert isinstance(body["skillHeaderTokens"], int)
 
 
 def test_overview_fast_path_disabled_without_flag(tmp_path, monkeypatch):
