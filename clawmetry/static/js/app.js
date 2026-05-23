@@ -8045,6 +8045,10 @@ function memoryOpenAccessConversation(sessionId) {
 // is one session, each event is a span, linked by parentId.
 window._traceData = null;
 window._traceView = 'waterfall';
+window._traceActiveSpanId = null;
+window._traceActiveTab = 'details';
+window._traceSpanCache = {};
+window._traceSpanCopyBuf = '';
 
 var _TRACE_KIND_COLORS = {
   agent: '#ec4899', prompt: '#3b82f6', llm: '#8b5cf6', tool: '#10b981',
@@ -8322,10 +8326,11 @@ function traceShowSpan(spanId) {
   if (!s) return;
   var drawer = document.getElementById('trace-span-drawer');
   if (!drawer) return;
+  window._traceActiveSpanId = spanId;
+  window._traceActiveTab = 'details';
   drawer.style.display = '';
   var isErr = s.status === 'error';
   var cost = _traceCost(s), tok = _traceTokens(s);
-  // kind-aware metric chips
   function chip(label, val, color) {
     return '<span style="background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;padding:3px 9px;font-size:11px;color:' + (color || 'var(--text-secondary)') + ';"><span style="color:var(--text-muted);">' + label + '</span> ' + val + '</span>';
   }
@@ -8338,19 +8343,117 @@ function traceShowSpan(spanId) {
   if (cost) chips.push(chip('cost', '$' + (cost < 0.01 ? cost.toFixed(4) : cost.toFixed(3)) + (s.rolled_cost != null ? ' (incl. children)' : '')));
   if (s.model) chips.push(chip('model', escHtml(s.model)));
   if (s.tool) chips.push(chip('tool', escHtml(s.tool)));
-  // body label by kind
-  var bodyLabel = s.kind === 'tool' ? 'Tool input'
-                : s.kind === 'llm' ? 'Message / output'
-                : s.kind === 'prompt' ? 'Prompt' : 'Detail';
-  drawer.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
+  drawer.innerHTML =
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
     + '<div style="font-weight:700;font-size:14px;color:' + (isErr ? '#f87171' : 'var(--text-primary)') + ';">' + _traceIcon(s) + ' ' + escHtml(s.name) + '</div>'
     + '<button onclick="document.getElementById(\'trace-span-drawer\').style.display=\'none\'" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:16px;">&times;</button>'
     + '</div>'
     + '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;">' + chips.join('') + '</div>'
-    + (s.detail
-        ? '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-muted);margin-bottom:4px;">' + bodyLabel + '</div>'
-          + '<pre style="white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--text-secondary);margin:0;max-height:300px;overflow:auto;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;padding:8px 10px;">' + escHtml(s.detail) + '</pre>'
-        : '<div style="color:var(--text-muted);font-size:12px;">No captured payload for this span. (Full LLM input/output capture is local-only and follows the E2E path in cloud.)</div>');
+    + '<div id="span-tabs-bar" style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border-primary);">'
+    + _traceSpanTabBtn('details', true) + '</div>'
+    + '<div id="span-tab-content"></div>';
+  _traceSpanRenderDetails(s);
+  // Fetch full OTel span row for BLOB tabs; 404 = synthetic span (no BLOB data — fine).
+  if (window._traceSpanCache[spanId]) {
+    _traceSpanMerge(spanId, window._traceSpanCache[spanId]);
+  } else {
+    fetch('/api/local/spans/' + encodeURIComponent(spanId))
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(data) {
+        if (data && data.available && data.span) {
+          window._traceSpanCache[spanId] = data.span;
+          _traceSpanMerge(spanId, data.span);
+        }
+      })
+      .catch(function() {});
+  }
+}
+
+function _traceSpanTabBtn(name, active) {
+  return '<button onclick="_traceSpanSwitchTab(\'' + name + '\')" data-tab="' + name
+    + '" style="padding:3px 11px;border-radius:4px;border:1px solid ' + (active ? '#6366f1' : 'var(--border-secondary)') + ';background:' + (active ? '#6366f1' : 'transparent') + ';color:' + (active ? '#fff' : 'var(--text-muted)') + ';font-size:11px;cursor:pointer;">'
+    + name.charAt(0).toUpperCase() + name.slice(1) + '</button>';
+}
+
+function _traceSpanSwitchTab(tab) {
+  window._traceActiveTab = tab;
+  var bar = document.getElementById('span-tabs-bar');
+  if (bar) bar.querySelectorAll('button').forEach(function(b) {
+    var on = b.dataset.tab === tab;
+    b.style.background = on ? '#6366f1' : 'transparent';
+    b.style.color = on ? '#fff' : 'var(--text-muted)';
+    b.style.borderColor = on ? '#6366f1' : 'var(--border-secondary)';
+  });
+  if (tab === 'details') {
+    var d = window._traceData;
+    var s = d && (d.spans || []).find(function(x) { return x.span_id === window._traceActiveSpanId; });
+    if (s) _traceSpanRenderDetails(s);
+  } else {
+    _traceSpanRenderBlob(tab);
+  }
+}
+
+function _traceSpanRenderDetails(s) {
+  var content = document.getElementById('span-tab-content');
+  if (!content) return;
+  var bodyLabel = s.kind === 'tool' ? 'Tool input'
+                : s.kind === 'llm' ? 'Message / output'
+                : s.kind === 'prompt' ? 'Prompt' : 'Detail';
+  content.innerHTML = s.detail
+    ? '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-muted);margin-bottom:4px;">' + bodyLabel + '</div>'
+      + '<pre style="white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--text-secondary);margin:0;max-height:300px;overflow:auto;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;padding:8px 10px;">' + escHtml(s.detail) + '</pre>'
+    : '<div style="color:var(--text-muted);font-size:12px;">No captured payload for this span. (Full LLM input/output capture is local-only and follows the E2E path in cloud.)</div>';
+}
+
+function _traceSpanRenderBlob(tab) {
+  var content = document.getElementById('span-tab-content');
+  if (!content) return;
+  var full = window._traceSpanCache[window._traceActiveSpanId];
+  if (!full) {
+    content.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:6px;">Loading&hellip;</div>';
+    return;
+  }
+  var fieldMap = {input: 'input', output: 'output', metadata: 'attributes', events: 'events', links: 'links'};
+  var val = full[fieldMap[tab]];
+  if (val == null) {
+    content.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No ' + escHtml(tab) + ' data for this span.</div>';
+    return;
+  }
+  var str = (typeof val === 'string') ? val : JSON.stringify(val, null, 2);
+  window._traceSpanCopyBuf = str;
+  content.innerHTML =
+    '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'
+    + '<input type="text" placeholder="Filter keys…" oninput="_traceSpanFilter(this.value,\'' + escHtml(tab) + '\')" style="padding:3px 8px;border-radius:4px;border:1px solid var(--border-secondary);background:var(--bg-primary);color:var(--text-primary);font-size:11px;flex:1;max-width:200px;">'
+    + '<button onclick="try{navigator.clipboard.writeText(window._traceSpanCopyBuf)}catch(e){}" style="padding:3px 10px;border-radius:4px;border:1px solid var(--border-secondary);background:transparent;color:var(--text-muted);font-size:11px;cursor:pointer;white-space:nowrap;">Copy JSON</button>'
+    + '</div>'
+    + '<pre id="span-blob-pre" style="white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--text-secondary);margin:0;max-height:350px;overflow:auto;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;padding:8px 10px;">' + escHtml(str) + '</pre>';
+}
+
+function _traceSpanFilter(query, tab) {
+  var pre = document.getElementById('span-blob-pre');
+  if (!pre) return;
+  var full = window._traceSpanCache[window._traceActiveSpanId];
+  if (!full) return;
+  var fieldMap = {input: 'input', output: 'output', metadata: 'attributes', events: 'events', links: 'links'};
+  var val = full[fieldMap[tab]];
+  if (val == null) return;
+  var str = (typeof val === 'string') ? val : JSON.stringify(val, null, 2);
+  if (!query) { pre.textContent = str; return; }
+  var q = query.toLowerCase();
+  pre.textContent = str.split('\n').filter(function(l) { return l.toLowerCase().indexOf(q) !== -1; }).join('\n') || '(no matches)';
+}
+
+function _traceSpanMerge(spanId, full) {
+  if (window._traceActiveSpanId !== spanId) return;
+  var bar = document.getElementById('span-tabs-bar');
+  if (!bar) return;
+  var blobFields = ['input', 'output', 'attributes', 'events', 'links'];
+  var blobTabs   = ['input', 'output', 'metadata',   'events', 'links'];
+  var tabs = ['details'];
+  blobFields.forEach(function(f, i) { if (full[f] != null) tabs.push(blobTabs[i]); });
+  var active = window._traceActiveTab;
+  bar.innerHTML = tabs.map(function(t) { return _traceSpanTabBtn(t, t === active); }).join('');
+  if (active !== 'details') _traceSpanRenderBlob(active);
 }
 
 // Entry point called by nav switchTab + loadAll bootstrap.

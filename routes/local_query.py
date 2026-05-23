@@ -334,6 +334,20 @@ def http_transcript(session_id: str):
         return jsonify({"error": str(e)[:300]}), 500
 
 
+@bp_local_query.route("/api/local/spans/<span_id>", methods=["GET"])
+def http_span_detail(span_id: str):
+    """Full OTel span row including BLOB columns (input, output, attributes,
+    events, links). Returns 404 for session-derived synthetic spans that do
+    not live in the ``spans`` table."""
+    try:
+        rows = _store().query_spans(span_id=span_id, limit=1)
+    except Exception as e:
+        return jsonify({"available": False, "error": str(e)[:300]}), 503
+    if not rows:
+        return jsonify({"available": False}), 404
+    return jsonify({"available": True, "span": rows[0]})
+
+
 @bp_local_query.route("/api/local/query", methods=["POST"])
 def http_query():
     """Generic shape-dispatched endpoint. Mirrors the WS relay frame format,
