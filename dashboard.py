@@ -8705,13 +8705,95 @@ def _check_stuck_sessions() -> None:
         _stuck_session_cooldowns[sid] = now
         severity = "critical" if age_sec >= STUCK_SESSION_CRITICAL_SEC else "warning"
         minutes = int(age_sec / 60)
-        label = s.get("displayName") or sid[:16]
+        # Build a richer, human-readable label so users see WHAT got stuck, not
+        # a UUID prefix. Order of preference: first user prompt (= the actual
+        # task the agent was given) → displayName (if it isn't just a UUID
+        # prefix itself) → channel + agent + model fallback → UUID prefix.
+        label = _stuck_session_label(s, sid)
         agent = s.get("agent", "main")
         msg = (
             f'Session "{label}" appears stuck — no activity for {minutes} min'
             f" (agent: {agent})"
         )
-        _fire_alert(f"stuck_session_{sid[:32]}", "stuck_session", msg, severity=severity)
+        # rule_id carries the FULL session id (was [:32] truncated, which broke
+        # frontend deep-links for standard UUID/UUID-ish session keys). Exact
+        # match still works for cooldown lookup.
+        _fire_alert(f"stuck_session_{sid}", "stuck_session", msg, severity=severity)
+
+
+_UUIDISH_RE = _re.compile(r"^[0-9a-f]{6,}([-_][0-9a-f]+)*$", _re.I)
+
+
+def _stuck_session_label(sess: dict, sid: str) -> str:
+    """Render a human-readable label for the stuck-session banner.
+
+    Tries (in order): the session's first user prompt (the actual task) →
+    the gateway-supplied displayName (if it isn't a bare UUID) → a context
+    blurb (channel · agent · model) → a UUID prefix. Bounded to ~60 chars.
+    Never raises — falls through to ``sid[:16]`` on any error so the alert
+    still fires.
+    """
+    try:
+        prompt = _first_user_prompt_for_session(sid)
+        if prompt:
+            return prompt[:60] + ("…" if len(prompt) > 60 else "")
+        name = (sess.get("displayName") or "").strip()
+        # Skip pure UUID-prefix display names (the gateway returns these when
+        # the agent never set a real one — they're noise to the user).
+        if name and not _UUIDISH_RE.match(name):
+            return name[:60]
+        bits = [b for b in (sess.get("channel"), sess.get("agent"), sess.get("model")) if b]
+        if bits:
+            return " · ".join(str(b) for b in bits)[:60]
+    except Exception:
+        pass
+    return sid[:16]
+
+
+def _first_user_prompt_for_session(sid: str) -> str:
+    """Return the first user-message text from the session JSONL, truncated.
+
+    The user prompt is the most informative single piece of context for a
+    stuck session (it's the task the agent was given). Read just enough of
+    the file to extract it; bail on any error (network-mounted dirs, missing
+    file, malformed lines) — the caller has a safe fallback. PR docs:
+    matches ``_extract_spawn_task`` shape (dashboard.py:14825) but as a
+    module-level helper so other features can reuse it.
+    """
+    try:
+        sessions_dir = _get_sessions_dir()
+        fpath = os.path.join(sessions_dir, sid + ".jsonl")
+        if not os.path.isfile(fpath):
+            return ""
+        with open(fpath) as f:
+            for line in f:
+                try:
+                    obj = json.loads(line.strip())
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                # OpenClaw v3 normalises to {type:"prompt.submitted",
+                # data:{finalPromptText:...}}; legacy event shape is
+                # {type:"message", message:{role:"user", content:...}}.
+                if obj.get("type") in ("prompt.submitted",) or obj.get("_v3_type") == "prompt.submitted":
+                    txt = (obj.get("data", {}) or {}).get("finalPromptText") or obj.get("finalPromptText")
+                    if isinstance(txt, str) and txt.strip():
+                        return txt.strip()
+                if obj.get("type") == "message":
+                    m = obj.get("message", {}) or {}
+                    if m.get("role") != "user":
+                        continue
+                    content = m.get("content", "")
+                    if isinstance(content, str) and content.strip():
+                        return content.strip()
+                    if isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                t = block.get("text", "")
+                                if isinstance(t, str) and t.strip():
+                                    return t.strip()
+    except Exception:
+        pass
+    return ""
 
 
 def _session_health_loop() -> None:
@@ -10852,7 +10934,7 @@ DASHBOARD_HTML = r"""
       </div>
       <div class="left-nav-item" data-tab="transcripts" onclick="switchTab('transcripts')" title="Conversations across channels (Telegram, Signal, WhatsApp, &hellip;)">
         <span class="left-nav-icon" aria-hidden="true">&#9787;</span>
-        <span class="left-nav-label">Embodied <span class="left-nav-beta">&#946;</span></span>
+        <span class="left-nav-label">Session replay <span class="left-nav-beta">(beta)</span></span>
       </div>
       <div class="left-nav-item" data-tab="crons" id="crons-tab" onclick="switchTab('crons')" title="Scheduled agent jobs">
         <span class="left-nav-icon" aria-hidden="true">&#9202;</span>
