@@ -303,3 +303,29 @@
     font-weight:600;
     ">Dismiss</button>
 </div>
+
+<!-- Sync Status Banner (PRD-sync-status.md) — first-install transparency.
+     Hidden by default; cm_sync_init() decides whether to show based on
+     /api/local/health.event_count (cold install) or /api/sync-progress.status. -->
+<div id="sync-status-banner" style="display:none;padding:12px 18px;background:linear-gradient(90deg,#1a2342 0%,#0f1422 100%);border-bottom:1px solid #334074;color:#cbd5e1;font-size:13px;font-family:Inter,system-ui,sans-serif;">
+  <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+    <span aria-hidden="true" style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:rgba(99,102,241,0.18);">
+      <span id="sync-status-icon" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#6366f1;animation:cm-sync-pulse 1.4s ease-in-out infinite;"></span>
+    </span>
+    <div style="flex:1;min-width:220px;">
+      <div id="sync-status-title" style="font-weight:600;color:#e2e8f0;">Syncing your OpenClaw workspace</div>
+      <div id="sync-status-subtitle" style="font-size:11px;color:#94a3b8;margin-top:2px;">Discovering sessions and indexing events. Your data will appear shortly.</div>
+    </div>
+    <div id="sync-status-stepper" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;"></div>
+    <button id="sync-status-toggle" type="button" onclick="cmSyncToggleDetails()" aria-expanded="false" style="background:transparent;border:1px solid #334074;color:#94a3b8;border-radius:6px;padding:4px 12px;font-size:11px;cursor:pointer;">Show details</button>
+  </div>
+  <div id="sync-status-details" style="display:none;margin-top:10px;padding:8px 12px;background:rgba(15,23,42,0.6);border:1px solid #1e293b;border-radius:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:#94a3b8;max-height:180px;overflow:auto;"></div>
+  <div id="sync-status-error" style="display:none;margin-top:10px;padding:10px 12px;background:rgba(127,29,29,0.25);border:1px solid #7f1d1d;border-radius:6px;font-size:12px;color:#fecaca;"></div>
+</div>
+<style>
+  @keyframes cm-sync-pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.4 } }
+  .cm-sync-step { display:inline-flex; align-items:center; gap:5px; padding:3px 9px; border-radius:14px; font-size:11px; font-weight:500; background:rgba(30,41,59,0.5); color:#64748b; border:1px solid rgba(51,64,116,0.5); white-space:nowrap; }
+  .cm-sync-step[data-state="done"]   { color:#86efac; border-color:#16a34a55; background:rgba(20,83,45,0.25); }
+  .cm-sync-step[data-state="active"] { color:#a5b4fc; border-color:#6366f1aa; background:rgba(67,56,202,0.25); }
+  .cm-sync-step[data-state="error"]  { color:#fecaca; border-color:#7f1d1d; background:rgba(127,29,29,0.35); }
+</style>
