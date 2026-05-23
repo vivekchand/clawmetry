@@ -9118,7 +9118,23 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "machine": uname.node,
         "runtime": f"Node.js - {uname.system} {uname.release.split('-')[0]}",
         "storage": system[0][1] if system else "--",
+        "python_version": platform.python_version(),
+        "os_name": uname.system,
+        "os_release": uname.release,
+        "arch": uname.machine,
     }
+    try:
+        infra["node_version"] = subprocess.run(
+            ["node", "--version"], capture_output=True, text=True, timeout=3
+        ).stdout.strip()
+    except Exception:
+        pass
+    try:
+        infra["openclaw_version"] = subprocess.run(
+            ["openclaw", "--version"], capture_output=True, text=True, timeout=3
+        ).stdout.strip()
+    except Exception:
+        pass
 
     # Session info
     sessions_dir = paths.get("sessions_dir", "")
