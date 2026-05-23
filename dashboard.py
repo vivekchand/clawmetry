@@ -10599,6 +10599,32 @@ def detect_config(args=None):
         except Exception as _e:
             return _jsonify({"error": f"unreadable: {_e}"}), 500
 
+    # #1937: cloud-status tri-state so the dashboard banner JS knows whether
+    # to show the "Syncing your OpenClaw workspace" banner at all. The banner
+    # describes CLOUD-side work, so it's misleading (or just frozen) when:
+    #   - cloud sync is opt-out disabled (CLAWMETRY_NO_CLOUD=1 or
+    #     ~/.clawmetry/nocloud), or
+    #   - the user never connected (no config.json) so there's nothing to sync.
+    # The banner only mounts when configured=true AND disabled=false.
+    @app.route("/api/cloud-status", endpoint="cloud_status")
+    def _cloud_status():
+        from flask import jsonify as _jsonify
+        from clawmetry.config import is_cloud_disabled, NOCLOUD_MARKER_PATH
+        cfg_path = os.path.expanduser("~/.clawmetry/config.json")
+        api_key = ""
+        if os.path.isfile(cfg_path):
+            try:
+                with open(cfg_path) as _f:
+                    api_key = (json.load(_f) or {}).get("api_key", "")
+            except Exception:
+                pass
+        return _jsonify({
+            "disabled": is_cloud_disabled(),
+            "configured": bool(api_key),
+            "marker_path": NOCLOUD_MARKER_PATH,
+            "env_optout": bool(os.environ.get("CLAWMETRY_NO_CLOUD", "").strip()),
+        })
+
     # Local SQLite event store (epic #964 / phase 1) — proves the daemon is
     # writing through to ~/.clawmetry/events.db. The dashboard's main read
     # paths are migrating to this store progressively; in the meantime this

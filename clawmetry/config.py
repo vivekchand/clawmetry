@@ -67,6 +67,38 @@ def hide_clawmetry_session(session_id) -> bool:
         not in _SHOW_INTERNAL_ENABLE_VALUES
 
 
+# ── Local-only mode (cloud sync opt-out) ───────────────────────────────────
+# Persistent opt-out from cloud sync. Two equivalent triggers — either one
+# turns it on; both survive updates:
+#   * CLAWMETRY_NO_CLOUD=1 (env)
+#   * ~/.clawmetry/nocloud  (marker file written by `clawmetry disconnect`)
+# When set, the sync daemon STILL ingests OpenClaw events into the local
+# DuckDB store (so the localhost dashboard keeps showing fresh data), but
+# skips every cloud-side call: no heartbeat, no encrypted snapshot push,
+# no cache_push, no /ingest/* POSTs, no `clawmetry connect` auto-prompt.
+# Background: GitHub #1937 — users want a real "local only, never phone
+# home" mode that updates can't silently re-enable.
+NOCLOUD_MARKER_PATH = os.path.expanduser("~/.clawmetry/nocloud")
+_NO_CLOUD_ENABLE_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
+def is_cloud_disabled() -> bool:
+    """True when the user has opted out of cloud sync via env or marker file.
+
+    Either CLAWMETRY_NO_CLOUD=1 (1/true/yes/on, case-insensitive) or the
+    presence of ``~/.clawmetry/nocloud`` flips the daemon into local-only
+    mode. The marker file is the persistent path (survives updates and
+    daemon restarts); the env var is for one-off / containerised use.
+    """
+    env = os.environ.get("CLAWMETRY_NO_CLOUD", "").strip().lower()
+    if env in _NO_CLOUD_ENABLE_VALUES:
+        return True
+    try:
+        return os.path.isfile(NOCLOUD_MARKER_PATH)
+    except Exception:
+        return False
+
+
 @dataclass
 class ClawMetryConfig:
     """
