@@ -1657,7 +1657,8 @@ def _cmd_onboard(args) -> None:
     if already_connected:
         print(f"\n  {GREEN(BOLD('Already connected to ClawMetry Cloud'))}")
         _maybe_apply_nemoclaw_preset(_input, BOLD, CYAN, DIM)
-        print(f"  {DIM('Run  clawmetry status  to check sync health.')}\n")
+        print(f"  {DIM('Run')} {CYAN('clawmetry status')} {DIM('to check sync health.')}")
+        print(f"  {DIM('Run')} {CYAN('clawmetry disconnect')} {DIM('to stop cloud sync and go local-only.')}\n")
         return
 
     # Get version for banner
@@ -1670,18 +1671,49 @@ def _cmd_onboard(args) -> None:
 
     print(f"\n  {BOLD(f'ClawMetry{_ver_str} installed!')}")
     print()
-    print(f"  Monitor your AI agents from anywhere with ClawMetry Cloud.")
-    print()
 
-    try:
-        choice = _input("  Do you have a ClawMetry account? [y/N]: ").strip().lower() or "n"
-    except (EOFError, KeyboardInterrupt):
-        choice = "n"
+    if getattr(args, "local_only", False):
+        # Non-interactive opt-out via `clawmetry onboard --local`.
+        choice = "l"
+    else:
+        print(f"  Set up your dashboard:")
+        print()
+        print(f"    {BOLD('c')} - Cloud dashboard (free, E2E encrypted, recommended)")
+        print(f"    {BOLD('e')} - Connect existing account")
+        print(f"    {BOLD('l')} - Local only (no cloud sync)")
         print()
 
+        try:
+            choice = _input("  Choice [C/e/l]: ").strip().lower() or "c"
+        except (EOFError, KeyboardInterrupt):
+            choice = "c"
+            print()
+
+    # Back-compat: legacy "y" mapped to existing account, "n"/no input meant
+    # "create a new cloud account". Honour those replies so install.sh users
+    # who answered the old prompt still get the same outcome.
+    if choice in ("y", "yes"):
+        choice = "e"
+    elif choice in ("n", "no"):
+        choice = "c"
+
     print()
 
-    if choice in ("y", "yes"):
+    if choice in ("l", "local"):
+        # Local-only mode: skip cloud entirely.
+        print(f"  {GREEN(BOLD('Installed'))} (local mode)")
+        print()
+        print(f"  Start your dashboard:")
+        print(
+            f"    {CYAN('clawmetry --host 0.0.0.0 --port 8900')}          {DIM('# foreground (LAN)')}"
+        )
+        print()
+        print(f"  {DIM('Connect to cloud later: clawmetry setup')}")
+        print()
+        _print_nemoclaw_preset_hint(BOLD, CYAN, DIM)
+        return
+
+    if choice in ("e", "existing"):
         # Existing user: email -> OTP -> connect
         import argparse as _ap
 
@@ -1694,7 +1726,7 @@ def _cmd_onboard(args) -> None:
         print()
         _maybe_apply_nemoclaw_preset(_input, BOLD, CYAN, DIM)
     else:
-        # New user: instant registration (no OTP)
+        # Default ("c"): instant registration (no OTP)
         print(f"  Setting up your cloud dashboard...")
         print()
 
@@ -2452,6 +2484,12 @@ def main() -> None:
         metavar="NAME",
         dest="custom_node_id",
         help="Custom node name (default: hostname)",
+    )
+    p_onboard.add_argument(
+        "--local",
+        action="store_true",
+        dest="local_only",
+        help="Skip the cloud prompt and install in local-only mode",
     )
 
     # connect

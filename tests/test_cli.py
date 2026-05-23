@@ -139,3 +139,38 @@ def test_post_json_handles_non_json_body():
     assert status == 500
     assert "oh no" in result["error"]
     assert result["retry_after"] is None
+
+
+def test_onboard_local_only_skips_cloud_setup(monkeypatch, tmp_path, capsys):
+    """`clawmetry onboard --local` must not call cloud setup or prompt the user."""
+    import argparse
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CLAWMETRY_API_KEY", raising=False)
+    monkeypatch.delenv("CLAWMETRY_NODE_ID", raising=False)
+
+    def _boom_register(*_a, **_kw):
+        raise AssertionError("cloud registration must not run in local mode")
+
+    def _boom_connect(*_a, **_kw):
+        raise AssertionError("cloud connect must not run in local mode")
+
+    def _boom_input(_prompt):
+        raise AssertionError("local-only path must not prompt the user")
+
+    monkeypatch.setattr(cli, "_instant_register", _boom_register)
+    monkeypatch.setattr(cli, "_cmd_connect", _boom_connect)
+    monkeypatch.setattr("builtins.input", _boom_input)
+
+    args = argparse.Namespace(
+        key=None,
+        foreground=False,
+        custom_node_id=None,
+        local_only=True,
+    )
+
+    cli._cmd_onboard(args)
+
+    out = capsys.readouterr().out
+    assert "local mode" in out.lower()
+    assert "clawmetry --host" in out

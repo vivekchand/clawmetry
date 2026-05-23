@@ -725,6 +725,9 @@ fi
 
 if [ "${CLAWMETRY_SKIP_ONBOARD:-}" = "1" ] || [ "$NEMOCLAW_DETECTED" = "1" ]; then
   [ "$NEMOCLAW_DETECTED" = "1" ] || echo -e "  ${DIM}Skipping onboard (CLAWMETRY_SKIP_ONBOARD=1)${NC}"
+elif [ "${CLAWMETRY_LOCAL_ONLY:-}" = "1" ]; then
+  echo -e "  ${DIM}Installing in local-only mode (CLAWMETRY_LOCAL_ONLY=1)${NC}"
+  "$CLAWMETRY_BIN" onboard --local || true
 elif (exec </dev/tty) 2>/dev/null; then
   "$CLAWMETRY_BIN" onboard </dev/tty || true
 else
