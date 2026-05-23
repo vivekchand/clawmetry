@@ -719,9 +719,13 @@ async function checkOnboardingStatus() {
   }
 }
 
-// Poll every 5s while the banner is active. First check is fast (300ms)
-// so a returning user with an already-warm daemon barely sees the banner.
-_cmOnboardingTimer = setInterval(checkOnboardingStatus, 5000);
+// Poll every 15s while the banner is active (#1969: was 5s + ungated, which
+// kept hitting /api/heartbeat-status every 5s on every tab and while the
+// browser tab was hidden). First check is fast (300ms) so a returning user
+// with an already-warm daemon barely sees the banner; thereafter the gated
+// wrapper suspends the poll when the tab is hidden and the in-function
+// dismiss-on-first-heartbeat keeps the on-tab pollage short.
+_cmOnboardingTimer = visibilitySetInterval(checkOnboardingStatus, 15000);
 setTimeout(checkOnboardingStatus, 300);
 
 // === No-Agent-Detected Empty-State Banner ===================================
@@ -2285,7 +2289,18 @@ function renderOauthBanner(overview) {
   }
 }
 
+// #1969: coalesce concurrent + back-to-back loadAll() callers. Heartbeat-
+// landed handlers, connection-restored, switchTab('overview'), and the
+// periodic refresh interval can all fire within the same second; pre-fix
+// each one independently ran the /api/overview + 8 secondary fetch
+// fan-out, producing the "3× /api/overview in 1 second" burst.
+var _loadAllInFlight = null;
+var _loadAllLastFinishedMs = 0;
+var _LOADALL_COALESCE_MS = 2000;
 async function loadAll() {
+  if (_loadAllInFlight) return _loadAllInFlight;
+  if (Date.now() - _loadAllLastFinishedMs < _LOADALL_COALESCE_MS) return;
+  _loadAllInFlight = (async function () {
   try {
     // Render overview quickly; do not block on heavy usage aggregation.
     var overview = await fetchJsonWithTimeout('/api/overview', 3000);
@@ -2343,6 +2358,12 @@ async function loadAll() {
     document.getElementById('refresh-time').textContent = 'Load failed - retrying...';
     return false;
   }
+  })();
+  _loadAllInFlight.finally(function () {
+    _loadAllLastFinishedMs = Date.now();
+    _loadAllInFlight = null;
+  });
+  return _loadAllInFlight;
 }
 
 async function loadMiniWidgets(overview, usage) {
@@ -11017,7 +11038,14 @@ async function cmSyncInit() {
   el.style.display = 'block';
   window._cmSync.startedAt = Date.now();
   _cmSyncRender(prog, health);
-  window._cmSync.pollTimer = setInterval(_cmSyncTick, 2500);
+  // #1969: was setInterval(.., 2500) ungated -> fired /api/sync-progress AND
+  // /api/local/health every 2.5s on every tab and while hidden (24 reqs in a
+  // 25s window). Route through the visibility wrapper and slow to 15s; the
+  // banner self-dismisses via _cmSyncDismiss when sync verifies, so this
+  // bounds the cost to ~1 request-pair / 15s when active and 0 when hidden.
+  window._cmSync.pollTimer = (typeof visibilitySetInterval === 'function'
+    ? visibilitySetInterval
+    : setInterval)(_cmSyncTick, 15000);
 }
 setTimeout(function(){ try { cmSyncInit(); } catch (e) {} }, 800);
 

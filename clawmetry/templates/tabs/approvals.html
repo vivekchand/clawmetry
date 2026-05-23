@@ -741,8 +741,13 @@
     }
   });
 
-  /* ── Background badge poll ── */
+  /* ── Background badge poll ──
+     #1969: gate on document visibility too. Pre-fix, this fetched
+     /api/cloud/approvals every 10s on every tab AND while the browser tab
+     was hidden — pointless noise in the access log for a nav-badge count
+     nobody is watching when the window isn't focused. */
   setInterval(function(){
+    if (typeof document !== 'undefined' && document.hidden) return;
     var pg = document.getElementById('page-approvals');
     if (pg && pg.classList.contains('active')) return;
     fetchJsonWithTimeout('/api/cloud/approvals?status=pending&limit=10' + _q(), 4000)
