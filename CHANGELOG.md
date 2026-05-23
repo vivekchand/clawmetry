@@ -1,4 +1,5 @@
 ## [Unreleased]
+- **Fixed:** In-app "Update now" was failing with `No module named pip` on uv-provisioned daemon venvs (every user on the uv-bootstrapped install). Bootstrap pip via stdlib `ensurepip --upgrade --default-pip` first, capture pip's real stderr so the banner shows *why* it failed instead of just `exit 1`, and pass `--no-cache-dir` to dodge the uv-cache-stale race. (#1948)
 
 ### Release: Transparent sync-status banner (2026-05-23)
 - Publishes #1943: first-install "Syncing your OpenClaw workspace" banner with a 5-step stepper (Discovering → Indexing events → Aggregating → Pushing snapshot → Verified), live counts and honest ETA from the daemon's existing /api/sync-progress + /api/local/health signals, an expandable structured log (no PII), and an actionable error card when sync queues a retry or stalls. Auto-clears on three independent signals. No new endpoints. PRD-sync-status.md ships alongside.
