@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Release: i18n Phase 0 foundation (2026-05-24)
+- Publishes #1987: the dashboard now ships the internationalization foundation — a top-right language switcher, auto-detection, a vanilla `Intl`-backed runtime, and a JSON catalog under `static/locales/` (en + ja/fr + en-XA pseudolocale). Pure frontend chrome; cloud picks it up on the next OSS pin bump. Full string extraction + the ~30-language autotranslate bot follow in later phases. See `docs/PRD_I18N.md`.
+
 ### i18n Phase 0: internationalization foundation (2026-05-24)
 - First slice of the i18n initiative (`docs/PRD_I18N.md`): the dashboard can now render in multiple languages with a **top-right language switcher**, auto-detection, and a choice that persists across reloads and surfaces. No build step, no new dependency — a vanilla runtime (`static/js/i18n.js`) translates `data-i18n` DOM nodes, exposes `window.t()` for JS strings (Phase 1 onward), and formats numbers/dates/plurals via native `Intl.*`. A flat JSON catalog under `static/locales/` (`en.json` source of truth + `_meta.json` registry, shipped in the wheel and shared with the upcoming v2 React SPA, see #1986) drives both. Detection precedence: `?lang=` > `cm-lang` cookie (`.clawmetry.com`-scoped for cross-surface consistency) / localStorage > `navigator.languages` > English; a missing key falls back to English, never blank. Ships `en` + proof translations `ja`/`fr` + an `en-XA` pseudolocale (dev) for extraction-coverage QA. A starter set of strings (left-nav labels + overview header) is marked; full string extraction is Phase 1. CI guard (`tests/test_i18n_catalog.py`) enforces locale key-parity with English. Verified live in the running dashboard.
 
