@@ -2,7 +2,8 @@ import { Routes, Route } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { WelcomePage } from "./pages/WelcomePage";
 import { StubPage } from "./pages/StubPage";
-import { NAV_ITEMS } from "./components/nav";
+import { NAV_ITEMS } from "./components/nav"; 
+import { OpsPage } from "./pages/OpsPage";
 
 // All v2 routes live inside <Layout>, which renders the sidebar + topbar
 // chrome and an <Outlet /> for route content. Every NAV_ITEMS entry maps
@@ -13,7 +14,8 @@ export default function App() {
     <Routes>
       <Route path="/" element={<Layout />}>
         <Route index element={<WelcomePage />} />
-        {NAV_ITEMS.map((it) => (
+        <Route path="ops" element={<OpsPage />} />
+        {NAV_ITEMS.filter((it) => it.id !== "ops").map((it) => (
           <Route key={it.id} path={it.id} element={<StubPage slug={it.id} />} />
         ))}
         {/* SPA catch-all — unknown deep links land on the welcome page rather
