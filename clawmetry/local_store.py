@@ -5305,6 +5305,7 @@ class LocalStore:
         self,
         *,
         scan_sessions: int = 5,
+        exclude_clawmetry: bool = True,
     ) -> dict[str, Any]:
         """Peak context-window measurement for the latest active session.
 
@@ -5345,6 +5346,16 @@ class LocalStore:
         Args:
             scan_sessions: How many most-recent sessions to walk before
                 giving up. Matches the legacy file-scan budget of 5.
+            exclude_clawmetry: Skip sessions whose id starts with
+                ``clawmetry-`` (Self-Evolve, Fix-with-AI, memory probes,
+                …). Default True so the "Context Window Usage" gauge
+                reflects the *user's* agent, not ClawMetry's own
+                plumbing. Bug surfaced 2026-05-23: OSS showed a 204K
+                SelfEvolve context while cloud showed 38K for the user's
+                actual session, because OSS scanned whichever
+                clawmetry-* session ran most recently first. Pass False
+                to keep the legacy include-everything behaviour
+                (debug tooling).
         """
         # Step 1: most-recent N sessions ordered by last activity. The
         # session table has updated_at; we use events for the same answer
@@ -5356,6 +5367,10 @@ class LocalStore:
         # returned ``input_tokens=0`` and the dashboard's
         # /api/context-anatomy "Session history" bucket vanished.
         ev_in = _sql_in_clause(_ASSISTANT_EVENT_TYPES)
+        # Over-fetch when filtering so a burst of clawmetry-* plumbing
+        # sessions can't crowd the user's real session out of the scan
+        # budget. The post-filter still respects the caller's cap.
+        sql_limit = int(scan_sessions) * (4 if exclude_clawmetry else 1)
         recent_sessions = self._fetch(
             f"""
             SELECT session_id, MAX(ts) AS last_ts
@@ -5366,8 +5381,17 @@ class LocalStore:
             ORDER BY last_ts DESC
             LIMIT ?
             """,
-            [int(scan_sessions)],
+            [sql_limit],
         )
+        if exclude_clawmetry:
+            # Imported here to keep clawmetry.config off this module's
+            # import critical path (local_store is imported in the cloud
+            # too, where the env-var override semantics still apply).
+            from clawmetry.config import hide_clawmetry_session
+            recent_sessions = [
+                r for r in recent_sessions
+                if not hide_clawmetry_session(r[0])
+            ][: int(scan_sessions)]
         for sid_row in recent_sessions:
             sid, _last_ts = sid_row[0], sid_row[1]
             if not sid:
