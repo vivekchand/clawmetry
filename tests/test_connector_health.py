@@ -126,10 +126,16 @@ def test_ingest_is_idempotent_on_retail(store):
 # ── classifier verdict ───────────────────────────────────────────────────
 
 def _verdict(monkeypatch, rows):
-    """Run _connector_liveness with telegram enabled + crafted signals."""
+    """Run _connector_liveness with telegram enabled + crafted signals.
+
+    The enabled-channels reader + classifier live in clawmetry.connector_health
+    (shared with the daemon snapshot builder); _connector_liveness imports them
+    at call time, so patching the source module takes effect.
+    """
     import routes.health as h
     import routes.local_query as lq
-    monkeypatch.setattr(h, "_enabled_channels_from_config", lambda: ["telegram"])
+    import clawmetry.connector_health as ch
+    monkeypatch.setattr(ch, "enabled_channels_from_config", lambda *a, **k: ["telegram"])
     monkeypatch.setattr(lq, "local_store_via_daemon", lambda method, **kw: rows)
     out = h._connector_liveness()
     return out[0] if out else {}
