@@ -17167,6 +17167,17 @@ def _run_server(args):
     except Exception as _ins_exc:
         print(f"  Insights:   [warn] cron not started: {_ins_exc}")
 
+    # Outbound OTLP exporter — gated by CLAWMETRY_OTEL_EXPORT_ENDPOINT (no-op
+    # when unset). Emits GenAI semantic convention spans to Datadog / Grafana /
+    # Honeycomb / any OTLP HTTP collector. Daemon thread, dies with the process.
+    try:
+        from clawmetry.otel_exporter import start_exporter as _start_otel_exporter
+        if _start_otel_exporter():
+            _otel_ep = os.environ.get("CLAWMETRY_OTEL_EXPORT_ENDPOINT", "")
+            print(f"  OTLP Export:[ok] Exporting to {_otel_ep}")
+    except Exception as _otel_exc:
+        print(f"  OTLP Export:[warn] not started: {_otel_exc}")
+
     try:
         print(BANNER.format(version=__version__))
         print(f"  Workspace:  {WORKSPACE}")
