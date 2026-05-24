@@ -689,7 +689,13 @@ def auth_token():
 </body></html>"""
 
 
-@bp_auth.route("/")
+# When --v2-default is active the v2 SPA owns '/' and v1 shifts to '/v1/'.
+# The env var is set by cli.py before dashboard.py (and this module) is
+# imported, so the value is stable for the lifetime of the process.
+_v1_root = "/v1/" if os.environ.get("CLAWMETRY_V2_DEFAULT") == "1" else "/"
+
+
+@bp_auth.route(_v1_root)
 def index():
     import dashboard as _d
     # v2_enabled gates the unobtrusive "Try v2" link in the v1 sidebar

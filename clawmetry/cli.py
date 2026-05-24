@@ -2486,7 +2486,15 @@ def main() -> None:
     # --v2 opt-in flag for the React SPA scaffold (see clawmetry/v2/routes.py).
     # Strip it from argv so dashboard.main's argparse doesn't choke on it.
     # Sets the env var that dashboard.py checks at blueprint registration time.
-    if "--v2" in sys.argv:
+    if "--v2-default" in sys.argv:
+        sys.argv = [a for a in sys.argv if a != "--v2-default"]
+        os.environ["CLAWMETRY_V2"] = "1"
+        os.environ["CLAWMETRY_V2_DEFAULT"] = "1"
+        print(
+            "v2 at / (default) · v1 at /v1",
+            flush=True,
+        )
+    elif "--v2" in sys.argv:
         sys.argv = [a for a in sys.argv if a != "--v2"]
         os.environ["CLAWMETRY_V2"] = "1"
         print(
