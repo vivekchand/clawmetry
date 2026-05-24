@@ -10,11 +10,14 @@ idempotent: it only spends tokens on the delta (new or changed English keys).
 Used by `.github/workflows/i18n-autotranslate.yml` and reusable across repos
 (pass a different --locales-dir). See docs/PRD_I18N.md section 5.
 
-Usage:
-  python3 scripts/i18n_autotranslate.py --locales-dir clawmetry/static/locales \
-      [--since <git-ref>] [--only zh-CN,es] [--dry-run] [--model claude-sonnet-4-6]
+Translation engine (default `claude-cli`): shells out to the local `claude` CLI
+(Claude Code), so it uses your Claude Code sign-in - NO API key. In CI, set
+CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`). `--engine api` is an
+optional fallback that uses the Anthropic SDK + ANTHROPIC_API_KEY.
 
-Env: ANTHROPIC_API_KEY (not needed for --dry-run).
+Usage (local, zero config - Claude Code must be signed in):
+  python3 scripts/i18n_autotranslate.py --locales-dir clawmetry/static/locales \
+      [--since <git-ref>] [--only zh-CN,es] [--dry-run] [--engine claude-cli|api]
 """
 import argparse
 import json
@@ -81,23 +84,44 @@ def _system_prompt(lang_name, glossary):
         f"- Numbers, currency symbols, and code identifiers stay as-is."
     )
 
-def _translate_batch(client, model, lang_name, glossary, items):
-    """items: OrderedDict {key: english}. Returns {key: translated}."""
-    user = (
-        "Translate the values of this JSON object. Keys are identifiers, do not change them. "
-        "Return the same keys with translated values as a JSON object:\n\n"
+def _build_prompt(lang_name, glossary, items):
+    return (
+        _system_prompt(lang_name, glossary)
+        + "\n\nTranslate the values of this JSON object. Keys are identifiers, do NOT change them. "
+        "Return ONLY the JSON object with the same keys and translated values:\n\n"
         + json.dumps(items, ensure_ascii=False, indent=2)
     )
-    resp = client.messages.create(
-        model=model,
-        max_tokens=8192,
-        system=_system_prompt(lang_name, glossary),
-        messages=[{"role": "user", "content": user}],
-    )
-    text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
+
+def _extract_json(text):
+    """Pull a JSON object out of model output, tolerating fences/preamble."""
+    text = text.strip()
     if text.startswith("```"):
-        text = re.sub(r"^```[a-z]*\n?|\n?```$", "", text).strip()
+        text = re.sub(r"^```[a-zA-Z]*\n?|\n?```$", "", text).strip()
+    s, e = text.find("{"), text.rfind("}")
+    if s != -1 and e > s:
+        text = text[s:e + 1]
     return json.loads(text)
+
+def _translate_batch_cli(model, lang_name, glossary, items):
+    """Translate via the local `claude` CLI (Claude Code) - no API key needed.
+    Uses the machine's Claude Code auth (or CLAUDE_CODE_OAUTH_TOKEN in CI)."""
+    cmd = ["claude", "-p", _build_prompt(lang_name, glossary, items)]
+    if model:
+        cmd += ["--model", model]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    if proc.returncode != 0:
+        raise RuntimeError(f"claude CLI failed (rc={proc.returncode}): {proc.stderr.strip()[:300]}")
+    return _extract_json(proc.stdout)
+
+def _translate_batch_api(client, model, lang_name, glossary, items):
+    """Fallback: Anthropic SDK (needs ANTHROPIC_API_KEY). Only used with --engine api."""
+    resp = client.messages.create(
+        model=model or "claude-sonnet-4-6", max_tokens=8192,
+        system=_system_prompt(lang_name, glossary),
+        messages=[{"role": "user", "content": _build_prompt(lang_name, glossary, items)}],
+    )
+    text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
+    return _extract_json(text)
 
 def _chunks(d, n):
     items = list(d.items())
@@ -111,7 +135,11 @@ def main():
     ap.add_argument("--locales-dir", required=True)
     ap.add_argument("--since", default=None, help="git ref of the previous en.json (to detect CHANGED keys)")
     ap.add_argument("--only", default=None, help="comma-separated locale codes to limit to")
-    ap.add_argument("--model", default=os.environ.get("I18N_MODEL", DEFAULT_MODEL))
+    ap.add_argument("--engine", choices=["claude-cli", "api"], default="claude-cli",
+                    help="claude-cli (default): shell out to the local `claude` CLI / Claude Code, "
+                         "no API key. api: Anthropic SDK (needs ANTHROPIC_API_KEY).")
+    ap.add_argument("--model", default=os.environ.get("I18N_MODEL"),
+                    help="model alias/id; default = the claude CLI's configured model")
     ap.add_argument("--batch-size", type=int, default=60)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
@@ -138,11 +166,11 @@ def main():
         targets = [m for m in targets if m["code"] in wanted]
 
     client = None
-    if not args.dry_run:
+    if not args.dry_run and args.engine == "api":
         try:
             from anthropic import Anthropic
         except ImportError:
-            print("ERROR: `pip install anthropic` required (or use --dry-run)", file=sys.stderr)
+            print("ERROR: `pip install anthropic` required for --engine api (or use --engine claude-cli)", file=sys.stderr)
             return 2
         client = Anthropic()  # reads ANTHROPIC_API_KEY
 
@@ -168,7 +196,10 @@ def main():
             continue
 
         for batch in _chunks(todo, args.batch_size):
-            out = _translate_batch(client, args.model, name, glossary, batch)
+            if args.engine == "api":
+                out = _translate_batch_api(client, args.model, name, glossary, batch)
+            else:
+                out = _translate_batch_cli(args.model, name, glossary, batch)
             for k, src in batch.items():
                 tr = out.get(k)
                 if not isinstance(tr, str) or not tr.strip():
