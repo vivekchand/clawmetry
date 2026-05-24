@@ -1,5 +1,9 @@
 [
   {"code": "en",    "endonym": "English",      "short": "EN", "dir": "ltr", "enabled": true},
+  {"code": "zh-CN", "endonym": "简体中文",       "short": "简中", "dir": "ltr", "enabled": true},
+  {"code": "es",    "endonym": "Español",       "short": "ES", "dir": "ltr", "enabled": true},
+  {"code": "hi",    "endonym": "हिन्दी",          "short": "HI", "dir": "ltr", "enabled": true},
+  {"code": "pt-BR", "endonym": "Português (BR)", "short": "PT", "dir": "ltr", "enabled": true},
   {"code": "ja",    "endonym": "日本語",         "short": "日本", "dir": "ltr", "enabled": true},
   {"code": "fr",    "endonym": "Français",      "short": "FR", "dir": "ltr", "enabled": true},
   {"code": "en-XA", "endonym": "⟦Pseudo · QA⟧", "short": "XA", "dir": "ltr", "enabled": true, "dev": true}

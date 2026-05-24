@@ -3,7 +3,9 @@ name: i18n autotranslate
 # Fans new/changed English keys out to every enabled locale via the Claude API,
 # then opens a "chore(i18n): sync translations" PR. English (en.json) is the
 # single source of truth. Idempotent: only the delta is translated.
-# Requires the ANTHROPIC_API_KEY repo secret (skips gracefully if unset).
+# Uses the Claude Code CLI (no API key). Set CLAUDE_CODE_OAUTH_TOKEN (from
+# `claude setup-token`) as a repo secret, or run the script locally where Claude
+# Code is signed in. Skips gracefully if the token is unset.
 
 on:
   push:
@@ -26,16 +28,17 @@ jobs:
   autotranslate:
     runs-on: ubuntu-latest
     env:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      # Claude Code subscription token (from `claude setup-token`), NOT an Anthropic API key.
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2  # need the previous en.json to detect CHANGED keys
 
-      - name: Guard - require API key
+      - name: Guard - require Claude Code token
         run: |
-          if [ -z "$ANTHROPIC_API_KEY" ]; then
-            echo "::warning::ANTHROPIC_API_KEY secret not set - skipping autotranslate. Add it in Settings > Secrets and variables > Actions."
+          if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+            echo "::warning::CLAUDE_CODE_OAUTH_TOKEN not set - skipping autotranslate. Generate one with 'claude setup-token' and add it as a repo secret, OR just run the bot locally where Claude Code is signed in: python3 scripts/i18n_autotranslate.py --locales-dir clawmetry/static/locales"
             echo "SKIP=1" >> "$GITHUB_ENV"
           fi
 
@@ -44,14 +47,15 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Anthropic SDK
+      - name: Install Claude Code CLI
         if: env.SKIP != '1'
-        run: pip install anthropic
+        run: npm install -g @anthropic-ai/claude-code
 
-      - name: Translate deltas
+      - name: Translate deltas (via Claude Code CLI, no API key)
         if: env.SKIP != '1'
         run: |
           python3 scripts/i18n_autotranslate.py \
+            --engine claude-cli \
             --locales-dir clawmetry/static/locales \
             --since "${{ github.event.before || 'HEAD~1' }}" \
             --only "${{ github.event.inputs.only }}"
