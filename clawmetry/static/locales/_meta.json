@@ -1,0 +1,6 @@
+[
+  {"code": "en",    "endonym": "English",      "short": "EN", "dir": "ltr", "enabled": true},
+  {"code": "ja",    "endonym": "日本語",         "short": "日本", "dir": "ltr", "enabled": true},
+  {"code": "fr",    "endonym": "Français",      "short": "FR", "dir": "ltr", "enabled": true},
+  {"code": "en-XA", "endonym": "⟦Pseudo · QA⟧", "short": "XA", "dir": "ltr", "enabled": true, "dev": true}
+]

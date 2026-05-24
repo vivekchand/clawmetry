@@ -2,7 +2,7 @@
   <!-- How independently your agent runs -->
   <div id="autonomy-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:18px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start;" title="How often you need to step in. Higher = more independent.">
     <div>
-      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px;">&#127919; How independent is your agent?</div>
+      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px;">&#127919; <span data-i18n="overview.autonomy_title">How independent is your agent?</span></div>
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
         <span id="autonomy-score-label" style="font-size:26px;font-weight:800;line-height:1.1;color:var(--text-primary);">--</span>
         <span id="autonomy-trend-badge" style="font-size:12px;font-weight:600;padding:3px 8px;border-radius:20px;"></span>
@@ -11,7 +11,7 @@
       <div id="autonomy-trend-pct" style="font-size:12px;color:var(--text-muted);margin-top:3px;"></div>
     </div>
     <div style="display:flex;flex-direction:column;align-items:flex-end;justify-content:center;">
-      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;text-align:right;">Last 7 days</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;text-align:right;" data-i18n="overview.last_7_days">Last 7 days</div>
       <svg id="autonomy-sparkline" width="160" height="48" viewBox="0 0 160 48" style="overflow:visible;">
         <text x="80" y="28" text-anchor="middle" fill="var(--text-muted)" font-size="10">No data yet</text>
       </svg>
