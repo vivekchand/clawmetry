@@ -10557,6 +10557,39 @@ def detect_config(args=None):
     _adapter_registry.register(OpenClawAdapter())
     _adapter_registry.register(HermesAdapter())
 
+    # OpenClaw-family runtimes that ClawMetry can observe but that use their
+    # OWN native session format (not OpenClaw's v3 JSONL), so each ships a
+    # dedicated reader adapter:
+    #   - PicoClaw  (github.com/sipeed/picoclaw): flat providers.Message JSONL
+    #     under ~/.picoclaw/workspace/sessions/.
+    #   - NanoClaw  (github.com/nanocoai/nanoclaw): per-session SQLite DBs
+    #     (inbound.db / outbound.db) under <data_dir>/v2-sessions/.
+    # Register each only when its home directory exists, so an absent runtime
+    # never clutters the multi-agent chip bar. Each adapter's detect() is
+    # independently safe, so this gate is purely a UI-cleanliness measure.
+    try:
+        from clawmetry.adapters.picoclaw import PicoClawAdapter
+        if os.environ.get("PICOCLAW_HOME") or os.path.isdir(
+            os.path.expanduser("~/.picoclaw")
+        ):
+            _adapter_registry.register(PicoClawAdapter())
+    except Exception as _pico_err:  # pragma: no cover - defensive
+        import logging as _logging
+        _logging.getLogger(__name__).debug(
+            "Skipped PicoClawAdapter registration: %s", _pico_err
+        )
+    try:
+        from clawmetry.adapters.nanoclaw import NanoClawAdapter
+        if os.environ.get("NANOCLAW_HOME") or os.path.isdir(
+            os.path.expanduser("~/.nanoclaw")
+        ):
+            _adapter_registry.register(NanoClawAdapter())
+    except Exception as _nano_err:  # pragma: no cover - defensive
+        import logging as _logging
+        _logging.getLogger(__name__).debug(
+            "Skipped NanoClawAdapter registration: %s", _nano_err
+        )
+
     # Local-OSS shims for cloud-only endpoints. Return empty arrays so the
     # Approvals tab renders cleanly without cloud sync.
     _oss_note = ("OSS install — connect to ClawMetry Cloud "

@@ -111,6 +111,18 @@ npm run build
 
 The production bundle is written to `clawmetry/static/v2/dist/`.
 
+## Runtime Compatibility
+
+ClawMetry observes the OpenClaw runtime family. Some members share OpenClaw's session format and work with zero config; others store sessions in their own native format and ship a dedicated reader adapter. See [`docs/compatibility.md`](docs/compatibility.md) for the full matrix, open questions, and a guide to adding runtimes.
+
+| Runtime | Status | Notes |
+|---|---|---|
+| **OpenClaw** | Native | Reference runtime, auto-detected |
+| **PicoClaw** | Beta adapter | Reads PicoClaw's native flat JSONL (`~/.picoclaw/workspace/sessions`). Transcripts, model, and tool calls. Tokens/cost are not written to disk by PicoClaw. |
+| **NanoClaw** | Beta adapter | Reads NanoClaw's native per-session SQLite (`data/v2-sessions`). Transcripts and message counts. Model/tokens/cost are not written to those tables. |
+
+"Beta adapter" means ClawMetry ships a reader for that runtime's real, verified on-disk format with fixture-backed CI tests. A per-runtime "Verified" badge is restored only after a session captured from a real install passes its adapter test and the live end-to-end path is confirmed.
+
 ## Configuration
 
 Most people don't need any config. ClawMetry auto-detects your workspace, logs, sessions, and crons.

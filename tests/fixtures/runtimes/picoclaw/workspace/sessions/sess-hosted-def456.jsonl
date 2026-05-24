@@ -1,0 +1,2 @@
+{"role": "user", "content": "Summarise the project in one sentence.", "created_at": "2026-05-25T11:30:00Z", "media": [], "attachments": []}
+{"role": "assistant", "content": "It is a real-time observability dashboard for AI agents.", "model_name": "gpt-5.4", "created_at": "2026-05-25T11:30:03Z", "media": [], "attachments": []}

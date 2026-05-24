@@ -1,0 +1,22 @@
+{
+  "jobs": [
+    {
+      "id": "job-at-1",
+      "name": "one-shot reminder",
+      "schedule": {"type": "at_seconds", "at_seconds": 1780000000},
+      "message": "Run the nightly summary once."
+    },
+    {
+      "id": "job-every-1",
+      "name": "heartbeat",
+      "schedule": {"type": "every_seconds", "every_seconds": 3600},
+      "message": "Ping the gateway every hour."
+    },
+    {
+      "id": "job-cron-1",
+      "name": "daily digest",
+      "schedule": {"type": "cron_expr", "cron_expr": "0 9 * * *"},
+      "message": "Send the daily digest at 09:00."
+    }
+  ]
+}
