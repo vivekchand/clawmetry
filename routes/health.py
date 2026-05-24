@@ -1332,6 +1332,10 @@ def api_system_health():
             # so operators see whether the gateway WS tap is actually
             # writing Telegram/Signal/Slack/etc. messages to DuckDB.
             "channel_ingest": _channel_ingest_recent(),
+            # Connector liveness (incident 2026-05-24: a node went deaf for
+            # ~37h with no alarm). Per enabled channel: is the inbound poll
+            # alive? 'down' = stopped receiving messages — the one that bites.
+            "connector_liveness": _connector_liveness(),
             "_source": top_source,
         }
     )
@@ -1552,6 +1556,133 @@ def _channel_ingest_recent():
         })
     # Most-recently-active provider first.
     out.sort(key=lambda r: r.get("mins_ago") if r.get("mins_ago") is not None else 1e9)
+    return out
+
+
+# ── Connector liveness ("agent went deaf and nobody noticed") ───────────────
+# A channel went deaf for ~37h with no alarm (2026-05-24): the inbound
+# long-poll wedged but outbound (crons) kept working, so health stayed green.
+# The daemon now records connector.health signals (sync.sync_connector_health
+# _from_logs); here we turn them into a per-channel ok/degraded/down verdict.
+# 'down' is the verdict that would have caught it: most-recent signal is a
+# stall/disconnect/wedge, no recovery since, older than the grace window.
+_CONNECTOR_DOWN_MIN = 15          # unhealthy + no recovery this long ⇒ down
+_CONNECTOR_FLAP_WINDOW_MIN = 60   # window for counting repeated disconnects
+_CONNECTOR_FLAP_COUNT = 3         # this many disconnects/hr ⇒ degraded
+_CONNECTOR_HEALTHY = {"started", "recovered"}
+_CONNECTOR_UNHEALTHY = {"stall", "disconnect", "wedged"}
+
+
+def _enabled_channels_from_config():
+    """Channel providers explicitly enabled in openclaw.json
+    (``channels.<provider>.enabled == true``).
+
+    Empty on cloud or when no config is present — the cloud surface reads
+    liveness from the encrypted snapshot (built daemon-side where the config
+    lives), not from this local-filesystem read. Never raises.
+    """
+    import os as _os
+    import json as _json
+    candidates = []
+    env = _os.environ.get("CLAWMETRY_OPENCLAW_DIR") or _os.environ.get("OPENCLAW_HOME")
+    if env:
+        candidates.append(_os.path.join(env, "openclaw.json"))
+    candidates.append(_os.path.join(_os.path.expanduser("~"), ".openclaw", "openclaw.json"))
+    for p in candidates:
+        try:
+            if not _os.path.exists(p):
+                continue
+            with open(p, errors="ignore") as f:
+                cfg = _json.load(f)
+            chans = (cfg or {}).get("channels") or {}
+            return [
+                str(name).lower()
+                for name, c in chans.items()
+                if isinstance(c, dict) and c.get("enabled")
+            ]
+        except Exception:
+            continue
+    return []
+
+
+def _connector_liveness():
+    """Per-enabled-channel inbound-poll verdict for the System Health UI.
+
+    Returns ``[{provider, state, reason, mins_ago, last_kind}, ...]`` with
+    ``state`` ∈ ``down`` | ``degraded`` | ``unknown`` | ``ok`` (worst first).
+    Reads connector.health signals via the daemon proxy (DuckDB-first);
+    returns ``[]`` on any failure — never blocks /api/system-health.
+    """
+    enabled = _enabled_channels_from_config()
+    if not enabled:
+        return []
+    rows = None
+    try:
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_connector_health", since_hours=24)
+    except Exception:
+        rows = None
+    if rows is None:
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            rows = store.query_connector_health(since_hours=24)
+        except Exception:
+            rows = []
+
+    by_prov: dict[str, list] = {}
+    for r in (rows or []):
+        if isinstance(r, dict) and r.get("provider"):
+            by_prov.setdefault(str(r["provider"]).lower(), []).append(r)
+
+    def _mins_since(ts):
+        try:
+            t = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+            return max(0, int((datetime.now(timezone.utc) - t).total_seconds() / 60))
+        except Exception:
+            return None
+
+    out = []
+    for prov in enabled:
+        sigs = by_prov.get(prov, [])  # newest-first (query orders DESC)
+        if not sigs:
+            out.append({
+                "provider": prov, "state": "unknown",
+                "reason": "no inbound-poll signals seen in the last 24h",
+                "mins_ago": None, "last_kind": None,
+            })
+            continue
+        latest = sigs[0]
+        latest_kind = latest.get("kind")
+        mins_ago = _mins_since(latest.get("ts"))
+        recent_bad = sum(
+            1 for s in sigs
+            if s.get("kind") in _CONNECTOR_UNHEALTHY
+            and (_mins_since(s.get("ts")) or 1e9) <= _CONNECTOR_FLAP_WINDOW_MIN
+        )
+        if latest_kind in _CONNECTOR_UNHEALTHY and (
+            mins_ago is None or mins_ago >= _CONNECTOR_DOWN_MIN
+        ):
+            state = "down"
+            reason = (
+                f"inbound poll {latest_kind} {mins_ago}m ago with no recovery "
+                f"since — this channel can no longer receive messages"
+            )
+        elif latest_kind in _CONNECTOR_UNHEALTHY:
+            state = "degraded"
+            reason = f"inbound poll {latest_kind} {mins_ago}m ago (watching for recovery)"
+        elif recent_bad >= _CONNECTOR_FLAP_COUNT:
+            state = "degraded"
+            reason = f"inbound poll flapping ({recent_bad} disconnects in the last hour)"
+        else:
+            state = "ok"
+            reason = f"inbound poll healthy (last signal: {latest_kind} {mins_ago}m ago)"
+        out.append({
+            "provider": prov, "state": state, "reason": reason,
+            "mins_ago": mins_ago, "last_kind": latest_kind,
+        })
+    order = {"down": 0, "degraded": 1, "unknown": 2, "ok": 3}
+    out.sort(key=lambda r: order.get(r["state"], 9))
     return out
 
 

@@ -10304,6 +10304,14 @@ def run_daemon() -> None:
                 )
                 tg = 0
 
+            # ── Connector liveness (incident: node deaf ~37h, no alarm) ──
+            # Tail both gateway logs for inbound-poll stall/disconnect/wedge
+            # signals so health.py can flag a channel that stopped receiving.
+            try:
+                sync_connector_health_from_logs(config, state, paths)
+            except Exception as _e_ch:
+                log.debug("connector-health tick error (non-fatal): %s", _e_ch)
+
             state["last_sync"] = datetime.now(timezone.utc).isoformat()
             # Audit fix (2026-05-17): force a synchronous local-store flush
             # BEFORE persisting the cursor state. Belt-and-suspenders to
@@ -10722,6 +10730,161 @@ def sync_telegram_from_gateway_log(
         return ingested
     except Exception as e:
         log.warning("telegram-gw-log: cycle failed: %s", e)
+        return 0
+
+
+# ── Connector liveness: detect a channel going deaf ──────────────────────────
+# Incident 2026-05-24: a Telegram inbound long-poll wedged (network stall →
+# aborted shutdown that timed out) and never restarted. The agent kept SENDING
+# (scheduled crons fired fine) but silently stopped RECEIVING for ~37h, and
+# nothing flagged it. The evidence was always there, split across two logs:
+#   gateway.log      [telegram] [default] starting provider            (healthy)
+#                    [health-monitor] [telegram:default] … (reason: disconnected)
+#   gateway.err.log  [telegram] Polling stall detected …               (unhealthy)
+#                    [telegram] [default] channel stop exceeded … abort (wedged)
+# We tail both and record each signal as a connector.health event so
+# routes/health.py can raise a real "inbound silent for Nh" alarm.
+_CONNECTOR_PROVIDERS = {
+    "telegram", "signal", "whatsapp", "discord", "slack", "irc", "imessage",
+    "webchat", "googlechat", "msteams", "matrix", "mattermost", "line",
+    "nostr", "twitch", "bluebubbles",
+}
+
+
+def parse_connector_health_line(line: str):
+    """Map one gateway-log line to ``(provider, kind, ts_utc_iso)`` or None.
+
+    ``kind`` ∈ healthy {``started``} / unhealthy {``stall``, ``wedged``,
+    ``disconnect``}. Cheap substring pre-filter first — only a handful of
+    lines per day match, so we skip the regex/parse for the other 99.99%.
+    """
+    if not line:
+        return None
+    if (
+        "starting provider" not in line
+        and "Polling stall detected" not in line
+        and "channel stop exceeded" not in line
+        and "(reason: disconnected)" not in line
+    ):
+        return None
+    import re as _re
+    mts = _re.match(r"(\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:?\d{2}))", line)
+    if not mts:
+        return None
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        ts_utc = (
+            _dt.fromisoformat(mts.group(1).replace("Z", "+00:00"))
+            .astimezone(_tz.utc)
+            .isoformat()
+        )
+    except Exception:
+        return None
+    # Provider lives in a bracket token: [telegram] or [telegram:default] or
+    # (for health-monitor lines) the SECOND bracket [telegram:default].
+    prov = None
+    for tok in _re.findall(r"\[([a-z0-9_]+)(?::[^\]]*)?\]", line.lower()):
+        if tok in _CONNECTOR_PROVIDERS:
+            prov = tok
+            break
+    if not prov:
+        return None
+    if "Polling stall detected" in line:
+        kind = "stall"
+    elif "channel stop exceeded" in line:
+        kind = "wedged"
+    elif "(reason: disconnected)" in line:
+        kind = "disconnect"
+    elif "starting provider" in line:
+        kind = "started"
+    else:
+        return None
+    return (prov, kind, ts_utc)
+
+
+def _connector_health_offset_key(log_path: str) -> str:
+    return f"connector_health::{os.path.abspath(log_path)}"
+
+
+def sync_connector_health_from_logs(
+    config: dict | None,
+    state: dict,
+    paths: dict | None = None,
+) -> int:
+    """Tail gateway.log + gateway.err.log for channel inbound-poll lifecycle
+    signals and ingest them as connector.health events. Byte-offset resume
+    per file (mirrors sync_telegram_from_gateway_log); idempotent ingest.
+    Best-effort — returns the number of signals ingested this cycle, 0 on any
+    failure (the daemon must never crash on telemetry plumbing).
+    """
+    try:
+        if paths and isinstance(paths, dict) and paths.get("logs_dir"):
+            logs_dir = str(paths["logs_dir"])
+        else:
+            logs_dir = os.path.join(_get_openclaw_dir(), "logs")
+        log_paths = [
+            os.path.join(logs_dir, "gateway.log"),
+            os.path.join(logs_dir, "gateway.err.log"),
+        ]
+        try:
+            from clawmetry import local_store as _ls
+            store = _ls.get_store()
+        except Exception as e:
+            log.warning("connector-health: local_store unavailable: %s", e)
+            return 0
+        node_id = (
+            (config or {}).get("node_id")
+            or os.environ.get("CLAWMETRY_NODE_ID")
+            or "local"
+        )
+        offsets = state.setdefault("last_log_offsets", {})
+        total = 0
+        for log_path in log_paths:
+            if not os.path.exists(log_path):
+                continue
+            key = _connector_health_offset_key(log_path)
+            prev_offset = int(offsets.get(key, 0) or 0)
+            try:
+                size = os.path.getsize(log_path)
+            except OSError:
+                continue
+            if size < prev_offset:
+                prev_offset = 0  # rotated/truncated — rescan (ingest idempotent)
+            if size == prev_offset:
+                continue
+            try:
+                with open(log_path, "rb") as fh:
+                    fh.seek(prev_offset)
+                    buf = fh.read()
+            except OSError as e:
+                log.warning("connector-health: read failed (%s): %s", log_path, e)
+                continue
+            text = buf.decode("utf-8", errors="ignore")
+            last_nl = text.rfind("\n")
+            if last_nl < 0:
+                continue
+            complete = text[: last_nl + 1]
+            new_offset = prev_offset + len(complete.encode("utf-8", errors="ignore"))
+            for raw_line in complete.splitlines():
+                parsed = parse_connector_health_line(raw_line)
+                if not parsed:
+                    continue
+                prov, kind, ts_utc = parsed
+                try:
+                    store.ingest_connector_health(
+                        node_id=node_id, provider=prov, kind=kind,
+                        ts_iso=ts_utc, raw=raw_line.strip(),
+                    )
+                except Exception as e:
+                    log.debug("connector-health: ingest failed: %s", e)
+                    continue
+                total += 1
+            offsets[key] = new_offset
+        if total:
+            log.info("connector-health: ingested %d signal(s)", total)
+        return total
+    except Exception as e:
+        log.warning("connector-health: cycle failed: %s", e)
         return 0
 
 

@@ -4363,6 +4363,95 @@ class LocalStore:
             })
         return result
 
+    # ── Connector liveness ("agent went deaf and nobody noticed") ────────
+    # An OpenClaw channel provider (Telegram/Signal/Slack/…) runs an inbound
+    # long-poll. When that poll wedges — a network stall, an aborted restart
+    # that times out — the agent silently stops RECEIVING messages while it
+    # keeps SENDING (scheduled crons fire fine), so from the outside nothing
+    # looks broken. That exact failure left a node deaf for ~37h with no
+    # alarm. The only on-disk evidence is diagnostic lines in gateway.log /
+    # gateway.err.log; the daemon (sync.sync_connector_health_from_logs)
+    # tails them and records each signal here so health.py and the cloud
+    # snapshot can raise a real "inbound silent for Nh" alert.
+    def ingest_connector_health(
+        self,
+        *,
+        node_id: str,
+        provider: str,
+        kind: str,
+        ts_iso: str,
+        raw: str = "",
+    ) -> None:
+        """Idempotently record one connector-health signal in ``events``.
+
+        ``kind`` is one of the healthy markers (``started`` / ``recovered``)
+        or the unhealthy ones (``stall`` / ``disconnect`` / ``wedged``).
+        Idempotent on a stable id derived from provider+kind+ts so re-tailing
+        the log (after a rotation/truncation rescan) never double-counts.
+        """
+        import hashlib
+        prov = (provider or "").lower().strip()
+        if not prov or not kind or not ts_iso:
+            return
+        ev_id = "connhealth-" + hashlib.sha1(
+            f"{prov}|{kind}|{ts_iso}|{(raw or '')[:80]}".encode("utf-8")
+        ).hexdigest()[:24]
+        payload = json.dumps({
+            "provider": prov,
+            "kind": kind,
+            "raw": (raw or "")[:300],
+        }).encode("utf-8")
+        with self._write_lock:
+            self._conn.execute(
+                """
+                INSERT OR IGNORE INTO events
+                  (id, agent_type, node_id, agent_id, session_id, workspace_id,
+                   event_type, ts, data, cost_usd, token_count, model, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                [
+                    ev_id, "openclaw", node_id or "local", "main", None, None,
+                    "connector.health", ts_iso, payload, None, None, None,
+                    int(time.time() * 1000),
+                ],
+            )
+
+    def query_connector_health(self, since_hours: int = 24) -> list[dict[str, Any]]:
+        """Recent ``connector.health`` signals, newest first.
+
+        Returns ``[{provider, kind, ts, raw}, ...]`` over the last
+        ``since_hours``. Empty on any failure — callers degrade to an
+        'unknown' state and never crash. The classifier
+        (``routes/health.py:_connector_liveness``) turns this stream into a
+        per-channel ok/degraded/down verdict.
+        """
+        from datetime import datetime, timedelta, timezone
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(hours=int(since_hours))
+        ).isoformat()
+        rows = self._fetch(
+            "SELECT ts, data FROM events "
+            "WHERE event_type = 'connector.health' AND ts >= ? "
+            "ORDER BY ts DESC",
+            [cutoff],
+        )
+        decoded = _decode_data_blob_rows(rows, ["ts", "data"])
+        out: list[dict[str, Any]] = []
+        for r in decoded:
+            data = r.get("data") or {}
+            if not isinstance(data, dict):
+                continue
+            prov = str(data.get("provider") or "").lower().strip()
+            if not prov:
+                continue
+            out.append({
+                "provider": prov,
+                "kind": data.get("kind") or "",
+                "ts": r.get("ts") or "",
+                "raw": data.get("raw") or "",
+            })
+        return out
+
     def query_alert_rules(
         self,
         *,
