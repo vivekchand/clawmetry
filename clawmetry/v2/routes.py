@@ -15,7 +15,7 @@ Flask's static_folder dispatch automatically.
 
 from __future__ import annotations
 import os
-from flask import Blueprint, send_from_directory, abort
+from flask import Blueprint, send_from_directory, abort, jsonify
 
 # `static_folder` is resolved relative to this file. After `npm run build`
 # in `frontend/`, the bundle lives at `clawmetry/static/v2/dist/`.
@@ -72,3 +72,30 @@ def v2_catchall(path: str):
     if ".." in path.split("/"):
         abort(404)
     return _serve_index()
+
+@bp_v2.route("/api/v2/ops", methods=["GET"])
+def get_ops():
+    return jsonify({
+        "services": [
+            {"name": "Gateway controller", "status": "ok", "uptime": "14d", "bpm": 84, "latency": "44ms"},
+            {"name": "Session DB", "status": "ok", "uptime": "14d", "bpm": 62, "latency": "2ms"},
+            {"name": "Memory store", "status": "ok", "uptime": "14d", "bpm": 71, "latency": "1ms"},
+            {"name": "Telegram connector", "status": "ok", "uptime": "8d", "bpm": 92, "latency": "180ms"},
+            {"name": "WhatsApp connector", "status": "warn", "uptime": "32m", "bpm": 110, "latency": "440ms"},
+            {"name": "Discord connector", "status": "ok", "uptime": "8d", "bpm": 78, "latency": "92ms"},
+            {"name": "Cron manager", "status": "ok", "uptime": "14d", "bpm": 68, "latency": "—"},
+            {"name": "ClawMetry agent (NemoClaw)", "status": "ok", "uptime": "8d", "bpm": 56, "latency": "12ms"},
+        ],
+        "crons": [
+            {"id": "cron-1", "name": "morning-digest", "schedule": "0 8 * * *", "last_run": "ok · today 08:00", "next_run": "tomorrow 08:00", "status": "ok", "miss_count": 0},
+            {"id": "cron-2", "name": "weekly-rollup", "schedule": "0 17 * * fri", "last_run": "ok · fri 17:00", "next_run": "fri 17:00", "status": "ok", "miss_count": 0},
+            {"id": "cron-3", "name": "purge-old-sessions", "schedule": "0 3 * * *", "last_run": "missed · 6h ago", "next_run": "in 18h", "status": "miss", "miss_count": 1},
+            {"id": "cron-4", "name": "embed-docs", "schedule": "*/15 * * * *", "last_run": "ok · 4m ago", "next_run": "in 11m", "status": "ok", "miss_count": 0},
+            {"id": "cron-5", "name": "standup-poll", "schedule": "30 9 * * 1-5", "last_run": "ok · today 09:30", "next_run": "tomorrow 09:30", "status": "ok", "miss_count": 0},
+            {"id": "cron-6", "name": "billing-cron", "schedule": "0 0 1 * *", "last_run": "ok · Oct 1", "next_run": "Nov 1", "status": "ok", "miss_count": 0},
+            {"id": "cron-7", "name": "memory-compact", "schedule": "0 4 * * *", "last_run": "fail · today 04:00", "next_run": "in 20h", "status": "fail", "miss_count": 0},
+        ],
+        "incidents": [
+            {"service": "WhatsApp connector", "summary": "Reconnect storm · 7 retries in 32 min", "detail": "Last good message · 32m ago\nLikely cause · upstream rate limit", "severity": "warn"},
+        ],
+    })
