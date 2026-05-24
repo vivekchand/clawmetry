@@ -14,18 +14,21 @@ Flask's static_folder dispatch automatically.
 """
 
 from __future__ import annotations
+import json
 import os
-from flask import Blueprint, send_from_directory, abort
+from pathlib import Path
+from flask import Blueprint, send_from_directory, abort, jsonify, request
 
-# `static_folder` is resolved relative to this file. After `npm run build`
-# in `frontend/`, the bundle lives at `clawmetry/static/v2/dist/`.
 _DIST_DIR = os.path.join(os.path.dirname(__file__), "..", "static", "v2", "dist")
 _ASSETS_DIR = os.path.join(_DIST_DIR, "assets")
 
-# static_url_path is narrowed to `/v2/assets` so Flask's static dispatcher
-# only handles real hashed asset URLs (Vite emits everything under
-# `/v2/assets/*`). Earlier this was mounted at `/v2`, which preempted the
-# SPA catch-all and 404'd every client-side route like `/v2/trace`.
+_PREFS_DIR = Path.home() / ".clawmetry"
+_PREFS_FILE = _PREFS_DIR / "preferences.json"
+
+_VALID_THEMES = {"light", "mid", "dark"}
+_VALID_DENSITIES = {"compact", "regular", "comfy"}
+_DEFAULT_PREFS = {"theme": "light", "density": "regular"}
+
 bp_v2 = Blueprint(
     "v2",
     __name__,
@@ -34,10 +37,30 @@ bp_v2 = Blueprint(
 )
 
 
+def _read_prefs() -> dict:
+    try:
+        if _PREFS_FILE.is_file():
+            with open(_PREFS_FILE) as f:
+                stored = json.load(f)
+            return {
+                "theme": stored.get("theme", "light") if stored.get("theme") in _VALID_THEMES else "light",
+                "density": stored.get("density", "regular") if stored.get("density") in _VALID_DENSITIES else "regular",
+            }
+    except (json.JSONDecodeError, OSError):
+        pass
+    return dict(_DEFAULT_PREFS)
+
+
+def _write_prefs(prefs: dict) -> None:
+    _PREFS_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = _PREFS_FILE.with_suffix(".tmp")
+    with open(tmp, "w") as f:
+        json.dump(prefs, f, indent=2)
+    tmp.rename(_PREFS_FILE)
+
+
 def _serve_index():
-    """Serve the SPA entry point. Returns 503 with a helpful message if the
-    React bundle hasn't been built yet (devs running from source without
-    having executed `npm run build`)."""
+    """Serve the SPA entry point."""
     index_path = os.path.join(_DIST_DIR, "index.html")
     if not os.path.isfile(index_path):
         return (
@@ -51,6 +74,27 @@ def _serve_index():
     return send_from_directory(_DIST_DIR, "index.html")
 
 
+# ── Preferences API ──────────────────────────────────────────────────────
+
+@bp_v2.route("/api/v2/preferences", methods=["GET"])
+def get_preferences():
+    return jsonify(_read_prefs())
+
+
+@bp_v2.route("/api/v2/preferences", methods=["POST"])
+def set_preferences():
+    body = request.get_json(silent=True) or {}
+    prefs = _read_prefs()
+    if "theme" in body and body["theme"] in _VALID_THEMES:
+        prefs["theme"] = body["theme"]
+    if "density" in body and body["density"] in _VALID_DENSITIES:
+        prefs["density"] = body["density"]
+    _write_prefs(prefs)
+    return jsonify(prefs)
+
+
+# ── SPA serving ──────────────────────────────────────────────────────────
+
 @bp_v2.route("/v2")
 @bp_v2.route("/v2/")
 def v2_root():
@@ -59,16 +103,9 @@ def v2_root():
 
 @bp_v2.route("/v2/<path:path>")
 def v2_catchall(path: str):
-    """SPA catch-all. Real asset files (assets/*.js, *.css, *.png) are served
-    by the static_folder dispatcher BEFORE this view runs; this view only
-    fires for client-side router paths like `/v2/trace` or `/v2/brain`."""
-    # If a file exists on disk for this path, serve it (defence-in-depth;
-    # Flask's static dispatch should normally handle this first).
     asset_path = os.path.join(_DIST_DIR, path)
     if os.path.isfile(asset_path):
         return send_from_directory(_DIST_DIR, path)
-    # Otherwise fall through to the SPA shell so the React router can match.
-    # Refuse path-escapes for safety.
     if ".." in path.split("/"):
         abort(404)
     return _serve_index()
