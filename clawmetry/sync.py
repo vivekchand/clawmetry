@@ -5282,10 +5282,24 @@ def _rows_to_brain_events(rows: list) -> list:
 
     The OSS-local Brain tab uses ``routes/brain.py:_try_local_store_brain``
     which builds the display shape directly — that path is unchanged.
+
+    Helper-session filtering: ClawMetry's own sessions (``clawmetry-selfevolve``,
+    ``clawmetry-fix``, ``clawmetry-mem-probe`` …) are plumbing, not agent
+    activity. The OSS-local path drops them via ``hide_clawmetry_session``
+    (``routes/brain.py``); for a long time this cache-push path did NOT, so
+    Self-Evolve findings leaked into the cloud Brain feed even though they
+    were hidden locally. We mirror the local filter here so both surfaces
+    agree. (The user explicitly asked to keep Self-Evolve out of the feed.)
     """
+    try:
+        from clawmetry.config import hide_clawmetry_session
+    except Exception:
+        hide_clawmetry_session = lambda _sid: False  # noqa: E731 — never break the push
     out = []
     for r in rows or []:
         if not isinstance(r, dict):
+            continue
+        if hide_clawmetry_session(r.get("session_id")):
             continue
         data = r.get("data")
         enrich = _channel_enrichment_from_row(r)
@@ -5369,15 +5383,19 @@ def _build_brain_cache_pushes(config: dict) -> list:
         return []
     try:
         store = local_store.get_store(read_only=True)
-        rows = store.query_events(limit=BRAIN_CACHE_LIMIT)
+        # Fetch headroom: _rows_to_brain_events drops ClawMetry's own helper
+        # sessions (selfevolve/fix/…), so query extra rows to still land
+        # ~BRAIN_CACHE_LIMIT real events after filtering.
+        rows = store.query_events(limit=BRAIN_CACHE_LIMIT * 3)
     except Exception:
         return []
     if not rows:
         return []
-    # Same translation as routes/brain.py:_try_local_store_brain so the
-    # browser sees an identical event shape regardless of which path served
-    # the data (cache hit vs. relay subscribe vs. JSONL fallback).
-    events = _rows_to_brain_events(rows)
+    # Same translation as routes/brain.py:_try_local_store_brain (incl. the
+    # hide_clawmetry_session filter) so the browser sees an identical event
+    # shape AND set regardless of which path served the data (cache hit vs.
+    # relay subscribe vs. JSONL fallback).
+    events = _rows_to_brain_events(rows)[:BRAIN_CACHE_LIMIT]
     payload = {
         "events":  events,
         "count":   len(events),
