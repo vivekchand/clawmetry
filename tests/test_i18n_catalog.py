@@ -43,8 +43,9 @@ def test_meta_registry_shape():
 
 
 def _shipped_locale_files():
-    # every <code>.json that physically ships (en-XA is generated at runtime, no file)
-    return sorted(p for p in LOCALES.glob("*.json") if p.name != "_meta.json")
+    # every <code>.json that physically ships (en-XA is generated at runtime, no file).
+    # underscore-prefixed files (_meta.json, _glossary.json) are config, not locales.
+    return sorted(p for p in LOCALES.glob("*.json") if not p.name.startswith("_"))
 
 
 def test_all_locale_files_are_valid_json():
