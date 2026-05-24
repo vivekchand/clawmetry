@@ -3009,22 +3009,42 @@ function _provenancePillHtml(meta, bodyHtml) {
 // Detects the "Sender (untrusted metadata)" / "Conversation info ..." JSON
 // prefix that channel adapters prepend to user messages. Returns
 // { meta:{...}, body:"<remaining text>" } or null.
+//
+// Adapters STACK more than one such block — a Telegram user message arrives as
+//
+//     Conversation info (untrusted metadata):
+//     ```json { "chat_id": "telegram:…", "sender": "Vivek Chand", … } ```
+//     Sender (untrusted metadata):
+//     ```json { "label": "Vivek Chand (…)", "id": "…", "name": "Vivek Chand" } ```
+//     <real message body>
+//
+// We strip EVERY leading provenance block (not just the first) so the same
+// identity isn't echoed 2-3× under the pill. The pill summarises the first
+// (richest) block; later blocks are redundant with it and dropped entirely.
 function _parseProvenancePrefix(s) {
   if (!s || typeof s !== 'string') return null;
-  // Match: optional "<label> (untrusted metadata):" header, then a ```json
-  // block, then the rest is the real body. Header is optional because some
-  // payloads ship just the json fence at the top.
-  var m = s.match(/^(?:[^\n]*\(untrusted metadata\)[^\n]*\n)?\s*```json\s*([\s\S]*?)```\s*([\s\S]*)$/);
-  if (!m) return null;
-  try {
-    var meta = JSON.parse(m[1]);
-    if (!meta || typeof meta !== 'object') return null;
-    // Require at least one provenance-y key so we don't eat unrelated json.
-    if (meta.chat_id == null && meta.sender == null && meta.message_id == null) {
-      return null;
-    }
-    return { meta: meta, body: (m[2] || '').trim() };
-  } catch(e) { return null; }
+  var rest = s;
+  var firstMeta = null;
+  // One leading block: optional "<label> (untrusted metadata):" header, then a
+  // ```json fence. ``\n?`` swallows the newline between stacked blocks.
+  var blockRe = /^\s*([^\n]*\(untrusted metadata\)[^\n]*\n)?[ \t]*```json\s*([\s\S]*?)```[ \t]*\n?/;
+  while (true) {
+    var m = rest.match(blockRe);
+    if (!m) break;
+    var hadHeader = !!m[1];
+    var meta;
+    try { meta = JSON.parse(m[2]); } catch(e) { break; }
+    if (!meta || typeof meta !== 'object') break;
+    var looksProv = (meta.chat_id != null || meta.sender != null || meta.message_id != null);
+    // Without the "(untrusted metadata)" header we only strip a block that is
+    // clearly provenance, so a real ```json code block in the message body is
+    // never eaten. With the header the adapter already declared it plumbing.
+    if (!hadHeader && !looksProv) break;
+    if (firstMeta === null) firstMeta = meta;
+    rest = rest.slice(m[0].length);
+  }
+  if (firstMeta === null) return null;
+  return { meta: firstMeta, body: rest.trim() };
 }
 
 function renderBrainDetail(detail) {
