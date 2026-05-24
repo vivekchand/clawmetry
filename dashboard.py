@@ -10859,10 +10859,10 @@ DASHBOARD_HTML = r"""
     </button>
     <div id="workspace-switcher-menu" style="display:none;position:absolute;top:calc(100% + 6px);left:0;min-width:240px;max-height:320px;overflow-y:auto;background:var(--bg-card,#1c2333);border:1px solid var(--border-color,rgba(255,255,255,0.1));border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,0.35);z-index:200;padding:4px;"></div>
   </div>
-  <div class="theme-toggle" onclick="var o=document.getElementById('gw-setup-overlay');o.dataset.mandatory='false';document.getElementById('gw-setup-close').style.display='';o.style.display='flex'" title="Gateway settings" style="cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
-  <div class="theme-toggle" id="alerts-bell-btn" onclick="switchTab('alerts')" title="Active alerts" style="cursor:pointer;position:relative;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span id="alerts-bell-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;border-radius:10px;padding:0 4px;font-size:9px;font-weight:700;min-width:14px;line-height:14px;text-align:center;">0</span></div>
+  <div class="theme-toggle" onclick="var o=document.getElementById('gw-setup-overlay');o.dataset.mandatory='false';document.getElementById('gw-setup-close').style.display='';o.style.display='flex'" data-i18n-title="topbar.gateway_settings" title="Gateway settings" style="cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
+  <div class="theme-toggle" id="alerts-bell-btn" onclick="switchTab('alerts')" data-i18n-title="topbar.active_alerts" title="Active alerts" style="cursor:pointer;position:relative;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span id="alerts-bell-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;border-radius:10px;padding:0 4px;font-size:9px;font-weight:700;min-width:14px;line-height:14px;text-align:center;">0</span></div>
 
-  <div class="theme-toggle" id="logout-btn" onclick="clawmetryLogout()" title="Logout" style="display:none;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>
+  <div class="theme-toggle" id="logout-btn" onclick="clawmetryLogout()" data-i18n-title="topbar.logout" title="Logout" style="display:none;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>
   <div class="i18n-switcher" id="i18n-switcher" style="position:relative;">
     <div id="i18n-switcher-btn" onclick="i18nToggleMenu(event)" data-i18n-title="i18n.language" title="Language" style="cursor:pointer;display:flex;align-items:center;gap:6px;border:1px solid var(--border-color,rgba(255,255,255,0.22));border-radius:8px;padding:7px 10px;color:var(--text-tertiary,#cbd5e1);background:var(--button-bg,transparent);transition:all 0.15s;" onmouseover="this.style.background='rgba(127,127,127,0.12)'" onmouseout="this.style.background='var(--button-bg,transparent)'">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
@@ -10872,9 +10872,9 @@ DASHBOARD_HTML = r"""
     <div id="i18n-switcher-menu" role="menu" style="display:none;position:absolute;top:calc(100% + 6px);right:0;min-width:180px;max-height:360px;overflow-y:auto;background:var(--bg-card,#1c2333);border:1px solid var(--border-color,rgba(255,255,255,0.1));border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,0.35);z-index:200;padding:4px;"></div>
   </div>
   <div class="zoom-controls">
-    <button class="zoom-btn" onclick="zoomOut()" title="Zoom out (Ctrl/Cmd + -)">−</button>
-    <span class="zoom-level" id="zoom-level" title="Current zoom level. Ctrl/Cmd + 0 to reset">100%</span>
-    <button class="zoom-btn" onclick="zoomIn()" title="Zoom in (Ctrl/Cmd + +)">+</button>
+    <button class="zoom-btn" onclick="zoomOut()" data-i18n-title="topbar.zoom_out" title="Zoom out (Ctrl/Cmd + -)">−</button>
+    <span class="zoom-level" id="zoom-level" data-i18n-title="topbar.zoom_level" title="Current zoom level. Ctrl/Cmd + 0 to reset">100%</span>
+    <button class="zoom-btn" onclick="zoomIn()" data-i18n-title="topbar.zoom_in" title="Zoom in (Ctrl/Cmd + +)">+</button>
   </div>
   {% if legacy_nav %}
   <div class="nav-tabs">
@@ -10928,7 +10928,7 @@ DASHBOARD_HTML = r"""
 <div class="app-shell">
   <aside id="left-nav" role="navigation" aria-label="Primary">
     <div class="left-nav-section">
-      <div class="left-nav-item left-nav-item-group active" data-tab="overview" onclick="switchTab('overview')" title="Live view of every running agent">
+      <div class="left-nav-item left-nav-item-group active" data-tab="overview" onclick="switchTab('overview')" data-i18n-title="nav.live_trace_tooltip" title="Live view of every running agent">
         <span class="left-nav-icon" aria-hidden="true">&#9679;</span>
         <span class="left-nav-label" data-i18n="nav.live_trace">Live trace</span>
         <span id="nav-stuck-badge" class="left-nav-badge" style="display:none;">0</span>
@@ -10944,37 +10944,37 @@ DASHBOARD_HTML = r"""
         <div class="left-nav-item left-nav-item-sub" data-tab="models" onclick="switchTab('models')">
           <span class="left-nav-label" data-i18n="nav.models">Models</span>
         </div>
-        <div class="left-nav-item left-nav-item-sub" data-tab="context" onclick="switchTab('context')" title="What the LLM sees on each turn">
+        <div class="left-nav-item left-nav-item-sub" data-tab="context" onclick="switchTab('context')" data-i18n-title="nav.llm_context_tooltip" title="What the LLM sees on each turn">
           <span class="left-nav-label" data-i18n="nav.llm_context">LLM Context</span>
         </div>
-        <div class="left-nav-item left-nav-item-sub" id="left-nav-tracing" data-tab="tracing" onclick="switchTab('tracing')" title="Every trace: span waterfall, tree, and agent graph" style="display:none;">
+        <div class="left-nav-item left-nav-item-sub" id="left-nav-tracing" data-tab="tracing" onclick="switchTab('tracing')" data-i18n-title="nav.tracing_tooltip" title="Every trace: span waterfall, tree, and agent graph" style="display:none;">
           <span class="left-nav-label" data-i18n="nav.tracing">Tracing</span>
         </div>
       </div>
 
-      <div class="left-nav-item" data-tab="approvals" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">
+      <div class="left-nav-item" data-tab="approvals" onclick="switchTab('approvals')" data-i18n-title="nav.approvals_tooltip" title="Cloud-mediated approval queue">
         <span class="left-nav-icon" aria-hidden="true">&#10003;</span>
         <span class="left-nav-label" data-i18n="nav.approvals">Approvals</span>
         <span id="nav-approvals-badge" class="left-nav-badge" style="display:none;">0</span>
       </div>
-      <div class="left-nav-item" data-tab="alerts" onclick="switchTab('alerts')" title="Get notified when something goes wrong with your agents">
+      <div class="left-nav-item" data-tab="alerts" onclick="switchTab('alerts')" data-i18n-title="nav.alerts_tooltip" title="Get notified when something goes wrong with your agents">
         <span class="left-nav-icon" aria-hidden="true">&#9873;</span>
         <span class="left-nav-label" data-i18n="nav.alerts">Alerts</span>
         <span id="nav-alerts-badge" class="left-nav-badge" style="display:none;">0</span>
       </div>
-      <div class="left-nav-item" data-tab="usage" onclick="switchTab('usage')" title="Token spend &amp; cost analytics">
+      <div class="left-nav-item" data-tab="usage" onclick="switchTab('usage')" data-i18n-title="nav.cost_tooltip" title="Token spend &amp; cost analytics">
         <span class="left-nav-icon" aria-hidden="true">&#36;</span>
         <span class="left-nav-label" data-i18n="nav.cost">Cost</span>
       </div>
-      <div class="left-nav-item" data-tab="transcripts" onclick="switchTab('transcripts')" title="Conversations across channels (Telegram, Signal, WhatsApp, &hellip;)">
+      <div class="left-nav-item" data-tab="transcripts" onclick="switchTab('transcripts')" data-i18n-title="nav.session_replay_tooltip" title="Conversations across channels (Telegram, Signal, WhatsApp, &hellip;)">
         <span class="left-nav-icon" aria-hidden="true">&#9787;</span>
         <span class="left-nav-label"><span data-i18n="nav.session_replay">Session replay</span> <span class="left-nav-beta" data-i18n="nav.beta">(beta)</span></span>
       </div>
-      <div class="left-nav-item" data-tab="crons" id="crons-tab" onclick="switchTab('crons')" title="Scheduled agent jobs">
+      <div class="left-nav-item" data-tab="crons" id="crons-tab" onclick="switchTab('crons')" data-i18n-title="nav.crons_tooltip" title="Scheduled agent jobs">
         <span class="left-nav-icon" aria-hidden="true">&#9202;</span>
         <span class="left-nav-label" data-i18n="nav.crons">Crons</span>
       </div>
-      <div class="left-nav-item" data-tab="memory" onclick="switchTab('memory')" title="Persistent memory files the agent reads on boot">
+      <div class="left-nav-item" data-tab="memory" onclick="switchTab('memory')" data-i18n-title="nav.memory_tooltip" title="Persistent memory files the agent reads on boot">
         <span class="left-nav-icon" aria-hidden="true">&#9873;</span>
         <span class="left-nav-label" data-i18n="nav.memory">Memory</span>
       </div>

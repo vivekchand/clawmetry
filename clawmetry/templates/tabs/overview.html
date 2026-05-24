@@ -1,6 +1,6 @@
 <div class="page active" id="page-overview">
   <!-- How independently your agent runs -->
-  <div id="autonomy-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:18px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start;" title="How often you need to step in. Higher = more independent.">
+  <div id="autonomy-card" data-i18n-title="overview.autonomy_tooltip" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:18px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start;" title="How often you need to step in. Higher means more independent.">
     <div>
       <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px;">&#127919; <span data-i18n="overview.autonomy_title">How independent is your agent?</span></div>
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
@@ -13,7 +13,7 @@
     <div style="display:flex;flex-direction:column;align-items:flex-end;justify-content:center;">
       <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;text-align:right;" data-i18n="overview.last_7_days">Last 7 days</div>
       <svg id="autonomy-sparkline" width="160" height="48" viewBox="0 0 160 48" style="overflow:visible;">
-        <text x="80" y="28" text-anchor="middle" fill="var(--text-muted)" font-size="10">No data yet</text>
+        <text x="80" y="28" text-anchor="middle" fill="var(--text-muted)" font-size="10" data-i18n="overview.no_data_yet">No data yet</text>
       </svg>
       <div id="autonomy-samples" style="font-size:10px;color:var(--text-muted);margin-top:4px;text-align:right;"></div>
     </div>
@@ -27,24 +27,24 @@
   </div>
 
   <!-- Heartbeat liveness card (closes #686) — pulse indicator + cadence + ok ratio -->
-  <div id="overview-heartbeat-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:14px 18px;margin-bottom:14px;box-shadow:var(--card-shadow);display:none;align-items:center;gap:18px;flex-wrap:wrap;" title="Your agent fires a heartbeat session every 30 min. Green = on time, amber = drifting, red = missed.">
+  <div id="overview-heartbeat-card" data-i18n-title="overview.heartbeat_tooltip" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:14px 18px;margin-bottom:14px;box-shadow:var(--card-shadow);display:none;align-items:center;gap:18px;flex-wrap:wrap;" title="Your agent fires a heartbeat session every 30 min. Green means on time, amber means drifting, red means missed.">
     <div style="display:flex;align-items:center;gap:10px;min-width:140px;">
       <span id="overview-hb-dot" style="width:14px;height:14px;border-radius:50%;background:#6b7280;display:inline-block;flex-shrink:0;"></span>
       <div>
-        <div style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;">&#x2764;&#xfe0f; Heartbeat</div>
+        <div style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;">&#x2764;&#xfe0f; <span data-i18n="overview.heartbeat">Heartbeat</span></div>
         <div id="overview-hb-status-label" style="font-size:13px;font-weight:600;color:var(--text-primary);">--</div>
       </div>
     </div>
     <div style="display:flex;flex-direction:column;gap:2px;min-width:160px;">
-      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">Last beat</div>
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;" data-i18n="overview.last_beat">Last beat</div>
       <div id="overview-hb-last-beat" style="font-size:14px;font-weight:600;color:var(--text-primary);">--</div>
     </div>
     <div style="display:flex;flex-direction:column;gap:2px;min-width:100px;">
-      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">Cadence</div>
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;" data-i18n="overview.cadence">Cadence</div>
       <div id="overview-hb-cadence" style="font-size:14px;font-weight:600;color:var(--text-primary);">30m</div>
     </div>
     <div style="display:flex;flex-direction:column;gap:2px;min-width:140px;">
-      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">OK ratio</div>
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;" data-i18n="overview.ok_ratio">OK ratio</div>
       <div id="overview-hb-ok-ratio" style="font-size:14px;font-weight:600;color:var(--text-primary);">--</div>
     </div>
   </div>
@@ -60,7 +60,7 @@
     ">
     <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
       <span id="velocity-alert-msg"></span>
-      <span style="font-size:11px;font-weight:400;color:inherit;opacity:0.8;">auto-refreshes every 30s</span>
+      <span style="font-size:11px;font-weight:400;color:inherit;opacity:0.8;" data-i18n="overview.auto_refresh_30s">auto-refreshes every 30s</span>
     </div>
     <div id="velocity-flagged-list" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;"></div>
   </div>
@@ -70,24 +70,24 @@
     <div class="stats-footer-item">
       <span class="stats-footer-icon">💰</span>
       <div>
-        <div class="stats-footer-label">Spending <span id="cost-info-icon" class="tooltip-info-icon" style="display:none;">i</span></div>
+        <div class="stats-footer-label"><span data-i18n="overview.spending">Spending</span> <span id="cost-info-icon" class="tooltip-info-icon" style="display:none;">i</span></div>
         <div class="stats-footer-value" id="cost-today">$0.00</div>
         <div class="stats-footer-sub" id="cost-billing-badge" style="margin-top:2px;display:none;"></div>
       </div>
       <div style="margin-left:auto;text-align:right;">
-        <div class="stats-footer-sub">wk: <span id="cost-week">--</span></div>
-        <div class="stats-footer-sub">mo: <span id="cost-month">--</span></div>
+        <div class="stats-footer-sub"><span data-i18n="overview.week_abbr">wk:</span> <span id="cost-week">--</span></div>
+        <div class="stats-footer-sub"><span data-i18n="overview.month_abbr">mo:</span> <span id="cost-month">--</span></div>
       </div>
-      <span id="cost-trend" style="display:none;">Estimated from usage -- may be $0 billed with OAuth auth</span>
+      <span id="cost-trend" style="display:none;" data-i18n="overview.cost_estimated_note">Estimated from usage, may be $0 billed with OAuth auth</span>
       <div style="margin-left:14px;min-width:160px;">
-        <div class="stats-footer-sub">Burn: <span id="budget-burn-rate">--</span></div>
-        <div class="stats-footer-sub">Proj/mo: <span id="budget-projected-month">--</span></div>
+        <div class="stats-footer-sub"><span data-i18n="overview.burn">Burn:</span> <span id="budget-burn-rate">--</span></div>
+        <div class="stats-footer-sub"><span data-i18n="overview.proj_month">Proj/mo:</span> <span id="budget-projected-month">--</span></div>
       </div>
     </div>
     <div class="stats-footer-item">
       <span class="stats-footer-icon">🤖</span>
       <div>
-        <div class="stats-footer-label">Model</div>
+        <div class="stats-footer-label" data-i18n="overview.model">Model</div>
         <div class="stats-footer-value" id="model-primary">--</div>
       </div>
       <div id="model-breakdown" style="display:none;">Loading...</div>
@@ -95,15 +95,15 @@
     <div class="stats-footer-item">
       <span class="stats-footer-icon">📊</span>
       <div>
-        <div class="stats-footer-label">Tokens</div>
+        <div class="stats-footer-label" data-i18n="overview.tokens">Tokens</div>
         <div class="stats-footer-value" id="token-rate">--</div>
       </div>
-      <span class="stats-footer-sub" style="margin-left:auto;">today: <span id="tokens-today" style="color:var(--text-success);font-weight:600;">--</span></span>
+      <span class="stats-footer-sub" style="margin-left:auto;"><span data-i18n="overview.today">today:</span> <span id="tokens-today" style="color:var(--text-success);font-weight:600;">--</span></span>
     </div>
     <div class="stats-footer-item">
       <span class="stats-footer-icon">💬</span>
       <div>
-        <div class="stats-footer-label">Sessions</div>
+        <div class="stats-footer-label" data-i18n="overview.sessions">Sessions</div>
         <div class="stats-footer-value" id="hot-sessions-count">--</div>
       </div>
       <div id="hot-sessions-list" style="display:none;">Loading...</div>
@@ -111,7 +111,7 @@
     <div class="stats-footer-item" id="reliability-card-lt">
       <span class="stats-footer-icon" id="reliability-icon-lt">🔄</span>
       <div>
-        <div class="stats-footer-label">Reliability</div>
+        <div class="stats-footer-label" data-i18n="overview.reliability">Reliability</div>
         <div class="stats-footer-value" id="reliability-direction-lt">--</div>
       </div>
       <span class="stats-footer-sub" style="margin-left:auto;" id="reliability-detail-lt"></span>
@@ -134,7 +134,7 @@
             height:100%;
             color:var(--text-muted);
             font-size:13px;
-            ">Loading flow...</div>
+            " data-i18n="overview.loading_flow">Loading flow...</div>
         </div>
       </div>
 
@@ -146,7 +146,7 @@
         padding:16px;
         box-shadow:var(--card-shadow);
         ">
-        <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:12px;">🏥 System Health</div>
+        <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:12px;">🏥 <span data-i18n="overview.system_health">System Health</span></div>
         <div style="
           font-size:11px;
           text-transform:uppercase;
@@ -154,7 +154,7 @@
           color:var(--text-muted);
           font-weight:600;
           margin-bottom:6px;
-          ">Services</div>
+          " data-i18n="overview.services">Services</div>
         <div id="sh-services" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;"></div>
         <div id="sh-channels-wrap">
           <div style="
@@ -164,7 +164,7 @@
             color:var(--text-muted);
             font-weight:600;
             margin-bottom:6px;
-            ">Channels</div>
+            " data-i18n="overview.channels">Channels</div>
         <div id="sh-channels" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;"></div></div>
         <div style="
           font-size:11px;
@@ -173,7 +173,7 @@
           color:var(--text-muted);
           font-weight:600;
           margin-bottom:6px;
-          ">Disk Usage</div>
+          " data-i18n="overview.disk_usage">Disk Usage</div>
         <div id="sh-disks" style="margin-bottom:14px;"></div>
         <div style="
           font-size:11px;
@@ -182,7 +182,7 @@
           color:var(--text-muted);
           font-weight:600;
           margin-bottom:6px;
-          ">Cron Jobs</div>
+          " data-i18n="overview.cron_jobs">Cron Jobs</div>
         <div id="sh-crons" style="margin-bottom:14px;"></div>
         <div style="
           font-size:11px;
@@ -191,7 +191,7 @@
           color:var(--text-muted);
           font-weight:600;
           margin-bottom:6px;
-          ">Sub-Agents (24h)</div>
+          " data-i18n="overview.subagents_24h">Sub-Agents (24h)</div>
         <div id="sh-subagents" style="margin-bottom:14px;"></div>
         <div id="delegation-chains-panel" style="margin-bottom:14px;"></div>
         <div style="
@@ -201,7 +201,7 @@
           color:var(--text-muted);
           font-weight:600;
           margin-bottom:6px;
-          ">Heartbeat</div>
+          " data-i18n="overview.heartbeat">Heartbeat</div>
         <div id="sh-heartbeat" style="margin-bottom:14px;"></div>
         <!-- 📨 Channel ingest (#1310 follow-up) — per-provider message
              counts so operators see whether the gateway WS tap is actually
@@ -214,7 +214,7 @@
             color:var(--text-muted);
             font-weight:600;
             margin-bottom:6px;
-            ">📨 Channel ingest</div>
+            ">📨 <span data-i18n="overview.channel_ingest">Channel ingest</span></div>
           <div id="sh-channel-ingest" style="margin-bottom:14px;"></div>
         </div>
         <!-- ⏱️ Handler latency (#1283) — p50/p95 per /api/* endpoint, 5-min rolling -->
@@ -226,7 +226,7 @@
             color:var(--text-muted);
             font-weight:600;
             margin-bottom:6px;
-            ">⏱️ Handler latency (5-min rolling)</div>
+            ">⏱️ <span data-i18n="overview.handler_latency">Handler latency (5-min rolling)</span></div>
           <div id="sh-latency" style="margin-bottom:14px;"></div>
         </div>
         <!-- 🛠️ Daemon health (PRD #1133 layer 4) — surfaces sync.log error rate -->
@@ -238,7 +238,7 @@
             color:var(--text-muted);
             font-weight:600;
             margin-bottom:6px;
-            ">🛠️ Daemon health</div>
+            ">🛠️ <span data-i18n="overview.daemon_health">Daemon health</span></div>
         <div id="sh-daemon" style="margin-bottom:14px;"></div></div>
         <!-- 🛰️ Gateway health (#852) — OpenClaw gateway process vitals -->
         <div id="sh-gateway-wrap" style="display:none;">
@@ -249,7 +249,7 @@
             color:var(--text-muted);
             font-weight:600;
             margin-bottom:6px;
-            ">🛰️ Gateway health</div>
+            ">🛰️ <span data-i18n="overview.gateway_health">Gateway health</span></div>
         <div id="sh-gateway" style="margin-bottom:14px;"></div></div>
         <div id="sh-sandbox-wrap" style="display:none;">
           <div style="
@@ -259,7 +259,7 @@
             color:var(--text-muted);
             font-weight:600;
             margin-bottom:6px;
-            ">🔒 Sandbox</div>
+            ">🔒 <span data-i18n="overview.sandbox">Sandbox</span></div>
         <div id="sh-sandbox" style="margin-bottom:14px;"></div></div>
         <div id="sh-inference-wrap" style="display:none;">
           <div style="
@@ -269,7 +269,7 @@
             color:var(--text-muted);
             font-weight:600;
             margin-bottom:6px;
-            ">🤖 Inference Provider</div>
+            ">🤖 <span data-i18n="overview.inference_provider">Inference Provider</span></div>
         <div id="sh-inference" style="margin-bottom:14px;"></div></div>
         <div id="sh-security-wrap" style="display:none;">
           <div style="
@@ -279,7 +279,7 @@
             color:var(--text-muted);
             font-weight:600;
             margin-bottom:6px;
-            ">🛡️ Security Posture</div>
+            ">🛡️ <span data-i18n="overview.security_posture">Security Posture</span></div>
         <div id="sh-security" style="margin-bottom:14px;"></div></div>
         <div id="sh-reliability-wrap" style="display:none;">
           <div style="
@@ -289,7 +289,7 @@
             color:var(--text-muted);
             font-weight:600;
             margin-bottom:6px;
-            ">📊 Agent Reliability</div>
+            ">📊 <span data-i18n="overview.agent_reliability">Agent Reliability</span></div>
         <div id="sh-reliability" style="margin-bottom:14px;"></div></div>
         <!-- 🔍 Diagnostics Panel (GH#28) -->
         <div id="sh-diagnostics-wrap">
@@ -306,7 +306,7 @@
               letter-spacing:1.5px;
               color:var(--text-muted);
               font-weight:600;
-              ">🔍 Configuration Diagnostics</div>
+              ">🔍 <span data-i18n="overview.config_diagnostics">Configuration Diagnostics</span></div>
             <div style="display:flex;align-items:center;gap:8px;">
               <button id="sh-diagnostics-copy" onclick="event.stopPropagation();copyDiagnostics();" style="
                 font-size:10px;
@@ -316,7 +316,7 @@
                 border-radius:4px;
                 color:var(--text-muted);
                 cursor:pointer;
-                ">📋 Copy</button>
+                ">📋 <span data-i18n="common.copy">Copy</span></button>
               <span class="diag-chevron" style="font-size:10px;color:var(--text-muted);">▼</span>
             </div>
           </div>
@@ -330,7 +330,7 @@
               padding:10px 12px;
               line-height:1.9;
               ">
-              <div style="color:var(--text-muted);">Loading diagnostics...</div>
+              <div style="color:var(--text-muted);" data-i18n="overview.loading_diagnostics">Loading diagnostics...</div>
             </div>
           </div>
         </div>
@@ -344,15 +344,15 @@
     <div class="overview-tasks-pane">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
         <div style="display:flex;align-items:center;gap:8px;">
-          <span style="font-size:15px;font-weight:700;color:var(--text-primary);">🐝 Active Tasks</span>
+          <span style="font-size:15px;font-weight:700;color:var(--text-primary);">🐝 <span data-i18n="overview.active_tasks">Active Tasks</span></span>
           <span id="overview-tasks-count-badge" style="font-size:11px;color:var(--text-muted);"></span>
         </div>
-        <span style="font-size:10px;color:var(--text-faint);letter-spacing:0.5px;">⟳ 30s</span>
+        <span style="font-size:10px;color:var(--text-faint);letter-spacing:0.5px;" data-i18n="overview.refresh_30s">⟳ 30s</span>
       </div>
       <div class="tasks-panel-scroll" id="overview-tasks-list">
         <div style="text-align:center;padding:32px;color:var(--text-muted);">
           <div style="font-size:28px;margin-bottom:8px;" class="tasks-empty-icon">🐝</div>
-          <div style="font-size:13px;">Loading tasks...</div>
+          <div style="font-size:13px;" data-i18n="overview.loading_tasks">Loading tasks...</div>
         </div>
       </div>
       <!-- 🧠 Brain Panel: Main Agent Activity (below Active Tasks) -->
@@ -398,7 +398,7 @@
             padding:8px;
             color:var(--text-muted);
             font-size:11px;
-            ">Waiting for activity...</div>
+            " data-i18n="overview.waiting_for_activity">Waiting for activity...</div>
         </div>
       </div>
     </div>
@@ -423,9 +423,9 @@
   <!-- old system health removed, now inside tasks pane -->
 
   <!-- Is your agent alive? -->
-  <div id="heartbeat-panel" style="margin-top:16px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:10px;padding:14px 18px;box-shadow:var(--card-shadow);" title="Your agent checks in every 30 minutes to prove it's awake. This shows whether it's doing that.">
+  <div id="heartbeat-panel" data-i18n-title="overview.heartbeat_panel_tooltip" style="margin-top:16px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:10px;padding:14px 18px;box-shadow:var(--card-shadow);" title="Your agent checks in every 30 minutes to prove it's awake. This shows whether it's doing that.">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#x2764;&#xfe0f; Is your agent alive?</span>
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#x2764;&#xfe0f; <span data-i18n="overview.is_agent_alive">Is your agent alive?</span></span>
       <span id="hb-status-badge" style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:rgba(107,114,128,0.2);color:var(--text-muted);">...</span>
     </div>
     <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
@@ -434,12 +434,12 @@
         <span id="hb-pulse-label" style="font-size:10px;color:var(--text-muted);">waiting...</span>
       </div>
       <div style="flex:1;display:flex;flex-direction:column;gap:5px;min-width:240px;">
-        <div style="font-size:13px;color:var(--text-primary);">Last check-in: <span id="hb-last-beat" style="font-weight:600;color:var(--text-success);">--</span></div>
+        <div style="font-size:13px;color:var(--text-primary);"><span data-i18n="overview.last_checkin">Last check-in:</span> <span id="hb-last-beat" style="font-weight:600;color:var(--text-success);">--</span></div>
         <div style="font-size:12px;color:var(--text-muted);"><span id="hb-cadence" style="font-weight:600;">--</span></div>
         <div style="font-size:12px;color:var(--text-muted);"><span id="hb-ok-ratio-line" style="font-weight:600;">--</span></div>
       </div>
       <div style="display:flex;flex-direction:column;gap:4px;align-items:center;">
-        <div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:2px;" title="Each dot is a recent check-in. Green = quiet, amber = took action.">Recent check-ins</div>
+        <div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:2px;" data-i18n="overview.recent_checkins" data-i18n-title="overview.recent_checkins_tooltip" title="Each dot is a recent check-in. Green means quiet, amber means took action.">Recent check-ins</div>
         <div id="hb-sparkline" style="display:flex;align-items:center;gap:4px;height:20px;">
           <span style="font-size:11px;color:var(--text-muted);">--</span>
         </div>
