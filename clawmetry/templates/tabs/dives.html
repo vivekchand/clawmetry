@@ -1,0 +1,75 @@
+<div class="page" id="page-dives">
+  <div style="display:flex;gap:16px;min-height:400px;">
+
+    <!-- Left sidebar: saved Dives -->
+    <div id="dives-sidebar" style="width:200px;flex-shrink:0;">
+      <div class="section-title" style="margin-top:0;font-size:12px;">Saved Dives</div>
+      <div id="dives-saved-list" style="font-size:13px;">
+        <div style="color:var(--text-muted);font-size:12px;padding:4px 0;">No saved Dives yet.</div>
+      </div>
+    </div>
+
+    <!-- Right: main query area -->
+    <div style="flex:1;min-width:0;">
+
+      <!-- No-auth banner -->
+      <div id="dives-noauth-banner" style="display:none;margin-bottom:16px;padding:12px 16px;background:#1a2a3a;border:1px solid #2a4a6a;border-radius:8px;font-size:13px;color:#7eb8f7;">
+        No Anthropic API key found. Export <code>ANTHROPIC_API_KEY</code> to enable AI-powered queries.
+        <a href="#" onclick="switchTab('security');return false;" style="color:#7eb8f7;text-decoration:underline;margin-left:6px;">Open Settings &#8594;</a>
+      </div>
+
+      <!-- Question input -->
+      <div class="card" style="margin-bottom:14px;">
+        <div style="display:flex;gap:8px;align-items:flex-end;">
+          <textarea id="dives-question"
+            placeholder="Ask anything about your AI usage&#8230;"
+            rows="2"
+            style="flex:1;padding:8px 10px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:6px;color:var(--text-primary);font-size:13px;resize:vertical;font-family:inherit;line-height:1.4;"></textarea>
+          <button id="dives-run-btn" onclick="divesRun()"
+            style="padding:8px 18px;background:#3a7bd5;color:#fff;border:none;border-radius:6px;font-size:13px;cursor:pointer;white-space:nowrap;align-self:flex-end;">
+            Run
+          </button>
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Tip: Ctrl/&#8984;+Enter to run</div>
+      </div>
+
+      <!-- Results area (hidden until first run) -->
+      <div id="dives-result-area" style="display:none;">
+
+        <!-- Result header row -->
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">
+          <div id="dives-result-title" style="font-size:14px;font-weight:600;color:var(--text-primary);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></div>
+          <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text-secondary);cursor:pointer;white-space:nowrap;">
+            <input type="checkbox" id="dives-show-sql" onchange="divesToggleSql()"> Show SQL
+          </label>
+          <button id="dives-save-btn" onclick="divesSave()"
+            style="padding:4px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:5px;color:var(--text-secondary);font-size:12px;cursor:pointer;white-space:nowrap;">
+            Save
+          </button>
+        </div>
+
+        <!-- SQL box (hidden by default) -->
+        <div id="dives-sql-box" style="display:none;margin-bottom:12px;padding:10px 12px;background:#0d1117;border:1px solid var(--border-secondary);border-radius:6px;font-family:monospace;font-size:12px;color:#79c0ff;white-space:pre-wrap;overflow-x:auto;"></div>
+
+        <!-- Error box -->
+        <div id="dives-error" style="display:none;margin-bottom:12px;padding:8px 12px;background:#2d0a0a;border:1px solid #7f1d1d;border-radius:6px;font-size:12px;color:#fca5a5;"></div>
+
+        <!-- Chart or table -->
+        <div class="card" style="margin-bottom:10px;overflow:hidden;">
+          <div id="dives-chart-wrap" style="position:relative;height:260px;">
+            <canvas id="dives-chart" style="width:100%;height:100%;"></canvas>
+          </div>
+          <div id="dives-table-wrap" style="display:none;overflow-x:auto;">
+            <table class="usage-table" id="dives-table"><tbody></tbody></table>
+          </div>
+        </div>
+
+        <!-- Description + timing -->
+        <div id="dives-description" style="font-size:12px;color:var(--text-muted);margin-bottom:4px;"></div>
+        <div id="dives-timing" style="font-size:11px;color:var(--text-muted);"></div>
+
+      </div><!-- /result-area -->
+
+    </div><!-- /right column -->
+  </div><!-- /flex wrapper -->
+</div><!-- /page-dives -->

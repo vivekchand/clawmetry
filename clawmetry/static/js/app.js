@@ -926,6 +926,7 @@ function switchTab(name) {
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
   if (name === 'approvals') { if (typeof loadApprovalsTab === 'function') loadApprovalsTab(); }
   if (name === 'alerts') { if (typeof loadAlertsPage === 'function') loadAlertsPage(); }
+  if (name === 'dives') { if (typeof loadDivesPage === 'function') loadDivesPage(); }
   if (name === 'actions') loadQAHistory();
   if (name === 'logs') {
     // Phase 3 (#1252): defer the SSE handshake until the user actually

@@ -10842,6 +10842,7 @@ DASHBOARD_HTML = r"""
 <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css', v=version) }}">
 <script src="{{ url_for('static', filename='js/nav-dropdown.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/alerts.js', v=version) }}" defer></script>
+<script src="{{ url_for('static', filename='js/dives.js', v=version) }}" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -10958,6 +10959,10 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-icon" aria-hidden="true">&#36;</span>
         <span class="left-nav-label">Cost</span>
       </div>
+      <div class="left-nav-item" data-tab="dives" onclick="switchTab('dives')" title="Ask questions about your AI usage in plain English">
+        <span class="left-nav-icon" aria-hidden="true">&#128270;</span>
+        <span class="left-nav-label">Dives</span>
+      </div>
       <div class="left-nav-item" data-tab="transcripts" onclick="switchTab('transcripts')" title="Conversations across channels (Telegram, Signal, WhatsApp, &hellip;)">
         <span class="left-nav-icon" aria-hidden="true">&#9787;</span>
         <span class="left-nav-label">Session replay <span class="left-nav-beta">(beta)</span></span>
@@ -11015,6 +11020,9 @@ DASHBOARD_HTML = r"""
 
 <!-- USAGE -->
 {% include 'tabs/usage.html' %}
+
+<!-- DIVES (NL-to-SQL-to-chart over local DuckDB) -->
+{% include 'tabs/dives.html' %}
 
 <!-- CRONS -->
 {% include 'tabs/crons.html' %}
