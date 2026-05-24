@@ -10863,6 +10863,14 @@ DASHBOARD_HTML = r"""
   <div class="theme-toggle" id="alerts-bell-btn" onclick="switchTab('alerts')" title="Active alerts" style="cursor:pointer;position:relative;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span id="alerts-bell-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;border-radius:10px;padding:0 4px;font-size:9px;font-weight:700;min-width:14px;line-height:14px;text-align:center;">0</span></div>
 
   <div class="theme-toggle" id="logout-btn" onclick="clawmetryLogout()" title="Logout" style="display:none;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>
+  <div class="i18n-switcher" id="i18n-switcher" style="position:relative;">
+    <div id="i18n-switcher-btn" onclick="i18nToggleMenu(event)" data-i18n-title="i18n.language" title="Language" style="cursor:pointer;display:flex;align-items:center;gap:6px;border:1px solid var(--border-color,rgba(255,255,255,0.22));border-radius:8px;padding:7px 10px;color:var(--text-tertiary,#cbd5e1);background:var(--button-bg,transparent);transition:all 0.15s;" onmouseover="this.style.background='rgba(127,127,127,0.12)'" onmouseout="this.style.background='var(--button-bg,transparent)'">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+      <span id="i18n-current-label" style="font-size:12px;font-weight:700;letter-spacing:0.3px;">EN</span>
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.7;"><polyline points="6 9 12 15 18 9"/></svg>
+    </div>
+    <div id="i18n-switcher-menu" role="menu" style="display:none;position:absolute;top:calc(100% + 6px);right:0;min-width:180px;max-height:360px;overflow-y:auto;background:var(--bg-card,#1c2333);border:1px solid var(--border-color,rgba(255,255,255,0.1));border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,0.35);z-index:200;padding:4px;"></div>
+  </div>
   <div class="zoom-controls">
     <button class="zoom-btn" onclick="zoomOut()" title="Zoom out (Ctrl/Cmd + -)">−</button>
     <span class="zoom-level" id="zoom-level" title="Current zoom level. Ctrl/Cmd + 0 to reset">100%</span>
@@ -10922,75 +10930,75 @@ DASHBOARD_HTML = r"""
     <div class="left-nav-section">
       <div class="left-nav-item left-nav-item-group active" data-tab="overview" onclick="switchTab('overview')" title="Live view of every running agent">
         <span class="left-nav-icon" aria-hidden="true">&#9679;</span>
-        <span class="left-nav-label">Live trace</span>
+        <span class="left-nav-label" data-i18n="nav.live_trace">Live trace</span>
         <span id="nav-stuck-badge" class="left-nav-badge" style="display:none;">0</span>
         <button type="button" class="left-nav-group-chevron" id="left-nav-live-toggle" aria-expanded="true" aria-controls="left-nav-live-list" aria-label="Toggle Live trace sub-items" onclick="event.stopPropagation(); toggleLiveDrawer();">&#9662;</button>
       </div>
       <div class="left-nav-group-list" id="left-nav-live-list">
         <div class="left-nav-item left-nav-item-sub" data-tab="flow" onclick="switchTab('flow')">
-          <span class="left-nav-label">Flow</span>
+          <span class="left-nav-label" data-i18n="nav.flow">Flow</span>
         </div>
         <div class="left-nav-item left-nav-item-sub" data-tab="brain" onclick="switchTab('brain')">
-          <span class="left-nav-label">Brain</span>
+          <span class="left-nav-label" data-i18n="nav.brain">Brain</span>
         </div>
         <div class="left-nav-item left-nav-item-sub" data-tab="models" onclick="switchTab('models')">
-          <span class="left-nav-label">Models</span>
+          <span class="left-nav-label" data-i18n="nav.models">Models</span>
         </div>
         <div class="left-nav-item left-nav-item-sub" data-tab="context" onclick="switchTab('context')" title="What the LLM sees on each turn">
-          <span class="left-nav-label">LLM Context</span>
+          <span class="left-nav-label" data-i18n="nav.llm_context">LLM Context</span>
         </div>
         <div class="left-nav-item left-nav-item-sub" id="left-nav-tracing" data-tab="tracing" onclick="switchTab('tracing')" title="Every trace: span waterfall, tree, and agent graph" style="display:none;">
-          <span class="left-nav-label">Tracing</span>
+          <span class="left-nav-label" data-i18n="nav.tracing">Tracing</span>
         </div>
       </div>
 
       <div class="left-nav-item" data-tab="approvals" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">
         <span class="left-nav-icon" aria-hidden="true">&#10003;</span>
-        <span class="left-nav-label">Approvals</span>
+        <span class="left-nav-label" data-i18n="nav.approvals">Approvals</span>
         <span id="nav-approvals-badge" class="left-nav-badge" style="display:none;">0</span>
       </div>
       <div class="left-nav-item" data-tab="alerts" onclick="switchTab('alerts')" title="Get notified when something goes wrong with your agents">
         <span class="left-nav-icon" aria-hidden="true">&#9873;</span>
-        <span class="left-nav-label">Alerts</span>
+        <span class="left-nav-label" data-i18n="nav.alerts">Alerts</span>
         <span id="nav-alerts-badge" class="left-nav-badge" style="display:none;">0</span>
       </div>
       <div class="left-nav-item" data-tab="usage" onclick="switchTab('usage')" title="Token spend &amp; cost analytics">
         <span class="left-nav-icon" aria-hidden="true">&#36;</span>
-        <span class="left-nav-label">Cost</span>
+        <span class="left-nav-label" data-i18n="nav.cost">Cost</span>
       </div>
       <div class="left-nav-item" data-tab="transcripts" onclick="switchTab('transcripts')" title="Conversations across channels (Telegram, Signal, WhatsApp, &hellip;)">
         <span class="left-nav-icon" aria-hidden="true">&#9787;</span>
-        <span class="left-nav-label">Session replay <span class="left-nav-beta">(beta)</span></span>
+        <span class="left-nav-label"><span data-i18n="nav.session_replay">Session replay</span> <span class="left-nav-beta" data-i18n="nav.beta">(beta)</span></span>
       </div>
       <div class="left-nav-item" data-tab="crons" id="crons-tab" onclick="switchTab('crons')" title="Scheduled agent jobs">
         <span class="left-nav-icon" aria-hidden="true">&#9202;</span>
-        <span class="left-nav-label">Crons</span>
+        <span class="left-nav-label" data-i18n="nav.crons">Crons</span>
       </div>
       <div class="left-nav-item" data-tab="memory" onclick="switchTab('memory')" title="Persistent memory files the agent reads on boot">
         <span class="left-nav-icon" aria-hidden="true">&#9873;</span>
-        <span class="left-nav-label">Memory</span>
+        <span class="left-nav-label" data-i18n="nav.memory">Memory</span>
       </div>
     </div>
 
     <button type="button" class="left-nav-advanced-toggle" id="left-nav-advanced-toggle" onclick="toggleAdvancedDrawer()" aria-expanded="false">
-      <span class="left-nav-label">Advanced</span>
+      <span class="left-nav-label" data-i18n="nav.advanced">Advanced</span>
       <span class="left-nav-advanced-chevron" aria-hidden="true">&#9662;</span>
     </button>
     <div class="left-nav-advanced-list" id="left-nav-advanced-list" hidden>
       <div class="left-nav-item left-nav-item-sub" data-tab="notifications" onclick="switchTab('notifications')">
-        <span class="left-nav-label">Notifications</span>
+        <span class="left-nav-label" data-i18n="nav.notifications">Notifications</span>
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="security" onclick="switchTab('security')">
-        <span class="left-nav-label">Security</span>
+        <span class="left-nav-label" data-i18n="nav.security">Security</span>
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="skills" onclick="switchTab('skills')">
-        <span class="left-nav-label">Skills</span>
+        <span class="left-nav-label" data-i18n="nav.skills">Skills</span>
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="selfevolve" onclick="switchTab('selfevolve')">
-        <span class="left-nav-label">Self-Evolve</span>
+        <span class="left-nav-label" data-i18n="nav.self_evolve">Self-Evolve</span>
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="version-impact" onclick="switchTab('version-impact')">
-        <span class="left-nav-label">Version impact</span>
+        <span class="left-nav-label" data-i18n="nav.version_impact">Version impact</span>
       </div>
       <!-- Rate limits tab removed: cloud endpoint is hard-disabled by design
            (rate-limit state is per-node, doesn't ride the snapshot), and
@@ -11079,6 +11087,7 @@ DASHBOARD_HTML = r"""
   </main>
 </div> <!-- end app-shell -->
 {% endif %}
+<script src="{{ url_for('static', filename='js/i18n.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/app.js', v=version) }}"></script>
 </div> <!-- end zoom-wrapper -->
 
