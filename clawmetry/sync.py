@@ -9480,6 +9480,10 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "memoryAccess": _build_memory_access(),
         "traces": _build_traces(),
         "skills": _build_skills(),
+        # Connector liveness (incident: a channel went deaf ~37h, no alarm).
+        # Lets the cloud dashboard flag a 'down' inbound channel just like the
+        # local dashboard's /api/system-health does.
+        "connectorLiveness": _build_connector_liveness(config),
     }
 
     # ── NemoClaw / sandbox enrichment ────────────────────────────────────────
@@ -10904,6 +10908,26 @@ def sync_connector_health_from_logs(
     except Exception as e:
         log.warning("connector-health: cycle failed: %s", e)
         return 0
+
+
+def _build_connector_liveness(config: dict | None = None) -> list:
+    """Per-channel inbound-poll verdict for the cloud snapshot, computed with
+    the SAME classifier the local dashboard uses (clawmetry.connector_health)
+    so the cloud and local UIs never disagree on whether a channel is down.
+    Best-effort; [] on any failure (never block the snapshot)."""
+    try:
+        from clawmetry.connector_health import (
+            enabled_channels_from_config, classify_connector_liveness,
+        )
+        enabled = enabled_channels_from_config()
+        if not enabled:
+            return []
+        from clawmetry import local_store as _ls
+        rows = _ls.get_store().query_connector_health(since_hours=24)
+        return classify_connector_liveness(enabled, rows)
+    except Exception as e:
+        log.debug("connector-liveness snapshot build failed (non-fatal): %s", e)
+        return []
 
 
 def _build_gateway_data(paths: dict = None) -> dict:
