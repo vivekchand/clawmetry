@@ -111,6 +111,18 @@ npm run build
 
 The production bundle is written to `clawmetry/static/v2/dist/`.
 
+## Runtime Compatibility
+
+ClawMetry monitors the entire OpenClaw runtime family. The matrix below tracks which runtimes are explicitly verified via fixture-backed CI tests — see [`docs/compatibility.md`](docs/compatibility.md) for the full table and a guide on adding new runtimes.
+
+| Runtime | Status | Notes |
+|---|---|---|
+| **OpenClaw** | ✅ Native | Reference runtime — auto-detected |
+| **NanoClaw** | ✅ Verified | Container runtime, same wire format |
+| **PicoClaw** | ✅ Verified | $10 hardware runtime, same wire format |
+
+NanoClaw and PicoClaw use the same on-disk session layout as OpenClaw; pointing ClawMetry at them is a one-flag override today (`clawmetry --sessions-dir ~/.nanoclaw/agents/main/sessions`). See the docs for the full setup.
+
 ## Configuration
 
 Most people don't need any config. ClawMetry auto-detects your workspace, logs, sessions, and crons.
