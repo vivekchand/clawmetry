@@ -6491,6 +6491,69 @@ function closeFileViewer() {
   document.getElementById('file-viewer').style.display = 'none';
 }
 
+// ── Runtime switcher (OpenClaw / PicoClaw / NanoClaw) ──────────────────────
+// OpenClaw-family runtimes share one dashboard; this lets you scope a session
+// list to a single runtime for a cleaner deep-dive ("All" = merged, the
+// default). The runtime is derived from the namespaced session id
+// (picoclaw:/nanoclaw:) with an explicit `runtime` field as a fallback, so it
+// works the same locally and in the cloud (the cloud session ids carry the
+// same prefix). The switcher only appears when >1 runtime is present.
+var _CM_RT_LABEL = { openclaw: 'OpenClaw', picoclaw: 'PicoClaw', nanoclaw: 'NanoClaw' };
+function _cmRuntimeOf(o) {
+  var id = (o && (o.id || o.sessionId || o.session_id || o.key)) || '';
+  var i = id.indexOf(':');
+  if (i > 0) {
+    var p = id.slice(0, i).toLowerCase();
+    if (p === 'picoclaw' || p === 'nanoclaw') return p;
+  }
+  if (o && o.runtime) return String(o.runtime).toLowerCase();
+  return 'openclaw';
+}
+function _cmRuntimeFilter() {
+  try { return localStorage.getItem('cm-runtime-filter') || 'all'; } catch (e) { return 'all'; }
+}
+function _cmSetRuntimeFilter(v, reload) {
+  try { localStorage.setItem('cm-runtime-filter', v); } catch (e) {}
+  if (typeof reload === 'function') reload();
+}
+// Render a runtime chip-switcher immediately before `anchor`. `counts` maps
+// runtime -> N. `reload` is invoked on chip click. Returns nothing; idempotent.
+function _cmRenderRuntimeSwitcher(counts, anchor, reload) {
+  if (!anchor || !anchor.parentNode) return;
+  var id = 'cm-runtime-switcher';
+  var existing = document.getElementById(id);
+  var order = ['openclaw', 'picoclaw', 'nanoclaw'].filter(function(k) { return counts[k]; });
+  if (order.length < 2) { if (existing) existing.remove(); return; }
+  var active = _cmRuntimeFilter();
+  if (active !== 'all' && !counts[active]) active = 'all';
+  var total = order.reduce(function(a, k) { return a + counts[k]; }, 0);
+  function chip(val, label, n, on) {
+    var bg = on ? 'var(--bg-accent,#E5443A)' : 'var(--bg-secondary,#161b22)';
+    var fg = on ? '#fff' : 'var(--text-secondary,#9ca3af)';
+    var bd = on ? 'var(--bg-accent,#E5443A)' : 'var(--border-primary,#30363d)';
+    return '<button class="cm-rt-btn" data-rt="' + val + '" style="cursor:pointer;padding:4px 12px;border-radius:14px;' +
+      'font-size:12px;font-weight:600;background:' + bg + ';color:' + fg + ';border:1px solid ' + bd + ';">' +
+      escHtml(label) + (n != null ? (' <span style="opacity:.65;">' + n + '</span>') : '') + '</button>';
+  }
+  var html = '<span style="font-size:11px;color:var(--text-muted);font-weight:600;margin-right:2px;">Runtime</span>';
+  html += chip('all', 'All', total, active === 'all');
+  order.forEach(function(k) { html += chip(k, _CM_RT_LABEL[k] || k, counts[k], active === k); });
+  if (!existing) {
+    existing = document.createElement('div');
+    existing.id = id;
+    existing.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:12px;';
+    anchor.parentNode.insertBefore(existing, anchor);
+  } else if (existing.nextSibling !== anchor) {
+    // anchor was re-created (tab re-render) — move the switcher back above it.
+    anchor.parentNode.insertBefore(existing, anchor);
+  }
+  existing.innerHTML = html;
+  var btns = existing.querySelectorAll('.cm-rt-btn');
+  for (var b = 0; b < btns.length; b++) {
+    btns[b].addEventListener('click', function() { _cmSetRuntimeFilter(this.getAttribute('data-rt'), reload); });
+  }
+}
+
 async function loadSessions() {
   if (window.CLOUD_MODE) {
     // In cloud mode: /api/sessions and /api/subagents already handle CLOUD_MODE server-side
@@ -10428,6 +10491,19 @@ async function loadTranscripts() {
     // catches the "name === sid" / "name === sid[:40]" cases the legacy
     // endpoint emits.
     var UUIDISH = /^[0-9a-f]{6,}([-_][0-9a-f]+)*$/i;
+    // Runtime scoping (OpenClaw-family). Count runtimes across ALL transcripts
+    // so the switcher always lists every runtime present, then narrow the list
+    // to the active one ("all" = merged, the default).
+    var _allTx = data.transcripts || [];
+    var _rtCounts = {};
+    _allTx.forEach(function(t) { var r = _cmRuntimeOf(t); _rtCounts[r] = (_rtCounts[r] || 0) + 1; });
+    var _rtFilter = _cmRuntimeFilter();
+    if (_rtFilter !== 'all' && !_rtCounts[_rtFilter]) _rtFilter = 'all';
+    var _anchor = document.getElementById('transcript-list');
+    _cmRenderRuntimeSwitcher(_rtCounts, _anchor, loadTranscripts);
+    if (_rtFilter !== 'all') {
+      data.transcripts = _allTx.filter(function(t) { return _cmRuntimeOf(t) === _rtFilter; });
+    }
     var plumbingTotal = 0;
     data.transcripts.forEach(function(t) {
       var raw = String(t.id || '');
