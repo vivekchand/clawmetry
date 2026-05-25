@@ -35,36 +35,36 @@
           padding:2px 10px;
           "></span>
       </div>
-      <button class="refresh-btn" onclick="loadNemoClaw()">&#8635; Refresh</button>
+      <button class="refresh-btn" onclick="loadNemoClaw()">&#8635; <span data-i18n="common.refresh">Refresh</span></button>
     </div>
     <!-- Two-column info grid -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
       <!-- Sandbox panel -->
       <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;">
-        <div style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;margin-bottom:10px;">SANDBOX</div>
+        <div style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;margin-bottom:10px;" data-i18n="nemoclaw.sandbox">SANDBOX</div>
         <table style="width:100%;border-collapse:collapse;font-size:12px;">
           <tr><td style="
             color:var(--text-muted);
             padding:3px 0;
             width:45%;
-            ">Status</td><td id="nc-sandbox-status" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">&#8212;</td></tr>
-          <tr><td style="color:var(--text-muted);padding:3px 0;">Blueprint</td><td id="nc-blueprint-ver2" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">&#8212;</td></tr>
-          <tr><td style="color:var(--text-muted);padding:3px 0;">Last action</td><td id="nc-last-action" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">&#8212;</td></tr>
-          <tr><td style="color:var(--text-muted);padding:3px 0;">Run ID</td><td id="nc-run-id" style="color:var(--text-tertiary);font-family:\'JetBrains Mono\',monospace;font-size:11px;">&#8212;</td></tr>
+            " data-i18n="nemoclaw.status">Status</td><td id="nc-sandbox-status" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">&#8212;</td></tr>
+          <tr><td style="color:var(--text-muted);padding:3px 0;" data-i18n="nemoclaw.blueprint">Blueprint</td><td id="nc-blueprint-ver2" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">&#8212;</td></tr>
+          <tr><td style="color:var(--text-muted);padding:3px 0;" data-i18n="nemoclaw.last_action">Last action</td><td id="nc-last-action" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">&#8212;</td></tr>
+          <tr><td style="color:var(--text-muted);padding:3px 0;" data-i18n="nemoclaw.run_id">Run ID</td><td id="nc-run-id" style="color:var(--text-tertiary);font-family:\'JetBrains Mono\',monospace;font-size:11px;">&#8212;</td></tr>
         </table>
       </div>
       <!-- Inference panel -->
       <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;">
-        <div style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;margin-bottom:10px;">INFERENCE</div>
+        <div style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;margin-bottom:10px;" data-i18n="nemoclaw.inference">INFERENCE</div>
         <table style="width:100%;border-collapse:collapse;font-size:12px;">
           <tr><td style="
             color:var(--text-muted);
             padding:3px 0;
             width:45%;
-            ">Provider</td><td id="nc-provider" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">&#8212;</td></tr>
-          <tr><td style="color:var(--text-muted);padding:3px 0;">Model</td><td id="nc-model" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">&#8212;</td></tr>
-          <tr><td style="color:var(--text-muted);padding:3px 0;">Endpoint</td><td id="nc-endpoint" style="color:var(--text-tertiary);font-family:\'JetBrains Mono\',monospace;font-size:11px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">&#8212;</td></tr>
-          <tr><td style="color:var(--text-muted);padding:3px 0;">Onboarded</td><td id="nc-onboarded" style="color:var(--text-tertiary);font-family:\'JetBrains Mono\',monospace;font-size:11px;">&#8212;</td></tr>
+            " data-i18n="nemoclaw.provider">Provider</td><td id="nc-provider" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">&#8212;</td></tr>
+          <tr><td style="color:var(--text-muted);padding:3px 0;" data-i18n="nemoclaw.model">Model</td><td id="nc-model" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">&#8212;</td></tr>
+          <tr><td style="color:var(--text-muted);padding:3px 0;" data-i18n="nemoclaw.endpoint">Endpoint</td><td id="nc-endpoint" style="color:var(--text-tertiary);font-family:\'JetBrains Mono\',monospace;font-size:11px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">&#8212;</td></tr>
+          <tr><td style="color:var(--text-muted);padding:3px 0;" data-i18n="nemoclaw.onboarded">Onboarded</td><td id="nc-onboarded" style="color:var(--text-tertiary);font-family:\'JetBrains Mono\',monospace;font-size:11px;">&#8212;</td></tr>
         </table>
       </div>
     </div>
@@ -77,7 +77,7 @@
       margin-bottom:12px;
       ">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
-        <span style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;">ACTIVE POLICY</span>
+        <span style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;" data-i18n="nemoclaw.active_policy">ACTIVE POLICY</span>
         <span id="nc-policy-hash" style="
           font-size:11px;
           color:var(--text-muted);
@@ -98,7 +98,7 @@
         padding:10px;
         margin-bottom:10px;
         ">
-        <div style="font-size:12px;font-weight:700;color:#ef4444;">&#9888;&#65039; Policy drift detected</div>
+        <div style="font-size:12px;font-weight:700;color:#ef4444;">&#9888;&#65039; <span data-i18n="nemoclaw.policy_drift">Policy drift detected</span></div>
         <div id="nc-drift-detail" style="
           font-size:11px;
           color:var(--text-muted);
@@ -112,7 +112,7 @@
         font-size:12px;
         line-height:1.8;
         ">
-        <div style="color:var(--text-muted);padding:8px 0;">Loading policy...</div>
+        <div style="color:var(--text-muted);padding:8px 0;" data-i18n="nemoclaw.loading_policy">Loading policy...</div>
       </div>
     </div>
     <!-- Applied Presets -->
@@ -129,9 +129,9 @@
         color:#76b900;
         letter-spacing:1px;
         margin-bottom:10px;
-        ">APPLIED PRESETS</div>
+        " data-i18n="nemoclaw.applied_presets">APPLIED PRESETS</div>
       <div id="nc-presets" style="display:flex;flex-wrap:wrap;gap:6px;">
-        <span style="color:var(--text-muted);font-size:12px;">None detected</span>
+        <span style="color:var(--text-muted);font-size:12px;" data-i18n="nemoclaw.none_detected">None detected</span>
       </div>
     </div>
     <!-- Egress Approvals Panel -->
@@ -143,7 +143,7 @@
       " id="nc-approvals-panel">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
         <div style="display:flex;align-items:center;gap:8px;">
-          <span style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;">PENDING EGRESS APPROVALS</span>
+          <span style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;" data-i18n="nemoclaw.pending_egress">PENDING EGRESS APPROVALS</span>
           <span id="nc-approvals-count" style="
             display:none;
             font-size:11px;
@@ -155,7 +155,7 @@
             padding:1px 8px;
             "></span>
         </div>
-        <button class="refresh-btn" onclick="loadNemoClawApprovals()" style="font-size:11px;">&#8635; Refresh</button>
+        <button class="refresh-btn" onclick="loadNemoClawApprovals()" style="font-size:11px;">&#8635; <span data-i18n="common.refresh">Refresh</span></button>
       </div>
       <div id="nc-approvals-list">
         <div style="color:var(--text-muted);font-size:12px;padding:8px 0;">Loading...</div>

@@ -1,8 +1,8 @@
 <div class="page" id="page-transcripts">
   <div class="refresh-bar">
-    <button class="refresh-btn" onclick="loadTranscripts()">↻ Refresh</button>
-    <button class="refresh-btn" id="transcript-plumbing-btn" onclick="toggleTranscriptPlumbing()" title="Show Self-Evolve sessions — the agent's own self-review runs (FIX mode + re-analyze), hidden by default because they're plumbing, not your sessions" style="font-weight:500;display:none"><span id="transcript-plumbing-state">○</span> Show plumbing <span id="transcript-plumbing-count" style="opacity:0.7;font-size:11px;"></span></button>
-    <button class="refresh-btn" id="transcript-back-btn" style="display:none" onclick="showTranscriptList()">← Back to list</button>
+    <button class="refresh-btn" onclick="loadTranscripts()">↻ <span data-i18n="common.refresh">Refresh</span></button>
+    <button class="refresh-btn" id="transcript-plumbing-btn" onclick="toggleTranscriptPlumbing()" data-i18n-title="transcripts.plumbing_tooltip" title="Show Self-Evolve sessions: the agent's own self-review runs (FIX mode + re-analyze), hidden by default because they're plumbing, not your sessions" style="font-weight:500;display:none"><span id="transcript-plumbing-state">○</span> <span data-i18n="transcripts.show_plumbing">Show plumbing</span> <span id="transcript-plumbing-count" style="opacity:0.7;font-size:11px;"></span></button>
+    <button class="refresh-btn" id="transcript-back-btn" style="display:none" onclick="showTranscriptList()">← <span data-i18n="transcripts.back_to_list">Back to list</span></button>
   </div>
   <div class="card" id="transcript-list">Loading...</div>
   <div id="transcript-viewer" style="display:none">
@@ -10,7 +10,7 @@
     <!-- Authority footprint panel (#880) — populated async by _loadAuthorityPanel() -->
     <div id="authority-panel" style="display:none;margin-bottom:10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;overflow:hidden;">
       <div id="authority-panel-toggle" onclick="document.getElementById('authority-panel-body').style.display=document.getElementById('authority-panel-body').style.display==='none'?'':'none'" style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;cursor:pointer;user-select:none;">
-        <span style="font-size:12px;font-weight:700;color:var(--text-primary);">&#128274; Authority Footprint</span>
+        <span style="font-size:12px;font-weight:700;color:var(--text-primary);">&#128274; <span data-i18n="transcripts.authority_footprint">Authority Footprint</span></span>
         <span id="authority-panel-summary" style="font-size:11px;color:var(--text-muted);"></span>
       </div>
       <div id="authority-panel-body" style="padding:0 12px 10px 12px;display:none;"></div>
@@ -54,7 +54,7 @@
           min-width:120px;
           accent-color:#6366f1;
           ">
-        <button id="replay-raw-toggle" onclick="toggleTranscriptRaw()" title="Toggle between the beautified turn and the exact JSON payload OpenClaw recorded" style="
+        <button id="replay-raw-toggle" onclick="toggleTranscriptRaw()" data-i18n-title="transcripts.raw_tooltip" title="Toggle between the beautified turn and the exact JSON payload OpenClaw recorded" style="
           padding:5px 12px;
           border-radius:6px;
           border:1px solid var(--border-secondary);
@@ -64,7 +64,7 @@
           font-size:12px;
           font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
           white-space:nowrap;
-          ">{ } Raw</button>
+          ">{ } <span data-i18n="transcripts.raw">Raw</span></button>
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;">
         <button class="replay-filter active-filter" data-type="all" onclick="replayFilter('all')" style="
@@ -75,7 +75,7 @@
           color:#fff;
           font-size:12px;
           cursor:pointer;
-          ">All</button>
+          " data-i18n="transcripts.filter_all">All</button>
         <button class="replay-filter" data-type="tool_use" onclick="replayFilter('tool_use')" style="
           padding:4px 10px;
           border-radius:20px;
@@ -84,7 +84,7 @@
           color:var(--text-secondary);
           font-size:12px;
           cursor:pointer;
-          ">&#128295; Tools</button>
+          ">&#128295; <span data-i18n="transcripts.filter_tools">Tools</span></button>
         <button class="replay-filter" data-type="thinking" onclick="replayFilter('thinking')" style="
           padding:4px 10px;
           border-radius:20px;
@@ -93,7 +93,7 @@
           color:var(--text-secondary);
           font-size:12px;
           cursor:pointer;
-          ">&#129504; Thinking</button>
+          ">&#129504; <span data-i18n="transcripts.filter_thinking">Thinking</span></button>
         <button class="replay-filter" data-type="assistant" onclick="replayFilter('assistant')" style="
           padding:4px 10px;
           border-radius:20px;
@@ -102,7 +102,7 @@
           color:var(--text-secondary);
           font-size:12px;
           cursor:pointer;
-          ">&#129776; AI</button>
+          ">&#129776; <span data-i18n="transcripts.filter_ai">AI</span></button>
         <button class="replay-filter" data-type="user" onclick="replayFilter('user')" style="
           padding:4px 10px;
           border-radius:20px;
@@ -111,7 +111,7 @@
           color:var(--text-secondary);
           font-size:12px;
           cursor:pointer;
-          ">&#128100; User</button>
+          ">&#128100; <span data-i18n="transcripts.filter_user">User</span></button>
       </div>
     </div>
     <div class="chat-messages" id="transcript-messages"></div>

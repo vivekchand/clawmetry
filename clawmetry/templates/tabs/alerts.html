@@ -13,12 +13,12 @@
   <div class="alerts-head">
     <div>
       <h2 class="alerts-title">
-        Alerts
-        <span class="pro-chip" title="Pro feature">Pro</span>
+        <span data-i18n="alerts.title">Alerts</span>
+        <span class="pro-chip" data-i18n-title="alerts.pro_feature" title="Pro feature" data-i18n="alerts.pro">Pro</span>
       </h2>
-      <div class="alerts-sub">Get notified when something goes wrong with your agents.</div>
+      <div class="alerts-sub" data-i18n="alerts.subtitle">Get notified when something goes wrong with your agents.</div>
     </div>
-    <button class="alerts-btn-primary" onclick="alertsHandleNewRule()">+ New alert rule</button>
+    <button class="alerts-btn-primary" onclick="alertsHandleNewRule()" data-i18n="alerts.new_rule">+ New alert rule</button>
   </div>
 
   <!-- Trial banner removed — trial users have full access, so the "Upgrade
@@ -27,20 +27,20 @@
        + New alert rule (see alerts.js alertsCreateRule / alertsToggleRule). -->
 
   <div id="alerts-rules-list" class="alerts-list">
-    <div class="alerts-loading">Loading alerts…</div>
+    <div class="alerts-loading" data-i18n="alerts.loading_alerts">Loading alerts…</div>
   </div>
 
-  <h4 class="alerts-section-h">Recent alert history</h4>
+  <h4 class="alerts-section-h" data-i18n="alerts.recent_history">Recent alert history</h4>
   <div id="alerts-history-list" class="alerts-history">
-    <div class="alerts-loading">Loading history…</div>
+    <div class="alerts-loading" data-i18n="alerts.loading_history">Loading history…</div>
   </div>
 
   <div class="alerts-shared-note">
     <div class="l">
-      Delivery channels: <b id="alerts-channels-summary">Slack · Email · PagerDuty · Telegram</b>
-      <span style="color:var(--text-muted);font-style:italic;"> shared with Approvals</span>
+      <span data-i18n="alerts.delivery_channels">Delivery channels:</span> <b id="alerts-channels-summary">Slack · Email · PagerDuty · Telegram</b>
+      <span style="color:var(--text-muted);font-style:italic;" data-i18n="alerts.shared_with_approvals"> shared with Approvals</span>
     </div>
-    <button class="alerts-btn-ghost" onclick="alertsHandleManageChannels()">Manage channels →</button>
+    <button class="alerts-btn-ghost" onclick="alertsHandleManageChannels()" data-i18n="alerts.manage_channels">Manage channels →</button>
   </div>
 </div>
 
@@ -55,10 +55,10 @@
       7-day free trial.
     </p>
     <div class="alerts-modal-actions">
-      <button class="alerts-btn-pro" id="alerts-paywall-cta" onclick="alertsCtaClick()">Sign up for Cloud</button>
-      <button class="alerts-btn-ghost" onclick="alertsClosePaywall()">Maybe later</button>
+      <button class="alerts-btn-pro" id="alerts-paywall-cta" onclick="alertsCtaClick()" data-i18n="alerts.signup_for_cloud">Sign up for Cloud</button>
+      <button class="alerts-btn-ghost" onclick="alertsClosePaywall()" data-i18n="alerts.maybe_later">Maybe later</button>
     </div>
-    <div class="alerts-modal-footnote">No credit card · free tier available · 7-day Pro trial</div>
+    <div class="alerts-modal-footnote" data-i18n="alerts.paywall_footnote">No credit card · free tier available · 7-day Pro trial</div>
   </div>
 </div>
 
@@ -81,14 +81,14 @@
     </div>
 
     <div class="alerts-editor-section">
-      <div class="alerts-editor-step">1. What should trigger this alert?</div>
+      <div class="alerts-editor-step" data-i18n="alerts.step_trigger">1. What should trigger this alert?</div>
       <div class="alerts-seg" id="alerts-type-seg">
-        <button data-type="daily_spend" onclick="alertsPickType('daily_spend')">💰 Cost</button>
-        <button data-type="node_offline" class="active" onclick="alertsPickType('node_offline')">🤖 Agent</button>
-        <button data-type="session_cost" onclick="alertsPickType('session_cost')">🧵 Session</button>
-        <button data-type="token_velocity" onclick="alertsPickType('token_velocity')">⚡ Velocity</button>
-        <button data-type="cron_failure" onclick="alertsPickType('cron_failure')">⏱ Cron</button>
-        <button data-type="error_rate" onclick="alertsPickType('error_rate')">🛠 Tool fails</button>
+        <button data-type="daily_spend" onclick="alertsPickType('daily_spend')">💰 <span data-i18n="alerts.type_cost">Cost</span></button>
+        <button data-type="node_offline" class="active" onclick="alertsPickType('node_offline')">🤖 <span data-i18n="alerts.type_agent">Agent</span></button>
+        <button data-type="session_cost" onclick="alertsPickType('session_cost')">🧵 <span data-i18n="alerts.type_session">Session</span></button>
+        <button data-type="token_velocity" onclick="alertsPickType('token_velocity')">⚡ <span data-i18n="alerts.type_velocity">Velocity</span></button>
+        <button data-type="cron_failure" onclick="alertsPickType('cron_failure')">⏱ <span data-i18n="alerts.type_cron">Cron</span></button>
+        <button data-type="error_rate" onclick="alertsPickType('error_rate')">🛠 <span data-i18n="alerts.type_tool_fails">Tool fails</span></button>
       </div>
       <div class="alerts-editor-form" id="alerts-editor-form">
         <!-- populated by alertsRenderTypeForm() -->
@@ -96,32 +96,32 @@
     </div>
 
     <div class="alerts-editor-section">
-      <div class="alerts-editor-step">2. Where should we notify you?</div>
+      <div class="alerts-editor-step" data-i18n="alerts.step_notify">2. Where should we notify you?</div>
       <div id="alerts-editor-channels">
-        <div class="alerts-loading">Loading your channels…</div>
+        <div class="alerts-loading" data-i18n="alerts.loading_channels">Loading your channels…</div>
       </div>
-      <button class="alerts-btn-ghost" onclick="alertsHandleManageChannels()" style="margin-top:6px;">+ Add channel</button>
+      <button class="alerts-btn-ghost" onclick="alertsHandleManageChannels()" style="margin-top:6px;" data-i18n="alerts.add_channel">+ Add channel</button>
     </div>
 
     <div class="alerts-editor-section">
-      <div class="alerts-editor-step">3. When should we re-alert?</div>
+      <div class="alerts-editor-step" data-i18n="alerts.step_realert">3. When should we re-alert?</div>
       <label class="alerts-radio">
         <input type="radio" name="alerts-re" value="once" checked />
-        Once per incident (auto-resolve after 30 min)
+        <span data-i18n="alerts.realert_once">Once per incident (auto-resolve after 30 min)</span>
       </label>
       <label class="alerts-radio">
         <input type="radio" name="alerts-re" value="every_15m" />
-        Every 15 minutes while active
+        <span data-i18n="alerts.realert_15m">Every 15 minutes while active</span>
       </label>
       <label class="alerts-radio">
         <input type="radio" name="alerts-re" value="every_1h" />
-        Every hour while active
+        <span data-i18n="alerts.realert_1h">Every hour while active</span>
       </label>
     </div>
 
     <div class="alerts-editor-actions">
-      <button class="alerts-btn-ghost" onclick="alertsCloseEditor()">Cancel</button>
-      <button class="alerts-btn-primary" onclick="alertsSaveRule()">Save &amp; enable</button>
+      <button class="alerts-btn-ghost" onclick="alertsCloseEditor()" data-i18n="common.cancel">Cancel</button>
+      <button class="alerts-btn-primary" onclick="alertsSaveRule()" data-i18n="alerts.save_enable">Save &amp; enable</button>
     </div>
   </div>
 </div>
