@@ -455,10 +455,12 @@ def _try_local_store_sessions():
             "total_tokens":   int(r.get("total_tokens") or 0),
             "total_cost":     float(r.get("cost_usd") or 0.0),
             "message_count":  int(r.get("message_count") or 0),
+            "model":          meta.get("recent_model") or meta.get("model") or "",
             "channel":        meta.get("channel", ""),
             "chat_type":      meta.get("chat_type", ""),
             "subject":        title or meta.get("subject", ""),
             "session_type":   meta.get("session_type", "main"),
+            "runtime":        meta.get("runtime", ""),
             "_source":        "local_store",
         })
     # Decorate with channel context from the typed openclaw_channels table.
