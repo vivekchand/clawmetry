@@ -27,26 +27,26 @@
     <!-- Header -->
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
       <div>
-        <span style="font-size:15px;font-weight:700;color:var(--text-primary);">📬 Notifications</span>
-        <span style="background:rgba(59,130,246,0.15);color:#60a5fa;font-size:10px;padding:2px 8px;border-radius:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-left:6px;">Pro</span>
-        <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">
-          One place to manage every delivery destination — used by Alerts and Approvals.
+        <span style="font-size:15px;font-weight:700;color:var(--text-primary);">📬 <span data-i18n="notifications.title">Notifications</span></span>
+        <span style="background:rgba(59,130,246,0.15);color:#60a5fa;font-size:10px;padding:2px 8px;border-radius:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-left:6px;" data-i18n="notifications.pro">Pro</span>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:4px;" data-i18n="notifications.subtitle">
+          One place to manage every delivery destination, used by Alerts and Approvals.
         </div>
       </div>
-      <button class="refresh-btn" onclick="loadNotificationsPage()">↻ Refresh</button>
+      <button class="refresh-btn" onclick="loadNotificationsPage()">↻ <span data-i18n="common.refresh">Refresh</span></button>
     </div>
 
     <!-- No-auth (OSS without cloud account) -->
     <div id="notifications-noauth" style="display:none;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:24px;text-align:center;color:var(--text-muted);font-size:13px;">
       <div style="font-size:24px;margin-bottom:8px;">🔒</div>
-      <div style="margin-bottom:6px;">Notifications need a ClawMetry Cloud account to deliver Slack / PagerDuty / Telegram / Email messages.</div>
-      <a href="https://clawmetry.com/connect?next=app" target="_blank" style="display:inline-block;margin-top:10px;padding:8px 18px;background:#3b82f6;color:#fff;border-radius:8px;text-decoration:none;font-size:13px;font-weight:600;">Sign up for Cloud</a>
-      <div style="font-size:11px;color:var(--text-faint);margin-top:8px;">Free trial · no credit card required</div>
+      <div style="margin-bottom:6px;" data-i18n="notifications.noauth_msg">Notifications need a ClawMetry Cloud account to deliver Slack / PagerDuty / Telegram / Email messages.</div>
+      <a href="https://clawmetry.com/connect?next=app" target="_blank" style="display:inline-block;margin-top:10px;padding:8px 18px;background:#3b82f6;color:#fff;border-radius:8px;text-decoration:none;font-size:13px;font-weight:600;" data-i18n="notifications.signup_for_cloud">Sign up for Cloud</a>
+      <div style="font-size:11px;color:var(--text-faint);margin-top:8px;" data-i18n="notifications.free_trial_note">Free trial · no credit card required</div>
     </div>
 
     <!-- Free-tier banner (1 channel cap reminder) -->
     <div id="notifications-free-banner" style="display:none;margin-bottom:14px;background:linear-gradient(135deg,rgba(59,130,246,0.08),rgba(99,102,241,0.04));border:1px solid rgba(59,130,246,0.25);border-radius:8px;padding:12px 16px;font-size:13px;color:var(--text-secondary);">
-      ⚡ Free plan: 1 channel. <a href="https://app.clawmetry.com/pricing" target="_blank" style="color:#60a5fa;font-weight:600;text-decoration:none;">Upgrade to Pro</a> for unlimited channels and multi-recipient delivery.
+      ⚡ <span data-i18n="notifications.free_plan_1_channel">Free plan: 1 channel.</span> <a href="https://app.clawmetry.com/pricing" target="_blank" style="color:#60a5fa;font-weight:600;text-decoration:none;" data-i18n="notifications.upgrade_to_pro">Upgrade to Pro</a> <span data-i18n="notifications.for_unlimited">for unlimited channels and multi-recipient delivery.</span>
     </div>
 
     <!-- Status line -->

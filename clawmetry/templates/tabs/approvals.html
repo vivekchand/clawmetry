@@ -6,12 +6,12 @@
   <!-- Header -->
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
     <div>
-      <span style="font-size:15px;font-weight:700;color:var(--text-primary);">Approvals</span>
+      <span style="font-size:15px;font-weight:700;color:var(--text-primary);" data-i18n="approvals.title">Approvals</span>
       <span id="approvals-pending-count" style="margin-left:8px;font-size:11px;color:var(--text-muted);"></span>
     </div>
     <div style="display:flex;gap:8px;align-items:center;">
       <span id="approvals-updated" style="font-size:11px;color:var(--text-muted);"></span>
-      <button class="refresh-btn" onclick="loadApprovalsTab()">&#8635; Refresh</button>
+      <button class="refresh-btn" onclick="loadApprovalsTab()">&#8635; <span data-i18n="common.refresh">Refresh</span></button>
     </div>
   </div>
 
@@ -26,17 +26,17 @@
 
   <!-- ═══ SECTION 1: Pending Queue (top of LEFT col) ═══ -->
   <div id="approvals-pending-section" style="margin-bottom:16px;">
-    <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:6px;">Pending Approvals</div>
+    <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:6px;" data-i18n="approvals.pending_approvals">Pending Approvals</div>
 
     <!-- Bulk-action header (#1343 Phase 1.3) — hidden until ≥1 selected.
          Lets operators triage a flood (e.g. "approve all 12 pending HTTP
          requests from the same trusted session") without per-row clicks. -->
     <div id="approvals-bulk-header" style="display:none;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;padding:8px 12px;margin-bottom:8px;align-items:center;gap:10px;flex-wrap:wrap;">
       <span id="approvals-bulk-count" style="font-size:12px;font-weight:700;color:var(--text-primary);"></span>
-      <input type="text" id="approvals-bulk-reason" placeholder="Bulk decision reason (optional, applied to all)" style="flex:1;min-width:200px;padding:5px 10px;border:1px solid var(--border-secondary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
-      <button onclick="bulkDecide('approve')" style="background:#22c55e;color:#062614;border:0;padding:6px 14px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;">Approve selected</button>
-      <button onclick="bulkDecide('deny')" style="background:#ef4444;color:#fff;border:0;padding:6px 14px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;">Deny selected</button>
-      <button onclick="bulkClearSelection()" style="background:transparent;color:var(--text-muted);border:1px solid var(--border-secondary);padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;">Clear</button>
+      <input type="text" id="approvals-bulk-reason" data-i18n-placeholder="approvals.bulk_reason_placeholder" placeholder="Bulk decision reason (optional, applied to all)" style="flex:1;min-width:200px;padding:5px 10px;border:1px solid var(--border-secondary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
+      <button onclick="bulkDecide('approve')" style="background:#22c55e;color:#062614;border:0;padding:6px 14px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;" data-i18n="approvals.approve_selected">Approve selected</button>
+      <button onclick="bulkDecide('deny')" style="background:#ef4444;color:#fff;border:0;padding:6px 14px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;" data-i18n="approvals.deny_selected">Deny selected</button>
+      <button onclick="bulkClearSelection()" style="background:transparent;color:var(--text-muted);border:1px solid var(--border-secondary);padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;" data-i18n="approvals.clear">Clear</button>
     </div>
 
     <div id="approvals-pending-list">
@@ -46,9 +46,9 @@
 
   <!-- ═══ SECTION 4: Recent Decisions (bottom of LEFT col) ═══ -->
   <div>
-    <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:6px;">Recent Decisions</div>
+    <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:6px;" data-i18n="approvals.recent_decisions">Recent Decisions</div>
     <div id="approvals-history-list">
-      <div style="padding:14px;text-align:center;color:var(--text-faint);font-size:12px;">No history yet.</div>
+      <div style="padding:14px;text-align:center;color:var(--text-faint);font-size:12px;" data-i18n="approvals.no_history">No history yet.</div>
     </div>
   </div>
 
@@ -60,8 +60,8 @@
   <!-- ═══ SECTION 2: Protection Rules (visual policy builder) ═══ -->
   <div style="margin-bottom:16px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Protection Rules</div>
-      <button onclick="toggleCreateRuleForm()" id="btn-create-rule" style="background:var(--bg-accent,#3b82f6);color:#fff;border:0;padding:5px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">+ New Rule</button>
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;" data-i18n="approvals.protection_rules">Protection Rules</div>
+      <button onclick="toggleCreateRuleForm()" id="btn-create-rule" style="background:var(--bg-accent,#3b82f6);color:#fff;border:0;padding:5px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;" data-i18n="approvals.new_rule">+ New Rule</button>
     </div>
 
     <!-- Preset cards grid -->
@@ -70,48 +70,48 @@
 
     <!-- Create custom rule form (hidden by default) -->
     <div id="create-rule-form" style="display:none;background:var(--bg-secondary);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:12px;">
-      <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:12px;">Create Custom Rule</div>
+      <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:12px;" data-i18n="approvals.create_custom_rule">Create Custom Rule</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
         <div>
-          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Rule name</label>
-          <input id="rule-name" type="text" placeholder="e.g. Block production deploys" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;" data-i18n="approvals.rule_name">Rule name</label>
+          <input id="rule-name" type="text" data-i18n-placeholder="approvals.rule_name_placeholder" placeholder="e.g. Block production deploys" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
         </div>
         <div>
-          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Tool type</label>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;" data-i18n="approvals.tool_type">Tool type</label>
           <select id="rule-tool" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
-            <option value="">Any tool</option>
-            <option value="exec">Shell commands (exec)</option>
-            <option value="write">File writes (write)</option>
-            <option value="edit">File edits (edit)</option>
-            <option value="http">HTTP requests (http)</option>
+            <option value="" data-i18n="approvals.any_tool">Any tool</option>
+            <option value="exec" data-i18n="approvals.tool_exec">Shell commands (exec)</option>
+            <option value="write" data-i18n="approvals.tool_write">File writes (write)</option>
+            <option value="edit" data-i18n="approvals.tool_edit">File edits (edit)</option>
+            <option value="http" data-i18n="approvals.tool_http">HTTP requests (http)</option>
           </select>
         </div>
         <div style="grid-column:1/-1;">
-          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Block commands matching</label>
-          <input id="rule-pattern" type="text" placeholder="e.g. deploy, sudo, DROP TABLE" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
-          <div style="font-size:10px;color:var(--text-faint);margin-top:3px;">Enter keywords separated by commas. The agent will be paused when any of these are detected.</div>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;" data-i18n="approvals.block_commands_matching">Block commands matching</label>
+          <input id="rule-pattern" type="text" data-i18n-placeholder="approvals.pattern_placeholder" placeholder="e.g. deploy, sudo, DROP TABLE" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
+          <div style="font-size:10px;color:var(--text-faint);margin-top:3px;" data-i18n="approvals.keywords_hint">Enter keywords separated by commas. The agent will be paused when any of these are detected.</div>
         </div>
         <div>
-          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Approval timeout</label>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;" data-i18n="approvals.approval_timeout">Approval timeout</label>
           <select id="rule-timeout" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
-            <option value="30">30 seconds</option>
-            <option value="60" selected>1 minute</option>
-            <option value="120">2 minutes</option>
-            <option value="300">5 minutes</option>
-            <option value="600">10 minutes</option>
+            <option value="30" data-i18n="approvals.timeout_30s">30 seconds</option>
+            <option value="60" selected data-i18n="approvals.timeout_1m">1 minute</option>
+            <option value="120" data-i18n="approvals.timeout_2m">2 minutes</option>
+            <option value="300" data-i18n="approvals.timeout_5m">5 minutes</option>
+            <option value="600" data-i18n="approvals.timeout_10m">10 minutes</option>
           </select>
         </div>
         <div>
-          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">If no one responds</label>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;" data-i18n="approvals.if_no_response">If no one responds</label>
           <select id="rule-on-timeout" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
-            <option value="deny" selected>Block the action (safer)</option>
-            <option value="approve">Allow the action</option>
+            <option value="deny" selected data-i18n="approvals.block_action_safer">Block the action (safer)</option>
+            <option value="approve" data-i18n="approvals.allow_action">Allow the action</option>
           </select>
         </div>
       </div>
       <div style="display:flex;gap:8px;margin-top:14px;">
-        <button onclick="saveCustomRule()" style="background:#22c55e;color:#062614;border:0;padding:8px 20px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;">Save Rule</button>
-        <button onclick="toggleCreateRuleForm()" style="background:var(--bg-primary);color:var(--text-muted);border:1px solid var(--border);padding:8px 16px;border-radius:6px;font-size:12px;cursor:pointer;">Cancel</button>
+        <button onclick="saveCustomRule()" style="background:#22c55e;color:#062614;border:0;padding:8px 20px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;" data-i18n="approvals.save_rule">Save Rule</button>
+        <button onclick="toggleCreateRuleForm()" style="background:var(--bg-primary);color:var(--text-muted);border:1px solid var(--border);padding:8px 16px;border-radius:6px;font-size:12px;cursor:pointer;" data-i18n="common.cancel">Cancel</button>
       </div>
     </div>
   </div>
@@ -121,13 +121,13 @@
        duplicating the cards here just made the same decision live in two
        places. One short link keeps the affordance discoverable. -->
   <div style="margin-bottom:16px;">
-    <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:8px;">Get Notified</div>
+    <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:8px;" data-i18n="approvals.get_notified">Get Notified</div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--bg-secondary,#131929);border:1px solid var(--border,#1e293b);border-radius:10px;padding:12px 14px;">
-      <div style="font-size:12px;color:var(--text-secondary,#cbd5e1);">
+      <div style="font-size:12px;color:var(--text-secondary,#cbd5e1);" data-i18n="approvals.delivered_via">
         Approvals are delivered via your Notifications channels (Email, Slack, Phone, PagerDuty, Telegram).
       </div>
       <button onclick="if(typeof switchTab==='function')switchTab('notifications')"
-        style="flex-shrink:0;padding:7px 14px;border:1px solid #3b82f6;background:transparent;color:#60a5fa;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">
+        style="flex-shrink:0;padding:7px 14px;border:1px solid #3b82f6;background:transparent;color:#60a5fa;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;" data-i18n="approvals.configure_notifications">
         Configure notifications →
       </button>
     </div>
@@ -140,26 +140,26 @@
   <div id="approvals-upgrade-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;" onclick="if(event.target===this)closeUpgradeModal()">
     <div style="background:var(--bg-secondary,#131929);border:1px solid rgba(96,165,250,0.3);border-radius:16px;padding:32px 36px;max-width:420px;width:90%;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.5);">
       <div style="font-size:32px;margin-bottom:12px;">&#128737;&#65039;</div>
-      <div style="font-size:18px;font-weight:700;color:var(--text-primary,#e2e8f0);margin-bottom:8px;">Protect Your Agents</div>
-      <div style="font-size:13px;color:var(--text-muted,#94a3b8);line-height:1.6;margin-bottom:20px;">
+      <div style="font-size:18px;font-weight:700;color:var(--text-primary,#e2e8f0);margin-bottom:8px;" data-i18n="approvals.protect_your_agents">Protect Your Agents</div>
+      <div style="font-size:13px;color:var(--text-muted,#94a3b8);line-height:1.6;margin-bottom:20px;" data-i18n="approvals.upgrade_pitch">
         Cloud-mediated approvals block risky agent actions before they execute.
-        Get notified via Slack, Email, PagerDuty or Telegram — and approve or deny with one click.
+        Get notified via Slack, Email, PagerDuty or Telegram, and approve or deny with one click.
       </div>
       <div style="background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.2);border-radius:10px;padding:14px;margin-bottom:20px;">
         <div style="font-size:14px;font-weight:700;color:#60a5fa;margin-bottom:4px;">Cloud Pro</div>
-        <div style="font-size:22px;font-weight:800;color:var(--text-primary,#e2e8f0);">$5<span style="font-size:13px;font-weight:400;color:var(--text-muted,#94a3b8);">/node/month</span></div>
-        <div style="font-size:11px;color:#22c55e;margin-top:4px;font-weight:600;">7-day free trial &middot; no credit card required</div>
+        <div style="font-size:22px;font-weight:800;color:var(--text-primary,#e2e8f0);">$5<span style="font-size:13px;font-weight:400;color:var(--text-muted,#94a3b8);" data-i18n="approvals.per_node_month">/node/month</span></div>
+        <div style="font-size:11px;color:#22c55e;margin-top:4px;font-weight:600;" data-i18n="approvals.trial_note">7-day free trial &middot; no credit card required</div>
       </div>
       <div style="text-align:left;margin-bottom:20px;padding:0 8px;">
-        <div style="font-size:12px;color:var(--text-secondary,#cbd5e1);margin-bottom:6px;">&#10003; Cloud-mediated approval queue</div>
-        <div style="font-size:12px;color:var(--text-secondary,#cbd5e1);margin-bottom:6px;">&#10003; Slack, Email, PagerDuty, Telegram alerts</div>
-        <div style="font-size:12px;color:var(--text-secondary,#cbd5e1);margin-bottom:6px;">&#10003; 8 built-in protection rules + custom rules</div>
-        <div style="font-size:12px;color:var(--text-secondary,#cbd5e1);margin-bottom:6px;">&#10003; Audit log of all decisions</div>
-        <div style="font-size:12px;color:var(--text-secondary,#cbd5e1);">&#10003; Multi-node fleet management</div>
+        <div style="font-size:12px;color:var(--text-secondary,#cbd5e1);margin-bottom:6px;">&#10003; <span data-i18n="approvals.feat_queue">Cloud-mediated approval queue</span></div>
+        <div style="font-size:12px;color:var(--text-secondary,#cbd5e1);margin-bottom:6px;">&#10003; <span data-i18n="approvals.feat_alerts">Slack, Email, PagerDuty, Telegram alerts</span></div>
+        <div style="font-size:12px;color:var(--text-secondary,#cbd5e1);margin-bottom:6px;">&#10003; <span data-i18n="approvals.feat_rules">8 built-in protection rules + custom rules</span></div>
+        <div style="font-size:12px;color:var(--text-secondary,#cbd5e1);margin-bottom:6px;">&#10003; <span data-i18n="approvals.feat_audit">Audit log of all decisions</span></div>
+        <div style="font-size:12px;color:var(--text-secondary,#cbd5e1);">&#10003; <span data-i18n="approvals.feat_fleet">Multi-node fleet management</span></div>
       </div>
-      <button onclick="startProTrial()" style="width:100%;padding:12px;background:#3b82f6;color:#fff;border:0;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;transition:background 0.2s;" onmouseover="this.style.background='#2563eb'" onmouseout="this.style.background='#3b82f6'">Start Free Trial</button>
+      <button onclick="startProTrial()" style="width:100%;padding:12px;background:#3b82f6;color:#fff;border:0;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;transition:background 0.2s;" onmouseover="this.style.background='#2563eb'" onmouseout="this.style.background='#3b82f6'" data-i18n="approvals.start_free_trial">Start Free Trial</button>
       <div style="margin-top:10px;">
-        <button onclick="closeUpgradeModal()" style="background:none;border:none;color:var(--text-muted,#94a3b8);font-size:12px;cursor:pointer;text-decoration:underline;">Maybe later</button>
+        <button onclick="closeUpgradeModal()" style="background:none;border:none;color:var(--text-muted,#94a3b8);font-size:12px;cursor:pointer;text-decoration:underline;" data-i18n="approvals.maybe_later">Maybe later</button>
       </div>
     </div>
   </div>
