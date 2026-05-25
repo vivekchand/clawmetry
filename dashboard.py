@@ -2209,16 +2209,32 @@ def _otel_to_row(span, resource_attrs):
       * ``gen_ai.usage.output_tokens`` / ``llm.usage.completion_tokens`` →
         ``tokens_output``
       * ``gen_ai.usage.total_tokens`` → ``token_count``
-      * ``gen_ai.usage.cost_usd`` / ``llm.usage.cost`` → ``cost_usd``
-      * ``tool.name`` / ``code.function`` → ``tool_name``
-      * ``session.id`` / ``openclaw.session_id`` → ``session_id``
-      * ``agent.id`` / ``openclaw.agent_id`` (also from resource) → ``agent_id``
+      * ``gen_ai.usage.cost_usd`` / ``llm.usage.cost`` → ``cost_usd``; when the
+        exporter ships no cost (the OTel GenAI norm — cost is not a standard
+        span attribute, so MLflow's OpenClaw plugin et al. emit token-only
+        spans), it is derived from tokens × model pricing, cache-aware, with
+        the provider resolved from ``gen_ai.provider.name`` / ``gen_ai.system``
+        or inferred from the model — same as the #2049 event path.
+      * ``gen_ai.tool.name`` / ``tool.name`` / ``code.function`` → ``tool_name``
+      * ``gen_ai.conversation.id`` / ``session.id`` / ``openclaw.session_id`` →
+        ``session_id``
+      * ``gen_ai.agent.id`` / ``agent.id`` / ``openclaw.agent_id`` (also from
+        resource) → ``agent_id``
       * ``agent.type`` (also from resource) → ``agent_type``
+      * ``gen_ai.input.messages`` / ``gen_ai.output.messages`` (current semconv)
+        and the legacy ``gen_ai.prompt`` / ``gen_ai.completion`` → ``input`` /
+        ``output``
       * Resource ``service.name`` → ``service_name``
+
+    Targets the OpenTelemetry GenAI semantic conventions (v1.37) so spans from
+    any conforming emitter — including MLflow's ``@mlflow/mlflow-openclaw``
+    tracer — light up ClawMetry's trace tree and cost views without a bespoke
+    per-SDK translator.
 
     Everything not projected lands in the ``attributes`` JSON blob so the
     span-detail panel can render any custom attributes the SDK exporter
-    set. Span events / links are passed through as JSON arrays.
+    set (e.g. ``gen_ai.operation.name``, ``gen_ai.agent.name``). Span events /
+    links are passed through as JSON arrays.
     """
     attrs = {}
     for attr in span.attributes:
@@ -2279,10 +2295,40 @@ def _otel_to_row(span, resource_attrs):
     token_count = _pick_int("gen_ai.usage.total_tokens", "llm.usage.total_tokens", "total_tokens")
     if token_count is None and (tokens_input or tokens_output):
         token_count = (tokens_input or 0) + (tokens_output or 0)
+    # Prompt-cache tokens (OTel GenAI semconv + Anthropic convention). Not
+    # stored as typed columns — they ride the attributes blob — but read here
+    # so the derived cost below is cache-aware (matches the #2049 event path).
+    cache_read = _pick_int("gen_ai.usage.cache_read_input_tokens", "cache_read_input_tokens") or 0
+    cache_write = _pick_int("gen_ai.usage.cache_creation_input_tokens", "cache_creation_input_tokens") or 0
+    # Provider: OTel GenAI semconv renamed gen_ai.system -> gen_ai.provider.name.
+    provider = _pick("gen_ai.provider.name", "gen_ai.system", "llm.provider", "provider") or ""
     cost_usd = _pick_float("gen_ai.usage.cost_usd", "llm.usage.cost", "cost_usd")
-    tool_name = _pick("tool.name", "code.function")
-    session_id = _pick("session.id", "openclaw.session_id", "session_id")
-    agent_id = _pick("agent.id", "openclaw.agent_id", "agent_id") or "main"
+    # Cost is NOT an OTel-standard span attribute, so GenAI emitters (MLflow's
+    # OpenClaw plugin, raw OpenAI/Anthropic auto-trace, …) ship token-only spans
+    # that would read as $0 in our usage/cost views. Derive it the same way the
+    # event ingest does (#2049): tokens x model pricing, cache-aware, provider
+    # resolved from the model when the span omits it. Only fill when the exporter
+    # supplied no cost at all, so an explicit cost (even 0 for a local model) wins.
+    if cost_usd is None and model and (tokens_input or tokens_output or cache_read or cache_write):
+        try:
+            from clawmetry.providers_pricing import estimate_event_cost_usd
+            derived = estimate_event_cost_usd(
+                model,
+                input_tokens=tokens_input or 0,
+                output_tokens=tokens_output or 0,
+                cache_read_tokens=cache_read,
+                cache_write_tokens=cache_write,
+                provider=provider,
+            )
+            if derived:
+                cost_usd = derived
+        except Exception:
+            pass
+    # tool.name: OTel GenAI semconv uses gen_ai.tool.name on execute_tool spans.
+    tool_name = _pick("gen_ai.tool.name", "tool.name", "code.function")
+    # session/conversation: semconv uses gen_ai.conversation.id.
+    session_id = _pick("gen_ai.conversation.id", "session.id", "openclaw.session_id", "session_id")
+    agent_id = _pick("gen_ai.agent.id", "agent.id", "openclaw.agent_id", "agent_id") or "main"
     agent_type = _pick("agent.type", "openclaw.agent_type", "agent_type") or "openclaw"
     service_name = resource_attrs.get("service.name") or attrs.get("service.name")
     node_id = _pick("node.id", "openclaw.node_id", "host.name")
@@ -2335,8 +2381,10 @@ def _otel_to_row(span, resource_attrs):
         "token_count": token_count,
         "tokens_input": tokens_input,
         "tokens_output": tokens_output,
-        "input": attrs.get("gen_ai.prompt") or attrs.get("llm.prompts") or attrs.get("input"),
-        "output": attrs.get("gen_ai.completion") or attrs.get("llm.completions") or attrs.get("output"),
+        "input": (attrs.get("gen_ai.input.messages") or attrs.get("gen_ai.prompt")
+                  or attrs.get("llm.prompts") or attrs.get("input")),
+        "output": (attrs.get("gen_ai.output.messages") or attrs.get("gen_ai.completion")
+                   or attrs.get("llm.completions") or attrs.get("output")),
         "attributes": attrs,
         "events": events,
         "links": links,
@@ -9953,16 +10001,32 @@ def _otel_to_row(span, resource_attrs):
       * ``gen_ai.usage.output_tokens`` / ``llm.usage.completion_tokens`` →
         ``tokens_output``
       * ``gen_ai.usage.total_tokens`` → ``token_count``
-      * ``gen_ai.usage.cost_usd`` / ``llm.usage.cost`` → ``cost_usd``
-      * ``tool.name`` / ``code.function`` → ``tool_name``
-      * ``session.id`` / ``openclaw.session_id`` → ``session_id``
-      * ``agent.id`` / ``openclaw.agent_id`` (also from resource) → ``agent_id``
+      * ``gen_ai.usage.cost_usd`` / ``llm.usage.cost`` → ``cost_usd``; when the
+        exporter ships no cost (the OTel GenAI norm — cost is not a standard
+        span attribute, so MLflow's OpenClaw plugin et al. emit token-only
+        spans), it is derived from tokens × model pricing, cache-aware, with
+        the provider resolved from ``gen_ai.provider.name`` / ``gen_ai.system``
+        or inferred from the model — same as the #2049 event path.
+      * ``gen_ai.tool.name`` / ``tool.name`` / ``code.function`` → ``tool_name``
+      * ``gen_ai.conversation.id`` / ``session.id`` / ``openclaw.session_id`` →
+        ``session_id``
+      * ``gen_ai.agent.id`` / ``agent.id`` / ``openclaw.agent_id`` (also from
+        resource) → ``agent_id``
       * ``agent.type`` (also from resource) → ``agent_type``
+      * ``gen_ai.input.messages`` / ``gen_ai.output.messages`` (current semconv)
+        and the legacy ``gen_ai.prompt`` / ``gen_ai.completion`` → ``input`` /
+        ``output``
       * Resource ``service.name`` → ``service_name``
+
+    Targets the OpenTelemetry GenAI semantic conventions (v1.37) so spans from
+    any conforming emitter — including MLflow's ``@mlflow/mlflow-openclaw``
+    tracer — light up ClawMetry's trace tree and cost views without a bespoke
+    per-SDK translator.
 
     Everything not projected lands in the ``attributes`` JSON blob so the
     span-detail panel can render any custom attributes the SDK exporter
-    set. Span events / links are passed through as JSON arrays.
+    set (e.g. ``gen_ai.operation.name``, ``gen_ai.agent.name``). Span events /
+    links are passed through as JSON arrays.
     """
     attrs = {}
     for attr in span.attributes:
@@ -10023,10 +10087,40 @@ def _otel_to_row(span, resource_attrs):
     token_count = _pick_int("gen_ai.usage.total_tokens", "llm.usage.total_tokens", "total_tokens")
     if token_count is None and (tokens_input or tokens_output):
         token_count = (tokens_input or 0) + (tokens_output or 0)
+    # Prompt-cache tokens (OTel GenAI semconv + Anthropic convention). Not
+    # stored as typed columns — they ride the attributes blob — but read here
+    # so the derived cost below is cache-aware (matches the #2049 event path).
+    cache_read = _pick_int("gen_ai.usage.cache_read_input_tokens", "cache_read_input_tokens") or 0
+    cache_write = _pick_int("gen_ai.usage.cache_creation_input_tokens", "cache_creation_input_tokens") or 0
+    # Provider: OTel GenAI semconv renamed gen_ai.system -> gen_ai.provider.name.
+    provider = _pick("gen_ai.provider.name", "gen_ai.system", "llm.provider", "provider") or ""
     cost_usd = _pick_float("gen_ai.usage.cost_usd", "llm.usage.cost", "cost_usd")
-    tool_name = _pick("tool.name", "code.function")
-    session_id = _pick("session.id", "openclaw.session_id", "session_id")
-    agent_id = _pick("agent.id", "openclaw.agent_id", "agent_id") or "main"
+    # Cost is NOT an OTel-standard span attribute, so GenAI emitters (MLflow's
+    # OpenClaw plugin, raw OpenAI/Anthropic auto-trace, …) ship token-only spans
+    # that would read as $0 in our usage/cost views. Derive it the same way the
+    # event ingest does (#2049): tokens x model pricing, cache-aware, provider
+    # resolved from the model when the span omits it. Only fill when the exporter
+    # supplied no cost at all, so an explicit cost (even 0 for a local model) wins.
+    if cost_usd is None and model and (tokens_input or tokens_output or cache_read or cache_write):
+        try:
+            from clawmetry.providers_pricing import estimate_event_cost_usd
+            derived = estimate_event_cost_usd(
+                model,
+                input_tokens=tokens_input or 0,
+                output_tokens=tokens_output or 0,
+                cache_read_tokens=cache_read,
+                cache_write_tokens=cache_write,
+                provider=provider,
+            )
+            if derived:
+                cost_usd = derived
+        except Exception:
+            pass
+    # tool.name: OTel GenAI semconv uses gen_ai.tool.name on execute_tool spans.
+    tool_name = _pick("gen_ai.tool.name", "tool.name", "code.function")
+    # session/conversation: semconv uses gen_ai.conversation.id.
+    session_id = _pick("gen_ai.conversation.id", "session.id", "openclaw.session_id", "session_id")
+    agent_id = _pick("gen_ai.agent.id", "agent.id", "openclaw.agent_id", "agent_id") or "main"
     agent_type = _pick("agent.type", "openclaw.agent_type", "agent_type") or "openclaw"
     service_name = resource_attrs.get("service.name") or attrs.get("service.name")
     node_id = _pick("node.id", "openclaw.node_id", "host.name")
@@ -10079,8 +10173,10 @@ def _otel_to_row(span, resource_attrs):
         "token_count": token_count,
         "tokens_input": tokens_input,
         "tokens_output": tokens_output,
-        "input": attrs.get("gen_ai.prompt") or attrs.get("llm.prompts") or attrs.get("input"),
-        "output": attrs.get("gen_ai.completion") or attrs.get("llm.completions") or attrs.get("output"),
+        "input": (attrs.get("gen_ai.input.messages") or attrs.get("gen_ai.prompt")
+                  or attrs.get("llm.prompts") or attrs.get("input")),
+        "output": (attrs.get("gen_ai.output.messages") or attrs.get("gen_ai.completion")
+                   or attrs.get("llm.completions") or attrs.get("output")),
         "attributes": attrs,
         "events": events,
         "links": links,
