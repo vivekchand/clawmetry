@@ -8222,6 +8222,87 @@ def _resolve_openclaw_bin():
     return None
 
 
+def run_openclaw_cron(subcmd, extra_args=None, timeout=40):
+    """Run ``openclaw cron <subcmd> [args] --json`` and parse the result.
+
+    This is the v3-correct way to MUTATE crons. OpenClaw v3 removed the
+    ``cron`` tool from the gateway's ``/tools/invoke`` surface (it returns
+    ``Tool not available: cron``), and ClawMetry's gateway token is
+    ``operator.read`` only, so the legacy ``_gw_invoke("cron", {...})`` path
+    in routes/crons.py is dead for every write. The official CLI talks to the
+    Gateway scheduler with OpenClaw's OWN credentials — same escape hatch the
+    Self-Evolve "Fix" feature uses for ``openclaw agent``.
+
+    ``openclaw`` is a Node script; under the daemon's launchd PATH ``node``
+    isn't found, so we augment PATH with the bin's dir + the usual install
+    locations (mirrors ``_action_selfevolve_fix``).
+
+    Returns a dict::
+
+        {ok: bool, result: <parsed JSON | None>, error: str,
+         scope_pending: bool, raw: str}
+
+    ``scope_pending`` is True when the gateway rejects the write because the
+    device needs a scope upgrade approved (``pairing required`` /
+    ``scope upgrade pending approval``) — the caller surfaces an actionable
+    "approve the device pairing" message instead of a generic failure.
+    """
+    binp = _resolve_openclaw_bin()
+    if not binp:
+        return {"ok": False, "result": None, "scope_pending": False,
+                "error": "openclaw CLI not found on this machine", "raw": ""}
+    env = dict(os.environ)
+    node_dirs = [
+        os.path.dirname(binp),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        os.path.expanduser("~/.local/bin"),
+    ]
+    env["PATH"] = os.pathsep.join(node_dirs + [env.get("PATH", "/usr/bin:/bin")])
+    cmd = [binp, "cron", subcmd] + list(extra_args or []) + ["--json"]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout, env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "result": None, "scope_pending": False,
+                "error": "openclaw cron %s timed out" % subcmd, "raw": ""}
+    except Exception as e:
+        return {"ok": False, "result": None, "scope_pending": False,
+                "error": str(e)[:400], "raw": ""}
+
+    blob = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    low = blob.lower()
+    scope_pending = (
+        "pairing required" in low
+        or "scope upgrade" in low
+        or "more scopes than currently approved" in low
+    )
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "exit %d" % proc.returncode).strip()
+        if scope_pending:
+            err = ("Cron write needs a one-time gateway approval. On the host "
+                   "run `openclaw devices list` then `openclaw devices approve "
+                   "<id>` (or approve the pairing prompt), then retry.")
+        return {"ok": False, "result": None, "scope_pending": scope_pending,
+                "error": err[:500], "raw": blob[:1000]}
+    # Success: parse the JSON the CLI emitted (best-effort — some subcommands
+    # print a human line before/after the JSON object).
+    parsed = None
+    try:
+        parsed = json.loads(proc.stdout.strip())
+    except Exception:
+        import re as _re
+        m = _re.search(r"(\{.*\}|\[.*\])", proc.stdout, _re.DOTALL)
+        if m:
+            try:
+                parsed = json.loads(m.group(1))
+            except Exception:
+                parsed = None
+    return {"ok": True, "result": parsed, "scope_pending": False,
+            "error": "", "raw": blob[:1000]}
+
+
 def _selfevolve_build_context(workspace=None):
     """Compact telemetry context for the review, built on the daemon's OWN
     store handle (never a read-only re-open — that deadlocks the write lock).
