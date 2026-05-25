@@ -15742,8 +15742,21 @@ async function _renderModalBrainEvents(match) {
     var events = await unwrapListAsync(data, 'events', 'events_blob');
     var filtered = events.filter(function(ev) {
       if ((ev.type || '').toUpperCase() === 'CONTEXT') return false;
-      var src = ev.source || '';
-      if (candidates.indexOf(src) < 0) return false;
+      // Brain events carry the session id under different keys depending on the
+      // feed: local routes/brain.py emits `source`, while the cloud/snapshot +
+      // family-runtime feed emits `src` (sometimes truncated) + `sessionId`.
+      // Reading only `ev.source` matched nothing on cloud-connected nodes, so
+      // the tab was always empty. Match against all of them, substring-tolerant.
+      var evSrc = String(ev.src || ev.source || '');
+      var evSession = String(ev.sessionId || '');
+      var hit = candidates.some(function(c) {
+        if (!c) return false;
+        if (c === evSrc || c === evSession) return true;
+        if (evSession && (evSession.indexOf(c) >= 0 || c.indexOf(evSession) >= 0)) return true;
+        if (evSrc.length >= 8 && (evSrc.indexOf(c) >= 0 || c.indexOf(evSrc) >= 0)) return true;
+        return false;
+      });
+      if (!hit) return false;
       var ts = Date.parse(ev.time || '');
       if (isNaN(ts)) return true;  // keep undated events
       return ts >= winStart && ts <= endMs;
@@ -15754,11 +15767,31 @@ async function _renderModalBrainEvents(match) {
     });
 
     if (!filtered.length) {
+      // Explain *why* it's empty instead of a bare, date-less "not found".
+      // The most common case here is a stale spawn whose events have already
+      // aged out of the retained Brain history (which only keeps recent ones),
+      // so show the spawn's full date and the history's coverage range.
+      var evTimes = events.map(function(e){ return Date.parse(e.time || ''); })
+                          .filter(function(n){ return !isNaN(n); });
+      var minEv = evTimes.length ? Math.min.apply(null, evTimes) : null;
+      var maxEv = evTimes.length ? Math.max.apply(null, evTimes) : null;
+      var spawnWhen = new Date(startedMs);
+      var spawnStr = isNaN(spawnWhen.getTime()) ? '' : spawnWhen.toLocaleString();
+      var note;
+      if (minEv && endMs < minEv) {
+        note = 'This spawn' + (spawnStr ? ' (' + spawnStr + ')' : '')
+             + ' is older than the retained Brain history (kept from '
+             + new Date(minEv).toLocaleString() + '), so its events are no longer available.';
+      } else if (maxEv && winStart > maxEv) {
+        note = 'This spawn' + (spawnStr ? ' (' + spawnStr + ')' : '')
+             + ' is newer than the latest retained Brain event — nothing recorded yet.';
+      } else {
+        note = 'No Brain events recorded for this spawn'
+             + (spawnStr ? ' (' + spawnStr + ')' : '') + '.';
+      }
       slot.innerHTML = '<div><div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:8px;">Brain events</div>'
                      + '<div style="padding:10px 12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:6px;font-size:12px;color:var(--text-muted);">'
-                     + 'No Brain events found in the window around this spawn ('
-                     + new Date(winStart).toLocaleTimeString() + ' – '
-                     + new Date(endMs).toLocaleTimeString() + ').</div></div>';
+                     + escHtml(note) + '</div></div>';
       return;
     }
 
@@ -15781,7 +15814,7 @@ async function _renderModalBrainEvents(match) {
         : '';
       var detail = escHtml(ev.detail || '');
       if (detail.length > 200) detail = detail.substring(0, 197) + '…';
-      var src = ev.sourceLabel || ev.source || '';
+      var src = ev.sourceLabel || ev.src || ev.source || ev.sessionId || '';
       if (src.length > 14) src = src.substring(0, 12) + '…';
       rows += '<div style="display:flex;gap:8px;align-items:flex-start;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.04);">'
            +  '<span style="color:var(--text-faint);min-width:62px;font-size:10.5px;font-variant-numeric:tabular-nums;">' + ts + '</span>'
