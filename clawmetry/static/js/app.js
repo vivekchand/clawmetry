@@ -16533,16 +16533,18 @@ document.addEventListener('DOMContentLoaded', function() {
   try { _applyTracingFlag(); } catch (e) { /* non-fatal */ }
 });
 
-// The Tracing tab stays gated while it's being polished (PRD-tracing.md phases
-// 3-4 + the daemon-proxy reliability fix). Hidden from the nav by default;
-// reveal it with ?tracing=1 (persisted to localStorage) or ?tab=tracing.
-// Disable again with ?tracing=0.
+// The Tracing tab (Phoenix/Arize-style span waterfall + tree + agent graph) is
+// now GA: shown in the nav by default for every install. The phases-3-4 polish
+// and the daemon-proxy reliability fixes that kept it behind a flag have landed,
+// and it's verified against real traces (event-derived + OTel/OTLP spans).
+// Power users can still hide it with ?tracing=0 (persisted to localStorage);
+// ?tracing=1 clears the opt-out.
 function _applyTracingFlag() {
   var p = new URLSearchParams(window.location.search);
-  if (p.get('tracing') === '1') { try { localStorage.setItem('cm-ff-tracing', '1'); } catch (e) {} }
-  if (p.get('tracing') === '0') { try { localStorage.removeItem('cm-ff-tracing'); } catch (e) {} }
-  var on = false;
-  try { on = localStorage.getItem('cm-ff-tracing') === '1'; } catch (e) {}
+  if (p.get('tracing') === '0') { try { localStorage.setItem('cm-ff-tracing-off', '1'); } catch (e) {} }
+  if (p.get('tracing') === '1') { try { localStorage.removeItem('cm-ff-tracing-off'); } catch (e) {} }
+  var on = true;
+  try { if (localStorage.getItem('cm-ff-tracing-off') === '1') on = false; } catch (e) {}
   if (p.get('tab') === 'tracing') on = true;
   var el = document.getElementById('left-nav-tracing');
   if (el) el.style.display = on ? '' : 'none';

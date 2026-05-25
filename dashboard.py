@@ -11066,7 +11066,7 @@ DASHBOARD_HTML = r"""
         <div class="left-nav-item left-nav-item-sub" data-tab="context" onclick="switchTab('context')" data-i18n-title="nav.llm_context_tooltip" title="What the LLM sees on each turn">
           <span class="left-nav-label" data-i18n="nav.llm_context">LLM Context</span>
         </div>
-        <div class="left-nav-item left-nav-item-sub" id="left-nav-tracing" data-tab="tracing" onclick="switchTab('tracing')" data-i18n-title="nav.tracing_tooltip" title="Every trace: span waterfall, tree, and agent graph" style="display:none;">
+        <div class="left-nav-item left-nav-item-sub" id="left-nav-tracing" data-tab="tracing" onclick="switchTab('tracing')" data-i18n-title="nav.tracing_tooltip" title="Every trace: span waterfall, tree, and agent graph">
           <span class="left-nav-label" data-i18n="nav.tracing">Tracing</span>
         </div>
       </div>
