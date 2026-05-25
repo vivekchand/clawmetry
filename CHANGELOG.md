@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Perf/correctness: dashboard audit — reliability scoring + overview self-poll (2026-05-25)
+- Proactive sweep for siblings of #1954 (prefix-only `clawmetry-` matcher) and #1969 (ungated pollers). (1) `sync.py`'s reliability/score builder skipped helper sessions with `sid.startswith("clawmetry-")`, missing the full OpenClaw form `agent:main:explicit:clawmetry-*` — so ClawMetry's own selfevolve/probe runs could pollute the user's real-agent reliability score; now uses the central `is_clawmetry_internal_session` matcher (both forms). (2) `overview.html` had a second, independent `/api/overview` self-poll firing every 60s with no `document.hidden` gate (decoupled from app.js's `loadAll`, so #1969's coalesce window couldn't reach it); now gated on visibility. (#2020, closes #2019)
+
+### Release: dashboard audit fixes (2026-05-25)
+- Publishes #2020 (closes #2019): reliability scoring excludes ClawMetry helper sessions in both id forms, and the Overview heartbeat card stops self-polling `/api/overview` while the browser tab is hidden.
+
 ### Release: UI polish + observability backlog (2026-05-25)
 - Security tab: warnings elevated, passing checks collapse to pills, calm "all clear" state (#1953).
 - Session replay: tool chips expand by default; Self-Evolve runs hidden behind "Show plumbing" (#1975, #2001).
