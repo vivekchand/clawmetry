@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Release: fix the syncing banner sticking forever on "Aggregating: crons" (2026-05-25)
+- The "Syncing your OpenClaw workspace" banner stuck on **Aggregating: crons** indefinitely even though sync was healthy (events + E2E snapshots flowing every ~60s). Root cause: the progress banner is a fresh-install affordance, but the steady-state main loop calls `sync_crons()` (and the other phase fns) every tick, each recording its phase as `running` on entry, re-opening the banner forever (it pinned on `crons` because `sync_crons` early-returns with no cron `jobs.json` and never recorded a terminal state). Fix: once the initial sync reaches `complete`, steady-state phase updates are suppressed (a daemon restart still shows the initial-sync banner); `sync_crons` now records a terminal state on the no-cron-file path. Regression-tested. Publishes #2042.
+
 ### Subagents: actually freeze runtime — ignore poisoned cache (2026-05-25)
 - Follow-up to the runtime-freeze fix: the first cut (#2032, 0.12.305) only recomputed when `runtime_ms` was absent, but the daemon caches a `runtime_ms` that is itself a `now - spawn` re-derived every snapshot (observed 402M → 403M → 404M, ever-growing), so the cached value was truthy and the fix never ran — stale subagents still climbed to "112h". Caught by verifying against the live DuckDB store, not synthetic rows. Now non-active (idle/stale/completed/failed) subagents ALWAYS recompute frozen at last activity and ignore the cached value; active/running keep the live clock. Verified: all 8 stale subagents 404198958ms → 0. (#2038, closes #2031)
 
