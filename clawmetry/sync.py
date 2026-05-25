@@ -9654,6 +9654,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     # cloud. Both built on the daemon's OWN store handle (no read-only
     # re-open → no writer-lock brick; see FLYWHEEL.md §1).
     current_context_tokens = 0
+    context_window = 200000
     try:
         from clawmetry import local_store as _ls_ctx
         _ctx_store = _ls_ctx.get_store()
@@ -9662,6 +9663,9 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
                 scan_sessions=5, exclude_clawmetry=True,
             ) or {}
             current_context_tokens = int(_peek.get("input_tokens") or 0)
+            # Size the window from the peeked turn's model + observed size so
+            # the gauge stays coherent (1M for [1m]/large-context sessions).
+            context_window = int(_peek.get("context_window") or 0) or 200000
     except Exception as _e:
         log.debug("snapshot: query_context_window_peek failed: %s", _e)
 
@@ -9684,7 +9688,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "mainTokens": main_tokens,
         "currentContextTokens": current_context_tokens,
         "skillHeaderTokens": skill_header_tokens,
-        "contextWindow": 200000,
+        "contextWindow": context_window,
         "cronCount": cron_enabled + cron_disabled,
         "cronEnabled": cron_enabled,
         "cronDisabled": cron_disabled,
