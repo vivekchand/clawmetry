@@ -512,6 +512,11 @@
       // app.js. The backend caches the heartbeat block for 30s so this is
       // cheap; we still poll every 60s to keep the gap counter ticking.
       function pollOnce(){
+        // #2019: skip the poll when the browser tab is hidden. This is a
+        // second, independent /api/overview poller (decoupled from app.js's
+        // loadAll on purpose), so it can't ride loadAll's coalesce window —
+        // gate it directly so it doesn't fetch every 60s while backgrounded.
+        if (typeof document !== 'undefined' && document.hidden) return;
         fetch('/api/overview', {credentials: 'same-origin'})
           .then(function(r){ return r.ok ? r.json() : null; })
           .then(function(d){
