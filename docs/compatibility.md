@@ -46,6 +46,17 @@ A "Verified" badge will be restored per runtime only after a session captured
 from a **real install** of that runtime passes its adapter test, and the live
 end-to-end path (dashboard + cloud snapshot) is confirmed.
 
+### Cloud runtime label (live-verified)
+
+The sync daemon detects PicoClaw / NanoClaw installs (via each adapter's
+`detect()`) and ships a runtime label in the encrypted snapshot, both as
+`runtimeInfo.items[]` rows and a small top-level `detectedRuntimes` summary
+(`{name, displayName, sessionCount, workspace}`). The cloud Runtime panel
+renders these alongside OpenClaw with no cloud code change. This was verified by
+decrypting the live cloud snapshot of a real node, which showed
+`PicoClaw: detected (1 session)` and `NanoClaw: detected (2 sessions)`. Pure
+detection only: no DuckDB access and no writer lock are involved.
+
 ## Pointing ClawMetry at PicoClaw or NanoClaw
 
 When a runtime's home directory exists, its adapter registers automatically and

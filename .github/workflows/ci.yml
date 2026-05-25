@@ -154,6 +154,7 @@ jobs:
             tests/test_moat_perf_benchmark.py \
             tests/test_picoclaw_adapter.py \
             tests/test_nanoclaw_adapter.py \
+            tests/test_runtime_detection_snapshot.py \
             -q
 
   # ── MOAT keystone (DuckDB-first invariant, 13-endpoint bar) ──────────────
