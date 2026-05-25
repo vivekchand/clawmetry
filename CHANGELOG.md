@@ -1,5 +1,12 @@
 ## [Unreleased]
 
+### Tracing tab is GA (2026-05-25)
+- The Phoenix/Arize-style **Tracing** tab — every session as a trace, with a span **waterfall**, a **span tree**, an **agent graph**, and a span-detail drawer — is now shown in the nav by default for every install (it had been behind a `?tracing=1` flag while the span-detail drawer and daemon-proxy reliability were finished). Power users can hide it with `?tracing=0`. Verified live against the real daemon: lists real traces and renders a 361-span trace's waterfall + tree with per-span tokens/durations. (#2091)
+
+### Fixed: $0 cost + mislabelled spans for Claude Code / adapter runtimes (2026-05-25)
+- Traces (and the Cost tab, Overview, budgets) showed **$0 for sessions that clearly cost money** on the multi-runtime adapters (Claude Code, Codex, …): a real 430,291-token session read $0. Those events pre-set `token_count` (the lumped total) and stash the input/output/cache split under `data.extra` with no provider, so the #2049 derivation skipped them. Cost is now derived from that split × model pricing (cache-aware, provider inferred from the model), and the `claude_code` adapter carries cache tokens so new turns price cache-accurately. Verified: the $0 trace now reads **$29.578365**, an exact match to its raw-JSONL input/output ground truth.
+- Also: those adapters use `event_type='message'` for both turns (speaker in `data.role`), so the trace builder rendered every assistant turn as a generic `event` span instead of a `chat`/llm span and never built a `prompt` span. Span classification now keys on `data.role` too, and prompt text is read from `data.content`. (#2107)
+
 ### Release: Aider + Goose runtimes (2026-05-25)
 - Publishes #2098. Two more standalone coding agents join the multi-agent pipeline: **Aider** (`.aider.chat.history.md` per-project transcripts; model + token counts) and **Goose** (Block; SQLite `~/.local/share/goose/sessions/sessions.db`; transcripts, tool calls, real token totals). Both were built firsthand: the tools were installed and run against local Ollama (zero cost) to capture their real on-disk format, then verified against it. Each is one `_FAMILY_ADAPTER_SPECS` row + a switcher label. Detected zero-config; shown in the sessions list + transcripts + runtime switcher. The full agent set is now OpenClaw, PicoClaw, NanoClaw, Hermes, Claude Code, Codex, Cursor, Aider, Goose. 127 compat tests green.
 
