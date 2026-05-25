@@ -99,6 +99,11 @@ def _model_completed_data(*, input_t: int, output_t: int) -> dict:
     }
 
 
+def _model_changed_data(*, model: str) -> dict:
+    """v3 ``model.changed`` envelope — emitted when agent switches models."""
+    return {"modelId": model, "provider": PROVIDER}
+
+
 def _build_v3_events() -> list[dict]:
     """Mixed v3 transcript.
 
@@ -121,6 +126,9 @@ def _build_v3_events() -> list[dict]:
         # session_start
         _base("ev-session-start", "session_start", 600,
               data={"title": "v3-invariants fixture"}),
+        # 1× model.changed — agent selects Opus at session start
+        _base("ev-model-changed", "model.changed", 550,
+              data=_model_changed_data(model=MODEL), model=MODEL),
         # 2× assistant (different seconds so dedupe keeps both)
         _base("ev-assistant-1", "assistant", 500,
               data=_assistant_data(model=MODEL, input_t=10000, output_t=500,
@@ -161,7 +169,7 @@ def _build_v3_events() -> list[dict]:
     ]
 
 
-EXPECTED_RAW_EVENT_COUNT  = 8
+EXPECTED_RAW_EVENT_COUNT  = 9
 EXPECTED_INPUT_TOKENS_MIN = 21000   # 10000 + 11000 (subagent extras OK)
 EXPECTED_OUTPUT_TOKENS_MIN = 1100   # 500 + 600
 
@@ -319,7 +327,30 @@ def test_query_events_returns_full_v3_transcript(store):
         )
 
 
-# NOTE: ``query_cost_split`` and ``query_session_model_journey`` still filter
-# ``event_type='message'`` exclusively. Known v3 zeros (not patched as part
-# of #1385) — re-listed in #1393's bug class but out of scope for this PR.
-# When they get migrated, add tests here mirroring the four above.
+def test_query_session_model_journey_returns_v3_model_completed_rows(store):
+    """Pre-fix: only ``message`` was in the IN-clause so ``model.completed``
+    events were invisible — the journey returned [] for every v3 session."""
+    rows = store.query_session_model_journey(session_id=SESSION_ID)
+    assert rows, (
+        "query_session_model_journey returned [] for v3 session — "
+        "model.completed event_type is missing from the IN-clause predicate"
+    )
+    total = sum(int(r.get("total_tokens") or 0) for r in rows if r.get("kind") == "message")
+    assert total > 0, (
+        f"query_session_model_journey summed 0 total_tokens on v3 fixture; "
+        f"typed cost_usd/token_count columns not being read. rows={rows!r}"
+    )
+
+
+def test_query_session_model_journey_tracks_v3_model_change(store):
+    """``model.changed`` events must produce ``kind='model_change'`` rows so
+    segment boundaries are computed for v3 sessions that switch models."""
+    rows = store.query_session_model_journey(session_id=SESSION_ID)
+    change_rows = [r for r in rows if r.get("kind") == "model_change"]
+    assert change_rows, (
+        f"query_session_model_journey returned no model_change rows from "
+        f"v3 model.changed event. all rows: {rows!r}"
+    )
+    assert any(r.get("model") == MODEL for r in change_rows), (
+        f"model_change row missing expected model {MODEL!r}: {change_rows!r}"
+    )
