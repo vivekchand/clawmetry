@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: OpenClaw observability surfaces — turn anatomy, tool-policy/sandbox, v2 sub-agents (2026-05-25)
+- Publishes three new observability surfaces that close the top gaps from the OpenClaw observability PRD (`docs/PRD_OPENCLAW_OBSERVABILITY_GAPS.md`), all built on the on-disk / `openclaw`-CLI data path (the gateway WS token grants zero scopes on a stock install, so RPC polling is not viable):
+  - **Per-turn anatomy waterfall + stalled detector (#2118, P0-3):** `GET /api/turn-anatomy?session_id=…` decomposes a session into turns (events between `prompt.submitted` boundaries) and emits ordered spans — prompt → model call(s) → each tool (start→end via the `tool_call.id`→`tool_result.toolUseId` join) → compaction → reply — laid out on the wall-clock timeline; plus `GET /api/turn-anatomy/stalled` for sessions whose latest turn has had no event past a threshold. Reads existing DuckDB events (no new ingest); never silent-zeros (handles v3 + Claude Code/Codex shapes).
+  - **Tool-policy + sandbox + exec-approval audit (#2119, P1-1):** a new Tool Policy tab showing per-agent sandbox mode + tool allow/deny (from `openclaw sandbox explain --json`, OpenClaw's own creds) and the exec-approval decision audit. New `run_ledger`-style `tool_policy` table + `sync_tool_policy` pass + bounded `toolPolicy` snapshot key + `/api/tool-policy` and `/api/approvals-audit`.
+  - **v2 React Sub-Agents page (#2113):** replaces the "Coming soon" stub with the queue-lane monitor + run-ledger + sub-agent fan-out tree on `/api/run-ledger`, matching the v1 surface shipped in 0.12.319.
+
 ### Release: opencode + Qwen Code runtimes (2026-05-25)
 - Publishes #2108. Two more standalone coding agents join the multi-agent pipeline, both built firsthand (installed + run against local Ollama, zero cost): **opencode** (SQLite `~/.local/share/opencode/opencode.db`; transcripts, model, tool calls, real tokens + cost) and **Qwen Code** (JSONL `~/.qwen/projects/<hash>/chats/<id>.jsonl`, Gemini-CLI lineage; transcripts, model, tool calls + thinking, token usage). Detected zero-config; in sessions + transcripts + runtime switcher. Full set now 11 runtimes: OpenClaw, PicoClaw, NanoClaw, Hermes, Claude Code, Codex, Cursor, Aider, Goose, opencode, Qwen Code. 153 compat tests green.
 
