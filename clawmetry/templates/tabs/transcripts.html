@@ -1,6 +1,7 @@
 <div class="page" id="page-transcripts">
   <div class="refresh-bar">
     <button class="refresh-btn" onclick="loadTranscripts()">↻ Refresh</button>
+    <button class="refresh-btn" id="transcript-plumbing-btn" onclick="toggleTranscriptPlumbing()" title="Show Self-Evolve sessions — the agent's own self-review runs (FIX mode + re-analyze), hidden by default because they're plumbing, not your sessions" style="font-weight:500;display:none"><span id="transcript-plumbing-state">○</span> Show plumbing <span id="transcript-plumbing-count" style="opacity:0.7;font-size:11px;"></span></button>
     <button class="refresh-btn" id="transcript-back-btn" style="display:none" onclick="showTranscriptList()">← Back to list</button>
   </div>
   <div class="card" id="transcript-list">Loading...</div>

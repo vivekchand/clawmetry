@@ -5418,7 +5418,22 @@ class LocalStore:
                             data = parsed
                     except (ValueError, TypeError, UnicodeDecodeError):
                         continue
-                tok = _extract_input_tokens(data)
+                # Live context-window size = the FULL prompt the model saw on
+                # its last turn: raw input + cached-prefix reads + this-turn
+                # cache writes. Reading only ``input_tokens`` undercounts
+                # cache-heavy sessions catastrophically — a Claude Code turn
+                # reports ``input_tokens: 2`` with ~150K in
+                # ``cache_read_input_tokens``, so the gauge showed "2 / 200K
+                # (0%)" for a nearly-full window. Output tokens are the
+                # model's *response*, not part of the prompt context, so they
+                # are intentionally excluded. (Bug surfaced 2026-05-23 while
+                # verifying the OSS↔cloud parity fix.)
+                splits = _extract_usage_splits(data)
+                tok = (
+                    int(splits.get("input_tokens", 0))
+                    + int(splits.get("cache_read_tokens", 0))
+                    + int(splits.get("cache_write_tokens", 0))
+                )
                 if tok > 0:
                     return {
                         "session_id":   sid,

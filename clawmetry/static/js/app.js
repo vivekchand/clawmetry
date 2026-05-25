@@ -970,6 +970,7 @@ function switchTab(name) {
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
   if (name === 'approvals') { if (typeof loadApprovalsTab === 'function') loadApprovalsTab(); }
   if (name === 'alerts') { if (typeof loadAlertsPage === 'function') loadAlertsPage(); }
+  if (name === 'dives') { if (typeof loadDivesPage === 'function') loadDivesPage(); }
   if (name === 'actions') loadQAHistory();
   if (name === 'logs') {
     // Phase 3 (#1252): defer the SSE handshake until the user actually
@@ -6241,23 +6242,19 @@ async function loadSecurityPosture() {
     var warnEl = document.getElementById('posture-warnings');
     var failedEl = document.getElementById('posture-failed');
     var listEl = document.getElementById('posture-checks-list');
-
     badge.textContent = data.score || '?';
     badge.style.background = data.score_color || '#64748b';
     var labelTxt = (data.score_label || 'Unknown') + ' · ' + (data.score_pct || 0) + '%';
-    label.innerHTML = escHtml(labelTxt) +
-      (data.config_path ? '<span style="color:var(--text-muted);margin-left:8px;font-size:10px;font-family:ui-monospace,Menlo,monospace;">' + escHtml(data.config_path) + '</span>' : '');
+    label.innerHTML = escHtml(labelTxt) + (data.config_path ? '<span style="color:var(--text-muted);margin-left:8px;font-size:10px;font-family:ui-monospace,Menlo,monospace;">' + escHtml(data.config_path) + '</span>' : '');
     bar.style.width = (data.score_pct || 0) + '%';
     bar.style.background = data.score_color || '#64748b';
     passedEl.textContent = data.passed || 0;
     warnEl.textContent = data.warnings || 0;
     failedEl.textContent = data.failed || 0;
-
     var checks = (data.checks || []).slice();
     var fails = checks.filter(function(c){ return c.status === 'fail'; });
     var warns = checks.filter(function(c){ return c.status === 'warn'; });
     var passes = checks.filter(function(c){ return c.status === 'pass'; });
-
     function row(c, color, accent) {
       var h = '<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:' + (accent || 'var(--bg-primary)') + ';border:1px solid var(--border);border-left:3px solid ' + color + ';border-radius:6px;">';
       h += '<div style="flex:1;min-width:0;">';
@@ -6272,10 +6269,7 @@ async function loadSecurityPosture() {
     function passPill(c) {
       return '<span title="' + escHtml(c.detail || '') + '" style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:14px;background:rgba(34,197,94,0.10);border:1px solid rgba(34,197,94,0.3);color:#86efac;font-size:11px;font-weight:500;">✓ ' + escHtml(c.label) + '</span>';
     }
-
     var html = '';
-    // Section 1: needs review — failures first, then warnings. Only renders
-    // when there's something actionable.
     if (fails.length || warns.length) {
       html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-muted);margin:4px 0 8px;">Needs review · ' + (fails.length + warns.length) + '</div>';
       html += '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;">';
@@ -6285,10 +6279,8 @@ async function loadSecurityPosture() {
     } else if (passes.length) {
       html += '<div style="padding:12px 14px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.25);border-radius:6px;color:#86efac;font-size:13px;font-weight:600;margin-bottom:14px;">✓ All ' + passes.length + ' security checks passing — nothing to review.</div>';
     }
-
-    // Section 2: passing — collapsed by default as compact pills.
     if (passes.length) {
-      var openByDefault = !(fails.length || warns.length); // open only when no warnings
+      var openByDefault = !(fails.length || warns.length);
       html += '<div>';
       html += '<button type="button" onclick="(function(b){var t=document.getElementById(\'posture-passing-list\');var open=t.style.display!==\'none\';t.style.display=open?\'none\':\'\';b.querySelector(\'.chev\').textContent=open?\'▸\':\'▾\';})(this)" style="display:inline-flex;align-items:center;gap:8px;background:none;border:none;color:var(--text-muted);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;cursor:pointer;padding:4px 0;">';
       html += '<span class="chev">' + (openByDefault ? '▾' : '▸') + '</span> Passing · ' + passes.length + '</button>';
@@ -6316,9 +6308,9 @@ async function loadSecurityPage(silent) {
     document.getElementById('sec-clean-count').textContent = counts.clean_sessions || 0;
     var scanTime = document.getElementById('security-scan-time');
     if (scanTime) scanTime.textContent = 'Scanned ' + new Date().toLocaleTimeString();
-    // Compact "all-clear" UI when there's nothing to triage: hide the four
-    // zero-tiles + severity filter + "Scanning..." placeholder; show one
-    // calm green line instead.
+    // Compact "all-clear" mode: when there's nothing to triage, hide the four
+    // zero-tiles + severity filter + perpetual "Scanning..." placeholder; show
+    // one calm green line instead. Restored the moment anything > 0.
     var nThreats = (counts.critical || 0) + (counts.high || 0) + (counts.medium || 0) + (threats.length || 0);
     var summaryEl = document.getElementById('security-summary');
     var filterEl = document.getElementById('security-filter-pills');
@@ -10407,6 +10399,24 @@ function loadAllSkills() {
 }
 
 // ===== Transcripts =====
+// ── Session-replay "Show plumbing" toggle ───────────────────────────────────
+// Self-Evolve sessions are the agent's own standing self-review runs (FIX mode
+// + re-analyze) — machine-initiated, not user work. Left in, they pile up and
+// bury real sessions, so they're hidden by default behind a "Show plumbing"
+// toggle (same treatment the Brain tab gives queue/metric rows).
+window._transcriptShowPlumbing = window._transcriptShowPlumbing || false;
+function _isPlumbingTranscript(titleSrc) {
+  // Match the Self-Evolve system prompt anywhere in the derived title — the
+  // title often carries a "[Wed 2026-05-20 22:30 GMT+2] …" timestamp prefix
+  // ahead of the prompt text, so we can't anchor at the start.
+  return String(titleSrc || '').toLowerCase().indexOf('you are clawmetry self-evolve') !== -1;
+}
+window.toggleTranscriptPlumbing = function() {
+  window._transcriptShowPlumbing = !window._transcriptShowPlumbing;
+  var st = document.getElementById('transcript-plumbing-state');
+  if (st) st.textContent = window._transcriptShowPlumbing ? '●' : '○';
+  loadTranscripts();
+};
 async function loadTranscripts() {
   try {
     var data = await fetch('/api/transcripts').then(r => r.json());
@@ -10418,12 +10428,17 @@ async function loadTranscripts() {
     // catches the "name === sid" / "name === sid[:40]" cases the legacy
     // endpoint emits.
     var UUIDISH = /^[0-9a-f]{6,}([-_][0-9a-f]+)*$/i;
+    var plumbingTotal = 0;
     data.transcripts.forEach(function(t) {
       var raw = String(t.id || '');
       var titleSrc = (t.title && String(t.title).trim()) || (t.name && String(t.name).trim()) || '';
       var looksLikeId = !titleSrc || titleSrc === raw || UUIDISH.test(titleSrc) || raw.indexOf(titleSrc) === 0;
       var title = looksLikeId ? 'Untitled session' : titleSrc;
-      html += '<div class="transcript-item" onclick="viewTranscript(\'' + escHtml(raw) + '\')">';
+      var isPlumbing = _isPlumbingTranscript(titleSrc);
+      if (isPlumbing) plumbingTotal++;
+      // Self-Evolve runs are hidden by default; "Show plumbing" reveals them de-emphasized.
+      if (isPlumbing && !window._transcriptShowPlumbing) return;
+      html += '<div class="transcript-item" style="' + (isPlumbing ? 'opacity:0.5;' : '') + '" onclick="viewTranscript(\'' + escHtml(raw) + '\')">';
       html += '<div style="min-width:0;flex:1;">';
       html += '<div class="transcript-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(title) + '</div>';
       html += '<div class="transcript-meta-row" style="gap:10px;">';
@@ -10435,7 +10450,14 @@ async function loadTranscripts() {
       html += '<span style="color:#444;font-size:18px;">▸</span>';
       html += '</div>';
     });
-    document.getElementById('transcript-list').innerHTML = html || '<div style="padding:16px;color:#666;">No transcript files found</div>';
+    var plumbCountEl = document.getElementById('transcript-plumbing-count');
+    if (plumbCountEl) plumbCountEl.textContent = plumbingTotal > 0 ? (window._transcriptShowPlumbing ? '(' + plumbingTotal + ' shown)' : '(' + plumbingTotal + ' hidden)') : '';
+    var plumbBtn = document.getElementById('transcript-plumbing-btn');
+    if (plumbBtn) plumbBtn.style.display = plumbingTotal > 0 ? '' : 'none';
+    var emptyMsg = (plumbingTotal > 0 && !window._transcriptShowPlumbing)
+      ? '<div style="padding:16px;color:#666;">No sessions to show — ' + plumbingTotal + ' Self-Evolve session' + (plumbingTotal === 1 ? '' : 's') + ' hidden. Click “Show plumbing” to reveal.</div>'
+      : '<div style="padding:16px;color:#666;">No transcript files found</div>';
+    document.getElementById('transcript-list').innerHTML = html || emptyMsg;
     document.getElementById('transcript-list').style.display = '';
     document.getElementById('transcript-viewer').style.display = 'none';
     document.getElementById('transcript-back-btn').style.display = 'none';
@@ -11149,6 +11171,16 @@ async function _cmSyncTick() {
 async function cmSyncInit() {
   // Cloud mode keeps its existing cm-sync-bar (Phase 2 promotes this component).
   if (window.CLOUD_MODE) return;
+  // #1937: the banner describes CLOUD-side sync work. Don't show it when
+  //   * the user opted out (CLAWMETRY_NO_CLOUD=1 or ~/.clawmetry/nocloud), or
+  //   * the user never connected (no config.json -> nothing to sync).
+  // Without this gate the banner freezes on the last phase the daemon
+  // happened to be in before disconnect ("Step: crons · about 2m remaining"
+  // -- forever), which is the exact symptom that prompted the fix.
+  try {
+    var cs = await fetch('/api/cloud-status').then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
+    if (cs && (cs.disabled || !cs.configured)) return;
+  } catch (e) {}
   // Only show on a cold install: no events yet, or a sync explicitly in progress.
   var health = await fetch('/api/local/health').then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
   var prog = await fetch('/api/sync-progress').then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });

@@ -5,6 +5,10 @@ OpenClaw's on-disk session format and "just work"; others store sessions in
 their own native format and ship a dedicated reader adapter
 (`clawmetry/adapters/`). This page tracks each runtime's real status, honestly.
 
+> New to NanoClaw / PicoClaw? See [`RUNTIME_FAMILY.md`](RUNTIME_FAMILY.md) for a
+> short primer that compares all three runtimes (what each is, how they store a
+> session, and how they differ from OpenClaw).
+
 | Runtime  | Status              | Session store                          | Notes |
 | -------- | ------------------- | -------------------------------------- | ----- |
 | OpenClaw | Native              | v3 JSONL `~/.openclaw/agents/main/sessions/` | Reference runtime; auto-detected. |
