@@ -6498,15 +6498,24 @@ function closeFileViewer() {
 // (picoclaw:/nanoclaw:) with an explicit `runtime` field as a fallback, so it
 // works the same locally and in the cloud (the cloud session ids carry the
 // same prefix). The switcher only appears when >1 runtime is present.
-var _CM_RT_LABEL = { openclaw: 'OpenClaw', picoclaw: 'PicoClaw', nanoclaw: 'NanoClaw' };
+// Known non-OpenClaw runtimes (keys match each adapter's `name` + the
+// `<name>:<id>` session-id prefix the daemon stamps). Order here drives the
+// switcher chip order (OpenClaw always first). To add a runtime, add a label.
+var _CM_RT_LABEL = {
+  openclaw: 'OpenClaw', picoclaw: 'PicoClaw', nanoclaw: 'NanoClaw',
+  hermes: 'Hermes', claude_code: 'Claude Code', codex: 'Codex', cursor: 'Cursor'
+};
 function _cmRuntimeOf(o) {
   var id = (o && (o.id || o.sessionId || o.session_id || o.key)) || '';
   var i = id.indexOf(':');
   if (i > 0) {
     var p = id.slice(0, i).toLowerCase();
-    if (p === 'picoclaw' || p === 'nanoclaw') return p;
+    if (_CM_RT_LABEL.hasOwnProperty(p) && p !== 'openclaw') return p;
   }
-  if (o && o.runtime) return String(o.runtime).toLowerCase();
+  if (o && o.runtime) {
+    var r = String(o.runtime).toLowerCase();
+    if (_CM_RT_LABEL.hasOwnProperty(r)) return r;
+  }
   return 'openclaw';
 }
 function _cmRuntimeFilter() {
@@ -6522,7 +6531,7 @@ function _cmRenderRuntimeSwitcher(counts, anchor, reload) {
   if (!anchor || !anchor.parentNode) return;
   var id = 'cm-runtime-switcher';
   var existing = document.getElementById(id);
-  var order = ['openclaw', 'picoclaw', 'nanoclaw'].filter(function(k) { return counts[k]; });
+  var order = Object.keys(_CM_RT_LABEL).filter(function(k) { return counts[k]; });
   if (order.length < 2) { if (existing) existing.remove(); return; }
   var active = _cmRuntimeFilter();
   if (active !== 'all' && !counts[active]) active = 'all';

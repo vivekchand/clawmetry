@@ -7457,27 +7457,47 @@ def _build_machine_info():
         return {"items": []}
 
 
-def _detect_family_runtimes():
-    """Detect OpenClaw-family runtimes installed alongside (PicoClaw, NanoClaw).
+# Non-OpenClaw runtimes ClawMetry observes via a dedicated reader adapter. Each
+# uses its OWN native session format; the adapter translates it to the unified
+# Session/Event shapes and we ingest those into DuckDB alongside OpenClaw,
+# namespaced + tagged with the runtime. To add a runtime: ship its adapter and
+# add a (module, class) row here. Import is per-adapter + defensive so a missing
+# or broken adapter (e.g. an older wheel) never blocks the others.
+_FAMILY_ADAPTER_SPECS = (
+    ("clawmetry.adapters.picoclaw", "PicoClawAdapter"),
+    ("clawmetry.adapters.nanoclaw", "NanoClawAdapter"),
+    ("clawmetry.adapters.hermes", "HermesAdapter"),
+    ("clawmetry.adapters.claude_code", "ClaudeCodeAdapter"),
+    ("clawmetry.adapters.codex", "CodexAdapter"),
+    ("clawmetry.adapters.cursor", "CursorAdapter"),
+)
 
-    These runtimes use their OWN native session format (not OpenClaw's v3
-    JSONL), so ClawMetry ships dedicated reader adapters for them
-    (clawmetry/adapters/{picoclaw,nanoclaw}.py). Here we run each adapter's
-    cheap, never-raising ``detect()`` so the cloud can label which runtime a
-    node is actually running. Pure detection: no DuckDB access, no writes, no
-    writer lock involved.
+
+def _family_adapter_classes():
+    """Return the importable non-OpenClaw runtime adapter classes."""
+    classes = []
+    for mod_name, cls_name in _FAMILY_ADAPTER_SPECS:
+        try:
+            mod = __import__(mod_name, fromlist=[cls_name])
+            classes.append(getattr(mod, cls_name))
+        except Exception as exc:  # missing/broken adapter never blocks the rest
+            log.debug(f"family adapter {mod_name}.{cls_name} unavailable: {exc}")
+    return classes
+
+
+def _detect_family_runtimes():
+    """Detect non-OpenClaw runtimes present on this host (Hermes, Claude Code,
+    Codex, Cursor, PicoClaw, NanoClaw, ...).
+
+    Runs each adapter's cheap, never-raising ``detect()`` so the cloud can label
+    which runtimes a node is actually running. Pure detection: no DuckDB access,
+    no writes, no writer lock involved.
 
     Returns a list of ``{name, displayName, sessionCount, workspace}`` for the
-    runtimes whose data is present on this host. Empty list if none / on error.
+    runtimes whose data is present. Empty list if none / on error.
     """
     out = []
-    try:
-        from clawmetry.adapters.picoclaw import PicoClawAdapter
-        from clawmetry.adapters.nanoclaw import NanoClawAdapter
-    except Exception as exc:  # adapters unavailable (old wheel) — degrade quietly
-        log.debug(f"family-runtime adapters unavailable: {exc}")
-        return out
-    for cls in (PicoClawAdapter, NanoClawAdapter):
+    for cls in _family_adapter_classes():
         try:
             d = cls().detect()
             if d.detected:
@@ -7538,11 +7558,9 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
     if not _sync_allowed():
         return 0
     try:
-        from clawmetry.adapters.picoclaw import PicoClawAdapter
-        from clawmetry.adapters.nanoclaw import NanoClawAdapter
         from clawmetry import local_store
-    except Exception as exc:  # adapters unavailable (old wheel) — degrade quietly
-        log.debug(f"family-runtime adapters unavailable for ingest: {exc}")
+    except Exception as exc:  # local store unavailable (old wheel) — degrade quietly
+        log.debug(f"local_store unavailable for family ingest: {exc}")
         return 0
 
     node_id = config.get("node_id") or ""
@@ -7551,9 +7569,9 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
     total_events = 0
     cloud_session_rows: list = []
 
-    for cls in (PicoClawAdapter, NanoClawAdapter):
+    for cls in _family_adapter_classes():
         try:
-            adapter = cls()  # construct once (NanoClaw discovery globs are not free)
+            adapter = cls()  # construct once (discovery globs/DB opens are not free)
             if not adapter.detect().detected:
                 continue
             runtime = adapter.name
