@@ -29,6 +29,28 @@ _update_check_stop_event = threading.Event()
 CHANGELOG_URL = "https://github.com/vivekchand/clawmetry/blob/main/CHANGELOG.md"
 
 
+def _live_current_version() -> str:
+    """The version actually running right now (not the version recorded at the
+    last PyPI check). Reading this live is what keeps the update banner honest
+    immediately after an upgrade — before the next background check runs."""
+    try:
+        import dashboard as _d
+        return str(_d.__version__)
+    except Exception:
+        return ""
+
+
+def _version_gt(a: str, b: str) -> bool:
+    """True if version ``a`` is strictly newer than ``b`` (numeric tuple
+    compare; falls back to string inequality on non-numeric versions)."""
+    if not a or not b:
+        return False
+    try:
+        return [int(x) for x in a.split(".")] > [int(x) for x in b.split(".")]
+    except Exception:
+        return a != b
+
+
 def _get_fleet_db():
     """Get fleet database connection."""
     import dashboard as _d
@@ -137,10 +159,19 @@ def _get_latest_update_check():
             ).fetchone()
             db.close()
         if row:
+            latest = row["latest_version"]
+            # Always report the LIVE installed version, not the version recorded
+            # at check time — otherwise the banner lies right after an upgrade
+            # (e.g. "you are on v0.12.306" while actually on v0.12.309) until the
+            # next background check runs (which is delayed 60s on startup).
+            # Recompute availability against the live version too, so a stale
+            # recorded `latest` that's <= the current build never shows a banner.
+            current = _live_current_version() or row["current_version"]
+            update_available = _version_gt(latest, current)
             return {
-                "current": row["current_version"],
-                "latest": row["latest_version"],
-                "update_available": bool(row["update_available"]),
+                "current": current,
+                "latest": latest,
+                "update_available": update_available,
                 "changelog_url": row["changelog_url"] or "",
                 "checked_at": row["check_at"],
             }
@@ -184,14 +215,7 @@ def _check_for_update():
         log.debug("Update check failed: %s", exc)
         return None
 
-    # Compare version tuples
-    if latest != current:
-        try:
-            cur_parts = [int(x) for x in current.split(".")]
-            lat_parts = [int(x) for x in latest.split(".")]
-            update_available = lat_parts > cur_parts
-        except Exception:
-            update_available = True
+    update_available = _version_gt(latest, current)
 
     _record_update_check(current, latest, update_available, CHANGELOG_URL)
 
