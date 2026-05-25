@@ -127,6 +127,29 @@ ClawMetry observes many AI-agent runtimes, not just OpenClaw. Each non-OpenClaw 
 
 "Beta adapter" means ClawMetry ships a reader for that runtime's real on-disk format, each built + verified against a real install on a real machine (see `tests/fixtures/runtimes/<rt>/`). Adapters are read-only; each is honest about what its runtime actually stores (e.g. PicoClaw/NanoClaw/Cursor don't write token cost to disk). When several runtimes run on one node, the runtime switcher scopes the sessions view to one for a clean deep-dive.
 
+## OpenTelemetry — vendor-neutral, send your traces anywhere
+
+ClawMetry speaks **OpenTelemetry** in both directions, using the **GenAI semantic conventions**, so your agent traces are never locked into one tool.
+
+**Export** every session — LLM calls, tools, sub-agents, tokens, cost — as OTLP/HTTP GenAI spans to any collector (Datadog, Grafana, Honeycomb, **MLflow**, or your own OTel Collector):
+
+```bash
+clawmetry --otel-export http://localhost:4318/v1/traces
+# equivalently:
+CLAWMETRY_OTEL_EXPORT_ENDPOINT=http://localhost:4318/v1/traces clawmetry
+```
+
+Auth headers and poll interval are optional env vars:
+
+```bash
+CLAWMETRY_OTEL_EXPORT_HEADERS='{"X-API-Key":"…"}'   # extra HTTP headers
+CLAWMETRY_OTEL_EXPORT_INTERVAL=60                    # seconds (default 60)
+```
+
+**Ingest** — the built-in OTLP receiver accepts traces and metrics from anything else at `/v1/traces` and `/v1/metrics` (`pip install clawmetry[otel]` for protobuf ingest).
+
+You get the zero-config, local-first ClawMetry dashboard **and** your data in whatever backend your team already runs — no lock-in, no second agent to install.
+
 ## Configuration
 
 Most people don't need any config. ClawMetry auto-detects your workspace, logs, sessions, and crons.
