@@ -139,3 +139,32 @@ def get_ops():
             {"service": "WhatsApp connector", "summary": "Reconnect storm · 7 retries in 32 min", "detail": "Last good message · 32m ago\nLikely cause · upstream rate limit", "severity": "warn"},
         ],
     })
+
+# ── Context API ──────────────────────────────────────────────────────
+
+@bp_v2.route("/api/v2/context", methods=["GET"])
+def get_context():
+    return jsonify({
+        "tokens": {"used": 51.95, "total": 200, "compaction_threshold": 160},
+        "segments": [
+            {"name": "System prompt", "tokens": 1.2, "color": "ink-3", "note": "boilerplate · ClawMetry default"},
+            {"name": "Tooling overhead", "tokens": 3.0, "color": "sea", "note": "framework scaffolding"},
+            {"name": "Skill headers", "tokens": 1.5, "color": "amber", "note": "7 skills loaded"},
+            {"name": "Bootstrap · SOUL.md", "tokens": 0.75, "color": "plum", "note": "agent persona"},
+            {"name": "Bootstrap · MEMORY.md", "tokens": 1.0, "color": "plum", "note": "long-term memory"},
+            {"name": "Tool schemas (JSON)", "tokens": 7.0, "color": "sea", "note": "12 tools, full JSON-schema"},
+            {"name": "Conversation history", "tokens": 38.5, "color": "claw-red", "note": "current session · 84 turns"},
+        ],
+        "history": [
+            {"ts": "08:00", "used": 50, "event": "compaction"},
+            {"ts": "10:00", "used": 42},
+            {"ts": "12:00", "used": 22, "event": "compaction"},
+            {"ts": "14:00", "used": 56},
+            {"ts": "16:00", "used": 30, "event": "compaction"},
+            {"ts": "18:00", "used": 51.95},
+        ],
+        "memory_files": [
+            {"path": "SOUL.md", "size_bytes": 1200, "preview": "You are agent-vega-04. You're patient,\ndirect, and never deploy on Fridays."},
+            {"path": "MEMORY.md", "size_bytes": 1024, "preview": "- prod cluster: us-west-2\n- on-call: @vivek (oct rotation)\n- last incident: 2026-04-12 db lag"},
+        ],
+    })

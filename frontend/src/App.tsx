@@ -6,6 +6,7 @@ import { NAV_ITEMS } from "./components/nav";
 import { useEffect } from "react";
 import { useThemeStore } from "./stores/themeStore";
 import { OpsPage } from "./pages/OpsPage";
+import { ContextPage } from "./pages/ContextPage";
 
 // All v2 routes live inside <Layout>, which renders the sidebar + topbar
 // chrome and an <Outlet /> for route content. Every NAV_ITEMS entry maps
@@ -22,7 +23,8 @@ export default function App() {
       <Route path="/" element={<Layout />}>
         <Route index element={<WelcomePage />} />
         <Route path="ops" element={<OpsPage />} />
-        {NAV_ITEMS.filter((it) => it.id !== "ops").map((it) => (
+        <Route path="context" element={<ContextPage />} />
+        {NAV_ITEMS.filter((it) => it.id !== "ops" && it.id !== "context").map((it) => (
           <Route key={it.id} path={it.id} element={<StubPage slug={it.id} />} />
         ))}
         {/* SPA catch-all — unknown deep links land on the welcome page rather
