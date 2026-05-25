@@ -984,7 +984,7 @@ function switchTab(name) {
   if (name === 'models') loadModelAttribution();
   if (name === 'nemoclaw') { loadNemoClaw(); _startNcApprovalsAutoRefresh(); }
   if (name !== 'nemoclaw') _stopNcApprovalsAutoRefresh();
-  if (name === 'subagents') { loadSubagents(); if (!_subagentsTimer) _subagentsTimer = visibilitySetInterval(loadSubagents, 5000); }
+  if (name === 'subagents') { loadRunLedger(); loadSubagents(); if (!_subagentsTimer) _subagentsTimer = visibilitySetInterval(function(){ loadRunLedger(); loadSubagents(); }, 5000); }
   if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
 }
 
@@ -11405,6 +11405,70 @@ async function loadSubagents() {
 function _saToggle(sid) {
   _subagentsExpanded[sid] = (_subagentsExpanded[sid] === false) ? true : false;
   loadSubagents();
+}
+
+// OpenClaw queue-lane defaults (docs.openclaw.ai/concepts/queue): the
+// subagent lane caps at 8 and the main lane at 4 concurrent runs. cli/cron
+// have no fixed small cap, so we show live running count without a "/cap".
+var _RUN_LEDGER_LANE_CAPS = { subagent: 8, main: 4 };
+
+// Live OpenClaw run-ledger view: queue-lane saturation bars + recent runs.
+// `runtime` IS the OpenClaw queue lane (cli / cron / subagent), so the lane
+// rollup doubles as the queue/concurrency monitor. Reads /api/run-ledger,
+// which the sync daemon mirrors from ~/.openclaw/tasks/runs.sqlite.
+async function loadRunLedger() {
+  var el = document.getElementById('run-ledger-panel');
+  if (!el) return;
+  try {
+    var data = await fetch('/api/run-ledger?limit=60').then(function(r){ return r.json(); });
+    var lanes = data.lanes || [];
+    var runs = data.runs || [];
+    if (lanes.length === 0 && runs.length === 0) {
+      el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">No background runs yet. Sub-agent, cron and CLI runs from OpenClaw’s task ledger appear here as they execute.</div>';
+      return;
+    }
+    function laneColor(lane){ return ({subagent:'#8b5cf6',cron:'#0ea5e9',cli:'#16a34a'})[lane] || '#6b7280'; }
+    var laneHtml = '<div style="border:1px solid var(--border-primary);border-radius:10px;padding:14px;">';
+    laneHtml += '<div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;">Queue lanes</div>';
+    lanes.forEach(function(L){
+      var cap = _RUN_LEDGER_LANE_CAPS[L.lane];
+      var running = L.running||0, total = L.total||0, ok = L.succeeded||0, failed = L.failed||0, queued = L.queued||0;
+      var capLabel = cap ? (running + '/' + cap) : ('' + running);
+      function seg(n,color){ return total>0 ? '<span style="height:100%;width:'+(n/total*100)+'%;background:'+color+';display:inline-block;"></span>' : ''; }
+      laneHtml += '<div style="margin-bottom:12px;">';
+      laneHtml += '<div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:4px;">';
+      laneHtml += '<span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:'+laneColor(L.lane)+';"></span>';
+      laneHtml += '<span style="font-weight:700;color:var(--text-primary);">'+escHtml(L.lane)+'</span>';
+      laneHtml += '<span style="font-size:11px;font-weight:600;color:'+(running>0?'#16a34a':'var(--text-muted)')+';">'+(running>0 ? ('● '+capLabel+' running') : 'idle')+'</span>';
+      laneHtml += '<span style="flex:1;"></span>';
+      laneHtml += '<span style="font-size:11px;color:var(--text-muted);">'+total+' runs · '+ok+'✓'+(failed?(' · '+failed+'✗'):'')+'</span>';
+      laneHtml += '</div>';
+      laneHtml += '<div style="display:flex;height:7px;border-radius:4px;overflow:hidden;background:var(--bg-secondary);">';
+      laneHtml += seg(ok,'#16a34a')+seg(running,'#3b82f6')+seg(queued,'#d97706')+seg(failed,'#ef4444');
+      laneHtml += '</div></div>';
+    });
+    laneHtml += '</div>';
+    function pill(status){
+      var m = {succeeded:['#16a34a','rgba(22,163,74,.12)'],success:['#16a34a','rgba(22,163,74,.12)'],running:['#3b82f6','rgba(59,130,246,.12)'],failed:['#ef4444','rgba(239,68,68,.12)'],timeout:['#ef4444','rgba(239,68,68,.12)']};
+      var c = m[status] || ['#6b7280','var(--bg-secondary)'];
+      return '<span style="font-size:10px;font-weight:700;color:'+c[0]+';background:'+c[1]+';border-radius:4px;padding:1px 6px;">'+escHtml(String(status||'?'))+'</span>';
+    }
+    function dur(s){ if(!s.started_at||!s.ended_at) return ''; var ms=s.ended_at-s.started_at; if(ms<0) return ''; if(ms<1000) return ms+'ms'; if(ms<60000) return (ms/1000).toFixed(1)+'s'; return Math.round(ms/60000)+'m'; }
+    var runHtml = '<div style="border:1px solid var(--border-primary);border-radius:10px;margin-top:14px;overflow:hidden;">';
+    runHtml += '<div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;padding:12px 14px;border-bottom:1px solid var(--border-primary);">Recent runs</div>';
+    runs.slice(0,40).forEach(function(s){
+      runHtml += '<div style="display:flex;align-items:center;gap:10px;padding:7px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;">';
+      runHtml += pill(s.status);
+      runHtml += '<span style="font-size:10px;color:var(--text-faint);background:var(--bg-secondary);border-radius:4px;padding:1px 6px;min-width:54px;text-align:center;">'+escHtml(s.runtime||'')+'</span>';
+      runHtml += '<span style="flex:1;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+escHtml(s.label||'')+'">'+escHtml(s.label||'(untitled)')+'</span>';
+      var d = dur(s); if(d) runHtml += '<span style="color:var(--text-muted);white-space:nowrap;">'+d+'</span>';
+      runHtml += '</div>';
+    });
+    runHtml += '</div>';
+    el.innerHTML = laneHtml + runHtml;
+  } catch(e) {
+    el.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">Failed to load run ledger: '+escHtml(String(e))+'</div>';
+  }
 }
 
 // ── Upgrade Impact Panel ───────────────────────────────────────────────────
