@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Release: MLflow-style trace explorer (2026-05-26)
+- Publishes #2109: Tracing tab is now a split-pane explorer (tree + Gantt on the left, persistent Chat / Inputs / Outputs / Attributes / Events on the right) with the trace title in the header (the user's first prompt) and full input/output visibility per span. Backend `_build_spans` now captures Claude Code I/O too — text extraction probes `data.message.content` (list), `data.content`, `data.promptText`, `data.text`; role detection honours `data.role`; the tool-use/result walkers recognise Claude Code's `data.tool_calls=[{id,input}]` (name at `data.tool_name`) and `data.extra` JSON-string `{toolUseId,isError}`; `tool_result` content lands on the matching tool span as a new `output` field. Verified live on a 236-span trace: spans with `detail` 36 → 115, tool spans with `output` 0 → 77, all 77 tool spans now carry both input and output.
+
 ### Tracing tab is GA (2026-05-25)
 - The Phoenix/Arize-style **Tracing** tab — every session as a trace, with a span **waterfall**, a **span tree**, an **agent graph**, and a span-detail drawer — is now shown in the nav by default for every install (it had been behind a `?tracing=1` flag while the span-detail drawer and daemon-proxy reliability were finished). Power users can hide it with `?tracing=0`. Verified live against the real daemon: lists real traces and renders a 361-span trace's waterfall + tree with per-span tokens/durations. (#2091)
 
