@@ -5723,6 +5723,8 @@ _PENDING_ACTIONS = frozenset({
     "selfevolve_analyze",
     "cron_create",
     "cron_action",
+    "cron_killall",
+    "cron_fix",
 })
 
 
@@ -5919,6 +5921,12 @@ def _dispatch_pending_action(config: dict, action: dict) -> None:
         return
     if atype == "cron_action":
         _action_cron_op(config, action)
+        return
+    if atype == "cron_killall":
+        _action_cron_killall(config, action)
+        return
+    if atype == "cron_fix":
+        _action_cron_fix(config, action)
         return
 
 
@@ -6254,6 +6262,152 @@ def _action_cron_op(config: dict, action: dict) -> None:
             )
         except Exception as e:
             log.warning("cron_action cache post failed: %s", e)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _action_cron_killall(config: dict, action: dict) -> None:
+    """Cloud-relayed Emergency Stop All. Reads enabled jobs from local DuckDB
+    (cross-process safe; never via the dead v3 gateway cron tool) and disables
+    each via `openclaw cron disable <id>` in a daemon thread. Posts an
+    E2E-encrypted summary {status,disabled,errors,_shape:"cron_killall"} so
+    the browser can show a real count, not just "queued"."""
+    cache_key = action.get("cache_key")
+    enc_key = config.get("encryption_key")
+    api_key = config.get("api_key", "")
+    node_id = config.get("node_id", "")
+    if not (cache_key and enc_key and api_key):
+        return
+    aid = action.get("id")
+
+    def _run():
+        status, disabled, errors, scope_pending = "done", 0, [], False
+        try:
+            # Read the LIVE job list from the gateway via the CLI (not
+            # DuckDB). DuckDB lags the gateway and stale ids would either
+            # surface "unknown cron job id" errors or silently target jobs
+            # the user already deleted. The CLI is the gateway's own ground
+            # truth.
+            listed = run_openclaw_cron("list", ["--all"], timeout=20)
+            jobs = []
+            if listed.get("ok"):
+                lr = listed.get("result")
+                if isinstance(lr, list):
+                    jobs = lr
+                elif isinstance(lr, dict):
+                    jobs = lr.get("jobs") or lr.get("crons") or []
+            for j in jobs:
+                if not isinstance(j, dict) or not j.get("enabled", True):
+                    continue
+                jid = j.get("id") or j.get("cron_id") or ""
+                if not jid:
+                    continue
+                res = run_openclaw_cron("disable", [str(jid)], timeout=40)
+                if res.get("ok"):
+                    disabled += 1
+                else:
+                    if res.get("scope_pending"):
+                        scope_pending = True
+                    errors.append({"jobId": jid,
+                                   "error": (res.get("error") or "")[:200]})
+            if scope_pending and disabled == 0:
+                status = "error"
+        except Exception as e:
+            status = "error"; errors.append({"error": str(e)[:300]})
+        try:
+            blob = encrypt_payload(
+                {"status": status, "disabled": disabled,
+                 "errors": errors, "scope_pending": scope_pending,
+                 "message": ("Emergency stop: %d job(s) disabled." % disabled),
+                 "_shape": "cron_killall"},
+                enc_key,
+            )
+            _post(
+                "/ingest/cache",
+                {"node_id": node_id, "id": aid, "cache_key": cache_key,
+                 "blob": blob, "shape": "cron_killall", "ttl": 3600},
+                api_key,
+            )
+        except Exception as e:
+            log.warning("cron_killall cache post failed: %s", e)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _action_cron_fix(config: dict, action: dict) -> None:
+    """Cloud-relayed cron Fix. Dispatches `openclaw agent` against the cron's
+    error context in a daemon thread (mirror of _action_selfevolve_fix). The
+    agent's output lands in its own session, surfaced live in Brain. Posts a
+    short "dispatched" status blob so the cloud UI shows a real
+    acknowledgement instead of a stub."""
+    cache_key = action.get("cache_key")
+    job_id = (action.get("jobId") or "").strip()
+    name = (action.get("name") or job_id).strip()
+    last_err = (action.get("lastError") or "").strip()
+    schedule = action.get("schedule") or {}
+    consecutive = action.get("consecutiveFailures") or 0
+    enc_key = config.get("encryption_key")
+    api_key = config.get("api_key", "")
+    node_id = config.get("node_id", "")
+    if not (cache_key and job_id and enc_key and api_key):
+        return
+    aid = action.get("id")
+
+    def _run():
+        status, message = "error", ""
+        try:
+            binp = _resolve_openclaw_bin()
+            if not binp:
+                message = "openclaw CLI not found on this machine"
+            else:
+                import json as _j
+                msg = (
+                    "You are ClawMetry Cron-Fix in REPAIR mode. A scheduled "
+                    "job is failing repeatedly. Investigate and apply a "
+                    "concrete fix using your tools.\n\n"
+                    "Job: " + name + " (id " + job_id + ")\n"
+                    "Schedule: " + _j.dumps(schedule) + "\n"
+                    "Consecutive failures: " + str(consecutive) + "\n"
+                    "Last error: " + (last_err or "(none recorded)") + "\n\n"
+                    "End with a one-line summary that starts with 'DONE:' "
+                    "describing exactly what you changed."
+                )
+                env = dict(os.environ)
+                node_dirs = [
+                    os.path.dirname(binp),
+                    "/opt/homebrew/bin",
+                    "/usr/local/bin",
+                    os.path.expanduser("~/.local/bin"),
+                ]
+                env["PATH"] = os.pathsep.join(
+                    node_dirs + [env.get("PATH", "/usr/bin:/bin")]
+                )
+                sid = "clawmetry-cron-fix-" + job_id[:24]
+                # Fire-and-forget: don't block the post on the agent turn.
+                subprocess.Popen(
+                    [binp, "agent", "--session-id", sid,
+                     "--message", msg, "--json", "--timeout", "300"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
+                )
+                status = "done"
+                message = ('Fix dispatched. Agent is working on "%s" — '
+                           "watch the Brain feed for progress." % name)
+        except Exception as e:
+            message = str(e)[:400]
+        try:
+            blob = encrypt_payload(
+                {"status": status, "message": message,
+                 "_shape": "cron_fix"},
+                enc_key,
+            )
+            _post(
+                "/ingest/cache",
+                {"node_id": node_id, "id": aid, "cache_key": cache_key,
+                 "blob": blob, "shape": "cron_fix", "ttl": 3600},
+                api_key,
+            )
+        except Exception as e:
+            log.warning("cron_fix cache post failed: %s", e)
 
     threading.Thread(target=_run, daemon=True).start()
 

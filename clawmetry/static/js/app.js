@@ -7094,20 +7094,18 @@ async function loadCrons() {
     // copy says to click it. Cloud-iframe stays false so we don't dangle
     // controls that 410 when used.
     _cronActionsAvailable = !window.CLOUD_MODE;
-    // Single-job writes (create/run/toggle/delete/edit) now work in cloud too:
-    // the cm-cloud-cron-create + cm-cloud-cron-actions interceptors relay them
-    // to the daemon, which runs `openclaw cron <subcmd>` locally. So per-row
-    // management is available in cloud. Bulk/dangerous ops (Emergency Stop All)
-    // and the AI "Fix" button stay local-only until they get their own relay.
+    // ALL cron writes now relay to the daemon's openclaw CLI: single-job
+    // (create/run/toggle/delete/edit via cm-cloud-cron-create + cm-cloud-cron-
+    // actions), Emergency Stop All (cm-cloud-cron-bulk -> cron_killall), and
+    // the AI "Fix" button (cm-cloud-cron-bulk -> cron_fix). So per-row +
+    // bulk + AI-fix all work in cloud. Both flags now collapse to the same
+    // thing; kept as a pair for callers that semantically check "writes".
     _cronWritesAvailable = _cronActionsAvailable || !!window.CLOUD_MODE;
-    // Show/hide the bulk cron-action buttons (.cron-action-btn = New Job +
-    // Emergency Stop All) — local-only by default.
+    // .cron-action-btn (New Job + Emergency Stop All) — relay-backed, so show
+    // in cloud too.
     document.querySelectorAll('.cron-action-btn').forEach(function(btn) {
-      btn.style.display = _cronActionsAvailable ? '' : 'none';
+      btn.style.display = _cronWritesAvailable ? '' : 'none';
     });
-    // "+ New Job" is relay-backed, so show it in cloud too.
-    var _newJobBtn = document.getElementById('cron-new-job-btn');
-    if (_newJobBtn) _newJobBtn.style.display = '';
     renderCrons();
     // Load cron health summary panel
     loadCronHealth();
@@ -7152,7 +7150,7 @@ async function loadCronHealth() {
 
     // Show/hide emergency stop button
     var killBtn = document.getElementById('cron-kill-all-btn');
-    if (killBtn) killBtn.style.display = (_cronActionsAvailable && hasIssues) ? 'inline-flex' : 'none';
+    if (killBtn) killBtn.style.display = (_cronWritesAvailable && hasIssues) ? 'inline-flex' : 'none';
 
     if (jobs.length === 0) { panel.innerHTML = ''; return; }
 
@@ -7346,7 +7344,7 @@ function renderCronList(jobs) {
       var consecutiveFails = (j.state && j.state.consecutiveFailures) ? j.state.consecutiveFailures : '';
       html += '<span class="cron-error-actions">';
       html += '<span class="cron-info-icon" title="Error details" onclick="event.stopPropagation();showCronError(this,\'' + errMsg.replace(/'/g,'\\&#39;').replace(/"/g,'&quot;') + '\',\'' + escHtml(errTime) + '\',' + (consecutiveFails||'null') + ')">&#x2139;&#xFE0F;</span>';
-      if (_cronActionsAvailable) html += '<button class="cron-fix-btn" onclick="event.stopPropagation();confirmCronFix(\'' + escHtml(j.id) + '\',\'' + escHtml(j.name||j.id).replace(/'/g,'\\&#39;') + '\')">&#x1F527; Fix</button>';
+      if (_cronWritesAvailable) html += '<button class="cron-fix-btn" onclick="event.stopPropagation();confirmCronFix(\'' + escHtml(j.id) + '\',\'' + escHtml(j.name||j.id).replace(/'/g,'\\&#39;') + '\')">&#x1F527; Fix</button>';
       html += '</span>';
     }
     html += '</div>';
