@@ -21,6 +21,7 @@ Mode B (--v2-default): `/`, `/<path>` serve the SPA; assets at ``/assets/*``
 """
 
 from __future__ import annotations
+import datetime
 import json
 import os
 from pathlib import Path
@@ -302,6 +303,88 @@ def get_brain():
         pass  # turns stays []
 
     return jsonify({"turns": turns, "total": len(turns)})
+
+
+@bp_v2.route("/api/v2/cost", methods=["GET"])
+def get_cost():
+    """/api/v2/cost — real per-day cost/tokens, per-agent breakdown,
+    spike log and a single-node leaderboard, all read from the local DuckDB
+    store via the daemon proxy (same pattern as ``get_context``/``get_brain``).
+
+    Falls back to empty arrays when the daemon/local store is unreachable;
+    the CostPage frontend renders the empty state gracefully. No fabricated
+    numbers — every figure here comes from the user's own events.
+
+    Wire shape: {by_integration: [{name, tokens_7d, cost_usd_7d}],
+                 daily: [{date, tokens, cost_usd}],
+                 spikes: [{date, delta_pct, note}],
+                 leaderboard: [{node_id, label, cost_usd_7d}]}
+    """
+    today = datetime.date.today()
+    window = [(today - datetime.timedelta(days=6 - i)).isoformat() for i in range(7)]
+    window_set = set(window)
+
+    # query_aggregates is the same per-(agent_id, day) cost/token source the v1
+    # Usage tab trusts (matches /api/usage/cost-comparison). We base every figure
+    # on it so the daily table, integration bars and leaderboard stay internally
+    # consistent. (query_daily_usage_splits exists too but its cost column is
+    # cache-weighted and disagrees with the v1 cost-of-record.)
+    aggregates = []
+    try:
+        from routes.local_query import local_store_via_daemon as _lsd
+        aggregates = _lsd("query_aggregates") or []
+    except Exception:
+        pass  # leave empty -> graceful empty UI
+
+    rows7 = [r for r in aggregates if str(r.get("day") or "") in window_set]
+
+    # ── Daily cost/tokens (7 days, zero-filled, summed across agents per day) ──
+    by_day: dict = {}
+    for row in rows7:
+        day = str(row.get("day") or "")
+        slot = by_day.setdefault(day, {"date": day, "tokens": 0, "cost_usd": 0.0})
+        slot["tokens"] += int(row.get("token_count") or 0)
+        slot["cost_usd"] += float(row.get("cost_usd") or 0.0)
+    daily = [by_day.get(d, {"date": d, "tokens": 0, "cost_usd": 0.0}) for d in window]
+    for d in daily:
+        d["cost_usd"] = round(d["cost_usd"], 2)
+
+    # ── Spike log: day-over-day cost jumps > 50% above a $0.50 floor ──
+    spikes = []
+    for prev, cur in zip(daily, daily[1:]):
+        pc, cc = prev["cost_usd"], cur["cost_usd"]
+        if cc >= 0.50 and pc > 0 and cc > pc * 1.5:
+            delta = round((cc / pc - 1.0) * 100)
+            spikes.append({
+                "date": cur["date"],
+                "delta_pct": delta,
+                "note": f"cost up {delta}% vs prior day",
+            })
+
+    # ── Per-agent breakdown (7d) — the real grouping the store exposes ──
+    by_agent: dict = {}
+    for row in rows7:
+        name = str(row.get("agent_id") or "main")
+        slot = by_agent.setdefault(name, {"name": name, "tokens_7d": 0, "cost_usd_7d": 0.0})
+        slot["tokens_7d"] += int(row.get("token_count") or 0)
+        slot["cost_usd_7d"] += float(row.get("cost_usd") or 0.0)
+    by_integration = sorted(by_agent.values(), key=lambda r: -r["cost_usd_7d"])
+    for r in by_integration:
+        r["cost_usd_7d"] = round(r["cost_usd_7d"], 2)
+
+    # ── Leaderboard: this node's real 7d total (multi-node fleet is Stage B) ──
+    total_cost_7d = round(sum(d["cost_usd"] for d in daily), 2)
+    leaderboard = (
+        [{"node_id": "main", "label": "this node", "cost_usd_7d": total_cost_7d}]
+        if total_cost_7d > 0 else []
+    )
+
+    return jsonify({
+        "by_integration": by_integration,
+        "daily": daily,
+        "spikes": spikes,
+        "leaderboard": leaderboard,
+    })
 
 
 # ── SPA serving ───────────────────────────────────────────────────────────

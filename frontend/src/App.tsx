@@ -13,6 +13,7 @@ import { TurnAnatomyPage } from "./pages/TurnAnatomyPage";
 import { ToolPolicyPage } from "./pages/ToolPolicyPage";
 import { ContextEconomicsPage } from "./pages/ContextEconomicsPage";
 import { ToolCatalogPage } from "./pages/ToolCatalogPage";
+import { CostPage } from "./pages/CostPage";
 
 // Nav slugs that now have a real React page (so the stub fallback skips them).
 const REAL_PAGES = new Set([
@@ -24,6 +25,7 @@ const REAL_PAGES = new Set([
   "rules",
   "context-econ",
   "tools",
+  "cost",
 ]);
 
 // All v2 routes live inside <Layout>, which renders the sidebar + topbar
@@ -48,6 +50,7 @@ export default function App() {
         <Route path="rules" element={<ToolPolicyPage />} />
         <Route path="context-econ" element={<ContextEconomicsPage />} />
         <Route path="tools" element={<ToolCatalogPage />} />
+        <Route path="cost" element={<CostPage />} />
         {NAV_ITEMS.filter((it) => !REAL_PAGES.has(it.id)).map((it) => (
           <Route key={it.id} path={it.id} element={<StubPage slug={it.id} />} />
         ))}
