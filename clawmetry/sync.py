@@ -7757,6 +7757,39 @@ def _family_adapter_classes():
     return classes
 
 
+def _openclaw_spawned_claude_ids() -> set:
+    """Claude Code session ids that OpenClaw spawned (and already ingests).
+
+    OpenClaw's sessions.json index records the Claude CLI session id it spawned
+    under ``cliSessionIds.claude-cli`` (or ``claude_code`` / ``claude``).
+    sync_openclaw_claude_sessions_via_index already ingests those under the
+    OpenClaw session UUID, so the standalone ClaudeCode adapter must skip them to
+    avoid double-counting the same session. Cheap (one JSON read); never raises.
+    """
+    out: set = set()
+    idx = os.path.join(_get_openclaw_dir(), "agents", "main", "sessions", "sessions.json")
+    try:
+        if not os.path.isfile(idx):
+            return out
+        with open(idx) as fh:
+            data = json.load(fh)
+        for _k, meta in (data.items() if isinstance(data, dict) else []):
+            if not isinstance(meta, dict):
+                continue
+            cli = meta.get("cliSessionIds") or {}
+            if not isinstance(cli, dict):
+                continue
+            cc = cli.get("claude-cli") or cli.get("claude_code") or cli.get("claude")
+            if not cc:
+                continue
+            for v in (cc if isinstance(cc, list) else [cc]):
+                if v:
+                    out.add(str(v))
+    except Exception as exc:  # never block ingest on a bad/locked index
+        log.debug(f"openclaw spawned-claude index read failed: {exc}")
+    return out
+
+
 def _detect_family_runtimes():
     """Detect non-OpenClaw runtimes present on this host (Hermes, Claude Code,
     Codex, Cursor, PicoClaw, NanoClaw, ...).
@@ -7841,6 +7874,13 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
     total_events = 0
     cloud_session_rows: list = []
 
+    # Claude Code sessions that OpenClaw SPAWNED are already ingested under the
+    # OpenClaw session UUID by sync_openclaw_claude_sessions_via_index. Skip them
+    # in the claude_code adapter ingest so an orchestrated session shows once
+    # (under OpenClaw, which owns it), not twice. Verified on a real machine:
+    # 29 of 387 ~/.claude sessions were OpenClaw-spawned.
+    openclaw_spawned_claude = _openclaw_spawned_claude_ids()
+
     for cls in _family_adapter_classes():
         try:
             adapter = cls()  # construct once (discovery globs/DB opens are not free)
@@ -7848,6 +7888,8 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 continue
             runtime = adapter.name
             for s in adapter.list_sessions(limit=50):
+                if runtime == "claude_code" and s.id in openclaw_spawned_claude:
+                    continue  # owned by OpenClaw; avoid the double-count
                 ns_id = f"{runtime}:{s.id}"
                 started = _epoch_to_iso(s.started_at)
                 ended = _epoch_to_iso(s.ended_at)
