@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: UI polish + observability backlog (2026-05-25)
+- Security tab: warnings elevated, passing checks collapse to pills, calm "all clear" state (#1953).
+- Session replay: tool chips expand by default; Self-Evolve runs hidden behind "Show plumbing" (#1975, #2001).
+- New: Dives tab (plain-English to SQL to chart, #1976), intent-vs-execution divergence (#1977), outbound OTLP GenAI exporter to Datadog/Grafana/Honeycomb (#1978), proxy velocity breaker + per-session budget fence (#1979).
+- v2 rails: Brain timeline at /v2/brain (#2006).
+
 ### Release: NanoClaw + PicoClaw runtime support, validated against live installs (2026-05-25)
 - Publishes #2013 + #2014. ClawMetry now observes two more OpenClaw-family runtimes via reader adapters for their **real** native session formats (verified by actually installing and running both, not by assuming a shared layout). This corrects #956/#1981, whose premise that NanoClaw and PicoClaw "share the OpenClaw on-disk layout exactly" was false for both.
   - **PicoClaw** (`sipeed/picoclaw`, Go): flat `providers.Message` JSONL at `~/.picoclaw/workspace/sessions/<key>.jsonl` (+ `.meta.json`). `clawmetry/adapters/picoclaw.py` reads transcripts, model, and tool calls. Running it for real (v0.2.9 + local Ollama) caught two bugs the relabeled-OpenClaw fixtures could not: tool calls are OpenAI-nested under `function.{name,arguments}` (a flat read dropped them), and Go trims trailing zeros from fractional seconds, which made `datetime.fromisoformat()` raise on Python 3.9/3.10 and zero the timestamp. Tokens/cost are not on disk, so they are honestly surfaced as 0/unavailable.
