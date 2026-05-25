@@ -118,8 +118,10 @@ def _classify(e):
     if "tool_call" in et or "tool.call" in et or d.get("tool_name") or d.get("tool_calls"):
         return "tool_call"
 
-    # Prompt / user boundary.
-    if "prompt.submitted" in et or et.endswith("user") or et == "user" \
+    # Prompt / user boundary. (``et.endswith("user")`` already covers an
+    # exact ``"user"`` as well as v3-adjacent ``*user`` spellings; the v3
+    # name ``prompt.submitted`` is matched first, so this never silent-zeros.)
+    if "prompt.submitted" in et or et.endswith("user") \
             or (role == "user" and et in ("message", "text")):
         return "prompt"
 
