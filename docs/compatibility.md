@@ -22,6 +22,8 @@ This page tracks each one's real status, honestly.
 | Cursor      | Beta adapter   | SQLite `state.vscdb` (`cursorDiskKV` / `ItemTable`, global + per-workspace) | Chat/composer transcripts, model. No billed cost on disk (server-side). |
 | Aider       | Beta adapter   | Markdown `.aider.chat.history.md` per project dir (+ `.aider.input.history`) | Transcripts, model, token counts. Per-project history (set `AIDER_HISTORY_DIRS`). |
 | Goose       | Beta adapter   | SQLite `~/.local/share/goose/sessions/sessions.db` (`sessions` + `messages`) | Transcripts, model, tool calls, real token totals. |
+| opencode    | Beta adapter   | SQLite `~/.local/share/opencode/opencode.db` (`session`/`message`/`part`) | Transcripts, model, tool calls, real tokens + cost. |
+| Qwen Code   | Beta adapter   | JSONL `~/.qwen/projects/<hash>/chats/<id>.jsonl` (Gemini-CLI lineage) | Transcripts, model, tool calls + thinking, real token usage. |
 | ZeroClaw / TrustClaw / Nanobot | Not yet | unverified | Open an issue with a real session capture. |
 
 ## What "Beta adapter" means (and what it does not)

@@ -8000,6 +8000,8 @@ _FAMILY_ADAPTER_SPECS = (
     ("clawmetry.adapters.cursor", "CursorAdapter"),
     ("clawmetry.adapters.aider", "AiderAdapter"),
     ("clawmetry.adapters.goose", "GooseAdapter"),
+    ("clawmetry.adapters.opencode", "OpencodeAdapter"),
+    ("clawmetry.adapters.qwen_code", "QwenCodeAdapter"),
 )
 
 
