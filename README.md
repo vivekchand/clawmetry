@@ -111,17 +111,21 @@ npm run build
 
 The production bundle is written to `clawmetry/static/v2/dist/`.
 
-## Runtime Compatibility
+## Runtime / Agent Compatibility
 
-ClawMetry observes the OpenClaw runtime family. Some members share OpenClaw's session format and work with zero config; others store sessions in their own native format and ship a dedicated reader adapter. See [`docs/compatibility.md`](docs/compatibility.md) for the full matrix, open questions, and a guide to adding runtimes, and [`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md) for a primer comparing OpenClaw, NanoClaw, and PicoClaw.
+ClawMetry observes many AI-agent runtimes, not just OpenClaw. Each non-OpenClaw runtime ships a dedicated reader adapter that translates its native session format into ClawMetry's unified shapes; the daemon ingests them into the same DuckDB store + cloud snapshot, tagged with the runtime, and the Session replay tab shows a **runtime switcher** when more than one is present. See [`docs/compatibility.md`](docs/compatibility.md) for the full matrix + a guide to adding runtimes, and [`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md) for the OpenClaw-family primer.
 
-| Runtime | Status | Notes |
+| Runtime / Agent | Status | Notes |
 |---|---|---|
 | **OpenClaw** | Native | Reference runtime, auto-detected |
-| **PicoClaw** | Beta adapter | Reads PicoClaw's native flat JSONL (`~/.picoclaw/workspace/sessions`). Transcripts, model, and tool calls. Tokens/cost are not written to disk by PicoClaw. |
-| **NanoClaw** | Beta adapter | Reads NanoClaw's native per-session SQLite (`data/v2-sessions`). Transcripts and message counts. Model/tokens/cost are not written to those tables. |
+| **PicoClaw** | Beta adapter | Flat `providers.Message` JSONL (`~/.picoclaw/workspace/sessions`). Transcripts, model, tool calls. |
+| **NanoClaw** | Beta adapter | Per-session SQLite (`data/v2-sessions`). Transcripts + message counts. |
+| **Hermes** | Beta adapter | SQLite `~/.hermes/state.db`. Transcripts, model, tokens/cost. |
+| **Claude Code** | Beta adapter | JSONL `~/.claude/projects/.../<id>.jsonl`. Transcripts, model, tool calls + thinking, token usage. |
+| **Codex** | Beta adapter | Rollout JSONL `~/.codex/sessions/...`. Transcripts, model, tool calls, token usage. |
+| **Cursor** | Beta adapter | SQLite `state.vscdb`. Chat/composer transcripts, model. |
 
-"Beta adapter" means ClawMetry ships a reader for that runtime's real on-disk format, validated against a session captured from a real install (we installed and ran both; see `tests/fixtures/runtimes/<rt>/REAL/` and the per-runtime PRDs) with fixture-backed CI tests. Runtime detection is also live-verified end to end in the cloud: a node running PicoClaw or NanoClaw is labeled with its runtime in the cloud Runtime panel alongside OpenClaw. Full ingest of each runtime's individual sessions into the cloud is the next phase.
+"Beta adapter" means ClawMetry ships a reader for that runtime's real on-disk format, each built + verified against a real install on a real machine (see `tests/fixtures/runtimes/<rt>/`). Adapters are read-only; each is honest about what its runtime actually stores (e.g. PicoClaw/NanoClaw/Cursor don't write token cost to disk). When several runtimes run on one node, the runtime switcher scopes the sessions view to one for a clean deep-dive.
 
 ## Configuration
 

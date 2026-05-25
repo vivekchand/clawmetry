@@ -156,6 +156,9 @@ jobs:
             tests/test_nanoclaw_adapter.py \
             tests/test_runtime_detection_snapshot.py \
             tests/test_family_runtime_ingest.py \
+            tests/test_codex_adapter.py \
+            tests/test_cursor_adapter.py \
+            tests/test_claude_code_adapter.py \
             -q
 
   # ── MOAT keystone (DuckDB-first invariant, 13-endpoint bar) ──────────────
