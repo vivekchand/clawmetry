@@ -1955,14 +1955,13 @@ def _try_local_store_subagents(_rows=None):
                          or _parse_ts_ms(r.get("updated_at"))
                          or 0)
         spawned_at_ms = _parse_ts_ms(r.get("spawned_at")) or updated_at_ms
-        runtime_ms = int(extra.get("runtime_ms") or 0)
-        if not runtime_ms and spawned_at_ms:
-            runtime_ms = max(0, int(now_ms - spawned_at_ms))
+        ended_at_ms = _parse_ts_ms(r.get("ended_at")) or 0
 
         # Status: prefer the daemon's explicit classification verbatim
         # (it may emit ``completed`` / ``running`` / etc. that aren't in
         # the legacy bucket set — the UI handles those directly).
         # Fall back to age-derived bucket only when status is missing.
+        # Computed BEFORE runtime so a dead agent's clock can be frozen.
         status = (r.get("status") or "").strip().lower()
         if not status:
             age_ms = now_ms - (updated_at_ms or 0)
@@ -1972,6 +1971,18 @@ def _try_local_store_subagents(_rows=None):
                 status = "idle"
             else:
                 status = "stale"
+
+        # Runtime is *active work time*, not wall-clock since spawn. #2031:
+        # the old fallback `now - spawned_at` grew forever, so a stale subagent
+        # that died days ago showed an ever-climbing "111h 50m running". Only an
+        # active/running agent's clock runs to now; idle / stale / completed /
+        # failed agents freeze at their last known activity (ended_at, else
+        # last updated_at). Prefer the daemon's cached runtime_ms when present.
+        runtime_ms = int(extra.get("runtime_ms") or 0)
+        if not runtime_ms and spawned_at_ms:
+            _running = status in ("active", "running")
+            _end_ref = now_ms if _running else (ended_at_ms or updated_at_ms or spawned_at_ms)
+            runtime_ms = max(0, int(_end_ref - spawned_at_ms))
 
         token_count = int(r.get("token_count") or 0)
         # Build key in OpenClaw's canonical shape so Active-Tasks modal
