@@ -13205,10 +13205,22 @@ function _ovTimeLabel(agent) {
     if (min < 60) return 'Running (' + min + ' min)';
     return 'Running (' + hr + 'h ' + (min % 60) + 'm)';
   }
-  if (sec < 60) return 'Finished ' + sec + 's ago';
-  if (min < 60) return 'Finished ' + min + ' min ago';
-  if (hr < 24) return 'Finished ' + hr + 'h ago';
-  return 'Finished ' + Math.floor(hr / 24) + 'd ago';
+  // "Finished N ago" is time since the spawn ENDED — not the run duration.
+  // Using runtimeMs here made stale spawns whose runtime was frozen to 0
+  // (the dead-subagent freeze) read "Finished 0s ago" even when they ended
+  // days ago. Prefer completionTs, then updatedAt (last activity), then
+  // startedAt+runtime; blank if the end time is genuinely unknown.
+  var endedMs = 0;
+  if (agent.completionTs) { var ct = Date.parse(agent.completionTs); if (!isNaN(ct)) endedMs = ct; }
+  if (!endedMs && agent.updatedAt) endedMs = agent.updatedAt;
+  if (!endedMs && agent.startedAt && ms) endedMs = agent.startedAt + ms;
+  if (!endedMs) return '';
+  var ago = Math.max(0, Date.now() - endedMs);
+  var asec = Math.floor(ago / 1000), amin = Math.floor(asec / 60), ahr = Math.floor(amin / 60);
+  if (asec < 60) return 'Finished ' + asec + 's ago';
+  if (amin < 60) return 'Finished ' + amin + ' min ago';
+  if (ahr < 24) return 'Finished ' + ahr + 'h ago';
+  return 'Finished ' + Math.floor(ahr / 24) + 'd ago';
 }
 
 function _ovRenderCard(agent, idx) {
