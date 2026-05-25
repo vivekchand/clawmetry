@@ -8549,7 +8549,13 @@ def run_openclaw_cron(subcmd, extra_args=None, timeout=40):
         os.path.expanduser("~/.local/bin"),
     ]
     env["PATH"] = os.pathsep.join(node_dirs + [env.get("PATH", "/usr/bin:/bin")])
-    cmd = [binp, "cron", subcmd] + list(extra_args or []) + ["--json"]
+    # Only some subcommands accept --json (add/rm + the read commands); enable/
+    # disable/run/edit reject it with "unknown option '--json'". Append it only
+    # where supported so writes don't fail on an unrecognised flag.
+    _JSON_OK = {"add", "create", "rm", "list", "status", "runs", "show"}
+    cmd = [binp, "cron", subcmd] + list(extra_args or [])
+    if subcmd in _JSON_OK:
+        cmd.append("--json")
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=timeout, env=env,
