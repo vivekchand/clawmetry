@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Subagents: actually freeze runtime — ignore poisoned cache (2026-05-25)
+- Follow-up to the runtime-freeze fix: the first cut (#2032, 0.12.305) only recomputed when `runtime_ms` was absent, but the daemon caches a `runtime_ms` that is itself a `now - spawn` re-derived every snapshot (observed 402M → 403M → 404M, ever-growing), so the cached value was truthy and the fix never ran — stale subagents still climbed to "112h". Caught by verifying against the live DuckDB store, not synthetic rows. Now non-active (idle/stale/completed/failed) subagents ALWAYS recompute frozen at last activity and ignore the cached value; active/running keep the live clock. Verified: all 8 stale subagents 404198958ms → 0. (#2038, closes #2031)
+
+### Release: subagent runtime freeze (real fix) (2026-05-25)
+- Publishes #2038 (closes #2031): the Active-Tasks runtime for dead/stale subagents stops climbing — supersedes the incomplete 0.12.305 fix.
+
 ### Subagents: freeze runtime for dead subagents (2026-05-25)
 - The subagent / Active-Tasks tracker showed an ever-growing runtime ("111h 50m" and climbing) for `stale` subagents — `_try_local_store_subagents` derived runtime as `now - spawned_at` when the daemon hadn't cached a value, so an agent that died days ago looked like it was still running for 4.6 days. Runtime is now active *work* time: status is computed first, only `active`/`running` agents' clocks run to now; `idle`/`stale`/`completed`/`failed` freeze at last activity (`ended_at`, else last `updated_at`). The daemon's cached `runtime_ms` still wins. (#2032, closes #2031)
 
