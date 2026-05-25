@@ -964,6 +964,7 @@ function switchTab(name) {
   if (name === 'flow') initFlow();
   if (name === 'context') loadContextInspector();
   if (name === 'tracing') loadTracing();
+  if (name === 'turn-anatomy') loadTurnAnatomy();
   if (name === 'brain') loadBrainPage();
   if (name === 'selfevolve') loadSelfEvolvePage();
   if (name === 'notifications') { if (typeof loadNotificationsPage === 'function') loadNotificationsPage(); }
@@ -8349,6 +8350,171 @@ function _traceFmtDur(ms) {
 window._allTraces = [];
 window._traceListFilter = 'recent';
 window._traceListSearch = '';
+
+// ── Turn anatomy (P0-3): per-turn waterfall + stalled detector ──────────────
+// Reuses the trace list (one row per session) for picking a session, then
+// /api/turn-anatomy decomposes that session into turns of ordered spans.
+var _TA_KIND_COLORS = {
+  prompt: '#a78bfa', model: '#22d3ee', tool: '#f59e0b',
+  compaction: '#f472b6', reply: '#34d399'
+};
+var _TA_KIND_ICONS = {
+  prompt: '💬', model: '🧠', tool: '🔧', compaction: '🗜️', reply: '✅'
+};
+function _taColor(kind) { return _TA_KIND_COLORS[kind] || '#94a3b8'; }
+function _taIcon(kind) { return _TA_KIND_ICONS[kind] || '•'; }
+
+window._taSession = null;
+
+async function loadTurnAnatomy() {
+  turnAnatomyShowList();
+  _taLoadStalled();
+  var el = document.getElementById('ta-list');
+  if (!el) return;
+  el.style.cssText = '';
+  el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">Loading sessions&hellip;</div>';
+  var data;
+  try {
+    data = await fetch('/api/traces?limit=200').then(function(r){ return r.json(); });
+  } catch (e) {
+    el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">Could not load sessions.</div>';
+    return;
+  }
+  if (!data || data.available === false) {
+    el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-secondary);font-size:13px;">Turn anatomy reads from the local event store, which is not available here.</div>';
+    return;
+  }
+  var traces = (data.traces || []).slice().sort(function(a, b){ return (b.start_ms || 0) - (a.start_ms || 0); });
+  if (!traces.length) {
+    el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-secondary);font-size:13px;">No sessions yet. They appear here once your agent runs.</div>';
+    return;
+  }
+  el.style.cssText = 'padding:0;overflow:hidden;';
+  var html = '<div style="display:flex;gap:12px;padding:8px 14px;border-bottom:1px solid var(--border-primary);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-muted);">'
+    + '<span style="flex:1;">Session</span><span style="width:74px;text-align:right;">Duration</span><span style="width:64px;text-align:right;">Spans</span><span style="width:130px;">Model</span></div>';
+  traces.forEach(function(t) {
+    var when = t.start_ms ? new Date(t.start_ms).toLocaleString() : '';
+    var statusDot = t.status === 'error' ? '#ef4444' : '#22c55e';
+    html += '<div onclick="viewTurnAnatomy(\'' + escHtml(t.trace_id) + '\')" '
+      + 'style="display:flex;gap:12px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border-secondary);cursor:pointer;" '
+      + 'onmouseover="this.style.background=\'var(--bg-tertiary,#1e293b)\'" onmouseout="this.style.background=\'\'">'
+      + '<span style="flex:1;min-width:0;">'
+        + '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + statusDot + ';margin-right:8px;"></span>'
+        + '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;color:var(--text-primary);">' + escHtml((t.name || t.trace_id).slice(0, 30)) + '</span>'
+        + '<span style="margin-left:8px;color:var(--text-muted);font-size:11px;">' + escHtml(when) + '</span>'
+      + '</span>'
+      + '<span style="width:74px;text-align:right;color:var(--text-secondary);font-size:12px;">' + _traceFmtDur(t.duration_ms) + '</span>'
+      + '<span style="width:64px;text-align:right;color:var(--text-secondary);font-size:12px;">' + (t.span_count || 0) + '</span>'
+      + '<span style="width:130px;color:var(--text-muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(t.model || '') + '</span>'
+      + '</div>';
+  });
+  el.innerHTML = html;
+}
+
+function turnAnatomyShowList() {
+  var list = document.getElementById('ta-list');
+  var detail = document.getElementById('ta-detail');
+  var back = document.getElementById('ta-back-btn');
+  if (list) list.style.display = '';
+  if (detail) detail.style.display = 'none';
+  if (back) back.style.display = 'none';
+}
+
+async function _taLoadStalled() {
+  var el = document.getElementById('ta-stalled');
+  if (!el) return;
+  var data;
+  try {
+    data = await fetch('/api/turn-anatomy/stalled?min=5').then(function(r){ return r.json(); });
+  } catch (e) { el.style.display = 'none'; return; }
+  var stalled = (data && data.stalled) || [];
+  if (!stalled.length) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  var rows = stalled.slice(0, 6).map(function(s) {
+    return '<div onclick="viewTurnAnatomy(\'' + escHtml(s.session_id) + '\')" style="display:flex;align-items:center;gap:10px;padding:6px 0;cursor:pointer;font-size:12px;">'
+      + '<span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;flex-shrink:0;"></span>'
+      + '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text-primary);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(s.session_id) + '</span>'
+      + '<span style="color:#fbbf24;">idle ' + (s.idle_min || 0) + 'm</span>'
+      + '<span style="color:var(--text-muted);">' + escHtml(s.last_kind || '') + (s.pending_tool ? ' · tool pending' : '') + '</span>'
+      + '</div>';
+  }).join('');
+  el.innerHTML = '<div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.35);border-radius:8px;padding:12px 14px;">'
+    + '<div style="font-size:12px;font-weight:700;color:#f59e0b;margin-bottom:4px;">&#9888; ' + stalled.length + ' session' + (stalled.length === 1 ? '' : 's') + ' stalled / long-running</div>'
+    + '<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">Latest turn has had no new event for &gt; ' + (data.threshold_min || 5) + ' min and never reached a reply.</div>'
+    + rows + '</div>';
+}
+
+async function viewTurnAnatomy(sessionId) {
+  window._taSession = sessionId;
+  var list = document.getElementById('ta-list');
+  var detail = document.getElementById('ta-detail');
+  var back = document.getElementById('ta-back-btn');
+  if (list) list.style.display = 'none';
+  if (detail) detail.style.display = '';
+  if (back) back.style.display = '';
+  var meta = document.getElementById('ta-detail-meta');
+  var turnsEl = document.getElementById('ta-turns');
+  if (meta) meta.innerHTML = '<div style="color:var(--text-muted);font-size:13px;">Loading turns&hellip;</div>';
+  if (turnsEl) turnsEl.innerHTML = '';
+  var data;
+  try {
+    data = await fetch('/api/turn-anatomy?session_id=' + encodeURIComponent(sessionId)).then(function(r){ return r.json(); });
+  } catch (e) {
+    if (meta) meta.innerHTML = '<div style="color:var(--text-muted);font-size:13px;">Could not load turns.</div>';
+    return;
+  }
+  if (!data || data.available === false) {
+    if (meta) meta.innerHTML = '<div style="color:var(--text-secondary);font-size:13px;">Event store not available here.</div>';
+    return;
+  }
+  var turns = data.turns || [];
+  if (meta) {
+    meta.innerHTML = '<div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;color:var(--text-primary);">' + escHtml(sessionId) + '</div>'
+      + '<div style="font-size:12px;color:var(--text-muted);margin-top:4px;">' + turns.length + ' turn' + (turns.length === 1 ? '' : 's') + '</div>';
+  }
+  if (!turns.length) {
+    if (turnsEl) turnsEl.innerHTML = '<div class="card" style="padding:18px;color:var(--text-muted);">No turns in this session.</div>';
+    return;
+  }
+  if (turnsEl) turnsEl.innerHTML = turns.map(_taRenderTurn).join('');
+}
+
+function _taRenderTurn(t) {
+  var spans = (t.spans || []).slice().sort(function(a, b){ return (a.started_ms || 0) - (b.started_ms || 0); });
+  var t0 = spans.length ? (spans[0].started_ms || 0) : 0;
+  var t1 = 0;
+  spans.forEach(function(s){ t1 = Math.max(t1, (s.started_ms || 0) + (s.duration_ms || 0)); });
+  var total = Math.max(1, t1 - t0);
+  var isErr = t.status === 'error';
+  var head = '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">'
+    + '<span style="font-size:13px;font-weight:700;color:var(--text-primary);">Turn ' + t.turn + '</span>'
+    + (isErr ? '<span style="background:rgba(239,68,68,0.15);color:#f87171;border-radius:6px;padding:1px 7px;font-size:10px;font-weight:600;">error</span>' : '')
+    + '<span style="font-size:11px;color:var(--text-muted);">' + _traceFmtDur(t.duration_ms) + ' &middot; ' + (t.tool_count || 0) + ' tool' + (t.tool_count === 1 ? '' : 's') + ' &middot; ' + ((t.total_tokens || 0) / 1000).toFixed(1) + 'K tok</span>'
+    + '</div>';
+  var prompt = t.prompt ? '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + escHtml(t.prompt) + '">&#128172; ' + escHtml(t.prompt) + '</div>' : '';
+  var bars = '<div style="min-width:560px;">';
+  if (!spans.length) {
+    bars += '<div style="padding:8px;color:var(--text-muted);font-size:12px;">No spans.</div>';
+  }
+  spans.forEach(function(s) {
+    var left = ((s.started_ms - t0) / total) * 100;
+    var width = Math.max(0.6, ((s.duration_ms || 0) / total) * 100);
+    if (left + width > 100) width = Math.max(0.6, 100 - left);
+    var color = _taColor(s.kind);
+    var spanErr = s.status === 'error';
+    var label = (s.label || s.kind || '');
+    bars += '<div style="display:flex;align-items:center;gap:8px;padding:2px 0;" title="' + escHtml(label) + ' · ' + _traceFmtDur(s.duration_ms) + (spanErr ? ' · error' : '') + '">'
+      + '<span style="width:18px;flex-shrink:0;text-align:center;font-size:11px;">' + _taIcon(s.kind) + '</span>'
+      + '<span style="width:170px;flex-shrink:0;font-size:11px;color:' + (spanErr ? '#f87171' : 'var(--text-secondary)') + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(label) + (spanErr ? ' &#9888;' : '') + '</span>'
+      + '<span style="flex:1;position:relative;height:14px;background:var(--bg-primary);border-radius:3px;">'
+        + '<span style="position:absolute;left:' + left.toFixed(2) + '%;width:' + width.toFixed(2) + '%;top:2px;height:10px;background:' + (spanErr ? '#ef4444' : color) + ';border-radius:3px;min-width:2px;"></span>'
+      + '</span>'
+      + '<span style="width:58px;flex-shrink:0;text-align:right;font-size:11px;color:var(--text-muted);">' + _traceFmtDur(s.duration_ms) + '</span>'
+      + '</div>';
+  });
+  bars += '</div>';
+  return '<div class="card" style="margin-bottom:10px;overflow-x:auto;' + (isErr ? 'border-color:rgba(239,68,68,0.35);' : '') + '">' + head + prompt + bars + '</div>';
+}
 
 async function loadTracing() {
   tracingShowList();

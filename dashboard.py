@@ -123,6 +123,7 @@ from routes.evals import bp_evals
 from routes.dives import bp_dives
 from routes.scheduler import bp_scheduler
 from routes.policy import bp_policy
+from routes.turn_anatomy import bp_turn_anatomy
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -10621,6 +10622,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_dives)
     app.register_blueprint(bp_scheduler)
     app.register_blueprint(bp_policy)
+    app.register_blueprint(bp_turn_anatomy)
 
     # Register built-in agent adapters. External plugins can register more
     # via clawmetry.extensions entry points — see clawmetry/adapters/.
@@ -11073,6 +11075,9 @@ DASHBOARD_HTML = r"""
         <div class="left-nav-item left-nav-item-sub" id="left-nav-tracing" data-tab="tracing" onclick="switchTab('tracing')" data-i18n-title="nav.tracing_tooltip" title="Every trace: span waterfall, tree, and agent graph">
           <span class="left-nav-label" data-i18n="nav.tracing">Tracing</span>
         </div>
+        <div class="left-nav-item left-nav-item-sub" id="left-nav-turn-anatomy" data-tab="turn-anatomy" onclick="switchTab('turn-anatomy')" title="Decompose a turn into prompt, model, tools, compaction and reply">
+          <span class="left-nav-label">Turn anatomy</span>
+        </div>
       </div>
 
       <div class="left-nav-item" data-tab="approvals" onclick="switchTab('approvals')" data-i18n-title="nav.approvals_tooltip" title="Cloud-mediated approval queue">
@@ -11196,6 +11201,9 @@ DASHBOARD_HTML = r"""
 
 <!-- TRACING (Phoenix/Arize-style: span waterfall + tree + agent graph) -->
 {% include 'tabs/tracing.html' %}
+
+<!-- TURN ANATOMY (per-turn waterfall + stalled detector, P0-3) -->
+{% include 'tabs/turn-anatomy.html' %}
 
 <!-- SECURITY -->
 {% include 'tabs/security.html' %}

@@ -1,0 +1,24 @@
+<div class="page" id="page-turn-anatomy">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:16px;flex-wrap:wrap;">
+    <div>
+      <div style="font-size:18px;font-weight:700;color:var(--text-primary);">Turn anatomy</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Decompose one agent turn into a waterfall: prompt &rarr; model call(s) &rarr; each tool (start&rarr;end) &rarr; compaction &rarr; reply. Bar width is proportional to wall-clock duration.</div>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;">
+      <button class="refresh-btn" id="ta-back-btn" style="display:none;" onclick="turnAnatomyShowList()">&larr; Back to sessions</button>
+      <button class="refresh-btn" onclick="loadTurnAnatomy()">&#8635;</button>
+    </div>
+  </div>
+
+  <!-- Stalled / long-running indicator (persistent across both views) -->
+  <div id="ta-stalled" style="display:none;margin-bottom:12px;"></div>
+
+  <!-- SESSION LIST -->
+  <div class="card" id="ta-list" style="color:var(--text-muted);font-size:13px;">Loading sessions&hellip;</div>
+
+  <!-- TURN DETAIL -->
+  <div id="ta-detail" style="display:none;">
+    <div class="card" id="ta-detail-meta" style="margin-bottom:10px;"></div>
+    <div id="ta-turns"></div>
+  </div>
+</div>
