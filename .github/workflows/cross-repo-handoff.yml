@@ -25,8 +25,27 @@ jobs:
         with:
           path: oss
 
+      # CLOUD_REPO_PAT is NOT exposed to pull_request runs from a fork (GitHub
+      # withholds repo secrets from fork PRs to prevent exfiltration). Without it
+      # the private clawmetry-cloud checkout below cannot authenticate, so this
+      # cross-repo test can only run on same-repo PRs and on push to main. Detect
+      # that here and skip the cloud-dependent steps (job still goes green) so a
+      # fork contributor's PR is not blocked by an inaccessible private repo.
+      - name: Detect cloud-repo access
+        id: access
+        env:
+          CLOUD_REPO_PAT: ${{ secrets.CLOUD_REPO_PAT }}
+        run: |
+          if [ -n "$CLOUD_REPO_PAT" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=C4 skipped (fork PR)::CLOUD_REPO_PAT is not available to PRs from forks, so the private clawmetry-cloud repo cannot be checked out. The cross-repo handoff test is skipped on this run; it still runs on same-repo PRs and on push to main."
+          fi
+
       # Cloud repo provides run_cloud.py stub + DaemonSim wire-format simulator.
       - name: Checkout clawmetry-cloud
+        if: steps.access.outputs.available == 'true'
         uses: actions/checkout@v6
         with:
           repository: vivekchand/clawmetry-cloud
@@ -34,6 +53,7 @@ jobs:
           path: cloud
 
       - name: Patch run_cloud.py throttle stub (node_id kwarg compat)
+        if: steps.access.outputs.available == 'true'
         run: |
           python - <<'EOF'
           import pathlib
@@ -58,6 +78,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install deps
+        if: steps.access.outputs.available == 'true'
         run: |
           python -m pip install --upgrade pip
           # Install only what the test needs (avoids duckdb version-pin in requirements.txt)
@@ -69,6 +90,7 @@ jobs:
           pip install waitress
 
       - name: Run C4 cross-repo handoff
+        if: steps.access.outputs.available == 'true'
         env:
           CLAWMETRY_E2E_STUB_AUTH: "1"
         run: |

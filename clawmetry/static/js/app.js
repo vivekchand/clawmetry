@@ -427,6 +427,50 @@ setTimeout(checkActiveAlerts, 3000);
 
 // === Anomaly Detection Banner ===
 var _anomalyBannerEl = null;
+// ── Connector-down banner (incident: a channel went deaf ~37h, no alarm) ──
+// A red top banner whenever an enabled inbound channel's poll is 'down' —
+// the agent can still SEND but can no longer RECEIVE messages on it. Driven
+// by /api/system-health.connector_liveness (loadSystemHealth). Dynamically
+// created so it works on cloud (which serves this app.js) without a template.
+var _connectorBannerEl = null;
+function _getOrCreateConnectorBanner() {
+  if (_connectorBannerEl) return _connectorBannerEl;
+  var existing = document.getElementById('connector-down-banner');
+  if (existing) { _connectorBannerEl = existing; return existing; }
+  var el = document.createElement('div');
+  el.id = 'connector-down-banner';
+  el.style.cssText = 'display:none;padding:10px 16px;background:#7f1d1d;border-bottom:2px solid #ef4444;color:#fecaca;font-size:13px;font-weight:600;align-items:center;gap:10px;';
+  el.innerHTML = '<span style="font-size:18px;">&#128227;</span><span id="connector-down-banner-msg" style="flex:1;"></span><a href="#" onclick="switchTab(\'overview\');return false;" style="color:#fecaca;text-decoration:underline;font-size:12px;margin-right:8px;">View</a><button onclick="document.getElementById(\'connector-down-banner\').style.display=\'none\';" style="background:#991b1b;color:#fee2e2;border:none;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;">Dismiss</button>';
+  var alertBanner = document.getElementById('alert-banner');
+  if (alertBanner && alertBanner.parentNode) {
+    alertBanner.parentNode.insertBefore(el, alertBanner.nextSibling);
+  } else {
+    document.body.insertBefore(el, document.body.firstChild);
+  }
+  _connectorBannerEl = el;
+  return el;
+}
+
+function _renderConnectorBanner(liveness) {
+  var banner = _getOrCreateConnectorBanner();
+  var rows = Array.isArray(liveness) ? liveness : [];
+  var down = rows.filter(function(r){ return r && r.state === 'down'; });
+  if (down.length === 0) { banner.style.display = 'none'; return; }
+  function cap(s){ return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+  var first = down[0];
+  var mins = (first.mins_ago != null) ? first.mins_ago : null;
+  var since = (mins != null)
+    ? (mins >= 120 ? Math.round(mins/60) + 'h' : mins + 'm')
+    : '';
+  var msg = '⚠️ ' + cap(first.provider) + ' is not receiving messages'
+    + (since ? '. Inbound down ' + since + '.' : '.')
+    + ' Your agent can still send, but is not hearing replies.';
+  if (down.length > 1) msg += ' (+' + (down.length - 1) + ' more channel' + (down.length > 2 ? 's' : '') + ')';
+  var msgEl = document.getElementById('connector-down-banner-msg');
+  if (msgEl) msgEl.textContent = msg;
+  banner.style.display = 'flex';
+}
+
 function _getOrCreateAnomalyBanner() {
   if (_anomalyBannerEl) return _anomalyBannerEl;
   var existing = document.getElementById('anomaly-engine-banner');
@@ -3009,22 +3053,42 @@ function _provenancePillHtml(meta, bodyHtml) {
 // Detects the "Sender (untrusted metadata)" / "Conversation info ..." JSON
 // prefix that channel adapters prepend to user messages. Returns
 // { meta:{...}, body:"<remaining text>" } or null.
+//
+// Adapters STACK more than one such block — a Telegram user message arrives as
+//
+//     Conversation info (untrusted metadata):
+//     ```json { "chat_id": "telegram:…", "sender": "Vivek Chand", … } ```
+//     Sender (untrusted metadata):
+//     ```json { "label": "Vivek Chand (…)", "id": "…", "name": "Vivek Chand" } ```
+//     <real message body>
+//
+// We strip EVERY leading provenance block (not just the first) so the same
+// identity isn't echoed 2-3× under the pill. The pill summarises the first
+// (richest) block; later blocks are redundant with it and dropped entirely.
 function _parseProvenancePrefix(s) {
   if (!s || typeof s !== 'string') return null;
-  // Match: optional "<label> (untrusted metadata):" header, then a ```json
-  // block, then the rest is the real body. Header is optional because some
-  // payloads ship just the json fence at the top.
-  var m = s.match(/^(?:[^\n]*\(untrusted metadata\)[^\n]*\n)?\s*```json\s*([\s\S]*?)```\s*([\s\S]*)$/);
-  if (!m) return null;
-  try {
-    var meta = JSON.parse(m[1]);
-    if (!meta || typeof meta !== 'object') return null;
-    // Require at least one provenance-y key so we don't eat unrelated json.
-    if (meta.chat_id == null && meta.sender == null && meta.message_id == null) {
-      return null;
-    }
-    return { meta: meta, body: (m[2] || '').trim() };
-  } catch(e) { return null; }
+  var rest = s;
+  var firstMeta = null;
+  // One leading block: optional "<label> (untrusted metadata):" header, then a
+  // ```json fence. ``\n?`` swallows the newline between stacked blocks.
+  var blockRe = /^\s*([^\n]*\(untrusted metadata\)[^\n]*\n)?[ \t]*```json\s*([\s\S]*?)```[ \t]*\n?/;
+  while (true) {
+    var m = rest.match(blockRe);
+    if (!m) break;
+    var hadHeader = !!m[1];
+    var meta;
+    try { meta = JSON.parse(m[2]); } catch(e) { break; }
+    if (!meta || typeof meta !== 'object') break;
+    var looksProv = (meta.chat_id != null || meta.sender != null || meta.message_id != null);
+    // Without the "(untrusted metadata)" header we only strip a block that is
+    // clearly provenance, so a real ```json code block in the message body is
+    // never eaten. With the header the adapter already declared it plumbing.
+    if (!hadHeader && !looksProv) break;
+    if (firstMeta === null) firstMeta = meta;
+    rest = rest.slice(m[0].length);
+  }
+  if (firstMeta === null) return null;
+  return { meta: firstMeta, body: rest.trim() };
 }
 
 function renderBrainDetail(detail) {
@@ -8795,6 +8859,9 @@ async function _loadGatewayHealthSparkline() {
 async function loadSystemHealth() {
   try {
     var d = await fetchJsonWithTimeout('/api/system-health', 18000);
+    // Connector liveness: surface a 'down' inbound channel loudly (incident:
+    // a channel went deaf ~37h with no alarm). Driven by the same payload.
+    try { _renderConnectorBanner(d.connector_liveness); } catch(e) {}
     var services = Array.isArray(d.services) ? d.services : [];
     var channels = Array.isArray(d.channels) ? d.channels : [];
     var disks = Array.isArray(d.disks) ? d.disks : [];

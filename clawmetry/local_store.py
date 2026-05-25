@@ -4363,6 +4363,95 @@ class LocalStore:
             })
         return result
 
+    # ── Connector liveness ("agent went deaf and nobody noticed") ────────
+    # An OpenClaw channel provider (Telegram/Signal/Slack/…) runs an inbound
+    # long-poll. When that poll wedges — a network stall, an aborted restart
+    # that times out — the agent silently stops RECEIVING messages while it
+    # keeps SENDING (scheduled crons fire fine), so from the outside nothing
+    # looks broken. That exact failure left a node deaf for ~37h with no
+    # alarm. The only on-disk evidence is diagnostic lines in gateway.log /
+    # gateway.err.log; the daemon (sync.sync_connector_health_from_logs)
+    # tails them and records each signal here so health.py and the cloud
+    # snapshot can raise a real "inbound silent for Nh" alert.
+    def ingest_connector_health(
+        self,
+        *,
+        node_id: str,
+        provider: str,
+        kind: str,
+        ts_iso: str,
+        raw: str = "",
+    ) -> None:
+        """Idempotently record one connector-health signal in ``events``.
+
+        ``kind`` is one of the healthy markers (``started`` / ``recovered``)
+        or the unhealthy ones (``stall`` / ``disconnect`` / ``wedged``).
+        Idempotent on a stable id derived from provider+kind+ts so re-tailing
+        the log (after a rotation/truncation rescan) never double-counts.
+        """
+        import hashlib
+        prov = (provider or "").lower().strip()
+        if not prov or not kind or not ts_iso:
+            return
+        ev_id = "connhealth-" + hashlib.sha1(
+            f"{prov}|{kind}|{ts_iso}|{(raw or '')[:80]}".encode("utf-8")
+        ).hexdigest()[:24]
+        payload = json.dumps({
+            "provider": prov,
+            "kind": kind,
+            "raw": (raw or "")[:300],
+        }).encode("utf-8")
+        with self._write_lock:
+            self._conn.execute(
+                """
+                INSERT OR IGNORE INTO events
+                  (id, agent_type, node_id, agent_id, session_id, workspace_id,
+                   event_type, ts, data, cost_usd, token_count, model, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                [
+                    ev_id, "openclaw", node_id or "local", "main", None, None,
+                    "connector.health", ts_iso, payload, None, None, None,
+                    int(time.time() * 1000),
+                ],
+            )
+
+    def query_connector_health(self, since_hours: int = 24) -> list[dict[str, Any]]:
+        """Recent ``connector.health`` signals, newest first.
+
+        Returns ``[{provider, kind, ts, raw}, ...]`` over the last
+        ``since_hours``. Empty on any failure — callers degrade to an
+        'unknown' state and never crash. The classifier
+        (``routes/health.py:_connector_liveness``) turns this stream into a
+        per-channel ok/degraded/down verdict.
+        """
+        from datetime import datetime, timedelta, timezone
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(hours=int(since_hours))
+        ).isoformat()
+        rows = self._fetch(
+            "SELECT ts, data FROM events "
+            "WHERE event_type = 'connector.health' AND ts >= ? "
+            "ORDER BY ts DESC",
+            [cutoff],
+        )
+        decoded = _decode_data_blob_rows(rows, ["ts", "data"])
+        out: list[dict[str, Any]] = []
+        for r in decoded:
+            data = r.get("data") or {}
+            if not isinstance(data, dict):
+                continue
+            prov = str(data.get("provider") or "").lower().strip()
+            if not prov:
+                continue
+            out.append({
+                "provider": prov,
+                "kind": data.get("kind") or "",
+                "ts": r.get("ts") or "",
+                "raw": data.get("raw") or "",
+            })
+        return out
+
     def query_alert_rules(
         self,
         *,
@@ -5216,6 +5305,7 @@ class LocalStore:
         self,
         *,
         scan_sessions: int = 5,
+        exclude_clawmetry: bool = True,
     ) -> dict[str, Any]:
         """Peak context-window measurement for the latest active session.
 
@@ -5256,6 +5346,16 @@ class LocalStore:
         Args:
             scan_sessions: How many most-recent sessions to walk before
                 giving up. Matches the legacy file-scan budget of 5.
+            exclude_clawmetry: Skip sessions whose id starts with
+                ``clawmetry-`` (Self-Evolve, Fix-with-AI, memory probes,
+                …). Default True so the "Context Window Usage" gauge
+                reflects the *user's* agent, not ClawMetry's own
+                plumbing. Bug surfaced 2026-05-23: OSS showed a 204K
+                SelfEvolve context while cloud showed 38K for the user's
+                actual session, because OSS scanned whichever
+                clawmetry-* session ran most recently first. Pass False
+                to keep the legacy include-everything behaviour
+                (debug tooling).
         """
         # Step 1: most-recent N sessions ordered by last activity. The
         # session table has updated_at; we use events for the same answer
@@ -5267,6 +5367,10 @@ class LocalStore:
         # returned ``input_tokens=0`` and the dashboard's
         # /api/context-anatomy "Session history" bucket vanished.
         ev_in = _sql_in_clause(_ASSISTANT_EVENT_TYPES)
+        # Over-fetch when filtering so a burst of clawmetry-* plumbing
+        # sessions can't crowd the user's real session out of the scan
+        # budget. The post-filter still respects the caller's cap.
+        sql_limit = int(scan_sessions) * (4 if exclude_clawmetry else 1)
         recent_sessions = self._fetch(
             f"""
             SELECT session_id, MAX(ts) AS last_ts
@@ -5277,8 +5381,17 @@ class LocalStore:
             ORDER BY last_ts DESC
             LIMIT ?
             """,
-            [int(scan_sessions)],
+            [sql_limit],
         )
+        if exclude_clawmetry:
+            # Imported here to keep clawmetry.config off this module's
+            # import critical path (local_store is imported in the cloud
+            # too, where the env-var override semantics still apply).
+            from clawmetry.config import hide_clawmetry_session
+            recent_sessions = [
+                r for r in recent_sessions
+                if not hide_clawmetry_session(r[0])
+            ][: int(scan_sessions)]
         for sid_row in recent_sessions:
             sid, _last_ts = sid_row[0], sid_row[1]
             if not sid:

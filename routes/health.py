@@ -1332,6 +1332,10 @@ def api_system_health():
             # so operators see whether the gateway WS tap is actually
             # writing Telegram/Signal/Slack/etc. messages to DuckDB.
             "channel_ingest": _channel_ingest_recent(),
+            # Connector liveness (incident 2026-05-24: a node went deaf for
+            # ~37h with no alarm). Per enabled channel: is the inbound poll
+            # alive? 'down' = stopped receiving messages — the one that bites.
+            "connector_liveness": _connector_liveness(),
             "_source": top_source,
         }
     )
@@ -1553,6 +1557,42 @@ def _channel_ingest_recent():
     # Most-recently-active provider first.
     out.sort(key=lambda r: r.get("mins_ago") if r.get("mins_ago") is not None else 1e9)
     return out
+
+
+# ── Connector liveness ("agent went deaf and nobody noticed") ───────────────
+# A channel went deaf for ~37h with no alarm (2026-05-24): the inbound
+# long-poll wedged but outbound (crons) kept working, so health stayed green.
+# The daemon records connector.health signals (sync.sync_connector_health
+# _from_logs); the classifier is shared with the cloud snapshot builder in
+# ``clawmetry/connector_health.py`` so the local UI and cloud never disagree.
+def _connector_liveness():
+    """Per-enabled-channel inbound-poll verdict for the System Health UI.
+
+    Returns ``[{provider, state, reason, mins_ago, last_kind}, ...]`` with
+    ``state`` ∈ ``down`` | ``degraded`` | ``unknown`` | ``ok`` (worst first).
+    Reads connector.health signals via the daemon proxy (DuckDB-first);
+    returns ``[]`` on any failure — never blocks /api/system-health.
+    """
+    from clawmetry.connector_health import (
+        enabled_channels_from_config, classify_connector_liveness,
+    )
+    enabled = enabled_channels_from_config()
+    if not enabled:
+        return []
+    rows = None
+    try:
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_connector_health", since_hours=24)
+    except Exception:
+        rows = None
+    if rows is None:
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            rows = store.query_connector_health(since_hours=24)
+        except Exception:
+            rows = []
+    return classify_connector_liveness(enabled, rows)
 
 
 def _summarise_gateway_metric_recent(minutes: int = 60):

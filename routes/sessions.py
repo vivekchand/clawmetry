@@ -2259,6 +2259,162 @@ def api_subagents():
     return jsonify(payload)
 
 
+def _check_duplicate_completions(sessions_dir, max_files=None):
+    """Scan JSONL files for duplicate 'Internal task completion' events per child key.
+
+    Returns list of {type, subagentKey, count, timestamps} for any child
+    that received more than one completion broadcast in the parent transcript.
+    """
+    import glob as _glob
+    import re as _re
+    _session_key_re = _re.compile(r"session_key:\s*(agent:main:subagent:[\w-]+)")
+    completion_counts: dict = {}  # child_key -> [ts, ...]
+    if not sessions_dir or not os.path.isdir(sessions_dir):
+        return []
+    files = _glob.glob(os.path.join(sessions_dir, "*.jsonl"))
+    try:
+        files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    except Exception:
+        pass
+    if max_files and max_files > 0:
+        files = files[:max_files]
+    for fpath in files:
+        if ".deleted." in fpath or ".checkpoint." in fpath:
+            continue
+        try:
+            with open(fpath, "r", errors="replace") as fh:
+                for raw in fh:
+                    raw = raw.strip()
+                    if not raw or "Internal task completion event" not in raw:
+                        continue
+                    try:
+                        ev = json.loads(raw)
+                    except Exception:
+                        continue
+                    msg = ev.get("message") or {}
+                    if msg.get("role") != "user":
+                        continue
+                    ts = ev.get("timestamp", "")
+                    for blk in msg.get("content") or []:
+                        if not isinstance(blk, dict) or blk.get("type") != "text":
+                            continue
+                        txt = blk.get("text") or ""
+                        if "Internal task completion event" not in txt or "source: subagent" not in txt:
+                            continue
+                        sk_m = _session_key_re.search(txt)
+                        if not sk_m:
+                            continue
+                        child_key = sk_m.group(1)
+                        completion_counts.setdefault(child_key, []).append(ts)
+        except Exception:
+            continue
+    return [
+        {"type": "duplicate_completion", "subagentKey": ck, "count": len(ts_list), "timestamps": ts_list}
+        for ck, ts_list in completion_counts.items()
+        if len(ts_list) > 1
+    ]
+
+
+def _check_integrity(subagents):
+    """Run orphan and cycle integrity checks on an assembled subagent list.
+
+    Orphan: child references a parent key not present in the live session set,
+    age-gated to 7 days to avoid false-positives for GC'd old sessions.
+    Cycle: DFS detects back-edges in the parent→child adjacency graph.
+
+    Returns list of violation dicts.
+    """
+    violations = []
+    keys = {s["key"] for s in subagents if s.get("key")}
+    seven_days_ms = 7 * 24 * 3600 * 1000
+    now_ms = time.time() * 1000
+
+    for s in subagents:
+        parent = s.get("parent")
+        key = s.get("key", "")
+        if not parent or not key:
+            continue
+        # Only flag if parent looks like a subagent key (nested subagent
+        # whose parent is gone). Depth-1 subagents have a main session
+        # as parent — those will never appear in the subagent list and
+        # should not be flagged.
+        if "subagent" in parent and parent not in keys:
+            started = s.get("startedAt") or 0
+            if now_ms - started < seven_days_ms:
+                violations.append({
+                    "type": "orphan",
+                    "subagentKey": key,
+                    "displayName": s.get("displayName", ""),
+                    "parentKey": parent,
+                })
+
+    children_map: dict = {}
+    for s in subagents:
+        parent = s.get("parent")
+        key = s.get("key")
+        if parent and key:
+            children_map.setdefault(parent, []).append(key)
+
+    visited: set = set()
+    in_stack: set = set()
+
+    def _dfs(node, path):
+        if node in in_stack:
+            violations.append({"type": "cycle", "path": path + [node]})
+            return
+        if node in visited:
+            return
+        visited.add(node)
+        in_stack.add(node)
+        for child in children_map.get(node, []):
+            _dfs(child, path + [node])
+        in_stack.discard(node)
+
+    for s in subagents:
+        key = s.get("key")
+        if key and key not in visited:
+            _dfs(key, [])
+
+    return violations
+
+
+@bp_sessions.route("/api/subagents/integrity")
+def api_subagents_integrity():
+    """Validate subagent state-machine: orphans, cycles, duplicate completions.
+
+    Returns {violations, stats, checked_at}. Backend-only — no UI yet;
+    the endpoint exists for the Subagents tab to consume when the badge
+    is wired up.
+    """
+    import dashboard as _d
+    sub_resp = api_subagents()
+    try:
+        sub_data = json.loads(sub_resp.get_data(as_text=True))
+    except Exception:
+        sub_data = {}
+    subagents = sub_data.get("subagents") or []
+
+    violations = _check_integrity(subagents)
+
+    sessions_dir = getattr(_d, "SESSIONS_DIR", None) or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    try:
+        violations.extend(
+            _check_duplicate_completions(sessions_dir, max_files=_SUBAGENTS_SCAN_MAX_FILES)
+        )
+    except Exception:
+        pass
+
+    stats = {
+        "orphan_count": sum(1 for v in violations if v["type"] == "orphan"),
+        "cycle_count": sum(1 for v in violations if v["type"] == "cycle"),
+        "duplicate_count": sum(1 for v in violations if v["type"] == "duplicate_completion"),
+        "subagents_checked": len(subagents),
+    }
+    return jsonify({"violations": violations, "stats": stats, "checked_at": time.time()})
+
+
 def _try_local_store_delegation_tree():
     """Fast path for /api/delegation-tree (Tier-1 from #1778 punch list).
 
