@@ -21,13 +21,18 @@ Each ``.jsonl`` line is a FLAT ``providers.Message`` (NOT an OpenClaw v3
     {
       "role": "assistant",
       "content": "...",              # content is a STRING, not a block array
-      "model_name": "ollama/llama3.1:8b",
-      "created_at": "2026-05-25T10:00:05Z",   # RFC3339, omitempty
-      "tool_calls": [{"id": ..., "name": ..., "arguments": "..."}],  # omitempty
-      "tool_call_id": "...",          # omitempty
+      "model_name": "llama3",        # bare config alias, OR "ollama/llama3.1:8b"
+      "created_at": "2026-05-25T10:11:39.37008+02:00",   # RFC3339, Go-trimmed fraction
+      "tool_calls": [{"id": ..., "type": "function",
+                      "function": {"name": ..., "arguments": "..."}}],  # OpenAI-nested
+      "tool_call_id": "...",          # omitempty, on tool-result lines
       "reasoning_content": "...",     # omitempty
       "media": [], "attachments": []
     }
+
+The ``model_name`` may be a bare config alias (e.g. ``llama3``) or a
+``provider/model`` string (e.g. ``ollama/llama3.1:8b``) depending on the
+user's PicoClaw config; both are handled (provider prefix kept in extra).
 
 IMPORTANT — tokens and cost are NOT on disk. The ``providers.Message``
 struct carries no usage / token / cost field, so PicoClaw JSONL gives us
@@ -43,8 +48,18 @@ import glob
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any
+
+# Normalises the fractional-seconds part of an ISO-8601 timestamp. PicoClaw is
+# written in Go, whose time.Time JSON marshaling TRIMS trailing zeros, so it
+# emits e.g. "2026-05-25T10:11:39.37008+02:00" (5 fractional digits).
+# datetime.fromisoformat() on Python 3.9/3.10 only accepts exactly 0, 3, or 6
+# fractional digits, so an odd count raises ValueError and the timestamp would
+# silently parse as 0.0. We pad/truncate the fractional run to 6 digits.
+# (Caught against a real captured PicoClaw session; ClawMetry CI runs Py3.9.)
+_FRAC_RE = re.compile(r"\.(\d+)")
 
 from .base import AgentAdapter, Capability, DetectResult, Event, Session
 
@@ -80,6 +95,9 @@ def _parse_ts(ts: Any) -> float:
             return 0.0
         if s.endswith("Z"):
             s = s[:-1] + "+00:00"
+        # Pad/truncate fractional seconds to 6 digits so Go's trailing-zero
+        # trimming (e.g. ".37008") still parses on Python 3.9/3.10.
+        s = _FRAC_RE.sub(lambda m: "." + (m.group(1) + "000000")[:6], s, count=1)
         dt = datetime.fromisoformat(s)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
@@ -385,7 +403,18 @@ class PicoClawAdapter(AgentAdapter):
                         continue
                     if len(events) >= limit:
                         break
-                    name = tc.get("name") or "unknown"
+                    # Real PicoClaw tool calls are OpenAI-nested:
+                    # {"id", "type":"function", "function":{"name","arguments"}}.
+                    # Read the nested function object first, falling back to a
+                    # flat shape for forward/backward compatibility. (The flat
+                    # read dropped tool name + args on real captured data.)
+                    fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+                    name = fn.get("name") or tc.get("name") or "unknown"
+                    arguments = (
+                        fn.get("arguments")
+                        if fn.get("arguments") is not None
+                        else tc.get("arguments")
+                    )
                     seq += 1
                     events.append(Event(
                         agent=_AGENT,
@@ -398,7 +427,7 @@ class PicoClawAdapter(AgentAdapter):
                         tool_calls=[{
                             "id": tc.get("id") or "",
                             "name": name,
-                            "arguments": tc.get("arguments"),
+                            "arguments": arguments,
                         }],
                     ))
         return events

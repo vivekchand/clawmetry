@@ -22,17 +22,27 @@ to ``timestamp`` when a seq is missing).
 defensively and pull out a text/body field, falling back to the raw
 string when it is not JSON or has no recognisable text field.
 
-OPEN QUESTIONS (confirm with the NanoClaw maintainers):
-  * Model / tokens / cost: the message tables have NO model, token, or
-    cost columns. So on disk the model is unknown and tokens/cost are
-    0/None. Usage almost certainly lives in the Agent SDK event log, not
-    these DBs. We surface model="" and total_tokens=0 / cost_usd=None and
-    document it here rather than guessing.
+Both of the following were VERIFIED against a real NanoClaw install
+(github.com/nanocoai/nanoclaw @ 2.0.69) by running its own runtime code and
+capturing the session SQLite (see tests/fixtures/runtimes/nanoclaw/REAL/):
+
+  * Model / tokens / cost: the message tables have NO model, token, or cost
+    columns. The Agent SDK transcript that DOES carry usage lives INSIDE the
+    container (``$HOME/.claude/projects/.../<sessionId>.jsonl``) and is
+    archived-to-markdown then rotated/deleted; it never lands on the
+    host-visible session dir, and ``claude.ts translateEvents()`` keeps only
+    the result text + session id. So model/tokens/cost are genuinely
+    unrecoverable host-side. We honestly surface model="", total_tokens=0,
+    cost_usd=None and omit the COST capability.
   * Data dir: NanoClaw resolves its data dir as
-    ``path.resolve(process.cwd(), 'data')`` (install-CWD-relative), so the
-    real path depends on where the runtime was launched. We default to
-    ``~/.nanoclaw/data/v2-sessions`` (overridable via the constructor) as
-    a sensible install-home guess; confirm the deployed path.
+    ``path.resolve(process.cwd(), 'data')`` (install-CWD-relative). There is
+    NO ``NANOCLAW_HOME`` and NO ``DATA_DIR`` env override in NanoClaw, and it
+    does NOT use ``~/.nanoclaw``. The README flow clones to a checkout dir
+    (e.g. ``~/nanoclaw-v2``) and runs from there, so the real path is
+    ``<checkout>/data/v2-sessions``. We therefore discover the dir from a
+    bounded set of common checkout locations (plus a ClawMetry-side
+    ``CLAWMETRY_NANOCLAW_DIR`` override and the constructor arg) instead of
+    guessing a single home path.
 
 Read-only contract: the NanoClaw runtime actively owns these DB files.
 We ALWAYS open them read-only + immutable
@@ -62,16 +72,74 @@ _INBOUND_CHAT_KINDS = {"chat", "message", "user", "channel", "wake"}
 _OUTBOUND_CHAT_KINDS = {"chat", "chat-sdk", "assistant", "reply"}
 
 
-def _default_data_dir() -> str:
-    """Default NanoClaw v2-sessions root.
+# Common locations a NanoClaw checkout lands in. NanoClaw's data dir is
+# CWD-relative (<checkout>/data/v2-sessions) with no env var, so we scan a
+# bounded, explicit set of likely checkout roots rather than walking $HOME.
+_CHECKOUT_GLOBS = (
+    "~/nanoclaw*/data/v2-sessions",
+    "~/projects/nanoclaw*/data/v2-sessions",
+    "~/src/nanoclaw*/data/v2-sessions",
+    "~/code/nanoclaw*/data/v2-sessions",
+    "~/dev/nanoclaw*/data/v2-sessions",
+    "~/.nanoclaw/data/v2-sessions",  # last-ditch fallback (not used by NanoClaw)
+)
 
-    NanoClaw itself resolves data as ``path.resolve(process.cwd(), 'data')``
-    (install-CWD-relative), so there is no canonical absolute path. We
-    default to the user-home guess and let callers override via the
-    constructor / NANOCLAW_HOME.
+
+def _has_session_dbs(v2_sessions_dir: str) -> bool:
+    """True if a v2-sessions dir actually holds a <group>/<session>/inbound.db."""
+    try:
+        return bool(glob.glob(os.path.join(v2_sessions_dir, "*", "*", "inbound.db")))
+    except OSError:
+        return False
+
+
+def _normalize_data_dir(path: str) -> str:
+    """Accept either a v2-sessions dir or a checkout root and return the former.
+
+    Lets ``CLAWMETRY_NANOCLAW_DIR`` (and the constructor arg) point at the
+    NanoClaw checkout root, its ``data`` dir, or the ``v2-sessions`` dir
+    directly. A path that already holds ``<group>/<session>/inbound.db`` is
+    treated as the sessions root as-is (whatever its name); an unresolvable
+    path is returned unchanged so detect() reports detected=False gracefully.
     """
-    home = os.environ.get("NANOCLAW_HOME") or os.path.expanduser("~/.nanoclaw")
-    return os.path.join(home, "data", "v2-sessions")
+    path = os.path.expanduser(path.rstrip(os.sep))
+    if _has_session_dbs(path) or os.path.basename(path) == "v2-sessions":
+        return path
+    for sub in ("v2-sessions", os.path.join("data", "v2-sessions")):
+        cand = os.path.join(path, sub)
+        if os.path.isdir(cand):
+            return cand
+    return path
+
+
+def _discover_data_dir() -> str:
+    """Discover a real NanoClaw v2-sessions dir with zero config.
+
+    Order: explicit ClawMetry override -> the current working dir's data/ ->
+    common checkout locations. Returns the first that actually contains
+    session DBs; if none do, returns the first plausible path so detect()
+    reports detected=False gracefully. Never raises.
+    """
+    # 1. Explicit ClawMetry-side override (NanoClaw has no env var of its own).
+    override = os.environ.get("CLAWMETRY_NANOCLAW_DIR")
+    if override:
+        return _normalize_data_dir(override)
+
+    candidates: list[str] = []
+    # 2. Running from inside the checkout (NanoClaw's own CWD-relative path).
+    candidates.append(os.path.join(os.getcwd(), "data", "v2-sessions"))
+    # 3. Common checkout locations (bounded globs, newest match first).
+    for pattern in _CHECKOUT_GLOBS:
+        try:
+            for hit in sorted(glob.glob(os.path.expanduser(pattern)), reverse=True):
+                candidates.append(hit)
+        except OSError:
+            continue
+
+    for cand in candidates:
+        if _has_session_dbs(cand):
+            return cand
+    return candidates[0] if candidates else os.path.expanduser(_CHECKOUT_GLOBS[-1])
 
 
 def _parse_ts(ts: Any) -> float:
@@ -138,6 +206,15 @@ def _extract_text(content: Any) -> str:
             val = obj.get(key)
             if isinstance(val, str) and val:
                 return val
+        # NanoClaw control messages have no text field, e.g.
+        # {"operation":"reaction","emoji":"X"} or {"operation":"edit",...}.
+        # Summarise them so they never leak raw JSON into a session title.
+        op = obj.get("operation")
+        if isinstance(op, str) and op:
+            emoji = obj.get("emoji")
+            if op == "reaction" and emoji:
+                return f"[reaction {emoji}]"
+            return f"[{op}]"
         # OpenAI/Anthropic-style content blocks: [{"type":"text","text":...}]
         blocks = obj.get("content")
         if isinstance(blocks, list):
@@ -194,7 +271,11 @@ class NanoClawAdapter(AgentAdapter):
     display_name = "NanoClaw"
 
     def __init__(self, data_dir: str | None = None) -> None:
-        self.data_dir = data_dir or _default_data_dir()
+        # Explicit arg wins; otherwise discover a real install (CWD-relative,
+        # common checkout locations, or CLAWMETRY_NANOCLAW_DIR override).
+        self.data_dir = (
+            _normalize_data_dir(data_dir) if data_dir else _discover_data_dir()
+        )
 
     # ── helpers ──────────────────────────────────────────────────────────
 

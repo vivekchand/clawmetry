@@ -14,11 +14,16 @@ their own native format and ship a dedicated reader adapter
 
 ## What "Beta adapter" means (and what it does not)
 
-A **Beta adapter** means ClawMetry ships a reader for that runtime's *real,
-verified* on-disk format, with fixture-backed CI tests that fail if the parse
-path regresses. It is **not** the same as the earlier "Verified" claim, which
-was withdrawn: it had been based on fixtures that were actually OpenClaw v3
-records relabeled, and so proved only that ClawMetry parses OpenClaw's shape.
+A **Beta adapter** means ClawMetry ships a reader for that runtime's *real*
+on-disk format, validated against a session captured from a **real install** of
+that runtime (we installed and ran both, see
+`tests/fixtures/runtimes/<runtime>/REAL/PROVENANCE.md`), with fixture-backed CI
+tests that fail if the parse path regresses. It is **not** the same as the
+earlier "Verified" claim, which was withdrawn: that had been based on fixtures
+that were actually OpenClaw v3 records relabeled, and so proved only that
+ClawMetry parses OpenClaw's shape. Running the real runtimes caught real bugs
+the relabeled fixtures could never have (PicoClaw's nested tool-call shape and
+Go's trailing-zero timestamps; NanoClaw's CWD-relative data dir).
 
 PicoClaw and NanoClaw do **not** share OpenClaw's layout (verified 2026-05-25
 against the real sources):

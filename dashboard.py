@@ -10563,31 +10563,29 @@ def detect_config(args=None):
     #   - PicoClaw  (github.com/sipeed/picoclaw): flat providers.Message JSONL
     #     under ~/.picoclaw/workspace/sessions/.
     #   - NanoClaw  (github.com/nanocoai/nanoclaw): per-session SQLite DBs
-    #     (inbound.db / outbound.db) under <data_dir>/v2-sessions/.
-    # Register each only when its home directory exists, so an absent runtime
-    # never clutters the multi-agent chip bar. Each adapter's detect() is
-    # independently safe, so this gate is purely a UI-cleanliness measure.
+    #     (inbound.db / outbound.db) under a CWD-relative <checkout>/data/
+    #     v2-sessions/ (discovered via common checkout locations or the
+    #     CLAWMETRY_NANOCLAW_DIR override).
+    # Register each only when its own detect() reports the runtime present, so
+    # an absent runtime never clutters the multi-agent chip bar. detect() is
+    # cheap (filesystem globs) and never raises, so this gate is safe.
     try:
         from clawmetry.adapters.picoclaw import PicoClawAdapter
-        if os.environ.get("PICOCLAW_HOME") or os.path.isdir(
-            os.path.expanduser("~/.picoclaw")
-        ):
-            _adapter_registry.register(PicoClawAdapter())
-    except Exception as _pico_err:  # pragma: no cover - defensive
-        import logging as _logging
-        _logging.getLogger(__name__).debug(
-            "Skipped PicoClawAdapter registration: %s", _pico_err
-        )
-    try:
         from clawmetry.adapters.nanoclaw import NanoClawAdapter
-        if os.environ.get("NANOCLAW_HOME") or os.path.isdir(
-            os.path.expanduser("~/.nanoclaw")
-        ):
-            _adapter_registry.register(NanoClawAdapter())
-    except Exception as _nano_err:  # pragma: no cover - defensive
+        for _family_cls in (PicoClawAdapter, NanoClawAdapter):
+            try:
+                _inst = _family_cls()
+                if _inst.detect().detected:
+                    _adapter_registry.register(_inst)
+            except Exception as _fam_err:  # pragma: no cover - defensive
+                import logging as _logging
+                _logging.getLogger(__name__).debug(
+                    "Skipped %s registration: %s", _family_cls.__name__, _fam_err
+                )
+    except Exception as _fam_import_err:  # pragma: no cover - defensive
         import logging as _logging
         _logging.getLogger(__name__).debug(
-            "Skipped NanoClawAdapter registration: %s", _nano_err
+            "OpenClaw-family adapters unavailable: %s", _fam_import_err
         )
 
     # Local-OSS shims for cloud-only endpoints. Return empty arrays so the

@@ -1,9 +1,26 @@
 # PRD: PicoClaw Runtime Support
 
-**Status:** Draft / in progress
+**Status:** Adapter validated against a real captured session
 **Owner:** ClawMetry runtime-compat
 **Tracking issue:** #956 (supersedes the "shares OpenClaw layout" assumption in PR #1981)
-**Last verified against source:** 2026-05-25
+**Last verified:** 2026-05-25 (installed PicoClaw v0.2.9 from source, ran real agent turns against local Ollama, captured + validated)
+
+> ## Verified by running it
+> We installed PicoClaw v0.2.9 (source build; `go install` fails on its `replace`
+> directive), pointed it at a local Ollama model (`llama3`, zero cost), and ran
+> real `picoclaw agent` turns including a real `exec` tool call. The captured
+> session is committed under `tests/fixtures/runtimes/picoclaw/REAL/` (see
+> `PROVENANCE.md`) and the adapter is tested against those exact bytes. Running
+> it for real surfaced two bugs that synthetic fixtures missed (both now fixed):
+> 1. **Tool calls are OpenAI-nested** (`tool_calls[].function.{name,arguments}`),
+>    not flat. The flat read dropped every tool name + its arguments.
+> 2. **Go trims trailing zeros** from fractional seconds (`...39.37008+02:00`),
+>    which made `datetime.fromisoformat()` raise on Python 3.9/3.10 (a CI matrix
+>    leg) and silently zero the timestamp. Now padded to 6 digits.
+>
+> Confirmed two ways (Go struct + real bytes): **no token/usage/cost field exists
+> on disk** for the `agent` JSONL path, so the adapter's `total_tokens=0` /
+> `cost_usd=None` / no-COST is the correct, honest representation.
 
 ---
 
@@ -41,8 +58,10 @@ Verified 2026-05-25 via the GitHub API and direct source reads of `sipeed/picocl
 - **Sessions:** `<workspace>/sessions/<key>.jsonl` (append-only) + a `<key>.meta.json` sidecar.
   **NOT** `agents/main/sessions/`. Key sanitization replaces `:` `/` `\` with `_`
   (`pkg/memory/jsonl.go`).
-- **Crons:** `<workspace>/cron/jobs.json` (a JSON file, not gateway-RPC). Schedule types are
-  `at_seconds` / `every_seconds` / `cron_expr` (distinct from OpenClaw's `expr`).
+- **Crons:** `<workspace>/cron/jobs.json` (a JSON file, not gateway-RPC). Verified real shape:
+  each job has `schedule.{kind, expr}` (e.g. `{"kind":"cron","expr":"0 9 * * *"}`) and a
+  `payload.{kind, message}`, not the `at_seconds`/`every_seconds`/`cron_expr` the earlier
+  source-read had guessed. See `tests/fixtures/runtimes/picoclaw/REAL/cron/jobs.json`.
 - **Config:** `$PICOCLAW_HOME/config.json`. Default model in `config.example.json` is `gpt-5.4`
   (hosted); provider is empty by default (user picks). "PicoClaw == local Ollama" is an *assumption*;
   Ollama is opt-in.
@@ -126,13 +145,15 @@ the format differs from OpenClaw, so it does NOT subclass `OpenClawAdapter`):
   for labeling. Add a node-level `runtimeInfo.items[]` entry `{"label":"Runtime","value":"PicoClaw"}`
   so the cloud Runtime popup labels it with no cloud code change (the field already renders).
 
-## 6. Open questions (confirm before "Verified")
-- **Q1 (highest priority):** does PicoClaw persist per-message usage tokens anywhere on disk (a `usage`
-  line, a separate file), or is `UsageInfo` runtime-only? Determines whether token/cost is ever
-  showable. Until answered, surface tokens/cost as "not reported by PicoClaw," never 0-as-if-measured.
-- **Q2:** confirm sessions are exactly `<workspace>/sessions/<key>.jsonl` across PicoClaw versions
-  (some may nest per-agent).
-- **Q3:** is `content` always a string, including for tool calls/results, across versions?
+## 6. Open questions
+- **Q1 (RESOLVED):** does PicoClaw persist usage tokens on disk? **No** for the `agent` JSONL path
+  (confirmed via the Go `providers.Message` struct and the real captured session). A separate
+  `pkg/seahorse` SQLite store has a `token_count` column, but the `agent` CLI writes the JSONL store,
+  which has none. Tokens/cost are surfaced as unavailable, never fabricated.
+- **Q2 (RESOLVED for v0.2.9):** sessions are `<workspace>/sessions/<key>.jsonl` (key is a
+  `sk_v1_<hash>`); confirm stability across future versions via the pinned fixture + CI.
+- **Q3 (RESOLVED):** real `content` is a string; the first line is a real user message (no session
+  header). `model_name` may be a bare alias (`llama3`) or `provider/model`; both handled.
 - **Q4:** for live data, do we want gateway ingest on 18790? (out of scope now)
 
 ## 7. Verification plan

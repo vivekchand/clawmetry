@@ -214,3 +214,57 @@ def test_never_raises_on_garbage_file(tmp_path):
     assert len(good_events) == 1
     assert good_events[0].type == "message"
     assert good_events[0].role == "user"
+
+
+# ── REAL captured session (ground truth) ─────────────────────────────────────
+#
+# Captured by actually installing PicoClaw (sipeed/picoclaw v0.2.9, source
+# build) and running real agent turns against a local Ollama model. These
+# tests lock in two bugs found ONLY against real bytes (synthetic fixtures
+# missed both): (1) tool_calls are OpenAI-nested under "function", and
+# (2) Go trims trailing zeros from fractional seconds, which broke
+# datetime.fromisoformat on Python 3.9. See REAL/PROVENANCE.md.
+
+_REAL_SESSIONS = os.path.join(
+    os.path.dirname(__file__), "fixtures", "runtimes", "picoclaw", "REAL", "sessions"
+)
+
+
+def _real_present() -> bool:
+    import glob as _g
+    return bool(_g.glob(os.path.join(_REAL_SESSIONS, "*.jsonl")))
+
+
+@pytest.mark.skipif(not _real_present(), reason="real PicoClaw capture not present")
+def test_real_capture_parses():
+    a = PicoClawAdapter(sessions_dir=_REAL_SESSIONS)
+    assert a.detect().detected is True
+    sessions = a.list_sessions()
+    assert len(sessions) == 1
+    s = sessions[0]
+    # Real build wrote a bare config alias (not "ollama/..."), so model is the
+    # alias and source (provider prefix) is empty.
+    assert s.model == "llama3"
+    assert s.source == ""
+    assert s.message_count == 8
+    # Tokens/cost are not on disk for PicoClaw, honestly surfaced.
+    assert s.total_tokens == 0
+    assert s.cost_usd is None
+
+
+@pytest.mark.skipif(not _real_present(), reason="real PicoClaw capture not present")
+def test_real_capture_tool_calls_and_timestamps():
+    a = PicoClawAdapter(sessions_dir=_REAL_SESSIONS)
+    s = a.list_sessions()[0]
+    events = a.list_events(s.id)
+    # Bug 1: nested function.name/arguments must be extracted (was "unknown").
+    tool_calls = [e for e in events if e.type == "tool_call"]
+    assert tool_calls, "expected at least one tool_call event"
+    names = {e.tool_name for e in tool_calls}
+    assert "exec" in names
+    assert "unknown" not in names
+    exec_call = next(e for e in tool_calls if e.tool_name == "exec")
+    assert exec_call.tool_calls[0]["arguments"]  # real args present, not None
+    assert "echo hello-from-picoclaw" in exec_call.tool_calls[0]["arguments"]
+    # Bug 2: every event timestamp must parse (>0) despite 5-digit fractions.
+    assert all(e.ts > 0 for e in events), "Go-trimmed fractional seconds must parse on Py3.9"

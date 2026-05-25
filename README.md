@@ -121,7 +121,7 @@ ClawMetry observes the OpenClaw runtime family. Some members share OpenClaw's se
 | **PicoClaw** | Beta adapter | Reads PicoClaw's native flat JSONL (`~/.picoclaw/workspace/sessions`). Transcripts, model, and tool calls. Tokens/cost are not written to disk by PicoClaw. |
 | **NanoClaw** | Beta adapter | Reads NanoClaw's native per-session SQLite (`data/v2-sessions`). Transcripts and message counts. Model/tokens/cost are not written to those tables. |
 
-"Beta adapter" means ClawMetry ships a reader for that runtime's real, verified on-disk format with fixture-backed CI tests. A per-runtime "Verified" badge is restored only after a session captured from a real install passes its adapter test and the live end-to-end path is confirmed.
+"Beta adapter" means ClawMetry ships a reader for that runtime's real on-disk format, validated against a session captured from a real install (we installed and ran both; see `tests/fixtures/runtimes/<rt>/REAL/` and the per-runtime PRDs) with fixture-backed CI tests. A full "Verified" badge is reserved for once the live cloud end-to-end path is also confirmed.
 
 ## Configuration
 

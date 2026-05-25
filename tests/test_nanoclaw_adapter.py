@@ -257,3 +257,76 @@ def _iso(s: str) -> float:
     from clawmetry.adapters.nanoclaw import _parse_ts
 
     return _parse_ts(s)
+
+
+# ── REAL captured session SQLite (ground truth) ──────────────────────────────
+#
+# Captured by cloning NanoClaw (nanocoai/nanoclaw v2.0.69) and provisioning
+# sessions through its OWN ensureSchema()/insertMessage() code, so the schema
+# and content shapes are authentic. Locks in the real-world corrections:
+# data dir is CWD-relative (no ~/.nanoclaw, no env var of NanoClaw's own),
+# control rows ({"operation":"reaction",...}) must not leak raw JSON into the
+# session title, and usage is genuinely not on the host disk. See
+# REAL/PROVENANCE.md.
+
+_REAL_ROOT = os.path.join(
+    os.path.dirname(__file__), "fixtures", "runtimes", "nanoclaw", "REAL"
+)
+
+
+def _real_dbs_present() -> bool:
+    import glob as _g
+    return bool(_g.glob(os.path.join(_REAL_ROOT, "*", "*", "inbound.db")))
+
+
+@pytest.mark.skipif(not _real_dbs_present(), reason="real NanoClaw capture not present")
+def test_real_capture_detect_and_sessions():
+    a = NanoClawAdapter(data_dir=_REAL_ROOT)
+    d = a.detect()
+    assert d.detected is True
+    assert d.session_count == 2
+    sessions = {s.id: s for s in a.list_sessions()}
+    assert "sess-1779696636602-real01" in sessions
+    assert "sess-1779696695425-varied" in sessions
+    # Usage is not on disk; honestly surfaced.
+    for s in sessions.values():
+        assert s.model == ""
+        assert s.total_tokens == 0
+        assert s.cost_usd is None
+
+
+@pytest.mark.skipif(not _real_dbs_present(), reason="real NanoClaw capture not present")
+def test_real_capture_no_raw_json_in_title_and_events_merge():
+    a = NanoClawAdapter(data_dir=_REAL_ROOT)
+    sessions = {s.id: s for s in a.list_sessions()}
+    # Reaction control row has no text field; displayName must summarise it,
+    # not leak {"operation":"reaction",...} raw JSON.
+    varied = sessions["sess-1779696695425-varied"]
+    assert not varied.display_name.strip().startswith("{")
+    # Events merge inbound+outbound by seq with correct roles.
+    events = a.list_events("sess-1779696695425-varied")
+    roles = [e.role for e in events]
+    assert "user" in roles and "assistant" in roles
+    assert any("reaction" in e.content for e in events)
+
+
+@pytest.mark.skipif(not _real_dbs_present(), reason="real NanoClaw capture not present")
+def test_real_capture_via_clawmetry_env_override(monkeypatch):
+    # NanoClaw has no env var of its own; ClawMetry provides one to point at a
+    # checkout. The override must resolve a real v2-sessions-equivalent root.
+    monkeypatch.setenv("CLAWMETRY_NANOCLAW_DIR", _REAL_ROOT)
+    a = NanoClawAdapter()
+    assert a.detect().detected is True
+
+
+def test_read_only_does_not_modify_real_db():
+    """Real-capture read must not mutate the DB (immutable open)."""
+    if not _real_dbs_present():
+        import pytest as _p
+        _p.skip("real NanoClaw capture not present")
+    db = os.path.join(_REAL_ROOT, "ag-demo", "sess-1779696636602-real01", "outbound.db")
+    before = os.stat(db)
+    NanoClawAdapter(data_dir=_REAL_ROOT).list_events("sess-1779696636602-real01")
+    after = os.stat(db)
+    assert before.st_size == after.st_size
+    assert before.st_mtime == after.st_mtime
