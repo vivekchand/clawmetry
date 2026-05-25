@@ -60,6 +60,58 @@ def _events_for(session_id=None, limit=12000):
     return rows
 
 
+def _event_cost(e):
+    """Best-effort USD cost for one event, derived when the stored value is 0/None.
+
+    Multi-runtime adapters (Claude Code, Codex, …) pre-set ``token_count`` (the
+    lumped total) and stash the input/output/cache split under ``data.extra`` —
+    a shape the #2049 ingest derivation skipped, so these events land with
+    ``cost_usd`` NULL and the Cost column reads ``$0`` for sessions that clearly
+    cost money. Derive it here (read-side) from the split × model pricing,
+    cache-aware, with the provider inferred from the model. Honour an explicit
+    stored cost first so OpenClaw's already-priced events are never re-derived.
+    """
+    try:
+        c = e.get("cost_usd")
+        if c:
+            return float(c)
+    except (TypeError, ValueError):
+        pass
+    d = e.get("data") if isinstance(e.get("data"), dict) else {}
+    model = e.get("model") or d.get("model") or ""
+    if not model:
+        return 0.0
+    ex = d.get("extra") if isinstance(d.get("extra"), dict) else {}
+    u = d.get("usage") if isinstance(d.get("usage"), dict) else {}
+
+    def _pick(*keys):
+        for src in (ex, u):
+            if not isinstance(src, dict):
+                continue
+            for k in keys:
+                v = src.get(k)
+                if v:
+                    try:
+                        return int(v)
+                    except (TypeError, ValueError):
+                        return 0
+        return 0
+
+    ti = _pick("inputTokens", "input_tokens")
+    to = _pick("outputTokens", "output_tokens")
+    cr = _pick("cacheReadInputTokens", "cache_read_input_tokens")
+    cw = _pick("cacheCreationInputTokens", "cache_creation_input_tokens")
+    if not (ti or to or cr or cw):
+        return 0.0
+    try:
+        from clawmetry.providers_pricing import estimate_event_cost_usd
+        return float(estimate_event_cost_usd(
+            str(model), input_tokens=ti, output_tokens=to,
+            cache_read_tokens=cr, cache_write_tokens=cw) or 0.0)
+    except Exception:
+        return 0.0
+
+
 def _ts_ms(ts):
     """Coerce an event ts (ISO-8601 string or epoch s/ms) to ms-since-epoch."""
     if ts is None:
@@ -171,10 +223,7 @@ def _summarize_trace(session_id, rows):
         if ms:
             starts.append(ms)
         total_tokens += int(e.get("token_count") or 0)
-        try:
-            total_cost += float(e.get("cost_usd") or 0.0)
-        except (TypeError, ValueError):
-            pass
+        total_cost += _event_cost(e)
         if not model and e.get("model"):
             model = e.get("model")
         d = e.get("data") if isinstance(e.get("data"), dict) else {}
@@ -297,14 +346,29 @@ def _build_spans(rows):
             text = msg["content"]
         elif isinstance(d.get("finalPromptText"), str):
             text = d["finalPromptText"]
+        elif isinstance(d.get("content"), str):
+            # Multi-runtime adapters (Claude Code, …) put the turn text on
+            # ``data.content`` directly — without this the user prompt is empty
+            # and falls through to a generic ``message`` span instead of a
+            # ``prompt`` span.
+            text = d["content"]
 
         if is_sub and sub_root is None:
             sub_root = _mk("agent-sub", main_root["span_id"],
                            "invoke_agent sub-agent", "agent", start, t1, is_sub=True)
         agent_parent = (sub_root or main_root)["span_id"] if is_sub else main_root["span_id"]
 
-        is_assistant = ("assistant" in low) or ("model.completed" in low)
-        is_user = low.endswith("user") or low == "user" or "prompt" in low
+        # Multi-runtime adapters (Claude Code, Codex, …) emit event_type
+        # ``message`` for BOTH turns and carry the speaker in ``data.role`` —
+        # so classify on the role too, or every adapter LLM turn renders as a
+        # generic ``event`` span instead of a ``chat`` (llm) span. Gate the
+        # role path to text turns so a ``tool_call`` row (also role=assistant)
+        # still becomes an execute_tool span, not an empty chat.
+        role = (d.get("role") or "").lower()
+        is_assistant = ("assistant" in low) or ("model.completed" in low) \
+            or (role == "assistant" and low in ("message", "text"))
+        is_user = low.endswith("user") or low == "user" or "prompt" in low \
+            or (role == "user" and low == "message")
 
         # Close execute_tool spans whose result just arrived (the join).
         results = list(_walk_tool_results(d))
@@ -322,7 +386,7 @@ def _build_spans(rows):
             chat = _mk(eid, agent_parent,
                        ("chat " + (e.get("model") or "")).strip() or "chat",
                        "llm", start, nxt, is_sub=is_sub, model=e.get("model") or "",
-                       tokens=e.get("token_count"), cost=e.get("cost_usd"),
+                       tokens=e.get("token_count"), cost=_event_cost(e),
                        status="error" if (d.get("isError") or d.get("is_error")) else "ok",
                        detail=text, event_type=et)
             for j, tu in enumerate(_walk_tool_uses(d)):
@@ -342,7 +406,7 @@ def _build_spans(rows):
         # Fallback: any other renderable event as a child of its agent root.
         _mk(eid, agent_parent, (et or "event"), _span_kind(et, is_sub), start, nxt,
             is_sub=is_sub, model=e.get("model") or "", tokens=e.get("token_count"),
-            cost=e.get("cost_usd"), detail=text, event_type=et)
+            cost=_event_cost(e), detail=text, event_type=et)
 
     # Roll cost/tokens/duration child→parent; propagate error to agent parents.
     children = {}

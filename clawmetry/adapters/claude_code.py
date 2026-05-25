@@ -298,6 +298,11 @@ class ClaudeCodeAdapter(AgentAdapter):
             usage = msg.get("usage") if isinstance(msg.get("usage"), dict) else {}
             tokens_in = int(usage.get("input_tokens") or 0)
             tokens_out = int(usage.get("output_tokens") or 0)
+            # Prompt-cache tokens dominate cost on Claude Code turns (a cached
+            # 100k-token context re-read every turn). Carry them so the store's
+            # cost derivation is cache-aware instead of input/output-only.
+            cache_read = int(usage.get("cache_read_input_tokens") or 0)
+            cache_write = int(usage.get("cache_creation_input_tokens") or 0)
             model = msg.get("model") or ""
             usage_attached = False  # carry usage onto the first event of the turn
 
@@ -310,9 +315,13 @@ class ClaudeCodeAdapter(AgentAdapter):
                 btype = block.get("type")
                 tokens = 0
                 extra: dict[str, Any] = {}
-                if not usage_attached and (tokens_in or tokens_out):
+                if not usage_attached and (tokens_in or tokens_out or cache_read or cache_write):
                     tokens = tokens_in + tokens_out
                     extra = {"inputTokens": tokens_in, "outputTokens": tokens_out}
+                    if cache_read:
+                        extra["cacheReadInputTokens"] = cache_read
+                    if cache_write:
+                        extra["cacheCreationInputTokens"] = cache_write
 
                 if btype == "text" and isinstance(block.get("text"), str):
                     seq += 1

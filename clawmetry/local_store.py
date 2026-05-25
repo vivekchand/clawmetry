@@ -7110,17 +7110,53 @@ def _extract_event_metrics(
                     except (TypeError, ValueError):
                         pass
 
-    # Derive cost only when input/output split + provider + model are all known.
-    # estimate_cost_usd uses asymmetric input/output rates; a single ``total``
-    # can't be priced correctly, so leave cost=None and let read-side compute.
-    if cost is None and provider and model and (tokens_in or tokens_out):
+    # Adapter shapes (Claude Code, Codex, …) pre-set ``token_count`` (the lumped
+    # total) and stash the input/output/cache split under ``data.extra`` — so
+    # the ``if tokens is None`` blocks above were skipped and the split is still
+    # unknown, leaving cost NULL ($0 in the Cost tab for sessions that clearly
+    # cost money). Recover the split + cache tokens here, from ``data.extra``
+    # then ``data.usage``, regardless of whether the total was pre-set, so the
+    # #2049 derivation below can run.
+    cache_read = cache_write = 0
+    for src in (d.get("extra"), d.get("usage")):
+        if not isinstance(src, dict):
+            continue
+        if tokens_in is None:
+            i = src.get("inputTokens") or src.get("input_tokens")
+            if i:
+                try:
+                    tokens_in = int(i)
+                except (TypeError, ValueError):
+                    pass
+        if tokens_out is None:
+            o = src.get("outputTokens") or src.get("output_tokens")
+            if o:
+                try:
+                    tokens_out = int(o)
+                except (TypeError, ValueError):
+                    pass
+        if not cache_read:
+            cache_read = int(src.get("cacheReadInputTokens")
+                             or src.get("cache_read_input_tokens") or 0)
+        if not cache_write:
+            cache_write = int(src.get("cacheCreationInputTokens")
+                              or src.get("cache_creation_input_tokens") or 0)
+
+    # Derive cost from tokens × model pricing (#2049), cache-aware, with the
+    # provider resolved from the model when the event didn't carry one (adapter
+    # events don't). ``estimate_event_cost_usd`` infers the provider and applies
+    # the Anthropic cache multipliers; an explicit/already-priced cost still
+    # wins (we only derive when ``cost is None``).
+    if cost is None and model and (tokens_in or tokens_out or cache_read or cache_write):
         try:
-            from clawmetry.providers_pricing import estimate_cost_usd
-            est = estimate_cost_usd(
-                provider=str(provider),
-                tokens_in=int(tokens_in or 0),
-                tokens_out=int(tokens_out or 0),
-                model=str(model),
+            from clawmetry.providers_pricing import estimate_event_cost_usd
+            est = estimate_event_cost_usd(
+                str(model),
+                input_tokens=int(tokens_in or 0),
+                output_tokens=int(tokens_out or 0),
+                cache_read_tokens=int(cache_read or 0),
+                cache_write_tokens=int(cache_write or 0),
+                provider=str(provider or ""),
             )
             if est:
                 cost = float(est)
