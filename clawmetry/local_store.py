@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -5435,10 +5436,24 @@ class LocalStore:
                     + int(splits.get("cache_write_tokens", 0))
                 )
                 if tok > 0:
+                    # Carry the turn's model so callers can size the context
+                    # window correctly (e.g. 1M for the [1m] Opus variant).
+                    # Without it, currentContextTokens=323K rendered against
+                    # a hardcoded 200K window read ">100%". Probed across the
+                    # same shapes _extract_usage_splits handles.
+                    msg = data.get("message") if isinstance(data.get("message"), dict) else {}
+                    model = (
+                        msg.get("model")
+                        or data.get("model")
+                        or data.get("modelId")
+                        or ""
+                    )
                     return {
                         "session_id":   sid,
                         "input_tokens": tok,
                         "ts":           ts,
+                        "model":        model,
+                        "context_window": context_window_for_model(model, tok),
                     }
         return {"input_tokens": 0}
 
@@ -6979,6 +6994,50 @@ def _sql_in_clause(values: tuple[str, ...]) -> str:
     so it's safe to interpolate them directly. Centralised so the four
     fast-path methods can keep their predicates in sync."""
     return "(" + ", ".join("'" + v.replace("'", "''") + "'" for v in values) + ")"
+
+
+# Standard Claude context window. Most models are 200K; the [1m] Opus/Sonnet
+# variants are 1M. Other providers/local models vary, but 200K is a safe
+# default that the observed-tokens guard below corrects upward when wrong.
+_DEFAULT_CONTEXT_WINDOW = 200_000
+_LARGE_CONTEXT_WINDOW = 1_000_000
+
+
+def context_window_for_model(model: str, observed_tokens: int = 0) -> int:
+    """Best-effort context-window size (in tokens) for ``model``.
+
+    Used to size the LLM Context Inspector gauge so currentContextTokens /
+    contextWindow is coherent. Before this, contextWindow was hardcoded to
+    200K everywhere, so a Claude Code turn on the 1M Opus variant
+    (currentContextTokens ≈ 323K) rendered as ">100%". (Surfaced
+    2026-05-25.)
+
+    Two signals, in order:
+      1. **Model string** — a ``1m`` marker (``claude-opus-4-7[1m]``,
+         ``...-1m``) means the 1M variant.
+      2. **Observed tokens** — a measured prompt can never exceed the
+         model's window, so if we saw MORE than the string-derived base we
+         must be on a larger variant whose marker we didn't recognise (the
+         beta 1M header isn't always echoed into the model string). Bump to
+         the next standard tier so the gauge never reads >100%.
+
+    Args:
+        model: the model string from the turn (may be empty).
+        observed_tokens: the measured live context size, if known. Acts as
+            a floor for the returned window.
+    """
+    m = (model or "").lower()
+    if "1m" in m:  # matches [1m], -1m, _1m, "1m"
+        base = _LARGE_CONTEXT_WINDOW
+    else:
+        base = _DEFAULT_CONTEXT_WINDOW
+    obs = int(observed_tokens or 0)
+    if obs > base:
+        if obs <= _LARGE_CONTEXT_WINDOW:
+            return _LARGE_CONTEXT_WINDOW
+        # Round up to the next whole-million tier for >1M contexts.
+        return int(math.ceil(obs / _LARGE_CONTEXT_WINDOW) * _LARGE_CONTEXT_WINDOW)
+    return base
 
 
 def _extract_input_tokens(data: dict) -> int:
