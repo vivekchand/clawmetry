@@ -3006,6 +3006,40 @@ def _count_jsonl_renderable_lines(fpath: str) -> int:
     return count
 
 
+def _first_user_title(fpath: str) -> str:
+    """First user-message text from a session file — a ChatGPT-style title.
+
+    The cloud snapshot ships a derived title (see ``_derive_transcript_title``),
+    but the legacy local endpoint left ``title`` empty, so the Session-replay
+    list showed every session as "Untitled" and the client-side "Show plumbing"
+    filter (which keys off the title) couldn't tell a Self-Evolve run from real
+    work. Handles both Anthropic-shape rows (top-level ``role``) and OpenClaw v3
+    rows nested under ``message``. Cheap: stops at the first user turn. Capped so
+    it never bloats the list payload; the renderer ellipsises for display.
+    """
+    try:
+        with open(fpath) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                msg = obj.get("message") if isinstance(obj.get("message"), dict) else obj
+                if msg.get("role") != "user":
+                    continue
+                text = _stringify_content(msg.get("content")).strip()
+                if text:
+                    return text[:200]
+    except Exception:
+        pass
+    return ""
+
+
 def _try_local_store_transcripts():
     """Fast path for /api/transcripts. Lists distinct sessions with their
     event counts + most-recent ts, straight from DuckDB.
@@ -3021,6 +3055,10 @@ def _try_local_store_transcripts():
     rows = _ls_call("query_sessions", limit=50)
     if not rows:
         return None
+    import dashboard as _d
+    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
     transcripts = []
     for r in rows:
         sid = r.get("session_id") or ""
@@ -3053,6 +3091,10 @@ def _try_local_store_transcripts():
             msg_count = r.get("event_count") or 0
         transcripts.append({
             "id": sid,
+            # Derive the same ChatGPT-style title the legacy path / cloud use, so
+            # the client "Show plumbing" filter can spot Self-Evolve runs. Cheap:
+            # reads only up to the first user line of each session file.
+            "title": _first_user_title(os.path.join(sessions_dir, sid + ".jsonl")),
             "name": sid[:40],
             "messages": int(msg_count or 0),
             "size": 0,  # unknown from DuckDB; UI shows "—" when 0
@@ -3100,6 +3142,7 @@ def api_transcripts():
                 transcripts.append(
                     {
                         "id": fname.replace(".jsonl", ""),
+                        "title": _first_user_title(fpath),
                         "name": fname.replace(".jsonl", "")[:40],
                         "messages": msg_count,
                         "size": os.path.getsize(fpath),
