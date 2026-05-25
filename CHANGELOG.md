@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Release: opencode + Qwen Code runtimes (2026-05-25)
+- Publishes #2108. Two more standalone coding agents join the multi-agent pipeline, both built firsthand (installed + run against local Ollama's OpenAI-compatible endpoint, zero cost): **opencode** (SQLite `~/.local/share/opencode/opencode.db`; transcripts, model, tool calls, real tokens + cost) and **Qwen Code** (JSONL `~/.qwen/projects/<hash>/chats/<id>.jsonl`, Gemini-CLI lineage; transcripts, model, tool calls + thinking, real token usage). Each is one `_FAMILY_ADAPTER_SPECS` row + a switcher label; detected zero-config; shown in sessions + transcripts + runtime switcher. The full agent set is now OpenClaw, PicoClaw, NanoClaw, Hermes, Claude Code, Codex, Cursor, Aider, Goose, opencode, Qwen Code (11 runtimes). 153 compat tests green.
+
 ### Release: Aider + Goose runtimes (2026-05-25)
 - Publishes #2098. Two more standalone coding agents join the multi-agent pipeline: **Aider** (`.aider.chat.history.md` per-project transcripts; model + token counts) and **Goose** (Block; SQLite `~/.local/share/goose/sessions/sessions.db`; transcripts, tool calls, real token totals). Both were built firsthand: the tools were installed and run against local Ollama (zero cost) to capture their real on-disk format, then verified against it. Each is one `_FAMILY_ADAPTER_SPECS` row + a switcher label. Detected zero-config; shown in the sessions list + transcripts + runtime switcher. The full agent set is now OpenClaw, PicoClaw, NanoClaw, Hermes, Claude Code, Codex, Cursor, Aider, Goose. 127 compat tests green.
 
