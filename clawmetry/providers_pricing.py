@@ -118,10 +118,27 @@ def estimate_cost_usd(
         return 0.0
 
 
+# Local / self-hosted inference: the user pays for hardware + power, not
+# per-token, so the per-token API cost is genuinely zero. Listed explicitly so
+# that local-model traffic (e.g. PicoClaw on Ollama, "ollama/llama3.2:3b")
+# resolves to 0.0 intentionally rather than falling through to the conservative
+# unknown-provider default below, which would over-charge it. Matched against
+# the provider name and any "<provider>/..." model prefix.
+_LOCAL_PROVIDERS = frozenset({"ollama", "llamacpp", "llama.cpp", "lmstudio", "local", "vllm"})
+
+
 def _get_rates(provider: str, model: str) -> tuple[float, float]:
     """Return (input_per_1m, output_per_1m) for a provider+model combo."""
+    prov_lower = (provider or "").lower()
+    model_lower = (model or "").lower()
+
+    # Local / self-hosted models cost nothing per token.
+    if prov_lower in _LOCAL_PROVIDERS or any(
+        model_lower.startswith(p + "/") for p in _LOCAL_PROVIDERS
+    ):
+        return 0.0, 0.0
+
     if model:
-        model_lower = model.lower()
         for (prov, prefix), rates in MODEL_OVERRIDES.items():
             if prov == provider and model_lower.startswith(prefix.lower()):
                 return rates

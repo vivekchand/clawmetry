@@ -1,0 +1,4 @@
+{"role": "user", "content": "What files are in the current directory?", "created_at": "2026-05-25T10:00:00Z", "media": [], "attachments": []}
+{"role": "assistant", "content": "Let me list the directory for you.", "model_name": "ollama/llama3.2:3b", "created_at": "2026-05-25T10:00:05Z", "reasoning_content": "The user wants a directory listing, I should call the shell tool.", "tool_calls": [{"id": "call_001", "name": "shell", "arguments": "{\"command\": \"ls -la\"}"}], "media": [], "attachments": []}
+{"role": "tool", "content": "total 8\ndrwxr-xr-x  3 user user 4096 May 25 10:00 .\n-rw-r--r--  1 user user   42 May 25 09:59 README.md", "created_at": "2026-05-25T10:00:06Z", "tool_call_id": "call_001", "media": [], "attachments": []}
+{"role": "assistant", "content": "The current directory contains a README.md file.", "model_name": "ollama/llama3.2:3b", "created_at": "2026-05-25T10:00:08Z", "media": [], "attachments": []}

@@ -5606,19 +5606,33 @@ class LocalStore:
           * thinking rows:     ``{kind:'thinking_level_change', level, ts}``
 
         Single-session helper — caller passes ``session_id``. Uses the
-        existing events table; no new schema required."""
+        existing events table; no new schema required.
+
+        Accepts both v2 event names (``model_change``, ``message``) and v3
+        namespaced names (``model.changed``, ``model.completed``,
+        ``prompt.submitted``) so sessions ingested via OpenClaw v3 return a
+        non-empty journey.  ``cost_usd`` and ``token_count`` are read directly
+        from the typed columns — both v2 and v3 ingest paths populate them —
+        and used as a fallback when the nested ``data.message.usage`` block
+        is absent (v3 shape)."""
         if not session_id:
             return []
         sql = """
-            SELECT event_type, ts, data, model
+            SELECT event_type, ts, data, model, cost_usd, token_count
             FROM events
             WHERE session_id = ?
-              AND event_type IN ('model_change', 'message', 'thinking_level_change')
+              AND event_type IN (
+                'model_change',   'model.changed',
+                'message',        'model.completed', 'prompt.submitted',
+                'thinking_level_change'
+              )
             ORDER BY ts ASC, id ASC
             LIMIT ?
         """
         out: list[dict[str, Any]] = []
-        for et, ts, raw, ev_model in self._fetch(sql, [session_id, int(limit)]):
+        for et, ts, raw, ev_model, ev_cost_usd, ev_token_count in self._fetch(
+            sql, [session_id, int(limit)]
+        ):
             data: dict[str, Any] = {}
             if raw is not None:
                 try:
@@ -5628,7 +5642,7 @@ class LocalStore:
                         data = parsed
                 except (ValueError, TypeError, UnicodeDecodeError):
                     data = {}
-            if et == "model_change":
+            if et in ("model_change", "model.changed"):
                 out.append({
                     "kind":      "model_change",
                     "model":     data.get("modelId") or data.get("model") or ev_model or "",
@@ -5641,16 +5655,20 @@ class LocalStore:
                     "level": data.get("thinkingLevel") or data.get("level") or "",
                     "ts":    ts,
                 })
-            else:  # message
+            else:  # message / model.completed / prompt.submitted
+                # v2 path: cost + tokens nested under data["message"]["usage"]
                 msg = data.get("message") if isinstance(data.get("message"), dict) else {}
                 usage = msg.get("usage") if isinstance(msg.get("usage"), dict) else {}
                 cost_obj = usage.get("cost") if isinstance(usage.get("cost"), dict) else {}
+                # Prefer nested v2 values; fall back to typed columns for v3.
+                total_tokens = int(usage.get("totalTokens", 0) or 0) or int(ev_token_count or 0)
+                total_cost = float(cost_obj.get("total", 0) or 0) or float(ev_cost_usd or 0)
                 out.append({
                     "kind":         "message",
-                    "model":        msg.get("model") or ev_model or "",
-                    "provider":     msg.get("provider") or "",
-                    "total_tokens": int(usage.get("totalTokens", 0) or 0),
-                    "total_cost":   float(cost_obj.get("total", 0) or 0),
+                    "model":        msg.get("model") or data.get("modelId") or ev_model or "",
+                    "provider":     msg.get("provider") or data.get("provider") or "",
+                    "total_tokens": total_tokens,
+                    "total_cost":   total_cost,
                     "ts":           ts,
                 })
         return out
