@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Release: update banner shows the live version, not the recorded one (2026-05-25)
+- Publishes #2059. After an upgrade (e.g. 0.12.306 → 0.12.309) the "Update available" banner kept showing the stale recorded version ("you are on v0.12.306") for ~60s until the delayed on-startup PyPI recheck ran. `_get_latest_update_check` now overlays the **live** installed version as `current` and recomputes `update_available` against it (shared numeric `_version_gt`), so the banner is correct the instant you update — no lying window. A stale recorded `latest` that's ≤ the running build no longer shows a banner; a genuinely newer one still does.
+
 ### Cost: derive from tokens × model pricing (no more $0 for real usage) (2026-05-25)
 - The Cost tab showed ~$0 for heavy usage (1.53M tokens summed to $0.0081) because cost came only from a provider-reported `cost_usd` that OpenClaw/OAuth events don't carry — nothing derived cost from tokens × model pricing. Now the daemon derives the API-equivalent cost at ingest from each event's own token split × model rate (cache-aware: Anthropic cache read 0.1× / write 1.25× of input rate; self-hosted models resolve to $0) and stores it, so aggregates, per-session costs, and budgets all reflect real spend. A one-time idempotent backfill recomputes `cost_usd` for events ingested before the fix. New `providers_pricing.provider_for_model` + `estimate_event_cost_usd`. Verified: real events derive to ~$443 (vs the old $0.008). (#2058, closes #2049)
 
