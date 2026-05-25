@@ -159,6 +159,8 @@ jobs:
             tests/test_codex_adapter.py \
             tests/test_cursor_adapter.py \
             tests/test_claude_code_adapter.py \
+            tests/test_aider_adapter.py \
+            tests/test_goose_adapter.py \
             -q
 
   # ── MOAT keystone (DuckDB-first invariant, 13-endpoint bar) ──────────────

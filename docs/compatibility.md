@@ -20,6 +20,8 @@ This page tracks each one's real status, honestly.
 | Claude Code | Beta adapter   | JSONL `~/.claude/projects/<cwd>/<id>.jsonl` (v-type lines) | Transcripts, model, tool calls + thinking, token usage. |
 | Codex       | Beta adapter   | "rollout" JSONL `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | Transcripts, model, tool calls, token usage (from `token_count` events). |
 | Cursor      | Beta adapter   | SQLite `state.vscdb` (`cursorDiskKV` / `ItemTable`, global + per-workspace) | Chat/composer transcripts, model. No billed cost on disk (server-side). |
+| Aider       | Beta adapter   | Markdown `.aider.chat.history.md` per project dir (+ `.aider.input.history`) | Transcripts, model, token counts. Per-project history (set `AIDER_HISTORY_DIRS`). |
+| Goose       | Beta adapter   | SQLite `~/.local/share/goose/sessions/sessions.db` (`sessions` + `messages`) | Transcripts, model, tool calls, real token totals. |
 | ZeroClaw / TrustClaw / Nanobot | Not yet | unverified | Open an issue with a real session capture. |
 
 ## What "Beta adapter" means (and what it does not)

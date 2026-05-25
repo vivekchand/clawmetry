@@ -6503,7 +6503,8 @@ function closeFileViewer() {
 // switcher chip order (OpenClaw always first). To add a runtime, add a label.
 var _CM_RT_LABEL = {
   openclaw: 'OpenClaw', picoclaw: 'PicoClaw', nanoclaw: 'NanoClaw',
-  hermes: 'Hermes', claude_code: 'Claude Code', codex: 'Codex', cursor: 'Cursor'
+  hermes: 'Hermes', claude_code: 'Claude Code', codex: 'Codex', cursor: 'Cursor',
+  aider: 'Aider', goose: 'Goose'
 };
 function _cmRuntimeOf(o) {
   var id = (o && (o.id || o.sessionId || o.session_id || o.key)) || '';

@@ -7844,6 +7844,8 @@ _FAMILY_ADAPTER_SPECS = (
     ("clawmetry.adapters.claude_code", "ClaudeCodeAdapter"),
     ("clawmetry.adapters.codex", "CodexAdapter"),
     ("clawmetry.adapters.cursor", "CursorAdapter"),
+    ("clawmetry.adapters.aider", "AiderAdapter"),
+    ("clawmetry.adapters.goose", "GooseAdapter"),
 )
 
 
