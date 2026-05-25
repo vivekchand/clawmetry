@@ -49,55 +49,10 @@ bp_crons = Blueprint('crons', __name__)
 # is pending).
 
 def _schedule_to_cron_cli_args(schedule):
-    """Translate a schedule dict into ``openclaw cron add`` flags.
-
-    Accepts the same shapes the dashboard + OpenClaw use on disk:
-      {"kind":"cron","expr":"37 9-21 * * *","tz":"Europe/Berlin"}
-      {"kind":"every","everyMs":3600000}  /  {"kind":"interval","interval":"1h"}
-      {"kind":"at","atMs":...}  /  {"kind":"at","at":"2026-01-01T09:00:00Z"}
-    Returns (args_list, error_str). error_str is non-empty on unsupported input.
-    """
-    if not isinstance(schedule, dict):
-        return [], "schedule must be an object"
-    kind = schedule.get("kind", "")
-    if kind == "cron":
-        expr = schedule.get("expr") or schedule.get("cron") or ""
-        if not expr:
-            return [], "cron schedule missing 'expr'"
-        args = ["--cron", str(expr)]
-        if schedule.get("tz"):
-            args += ["--tz", str(schedule["tz"])]
-        return args, ""
-    if kind in ("every", "interval"):
-        if schedule.get("interval"):
-            return ["--every", str(schedule["interval"])], ""
-        ms = schedule.get("everyMs")
-        if ms:
-            try:
-                mins = int(ms) // 60000
-                if mins >= 60 and mins % 60 == 0:
-                    return ["--every", "%dh" % (mins // 60)], ""
-                return ["--every", "%dm" % max(1, mins)], ""
-            except (TypeError, ValueError):
-                pass
-        return [], "interval schedule missing 'interval'/'everyMs'"
-    if kind == "at":
-        when = schedule.get("at")
-        if not when and schedule.get("atMs"):
-            try:
-                from datetime import datetime as _dt, timezone as _tz
-                when = _dt.fromtimestamp(
-                    int(schedule["atMs"]) / 1000, tz=_tz.utc
-                ).isoformat()
-            except Exception:
-                when = None
-        if not when:
-            return [], "at schedule missing 'at'/'atMs'"
-        args = ["--at", str(when)]
-        if schedule.get("tz"):
-            args += ["--tz", str(schedule["tz"])]
-        return args, ""
-    return [], "unsupported schedule kind: %r" % kind
+    """Thin wrapper over the canonical translator in clawmetry.sync so the
+    daemon relay action and these HTTP handlers share one implementation."""
+    from clawmetry.sync import cron_schedule_to_cli_args
+    return cron_schedule_to_cli_args(schedule)
 
 
 def _cron_cli_response(res, success_msg):

@@ -5685,6 +5685,7 @@ _PENDING_ACTIONS = frozenset({
     "approval_decision",
     "selfevolve_fix",
     "selfevolve_analyze",
+    "cron_create",
 })
 
 
@@ -5876,6 +5877,9 @@ def _dispatch_pending_action(config: dict, action: dict) -> None:
     if atype == "selfevolve_analyze":
         _action_selfevolve_analyze(config, action)
         return
+    if atype == "cron_create":
+        _action_cron_create(config, action)
+        return
 
 
 def _selfevolve_fix_summary(stdout: str) -> str:
@@ -5982,6 +5986,140 @@ def _action_selfevolve_fix(config: dict, action: dict) -> None:
             )
         except Exception as e:
             log.warning("selfevolve_fix cache post failed: %s", e)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def cron_schedule_to_cli_args(schedule):
+    """Translate a schedule dict into ``openclaw cron add/edit`` flags.
+
+    Canonical home for the translation so both the daemon relay action
+    (``_action_cron_create``) and the local HTTP handlers (routes/crons.py)
+    share one implementation. Accepts the on-disk shapes:
+      {"kind":"cron","expr":"37 9-21 * * *","tz":"Europe/Berlin"}
+      {"kind":"every","everyMs":3600000} | {"kind":"interval","interval":"1h"}
+      {"kind":"at","atMs":...} | {"kind":"at","at":"2026-01-01T09:00:00Z"}
+    Returns (args_list, error_str); error_str non-empty on unsupported input.
+    """
+    if not isinstance(schedule, dict):
+        return [], "schedule must be an object"
+    kind = schedule.get("kind", "")
+    if kind == "cron":
+        expr = schedule.get("expr") or schedule.get("cron") or ""
+        if not expr:
+            return [], "cron schedule missing 'expr'"
+        args = ["--cron", str(expr)]
+        if schedule.get("tz"):
+            args += ["--tz", str(schedule["tz"])]
+        return args, ""
+    if kind in ("every", "interval"):
+        if schedule.get("interval"):
+            return ["--every", str(schedule["interval"])], ""
+        ms = schedule.get("everyMs")
+        if ms:
+            try:
+                mins = int(ms) // 60000
+                if mins >= 60 and mins % 60 == 0:
+                    return ["--every", "%dh" % (mins // 60)], ""
+                return ["--every", "%dm" % max(1, mins)], ""
+            except (TypeError, ValueError):
+                pass
+        return [], "interval schedule missing 'interval'/'everyMs'"
+    if kind == "at":
+        when = schedule.get("at")
+        if not when and schedule.get("atMs"):
+            try:
+                when = datetime.fromtimestamp(
+                    int(schedule["atMs"]) / 1000, tz=timezone.utc
+                ).isoformat()
+            except Exception:
+                when = None
+        if not when:
+            return [], "at schedule missing 'at'/'atMs'"
+        args = ["--at", str(when)]
+        if schedule.get("tz"):
+            args += ["--tz", str(schedule["tz"])]
+        return args, ""
+    return [], "unsupported schedule kind: %r" % kind
+
+
+def _action_cron_create(config: dict, action: dict) -> None:
+    """Cloud-relayed cron creation (the cloud "New Job" button).
+
+    The cloud server cannot reach the user's local OpenClaw gateway, so the
+    cloud enqueues a ``cron_create`` action on the heartbeat-piggyback relay;
+    this daemon runs ``openclaw cron add`` locally (OpenClaw's own creds — the
+    gateway token is read-only and v3 dropped the cron tool from /tools/invoke)
+    and posts the E2E-encrypted result to ``/ingest/cache`` under the action's
+    ``cache_key`` for the browser to poll + decrypt. Runs in a background
+    thread so the CLI call never blocks the heartbeat loop.
+
+    Wire shape (queued cloud-side by /api/cloud/cron-create):
+        {type:"cron_create", id, cache_key, name, schedule,
+         enabled, prompt?, channel?, model?, description?}
+    """
+    cache_key = action.get("cache_key")
+    name = (action.get("name") or "").strip()
+    schedule = action.get("schedule")
+    enc_key = config.get("encryption_key")
+    api_key = config.get("api_key", "")
+    node_id = config.get("node_id", "")
+    if not (cache_key and name and schedule and enc_key and api_key):
+        return
+    aid = action.get("id")
+    enabled = action.get("enabled", True)
+    prompt = (action.get("prompt") or action.get("message") or "").strip()
+    channel = action.get("channel")
+    model = action.get("model")
+    description = action.get("description")
+
+    def _run():
+        status, message, scope_pending = "error", "", False
+        try:
+            sched_args, sched_err = cron_schedule_to_cli_args(schedule)
+            if sched_err:
+                message = sched_err
+            else:
+                args = ["--name", name] + sched_args
+                if prompt:
+                    args += ["--message", prompt]
+                if channel:
+                    args += ["--channel", str(channel)]
+                if model:
+                    args += ["--model", str(model)]
+                if description:
+                    args += ["--description", str(description)]
+                if not enabled:
+                    args += ["--disabled"]
+                res = run_openclaw_cron("add", args, timeout=45)
+                scope_pending = bool(res.get("scope_pending"))
+                if res.get("ok"):
+                    status = "done"
+                    message = 'Job "%s" created' % name
+                else:
+                    message = res.get("error") or "cron add failed"
+        except Exception as e:  # never raise from the worker thread
+            message = str(e)[:400]
+        try:
+            blob = encrypt_payload(
+                {"status": status, "message": message,
+                 "scope_pending": scope_pending, "_shape": "cron_create"},
+                enc_key,
+            )
+            _post(
+                "/ingest/cache",
+                {
+                    "node_id": node_id,
+                    "id": aid,
+                    "cache_key": cache_key,
+                    "blob": blob,
+                    "shape": "cron_create",
+                    "ttl": 3600,
+                },
+                api_key,
+            )
+        except Exception as e:
+            log.warning("cron_create cache post failed: %s", e)
 
     threading.Thread(target=_run, daemon=True).start()
 
