@@ -36,6 +36,43 @@ from clawmetry.config import is_local_store_read_enabled
 bp_crons = Blueprint('crons', __name__)
 
 
+# ── v3 cron writes via the openclaw CLI ─────────────────────────────────────
+# OpenClaw v3 removed the ``cron`` tool from the gateway's ``/tools/invoke``
+# surface ("Tool not available: cron"), and ClawMetry's gateway token is
+# ``operator.read`` only — so the legacy ``_gw_invoke("cron", {...})`` path is
+# dead for every mutation (it just 502s). The v3-correct path is the
+# ``openclaw cron`` CLI (talks to the Gateway scheduler with OpenClaw's own
+# creds). ``clawmetry.sync.run_openclaw_cron`` shells to it with an augmented
+# PATH and classifies the gateway's scope-approval rejection. These helpers
+# translate the dashboard's schedule dict into CLI flags and shape a uniform
+# HTTP response (incl. a 409 + actionable message when a device scope upgrade
+# is pending).
+
+def _schedule_to_cron_cli_args(schedule):
+    """Thin wrapper over the canonical translator in clawmetry.sync so the
+    daemon relay action and these HTTP handlers share one implementation."""
+    from clawmetry.sync import cron_schedule_to_cli_args
+    return cron_schedule_to_cli_args(schedule)
+
+
+def _cron_cli_response(res, success_msg):
+    """Shape a ``run_openclaw_cron`` result into a Flask (json, status) tuple.
+
+    - success            -> 200 {ok:true, message, result}
+    - scope upgrade gate  -> 409 {ok:false, error, scope_pending:true} so the
+                             UI can show "approve the device pairing" rather
+                             than a scary 502.
+    - everything else     -> 502 {ok:false, error}
+    """
+    if res.get("ok"):
+        return jsonify({"ok": True, "message": success_msg,
+                        "result": res.get("result")}), 200
+    if res.get("scope_pending"):
+        return jsonify({"ok": False, "scope_pending": True,
+                        "error": res.get("error", "")}), 409
+    return jsonify({"ok": False, "error": res.get("error") or "cron command failed"}), 502
+
+
 # ── Local DuckDB fast path (epic #964 phase 4 — Crons tab) ──────────────────
 #
 # Opt-in via CLAWMETRY_LOCAL_STORE_READ=1. Mirrors the same pattern used by
@@ -474,10 +511,9 @@ def api_cron_run():
         return jsonify(
             {"error": "Auto-pause active: refusing new session starts", "paused": True}
         ), 429
-    result = _d._gw_invoke("cron", {"action": "run", "jobId": job_id})
-    if result is None:
-        return jsonify({"error": "Gateway unavailable"}), 502
-    return jsonify({"ok": True, "message": "Job triggered", "result": result})
+    from clawmetry.sync import run_openclaw_cron
+    res = run_openclaw_cron("run", [str(job_id)])
+    return _cron_cli_response(res, "Job triggered")
 
 
 @bp_crons.route("/api/cron/toggle", methods=["POST"])
@@ -488,14 +524,10 @@ def api_cron_toggle():
     enabled = data.get("enabled", True)
     if not job_id:
         return jsonify({"error": "Missing jobId"}), 400
-    result = _d._gw_invoke(
-        "cron", {"action": "update", "jobId": job_id, "patch": {"enabled": enabled}}
-    )
-    if result is None:
-        return jsonify({"error": "Gateway unavailable"}), 502
-    return jsonify(
-        {"ok": True, "message": "Job enabled" if enabled else "Job disabled"}
-    )
+    from clawmetry.sync import run_openclaw_cron
+    # v3 CLI has dedicated enable/disable subcommands.
+    res = run_openclaw_cron("enable" if enabled else "disable", [str(job_id)])
+    return _cron_cli_response(res, "Job enabled" if enabled else "Job disabled")
 
 
 @bp_crons.route("/api/cron/delete", methods=["POST"])
@@ -505,10 +537,9 @@ def api_cron_delete():
     job_id = data.get("jobId", "")
     if not job_id:
         return jsonify({"error": "Missing jobId"}), 400
-    result = _d._gw_invoke("cron", {"action": "remove", "jobId": job_id})
-    if result is None:
-        return jsonify({"error": "Gateway unavailable"}), 502
-    return jsonify({"ok": True, "message": "Job deleted"})
+    from clawmetry.sync import run_openclaw_cron
+    res = run_openclaw_cron("rm", [str(job_id)])
+    return _cron_cli_response(res, "Job deleted")
 
 
 @bp_crons.route("/api/cron/update", methods=["POST"])
@@ -521,10 +552,30 @@ def api_cron_update():
         return jsonify({"error": "Missing jobId"}), 400
     if not patch:
         return jsonify({"error": "Missing patch"}), 400
-    result = _d._gw_invoke("cron", {"action": "update", "jobId": job_id, "patch": patch})
-    if result is None:
-        return jsonify({"error": "Gateway unavailable"}), 502
-    return jsonify({"ok": True, "message": "Job updated"})
+    from clawmetry.sync import run_openclaw_cron
+    # Translate the patch dict into `openclaw cron edit <id> [flags]`.
+    args = [str(job_id)]
+    if "name" in patch:
+        args += ["--name", str(patch["name"])]
+    if "description" in patch:
+        args += ["--description", str(patch["description"])]
+    if patch.get("prompt") or patch.get("message"):
+        args += ["--message", str(patch.get("prompt") or patch.get("message"))]
+    if patch.get("model"):
+        args += ["--model", str(patch["model"])]
+    if patch.get("channel"):
+        args += ["--channel", str(patch["channel"])]
+    if "schedule" in patch and isinstance(patch["schedule"], dict):
+        sched_args, sched_err = _schedule_to_cron_cli_args(patch["schedule"])
+        if sched_err:
+            return jsonify({"error": sched_err}), 400
+        args += sched_args
+    if "enabled" in patch:
+        args += ["--enable"] if patch["enabled"] else ["--disable"]
+    if len(args) == 1:
+        return jsonify({"error": "No supported fields in patch"}), 400
+    res = run_openclaw_cron("edit", args)
+    return _cron_cli_response(res, "Job updated")
 
 
 @bp_crons.route("/api/cron/create", methods=["POST"])
@@ -542,22 +593,26 @@ def api_cron_create():
         return jsonify(
             {"error": "Auto-pause active: refusing new session starts", "paused": True}
         ), 429
-    args = {
-        "action": "add",
-        "name": name,
-        "schedule": schedule,
-        "enabled": enabled,
-    }
-    if data.get("prompt"):
-        args["prompt"] = data["prompt"]
+    from clawmetry.sync import run_openclaw_cron
+    sched_args, sched_err = _schedule_to_cron_cli_args(schedule)
+    if sched_err:
+        return jsonify({"error": sched_err}), 400
+    args = ["--name", name] + sched_args
+    # The dashboard's "message"/"prompt" is the agentTurn payload. Default to a
+    # benign prompt so the job is valid even if the user left it blank.
+    msg = (data.get("prompt") or data.get("message") or "").strip()
+    if msg:
+        args += ["--message", msg]
     if data.get("channel"):
-        args["channel"] = data["channel"]
+        args += ["--channel", str(data["channel"])]
     if data.get("model"):
-        args["model"] = data["model"]
-    result = _d._gw_invoke("cron", args)
-    if result is None:
-        return jsonify({"error": "Gateway unavailable"}), 502
-    return jsonify({"ok": True, "message": f'Job "{name}" created', "result": result})
+        args += ["--model", str(data["model"])]
+    if data.get("description"):
+        args += ["--description", str(data["description"])]
+    if not enabled:
+        args += ["--disabled"]
+    res = run_openclaw_cron("add", args)
+    return _cron_cli_response(res, f'Job "{name}" created')
 
 
 @bp_crons.route("/api/cron/<job_id>/runs")
