@@ -1228,11 +1228,21 @@ def api_cron_kill_all():
     scope is pending approval, returns 409 with actionable guidance instead
     of silently 502-ing every job.
     """
+    # CRITICAL: read the LIVE job list from the gateway via the CLI, not
+    # DuckDB. DuckDB lags the gateway (ingest is periodic) and can carry
+    # stale ids from deleted-but-not-yet-resynced jobs. Using a stale list
+    # risks (a) "unknown cron job id" errors for ids that no longer exist
+    # and (b) silently disabling jobs that have already been deleted.
+    # The CLI's `cron list --all --json` is the gateway's own ground truth.
     from clawmetry.sync import run_openclaw_cron
-    jobs = _try_local_store_crons()  # DuckDB fast path
-    if jobs is None:
-        import dashboard as _d
-        jobs = _d._get_crons() or []
+    listed = run_openclaw_cron("list", ["--all"], timeout=20)
+    jobs = []
+    if listed.get("ok"):
+        res = listed.get("result")
+        if isinstance(res, list):
+            jobs = res
+        elif isinstance(res, dict):
+            jobs = res.get("jobs") or res.get("crons") or []
     if not isinstance(jobs, list):
         jobs = []
 

@@ -6283,18 +6283,23 @@ def _action_cron_killall(config: dict, action: dict) -> None:
     def _run():
         status, disabled, errors, scope_pending = "done", 0, [], False
         try:
-            from clawmetry import local_store as _ls
+            # Read the LIVE job list from the gateway via the CLI (not
+            # DuckDB). DuckDB lags the gateway and stale ids would either
+            # surface "unknown cron job id" errors or silently target jobs
+            # the user already deleted. The CLI is the gateway's own ground
+            # truth.
+            listed = run_openclaw_cron("list", ["--all"], timeout=20)
             jobs = []
-            try:
-                store = _ls.get_store()
-                if store is not None:
-                    jobs = store.query_crons(limit=2000) or []
-            except Exception:
-                jobs = []
+            if listed.get("ok"):
+                lr = listed.get("result")
+                if isinstance(lr, list):
+                    jobs = lr
+                elif isinstance(lr, dict):
+                    jobs = lr.get("jobs") or lr.get("crons") or []
             for j in jobs:
                 if not isinstance(j, dict) or not j.get("enabled", True):
                     continue
-                jid = j.get("cron_id") or j.get("id") or ""
+                jid = j.get("id") or j.get("cron_id") or ""
                 if not jid:
                     continue
                 res = run_openclaw_cron("disable", [str(jid)], timeout=40)
