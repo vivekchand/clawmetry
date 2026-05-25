@@ -780,6 +780,50 @@ def _compute_gateway_tap_comms() -> dict:
     return out
 
 
+# ── LLM Context Inspector parity helpers (issue: OSS↔cloud mismatch) ──────
+# The Context tab on OSS and on app.clawmetry.com used to disagree because
+# they computed Context Window Usage and Skills from different sources
+# (OSS hit /api/overview.mainTokens + /api/skills; cloud read the snapshot's
+# top-level mainTokens and had no /api/skills route → 410 Gone).
+# These two helpers compute the new shared fields (currentContextTokens,
+# skillHeaderTokens) that both /api/overview and the daemon snapshot now
+# expose so the Context tab reads one value on both sides.
+
+def _try_local_store_current_context_tokens():
+    """Live prompt size for the user's most-recent assistant turn.
+
+    Wraps ``routes.infra._try_local_store_session_history_tokens`` (which
+    in turn calls ``LocalStore.query_context_window_peek``) and pins
+    ``exclude_clawmetry=True`` so the gauge tracks the user's agent,
+    not ClawMetry-internal plumbing. Returns 0 when the local store is
+    cold or the daemon proxy can't be reached — the frontend then falls
+    back to mainTokens for backwards compatibility.
+    """
+    try:
+        from routes.infra import _try_local_store_session_history_tokens
+        v = _try_local_store_session_history_tokens(exclude_clawmetry=True)
+        return int(v or 0)
+    except Exception:
+        return 0
+
+
+def _compute_skill_header_tokens():
+    """Sum of header tokens for all installed skills.
+
+    Reuses ``routes.skills.compute_skills_payload`` (the same source
+    /api/skills serves) so OSS and the daemon snapshot agree on the
+    number rendered by the LLM Context Inspector's ``## Skills`` bar.
+    Returns 0 if the helper raises — we never fail the overview render
+    on a missing skill catalogue.
+    """
+    try:
+        from routes.skills import compute_skills_payload
+        payload = compute_skills_payload() or {}
+        return int((payload.get("summary") or {}).get("total_header_tokens") or 0)
+    except Exception:
+        return 0
+
+
 def _try_local_store_overview():
     """Epic #964: opt-in local-store fast path for /api/overview.
 
@@ -838,11 +882,25 @@ def _try_local_store_overview():
             "model": meta.get("model"),
         })
 
-    # Pick the most recent non-subagent session as the "main" session.
+    # Pick the user's main session — first non-subagent, non-ClawMetry-
+    # internal session in the most-recently-active-first order from
+    # query_sessions_table (`ORDER BY last_active_at DESC`).
+    #
+    # Without the ClawMetry filter OSS surfaced clawmetry-selfevolve /
+    # clawmetry-fix plumbing sessions as "main" — e.g. it reported the
+    # 204K cumulative tokens of a SelfEvolve run as the user's main
+    # session while the cloud snapshot (which already filters them at
+    # clawmetry/sync.py:9167) reported the real ~38K. Bug surfaced
+    # 2026-05-23.
+    from clawmetry.config import hide_clawmetry_session
     def _is_subagent(s):
         sid = (s.get("session_id") or "").lower()
         return "subagent" in sid or "sub-agent" in sid
-    main = next((s for s in sessions if not _is_subagent(s)), sessions[0])
+    def _is_user_main(s):
+        sid = s.get("session_id") or ""
+        return not _is_subagent(s) and not hide_clawmetry_session(sid)
+    user_sessions = [s for s in sessions if _is_user_main(s)]
+    main = user_sessions[0] if user_sessions else sessions[0]
 
     # Active = status=='active' (DuckDB persists status as a free-form string;
     # 'active' is what sync.py writes for in-progress sessions).
@@ -970,14 +1028,34 @@ def _try_local_store_overview():
     except Exception:
         infra["storage"] = "Disk"
 
+    # OSS/cloud parity: user-visible session count excludes sub-agents and
+    # ClawMetry-internal plumbing sessions so the OSS Overview matches the
+    # cloud snapshot's `sessionCount` (clawmetry/sync.py builds the same way).
+    user_session_count = len(user_sessions) if user_sessions else len(sessions)
+
+    # `currentContextTokens` is the right "Context Window Usage" gauge —
+    # the most recent assistant turn's input_tokens (i.e. live prompt
+    # size), filtered to exclude clawmetry-* plumbing sessions. Falls
+    # back to 0 so the frontend can degrade to mainTokens for backwards
+    # compatibility (older daemons without the snapshot field).
+    current_context_tokens = _try_local_store_current_context_tokens()
+
+    # `skillHeaderTokens` lets the LLM Context Inspector render the
+    # "## Skills" bar from the snapshot/overview without a separate
+    # /api/skills fetch (which is 410 Gone in cloud mode). Same source
+    # of truth on OSS and cloud.
+    skill_header_tokens = _compute_skill_header_tokens()
+
     return {
         "model": model_name,
         "provider": _d._infer_provider_from_model(model_name),
-        "sessionCount": len(sessions),
-        "sessions": len(sessions),  # alias for E2E compatibility
+        "sessionCount": user_session_count,
+        "sessions": user_session_count,  # alias for E2E compatibility
         "activeSessions": active_count,
         "mainSessionUpdated": main.get("last_active_at") or main.get("started_at"),
         "mainTokens": main.get("total_tokens", 0),
+        "currentContextTokens": current_context_tokens or 0,
+        "skillHeaderTokens": skill_header_tokens or 0,
         "contextWindow": 200000,
         "cronCount": len(crons),
         "cronEnabled": enabled,

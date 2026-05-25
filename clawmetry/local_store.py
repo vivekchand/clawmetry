@@ -4363,6 +4363,95 @@ class LocalStore:
             })
         return result
 
+    # ── Connector liveness ("agent went deaf and nobody noticed") ────────
+    # An OpenClaw channel provider (Telegram/Signal/Slack/…) runs an inbound
+    # long-poll. When that poll wedges — a network stall, an aborted restart
+    # that times out — the agent silently stops RECEIVING messages while it
+    # keeps SENDING (scheduled crons fire fine), so from the outside nothing
+    # looks broken. That exact failure left a node deaf for ~37h with no
+    # alarm. The only on-disk evidence is diagnostic lines in gateway.log /
+    # gateway.err.log; the daemon (sync.sync_connector_health_from_logs)
+    # tails them and records each signal here so health.py and the cloud
+    # snapshot can raise a real "inbound silent for Nh" alert.
+    def ingest_connector_health(
+        self,
+        *,
+        node_id: str,
+        provider: str,
+        kind: str,
+        ts_iso: str,
+        raw: str = "",
+    ) -> None:
+        """Idempotently record one connector-health signal in ``events``.
+
+        ``kind`` is one of the healthy markers (``started`` / ``recovered``)
+        or the unhealthy ones (``stall`` / ``disconnect`` / ``wedged``).
+        Idempotent on a stable id derived from provider+kind+ts so re-tailing
+        the log (after a rotation/truncation rescan) never double-counts.
+        """
+        import hashlib
+        prov = (provider or "").lower().strip()
+        if not prov or not kind or not ts_iso:
+            return
+        ev_id = "connhealth-" + hashlib.sha1(
+            f"{prov}|{kind}|{ts_iso}|{(raw or '')[:80]}".encode("utf-8")
+        ).hexdigest()[:24]
+        payload = json.dumps({
+            "provider": prov,
+            "kind": kind,
+            "raw": (raw or "")[:300],
+        }).encode("utf-8")
+        with self._write_lock:
+            self._conn.execute(
+                """
+                INSERT OR IGNORE INTO events
+                  (id, agent_type, node_id, agent_id, session_id, workspace_id,
+                   event_type, ts, data, cost_usd, token_count, model, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                [
+                    ev_id, "openclaw", node_id or "local", "main", None, None,
+                    "connector.health", ts_iso, payload, None, None, None,
+                    int(time.time() * 1000),
+                ],
+            )
+
+    def query_connector_health(self, since_hours: int = 24) -> list[dict[str, Any]]:
+        """Recent ``connector.health`` signals, newest first.
+
+        Returns ``[{provider, kind, ts, raw}, ...]`` over the last
+        ``since_hours``. Empty on any failure — callers degrade to an
+        'unknown' state and never crash. The classifier
+        (``routes/health.py:_connector_liveness``) turns this stream into a
+        per-channel ok/degraded/down verdict.
+        """
+        from datetime import datetime, timedelta, timezone
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(hours=int(since_hours))
+        ).isoformat()
+        rows = self._fetch(
+            "SELECT ts, data FROM events "
+            "WHERE event_type = 'connector.health' AND ts >= ? "
+            "ORDER BY ts DESC",
+            [cutoff],
+        )
+        decoded = _decode_data_blob_rows(rows, ["ts", "data"])
+        out: list[dict[str, Any]] = []
+        for r in decoded:
+            data = r.get("data") or {}
+            if not isinstance(data, dict):
+                continue
+            prov = str(data.get("provider") or "").lower().strip()
+            if not prov:
+                continue
+            out.append({
+                "provider": prov,
+                "kind": data.get("kind") or "",
+                "ts": r.get("ts") or "",
+                "raw": data.get("raw") or "",
+            })
+        return out
+
     def query_alert_rules(
         self,
         *,
@@ -5216,6 +5305,7 @@ class LocalStore:
         self,
         *,
         scan_sessions: int = 5,
+        exclude_clawmetry: bool = True,
     ) -> dict[str, Any]:
         """Peak context-window measurement for the latest active session.
 
@@ -5256,6 +5346,16 @@ class LocalStore:
         Args:
             scan_sessions: How many most-recent sessions to walk before
                 giving up. Matches the legacy file-scan budget of 5.
+            exclude_clawmetry: Skip sessions whose id starts with
+                ``clawmetry-`` (Self-Evolve, Fix-with-AI, memory probes,
+                …). Default True so the "Context Window Usage" gauge
+                reflects the *user's* agent, not ClawMetry's own
+                plumbing. Bug surfaced 2026-05-23: OSS showed a 204K
+                SelfEvolve context while cloud showed 38K for the user's
+                actual session, because OSS scanned whichever
+                clawmetry-* session ran most recently first. Pass False
+                to keep the legacy include-everything behaviour
+                (debug tooling).
         """
         # Step 1: most-recent N sessions ordered by last activity. The
         # session table has updated_at; we use events for the same answer
@@ -5267,6 +5367,10 @@ class LocalStore:
         # returned ``input_tokens=0`` and the dashboard's
         # /api/context-anatomy "Session history" bucket vanished.
         ev_in = _sql_in_clause(_ASSISTANT_EVENT_TYPES)
+        # Over-fetch when filtering so a burst of clawmetry-* plumbing
+        # sessions can't crowd the user's real session out of the scan
+        # budget. The post-filter still respects the caller's cap.
+        sql_limit = int(scan_sessions) * (4 if exclude_clawmetry else 1)
         recent_sessions = self._fetch(
             f"""
             SELECT session_id, MAX(ts) AS last_ts
@@ -5277,8 +5381,17 @@ class LocalStore:
             ORDER BY last_ts DESC
             LIMIT ?
             """,
-            [int(scan_sessions)],
+            [sql_limit],
         )
+        if exclude_clawmetry:
+            # Imported here to keep clawmetry.config off this module's
+            # import critical path (local_store is imported in the cloud
+            # too, where the env-var override semantics still apply).
+            from clawmetry.config import hide_clawmetry_session
+            recent_sessions = [
+                r for r in recent_sessions
+                if not hide_clawmetry_session(r[0])
+            ][: int(scan_sessions)]
         for sid_row in recent_sessions:
             sid, _last_ts = sid_row[0], sid_row[1]
             if not sid:
@@ -5305,7 +5418,22 @@ class LocalStore:
                             data = parsed
                     except (ValueError, TypeError, UnicodeDecodeError):
                         continue
-                tok = _extract_input_tokens(data)
+                # Live context-window size = the FULL prompt the model saw on
+                # its last turn: raw input + cached-prefix reads + this-turn
+                # cache writes. Reading only ``input_tokens`` undercounts
+                # cache-heavy sessions catastrophically — a Claude Code turn
+                # reports ``input_tokens: 2`` with ~150K in
+                # ``cache_read_input_tokens``, so the gauge showed "2 / 200K
+                # (0%)" for a nearly-full window. Output tokens are the
+                # model's *response*, not part of the prompt context, so they
+                # are intentionally excluded. (Bug surfaced 2026-05-23 while
+                # verifying the OSS↔cloud parity fix.)
+                splits = _extract_usage_splits(data)
+                tok = (
+                    int(splits.get("input_tokens", 0))
+                    + int(splits.get("cache_read_tokens", 0))
+                    + int(splits.get("cache_write_tokens", 0))
+                )
                 if tok > 0:
                     return {
                         "session_id":   sid,
@@ -5493,19 +5621,33 @@ class LocalStore:
           * thinking rows:     ``{kind:'thinking_level_change', level, ts}``
 
         Single-session helper — caller passes ``session_id``. Uses the
-        existing events table; no new schema required."""
+        existing events table; no new schema required.
+
+        Accepts both v2 event names (``model_change``, ``message``) and v3
+        namespaced names (``model.changed``, ``model.completed``,
+        ``prompt.submitted``) so sessions ingested via OpenClaw v3 return a
+        non-empty journey.  ``cost_usd`` and ``token_count`` are read directly
+        from the typed columns — both v2 and v3 ingest paths populate them —
+        and used as a fallback when the nested ``data.message.usage`` block
+        is absent (v3 shape)."""
         if not session_id:
             return []
         sql = """
-            SELECT event_type, ts, data, model
+            SELECT event_type, ts, data, model, cost_usd, token_count
             FROM events
             WHERE session_id = ?
-              AND event_type IN ('model_change', 'message', 'thinking_level_change')
+              AND event_type IN (
+                'model_change',   'model.changed',
+                'message',        'model.completed', 'prompt.submitted',
+                'thinking_level_change'
+              )
             ORDER BY ts ASC, id ASC
             LIMIT ?
         """
         out: list[dict[str, Any]] = []
-        for et, ts, raw, ev_model in self._fetch(sql, [session_id, int(limit)]):
+        for et, ts, raw, ev_model, ev_cost_usd, ev_token_count in self._fetch(
+            sql, [session_id, int(limit)]
+        ):
             data: dict[str, Any] = {}
             if raw is not None:
                 try:
@@ -5515,7 +5657,7 @@ class LocalStore:
                         data = parsed
                 except (ValueError, TypeError, UnicodeDecodeError):
                     data = {}
-            if et == "model_change":
+            if et in ("model_change", "model.changed"):
                 out.append({
                     "kind":      "model_change",
                     "model":     data.get("modelId") or data.get("model") or ev_model or "",
@@ -5528,16 +5670,20 @@ class LocalStore:
                     "level": data.get("thinkingLevel") or data.get("level") or "",
                     "ts":    ts,
                 })
-            else:  # message
+            else:  # message / model.completed / prompt.submitted
+                # v2 path: cost + tokens nested under data["message"]["usage"]
                 msg = data.get("message") if isinstance(data.get("message"), dict) else {}
                 usage = msg.get("usage") if isinstance(msg.get("usage"), dict) else {}
                 cost_obj = usage.get("cost") if isinstance(usage.get("cost"), dict) else {}
+                # Prefer nested v2 values; fall back to typed columns for v3.
+                total_tokens = int(usage.get("totalTokens", 0) or 0) or int(ev_token_count or 0)
+                total_cost = float(cost_obj.get("total", 0) or 0) or float(ev_cost_usd or 0)
                 out.append({
                     "kind":         "message",
-                    "model":        msg.get("model") or ev_model or "",
-                    "provider":     msg.get("provider") or "",
-                    "total_tokens": int(usage.get("totalTokens", 0) or 0),
-                    "total_cost":   float(cost_obj.get("total", 0) or 0),
+                    "model":        msg.get("model") or data.get("modelId") or ev_model or "",
+                    "provider":     msg.get("provider") or data.get("provider") or "",
+                    "total_tokens": total_tokens,
+                    "total_cost":   total_cost,
                     "ts":           ts,
                 })
         return out

@@ -5282,10 +5282,24 @@ def _rows_to_brain_events(rows: list) -> list:
 
     The OSS-local Brain tab uses ``routes/brain.py:_try_local_store_brain``
     which builds the display shape directly — that path is unchanged.
+
+    Helper-session filtering: ClawMetry's own sessions (``clawmetry-selfevolve``,
+    ``clawmetry-fix``, ``clawmetry-mem-probe`` …) are plumbing, not agent
+    activity. The OSS-local path drops them via ``hide_clawmetry_session``
+    (``routes/brain.py``); for a long time this cache-push path did NOT, so
+    Self-Evolve findings leaked into the cloud Brain feed even though they
+    were hidden locally. We mirror the local filter here so both surfaces
+    agree. (The user explicitly asked to keep Self-Evolve out of the feed.)
     """
+    try:
+        from clawmetry.config import hide_clawmetry_session
+    except Exception:
+        hide_clawmetry_session = lambda _sid: False  # noqa: E731 — never break the push
     out = []
     for r in rows or []:
         if not isinstance(r, dict):
+            continue
+        if hide_clawmetry_session(r.get("session_id")):
             continue
         data = r.get("data")
         enrich = _channel_enrichment_from_row(r)
@@ -5369,15 +5383,19 @@ def _build_brain_cache_pushes(config: dict) -> list:
         return []
     try:
         store = local_store.get_store(read_only=True)
-        rows = store.query_events(limit=BRAIN_CACHE_LIMIT)
+        # Fetch headroom: _rows_to_brain_events drops ClawMetry's own helper
+        # sessions (selfevolve/fix/…), so query extra rows to still land
+        # ~BRAIN_CACHE_LIMIT real events after filtering.
+        rows = store.query_events(limit=BRAIN_CACHE_LIMIT * 3)
     except Exception:
         return []
     if not rows:
         return []
-    # Same translation as routes/brain.py:_try_local_store_brain so the
-    # browser sees an identical event shape regardless of which path served
-    # the data (cache hit vs. relay subscribe vs. JSONL fallback).
-    events = _rows_to_brain_events(rows)
+    # Same translation as routes/brain.py:_try_local_store_brain (incl. the
+    # hide_clawmetry_session filter) so the browser sees an identical event
+    # shape AND set regardless of which path served the data (cache hit vs.
+    # relay subscribe vs. JSONL fallback).
+    events = _rows_to_brain_events(rows)[:BRAIN_CACHE_LIMIT]
     payload = {
         "events":  events,
         "count":   len(events),
@@ -7424,6 +7442,43 @@ def _build_machine_info():
         return {"items": []}
 
 
+def _detect_family_runtimes():
+    """Detect OpenClaw-family runtimes installed alongside (PicoClaw, NanoClaw).
+
+    These runtimes use their OWN native session format (not OpenClaw's v3
+    JSONL), so ClawMetry ships dedicated reader adapters for them
+    (clawmetry/adapters/{picoclaw,nanoclaw}.py). Here we run each adapter's
+    cheap, never-raising ``detect()`` so the cloud can label which runtime a
+    node is actually running. Pure detection: no DuckDB access, no writes, no
+    writer lock involved.
+
+    Returns a list of ``{name, displayName, sessionCount, workspace}`` for the
+    runtimes whose data is present on this host. Empty list if none / on error.
+    """
+    out = []
+    try:
+        from clawmetry.adapters.picoclaw import PicoClawAdapter
+        from clawmetry.adapters.nanoclaw import NanoClawAdapter
+    except Exception as exc:  # adapters unavailable (old wheel) — degrade quietly
+        log.debug(f"family-runtime adapters unavailable: {exc}")
+        return out
+    for cls in (PicoClawAdapter, NanoClawAdapter):
+        try:
+            d = cls().detect()
+            if d.detected:
+                out.append(
+                    {
+                        "name": d.name,
+                        "displayName": d.display_name,
+                        "sessionCount": int(d.session_count or 0),
+                        "workspace": d.workspace or "",
+                    }
+                )
+        except Exception as exc:  # one bad adapter never blocks the others
+            log.debug(f"family-runtime detect failed for {cls.__name__}: {exc}")
+    return out
+
+
 def _build_runtime_info():
     """Build runtime environment info for the Runtime popup."""
     try:
@@ -7486,6 +7541,18 @@ def _build_runtime_info():
             items.append({"label": "Node.js", "value": nv, "status": "ok"})
         except Exception:
             pass
+        # OpenClaw-family runtimes detected on this host (PicoClaw, NanoClaw).
+        # Surfaced as Runtime popup rows so the cloud shows what a node runs,
+        # with no cloud-side code change (the popup renders runtimeInfo.items).
+        for rt in _detect_family_runtimes():
+            n = rt.get("sessionCount") or 0
+            items.append(
+                {
+                    "label": rt.get("displayName") or rt.get("name") or "Runtime",
+                    "value": f"detected ({n} session{'s' if n != 1 else ''})",
+                    "status": "ok",
+                }
+            )
         return {"items": items}
     except Exception as e:
         log.warning(f"Runtime info error: {e}")
@@ -8363,9 +8430,15 @@ def _build_reliability(limit_sessions=25, min_sessions=4):
         # score the user's real agent, not our own selfevolve/probe runs).
         order = []
         by_sid = {}
+        from clawmetry.config import is_clawmetry_internal_session
         for e in evs:
             sid = (e.get("session_id") or "").strip()
-            if not sid or sid.startswith("clawmetry-"):
+            # #2019: skip ClawMetry's own helper sessions from reliability
+            # scoring. is_clawmetry_internal_session matches both the bare id
+            # and the full OpenClaw form (agent:main:explicit:clawmetry-*);
+            # the old startswith("clawmetry-") missed the latter and let our
+            # selfevolve/probe runs pollute the user's real-agent score.
+            if not sid or is_clawmetry_internal_session(sid):
                 continue
             if sid not in by_sid:
                 by_sid[sid] = []
@@ -9444,6 +9517,10 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "brainData": _build_brain_data(),
         "gateway": {},
         "runtimeInfo": _build_runtime_info(),
+        # OpenClaw-family runtimes (PicoClaw, NanoClaw) detected on this host,
+        # tiny by design ({name, displayName, sessionCount, workspace}) so the
+        # cloud can show a runtime chip without bloating the snapshot.
+        "detectedRuntimes": _detect_family_runtimes(),
         "machineInfo": _build_machine_info(),
         "channelList": _build_channel_list(config),
         "ollamaInfo": _detect_ollama_for_heartbeat(),
@@ -9462,6 +9539,10 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "memoryAccess": _build_memory_access(),
         "traces": _build_traces(),
         "skills": _build_skills(),
+        # Connector liveness (incident: a channel went deaf ~37h, no alarm).
+        # Lets the cloud dashboard flag a 'down' inbound channel just like the
+        # local dashboard's /api/system-health does.
+        "connectorLiveness": _build_connector_liveness(config),
     }
 
     # ── NemoClaw / sandbox enrichment ────────────────────────────────────────
@@ -10304,6 +10385,14 @@ def run_daemon() -> None:
                 )
                 tg = 0
 
+            # ── Connector liveness (incident: node deaf ~37h, no alarm) ──
+            # Tail both gateway logs for inbound-poll stall/disconnect/wedge
+            # signals so health.py can flag a channel that stopped receiving.
+            try:
+                sync_connector_health_from_logs(config, state, paths)
+            except Exception as _e_ch:
+                log.debug("connector-health tick error (non-fatal): %s", _e_ch)
+
             state["last_sync"] = datetime.now(timezone.utc).isoformat()
             # Audit fix (2026-05-17): force a synchronous local-store flush
             # BEFORE persisting the cursor state. Belt-and-suspenders to
@@ -10723,6 +10812,181 @@ def sync_telegram_from_gateway_log(
     except Exception as e:
         log.warning("telegram-gw-log: cycle failed: %s", e)
         return 0
+
+
+# ── Connector liveness: detect a channel going deaf ──────────────────────────
+# Incident 2026-05-24: a Telegram inbound long-poll wedged (network stall →
+# aborted shutdown that timed out) and never restarted. The agent kept SENDING
+# (scheduled crons fired fine) but silently stopped RECEIVING for ~37h, and
+# nothing flagged it. The evidence was always there, split across two logs:
+#   gateway.log      [telegram] [default] starting provider            (healthy)
+#                    [health-monitor] [telegram:default] … (reason: disconnected)
+#   gateway.err.log  [telegram] Polling stall detected …               (unhealthy)
+#                    [telegram] [default] channel stop exceeded … abort (wedged)
+# We tail both and record each signal as a connector.health event so
+# routes/health.py can raise a real "inbound silent for Nh" alarm.
+_CONNECTOR_PROVIDERS = {
+    "telegram", "signal", "whatsapp", "discord", "slack", "irc", "imessage",
+    "webchat", "googlechat", "msteams", "matrix", "mattermost", "line",
+    "nostr", "twitch", "bluebubbles",
+}
+
+
+def parse_connector_health_line(line: str):
+    """Map one gateway-log line to ``(provider, kind, ts_utc_iso)`` or None.
+
+    ``kind`` ∈ healthy {``started``} / unhealthy {``stall``, ``wedged``,
+    ``disconnect``}. Cheap substring pre-filter first — only a handful of
+    lines per day match, so we skip the regex/parse for the other 99.99%.
+    """
+    if not line:
+        return None
+    if (
+        "starting provider" not in line
+        and "Polling stall detected" not in line
+        and "channel stop exceeded" not in line
+        and "(reason: disconnected)" not in line
+    ):
+        return None
+    import re as _re
+    mts = _re.match(r"(\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:?\d{2}))", line)
+    if not mts:
+        return None
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        ts_utc = (
+            _dt.fromisoformat(mts.group(1).replace("Z", "+00:00"))
+            .astimezone(_tz.utc)
+            .isoformat()
+        )
+    except Exception:
+        return None
+    # Provider lives in a bracket token: [telegram] or [telegram:default] or
+    # (for health-monitor lines) the SECOND bracket [telegram:default].
+    prov = None
+    for tok in _re.findall(r"\[([a-z0-9_]+)(?::[^\]]*)?\]", line.lower()):
+        if tok in _CONNECTOR_PROVIDERS:
+            prov = tok
+            break
+    if not prov:
+        return None
+    if "Polling stall detected" in line:
+        kind = "stall"
+    elif "channel stop exceeded" in line:
+        kind = "wedged"
+    elif "(reason: disconnected)" in line:
+        kind = "disconnect"
+    elif "starting provider" in line:
+        kind = "started"
+    else:
+        return None
+    return (prov, kind, ts_utc)
+
+
+def _connector_health_offset_key(log_path: str) -> str:
+    return f"connector_health::{os.path.abspath(log_path)}"
+
+
+def sync_connector_health_from_logs(
+    config: dict | None,
+    state: dict,
+    paths: dict | None = None,
+) -> int:
+    """Tail gateway.log + gateway.err.log for channel inbound-poll lifecycle
+    signals and ingest them as connector.health events. Byte-offset resume
+    per file (mirrors sync_telegram_from_gateway_log); idempotent ingest.
+    Best-effort — returns the number of signals ingested this cycle, 0 on any
+    failure (the daemon must never crash on telemetry plumbing).
+    """
+    try:
+        if paths and isinstance(paths, dict) and paths.get("logs_dir"):
+            logs_dir = str(paths["logs_dir"])
+        else:
+            logs_dir = os.path.join(_get_openclaw_dir(), "logs")
+        log_paths = [
+            os.path.join(logs_dir, "gateway.log"),
+            os.path.join(logs_dir, "gateway.err.log"),
+        ]
+        try:
+            from clawmetry import local_store as _ls
+            store = _ls.get_store()
+        except Exception as e:
+            log.warning("connector-health: local_store unavailable: %s", e)
+            return 0
+        node_id = (
+            (config or {}).get("node_id")
+            or os.environ.get("CLAWMETRY_NODE_ID")
+            or "local"
+        )
+        offsets = state.setdefault("last_log_offsets", {})
+        total = 0
+        for log_path in log_paths:
+            if not os.path.exists(log_path):
+                continue
+            key = _connector_health_offset_key(log_path)
+            prev_offset = int(offsets.get(key, 0) or 0)
+            try:
+                size = os.path.getsize(log_path)
+            except OSError:
+                continue
+            if size < prev_offset:
+                prev_offset = 0  # rotated/truncated — rescan (ingest idempotent)
+            if size == prev_offset:
+                continue
+            try:
+                with open(log_path, "rb") as fh:
+                    fh.seek(prev_offset)
+                    buf = fh.read()
+            except OSError as e:
+                log.warning("connector-health: read failed (%s): %s", log_path, e)
+                continue
+            text = buf.decode("utf-8", errors="ignore")
+            last_nl = text.rfind("\n")
+            if last_nl < 0:
+                continue
+            complete = text[: last_nl + 1]
+            new_offset = prev_offset + len(complete.encode("utf-8", errors="ignore"))
+            for raw_line in complete.splitlines():
+                parsed = parse_connector_health_line(raw_line)
+                if not parsed:
+                    continue
+                prov, kind, ts_utc = parsed
+                try:
+                    store.ingest_connector_health(
+                        node_id=node_id, provider=prov, kind=kind,
+                        ts_iso=ts_utc, raw=raw_line.strip(),
+                    )
+                except Exception as e:
+                    log.debug("connector-health: ingest failed: %s", e)
+                    continue
+                total += 1
+            offsets[key] = new_offset
+        if total:
+            log.info("connector-health: ingested %d signal(s)", total)
+        return total
+    except Exception as e:
+        log.warning("connector-health: cycle failed: %s", e)
+        return 0
+
+
+def _build_connector_liveness(config: dict | None = None) -> list:
+    """Per-channel inbound-poll verdict for the cloud snapshot, computed with
+    the SAME classifier the local dashboard uses (clawmetry.connector_health)
+    so the cloud and local UIs never disagree on whether a channel is down.
+    Best-effort; [] on any failure (never block the snapshot)."""
+    try:
+        from clawmetry.connector_health import (
+            enabled_channels_from_config, classify_connector_liveness,
+        )
+        enabled = enabled_channels_from_config()
+        if not enabled:
+            return []
+        from clawmetry import local_store as _ls
+        rows = _ls.get_store().query_connector_health(since_hours=24)
+        return classify_connector_liveness(enabled, rows)
+    except Exception as e:
+        log.debug("connector-liveness snapshot build failed (non-fatal): %s", e)
+        return []
 
 
 def _build_gateway_data(paths: dict = None) -> dict:

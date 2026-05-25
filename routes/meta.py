@@ -789,18 +789,28 @@ def otlp_traces():
 
 @bp_otel.route("/api/otel-status")
 def api_otel_status():
-    """Return OTLP receiver status."""
+    """Return OTLP receiver + exporter status."""
     import dashboard as _d
     counts = {}
     with _d._metrics_lock:
         for k in _d.metrics_store:
             counts[k] = len(_d.metrics_store[k])
+    export_stats: dict = {}
+    try:
+        from clawmetry.otel_exporter import get_stats as _otel_get_stats
+        export_stats = _otel_get_stats()
+    except Exception:
+        pass
     return jsonify(
         {
             "available": _d._HAS_OTEL_PROTO,
             "hasData": _d._has_otel_data(),
             "lastReceived": _d._otel_last_received,
             "counts": counts,
+            "exportEndpoint": export_stats.get("endpoint", ""),
+            "exportLastFlushAt": export_stats.get("last_flush_at"),
+            "exportSpansSent": export_stats.get("spans_sent", 0),
+            "exportLastError": export_stats.get("last_error"),
         }
     )
 

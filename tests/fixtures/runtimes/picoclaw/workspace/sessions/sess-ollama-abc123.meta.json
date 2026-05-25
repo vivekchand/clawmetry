@@ -1,0 +1,10 @@
+{
+  "key": "sess-ollama-abc123",
+  "summary": "List directory contents",
+  "skip": false,
+  "count": 4,
+  "created_at": "2026-05-25T10:00:00Z",
+  "updated_at": "2026-05-25T10:00:08Z",
+  "scope": "default",
+  "aliases": ["ls-session"]
+}

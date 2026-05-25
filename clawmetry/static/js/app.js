@@ -427,6 +427,50 @@ setTimeout(checkActiveAlerts, 3000);
 
 // === Anomaly Detection Banner ===
 var _anomalyBannerEl = null;
+// ── Connector-down banner (incident: a channel went deaf ~37h, no alarm) ──
+// A red top banner whenever an enabled inbound channel's poll is 'down' —
+// the agent can still SEND but can no longer RECEIVE messages on it. Driven
+// by /api/system-health.connector_liveness (loadSystemHealth). Dynamically
+// created so it works on cloud (which serves this app.js) without a template.
+var _connectorBannerEl = null;
+function _getOrCreateConnectorBanner() {
+  if (_connectorBannerEl) return _connectorBannerEl;
+  var existing = document.getElementById('connector-down-banner');
+  if (existing) { _connectorBannerEl = existing; return existing; }
+  var el = document.createElement('div');
+  el.id = 'connector-down-banner';
+  el.style.cssText = 'display:none;padding:10px 16px;background:#7f1d1d;border-bottom:2px solid #ef4444;color:#fecaca;font-size:13px;font-weight:600;align-items:center;gap:10px;';
+  el.innerHTML = '<span style="font-size:18px;">&#128227;</span><span id="connector-down-banner-msg" style="flex:1;"></span><a href="#" onclick="switchTab(\'overview\');return false;" style="color:#fecaca;text-decoration:underline;font-size:12px;margin-right:8px;">View</a><button onclick="document.getElementById(\'connector-down-banner\').style.display=\'none\';" style="background:#991b1b;color:#fee2e2;border:none;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;">Dismiss</button>';
+  var alertBanner = document.getElementById('alert-banner');
+  if (alertBanner && alertBanner.parentNode) {
+    alertBanner.parentNode.insertBefore(el, alertBanner.nextSibling);
+  } else {
+    document.body.insertBefore(el, document.body.firstChild);
+  }
+  _connectorBannerEl = el;
+  return el;
+}
+
+function _renderConnectorBanner(liveness) {
+  var banner = _getOrCreateConnectorBanner();
+  var rows = Array.isArray(liveness) ? liveness : [];
+  var down = rows.filter(function(r){ return r && r.state === 'down'; });
+  if (down.length === 0) { banner.style.display = 'none'; return; }
+  function cap(s){ return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+  var first = down[0];
+  var mins = (first.mins_ago != null) ? first.mins_ago : null;
+  var since = (mins != null)
+    ? (mins >= 120 ? Math.round(mins/60) + 'h' : mins + 'm')
+    : '';
+  var msg = '⚠️ ' + cap(first.provider) + ' is not receiving messages'
+    + (since ? '. Inbound down ' + since + '.' : '.')
+    + ' Your agent can still send, but is not hearing replies.';
+  if (down.length > 1) msg += ' (+' + (down.length - 1) + ' more channel' + (down.length > 2 ? 's' : '') + ')';
+  var msgEl = document.getElementById('connector-down-banner-msg');
+  if (msgEl) msgEl.textContent = msg;
+  banner.style.display = 'flex';
+}
+
 function _getOrCreateAnomalyBanner() {
   if (_anomalyBannerEl) return _anomalyBannerEl;
   var existing = document.getElementById('anomaly-engine-banner');
@@ -926,6 +970,7 @@ function switchTab(name) {
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
   if (name === 'approvals') { if (typeof loadApprovalsTab === 'function') loadApprovalsTab(); }
   if (name === 'alerts') { if (typeof loadAlertsPage === 'function') loadAlertsPage(); }
+  if (name === 'dives') { if (typeof loadDivesPage === 'function') loadDivesPage(); }
   if (name === 'actions') loadQAHistory();
   if (name === 'logs') {
     // Phase 3 (#1252): defer the SSE handshake until the user actually
@@ -3009,22 +3054,42 @@ function _provenancePillHtml(meta, bodyHtml) {
 // Detects the "Sender (untrusted metadata)" / "Conversation info ..." JSON
 // prefix that channel adapters prepend to user messages. Returns
 // { meta:{...}, body:"<remaining text>" } or null.
+//
+// Adapters STACK more than one such block — a Telegram user message arrives as
+//
+//     Conversation info (untrusted metadata):
+//     ```json { "chat_id": "telegram:…", "sender": "Vivek Chand", … } ```
+//     Sender (untrusted metadata):
+//     ```json { "label": "Vivek Chand (…)", "id": "…", "name": "Vivek Chand" } ```
+//     <real message body>
+//
+// We strip EVERY leading provenance block (not just the first) so the same
+// identity isn't echoed 2-3× under the pill. The pill summarises the first
+// (richest) block; later blocks are redundant with it and dropped entirely.
 function _parseProvenancePrefix(s) {
   if (!s || typeof s !== 'string') return null;
-  // Match: optional "<label> (untrusted metadata):" header, then a ```json
-  // block, then the rest is the real body. Header is optional because some
-  // payloads ship just the json fence at the top.
-  var m = s.match(/^(?:[^\n]*\(untrusted metadata\)[^\n]*\n)?\s*```json\s*([\s\S]*?)```\s*([\s\S]*)$/);
-  if (!m) return null;
-  try {
-    var meta = JSON.parse(m[1]);
-    if (!meta || typeof meta !== 'object') return null;
-    // Require at least one provenance-y key so we don't eat unrelated json.
-    if (meta.chat_id == null && meta.sender == null && meta.message_id == null) {
-      return null;
-    }
-    return { meta: meta, body: (m[2] || '').trim() };
-  } catch(e) { return null; }
+  var rest = s;
+  var firstMeta = null;
+  // One leading block: optional "<label> (untrusted metadata):" header, then a
+  // ```json fence. ``\n?`` swallows the newline between stacked blocks.
+  var blockRe = /^\s*([^\n]*\(untrusted metadata\)[^\n]*\n)?[ \t]*```json\s*([\s\S]*?)```[ \t]*\n?/;
+  while (true) {
+    var m = rest.match(blockRe);
+    if (!m) break;
+    var hadHeader = !!m[1];
+    var meta;
+    try { meta = JSON.parse(m[2]); } catch(e) { break; }
+    if (!meta || typeof meta !== 'object') break;
+    var looksProv = (meta.chat_id != null || meta.sender != null || meta.message_id != null);
+    // Without the "(untrusted metadata)" header we only strip a block that is
+    // clearly provenance, so a real ```json code block in the message body is
+    // never eaten. With the header the adapter already declared it plumbing.
+    if (!hadHeader && !looksProv) break;
+    if (firstMeta === null) firstMeta = meta;
+    rest = rest.slice(m[0].length);
+  }
+  if (firstMeta === null) return null;
+  return { meta: firstMeta, body: rest.trim() };
 }
 
 function renderBrainDetail(detail) {
@@ -6177,23 +6242,19 @@ async function loadSecurityPosture() {
     var warnEl = document.getElementById('posture-warnings');
     var failedEl = document.getElementById('posture-failed');
     var listEl = document.getElementById('posture-checks-list');
-
     badge.textContent = data.score || '?';
     badge.style.background = data.score_color || '#64748b';
     var labelTxt = (data.score_label || 'Unknown') + ' · ' + (data.score_pct || 0) + '%';
-    label.innerHTML = escHtml(labelTxt) +
-      (data.config_path ? '<span style="color:var(--text-muted);margin-left:8px;font-size:10px;font-family:ui-monospace,Menlo,monospace;">' + escHtml(data.config_path) + '</span>' : '');
+    label.innerHTML = escHtml(labelTxt) + (data.config_path ? '<span style="color:var(--text-muted);margin-left:8px;font-size:10px;font-family:ui-monospace,Menlo,monospace;">' + escHtml(data.config_path) + '</span>' : '');
     bar.style.width = (data.score_pct || 0) + '%';
     bar.style.background = data.score_color || '#64748b';
     passedEl.textContent = data.passed || 0;
     warnEl.textContent = data.warnings || 0;
     failedEl.textContent = data.failed || 0;
-
     var checks = (data.checks || []).slice();
     var fails = checks.filter(function(c){ return c.status === 'fail'; });
     var warns = checks.filter(function(c){ return c.status === 'warn'; });
     var passes = checks.filter(function(c){ return c.status === 'pass'; });
-
     function row(c, color, accent) {
       var h = '<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:' + (accent || 'var(--bg-primary)') + ';border:1px solid var(--border);border-left:3px solid ' + color + ';border-radius:6px;">';
       h += '<div style="flex:1;min-width:0;">';
@@ -6208,10 +6269,7 @@ async function loadSecurityPosture() {
     function passPill(c) {
       return '<span title="' + escHtml(c.detail || '') + '" style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:14px;background:rgba(34,197,94,0.10);border:1px solid rgba(34,197,94,0.3);color:#86efac;font-size:11px;font-weight:500;">✓ ' + escHtml(c.label) + '</span>';
     }
-
     var html = '';
-    // Section 1: needs review — failures first, then warnings. Only renders
-    // when there's something actionable.
     if (fails.length || warns.length) {
       html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-muted);margin:4px 0 8px;">Needs review · ' + (fails.length + warns.length) + '</div>';
       html += '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;">';
@@ -6221,10 +6279,8 @@ async function loadSecurityPosture() {
     } else if (passes.length) {
       html += '<div style="padding:12px 14px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.25);border-radius:6px;color:#86efac;font-size:13px;font-weight:600;margin-bottom:14px;">✓ All ' + passes.length + ' security checks passing — nothing to review.</div>';
     }
-
-    // Section 2: passing — collapsed by default as compact pills.
     if (passes.length) {
-      var openByDefault = !(fails.length || warns.length); // open only when no warnings
+      var openByDefault = !(fails.length || warns.length);
       html += '<div>';
       html += '<button type="button" onclick="(function(b){var t=document.getElementById(\'posture-passing-list\');var open=t.style.display!==\'none\';t.style.display=open?\'none\':\'\';b.querySelector(\'.chev\').textContent=open?\'▸\':\'▾\';})(this)" style="display:inline-flex;align-items:center;gap:8px;background:none;border:none;color:var(--text-muted);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;cursor:pointer;padding:4px 0;">';
       html += '<span class="chev">' + (openByDefault ? '▾' : '▸') + '</span> Passing · ' + passes.length + '</button>';
@@ -6252,9 +6308,9 @@ async function loadSecurityPage(silent) {
     document.getElementById('sec-clean-count').textContent = counts.clean_sessions || 0;
     var scanTime = document.getElementById('security-scan-time');
     if (scanTime) scanTime.textContent = 'Scanned ' + new Date().toLocaleTimeString();
-    // Compact "all-clear" UI when there's nothing to triage: hide the four
-    // zero-tiles + severity filter + "Scanning..." placeholder; show one
-    // calm green line instead.
+    // Compact "all-clear" mode: when there's nothing to triage, hide the four
+    // zero-tiles + severity filter + perpetual "Scanning..." placeholder; show
+    // one calm green line instead. Restored the moment anything > 0.
     var nThreats = (counts.critical || 0) + (counts.high || 0) + (counts.medium || 0) + (threats.length || 0);
     var summaryEl = document.getElementById('security-summary');
     var filterEl = document.getElementById('security-filter-pills');
@@ -8795,6 +8851,9 @@ async function _loadGatewayHealthSparkline() {
 async function loadSystemHealth() {
   try {
     var d = await fetchJsonWithTimeout('/api/system-health', 18000);
+    // Connector liveness: surface a 'down' inbound channel loudly (incident:
+    // a channel went deaf ~37h with no alarm). Driven by the same payload.
+    try { _renderConnectorBanner(d.connector_liveness); } catch(e) {}
     var services = Array.isArray(d.services) ? d.services : [];
     var channels = Array.isArray(d.channels) ? d.channels : [];
     var disks = Array.isArray(d.disks) ? d.disks : [];
@@ -10340,6 +10399,24 @@ function loadAllSkills() {
 }
 
 // ===== Transcripts =====
+// ── Session-replay "Show plumbing" toggle ───────────────────────────────────
+// Self-Evolve sessions are the agent's own standing self-review runs (FIX mode
+// + re-analyze) — machine-initiated, not user work. Left in, they pile up and
+// bury real sessions, so they're hidden by default behind a "Show plumbing"
+// toggle (same treatment the Brain tab gives queue/metric rows).
+window._transcriptShowPlumbing = window._transcriptShowPlumbing || false;
+function _isPlumbingTranscript(titleSrc) {
+  // Match the Self-Evolve system prompt anywhere in the derived title — the
+  // title often carries a "[Wed 2026-05-20 22:30 GMT+2] …" timestamp prefix
+  // ahead of the prompt text, so we can't anchor at the start.
+  return String(titleSrc || '').toLowerCase().indexOf('you are clawmetry self-evolve') !== -1;
+}
+window.toggleTranscriptPlumbing = function() {
+  window._transcriptShowPlumbing = !window._transcriptShowPlumbing;
+  var st = document.getElementById('transcript-plumbing-state');
+  if (st) st.textContent = window._transcriptShowPlumbing ? '●' : '○';
+  loadTranscripts();
+};
 async function loadTranscripts() {
   try {
     var data = await fetch('/api/transcripts').then(r => r.json());
@@ -10351,12 +10428,17 @@ async function loadTranscripts() {
     // catches the "name === sid" / "name === sid[:40]" cases the legacy
     // endpoint emits.
     var UUIDISH = /^[0-9a-f]{6,}([-_][0-9a-f]+)*$/i;
+    var plumbingTotal = 0;
     data.transcripts.forEach(function(t) {
       var raw = String(t.id || '');
       var titleSrc = (t.title && String(t.title).trim()) || (t.name && String(t.name).trim()) || '';
       var looksLikeId = !titleSrc || titleSrc === raw || UUIDISH.test(titleSrc) || raw.indexOf(titleSrc) === 0;
       var title = looksLikeId ? 'Untitled session' : titleSrc;
-      html += '<div class="transcript-item" onclick="viewTranscript(\'' + escHtml(raw) + '\')">';
+      var isPlumbing = _isPlumbingTranscript(titleSrc);
+      if (isPlumbing) plumbingTotal++;
+      // Self-Evolve runs are hidden by default; "Show plumbing" reveals them de-emphasized.
+      if (isPlumbing && !window._transcriptShowPlumbing) return;
+      html += '<div class="transcript-item" style="' + (isPlumbing ? 'opacity:0.5;' : '') + '" onclick="viewTranscript(\'' + escHtml(raw) + '\')">';
       html += '<div style="min-width:0;flex:1;">';
       html += '<div class="transcript-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(title) + '</div>';
       html += '<div class="transcript-meta-row" style="gap:10px;">';
@@ -10368,7 +10450,14 @@ async function loadTranscripts() {
       html += '<span style="color:#444;font-size:18px;">▸</span>';
       html += '</div>';
     });
-    document.getElementById('transcript-list').innerHTML = html || '<div style="padding:16px;color:#666;">No transcript files found</div>';
+    var plumbCountEl = document.getElementById('transcript-plumbing-count');
+    if (plumbCountEl) plumbCountEl.textContent = plumbingTotal > 0 ? (window._transcriptShowPlumbing ? '(' + plumbingTotal + ' shown)' : '(' + plumbingTotal + ' hidden)') : '';
+    var plumbBtn = document.getElementById('transcript-plumbing-btn');
+    if (plumbBtn) plumbBtn.style.display = plumbingTotal > 0 ? '' : 'none';
+    var emptyMsg = (plumbingTotal > 0 && !window._transcriptShowPlumbing)
+      ? '<div style="padding:16px;color:#666;">No sessions to show — ' + plumbingTotal + ' Self-Evolve session' + (plumbingTotal === 1 ? '' : 's') + ' hidden. Click “Show plumbing” to reveal.</div>'
+      : '<div style="padding:16px;color:#666;">No transcript files found</div>';
+    document.getElementById('transcript-list').innerHTML = html || emptyMsg;
     document.getElementById('transcript-list').style.display = '';
     document.getElementById('transcript-viewer').style.display = 'none';
     document.getElementById('transcript-back-btn').style.display = 'none';
@@ -10778,6 +10867,7 @@ async function viewTranscript(sessionId) {
       metaHtml += '</div>';
     }
     document.getElementById('transcript-meta').innerHTML = metaHtml;
+    _loadAuthorityPanel(sessionId);
     // Build replay events array - include compaction markers as special events
     var events = [];
     var compactionIdx = 0;
@@ -10820,6 +10910,65 @@ async function viewTranscript(sessionId) {
   } catch(e) {
     document.getElementById('transcript-messages').innerHTML = '<div style="color:#e74c3c;padding:16px;">Failed to load transcript</div>';
   }
+}
+
+// Authority footprint panel (#880) — fetches /api/authority for the current
+// session and renders tools/filesystem/network sections in a collapsible card.
+async function _loadAuthorityPanel(sessionId) {
+  var panel = document.getElementById('authority-panel');
+  var body  = document.getElementById('authority-panel-body');
+  var sumEl = document.getElementById('authority-panel-summary');
+  if (!panel || !body) return;
+  panel.style.display = 'none';
+  try {
+    var fp = await fetch('/api/authority?session_id=' + encodeURIComponent(sessionId))
+                    .then(function(r){ return r.json(); });
+    if (!fp || fp.error) return;
+    var tools = fp.tools || [];
+    var files = fp.filesystem || [];
+    var hosts = fp.network || [];
+    if (tools.length === 0 && files.length === 0 && hosts.length === 0) return;
+
+    // Summary line in the toggle header
+    var parts = [];
+    if (tools.length) parts.push(tools.length + ' tool' + (tools.length === 1 ? '' : 's'));
+    if (files.length) parts.push(files.length + ' path' + (files.length === 1 ? '' : 's'));
+    if (hosts.length) parts.push(hosts.length + ' host' + (hosts.length === 1 ? '' : 's'));
+    if (sumEl) sumEl.textContent = parts.join(' · ');
+
+    function _pill(text, color) {
+      return '<span style="display:inline-block;padding:1px 7px;border-radius:99px;font-size:10px;font-family:var(--font-mono,monospace);background:' + color + '22;color:' + color + ';border:1px solid ' + color + '44;margin:2px 2px 2px 0;">' + escHtml(text) + '</span>';
+    }
+
+    var html = '';
+
+    if (tools.length) {
+      html += '<div style="margin-bottom:8px;"><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:4px;">Tools called</div><div>';
+      tools.forEach(function(t){
+        html += _pill(t.name + (t.calls > 1 ? ' ×' + t.calls : ''), '#6366f1');
+      });
+      html += '</div></div>';
+    }
+
+    if (files.length) {
+      html += '<div style="margin-bottom:8px;"><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:4px;">Filesystem paths</div><div>';
+      files.forEach(function(f){
+        html += _pill(f.path, '#22c55e');
+      });
+      html += '</div></div>';
+    }
+
+    if (hosts.length) {
+      html += '<div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:4px;">Network hosts</div><div>';
+      hosts.forEach(function(h){
+        html += _pill(h.host, '#f59e0b');
+      });
+      html += '</div></div>';
+    }
+
+    body.innerHTML = html;
+    panel.style.display = '';
+  } catch(e) { /* non-critical — panel stays hidden on error */ }
 }
 
 function toggleMsg(idx) {
@@ -11022,6 +11171,16 @@ async function _cmSyncTick() {
 async function cmSyncInit() {
   // Cloud mode keeps its existing cm-sync-bar (Phase 2 promotes this component).
   if (window.CLOUD_MODE) return;
+  // #1937: the banner describes CLOUD-side sync work. Don't show it when
+  //   * the user opted out (CLAWMETRY_NO_CLOUD=1 or ~/.clawmetry/nocloud), or
+  //   * the user never connected (no config.json -> nothing to sync).
+  // Without this gate the banner freezes on the last phase the daemon
+  // happened to be in before disconnect ("Step: crons · about 2m remaining"
+  // -- forever), which is the exact symptom that prompted the fix.
+  try {
+    var cs = await fetch('/api/cloud-status').then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
+    if (cs && (cs.disabled || !cs.configured)) return;
+  } catch (e) {}
   // Only show on a cold install: no events yet, or a sync explicitly in progress.
   var health = await fetch('/api/local/health').then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
   var prog = await fetch('/api/sync-progress').then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });

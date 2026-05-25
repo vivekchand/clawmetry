@@ -280,7 +280,13 @@
 @keyframes cm-trail { 0%{stroke-dashoffset:200} 100%{stroke-dashoffset:0} }
 
 .cm-blink { animation: cm-blink 1.4s infinite; }
-.cm-pulse { animation: cm-pulse 1.8s ease-in-out infinite; }
+.cm-pulse { animation: cm-pulse 1.8s ease-in-out infinite; } 
+
+.cm-ecg path {
+  stroke-dasharray: 200;
+  stroke-dashoffset: 200;
+  animation: cm-trail 1.4s linear infinite;
+}
 
 /* metaphor frame variants — wraps the featured dashboard */
 .metaphor-hood {

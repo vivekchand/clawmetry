@@ -1903,7 +1903,7 @@ def api_automation_analysis():
         })
 
 
-def _try_local_store_session_history_tokens():
+def _try_local_store_session_history_tokens(exclude_clawmetry: bool = True):
     """Tier-1 DuckDB fast path for /api/context-anatomy session-history bucket.
 
     Replaces a 5-file × N-line JSONL scan (the single hottest blocking
@@ -1913,11 +1913,20 @@ def _try_local_store_session_history_tokens():
     behaviour exactly. Returns ``None`` to defer to the JSONL scanner if:
       * the daemon proxy isn't reachable AND direct open fails
       * the events table has no message events with non-zero usage yet
+
+    Args:
+        exclude_clawmetry: filter out ClawMetry-internal plumbing
+            sessions (clawmetry-selfevolve, clawmetry-fix, …). Default
+            True so the value drives a user-facing "context window
+            usage" gauge — see ``query_context_window_peek``.
     """
+    kwargs = {"scan_sessions": 5}
+    if not exclude_clawmetry:
+        kwargs["exclude_clawmetry"] = False
     result = None
     try:
         from routes.local_query import local_store_via_daemon
-        result = local_store_via_daemon("query_context_window_peek", scan_sessions=5)
+        result = local_store_via_daemon("query_context_window_peek", **kwargs)
     except Exception:
         result = None
     if result is None:
@@ -1926,7 +1935,7 @@ def _try_local_store_session_history_tokens():
         try:
             from clawmetry import local_store
             store = local_store.get_store(read_only=True)
-            result = store.query_context_window_peek(scan_sessions=5)
+            result = store.query_context_window_peek(**kwargs)
         except Exception:
             return None
     if not isinstance(result, dict):

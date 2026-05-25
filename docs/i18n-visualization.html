@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClawMetry i18n — Before / After</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --border:#2b3444;
+    --text:#e6edf3; --muted:#8b97a7; --accent:#6ea8fe; --good:#3fb950; --warn:#d29922;
+    --land-bg:#ffffff; --land-text:#0d1117; --land-muted:#5b6675; --land-border:#e5e9f0;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans","Noto Sans JP","Noto Sans SC","Noto Sans Tamil","Noto Sans Devanagari","Noto Sans Arabic",sans-serif}
+  .topbar{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;
+    padding:14px 22px;background:#0a0e14;border-bottom:1px solid var(--border)}
+  .topbar h1{font-size:16px;margin:0;font-weight:800;letter-spacing:.2px}
+  .topbar .sub{color:var(--muted);font-size:12px;margin-top:2px}
+  .picker{display:flex;align-items:center;gap:8px}
+  .picker label{color:var(--muted);font-size:12px}
+  select{background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:8px;
+    padding:7px 12px;font-size:13px;font-family:inherit}
+  .wrap{max-width:1180px;margin:0 auto;padding:26px 22px 60px}
+  .section{margin-bottom:34px}
+  .section > h2{font-size:13px;text-transform:uppercase;letter-spacing:1.5px;color:var(--accent);
+    margin:0 0 12px;font-weight:700}
+  .pair{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  .col-label{font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin-bottom:7px;display:flex;align-items:center;gap:7px}
+  .pill{font-size:10px;padding:2px 8px;border-radius:20px;font-weight:700}
+  .pill.before{background:#3a2326;color:#ff9a9a}
+  .pill.after{background:#16331f;color:#7ee2a0}
+  /* generic mock card */
+  .mock{border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--panel)}
+  .note{margin-top:8px;font-size:11.5px;color:var(--muted);display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .chip{background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:2px 8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:#a9d1ff}
+  .chip.ok{color:#7ee2a0;border-color:#1f4d2e}
+  /* ---- landing mock ---- */
+  .land{background:var(--land-bg);color:var(--land-text)}
+  .land .nav{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-bottom:1px solid var(--land-border)}
+  .land .brand{font-weight:800;font-size:15px;display:flex;align-items:center;gap:7px}
+  .land .brand .dot{width:9px;height:9px;border-radius:50%;background:#6ea8fe;display:inline-block}
+  .land .nav-r{display:flex;align-items:center;gap:14px;font-size:12.5px;color:var(--land-muted)}
+  .land .nav-r .globe{border:1px solid var(--land-border);border-radius:7px;padding:4px 9px;color:var(--land-text);font-weight:600}
+  .land .nav-r .cta{background:#0d1117;color:#fff;padding:6px 12px;border-radius:7px;font-weight:700}
+  .land .hero{padding:30px 22px 34px;text-align:center}
+  .land .hero h3{font-size:24px;line-height:1.25;margin:0 0 10px;font-weight:800;max-width:560px;margin-inline:auto}
+  .land .hero p{color:var(--land-muted);font-size:13.5px;margin:0 auto 16px;max-width:480px}
+  .land .hero .btn{background:#0d1117;color:#fff;padding:9px 18px;border-radius:9px;font-weight:700;display:inline-block;font-size:13px}
+  .land .feats{display:flex;gap:10px;justify-content:center;margin-top:22px;flex-wrap:wrap}
+  .land .feat{border:1px solid var(--land-border);border-radius:9px;padding:9px 14px;font-size:12px;font-weight:600;color:var(--land-text)}
+  /* ---- dashboard mock ---- */
+  .dash .bar{display:flex;align-items:center;justify-content:space-between;padding:11px 15px;border-bottom:1px solid var(--border);background:#11161f}
+  .dash .bar .left{display:flex;align-items:center;gap:10px}
+  .dash .logo{font-weight:800;font-size:14px}
+  .dash .live{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--good)}
+  .dash .live .d{width:8px;height:8px;border-radius:50%;background:var(--good);display:inline-block}
+  .dash .globe{border:1px solid var(--border);border-radius:7px;padding:4px 9px;font-size:11.5px;color:var(--text);font-weight:600}
+  .dash .tabs{display:flex;gap:4px;padding:9px 15px 0;flex-wrap:wrap}
+  .dash .tab{font-size:12px;padding:6px 11px;border-radius:7px 7px 0 0;color:var(--muted)}
+  .dash .tab.on{background:var(--panel2);color:var(--text);font-weight:700}
+  .dash .body{padding:14px 15px 16px}
+  .dash .card{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:13px 15px;margin-bottom:10px}
+  .dash .card .k{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:5px}
+  .dash .stat-row{display:flex;gap:10px}
+  .dash .stat-row .card{flex:1;margin-bottom:0}
+  .dash .big{font-size:22px;font-weight:800}
+  .dash .cloudbanner{background:#13233a;border:1px solid #1f3a5c;color:#a9d1ff;border-radius:9px;padding:8px 12px;font-size:12px;margin:11px 15px 0;display:flex;align-items:center;gap:8px}
+  .dash .cloudbanner .lock{color:#7ee2a0}
+  /* RTL */
+  [dir="rtl"]{text-align:right}
+  /* consistency flow */
+  .flow{margin-top:10px;border:1px dashed var(--border);border-radius:12px;padding:16px 18px;background:#0f141d}
+  .flow .row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:center}
+  .flow .node{background:var(--panel2);border:1px solid var(--border);border-radius:9px;padding:9px 14px;font-size:12px;font-weight:600;text-align:center}
+  .flow .node small{display:block;color:var(--muted);font-weight:400;font-size:10.5px;margin-top:2px}
+  .flow .arrow{color:var(--accent);font-size:18px}
+  .flow .cookie{display:block;text-align:center;color:var(--good);font-size:11.5px;margin-top:10px;font-family:ui-monospace,monospace}
+  .legend{font-size:11.5px;color:var(--muted);margin-top:6px}
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div>
+      <h1>🌀 ClawMetry · Internationalization — Before / After</h1>
+      <div class="sub">Left column = today (English only). Right column = after i18n. Pick a language to drive the “After” panels live →</div>
+    </div>
+    <div class="picker">
+      <label>🌐 Language</label>
+      <select id="lang">
+        <option value="en">English</option>
+        <option value="ja">日本語</option>
+        <option value="zh-CN">简体中文</option>
+        <option value="fr">Français</option>
+        <option value="hi">हिन्दी</option>
+        <option value="ta">தமிழ்</option>
+        <option value="ar">العربية (RTL)</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="wrap">
+
+    <!-- ============ LANDING ============ -->
+    <div class="section">
+      <h2>1 · Landing site (clawmetry.com)</h2>
+      <div class="pair">
+        <!-- before -->
+        <div>
+          <div class="col-label"><span class="pill before">BEFORE</span> one English page</div>
+          <div class="mock land">
+            <div class="nav"><div class="brand"><span class="dot"></span>ClawMetry</div>
+              <div class="nav-r"><span>Pricing</span><span>Docs</span><span>Sign in</span><span class="cta">Get started</span></div></div>
+            <div class="hero">
+              <h3>Real-time observability for your AI agents</h3>
+              <p>See every session, token, and cost. pip install clawmetry and you're live.</p>
+              <span class="btn">Start free</span>
+              <div class="feats"><span class="feat">Live sessions</span><span class="feat">Cost tracking</span></div>
+            </div>
+          </div>
+          <div class="note"><span class="chip">clawmetry.com/</span> Google indexes English only · no <span class="chip">hreflang</span></div>
+        </div>
+        <!-- after -->
+        <div>
+          <div class="col-label"><span class="pill after">AFTER</span> crawlable locale subpaths + switcher</div>
+          <div class="mock land after">
+            <div class="nav"><div class="brand"><span class="dot"></span>ClawMetry</div>
+              <div class="nav-r"><span data-i18n>nav.pricing</span><span data-i18n>nav.docs</span><span data-i18n>nav.signin</span>
+                <span class="globe">🌐 <span class="lang-endonym">English</span></span>
+                <span class="cta" data-i18n>nav.cta</span></div></div>
+            <div class="hero">
+              <h3 data-i18n>hero.title</h3>
+              <p data-i18n>hero.sub</p>
+              <span class="btn" data-i18n>hero.cta</span>
+              <div class="feats"><span class="feat" data-i18n>feat.sessions</span><span class="feat" data-i18n>feat.cost</span></div>
+            </div>
+          </div>
+          <div class="note"><span class="chip url">clawmetry.com/en/</span>
+            <span class="chip ok">&lt;html lang&gt;</span><span class="chip ok">hreflang</span><span class="chip ok">localized &lt;title&gt;/meta</span>
+            <span class="chip ok">sitemap</span> · server-rendered, SEO-indexed per language</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ OSS DASHBOARD ============ -->
+    <div class="section">
+      <h2>2 · OSS dashboard (localhost:8900 — pip install clawmetry)</h2>
+      <div class="pair">
+        <div>
+          <div class="col-label"><span class="pill before">BEFORE</span> English-only chrome</div>
+          <div class="mock dash">
+            <div class="bar"><div class="left"><span class="logo">ClawMetry</span>
+              <span class="live"><span class="d"></span>LIVE</span></div></div>
+            <div class="tabs"><span class="tab on">Overview</span><span class="tab">Sessions</span><span class="tab">Usage</span></div>
+            <div class="body">
+              <div class="card"><div class="k">How independent is your agent?</div><div class="big">82 / 100</div></div>
+              <div class="stat-row">
+                <div class="card"><div class="k">Total cost</div><div class="big">$1,234.56</div></div>
+                <div class="card"><div class="k">Tokens · Last 7 days</div><div class="big">1.2M</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="note">Strings hardcoded in <span class="chip">app.js</span> + <span class="chip">templates/tabs/*.html</span></div>
+        </div>
+        <div>
+          <div class="col-label"><span class="pill after">AFTER</span> top-right switcher · choice persists</div>
+          <div class="mock dash after">
+            <div class="bar"><div class="left"><span class="logo">ClawMetry</span>
+              <span class="live"><span class="d"></span><span data-i18n>dash.live</span></span></div>
+              <span class="globe">🌐 <span class="lang-endonym">English</span> ▾</span></div>
+            <div class="tabs"><span class="tab on" data-i18n>dash.overview</span><span class="tab" data-i18n>dash.sessions</span><span class="tab" data-i18n>dash.usage</span></div>
+            <div class="body">
+              <div class="card"><div class="k" data-i18n>dash.autonomy</div><div class="big"><span class="num-score">82</span> / 100</div></div>
+              <div class="stat-row">
+                <div class="card"><div class="k" data-i18n>dash.cost</div><div class="big num-cost">$1,234.56</div></div>
+                <div class="card"><div class="k"><span data-i18n>dash.tokens</span> · <span data-i18n>dash.last7</span></div><div class="big num-tok">1.2M</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="note"><span class="chip ok">localStorage cm-lang</span> + <span class="chip ok">Intl number/date format</span> · numbers reformat per locale</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ CLOUD ============ -->
+    <div class="section">
+      <h2>3 · Cloud dashboard (app.clawmetry.com)</h2>
+      <div class="pair">
+        <div>
+          <div class="col-label"><span class="pill before">BEFORE</span> English-only (serves the pinned OSS wheel)</div>
+          <div class="mock dash">
+            <div class="cloudbanner"><span class="lock">🔒</span>Synced to cloud · End-to-end encrypted</div>
+            <div class="bar" style="border-top:1px solid var(--border)"><div class="left"><span class="logo">ClawMetry</span>
+              <span class="live"><span class="d"></span>LIVE</span></div></div>
+            <div class="tabs"><span class="tab on">Overview</span><span class="tab">Sessions</span><span class="tab">Usage</span></div>
+            <div class="body"><div class="card"><div class="k">Total cost</div><div class="big">$1,234.56</div></div></div>
+          </div>
+          <div class="note">No separate i18n work — cloud just renders whatever the OSS package ships</div>
+        </div>
+        <div>
+          <div class="col-label"><span class="pill after">AFTER</span> inherits i18n for free via the pinned wheel</div>
+          <div class="mock dash after">
+            <div class="cloudbanner"><span class="lock">🔒</span><span data-i18n>cloud.banner</span></div>
+            <div class="bar" style="border-top:1px solid var(--border)"><div class="left"><span class="logo">ClawMetry</span>
+              <span class="live"><span class="d"></span><span data-i18n>dash.live</span></span></div>
+              <span class="globe">🌐 <span class="lang-endonym">English</span> ▾</span></div>
+            <div class="tabs"><span class="tab on" data-i18n>dash.overview</span><span class="tab" data-i18n>dash.sessions</span><span class="tab" data-i18n>dash.usage</span></div>
+            <div class="body"><div class="card"><div class="k" data-i18n>dash.cost</div><div class="big num-cost">$1,234.56</div></div></div>
+          </div>
+          <div class="note"><span class="chip ok">.clawmetry.com cookie</span> shared with landing · <span class="chip">cm-cloud-*</span> interceptors unchanged (chrome only, data still E2E-encrypted)</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ CONSISTENCY ============ -->
+    <div class="section">
+      <h2>4 · Consistency — one choice, everywhere</h2>
+      <div class="flow">
+        <div class="row">
+          <div class="node">Landing<small>clawmetry.com/<b class="flow-lang">en</b>/</small></div>
+          <span class="arrow">→</span>
+          <div class="node">OSS dashboard<small>localhost:8900</small></div>
+          <span class="arrow">→</span>
+          <div class="node">Cloud<small>app.clawmetry.com</small></div>
+        </div>
+        <span class="cookie">cm-lang=<span class="flow-lang2">en</span> · Domain=.clawmetry.com · localStorage mirror — set once, honored on every surface, every reload</span>
+        <div class="legend" style="text-align:center">Pick a language above and watch the URL, switcher label, and cookie below all follow it. RTL languages flip layout direction automatically.</div>
+      </div>
+    </div>
+
+  </div>
+
+<script>
+/* ---- the proposed ~vanilla t() runtime, inlined as a working proof (no build, no deps) ---- */
+const CATALOG = {
+  "en": {dir:"ltr", endonym:"English", t:{
+    "nav.pricing":"Pricing","nav.docs":"Docs","nav.signin":"Sign in","nav.cta":"Get started",
+    "hero.title":"Real-time observability for your AI agents",
+    "hero.sub":"See every session, token, and cost. pip install clawmetry and you're live.",
+    "hero.cta":"Start free","feat.sessions":"Live sessions","feat.cost":"Cost tracking",
+    "dash.live":"LIVE","dash.overview":"Overview","dash.sessions":"Sessions","dash.usage":"Usage",
+    "dash.autonomy":"How independent is your agent?","dash.cost":"Total cost","dash.tokens":"Tokens","dash.last7":"Last 7 days",
+    "cloud.banner":"Synced to cloud · End-to-end encrypted"}},
+  "ja": {dir:"ltr", endonym:"日本語", t:{
+    "nav.pricing":"料金","nav.docs":"ドキュメント","nav.signin":"ログイン","nav.cta":"始める",
+    "hero.title":"AIエージェントのリアルタイム可観測性",
+    "hero.sub":"すべてのセッション、トークン、コストを把握。pip install clawmetry ですぐに稼働。",
+    "hero.cta":"無料で始める","feat.sessions":"ライブセッション","feat.cost":"コスト追跡",
+    "dash.live":"ライブ","dash.overview":"概要","dash.sessions":"セッション","dash.usage":"使用状況",
+    "dash.autonomy":"エージェントの自律性は？","dash.cost":"合計コスト","dash.tokens":"トークン","dash.last7":"過去7日間",
+    "cloud.banner":"クラウドに同期 · エンドツーエンド暗号化"}},
+  "zh-CN": {dir:"ltr", endonym:"简体中文", t:{
+    "nav.pricing":"价格","nav.docs":"文档","nav.signin":"登录","nav.cta":"开始使用",
+    "hero.title":"AI 智能体的实时可观测性",
+    "hero.sub":"查看每个会话、令牌和成本。pip install clawmetry 即刻上线。",
+    "hero.cta":"免费开始","feat.sessions":"实时会话","feat.cost":"成本跟踪",
+    "dash.live":"实时","dash.overview":"概览","dash.sessions":"会话","dash.usage":"用量",
+    "dash.autonomy":"你的智能体有多自主？","dash.cost":"总成本","dash.tokens":"令牌","dash.last7":"最近 7 天",
+    "cloud.banner":"已同步到云端 · 端到端加密"}},
+  "fr": {dir:"ltr", endonym:"Français", t:{
+    "nav.pricing":"Tarifs","nav.docs":"Docs","nav.signin":"Connexion","nav.cta":"Commencer",
+    "hero.title":"Observabilité en temps réel pour vos agents IA",
+    "hero.sub":"Visualisez chaque session, token et coût. pip install clawmetry et c'est parti.",
+    "hero.cta":"Commencer gratuitement","feat.sessions":"Sessions en direct","feat.cost":"Suivi des coûts",
+    "dash.live":"EN DIRECT","dash.overview":"Aperçu","dash.sessions":"Sessions","dash.usage":"Utilisation",
+    "dash.autonomy":"Quelle est l'autonomie de votre agent ?","dash.cost":"Coût total","dash.tokens":"Tokens","dash.last7":"7 derniers jours",
+    "cloud.banner":"Synchronisé avec le cloud · Chiffré de bout en bout"}},
+  "hi": {dir:"ltr", endonym:"हिन्दी", t:{
+    "nav.pricing":"मूल्य निर्धारण","nav.docs":"दस्तावेज़","nav.signin":"साइन इन करें","nav.cta":"शुरू करें",
+    "hero.title":"आपके AI एजेंट्स के लिए रीयल-टाइम ऑब्ज़र्वेबिलिटी",
+    "hero.sub":"हर सेशन, टोकन और लागत देखें। pip install clawmetry और आप लाइव हैं।",
+    "hero.cta":"मुफ़्त में शुरू करें","feat.sessions":"लाइव सेशन","feat.cost":"लागत ट्रैकिंग",
+    "dash.live":"लाइव","dash.overview":"अवलोकन","dash.sessions":"सेशन","dash.usage":"उपयोग",
+    "dash.autonomy":"आपका एजेंट कितना स्वतंत्र है?","dash.cost":"कुल लागत","dash.tokens":"टोकन","dash.last7":"पिछले 7 दिन",
+    "cloud.banner":"क्लाउड में सिंक · एंड-टू-एंड एन्क्रिप्टेड"}},
+  "ta": {dir:"ltr", endonym:"தமிழ்", t:{
+    "nav.pricing":"விலை நிர்ணயம்","nav.docs":"ஆவணங்கள்","nav.signin":"உள்நுழைய","nav.cta":"தொடங்குங்கள்",
+    "hero.title":"உங்கள் AI முகவர்களுக்கான நிகழ்நேர கண்காணிப்பு",
+    "hero.sub":"ஒவ்வொரு அமர்வு, டோக்கன், செலவையும் பாருங்கள். pip install clawmetry, நீங்கள் தயார்.",
+    "hero.cta":"இலவசமாக தொடங்குங்கள்","feat.sessions":"நேரடி அமர்வுகள்","feat.cost":"செலவு கண்காணிப்பு",
+    "dash.live":"நேரலை","dash.overview":"கண்ணோட்டம்","dash.sessions":"அமர்வுகள்","dash.usage":"பயன்பாடு",
+    "dash.autonomy":"உங்கள் முகவர் எவ்வளவு சுயேச்சையானது?","dash.cost":"மொத்த செலவு","dash.tokens":"டோக்கன்கள்","dash.last7":"கடந்த 7 நாட்கள்",
+    "cloud.banner":"கிளவுடில் ஒத்திசைக்கப்பட்டது · எண்ட்-டு-எண்ட் குறியாக்கம்"}},
+  "ar": {dir:"rtl", endonym:"العربية", t:{
+    "nav.pricing":"التسعير","nav.docs":"المستندات","nav.signin":"تسجيل الدخول","nav.cta":"ابدأ الآن",
+    "hero.title":"مراقبة فورية لوكلاء الذكاء الاصطناعي",
+    "hero.sub":"شاهد كل جلسة ورمز وتكلفة. pip install clawmetry وستكون جاهزًا.",
+    "hero.cta":"ابدأ مجانًا","feat.sessions":"الجلسات المباشرة","feat.cost":"تتبع التكاليف",
+    "dash.live":"مباشر","dash.overview":"نظرة عامة","dash.sessions":"الجلسات","dash.usage":"الاستخدام",
+    "dash.autonomy":"ما مدى استقلالية وكيلك؟","dash.cost":"التكلفة الإجمالية","dash.tokens":"الرموز","dash.last7":"آخر 7 أيام",
+    "cloud.banner":"تمت المزامنة مع السحابة · مشفّر من طرف إلى طرف"}},
+};
+
+function setLang(code){
+  const L = CATALOG[code] || CATALOG.en;
+  // translate every data-i18n node inside the "After" panels.
+  // Stash the original key ONCE (attribute value, else initial text) so we never
+  // read it back from the text we just overwrote — the stable-key rule.
+  document.querySelectorAll('.after [data-i18n]').forEach(el=>{
+    if(!el.dataset.i18nKey){ el.dataset.i18nKey = (el.getAttribute('data-i18n') || el.textContent).trim(); }
+    const key = el.dataset.i18nKey;
+    el.textContent = L.t[key] ?? CATALOG.en.t[key] ?? key;   // English fallback, never blank
+  });
+  // switcher label shows the active endonym
+  document.querySelectorAll('.after .lang-endonym').forEach(el=> el.textContent = L.endonym);
+  // RTL flip on the After panels only
+  document.querySelectorAll('.after').forEach(el=> el.setAttribute('dir', L.dir));
+  // native Intl formatting — numbers reformat per locale
+  const nf = new Intl.NumberFormat(code, {style:'currency', currency:'USD'});
+  const cf = new Intl.NumberFormat(code, {notation:'compact', maximumFractionDigits:1});
+  document.querySelectorAll('.after .num-cost').forEach(el=> el.textContent = nf.format(1234.56));
+  document.querySelectorAll('.after .num-tok').forEach(el=> el.textContent = cf.format(1200000));
+  document.querySelectorAll('.after .num-score').forEach(el=> el.textContent = new Intl.NumberFormat(code).format(82));
+  // consistency strip
+  document.querySelectorAll('.flow-lang').forEach(el=> el.textContent = code);
+  document.querySelectorAll('.flow-lang2').forEach(el=> el.textContent = code);
+  document.querySelectorAll('.url').forEach(el=> el.textContent = 'clawmetry.com/'+code+'/');
+  document.documentElement.setAttribute('data-active', code);
+}
+document.getElementById('lang').addEventListener('change', e=> setLang(e.target.value));
+setLang('en');
+</script>
+</body>
+</html>
