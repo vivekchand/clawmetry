@@ -18,6 +18,8 @@ definitions.
 
 import json
 import os
+import re
+import re as _re
 import sys
 import time
 from datetime import datetime
@@ -6039,3 +6041,308 @@ def api_outcomes_impact():
     agg["total_sessions_in_window"] = len(outcome_rows)
     agg["_source"] = "local_store" if outcome_rows else "empty"
     return jsonify(agg)
+
+
+# ── Authority footprint (#880) ────────────────────────────────────────────────
+
+# Matches absolute filesystem paths inside tool arg JSON/strings.
+# Stops at whitespace and common JSON delimiters to avoid over-matching.
+_AUTH_FILE_RE = re.compile(r'(?:^|[\s"\'`=,({])((?:/[^\s"\'`<>:;,)}\[\]]{2,})+)')
+
+# Matches the host (and optional port) portion of http/https URLs.
+_AUTH_URL_RE = re.compile(r'https?://([a-zA-Z0-9._%-]+(?::\d+)?)')
+
+# Event types that carry a top-level tool invocation (all known variants).
+_AUTH_TOOL_TYPES = frozenset({
+    "tool_call", "tool.call", "tool_use", "toolCall",
+})
+
+
+def _extract_authority(events: list) -> dict:
+    """Derive an authority footprint from a list of DuckDB events.
+
+    Returns dict with keys:
+      tools      — [{name, calls}] sorted by call count desc
+      filesystem — [{path, via_tools}] up to 100 unique paths
+      network    — [{host, via_tools}] up to 50 unique hosts
+    """
+    tool_counts: dict = {}
+    file_paths: dict = {}   # path  -> set of tool names
+    net_hosts: dict = {}    # host  -> set of tool names
+
+    for ev in (events or []):
+        if ev.get("event_type", "") not in _AUTH_TOOL_TYPES:
+            continue
+        data = ev.get("data") or {}
+        if not isinstance(data, dict):
+            continue
+
+        name = (
+            data.get("tool") or data.get("tool_name") or data.get("name") or ""
+        ).lower().strip()
+        if not name:
+            continue
+
+        tool_counts[name] = tool_counts.get(name, 0) + 1
+
+        args_raw = (
+            data.get("args") if data.get("args") is not None
+            else data.get("arguments") if data.get("arguments") is not None
+            else data.get("input")
+        )
+        if args_raw is None:
+            continue
+        if isinstance(args_raw, str):
+            args_str = args_raw
+        else:
+            try:
+                args_str = json.dumps(args_raw)
+            except Exception:
+                args_str = str(args_raw)
+
+        for m in _AUTH_FILE_RE.findall(args_str):
+            path = m.strip()
+            # Skip noise: very short paths, kernel pseudo-filesystems
+            if len(path) > 3 and not path.startswith(("/proc", "/sys", "/dev")):
+                file_paths.setdefault(path, set()).add(name)
+
+        for host in _AUTH_URL_RE.findall(args_str):
+            if host:
+                net_hosts.setdefault(host, set()).add(name)
+
+    return {
+        "tools": [
+            {"name": n, "calls": c}
+            for n, c in sorted(tool_counts.items(), key=lambda x: -x[1])
+        ],
+        "filesystem": [
+            {"path": p, "via_tools": sorted(t)}
+            for p, t in sorted(file_paths.items())
+        ][:100],
+        "network": [
+            {"host": h, "via_tools": sorted(t)}
+            for h, t in sorted(net_hosts.items())
+        ][:50],
+    }
+
+
+@bp_sessions.route("/api/authority")
+def api_authority():
+    """Authority footprint for one session: tools called, files touched,
+    network hosts contacted. Implements issue #880.
+
+    Query params:
+      session_id  — required
+      limit       — max events to scan (default 2000, cap 10000)
+    """
+    session_id = (
+        request.args.get("session_id") or request.args.get("session") or ""
+    )
+    if not session_id:
+        return jsonify({"error": "session_id required"}), 400
+    try:
+        limit = max(1, min(10000, int(request.args.get("limit") or 2000)))
+    except (TypeError, ValueError):
+        limit = 2000
+
+    events = _ls_call("query_events", session_id=session_id, limit=limit) or []
+    footprint = _extract_authority(events)
+    footprint["session_id"] = session_id
+    footprint["scanned_events"] = len(events)
+    return jsonify(footprint)
+# ─────────────────────────────────────────────────────────────────────────────
+# Intent vs. execution divergence detection  (issue #879)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Three rule sets: (1) claims search/read but calls write/execute,
+# (2) claims read-only but calls write/execute/delete,
+# (3) claims local-only but calls a network/external tool.
+_INTENT_DIVERGENCE_RULES = [
+    {
+        "id": "INT-001",
+        "description": "Claims to search/read but writes or executes",
+        "severity": "medium",
+        "compiled": [
+            _re.compile(r, _re.IGNORECASE) for r in [
+                r"\bi(?:'?ll| will| am going to)\s+(?:search|look up|browse|fetch|retrieve)\b",
+                r"\blet me\s+(?:search|look|check|browse|find)\b",
+                r"\bi(?:'?ll| will)\s+(?:just\s+)?(?:read|look at|check)\b",
+            ]
+        ],
+        "mismatched_substrings": ("write", "edit", "create", "bash", "execute", "run"),
+    },
+    {
+        "id": "INT-002",
+        "description": "Claims read-only intent but calls write or execute tool",
+        "severity": "high",
+        "compiled": [
+            _re.compile(r, _re.IGNORECASE) for r in [
+                r"\bonly\s+(?:read|check|look|inspect|view)\b",
+                r"\bwon'?t\s+(?:change|modify|write|execute|run)\b",
+                r"\bnot\s+(?:going to\s+)?(?:change|modify|write|run|execute)\b",
+                r"\bwithout\s+(?:modifying|changing|writing|executing)\b",
+            ]
+        ],
+        "mismatched_substrings": ("write", "edit", "create", "bash", "execute", "run", "delete"),
+    },
+    {
+        "id": "INT-003",
+        "description": "Claims local-only operation but calls network or external tool",
+        "severity": "medium",
+        "compiled": [
+            _re.compile(r, _re.IGNORECASE) for r in [
+                r"\b(?:only\s+(?:\w+\s+)?local(?:ly)?|local(?:ly)?\s+only|work(?:ing)?\s+local(?:ly)?)\b",
+                r"\bno\s+(?:external|network|internet|remote|online)\b",
+                r"\bwithout\s+(?:connect(?:ing)?|network|internet|uploading|downloading)\b",
+            ]
+        ],
+        "mismatched_substrings": ("web_search", "web_fetch", "http", "curl", "wget", "fetch", "download", "upload", "request"),
+    },
+]
+
+
+def _extract_tool_names_from_obj(obj: dict) -> list:
+    """Return all tool names referenced in a single JSONL event object.
+
+    Handles legacy ``tool_calls``/``tool_use`` arrays, v3 ``tool.call`` events,
+    and Anthropic-style ``tool_use`` content blocks.
+    """
+    names = []
+    for field in ("tool_calls", "tool_use"):
+        for tc in (obj.get(field) or []):
+            if isinstance(tc, dict):
+                n = tc.get("name") or (tc.get("function") or {}).get("name") or ""
+                if n:
+                    names.append(n.lower())
+    data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
+    if obj.get("event_type") in ("tool.call", "tool_use"):
+        n = data.get("tool") or data.get("toolName") or data.get("name") or ""
+        if n:
+            names.append(n.lower())
+    for container in (obj, obj.get("message") if isinstance(obj.get("message"), dict) else {}):
+        if not isinstance(container, dict):
+            continue
+        for blk in (container.get("content") or []):
+            if isinstance(blk, dict) and blk.get("type") == "tool_use":
+                n = blk.get("name") or ""
+                if n:
+                    names.append(n.lower())
+    return names
+
+
+def _extract_assistant_text(obj: dict) -> str:
+    """Return the assistant's text content from a JSONL line object, or ''."""
+    et = obj.get("event_type") or obj.get("type") or ""
+    role = obj.get("role") or ""
+    msg = obj
+    if et in ("message", "user", "assistant") and isinstance(obj.get("message"), dict):
+        msg = obj["message"]
+    if msg.get("role") == "assistant" or role == "assistant" or et == "model.completed":
+        content = msg.get("content") or obj.get("content") or ""
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            return " ".join(
+                blk.get("text", "") if isinstance(blk, dict) and blk.get("type") == "text" else ""
+                for blk in content
+            ).strip()
+    return ""
+
+
+def _detect_intent_divergence(path: str) -> dict:
+    """Scan a session JSONL for intent vs. execution divergence (issue #879).
+
+    Single-pass state machine: tracks the last assistant text; on each tool call
+    checks whether the preceding stated intent contradicts the tool name.
+    Resets on user / prompt.submitted turns.
+
+    Returns ``{has_divergence, divergence_count, flags}`` where each flag is
+    ``{turn, ts, check_id, description, severity, intent_evidence, actual_tool}``.
+    Always returns a result dict — never raises.
+    """
+    flags: list = []
+    last_text = ""
+    last_ts = ""
+    last_turn = 0
+    turn = 0
+    try:
+        with open(path, "r", errors="replace") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    obj = json.loads(raw)
+                except Exception:
+                    continue
+                et = obj.get("event_type") or obj.get("type") or ""
+                role = obj.get("role") or ""
+                ts = obj.get("ts") or obj.get("timestamp") or obj.get("time") or ""
+                if role == "user" or et in ("prompt.submitted", "user"):
+                    last_text = ""
+                    continue
+                text = _extract_assistant_text(obj)
+                if text:
+                    turn += 1
+                    last_text = text
+                    last_ts = ts
+                    last_turn = turn
+                if not last_text:
+                    continue
+                for tool_name in _extract_tool_names_from_obj(obj):
+                    for rule in _INTENT_DIVERGENCE_RULES:
+                        if not any(p.search(last_text) for p in rule["compiled"]):
+                            continue
+                        if not any(sub in tool_name for sub in rule["mismatched_substrings"]):
+                            continue
+                        flags.append({
+                            "turn": last_turn,
+                            "ts": last_ts or ts,
+                            "check_id": rule["id"],
+                            "description": rule["description"],
+                            "severity": rule["severity"],
+                            "intent_evidence": last_text[:300],
+                            "actual_tool": tool_name,
+                        })
+    except Exception:
+        pass
+    return {
+        "has_divergence": bool(flags),
+        "divergence_count": len(flags),
+        "flags": flags,
+    }
+
+
+@bp_sessions.route("/api/sessions/<session_id>/intent-divergence")
+def api_session_intent_divergence(session_id):
+    """Check for intent vs. execution divergence in a session (issue #879).
+
+    Compares what the assistant says it will do (stated intent in text turns)
+    against the tool calls that follow. Uses three heuristic rules:
+    INT-001 (search/read claim + write/execute action),
+    INT-002 (read-only claim + write/execute action),
+    INT-003 (local-only claim + network/external action).
+
+    Response: ``{sessionId, has_divergence, divergence_count, flags: [{turn,
+    ts, check_id, description, severity, intent_evidence, actual_tool}]}``.
+    """
+    import dashboard as _d
+    if not session_id or any(c in session_id for c in ("/", "\\", "..")):
+        return jsonify({"error": "invalid session id"}), 400
+    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    path = os.path.join(sessions_dir, session_id + ".jsonl")
+    path = os.path.normpath(path)
+    if not path.startswith(os.path.normpath(sessions_dir)):
+        return jsonify({"error": "access denied"}), 403
+    if not os.path.isfile(path):
+        return jsonify({
+            "sessionId": session_id,
+            "has_divergence": False,
+            "divergence_count": 0,
+            "flags": [],
+        })
+    result = _detect_intent_divergence(path)
+    result["sessionId"] = session_id
+    return jsonify(result)

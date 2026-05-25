@@ -148,7 +148,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.12.300"
+__version__ = "0.12.302"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
@@ -10873,6 +10873,7 @@ DASHBOARD_HTML = r"""
 <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css', v=version) }}">
 <script src="{{ url_for('static', filename='js/nav-dropdown.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/alerts.js', v=version) }}" defer></script>
+<script src="{{ url_for('static', filename='js/dives.js', v=version) }}" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -10997,6 +10998,10 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-icon" aria-hidden="true">&#36;</span>
         <span class="left-nav-label" data-i18n="nav.cost">Cost</span>
       </div>
+      <div class="left-nav-item" data-tab="dives" onclick="switchTab('dives')" title="Ask questions about your AI usage in plain English">
+        <span class="left-nav-icon" aria-hidden="true">&#128270;</span>
+        <span class="left-nav-label">Dives</span>
+      </div>
       <div class="left-nav-item" data-tab="transcripts" onclick="switchTab('transcripts')" data-i18n-title="nav.session_replay_tooltip" title="Conversations across channels (Telegram, Signal, WhatsApp, &hellip;)">
         <span class="left-nav-icon" aria-hidden="true">&#9787;</span>
         <span class="left-nav-label"><span data-i18n="nav.session_replay">Session replay</span> <span class="left-nav-beta" data-i18n="nav.beta">(beta)</span></span>
@@ -11054,6 +11059,9 @@ DASHBOARD_HTML = r"""
 
 <!-- USAGE -->
 {% include 'tabs/usage.html' %}
+
+<!-- DIVES (NL-to-SQL-to-chart over local DuckDB) -->
+{% include 'tabs/dives.html' %}
 
 <!-- CRONS -->
 {% include 'tabs/crons.html' %}
@@ -17197,6 +17205,17 @@ def _run_server(args):
             print("  Insights:   [ok] Weekly digest cron registered (Mon 9am local)")
     except Exception as _ins_exc:
         print(f"  Insights:   [warn] cron not started: {_ins_exc}")
+
+    # Outbound OTLP exporter — gated by CLAWMETRY_OTEL_EXPORT_ENDPOINT (no-op
+    # when unset). Emits GenAI semantic convention spans to Datadog / Grafana /
+    # Honeycomb / any OTLP HTTP collector. Daemon thread, dies with the process.
+    try:
+        from clawmetry.otel_exporter import start_exporter as _start_otel_exporter
+        if _start_otel_exporter():
+            _otel_ep = os.environ.get("CLAWMETRY_OTEL_EXPORT_ENDPOINT", "")
+            print(f"  OTLP Export:[ok] Exporting to {_otel_ep}")
+    except Exception as _otel_exc:
+        print(f"  OTLP Export:[warn] not started: {_otel_exc}")
 
     try:
         print(BANNER.format(version=__version__))

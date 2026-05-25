@@ -39,6 +39,17 @@ def app(tmp_path, monkeypatch):
 
     import clawmetry.local_store as ls
     importlib.reload(ls)
+    # Hermetic isolation: on a dev machine with the sync daemon running,
+    # ~/.clawmetry/local_query.json trips _daemon_registered() and steers
+    # get_store() to a _ProxyStore that forwards into the developer's REAL
+    # DuckDB (the test would then read live sessions, not the tmp_path
+    # fixture). Force the writer-owner path + stub the discovery hooks so
+    # every read opens the tmp_path store in-process. Matches CI, where no
+    # daemon runs.
+    ls.mark_writer_owner()
+    import routes.local_query as _lq
+    monkeypatch.setattr(_lq, "_read_discovery", lambda: None)
+    monkeypatch.setattr(_lq, "_cached_discovery", lambda: None)
     # Point WORKSPACE/SESSIONS_DIR at empty tmp dirs so the legacy JSONL
     # fallback has nothing to find — proves the fast path is really
     # what's populating the bucket.
@@ -244,8 +255,13 @@ def test_query_context_window_peek_v3_assistant_event(app):
     _wait_flush(store)
 
     result = store.query_context_window_peek(scan_sessions=5)
-    assert result["input_tokens"] == 6, (
-        f"v3 assistant event was not counted; result={result}"
+    # Live context size = input + cache_read + cache_write (all three are
+    # part of the prompt the model saw). 6 + 18498 + 19325 = 37829. The
+    # old expectation of 6 (input only) under-counted cache-heavy turns —
+    # see test_query_context_window_peek_sums_cache_tokens for the Claude
+    # Code shape where that bug showed "2 / 200K".
+    assert result["input_tokens"] == 6 + 18498 + 19325, (
+        f"cache splits not summed into context size; result={result}"
     )
     assert result["session_id"] == "575597e9-f609-4e88-9c12-055392f1c107"
 
@@ -282,6 +298,53 @@ def test_query_context_window_peek_v3_model_completed_event(app):
     _wait_flush(store)
 
     result = store.query_context_window_peek(scan_sessions=5)
+    # lastCallUsage carries no cache split, so context size == input == 6.
     assert result["input_tokens"] == 6, (
         f"v3 model.completed event was not counted; result={result}"
+    )
+
+
+def test_query_context_window_peek_sums_cache_tokens(app):
+    """Cache-heavy regression (surfaced 2026-05-23 verifying OSS↔cloud
+    parity): a Claude Code assistant turn reports a tiny raw
+    ``input_tokens`` (the un-cached delta) while the bulk of the live
+    context lives in ``cache_read_input_tokens``. Reading input alone made
+    ``currentContextTokens`` show 2 for a ~150K-full window → the LLM
+    Context Inspector gauge read "2 / 200K (0%)". The peek must sum
+    input + cache_read + cache_write so the gauge reflects the real prompt
+    size. Fixture is the exact shape pulled from session
+    625c0ad9 on the dev box.
+    """
+    _a, ls = app
+    store = ls.get_store()
+    store.ingest({
+        "id":         "cc-cache-1",
+        "node_id":    "agent+Macbook-Pro-2-local",
+        "agent_id":   "main",
+        "session_id": "625c0ad9-71af-4a56-9a3b-cab396860a85",
+        "event_type": "assistant",
+        "ts":         "2026-05-24T18:50:51.723Z",
+        "data": {
+            "type":    "assistant",
+            "version": 3,
+            "message": {
+                "role":  "assistant",
+                "model": "claude-opus-4-7",
+                "usage": {
+                    "input_tokens":                2,
+                    "output_tokens":               140,
+                    "cache_read_input_tokens":     148_000,
+                    "cache_creation_input_tokens": 1_500,
+                },
+            },
+        },
+        "model": "claude-opus-4-7",
+    })
+    _wait_flush(store)
+
+    result = store.query_context_window_peek(scan_sessions=5)
+    # 2 + 148000 + 1500 = 149502 — the real live context, not the raw 2.
+    assert result["input_tokens"] == 2 + 148_000 + 1_500, (
+        f"cache tokens not summed; gauge would show the bogus raw input; "
+        f"result={result}"
     )

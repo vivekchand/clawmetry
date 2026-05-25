@@ -99,6 +99,7 @@ MODEL_PRICING = {
 class BudgetConfig:
     daily_usd: float = 0.0
     monthly_usd: float = 0.0
+    per_session_usd: float = 0.0  # 0 = disabled; hard stop per-session
     action: str = "block"  # "block" | "warn" | "downgrade"
     downgrade_model: str = "claude-3-haiku-20240307"
 
@@ -109,6 +110,13 @@ class LoopDetectionConfig:
     window_seconds: int = 300
     max_similar: int = 5
     similarity_threshold: float = 0.85
+
+
+@dataclass
+class VelocityBreakerConfig:
+    enabled: bool = False
+    window_seconds: int = 300  # rolling window
+    max_tokens: int = 0  # 0 = disabled; total input+output tokens in window
 
 
 @dataclass
@@ -134,6 +142,7 @@ class ProxyConfig:
     host: str = "127.0.0.1"
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     loop_detection: LoopDetectionConfig = field(default_factory=LoopDetectionConfig)
+    velocity_breaker: VelocityBreakerConfig = field(default_factory=VelocityBreakerConfig)
     routing_rules: List[RoutingRule] = field(default_factory=list)
     providers: Dict[str, ProviderConfig] = field(default_factory=dict)
     log_requests: bool = False
@@ -166,6 +175,7 @@ class ProxyConfig:
                     config.budget = BudgetConfig(
                         daily_usd=b.get("daily_usd", 0.0),
                         monthly_usd=b.get("monthly_usd", 0.0),
+                        per_session_usd=b.get("per_session_usd", 0.0),
                         action=b.get("action", "block"),
                         downgrade_model=b.get(
                             "downgrade_model", "claude-3-haiku-20240307"
@@ -179,6 +189,14 @@ class ProxyConfig:
                         window_seconds=ld.get("window_seconds", 300),
                         max_similar=ld.get("max_similar", 5),
                         similarity_threshold=ld.get("similarity_threshold", 0.85),
+                    )
+
+                if "velocity_breaker" in raw:
+                    vb = raw["velocity_breaker"]
+                    config.velocity_breaker = VelocityBreakerConfig(
+                        enabled=vb.get("enabled", False),
+                        window_seconds=vb.get("window_seconds", 300),
+                        max_tokens=vb.get("max_tokens", 0),
                     )
 
                 if "routing" in raw and "rules" in raw["routing"]:
@@ -223,6 +241,7 @@ class ProxyConfig:
             "budget": {
                 "daily_usd": self.budget.daily_usd,
                 "monthly_usd": self.budget.monthly_usd,
+                "per_session_usd": self.budget.per_session_usd,
                 "action": self.budget.action,
                 "downgrade_model": self.budget.downgrade_model,
             },
@@ -231,6 +250,11 @@ class ProxyConfig:
                 "window_seconds": self.loop_detection.window_seconds,
                 "max_similar": self.loop_detection.max_similar,
                 "similarity_threshold": self.loop_detection.similarity_threshold,
+            },
+            "velocity_breaker": {
+                "enabled": self.velocity_breaker.enabled,
+                "window_seconds": self.velocity_breaker.window_seconds,
+                "max_tokens": self.velocity_breaker.max_tokens,
             },
             "routing": {
                 "rules": [
@@ -306,6 +330,8 @@ class ProxyDB:
                     ON proxy_usage(timestamp DESC);
                 CREATE INDEX IF NOT EXISTS idx_proxy_usage_model
                     ON proxy_usage(model, timestamp DESC);
+                CREATE INDEX IF NOT EXISTS idx_proxy_usage_session
+                    ON proxy_usage(session_id, timestamp DESC);
                 CREATE INDEX IF NOT EXISTS idx_proxy_events_ts
                     ON proxy_events(timestamp DESC);
                 CREATE INDEX IF NOT EXISTS idx_proxy_events_type
@@ -444,6 +470,30 @@ class ProxyDB:
             ).fetchall()
             conn.close()
             return [r["request_hash"] for r in rows]
+
+    def get_session_spending(self, session_id: str) -> float:
+        """Get total USD cost for a session (all time)."""
+        with self._lock:
+            conn = self._connect()
+            row = conn.execute(
+                "SELECT COALESCE(SUM(cost_usd), 0.0) as total FROM proxy_usage WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            conn.close()
+            return row["total"] if row else 0.0
+
+    def get_recent_token_count(self, session_id: str, window_seconds: int) -> int:
+        """Get total input+output tokens for a session in the last window_seconds."""
+        since = time.time() - window_seconds
+        with self._lock:
+            conn = self._connect()
+            row = conn.execute(
+                """SELECT COALESCE(SUM(input_tokens + output_tokens), 0) as total
+                   FROM proxy_usage WHERE session_id = ? AND timestamp >= ?""",
+                (session_id, since),
+            ).fetchone()
+            conn.close()
+            return int(row["total"]) if row else 0
 
     def prune_old_data(self, retention_days: int = 30) -> None:
         """Remove data older than retention period."""
@@ -629,15 +679,12 @@ class BudgetEnforcer:
         self.config = config
         self.db = db
 
-    def check(self, model: str = "") -> Tuple[bool, str]:
+    def check(self, model: str = "", session_id: str = "") -> Tuple[bool, str]:
         """Check if a request should be allowed.
 
         Returns:
             (allowed, reason) - True if allowed, reason explains why not
         """
-        if self.config.daily_usd <= 0 and self.config.monthly_usd <= 0:
-            return True, ""
-
         daily_spent = self.db.get_daily_spending()
         monthly_spent = self.db.get_monthly_spending()
 
@@ -648,6 +695,15 @@ class BudgetEnforcer:
         if self.config.monthly_usd > 0 and monthly_spent >= self.config.monthly_usd:
             reason = f"Monthly budget exceeded: ${monthly_spent:.2f} / ${self.config.monthly_usd:.2f}"
             return False, reason
+
+        if session_id and self.config.per_session_usd > 0:
+            session_spent = self.db.get_session_spending(session_id)
+            if session_spent >= self.config.per_session_usd:
+                reason = (
+                    f"Per-session budget exceeded: ${session_spent:.4f} / "
+                    f"${self.config.per_session_usd:.2f} for session '{session_id}'"
+                )
+                return False, reason
 
         return True, ""
 
@@ -755,6 +811,60 @@ class LoopDetector:
         return False, ""
 
 
+# ── Velocity Breaker ───────────────────────────────────────────────────
+
+
+class VelocityBreaker:
+    """Halts agents whose token burn-rate exceeds a rolling-window threshold."""
+
+    def __init__(self, config: VelocityBreakerConfig, db: ProxyDB):
+        self.config = config
+        self.db = db
+
+    def check(self, session_id: str) -> Tuple[bool, str]:
+        """Check if this session is burning tokens too fast.
+
+        Returns:
+            (is_spike, reason) - True if velocity limit exceeded
+        """
+        if not self.config.enabled or not self.config.max_tokens or not session_id:
+            return False, ""
+
+        recent_tokens = self.db.get_recent_token_count(
+            session_id, self.config.window_seconds
+        )
+
+        if recent_tokens >= self.config.max_tokens:
+            reason = (
+                f"Token velocity exceeded: {recent_tokens:,} tokens from session "
+                f"'{session_id}' in the last {self.config.window_seconds}s "
+                f"(limit: {self.config.max_tokens:,})"
+            )
+            try:
+                from clawmetry import local_store as _ls
+                import uuid as _uuid
+                _ls.get_store().ingest({
+                    "id":         _uuid.uuid4().hex,
+                    "node_id":    os.environ.get("CLAWMETRY_NODE_ID") or "local",
+                    "agent_id":   "clawmetry-proxy",
+                    "agent_type": "openclaw",
+                    "event_type": "velocity_exceeded",
+                    "ts":         datetime.now(timezone.utc).isoformat(),
+                    "session_id": session_id,
+                    "data": {
+                        "recent_tokens":   recent_tokens,
+                        "max_tokens":      self.config.max_tokens,
+                        "window_seconds":  self.config.window_seconds,
+                        "reason":          reason,
+                    },
+                })
+            except Exception as exc:  # noqa: BLE001 — never break enforcement
+                logger.debug("velocity_exceeded event skipped: %s", exc)
+            return True, reason
+
+        return False, ""
+
+
 # ── Model Router ───────────────────────────────────────────────────────
 
 
@@ -804,12 +914,14 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
     db = ProxyDB()
     budget = BudgetEnforcer(config.budget, db)
     loop_detector = LoopDetector(config.loop_detection, db)
+    velocity_breaker = VelocityBreaker(config.velocity_breaker, db)
     router = ModelRouter(config.routing_rules)
 
     _stats = {
         "requests": 0,
         "blocked": 0,
         "loops_detected": 0,
+        "velocity_blocked": 0,
         "started_at": time.time(),
     }
     _stats_lock = threading.Lock()
@@ -1003,12 +1115,19 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                 "requests_total": stats["requests"],
                 "requests_blocked": stats["blocked"],
                 "loops_detected": stats["loops_detected"],
+                "velocity_blocked": stats["velocity_blocked"],
                 "budget": budget.get_status(),
                 "config": {
                     "port": config.port,
                     "host": config.host,
                     "budget_action": config.budget.action,
+                    "per_session_usd": config.budget.per_session_usd,
                     "loop_detection": config.loop_detection.enabled,
+                    "velocity_breaker": {
+                        "enabled": config.velocity_breaker.enabled,
+                        "window_seconds": config.velocity_breaker.window_seconds,
+                        "max_tokens": config.velocity_breaker.max_tokens,
+                    },
                     "routing_rules": len(config.routing_rules),
                 },
             }
@@ -1070,6 +1189,8 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                 config.budget.daily_usd = float(b["daily_usd"])
             if "monthly_usd" in b:
                 config.budget.monthly_usd = float(b["monthly_usd"])
+            if "per_session_usd" in b:
+                config.budget.per_session_usd = float(b["per_session_usd"])
             if "action" in b:
                 config.budget.action = b["action"]
 
@@ -1081,6 +1202,15 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                 config.loop_detection.window_seconds = int(ld["window_seconds"])
             if "max_similar" in ld:
                 config.loop_detection.max_similar = int(ld["max_similar"])
+
+        if "velocity_breaker" in data:
+            vb = data["velocity_breaker"]
+            if "enabled" in vb:
+                config.velocity_breaker.enabled = bool(vb["enabled"])
+            if "window_seconds" in vb:
+                config.velocity_breaker.window_seconds = int(vb["window_seconds"])
+            if "max_tokens" in vb:
+                config.velocity_breaker.max_tokens = int(vb["max_tokens"])
 
         config.save()
         db.record_event(
@@ -1120,7 +1250,7 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
             )
 
         # ── Budget check ───────────────────────────────────────────────
-        allowed, reason = budget.check(model)
+        allowed, reason = budget.check(model, session_id)
         if not allowed:
             with _stats_lock:
                 _stats["blocked"] += 1
@@ -1166,6 +1296,20 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
             )
             logger.warning(f"Loop detected: {loop_reason}")
             return _error_response(429, "loop_detected", loop_reason, provider)
+
+        # ── Velocity check ─────────────────────────────────────────────
+        is_spike, spike_reason = velocity_breaker.check(session_id)
+        if is_spike:
+            with _stats_lock:
+                _stats["velocity_blocked"] += 1
+            db.record_event(
+                "velocity_exceeded",
+                spike_reason,
+                severity="warning",
+                details={"model": model, "session_id": session_id},
+            )
+            logger.warning(f"Velocity exceeded: {spike_reason}")
+            return _error_response(429, "velocity_exceeded", spike_reason, provider)
 
         # ── Model routing ──────────────────────────────────────────────
         new_model, new_provider = router.route(model, session_id)
