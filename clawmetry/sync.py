@@ -8430,9 +8430,15 @@ def _build_reliability(limit_sessions=25, min_sessions=4):
         # score the user's real agent, not our own selfevolve/probe runs).
         order = []
         by_sid = {}
+        from clawmetry.config import is_clawmetry_internal_session
         for e in evs:
             sid = (e.get("session_id") or "").strip()
-            if not sid or sid.startswith("clawmetry-"):
+            # #2019: skip ClawMetry's own helper sessions from reliability
+            # scoring. is_clawmetry_internal_session matches both the bare id
+            # and the full OpenClaw form (agent:main:explicit:clawmetry-*);
+            # the old startswith("clawmetry-") missed the latter and let our
+            # selfevolve/probe runs pollute the user's real-agent score.
+            if not sid or is_clawmetry_internal_session(sid):
                 continue
             if sid not in by_sid:
                 by_sid[sid] = []
