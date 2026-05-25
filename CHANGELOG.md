@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Subagents: freeze runtime for dead subagents (2026-05-25)
+- The subagent / Active-Tasks tracker showed an ever-growing runtime ("111h 50m" and climbing) for `stale` subagents — `_try_local_store_subagents` derived runtime as `now - spawned_at` when the daemon hadn't cached a value, so an agent that died days ago looked like it was still running for 4.6 days. Runtime is now active *work* time: status is computed first, only `active`/`running` agents' clocks run to now; `idle`/`stale`/`completed`/`failed` freeze at last activity (`ended_at`, else last `updated_at`). The daemon's cached `runtime_ms` still wins. (#2032, closes #2031)
+
+### Release: subagent runtime freeze (2026-05-25)
+- Publishes #2032 (closes #2031): dead/stale subagents stop displaying an ever-growing runtime; the Active-Tasks runtime now reflects real active work time.
+
 ### Release: PicoClaw + NanoClaw sessions in the sessions list + transcripts (2026-05-25)
 - Publishes #2028 (phase 3b of NanoClaw/PicoClaw support; builds on #2013 adapters + #2014 cloud runtime label). PicoClaw and NanoClaw sessions are now fully observable the way OpenClaw sessions are: they appear in the sessions list and render as transcripts, locally and in the cloud.
 - The sync daemon's new `sync_family_runtimes()` reads each detected runtime's sessions + events through the reader adapters and maps them onto the SAME DuckDB rows OpenClaw uses, via the daemon's own writer handle: `agent_type='openclaw'` so every existing read path returns them with no filter changes (runtime carried in `metadata.runtime` + `data._runtime`), session ids namespaced (`picoclaw:<key>` / `nanoclaw:<id>`) to avoid PK collisions, renderable event types so transcripts render and counts work, and float-epoch timestamps converted to the ISO strings DuckDB expects. Session rows are also pushed to `/ingest/sessions` so the cloud sessions list shows them; transcripts ride the existing snapshot builder. Gated by `_sync_allowed()`, throttled 60s, no `local_store.py` changes.
