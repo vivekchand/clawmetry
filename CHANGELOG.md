@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Release: fix Claude Code double-count (OpenClaw-spawned sessions) (2026-05-25)
+- Publishes #2078, a correctness follow-up to the multi-agent runtimes work (#2060). A Claude Code session that OpenClaw spawned was counted twice (once as `openclaw` via the claude-index ingest, once as `claude_code:<id>` via the new adapter). The daemon now reads OpenClaw's `sessions.json` index (`cliSessionIds`) and skips OpenClaw-owned Claude sessions in the `claude_code` ingest, so an orchestrated session shows once and standalone Claude Code sessions still ingest normally. Verified on a real machine: 29 of 387 `~/.claude` sessions were affected.
+
 ### Added: opt-in auto-update — install new releases automatically (2026-05-25)
 - A new "Auto-update" toggle in the update banner. When on, ClawMetry installs each newly published release automatically instead of waiting for a click. The always-on background update-checker (in the dashboard server process, so it works with no browser open) runs the same vetted `pip install -U` + restart path the manual "Update now" button uses; off by default. On the hosted cloud the toggle shows "Auto-updates on Cloud" (the cloud is kept current centrally). Publishes #2074.
 - Cloud half (#2075): each OSS release now rolls out to the hosted cloud hands-off — `auto-deploy-cloud.yml` waits for the new version on PyPI, then auto-merges the Dockerfile-pin PR once cloud CI is green (pin-only diff guard; the candidate smoke-gate still protects prod before traffic flips).
