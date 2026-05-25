@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Added: full cloud cron management — run/pause/edit/delete from the cloud (2026-05-25)
+- Building on cloud cron-create (#2053), the per-row **Run Now / Disable-Enable / Edit / Delete** buttons (and the health-panel Pause) now work from app.clawmetry.com. Each relays through the heartbeat-piggyback transport: the cloud enqueues a `cron_action`, the local daemon runs the matching `openclaw cron` subcommand (its own creds; v3 dropped the gateway cron tool), and the E2E-encrypted result is posted back for the browser to decrypt — the cloud never sees plaintext. Bulk "Emergency Stop All" and the AI "Fix" button stay local-only. Also fixed: `run_openclaw_cron` only passes `--json` to the subcommands that accept it (enable/disable/run/edit reject it). (#2068)
+
 ### Subagents: "Finished N ago" used run duration, not end time (2026-05-25)
 - The Overview Tasks card read "Finished 0s ago" for subagents that actually ended days ago. `_ovTimeLabel` computed the relative finish time from `runtimeMs` — a *duration*, which the dead-subagent freeze (#2038) forces to 0 for stale spawns — instead of an end timestamp. Now derived from `completionTs` then `updatedAt` (last activity) then `startedAt+runtime`; blank when genuinely unknown. Verified against a live node: 5-day-old spawns now read "Finished 4d ago". Pairs with #2062 (shipped in 0.12.311), which fixed the subagent Brain Events tab to match the `src`/`sessionId` fields the cloud feed emits. Publishes #2067.
 
