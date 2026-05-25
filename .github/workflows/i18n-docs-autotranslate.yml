@@ -36,7 +36,7 @@ jobs:
             echo "SKIP=1" >> "$GITHUB_ENV"
           fi
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         if: env.SKIP != '1'
         with:
           python-version: '3.11'
