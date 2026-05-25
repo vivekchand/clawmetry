@@ -6834,6 +6834,7 @@ var _cronJobs = [];
 var _cronExpanded = {};
 var _cronAutoRefreshTimer = null;
 var _cronActionsAvailable = false;
+var _cronWritesAvailable = false;  // single-job writes (relay-backed in cloud)
 var _cronView = 'active'; // 'active' | 'paused' | 'calendar'
 
 // Cache of recent runs per job, populated lazily when Calendar is opened.
@@ -7092,14 +7093,18 @@ async function loadCrons() {
     // copy says to click it. Cloud-iframe stays false so we don't dangle
     // controls that 410 when used.
     _cronActionsAvailable = !window.CLOUD_MODE;
-    // Show/hide cron action buttons based on gateway availability
+    // Single-job writes (create/run/toggle/delete/edit) now work in cloud too:
+    // the cm-cloud-cron-create + cm-cloud-cron-actions interceptors relay them
+    // to the daemon, which runs `openclaw cron <subcmd>` locally. So per-row
+    // management is available in cloud. Bulk/dangerous ops (Emergency Stop All)
+    // and the AI "Fix" button stay local-only until they get their own relay.
+    _cronWritesAvailable = _cronActionsAvailable || !!window.CLOUD_MODE;
+    // Show/hide the bulk cron-action buttons (.cron-action-btn = New Job +
+    // Emergency Stop All) — local-only by default.
     document.querySelectorAll('.cron-action-btn').forEach(function(btn) {
       btn.style.display = _cronActionsAvailable ? '' : 'none';
     });
-    // "+ New Job" works in cloud too: the cm-cloud-cron-create interceptor
-    // relays the POST to the daemon, which runs `openclaw cron add` locally.
-    // (Per-row write buttons — Pause/Run/Delete/Fix — stay local-only until
-    // they get their own relay actions.) Un-gate just New Job in cloud.
+    // "+ New Job" is relay-backed, so show it in cloud too.
     var _newJobBtn = document.getElementById('cron-new-job-btn');
     if (_newJobBtn) _newJobBtn.style.display = '';
     renderCrons();
@@ -7182,7 +7187,7 @@ async function loadCronHealth() {
         html += anomalyBadges;
         if (j.consecutiveFailures > 1) html += '<span style="font-size:11px;background:#ef444422;color:#ef4444;border-radius:4px;padding:1px 5px;">'+j.consecutiveFailures+' fails</span>';
         html += '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap;">'+projStr+'</span>';
-        if (_cronActionsAvailable) html += '<button onclick="event.stopPropagation();cronPauseJob(\''+escHtml(j.id)+'\')" title="Pause this job" style="font-size:11px;padding:2px 7px;border-radius:5px;border:1px solid var(--border-secondary);background:var(--bg-tertiary);color:var(--text-secondary);cursor:pointer;">&#x23F8; Pause</button>';
+        if (_cronWritesAvailable) html += '<button onclick="event.stopPropagation();cronPauseJob(\''+escHtml(j.id)+'\')" title="Pause this job" style="font-size:11px;padding:2px 7px;border-radius:5px;border:1px solid var(--border-secondary);background:var(--bg-tertiary);color:var(--text-secondary);cursor:pointer;">&#x23F8; Pause</button>';
         html += '</div>';
       });
       html += '</div>';
@@ -7372,8 +7377,9 @@ function renderCronList(jobs) {
     }
     if (badges) html += '<div style="display:inline;">' + badges + '</div>';
 
-    // Action buttons (hidden unless gateway supports cron invocation)
-    if (_cronActionsAvailable) {
+    // Action buttons. Relay-backed in cloud (cm-cloud-cron-actions), so show
+    // them whenever single-job writes are available (local OR cloud).
+    if (_cronWritesAvailable) {
     html += '<div class="cron-actions" onclick="event.stopPropagation()">';
     html += '<button class="cron-btn-run" onclick="cronRunNow(\'' + escHtml(j.id) + '\')">&#x25B6; Run Now</button>';
     html += '<button class="cron-btn-toggle" onclick="cronToggle(\'' + escHtml(j.id) + '\',' + !isEnabled + ')">' + (isEnabled ? '&#x23F8; Disable' : '&#x25B6; Enable') + '</button>';

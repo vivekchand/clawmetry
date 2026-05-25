@@ -5722,6 +5722,7 @@ _PENDING_ACTIONS = frozenset({
     "selfevolve_fix",
     "selfevolve_analyze",
     "cron_create",
+    "cron_action",
 })
 
 
@@ -5915,6 +5916,9 @@ def _dispatch_pending_action(config: dict, action: dict) -> None:
         return
     if atype == "cron_create":
         _action_cron_create(config, action)
+        return
+    if atype == "cron_action":
+        _action_cron_op(config, action)
         return
 
 
@@ -6156,6 +6160,100 @@ def _action_cron_create(config: dict, action: dict) -> None:
             )
         except Exception as e:
             log.warning("cron_create cache post failed: %s", e)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _action_cron_op(config: dict, action: dict) -> None:
+    """Cloud-relayed cron management op (delete / toggle / run / update).
+
+    Completes cloud cron management alongside _action_cron_create: the cloud
+    "Run / Disable / Edit / Delete" per-row buttons relay a `cron_action` here
+    and the daemon runs the matching `openclaw cron` subcommand locally
+    (OpenClaw's own creds; v3 dropped the gateway cron tool). E2E-encrypted
+    result -> cache_key, browser polls + decrypts. Runs in a background thread.
+
+    Wire shape (queued cloud-side by /api/cloud/cron-action):
+        {type:"cron_action", id, cache_key, action, jobId, enabled?, patch?}
+      action ∈ {delete, toggle, run, update}
+    """
+    cache_key = action.get("cache_key")
+    op = (action.get("action") or "").strip()
+    job_id = (action.get("jobId") or "").strip()
+    enc_key = config.get("encryption_key")
+    api_key = config.get("api_key", "")
+    node_id = config.get("node_id", "")
+    if not (cache_key and op and job_id and enc_key and api_key):
+        return
+    aid = action.get("id")
+    enabled = action.get("enabled", True)
+    patch = action.get("patch") if isinstance(action.get("patch"), dict) else {}
+
+    def _run():
+        status, message, scope_pending = "error", "", False
+        try:
+            if op == "delete":
+                res = run_openclaw_cron("rm", [job_id], timeout=40)
+                ok_msg = "Job deleted"
+            elif op == "run":
+                res = run_openclaw_cron("run", [job_id], timeout=45)
+                ok_msg = "Job triggered"
+            elif op == "toggle":
+                res = run_openclaw_cron(
+                    "enable" if enabled else "disable", [job_id], timeout=40)
+                ok_msg = "Job enabled" if enabled else "Job disabled"
+            elif op == "update":
+                eargs = [job_id]
+                if patch.get("name"):
+                    eargs += ["--name", str(patch["name"])]
+                if patch.get("description"):
+                    eargs += ["--description", str(patch["description"])]
+                if patch.get("prompt") or patch.get("message"):
+                    eargs += ["--message",
+                              str(patch.get("prompt") or patch.get("message"))]
+                if patch.get("model"):
+                    eargs += ["--model", str(patch["model"])]
+                if patch.get("channel"):
+                    eargs += ["--channel", str(patch["channel"])]
+                if isinstance(patch.get("schedule"), dict):
+                    sargs, serr = cron_schedule_to_cli_args(patch["schedule"])
+                    if serr:
+                        raise ValueError(serr)
+                    eargs += sargs
+                if "enabled" in patch:
+                    eargs += ["--enable"] if patch["enabled"] else ["--disable"]
+                res = run_openclaw_cron("edit", eargs, timeout=40)
+                ok_msg = "Job updated"
+            else:
+                res = {"ok": False, "error": "unsupported action: %s" % op}
+                ok_msg = ""
+            scope_pending = bool(res.get("scope_pending"))
+            if res.get("ok"):
+                status, message = "done", ok_msg
+            else:
+                message = res.get("error") or ("cron %s failed" % op)
+        except Exception as e:  # never raise from the worker thread
+            message = str(e)[:400]
+        try:
+            blob = encrypt_payload(
+                {"status": status, "message": message,
+                 "scope_pending": scope_pending, "_shape": "cron_action"},
+                enc_key,
+            )
+            _post(
+                "/ingest/cache",
+                {
+                    "node_id": node_id,
+                    "id": aid,
+                    "cache_key": cache_key,
+                    "blob": blob,
+                    "shape": "cron_action",
+                    "ttl": 3600,
+                },
+                api_key,
+            )
+        except Exception as e:
+            log.warning("cron_action cache post failed: %s", e)
 
     threading.Thread(target=_run, daemon=True).start()
 
