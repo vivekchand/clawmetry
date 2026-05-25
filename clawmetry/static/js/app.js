@@ -10460,6 +10460,7 @@ async function loadTranscripts() {
     });
     var plumbCountEl = document.getElementById('transcript-plumbing-count');
     if (plumbCountEl) plumbCountEl.textContent = plumbingTotal > 0 ? (window._transcriptShowPlumbing ? '(' + plumbingTotal + ' shown)' : '(' + plumbingTotal + ' hidden)') : '';
+    window._transcriptPlumbingTotal = plumbingTotal;
     var plumbBtn = document.getElementById('transcript-plumbing-btn');
     if (plumbBtn) plumbBtn.style.display = plumbingTotal > 0 ? '' : 'none';
     var emptyMsg = (plumbingTotal > 0 && !window._transcriptShowPlumbing)
@@ -10492,6 +10493,9 @@ function showTranscriptList() {
   document.getElementById('transcript-list').style.display = '';
   document.getElementById('transcript-viewer').style.display = 'none';
   document.getElementById('transcript-back-btn').style.display = 'none';
+  // List view: restore the "Show plumbing" toggle (hidden while viewing a single session).
+  var pb = document.getElementById('transcript-plumbing-btn');
+  if (pb) pb.style.display = (window._transcriptPlumbingTotal > 0) ? '' : 'none';
 }
 
 // ── Session Replay State ────────────────────────────────────────────────────
@@ -10837,6 +10841,9 @@ async function viewTranscript(sessionId) {
   document.getElementById('transcript-list').style.display = 'none';
   document.getElementById('transcript-viewer').style.display = '';
   document.getElementById('transcript-back-btn').style.display = '';
+  // Viewer: the "Show plumbing" toggle only applies to the list, so hide it here.
+  var _pb = document.getElementById('transcript-plumbing-btn');
+  if (_pb) _pb.style.display = 'none';
   document.getElementById('transcript-messages').innerHTML = '<div style="padding:20px;color:#666;">Loading transcript...</div>';
   document.getElementById('replay-controls').style.display = 'none';
   // Reset replay state
