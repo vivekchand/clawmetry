@@ -7479,6 +7479,180 @@ def _detect_family_runtimes():
     return out
 
 
+def _epoch_to_iso(epoch) -> str | None:
+    """Convert a float/int epoch-seconds timestamp to an ISO-8601 UTC string.
+
+    The family adapters return ``started_at`` / ``ended_at`` / event ``ts`` as
+    float epoch seconds, but every DuckDB ``ts`` / ``started_at`` column is an
+    ISO string (OpenClaw stamps ISO, and ``query_sessions`` does
+    ``CAST(ts AS TIMESTAMP)`` + string ``ts >= ?`` comparisons). Returns None on
+    anything unparseable so a bad timestamp never crashes ingest or breaks sort.
+    """
+    if not epoch:
+        return None
+    try:
+        return datetime.fromtimestamp(float(epoch), tz=timezone.utc).isoformat()
+    except (ValueError, OSError, OverflowError, TypeError):
+        return None
+
+
+def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
+    """Ingest PicoClaw + NanoClaw sessions into DuckDB (and the cloud) so they
+    appear in the sessions list + transcripts the same way OpenClaw does.
+
+    These runtimes store sessions in their OWN native formats (PicoClaw: flat
+    ``providers.Message`` JSONL; NanoClaw: per-session SQLite), so we read them
+    through the reader adapters (which translate to the unified Session/Event
+    shapes) and map those onto the SAME DuckDB rows OpenClaw uses:
+
+    - ``agent_type='openclaw'`` so every existing read path (``/api/sessions``,
+      transcripts, ``query_sessions_table``'s events-join) returns them with no
+      filter changes; the runtime is carried in ``metadata.runtime`` (session)
+      and ``data._runtime`` (events) as the discriminator.
+    - session ids are namespaced (``picoclaw:<key>`` / ``nanoclaw:<id>``) so a
+      runtime UUID can never collide with an OpenClaw one in the shared
+      ``(agent_type, session_id)`` PK.
+    - event types stay ``message`` / ``tool_call`` / ``tool_result`` (the
+      renderable set) so transcripts render and ``message_count`` counts.
+
+    Writes go through the daemon's OWN writer handle (``local_store.get_store()``),
+    never a ``read_only=True`` re-open (the #1771 brick-lock). Gated by
+    ``_sync_allowed()`` exactly like ``sync_sessions`` / ``sync_session_metadata``.
+    Returns the number of events ingested.
+    """
+    if not _sync_allowed():
+        return 0
+    try:
+        from clawmetry.adapters.picoclaw import PicoClawAdapter
+        from clawmetry.adapters.nanoclaw import NanoClawAdapter
+        from clawmetry import local_store
+    except Exception as exc:  # adapters unavailable (old wheel) — degrade quietly
+        log.debug(f"family-runtime adapters unavailable for ingest: {exc}")
+        return 0
+
+    node_id = config.get("node_id") or ""
+    api_key = config.get("api_key")
+    store = local_store.get_store()
+    total_events = 0
+    cloud_session_rows: list = []
+
+    for cls in (PicoClawAdapter, NanoClawAdapter):
+        try:
+            adapter = cls()  # construct once (NanoClaw discovery globs are not free)
+            if not adapter.detect().detected:
+                continue
+            runtime = adapter.name
+            for s in adapter.list_sessions(limit=50):
+                ns_id = f"{runtime}:{s.id}"
+                started = _epoch_to_iso(s.started_at)
+                ended = _epoch_to_iso(s.ended_at)
+                metadata = {
+                    "runtime": runtime,
+                    "displayName": s.display_name or "",
+                    "model": s.model or "",
+                    # recent_model is the key the sessions list reads to label
+                    # the model column (OpenClaw rows use the same key).
+                    "recent_model": s.model or "",
+                    "source": s.source or "",
+                }
+                if isinstance(s.extra, dict):
+                    metadata.update(
+                        {k: v for k, v in s.extra.items() if k not in metadata}
+                    )
+                # Local upsert (the sessions list reads this).
+                try:
+                    store.ingest_session({
+                        "agent_type": "openclaw",
+                        "session_id": ns_id,
+                        "node_id": node_id,
+                        "agent_id": "main",
+                        "title": s.display_name or s.title or s.id,
+                        "started_at": started,
+                        "last_active_at": ended or started,
+                        "ended_at": ended,
+                        "status": "ended",
+                        "total_tokens": int(s.total_tokens or 0),
+                        "cost_usd": s.cost_usd,
+                        "message_count": int(s.message_count or 0),
+                        "metadata": metadata,
+                    })
+                except Exception as _se:
+                    log.warning("family session upsert failed (%s): %s", ns_id, _se)
+                    continue
+                # Carry the same row to cloud so the cloud Sessions list shows it.
+                cloud_session_rows.append({
+                    "agent_type": "openclaw",
+                    "session_id": ns_id,
+                    "node_id": node_id,
+                    "agent_id": "main",
+                    "title": s.display_name or s.title or s.id,
+                    "started_at": started,
+                    "last_active_at": ended or started,
+                    "ended_at": ended,
+                    "status": "ended",
+                    "total_tokens": int(s.total_tokens or 0),
+                    "cost_usd": s.cost_usd,
+                    "message_count": int(s.message_count or 0),
+                    "runtime": runtime,
+                    "model": s.model or "",
+                })
+                # Events → transcript (rides the existing _build_transcripts path).
+                rows = []
+                for e in adapter.list_events(s.id, limit=2000):
+                    ets = _epoch_to_iso(e.ts)
+                    if not ets:
+                        continue
+                    data = {"role": e.role, "content": e.content, "_runtime": runtime}
+                    if e.tool_calls:
+                        data["tool_calls"] = e.tool_calls
+                    if e.tool_name:
+                        data["tool_name"] = e.tool_name
+                    if isinstance(e.extra, dict) and e.extra:
+                        data["extra"] = e.extra
+                    rows.append({
+                        "id": f"{runtime}:{e.id}",
+                        "node_id": node_id,
+                        "agent_id": "main",
+                        "session_id": ns_id,
+                        "workspace_id": None,
+                        "event_type": e.type or "message",
+                        "ts": ets,
+                        "data": data,
+                        "cost_usd": None,
+                        "token_count": int(e.tokens or 0),
+                        "model": s.model or None,
+                    })
+                if rows:
+                    try:
+                        store.ingest_many(rows)
+                        total_events += len(rows)
+                    except Exception as _ee:
+                        log.warning("family event ingest failed (%s): %s", ns_id, _ee)
+        except Exception as exc:
+            log.warning(
+                "family runtime ingest failed for %s: %s",
+                getattr(cls, "name", cls.__name__), exc,
+            )
+
+    if total_events or cloud_session_rows:
+        try:
+            store.flush()
+        except Exception as _fe:
+            log.debug("family ingest flush failed (continuing): %s", _fe)
+    # Push session rows to cloud so the cloud Sessions list shows them. Mirrors
+    # sync_session_metadata's cloud push; best-effort and never blocks.
+    if cloud_session_rows and api_key:
+        try:
+            _post(
+                "/ingest/sessions",
+                {"node_id": node_id, "sessions": cloud_session_rows},
+                api_key,
+            )
+        except Exception as _pe:
+            log.debug("family sessions cloud push failed (continuing): %s", _pe)
+    return total_events
+
+
 def _build_runtime_info():
     """Build runtime environment info for the Runtime popup."""
     try:
@@ -10066,6 +10240,12 @@ def run_daemon() -> None:
     except Exception as e:
         log.warning(f"  Session metadata error: {e}")
     try:
+        fr = sync_family_runtimes(config, state, paths)
+        if fr:
+            log.info(f"  Family-runtime sessions (PicoClaw/NanoClaw): {fr} events synced")
+    except Exception as e:
+        log.warning(f"  Family-runtime sync error: {e}")
+    try:
         cr = sync_crons(config, state, paths)
         if cr:
             log.info(f"  Crons: {cr} synced")
@@ -10245,6 +10425,8 @@ def run_daemon() -> None:
     heartbeat_interval = _pick_heartbeat_interval(_LAST_HEARTBEAT_RESPONSE)
     snapshot_interval = 60  # system snapshot (subagents, flow metrics) every 60s
     log_sync_interval = 60  # log lines are low-priority; streamer covers real-time
+    family_interval = 60  # PicoClaw/NanoClaw ingest; cheap when absent, throttled when present
+    last_family = 0  # force first family-runtime ingest immediately
     last_heartbeat = time.time()
     last_snapshot = 0  # force first snapshot immediately
     last_log_sync = (
@@ -10305,6 +10487,17 @@ def run_daemon() -> None:
 
             ev = sync_sessions(config, state, paths)
             ev += sync_claude_cli_sessions(config, state, paths)
+            # OpenClaw-family runtimes (PicoClaw/NanoClaw) sessions -> DuckDB +
+            # cloud, throttled. Cheap no-op when neither runtime is present
+            # (detect() short-circuits), so the gate is just to bound the
+            # per-session file/SQLite reads when one IS present.
+            now_fam = time.time()
+            if now_fam - last_family > family_interval:
+                try:
+                    ev += sync_family_runtimes(config, state, paths)
+                except Exception as _fam_e:
+                    log.warning("family-runtime ingest failed (continuing): %s", _fam_e)
+                last_family = now_fam
             # PRIMARY: walk OpenClaw's sessions.json → ``cliSessionIds.claude-cli``
             # → ``~/.claude/projects/<encoded-cwd>/<id>.jsonl`` plus subagents/
             # and tool-results/. Tags events under the OpenClaw session UUID
