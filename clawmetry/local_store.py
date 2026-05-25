@@ -3630,6 +3630,17 @@ class LocalStore:
             msg = obj.get("message") if isinstance(obj.get("message"), dict) else None
             src = msg or obj
             u = src.get("usage") if isinstance(src.get("usage"), dict) else {}
+            # Family-runtime events (claude_code/cursor/…, ingested by
+            # sync_family_runtimes) carry the token split under
+            # ``data.extra.{inputTokens,outputTokens}`` rather than
+            # ``data.usage``. Without this fallback their cost stayed $0 even
+            # for heavy Opus sessions (the Tracing + Cost tabs showed $0 on
+            # hundreds of thousands of tokens). _tok() already accepts the
+            # camelCase keys, so the same estimate path then prices them.
+            if not u:
+                ex = obj.get("extra") if isinstance(obj.get("extra"), dict) else {}
+                if ex.get("inputTokens") is not None or ex.get("outputTokens") is not None:
+                    u = ex
             if not u:
                 continue
             cost = estimate_event_cost_usd(
