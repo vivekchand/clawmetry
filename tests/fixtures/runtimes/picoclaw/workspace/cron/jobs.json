@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "3e1798d6b35a6b7b",
+      "name": "daily-echo",
+      "enabled": true,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 9 * * *"
+      },
+      "payload": {
+        "kind": "agent_turn",
+        "message": "say good morning"
+      },
+      "state": {
+        "nextRunAtMs": 1779778800000
+      },
+      "createdAtMs": 1779696726059,
+      "updatedAtMs": 1779696726059,
+      "deleteAfterRun": false
+    }
+  ]
+}

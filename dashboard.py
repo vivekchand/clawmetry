@@ -148,7 +148,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.12.298"
+__version__ = "0.12.300"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
@@ -10556,6 +10556,37 @@ def detect_config(args=None):
     from clawmetry.adapters.hermes import HermesAdapter
     _adapter_registry.register(OpenClawAdapter())
     _adapter_registry.register(HermesAdapter())
+
+    # OpenClaw-family runtimes that ClawMetry can observe but that use their
+    # OWN native session format (not OpenClaw's v3 JSONL), so each ships a
+    # dedicated reader adapter:
+    #   - PicoClaw  (github.com/sipeed/picoclaw): flat providers.Message JSONL
+    #     under ~/.picoclaw/workspace/sessions/.
+    #   - NanoClaw  (github.com/nanocoai/nanoclaw): per-session SQLite DBs
+    #     (inbound.db / outbound.db) under a CWD-relative <checkout>/data/
+    #     v2-sessions/ (discovered via common checkout locations or the
+    #     CLAWMETRY_NANOCLAW_DIR override).
+    # Register each only when its own detect() reports the runtime present, so
+    # an absent runtime never clutters the multi-agent chip bar. detect() is
+    # cheap (filesystem globs) and never raises, so this gate is safe.
+    try:
+        from clawmetry.adapters.picoclaw import PicoClawAdapter
+        from clawmetry.adapters.nanoclaw import NanoClawAdapter
+        for _family_cls in (PicoClawAdapter, NanoClawAdapter):
+            try:
+                _inst = _family_cls()
+                if _inst.detect().detected:
+                    _adapter_registry.register(_inst)
+            except Exception as _fam_err:  # pragma: no cover - defensive
+                import logging as _logging
+                _logging.getLogger(__name__).debug(
+                    "Skipped %s registration: %s", _family_cls.__name__, _fam_err
+                )
+    except Exception as _fam_import_err:  # pragma: no cover - defensive
+        import logging as _logging
+        _logging.getLogger(__name__).debug(
+            "OpenClaw-family adapters unavailable: %s", _fam_import_err
+        )
 
     # Local-OSS shims for cloud-only endpoints. Return empty arrays so the
     # Approvals tab renders cleanly without cloud sync.
