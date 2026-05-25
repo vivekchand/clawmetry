@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Release: opencode + Qwen Code runtimes (2026-05-25)
+- Publishes #2108. Two more standalone coding agents join the multi-agent pipeline, both built firsthand (installed + run against local Ollama, zero cost): **opencode** (SQLite `~/.local/share/opencode/opencode.db`; transcripts, model, tool calls, real tokens + cost) and **Qwen Code** (JSONL `~/.qwen/projects/<hash>/chats/<id>.jsonl`, Gemini-CLI lineage; transcripts, model, tool calls + thinking, token usage). Detected zero-config; in sessions + transcripts + runtime switcher. Full set now 11 runtimes: OpenClaw, PicoClaw, NanoClaw, Hermes, Claude Code, Codex, Cursor, Aider, Goose, opencode, Qwen Code. 153 compat tests green.
+
 ### Tracing tab is GA (2026-05-25)
 - The Phoenix/Arize-style **Tracing** tab — every session as a trace, with a span **waterfall**, a **span tree**, an **agent graph**, and a span-detail drawer — is now shown in the nav by default for every install (it had been behind a `?tracing=1` flag while the span-detail drawer and daemon-proxy reliability were finished). Power users can hide it with `?tracing=0`. Verified live against the real daemon: lists real traces and renders a 361-span trace's waterfall + tree with per-span tokens/durations. (#2091)
 
