@@ -131,7 +131,7 @@ ClawMetry observes many AI-agent runtimes, not just OpenClaw. Each non-OpenClaw 
 
 ClawMetry speaks **OpenTelemetry** in both directions, using the **GenAI semantic conventions**, so your agent traces are never locked into one tool.
 
-**Export** every session — LLM calls, tools, sub-agents, tokens, cost — as OTLP/HTTP GenAI spans to any collector (Datadog, Grafana, Honeycomb, **MLflow**, or your own OTel Collector):
+**Export** every session — LLM calls, tools, sub-agents, tokens, cost — as OTLP/HTTP GenAI spans to any collector (Datadog, Grafana, Honeycomb, or your own OTel Collector):
 
 ```bash
 clawmetry --otel-export http://localhost:4318/v1/traces
