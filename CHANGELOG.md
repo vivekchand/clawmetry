@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Fixed + Added: cron writes on OpenClaw v3 + create-cron from cloud (2026-05-25)
+- **Fixed:** Every cron write button (New Job, Delete, Pause/Enable, Run, Edit) was silently broken on OpenClaw v3. They called the gateway's `/tools/invoke` `cron` tool, which v3 removed ("Tool not available: cron"), and ClawMetry's gateway token is read-only — so every mutation 502'd. Migrated all cron writes to the `openclaw cron` CLI (uses OpenClaw's own creds, same as Self-Evolve's `openclaw agent`). Reads (list/runs) unchanged. When the gateway needs a one-time device-scope approval for writes, the API now returns a clear 409 with "approve the device pairing" guidance instead of a confusing 502. (#2053)
+- **Added:** Create a cron from the cloud dashboard. The "+ New Job" button now works on app.clawmetry.com via the heartbeat-piggyback relay: cloud enqueues a `cron_create` action, the local daemon runs `openclaw cron add`, and the E2E-encrypted result is posted back for the browser to decrypt — the cloud never sees plaintext. Mirrors the Self-Evolve "Fix" relay. (#2053 + cloud)
+
 ### Release: runtime switcher on Session replay (2026-05-25)
 - Publishes #2050. When OpenClaw + PicoClaw + NanoClaw run on the same node their sessions share one dashboard; the Session replay (transcripts) tab now has a **Runtime** chip-switcher to scope the list to a single runtime for a clean deep-dive, with **All** (merged) as the default. Chips show per-runtime counts and only appear when more than one runtime is present; the choice persists. The runtime is derived from the namespaced session id (`picoclaw:` / `nanoclaw:`), so it works identically locally and in the cloud with no server change. Verified live (OpenClaw 27 / PicoClaw 1 / NanoClaw 2): selecting PicoClaw narrows to its session, All restores the merged view.
 
