@@ -10399,6 +10399,24 @@ function loadAllSkills() {
 }
 
 // ===== Transcripts =====
+// ── Session-replay "Show plumbing" toggle ───────────────────────────────────
+// Self-Evolve sessions are the agent's own standing self-review runs (FIX mode
+// + re-analyze) — machine-initiated, not user work. Left in, they pile up and
+// bury real sessions, so they're hidden by default behind a "Show plumbing"
+// toggle (same treatment the Brain tab gives queue/metric rows).
+window._transcriptShowPlumbing = window._transcriptShowPlumbing || false;
+function _isPlumbingTranscript(titleSrc) {
+  // Match the Self-Evolve system prompt anywhere in the derived title — the
+  // title often carries a "[Wed 2026-05-20 22:30 GMT+2] …" timestamp prefix
+  // ahead of the prompt text, so we can't anchor at the start.
+  return String(titleSrc || '').toLowerCase().indexOf('you are clawmetry self-evolve') !== -1;
+}
+window.toggleTranscriptPlumbing = function() {
+  window._transcriptShowPlumbing = !window._transcriptShowPlumbing;
+  var st = document.getElementById('transcript-plumbing-state');
+  if (st) st.textContent = window._transcriptShowPlumbing ? '●' : '○';
+  loadTranscripts();
+};
 async function loadTranscripts() {
   try {
     var data = await fetch('/api/transcripts').then(r => r.json());
@@ -10410,12 +10428,17 @@ async function loadTranscripts() {
     // catches the "name === sid" / "name === sid[:40]" cases the legacy
     // endpoint emits.
     var UUIDISH = /^[0-9a-f]{6,}([-_][0-9a-f]+)*$/i;
+    var plumbingTotal = 0;
     data.transcripts.forEach(function(t) {
       var raw = String(t.id || '');
       var titleSrc = (t.title && String(t.title).trim()) || (t.name && String(t.name).trim()) || '';
       var looksLikeId = !titleSrc || titleSrc === raw || UUIDISH.test(titleSrc) || raw.indexOf(titleSrc) === 0;
       var title = looksLikeId ? 'Untitled session' : titleSrc;
-      html += '<div class="transcript-item" onclick="viewTranscript(\'' + escHtml(raw) + '\')">';
+      var isPlumbing = _isPlumbingTranscript(titleSrc);
+      if (isPlumbing) plumbingTotal++;
+      // Self-Evolve runs are hidden by default; "Show plumbing" reveals them de-emphasized.
+      if (isPlumbing && !window._transcriptShowPlumbing) return;
+      html += '<div class="transcript-item" style="' + (isPlumbing ? 'opacity:0.5;' : '') + '" onclick="viewTranscript(\'' + escHtml(raw) + '\')">';
       html += '<div style="min-width:0;flex:1;">';
       html += '<div class="transcript-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(title) + '</div>';
       html += '<div class="transcript-meta-row" style="gap:10px;">';
@@ -10427,7 +10450,14 @@ async function loadTranscripts() {
       html += '<span style="color:#444;font-size:18px;">▸</span>';
       html += '</div>';
     });
-    document.getElementById('transcript-list').innerHTML = html || '<div style="padding:16px;color:#666;">No transcript files found</div>';
+    var plumbCountEl = document.getElementById('transcript-plumbing-count');
+    if (plumbCountEl) plumbCountEl.textContent = plumbingTotal > 0 ? (window._transcriptShowPlumbing ? '(' + plumbingTotal + ' shown)' : '(' + plumbingTotal + ' hidden)') : '';
+    var plumbBtn = document.getElementById('transcript-plumbing-btn');
+    if (plumbBtn) plumbBtn.style.display = plumbingTotal > 0 ? '' : 'none';
+    var emptyMsg = (plumbingTotal > 0 && !window._transcriptShowPlumbing)
+      ? '<div style="padding:16px;color:#666;">No sessions to show — ' + plumbingTotal + ' Self-Evolve session' + (plumbingTotal === 1 ? '' : 's') + ' hidden. Click “Show plumbing” to reveal.</div>'
+      : '<div style="padding:16px;color:#666;">No transcript files found</div>';
+    document.getElementById('transcript-list').innerHTML = html || emptyMsg;
     document.getElementById('transcript-list').style.display = '';
     document.getElementById('transcript-viewer').style.display = 'none';
     document.getElementById('transcript-back-btn').style.display = 'none';
