@@ -7149,6 +7149,108 @@ def sync_cron_runs(config: dict, state: dict, paths: dict) -> int:
     return n_ingested
 
 
+_RUN_LEDGER_SRC_COLS = (
+    "task_id", "runtime", "task_kind", "source_id", "requester_session_key",
+    "owner_key", "scope_kind", "child_session_key", "parent_flow_id",
+    "parent_task_id", "agent_id", "run_id", "label", "task", "status",
+    "delivery_status", "notify_policy", "created_at", "started_at", "ended_at",
+    "last_event_at", "cleanup_after", "error", "progress_summary",
+    "terminal_summary", "terminal_outcome",
+)
+
+
+def _openclaw_task_ledger_paths() -> list[Path]:
+    """Candidate locations of OpenClaw's run ledger SQLite, newest layout
+    first. OpenClaw 2026.5.x writes ``~/.openclaw/tasks/runs.sqlite``."""
+    oc = Path(_get_openclaw_dir())
+    return [
+        oc / "tasks" / "runs.sqlite",
+        Path("/root/.openclaw/tasks/runs.sqlite"),
+        Path("/sandbox/.openclaw/tasks/runs.sqlite"),
+    ]
+
+
+def sync_run_ledger(config: dict, state: dict, paths: dict) -> int:
+    """Mirror OpenClaw's background-run ledger (``tasks/runs.sqlite``) into
+    the local DuckDB ``run_ledger`` table.
+
+    This is the authoritative record of every background run — sub-agents
+    (``runtime='subagent'``), cron jobs (``runtime='cron'``) and inline
+    CLI/agent turns (``runtime='cli'``) — and is the shared source for the
+    Scheduler lane monitor, the sub-agent fan-out tree and the cron run log.
+
+    Idempotent + incremental: we keep a ``last_event_at`` watermark in
+    ``state['run_ledger_watermark']`` and only re-read rows that advanced
+    since the last cycle (status moves ``running`` -> terminal, so the
+    watermark catches updates as well as inserts). Returns rows ingested.
+
+    Degrades silently: missing ledger, locked DB, or malformed row each
+    return 0 / skip rather than raising (read-only-by-default contract).
+    """
+    try:
+        from clawmetry import local_store as _ls
+    except Exception as e:  # noqa: BLE001
+        log.debug("sync_run_ledger: local_store unavailable: %s", e)
+        return 0
+
+    src = next((p for p in _openclaw_task_ledger_paths() if p.exists()), None)
+    if src is None:
+        return 0
+
+    node_id = config.get("node_id", "") if isinstance(config, dict) else ""
+    watermark = int(state.get("run_ledger_watermark", 0) or 0)
+
+    import sqlite3
+    rows: list[dict] = []
+    try:
+        # Read-only URI open so we never contend with OpenClaw's writer.
+        conn = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=2.0)
+        try:
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute(
+                f"SELECT {', '.join(_RUN_LEDGER_SRC_COLS)} FROM task_runs "
+                "WHERE COALESCE(last_event_at, ended_at, created_at, 0) >= ? "
+                "ORDER BY COALESCE(last_event_at, ended_at, created_at, 0) ASC "
+                "LIMIT 5000",
+                [watermark],
+            )
+            rows = [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+    except Exception as e:  # noqa: BLE001 — locked / corrupt / schema drift
+        log.debug("sync_run_ledger: read failed (%s)", e)
+        return 0
+
+    if not rows:
+        return 0
+
+    try:
+        store = _ls.get_store()
+    except Exception as e:  # noqa: BLE001
+        log.debug("sync_run_ledger: get_store failed: %s", e)
+        return 0
+
+    n = 0
+    new_watermark = watermark
+    for r in rows:
+        try:
+            store.ingest_run_ledger_row(r, node_id=node_id)
+            n += 1
+            wm = r.get("last_event_at") or r.get("ended_at") or r.get("created_at") or 0
+            try:
+                new_watermark = max(new_watermark, int(wm))
+            except (TypeError, ValueError):
+                pass
+        except Exception as e_in:  # noqa: BLE001
+            log.debug("sync_run_ledger: ingest skipped for %s: %s",
+                      r.get("task_id"), e_in)
+    state["run_ledger_watermark"] = new_watermark
+    if n:
+        log.debug("sync_run_ledger: ingested %d rows (watermark=%d)",
+                  n, new_watermark)
+    return n
+
+
 def sync_session_metadata(config: dict, state: dict = None) -> int:
     """Sync OpenClaw session metadata rows to cloud sessions table.
 
@@ -10128,6 +10230,37 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _e:
         log.debug("snapshot: compute_skills_payload failed: %s", _e)
 
+    # OpenClaw run ledger (tasks/runs.sqlite mirror) → bounded snapshot slice
+    # for the cloud Scheduler lane monitor + sub-agent fan-out tree. We ship
+    # the lane rollup (tiny) plus the most-recent runs only, and trim the
+    # free-text fields to short prefixes so a long task description can't
+    # bloat the shared snapshot (the #1895 / 0.12.278 bloat lesson).
+    run_ledger_slice = {"lanes": [], "runs": []}
+    try:
+        from clawmetry import local_store as _ls_rl
+        _rl_store = _ls_rl.get_store()
+        if _rl_store is not None:
+            run_ledger_slice["lanes"] = _rl_store.query_run_ledger_lanes() or []
+            _RL_KEEP = (
+                "task_id", "runtime", "task_kind", "scope_kind", "agent_id",
+                "run_id", "label", "status", "delivery_status",
+                "terminal_outcome", "child_session_key", "parent_task_id",
+                "requester_session_key", "created_at", "started_at",
+                "ended_at", "last_event_at",
+            )
+            _runs = _rl_store.query_run_ledger(limit=120) or []
+            run_ledger_slice["runs"] = [
+                {
+                    **{k: r.get(k) for k in _RL_KEEP},
+                    # short prefixes only — never the full task/error body
+                    "label": (str(r.get("label") or r.get("task") or "")[:80]),
+                    "error": (str(r.get("error"))[:160] if r.get("error") else None),
+                }
+                for r in _runs
+            ]
+    except Exception as _e_rl:
+        log.debug("snapshot: run_ledger slice failed: %s", _e_rl)
+
     payload = {
         "system": system,
         "infra": infra,
@@ -10152,6 +10285,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
             "total": len(subagents_list),
         },
         "totalActive": active_count,
+        "runLedger": run_ledger_slice,
         "spending": spending,
         "cronJobs": _build_cron_jobs(paths),
         "channels": _build_channel_data(config),
@@ -10728,6 +10862,14 @@ def run_daemon() -> None:
             log.info(f"  Cron runs: {crr} rows ingested")
     except Exception as e:
         log.warning(f"  Cron-run ingest error: {e}")
+    # OpenClaw 2026.5.x run ledger (tasks/runs.sqlite) → DuckDB run_ledger.
+    # Feeds the Scheduler lane monitor + sub-agent fan-out tree.
+    try:
+        rl = sync_run_ledger(config, state, paths)
+        if rl:
+            log.info(f"  Run ledger: {rl} rows ingested")
+    except Exception as e:
+        log.warning(f"  Run-ledger ingest error: {e}")
     # Sync today's log lines immediately so Brain tab shows the most recent
     # activity right away — older log history is backfilled later
     try:
@@ -11023,6 +11165,11 @@ def run_daemon() -> None:
             except Exception as _e_cr:
                 log.debug("sync_cron_runs error (non-fatal): %s", _e_cr)
                 cron_runs = 0
+            # OpenClaw run ledger (tasks/runs.sqlite) → DuckDB run_ledger.
+            try:
+                sync_run_ledger(config, state, paths)
+            except Exception as _e_rl:
+                log.debug("sync_run_ledger error (non-fatal): %s", _e_rl)
 
             # ── Low-priority: log lines (real-time covered by streamer) ──
             lg = 0

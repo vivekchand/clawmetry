@@ -416,6 +416,11 @@ _DAEMON_METHODS = frozenset({
     # ``routes/crons.py:_cron_runs_from_duckdb`` via the daemon proxy.
     "query_cron_runs",
     "query_subagents",
+    # OpenClaw run ledger (tasks/runs.sqlite mirror): sub-agents + crons +
+    # CLI turns with status/timing/parent-child. Powers the Scheduler lane
+    # monitor + sub-agent fan-out tree + cron run log off one source.
+    "query_run_ledger",
+    "query_run_ledger_lanes",
     # Issue #1597: parent session tool-timeline rollup needs to merge in
     # events from every child sub-agent session (the events table has no
     # parent_session_id column; the link lives on the subagents table). The
