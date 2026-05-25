@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Release: model-aware LLM context window (2026-05-25)
+- Publishes #2055: the LLM Context Inspector gauge no longer reads ">100%". `currentContextTokens` (live prompt size incl. cache) is now sized against a model-aware `contextWindow` — 1M for the `[1m]` Opus/Sonnet variants, and a defensive bump when the observed prompt exceeds the string-derived base (the beta 1M header isn't always echoed into the model string). A Claude Code turn with ~323K live context now reads `323K / 1M (32%)` instead of `323K / 200K (100%)`. `/api/overview` + the daemon snapshot derive the window from `query_context_window_peek` (which now returns the turn's model + context_window); the cloud interceptor already passes it through. Verified live on OSS + the decrypted cloud snapshot (both 323485 / 1000000).
+
 ### Release: runtime switcher on Session replay (2026-05-25)
 - Publishes #2050. When OpenClaw + PicoClaw + NanoClaw run on the same node their sessions share one dashboard; the Session replay (transcripts) tab now has a **Runtime** chip-switcher to scope the list to a single runtime for a clean deep-dive, with **All** (merged) as the default. Chips show per-runtime counts and only appear when more than one runtime is present; the choice persists. The runtime is derived from the namespaced session id (`picoclaw:` / `nanoclaw:`), so it works identically locally and in the cloud with no server change. Verified live (OpenClaw 27 / PicoClaw 1 / NanoClaw 2): selecting PicoClaw narrows to its session, All restores the merged view.
 
