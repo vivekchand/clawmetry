@@ -16797,8 +16797,49 @@ async function checkUpdateStatus() {
       var current = (data.latest_check && data.latest_check.current) || '';
       msg.textContent = 'Update available: v' + latest + ' is out. You are on v' + current + '.';
       banner.style.display = 'flex';
+      _renderAutoUpdateToggle(!!(data.config && data.config.auto_update));
     }
   } catch(e) {}
+}
+
+// Reflect the persisted auto_update preference in the banner toggle. On the
+// hosted cloud (CLOUD_MODE) the local pip-updater doesn't apply — the cloud
+// stays current centrally — so show that instead of a functional switch.
+function _renderAutoUpdateToggle(isOn) {
+  var wrap = document.getElementById('update-banner-auto');
+  var box = document.getElementById('update-banner-auto-toggle');
+  var label = document.getElementById('update-banner-auto-label');
+  if (!wrap) return;
+  if (window.CLOUD_MODE) {
+    wrap.style.display = 'flex';
+    wrap.style.cursor = 'default';
+    wrap.title = 'ClawMetry Cloud is kept on the latest release automatically.';
+    if (box) box.style.display = 'none';
+    if (label) label.textContent = '☁ Auto-updates on Cloud';
+    return;
+  }
+  wrap.style.display = 'flex';
+  if (box) { box.style.display = ''; box.checked = !!isOn; }
+  if (label) label.textContent = isOn ? 'Auto-update on' : 'Auto-update';
+}
+
+// Persist the toggle; if turning it ON while an update is already pending,
+// kick the upgrade right away instead of waiting for the next daily check.
+async function toggleAutoUpdate(on) {
+  var label = document.getElementById('update-banner-auto-label');
+  try {
+    await fetch('/api/update-check/config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({auto_update: !!on})
+    });
+  } catch(e) {}
+  if (label) label.textContent = on ? 'Auto-update on' : 'Auto-update';
+  if (on) {
+    // An update is showing (this toggle only renders inside the update banner),
+    // so apply it now — reuse the same vetted path as the Update now button.
+    updateFromBanner();
+  }
 }
 
 async function dismissUpdateBanner() {

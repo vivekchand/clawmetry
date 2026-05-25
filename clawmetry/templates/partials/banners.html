@@ -2,6 +2,10 @@
 <div id="update-banner" style="display:none; padding:10px 16px; background:linear-gradient(90deg,#0f3d0f 0%,#1a1a2e 100%); border-bottom:2px solid #22c55e; color:#86efac; font-size:13px; font-weight:600; align-items:center; gap:10px;">
   <span style="font-size:18px;">&#128640;</span>
   <span id="update-banner-msg" style="flex:1;"></span>
+  <label id="update-banner-auto" title="When on, future releases install automatically as soon as they're published." style="display:none; align-items:center; gap:6px; font-size:12px; color:#86efac; cursor:pointer; user-select:none; white-space:nowrap;">
+    <input type="checkbox" id="update-banner-auto-toggle" onchange="toggleAutoUpdate(this.checked)" style="cursor:pointer; accent-color:#16a34a; width:14px; height:14px;">
+    <span id="update-banner-auto-label">Auto-update</span>
+  </label>
   <button id="update-banner-update-btn" onclick="updateFromBanner()" style="
     background:#16a34a;
     color:#fff;
