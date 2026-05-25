@@ -168,3 +168,63 @@ def get_context():
             {"path": "MEMORY.md", "size_bytes": 1024, "preview": "- prod cluster: us-west-2\n- on-call: @vivek (oct rotation)\n- last incident: 2026-04-12 db lag"},
         ],
     })
+
+@bp_v2.route("/api/v2/brain", methods=["GET"])
+def get_brain():
+    """Stage A: adapts /api/brain-history events to the v2 turn wire shape.
+    Stage B will group events into real conversation round-trips via DuckDB.
+
+    Wire shape: {turns: [{id, time, channel, user, steps, skill, llms,
+                           tools, duration_ms, active, source, severity}],
+                 total: int}
+    """
+    from flask import request as _req
+    try:
+        limit = max(1, min(200, int(_req.args.get("limit", 50))))
+    except (TypeError, ValueError):
+        limit = 50
+
+    _CHANNEL_EMOJI = {
+        "telegram": "📱", "signal": "📡", "whatsapp": "💬",
+        "discord": "🎮", "slack": "💼", "imessage": "🍎",
+        "webchat": "🌐", "matrix": "🔢", "msteams": "🏢",
+        "irc": "📡", "googlechat": "🔵", "mattermost": "⚡",
+        "line": "💚", "nostr": "🟣", "twitch": "💜",
+        "bluebubbles": "💙", "cli": "⌨️", "tui": "⌨️",
+    }
+
+    def _channel_from_source(source: str) -> str:
+        parts = (source or "").split(":")
+        # agent:<id>:<provider>:… — provider is index 2
+        if len(parts) >= 3 and parts[2] not in ("main", "subagent", "cron", ""):
+            return parts[2].lower()
+        return "cli"
+
+    turns = []
+    try:
+        from routes.brain import api_brain_history
+        resp = api_brain_history()
+        events = (resp.get_json() or {}).get("events", [])
+        for i, ev in enumerate(events[:limit]):
+            ev_type = (ev.get("type") or "EVENT").upper()
+            source = ev.get("source", "")
+            channel = _channel_from_source(source)
+            turns.append({
+                "id": ev.get("id") or f"{source}-{i}",
+                "time": ev.get("time", ""),
+                "channel": channel,
+                "channel_emoji": _CHANNEL_EMOJI.get(channel, "💬"),
+                "user": (ev.get("detail") or "")[:120],
+                "steps": [ev_type],
+                "skill": ev.get("skill"),
+                "llms": [ev["model"]] if ev.get("model") else [],
+                "tools": [ev["tool"]] if ev.get("tool") else [],
+                "duration_ms": ev.get("duration_ms") or 0,
+                "active": bool(ev.get("active")),
+                "source": ev.get("sourceLabel") or source,
+                "severity": ev.get("severity"),
+            })
+    except Exception:
+        pass  # turns stays []
+
+    return jsonify({"turns": turns, "total": len(turns)})
