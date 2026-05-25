@@ -2066,6 +2066,42 @@ def _extract_cost_tokens_model(obj: dict) -> tuple:
                         cost_usd = float(cv)
                     except (TypeError, ValueError):
                         cost_usd = None
+
+    # #2049: derive cost when the provider didn't report it. OpenClaw / OAuth
+    # events carry tokens + model but no cost_usd, so the Cost tab showed ~$0
+    # for heavy usage (1.5M tokens -> $0.008). Compute the API-equivalent cost
+    # from this event's own token split x model pricing (cache-aware) and store
+    # it — chosen semantics: derive-at-ingest, store-as-cost, so aggregates,
+    # budgets and per-session costs all see a real number. Local/self-hosted
+    # models resolve to 0 (no per-token charge). Best-effort, never raises.
+    if cost_usd is None and model:
+        u = usage if (isinstance(msg, dict) and isinstance(usage, dict)) else {}
+        if not u and isinstance(obj.get("usage"), dict):
+            u = obj["usage"]
+
+        def _utok(*keys):
+            for _k in keys:
+                _v = u.get(_k)
+                if _v is not None:
+                    try:
+                        return int(_v)
+                    except (TypeError, ValueError):
+                        pass
+            return 0
+
+        _in = _utok("input_tokens", "inputTokens", "prompt_tokens", "promptTokens")
+        _out = _utok("output_tokens", "outputTokens", "completion_tokens", "completionTokens")
+        _cr = _utok("cache_read_input_tokens", "cacheReadInputTokens", "cache_read_tokens")
+        _cw = _utok("cache_creation_input_tokens", "cacheCreationInputTokens", "cache_write_tokens")
+        if _in or _out or _cr or _cw:
+            try:
+                from clawmetry.providers_pricing import estimate_event_cost_usd
+                _derived = estimate_event_cost_usd(model, _in, _out, _cr, _cw)
+                if _derived and _derived > 0:
+                    cost_usd = _derived
+            except Exception:
+                pass
+
     return cost_usd, token_count, model
 
 
@@ -8640,6 +8676,31 @@ def _build_selfevolve(workspace=None):
         return {}
 
 
+_cost_backfill_done = False
+
+
+def _backfill_event_costs_once(store) -> None:
+    """#2049: drain the cost_usd backfill once per daemon process. Bounded
+    batches with a hard iteration cap so a huge store can't stall the snapshot
+    build; remaining rows get picked up on the next process start. Never
+    raises."""
+    global _cost_backfill_done
+    if _cost_backfill_done:
+        return
+    _cost_backfill_done = True  # set first: a failure shouldn't retry-loop
+    try:
+        total = 0
+        for _ in range(40):  # cap: 40 x 5000 = up to 200k rows / process
+            n = store.backfill_event_costs(batch=5000)
+            total += n
+            if n < 5000:
+                break
+        if total:
+            log.info("cost backfill: populated cost_usd for %d events (#2049)", total)
+    except Exception as _e:
+        log.debug("cost backfill failed: %s", _e)
+
+
 def _build_daily_usage(days=14):
     """14-day token/cost history for the cloud Cost tab.
 
@@ -8658,6 +8719,11 @@ def _build_daily_usage(days=14):
         store = _ls.get_store()
         if store is None:
             return {}
+        # #2049: one-time backfill of cost_usd for events ingested before the
+        # derive-at-ingest fix (they carry tokens+model but no provider cost,
+        # so the Cost tab showed ~$0). Runs once per process, on the daemon's
+        # writer handle, draining in bounded batches before we read costs.
+        _backfill_event_costs_once(store)
         daily_tok: dict = {}
         daily_cost: dict = {}
         for r in (store.query_aggregates() or []):
