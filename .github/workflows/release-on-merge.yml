@@ -155,6 +155,21 @@ jobs:
           echo "new=$NEW" >> $GITHUB_OUTPUT
           echo "Bumped $OLD → $NEW"
 
+      # Rebuild the v2 React bundle from source so the wheel never ships a
+      # stale committed clawmetry/static/v2/dist/. publish.yml already does
+      # this; this path (the actual [RELEASE] publish) did not, so PyPI shipped
+      # whatever dist happened to be committed — which lags source whenever a
+      # v2 PR lands without rebuilding the bundle.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+
+      - name: Build v2 React bundle (fresh)
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+
       - name: Build package
         run: python3 -m build
 
