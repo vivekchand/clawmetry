@@ -2,7 +2,9 @@ import { Routes, Route } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { WelcomePage } from "./pages/WelcomePage";
 import { StubPage } from "./pages/StubPage";
-import { NAV_ITEMS } from "./components/nav"; 
+import { NAV_ITEMS } from "./components/nav";
+import { useEffect } from "react";
+import { useThemeStore } from "./stores/themeStore";
 import { OpsPage } from "./pages/OpsPage";
 
 // All v2 routes live inside <Layout>, which renders the sidebar + topbar
@@ -10,6 +12,11 @@ import { OpsPage } from "./pages/OpsPage";
 // to a /v2/<slug> route → <StubPage> for now ("Coming soon · see issue #N").
 // When a real tab lands, swap that route's element for the real component.
 export default function App() {
+  const hydrate = useThemeStore((s) => s.hydrate);
+  useEffect(() => {
+    hydrate();
+  }, [hydrate]);
+
   return (
     <Routes>
       <Route path="/" element={<Layout />}>
