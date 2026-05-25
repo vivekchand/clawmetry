@@ -396,6 +396,52 @@ _DDL = [
         PRIMARY KEY (agent_type, subagent_id)
     )
     """,
+    # OpenClaw 2026.5.x moved its background-run bookkeeping out of the old
+    # ``~/.openclaw/subagents/runs.json`` (now usually empty) into a unified
+    # SQLite ledger at ``~/.openclaw/tasks/runs.sqlite``. That ledger is the
+    # authoritative record of EVERY background run — sub-agents
+    # (``runtime='subagent'``), cron jobs (``runtime='cron'``), and inline
+    # CLI/agent turns (``runtime='cli'``) — with status, delivery, timing,
+    # parent/child linkage and terminal outcome. We mirror it verbatim into
+    # ``run_ledger`` so three observability surfaces share one source of
+    # truth: the Scheduler/lane monitor (group by ``runtime``/``status``),
+    # the sub-agent fan-out tree (``parent_task_id``/``child_session_key``),
+    # and the cron run log. ``runtime`` IS the OpenClaw queue lane.
+    """
+    CREATE TABLE IF NOT EXISTS run_ledger (
+        task_id               VARCHAR PRIMARY KEY,
+        node_id               VARCHAR,
+        runtime               VARCHAR,
+        task_kind             VARCHAR,
+        source_id             VARCHAR,
+        requester_session_key VARCHAR,
+        owner_key             VARCHAR,
+        scope_kind            VARCHAR,
+        child_session_key     VARCHAR,
+        parent_flow_id        VARCHAR,
+        parent_task_id        VARCHAR,
+        agent_id              VARCHAR,
+        run_id                VARCHAR,
+        label                 VARCHAR,
+        task                  VARCHAR,
+        status                VARCHAR,
+        delivery_status       VARCHAR,
+        notify_policy         VARCHAR,
+        created_at            BIGINT,
+        started_at            BIGINT,
+        ended_at              BIGINT,
+        last_event_at         BIGINT,
+        cleanup_after         BIGINT,
+        error                 VARCHAR,
+        progress_summary      VARCHAR,
+        terminal_summary      VARCHAR,
+        terminal_outcome      VARCHAR,
+        updated_at            BIGINT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_run_ledger_runtime_status ON run_ledger(runtime, status)",
+    "CREATE INDEX IF NOT EXISTS idx_run_ledger_parent ON run_ledger(parent_task_id)",
+    "CREATE INDEX IF NOT EXISTS idx_run_ledger_last_event ON run_ledger(last_event_at)",
     # Epic #1032 Phase 4 — approval queue. Authored locally when the policy
     # watcher fires on a tool-call, mirrored to the cloud cache via heartbeat
     # cache_push so the cloud Approvals inbox paints from cache, and resolved
@@ -2063,6 +2109,74 @@ class LocalStore:
                   float(sa.get("cost_usd") or 0),
                   int(sa.get("token_count") or 0),
                   data_blob, now_ms])
+
+    # Columns mirrored 1:1 from OpenClaw's tasks/runs.sqlite ``task_runs`` row.
+    _RUN_LEDGER_COLS = (
+        "task_id", "node_id", "runtime", "task_kind", "source_id",
+        "requester_session_key", "owner_key", "scope_kind", "child_session_key",
+        "parent_flow_id", "parent_task_id", "agent_id", "run_id", "label",
+        "task", "status", "delivery_status", "notify_policy", "created_at",
+        "started_at", "ended_at", "last_event_at", "cleanup_after", "error",
+        "progress_summary", "terminal_summary", "terminal_outcome",
+    )
+
+    def ingest_run_ledger_row(self, r: dict[str, Any], *, node_id: str = "") -> None:
+        """Upsert one OpenClaw run-ledger row (from ``tasks/runs.sqlite``).
+
+        Required: ``task_id``. Re-ingesting a row whose ``status`` /
+        ``last_event_at`` advanced overwrites the prior copy (runs go
+        ``running`` -> ``succeeded``/``failed``), so the daemon can keep a
+        watermark on ``last_event_at`` and only re-read changed rows. Long
+        free-text fields are truncated so a runaway ``task`` description
+        can't bloat the row (and, downstream, the shared snapshot)."""
+        tid = r.get("task_id")
+        if not tid:
+            raise ValueError("run-ledger row must include 'task_id'")
+
+        def _txt(v: Any, n: int = 2000) -> Any:
+            if v is None:
+                return None
+            s = str(v)
+            return s[:n] if len(s) > n else s
+
+        def _int(v: Any) -> Any:
+            if v is None:
+                return None
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return None
+
+        vals = [
+            str(tid), node_id or None, _txt(r.get("runtime"), 64),
+            _txt(r.get("task_kind"), 64), _txt(r.get("source_id"), 256),
+            _txt(r.get("requester_session_key"), 256), _txt(r.get("owner_key"), 256),
+            _txt(r.get("scope_kind"), 64), _txt(r.get("child_session_key"), 256),
+            _txt(r.get("parent_flow_id"), 256), _txt(r.get("parent_task_id"), 256),
+            _txt(r.get("agent_id"), 128), _txt(r.get("run_id"), 256),
+            _txt(r.get("label"), 512), _txt(r.get("task"), 2000),
+            _txt(r.get("status"), 64), _txt(r.get("delivery_status"), 64),
+            _txt(r.get("notify_policy"), 64), _int(r.get("created_at")),
+            _int(r.get("started_at")), _int(r.get("ended_at")),
+            _int(r.get("last_event_at")), _int(r.get("cleanup_after")),
+            _txt(r.get("error"), 2000), _txt(r.get("progress_summary"), 2000),
+            _txt(r.get("terminal_summary"), 2000), _txt(r.get("terminal_outcome"), 256),
+        ]
+        now_ms = int(time.time() * 1000)
+        cols = ", ".join(self._RUN_LEDGER_COLS)
+        ph = ", ".join("?" for _ in self._RUN_LEDGER_COLS)
+        # Overwrite every non-key column on conflict — the source row is the
+        # source of truth and only ever moves forward (status/timing fill in).
+        upd = ", ".join(
+            f"{c} = excluded.{c}" for c in self._RUN_LEDGER_COLS if c != "task_id"
+        )
+        with self._write_lock:
+            self._conn.execute(
+                f"INSERT INTO run_ledger ({cols}, updated_at) "
+                f"VALUES ({ph}, ?) "
+                f"ON CONFLICT (task_id) DO UPDATE SET {upd}, updated_at = excluded.updated_at",
+                [*vals, now_ms],
+            )
 
     def ingest_loop_signal(
         self,
@@ -4389,6 +4503,63 @@ class LocalStore:
                 "ended_at", "task", "status", "cost_usd", "token_count",
                 "data", "updated_at"]
         return _decode_data_blob_rows(self._fetch(sql, params), cols)
+
+    def query_run_ledger(
+        self,
+        *,
+        runtime: str | None = None,
+        scope_kind: str | None = None,
+        status: str | None = None,
+        since_ms: int | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """OpenClaw background-run ledger rows (sub-agents, crons, CLI turns).
+
+        ``runtime`` is the OpenClaw queue lane (``cli``/``cron``/``subagent``).
+        Newest first by ``last_event_at`` (falling back to ``created_at``)."""
+        where: list[str] = []
+        params: list[Any] = []
+        if runtime:
+            where.append("runtime = ?"); params.append(runtime)
+        if scope_kind:
+            where.append("scope_kind = ?"); params.append(scope_kind)
+        if status:
+            where.append("status = ?"); params.append(status)
+        if since_ms is not None:
+            where.append("COALESCE(last_event_at, created_at, 0) >= ?")
+            params.append(int(since_ms))
+        clause = ("WHERE " + " AND ".join(where)) if where else ""
+        cols = list(self._RUN_LEDGER_COLS) + ["updated_at"]
+        sql = (
+            f"SELECT {', '.join(cols)} FROM run_ledger {clause} "
+            f"ORDER BY COALESCE(last_event_at, created_at, 0) DESC LIMIT ?"
+        )
+        params.append(int(limit))
+        return [dict(zip(cols, row)) for row in self._fetch(sql, params)]
+
+    def query_run_ledger_lanes(self) -> list[dict[str, Any]]:
+        """Per-lane occupancy rollup for the Scheduler/queue monitor.
+
+        One row per ``runtime`` lane with running / queued / done counts so
+        the UI can render lane-saturation bars without pulling every row.
+        ``running`` approximates live lane occupancy; ``queued`` is anything
+        accepted-but-not-started; ``failed_recent`` flags lanes with trouble."""
+        sql = """
+            SELECT
+                COALESCE(runtime, 'unknown')                                   AS lane,
+                COUNT(*)                                                       AS total,
+                COUNT(*) FILTER (WHERE status IN ('running', 'in_progress', 'active'))   AS running,
+                COUNT(*) FILTER (WHERE status IN ('queued', 'accepted', 'pending'))      AS queued,
+                COUNT(*) FILTER (WHERE status IN ('succeeded', 'success', 'ok', 'done')) AS succeeded,
+                COUNT(*) FILTER (WHERE status IN ('failed', 'error', 'timeout'))         AS failed,
+                MAX(COALESCE(last_event_at, created_at, 0))                     AS last_event_at
+            FROM run_ledger
+            GROUP BY 1
+            ORDER BY running DESC, total DESC
+        """
+        cols = ["lane", "total", "running", "queued", "succeeded",
+                "failed", "last_event_at"]
+        return [dict(zip(cols, row)) for row in self._fetch(sql, [])]
 
     def query_channel_configs(
         self,
