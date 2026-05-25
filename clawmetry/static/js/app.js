@@ -7024,6 +7024,12 @@ async function loadCrons() {
     document.querySelectorAll('.cron-action-btn').forEach(function(btn) {
       btn.style.display = _cronActionsAvailable ? '' : 'none';
     });
+    // "+ New Job" works in cloud too: the cm-cloud-cron-create interceptor
+    // relays the POST to the daemon, which runs `openclaw cron add` locally.
+    // (Per-row write buttons — Pause/Run/Delete/Fix — stay local-only until
+    // they get their own relay actions.) Un-gate just New Job in cloud.
+    var _newJobBtn = document.getElementById('cron-new-job-btn');
+    if (_newJobBtn) _newJobBtn.style.display = '';
     renderCrons();
     // Load cron health summary panel
     loadCronHealth();
