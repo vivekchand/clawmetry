@@ -124,6 +124,8 @@ ClawMetry observes many AI-agent runtimes, not just OpenClaw. Each non-OpenClaw 
 | **Claude Code** | Beta adapter | JSONL `~/.claude/projects/.../<id>.jsonl`. Transcripts, model, tool calls + thinking, token usage. |
 | **Codex** | Beta adapter | Rollout JSONL `~/.codex/sessions/...`. Transcripts, model, tool calls, token usage. |
 | **Cursor** | Beta adapter | SQLite `state.vscdb`. Chat/composer transcripts, model. |
+| **Aider** | Beta adapter | `.aider.chat.history.md` per project. Transcripts, model, token counts. |
+| **Goose** | Beta adapter | SQLite `~/.local/share/goose`. Transcripts, model, tool calls, token totals. |
 
 "Beta adapter" means ClawMetry ships a reader for that runtime's real on-disk format, each built + verified against a real install on a real machine (see `tests/fixtures/runtimes/<rt>/`). Adapters are read-only; each is honest about what its runtime actually stores (e.g. PicoClaw/NanoClaw/Cursor don't write token cost to disk). When several runtimes run on one node, the runtime switcher scopes the sessions view to one for a clean deep-dive.
 
