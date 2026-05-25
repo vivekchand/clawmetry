@@ -10845,6 +10845,7 @@ async function viewTranscript(sessionId) {
       metaHtml += '</div>';
     }
     document.getElementById('transcript-meta').innerHTML = metaHtml;
+    _loadAuthorityPanel(sessionId);
     // Build replay events array - include compaction markers as special events
     var events = [];
     var compactionIdx = 0;
@@ -10887,6 +10888,65 @@ async function viewTranscript(sessionId) {
   } catch(e) {
     document.getElementById('transcript-messages').innerHTML = '<div style="color:#e74c3c;padding:16px;">Failed to load transcript</div>';
   }
+}
+
+// Authority footprint panel (#880) — fetches /api/authority for the current
+// session and renders tools/filesystem/network sections in a collapsible card.
+async function _loadAuthorityPanel(sessionId) {
+  var panel = document.getElementById('authority-panel');
+  var body  = document.getElementById('authority-panel-body');
+  var sumEl = document.getElementById('authority-panel-summary');
+  if (!panel || !body) return;
+  panel.style.display = 'none';
+  try {
+    var fp = await fetch('/api/authority?session_id=' + encodeURIComponent(sessionId))
+                    .then(function(r){ return r.json(); });
+    if (!fp || fp.error) return;
+    var tools = fp.tools || [];
+    var files = fp.filesystem || [];
+    var hosts = fp.network || [];
+    if (tools.length === 0 && files.length === 0 && hosts.length === 0) return;
+
+    // Summary line in the toggle header
+    var parts = [];
+    if (tools.length) parts.push(tools.length + ' tool' + (tools.length === 1 ? '' : 's'));
+    if (files.length) parts.push(files.length + ' path' + (files.length === 1 ? '' : 's'));
+    if (hosts.length) parts.push(hosts.length + ' host' + (hosts.length === 1 ? '' : 's'));
+    if (sumEl) sumEl.textContent = parts.join(' · ');
+
+    function _pill(text, color) {
+      return '<span style="display:inline-block;padding:1px 7px;border-radius:99px;font-size:10px;font-family:var(--font-mono,monospace);background:' + color + '22;color:' + color + ';border:1px solid ' + color + '44;margin:2px 2px 2px 0;">' + escHtml(text) + '</span>';
+    }
+
+    var html = '';
+
+    if (tools.length) {
+      html += '<div style="margin-bottom:8px;"><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:4px;">Tools called</div><div>';
+      tools.forEach(function(t){
+        html += _pill(t.name + (t.calls > 1 ? ' ×' + t.calls : ''), '#6366f1');
+      });
+      html += '</div></div>';
+    }
+
+    if (files.length) {
+      html += '<div style="margin-bottom:8px;"><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:4px;">Filesystem paths</div><div>';
+      files.forEach(function(f){
+        html += _pill(f.path, '#22c55e');
+      });
+      html += '</div></div>';
+    }
+
+    if (hosts.length) {
+      html += '<div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:4px;">Network hosts</div><div>';
+      hosts.forEach(function(h){
+        html += _pill(h.host, '#f59e0b');
+      });
+      html += '</div></div>';
+    }
+
+    body.innerHTML = html;
+    panel.style.display = '';
+  } catch(e) { /* non-critical — panel stays hidden on error */ }
 }
 
 function toggleMsg(idx) {

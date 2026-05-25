@@ -18,6 +18,7 @@ definitions.
 
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -5904,3 +5905,112 @@ def api_outcomes_impact():
     agg["total_sessions_in_window"] = len(outcome_rows)
     agg["_source"] = "local_store" if outcome_rows else "empty"
     return jsonify(agg)
+
+
+# ── Authority footprint (#880) ────────────────────────────────────────────────
+
+# Matches absolute filesystem paths inside tool arg JSON/strings.
+# Stops at whitespace and common JSON delimiters to avoid over-matching.
+_AUTH_FILE_RE = re.compile(r'(?:^|[\s"\'`=,({])((?:/[^\s"\'`<>:;,)}\[\]]{2,})+)')
+
+# Matches the host (and optional port) portion of http/https URLs.
+_AUTH_URL_RE = re.compile(r'https?://([a-zA-Z0-9._%-]+(?::\d+)?)')
+
+# Event types that carry a top-level tool invocation (all known variants).
+_AUTH_TOOL_TYPES = frozenset({
+    "tool_call", "tool.call", "tool_use", "toolCall",
+})
+
+
+def _extract_authority(events: list) -> dict:
+    """Derive an authority footprint from a list of DuckDB events.
+
+    Returns dict with keys:
+      tools      — [{name, calls}] sorted by call count desc
+      filesystem — [{path, via_tools}] up to 100 unique paths
+      network    — [{host, via_tools}] up to 50 unique hosts
+    """
+    tool_counts: dict = {}
+    file_paths: dict = {}   # path  -> set of tool names
+    net_hosts: dict = {}    # host  -> set of tool names
+
+    for ev in (events or []):
+        if ev.get("event_type", "") not in _AUTH_TOOL_TYPES:
+            continue
+        data = ev.get("data") or {}
+        if not isinstance(data, dict):
+            continue
+
+        name = (
+            data.get("tool") or data.get("tool_name") or data.get("name") or ""
+        ).lower().strip()
+        if not name:
+            continue
+
+        tool_counts[name] = tool_counts.get(name, 0) + 1
+
+        args_raw = (
+            data.get("args") if data.get("args") is not None
+            else data.get("arguments") if data.get("arguments") is not None
+            else data.get("input")
+        )
+        if args_raw is None:
+            continue
+        if isinstance(args_raw, str):
+            args_str = args_raw
+        else:
+            try:
+                args_str = json.dumps(args_raw)
+            except Exception:
+                args_str = str(args_raw)
+
+        for m in _AUTH_FILE_RE.findall(args_str):
+            path = m.strip()
+            # Skip noise: very short paths, kernel pseudo-filesystems
+            if len(path) > 3 and not path.startswith(("/proc", "/sys", "/dev")):
+                file_paths.setdefault(path, set()).add(name)
+
+        for host in _AUTH_URL_RE.findall(args_str):
+            if host:
+                net_hosts.setdefault(host, set()).add(name)
+
+    return {
+        "tools": [
+            {"name": n, "calls": c}
+            for n, c in sorted(tool_counts.items(), key=lambda x: -x[1])
+        ],
+        "filesystem": [
+            {"path": p, "via_tools": sorted(t)}
+            for p, t in sorted(file_paths.items())
+        ][:100],
+        "network": [
+            {"host": h, "via_tools": sorted(t)}
+            for h, t in sorted(net_hosts.items())
+        ][:50],
+    }
+
+
+@bp_sessions.route("/api/authority")
+def api_authority():
+    """Authority footprint for one session: tools called, files touched,
+    network hosts contacted. Implements issue #880.
+
+    Query params:
+      session_id  — required
+      limit       — max events to scan (default 2000, cap 10000)
+    """
+    session_id = (
+        request.args.get("session_id") or request.args.get("session") or ""
+    )
+    if not session_id:
+        return jsonify({"error": "session_id required"}), 400
+    try:
+        limit = max(1, min(10000, int(request.args.get("limit") or 2000)))
+    except (TypeError, ValueError):
+        limit = 2000
+
+    events = _ls_call("query_events", session_id=session_id, limit=limit) or []
+    footprint = _extract_authority(events)
+    footprint["session_id"] = session_id
+    footprint["scanned_events"] = len(events)
+    return jsonify(footprint)
