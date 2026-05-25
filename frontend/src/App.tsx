@@ -6,6 +6,7 @@ import { NAV_ITEMS } from "./components/nav";
 import { useEffect } from "react";
 import { useThemeStore } from "./stores/themeStore";
 import { OpsPage } from "./pages/OpsPage";
+import { ContextPage } from "./pages/ContextPage";
 import { BrainPage } from "./pages/BrainPage";
 
 // All v2 routes live inside <Layout>, which renders the sidebar + topbar
@@ -23,8 +24,9 @@ export default function App() {
       <Route path="/" element={<Layout />}>
         <Route index element={<WelcomePage />} />
         <Route path="ops" element={<OpsPage />} />
+        <Route path="context" element={<ContextPage />} />
         <Route path="brain" element={<BrainPage />} />
-        {NAV_ITEMS.filter((it) => it.id !== "ops" && it.id !== "brain").map((it) => (
+        {NAV_ITEMS.filter((it) => it.id !== "ops" && it.id !== "context" && it.id !== "brain").map((it) => (
           <Route key={it.id} path={it.id} element={<StubPage slug={it.id} />} />
         ))}
         {/* SPA catch-all — unknown deep links land on the welcome page rather
