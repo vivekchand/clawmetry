@@ -8,6 +8,7 @@ import { useThemeStore } from "./stores/themeStore";
 import { OpsPage } from "./pages/OpsPage";
 import { ContextPage } from "./pages/ContextPage";
 import { BrainPage } from "./pages/BrainPage";
+import { SubAgentsPage } from "./pages/SubAgentsPage";
 
 // All v2 routes live inside <Layout>, which renders the sidebar + topbar
 // chrome and an <Outlet /> for route content. Every NAV_ITEMS entry maps
@@ -26,7 +27,8 @@ export default function App() {
         <Route path="ops" element={<OpsPage />} />
         <Route path="context" element={<ContextPage />} />
         <Route path="brain" element={<BrainPage />} />
-        {NAV_ITEMS.filter((it) => it.id !== "ops" && it.id !== "context" && it.id !== "brain").map((it) => (
+        <Route path="subagents" element={<SubAgentsPage />} />
+        {NAV_ITEMS.filter((it) => it.id !== "ops" && it.id !== "context" && it.id !== "brain" && it.id !== "subagents").map((it) => (
           <Route key={it.id} path={it.id} element={<StubPage slug={it.id} />} />
         ))}
         {/* SPA catch-all — unknown deep links land on the welcome page rather
