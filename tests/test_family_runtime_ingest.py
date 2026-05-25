@@ -160,3 +160,54 @@ def test_family_runtimes_noop_when_absent(tmp_path, monkeypatch):
             ls.get_store().stop(flush=True)
         except Exception:
             pass
+
+
+# ── Claude Code / OpenClaw spawn dedup (verified vs real data: 29/387) ────────
+
+def test_openclaw_spawned_claude_skipped(tmp_path, monkeypatch):
+    """A Claude session OpenClaw spawned (in sessions.json cliSessionIds) is NOT
+    re-ingested as a claude_code:<id> session (OpenClaw already owns it)."""
+    import importlib, json as _json, time
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "events.duckdb"))
+    monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_SECS", "0.05")
+    # Build a fake OpenClaw home whose index marks one claude id as spawned.
+    oc = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
+    oc.mkdir(parents=True)
+    spawned_id = "spawned-1111-2222-3333-444444444444"
+    (oc / "sessions.json").write_text(_json.dumps({
+        "agent:main:explicit:x": {"cliSessionIds": {"claude-cli": spawned_id}}
+    }))
+    monkeypatch.setenv("CLAWMETRY_OPENCLAW_DIR", str(tmp_path / ".openclaw"))
+    import clawmetry.local_store as ls
+    import clawmetry.sync as sync
+    importlib.reload(ls); importlib.reload(sync)
+    monkeypatch.setattr(ls, "_daemon_registered", lambda: False)
+    # The index helper must see the spawned id.
+    assert spawned_id in sync._openclaw_spawned_claude_ids()
+
+    # Stub a ClaudeCode adapter that returns one spawned + one standalone session.
+    from clawmetry.adapters.base import AgentAdapter, DetectResult, Session, Event, Capability
+    class _FakeCC(AgentAdapter):
+        name = "claude_code"; display_name = "Claude Code"
+        def detect(self): return DetectResult(name=self.name, display_name=self.display_name, detected=True, session_count=2)
+        def list_sessions(self, limit=100):
+            return [Session(agent=self.name, id=spawned_id, started_at=1.0, message_count=1),
+                    Session(agent=self.name, id="standalone-xyz", started_at=2.0, message_count=1)]
+        def list_events(self, session_id, limit=500):
+            return [Event(agent=self.name, session_id=session_id, id=session_id+":1", type="message", ts=1.0, role="user", content="hi")]
+        def capabilities(self): return {Capability.SESSIONS, Capability.EVENTS}
+    monkeypatch.setattr(sync, "_family_adapter_classes", lambda: [_FakeCC])
+
+    from unittest.mock import patch
+    with patch.object(sync, "_sync_allowed", return_value=True), patch.object(sync, "_post", return_value={}):
+        sync.sync_family_runtimes({"node_id": "n", "api_key": None}, {}, {})
+    store = ls.get_store()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and store.health()["ring_depth"] != 0:
+        time.sleep(0.02)
+    rows = store._fetch("SELECT session_id FROM sessions WHERE session_id LIKE 'claude_code:%'", [])
+    sids = {r[0] for r in rows}
+    assert "claude_code:standalone-xyz" in sids, "standalone session must be ingested"
+    assert f"claude_code:{spawned_id}" not in sids, "OpenClaw-spawned session must be skipped (dedup)"
+    try: store.stop(flush=True)
+    except Exception: pass
