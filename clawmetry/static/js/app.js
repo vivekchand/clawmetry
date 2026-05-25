@@ -6504,7 +6504,7 @@ function closeFileViewer() {
 var _CM_RT_LABEL = {
   openclaw: 'OpenClaw', picoclaw: 'PicoClaw', nanoclaw: 'NanoClaw',
   hermes: 'Hermes', claude_code: 'Claude Code', codex: 'Codex', cursor: 'Cursor',
-  aider: 'Aider', goose: 'Goose'
+  aider: 'Aider', goose: 'Goose', opencode: 'opencode', qwen_code: 'Qwen Code'
 };
 function _cmRuntimeOf(o) {
   var id = (o && (o.id || o.sessionId || o.session_id || o.key)) || '';
