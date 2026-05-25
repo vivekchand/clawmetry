@@ -250,53 +250,60 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          set -e
+          # Publishing is best-effort: screenshots are also uploaded as a
+          # workflow artifact (step 12), so a push race must NEVER fail this
+          # job. We deliberately do not `set -e` here -- every git step is
+          # checked explicitly and any unrecoverable trouble degrades to the
+          # artifact fallback with `exit 0`.
           if [ ! -f "${GITHUB_WORKSPACE}/screenshots/manifest.json" ]; then
             echo "no manifest.json -- skipping publish"
             exit 0
           fi
           SHORT_SHA="${HEAD_SHA:0:12}"
           DEST_DIR="pr/${PR_NUMBER}/${SHORT_SHA}"
-          PUB_DIR="$(mktemp -d)"
-          cd "$PUB_DIR"
-          git init -q -b _pub
-          git config user.email "visual-diff-bot@users.noreply.github.com"
-          git config user.name  "visual-diff-bot"
           REMOTE="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          if git ls-remote --exit-code --heads "$REMOTE" pr-screenshots >/dev/null 2>&1; then
-            git fetch --depth=1 "$REMOTE" pr-screenshots:pr-screenshots
-            git checkout pr-screenshots
-          else
-            git checkout --orphan pr-screenshots
-            git rm -rf . >/dev/null 2>&1 || true
-          fi
-          mkdir -p "$DEST_DIR"
-          cp "${GITHUB_WORKSPACE}/screenshots"/*.png "$DEST_DIR/"
-          cp "${GITHUB_WORKSPACE}/screenshots/manifest.json" "$DEST_DIR/manifest.json"
-          git add -A
-          git commit -m "visual diff: PR #${PR_NUMBER} @ ${SHORT_SHA}" || { echo "no changes"; exit 0; }
-          # Concurrent PR builds race to push to the shared pr-screenshots
-          # ref. Each PR writes to its own pr/<N>/<sha>/ subdir, so rebase
-          # is always conflict-free. Retry with rebase up to 6 attempts +
-          # jittered backoff. If we still lose the race the screenshots are
-          # uploaded as a workflow artifact (step 12), so don't fail the job.
+
+          # Stage our PNGs once in a holding dir so we can replay them onto a
+          # freshly-fetched tip on every attempt.
+          PAYLOAD="$(mktemp -d)"
+          mkdir -p "${PAYLOAD}/${DEST_DIR}"
+          cp "${GITHUB_WORKSPACE}/screenshots"/*.png "${PAYLOAD}/${DEST_DIR}/" 2>/dev/null || true
+          cp "${GITHUB_WORKSPACE}/screenshots/manifest.json" "${PAYLOAD}/${DEST_DIR}/manifest.json"
+
+          # Concurrent PR builds race to push to the shared pr-screenshots ref.
+          # Each PR writes to its own pr/<N>/<sha>/ subdir, so layering our
+          # files onto the latest tip is always conflict-free. Re-init a clean
+          # checkout each attempt at a CONSISTENT --depth=1 -- mixing fetch
+          # depths on one shallow repo triggers "fatal: shallow file has
+          # changed since we read it", which is what broke the old rebase loop.
           for attempt in 1 2 3 4 5 6; do
+            PUB_DIR="$(mktemp -d)"
+            cd "$PUB_DIR"
+            git init -q -b pr-screenshots
+            git config user.email "visual-diff-bot@users.noreply.github.com"
+            git config user.name  "visual-diff-bot"
+            if git ls-remote --exit-code --heads "$REMOTE" pr-screenshots >/dev/null 2>&1; then
+              if ! git fetch --depth=1 "$REMOTE" pr-screenshots; then
+                echo "fetch of remote tip failed (attempt ${attempt}/6)"
+                sleep $(( attempt * 3 + RANDOM % 4 )); continue
+              fi
+              git reset --hard FETCH_HEAD >/dev/null 2>&1
+            fi
+            # Lay our per-PR subdir on top of whatever the current tip is.
+            cp -R "${PAYLOAD}/." .
+            git add -A
+            git commit -q -m "visual diff: PR #${PR_NUMBER} @ ${SHORT_SHA}" || {
+              echo "nothing new to publish"; exit 0; }
             if git push "$REMOTE" "HEAD:pr-screenshots" 2>push.err; then
               echo "pushed pr-screenshots on attempt ${attempt}"
               exit 0
             fi
             cat push.err
             if ! grep -qE "rejected|non-fast-forward|fetch first" push.err; then
-              echo "push failed for a non-race reason; bailing"
-              exit 1
-            fi
-            echo "race lost (attempt ${attempt}/6) -- fetching remote tip and rebasing"
-            git fetch --depth=50 "$REMOTE" pr-screenshots
-            if ! git rebase FETCH_HEAD; then
-              git rebase --abort || true
-              echo "::warning::pr-screenshots rebase conflict (unexpected since dirs are per-PR); skipping publish"
+              echo "::warning::pr-screenshots push failed for a non-race reason; screenshots are available as a workflow artifact"
               exit 0
             fi
+            echo "race lost (attempt ${attempt}/6) -- re-fetching tip and retrying"
             sleep $(( attempt * 3 + RANDOM % 4 ))
           done
           echo "::warning::pr-screenshots push lost the race after 6 attempts; screenshots are still available as a workflow artifact"
