@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Robustness: daemon self-heals DuckDB index corruption (2026-05-25)
+- A SIGKILL/OOM/reboot during a DuckDB write (especially a bulk UPDATE) can leave an explicit ART index out of sync with its table; the next DELETE/UPSERT then raises `FATAL: database invalidated... Failed to delete all rows from index`, every subsequent op fails, and the daemon crash-loops until manual recovery (1.4 GB+ file is fine; only the index is bad). Now the daemon main cycle catches the FATAL via `local_store.is_index_corruption_error`, calls `heal_index_corruption()` — drop every `idx_%` on a fresh connection, `CHECKPOINT`, re-run the schema DDL (idempotent `CREATE INDEX IF NOT EXISTS` rebuilds them clean from table data) — and continues. Verified end-to-end on a live 1.4 GB DB: 34 indexes dropped + 34 recreated, 929 events preserved, clean reboot. (#2081, closes #2073)
+
+### Release: daemon self-heals DuckDB index corruption (2026-05-25)
+- Publishes #2081 (closes #2073): the sync daemon now self-heals from DuckDB index corruption (kill-during-write) on the next cycle instead of crash-looping.
+
 ### Release: fix Claude Code double-count (OpenClaw-spawned sessions) (2026-05-25)
 - Publishes #2078, a correctness follow-up to the multi-agent runtimes work (#2060). A Claude Code session that OpenClaw spawned was counted twice (once as `openclaw` via the claude-index ingest, once as `claude_code:<id>` via the new adapter). The daemon now reads OpenClaw's `sessions.json` index (`cliSessionIds`) and skips OpenClaw-owned Claude sessions in the `claude_code` ingest, so an orchestrated session shows once and standalone Claude Code sessions still ingest normally. Verified on a real machine: 29 of 387 `~/.claude` sessions were affected.
 
