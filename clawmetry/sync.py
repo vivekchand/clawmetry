@@ -727,12 +727,24 @@ def save_state(state: dict) -> None:
 # file on every banner poll.
 SYNC_PROGRESS_FILE = CONFIG_DIR / "sync_progress.json"
 _sync_progress_started_at: str | None = None
+# Flipped True once the initial sync reaches "complete". After that, the
+# steady-state main-loop phase calls (sync_crons et al. run every tick) must NOT
+# re-open the "syncing…" banner, or it sticks forever on whatever phase ran last
+# (typically "crons", which early-returns when there is no cron jobs.json and so
+# never records a terminal state). The banner is a fresh-install affordance; a
+# daemon restart resets this to False so the initial sync shows again.
+_sync_progress_done: bool = False
 
 
 def _record_sync_progress(
     phase: str, done: int, total: int = 0, status: str = "running"
 ) -> None:
-    global _sync_progress_started_at
+    global _sync_progress_started_at, _sync_progress_done
+    # Suppress steady-state churn: once the first sync completed, only a
+    # terminal "complete" is allowed through (idempotent); ignore the per-tick
+    # "running" updates that would otherwise re-trigger the banner indefinitely.
+    if _sync_progress_done and status != "complete":
+        return
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         now = datetime.now(timezone.utc).isoformat()
@@ -755,6 +767,8 @@ def _record_sync_progress(
         tmp = SYNC_PROGRESS_FILE.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(payload, indent=2))
         os.replace(tmp, SYNC_PROGRESS_FILE)
+        if status == "complete":
+            _sync_progress_done = True
     except Exception as e:
         log.debug(f"Could not record sync progress ({phase}): {e}")
 
@@ -6525,6 +6539,7 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
     ]
     cron_file = next((str(p) for p in cron_candidates if p.exists()), None)
     if not cron_file:
+        _record_sync_progress("crons", 0, 0)  # terminal: no cron file, nothing to sync
         return 0
 
     try:
