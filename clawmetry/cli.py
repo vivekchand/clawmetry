@@ -2494,7 +2494,7 @@ def main() -> None:
             flush=True,
         )
     # --otel-export <url>: stream agent traces as OpenTelemetry GenAI spans to
-    # any OTLP/HTTP collector (Datadog, Grafana, Honeycomb, MLflow, your own).
+    # any OTLP/HTTP collector (Datadog, Grafana, Honeycomb, your own).
     # Sets the env var clawmetry/otel_exporter.py reads at boot. Strip from argv
     # so dashboard.main's argparse doesn't choke on it. Accepts both
     # `--otel-export URL` and `--otel-export=URL`.
