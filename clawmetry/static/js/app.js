@@ -10490,10 +10490,15 @@ function loadAllSkills() {
 // toggle (same treatment the Brain tab gives queue/metric rows).
 window._transcriptShowPlumbing = window._transcriptShowPlumbing || false;
 function _isPlumbingTranscript(titleSrc) {
-  // Match the Self-Evolve system prompt anywhere in the derived title — the
-  // title often carries a "[Wed 2026-05-20 22:30 GMT+2] …" timestamp prefix
+  // Internal/machine sessions that bury real work in the list — hidden by
+  // default behind "Show plumbing". Matched anywhere in the derived title,
+  // which often carries a "[Wed 2026-05-20 22:30 GMT+2] …" timestamp prefix
   // ahead of the prompt text, so we can't anchor at the start.
-  return String(titleSrc || '').toLowerCase().indexOf('you are clawmetry self-evolve') !== -1;
+  var s = String(titleSrc || '').toLowerCase();
+  return s.indexOf('you are clawmetry self-evolve') !== -1     // Self-Evolve runs (FIX + re-analyze)
+      || s.indexOf('[subagent context]') !== -1                 // spawned subagents
+      || s.indexOf('you are running as a subagent') !== -1      // subagent prompt (belt-and-suspenders)
+      || s.indexOf('base directory for this skill:') !== -1;    // skill-bootstrap sessions
 }
 window.toggleTranscriptPlumbing = function() {
   window._transcriptShowPlumbing = !window._transcriptShowPlumbing;
