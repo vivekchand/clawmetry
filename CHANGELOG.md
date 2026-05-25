@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Cost: derive from tokens × model pricing (no more $0 for real usage) (2026-05-25)
+- The Cost tab showed ~$0 for heavy usage (1.53M tokens summed to $0.0081) because cost came only from a provider-reported `cost_usd` that OpenClaw/OAuth events don't carry — nothing derived cost from tokens × model pricing. Now the daemon derives the API-equivalent cost at ingest from each event's own token split × model rate (cache-aware: Anthropic cache read 0.1× / write 1.25× of input rate; self-hosted models resolve to $0) and stores it, so aggregates, per-session costs, and budgets all reflect real spend. A one-time idempotent backfill recomputes `cost_usd` for events ingested before the fix. New `providers_pricing.provider_for_model` + `estimate_event_cost_usd`. Verified: real events derive to ~$443 (vs the old $0.008). (#2058, closes #2049)
+
+### Release: cost derived from tokens × pricing (2026-05-25)
+- Publishes #2058 (closes #2049): the Cost tab now shows real (API-equivalent) cost instead of ~$0 for OpenClaw/OAuth usage — derived at ingest from tokens × model pricing, with a backfill for historical events.
+
 ### Fixed + Added: cron writes on OpenClaw v3 + create-cron from cloud (2026-05-25)
 - **Fixed:** Every cron write button (New Job, Delete, Pause/Enable, Run, Edit) was silently broken on OpenClaw v3. They called the gateway's `/tools/invoke` `cron` tool, which v3 removed ("Tool not available: cron"), and ClawMetry's gateway token is read-only — so every mutation 502'd. Migrated all cron writes to the `openclaw cron` CLI (uses OpenClaw's own creds, same as Self-Evolve's `openclaw agent`). Reads (list/runs) unchanged. When the gateway needs a one-time device-scope approval for writes, the API now returns a clear 409 with "approve the device pairing" guidance instead of a confusing 502. (#2053)
 - **Added:** Create a cron from the cloud dashboard. The "+ New Job" button now works on app.clawmetry.com via the heartbeat-piggyback relay: cloud enqueues a `cron_create` action, the local daemon runs `openclaw cron add`, and the E2E-encrypted result is posted back for the browser to decrypt — the cloud never sees plaintext. Mirrors the Self-Evolve "Fix" relay. (#2053 + cloud)
