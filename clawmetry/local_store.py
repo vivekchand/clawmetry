@@ -1097,6 +1097,90 @@ def _reset_singleton_for_tests() -> None:
         _store_proxy = None
 
 
+# #2073: DuckDB ART-index corruption recovery. A SIGKILL / OOM / reboot during
+# a write (especially a bulk UPDATE — e.g. the cost backfill #2049) can leave
+# an explicit ``idx_%`` out of sync with its table, so the next DELETE/UPSERT
+# touching it raises one of these markers and DuckDB invalidates the whole
+# database for that session — every subsequent op fails and the daemon
+# crash-loops until manual recovery. Detection + heal lets the daemon self-heal
+# on the next cycle instead. (Burned 2026-05-25;
+# [[feedback_no_sigkill_daemon_duckdb_writes]].)
+_INDEX_CORRUPTION_MARKERS = (
+    "Failed to delete all rows from index",
+    "database has been invalidated",
+)
+
+
+def is_index_corruption_error(err: BaseException) -> bool:
+    """True if ``err``'s message matches a DuckDB index-invalidation FATAL.
+    Used by the daemon main loop to trigger ``heal_index_corruption()``."""
+    s = str(err)
+    return any(m in s for m in _INDEX_CORRUPTION_MARKERS)
+
+
+def heal_index_corruption() -> int:
+    """Repair DuckDB ART-index corruption on the daemon's writer DB. Drops
+    every explicit ``idx_%`` on a fresh connection, ``CHECKPOINT``s, then
+    re-runs the schema DDL (idempotent ``CREATE INDEX IF NOT EXISTS``) to
+    rebuild them clean from the table data. Data is intact — only the
+    indexes are rebuilt.
+
+    Closes and clears the singleton so the next ``get_store()`` reopens on
+    the healed DB. Returns the number of indexes rebuilt, or -1 on failure.
+    Never raises."""
+    global _store_rw, _store_ro, _store_proxy
+    try:
+        with _store_lock:
+            # The cached writer connection is invalidated post-corruption — drop
+            # it so the next get_store() opens fresh on the healed DB.
+            for name in ("_store_rw", "_store_ro"):
+                _st = globals().get(name)
+                if _st is None:
+                    continue
+                try:
+                    _st.stop(flush=False)
+                except Exception:
+                    pass
+            _store_rw = None
+            _store_ro = None
+            _store_proxy = None
+            # Open a fresh connection just for the repair.
+            conn = _open_connection(read_only=False)
+            n_dropped = 0
+            try:
+                try: conn.execute("CHECKPOINT")
+                except Exception: pass
+                try:
+                    rows = conn.execute(
+                        "SELECT index_name FROM duckdb_indexes() "
+                        "WHERE index_name LIKE 'idx_%'"
+                    ).fetchall()
+                except Exception:
+                    rows = []
+                for (idx_name,) in rows:
+                    try:
+                        conn.execute(f'DROP INDEX IF EXISTS "{idx_name}"')
+                        n_dropped += 1
+                    except Exception:
+                        pass
+                try: conn.execute("CHECKPOINT")
+                except Exception: pass
+                # Re-apply schema DDL — CREATE INDEX IF NOT EXISTS is
+                # idempotent for tables and recreates the dropped indexes
+                # from the table data, clean.
+                for stmt in _DDL:
+                    try: conn.execute(stmt)
+                    except Exception: pass
+                try: conn.execute("CHECKPOINT")
+                except Exception: pass
+            finally:
+                try: conn.close()
+                except Exception: pass
+        return n_dropped
+    except Exception:
+        return -1
+
+
 class LocalStore:
     """Thread-safe local event store with a background batched flusher.
 

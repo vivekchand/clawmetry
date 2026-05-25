@@ -11164,7 +11164,30 @@ def run_daemon() -> None:
                     heartbeat_interval = HEARTBEAT_INTERVAL_SLOW
 
         except Exception as e:
-            log.error(f"Sync cycle error: {e}")
+            # #2073: self-heal DuckDB ART-index corruption from a prior
+            # kill-during-write (SIGKILL / OOM / reboot). The whole DB is
+            # invalidated for this connection — every subsequent op fails
+            # and the daemon crash-loops without this. Drop+recreate the
+            # explicit indexes on a fresh connection and continue; the next
+            # cycle runs on the healed DB. Data is intact (#2073;
+            # [[feedback_no_sigkill_daemon_duckdb_writes]]).
+            try:
+                from clawmetry import local_store as _ls
+                if _ls.is_index_corruption_error(e):
+                    n = _ls.heal_index_corruption()
+                    if n >= 0:
+                        log.warning(
+                            "Sync cycle hit DuckDB index corruption — "
+                            "self-healed (%d indexes rebuilt); next cycle "
+                            "will run on the recovered store.", n,
+                        )
+                    else:
+                        log.error("Sync cycle hit DuckDB index corruption "
+                                  "and self-heal failed; will retry next cycle")
+                else:
+                    log.error(f"Sync cycle error: {e}")
+            except Exception:
+                log.error(f"Sync cycle error: {e}")
 
         # Adaptive cycle sleep (P0 real-time MOAT, 2026-05-13). The
         # original `time.sleep(POLL_INTERVAL=15)` floored the heartbeat
