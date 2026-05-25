@@ -1972,17 +1972,26 @@ def _try_local_store_subagents(_rows=None):
             else:
                 status = "stale"
 
-        # Runtime is *active work time*, not wall-clock since spawn. #2031:
-        # the old fallback `now - spawned_at` grew forever, so a stale subagent
-        # that died days ago showed an ever-climbing "111h 50m running". Only an
-        # active/running agent's clock runs to now; idle / stale / completed /
-        # failed agents freeze at their last known activity (ended_at, else
-        # last updated_at). Prefer the daemon's cached runtime_ms when present.
-        runtime_ms = int(extra.get("runtime_ms") or 0)
-        if not runtime_ms and spawned_at_ms:
-            _running = status in ("active", "running")
-            _end_ref = now_ms if _running else (ended_at_ms or updated_at_ms or spawned_at_ms)
+        # Runtime is *active work time*, not wall-clock since spawn. #2031
+        # follow-up: the first fix recomputed only when runtime_ms was absent,
+        # but the daemon caches a `runtime_ms` that is itself a now-minus-spawn
+        # re-derived every snapshot (402M -> 403M -> 404M, ever-growing). So for
+        # a dead agent the cached value is poison and must be ignored, not
+        # trusted. Only an active/running agent's clock runs to now (and may use
+        # its cached value); idle / stale / completed / failed agents ALWAYS
+        # recompute frozen at their last known activity (ended_at, else last
+        # updated_at — updated_at_ms already prefers the real data-blob
+        # timestamp over the row's per-snapshot-bumped column).
+        _running = status in ("active", "running")
+        cached_rt = int(extra.get("runtime_ms") or 0)
+        if _running:
+            runtime_ms = cached_rt or (
+                max(0, int(now_ms - spawned_at_ms)) if spawned_at_ms else 0)
+        elif spawned_at_ms:
+            _end_ref = ended_at_ms or updated_at_ms or spawned_at_ms
             runtime_ms = max(0, int(_end_ref - spawned_at_ms))
+        else:
+            runtime_ms = 0
 
         token_count = int(r.get("token_count") or 0)
         # Build key in OpenClaw's canonical shape so Active-Tasks modal
