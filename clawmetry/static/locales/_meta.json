@@ -31,5 +31,9 @@
   {"code": "fil",   "endonym": "Filipino",      "short": "FIL", "dir": "ltr", "enabled": true},
   {"code": "sv",    "endonym": "Svenska",       "short": "SV", "dir": "ltr", "enabled": true},
   {"code": "el",    "endonym": "Ελληνικά",      "short": "EL", "dir": "ltr", "enabled": true},
+  {"code": "ar",    "endonym": "العربية",        "short": "AR", "dir": "rtl", "enabled": true},
+  {"code": "he",    "endonym": "עברית",          "short": "HE", "dir": "rtl", "enabled": true},
+  {"code": "fa",    "endonym": "فارسی",          "short": "FA", "dir": "rtl", "enabled": true},
+  {"code": "ur",    "endonym": "اردو",           "short": "UR", "dir": "rtl", "enabled": true},
   {"code": "en-XA", "endonym": "⟦Pseudo · QA⟧", "short": "XA", "dir": "ltr", "enabled": true, "dev": true}
 ]
