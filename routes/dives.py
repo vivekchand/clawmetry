@@ -191,8 +191,20 @@ def api_dives_query():
 
     try:
         store = _get_store()
-    except Exception as e:
-        return jsonify({"error": f"Local store unavailable: {e}"}), 503
+    except Exception:
+        # Cold/cloud fall-through: there's no local DuckDB to query here (the
+        # cloud container has no ~/.clawmetry, and a keyless browser hasn't
+        # rerouted through the cm-cloud-dives relay yet). Return a clean,
+        # graceful message instead of leaking the raw DuckDB IO error — the
+        # frontend renders `error` verbatim in its result box. When the cloud
+        # interceptor IS active it reroutes POST /api/dives/query to the
+        # heartbeat relay and this handler is never reached. (#2124)
+        return jsonify({
+            "error": "Dives runs SQL against your local data store, which isn't "
+                     "reachable from here. Open your local dashboard at "
+                     "http://localhost:8900 to run Dives — your raw event data "
+                     "stays on your machine.",
+        }), 200
 
     t0 = time.monotonic()
     try:

@@ -5725,6 +5725,7 @@ _PENDING_ACTIONS = frozenset({
     "cron_action",
     "cron_killall",
     "cron_fix",
+    "dives_query",
 })
 
 
@@ -5927,6 +5928,9 @@ def _dispatch_pending_action(config: dict, action: dict) -> None:
         return
     if atype == "cron_fix":
         _action_cron_fix(config, action)
+        return
+    if atype == "dives_query":
+        _action_dives_query(config, action)
         return
 
 
@@ -6168,6 +6172,88 @@ def _action_cron_create(config: dict, action: dict) -> None:
             )
         except Exception as e:
             log.warning("cron_create cache post failed: %s", e)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _action_dives_query(config: dict, action: dict) -> None:
+    """Cloud-relayed Dives NL-to-SQL query (the cloud Dives "Run" button).
+
+    The cloud server has no DuckDB and cannot decrypt the snapshot, so it can't
+    run arbitrary SQL. It enqueues a ``dives_query`` action on the
+    heartbeat-piggyback relay; this daemon runs the NL->SQL + query LOCALLY on
+    its OWN DuckDB writer handle (``local_store.get_store()`` — never a
+    ``read_only=True`` re-open, which would brick the writer lock, flywheel
+    #1771) and posts the E2E-encrypted ``{sql, chart_spec, rows}`` result to
+    ``/ingest/cache`` under the action's ``cache_key`` for the browser to poll +
+    decrypt. Runs in a background thread so the LLM + query latency never blocks
+    the heartbeat loop.
+
+    Wire shape (queued cloud-side by /api/cloud/dives-query):
+        {type:"dives_query", id, cache_key, question}
+
+    Result shape mirrors routes/dives.py::api_dives_query so the same Dives
+    frontend renders it: {sql, chart_spec, rows, error?} (or {error:"no_auth"}).
+    """
+    cache_key = action.get("cache_key")
+    question = (action.get("question") or "").strip()
+    enc_key = config.get("encryption_key")
+    api_key = config.get("api_key", "")
+    node_id = config.get("node_id", "")
+    if not (cache_key and question and enc_key and api_key):
+        return
+    aid = action.get("id")
+
+    def _run():
+        result: dict = {"_shape": "dives_query"}
+        try:
+            from clawmetry import local_store as _ls
+            from routes import dives as _dives
+            store = _ls.get_store()  # daemon's own writer handle, never read_only
+            spec = _dives._call_llm_for_sql(question, store)
+            sql = spec["sql"]
+            rows, sql_error = _dives._execute(sql, store)
+            result.update({
+                "sql": sql,
+                "chart_spec": {
+                    "chart_type":  spec.get("chart_type", "table"),
+                    "x":           spec.get("x"),
+                    "y":           spec.get("y"),
+                    "title":       spec.get("title", question[:60]),
+                    "description": spec.get("description", ""),
+                },
+                "rows": rows,
+            })
+            if sql_error:
+                result["error"] = sql_error
+        except ValueError as e:
+            # Mirror api_dives_query's error mapping so the frontend reacts the
+            # same way (no-auth banner vs upstream error).
+            msg = str(e)
+            if msg.startswith("no_auth"):
+                result["error"] = "no_auth"
+                result["message"] = msg[len("no_auth"):].strip(": ").strip()
+            else:
+                result["error"] = "upstream_error"
+                result["detail"] = msg[:200]
+        except Exception as e:  # never raise from the worker thread
+            result["error"] = str(e)[:200]
+        try:
+            blob = encrypt_payload(result, enc_key)
+            _post(
+                "/ingest/cache",
+                {
+                    "node_id": node_id,
+                    "id": aid,
+                    "cache_key": cache_key,
+                    "blob": blob,
+                    "shape": "dives_query",
+                    "ttl": 3600,
+                },
+                api_key,
+            )
+        except Exception as e:
+            log.warning("dives_query cache post failed: %s", e)
 
     threading.Thread(target=_run, daemon=True).start()
 
