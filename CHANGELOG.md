@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Subagents: "Finished N ago" used run duration, not end time (2026-05-25)
+- The Overview Tasks card read "Finished 0s ago" for subagents that actually ended days ago. `_ovTimeLabel` computed the relative finish time from `runtimeMs` — a *duration*, which the dead-subagent freeze (#2038) forces to 0 for stale spawns — instead of an end timestamp. Now derived from `completionTs` then `updatedAt` (last activity) then `startedAt+runtime`; blank when genuinely unknown. Verified against a live node: 5-day-old spawns now read "Finished 4d ago". Pairs with #2062 (shipped in 0.12.311), which fixed the subagent Brain Events tab to match the `src`/`sessionId` fields the cloud feed emits. Publishes #2067.
+
 ### Release: multi-agent runtimes — Hermes, Claude Code, Codex, Cursor (2026-05-25)
 - Publishes #2060. ClawMetry now observes many AI-agent runtimes, not just OpenClaw: **Hermes, Claude Code, Codex, and Cursor** join OpenClaw/PicoClaw/NanoClaw as first-class runtimes, each detected zero-config, read in its real native format via a dedicated read-only adapter, ingested into the local DuckDB store + cloud snapshot tagged with its runtime, shown in the sessions list + transcripts, and filterable via the Session replay runtime switcher.
 - The pipeline is now adapter-driven: a single `_FAMILY_ADAPTER_SPECS` registry in `clawmetry/sync.py` is the source of truth for detection, ingest, dashboard registration, and the switcher. Adding a runtime is "ship an adapter + one registry row." Sessions/events are namespaced `<runtime>:<id>` and tagged so every existing read path returns them.
