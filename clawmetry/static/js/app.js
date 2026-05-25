@@ -10836,11 +10836,12 @@ async function viewTranscript(sessionId) {
   window._replayIndex = 0;
   window._replayFilter = 'all';
   try {
-    // Fetch transcript, compaction markers, and config-drift data in parallel
-    var [data, compactionsData, driftData] = await Promise.all([
+    // Fetch transcript, compaction markers, config-drift, and lexical drift in parallel
+    var [data, compactionsData, driftData, lexicalDriftData] = await Promise.all([
       fetch('/api/transcript/' + encodeURIComponent(sessionId)).then(r => r.json()),
       fetch('/api/compactions?session_id=' + encodeURIComponent(sessionId) + '&summary_chars=5000').then(r => r.json()).catch(() => ({compactions: []})),
-      fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/config-drift').then(r => r.json()).catch(() => ({has_drift: false}))
+      fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/config-drift').then(r => r.json()).catch(() => ({has_drift: false})),
+      fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/lexical-drift').then(r => r.json()).catch(() => null)
     ]);
     var compactions = compactionsData.compactions || [];
     // Metadata
@@ -10864,6 +10865,12 @@ async function viewTranscript(sessionId) {
       metaHtml += '⚠ <strong>Config Drift</strong>: provider switched ' + driftN + '× with changed sampling params';
       if (driftKeys) metaHtml += ' (' + escHtml(driftKeys) + ')';
       metaHtml += '. Different providers interpret the same temperature differently — check the ⚙ pills below to confirm the intended config.';
+      metaHtml += '</div>';
+    }
+    // Lexical drift notice — fires when TF-IDF cosine vs anchor turn drops below threshold
+    if (lexicalDriftData && lexicalDriftData.has_drift) {
+      metaHtml += '<div class="stat-row" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border-secondary);">';
+      metaHtml += '<span class="stat-label">⚠ Lexical Drift</span><span class="stat-val" title="TF-IDF cosine similarity vs turn 0 (lexical vocabulary overlap)">avg ' + lexicalDriftData.avg_similarity + ' · min ' + lexicalDriftData.min_similarity + ' at turn ' + lexicalDriftData.min_turn + '</span>';
       metaHtml += '</div>';
     }
     document.getElementById('transcript-meta').innerHTML = metaHtml;
