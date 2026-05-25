@@ -1,5 +1,26 @@
 ## [Unreleased]
 
+### Release: PicoClaw + NanoClaw sessions in the sessions list + transcripts (2026-05-25)
+- Publishes #2028 (phase 3b of NanoClaw/PicoClaw support; builds on #2013 adapters + #2014 cloud runtime label). PicoClaw and NanoClaw sessions are now fully observable the way OpenClaw sessions are: they appear in the sessions list and render as transcripts, locally and in the cloud.
+- The sync daemon's new `sync_family_runtimes()` reads each detected runtime's sessions + events through the reader adapters and maps them onto the SAME DuckDB rows OpenClaw uses, via the daemon's own writer handle: `agent_type='openclaw'` so every existing read path returns them with no filter changes (runtime carried in `metadata.runtime` + `data._runtime`), session ids namespaced (`picoclaw:<key>` / `nanoclaw:<id>`) to avoid PK collisions, renderable event types so transcripts render and counts work, and float-epoch timestamps converted to the ISO strings DuckDB expects. Session rows are also pushed to `/ingest/sessions` so the cloud sessions list shows them; transcripts ride the existing snapshot builder. Gated by `_sync_allowed()`, throttled 60s, no `local_store.py` changes.
+- The sessions list (`_try_local_store_sessions`) now surfaces `model` (from `metadata.recent_model`) and `runtime`, filling the model column for family sessions and for OpenClaw sessions on the local-store read path.
+- Verified live end to end on a real node: `/api/sessions` shows the PicoClaw + NanoClaw rows, `/api/transcript` renders the PicoClaw session in full (user → assistant → exec tool call + args → tool result → summary), and the decrypted live cloud snapshot carries all three family transcripts. CI: `tests/test_family_runtime_ingest.py` in the moat-tests job; 45 compat tests green on Python 3.9.
+
+### Release: i18n — 32 languages live (2026-05-25)
+- The dashboard now ships **32 languages** (en + zh-CN, zh-TW, es, es-419, hi, bn, ta, te, kn, ml, mr, gu, pa, pt-BR, pt-PT, ja, ko, fr, de, it, nl, pl, ru, uk, tr, id, vi, th, fil, sv, el). All generated from the English source by the autotranslate bot running on the local Claude Code CLI (no API key), with glossary + placeholder integrity enforced and key-parity CI-gated (every locale carries the full 85-key catalog). Pick a language from the top-right switcher; choice persists across reloads and surfaces. Publishes #2024. See docs/PRD_I18N.md.
+
+### Perf/correctness: dashboard audit — reliability scoring + overview self-poll (2026-05-25)
+- Proactive sweep for siblings of #1954 (prefix-only `clawmetry-` matcher) and #1969 (ungated pollers). (1) `sync.py`'s reliability/score builder skipped helper sessions with `sid.startswith("clawmetry-")`, missing the full OpenClaw form `agent:main:explicit:clawmetry-*` — so ClawMetry's own selfevolve/probe runs could pollute the user's real-agent reliability score; now uses the central `is_clawmetry_internal_session` matcher (both forms). (2) `overview.html` had a second, independent `/api/overview` self-poll firing every 60s with no `document.hidden` gate (decoupled from app.js's `loadAll`, so #1969's coalesce window couldn't reach it); now gated on visibility. (#2020, closes #2019)
+
+### Release: dashboard audit fixes (2026-05-25)
+- Publishes #2020 (closes #2019): reliability scoring excludes ClawMetry helper sessions in both id forms, and the Overview heartbeat card stops self-polling `/api/overview` while the browser tab is hidden.
+
+### Release: UI polish + observability backlog (2026-05-25)
+- Security tab: warnings elevated, passing checks collapse to pills, calm "all clear" state (#1953).
+- Session replay: tool chips expand by default; Self-Evolve runs hidden behind "Show plumbing" (#1975, #2001).
+- New: Dives tab (plain-English to SQL to chart, #1976), intent-vs-execution divergence (#1977), outbound OTLP GenAI exporter to Datadog/Grafana/Honeycomb (#1978), proxy velocity breaker + per-session budget fence (#1979).
+- v2 rails: Brain timeline at /v2/brain (#2006).
+
 ### Release: NanoClaw + PicoClaw runtime support, validated against live installs (2026-05-25)
 - Publishes #2013 + #2014. ClawMetry now observes two more OpenClaw-family runtimes via reader adapters for their **real** native session formats (verified by actually installing and running both, not by assuming a shared layout). This corrects #956/#1981, whose premise that NanoClaw and PicoClaw "share the OpenClaw on-disk layout exactly" was false for both.
   - **PicoClaw** (`sipeed/picoclaw`, Go): flat `providers.Message` JSONL at `~/.picoclaw/workspace/sessions/<key>.jsonl` (+ `.meta.json`). `clawmetry/adapters/picoclaw.py` reads transcripts, model, and tool calls. Running it for real (v0.2.9 + local Ollama) caught two bugs the relabeled-OpenClaw fixtures could not: tool calls are OpenAI-nested under `function.{name,arguments}` (a flat read dropped them), and Go trims trailing zeros from fractional seconds, which made `datetime.fromisoformat()` raise on Python 3.9/3.10 and zero the timestamp. Tokens/cost are not on disk, so they are honestly surfaced as 0/unavailable.

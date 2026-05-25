@@ -1,11 +1,20 @@
 <div class="page" id="page-transcripts">
   <div class="refresh-bar">
     <button class="refresh-btn" onclick="loadTranscripts()">↻ Refresh</button>
+    <button class="refresh-btn" id="transcript-plumbing-btn" onclick="toggleTranscriptPlumbing()" title="Show Self-Evolve sessions — the agent's own self-review runs (FIX mode + re-analyze), hidden by default because they're plumbing, not your sessions" style="font-weight:500;display:none"><span id="transcript-plumbing-state">○</span> Show plumbing <span id="transcript-plumbing-count" style="opacity:0.7;font-size:11px;"></span></button>
     <button class="refresh-btn" id="transcript-back-btn" style="display:none" onclick="showTranscriptList()">← Back to list</button>
   </div>
   <div class="card" id="transcript-list">Loading...</div>
   <div id="transcript-viewer" style="display:none">
     <div class="transcript-viewer-meta" id="transcript-meta"></div>
+    <!-- Authority footprint panel (#880) — populated async by _loadAuthorityPanel() -->
+    <div id="authority-panel" style="display:none;margin-bottom:10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;overflow:hidden;">
+      <div id="authority-panel-toggle" onclick="document.getElementById('authority-panel-body').style.display=document.getElementById('authority-panel-body').style.display==='none'?'':'none'" style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;cursor:pointer;user-select:none;">
+        <span style="font-size:12px;font-weight:700;color:var(--text-primary);">&#128274; Authority Footprint</span>
+        <span id="authority-panel-summary" style="font-size:11px;color:var(--text-muted);"></span>
+      </div>
+      <div id="authority-panel-body" style="padding:0 12px 10px 12px;display:none;"></div>
+    </div>
     <!-- Session Replay Controls -->
     <div id="replay-controls" style="
       display:none;
