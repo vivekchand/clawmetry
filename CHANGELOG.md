@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Release: Aider + Goose runtimes (2026-05-25)
+- Publishes #2098. Two more standalone coding agents join the multi-agent pipeline: **Aider** (`.aider.chat.history.md` per-project transcripts; model + token counts) and **Goose** (Block; SQLite `~/.local/share/goose/sessions/sessions.db`; transcripts, tool calls, real token totals). Both were built firsthand: the tools were installed and run against local Ollama (zero cost) to capture their real on-disk format, then verified against it. Each is one `_FAMILY_ADAPTER_SPECS` row + a switcher label. Detected zero-config; shown in the sessions list + transcripts + runtime switcher. The full agent set is now OpenClaw, PicoClaw, NanoClaw, Hermes, Claude Code, Codex, Cursor, Aider, Goose. 127 compat tests green.
+
 ### Cost: price family-runtime (Claude Code / Cursor) sessions — Tracing & Cost showed $0 (2026-05-25)
 - The Tracing and Cost tabs showed **$0.00** for Claude Code (and other family-runtime) sessions even with hundreds of thousands of Opus tokens. The #2049 cost backfill estimated cost only from `data.usage`, but family-runtime events carry the token split under `data.extra.{inputTokens,outputTokens}`, so they were skipped. The backfill now falls back to `data.extra`; existing events are re-priced on the daemon's next startup pass. Verified live: traces went $0 → up to $33.33 per session and `/api/usage` today went $0 → $501.58. Publishes #2093.
 
