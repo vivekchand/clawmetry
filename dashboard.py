@@ -122,6 +122,7 @@ from routes.review import bp_review
 from routes.evals import bp_evals
 from routes.dives import bp_dives
 from routes.scheduler import bp_scheduler
+from routes.policy import bp_policy
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -10619,6 +10620,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_local_query)
     app.register_blueprint(bp_dives)
     app.register_blueprint(bp_scheduler)
+    app.register_blueprint(bp_policy)
 
     # Register built-in agent adapters. External plugins can register more
     # via clawmetry.extensions entry points — see clawmetry/adapters/.
@@ -11116,6 +11118,9 @@ DASHBOARD_HTML = r"""
       <div class="left-nav-item left-nav-item-sub" data-tab="security" onclick="switchTab('security')">
         <span class="left-nav-label" data-i18n="nav.security">Security</span>
       </div>
+      <div class="left-nav-item left-nav-item-sub" data-tab="policy" onclick="switchTab('policy')" title="Which tools each agent can run, where they run, and what got approved or blocked">
+        <span class="left-nav-label" data-i18n="nav.tool_policy">Tool Policy</span>
+      </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="skills" onclick="switchTab('skills')">
         <span class="left-nav-label" data-i18n="nav.skills">Skills</span>
       </div>
@@ -11194,6 +11199,9 @@ DASHBOARD_HTML = r"""
 
 <!-- SECURITY -->
 {% include 'tabs/security.html' %}
+
+<!-- TOOL POLICY + SANDBOX + EXEC-APPROVAL AUDIT (governance, PRD P1-1) -->
+{% include 'tabs/policy.html' %}
 
 <!-- APPROVALS — cloud-mediated approval queue (#667) -->
 {% include 'tabs/approvals.html' %}

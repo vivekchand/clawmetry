@@ -1,0 +1,18 @@
+<div class="page" id="page-policy">
+  <div class="refresh-bar">
+    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">&#128274; Tool Policy &amp; Sandbox</h2>
+    <button class="refresh-btn" onclick="loadToolPolicy()">&#8635; Refresh</button>
+  </div>
+  <!-- Governance surface (PRD P1-1): which tools each agent can run, where
+       they run (sandbox mode + workspace access), and what got approved or
+       blocked. Per-agent policy comes from /api/tool-policy (mirrored from
+       `openclaw sandbox explain --json`); the exec-approval audit comes from
+       /api/approvals-audit. Both render via loadToolPolicy(). -->
+  <div id="tool-policy-summary" style="margin-bottom:14px;"></div>
+  <div id="tool-policy-agents">
+    <div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading tool policy&hellip;</div>
+  </div>
+  <div id="approvals-audit-panel" style="margin-top:18px;">
+    <div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading approval audit&hellip;</div>
+  </div>
+</div><!-- end page-policy -->
