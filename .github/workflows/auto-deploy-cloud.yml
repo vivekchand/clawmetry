@@ -111,7 +111,11 @@ jobs:
             echo "::warning::PR #$PR touches more than Dockerfile ($FILES) — leaving for manual review."; exit 0
           fi
           # Poll the rollup until every check concludes (or budget runs out).
-          for i in $(seq 1 40); do
+          # ~45 min budget: the cloud golden-path E2E + MOAT roundtrip checks
+          # routinely run 15-20 min, and the earlier 20 min budget timed out
+          # before they finished (the pin PR was left open, merged later by
+          # hand) — defeating hands-off auto-merge.
+          for i in $(seq 1 90); do
             ROLL=$(gh pr view "$PR" --repo "$REPO" --json statusCheckRollup \
                      -q '.statusCheckRollup')
             FAIL=$(echo "$ROLL" | python3 -c "import json,sys; r=json.load(sys.stdin); print(sum(1 for c in r if (c.get('conclusion') or '') in ('FAILURE','CANCELLED','TIMED_OUT','ACTION_REQUIRED')))")
