@@ -93,6 +93,10 @@ def _get_update_check_config():
         "enabled": True,
         "check_on_startup": True,
         "check_daily": True,
+        # Opt-in: when on, a detected newer release is installed automatically
+        # by the background worker (no click needed). Off by default — auto
+        # pip-install + restart is something the user explicitly turns on.
+        "auto_update": False,
         "dismissed_version": "",
         "last_check_at": 0,
     }
@@ -219,12 +223,48 @@ def _check_for_update():
 
     _record_update_check(current, latest, update_available, CHANGELOG_URL)
 
+    # Auto-update: if the user opted in, install the newer release now (no
+    # click). Runs in the always-on dashboard server process, so it works
+    # with no browser open. Guarded so a pending restart isn't re-triggered.
+    if update_available:
+        try:
+            _maybe_auto_update(current, latest)
+        except Exception as exc:
+            log.warning("auto-update trigger failed: %s", exc)
+
     return {
         "current": current,
         "latest": latest,
         "update_available": update_available,
         "changelog_url": CHANGELOG_URL,
     }
+
+
+# Set once an auto-update upgrade has been kicked off (the process is about to
+# restart). Prevents re-triggering pip on every subsequent check in the gap
+# before the restart lands. Reset on failure so the next check can retry.
+_auto_update_in_progress = False
+
+
+def _maybe_auto_update(current, latest):
+    """Install a newer release automatically when ``auto_update`` is enabled."""
+    global _auto_update_in_progress
+    if _auto_update_in_progress:
+        return
+    cfg = _get_update_check_config()
+    if not cfg.get("auto_update"):
+        return
+    _auto_update_in_progress = True
+    log.info("auto-update: opted in — upgrading clawmetry v%s -> v%s", current, latest)
+    try:
+        from routes.meta import perform_self_update
+        payload, _status = perform_self_update(reason="auto")
+        if not (isinstance(payload, dict) and payload.get("ok")):
+            log.warning("auto-update: upgrade failed, will retry next check: %s", payload)
+            _auto_update_in_progress = False  # allow retry; no restart was scheduled
+    except Exception as exc:
+        log.warning("auto-update: error during upgrade: %s", exc)
+        _auto_update_in_progress = False
 
 
 def _update_check_worker(stop_event):
@@ -296,7 +336,7 @@ def api_update_check_config():
 def api_update_check_config_post():
     """Update update check configuration."""
     data = request.get_json(silent=True) or {}
-    allowed_keys = ["enabled", "check_on_startup", "check_daily", "dismissed_version"]
+    allowed_keys = ["enabled", "check_on_startup", "check_daily", "auto_update", "dismissed_version"]
     updates = {k: v for k, v in data.items() if k in allowed_keys}
     _set_update_check_config(updates)
     return jsonify({"ok": True})

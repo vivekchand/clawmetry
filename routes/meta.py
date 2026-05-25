@@ -96,14 +96,23 @@ def api_version():
     return {"current": current, "latest": latest, "update_available": update_available}
 
 
-@bp_version.route("/api/update", methods=["POST"])
-def api_update():
-    """Self-update clawmetry via pip, then schedule process restart."""
+def perform_self_update(reason: str = "manual"):
+    """Core self-update: ``pip install -U clawmetry`` then schedule a process
+    restart. Returns ``(payload_dict, http_status)``.
+
+    Shared by the manual ``/api/update`` route and the background auto-updater
+    (``routes/update_check.py``) so both use one vetted upgrade+restart path.
+    Safe to call from a worker thread — the restart is scheduled on a Timer
+    that exits the process (launchd/systemd respawns it on the new wheel).
+    """
     import dashboard as _d
     import subprocess as _sp
     import threading as _thr
+    import logging as _log
 
+    _ulog = _log.getLogger(__name__)
     old_version = _d.__version__
+    _ulog.info("self-update (%s): pip install -U clawmetry from v%s", reason, old_version)
     py = sys.executable
     # Bootstrap pip via the stdlib's ensurepip first. The daemon's venv at
     # ~/.clawmetry/bin/python3 is provisioned WITHOUT pip by uv-style
@@ -176,8 +185,17 @@ def api_update():
                 pass  # daemon may not be running; dashboard restart is enough
         _os._exit(0)
 
+    _ulog.info("self-update (%s): upgraded v%s -> v%s; restarting in 2s",
+               reason, old_version, new_version)
     _thr.Timer(2.0, _restart).start()
-    return {"ok": True, "old_version": old_version, "new_version": new_version}
+    return {"ok": True, "old_version": old_version, "new_version": new_version}, 200
+
+
+@bp_version.route("/api/update", methods=["POST"])
+def api_update():
+    """Self-update clawmetry via pip, then schedule process restart."""
+    payload, status = perform_self_update(reason="manual")
+    return payload, status
 
 
 @bp_version.route("/api/install-age")
