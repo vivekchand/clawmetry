@@ -7442,6 +7442,43 @@ def _build_machine_info():
         return {"items": []}
 
 
+def _detect_family_runtimes():
+    """Detect OpenClaw-family runtimes installed alongside (PicoClaw, NanoClaw).
+
+    These runtimes use their OWN native session format (not OpenClaw's v3
+    JSONL), so ClawMetry ships dedicated reader adapters for them
+    (clawmetry/adapters/{picoclaw,nanoclaw}.py). Here we run each adapter's
+    cheap, never-raising ``detect()`` so the cloud can label which runtime a
+    node is actually running. Pure detection: no DuckDB access, no writes, no
+    writer lock involved.
+
+    Returns a list of ``{name, displayName, sessionCount, workspace}`` for the
+    runtimes whose data is present on this host. Empty list if none / on error.
+    """
+    out = []
+    try:
+        from clawmetry.adapters.picoclaw import PicoClawAdapter
+        from clawmetry.adapters.nanoclaw import NanoClawAdapter
+    except Exception as exc:  # adapters unavailable (old wheel) — degrade quietly
+        log.debug(f"family-runtime adapters unavailable: {exc}")
+        return out
+    for cls in (PicoClawAdapter, NanoClawAdapter):
+        try:
+            d = cls().detect()
+            if d.detected:
+                out.append(
+                    {
+                        "name": d.name,
+                        "displayName": d.display_name,
+                        "sessionCount": int(d.session_count or 0),
+                        "workspace": d.workspace or "",
+                    }
+                )
+        except Exception as exc:  # one bad adapter never blocks the others
+            log.debug(f"family-runtime detect failed for {cls.__name__}: {exc}")
+    return out
+
+
 def _build_runtime_info():
     """Build runtime environment info for the Runtime popup."""
     try:
@@ -7504,6 +7541,18 @@ def _build_runtime_info():
             items.append({"label": "Node.js", "value": nv, "status": "ok"})
         except Exception:
             pass
+        # OpenClaw-family runtimes detected on this host (PicoClaw, NanoClaw).
+        # Surfaced as Runtime popup rows so the cloud shows what a node runs,
+        # with no cloud-side code change (the popup renders runtimeInfo.items).
+        for rt in _detect_family_runtimes():
+            n = rt.get("sessionCount") or 0
+            items.append(
+                {
+                    "label": rt.get("displayName") or rt.get("name") or "Runtime",
+                    "value": f"detected ({n} session{'s' if n != 1 else ''})",
+                    "status": "ok",
+                }
+            )
         return {"items": items}
     except Exception as e:
         log.warning(f"Runtime info error: {e}")
@@ -9462,6 +9511,10 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "brainData": _build_brain_data(),
         "gateway": {},
         "runtimeInfo": _build_runtime_info(),
+        # OpenClaw-family runtimes (PicoClaw, NanoClaw) detected on this host,
+        # tiny by design ({name, displayName, sessionCount, workspace}) so the
+        # cloud can show a runtime chip without bloating the snapshot.
+        "detectedRuntimes": _detect_family_runtimes(),
         "machineInfo": _build_machine_info(),
         "channelList": _build_channel_list(config),
         "ollamaInfo": _detect_ollama_for_heartbeat(),

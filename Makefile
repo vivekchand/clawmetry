@@ -9,7 +9,7 @@ test: test-api test-e2e test-e2e-duckdb test-workflow test-compat
 # (per-session SQLite). Hermetic, ~1s — no live server, no gateway, no
 # network. Mirror in .github/workflows/ci.yml (moat-tests job).
 test-compat:
-	python3 -m pytest tests/test_picoclaw_adapter.py tests/test_nanoclaw_adapter.py -v
+	python3 -m pytest tests/test_picoclaw_adapter.py tests/test_nanoclaw_adapter.py tests/test_runtime_detection_snapshot.py -v
 
 test-fast:
 	CLAWMETRY_URL=http://localhost:8900 CLAWMETRY_TOKEN=dev-token python3 -m pytest tests/test_api.py -v
