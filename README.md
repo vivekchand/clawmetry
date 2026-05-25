@@ -113,7 +113,7 @@ The production bundle is written to `clawmetry/static/v2/dist/`.
 
 ## Runtime Compatibility
 
-ClawMetry observes the OpenClaw runtime family. Some members share OpenClaw's session format and work with zero config; others store sessions in their own native format and ship a dedicated reader adapter. See [`docs/compatibility.md`](docs/compatibility.md) for the full matrix, open questions, and a guide to adding runtimes.
+ClawMetry observes the OpenClaw runtime family. Some members share OpenClaw's session format and work with zero config; others store sessions in their own native format and ship a dedicated reader adapter. See [`docs/compatibility.md`](docs/compatibility.md) for the full matrix, open questions, and a guide to adding runtimes, and [`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md) for a primer comparing OpenClaw, NanoClaw, and PicoClaw.
 
 | Runtime | Status | Notes |
 |---|---|---|
