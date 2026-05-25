@@ -7405,6 +7405,136 @@ def sync_run_ledger(config: dict, state: dict, paths: dict) -> int:
     return n
 
 
+def _openclaw_agent_ids() -> list[str]:
+    """Enumerate OpenClaw agent ids to inspect for tool policy.
+
+    Each agent has a dir under ``~/.openclaw/agents/<id>/``. ``main`` always
+    exists; we read the directory so multi-agent installs are covered. Falls
+    back to ``["main"]`` if the dir is missing/unreadable (read-only contract:
+    never crash, always return at least the default agent)."""
+    ids: list[str] = []
+    try:
+        agents_dir = Path(_get_openclaw_dir()) / "agents"
+        if agents_dir.is_dir():
+            for p in sorted(agents_dir.iterdir()):
+                if p.is_dir() and not p.name.startswith("."):
+                    ids.append(p.name)
+    except Exception as e:  # noqa: BLE001
+        log.debug("_openclaw_agent_ids: enumerate failed: %s", e)
+    if "main" not in ids:
+        ids.insert(0, "main")
+    return ids[:25]  # bound the fan-out — pathological installs only
+
+
+def _flatten_sandbox_explain(d: dict, agent_id: str) -> dict | None:
+    """Flatten one ``openclaw sandbox explain --json`` payload into the row
+    shape ``LocalStore.ingest_tool_policy_row`` expects. Returns None if the
+    payload has no ``sandbox`` block (nothing useful to store)."""
+    if not isinstance(d, dict):
+        return None
+    sb = d.get("sandbox")
+    if not isinstance(sb, dict):
+        return None
+    tools = sb.get("tools") if isinstance(sb.get("tools"), dict) else {}
+    elev = d.get("elevated") if isinstance(d.get("elevated"), dict) else {}
+    allow = tools.get("allow") if isinstance(tools.get("allow"), list) else []
+    deny = tools.get("deny") if isinstance(tools.get("deny"), list) else []
+    return {
+        "agent_id": d.get("agentId") or agent_id,
+        "session_key": d.get("sessionKey"),
+        "sandbox_mode": sb.get("mode"),
+        "sandbox_scope": sb.get("scope"),
+        "workspace_access": sb.get("workspaceAccess"),
+        "workspace_root": sb.get("workspaceRoot"),
+        "session_is_sandboxed": sb.get("sessionIsSandboxed"),
+        "allow": allow,
+        "deny": deny,
+        "sources": tools.get("sources") if isinstance(tools.get("sources"), dict) else {},
+        "elevated_enabled": elev.get("enabled"),
+        "elevated_channel": elev.get("channel"),
+        "elevated_allowed": elev.get("allowedByConfig"),
+        "observed_at": int(time.time() * 1000),
+    }
+
+
+def sync_tool_policy(config: dict, state: dict, paths: dict) -> int:
+    """Mirror OpenClaw's effective sandbox + tool policy into the DuckDB
+    ``tool_policy`` table (PRD P1-1 governance).
+
+    For each agent we shell out to ``openclaw sandbox explain --agent <id>
+    --json`` — OpenClaw's own CLI, which works on its OWN credentials and so
+    does NOT need the (scope-less) ClawMetry gateway token. The daemon's
+    launchd PATH lacks ``node``, so we augment PATH with the usual Homebrew /
+    local install dirs (same escape hatch as ``run_openclaw_cron`` /
+    Self-Evolve). One row per agent, upserted on ``agent_id``.
+
+    Degrades silently: CLI missing, timeout, non-zero exit, or malformed JSON
+    each skip that agent rather than raising (read-only-by-default). Returns
+    the number of agent rows ingested."""
+    binp = _resolve_openclaw_bin()
+    if not binp:
+        log.debug("sync_tool_policy: openclaw CLI not found; skipping")
+        return 0
+    try:
+        from clawmetry import local_store as _ls
+    except Exception as e:  # noqa: BLE001
+        log.debug("sync_tool_policy: local_store unavailable: %s", e)
+        return 0
+
+    env = dict(os.environ)
+    env["PATH"] = os.pathsep.join([
+        os.path.dirname(binp), "/opt/homebrew/bin", "/usr/local/bin",
+        os.path.expanduser("~/.local/bin"),
+        env.get("PATH", "/usr/bin:/bin"),
+    ])
+    node_id = config.get("node_id", "") if isinstance(config, dict) else ""
+
+    try:
+        store = _ls.get_store()
+    except Exception as e:  # noqa: BLE001
+        log.debug("sync_tool_policy: get_store failed: %s", e)
+        return 0
+
+    n = 0
+    for aid in _openclaw_agent_ids():
+        try:
+            proc = subprocess.run(
+                [binp, "sandbox", "explain", "--agent", aid, "--json"],
+                capture_output=True, text=True, timeout=20, env=env,
+            )
+        except subprocess.TimeoutExpired:
+            log.debug("sync_tool_policy: explain %s timed out", aid)
+            continue
+        except Exception as e:  # noqa: BLE001
+            log.debug("sync_tool_policy: explain %s failed: %s", aid, e)
+            continue
+        if proc.returncode != 0:
+            log.debug("sync_tool_policy: explain %s rc=%s", aid, proc.returncode)
+            continue
+        try:
+            payload = json.loads(proc.stdout.strip())
+        except Exception:
+            import re as _re
+            m = _re.search(r"\{.*\}", proc.stdout, _re.DOTALL)
+            if not m:
+                continue
+            try:
+                payload = json.loads(m.group(0))
+            except Exception:
+                continue
+        row = _flatten_sandbox_explain(payload, aid)
+        if not row:
+            continue
+        try:
+            store.ingest_tool_policy_row(row, node_id=node_id)
+            n += 1
+        except Exception as e_in:  # noqa: BLE001
+            log.debug("sync_tool_policy: ingest skipped for %s: %s", aid, e_in)
+    if n:
+        log.debug("sync_tool_policy: ingested %d agent rows", n)
+    return n
+
+
 def sync_session_metadata(config: dict, state: dict = None) -> int:
     """Sync OpenClaw session metadata rows to cloud sessions table.
 
@@ -10419,6 +10549,36 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _e_rl:
         log.debug("snapshot: run_ledger slice failed: %s", _e_rl)
 
+    # Effective sandbox + tool policy per agent (PRD P1-1 governance) →
+    # bounded snapshot slice for the cloud Tool Policy tab. One small row per
+    # agent (allow/deny lists are short tool-name arrays, capped here so a
+    # pathological config can't bloat the shared snapshot).
+    tool_policy_slice: list[dict] = []
+    try:
+        from clawmetry import local_store as _ls_tp
+        _tp_store = _ls_tp.get_store()
+        if _tp_store is not None:
+            for r in (_tp_store.query_tool_policy(limit=25) or []):
+                allow = r.get("allow") if isinstance(r.get("allow"), list) else []
+                deny = r.get("deny") if isinstance(r.get("deny"), list) else []
+                tool_policy_slice.append({
+                    "agent_id": r.get("agent_id"),
+                    "sandbox_mode": r.get("sandbox_mode"),
+                    "sandbox_scope": r.get("sandbox_scope"),
+                    "workspace_access": r.get("workspace_access"),
+                    "session_is_sandboxed": r.get("session_is_sandboxed"),
+                    "allow": allow[:80],
+                    "deny": deny[:80],
+                    "allow_count": r.get("allow_count"),
+                    "deny_count": r.get("deny_count"),
+                    "elevated_enabled": r.get("elevated_enabled"),
+                    "elevated_channel": r.get("elevated_channel"),
+                    "elevated_allowed": r.get("elevated_allowed"),
+                    "observed_at": r.get("observed_at"),
+                })
+    except Exception as _e_tp:
+        log.debug("snapshot: tool_policy slice failed: %s", _e_tp)
+
     payload = {
         "system": system,
         "infra": infra,
@@ -10444,6 +10604,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         },
         "totalActive": active_count,
         "runLedger": run_ledger_slice,
+        "toolPolicy": tool_policy_slice,
         "spending": spending,
         "cronJobs": _build_cron_jobs(paths),
         "channels": _build_channel_data(config),
@@ -11028,6 +11189,15 @@ def run_daemon() -> None:
             log.info(f"  Run ledger: {rl} rows ingested")
     except Exception as e:
         log.warning(f"  Run-ledger ingest error: {e}")
+    # Effective sandbox + tool policy per agent (PRD P1-1 governance) →
+    # DuckDB tool_policy. Feeds the Tool Policy tab. Near-static config;
+    # re-synced on a slow cadence in the steady-state loop below.
+    try:
+        tp = sync_tool_policy(config, state, paths)
+        if tp:
+            log.info(f"  Tool policy: {tp} agent rows ingested")
+    except Exception as e:
+        log.warning(f"  Tool-policy ingest error: {e}")
     # Sync today's log lines immediately so Brain tab shows the most recent
     # activity right away — older log history is backfilled later
     try:
@@ -11193,6 +11363,10 @@ def run_daemon() -> None:
     heartbeat_interval = _pick_heartbeat_interval(_LAST_HEARTBEAT_RESPONSE)
     snapshot_interval = 60  # system snapshot (subagents, flow metrics) every 60s
     log_sync_interval = 60  # log lines are low-priority; streamer covers real-time
+    tool_policy_interval = 300  # sandbox/tool policy is near-static; refresh slowly
+    last_tool_policy = (
+        time.time()
+    )  # already synced at startup; next run after tool_policy_interval
     family_interval = 60  # PicoClaw/NanoClaw ingest; cheap when absent, throttled when present
     last_family = 0  # force first family-runtime ingest immediately
     last_heartbeat = time.time()
@@ -11328,6 +11502,18 @@ def run_daemon() -> None:
                 sync_run_ledger(config, state, paths)
             except Exception as _e_rl:
                 log.debug("sync_run_ledger error (non-fatal): %s", _e_rl)
+
+            # Effective sandbox + tool policy per agent (PRD P1-1) → DuckDB
+            # tool_policy. Throttled — config is near-static and each agent is
+            # a CLI shell-out, so we refresh every tool_policy_interval, not
+            # every loop tick.
+            now_tp = time.time()
+            if now_tp - last_tool_policy > tool_policy_interval:
+                try:
+                    sync_tool_policy(config, state, paths)
+                except Exception as _e_tp:
+                    log.debug("sync_tool_policy error (non-fatal): %s", _e_tp)
+                last_tool_policy = now_tp
 
             # ── Low-priority: log lines (real-time covered by streamer) ──
             lg = 0

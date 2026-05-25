@@ -968,6 +968,7 @@ function switchTab(name) {
   if (name === 'selfevolve') loadSelfEvolvePage();
   if (name === 'notifications') { if (typeof loadNotificationsPage === 'function') loadNotificationsPage(); }
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
+  if (name === 'policy') { if (typeof loadToolPolicy === 'function') loadToolPolicy(); }
   if (name === 'approvals') { if (typeof loadApprovalsTab === 'function') loadApprovalsTab(); }
   if (name === 'alerts') { if (typeof loadAlertsPage === 'function') loadAlertsPage(); }
   if (name === 'dives') { if (typeof loadDivesPage === 'function') loadDivesPage(); }
@@ -11467,6 +11468,118 @@ async function loadRunLedger() {
     el.innerHTML = laneHtml + runHtml;
   } catch(e) {
     el.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">Failed to load run ledger: '+escHtml(String(e))+'</div>';
+  }
+}
+
+// ── Tool Policy + Sandbox + exec-approval audit (governance, PRD P1-1) ──────
+// Renders per-agent effective sandbox mode + tool allow/deny (from
+// /api/tool-policy, mirrored from `openclaw sandbox explain --json`) plus the
+// exec-approval decision audit (from /api/approvals-audit). Answers: which
+// tools can run, where they run, and what got blocked/approved and why.
+async function loadToolPolicy() {
+  var sumEl = document.getElementById('tool-policy-summary');
+  var agEl = document.getElementById('tool-policy-agents');
+  var apEl = document.getElementById('approvals-audit-panel');
+  if (!agEl) return;
+  // ── Per-agent sandbox + tool policy ──
+  try {
+    var data = await fetch('/api/tool-policy?limit=50').then(function(r){ return r.json(); });
+    var agents = data.agents || [];
+    var s = data.summary || {};
+    if (sumEl) {
+      if (agents.length === 0) {
+        sumEl.innerHTML = '';
+      } else {
+        function chip(label, val, color){
+          return '<div style="border:1px solid var(--border-primary);border-radius:10px;padding:10px 14px;min-width:96px;">'
+            + '<div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">'+escHtml(label)+'</div>'
+            + '<div style="font-size:18px;font-weight:700;color:'+(color||'var(--text-primary)')+';margin-top:2px;">'+escHtml(String(val))+'</div></div>';
+        }
+        var modeColor = (s.strongest_mode && s.strongest_mode !== 'off') ? '#16a34a' : 'var(--text-muted)';
+        sumEl.innerHTML = '<div style="display:flex;gap:10px;flex-wrap:wrap;">'
+          + chip('Agents', s.agent_count || 0)
+          + chip('Sandboxed', (s.sandboxed_agents||0) + '/' + (s.agent_count||0), modeColor)
+          + chip('Strongest mode', s.strongest_mode || 'off', modeColor)
+          + chip('Tools allowed', s.total_allowed_tools || 0)
+          + chip('Tools denied', s.total_denied_tools || 0, '#ef4444')
+          + '</div>';
+      }
+    }
+    if (agents.length === 0) {
+      agEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">No tool policy recorded yet. Per-agent sandbox mode and tool allow/deny lists appear here once the sync daemon reads OpenClaw’s effective policy.</div>';
+    } else {
+      function modePill(mode){
+        var m = {off:['#6b7280','var(--bg-secondary)'],'non-main':['#d97706','rgba(217,119,6,.12)'],nonmain:['#d97706','rgba(217,119,6,.12)'],all:['#16a34a','rgba(22,163,74,.12)']};
+        var c = m[mode] || ['#6b7280','var(--bg-secondary)'];
+        return '<span style="font-size:11px;font-weight:700;color:'+c[0]+';background:'+c[1]+';border-radius:5px;padding:2px 8px;">sandbox: '+escHtml(String(mode||'off'))+'</span>';
+      }
+      function toolTags(list, color, bg){
+        list = list || [];
+        if (list.length === 0) return '<span style="font-size:11px;color:var(--text-faint);">(none)</span>';
+        return list.map(function(t){
+          return '<span style="font-size:11px;color:'+color+';background:'+bg+';border-radius:4px;padding:1px 7px;margin:0 4px 4px 0;display:inline-block;">'+escHtml(String(t))+'</span>';
+        }).join('');
+      }
+      var html = '';
+      agents.forEach(function(a){
+        html += '<div style="border:1px solid var(--border-primary);border-radius:10px;padding:14px;margin-bottom:12px;">';
+        html += '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">';
+        html += '<span style="font-size:14px;font-weight:700;color:var(--text-primary);">' + escHtml(a.agent_id || 'main') + '</span>';
+        html += modePill(a.sandbox_mode);
+        if (a.sandbox_scope) html += '<span style="font-size:11px;color:var(--text-muted);">scope: '+escHtml(String(a.sandbox_scope))+'</span>';
+        if (a.workspace_access) html += '<span style="font-size:11px;color:var(--text-muted);">workspace: '+escHtml(String(a.workspace_access))+'</span>';
+        if (a.elevated_enabled) html += '<span style="font-size:11px;color:'+(a.elevated_allowed?'#16a34a':'var(--text-muted)')+';">elevated: '+(a.elevated_allowed?'allowed':'gated')+(a.elevated_channel?(' ('+escHtml(String(a.elevated_channel))+')'):'')+'</span>';
+        html += '</div>';
+        html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">';
+        html += '<div><div style="font-size:11px;font-weight:700;color:#16a34a;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Allowed ('+(a.allow_count!=null?a.allow_count:(a.allow||[]).length)+')</div>'+toolTags(a.allow,'#16a34a','rgba(22,163,74,.10)')+'</div>';
+        html += '<div><div style="font-size:11px;font-weight:700;color:#ef4444;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Denied ('+(a.deny_count!=null?a.deny_count:(a.deny||[]).length)+')</div>'+toolTags(a.deny,'#ef4444','rgba(239,68,68,.10)')+'</div>';
+        html += '</div></div>';
+      });
+      agEl.innerHTML = html;
+    }
+  } catch(e) {
+    if (sumEl) sumEl.innerHTML = '';
+    agEl.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">Failed to load tool policy: '+escHtml(String(e))+'</div>';
+  }
+  // ── Exec-approval audit ──
+  if (!apEl) return;
+  try {
+    var ad = await fetch('/api/approvals-audit?limit=80').then(function(r){ return r.json(); });
+    var decisions = ad.decisions || [];
+    var as = ad.summary || {};
+    var head = '<div style="border:1px solid var(--border-primary);border-radius:10px;overflow:hidden;">';
+    head += '<div style="display:flex;align-items:center;gap:12px;font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;padding:12px 14px;border-bottom:1px solid var(--border-primary);">';
+    head += '<span style="flex:1;">Exec-approval audit</span>';
+    head += '<span style="color:#d97706;">'+(as.pending||0)+' pending</span>';
+    head += '<span style="color:#16a34a;">'+(as.approved||0)+' approved</span>';
+    head += '<span style="color:#ef4444;">'+(as.denied||0)+' denied</span>';
+    head += '</div>';
+    if (decisions.length === 0) {
+      apEl.innerHTML = head + '<div style="color:var(--text-muted);font-size:13px;padding:16px;">No exec-approval decisions recorded yet. When a tool-call hits a policy gate it appears here with its decision and reason.</div></div>';
+    } else {
+      function decPill(st){
+        var m = {pending:['#d97706','rgba(217,119,6,.12)'],approved:['#16a34a','rgba(22,163,74,.12)'],allowed:['#16a34a','rgba(22,163,74,.12)'],denied:['#ef4444','rgba(239,68,68,.12)'],blocked:['#ef4444','rgba(239,68,68,.12)']};
+        var c = m[st] || ['#6b7280','var(--bg-secondary)'];
+        return '<span style="font-size:10px;font-weight:700;color:'+c[0]+';background:'+c[1]+';border-radius:4px;padding:1px 6px;">'+escHtml(String(st||'?'))+'</span>';
+      }
+      var rows = head;
+      decisions.forEach(function(d){
+        rows += '<div style="padding:9px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;">';
+        rows += '<div style="display:flex;align-items:center;gap:10px;">';
+        rows += decPill(d.status);
+        rows += '<span style="font-weight:600;color:var(--text-primary);">'+escHtml(String(d.action||'tool-call'))+'</span>';
+        if (d.args_preview) rows += '<span style="flex:1;color:var(--text-muted);font-family:monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+escHtml(String(d.args_preview))+'">'+escHtml(String(d.args_preview))+'</span>';
+        else rows += '<span style="flex:1;"></span>';
+        if (d.resolver) rows += '<span style="font-size:11px;color:var(--text-faint);">by '+escHtml(String(d.resolver))+'</span>';
+        rows += '</div>';
+        if (d.decision_reason) rows += '<div style="margin-top:3px;color:var(--text-muted);font-size:11px;">'+escHtml(String(d.decision_reason))+'</div>';
+        rows += '</div>';
+      });
+      rows += '</div>';
+      apEl.innerHTML = rows;
+    }
+  } catch(e) {
+    apEl.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">Failed to load approval audit: '+escHtml(String(e))+'</div>';
   }
 }
 

@@ -442,6 +442,38 @@ _DDL = [
     "CREATE INDEX IF NOT EXISTS idx_run_ledger_runtime_status ON run_ledger(runtime, status)",
     "CREATE INDEX IF NOT EXISTS idx_run_ledger_parent ON run_ledger(parent_task_id)",
     "CREATE INDEX IF NOT EXISTS idx_run_ledger_last_event ON run_ledger(last_event_at)",
+    # PRD P1-1 (governance) — effective sandbox + tool-policy per agent.
+    # Mirrors `openclaw sandbox explain --json` (one row per agent_id): the
+    # sandbox mode (off/non-main/all), scope, workspace access, and the
+    # effective tool allow/deny lists. This is the authoritative answer to
+    # "which tools can this agent run, and where do they run." The daemon
+    # re-ingests on a slow cadence (config is near-static), upserting on
+    # agent_id. allow_json/deny_json are JSON-encoded string arrays so we
+    # don't drag a list type through DuckDB; sources_json keeps the
+    # provenance (which config key set each list) for the "why" column.
+    """
+    CREATE TABLE IF NOT EXISTS tool_policy (
+        agent_id              VARCHAR PRIMARY KEY,
+        node_id               VARCHAR,
+        session_key           VARCHAR,
+        sandbox_mode          VARCHAR,
+        sandbox_scope         VARCHAR,
+        workspace_access      VARCHAR,
+        workspace_root        VARCHAR,
+        session_is_sandboxed  BOOLEAN,
+        allow_json            VARCHAR,
+        deny_json             VARCHAR,
+        allow_count           INTEGER,
+        deny_count            INTEGER,
+        sources_json          VARCHAR,
+        elevated_enabled      BOOLEAN,
+        elevated_channel      VARCHAR,
+        elevated_allowed      BOOLEAN,
+        observed_at           BIGINT,
+        updated_at            BIGINT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_tool_policy_observed ON tool_policy(observed_at)",
     # Epic #1032 Phase 4 — approval queue. Authored locally when the policy
     # watcher fires on a tool-call, mirrored to the cloud cache via heartbeat
     # cache_push so the cloud Approvals inbox paints from cache, and resolved
@@ -2175,6 +2207,77 @@ class LocalStore:
                 f"INSERT INTO run_ledger ({cols}, updated_at) "
                 f"VALUES ({ph}, ?) "
                 f"ON CONFLICT (task_id) DO UPDATE SET {upd}, updated_at = excluded.updated_at",
+                [*vals, now_ms],
+            )
+
+    _TOOL_POLICY_COLS = (
+        "agent_id", "node_id", "session_key", "sandbox_mode", "sandbox_scope",
+        "workspace_access", "workspace_root", "session_is_sandboxed",
+        "allow_json", "deny_json", "allow_count", "deny_count", "sources_json",
+        "elevated_enabled", "elevated_channel", "elevated_allowed", "observed_at",
+    )
+
+    def ingest_tool_policy_row(self, r: dict[str, Any], *, node_id: str = "") -> None:
+        """Upsert one effective sandbox/tool-policy row (PRD P1-1 governance).
+
+        ``r`` is the (already flattened) shape produced from one
+        ``openclaw sandbox explain --json`` invocation — see
+        ``clawmetry/sync.py:_flatten_sandbox_explain``. Required: ``agent_id``.
+        Re-ingest overwrites the prior copy on ``agent_id`` (config is
+        near-static; the newest read is the source of truth). The tool
+        allow/deny lists arrive as Python lists and are JSON-encoded so we
+        don't drag a list type through DuckDB.
+
+        Never raises on a malformed list/dict — degrades to ``[]``/``{}`` so
+        the read-only-by-default contract holds (the daemon must not crash on
+        an unexpected CLI shape)."""
+        aid = r.get("agent_id")
+        if not aid:
+            raise ValueError("tool-policy row must include 'agent_id'")
+
+        def _txt(v: Any, n: int = 512) -> Any:
+            if v is None:
+                return None
+            s = str(v)
+            return s[:n] if len(s) > n else s
+
+        def _json_list(v: Any) -> tuple[str, int]:
+            items = v if isinstance(v, list) else []
+            try:
+                return json.dumps(items)[:60000], len(items)
+            except (TypeError, ValueError):
+                return "[]", 0
+
+        def _bool(v: Any) -> Any:
+            return bool(v) if v is not None else None
+
+        allow_json, allow_n = _json_list(r.get("allow"))
+        deny_json, deny_n = _json_list(r.get("deny"))
+        try:
+            sources_json = json.dumps(r.get("sources") or {})[:8000]
+        except (TypeError, ValueError):
+            sources_json = "{}"
+
+        vals = [
+            str(aid), node_id or None, _txt(r.get("session_key"), 256),
+            _txt(r.get("sandbox_mode"), 32), _txt(r.get("sandbox_scope"), 32),
+            _txt(r.get("workspace_access"), 64), _txt(r.get("workspace_root"), 1024),
+            _bool(r.get("session_is_sandboxed")), allow_json, deny_json,
+            allow_n, deny_n, sources_json, _bool(r.get("elevated_enabled")),
+            _txt(r.get("elevated_channel"), 64), _bool(r.get("elevated_allowed")),
+            int(r.get("observed_at") or int(time.time() * 1000)),
+        ]
+        now_ms = int(time.time() * 1000)
+        cols = ", ".join(self._TOOL_POLICY_COLS)
+        ph = ", ".join("?" for _ in self._TOOL_POLICY_COLS)
+        upd = ", ".join(
+            f"{c} = excluded.{c}" for c in self._TOOL_POLICY_COLS if c != "agent_id"
+        )
+        with self._write_lock:
+            self._conn.execute(
+                f"INSERT INTO tool_policy ({cols}, updated_at) "
+                f"VALUES ({ph}, ?) "
+                f"ON CONFLICT (agent_id) DO UPDATE SET {upd}, updated_at = excluded.updated_at",
                 [*vals, now_ms],
             )
 
@@ -4571,6 +4674,48 @@ class LocalStore:
         cols = ["lane", "total", "running", "queued", "succeeded",
                 "failed", "last_event_at"]
         return [dict(zip(cols, row)) for row in self._fetch(sql, [])]
+
+    def query_tool_policy(
+        self,
+        *,
+        agent_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Effective sandbox + tool-policy rows, one per agent (PRD P1-1).
+
+        Returns the per-agent sandbox mode, scope, workspace access and the
+        decoded tool ``allow`` / ``deny`` lists (parsed back from JSON so the
+        caller hands them straight to the API). ``sources`` provenance is
+        decoded the same way. Newest-observed first. Empty list (fresh sync /
+        OpenClaw without ``sandbox explain``) is a normal, non-error state."""
+        where: list[str] = []
+        params: list[Any] = []
+        if agent_id:
+            where.append("agent_id = ?")
+            params.append(agent_id)
+        clause = ("WHERE " + " AND ".join(where)) if where else ""
+        cols = list(self._TOOL_POLICY_COLS) + ["updated_at"]
+        sql = (
+            f"SELECT {', '.join(cols)} FROM tool_policy {clause} "
+            f"ORDER BY COALESCE(observed_at, 0) DESC, agent_id LIMIT ?"
+        )
+        params.append(int(limit))
+        out: list[dict[str, Any]] = []
+        for row in self._fetch(sql, params):
+            d = dict(zip(cols, row))
+            for jk, outk in (("allow_json", "allow"), ("deny_json", "deny")):
+                try:
+                    d[outk] = json.loads(d.get(jk) or "[]")
+                except (ValueError, TypeError):
+                    d[outk] = []
+                d.pop(jk, None)
+            try:
+                d["sources"] = json.loads(d.get("sources_json") or "{}")
+            except (ValueError, TypeError):
+                d["sources"] = {}
+            d.pop("sources_json", None)
+            out.append(d)
+        return out
 
     def query_channel_configs(
         self,

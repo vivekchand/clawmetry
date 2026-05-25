@@ -421,6 +421,10 @@ _DAEMON_METHODS = frozenset({
     # monitor + sub-agent fan-out tree + cron run log off one source.
     "query_run_ledger",
     "query_run_ledger_lanes",
+    # PRD P1-1 (governance): effective sandbox + tool policy per agent,
+    # mirrored from `openclaw sandbox explain --json`. Powers the Tool Policy
+    # tab (routes/policy.py:/api/tool-policy). Read-only; daemon owns writer.
+    "query_tool_policy",
     # Issue #1597: parent session tool-timeline rollup needs to merge in
     # events from every child sub-agent session (the events table has no
     # parent_session_id column; the link lives on the subagents table). The
