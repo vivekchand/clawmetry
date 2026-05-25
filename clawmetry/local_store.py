@@ -3497,6 +3497,76 @@ class LocalStore:
         params.append(int(limit))
         return [_row_to_event(r, _EVENT_COLS) for r in self._fetch(sql, params)]
 
+    def backfill_event_costs(self, *, batch: int = 5000) -> int:
+        """#2049: populate ``cost_usd`` for events that arrived without it.
+
+        OpenClaw / OAuth events carry tokens + model but no provider-reported
+        cost, so ``cost_usd`` was NULL/0 and the Cost tab showed ~$0 for heavy
+        usage (1.5M tokens -> $0.008). Recompute the API-equivalent cost from
+        each event's own token split x model pricing (cache-aware) and store
+        it. One bounded batch per call. Idempotent: only rows whose cost_usd
+        is NULL/0 AND whose derived cost is > 0 are written, so re-runs and
+        genuinely-free local-model rows are no-ops. Returns rows updated.
+        Daemon-only (needs the writer connection)."""
+        try:
+            from clawmetry.providers_pricing import estimate_event_cost_usd
+        except Exception:
+            return 0
+        try:
+            rows = self._conn.execute(
+                "SELECT id, data, model FROM events "
+                "WHERE (cost_usd IS NULL OR cost_usd = 0) "
+                "AND token_count > 0 AND model IS NOT NULL "
+                "LIMIT ?",
+                [int(batch)],
+            ).fetchall()
+        except Exception:
+            return 0
+
+        def _tok(u, *keys):
+            for k in keys:
+                v = u.get(k)
+                if v is not None:
+                    try:
+                        return int(v)
+                    except (TypeError, ValueError):
+                        pass
+            return 0
+
+        updates: list[tuple] = []
+        for (eid, data, model) in rows:
+            try:
+                if isinstance(data, (bytes, bytearray)):
+                    data = bytes(data).decode("utf-8", "replace")
+                obj = json.loads(data) if isinstance(data, str) else data
+            except Exception:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            msg = obj.get("message") if isinstance(obj.get("message"), dict) else None
+            src = msg or obj
+            u = src.get("usage") if isinstance(src.get("usage"), dict) else {}
+            if not u:
+                continue
+            cost = estimate_event_cost_usd(
+                model,
+                _tok(u, "input_tokens", "inputTokens", "prompt_tokens"),
+                _tok(u, "output_tokens", "outputTokens", "completion_tokens"),
+                _tok(u, "cache_read_input_tokens", "cacheReadInputTokens"),
+                _tok(u, "cache_creation_input_tokens", "cacheCreationInputTokens"),
+            )
+            if cost and cost > 0:
+                updates.append((float(cost), eid))
+        if not updates:
+            return 0
+        try:
+            self._conn.executemany(
+                "UPDATE events SET cost_usd = ? WHERE id = ?", updates
+            )
+        except Exception:
+            return 0
+        return len(updates)
+
     def query_events_with_subagents(
         self,
         *,
