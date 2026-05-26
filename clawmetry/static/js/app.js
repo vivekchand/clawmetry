@@ -10342,6 +10342,8 @@ async function loadUsage() {
     loadCacheAnalytics();
     // Load cost forecast (issue #1413)
     loadCostForecast();
+    // Load spend optimization recommendations (issue #1415)
+    loadSpendOptimization();
     // NeMo daily-cap banner (issue #1170) — only visible when a free-tier
     // user has tripped the 1000-events/day ceiling.
     _refreshNemoCapBanner('usage-chart');
@@ -10646,6 +10648,55 @@ function renderCostComparison(data) {
   });
   html += '</div>';
   html += '<div style="margin-top:10px;font-size:11px;color:var(--text-muted);line-height:1.5;">Estimates based on 60/40 input/output split for ' + tokStr + ' tokens. Actual costs vary by prompt structure and API tier.</div>';
+  el.innerHTML = html;
+}
+
+// ===== Spend Optimization Recommendations (issue #1415) =====
+async function loadSpendOptimization() {
+  var card = document.getElementById('spend-optimization-card');
+  var el = document.getElementById('spend-optimization-content');
+  if (!card || !el) return;
+  try {
+    var data = await fetch('/api/usage/optimization-recommendations').then(function(r){return r.json();});
+    if (!data || !data.recommendations || data.recommendations.length === 0) return;
+    card.style.display = 'block';
+    renderSpendOptimization(data);
+  } catch(e) {
+    // silently skip if unavailable
+  }
+}
+
+function renderSpendOptimization(data) {
+  var el = document.getElementById('spend-optimization-content');
+  if (!el) return;
+  var recs = data.recommendations || [];
+  if (recs.length === 0) {
+    el.innerHTML = '<span style="color:var(--text-muted)">No optimization suggestions yet — run more agents with span data enabled to see recommendations.</span>';
+    return;
+  }
+  var totalSave = data.total_projected_savings_usd_30d || 0;
+  var saveFmt = totalSave >= 0.01 ? '$' + totalSave.toFixed(2) : totalSave > 0 ? '<$0.01' : '$0.00';
+  var html = '<div style="margin-bottom:14px;padding:10px 14px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.25);border-radius:8px;">';
+  html += '<div style="font-size:12px;color:#86efac;margin-bottom:4px;">Projected 30-day savings</div>';
+  html += '<div style="font-size:22px;font-weight:700;color:#22c55e;">' + saveFmt + '</div>';
+  html += '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">by routing simple tools to a cheaper model tier</div>';
+  html += '</div>';
+  html += '<div style="display:flex;flex-direction:column;gap:8px;">';
+  recs.forEach(function(rec) {
+    var savStr = rec.projected_savings_usd_30d >= 0.01 ? '$' + rec.projected_savings_usd_30d.toFixed(2) : '<$0.01';
+    var curStr = rec.current_cost_usd_30d >= 0.01 ? '$' + rec.current_cost_usd_30d.toFixed(2) : rec.current_cost_usd_30d > 0 ? '<$0.01' : '$0.00';
+    html += '<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:12px;">';
+    html += '<div style="flex:1;min-width:0;">';
+    html += '<div style="font-size:13px;font-weight:600;color:var(--text-primary);">' + escHtml(rec.tool) + '</div>';
+    html += '<div style="font-size:11px;color:var(--text-muted);">' + escHtml(rec.current_model) + ' → ' + escHtml(rec.suggested_model_tier) + ' &middot; ' + rec.call_count + ' calls</div>';
+    html += '</div>';
+    html += '<div style="text-align:right;flex-shrink:0;">';
+    html += '<div style="font-size:14px;font-weight:700;color:#22c55e;">save ' + savStr + '</div>';
+    html += '<div style="font-size:11px;color:var(--text-muted);">' + curStr + ' now &middot; ' + rec.savings_pct + '% off</div>';
+    html += '</div></div>';
+  });
+  html += '</div>';
+  html += '<div style="margin-top:10px;font-size:11px;color:var(--text-muted);line-height:1.5;">Based on a static heuristic: deterministic tools (bash, read, ls) rarely need heavy reasoning. Validate quality before applying routing rules.</div>';
   el.innerHTML = html;
 }
 
