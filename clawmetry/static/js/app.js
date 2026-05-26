@@ -6571,7 +6571,7 @@ async function loadSessions() {
     // In cloud mode: /api/sessions and /api/subagents already handle CLOUD_MODE server-side
     // fetch interceptor appends node_id+token so these hit the cloud endpoints correctly
   }
-  var [sessData, saData, anomalyData, costData, chainData, riskBrain, evalData] = await Promise.all([
+  var [sessData, saData, anomalyData, costData, chainData, riskBrain, evalData, loopData] = await Promise.all([
     fetch('/api/sessions').then(r => r.json()).catch(function() { return {sessions:[]}; }),
     fetch('/api/subagents').then(r => r.json()).catch(function() { return {subagents:[]}; }),
     fetch('/api/usage/anomalies').then(r => r.json()).catch(function() { return {anomalies:[]}; }),
@@ -6585,7 +6585,12 @@ async function loadSessions() {
     // Issue #1619 Phase 1 — eval scores. Joined client-side onto the
     // sessions list so the Score column doesn't require a server-side
     // join with the in-flight #1614 outcome columns.
-    fetch('/api/evals/recent?limit=200').then(r => r.json()).catch(function() { return {evals:[]}; })
+    fetch('/api/evals/recent?limit=200').then(r => r.json()).catch(function() { return {evals:[]}; }),
+    // Issue #1364 — loop-detection badge on session cards. Same data that
+    // powers the Brain tab badge, now surfaced on the Sessions list where
+    // users look first. Fails silently (empty map) when the proxy isn't
+    // running or the local store is unreachable.
+    fetch('/api/loop-signals?limit=200&since_minutes=60').then(r => r.json()).catch(function() { return {signals:[]}; })
   ]);
   // Build a session_id → eval lookup for O(1) overlay.
   var evalMap = {};
@@ -6603,6 +6608,13 @@ async function loadSessions() {
   });
   var anomalySet = {};
   (anomalyData.anomalies || []).forEach(function(a) { if (a && a.session_id) anomalySet[a.session_id] = a; });
+  // Issue #1364 — per-session loop-detection lookup (session_id → repeat_count).
+  // Populated from /api/loop-signals (loop_signals DuckDB table). Empty for
+  // users who don't run the proxy; badge simply won't appear in that case.
+  var loopSessions = {};
+  ((loopData && loopData.signals) || []).forEach(function(sig) {
+    if (sig && sig.session_id) loopSessions[sig.session_id] = (loopSessions[sig.session_id] || 0) + (sig.repeat_count || 1);
+  });
   // Per-session high-risk set for the session-row warning badge.
   // Issue #567: a session is "high-risk" if ANY of its recent LLM calls
   // scored "high". Build the lookup once so the per-row test is O(1).
@@ -6637,6 +6649,14 @@ async function loadSessions() {
         '" title="' + _hrCount + ' high-risk call' + (_hrCount > 1 ? 's' : '') +
         ' in this session. Open the Brain tab for per-call detail."' +
         ' style="margin-left:6px;color:#dc2626;font-size:13px;">&#9888;</span>';
+    }
+    // Issue #1364 — loop-detection badge. Shown when the proxy's LoopDetector
+    // has recorded repeated identical requests from this session in the last
+    // hour. Data comes from the loop_signals DuckDB table via /api/loop-signals.
+    var _loopCount = loopSessions[sid] || 0;
+    if (_loopCount > 0) {
+      html += '<span class="session-loop-warn" onclick="event.stopPropagation();switchTab(\'brain\')" title="Agent may be looping: ' + _loopCount + ' repeated request' + (_loopCount > 1 ? 's' : '') + ' detected. Click to open Brain tab."' +
+        ' style="margin-left:6px;color:#d97706;font-size:11px;font-weight:700;background:rgba(217,119,6,0.12);border:1px solid rgba(217,119,6,0.35);border-radius:8px;padding:1px 6px;cursor:pointer;">&#9888; Looping</span>';
     }
     html += '</span>';
     html += '<button onclick="event.stopPropagation();stopSession(\'' + escHtml(sid).replace(/'/g, "\\\\'") + '\')" style="background:#b91c1c;color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;">⏹ Emergency Stop</button>';
