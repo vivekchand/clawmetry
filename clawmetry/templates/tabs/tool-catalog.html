@@ -25,6 +25,13 @@
   <!-- Provenance summary chips -->
   <div id="tc-summary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;"></div>
 
+  <!-- Per-MCP-server rollup (#2007): which MCP server is hot / slow / failing. -->
+  <div id="mcp-servers-section" style="display:none;margin-bottom:16px;">
+    <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:2px;">🧩 MCP servers</div>
+    <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Tool calls grouped by MCP server &mdash; volume, p50/p95 latency, error rate. Model spend is the cost of the turns that called each server.</div>
+    <div class="card" id="mcp-servers-card" style="padding:0;overflow:hidden;"></div>
+  </div>
+
   <!-- Tool table -->
   <div class="card" id="tc-table" style="color:var(--text-muted);font-size:13px;padding:0;overflow:hidden;">Loading tool catalog&hellip;</div>
 </div>

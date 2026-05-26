@@ -10859,6 +10859,34 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         tool_catalog_slice = _build_tool_catalog_slice()
     except Exception as _e_tc:
         log.debug("snapshot: tool_catalog slice failed: %s", _e_tc)
+    # Per-MCP-server cost & latency rollup (#2007): the same tool_call→tool_result
+    # join as the tool catalog, re-aggregated by MCP server (the provider segment
+    # of mcp__<server>__<tool>). Built on the daemon's OWN store handle (never a
+    # read_only=True re-open — #1771) and bounded to the top servers so the slice
+    # stays tiny in the shared snapshot. Reuses the OSS route's rollup so the
+    # cloud MCP-servers card shows the identical numbers.
+    mcp_servers_slice: dict = {"servers": [], "totals": {}}
+    try:
+        from clawmetry import local_store as _ls_mcp
+        _mcp_store = _ls_mcp.get_store()
+        if _mcp_store is not None:
+            _mcp_rows = _mcp_store.query_events(limit=5000) or []
+            _mcp_builtin: set = set()
+            try:
+                for _r in (_mcp_store.query_tool_policy(limit=25) or []):
+                    _allow = _r.get("allow")
+                    if isinstance(_allow, list):
+                        for _n in _allow:
+                            if _n:
+                                _mcp_builtin.add(str(_n).replace("mcp__openclaw__", ""))
+            except Exception:
+                pass
+            from routes.tool_catalog import _mcp_servers_rollup as _mcp_roll
+            mcp_servers_slice = _mcp_roll(_mcp_rows, builtin=_mcp_builtin)
+            # Bound to the 12 busiest servers; trim each server's top_tools to 5.
+            mcp_servers_slice["servers"] = mcp_servers_slice.get("servers", [])[:12]
+    except Exception as _e_mcp:
+        log.debug("snapshot: mcp_servers slice failed: %s", _e_mcp)
     # Context-window economics (PRD P1-2) → bounded snapshot slice for the
     # cloud Context Economics tab. Ships the compaction log (trigger + before/
     # after + reclaimed) and the overflow-session flags, plus a small summary,
@@ -10941,6 +10969,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "runLedger": run_ledger_slice,
         "toolPolicy": tool_policy_slice,
         "toolCatalog": tool_catalog_slice,
+        "mcpServers": mcp_servers_slice,
         "contextEconomics": context_economics_slice,
         "spending": spending,
         "cronJobs": _build_cron_jobs(paths),
