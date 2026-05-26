@@ -449,6 +449,11 @@ _DAEMON_METHODS = frozenset({
     # off the JSONL scanner. Returns last non-zero usage.input_tokens
     # from the most-recent active session.
     "query_context_window_peek",
+    # PRD P1-2 (Context Economics): per-turn context utilization over time +
+    # compaction events tagged proactive/overflow + reclaimed tokens +
+    # repeatedly-overflow-then-retry session flag. Powers the Context
+    # Economics tab (routes/context_economics.py:/api/context-economics).
+    "query_context_economics",
     # Phase 4 (issue #1088 follow-up, 2026-05-13): channel-message
     # foundation. Three helpers proved out the schema; the remaining 18
     # per-provider channel routes follow once these go green.

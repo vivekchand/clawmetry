@@ -125,6 +125,7 @@ from routes.scheduler import bp_scheduler
 from routes.policy import bp_policy
 from routes.turn_anatomy import bp_turn_anatomy
 from routes.tool_catalog import bp_tool_catalog
+from routes.context_economics import bp_context_economics
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -10625,6 +10626,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_policy)
     app.register_blueprint(bp_turn_anatomy)
     app.register_blueprint(bp_tool_catalog)
+    app.register_blueprint(bp_context_economics)
 
     # Register built-in agent adapters. External plugins can register more
     # via clawmetry.extensions entry points — see clawmetry/adapters/.
@@ -11082,6 +11084,8 @@ DASHBOARD_HTML = r"""
         </div>
         <div class="left-nav-item left-nav-item-sub" id="left-nav-tool-catalog" data-tab="tool-catalog" onclick="switchTab('tool-catalog')" title="Every tool the agent uses by provenance, with call count and p50/p95 latency">
           <span class="left-nav-label">Tool catalog</span>
+        <div class="left-nav-item left-nav-item-sub" id="left-nav-context-economics" data-tab="context-economics" onclick="switchTab('context-economics')" title="Context-window utilization over time, compaction triggers and tokens reclaimed">
+          <span class="left-nav-label">Context economics</span>
         </div>
       </div>
 
@@ -11212,6 +11216,7 @@ DASHBOARD_HTML = r"""
 
 <!-- TOOL CATALOG (provenance + p50/p95 latency + error rate, P1-3) -->
 {% include 'tabs/tool-catalog.html' %}
+{% include 'tabs/context-economics.html' %}
 
 <!-- SECURITY -->
 {% include 'tabs/security.html' %}

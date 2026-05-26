@@ -930,6 +930,192 @@ function cancelAllPendingSSEDwell() {
   });
 }
 
+// ── Context Economics (PRD P1-2) ───────────────────────────────────────────
+// Interactive context-window economics: a utilization gauge over time, the
+// compaction log tagged proactive/overflow with tokens reclaimed, and the
+// repeatedly-overflow-then-retry flag. Reads /api/context-economics.
+//   - Click a session chip to scope the gauge to one conversation.
+//   - Hover a gauge bar for the per-turn ctx tokens / window / %.
+//   - Click a compaction row to expand its before/after + summary, with a
+//     "View transcript" deep-link into the global viewTranscript(sessionId).
+var _ceSessionId = null;          // active session scope (null = all)
+var _ceCompactionsCache = [];     // last-rendered compactions (for expand)
+
+function _ceShortSid(sid) {
+  sid = String(sid || '');
+  // claude_code:UUID -> UUID head; otherwise tail. Keep it short + stable.
+  var parts = sid.split(':');
+  var tail = parts[parts.length - 1] || sid;
+  return tail.slice(0, 8);
+}
+
+function _ceFmtTokens(n) {
+  n = Number(n || 0);
+  if (n >= 1000) return (n / 1000).toFixed(n >= 100000 ? 0 : 1) + 'K';
+  return String(n);
+}
+
+function _ceSelectSession(sid) {
+  _ceSessionId = (_ceSessionId === sid) ? null : sid;  // toggle off if same
+  loadContextEconomics();
+}
+
+function _ceToggleCompaction(idx) {
+  var row = document.getElementById('ce-comp-detail-' + idx);
+  if (!row) return;
+  row.style.display = (row.style.display === 'none' || !row.style.display) ? 'block' : 'none';
+}
+
+async function loadContextEconomics() {
+  var gaugeEl = document.getElementById('ce-gauge-panel');
+  var sumEl = document.getElementById('ce-summary');
+  var chipsEl = document.getElementById('ce-session-chips');
+  var compEl = document.getElementById('ce-compactions-panel');
+  var ovEl = document.getElementById('ce-overflow-panel');
+  if (!gaugeEl) return;
+  var url = '/api/context-economics?limit=400' + (_ceSessionId ? ('&session_id=' + encodeURIComponent(_ceSessionId)) : '');
+  var data;
+  try {
+    data = await fetch(url).then(function(r){ return r.json(); });
+  } catch (e) {
+    gaugeEl.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">Failed to load context economics: ' + escHtml(String(e)) + '</div>';
+    return;
+  }
+  var util = data.utilization || [];
+  var comps = data.compactions || [];
+  var overflow = data.overflow_sessions || [];
+  var chips = data.session_chips || [];
+  var s = data.summary || {};
+  _ceCompactionsCache = comps;
+
+  // ── Summary chips ──
+  if (sumEl) {
+    function chip(label, val, color) {
+      return '<div style="border:1px solid var(--border-primary);border-radius:10px;padding:10px 14px;min-width:96px;">'
+        + '<div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">' + escHtml(label) + '</div>'
+        + '<div style="font-size:18px;font-weight:700;color:' + (color || 'var(--text-primary)') + ';margin-top:2px;">' + escHtml(String(val)) + '</div></div>';
+    }
+    var peakColor = (s.peak_pct || 0) >= 90 ? '#ef4444' : ((s.peak_pct || 0) >= 70 ? '#d97706' : 'var(--text-primary)');
+    sumEl.innerHTML = '<div style="display:flex;gap:10px;flex-wrap:wrap;">'
+      + chip('Peak window', (s.peak_pct || 0) + '%', peakColor)
+      + chip('Compactions', s.compaction_count || 0)
+      + chip('Overflow', s.overflow_count || 0, (s.overflow_count || 0) > 0 ? '#ef4444' : 'var(--text-muted)')
+      + chip('Proactive', s.proactive_count || 0, '#16a34a')
+      + chip('Tokens reclaimed', _ceFmtTokens(s.total_reclaimed || 0), '#16a34a')
+      + chip('Overflow sessions', s.overflow_sessions || 0, (s.overflow_sessions || 0) > 0 ? '#ef4444' : 'var(--text-muted)')
+      + '</div>';
+  }
+
+  // ── Session picker chips ──
+  if (chipsEl) {
+    if (chips.length === 0) {
+      chipsEl.innerHTML = '';
+    } else {
+      var ch = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">';
+      ch += '<span style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-right:4px;">Scope:</span>';
+      ch += '<span onclick="_ceSelectSession(null)" style="cursor:pointer;font-size:12px;font-weight:600;border-radius:14px;padding:4px 12px;border:1px solid ' + (!_ceSessionId ? '#3b82f6' : 'var(--border-primary)') + ';background:' + (!_ceSessionId ? 'rgba(59,130,246,.12)' : 'transparent') + ';color:var(--text-primary);">All sessions</span>';
+      chips.slice(0, 12).forEach(function(c) {
+        var active = (_ceSessionId === c.session_id);
+        var pk = Number(c.peak_pct || 0);
+        var dot = pk >= 90 ? '#ef4444' : (pk >= 70 ? '#d97706' : '#16a34a');
+        ch += '<span onclick="_ceSelectSession(' + JSON.stringify(c.session_id) + ')" title="' + escHtml(c.session_id) + ' · peak ' + pk + '%" style="cursor:pointer;font-size:12px;font-weight:600;border-radius:14px;padding:4px 12px;border:1px solid ' + (active ? '#3b82f6' : 'var(--border-primary)') + ';background:' + (active ? 'rgba(59,130,246,.12)' : 'transparent') + ';color:var(--text-primary);">'
+          + '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:' + dot + ';margin-right:5px;"></span>'
+          + escHtml(_ceShortSid(c.session_id)) + ' <span style="color:var(--text-muted);font-weight:500;">' + pk + '%</span></span>';
+      });
+      ch += '</div>';
+      chipsEl.innerHTML = ch;
+    }
+  }
+
+  // ── Utilization gauge over time (sparkline-style bars) ──
+  if (util.length === 0) {
+    gaugeEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">No context-window readings yet. Once your agents take a few turns, per-turn utilization appears here.</div>';
+  } else {
+    var maxPct = Math.max(100, util.reduce(function(m, u){ return Math.max(m, Number(u.pct || 0)); }, 0));
+    var g = '<div style="border:1px solid var(--border-primary);border-radius:10px;padding:14px;">';
+    g += '<div style="display:flex;align-items:baseline;gap:8px;margin-bottom:10px;">';
+    g += '<div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;">Context-window utilization over time</div>';
+    g += '<span style="font-size:11px;color:var(--text-muted);">' + util.length + ' turns' + (_ceSessionId ? (' · ' + escHtml(_ceShortSid(_ceSessionId))) : '') + '</span></div>';
+    // Threshold guide lines (70% warn / 90% danger) behind the bars.
+    g += '<div style="position:relative;height:120px;display:flex;align-items:flex-end;gap:1px;border-bottom:1px solid var(--border-secondary);">';
+    g += '<div style="position:absolute;left:0;right:0;bottom:' + (90 / maxPct * 100) + '%;border-top:1px dashed rgba(239,68,68,.5);"></div>';
+    g += '<div style="position:absolute;left:0;right:0;bottom:' + (70 / maxPct * 100) + '%;border-top:1px dashed rgba(217,119,6,.4);"></div>';
+    util.forEach(function(u) {
+      var pct = Number(u.pct || 0);
+      var h = Math.max(2, pct / maxPct * 100);
+      var color = pct >= 90 ? '#ef4444' : (pct >= 70 ? '#d97706' : '#3b82f6');
+      var tip = (u.ts || '') + ' · ' + _ceFmtTokens(u.tokens) + ' / ' + _ceFmtTokens(u.window) + ' ctx tokens (' + pct + '%)' + (u.model ? (' · ' + u.model) : '');
+      g += '<div title="' + escHtml(tip) + '" style="flex:1;min-width:2px;height:' + h + '%;background:' + color + ';border-radius:2px 2px 0 0;cursor:crosshair;"></div>';
+    });
+    g += '</div>';
+    g += '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-faint);margin-top:5px;">'
+      + '<span>oldest</span><span style="color:#d97706;">- - 70%</span><span style="color:#ef4444;">- - 90%</span><span>newest</span></div>';
+    g += '</div>';
+    gaugeEl.innerHTML = g;
+  }
+
+  // ── Compaction log (clickable rows -> before/after + summary) ──
+  if (compEl) {
+    if (comps.length === 0) {
+      compEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">No compactions recorded' + (_ceSessionId ? ' for this session' : '') + '. OpenClaw compacts the transcript when the window fills; events appear here as they happen.</div>';
+    } else {
+      var c = '<div style="border:1px solid var(--border-primary);border-radius:10px;overflow:hidden;">';
+      c += '<div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;padding:12px 14px;border-bottom:1px solid var(--border-primary);">Compaction events <span style="color:var(--text-faint);font-weight:500;text-transform:none;">— click a row to expand</span></div>';
+      comps.forEach(function(cp, idx) {
+        var isOverflow = cp.trigger === 'overflow';
+        var trigColor = isOverflow ? '#ef4444' : '#16a34a';
+        var trigBg = isOverflow ? 'rgba(239,68,68,.12)' : 'rgba(22,163,74,.12)';
+        var reclaimed = Number(cp.reclaimed || 0);
+        c += '<div onclick="_ceToggleCompaction(' + idx + ')" style="cursor:pointer;display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;">';
+        c += '<span style="font-size:10px;font-weight:700;color:' + trigColor + ';background:' + trigBg + ';border-radius:4px;padding:1px 7px;text-transform:uppercase;">' + escHtml(cp.trigger || 'proactive') + '</span>';
+        c += '<span style="color:var(--text-faint);background:var(--bg-secondary);border-radius:4px;padding:1px 6px;font-size:10px;" title="' + escHtml(cp.session_id || '') + '">' + escHtml(_ceShortSid(cp.session_id)) + '</span>';
+        c += '<span style="flex:1;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(String(cp.ts || '')) + '</span>';
+        c += '<span style="color:var(--text-primary);white-space:nowrap;">' + _ceFmtTokens(cp.tokens_before) + ' &#8594; ' + _ceFmtTokens(cp.tokens_after) + '</span>';
+        if (reclaimed > 0) c += '<span style="color:#16a34a;font-weight:600;white-space:nowrap;">&#8722;' + _ceFmtTokens(reclaimed) + '</span>';
+        c += '<span style="color:var(--text-faint);">&#9662;</span>';
+        c += '</div>';
+        // Expandable detail.
+        c += '<div id="ce-comp-detail-' + idx + '" style="display:none;padding:12px 16px;background:var(--bg-secondary);border-bottom:1px solid var(--border-secondary);font-size:12px;">';
+        c += '<div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:10px;">';
+        c += '<div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">Tokens before</div><div style="font-size:15px;font-weight:700;color:var(--text-primary);">' + Number(cp.tokens_before || 0).toLocaleString() + '</div></div>';
+        c += '<div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">Tokens after</div><div style="font-size:15px;font-weight:700;color:var(--text-primary);">' + Number(cp.tokens_after || 0).toLocaleString() + '</div></div>';
+        c += '<div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">Reclaimed</div><div style="font-size:15px;font-weight:700;color:#16a34a;">' + reclaimed.toLocaleString() + '</div></div>';
+        c += '<div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">Trigger</div><div style="font-size:13px;font-weight:600;color:' + trigColor + ';">' + escHtml(cp.trigger || 'proactive') + (cp.from_hook ? ' (auto-hook)' : '') + '</div></div>';
+        c += '</div>';
+        if (cp.summary) {
+          c += '<div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px;">Compaction summary</div>';
+          c += '<div style="max-height:160px;overflow:auto;white-space:pre-wrap;color:var(--text-secondary);line-height:1.5;border:1px solid var(--border-secondary);border-radius:6px;padding:8px;background:var(--bg-primary);">' + escHtml(String(cp.summary).slice(0, 4000)) + '</div>';
+        }
+        c += '<div style="margin-top:10px;"><a href="#" onclick="event.stopPropagation();viewTranscript(' + JSON.stringify(cp.session_id) + ');return false;" style="color:#7eb8f7;text-decoration:underline;font-weight:600;">View session transcript &#8594;</a></div>';
+        c += '</div>';
+      });
+      c += '</div>';
+      compEl.innerHTML = c;
+    }
+  }
+
+  // ── Repeatedly-overflow-then-retry flag ──
+  if (ovEl) {
+    if (overflow.length === 0) {
+      ovEl.innerHTML = '';
+    } else {
+      var o = '<div style="border:1px solid rgba(239,68,68,.4);border-radius:10px;overflow:hidden;margin-top:4px;">';
+      o += '<div style="font-size:12px;font-weight:700;color:#ef4444;text-transform:uppercase;letter-spacing:0.5px;padding:12px 14px;border-bottom:1px solid var(--border-secondary);background:rgba(239,68,68,.06);">&#9888; Sessions overflowing then retrying</div>';
+      overflow.forEach(function(os) {
+        o += '<div style="display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;">';
+        o += '<span style="color:var(--text-faint);background:var(--bg-secondary);border-radius:4px;padding:1px 6px;font-size:10px;" title="' + escHtml(os.session_id || '') + '">' + escHtml(_ceShortSid(os.session_id)) + '</span>';
+        o += '<span style="flex:1;color:var(--text-muted);">' + (os.compaction_count || 0) + ' compactions · ' + (os.overflow_count || 0) + ' overflow</span>';
+        o += '<a href="#" onclick="_ceSelectSession(' + JSON.stringify(os.session_id) + ');return false;" style="color:#7eb8f7;text-decoration:underline;">Scope gauge</a>';
+        o += '<a href="#" onclick="viewTranscript(' + JSON.stringify(os.session_id) + ');return false;" style="color:#7eb8f7;text-decoration:underline;">Transcript &#8594;</a>';
+        o += '</div>';
+      });
+      o += '</div>';
+      ovEl.innerHTML = o;
+    }
+  }
+}
+
+
 function switchTab(name) {
   // Track the active tab so tab-scoped pollers (Overview loadAll, etc.) only
   // run on their own screen instead of on every tab.
@@ -966,6 +1152,7 @@ function switchTab(name) {
   if (name === 'tracing') loadTracing();
   if (name === 'turn-anatomy') loadTurnAnatomy();
   if (name === 'tool-catalog') { if (typeof loadToolCatalog === 'function') loadToolCatalog(); }
+  if (name === 'context-economics') { if (typeof loadContextEconomics === 'function') loadContextEconomics(); }
   if (name === 'brain') loadBrainPage();
   if (name === 'selfevolve') loadSelfEvolvePage();
   if (name === 'notifications') { if (typeof loadNotificationsPage === 'function') loadNotificationsPage(); }

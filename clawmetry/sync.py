@@ -10847,6 +10847,59 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         tool_catalog_slice = _build_tool_catalog_slice()
     except Exception as _e_tc:
         log.debug("snapshot: tool_catalog slice failed: %s", _e_tc)
+    # Context-window economics (PRD P1-2) → bounded snapshot slice for the
+    # cloud Context Economics tab. Ships the compaction log (trigger + before/
+    # after + reclaimed) and the overflow-session flags, plus a small summary,
+    # but caps rows and truncates the free-text compaction summary so a long
+    # transcript summary can't bloat the shared snapshot (#1895 / 0.12.278
+    # bloat lesson). The full per-turn utilization series is intentionally
+    # NOT shipped — it can be hundreds of points per session; the cloud can
+    # re-derive a coarse view from the summary + compactions, and the OSS tab
+    # reads the live series directly.
+    context_economics_slice: dict = {
+        "compactions": [], "overflow_sessions": [], "summary": {},
+    }
+    try:
+        from clawmetry import local_store as _ls_ce
+        _ce_store = _ls_ce.get_store()
+        if _ce_store is not None:
+            _ce = _ce_store.query_context_economics(
+                util_limit=400, compaction_limit=80,
+            ) or {}
+            _ce_comps = _ce.get("compactions") or []
+            context_economics_slice["compactions"] = [
+                {
+                    "session_id":    c.get("session_id"),
+                    "ts":            c.get("ts"),
+                    "trigger":       c.get("trigger"),
+                    "tokens_before": c.get("tokens_before"),
+                    "tokens_after":  c.get("tokens_after"),
+                    "reclaimed":     c.get("reclaimed"),
+                    "from_hook":     c.get("from_hook"),
+                    # short prefix only — never the full compaction summary
+                    "summary":       (str(c.get("summary") or "")[:280]),
+                }
+                for c in _ce_comps[:80]
+            ]
+            context_economics_slice["overflow_sessions"] = (
+                _ce.get("overflow_sessions") or []
+            )[:50]
+            _ce_util = _ce.get("utilization") or []
+            _peak = max((float(u.get("pct") or 0) for u in _ce_util), default=0.0)
+            _overflow_n = sum(
+                1 for c in _ce_comps if c.get("trigger") == "overflow"
+            )
+            context_economics_slice["summary"] = {
+                "compaction_count":   len(_ce_comps),
+                "overflow_count":     _overflow_n,
+                "proactive_count":    len(_ce_comps) - _overflow_n,
+                "total_reclaimed":    sum(int(c.get("reclaimed") or 0) for c in _ce_comps),
+                "peak_pct":           round(_peak, 2),
+                "overflow_sessions":  len(_ce.get("overflow_sessions") or []),
+                "utilization_points": len(_ce_util),
+            }
+    except Exception as _e_ce:
+        log.debug("snapshot: context_economics slice failed: %s", _e_ce)
 
     payload = {
         "system": system,
@@ -10875,6 +10928,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "runLedger": run_ledger_slice,
         "toolPolicy": tool_policy_slice,
         "toolCatalog": tool_catalog_slice,
+        "contextEconomics": context_economics_slice,
         "spending": spending,
         "cronJobs": _build_cron_jobs(paths),
         "channels": _build_channel_data(config),
