@@ -10742,8 +10742,20 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     # Memory files
     _mem_files = _build_memory_files(paths.get("workspace", ""))
 
-    # Spending (from state if available)
-    spending = state.get("spending", {"today": 0, "week": 0, "month": 0})
+    # Spending (#2142): derive from the same live source as `dailyUsage` so
+    # both cost surfaces agree. Pre-fix this read from the daemon's
+    # `state.json`, which is almost always stale (often {0, 0, 0} on fresh
+    # nodes) — meanwhile `dailyUsage.monthCost` was correctly derived live
+    # from DuckDB events × model pricing (#2058). The cloud Spending hero
+    # card reads `snap.spending` and rendered $0 while the Cost tab showed
+    # the real four-figure month — trust-destroying. Computing dailyUsage
+    # once here and reusing it bounds the cost.
+    _du = _build_daily_usage()
+    spending = {
+        "today": float(_du.get("todayCost") or state.get("spending", {}).get("today") or 0),
+        "week":  float(_du.get("weekCost")  or state.get("spending", {}).get("week")  or 0),
+        "month": float(_du.get("monthCost") or state.get("spending", {}).get("month") or 0),
+    }
 
     # LLM Context Inspector parity (2026-05-23): expose the SAME fields
     # the OSS /api/overview now adds so the Context tab reads one value
@@ -10953,7 +10965,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
             ]
         ),
         "selfEvolve": _build_selfevolve(paths.get("workspace")),
-        "dailyUsage": _build_daily_usage(),
+        "dailyUsage": _du,  # #2142: computed once above, shared with `spending`
         "reliability": _build_reliability(),
         "memoryAccess": _build_memory_access(),
         "traces": _build_traces(),
