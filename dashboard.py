@@ -11320,8 +11320,10 @@ DASHBOARD_HTML = r"""
       <code style="display:block;color:var(--text-accent, #0af); background:rgba(0,170,255,0.1); padding:6px 8px; border-radius:4px; font-size:11px; word-break:break-all;">cat ~/.openclaw/openclaw.json | python3 -c "import json,sys;print(json.load(sys.stdin)['gateway']['auth']['token'])"</code>
       <div style="font-weight:600;color:var(--text-secondary, #aaa);margin:8px 0 4px;">Docker install</div>
       <code style="display:block;color:var(--text-accent, #0af); background:rgba(0,170,255,0.1); padding:6px 8px; border-radius:4px; font-size:11px; word-break:break-all;">docker exec $(docker ps -q) env | grep TOKEN</code>
+      <div style="font-weight:600;color:var(--text-secondary, #aaa);margin:8px 0 4px;">Remote / Docker / reverse-proxy</div>
+      <span style="color:var(--text-muted, #888);">Set <code style="color:var(--text-accent, #0af);">OPENCLAW_GATEWAY_URL=http://&lt;host&gt;:18789</code> env var, or enter the URL below.</span>
     </div>
-    <p id="gw-url-hint" style="color:var(--text-muted, #666); font-size:11px; margin:0 0 16px; text-align:left;">Optional: <input id="gw-url-input" type="text" placeholder="http://localhost:18789 (auto-detected)" style="width:70%; padding:4px 8px; border:1px solid var(--border-primary, #444); border-radius:4px; background:var(--bg-primary, #111); color:var(--text-primary, #fff); font-size:11px; font-family:monospace;"></p>
+    <p id="gw-url-hint" style="color:var(--text-muted, #666); font-size:11px; margin:0 0 16px; text-align:left;"><span style="color:var(--text-secondary,#aaa);">Gateway URL</span> <span style="color:var(--text-faint,#555);">(auto-detected for local; required for remote / Docker / reverse-proxy)</span><br><input id="gw-url-input" type="text" placeholder="http://localhost:18789" style="width:100%; margin-top:4px; padding:4px 8px; border:1px solid var(--border-primary, #444); border-radius:4px; background:var(--bg-primary, #111); color:var(--text-primary, #fff); font-size:11px; font-family:monospace; box-sizing:border-box;"></p>
     <div id="gw-setup-error" style="color:#ff4444; font-size:13px; margin-bottom:12px; display:none;"></div>
     <div id="gw-setup-status" style="color:var(--text-accent, #0af); font-size:13px; margin-bottom:12px; display:none;"></div>
     <button onclick="gwSetupConnect()" id="gw-connect-btn"
@@ -11378,7 +11380,10 @@ def _load_gw_config():
     if token:
         GATEWAY_TOKEN = token
         if not GATEWAY_URL:
-            GATEWAY_URL = f"http://127.0.0.1:{port}"
+            # OPENCLAW_GATEWAY_URL lets Docker / reverse-proxy users point at a
+            # remote gateway (e.g. Android) without touching the setup wizard.
+            env_url = os.environ.get("OPENCLAW_GATEWAY_URL", "").strip()
+            GATEWAY_URL = env_url if env_url else f"http://127.0.0.1:{port}"
         # Update cache file with fresh token (backward compat, not used for reads)
         try:
             cache = {}
@@ -11561,6 +11566,11 @@ _pypi_cache = {"ts": 0, "version": None}
 
 def _auto_discover_gateway(token):
     """Scan common ports to find an OpenClaw gateway."""
+    # Honour explicit remote URL before scanning localhost (issue #2106 — Docker/reverse-proxy).
+    env_url = os.environ.get("OPENCLAW_GATEWAY_URL", "").strip()
+    if env_url:
+        return env_url  # Caller validates; wrong URL surfaces a clear error there.
+
     common_ports = [18789, 56089]
     # Also check env and config files
     env_port = os.environ.get("OPENCLAW_GATEWAY_PORT")
