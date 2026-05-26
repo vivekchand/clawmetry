@@ -9864,6 +9864,178 @@ def _build_brain_data():
         return {"stats": {}, "calls": [], "total": 0}
 
 
+def _build_tool_catalog_slice(limit: int = 5000, top: int = 60) -> dict:
+    """Per-tool call count + p50/p95 latency + error rate grouped by provenance
+    (PRD P1-3), derived from the DuckDB ``events`` table.
+
+    Mirrors the OSS ``routes/tool_catalog.py`` aggregation so the cloud Tool
+    Catalog tab shows the same rollup: each ``tool_call`` event is matched to
+    its closing ``tool_result`` by tool_use id (the ``turn_anatomy`` join),
+    duration = ``result_ts - call_ts``. Provenance: a name with ``__`` is MCP,
+    a name in the sandbox ``tool_policy`` allow set is builtin, else plugin.
+
+    Bounded to the ``top`` busiest tools so the slice stays tiny in the shared
+    snapshot. Returns ``{"tools": [...], "groups": {...}}``; degrades to an
+    empty catalog (never raises) when the store is unavailable."""
+    out = {"tools": [], "groups": {"builtin": 0, "mcp": 0, "plugin": 0}}
+    try:
+        from clawmetry import local_store as _ls_tc
+        store = _ls_tc.get_store()
+    except Exception:
+        return out
+    if store is None:
+        return out
+
+    try:
+        rows = store.query_events(limit=int(limit)) or []
+    except Exception:
+        return out
+
+    # Builtin universe from the mirrored sandbox tool policy.
+    builtin: set = set()
+    try:
+        for r in (store.query_tool_policy(limit=25) or []):
+            allow = r.get("allow")
+            if isinstance(allow, list):
+                for n in allow:
+                    if n:
+                        builtin.add(str(n).replace("mcp__openclaw__", ""))
+    except Exception:
+        pass
+
+    def _d(e):
+        d = e.get("data")
+        return d if isinstance(d, dict) else {}
+
+    def _ms(ts):
+        if ts is None:
+            return None
+        if isinstance(ts, (int, float)):
+            return int(ts * 1000) if ts < 1e12 else int(ts)
+        try:
+            return int(datetime.fromisoformat(
+                str(ts).replace("Z", "+00:00")).timestamp() * 1000)
+        except Exception:
+            return None
+
+    def _name(e):
+        d = _d(e)
+        n = d.get("tool_name")
+        if n:
+            return str(n).replace("mcp__openclaw__", "")
+        tcs = d.get("tool_calls")
+        if isinstance(tcs, list) and tcs and isinstance(tcs[0], dict):
+            nn = tcs[0].get("name") or (tcs[0].get("function") or {}).get("name")
+            if nn:
+                return str(nn).replace("mcp__openclaw__", "")
+        return ""
+
+    def _err(e):
+        d = _d(e)
+        ex = d.get("extra") if isinstance(d.get("extra"), dict) else {}
+        return bool(ex.get("isError") or d.get("isError") or d.get("is_error")
+                    or (e.get("event_type") or "").endswith("error"))
+
+    def _is_result(e):
+        et = (e.get("event_type") or "").lower()
+        if "tool_result" in et or "tool_use_result" in et:
+            return True
+        return (_d(e).get("role") or "").lower() == "tool"
+
+    def _is_call(e):
+        et = (e.get("event_type") or "").lower()
+        if "tool_result" in et or "tool_use_result" in et:
+            return False
+        d = _d(e)
+        if (d.get("role") or "").lower() == "tool":
+            return False
+        return bool("tool_call" in et or "tool.call" in et
+                    or d.get("tool_name") or d.get("tool_calls"))
+
+    # Index results by the tool_use id they close.
+    res_idx: dict = {}
+    for e in rows:
+        if not _is_result(e):
+            continue
+        d = _d(e)
+        ex = d.get("extra") if isinstance(d.get("extra"), dict) else {}
+        rid = ex.get("toolUseId") or ex.get("tool_use_id") or d.get("tool_use_id")
+        if rid is not None:
+            res_idx[str(rid)] = {"ts": _ms(e.get("ts")), "error": _err(e)}
+
+    agg: dict = {}
+    for e in rows:
+        if not _is_call(e):
+            continue
+        name = _name(e)
+        if not name:
+            continue
+        start = _ms(e.get("ts"))
+        dur = None
+        err = _err(e)
+        d = _d(e)
+        tcs = d.get("tool_calls")
+        ids = [str(tc["id"]) for tc in tcs
+               if isinstance(tc, dict) and tc.get("id")] if isinstance(tcs, list) else []
+        for tuid in ids:
+            m = res_idx.get(tuid)
+            if m:
+                if m["error"]:
+                    err = True
+                if m["ts"] is not None and start is not None:
+                    dur = max(0, m["ts"] - start)
+                break
+        a = agg.setdefault(name, {"calls": 0, "durs": [], "errs": 0})
+        a["calls"] += 1
+        if dur is not None:
+            a["durs"].append(dur)
+        if err:
+            a["errs"] += 1
+
+    def _pct(vals, p):
+        if not vals:
+            return None
+        if len(vals) == 1:
+            return int(vals[0])
+        k = (len(vals) - 1) * (p / 100.0)
+        f = int(k)
+        if f + 1 < len(vals):
+            return int(vals[f] + (vals[f + 1] - vals[f]) * (k - f))
+        return int(vals[f])
+
+    def _classify(name):
+        if "__" in name:
+            parts = [p for p in name.split("__") if p]
+            if name.startswith("mcp__"):
+                provider = parts[1] if len(parts) > 1 else "mcp"
+            else:
+                provider = parts[0] if parts else "mcp"
+            return ("mcp", provider)
+        if name in builtin:
+            return ("builtin", "")
+        return ("plugin", "")
+
+    tools = []
+    for name, a in agg.items():
+        prov, provider = _classify(name)
+        durs = sorted(a["durs"])
+        calls = a["calls"]
+        tools.append({
+            "name": name,
+            "provenance": prov,
+            "provider": provider or None,
+            "calls": calls,
+            "p50_ms": _pct(durs, 50),
+            "p95_ms": _pct(durs, 95),
+            "error_rate": round(a["errs"] / calls, 4) if calls else 0.0,
+            "errors": a["errs"],
+        })
+        out["groups"][prov] = out["groups"].get(prov, 0) + 1
+    tools.sort(key=lambda t: (-t["calls"], -(t["p95_ms"] or 0), t["name"]))
+    out["tools"] = tools[:int(top)]
+    return out
+
+
 def _build_tool_stats():
     """Build tool usage stats from recent session logs."""
     try:
@@ -10665,6 +10837,17 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _e_tp:
         log.debug("snapshot: tool_policy slice failed: %s", _e_tp)
 
+    # Tool catalog (PRD P1-3): per-tool call count + p50/p95 latency + error
+    # rate grouped by provenance, derived from the DuckDB events table
+    # (tool_call → tool_result join). Bounded to the top tools by call count so
+    # the slice stays tiny in the shared snapshot. Mirrors the OSS
+    # ``/api/tool-catalog`` aggregation so the cloud tab shows the same rollup.
+    tool_catalog_slice: dict = {"tools": [], "groups": {}}
+    try:
+        tool_catalog_slice = _build_tool_catalog_slice()
+    except Exception as _e_tc:
+        log.debug("snapshot: tool_catalog slice failed: %s", _e_tc)
+
     payload = {
         "system": system,
         "infra": infra,
@@ -10691,6 +10874,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "totalActive": active_count,
         "runLedger": run_ledger_slice,
         "toolPolicy": tool_policy_slice,
+        "toolCatalog": tool_catalog_slice,
         "spending": spending,
         "cronJobs": _build_cron_jobs(paths),
         "channels": _build_channel_data(config),
