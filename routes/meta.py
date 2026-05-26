@@ -233,8 +233,10 @@ def api_gw_config():
         token = data.get("token", "").strip()
         if not token:
             return jsonify({"error": "Token is required"}), 400
-        # Auto-discover gateway port by scanning common ports
+        # Auto-discover gateway: explicit URL wins, then env var, then port scan.
         gw_url = data.get("url", "").strip()
+        if not gw_url:
+            gw_url = os.environ.get("OPENCLAW_GATEWAY_URL", "").strip()
         if not gw_url:
             gw_url = _d._auto_discover_gateway(token)
         if not gw_url:
