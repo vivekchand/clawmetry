@@ -930,6 +930,192 @@ function cancelAllPendingSSEDwell() {
   });
 }
 
+// ── Context Economics (PRD P1-2) ───────────────────────────────────────────
+// Interactive context-window economics: a utilization gauge over time, the
+// compaction log tagged proactive/overflow with tokens reclaimed, and the
+// repeatedly-overflow-then-retry flag. Reads /api/context-economics.
+//   - Click a session chip to scope the gauge to one conversation.
+//   - Hover a gauge bar for the per-turn ctx tokens / window / %.
+//   - Click a compaction row to expand its before/after + summary, with a
+//     "View transcript" deep-link into the global viewTranscript(sessionId).
+var _ceSessionId = null;          // active session scope (null = all)
+var _ceCompactionsCache = [];     // last-rendered compactions (for expand)
+
+function _ceShortSid(sid) {
+  sid = String(sid || '');
+  // claude_code:UUID -> UUID head; otherwise tail. Keep it short + stable.
+  var parts = sid.split(':');
+  var tail = parts[parts.length - 1] || sid;
+  return tail.slice(0, 8);
+}
+
+function _ceFmtTokens(n) {
+  n = Number(n || 0);
+  if (n >= 1000) return (n / 1000).toFixed(n >= 100000 ? 0 : 1) + 'K';
+  return String(n);
+}
+
+function _ceSelectSession(sid) {
+  _ceSessionId = (_ceSessionId === sid) ? null : sid;  // toggle off if same
+  loadContextEconomics();
+}
+
+function _ceToggleCompaction(idx) {
+  var row = document.getElementById('ce-comp-detail-' + idx);
+  if (!row) return;
+  row.style.display = (row.style.display === 'none' || !row.style.display) ? 'block' : 'none';
+}
+
+async function loadContextEconomics() {
+  var gaugeEl = document.getElementById('ce-gauge-panel');
+  var sumEl = document.getElementById('ce-summary');
+  var chipsEl = document.getElementById('ce-session-chips');
+  var compEl = document.getElementById('ce-compactions-panel');
+  var ovEl = document.getElementById('ce-overflow-panel');
+  if (!gaugeEl) return;
+  var url = '/api/context-economics?limit=400' + (_ceSessionId ? ('&session_id=' + encodeURIComponent(_ceSessionId)) : '');
+  var data;
+  try {
+    data = await fetch(url).then(function(r){ return r.json(); });
+  } catch (e) {
+    gaugeEl.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">Failed to load context economics: ' + escHtml(String(e)) + '</div>';
+    return;
+  }
+  var util = data.utilization || [];
+  var comps = data.compactions || [];
+  var overflow = data.overflow_sessions || [];
+  var chips = data.session_chips || [];
+  var s = data.summary || {};
+  _ceCompactionsCache = comps;
+
+  // ── Summary chips ──
+  if (sumEl) {
+    function chip(label, val, color) {
+      return '<div style="border:1px solid var(--border-primary);border-radius:10px;padding:10px 14px;min-width:96px;">'
+        + '<div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">' + escHtml(label) + '</div>'
+        + '<div style="font-size:18px;font-weight:700;color:' + (color || 'var(--text-primary)') + ';margin-top:2px;">' + escHtml(String(val)) + '</div></div>';
+    }
+    var peakColor = (s.peak_pct || 0) >= 90 ? '#ef4444' : ((s.peak_pct || 0) >= 70 ? '#d97706' : 'var(--text-primary)');
+    sumEl.innerHTML = '<div style="display:flex;gap:10px;flex-wrap:wrap;">'
+      + chip('Peak window', (s.peak_pct || 0) + '%', peakColor)
+      + chip('Compactions', s.compaction_count || 0)
+      + chip('Overflow', s.overflow_count || 0, (s.overflow_count || 0) > 0 ? '#ef4444' : 'var(--text-muted)')
+      + chip('Proactive', s.proactive_count || 0, '#16a34a')
+      + chip('Tokens reclaimed', _ceFmtTokens(s.total_reclaimed || 0), '#16a34a')
+      + chip('Overflow sessions', s.overflow_sessions || 0, (s.overflow_sessions || 0) > 0 ? '#ef4444' : 'var(--text-muted)')
+      + '</div>';
+  }
+
+  // ── Session picker chips ──
+  if (chipsEl) {
+    if (chips.length === 0) {
+      chipsEl.innerHTML = '';
+    } else {
+      var ch = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">';
+      ch += '<span style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-right:4px;">Scope:</span>';
+      ch += '<span onclick="_ceSelectSession(null)" style="cursor:pointer;font-size:12px;font-weight:600;border-radius:14px;padding:4px 12px;border:1px solid ' + (!_ceSessionId ? '#3b82f6' : 'var(--border-primary)') + ';background:' + (!_ceSessionId ? 'rgba(59,130,246,.12)' : 'transparent') + ';color:var(--text-primary);">All sessions</span>';
+      chips.slice(0, 12).forEach(function(c) {
+        var active = (_ceSessionId === c.session_id);
+        var pk = Number(c.peak_pct || 0);
+        var dot = pk >= 90 ? '#ef4444' : (pk >= 70 ? '#d97706' : '#16a34a');
+        ch += '<span onclick="_ceSelectSession(' + JSON.stringify(c.session_id) + ')" title="' + escHtml(c.session_id) + ' · peak ' + pk + '%" style="cursor:pointer;font-size:12px;font-weight:600;border-radius:14px;padding:4px 12px;border:1px solid ' + (active ? '#3b82f6' : 'var(--border-primary)') + ';background:' + (active ? 'rgba(59,130,246,.12)' : 'transparent') + ';color:var(--text-primary);">'
+          + '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:' + dot + ';margin-right:5px;"></span>'
+          + escHtml(_ceShortSid(c.session_id)) + ' <span style="color:var(--text-muted);font-weight:500;">' + pk + '%</span></span>';
+      });
+      ch += '</div>';
+      chipsEl.innerHTML = ch;
+    }
+  }
+
+  // ── Utilization gauge over time (sparkline-style bars) ──
+  if (util.length === 0) {
+    gaugeEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">No context-window readings yet. Once your agents take a few turns, per-turn utilization appears here.</div>';
+  } else {
+    var maxPct = Math.max(100, util.reduce(function(m, u){ return Math.max(m, Number(u.pct || 0)); }, 0));
+    var g = '<div style="border:1px solid var(--border-primary);border-radius:10px;padding:14px;">';
+    g += '<div style="display:flex;align-items:baseline;gap:8px;margin-bottom:10px;">';
+    g += '<div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;">Context-window utilization over time</div>';
+    g += '<span style="font-size:11px;color:var(--text-muted);">' + util.length + ' turns' + (_ceSessionId ? (' · ' + escHtml(_ceShortSid(_ceSessionId))) : '') + '</span></div>';
+    // Threshold guide lines (70% warn / 90% danger) behind the bars.
+    g += '<div style="position:relative;height:120px;display:flex;align-items:flex-end;gap:1px;border-bottom:1px solid var(--border-secondary);">';
+    g += '<div style="position:absolute;left:0;right:0;bottom:' + (90 / maxPct * 100) + '%;border-top:1px dashed rgba(239,68,68,.5);"></div>';
+    g += '<div style="position:absolute;left:0;right:0;bottom:' + (70 / maxPct * 100) + '%;border-top:1px dashed rgba(217,119,6,.4);"></div>';
+    util.forEach(function(u) {
+      var pct = Number(u.pct || 0);
+      var h = Math.max(2, pct / maxPct * 100);
+      var color = pct >= 90 ? '#ef4444' : (pct >= 70 ? '#d97706' : '#3b82f6');
+      var tip = (u.ts || '') + ' · ' + _ceFmtTokens(u.tokens) + ' / ' + _ceFmtTokens(u.window) + ' ctx tokens (' + pct + '%)' + (u.model ? (' · ' + u.model) : '');
+      g += '<div title="' + escHtml(tip) + '" style="flex:1;min-width:2px;height:' + h + '%;background:' + color + ';border-radius:2px 2px 0 0;cursor:crosshair;"></div>';
+    });
+    g += '</div>';
+    g += '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-faint);margin-top:5px;">'
+      + '<span>oldest</span><span style="color:#d97706;">- - 70%</span><span style="color:#ef4444;">- - 90%</span><span>newest</span></div>';
+    g += '</div>';
+    gaugeEl.innerHTML = g;
+  }
+
+  // ── Compaction log (clickable rows -> before/after + summary) ──
+  if (compEl) {
+    if (comps.length === 0) {
+      compEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">No compactions recorded' + (_ceSessionId ? ' for this session' : '') + '. OpenClaw compacts the transcript when the window fills; events appear here as they happen.</div>';
+    } else {
+      var c = '<div style="border:1px solid var(--border-primary);border-radius:10px;overflow:hidden;">';
+      c += '<div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;padding:12px 14px;border-bottom:1px solid var(--border-primary);">Compaction events <span style="color:var(--text-faint);font-weight:500;text-transform:none;">— click a row to expand</span></div>';
+      comps.forEach(function(cp, idx) {
+        var isOverflow = cp.trigger === 'overflow';
+        var trigColor = isOverflow ? '#ef4444' : '#16a34a';
+        var trigBg = isOverflow ? 'rgba(239,68,68,.12)' : 'rgba(22,163,74,.12)';
+        var reclaimed = Number(cp.reclaimed || 0);
+        c += '<div onclick="_ceToggleCompaction(' + idx + ')" style="cursor:pointer;display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;">';
+        c += '<span style="font-size:10px;font-weight:700;color:' + trigColor + ';background:' + trigBg + ';border-radius:4px;padding:1px 7px;text-transform:uppercase;">' + escHtml(cp.trigger || 'proactive') + '</span>';
+        c += '<span style="color:var(--text-faint);background:var(--bg-secondary);border-radius:4px;padding:1px 6px;font-size:10px;" title="' + escHtml(cp.session_id || '') + '">' + escHtml(_ceShortSid(cp.session_id)) + '</span>';
+        c += '<span style="flex:1;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(String(cp.ts || '')) + '</span>';
+        c += '<span style="color:var(--text-primary);white-space:nowrap;">' + _ceFmtTokens(cp.tokens_before) + ' &#8594; ' + _ceFmtTokens(cp.tokens_after) + '</span>';
+        if (reclaimed > 0) c += '<span style="color:#16a34a;font-weight:600;white-space:nowrap;">&#8722;' + _ceFmtTokens(reclaimed) + '</span>';
+        c += '<span style="color:var(--text-faint);">&#9662;</span>';
+        c += '</div>';
+        // Expandable detail.
+        c += '<div id="ce-comp-detail-' + idx + '" style="display:none;padding:12px 16px;background:var(--bg-secondary);border-bottom:1px solid var(--border-secondary);font-size:12px;">';
+        c += '<div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:10px;">';
+        c += '<div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">Tokens before</div><div style="font-size:15px;font-weight:700;color:var(--text-primary);">' + Number(cp.tokens_before || 0).toLocaleString() + '</div></div>';
+        c += '<div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">Tokens after</div><div style="font-size:15px;font-weight:700;color:var(--text-primary);">' + Number(cp.tokens_after || 0).toLocaleString() + '</div></div>';
+        c += '<div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">Reclaimed</div><div style="font-size:15px;font-weight:700;color:#16a34a;">' + reclaimed.toLocaleString() + '</div></div>';
+        c += '<div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">Trigger</div><div style="font-size:13px;font-weight:600;color:' + trigColor + ';">' + escHtml(cp.trigger || 'proactive') + (cp.from_hook ? ' (auto-hook)' : '') + '</div></div>';
+        c += '</div>';
+        if (cp.summary) {
+          c += '<div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px;">Compaction summary</div>';
+          c += '<div style="max-height:160px;overflow:auto;white-space:pre-wrap;color:var(--text-secondary);line-height:1.5;border:1px solid var(--border-secondary);border-radius:6px;padding:8px;background:var(--bg-primary);">' + escHtml(String(cp.summary).slice(0, 4000)) + '</div>';
+        }
+        c += '<div style="margin-top:10px;"><a href="#" onclick="event.stopPropagation();viewTranscript(' + JSON.stringify(cp.session_id) + ');return false;" style="color:#7eb8f7;text-decoration:underline;font-weight:600;">View session transcript &#8594;</a></div>';
+        c += '</div>';
+      });
+      c += '</div>';
+      compEl.innerHTML = c;
+    }
+  }
+
+  // ── Repeatedly-overflow-then-retry flag ──
+  if (ovEl) {
+    if (overflow.length === 0) {
+      ovEl.innerHTML = '';
+    } else {
+      var o = '<div style="border:1px solid rgba(239,68,68,.4);border-radius:10px;overflow:hidden;margin-top:4px;">';
+      o += '<div style="font-size:12px;font-weight:700;color:#ef4444;text-transform:uppercase;letter-spacing:0.5px;padding:12px 14px;border-bottom:1px solid var(--border-secondary);background:rgba(239,68,68,.06);">&#9888; Sessions overflowing then retrying</div>';
+      overflow.forEach(function(os) {
+        o += '<div style="display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;">';
+        o += '<span style="color:var(--text-faint);background:var(--bg-secondary);border-radius:4px;padding:1px 6px;font-size:10px;" title="' + escHtml(os.session_id || '') + '">' + escHtml(_ceShortSid(os.session_id)) + '</span>';
+        o += '<span style="flex:1;color:var(--text-muted);">' + (os.compaction_count || 0) + ' compactions · ' + (os.overflow_count || 0) + ' overflow</span>';
+        o += '<a href="#" onclick="_ceSelectSession(' + JSON.stringify(os.session_id) + ');return false;" style="color:#7eb8f7;text-decoration:underline;">Scope gauge</a>';
+        o += '<a href="#" onclick="viewTranscript(' + JSON.stringify(os.session_id) + ');return false;" style="color:#7eb8f7;text-decoration:underline;">Transcript &#8594;</a>';
+        o += '</div>';
+      });
+      o += '</div>';
+      ovEl.innerHTML = o;
+    }
+  }
+}
+
+
 function switchTab(name) {
   // Track the active tab so tab-scoped pollers (Overview loadAll, etc.) only
   // run on their own screen instead of on every tab.
@@ -965,6 +1151,8 @@ function switchTab(name) {
   if (name === 'context') loadContextInspector();
   if (name === 'tracing') loadTracing();
   if (name === 'turn-anatomy') loadTurnAnatomy();
+  if (name === 'tool-catalog') { if (typeof loadToolCatalog === 'function') loadToolCatalog(); }
+  if (name === 'context-economics') { if (typeof loadContextEconomics === 'function') loadContextEconomics(); }
   if (name === 'brain') loadBrainPage();
   if (name === 'selfevolve') loadSelfEvolvePage();
   if (name === 'notifications') { if (typeof loadNotificationsPage === 'function') loadNotificationsPage(); }
@@ -8647,31 +8835,57 @@ async function viewTrace(traceId) {
   if (list) list.style.display = 'none';
   if (detail) detail.style.display = '';
   if (back) back.style.display = '';
-  var wf = document.getElementById('trace-waterfall');
-  if (wf) wf.innerHTML = '<div style="padding:18px;color:var(--text-muted);">Loading trace&hellip;</div>';
-  var drawer = document.getElementById('trace-span-drawer');
-  if (drawer) drawer.style.display = 'none';
+  // Reset left-pane loading state + right-pane placeholder until spans land.
+  var tg = document.getElementById('trace-treegantt');
+  if (tg) tg.innerHTML = '<div style="padding:18px;color:var(--text-muted);">Loading trace&hellip;</div>';
+  var pane = document.getElementById('trace-span-pane');
+  if (pane) pane.innerHTML = '<div style="color:var(--text-muted);font-size:12px;text-align:center;padding:32px 14px;">Select a span on the left to see its <b>Chat</b>, <b>Inputs</b>, <b>Outputs</b>, <b>Attributes</b>, and <b>Events</b>.</div>';
+  window._traceActiveSpanId = null;
+  window._traceSpanCache = {};
   var data;
   try {
     data = await fetch('/api/trace/' + encodeURIComponent(traceId)).then(function(r){ return r.json(); });
   } catch (e) {
-    if (wf) wf.innerHTML = '<div style="padding:18px;color:var(--text-muted);">Could not load trace.</div>';
+    if (tg) tg.innerHTML = '<div style="padding:18px;color:var(--text-muted);">Could not load trace.</div>';
     return;
   }
   window._traceData = data;
   var s = data.summary || {};
+
+  // MLflow-style header: trace title (first user prompt) prominent on top,
+  // small id + key stats chips beneath. Falls back to the trace id when the
+  // first-prompt couldn't be derived (older daemons before #2055 follow-up).
   var meta = document.getElementById('trace-detail-meta');
   if (meta) {
-    meta.innerHTML = '<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;">'
-      + '<div><div style="font-size:11px;color:var(--text-muted);">Trace</div><div style="font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--text-primary);">' + escHtml((data.trace_id || '').slice(0, 32)) + '</div></div>'
-      + '<div><div style="font-size:11px;color:var(--text-muted);">Spans</div><div style="font-size:14px;font-weight:600;">' + (s.span_count || (data.spans || []).length) + '</div></div>'
-      + '<div><div style="font-size:11px;color:var(--text-muted);">Duration</div><div style="font-size:14px;font-weight:600;">' + _traceFmtDur(s.duration_ms) + '</div></div>'
-      + '<div><div style="font-size:11px;color:var(--text-muted);">Tokens</div><div style="font-size:14px;font-weight:600;">' + ((s.total_tokens || 0) / 1000).toFixed(1) + 'K</div></div>'
-      + '<div><div style="font-size:11px;color:var(--text-muted);">Model</div><div style="font-size:13px;">' + escHtml(s.model || '') + '</div></div>'
+    var title = (s.title || '').trim();
+    var statusDot = s.status === 'error' ? '#ef4444' : '#22c55e';
+    function stat(label, val) {
+      return '<span style="display:inline-flex;align-items:baseline;gap:6px;font-size:12px;color:var(--text-secondary);">'
+        + '<span style="color:var(--text-muted);font-size:11px;">' + label + '</span>'
+        + '<b style="color:var(--text-primary);">' + val + '</b></span>';
+    }
+    var stats = [];
+    stats.push(stat('Latency', _traceFmtDur(s.duration_ms)));
+    stats.push(stat('Spans', String(s.span_count || (data.spans || []).length)));
+    if (s.total_tokens) stats.push(stat('Tokens', ((s.total_tokens / 1000).toFixed(1) + 'K')));
+    if (s.total_cost_usd) stats.push(stat('Cost', '$' + (s.total_cost_usd < 0.01 ? s.total_cost_usd.toFixed(4) : s.total_cost_usd.toFixed(3))));
+    if (s.model) stats.push(stat('Model', escHtml(s.model)));
+    if (s.has_subagents) stats.push('<span style="background:rgba(245,158,11,0.15);color:#f59e0b;border-radius:6px;padding:1px 8px;font-size:11px;font-weight:600;">sub-agents</span>');
+    meta.innerHTML =
+      '<div style="display:flex;align-items:flex-start;gap:10px;">'
+        + '<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:' + statusDot + ';margin-top:6px;flex-shrink:0;"></span>'
+        + '<div style="flex:1;min-width:0;">'
+          + '<div style="font-size:15px;font-weight:700;color:var(--text-primary);line-height:1.35;word-break:break-word;">'
+            + (title ? escHtml(title) : '<span style="font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--text-secondary);">' + escHtml((data.trace_id || '').slice(0, 40)) + '</span>')
+          + '</div>'
+          + (title ? '<div style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--text-muted);margin-top:2px;">' + escHtml((data.trace_id || '').slice(0, 40)) + '</div>' : '')
+          + '<div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:8px;">' + stats.join('') + '</div>'
+        + '</div>'
       + '</div>';
   }
-  window._traceView = 'waterfall';
-  tracingSwitchView('waterfall');
+
+  window._traceView = 'treegantt';
+  tracingSwitchView('treegantt');
 }
 
 function tracingSwitchView(view) {
@@ -8682,17 +8896,113 @@ function tracingSwitchView(view) {
     t.style.color = active ? '#fff' : 'var(--text-muted)';
     t.style.borderColor = active ? '#6366f1' : 'var(--border-secondary)';
   });
+  var tg = document.getElementById('trace-treegantt');
   var wf = document.getElementById('trace-waterfall');
-  var tree = document.getElementById('trace-tree');
   var graph = document.getElementById('trace-graph');
+  if (tg) tg.style.display = view === 'treegantt' ? '' : 'none';
   if (wf) wf.style.display = view === 'waterfall' ? '' : 'none';
-  if (tree) tree.style.display = view === 'tree' ? '' : 'none';
   if (graph) graph.style.display = view === 'graph' ? '' : 'none';
   var d = window._traceData;
   if (!d) return;
-  if (view === 'waterfall') _traceRenderWaterfall(d.spans || []);
-  else if (view === 'tree') _traceRenderTree(d.spans || [], d.root_span_ids || []);
+  if (view === 'treegantt') _traceRenderTreeGantt(d.spans || [], d.root_span_ids || []);
+  else if (view === 'waterfall') _traceRenderWaterfall(d.spans || []);
   else if (view === 'graph') _traceRenderGraph(d.agent_graph || {nodes: [], edges: []});
+}
+
+// MLflow-style merged tree + inline Gantt bars (the new default trace view).
+// Combines the nesting of _traceRenderTree with the time-aligned bars from
+// _traceRenderWaterfall so you can see hierarchy + timing in one place. The
+// top of the panel has a time axis (0s / 25% / 50% / 75% / 100% of trace
+// duration) all bars align to.
+function _traceRenderTreeGantt(spans, roots) {
+  var el = document.getElementById('trace-treegantt');
+  if (!el) return;
+  if (!spans.length) { el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">No spans in this trace.</div>'; return; }
+
+  // Trace timeline = earliest start → latest (start + duration).
+  var t0 = Infinity, t1 = 0;
+  spans.forEach(function(s) {
+    var st = s.start_ms || 0;
+    if (st && st < t0) t0 = st;
+    t1 = Math.max(t1, st + (s.duration_ms || 0));
+  });
+  if (!isFinite(t0)) t0 = 0;
+  var total = Math.max(1, t1 - t0);
+
+  var byId = {}; spans.forEach(function(s){ byId[s.span_id] = s; });
+  var children = {};
+  spans.forEach(function(s) {
+    var p = s.parent_span_id;
+    if (p && byId[p]) (children[p] = children[p] || []).push(s);
+  });
+  Object.keys(children).forEach(function(k) {
+    children[k].sort(function(a, b){ return (a.start_ms || 0) - (b.start_ms || 0); });
+  });
+  var rootIds = (roots && roots.length)
+    ? roots
+    : spans.filter(function(s){ return !s.parent_span_id; }).map(function(s){ return s.span_id; });
+
+  // Time-axis labels: 0s, q1, q2, q3, total. Aligned to the same flex column
+  // the bars live in so the visual ticks line up exactly.
+  var axisLabels = [0, 0.25, 0.5, 0.75, 1].map(function(f) {
+    return '<span style="flex:0 0 0;position:relative;">'
+      + '<span style="position:absolute;left:-1px;top:0;font-size:10px;color:var(--text-muted);transform:translateX(' + (f === 0 ? '0' : f === 1 ? '-100%' : '-50%') + ');white-space:nowrap;">'
+      + _traceFmtDur(total * f) + '</span></span>';
+  });
+  // The bar column is `flex:1`; the ticks live in a 5-column grid above it.
+  var axisHtml = '<div style="display:flex;align-items:center;gap:8px;padding:0 8px 8px 8px;border-bottom:1px solid var(--border-secondary);margin-bottom:6px;font-size:10px;color:var(--text-muted);">'
+    + '<span style="width:260px;flex-shrink:0;text-transform:uppercase;letter-spacing:0.6px;font-weight:700;">Span</span>'
+    + '<span style="flex:1;position:relative;height:14px;">'
+      + '<div style="position:absolute;inset:0;display:flex;justify-content:space-between;align-items:flex-end;">'
+        + [0,0.25,0.5,0.75,1].map(function(f) {
+            var labelTransform = f === 0 ? '0' : f === 1 ? '-100%' : '-50%';
+            return '<span style="position:relative;font-size:10px;color:var(--text-muted);transform:translateX(' + labelTransform + ');white-space:nowrap;">' + _traceFmtDur(total * f) + '</span>';
+          }).join('')
+      + '</div>'
+    + '</span>'
+    + '<span style="width:60px;flex-shrink:0;text-align:right;text-transform:uppercase;letter-spacing:0.6px;font-weight:700;">Dur</span>'
+    + '<span style="width:54px;flex-shrink:0;text-align:right;text-transform:uppercase;letter-spacing:0.6px;font-weight:700;">Tok</span>'
+    + '<span style="width:60px;flex-shrink:0;text-align:right;text-transform:uppercase;letter-spacing:0.6px;font-weight:700;">Cost</span>'
+    + '</div>';
+  // (note: axisLabels variable above is unused — the inline expression above is
+  // the working version; kept the variable assignment for future styling tweaks.)
+  axisLabels; // silence linter (the value above is the live axis)
+
+  function row(s, depth) {
+    var color = _traceColor(s);
+    var isErr = s.status === 'error';
+    var active = window._traceActiveSpanId === s.span_id;
+    var left = total > 0 ? (((s.start_ms || 0) - t0) / total) * 100 : 0;
+    var width = total > 0 ? Math.max(0.6, ((s.duration_ms || 0) / total) * 100) : 0.6;
+    if (left + width > 100) width = Math.max(0.6, 100 - left);
+    var cost = _traceCost(s);
+    var costStr = cost ? '$' + (cost < 0.01 ? cost.toFixed(4) : cost.toFixed(3)) : '';
+    var tok = _traceTokens(s);
+    var tokStr = tok ? (tok / 1000).toFixed(1) + 'K' : '';
+    var bg = active ? 'rgba(99,102,241,0.12)' : (isErr ? 'rgba(239,68,68,0.06)' : '');
+    var h = '<div onclick="traceShowSpan(\'' + escHtml(s.span_id) + '\')" data-span-id="' + escHtml(s.span_id) + '" class="trace-row" '
+      + 'style="display:flex;align-items:center;gap:8px;padding:5px 8px;cursor:pointer;border-radius:4px;background:' + bg + ';" '
+      + 'onmouseover="if(!this.classList.contains(\'active\'))this.style.background=\'var(--bg-tertiary,#1e293b)\'" '
+      + 'onmouseout="this.style.background=\'' + bg + '\'">'
+      + '<span style="width:260px;flex-shrink:0;display:flex;align-items:center;gap:6px;min-width:0;">'
+        + '<span style="padding-left:' + (depth * 14) + 'px;"></span>'
+        + '<span style="width:9px;height:9px;border-radius:2px;background:' + color + ';flex-shrink:0;"></span>'
+        + '<span style="flex-shrink:0;font-size:11px;width:14px;text-align:center;">' + _traceIcon(s) + '</span>'
+        + '<span style="flex:1;min-width:0;font-size:12px;color:' + (isErr ? '#f87171' : 'var(--text-primary)') + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + escHtml(s.name) + '">' + escHtml(s.name) + (isErr ? ' ⚠' : '') + '</span>'
+      + '</span>'
+      + '<span style="flex:1;position:relative;height:14px;background:var(--bg-primary);border-radius:3px;">'
+        + '<span style="position:absolute;left:' + left.toFixed(2) + '%;width:' + width.toFixed(2) + '%;top:2px;height:10px;background:' + color + ';border-radius:3px;min-width:2px;" title="' + _traceFmtDur(s.duration_ms) + '"></span>'
+      + '</span>'
+      + '<span style="width:60px;flex-shrink:0;text-align:right;font-size:11px;color:var(--text-muted);">' + _traceFmtDur(s.duration_ms) + '</span>'
+      + '<span style="width:54px;flex-shrink:0;text-align:right;font-size:11px;color:var(--text-muted);">' + tokStr + '</span>'
+      + '<span style="width:60px;flex-shrink:0;text-align:right;font-size:11px;color:var(--text-muted);">' + costStr + '</span>'
+      + '</div>';
+    (children[s.span_id] || []).forEach(function(c){ h += row(c, depth + 1); });
+    return h;
+  }
+  var body = '';
+  rootIds.forEach(function(rid){ if (byId[rid]) body += row(byId[rid], 0); });
+  el.innerHTML = axisHtml + body;
 }
 
 function _traceRenderWaterfall(spans) {
@@ -8775,23 +9085,37 @@ function _traceRenderGraph(graph) {
   el.innerHTML = html;
 }
 
+// MLflow-style span-detail pane (right side of the split). The 5 tabs are
+// stable — they appear even when the OTel span row hasn't loaded yet, so the
+// UI doesn't flicker tab additions after the fetch. Each tab handles its own
+// empty state.
+var _TRACE_SPAN_TABS = ['chat', 'inputs', 'outputs', 'attributes', 'events'];
+
 function traceShowSpan(spanId) {
   var d = window._traceData;
   if (!d) return;
   var s = (d.spans || []).find(function(x){ return x.span_id === spanId; });
   if (!s) return;
-  var drawer = document.getElementById('trace-span-drawer');
-  if (!drawer) return;
+  var pane = document.getElementById('trace-span-pane');
+  if (!pane) return;
   window._traceActiveSpanId = spanId;
-  window._traceActiveTab = 'details';
-  drawer.style.display = '';
+  if (!window._traceActiveTab || _TRACE_SPAN_TABS.indexOf(window._traceActiveTab) < 0) {
+    window._traceActiveTab = 'chat';
+  }
+  // Highlight the selected row in the tree + Gantt panel.
+  document.querySelectorAll('#trace-treegantt .trace-row').forEach(function(r) {
+    var on = r.dataset.spanId === spanId;
+    r.classList.toggle('active', on);
+    r.style.background = on ? 'rgba(99,102,241,0.12)' : '';
+  });
+
   var isErr = s.status === 'error';
   var cost = _traceCost(s), tok = _traceTokens(s);
   function chip(label, val, color) {
     return '<span style="background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;padding:3px 9px;font-size:11px;color:' + (color || 'var(--text-secondary)') + ';"><span style="color:var(--text-muted);">' + label + '</span> ' + val + '</span>';
   }
   var chips = [
-    chip('kind', '<b style="color:' + _traceColor(s) + '">' + _traceIcon(s) + ' ' + escHtml(s.kind) + '</b>'),
+    chip('kind', '<b style="color:' + _traceColor(s) + '">' + _traceIcon(s) + ' ' + escHtml(s.kind || '') + '</b>'),
     chip('duration', _traceFmtDur(s.duration_ms)),
   ];
   if (isErr) chips.unshift(chip('status', '<b>error ⚠</b>', '#f87171'));
@@ -8799,26 +9123,30 @@ function traceShowSpan(spanId) {
   if (cost) chips.push(chip('cost', '$' + (cost < 0.01 ? cost.toFixed(4) : cost.toFixed(3)) + (s.rolled_cost != null ? ' (incl. children)' : '')));
   if (s.model) chips.push(chip('model', escHtml(s.model)));
   if (s.tool) chips.push(chip('tool', escHtml(s.tool)));
-  drawer.innerHTML =
-    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
-    + '<div style="font-weight:700;font-size:14px;color:' + (isErr ? '#f87171' : 'var(--text-primary)') + ';">' + _traceIcon(s) + ' ' + escHtml(s.name) + '</div>'
-    + '<button onclick="document.getElementById(\'trace-span-drawer\').style.display=\'none\'" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:16px;">&times;</button>'
+
+  // Render fixed 5-tab structure (Chat / Inputs / Outputs / Attributes / Events).
+  // Tabs are always present — empty state is handled per-renderer.
+  pane.innerHTML =
+    '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;gap:8px;">'
+    + '<div style="font-weight:700;font-size:14px;color:' + (isErr ? '#f87171' : 'var(--text-primary)') + ';flex:1;min-width:0;word-break:break-word;">' + _traceIcon(s) + ' ' + escHtml(s.name) + '</div>'
     + '</div>'
     + '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;">' + chips.join('') + '</div>'
     + '<div id="span-tabs-bar" style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border-primary);">'
-    + _traceSpanTabBtn('details', true) + '</div>'
+    + _TRACE_SPAN_TABS.map(function(t) { return _traceSpanTabBtn(t, t === window._traceActiveTab); }).join('')
+    + '</div>'
     + '<div id="span-tab-content"></div>';
-  _traceSpanRenderDetails(s);
-  // Fetch full OTel span row for BLOB tabs; 404 = synthetic span (no BLOB data — fine).
-  if (window._traceSpanCache[spanId]) {
-    _traceSpanMerge(spanId, window._traceSpanCache[spanId]);
-  } else {
+
+  // Render the active tab now; load the OTel row in the background for the
+  // input/output/attributes/events tabs that need it. Cache so re-clicking
+  // is instant.
+  _traceSpanRenderActive(s);
+  if (!window._traceSpanCache[spanId]) {
     fetch('/api/local/spans/' + encodeURIComponent(spanId))
       .then(function(r) { return r.ok ? r.json() : null; })
       .then(function(data) {
         if (data && data.available && data.span) {
           window._traceSpanCache[spanId] = data.span;
-          _traceSpanMerge(spanId, data.span);
+          if (window._traceActiveSpanId === spanId) _traceSpanRenderActive(s);
         }
       })
       .catch(function() {});
@@ -8840,76 +9168,157 @@ function _traceSpanSwitchTab(tab) {
     b.style.color = on ? '#fff' : 'var(--text-muted)';
     b.style.borderColor = on ? '#6366f1' : 'var(--border-secondary)';
   });
-  if (tab === 'details') {
-    var d = window._traceData;
-    var s = d && (d.spans || []).find(function(x) { return x.span_id === window._traceActiveSpanId; });
-    if (s) _traceSpanRenderDetails(s);
-  } else {
-    _traceSpanRenderBlob(tab);
-  }
+  var d = window._traceData;
+  var s = d && (d.spans || []).find(function(x) { return x.span_id === window._traceActiveSpanId; });
+  if (s) _traceSpanRenderActive(s);
 }
 
-function _traceSpanRenderDetails(s) {
-  var content = document.getElementById('span-tab-content');
-  if (!content) return;
-  var bodyLabel = s.kind === 'tool' ? 'Tool input'
-                : s.kind === 'llm' ? 'Message / output'
-                : s.kind === 'prompt' ? 'Prompt' : 'Detail';
-  content.innerHTML = s.detail
-    ? '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-muted);margin-bottom:4px;">' + bodyLabel + '</div>'
-      + '<pre style="white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--text-secondary);margin:0;max-height:300px;overflow:auto;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;padding:8px 10px;">' + escHtml(s.detail) + '</pre>'
-    : '<div style="color:var(--text-muted);font-size:12px;">No captured payload for this span. (Full LLM input/output capture is local-only and follows the E2E path in cloud.)</div>';
+// Dispatcher: routes the active tab to the matching renderer. Chat reads the
+// span's semantic content (works without the OTel BLOB row); Inputs / Outputs
+// / Attributes / Events read from the full OTel span row when available.
+function _traceSpanRenderActive(s) {
+  var t = window._traceActiveTab || 'chat';
+  if (t === 'chat')           _traceSpanRenderChat(s);
+  else if (t === 'inputs')    _traceSpanRenderBlob('input');
+  else if (t === 'outputs')   _traceSpanRenderBlob('output');
+  else if (t === 'attributes')_traceSpanRenderBlob('attributes');
+  else if (t === 'events')    _traceSpanRenderBlob('events');
 }
 
-function _traceSpanRenderBlob(tab) {
+// MLflow-style Chat tab — renders the conversation turn at this span as a
+// friendly user/assistant view. Falls back to the trace summary's
+// derived first-prompt + the span's captured detail/output when the OTel
+// BLOB row doesn't carry rich message content. Always shows SOMETHING so
+// the tab never reads empty for real spans.
+function _traceSpanRenderChat(s) {
   var content = document.getElementById('span-tab-content');
   if (!content) return;
   var full = window._traceSpanCache[window._traceActiveSpanId];
-  if (!full) {
-    content.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:6px;">Loading&hellip;</div>';
+  var msgs = _traceExtractMessages(s, full);
+  if (!msgs.length) {
+    content.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:6px;">No conversation content for this span. Try <b>Inputs</b> / <b>Outputs</b> for the raw payload.</div>';
     return;
   }
-  var fieldMap = {input: 'input', output: 'output', metadata: 'attributes', events: 'events', links: 'links'};
-  var val = full[fieldMap[tab]];
+  var html = '<div style="display:flex;flex-direction:column;gap:10px;max-height:520px;overflow:auto;padding:2px;">';
+  msgs.forEach(function(m) {
+    var isUser = m.role === 'user';
+    var isAssistant = m.role === 'assistant';
+    var bg = isUser ? 'rgba(99,102,241,0.10)' : isAssistant ? 'var(--bg-primary)' : 'rgba(245,158,11,0.08)';
+    var border = isUser ? '#6366f1' : isAssistant ? 'var(--border-secondary)' : '#f59e0b';
+    var label = isUser ? 'User' : isAssistant ? 'Assistant' : (m.role || 'system');
+    html += '<div style="background:' + bg + ';border:1px solid ' + border + ';border-left:3px solid ' + border + ';border-radius:6px;padding:8px 10px;">'
+      + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-muted);margin-bottom:4px;">' + escHtml(label) + '</div>'
+      + '<div style="font-size:13px;color:var(--text-primary);white-space:pre-wrap;word-break:break-word;line-height:1.4;">' + escHtml(m.text || '') + '</div>'
+      + '</div>';
+  });
+  html += '</div>';
+  content.innerHTML = html;
+}
+
+// Walk a span + its OTel BLOB row to extract {role,text}[] for the Chat view.
+// Tries (in order): full.input/output message arrays, the span's detail +
+// output fields (populated by _build_spans for synthetic-from-events spans),
+// and finally the trace's derived first-prompt title.
+function _traceExtractMessages(s, full) {
+  var out = [];
+  function add(role, text) {
+    if (text == null) return;
+    var t = (typeof text === 'string') ? text : JSON.stringify(text);
+    t = t.trim();
+    if (t) out.push({role: role, text: t});
+  }
+  function walk(val, fallbackRole) {
+    if (val == null) return;
+    if (Array.isArray(val)) { val.forEach(function(x) { walk(x, fallbackRole); }); return; }
+    if (typeof val === 'string') { add(fallbackRole, val); return; }
+    if (typeof val !== 'object') return;
+    var role = val.role || fallbackRole;
+    // Anthropic-style content list: [{type:'text',text:'...'},{type:'tool_use',...}]
+    if (Array.isArray(val.content)) {
+      val.content.forEach(function(b) {
+        if (b && typeof b === 'object' && typeof b.text === 'string') add(role, b.text);
+        else if (typeof b === 'string') add(role, b);
+      });
+      return;
+    }
+    if (typeof val.content === 'string') { add(role, val.content); return; }
+    if (typeof val.text === 'string')    { add(role, val.text); return; }
+    if (val.message)                     { walk(val.message, role); return; }
+    if (val.messages)                    { walk(val.messages, role); return; }
+  }
+  if (full) { walk(full.input, 'user'); walk(full.output, 'assistant'); }
+  // Span-level captured detail + output (set by _build_spans). For tool
+  // spans, detail is the tool input and output is the tool_result content.
+  if (!out.length && s) {
+    var role = s.kind === 'llm' ? 'assistant'
+             : s.kind === 'prompt' ? 'user'
+             : s.kind === 'tool' ? 'tool' : 'system';
+    if (s.detail) add(role, s.detail);
+    if (s.output) add('tool_result', s.output);
+  }
+  // Last resort: the trace's derived first-prompt title.
+  if (!out.length) {
+    var t = (window._traceData && window._traceData.summary && window._traceData.summary.title) || '';
+    if (t) add('user', t);
+  }
+  return out;
+}
+
+function _traceSpanRenderBlob(blobKey) {
+  var content = document.getElementById('span-tab-content');
+  if (!content) return;
+  var d = window._traceData;
+  var s = d && (d.spans || []).find(function(x) { return x.span_id === window._traceActiveSpanId; });
+  var full = window._traceSpanCache[window._traceActiveSpanId];
+  // Pick a value: OTel BLOB row first; otherwise fall back to the
+  // synthetic-span fields populated by _build_spans. This is what stops the
+  // "Loading…" forever state for spans that aren't in the OTel spans table.
+  var val = null;
+  if (full && full[blobKey] != null) val = full[blobKey];
+  else if (s) {
+    if (blobKey === 'input' && s.detail) val = s.detail;
+    else if (blobKey === 'output' && s.output) val = s.output;
+    else if (blobKey === 'attributes') {
+      // Synthesise an attributes view from the lightweight span fields.
+      val = {
+        name: s.name, kind: s.kind, event_type: s.event_type,
+        model: s.model || null, tool: s.tool || null,
+        tokens: s.tokens || 0, cost: s.cost || 0,
+        duration_ms: s.duration_ms || 0, status: s.status,
+        is_subagent: !!s.is_subagent,
+        rolled_tokens: s.rolled_tokens != null ? s.rolled_tokens : null,
+        rolled_cost:   s.rolled_cost   != null ? s.rolled_cost   : null,
+      };
+    }
+  }
   if (val == null) {
-    content.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No ' + escHtml(tab) + ' data for this span.</div>';
+    var hint = blobKey === 'events'
+      ? 'This span has no nested timeline events. Tool spans roll up here as children in the tree on the left.'
+      : 'No ' + escHtml(blobKey) + ' captured for this synthetic span. Try the <b>Chat</b> tab — it falls back to the span\'s detail when raw I/O isn\'t recorded.';
+    content.innerHTML = '<div style="color:var(--text-muted);font-size:12px;line-height:1.45;">' + hint + '</div>';
     return;
   }
   var str = (typeof val === 'string') ? val : JSON.stringify(val, null, 2);
   window._traceSpanCopyBuf = str;
   content.innerHTML =
     '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'
-    + '<input type="text" placeholder="Filter keys…" oninput="_traceSpanFilter(this.value,\'' + escHtml(tab) + '\')" style="padding:3px 8px;border-radius:4px;border:1px solid var(--border-secondary);background:var(--bg-primary);color:var(--text-primary);font-size:11px;flex:1;max-width:200px;">'
+    + '<input type="text" placeholder="Filter keys…" oninput="_traceSpanFilter(this.value,\'' + escHtml(blobKey) + '\')" style="padding:3px 8px;border-radius:4px;border:1px solid var(--border-secondary);background:var(--bg-primary);color:var(--text-primary);font-size:11px;flex:1;max-width:200px;">'
     + '<button onclick="try{navigator.clipboard.writeText(window._traceSpanCopyBuf)}catch(e){}" style="padding:3px 10px;border-radius:4px;border:1px solid var(--border-secondary);background:transparent;color:var(--text-muted);font-size:11px;cursor:pointer;white-space:nowrap;">Copy JSON</button>'
     + '</div>'
-    + '<pre id="span-blob-pre" style="white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--text-secondary);margin:0;max-height:350px;overflow:auto;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;padding:8px 10px;">' + escHtml(str) + '</pre>';
+    + '<pre id="span-blob-pre" style="white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--text-secondary);margin:0;max-height:480px;overflow:auto;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;padding:8px 10px;">' + escHtml(str) + '</pre>';
 }
 
-function _traceSpanFilter(query, tab) {
+function _traceSpanFilter(query, blobKey) {
   var pre = document.getElementById('span-blob-pre');
   if (!pre) return;
   var full = window._traceSpanCache[window._traceActiveSpanId];
   if (!full) return;
-  var fieldMap = {input: 'input', output: 'output', metadata: 'attributes', events: 'events', links: 'links'};
-  var val = full[fieldMap[tab]];
+  var val = full[blobKey];
   if (val == null) return;
   var str = (typeof val === 'string') ? val : JSON.stringify(val, null, 2);
   if (!query) { pre.textContent = str; return; }
   var q = query.toLowerCase();
   pre.textContent = str.split('\n').filter(function(l) { return l.toLowerCase().indexOf(q) !== -1; }).join('\n') || '(no matches)';
-}
-
-function _traceSpanMerge(spanId, full) {
-  if (window._traceActiveSpanId !== spanId) return;
-  var bar = document.getElementById('span-tabs-bar');
-  if (!bar) return;
-  var blobFields = ['input', 'output', 'attributes', 'events', 'links'];
-  var blobTabs   = ['input', 'output', 'metadata',   'events', 'links'];
-  var tabs = ['details'];
-  blobFields.forEach(function(f, i) { if (full[f] != null) tabs.push(blobTabs[i]); });
-  var active = window._traceActiveTab;
-  bar.innerHTML = tabs.map(function(t) { return _traceSpanTabBtn(t, t === active); }).join('');
-  if (active !== 'details') _traceSpanRenderBlob(active);
 }
 
 // Entry point called by nav switchTab + loadAll bootstrap.
@@ -11597,63 +12006,396 @@ function _saToggle(sid) {
 // subagent lane caps at 8 and the main lane at 4 concurrent runs. cli/cron
 // have no fixed small cap, so we show live running count without a "/cap".
 var _RUN_LEDGER_LANE_CAPS = { subagent: 8, main: 4 };
+// Interactive state: which lane is filtered (null = all) and which run rows
+// are expanded into their detail drawer. Kept module-level so a 5s refresh
+// re-render preserves the user's drill-down.
+var _rlLaneFilter = null;
+var _rlExpanded = {};
+var _rlData = { lanes: [], runs: [] };
 
 // Live OpenClaw run-ledger view: queue-lane saturation bars + recent runs.
 // `runtime` IS the OpenClaw queue lane (cli / cron / subagent), so the lane
 // rollup doubles as the queue/concurrency monitor. Reads /api/run-ledger,
 // which the sync daemon mirrors from ~/.openclaw/tasks/runs.sqlite.
+// Interactive: click a lane to filter, click a run to expand its detail +
+// jump to the child session transcript.
 async function loadRunLedger() {
   var el = document.getElementById('run-ledger-panel');
   if (!el) return;
   try {
-    var data = await fetch('/api/run-ledger?limit=60').then(function(r){ return r.json(); });
-    var lanes = data.lanes || [];
-    var runs = data.runs || [];
-    if (lanes.length === 0 && runs.length === 0) {
-      el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">No background runs yet. Sub-agent, cron and CLI runs from OpenClaw’s task ledger appear here as they execute.</div>';
-      return;
-    }
-    function laneColor(lane){ return ({subagent:'#8b5cf6',cron:'#0ea5e9',cli:'#16a34a'})[lane] || '#6b7280'; }
-    var laneHtml = '<div style="border:1px solid var(--border-primary);border-radius:10px;padding:14px;">';
-    laneHtml += '<div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;">Queue lanes</div>';
-    lanes.forEach(function(L){
-      var cap = _RUN_LEDGER_LANE_CAPS[L.lane];
-      var running = L.running||0, total = L.total||0, ok = L.succeeded||0, failed = L.failed||0, queued = L.queued||0;
-      var capLabel = cap ? (running + '/' + cap) : ('' + running);
-      function seg(n,color){ return total>0 ? '<span style="height:100%;width:'+(n/total*100)+'%;background:'+color+';display:inline-block;"></span>' : ''; }
-      laneHtml += '<div style="margin-bottom:12px;">';
-      laneHtml += '<div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:4px;">';
-      laneHtml += '<span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:'+laneColor(L.lane)+';"></span>';
-      laneHtml += '<span style="font-weight:700;color:var(--text-primary);">'+escHtml(L.lane)+'</span>';
-      laneHtml += '<span style="font-size:11px;font-weight:600;color:'+(running>0?'#16a34a':'var(--text-muted)')+';">'+(running>0 ? ('● '+capLabel+' running') : 'idle')+'</span>';
-      laneHtml += '<span style="flex:1;"></span>';
-      laneHtml += '<span style="font-size:11px;color:var(--text-muted);">'+total+' runs · '+ok+'✓'+(failed?(' · '+failed+'✗'):'')+'</span>';
-      laneHtml += '</div>';
-      laneHtml += '<div style="display:flex;height:7px;border-radius:4px;overflow:hidden;background:var(--bg-secondary);">';
-      laneHtml += seg(ok,'#16a34a')+seg(running,'#3b82f6')+seg(queued,'#d97706')+seg(failed,'#ef4444');
-      laneHtml += '</div></div>';
-    });
-    laneHtml += '</div>';
-    function pill(status){
-      var m = {succeeded:['#16a34a','rgba(22,163,74,.12)'],success:['#16a34a','rgba(22,163,74,.12)'],running:['#3b82f6','rgba(59,130,246,.12)'],failed:['#ef4444','rgba(239,68,68,.12)'],timeout:['#ef4444','rgba(239,68,68,.12)']};
-      var c = m[status] || ['#6b7280','var(--bg-secondary)'];
-      return '<span style="font-size:10px;font-weight:700;color:'+c[0]+';background:'+c[1]+';border-radius:4px;padding:1px 6px;">'+escHtml(String(status||'?'))+'</span>';
-    }
-    function dur(s){ if(!s.started_at||!s.ended_at) return ''; var ms=s.ended_at-s.started_at; if(ms<0) return ''; if(ms<1000) return ms+'ms'; if(ms<60000) return (ms/1000).toFixed(1)+'s'; return Math.round(ms/60000)+'m'; }
-    var runHtml = '<div style="border:1px solid var(--border-primary);border-radius:10px;margin-top:14px;overflow:hidden;">';
-    runHtml += '<div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;padding:12px 14px;border-bottom:1px solid var(--border-primary);">Recent runs</div>';
-    runs.slice(0,40).forEach(function(s){
-      runHtml += '<div style="display:flex;align-items:center;gap:10px;padding:7px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;">';
-      runHtml += pill(s.status);
-      runHtml += '<span style="font-size:10px;color:var(--text-faint);background:var(--bg-secondary);border-radius:4px;padding:1px 6px;min-width:54px;text-align:center;">'+escHtml(s.runtime||'')+'</span>';
-      runHtml += '<span style="flex:1;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+escHtml(s.label||'')+'">'+escHtml(s.label||'(untitled)')+'</span>';
-      var d = dur(s); if(d) runHtml += '<span style="color:var(--text-muted);white-space:nowrap;">'+d+'</span>';
-      runHtml += '</div>';
-    });
-    runHtml += '</div>';
-    el.innerHTML = laneHtml + runHtml;
+    var data = await fetch('/api/run-ledger?limit=120').then(function(r){ return r.json(); });
+    _rlData = { lanes: data.lanes || [], runs: data.runs || [] };
+    _rlRender();
   } catch(e) {
     el.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">Failed to load run ledger: '+escHtml(String(e))+'</div>';
+  }
+}
+
+function _rlSetLane(lane) {
+  _rlLaneFilter = (_rlLaneFilter === lane) ? null : lane;  // toggle
+  _rlRender();
+}
+function _rlToggleRun(tid) {
+  _rlExpanded[tid] = !_rlExpanded[tid];
+  _rlRender();
+}
+function _rlOpenSession(key) {
+  // Jump to the child session's transcript (same deep-link the tree uses).
+  try { if (typeof viewTranscript === 'function') { viewTranscript(key); return; } } catch(e) {}
+  try { window.location.hash = 'session=' + encodeURIComponent(key); } catch(e) {}
+}
+
+function _rlRender() {
+  var el = document.getElementById('run-ledger-panel');
+  if (!el) return;
+  var lanes = _rlData.lanes || [], runs = _rlData.runs || [];
+  if (lanes.length === 0 && runs.length === 0) {
+    el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">No background runs yet. Sub-agent, cron and CLI runs from OpenClaw’s task ledger appear here as they execute.</div>';
+    return;
+  }
+  function laneColor(lane){ return ({subagent:'#8b5cf6',cron:'#0ea5e9',cli:'#16a34a'})[lane] || '#6b7280'; }
+  function jsq(s){ return String(s==null?'':s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
+
+  // ── Lane bars (clickable filters) ──
+  var laneHtml = '<div style="border:1px solid var(--border-primary);border-radius:10px;padding:14px;">';
+  laneHtml += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;"><span style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;">Queue lanes</span>';
+  if (_rlLaneFilter) laneHtml += '<span style="font-size:11px;color:var(--text-muted);">· filtered to <strong style="color:'+laneColor(_rlLaneFilter)+'">'+escHtml(_rlLaneFilter)+'</strong> <a onclick="_rlSetLane(\''+jsq(_rlLaneFilter)+'\')" style="cursor:pointer;color:var(--accent,#3b82f6);">clear ✕</a></span>';
+  else laneHtml += '<span style="font-size:11px;color:var(--text-faint);">click a lane to filter</span>';
+  laneHtml += '</div>';
+  lanes.forEach(function(L){
+    var cap = _RUN_LEDGER_LANE_CAPS[L.lane];
+    var running = L.running||0, total = L.total||0, ok = L.succeeded||0, failed = L.failed||0, queued = L.queued||0;
+    var capLabel = cap ? (running + '/' + cap) : ('' + running);
+    var active = (_rlLaneFilter === L.lane);
+    function seg(n,color){ return total>0 ? '<span style="height:100%;width:'+(n/total*100)+'%;background:'+color+';display:inline-block;"></span>' : ''; }
+    laneHtml += '<div onclick="_rlSetLane(\''+jsq(L.lane)+'\')" title="Filter runs to the '+escHtml(L.lane)+' lane" style="margin-bottom:10px;cursor:pointer;border-radius:7px;padding:6px 8px;'+(active?'background:var(--bg-hover);outline:1px solid '+laneColor(L.lane)+';':'')+'transition:background .1s;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\''+(active?'var(--bg-hover)':'')+'\'">';
+    laneHtml += '<div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:4px;">';
+    laneHtml += '<span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:'+laneColor(L.lane)+';"></span>';
+    laneHtml += '<span style="font-weight:700;color:var(--text-primary);">'+escHtml(L.lane)+'</span>';
+    laneHtml += '<span style="font-size:11px;font-weight:600;color:'+(running>0?'#16a34a':'var(--text-muted)')+';">'+(running>0 ? ('● '+capLabel+' running') : 'idle')+'</span>';
+    laneHtml += '<span style="flex:1;"></span>';
+    laneHtml += '<span style="font-size:11px;color:var(--text-muted);">'+total+' runs · '+ok+'✓'+(failed?(' · '+failed+'✗'):'')+'</span>';
+    laneHtml += '</div>';
+    laneHtml += '<div style="display:flex;height:7px;border-radius:4px;overflow:hidden;background:var(--bg-secondary);">';
+    laneHtml += seg(ok,'#16a34a')+seg(running,'#3b82f6')+seg(queued,'#d97706')+seg(failed,'#ef4444');
+    laneHtml += '</div></div>';
+  });
+  laneHtml += '</div>';
+
+  function pill(status){
+    var m = {succeeded:['#16a34a','rgba(22,163,74,.12)'],success:['#16a34a','rgba(22,163,74,.12)'],running:['#3b82f6','rgba(59,130,246,.12)'],failed:['#ef4444','rgba(239,68,68,.12)'],timeout:['#ef4444','rgba(239,68,68,.12)']};
+    var c = m[status] || ['#6b7280','var(--bg-secondary)'];
+    return '<span style="font-size:10px;font-weight:700;color:'+c[0]+';background:'+c[1]+';border-radius:4px;padding:1px 6px;">'+escHtml(String(status||'?'))+'</span>';
+  }
+  function dur(s){ if(!s.started_at||!s.ended_at) return ''; var ms=s.ended_at-s.started_at; if(ms<0) return ''; if(ms<1000) return ms+'ms'; if(ms<60000) return (ms/1000).toFixed(1)+'s'; return Math.round(ms/60000)+'m'; }
+  function tsLabel(ms){ if(!ms) return '-'; try { return new Date(ms).toLocaleString(); } catch(e){ return String(ms); } }
+
+  // ── Recent runs (filtered + clickable to expand) ──
+  var shown = _rlLaneFilter ? runs.filter(function(r){ return r.runtime === _rlLaneFilter; }) : runs;
+  var runHtml = '<div style="border:1px solid var(--border-primary);border-radius:10px;margin-top:14px;overflow:hidden;">';
+  runHtml += '<div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;padding:12px 14px;border-bottom:1px solid var(--border-primary);">Recent runs'+(_rlLaneFilter?(' · '+escHtml(_rlLaneFilter)):'')+' <span style="color:var(--text-faint);font-weight:500;">('+shown.length+')</span></div>';
+  if (shown.length === 0) {
+    runHtml += '<div style="padding:14px;color:var(--text-muted);font-size:12px;">No runs in this lane.</div>';
+  }
+  shown.slice(0,60).forEach(function(s){
+    var tid = s.task_id || s.run_id || '';
+    var open = !!_rlExpanded[tid];
+    runHtml += '<div onclick="_rlToggleRun(\''+jsq(tid)+'\')" style="display:flex;align-items:center;gap:10px;padding:7px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;cursor:pointer;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\'\'">';
+    runHtml += '<span style="color:var(--text-faint);font-size:10px;width:10px;">'+(open?'▼':'▶')+'</span>';
+    runHtml += pill(s.status);
+    runHtml += '<span style="font-size:10px;color:var(--text-faint);background:var(--bg-secondary);border-radius:4px;padding:1px 6px;min-width:54px;text-align:center;">'+escHtml(s.runtime||'')+'</span>';
+    runHtml += '<span style="flex:1;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+escHtml(s.label||'')+'">'+escHtml(s.label||'(untitled)')+'</span>';
+    var d = dur(s); if(d) runHtml += '<span style="color:var(--text-muted);white-space:nowrap;">'+d+'</span>';
+    runHtml += '</div>';
+    if (open) {
+      runHtml += '<div style="padding:10px 14px 12px 34px;background:var(--bg-secondary);border-bottom:1px solid var(--border-secondary);font-size:11px;color:var(--text-secondary);line-height:1.7;">';
+      function row(k,v){ return '<div><span style="color:var(--text-muted);display:inline-block;min-width:120px;">'+k+'</span>'+v+'</div>'; }
+      if (s.run_id) runHtml += row('run id', '<code style="color:var(--text-primary);">'+escHtml(s.run_id)+'</code>');
+      if (s.agent_id) runHtml += row('agent', escHtml(s.agent_id));
+      if (s.scope_kind || s.task_kind) runHtml += row('scope', escHtml((s.scope_kind||'')+(s.task_kind?(' · '+s.task_kind):'')));
+      if (s.delivery_status) runHtml += row('delivery', escHtml(s.delivery_status));
+      if (s.terminal_outcome) runHtml += row('outcome', escHtml(s.terminal_outcome));
+      runHtml += row('created', tsLabel(s.created_at));
+      if (s.ended_at) runHtml += row('ended', tsLabel(s.ended_at));
+      if (s.error) runHtml += '<div style="margin-top:4px;color:#ef4444;"><span style="color:var(--text-muted);display:inline-block;min-width:120px;">error</span>'+escHtml(String(s.error).slice(0,400))+'</div>';
+      if (s.child_session_key) {
+        runHtml += '<div style="margin-top:8px;"><button onclick="event.stopPropagation();_rlOpenSession(\''+jsq(s.child_session_key)+'\')" style="font-size:11px;font-weight:600;cursor:pointer;background:var(--accent,#3b82f6);color:#fff;border:none;border-radius:5px;padding:4px 10px;">Open session →</button> <span style="color:var(--text-faint);margin-left:6px;">'+escHtml(s.child_session_key)+'</span></div>';
+      }
+      runHtml += '</div>';
+    }
+  });
+  runHtml += '</div>';
+  el.innerHTML = laneHtml + runHtml;
+}
+
+// ── Tool catalog: provenance + p50/p95 latency (PRD P1-3) ───────────────────
+// Interactive catalog of every tool the agent invoked, grouped by provenance
+// (builtin / MCP / plugin) with call count + p50/p95 latency + error rate.
+// Rows are clickable → expand to the tool's recent individual calls (each
+// linking to its session transcript). Sortable + provenance-filterable.
+// Reads /api/tool-catalog (derived from DuckDB tool_call/tool_result pairs).
+var _toolCatalogData = null;       // last /api/tool-catalog payload
+var _tcExpanded = {};              // tool name -> bool (row expanded)
+var _tcCallsCache = {};            // tool name -> recent-calls payload
+
+function _tcProvBadge(prov, provider) {
+  var map = {
+    builtin: ['#0ea5e9', 'rgba(14,165,233,.12)', 'builtin'],
+    mcp:     ['#8b5cf6', 'rgba(139,92,246,.12)', 'MCP' + (provider ? (' · ' + provider) : '')],
+    plugin:  ['#d97706', 'rgba(217,119,6,.12)', 'plugin']
+  };
+  var c = map[prov] || ['#6b7280', 'var(--bg-secondary)', prov || 'unknown'];
+  var tip = prov === 'builtin' ? 'In the OpenClaw sandbox tool allow-list'
+          : prov === 'mcp' ? ('MCP-namespaced tool' + (provider ? (' from provider "' + provider + '"') : ''))
+          : 'Not a sandbox builtin and not MCP-namespaced (plugin / custom / unknown)';
+  return '<span title="' + escHtml(tip) + '" style="font-size:10px;font-weight:700;color:' + c[0] + ';background:' + c[1] + ';border-radius:4px;padding:1px 7px;white-space:nowrap;">' + escHtml(c[2]) + '</span>';
+}
+
+function _tcFmtMs(ms) {
+  if (ms === null || ms === undefined) return '<span style="color:var(--text-faint);" title="No matching tool_result captured for these calls">&mdash;</span>';
+  if (ms < 1000) return ms + 'ms';
+  if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+  return Math.round(ms / 60000) + 'm';
+}
+
+function _tcSortTools(tools) {
+  var sel = document.getElementById('tc-sort');
+  var mode = sel ? sel.value : 'calls';
+  var arr = tools.slice();
+  if (mode === 'name') arr.sort(function(a, b) { return a.name.localeCompare(b.name); });
+  else if (mode === 'p95') arr.sort(function(a, b) { return (b.p95_ms || 0) - (a.p95_ms || 0); });
+  else if (mode === 'p50') arr.sort(function(a, b) { return (b.p50_ms || 0) - (a.p50_ms || 0); });
+  else if (mode === 'errors') arr.sort(function(a, b) { return (b.error_rate || 0) - (a.error_rate || 0) || (b.calls - a.calls); });
+  else arr.sort(function(a, b) { return (b.calls - a.calls) || ((b.p95_ms || 0) - (a.p95_ms || 0)); });
+  return arr;
+}
+
+async function loadToolCatalog() {
+  var tableEl = document.getElementById('tc-table');
+  var sumEl = document.getElementById('tc-summary');
+  if (!tableEl) return;
+  var provSel = document.getElementById('tc-prov-filter');
+  var provQ = provSel && provSel.value ? ('?provenance=' + encodeURIComponent(provSel.value)) : '';
+  try {
+    var data = await fetch('/api/tool-catalog' + provQ).then(function(r) { return r.json(); });
+    _toolCatalogData = data;
+    _tcCallsCache = {};  // catalog refreshed → drop stale per-call caches
+    // Provenance summary chips.
+    if (sumEl) {
+      var g = data.groups || {}, t = data.totals || {};
+      var chips = '';
+      function chip(label, val, color) {
+        return '<span style="font-size:12px;color:var(--text-muted);background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:5px 11px;"><strong style="color:' + color + ';">' + val + '</strong> ' + label + '</span>';
+      }
+      chips += chip('tools', t.tool_count || 0, 'var(--text-primary)');
+      chips += chip('calls', t.total_calls || 0, 'var(--text-primary)');
+      chips += chip('builtin', g.builtin || 0, '#0ea5e9');
+      chips += chip('MCP', g.mcp || 0, '#8b5cf6');
+      chips += chip('plugin', g.plugin || 0, '#d97706');
+      sumEl.innerHTML = chips;
+    }
+    renderToolCatalog();
+  } catch (e) {
+    tableEl.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">Failed to load tool catalog: ' + escHtml(String(e)) + '</div>';
+  }
+}
+
+function renderToolCatalog() {
+  var tableEl = document.getElementById('tc-table');
+  if (!tableEl || !_toolCatalogData) return;
+  var tools = _tcSortTools(_toolCatalogData.tools || []);
+  if (tools.length === 0) {
+    tableEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:24px;text-align:center;">No tool calls recorded yet. Tools appear here as the agent invokes them (derived from tool_call &rarr; tool_result event pairs).</div>';
+    return;
+  }
+  var html = '';
+  // Header row.
+  html += '<div style="display:flex;align-items:center;gap:10px;padding:9px 14px;background:var(--bg-secondary);border-bottom:1px solid var(--border-primary);font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;">';
+  html += '<span style="width:14px;"></span>';
+  html += '<span style="flex:1;">Tool</span>';
+  html += '<span style="width:96px;">Provenance</span>';
+  html += '<span style="width:54px;text-align:right;" title="Number of times this tool was called">Calls</span>';
+  html += '<span style="width:62px;text-align:right;" title="Median (50th percentile) call duration">p50</span>';
+  html += '<span style="width:62px;text-align:right;" title="95th percentile call duration">p95</span>';
+  html += '<span style="width:64px;text-align:right;" title="Share of calls that returned an error">Errors</span>';
+  html += '</div>';
+  tools.forEach(function(tool) {
+    var expanded = !!_tcExpanded[tool.name];
+    var errPct = (tool.error_rate || 0) * 100;
+    var errColor = errPct > 0 ? '#ef4444' : 'var(--text-muted)';
+    var nameEsc = tool.name.replace(/'/g, "\\'");
+    html += '<div onclick="_tcToggle(\'' + nameEsc + '\')" title="Click to expand recent calls for ' + escHtml(tool.name) + '" style="display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--border-secondary);font-size:13px;cursor:pointer;transition:background 0.1s;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\'\'">';
+    html += '<span style="width:14px;color:var(--text-muted);font-size:11px;">' + (expanded ? '&#9660;' : '&#9654;') + '</span>';
+    html += '<span style="flex:1;font-weight:600;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-mono,monospace);" title="' + escHtml(tool.name) + '">' + escHtml(tool.name) + '</span>';
+    html += '<span style="width:96px;">' + _tcProvBadge(tool.provenance, tool.provider) + '</span>';
+    html += '<span style="width:54px;text-align:right;color:var(--text-primary);font-variant-numeric:tabular-nums;">' + tool.calls + '</span>';
+    html += '<span style="width:62px;text-align:right;color:var(--text-muted);font-variant-numeric:tabular-nums;">' + _tcFmtMs(tool.p50_ms) + '</span>';
+    html += '<span style="width:62px;text-align:right;color:var(--text-muted);font-variant-numeric:tabular-nums;">' + _tcFmtMs(tool.p95_ms) + '</span>';
+    html += '<span style="width:64px;text-align:right;color:' + errColor + ';font-variant-numeric:tabular-nums;" title="' + (tool.errors || 0) + ' of ' + tool.calls + ' calls errored">' + errPct.toFixed(errPct > 0 && errPct < 1 ? 1 : 0) + '%</span>';
+    html += '</div>';
+    if (expanded) {
+      html += '<div id="tc-calls-' + encodeURIComponent(tool.name) + '" style="background:var(--bg-secondary);border-bottom:1px solid var(--border-secondary);padding:6px 14px 10px 38px;font-size:12px;color:var(--text-muted);">Loading recent calls&hellip;</div>';
+    }
+  });
+  tableEl.innerHTML = html;
+  // Lazy-load the per-call drill-down for any expanded row.
+  tools.forEach(function(tool) {
+    if (_tcExpanded[tool.name]) _tcLoadCalls(tool.name);
+  });
+}
+
+function _tcToggle(name) {
+  _tcExpanded[name] = !_tcExpanded[name];
+  renderToolCatalog();
+}
+
+async function _tcLoadCalls(name) {
+  var el = document.getElementById('tc-calls-' + encodeURIComponent(name));
+  if (!el) return;
+  try {
+    var data = _tcCallsCache[name];
+    if (!data) {
+      data = await fetch('/api/tool-catalog/' + encodeURIComponent(name) + '/calls').then(function(r) { return r.json(); });
+      _tcCallsCache[name] = data;
+    }
+    var calls = data.calls || [];
+    if (calls.length === 0) {
+      el.innerHTML = '<div style="padding:4px 0;">No individual calls captured in the recent event window.</div>';
+      return;
+    }
+    var rows = '';
+    calls.forEach(function(c) {
+      var when = c.ts_ms ? new Date(c.ts_ms).toLocaleString() : '';
+      var statusColor = c.status === 'error' ? '#ef4444' : '#16a34a';
+      var statusLabel = c.status === 'error' ? 'error' : 'ok';
+      rows += '<div style="display:flex;align-items:center;gap:10px;padding:4px 0;border-top:1px solid var(--border-secondary);">';
+      rows += '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:' + statusColor + ';flex-shrink:0;" title="' + statusLabel + '"></span>';
+      rows += '<span style="width:140px;color:var(--text-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + escHtml(when) + '">' + escHtml(when) + '</span>';
+      rows += '<span style="width:64px;color:var(--text-primary);font-variant-numeric:tabular-nums;">' + _tcFmtMs(c.duration_ms) + '</span>';
+      rows += '<span style="width:48px;font-size:10px;font-weight:700;color:' + statusColor + ';">' + statusLabel + '</span>';
+      if (c.session_id) {
+        var sidEsc = String(c.session_id).replace(/'/g, "\\'");
+        rows += '<span onclick="event.stopPropagation();viewTranscript(\'' + sidEsc + '\')" title="Open this session\'s transcript" style="flex:1;color:var(--accent,#3b82f6);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:underline;">' + escHtml(String(c.session_id).slice(0, 32)) + '</span>';
+      } else {
+        rows += '<span style="flex:1;color:var(--text-faint);">(no session)</span>';
+      }
+      rows += '</div>';
+    });
+    el.innerHTML = '<div style="font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;padding:2px 0 4px;">' + calls.length + ' recent call' + (calls.length === 1 ? '' : 's') + '</div>' + rows;
+  } catch (e) {
+    el.innerHTML = '<div style="color:#e74c3c;padding:4px 0;">Failed to load calls: ' + escHtml(String(e)) + '</div>';
+  }
+}
+
+// ── Tool Policy + Sandbox + exec-approval audit (governance, PRD P1-1) ──────
+// Renders per-agent effective sandbox mode + tool allow/deny (from
+// /api/tool-policy, mirrored from `openclaw sandbox explain --json`) plus the
+// exec-approval decision audit (from /api/approvals-audit). Answers: which
+// tools can run, where they run, and what got blocked/approved and why.
+async function loadToolPolicy() {
+  var sumEl = document.getElementById('tool-policy-summary');
+  var agEl = document.getElementById('tool-policy-agents');
+  var apEl = document.getElementById('approvals-audit-panel');
+  if (!agEl) return;
+  // ── Per-agent sandbox + tool policy ──
+  try {
+    var data = await fetch('/api/tool-policy?limit=50').then(function(r){ return r.json(); });
+    var agents = data.agents || [];
+    var s = data.summary || {};
+    if (sumEl) {
+      if (agents.length === 0) {
+        sumEl.innerHTML = '';
+      } else {
+        function chip(label, val, color){
+          return '<div style="border:1px solid var(--border-primary);border-radius:10px;padding:10px 14px;min-width:96px;">'
+            + '<div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">'+escHtml(label)+'</div>'
+            + '<div style="font-size:18px;font-weight:700;color:'+(color||'var(--text-primary)')+';margin-top:2px;">'+escHtml(String(val))+'</div></div>';
+        }
+        var modeColor = (s.strongest_mode && s.strongest_mode !== 'off') ? '#16a34a' : 'var(--text-muted)';
+        sumEl.innerHTML = '<div style="display:flex;gap:10px;flex-wrap:wrap;">'
+          + chip('Agents', s.agent_count || 0)
+          + chip('Sandboxed', (s.sandboxed_agents||0) + '/' + (s.agent_count||0), modeColor)
+          + chip('Strongest mode', s.strongest_mode || 'off', modeColor)
+          + chip('Tools allowed', s.total_allowed_tools || 0)
+          + chip('Tools denied', s.total_denied_tools || 0, '#ef4444')
+          + '</div>';
+      }
+    }
+    if (agents.length === 0) {
+      agEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">No tool policy recorded yet. Per-agent sandbox mode and tool allow/deny lists appear here once the sync daemon reads OpenClaw’s effective policy.</div>';
+    } else {
+      function modePill(mode){
+        var m = {off:['#6b7280','var(--bg-secondary)'],'non-main':['#d97706','rgba(217,119,6,.12)'],nonmain:['#d97706','rgba(217,119,6,.12)'],all:['#16a34a','rgba(22,163,74,.12)']};
+        var c = m[mode] || ['#6b7280','var(--bg-secondary)'];
+        return '<span style="font-size:11px;font-weight:700;color:'+c[0]+';background:'+c[1]+';border-radius:5px;padding:2px 8px;">sandbox: '+escHtml(String(mode||'off'))+'</span>';
+      }
+      function toolTags(list, color, bg){
+        list = list || [];
+        if (list.length === 0) return '<span style="font-size:11px;color:var(--text-faint);">(none)</span>';
+        return list.map(function(t){
+          return '<span style="font-size:11px;color:'+color+';background:'+bg+';border-radius:4px;padding:1px 7px;margin:0 4px 4px 0;display:inline-block;">'+escHtml(String(t))+'</span>';
+        }).join('');
+      }
+      var html = '';
+      agents.forEach(function(a){
+        html += '<div style="border:1px solid var(--border-primary);border-radius:10px;padding:14px;margin-bottom:12px;">';
+        html += '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">';
+        html += '<span style="font-size:14px;font-weight:700;color:var(--text-primary);">' + escHtml(a.agent_id || 'main') + '</span>';
+        html += modePill(a.sandbox_mode);
+        if (a.sandbox_scope) html += '<span style="font-size:11px;color:var(--text-muted);">scope: '+escHtml(String(a.sandbox_scope))+'</span>';
+        if (a.workspace_access) html += '<span style="font-size:11px;color:var(--text-muted);">workspace: '+escHtml(String(a.workspace_access))+'</span>';
+        if (a.elevated_enabled) html += '<span style="font-size:11px;color:'+(a.elevated_allowed?'#16a34a':'var(--text-muted)')+';">elevated: '+(a.elevated_allowed?'allowed':'gated')+(a.elevated_channel?(' ('+escHtml(String(a.elevated_channel))+')'):'')+'</span>';
+        html += '</div>';
+        html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">';
+        html += '<div><div style="font-size:11px;font-weight:700;color:#16a34a;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Allowed ('+(a.allow_count!=null?a.allow_count:(a.allow||[]).length)+')</div>'+toolTags(a.allow,'#16a34a','rgba(22,163,74,.10)')+'</div>';
+        html += '<div><div style="font-size:11px;font-weight:700;color:#ef4444;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Denied ('+(a.deny_count!=null?a.deny_count:(a.deny||[]).length)+')</div>'+toolTags(a.deny,'#ef4444','rgba(239,68,68,.10)')+'</div>';
+        html += '</div></div>';
+      });
+      agEl.innerHTML = html;
+    }
+  } catch(e) {
+    if (sumEl) sumEl.innerHTML = '';
+    agEl.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">Failed to load tool policy: '+escHtml(String(e))+'</div>';
+  }
+  // ── Exec-approval audit ──
+  if (!apEl) return;
+  try {
+    var ad = await fetch('/api/approvals-audit?limit=80').then(function(r){ return r.json(); });
+    var decisions = ad.decisions || [];
+    var as = ad.summary || {};
+    var head = '<div style="border:1px solid var(--border-primary);border-radius:10px;overflow:hidden;">';
+    head += '<div style="display:flex;align-items:center;gap:12px;font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;padding:12px 14px;border-bottom:1px solid var(--border-primary);">';
+    head += '<span style="flex:1;">Exec-approval audit</span>';
+    head += '<span style="color:#d97706;">'+(as.pending||0)+' pending</span>';
+    head += '<span style="color:#16a34a;">'+(as.approved||0)+' approved</span>';
+    head += '<span style="color:#ef4444;">'+(as.denied||0)+' denied</span>';
+    head += '</div>';
+    if (decisions.length === 0) {
+      apEl.innerHTML = head + '<div style="color:var(--text-muted);font-size:13px;padding:16px;">No exec-approval decisions recorded yet. When a tool-call hits a policy gate it appears here with its decision and reason.</div></div>';
+    } else {
+      function decPill(st){
+        var m = {pending:['#d97706','rgba(217,119,6,.12)'],approved:['#16a34a','rgba(22,163,74,.12)'],allowed:['#16a34a','rgba(22,163,74,.12)'],denied:['#ef4444','rgba(239,68,68,.12)'],blocked:['#ef4444','rgba(239,68,68,.12)']};
+        var c = m[st] || ['#6b7280','var(--bg-secondary)'];
+        return '<span style="font-size:10px;font-weight:700;color:'+c[0]+';background:'+c[1]+';border-radius:4px;padding:1px 6px;">'+escHtml(String(st||'?'))+'</span>';
+      }
+      var rows = head;
+      decisions.forEach(function(d){
+        rows += '<div style="padding:9px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;">';
+        rows += '<div style="display:flex;align-items:center;gap:10px;">';
+        rows += decPill(d.status);
+        rows += '<span style="font-weight:600;color:var(--text-primary);">'+escHtml(String(d.action||'tool-call'))+'</span>';
+        if (d.args_preview) rows += '<span style="flex:1;color:var(--text-muted);font-family:monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+escHtml(String(d.args_preview))+'">'+escHtml(String(d.args_preview))+'</span>';
+        else rows += '<span style="flex:1;"></span>';
+        if (d.resolver) rows += '<span style="font-size:11px;color:var(--text-faint);">by '+escHtml(String(d.resolver))+'</span>';
+        rows += '</div>';
+        if (d.decision_reason) rows += '<div style="margin-top:3px;color:var(--text-muted);font-size:11px;">'+escHtml(String(d.decision_reason))+'</div>';
+        rows += '</div>';
+      });
+      rows += '</div>';
+      apEl.innerHTML = rows;
+    }
+  } catch(e) {
+    apEl.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">Failed to load approval audit: '+escHtml(String(e))+'</div>';
   }
 }
 

@@ -141,20 +141,47 @@ def _span_kind(event_type, is_subagent):
     return "event"
 
 
-def _walk_tool_uses(node):
-    """Yield tool_use dicts nested anywhere in ``node`` (depth-first)."""
+def _walk_tool_uses(node, _parent_name=None):
+    """Yield tool_use-like dicts nested anywhere in ``node`` (depth-first).
+
+    Recognises two shapes:
+      * **OpenClaw / Anthropic** — ``{type: 'tool_use', name, id, input}``
+      * **Claude Code** — top-level ``data.tool_calls = [{id, input}]`` with
+        the tool name on the parent at ``data.tool_name``. The yielded dict
+        is normalised to ``{type:'tool_use', name, id, input}`` so callers
+        don't need to know which shape produced it.
+    """
     if isinstance(node, dict):
         if node.get("type") == "tool_use" and node.get("name"):
             yield node
-        for v in node.values():
-            yield from _walk_tool_uses(v)
+        # Claude Code shape: data.tool_calls = [...] with name at data.tool_name
+        tn = node.get("tool_name")
+        tcs = node.get("tool_calls")
+        if isinstance(tcs, list) and tn:
+            for tc in tcs:
+                if isinstance(tc, dict):
+                    yield {
+                        "type": "tool_use",
+                        "name": tn,
+                        "id": tc.get("id") or tc.get("tool_call_id") or "",
+                        "input": tc.get("input") or tc.get("arguments") or {},
+                    }
+        for k, v in node.items():
+            if k == "tool_calls":
+                continue  # already handled above
+            yield from _walk_tool_uses(v, _parent_name=node.get("tool_name") or _parent_name)
     elif isinstance(node, list):
         for item in node:
-            yield from _walk_tool_uses(item)
+            yield from _walk_tool_uses(item, _parent_name=_parent_name)
 
 
 def _walk_tool_results(node):
     """Yield (tool_use_id, is_error) for tool_result blocks anywhere in ``node``.
+
+    Recognises:
+      * **OpenClaw / Anthropic** — ``{type: 'tool_result', tool_use_id, is_error}``
+      * **Claude Code** — the link lives in ``data.extra`` (a JSON-encoded
+        string) as ``{toolUseId, isError}``.
 
     The join key for span reconstruction: an assistant tool_use.id is closed by
     the later user event whose tool_result.tool_use_id matches it.
@@ -162,6 +189,21 @@ def _walk_tool_results(node):
     if isinstance(node, dict):
         if node.get("type") == "tool_result" and node.get("tool_use_id"):
             yield node.get("tool_use_id"), bool(node.get("is_error"))
+        # Claude Code shape: tool_result event with linkage in data.extra.
+        extra = node.get("extra")
+        if isinstance(extra, str) and extra:
+            try:
+                ex = json.loads(extra)
+            except (ValueError, TypeError):
+                ex = None
+            if isinstance(ex, dict):
+                tuid = ex.get("toolUseId") or ex.get("tool_use_id") or ex.get("tool_call_id")
+                if tuid:
+                    yield tuid, bool(ex.get("isError") or ex.get("is_error"))
+        elif isinstance(extra, dict):
+            tuid = extra.get("toolUseId") or extra.get("tool_use_id") or extra.get("tool_call_id")
+            if tuid:
+                yield tuid, bool(extra.get("isError") or extra.get("is_error"))
         for v in node.values():
             yield from _walk_tool_results(v)
     elif isinstance(node, list):
@@ -207,6 +249,24 @@ def _short_name(event_type, data, is_subagent):
     return prefix + (event_type or "event")
 
 
+def _derive_trace_title(rows):
+    """Best-effort first-user-prompt → trace title (MLflow-style header).
+
+    Reuses the bug-class-gated probe from clawmetry.eval_regression_replay so
+    we honour the same v3 event-shape coverage. Returns "" on no match; the
+    frontend falls back to the trace id when title is empty. Cheap: walks
+    ``rows`` once, stops at the first non-empty prompt text.
+    """
+    try:
+        from clawmetry.eval_regression_replay import _extract_first_prompt
+        txt = _extract_first_prompt(rows or []) or ""
+    except Exception:
+        txt = ""
+    # Collapse whitespace + cap at 120 chars so it renders on one line.
+    txt = " ".join((txt or "").split())
+    return txt[:120] + ("…" if len(txt) > 120 else "")
+
+
 def _summarize_trace(session_id, rows):
     """Roll up one session's events into a trace summary row."""
     starts, total_tokens, total_cost, errors, model = [], 0, 0.0, 0, None
@@ -232,9 +292,14 @@ def _summarize_trace(session_id, rows):
     start_ms = min(starts) if starts else None
     end_ms = max(starts) if starts else None
     duration_ms = (end_ms - start_ms) if (start_ms and end_ms) else 0
+    title = _derive_trace_title(rows)
     return {
         "trace_id": session_id,
         "name": session_id[:40],
+        # First-user-prompt title for the MLflow-style trace header.
+        # Empty string when no prompt is recoverable; the UI falls back
+        # to the trace id in that case.
+        "title": title,
         "start_ms": start_ms,
         "duration_ms": duration_ms,
         "span_count": span_count,
@@ -321,7 +386,14 @@ def _build_spans(rows):
             "start_ms": start, "duration_ms": max(0, (end or start) - start),
             "model": model, "tokens": int(tokens or 0),
             "cost": round(float(cost or 0.0), 6), "status": status,
-            "is_subagent": is_sub, "detail": (detail or "")[:240], "tool": tool,
+            # `detail` carries the primary text for the MLflow-style Chat
+            # tab. Bumped from 240 → 8000 because the old cap reduced
+            # multi-paragraph assistant turns and tool inputs to single
+            # truncated sentences in the UI. `output` is filled in when
+            # the matching tool_result closes the span (below) so the
+            # Outputs tab has content without a second round-trip.
+            "is_subagent": is_sub, "detail": (detail or "")[:8000], "tool": tool,
+            "output": "",
         }
         spans.append(s)
         by_id[sid] = s
@@ -340,18 +412,35 @@ def _build_spans(rows):
         start = order_ms[i]
         nxt = order_ms[i + 1] if i + 1 < len(order_ms) else t1
         eid = str(d.get("id") or e.get("id") or f"ev-{i}")
+        # Extract the human-readable text for this event across every shape
+        # we see in the wild. The old code only checked `data.message.content`
+        # (OpenClaw v3 assistant) + `data.finalPromptText` (OpenClaw prompt) —
+        # which meant Claude Code events (`data.content` directly, no
+        # `message` wrapper) ended up with empty `detail` and the MLflow-
+        # style Chat tab had nothing to render.
         text = ""
         msg = d.get("message")
         if isinstance(msg, dict) and isinstance(msg.get("content"), str):
             text = msg["content"]
+        elif isinstance(msg, dict) and isinstance(msg.get("content"), list):
+            # Anthropic SDK content list: [{type:'text',text:'…'}, …]
+            parts = [b.get("text", "") for b in msg["content"] if isinstance(b, dict)]
+            text = "\n".join(p for p in parts if p)
         elif isinstance(d.get("finalPromptText"), str):
             text = d["finalPromptText"]
+        elif isinstance(d.get("promptText"), str):
+            text = d["promptText"]
         elif isinstance(d.get("content"), str):
-            # Multi-runtime adapters (Claude Code, …) put the turn text on
-            # ``data.content`` directly — without this the user prompt is empty
-            # and falls through to a generic ``message`` span instead of a
-            # ``prompt`` span.
+            # Claude Code shape: `data.content` is the message body directly
+            # (no `message` wrapper). Without this the user prompt is empty
+            # and falls through to a generic `message` span instead of a
+            # `prompt` span.
             text = d["content"]
+        elif isinstance(d.get("content"), list):
+            parts = [b.get("text", "") for b in d["content"] if isinstance(b, dict)]
+            text = "\n".join(p for p in parts if p)
+        elif isinstance(d.get("text"), str):
+            text = d["text"]
 
         if is_sub and sub_root is None:
             sub_root = _mk("agent-sub", main_root["span_id"],
@@ -359,28 +448,48 @@ def _build_spans(rows):
         agent_parent = (sub_root or main_root)["span_id"] if is_sub else main_root["span_id"]
 
         # Multi-runtime adapters (Claude Code, Codex, …) emit event_type
-        # ``message`` for BOTH turns and carry the speaker in ``data.role`` —
-        # so classify on the role too, or every adapter LLM turn renders as a
-        # generic ``event`` span instead of a ``chat`` (llm) span. Gate the
-        # role path to text turns so a ``tool_call`` row (also role=assistant)
-        # still becomes an execute_tool span, not an empty chat.
-        role = (d.get("role") or "").lower()
+        # `message` for BOTH turns and carry the speaker in `data.role` — so
+        # classify on the role too. Gated to text turns so a `tool_call` row
+        # (also role=assistant) takes the explicit `tool_call → assistant`
+        # branch below instead of being misclassified by the role-only check.
+        d_role = (d.get("role") or "").lower()
         is_assistant = ("assistant" in low) or ("model.completed" in low) \
-            or (role == "assistant" and low in ("message", "text"))
-        is_user = low.endswith("user") or low == "user" or "prompt" in low \
-            or (role == "user" and low == "message")
+            or (d_role == "assistant" and low in ("message", "text"))
+        is_user = (low.endswith("user") or low == "user" or "prompt" in low
+                   or (d_role == "user" and low == "message"))
+        # tool_call is an assistant turn (the assistant invokes the tool):
+        # route it through the chat+execute_tool branch so _walk_tool_uses
+        # discovers its tool_calls and emits the matching tool spans.
+        if low == "tool_call":
+            is_assistant = True
 
-        # Close execute_tool spans whose result just arrived (the join).
+        # Close execute_tool spans whose result just arrived (the join). When
+        # we have a tool_result event, also attach its text to the tool span
+        # as `output` so the Outputs tab in the MLflow-style detail pane has
+        # content without a second BLOB round-trip.
         results = list(_walk_tool_results(d))
-        if results:
+        if results or low == "tool_result":
+            tool_result_text = ""
+            if isinstance(d.get("content"), str):
+                tool_result_text = d["content"]
+            elif text:
+                tool_result_text = text
             for tuid, is_err in results:
                 ts = tool_spans.get(tuid)
                 if ts is not None:
                     ts["duration_ms"] = max(0, start - ts["start_ms"])
                     if is_err:
                         ts["status"] = "error"
+                    if tool_result_text and not ts.get("output"):
+                        ts["output"] = tool_result_text[:8000]
             if is_user and not text.strip():
                 continue  # pure tool-result turn → no span of its own
+            if low == "tool_result":
+                # Claude Code tool_result with no embedded tool_use_id link:
+                # we already updated the most-recent tool span above when the
+                # results walker yielded ids; if none did, skip emitting a
+                # generic event-span for this row (its content is on the tool).
+                continue
 
         if is_assistant:
             chat = _mk(eid, agent_parent,

@@ -9864,6 +9864,178 @@ def _build_brain_data():
         return {"stats": {}, "calls": [], "total": 0}
 
 
+def _build_tool_catalog_slice(limit: int = 5000, top: int = 60) -> dict:
+    """Per-tool call count + p50/p95 latency + error rate grouped by provenance
+    (PRD P1-3), derived from the DuckDB ``events`` table.
+
+    Mirrors the OSS ``routes/tool_catalog.py`` aggregation so the cloud Tool
+    Catalog tab shows the same rollup: each ``tool_call`` event is matched to
+    its closing ``tool_result`` by tool_use id (the ``turn_anatomy`` join),
+    duration = ``result_ts - call_ts``. Provenance: a name with ``__`` is MCP,
+    a name in the sandbox ``tool_policy`` allow set is builtin, else plugin.
+
+    Bounded to the ``top`` busiest tools so the slice stays tiny in the shared
+    snapshot. Returns ``{"tools": [...], "groups": {...}}``; degrades to an
+    empty catalog (never raises) when the store is unavailable."""
+    out = {"tools": [], "groups": {"builtin": 0, "mcp": 0, "plugin": 0}}
+    try:
+        from clawmetry import local_store as _ls_tc
+        store = _ls_tc.get_store()
+    except Exception:
+        return out
+    if store is None:
+        return out
+
+    try:
+        rows = store.query_events(limit=int(limit)) or []
+    except Exception:
+        return out
+
+    # Builtin universe from the mirrored sandbox tool policy.
+    builtin: set = set()
+    try:
+        for r in (store.query_tool_policy(limit=25) or []):
+            allow = r.get("allow")
+            if isinstance(allow, list):
+                for n in allow:
+                    if n:
+                        builtin.add(str(n).replace("mcp__openclaw__", ""))
+    except Exception:
+        pass
+
+    def _d(e):
+        d = e.get("data")
+        return d if isinstance(d, dict) else {}
+
+    def _ms(ts):
+        if ts is None:
+            return None
+        if isinstance(ts, (int, float)):
+            return int(ts * 1000) if ts < 1e12 else int(ts)
+        try:
+            return int(datetime.fromisoformat(
+                str(ts).replace("Z", "+00:00")).timestamp() * 1000)
+        except Exception:
+            return None
+
+    def _name(e):
+        d = _d(e)
+        n = d.get("tool_name")
+        if n:
+            return str(n).replace("mcp__openclaw__", "")
+        tcs = d.get("tool_calls")
+        if isinstance(tcs, list) and tcs and isinstance(tcs[0], dict):
+            nn = tcs[0].get("name") or (tcs[0].get("function") or {}).get("name")
+            if nn:
+                return str(nn).replace("mcp__openclaw__", "")
+        return ""
+
+    def _err(e):
+        d = _d(e)
+        ex = d.get("extra") if isinstance(d.get("extra"), dict) else {}
+        return bool(ex.get("isError") or d.get("isError") or d.get("is_error")
+                    or (e.get("event_type") or "").endswith("error"))
+
+    def _is_result(e):
+        et = (e.get("event_type") or "").lower()
+        if "tool_result" in et or "tool_use_result" in et:
+            return True
+        return (_d(e).get("role") or "").lower() == "tool"
+
+    def _is_call(e):
+        et = (e.get("event_type") or "").lower()
+        if "tool_result" in et or "tool_use_result" in et:
+            return False
+        d = _d(e)
+        if (d.get("role") or "").lower() == "tool":
+            return False
+        return bool("tool_call" in et or "tool.call" in et
+                    or d.get("tool_name") or d.get("tool_calls"))
+
+    # Index results by the tool_use id they close.
+    res_idx: dict = {}
+    for e in rows:
+        if not _is_result(e):
+            continue
+        d = _d(e)
+        ex = d.get("extra") if isinstance(d.get("extra"), dict) else {}
+        rid = ex.get("toolUseId") or ex.get("tool_use_id") or d.get("tool_use_id")
+        if rid is not None:
+            res_idx[str(rid)] = {"ts": _ms(e.get("ts")), "error": _err(e)}
+
+    agg: dict = {}
+    for e in rows:
+        if not _is_call(e):
+            continue
+        name = _name(e)
+        if not name:
+            continue
+        start = _ms(e.get("ts"))
+        dur = None
+        err = _err(e)
+        d = _d(e)
+        tcs = d.get("tool_calls")
+        ids = [str(tc["id"]) for tc in tcs
+               if isinstance(tc, dict) and tc.get("id")] if isinstance(tcs, list) else []
+        for tuid in ids:
+            m = res_idx.get(tuid)
+            if m:
+                if m["error"]:
+                    err = True
+                if m["ts"] is not None and start is not None:
+                    dur = max(0, m["ts"] - start)
+                break
+        a = agg.setdefault(name, {"calls": 0, "durs": [], "errs": 0})
+        a["calls"] += 1
+        if dur is not None:
+            a["durs"].append(dur)
+        if err:
+            a["errs"] += 1
+
+    def _pct(vals, p):
+        if not vals:
+            return None
+        if len(vals) == 1:
+            return int(vals[0])
+        k = (len(vals) - 1) * (p / 100.0)
+        f = int(k)
+        if f + 1 < len(vals):
+            return int(vals[f] + (vals[f + 1] - vals[f]) * (k - f))
+        return int(vals[f])
+
+    def _classify(name):
+        if "__" in name:
+            parts = [p for p in name.split("__") if p]
+            if name.startswith("mcp__"):
+                provider = parts[1] if len(parts) > 1 else "mcp"
+            else:
+                provider = parts[0] if parts else "mcp"
+            return ("mcp", provider)
+        if name in builtin:
+            return ("builtin", "")
+        return ("plugin", "")
+
+    tools = []
+    for name, a in agg.items():
+        prov, provider = _classify(name)
+        durs = sorted(a["durs"])
+        calls = a["calls"]
+        tools.append({
+            "name": name,
+            "provenance": prov,
+            "provider": provider or None,
+            "calls": calls,
+            "p50_ms": _pct(durs, 50),
+            "p95_ms": _pct(durs, 95),
+            "error_rate": round(a["errs"] / calls, 4) if calls else 0.0,
+            "errors": a["errs"],
+        })
+        out["groups"][prov] = out["groups"].get(prov, 0) + 1
+    tools.sort(key=lambda t: (-t["calls"], -(t["p95_ms"] or 0), t["name"]))
+    out["tools"] = tools[:int(top)]
+    return out
+
+
 def _build_tool_stats():
     """Build tool usage stats from recent session logs."""
     try:
@@ -10570,8 +10742,20 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     # Memory files
     _mem_files = _build_memory_files(paths.get("workspace", ""))
 
-    # Spending (from state if available)
-    spending = state.get("spending", {"today": 0, "week": 0, "month": 0})
+    # Spending (#2142): derive from the same live source as `dailyUsage` so
+    # both cost surfaces agree. Pre-fix this read from the daemon's
+    # `state.json`, which is almost always stale (often {0, 0, 0} on fresh
+    # nodes) — meanwhile `dailyUsage.monthCost` was correctly derived live
+    # from DuckDB events × model pricing (#2058). The cloud Spending hero
+    # card reads `snap.spending` and rendered $0 while the Cost tab showed
+    # the real four-figure month — trust-destroying. Computing dailyUsage
+    # once here and reusing it bounds the cost.
+    _du = _build_daily_usage()
+    spending = {
+        "today": float(_du.get("todayCost") or state.get("spending", {}).get("today") or 0),
+        "week":  float(_du.get("weekCost")  or state.get("spending", {}).get("week")  or 0),
+        "month": float(_du.get("monthCost") or state.get("spending", {}).get("month") or 0),
+    }
 
     # LLM Context Inspector parity (2026-05-23): expose the SAME fields
     # the OSS /api/overview now adds so the Context tab reads one value
@@ -10665,11 +10849,76 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _e_tp:
         log.debug("snapshot: tool_policy slice failed: %s", _e_tp)
 
+    # Tool catalog (PRD P1-3): per-tool call count + p50/p95 latency + error
+    # rate grouped by provenance, derived from the DuckDB events table
+    # (tool_call → tool_result join). Bounded to the top tools by call count so
+    # the slice stays tiny in the shared snapshot. Mirrors the OSS
+    # ``/api/tool-catalog`` aggregation so the cloud tab shows the same rollup.
+    tool_catalog_slice: dict = {"tools": [], "groups": {}}
+    try:
+        tool_catalog_slice = _build_tool_catalog_slice()
+    except Exception as _e_tc:
+        log.debug("snapshot: tool_catalog slice failed: %s", _e_tc)
+    # Context-window economics (PRD P1-2) → bounded snapshot slice for the
+    # cloud Context Economics tab. Ships the compaction log (trigger + before/
+    # after + reclaimed) and the overflow-session flags, plus a small summary,
+    # but caps rows and truncates the free-text compaction summary so a long
+    # transcript summary can't bloat the shared snapshot (#1895 / 0.12.278
+    # bloat lesson). The full per-turn utilization series is intentionally
+    # NOT shipped — it can be hundreds of points per session; the cloud can
+    # re-derive a coarse view from the summary + compactions, and the OSS tab
+    # reads the live series directly.
+    context_economics_slice: dict = {
+        "compactions": [], "overflow_sessions": [], "summary": {},
+    }
+    try:
+        from clawmetry import local_store as _ls_ce
+        _ce_store = _ls_ce.get_store()
+        if _ce_store is not None:
+            _ce = _ce_store.query_context_economics(
+                util_limit=400, compaction_limit=80,
+            ) or {}
+            _ce_comps = _ce.get("compactions") or []
+            context_economics_slice["compactions"] = [
+                {
+                    "session_id":    c.get("session_id"),
+                    "ts":            c.get("ts"),
+                    "trigger":       c.get("trigger"),
+                    "tokens_before": c.get("tokens_before"),
+                    "tokens_after":  c.get("tokens_after"),
+                    "reclaimed":     c.get("reclaimed"),
+                    "from_hook":     c.get("from_hook"),
+                    # short prefix only — never the full compaction summary
+                    "summary":       (str(c.get("summary") or "")[:280]),
+                }
+                for c in _ce_comps[:80]
+            ]
+            context_economics_slice["overflow_sessions"] = (
+                _ce.get("overflow_sessions") or []
+            )[:50]
+            _ce_util = _ce.get("utilization") or []
+            _peak = max((float(u.get("pct") or 0) for u in _ce_util), default=0.0)
+            _overflow_n = sum(
+                1 for c in _ce_comps if c.get("trigger") == "overflow"
+            )
+            context_economics_slice["summary"] = {
+                "compaction_count":   len(_ce_comps),
+                "overflow_count":     _overflow_n,
+                "proactive_count":    len(_ce_comps) - _overflow_n,
+                "total_reclaimed":    sum(int(c.get("reclaimed") or 0) for c in _ce_comps),
+                "peak_pct":           round(_peak, 2),
+                "overflow_sessions":  len(_ce.get("overflow_sessions") or []),
+                "utilization_points": len(_ce_util),
+            }
+    except Exception as _e_ce:
+        log.debug("snapshot: context_economics slice failed: %s", _e_ce)
+
+    from clawmetry.providers_pricing import provider_for_model as _pfm
     payload = {
         "system": system,
         "infra": infra,
         "model": model_name or "unknown",
-        "provider": "",
+        "provider": _pfm(model_name or ""),
         "sessionCount": session_count,
         "mainTokens": main_tokens,
         "currentContextTokens": current_context_tokens,
@@ -10691,6 +10940,8 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "totalActive": active_count,
         "runLedger": run_ledger_slice,
         "toolPolicy": tool_policy_slice,
+        "toolCatalog": tool_catalog_slice,
+        "contextEconomics": context_economics_slice,
         "spending": spending,
         "cronJobs": _build_cron_jobs(paths),
         "channels": _build_channel_data(config),
@@ -10715,7 +10966,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
             ]
         ),
         "selfEvolve": _build_selfevolve(paths.get("workspace")),
-        "dailyUsage": _build_daily_usage(),
+        "dailyUsage": _du,  # #2142: computed once above, shared with `spending`
         "reliability": _build_reliability(),
         "memoryAccess": _build_memory_access(),
         "traces": _build_traces(),
