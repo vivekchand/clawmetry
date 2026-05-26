@@ -3859,6 +3859,13 @@ function renderBrainStream(events) {
   if (_brainChannelFilter !== 'all') {
     filtered = filtered.filter(function(ev) { return (ev.channel || '') === _brainChannelFilter; });
   }
+  // Global runtime switcher (header): scope the activity stream to one runtime
+  // so Brain stops mixing OpenClaw with Claude Code / Codex / etc. Each event
+  // carries `sessionId`, whose prefix is the runtime discriminator.
+  var _brainRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  if (_brainRt && _brainRt !== 'all') {
+    filtered = filtered.filter(function(ev) { return _cmRuntimeOf(ev) === _brainRt; });
+  }
   // Plumbing toggle: hide QUEUE-OPERATION rows unless user opted in.
   // Updates the "Show plumbing (N hidden)" label as a side-effect so the
   // count stays in sync with whatever the current filter set surfaces.
