@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Release: dashboard tab i18n (16 languages, coverage model) (2026-05-26)
+- Completes the dashboard string extraction (last i18n surface): ~350 tab/panel strings across all tabs are now translatable. 16 languages fully translated (bn/es/fr/gu/hi/ja/kn/ko/ml/mr/pa/pt-BR/ta/te/zh-CN/zh-TW); the rest fall back to English (no blanks) and backfill via the autotranslate bot. Publishes #2130.
+
 ### Fixed: cloud Dives via heartbeat relay (was a raw DuckDB error) (2026-05-26)
 - The cloud **Dives** tab (NL-to-SQL exploration) showed a raw `Local store unavailable: IO Error: Cannot open database "/root/.clawmetry/clawmetry.duckdb" in read-only mode: database does not exist`. The cloud server has no DuckDB and cannot decrypt the E2E snapshot, so it can't run Dives' arbitrary SQL server-side. Dives now rides the heartbeat-piggyback relay like cron does (local compute, cloud display): the daemon gets a `dives_query` action, runs the NL-to-SQL + query on its **own** DuckDB writer handle (never a `read_only=True` re-open), and posts the AES-256-GCM-encrypted `{sql, chart_spec, rows}` result to `/ingest/cache` for the browser to poll + decrypt client-side. The cloud never sees plaintext. The local `/api/dives/query` handler also degrades gracefully now — a keyless/cold cloud fall-through returns a clean "run Dives on your local dashboard" message instead of the raw IO error. The NL-to-SQL step runs on the node, so it needs an Anthropic credential (env var or `claude` CLI OAuth) locally; without one the relay returns the existing no-auth banner. (#2127 + cloud)
 
