@@ -9,6 +9,22 @@ import { OpsPage } from "./pages/OpsPage";
 import { ContextPage } from "./pages/ContextPage";
 import { BrainPage } from "./pages/BrainPage";
 import { SubAgentsPage } from "./pages/SubAgentsPage";
+import { TurnAnatomyPage } from "./pages/TurnAnatomyPage";
+import { ToolPolicyPage } from "./pages/ToolPolicyPage";
+import { ContextEconomicsPage } from "./pages/ContextEconomicsPage";
+import { ToolCatalogPage } from "./pages/ToolCatalogPage";
+
+// Nav slugs that now have a real React page (so the stub fallback skips them).
+const REAL_PAGES = new Set([
+  "ops",
+  "context",
+  "brain",
+  "subagents",
+  "trace",
+  "rules",
+  "context-econ",
+  "tools",
+]);
 
 // All v2 routes live inside <Layout>, which renders the sidebar + topbar
 // chrome and an <Outlet /> for route content. Every NAV_ITEMS entry maps
@@ -28,7 +44,11 @@ export default function App() {
         <Route path="context" element={<ContextPage />} />
         <Route path="brain" element={<BrainPage />} />
         <Route path="subagents" element={<SubAgentsPage />} />
-        {NAV_ITEMS.filter((it) => it.id !== "ops" && it.id !== "context" && it.id !== "brain" && it.id !== "subagents").map((it) => (
+        <Route path="trace" element={<TurnAnatomyPage />} />
+        <Route path="rules" element={<ToolPolicyPage />} />
+        <Route path="context-econ" element={<ContextEconomicsPage />} />
+        <Route path="tools" element={<ToolCatalogPage />} />
+        {NAV_ITEMS.filter((it) => !REAL_PAGES.has(it.id)).map((it) => (
           <Route key={it.id} path={it.id} element={<StubPage slug={it.id} />} />
         ))}
         {/* SPA catch-all — unknown deep links land on the welcome page rather

@@ -21,17 +21,19 @@ export const NAV_ITEMS: NavItem[] = [
   { id: "trace", label: "Live trace", icon: "◐", section: "live", issue: 1505 },
   { id: "brain", label: "Brain", icon: "✦", section: "live", issue: 1506 },
   { id: "context", label: "Context", icon: "▤", section: "live", issue: 1507 },
+  { id: "context-econ", label: "Context $", icon: "◴", section: "live", issue: 1507 },
   { id: "approvals", label: "Approvals", icon: "✋", section: "live", badge: "PRO", issue: 1508 },
 
   // HISTORY — looking back
   { id: "cost", label: "Cost", icon: "$", section: "history", issue: 1509 },
   { id: "subagents", label: "Sub agents", icon: "⇲", section: "history", issue: 1510 },
+  { id: "tools", label: "Tool catalog", icon: "🔧", section: "history", issue: 1511 },
   { id: "skills", label: "Skills", icon: "✎", section: "history", issue: 1511 },
 
   // FLEET — multi-node + governance
   { id: "ops", label: "Ops", icon: "◍", section: "fleet", issue: 1512 },
   { id: "fleet", label: "Fleet sonar", icon: "◌", section: "fleet", badge: "PRO", issue: 1513 },
-  { id: "rules", label: "Rules", icon: "⚙", section: "fleet", badge: "PRO", issue: 1514 },
+  { id: "rules", label: "Tool policy", icon: "⚙", section: "fleet", issue: 1514 },
   { id: "settings", label: "Settings", icon: "⌥", section: "fleet", issue: 1515 },
 ];
 
