@@ -6754,6 +6754,58 @@ function _cmRenderRuntimeSwitcher(counts, anchor, reload) {
   }
 }
 
+// ── Global runtime switcher (header) ────────────────────────────────────────
+// Promotes the per-runtime filter — previously rendered only on the Transcripts
+// tab — to an always-visible header control, so the active runtime scope is
+// discoverable and persists across tabs. Reuses _cmRuntimeFilter() /
+// _cmSetRuntimeFilter() / _CM_RT_LABEL and the same session-id-prefix runtime
+// derivation. Hidden until >1 runtime is present (single-runtime installs are
+// unchanged). Changing it reloads the current tab so any runtime-aware view
+// re-filters against the new scope.
+var _cmGlobalRtCounts = {};
+
+function _cmPopulateGlobalRuntime(counts) {
+  if (counts && Object.keys(counts).length) _cmGlobalRtCounts = counts;
+  counts = _cmGlobalRtCounts || {};
+  var wrap = document.getElementById('cm-global-runtime-wrap');
+  var sel = document.getElementById('cm-global-runtime');
+  if (!wrap || !sel) return;
+  var order = Object.keys(_CM_RT_LABEL).filter(function(k) { return counts[k]; });
+  if (order.length < 2) { wrap.style.display = 'none'; return; }
+  var active = _cmRuntimeFilter();
+  if (active !== 'all' && !counts[active]) active = 'all';
+  var total = order.reduce(function(a, k) { return a + counts[k]; }, 0);
+  var html = '<option value="all">All runtimes (' + total + ')</option>';
+  order.forEach(function(k) {
+    html += '<option value="' + k + '">' + escHtml(_CM_RT_LABEL[k] || k) + ' (' + counts[k] + ')</option>';
+  });
+  sel.innerHTML = html;
+  sel.value = active;
+  wrap.style.display = 'flex';
+}
+
+function _cmOnGlobalRuntimeChange(sel) {
+  if (!sel) return;
+  _cmSetRuntimeFilter(sel.value);
+  // Reload the current tab so any runtime-aware view re-filters in place.
+  if (typeof switchTab === 'function' && _cmCurrentTab) switchTab(_cmCurrentTab);
+}
+
+async function _cmInitGlobalRuntimeSwitcher() {
+  // Derive the runtimes present from the session list (the session-id prefix is
+  // the runtime discriminator — agent_type is always "openclaw"). One cheap
+  // fetch on load; the Transcripts loader refreshes the counts as it runs.
+  try {
+    var data = await fetch('/api/sessions', { credentials: 'same-origin' }).then(function(r) { return r.json(); });
+    var counts = {};
+    ((data && data.sessions) || []).forEach(function(s) {
+      var rt = _cmRuntimeOf(s);
+      counts[rt] = (counts[rt] || 0) + 1;
+    });
+    _cmPopulateGlobalRuntime(counts);
+  } catch (e) { /* non-fatal — the switcher just stays hidden */ }
+}
+
 async function loadSessions() {
   if (window.CLOUD_MODE) {
     // In cloud mode: /api/sessions and /api/subagents already handle CLOUD_MODE server-side
@@ -11171,8 +11223,9 @@ async function loadTranscripts() {
     _allTx.forEach(function(t) { var r = _cmRuntimeOf(t); _rtCounts[r] = (_rtCounts[r] || 0) + 1; });
     var _rtFilter = _cmRuntimeFilter();
     if (_rtFilter !== 'all' && !_rtCounts[_rtFilter]) _rtFilter = 'all';
-    var _anchor = document.getElementById('transcript-list');
-    _cmRenderRuntimeSwitcher(_rtCounts, _anchor, loadTranscripts);
+    // Feed the freshest runtime counts to the global header switcher (it owns
+    // the control now; the old inline per-tab chip switcher is retired).
+    _cmPopulateGlobalRuntime(_rtCounts);
     if (_rtFilter !== 'all') {
       data.transcripts = _allTx.filter(function(t) { return _cmRuntimeOf(t) === _rtFilter; });
     }
@@ -17684,6 +17737,8 @@ document.addEventListener('DOMContentLoaded', function() {
   bootDashboard();
   // Issue #950: multi-profile workspace switcher
   try { initWorkspaceSwitcher(); } catch (e) { /* non-fatal */ }
+  // Global runtime switcher — populate from the session list on load.
+  try { _cmInitGlobalRuntimeSwitcher(); } catch (e) { /* non-fatal */ }
   try { _hideCloudIrrelevantNav(); } catch (e) { /* non-fatal */ }
   try { _applyTracingFlag(); } catch (e) { /* non-fatal */ }
 });
