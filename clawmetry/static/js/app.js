@@ -12249,6 +12249,59 @@ async function loadToolCatalog() {
   } catch (e) {
     tableEl.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">Failed to load tool catalog: ' + escHtml(String(e)) + '</div>';
   }
+  // Per-MCP-server rollup (#2007) — independent of the provenance filter.
+  loadMcpServers();
+}
+
+// ── Per-MCP-server rollup (#2007) ───────────────────────────────────────────
+// Reads /api/mcp-servers (same DuckDB tool_call/tool_result join as the
+// catalog, re-aggregated by MCP server) and renders a compact per-server card:
+// call volume, p50/p95 latency, error rate, top tools, and the model spend of
+// the turns that called the server. Hidden when no MCP servers were used.
+function _mcpFmtMs(ms) {
+  if (ms === null || ms === undefined) return '<span style="color:var(--text-faint);">&mdash;</span>';
+  if (ms < 1000) return ms + 'ms';
+  if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+  return Math.round(ms / 60000) + 'm';
+}
+
+async function loadMcpServers() {
+  var section = document.getElementById('mcp-servers-section');
+  var card = document.getElementById('mcp-servers-card');
+  if (!section || !card) return;
+  try {
+    var data = await fetch('/api/mcp-servers').then(function(r) { return r.json(); });
+    var servers = (data && data.servers) || [];
+    if (servers.length === 0) { section.style.display = 'none'; return; }
+    section.style.display = 'block';
+    var maxCalls = servers.reduce(function(m, s) { return Math.max(m, s.calls || 0); }, 1);
+    var html = '';
+    servers.forEach(function(s, i) {
+      var errPct = Math.round((s.error_rate || 0) * 100);
+      var errColor = errPct >= 20 ? '#dc2626' : errPct > 0 ? '#d97706' : 'var(--text-muted)';
+      var barW = Math.round(((s.calls || 0) / maxCalls) * 100);
+      var topTools = (s.top_tools || []).map(function(t) {
+        return '<span style="font-size:10px;color:var(--text-muted);background:var(--bg-secondary);border-radius:4px;padding:1px 6px;">' + escHtml(t.name) + ' &middot; ' + t.calls + '</span>';
+      }).join(' ');
+      html += '<div style="padding:11px 14px;' + (i > 0 ? 'border-top:1px solid var(--border-primary);' : '') + '">';
+      html += '<div style="display:flex;align-items:center;gap:12px;">';
+      html += '<div style="flex:1;min-width:0;">';
+      html += '<div style="font-size:13px;font-weight:600;color:var(--text-primary);">' + escHtml(s.display_name || s.server) + '</div>';
+      html += '<div style="height:4px;background:var(--bg-secondary);border-radius:3px;margin-top:5px;max-width:220px;"><div style="width:' + barW + '%;height:100%;background:#8b5cf6;border-radius:3px;"></div></div>';
+      html += '</div>';
+      html += '<div style="display:flex;gap:18px;font-size:12px;text-align:right;flex-shrink:0;">';
+      html += '<div><div style="font-weight:700;color:var(--text-primary);">' + (s.calls || 0) + '</div><div style="font-size:10px;color:var(--text-muted);">calls</div></div>';
+      html += '<div title="median / 95th-percentile call duration"><div style="font-weight:700;color:var(--text-primary);">' + _mcpFmtMs(s.p50_ms) + ' / ' + _mcpFmtMs(s.p95_ms) + '</div><div style="font-size:10px;color:var(--text-muted);">p50 / p95</div></div>';
+      html += '<div><div style="font-weight:700;color:' + errColor + ';">' + errPct + '%</div><div style="font-size:10px;color:var(--text-muted);">errors</div></div>';
+      html += '<div title="Model spend on the turns that called this server (cache-aware). Not the MCP execution cost."><div style="font-weight:700;color:var(--text-primary);">$' + (s.cost_usd >= 0.01 ? Number(s.cost_usd).toFixed(2) : (s.cost_usd > 0 ? '&lt;0.01' : '0.00')) + '</div><div style="font-size:10px;color:var(--text-muted);">turn spend</div></div>';
+      html += '</div></div>';
+      if (topTools) html += '<div style="margin-top:7px;display:flex;gap:5px;flex-wrap:wrap;">' + topTools + '</div>';
+      html += '</div>';
+    });
+    card.innerHTML = html;
+  } catch (e) {
+    section.style.display = 'none';
+  }
 }
 
 function renderToolCatalog() {

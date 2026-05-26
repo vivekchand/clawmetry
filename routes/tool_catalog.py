@@ -198,6 +198,28 @@ def _classify(name: str, builtin: set):
     return ("plugin", "")
 
 
+def _mcp_tool_short(name: str, provider: str) -> str:
+    """Strip the ``mcp__<provider>__`` namespace off a tool name for display.
+
+    ``mcp__plugin_x_y__list_pages`` → ``list_pages``. Falls back to the full
+    name if the expected prefix isn't present.
+    """
+    if not name:
+        return ""
+    prefix = f"mcp__{provider}__"
+    if provider and name.startswith(prefix):
+        return name[len(prefix):]
+    parts = [p for p in name.split("__") if p]
+    return "__".join(parts[2:]) if len(parts) > 2 else name
+
+
+def _mcp_server_display(provider: str) -> str:
+    """Human-friendly server label. OpenClaw namespaces plugin-hosted MCP
+    servers as ``plugin_<name>`` — drop that prefix for the UI."""
+    p = provider or "mcp"
+    return p[len("plugin_"):] if p.startswith("plugin_") else p
+
+
 # ── Aggregation ─────────────────────────────────────────────────────────────
 
 def _percentile(sorted_vals: list, p: float):
@@ -367,3 +389,117 @@ def api_tool_catalog_calls(name):
         "call_count": len(calls),
         "_source": "local_store",
     })
+
+
+def _mcp_servers_rollup(rows: list, builtin: set | None = None) -> dict:
+    """Aggregate MCP tool calls by server (issue #2007).
+
+    Reuses the same tool_call->tool_result join + provenance classification as
+    the tool catalog, then rolls up by MCP server (the ``provider`` segment of
+    ``mcp__<provider>__<tool>``):
+      * ``calls`` / ``p50_ms`` / ``p95_ms`` / ``error_rate`` — exact, derived
+        from the event join (a call with no matching result counts toward
+        ``calls`` but not the latency percentiles).
+      * ``tokens`` / ``cost_usd`` — best-effort, summed from the ``tool_call``
+        event's own ``token_count`` / ``cost_usd`` (the LLM turn that issued the
+        call). Reflects the hop that drove the MCP call; may be 0 on runtimes
+        that don't price per event.
+      * ``top_tools`` — the busiest tools that server exposed.
+    Transport (stdio/sse/http) and cold-start are not yet ingested, so they're
+    deliberately omitted rather than faked.
+
+    ``builtin`` lets the daemon pass its own sandbox tool set (read from its own
+    store handle) so the snapshot builder never goes through the daemon proxy or
+    a ``read_only=True`` re-open; the HTTP route passes ``None`` and we resolve
+    it via ``_builtin_tool_set()``.
+    """
+    if builtin is None:
+        builtin = _builtin_tool_set()
+    res_idx = _result_index(rows)
+
+    servers: dict = {}
+    for name, start, dur, err, _sid in _iter_tool_calls(rows, res_idx):
+        prov, provider = _classify(name, builtin)
+        if prov != "mcp":
+            continue
+        s = servers.setdefault(provider, {
+            "calls": 0, "durs": [], "errs": 0, "tools": {}, "last_ts": None,
+            "tokens": 0, "cost": 0.0,
+        })
+        s["calls"] += 1
+        if dur is not None:
+            s["durs"].append(dur)
+        if err:
+            s["errs"] += 1
+        short = _mcp_tool_short(name, provider)
+        s["tools"][short] = s["tools"].get(short, 0) + 1
+        if start is not None and (s["last_ts"] is None or start > s["last_ts"]):
+            s["last_ts"] = start
+
+    # Token/cost attribution: a separate pass over the raw tool_call events so we
+    # don't have to thread cost through the shared _iter_tool_calls helper.
+    for e in rows:
+        if not _is_tool_call(e):
+            continue
+        prov, provider = _classify(_tool_name(e), builtin)
+        if prov != "mcp" or provider not in servers:
+            continue
+        servers[provider]["tokens"] += int(e.get("token_count") or 0)
+        try:
+            servers[provider]["cost"] += float(e.get("cost_usd") or 0.0)
+        except (TypeError, ValueError):
+            pass
+
+    out = []
+    for provider, s in servers.items():
+        durs = sorted(s["durs"])
+        calls = s["calls"]
+        top_tools = sorted(s["tools"].items(), key=lambda kv: -kv[1])[:5]
+        out.append({
+            "server": provider,
+            "display_name": _mcp_server_display(provider),
+            "calls": calls,
+            "p50_ms": _percentile(durs, 50),
+            "p95_ms": _percentile(durs, 95),
+            "error_rate": round(s["errs"] / calls, 4) if calls else 0.0,
+            "errors": s["errs"],
+            "timed_calls": len(durs),
+            "tool_count": len(s["tools"]),
+            "top_tools": [{"name": n, "calls": c} for n, c in top_tools],
+            "tokens": s["tokens"],
+            "cost_usd": round(s["cost"], 4),
+            "last_active_ms": s["last_ts"],
+        })
+    # Busiest server first; ties broken by slowest p95 then name.
+    out.sort(key=lambda r: (-r["calls"], -(r["p95_ms"] or 0), r["server"]))
+    return {
+        "servers": out,
+        "totals": {
+            "server_count": len(out),
+            "total_calls": sum(r["calls"] for r in out),
+            "total_tokens": sum(r["tokens"] for r in out),
+            "total_cost_usd": round(sum(r["cost_usd"] for r in out), 4),
+        },
+        "_source": "local_store",
+    }
+
+
+@bp_tool_catalog.route("/api/mcp-servers")
+def api_mcp_servers():
+    """Per-MCP-server cost & latency rollup (issue #2007).
+
+    Groups the agent's MCP tool calls by server so you can see which MCP server
+    is hot, slow, or error-prone — call volume, p50/p95 latency, error rate, the
+    tools each server exposes, and best-effort token/cost attributed from the
+    issuing turn. Reads the DuckDB ``events`` table through the daemon proxy
+    (same source + join as ``/api/tool-catalog``). Never 500s — an empty/cold
+    store returns ``{servers:[], totals:{...}}`` (HTTP 200).
+
+    Query param: ``limit`` (event scan window, <=5000).
+    """
+    try:
+        limit = max(1, min(5000, int(request.args.get("limit", 5000))))
+    except (TypeError, ValueError):
+        limit = 5000
+    rows = _coerce_rows(_ls_call("query_events", limit=limit))
+    return jsonify(_mcp_servers_rollup(rows))
