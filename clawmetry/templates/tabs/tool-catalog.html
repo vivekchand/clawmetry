@@ -1,0 +1,30 @@
+<div class="page" id="page-tool-catalog">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:16px;flex-wrap:wrap;">
+    <div>
+      <div style="font-size:18px;font-weight:700;color:var(--text-primary);">Tool catalog</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Every tool the agent actually invoked, grouped by provenance (builtin / MCP / plugin), with call count, p50/p95 latency and error rate. Click a tool to expand its recent calls.</div>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;">
+      <select id="tc-prov-filter" onchange="loadToolCatalog()" title="Filter by provenance group" style="font-size:12px;padding:5px 8px;border:1px solid var(--border-primary);border-radius:7px;background:var(--bg-secondary);color:var(--text-primary);">
+        <option value="">All provenance</option>
+        <option value="builtin">Builtin only</option>
+        <option value="mcp">MCP only</option>
+        <option value="plugin">Plugin only</option>
+      </select>
+      <select id="tc-sort" onchange="renderToolCatalog()" title="Sort tool rows" style="font-size:12px;padding:5px 8px;border:1px solid var(--border-primary);border-radius:7px;background:var(--bg-secondary);color:var(--text-primary);">
+        <option value="calls">Most calls</option>
+        <option value="p95">Slowest p95</option>
+        <option value="p50">Slowest p50</option>
+        <option value="errors">Highest error rate</option>
+        <option value="name">Name (A&ndash;Z)</option>
+      </select>
+      <button class="refresh-btn" onclick="loadToolCatalog()">&#8635;</button>
+    </div>
+  </div>
+
+  <!-- Provenance summary chips -->
+  <div id="tc-summary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;"></div>
+
+  <!-- Tool table -->
+  <div class="card" id="tc-table" style="color:var(--text-muted);font-size:13px;padding:0;overflow:hidden;">Loading tool catalog&hellip;</div>
+</div>

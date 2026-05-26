@@ -124,6 +124,7 @@ from routes.dives import bp_dives
 from routes.scheduler import bp_scheduler
 from routes.policy import bp_policy
 from routes.turn_anatomy import bp_turn_anatomy
+from routes.tool_catalog import bp_tool_catalog
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -10623,6 +10624,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_scheduler)
     app.register_blueprint(bp_policy)
     app.register_blueprint(bp_turn_anatomy)
+    app.register_blueprint(bp_tool_catalog)
 
     # Register built-in agent adapters. External plugins can register more
     # via clawmetry.extensions entry points — see clawmetry/adapters/.
@@ -11078,6 +11080,9 @@ DASHBOARD_HTML = r"""
         <div class="left-nav-item left-nav-item-sub" id="left-nav-turn-anatomy" data-tab="turn-anatomy" onclick="switchTab('turn-anatomy')" title="Decompose a turn into prompt, model, tools, compaction and reply">
           <span class="left-nav-label">Turn anatomy</span>
         </div>
+        <div class="left-nav-item left-nav-item-sub" id="left-nav-tool-catalog" data-tab="tool-catalog" onclick="switchTab('tool-catalog')" title="Every tool the agent uses by provenance, with call count and p50/p95 latency">
+          <span class="left-nav-label">Tool catalog</span>
+        </div>
       </div>
 
       <div class="left-nav-item" data-tab="approvals" onclick="switchTab('approvals')" data-i18n-title="nav.approvals_tooltip" title="Cloud-mediated approval queue">
@@ -11204,6 +11209,9 @@ DASHBOARD_HTML = r"""
 
 <!-- TURN ANATOMY (per-turn waterfall + stalled detector, P0-3) -->
 {% include 'tabs/turn-anatomy.html' %}
+
+<!-- TOOL CATALOG (provenance + p50/p95 latency + error rate, P1-3) -->
+{% include 'tabs/tool-catalog.html' %}
 
 <!-- SECURITY -->
 {% include 'tabs/security.html' %}

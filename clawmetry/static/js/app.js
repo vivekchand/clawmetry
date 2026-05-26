@@ -965,6 +965,7 @@ function switchTab(name) {
   if (name === 'context') loadContextInspector();
   if (name === 'tracing') loadTracing();
   if (name === 'turn-anatomy') loadTurnAnatomy();
+  if (name === 'tool-catalog') { if (typeof loadToolCatalog === 'function') loadToolCatalog(); }
   if (name === 'brain') loadBrainPage();
   if (name === 'selfevolve') loadSelfEvolvePage();
   if (name === 'notifications') { if (typeof loadNotificationsPage === 'function') loadNotificationsPage(); }
@@ -11634,6 +11635,165 @@ async function loadRunLedger() {
     el.innerHTML = laneHtml + runHtml;
   } catch(e) {
     el.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">Failed to load run ledger: '+escHtml(String(e))+'</div>';
+  }
+}
+
+// ── Tool catalog: provenance + p50/p95 latency (PRD P1-3) ───────────────────
+// Interactive catalog of every tool the agent invoked, grouped by provenance
+// (builtin / MCP / plugin) with call count + p50/p95 latency + error rate.
+// Rows are clickable → expand to the tool's recent individual calls (each
+// linking to its session transcript). Sortable + provenance-filterable.
+// Reads /api/tool-catalog (derived from DuckDB tool_call/tool_result pairs).
+var _toolCatalogData = null;       // last /api/tool-catalog payload
+var _tcExpanded = {};              // tool name -> bool (row expanded)
+var _tcCallsCache = {};            // tool name -> recent-calls payload
+
+function _tcProvBadge(prov, provider) {
+  var map = {
+    builtin: ['#0ea5e9', 'rgba(14,165,233,.12)', 'builtin'],
+    mcp:     ['#8b5cf6', 'rgba(139,92,246,.12)', 'MCP' + (provider ? (' · ' + provider) : '')],
+    plugin:  ['#d97706', 'rgba(217,119,6,.12)', 'plugin']
+  };
+  var c = map[prov] || ['#6b7280', 'var(--bg-secondary)', prov || 'unknown'];
+  var tip = prov === 'builtin' ? 'In the OpenClaw sandbox tool allow-list'
+          : prov === 'mcp' ? ('MCP-namespaced tool' + (provider ? (' from provider "' + provider + '"') : ''))
+          : 'Not a sandbox builtin and not MCP-namespaced (plugin / custom / unknown)';
+  return '<span title="' + escHtml(tip) + '" style="font-size:10px;font-weight:700;color:' + c[0] + ';background:' + c[1] + ';border-radius:4px;padding:1px 7px;white-space:nowrap;">' + escHtml(c[2]) + '</span>';
+}
+
+function _tcFmtMs(ms) {
+  if (ms === null || ms === undefined) return '<span style="color:var(--text-faint);" title="No matching tool_result captured for these calls">&mdash;</span>';
+  if (ms < 1000) return ms + 'ms';
+  if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+  return Math.round(ms / 60000) + 'm';
+}
+
+function _tcSortTools(tools) {
+  var sel = document.getElementById('tc-sort');
+  var mode = sel ? sel.value : 'calls';
+  var arr = tools.slice();
+  if (mode === 'name') arr.sort(function(a, b) { return a.name.localeCompare(b.name); });
+  else if (mode === 'p95') arr.sort(function(a, b) { return (b.p95_ms || 0) - (a.p95_ms || 0); });
+  else if (mode === 'p50') arr.sort(function(a, b) { return (b.p50_ms || 0) - (a.p50_ms || 0); });
+  else if (mode === 'errors') arr.sort(function(a, b) { return (b.error_rate || 0) - (a.error_rate || 0) || (b.calls - a.calls); });
+  else arr.sort(function(a, b) { return (b.calls - a.calls) || ((b.p95_ms || 0) - (a.p95_ms || 0)); });
+  return arr;
+}
+
+async function loadToolCatalog() {
+  var tableEl = document.getElementById('tc-table');
+  var sumEl = document.getElementById('tc-summary');
+  if (!tableEl) return;
+  var provSel = document.getElementById('tc-prov-filter');
+  var provQ = provSel && provSel.value ? ('?provenance=' + encodeURIComponent(provSel.value)) : '';
+  try {
+    var data = await fetch('/api/tool-catalog' + provQ).then(function(r) { return r.json(); });
+    _toolCatalogData = data;
+    _tcCallsCache = {};  // catalog refreshed → drop stale per-call caches
+    // Provenance summary chips.
+    if (sumEl) {
+      var g = data.groups || {}, t = data.totals || {};
+      var chips = '';
+      function chip(label, val, color) {
+        return '<span style="font-size:12px;color:var(--text-muted);background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:5px 11px;"><strong style="color:' + color + ';">' + val + '</strong> ' + label + '</span>';
+      }
+      chips += chip('tools', t.tool_count || 0, 'var(--text-primary)');
+      chips += chip('calls', t.total_calls || 0, 'var(--text-primary)');
+      chips += chip('builtin', g.builtin || 0, '#0ea5e9');
+      chips += chip('MCP', g.mcp || 0, '#8b5cf6');
+      chips += chip('plugin', g.plugin || 0, '#d97706');
+      sumEl.innerHTML = chips;
+    }
+    renderToolCatalog();
+  } catch (e) {
+    tableEl.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">Failed to load tool catalog: ' + escHtml(String(e)) + '</div>';
+  }
+}
+
+function renderToolCatalog() {
+  var tableEl = document.getElementById('tc-table');
+  if (!tableEl || !_toolCatalogData) return;
+  var tools = _tcSortTools(_toolCatalogData.tools || []);
+  if (tools.length === 0) {
+    tableEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:24px;text-align:center;">No tool calls recorded yet. Tools appear here as the agent invokes them (derived from tool_call &rarr; tool_result event pairs).</div>';
+    return;
+  }
+  var html = '';
+  // Header row.
+  html += '<div style="display:flex;align-items:center;gap:10px;padding:9px 14px;background:var(--bg-secondary);border-bottom:1px solid var(--border-primary);font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;">';
+  html += '<span style="width:14px;"></span>';
+  html += '<span style="flex:1;">Tool</span>';
+  html += '<span style="width:96px;">Provenance</span>';
+  html += '<span style="width:54px;text-align:right;" title="Number of times this tool was called">Calls</span>';
+  html += '<span style="width:62px;text-align:right;" title="Median (50th percentile) call duration">p50</span>';
+  html += '<span style="width:62px;text-align:right;" title="95th percentile call duration">p95</span>';
+  html += '<span style="width:64px;text-align:right;" title="Share of calls that returned an error">Errors</span>';
+  html += '</div>';
+  tools.forEach(function(tool) {
+    var expanded = !!_tcExpanded[tool.name];
+    var errPct = (tool.error_rate || 0) * 100;
+    var errColor = errPct > 0 ? '#ef4444' : 'var(--text-muted)';
+    var nameEsc = tool.name.replace(/'/g, "\\'");
+    html += '<div onclick="_tcToggle(\'' + nameEsc + '\')" title="Click to expand recent calls for ' + escHtml(tool.name) + '" style="display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--border-secondary);font-size:13px;cursor:pointer;transition:background 0.1s;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\'\'">';
+    html += '<span style="width:14px;color:var(--text-muted);font-size:11px;">' + (expanded ? '&#9660;' : '&#9654;') + '</span>';
+    html += '<span style="flex:1;font-weight:600;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-mono,monospace);" title="' + escHtml(tool.name) + '">' + escHtml(tool.name) + '</span>';
+    html += '<span style="width:96px;">' + _tcProvBadge(tool.provenance, tool.provider) + '</span>';
+    html += '<span style="width:54px;text-align:right;color:var(--text-primary);font-variant-numeric:tabular-nums;">' + tool.calls + '</span>';
+    html += '<span style="width:62px;text-align:right;color:var(--text-muted);font-variant-numeric:tabular-nums;">' + _tcFmtMs(tool.p50_ms) + '</span>';
+    html += '<span style="width:62px;text-align:right;color:var(--text-muted);font-variant-numeric:tabular-nums;">' + _tcFmtMs(tool.p95_ms) + '</span>';
+    html += '<span style="width:64px;text-align:right;color:' + errColor + ';font-variant-numeric:tabular-nums;" title="' + (tool.errors || 0) + ' of ' + tool.calls + ' calls errored">' + errPct.toFixed(errPct > 0 && errPct < 1 ? 1 : 0) + '%</span>';
+    html += '</div>';
+    if (expanded) {
+      html += '<div id="tc-calls-' + encodeURIComponent(tool.name) + '" style="background:var(--bg-secondary);border-bottom:1px solid var(--border-secondary);padding:6px 14px 10px 38px;font-size:12px;color:var(--text-muted);">Loading recent calls&hellip;</div>';
+    }
+  });
+  tableEl.innerHTML = html;
+  // Lazy-load the per-call drill-down for any expanded row.
+  tools.forEach(function(tool) {
+    if (_tcExpanded[tool.name]) _tcLoadCalls(tool.name);
+  });
+}
+
+function _tcToggle(name) {
+  _tcExpanded[name] = !_tcExpanded[name];
+  renderToolCatalog();
+}
+
+async function _tcLoadCalls(name) {
+  var el = document.getElementById('tc-calls-' + encodeURIComponent(name));
+  if (!el) return;
+  try {
+    var data = _tcCallsCache[name];
+    if (!data) {
+      data = await fetch('/api/tool-catalog/' + encodeURIComponent(name) + '/calls').then(function(r) { return r.json(); });
+      _tcCallsCache[name] = data;
+    }
+    var calls = data.calls || [];
+    if (calls.length === 0) {
+      el.innerHTML = '<div style="padding:4px 0;">No individual calls captured in the recent event window.</div>';
+      return;
+    }
+    var rows = '';
+    calls.forEach(function(c) {
+      var when = c.ts_ms ? new Date(c.ts_ms).toLocaleString() : '';
+      var statusColor = c.status === 'error' ? '#ef4444' : '#16a34a';
+      var statusLabel = c.status === 'error' ? 'error' : 'ok';
+      rows += '<div style="display:flex;align-items:center;gap:10px;padding:4px 0;border-top:1px solid var(--border-secondary);">';
+      rows += '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:' + statusColor + ';flex-shrink:0;" title="' + statusLabel + '"></span>';
+      rows += '<span style="width:140px;color:var(--text-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + escHtml(when) + '">' + escHtml(when) + '</span>';
+      rows += '<span style="width:64px;color:var(--text-primary);font-variant-numeric:tabular-nums;">' + _tcFmtMs(c.duration_ms) + '</span>';
+      rows += '<span style="width:48px;font-size:10px;font-weight:700;color:' + statusColor + ';">' + statusLabel + '</span>';
+      if (c.session_id) {
+        var sidEsc = String(c.session_id).replace(/'/g, "\\'");
+        rows += '<span onclick="event.stopPropagation();viewTranscript(\'' + sidEsc + '\')" title="Open this session\'s transcript" style="flex:1;color:var(--accent,#3b82f6);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:underline;">' + escHtml(String(c.session_id).slice(0, 32)) + '</span>';
+      } else {
+        rows += '<span style="flex:1;color:var(--text-faint);">(no session)</span>';
+      }
+      rows += '</div>';
+    });
+    el.innerHTML = '<div style="font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;padding:2px 0 4px;">' + calls.length + ' recent call' + (calls.length === 1 ? '' : 's') + '</div>' + rows;
+  } catch (e) {
+    el.innerHTML = '<div style="color:#e74c3c;padding:4px 0;">Failed to load calls: ' + escHtml(String(e)) + '</div>';
   }
 }
 
