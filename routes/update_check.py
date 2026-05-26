@@ -29,6 +29,28 @@ _update_check_stop_event = threading.Event()
 CHANGELOG_URL = "https://github.com/vivekchand/clawmetry/blob/main/CHANGELOG.md"
 
 
+def _live_current_version() -> str:
+    """The version actually running right now (not the version recorded at the
+    last PyPI check). Reading this live is what keeps the update banner honest
+    immediately after an upgrade — before the next background check runs."""
+    try:
+        import dashboard as _d
+        return str(_d.__version__)
+    except Exception:
+        return ""
+
+
+def _version_gt(a: str, b: str) -> bool:
+    """True if version ``a`` is strictly newer than ``b`` (numeric tuple
+    compare; falls back to string inequality on non-numeric versions)."""
+    if not a or not b:
+        return False
+    try:
+        return [int(x) for x in a.split(".")] > [int(x) for x in b.split(".")]
+    except Exception:
+        return a != b
+
+
 def _get_fleet_db():
     """Get fleet database connection."""
     import dashboard as _d
@@ -71,6 +93,10 @@ def _get_update_check_config():
         "enabled": True,
         "check_on_startup": True,
         "check_daily": True,
+        # Opt-in: when on, a detected newer release is installed automatically
+        # by the background worker (no click needed). Off by default — auto
+        # pip-install + restart is something the user explicitly turns on.
+        "auto_update": False,
         "dismissed_version": "",
         "last_check_at": 0,
     }
@@ -137,10 +163,19 @@ def _get_latest_update_check():
             ).fetchone()
             db.close()
         if row:
+            latest = row["latest_version"]
+            # Always report the LIVE installed version, not the version recorded
+            # at check time — otherwise the banner lies right after an upgrade
+            # (e.g. "you are on v0.12.306" while actually on v0.12.309) until the
+            # next background check runs (which is delayed 60s on startup).
+            # Recompute availability against the live version too, so a stale
+            # recorded `latest` that's <= the current build never shows a banner.
+            current = _live_current_version() or row["current_version"]
+            update_available = _version_gt(latest, current)
             return {
-                "current": row["current_version"],
-                "latest": row["latest_version"],
-                "update_available": bool(row["update_available"]),
+                "current": current,
+                "latest": latest,
+                "update_available": update_available,
                 "changelog_url": row["changelog_url"] or "",
                 "checked_at": row["check_at"],
             }
@@ -184,16 +219,18 @@ def _check_for_update():
         log.debug("Update check failed: %s", exc)
         return None
 
-    # Compare version tuples
-    if latest != current:
-        try:
-            cur_parts = [int(x) for x in current.split(".")]
-            lat_parts = [int(x) for x in latest.split(".")]
-            update_available = lat_parts > cur_parts
-        except Exception:
-            update_available = True
+    update_available = _version_gt(latest, current)
 
     _record_update_check(current, latest, update_available, CHANGELOG_URL)
+
+    # Auto-update: if the user opted in, install the newer release now (no
+    # click). Runs in the always-on dashboard server process, so it works
+    # with no browser open. Guarded so a pending restart isn't re-triggered.
+    if update_available:
+        try:
+            _maybe_auto_update(current, latest)
+        except Exception as exc:
+            log.warning("auto-update trigger failed: %s", exc)
 
     return {
         "current": current,
@@ -201,6 +238,33 @@ def _check_for_update():
         "update_available": update_available,
         "changelog_url": CHANGELOG_URL,
     }
+
+
+# Set once an auto-update upgrade has been kicked off (the process is about to
+# restart). Prevents re-triggering pip on every subsequent check in the gap
+# before the restart lands. Reset on failure so the next check can retry.
+_auto_update_in_progress = False
+
+
+def _maybe_auto_update(current, latest):
+    """Install a newer release automatically when ``auto_update`` is enabled."""
+    global _auto_update_in_progress
+    if _auto_update_in_progress:
+        return
+    cfg = _get_update_check_config()
+    if not cfg.get("auto_update"):
+        return
+    _auto_update_in_progress = True
+    log.info("auto-update: opted in — upgrading clawmetry v%s -> v%s", current, latest)
+    try:
+        from routes.meta import perform_self_update
+        payload, _status = perform_self_update(reason="auto")
+        if not (isinstance(payload, dict) and payload.get("ok")):
+            log.warning("auto-update: upgrade failed, will retry next check: %s", payload)
+            _auto_update_in_progress = False  # allow retry; no restart was scheduled
+    except Exception as exc:
+        log.warning("auto-update: error during upgrade: %s", exc)
+        _auto_update_in_progress = False
 
 
 def _update_check_worker(stop_event):
@@ -272,7 +336,7 @@ def api_update_check_config():
 def api_update_check_config_post():
     """Update update check configuration."""
     data = request.get_json(silent=True) or {}
-    allowed_keys = ["enabled", "check_on_startup", "check_daily", "dismissed_version"]
+    allowed_keys = ["enabled", "check_on_startup", "check_daily", "auto_update", "dismissed_version"]
     updates = {k: v for k, v in data.items() if k in allowed_keys}
     _set_update_check_config(updates)
     return jsonify({"ok": True})

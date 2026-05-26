@@ -2,6 +2,10 @@
 <div id="update-banner" style="display:none; padding:10px 16px; background:linear-gradient(90deg,#0f3d0f 0%,#1a1a2e 100%); border-bottom:2px solid #22c55e; color:#86efac; font-size:13px; font-weight:600; align-items:center; gap:10px;">
   <span style="font-size:18px;">&#128640;</span>
   <span id="update-banner-msg" style="flex:1;"></span>
+  <label id="update-banner-auto" title="When on, future releases install automatically as soon as they're published." style="display:none; align-items:center; gap:6px; font-size:12px; color:#86efac; cursor:pointer; user-select:none; white-space:nowrap;">
+    <input type="checkbox" id="update-banner-auto-toggle" onchange="toggleAutoUpdate(this.checked)" style="cursor:pointer; accent-color:#16a34a; width:14px; height:14px;">
+    <span id="update-banner-auto-label">Auto-update</span>
+  </label>
   <button id="update-banner-update-btn" onclick="updateFromBanner()" style="
     background:#16a34a;
     color:#fff;
@@ -22,7 +26,7 @@
     cursor:pointer;
     font-weight:600;
     text-decoration:none;
-    ">Changelog</a>
+    " data-i18n="banners.changelog">Changelog</a>
   <button onclick="dismissUpdateBanner()" style="
     background:transparent;
     color:#86efac;
@@ -31,7 +35,7 @@
     padding:4px 10px;
     font-size:11px;
     cursor:pointer;
-    ">Dismiss</button>
+    " data-i18n="common.dismiss">Dismiss</button>
 </div>
 
 <!-- Alert Banner -->
@@ -58,7 +62,7 @@
     font-size:12px;
     cursor:pointer;
     font-weight:600;
-    ">Dismiss</button>
+    " data-i18n="common.dismiss">Dismiss</button>
   <button id="alert-resume-btn" onclick="resumeGateway()" style="
     display:none;
     background:#16a34a;
@@ -69,7 +73,7 @@
     font-size:12px;
     cursor:pointer;
     font-weight:600;
-    ">Resume Gateway</button>
+    " data-i18n="banners.resume_gateway">Resume Gateway</button>
 </div>
 
 <!-- Auto-Pause Banner -->
@@ -95,7 +99,7 @@
     font-size:12px;
     cursor:pointer;
     font-weight:600;
-    ">Dismiss</button>
+    " data-i18n="common.dismiss">Dismiss</button>
 </div>
 
 <!-- Upgrade Impact Banner -->
@@ -121,7 +125,7 @@
     font-size:12px;
     cursor:pointer;
     font-weight:600;
-    ">View Details</button>
+    " data-i18n="banners.view_details">View Details</button>
   <button onclick="dismissUpgradeBanner()" style="
     background:transparent;
     color:#93c5fd;
@@ -130,7 +134,7 @@
     padding:4px 10px;
     font-size:11px;
     cursor:pointer;
-    ">Dismiss</button>
+    " data-i18n="common.dismiss">Dismiss</button>
 </div>
 
 <!-- No-Agent-Detected Empty-State Banner -->
@@ -153,7 +157,7 @@
   flex-wrap:wrap;
   ">
   <span style="font-size:18px;">&#9888;&#65039;</span>
-  <span id="no-agent-banner-msg" style="flex:1;min-width:240px;">
+  <span id="no-agent-banner-msg" style="flex:1;min-width:240px;" data-i18n="banners.no_agent_msg">
     No OpenClaw or NVIDIA NemoClaw detected. Install one to start seeing data.
   </span>
   <a href="https://openclaw.ai/" target="_blank" rel="noopener" style="
@@ -167,7 +171,7 @@
     font-weight:600;
     text-decoration:none;
     white-space:nowrap;
-    ">Install OpenClaw</a>
+    " data-i18n="banners.install_openclaw">Install OpenClaw</a>
   <a href="https://www.nvidia.com/en-us/ai/nemoclaw/" target="_blank" rel="noopener" style="
     background:#76b900;
     color:#000;
@@ -179,7 +183,7 @@
     font-weight:600;
     text-decoration:none;
     white-space:nowrap;
-    ">Install NVIDIA NemoClaw</a>
+    " data-i18n="banners.install_nemoclaw">Install NVIDIA NemoClaw</a>
 </div>
 
 <!-- Onboarding / First-Heartbeat Banner (closes #1604) -->
@@ -239,7 +243,7 @@
     font-size:12px;
     cursor:pointer;
     font-weight:600;
-    ">Dismiss</button>
+    " data-i18n="common.dismiss">Dismiss</button>
 </div>
 
 <!-- Stuck Session Banner -->
@@ -266,7 +270,7 @@
     cursor:pointer;
     font-weight:600;
     text-decoration:none;
-    ">View Session</a>
+    " data-i18n="banners.view_session">View Session</a>
   <button onclick="(typeof dismissStuckBanner==='function')?dismissStuckBanner():(function(){document.getElementById('stuck-session-banner').style.display='none';_stuckCount=0;_updateStuckBadge();})();" style="
     background:#7f1d1d;
     color:#fecaca;
@@ -275,7 +279,7 @@
     padding:4px 10px;
     font-size:11px;
     cursor:pointer;
-    ">Dismiss</button>
+    " data-i18n="common.dismiss">Dismiss</button>
 </div>
 
 <!-- Budget Cap Banner -->
@@ -301,7 +305,7 @@
     font-size:12px;
     cursor:pointer;
     font-weight:600;
-    ">Dismiss</button>
+    " data-i18n="common.dismiss">Dismiss</button>
 </div>
 
 <!-- Sync Status Banner (PRD-sync-status.md) — first-install transparency.
@@ -318,6 +322,7 @@
     </div>
     <div id="sync-status-stepper" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;"></div>
     <button id="sync-status-toggle" type="button" onclick="cmSyncToggleDetails()" aria-expanded="false" style="background:transparent;border:1px solid #334074;color:#94a3b8;border-radius:6px;padding:4px 12px;font-size:11px;cursor:pointer;">Show details</button>
+    <button id="sync-status-hide" type="button" onclick="_cmSyncDismiss()" data-i18n-title="banners.hide_banner" title="Hide this banner" data-i18n-aria-label="banners.hide_sync_banner" aria-label="Hide sync banner" style="background:transparent;border:1px solid #334074;color:#94a3b8;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;" data-i18n="banners.hide">Hide</button>
   </div>
   <div id="sync-status-details" style="display:none;margin-top:10px;padding:8px 12px;background:rgba(15,23,42,0.6);border:1px solid #1e293b;border-radius:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:#94a3b8;max-height:180px;overflow:auto;"></div>
   <div id="sync-status-error" style="display:none;margin-top:10px;padding:10px 12px;background:rgba(127,29,29,0.25);border:1px solid #7f1d1d;border-radius:6px;font-size:12px;color:#fecaca;"></div>

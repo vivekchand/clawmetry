@@ -104,14 +104,27 @@ def _extract_json(text):
 
 def _translate_batch_cli(model, lang_name, glossary, items):
     """Translate via the local `claude` CLI (Claude Code) - no API key needed.
-    Uses the machine's Claude Code auth (or CLAUDE_CODE_OAUTH_TOKEN in CI)."""
+    Uses the machine's Claude Code auth (or CLAUDE_CODE_OAUTH_TOKEN in CI).
+
+    Retries on transient failures (server-side rate limiting, flaky CLI,
+    unparseable output) with exponential backoff so one throttled call does not
+    abort a long multi-locale run."""
+    import time as _time
     cmd = ["claude", "-p", _build_prompt(lang_name, glossary, items)]
     if model:
         cmd += ["--model", model]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-    if proc.returncode != 0:
-        raise RuntimeError(f"claude CLI failed (rc={proc.returncode}): {proc.stderr.strip()[:300]}")
-    return _extract_json(proc.stdout)
+    last = ""
+    for attempt in range(6):
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            if proc.returncode == 0:
+                return _extract_json(proc.stdout)
+            last = (proc.stderr or proc.stdout or "").strip()[:200]
+        except Exception as e:  # timeout, parse error, etc.
+            last = str(e)[:200]
+        if attempt < 5:
+            _time.sleep(min(120, 20 * (attempt + 1)))  # 20,40,60,80,100s
+    raise RuntimeError(f"claude CLI failed after retries: {last}")
 
 def _translate_batch_api(client, model, lang_name, glossary, items):
     """Fallback: Anthropic SDK (needs ANTHROPIC_API_KEY). Only used with --engine api."""

@@ -154,6 +154,94 @@ def get_ops():
         ],
     })
 
+# ── Context API ──────────────────────────────────────────────────────
+
+@bp_v2.route("/api/v2/context", methods=["GET"])
+def get_context():
+    from datetime import datetime, timezone, timedelta
+
+    # ── Token gauge ───────────────────────────────────────────────────────
+    peek: dict = {}
+    try:
+        from routes.local_query import local_store_via_daemon
+        peek = local_store_via_daemon("query_context_window_peek") or {}
+    except Exception:
+        pass
+
+    input_toks = int(peek.get("input_tokens") or 0)
+    # context_window is already model-aware (1M Opus, etc.) — falls back to 200K.
+    context_window = int(peek.get("context_window") or 200_000)
+    compaction_threshold = int(context_window * 0.8)
+
+    # ── Compaction history (last 6 h) ─────────────────────────────────────
+    history: list[dict] = []
+    try:
+        from routes.local_query import local_store_via_daemon as _lsd
+        raw = _lsd("query_compactions", limit=100) or []
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=6)
+        for c in raw:
+            ts_str = str(c.get("timestamp") or c.get("ts") or "")
+            if not ts_str:
+                continue
+            try:
+                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                if ts < cutoff:
+                    continue
+                history.append({
+                    "ts": ts.strftime("%H:%M"),
+                    "used": round(int(c.get("tokens_before") or 0) / 1000, 2),
+                    "event": "compaction",
+                })
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    # Append current reading as the trailing data point.
+    if input_toks > 0:
+        history.append({
+            "ts": datetime.now(timezone.utc).strftime("%H:%M"),
+            "used": round(input_toks / 1000, 2),
+        })
+
+    # ── Memory files ──────────────────────────────────────────────────────
+    memory_files: list[dict] = []
+    try:
+        from routes.local_query import local_store_via_daemon as _lsd2
+        rows = _lsd2("query_memory_blobs", limit=20) or []
+        seen: set[str] = set()
+        for r in rows:
+            path = r.get("path") or ""
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            blob = r.get("blob") or ""
+            preview = (blob if isinstance(blob, str) else "")[:200]
+            size = r.get("size_bytes")
+            if size is None:
+                size = len(blob.encode("utf-8") if isinstance(blob, str) else b"")
+            memory_files.append({
+                "path": path,
+                "size_bytes": int(size or 0),
+                "preview": preview,
+            })
+    except Exception:
+        pass
+
+    return jsonify({
+        "tokens": {
+            "used": round(input_toks / 1000, 2),
+            "total": context_window // 1000,
+            "compaction_threshold": compaction_threshold // 1000,
+        },
+        "history": history,
+        "memory_files": memory_files,
+    })
+
+
+# ── Brain API ─────────────────────────────────────────────────────────
 
 @bp_v2.route("/api/v2/brain", methods=["GET"])
 def get_brain():

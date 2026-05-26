@@ -2501,6 +2501,24 @@ def main() -> None:
             "v2 preview at http://localhost:8900/v2 · back to v1 at /",
             flush=True,
         )
+    # --otel-export <url>: stream agent traces as OpenTelemetry GenAI spans to
+    # any OTLP/HTTP collector (Datadog, Grafana, Honeycomb, your own).
+    # Sets the env var clawmetry/otel_exporter.py reads at boot. Strip from argv
+    # so dashboard.main's argparse doesn't choke on it. Accepts both
+    # `--otel-export URL` and `--otel-export=URL`.
+    _otel_ep = None
+    for _i, _a in enumerate(list(sys.argv)):
+        if _a == "--otel-export" and _i + 1 < len(sys.argv):
+            _otel_ep = sys.argv[_i + 1]
+            del sys.argv[_i:_i + 2]
+            break
+        if _a.startswith("--otel-export="):
+            _otel_ep = _a.split("=", 1)[1]
+            sys.argv.remove(_a)
+            break
+    if _otel_ep:
+        os.environ["CLAWMETRY_OTEL_EXPORT_ENDPOINT"] = _otel_ep
+        print(f"OpenTelemetry export ON → {_otel_ep} (GenAI semconv)", flush=True)
     # Tag this process as the dashboard BEFORE importing dashboard, so every
     # get_store() in dashboard.py (module-level + handlers) is barred from the
     # DuckDB writer — only the sync daemon writes. Set before the import or a

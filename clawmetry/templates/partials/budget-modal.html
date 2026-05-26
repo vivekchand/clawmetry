@@ -18,7 +18,7 @@
     box-shadow:0 25px 50px rgba(0,0,0,0.25);
     ">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-      <h3 style="font-size:18px;font-weight:700;color:var(--text-primary);">&#128176; Budget & Alerts</h3>
+      <h3 style="font-size:18px;font-weight:700;color:var(--text-primary);">&#128176; <span data-i18n="budget.title">Budget & Alerts</span></h3>
       <button onclick="document.getElementById('budget-modal').style.display='none'" style="
         background:var(--button-bg);
         border:1px solid var(--border-primary);
@@ -36,10 +36,10 @@
       border-bottom:1px solid var(--border-primary);
       margin-bottom:16px;
       ">
-      <div class="modal-tab active" onclick="switchBudgetTab('limits',this)">Budget Limits</div>
-      <div class="modal-tab" onclick="switchBudgetTab('alerts',this)">Alert Rules</div>
-      <div class="modal-tab" onclick="switchBudgetTab('telegram',this)">Telegram</div>
-      <div class="modal-tab" onclick="switchBudgetTab('history',this)">History</div>
+      <div class="modal-tab active" onclick="switchBudgetTab('limits',this)" data-i18n="budget.tab_limits">Budget Limits</div>
+      <div class="modal-tab" onclick="switchBudgetTab('alerts',this)" data-i18n="budget.tab_alerts">Alert Rules</div>
+      <div class="modal-tab" onclick="switchBudgetTab('telegram',this)" data-i18n="budget.tab_telegram">Telegram</div>
+      <div class="modal-tab" onclick="switchBudgetTab('history',this)" data-i18n="budget.tab_history">History</div>
     </div>
     <!-- Budget Limits Tab -->
     <div id="budget-tab-limits">
@@ -50,7 +50,7 @@
             color:var(--text-muted);
             display:block;
             margin-bottom:4px;
-            ">Daily Limit (USD, 0 = no limit)</label>
+            " data-i18n="budget.daily_limit">Daily Limit (USD, 0 = no limit)</label>
           <input id="budget-daily" type="number" step="0.01" min="0" style="
             width:100%;
             padding:8px 12px;
@@ -67,7 +67,7 @@
             color:var(--text-muted);
             display:block;
             margin-bottom:4px;
-            ">Weekly Limit (USD)</label>
+            " data-i18n="budget.weekly_limit">Weekly Limit (USD)</label>
           <input id="budget-weekly" type="number" step="0.01" min="0" style="
             width:100%;
             padding:8px 12px;
@@ -84,7 +84,7 @@
             color:var(--text-muted);
             display:block;
             margin-bottom:4px;
-            ">Monthly Limit (USD)</label>
+            " data-i18n="budget.monthly_limit">Monthly Limit (USD)</label>
           <input id="budget-monthly" type="number" step="0.01" min="0" style="
             width:100%;
             padding:8px 12px;
@@ -96,7 +96,7 @@
             ">
         </div>
         <div>
-          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Warning at (%)</label>
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;" data-i18n="budget.warning_at">Warning at (%)</label>
           <input id="budget-warn-pct" type="number" step="1" min="1" max="100" value="80" style="
             width:100%;
             padding:8px 12px;
@@ -113,7 +113,7 @@
             font-size:13px;
             color:var(--text-secondary);
             cursor:pointer;
-            ">Auto-pause gateway when budget exceeded</label>
+            " data-i18n="budget.autopause">Auto-pause gateway when budget exceeded</label>
         </div>
         <button onclick="saveBudgetConfig()" style="
           background:var(--bg-accent);
@@ -124,7 +124,7 @@
           font-size:14px;
           font-weight:600;
           cursor:pointer;
-          ">Save Budget Settings</button>
+          " data-i18n="budget.save_settings">Save Budget Settings</button>
       </div>
       <div id="budget-status-display" style="
         margin-top:16px;
@@ -133,7 +133,7 @@
         border:1px solid var(--border-primary);
         border-radius:8px;
         ">
-        <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Current Spending</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;" data-i18n="budget.current_spending">Current Spending</div>
         <div id="budget-status-content" style="font-size:13px;color:var(--text-secondary);">Loading...</div>
       </div>
     </div>
@@ -149,7 +149,7 @@
           font-size:13px;
           font-weight:600;
           cursor:pointer;
-          ">+ Add Alert Rule</button>
+          " data-i18n="budget.add_alert_rule">+ Add Alert Rule</button>
       </div>
       <div id="add-alert-form" style="
         display:none;
@@ -167,10 +167,10 @@
             background:var(--bg-tertiary);
             color:var(--text-primary);
             ">
-            <option value="threshold">Threshold (daily $ amount)</option>
-            <option value="spike">Spike (hourly rate multiplier)</option>
+            <option value="threshold" data-i18n="budget.alert_type_threshold">Threshold (daily $ amount)</option>
+            <option value="spike" data-i18n="budget.alert_type_spike">Spike (hourly rate multiplier)</option>
           </select>
-          <input id="alert-threshold" type="number" step="0.01" min="0" placeholder="Threshold value" style="
+          <input id="alert-threshold" type="number" step="0.01" min="0" data-i18n-placeholder="budget.threshold_value" placeholder="Threshold value" style="
             padding:8px;
             border:1px solid var(--border-primary);
             border-radius:6px;
@@ -183,15 +183,15 @@
               display:flex;
               align-items:center;
               gap:4px;
-              "><input type="checkbox" id="alert-ch-banner" checked> Banner</label>
+              "><input type="checkbox" id="alert-ch-banner" checked> <span data-i18n="budget.ch_banner">Banner</span></label>
             <label style="
               font-size:12px;
               display:flex;
               align-items:center;
               gap:4px;
-              "><input type="checkbox" id="alert-ch-telegram"> Telegram</label>
+              "><input type="checkbox" id="alert-ch-telegram"> <span data-i18n="budget.ch_telegram">Telegram</span></label>
           </div>
-          <input id="alert-cooldown" type="number" value="30" min="1" placeholder="Cooldown (min)" style="
+          <input id="alert-cooldown" type="number" value="30" min="1" data-i18n-placeholder="budget.cooldown_min" placeholder="Cooldown (min)" style="
             padding:8px;
             border:1px solid var(--border-primary);
             border-radius:6px;
@@ -207,7 +207,7 @@
               padding:6px 16px;
               font-size:13px;
               cursor:pointer;
-              ">Create</button>
+              " data-i18n="budget.create">Create</button>
             <button onclick="document.getElementById('add-alert-form').style.display='none'" style="
               background:var(--button-bg);
               color:var(--text-secondary);
@@ -216,7 +216,7 @@
               padding:6px 16px;
               font-size:13px;
               cursor:pointer;
-              ">Cancel</button>
+              " data-i18n="common.cancel">Cancel</button>
           </div>
         </div>
       </div>
@@ -228,40 +228,39 @@
         the Cloud-Pro Alerts Center with cloud routing lives on the Alerts tab.
       -->
       <div style="padding:12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;margin-bottom:12px;">
-        <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">Alert Channels (Webhooks)</div>
+        <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:6px;" data-i18n="budget.alert_channels">Alert Channels (Webhooks)</div>
         <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;line-height:1.4;">
-          Paste your own Slack or Discord incoming-webhook URL to receive alerts directly.
-          For routed delivery (PagerDuty, email, on-call), see the <b>Alerts</b> tab (Pro).
+          <span data-i18n="budget.webhook_desc_1">Paste your own Slack or Discord incoming-webhook URL to receive alerts directly. For routed delivery (PagerDuty, email, on-call), see the</span> <b>Alerts</b> <span data-i18n="budget.webhook_desc_2">tab (Pro).</span>
         </div>
         <div style="display:grid;gap:8px;">
           <div style="display:flex;gap:6px;align-items:center;">
-            <input id="alert-webhook-url" type="text" placeholder="Generic webhook URL (JSON payload)" style="flex:1;padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
-            <button onclick="testWebhookConfig('generic')" style="background:#374151;color:#fff;border:none;border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;white-space:nowrap;">Test</button>
+            <input id="alert-webhook-url" type="text" data-i18n-placeholder="budget.generic_webhook_url" placeholder="Generic webhook URL (JSON payload)" style="flex:1;padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+            <button onclick="testWebhookConfig('generic')" style="background:#374151;color:#fff;border:none;border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;white-space:nowrap;" data-i18n="budget.test">Test</button>
           </div>
           <div style="display:flex;gap:6px;align-items:center;">
-            <input id="alert-slack-url" type="text" placeholder="Slack incoming webhook URL" style="flex:1;padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
-            <button onclick="testWebhookConfig('slack')" style="background:#4a154b;color:#fff;border:none;border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;white-space:nowrap;">Test</button>
+            <input id="alert-slack-url" type="text" data-i18n-placeholder="budget.slack_webhook_url" placeholder="Slack incoming webhook URL" style="flex:1;padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+            <button onclick="testWebhookConfig('slack')" style="background:#4a154b;color:#fff;border:none;border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;white-space:nowrap;" data-i18n="budget.test">Test</button>
           </div>
           <div style="display:flex;gap:6px;align-items:center;">
-            <input id="alert-discord-url" type="text" placeholder="Discord webhook URL" style="flex:1;padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
-            <button onclick="testWebhookConfig('discord')" style="background:#5865f2;color:#fff;border:none;border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;white-space:nowrap;">Test</button>
+            <input id="alert-discord-url" type="text" data-i18n-placeholder="budget.discord_webhook_url" placeholder="Discord webhook URL" style="flex:1;padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+            <button onclick="testWebhookConfig('discord')" style="background:#5865f2;color:#fff;border:none;border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;white-space:nowrap;" data-i18n="budget.test">Test</button>
           </div>
           <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;">
-            <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-cost-spike"> Cost spike alerts</label>
-            <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-agent-error"> Agent error rate alerts</label>
-            <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-security"> Security posture changes</label>
+            <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-cost-spike"> <span data-i18n="budget.cost_spike_alerts">Cost spike alerts</span></label>
+            <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-agent-error"> <span data-i18n="budget.agent_error_alerts">Agent error rate alerts</span></label>
+            <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-security"> <span data-i18n="budget.security_changes">Security posture changes</span></label>
           </div>
           <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
-            <label style="font-size:12px;color:var(--text-muted);">Min severity:</label>
+            <label style="font-size:12px;color:var(--text-muted);" data-i18n="budget.min_severity">Min severity:</label>
             <select id="alert-min-severity" style="padding:4px 8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);font-size:12px;">
-              <option value="info">Info (all alerts)</option>
-              <option value="warning" selected>Warning and above</option>
-              <option value="critical">Critical only</option>
+              <option value="info" data-i18n="budget.sev_info">Info (all alerts)</option>
+              <option value="warning" selected data-i18n="budget.sev_warning">Warning and above</option>
+              <option value="critical" data-i18n="budget.sev_critical">Critical only</option>
             </select>
           </div>
           <div style="display:flex;gap:8px;align-items:center;">
-            <button onclick="saveWebhookConfig()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Save</button>
-            <button onclick="testWebhookConfig('all')" style="background:#16a34a;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Test All</button>
+            <button onclick="saveWebhookConfig()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;" data-i18n="common.save">Save</button>
+            <button onclick="testWebhookConfig('all')" style="background:#16a34a;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;" data-i18n="budget.test_all">Test All</button>
             <span id="alert-webhook-status" style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;"></span>
           </div>
         </div>
@@ -272,10 +271,10 @@
     <div id="budget-tab-telegram" style="display:none;">
       <div style="display:grid;gap:12px;">
         <div style="font-size:12px;color:var(--text-muted);line-height:1.5;">
-          Configure direct Telegram notifications for budget alerts. Create a bot via <a href="https://t.me/BotFather" target="_blank" style="color:var(--text-accent);">@BotFather</a> and get your chat ID.
+          <span data-i18n="budget.tg_desc_1">Configure direct Telegram notifications for budget alerts. Create a bot via</span> <a href="https://t.me/BotFather" target="_blank" style="color:var(--text-accent);">@BotFather</a> <span data-i18n="budget.tg_desc_2">and get your chat ID.</span>
         </div>
         <div>
-          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Bot Token</label>
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;" data-i18n="budget.bot_token">Bot Token</label>
           <input id="tg-bot-token" type="password" placeholder="123456:ABC-DEF..." style="
             width:100%;
             padding:8px 12px;
@@ -287,7 +286,7 @@
             ">
         </div>
         <div>
-          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Chat ID</label>
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;" data-i18n="budget.chat_id">Chat ID</label>
           <input id="tg-chat-id" type="text" placeholder="-100123456789" style="
             width:100%;
             padding:8px 12px;
@@ -308,7 +307,7 @@
             font-size:14px;
             font-weight:600;
             cursor:pointer;
-            ">Save</button>
+            " data-i18n="common.save">Save</button>
           <button onclick="testTelegram()" style="
             background:#16a34a;
             color:#fff;
@@ -318,7 +317,7 @@
             font-size:14px;
             font-weight:600;
             cursor:pointer;
-            ">Send Test</button>
+            " data-i18n="budget.send_test">Send Test</button>
         </div>
         <div id="tg-status" style="font-size:12px;color:var(--text-muted);"></div>
       </div>

@@ -51,7 +51,7 @@ jobs:
           done
           echo "✅ JS Syntax OK"
 
-  # ── API tests across all 3 platforms ───────────────────────────────────────────
+  # ── API tests across all 3 platforms ─────────────────────────────────────────────
   api-tests:
     name: API Tests (${{ matrix.os }})
     needs: lint
@@ -117,7 +117,7 @@ jobs:
           CLAWMETRY_TOKEN: ci-test-token
         run: python3 -m pytest tests/test_api.py -v --tb=short
 
-  # ── MOAT verifier (hermetic, hard-fail) ───────────────────────────────────────────
+  # ── MOAT verifier (hermetic, hard-fail) ────────────────────────────────────────────────────
   # Issue #1491 / PRD #1133 invariant #3: "A regression in either direction
   # is caught BEFORE merge." These files exercise the
   # OpenClaw → DuckDB → API surface contract end-to-end, plus the lint
@@ -155,6 +155,14 @@ jobs:
             tests/test_picoclaw_adapter.py \
             tests/test_nanoclaw_adapter.py \
             tests/test_runtime_detection_snapshot.py \
+            tests/test_family_runtime_ingest.py \
+            tests/test_codex_adapter.py \
+            tests/test_cursor_adapter.py \
+            tests/test_claude_code_adapter.py \
+            tests/test_aider_adapter.py \
+            tests/test_goose_adapter.py \
+            tests/test_opencode_adapter.py \
+            tests/test_qwen_code_adapter.py \
             -q
 
   # ── MOAT keystone (DuckDB-first invariant, 13-endpoint bar) ──────────────
@@ -255,12 +263,12 @@ jobs:
           echo "── local_server.log tail ──"
           tail -200 /tmp/local_server.log || true
 
-  # ── E2E Playwright tests — critical subset (hard-gate, blocks merge) ──────
+  # ── E2E Playwright tests — critical subset (hard-gate, blocks merge) ────
   # Per issue #1528: the prior `e2e-tests` job carried `continue-on-error: true`
   # which silently masked Playwright regressions. We split the suite into:
   #   1. `e2e-critical` (this job) — TestTabsLoad: page-load + tab-nav smoke
   #      tests that have been stable. Hard-fails on regression.
-  #      TestAllTabsPostAuth: C5 auth-overlay gate (issue #1646).
+  #      TestAllTabsPostAuth: C5 auth-overlay gate (issue #1646, #2146).
   #   2. `e2e-nightly`  (.github/workflows/e2e-nightly.yml) — the broader
   #      TestFlowDiagram suite, which depends on SVG rendering of live data
   #      and is still flaky. Runs on schedule, not per-PR.
@@ -277,16 +285,44 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install dependencies
-        run: pip install flask pytest pytest-playwright requests
+        # duckdb is in requirements.txt and used by the dashboard's local
+        # event store; without it the server crashes on import and the
+        # health check silently times out.
+        run: pip install flask pytest pytest-playwright requests duckdb
       - name: Install Playwright browsers
         run: python3 -m playwright install chromium --with-deps
       - name: Start server
         run: |
           OPENCLAW_GATEWAY_TOKEN=ci-test-token python3 dashboard.py --port 8900 --no-debug &
+          ok=0
           for i in $(seq 1 30); do
-            curl -sf -H "Authorization: Bearer ci-test-token" http://localhost:8900/api/health && break
+            curl -sf -H "Authorization: Bearer ci-test-token" http://localhost:8900/api/health \
+              && echo "Dashboard ready after ${i}s" && ok=1 && break
             sleep 1
           done
+          if [ "$ok" != "1" ]; then
+            echo "::error::Dashboard failed to start on port 8900. Check for import errors or port conflicts."
+            exit 1
+          fi
+      - name: Probe gateway-token auth (C5 gate)
+        # Explicit pre-flight: verify /api/auth/check accepts the token
+        # BEFORE Playwright runs. Without this a token mismatch produces
+        # 19 identical overlay-visible assertion failures instead of one
+        # actionable message. Routes/meta.py:api_auth_check compares the
+        # bearer token directly to OPENCLAW_GATEWAY_TOKEN (no gateway
+        # process needed), so this probe is purely env-var correctness.
+        run: |
+          resp=$(curl -sf -H "Authorization: Bearer ci-test-token" \
+            "http://localhost:8900/api/auth/check" 2>/dev/null || echo '{"valid":false}')
+          valid=$(echo "$resp" | python3 -c \
+            "import sys,json; d=json.load(sys.stdin); print(d.get('valid',False))" \
+            2>/dev/null || echo "False")
+          if [ "$valid" != "True" ]; then
+            echo "::error::/api/auth/check returned valid!=true (C5 gate). Response: $resp"
+            echo "::error::Token plumbing broken: OPENCLAW_GATEWAY_TOKEN=ci-test-token not accepted."
+            exit 1
+          fi
+          echo "C5 auth probe OK: /api/auth/check returned valid=true"
       - name: Run E2E tests (critical subset only -- hard gate)
         env:
           CLAWMETRY_URL: http://localhost:8900
@@ -297,7 +333,7 @@ jobs:
             tests/test_e2e_oss_all_tabs.py::TestAllTabsPostAuth \
             -v --tb=short
 
-  # ── pip install smoke test across platforms ──────────────────────────────
+  # ── pip install smoke test across platforms ─────────────────────────────────────────
   pip-install:
     name: pip install (${{ matrix.os }})
     needs: lint
@@ -373,7 +409,7 @@ jobs:
           fi
           echo "✅ /static/js/app.js served from installed wheel"
 
-  # ── Eval suite gate (Phase 2 evals, refs #1619 / PR #1626) ─────────────
+  # ── Eval suite gate (Phase 2 evals, refs #1619 / PR #1626) ──────────────
   # Runs ClawMetry's own golden suite (tests/data/golden_ci.yaml) through
   # the `clawmetry eval` CLI on every PR. Catches regressions in:
   #   * eval_suite_runner.py YAML parsing / runner loop

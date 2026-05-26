@@ -1,34 +1,45 @@
 <div class="page" id="page-tracing">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:16px;flex-wrap:wrap;">
     <div>
-      <div style="font-size:18px;font-weight:700;color:var(--text-primary);">Tracing</div>
-      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Every session as a trace. Open one for the span waterfall, the span tree, and the agent graph.</div>
+      <div style="font-size:18px;font-weight:700;color:var(--text-primary);" data-i18n="tracing.title">Tracing</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;" data-i18n="tracing.subtitle">Every session as a trace. Open one for the span tree, waterfall, and agent graph &mdash; with full inputs/outputs per span.</div>
     </div>
     <div style="display:flex;gap:6px;align-items:center;">
-      <button class="refresh-btn" id="trace-back-btn" style="display:none;" onclick="tracingShowList()">&larr; Back to traces</button>
+      <button class="refresh-btn" id="trace-back-btn" style="display:none;" onclick="tracingShowList()">&larr; <span data-i18n="tracing.back_to_traces">Back to traces</span></button>
       <button class="refresh-btn" onclick="loadTracing()">&#8635;</button>
     </div>
   </div>
 
   <!-- TRACE LIST -->
-  <div class="card" id="trace-list" style="color:var(--text-muted);font-size:13px;">Loading traces&hellip;</div>
+  <div class="card" id="trace-list" style="color:var(--text-muted);font-size:13px;" data-i18n="tracing.loading_traces">Loading traces&hellip;</div>
 
-  <!-- TRACE DETAIL -->
+  <!-- TRACE DETAIL &mdash; MLflow-style split-pane (tree-left, span-detail-right) -->
   <div id="trace-detail" style="display:none;">
-    <div class="card" id="trace-detail-meta" style="margin-bottom:10px;"></div>
+    <!-- Trace header: title (first prompt) + key stats inline -->
+    <div class="card" id="trace-detail-meta" style="margin-bottom:10px;padding:14px 16px;"></div>
 
-    <!-- View switch -->
+    <!-- Left-pane view switcher (tree+gantt is the MLflow-style default) -->
     <div style="display:flex;gap:6px;margin-bottom:10px;">
-      <div class="trace-view-tab" data-view="waterfall" onclick="tracingSwitchView('waterfall')" style="padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:#6366f1;color:#fff;border:1px solid #6366f1;">Waterfall</div>
-      <div class="trace-view-tab" data-view="tree" onclick="tracingSwitchView('tree')" style="padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:transparent;color:var(--text-muted);border:1px solid var(--border-secondary);">Span tree</div>
-      <div class="trace-view-tab" data-view="graph" onclick="tracingSwitchView('graph')" style="padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:transparent;color:var(--text-muted);border:1px solid var(--border-secondary);">Agent graph</div>
+      <div class="trace-view-tab" data-view="treegantt" onclick="tracingSwitchView('treegantt')" style="padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:#6366f1;color:#fff;border:1px solid #6366f1;" data-i18n="tracing.tree_gantt">Tree + Gantt</div>
+      <div class="trace-view-tab" data-view="waterfall" onclick="tracingSwitchView('waterfall')" style="padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:transparent;color:var(--text-muted);border:1px solid var(--border-secondary);" data-i18n="tracing.waterfall">Waterfall</div>
+      <div class="trace-view-tab" data-view="graph" onclick="tracingSwitchView('graph')" style="padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:transparent;color:var(--text-muted);border:1px solid var(--border-secondary);" data-i18n="tracing.agent_graph">Agent graph</div>
     </div>
 
-    <div class="card" id="trace-waterfall" style="overflow-x:auto;"></div>
-    <div class="card" id="trace-tree" style="display:none;"></div>
-    <div class="card" id="trace-graph" style="display:none;"></div>
-
-    <!-- Span detail drawer -->
-    <div id="trace-span-drawer" style="display:none;margin-top:10px;padding:14px 16px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;"></div>
+    <!-- Split-pane: LEFT = tree/waterfall/graph (toggled by view), RIGHT = persistent span detail.
+         The right pane is the MLflow Chat / Inputs / Outputs / Attributes / Events view that
+         stays mounted while you click around the tree. Collapses on narrow viewports. -->
+    <div id="trace-split" style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,520px);gap:10px;align-items:stretch;">
+      <div class="card" id="trace-left" style="overflow:auto;min-height:340px;padding:0;">
+        <div class="card" id="trace-treegantt" style="border:none;border-radius:0;padding:14px 16px;display:block;"></div>
+        <div class="card" id="trace-waterfall" style="border:none;border-radius:0;padding:14px 16px;display:none;overflow-x:auto;"></div>
+        <div class="card" id="trace-graph"     style="border:none;border-radius:0;padding:14px 16px;display:none;"></div>
+      </div>
+      <div class="card" id="trace-span-pane"
+           style="padding:14px 16px;min-height:340px;overflow:auto;background:var(--bg-secondary);">
+        <div style="color:var(--text-muted);font-size:12px;text-align:center;padding:32px 14px;">
+          Select a span on the left to see its <b>Chat</b>, <b>Inputs</b>, <b>Outputs</b>, <b>Attributes</b>, and <b>Events</b>.
+        </div>
+      </div>
+    </div>
   </div>
 </div>

@@ -1,0 +1,22 @@
+<div class="page" id="page-context-economics">
+  <div class="refresh-bar">
+    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">&#128202; Context Economics</h2>
+    <button class="refresh-btn" onclick="loadContextEconomics()">&#8635; Refresh</button>
+  </div>
+  <p style="color:var(--text-muted);font-size:13px;margin:2px 0 14px;max-width:760px;">
+    How full your agents&#8217; context windows get, when OpenClaw compacted (proactively vs forced by an overflow),
+    how many tokens each compaction reclaimed, and which sessions keep slamming into the wall.
+  </p>
+  <!-- Summary chips -->
+  <div id="ce-summary" style="margin-bottom:14px;"></div>
+  <!-- Session picker chips (scope the gauge to one conversation) -->
+  <div id="ce-session-chips" style="margin-bottom:14px;"></div>
+  <!-- Context-window utilization gauge over time -->
+  <div id="ce-gauge-panel" style="margin-bottom:18px;">
+    <div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading utilization&#8230;</div>
+  </div>
+  <!-- Compaction events (clickable rows -> before/after + summary) -->
+  <div id="ce-compactions-panel" style="margin-bottom:18px;"></div>
+  <!-- Repeatedly-overflow-then-retry sessions -->
+  <div id="ce-overflow-panel"></div>
+</div><!-- end page-context-economics -->

@@ -70,6 +70,50 @@ def _is_tool_result_only(content: Any) -> bool:
     return False
 
 
+def _resolve_session_path(session_id: str) -> str | None:
+    """Locate the JSONL file for *session_id* under the projects root.
+
+    Claude Code names each transcript ``<session-uuid>.jsonl`` and nests it
+    one directory deep (one dir per encoded cwd), so we scan every project
+    directory for a matching filename. Returns the path or None. Never raises.
+    """
+    if not session_id:
+        return None
+    root = _projects_root()
+    if not os.path.isdir(root):
+        return None
+    target = f"{session_id}.jsonl"
+    try:
+        for proj in os.scandir(root):
+            if not proj.is_dir():
+                continue
+            candidate = os.path.join(proj.path, target)
+            if os.path.isfile(candidate):
+                return candidate
+    except OSError as exc:
+        logger.warning("ClaudeCodeAdapter: scan for %s failed: %s", session_id, exc)
+    return None
+
+
+def _tool_result_text(block: dict) -> str:
+    """Flatten a tool_result block's ``content`` (str or list of blocks) to text."""
+    content = block.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for sub in content:
+            if isinstance(sub, dict):
+                if sub.get("type") == "text" and isinstance(sub.get("text"), str):
+                    parts.append(sub["text"])
+                elif isinstance(sub.get("text"), str):
+                    parts.append(sub["text"])
+            elif isinstance(sub, str):
+                parts.append(sub)
+        return "\n".join(parts)
+    return ""
+
+
 # ── adapter ────────────────────────────────────────────────────────────────────────────────
 
 
@@ -140,6 +184,200 @@ class ClaudeCodeAdapter(AgentAdapter):
                 if len(sessions) >= limit:
                     return sessions
         return sessions
+
+    def list_events(self, session_id: str, limit: int = 500) -> list[Event]:
+        """Parse one session's JSONL into unified events, chronological order.
+
+        Maps each Claude Code transcript line to one or more :class:`Event`:
+          * ``user`` (string content)        -> ``message`` (role=user)
+          * ``user`` (tool_result blocks)    -> ``tool_result`` per block
+          * ``assistant`` ``text`` block     -> ``message`` (role=assistant)
+          * ``assistant`` ``thinking`` block -> ``thinking``
+          * ``assistant`` ``tool_use`` block -> ``tool_call`` (name + input)
+
+        Token counts (input/output) are carried from ``message.usage`` on the
+        first emitted event of each assistant turn. Non-message lines
+        (permission-mode, attachments, snapshots, system notices) are skipped.
+
+        Read-only and defensive: a bad file or line is logged and skipped,
+        and the method never raises (returns ``[]`` on failure).
+        """
+        path = _resolve_session_path(session_id)
+        if not path:
+            return []
+
+        events: list[Event] = []
+        seq = 0
+        try:
+            with open(path, "r", errors="replace") as fh:
+                lines = fh.readlines()
+        except OSError as exc:
+            logger.warning("ClaudeCodeAdapter list_events: cannot open %s: %s", path, exc)
+            return []
+
+        for raw in lines:
+            if len(events) >= limit:
+                break
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                obj = json.loads(raw)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(obj, dict):
+                continue
+
+            evt_type = obj.get("type")
+            if evt_type not in ("user", "assistant"):
+                # permission-mode / attachment / file-history-snapshot /
+                # system / ai-title / last-prompt carry no conversational
+                # message — skip them.
+                continue
+
+            msg = obj.get("message")
+            if not isinstance(msg, dict):
+                continue
+            ts = _parse_ts(obj.get("timestamp"))
+            base_uid = obj.get("uuid") or obj.get("id") or ""
+            content = msg.get("content")
+
+            if evt_type == "user":
+                if isinstance(content, str):
+                    if not content.strip():
+                        continue
+                    seq += 1
+                    events.append(Event(
+                        agent=_AGENT_TYPE,
+                        session_id=session_id,
+                        id=base_uid or f"{session_id}:{seq}",
+                        type="message",
+                        ts=ts,
+                        role="user",
+                        content=content,
+                        parent_id=obj.get("parentUuid"),
+                    ))
+                elif isinstance(content, list):
+                    for block in content:
+                        if len(events) >= limit:
+                            break
+                        if not isinstance(block, dict):
+                            continue
+                        btype = block.get("type")
+                        if btype == "tool_result":
+                            seq += 1
+                            events.append(Event(
+                                agent=_AGENT_TYPE,
+                                session_id=session_id,
+                                id=f"{base_uid or session_id}:{seq}",
+                                type="tool_result",
+                                ts=ts,
+                                role="tool",
+                                content=_tool_result_text(block),
+                                parent_id=obj.get("parentUuid"),
+                                extra={
+                                    "toolUseId": block.get("tool_use_id") or "",
+                                    "isError": bool(block.get("is_error")),
+                                },
+                            ))
+                        elif btype == "text" and isinstance(block.get("text"), str):
+                            seq += 1
+                            events.append(Event(
+                                agent=_AGENT_TYPE,
+                                session_id=session_id,
+                                id=f"{base_uid or session_id}:{seq}",
+                                type="message",
+                                ts=ts,
+                                role="user",
+                                content=block["text"],
+                                parent_id=obj.get("parentUuid"),
+                            ))
+                continue
+
+            # ── assistant turn ──────────────────────────────────────────────
+            usage = msg.get("usage") if isinstance(msg.get("usage"), dict) else {}
+            tokens_in = int(usage.get("input_tokens") or 0)
+            tokens_out = int(usage.get("output_tokens") or 0)
+            # Prompt-cache tokens dominate cost on Claude Code turns (a cached
+            # 100k-token context re-read every turn). Carry them so the store's
+            # cost derivation is cache-aware instead of input/output-only.
+            cache_read = int(usage.get("cache_read_input_tokens") or 0)
+            cache_write = int(usage.get("cache_creation_input_tokens") or 0)
+            model = msg.get("model") or ""
+            usage_attached = False  # carry usage onto the first event of the turn
+
+            blocks = content if isinstance(content, list) else []
+            for block in blocks:
+                if len(events) >= limit:
+                    break
+                if not isinstance(block, dict):
+                    continue
+                btype = block.get("type")
+                tokens = 0
+                extra: dict[str, Any] = {}
+                if not usage_attached and (tokens_in or tokens_out or cache_read or cache_write):
+                    tokens = tokens_in + tokens_out
+                    extra = {"inputTokens": tokens_in, "outputTokens": tokens_out}
+                    if cache_read:
+                        extra["cacheReadInputTokens"] = cache_read
+                    if cache_write:
+                        extra["cacheCreationInputTokens"] = cache_write
+
+                if btype == "text" and isinstance(block.get("text"), str):
+                    seq += 1
+                    if model:
+                        extra["model"] = model
+                    events.append(Event(
+                        agent=_AGENT_TYPE,
+                        session_id=session_id,
+                        id=f"{base_uid or session_id}:{seq}",
+                        type="message",
+                        ts=ts,
+                        role="assistant",
+                        content=block["text"],
+                        parent_id=obj.get("parentUuid"),
+                        tokens=tokens,
+                        extra=extra,
+                    ))
+                    usage_attached = True
+                elif btype == "thinking":
+                    seq += 1
+                    events.append(Event(
+                        agent=_AGENT_TYPE,
+                        session_id=session_id,
+                        id=f"{base_uid or session_id}:{seq}",
+                        type="thinking",
+                        ts=ts,
+                        role="assistant",
+                        content=str(block.get("thinking") or ""),
+                        parent_id=obj.get("parentUuid"),
+                        tokens=tokens,
+                        extra=extra,
+                    ))
+                    usage_attached = True
+                elif btype == "tool_use":
+                    name = block.get("name") or "unknown"
+                    seq += 1
+                    events.append(Event(
+                        agent=_AGENT_TYPE,
+                        session_id=session_id,
+                        id=block.get("id") or f"{base_uid or session_id}:{seq}",
+                        type="tool_call",
+                        ts=ts,
+                        role="assistant",
+                        tool_name=name,
+                        tool_calls=[{
+                            "id": block.get("id") or "",
+                            "name": name,
+                            "input": block.get("input"),
+                        }],
+                        parent_id=obj.get("parentUuid"),
+                        tokens=tokens,
+                        extra=extra,
+                    ))
+                    usage_attached = True
+
+        return events
 
     def capabilities(self) -> set[Capability]:
         return {Capability.SESSIONS, Capability.EVENTS, Capability.COST}

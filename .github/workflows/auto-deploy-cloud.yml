@@ -25,6 +25,22 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "OSS version: $VERSION"
 
+      # The cloud Dockerfile does `pip install clawmetry==<version>`, and the
+      # cloud PR's CI also installs it to audit routes. On a release commit this
+      # job can fire before PyPI has finished propagating the new wheel, so wait
+      # for it to be installable before opening/merging the pin PR (avoids a
+      # spurious cloud-CI failure that would (correctly) block the auto-merge).
+      - name: Wait for version on PyPI
+        run: |
+          V="${{ steps.oss_version.outputs.version }}"
+          for i in $(seq 1 30); do
+            if curl -fsSL "https://pypi.org/pypi/clawmetry/$V/json" >/dev/null 2>&1; then
+              echo "clawmetry==$V is on PyPI"; exit 0
+            fi
+            echo "waiting for clawmetry==$V on PyPI (attempt $i)..."; sleep 20
+          done
+          echo "::warning::clawmetry==$V not on PyPI after wait; continuing (cloud CI will gate the merge)"
+
       - name: Checkout cloud repo
         uses: actions/checkout@v6
         with:
@@ -71,3 +87,49 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ secrets.CLOUD_REPO_PAT }}
+
+      # Auto-merge the pin PR once the cloud CI is green so each OSS release
+      # deploys to the cloud hands-off. We poll the PR's checks and merge with
+      # the PAT (a PAT merge — unlike GITHUB_TOKEN — triggers the cloud's
+      # deploy.yml, whose candidate smoke-gate still protects prod before
+      # traffic flips). Guards: pin-only diff (Dockerfile), and never merge a
+      # PR with a failing or still-pending check. A failed/!pin-only PR is left
+      # open for review rather than force-merged.
+      - name: Auto-merge pin PR when cloud CI is green
+        env:
+          GH_TOKEN: ${{ secrets.CLOUD_REPO_PAT }}
+          REPO: vivekchand/clawmetry-cloud
+          VERSION: ${{ steps.oss_version.outputs.version }}
+        run: |
+          BRANCH="auto/pin-clawmetry-${VERSION}"
+          PR=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json number -q '.[0].number')
+          if [ -z "$PR" ]; then echo "No open pin PR for $BRANCH (pin already current) — nothing to merge."; exit 0; fi
+          echo "Pin PR: #$PR"
+          # Safety: only auto-merge a pin-only diff. Anything else waits for a human.
+          FILES=$(gh pr view "$PR" --repo "$REPO" --json files -q '[.files[].path] | join(",")')
+          if [ "$FILES" != "Dockerfile" ]; then
+            echo "::warning::PR #$PR touches more than Dockerfile ($FILES) — leaving for manual review."; exit 0
+          fi
+          # Poll the rollup until every check concludes (or budget runs out).
+          # ~45 min budget: the cloud golden-path E2E + MOAT roundtrip checks
+          # routinely run 15-20 min, and the earlier 20 min budget timed out
+          # before they finished (the pin PR was left open, merged later by
+          # hand) — defeating hands-off auto-merge.
+          for i in $(seq 1 90); do
+            ROLL=$(gh pr view "$PR" --repo "$REPO" --json statusCheckRollup \
+                     -q '.statusCheckRollup')
+            FAIL=$(echo "$ROLL" | python3 -c "import json,sys; r=json.load(sys.stdin); print(sum(1 for c in r if (c.get('conclusion') or '') in ('FAILURE','CANCELLED','TIMED_OUT','ACTION_REQUIRED')))")
+            PEND=$(echo "$ROLL" | python3 -c "import json,sys; r=json.load(sys.stdin); print(sum(1 for c in r if (c.get('status') or c.get('state') or '') in ('IN_PROGRESS','QUEUED','PENDING','EXPECTED')))")
+            TOTAL=$(echo "$ROLL" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))")
+            echo "checks: total=$TOTAL fail=$FAIL pending=$PEND (poll $i)"
+            if [ "$FAIL" -gt 0 ]; then
+              echo "::warning::cloud CI failed on pin PR #$PR — leaving open for review (will retry on next OSS push)."; exit 0
+            fi
+            if [ "$PEND" -eq 0 ] && [ "$TOTAL" -gt 0 ]; then
+              echo "all checks green — merging #$PR"
+              gh pr merge "$PR" --repo "$REPO" --squash --delete-branch && \
+                echo "✅ merged #$PR — cloud deploy will run (candidate-gated)"; exit 0
+            fi
+            sleep 30
+          done
+          echo "::warning::pin PR #$PR checks did not finish within budget — leaving open."

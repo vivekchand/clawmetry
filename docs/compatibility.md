@@ -1,19 +1,29 @@
-# Runtime Compatibility
+# Runtime / Agent Compatibility
 
-ClawMetry observes the OpenClaw runtime family. Some family members share
-OpenClaw's on-disk session format and "just work"; others store sessions in
-their own native format and ship a dedicated reader adapter
-(`clawmetry/adapters/`). This page tracks each runtime's real status, honestly.
+ClawMetry observes many AI-agent runtimes, not just OpenClaw. Each runtime that
+isn't OpenClaw ships a dedicated reader adapter (`clawmetry/adapters/`) that
+translates its native session format into ClawMetry's unified Session/Event
+shapes; the daemon then ingests them into the same local DuckDB store and cloud
+snapshot, tagged with the runtime. When more than one runtime is present on a
+node, the Session replay tab shows a **runtime switcher** (All / per runtime).
+This page tracks each one's real status, honestly.
 
 > New to NanoClaw / PicoClaw? See [`RUNTIME_FAMILY.md`](RUNTIME_FAMILY.md) for a
-> short primer that compares all three runtimes (what each is, how they store a
-> session, and how they differ from OpenClaw).
+> primer on the OpenClaw-family runtimes specifically.
 
-| Runtime  | Status              | Session store                          | Notes |
-| -------- | ------------------- | -------------------------------------- | ----- |
-| OpenClaw | Native              | v3 JSONL `~/.openclaw/agents/main/sessions/` | Reference runtime; auto-detected. |
-| PicoClaw | Beta adapter        | Flat `providers.Message` JSONL `~/.picoclaw/workspace/sessions/` | Reads transcripts, model, tool calls. Tokens/cost not on disk. |
-| NanoClaw | Beta adapter        | Per-session SQLite `data/v2-sessions/<group>/<session>/{inbound,outbound}.db` | Reads transcripts. Model/tokens/cost not on disk. |
+| Runtime / Agent | Status         | Session store                          | Notes |
+| --------------- | -------------- | -------------------------------------- | ----- |
+| OpenClaw    | Native         | v3 JSONL `~/.openclaw/agents/main/sessions/` | Reference runtime; auto-detected. |
+| PicoClaw    | Beta adapter   | Flat `providers.Message` JSONL `~/.picoclaw/workspace/sessions/` | Transcripts, model, tool calls. Tokens/cost not on disk. |
+| NanoClaw    | Beta adapter   | Per-session SQLite `data/v2-sessions/<group>/<session>/{inbound,outbound}.db` | Transcripts. Model/tokens/cost not on disk. |
+| Hermes      | Beta adapter   | SQLite `~/.hermes/state.db` (sessions + messages) | Transcripts, model, pre-computed tokens/cost. |
+| Claude Code | Beta adapter   | JSONL `~/.claude/projects/<cwd>/<id>.jsonl` (v-type lines) | Transcripts, model, tool calls + thinking, token usage. |
+| Codex       | Beta adapter   | "rollout" JSONL `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | Transcripts, model, tool calls, token usage (from `token_count` events). |
+| Cursor      | Beta adapter   | SQLite `state.vscdb` (`cursorDiskKV` / `ItemTable`, global + per-workspace) | Chat/composer transcripts, model. No billed cost on disk (server-side). |
+| Aider       | Beta adapter   | Markdown `.aider.chat.history.md` per project dir (+ `.aider.input.history`) | Transcripts, model, token counts. Per-project history (set `AIDER_HISTORY_DIRS`). |
+| Goose       | Beta adapter   | SQLite `~/.local/share/goose/sessions/sessions.db` (`sessions` + `messages`) | Transcripts, model, tool calls, real token totals. |
+| opencode    | Beta adapter   | SQLite `~/.local/share/opencode/opencode.db` (`session`/`message`/`part`) | Transcripts, model, tool calls, real tokens + cost. |
+| Qwen Code   | Beta adapter   | JSONL `~/.qwen/projects/<hash>/chats/<id>.jsonl` (Gemini-CLI lineage) | Transcripts, model, tool calls + thinking, real token usage. |
 | ZeroClaw / TrustClaw / Nanobot | Not yet | unverified | Open an issue with a real session capture. |
 
 ## What "Beta adapter" means (and what it does not)

@@ -18,15 +18,15 @@
   <div style="padding:12px 0 8px 0;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
       <div>
-        <div style="font-size:14px;font-weight:700;color:var(--text-primary);">🔄 Self-Evolve</div>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">How your agent could improve.</div>
-        <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">
+        <div style="font-size:14px;font-weight:700;color:var(--text-primary);">🔄 <span data-i18n="selfevolve.title">Self-Evolve</span></div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;" data-i18n="selfevolve.subtitle">How your agent could improve.</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:2px;" data-i18n="selfevolve.description">
           Structured review of recent activity. Each finding has evidence and a concrete action.
         </div>
       </div>
       <button id="selfevolve-run-btn" onclick="selfevolveRun()"
         style="padding:8px 16px;background:#2563eb;color:#fff;border:none;border-radius:8px;
-               font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 2px 8px rgba(37,99,235,0.3);">
+               font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 2px 8px rgba(37,99,235,0.3);" data-i18n="selfevolve.analyze">
         Analyze
       </button>
     </div>
@@ -56,7 +56,7 @@
         in your shell. We auto-detect, no copy/paste here.
       </div>
       <details style="margin-top:8px;">
-        <summary style="cursor:pointer;font-size:11px;color:var(--text-muted);">Where we looked</summary>
+        <summary style="cursor:pointer;font-size:11px;color:var(--text-muted);" data-i18n="selfevolve.where_we_looked">Where we looked</summary>
         <ul id="selfevolve-noauth-probed" style="margin:6px 0 0 0;padding-left:18px;font-size:11px;color:var(--text-muted);font-family:ui-monospace,Menlo,monospace;"></ul>
       </details>
     </div>
@@ -82,8 +82,8 @@
         display:none;
         ">
         <div style="font-size:24px;margin-bottom:8px;">🪶</div>
-        <div>No analysis yet. Click <strong>Analyze</strong> to review recent activity.</div>
-        <div style="font-size:11px;margin-top:8px;">Takes about 15 seconds.</div>
+        <div><span data-i18n="selfevolve.empty_prefix">No analysis yet. Click</span> <strong data-i18n="selfevolve.analyze">Analyze</strong> <span data-i18n="selfevolve.empty_suffix">to review recent activity.</span></div>
+        <div style="font-size:11px;margin-top:8px;" data-i18n="selfevolve.takes_15s">Takes about 15 seconds.</div>
       </div>
     </div>
   </div>

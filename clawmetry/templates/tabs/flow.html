@@ -1,9 +1,9 @@
 <div class="page" id="page-flow">
   <div class="flow-stats">
-    <div class="flow-stat"><span class="flow-stat-label">Messages / min</span><span class="flow-stat-value" id="flow-msg-rate">0</span></div>
-    <div class="flow-stat"><span class="flow-stat-label">Actions Taken</span><span class="flow-stat-value" id="flow-event-count">0</span></div>
-    <div class="flow-stat"><span class="flow-stat-label">Active Tools</span><span class="flow-stat-value" id="flow-active-tools">&mdash;</span></div>
-    <div class="flow-stat"><span class="flow-stat-label">Tokens Used</span><span class="flow-stat-value" id="flow-tokens">&mdash;</span></div>
+    <div class="flow-stat"><span class="flow-stat-label" data-i18n="flow.messages_per_min">Messages / min</span><span class="flow-stat-value" id="flow-msg-rate">0</span></div>
+    <div class="flow-stat"><span class="flow-stat-label" data-i18n="flow.actions_taken">Actions Taken</span><span class="flow-stat-value" id="flow-event-count">0</span></div>
+    <div class="flow-stat"><span class="flow-stat-label" data-i18n="flow.active_tools">Active Tools</span><span class="flow-stat-value" id="flow-active-tools">&mdash;</span></div>
+    <div class="flow-stat"><span class="flow-stat-label" data-i18n="flow.tokens_used">Tokens Used</span><span class="flow-stat-value" id="flow-tokens">&mdash;</span></div>
   </div>
   <div class="flow-container">
     <svg id="flow-svg" viewBox="0 0 980 550" preserveAspectRatio="xMidYMid meet">
@@ -361,9 +361,9 @@
       flex-wrap:wrap;
       gap:8px;
       ">
-      <span style="font-size:13px;font-weight:600;color:#aaa;">&#128295; Live Tool Call Stream</span>
+      <span style="font-size:13px;font-weight:600;color:#aaa;">&#128295; <span data-i18n="flow.live_tool_stream">Live Tool Call Stream</span></span>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-        <input id="tool-stream-filter" type="text" placeholder="Filter by tool&hellip;" oninput="applyToolStreamFilter()" style="
+        <input id="tool-stream-filter" type="text" data-i18n-placeholder="flow.filter_by_tool" placeholder="Filter by tool&hellip;" oninput="applyToolStreamFilter()" style="
           font-size:11px;
           padding:3px 8px;
           border:1px solid var(--border-secondary,#2a2a4a);
@@ -390,7 +390,7 @@
           background:var(--bg-primary,#0a0a1a);
           color:#aaa;
           cursor:pointer;
-          ">&#10005; Clear</button>
+          ">&#10005; <span data-i18n="flow.clear">Clear</span></button>
         <span style="font-size:10px;color:#555;" id="flow-feed-count">0 events</span>
       </div>
     </div>
@@ -402,7 +402,7 @@
       line-height:1.6;
       color:#777;
       ">
-      <div style="color:#555;">Waiting for activity...</div>
+      <div style="color:#555;" data-i18n="flow.waiting_for_activity">Waiting for activity...</div>
     </div>
   </div>
 </div><!-- end page-flow -->

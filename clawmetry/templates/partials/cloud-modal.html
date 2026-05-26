@@ -42,9 +42,9 @@
       font-size:14px;
       margin:0 0 24px;
       line-height:1.5;
-      ">Monitor your agents from anywhere. Encrypted, real-time, accessible from any browser or as a Mac app.</p>
+      " data-i18n="cloud.tagline">Monitor your agents from anywhere. Encrypted, real-time, accessible from any browser or as a Mac app.</p>
     <div id="cloud-step-email">
-      <label style="font-size:12px;font-weight:600;color:#94a3b8;display:block;margin-bottom:6px;">YOUR EMAIL</label>
+      <label style="font-size:12px;font-weight:600;color:#94a3b8;display:block;margin-bottom:6px;" data-i18n="cloud.your_email">YOUR EMAIL</label>
       <div style="display:flex;gap:8px;">
         <input id="cloud-email-input" type="email" placeholder="you@example.com" style="
           flex:1;
@@ -66,15 +66,15 @@
           font-weight:600;
           cursor:pointer;
           white-space:nowrap;
-          ">Get Started</button>
+          " data-i18n="cloud.get_started">Get Started</button>
       </div>
       <p id="cloud-email-error" style="color:#E5443A;font-size:12px;margin:6px 0 0;display:none;"></p>
       <div style="margin-top:20px;padding-top:20px;border-top:1px solid rgba(255,255,255,0.06);text-align:center;">
-        <span style="color:#64748b;font-size:12px;">or run </span><code style="color:#94a3b8;font-size:12px;background:rgba(255,255,255,0.05);padding:2px 8px;border-radius:4px;">clawmetry connect</code>
+        <span style="color:#64748b;font-size:12px;" data-i18n="cloud.or_run">or run </span><code style="color:#94a3b8;font-size:12px;background:rgba(255,255,255,0.05);padding:2px 8px;border-radius:4px;">clawmetry connect</code>
       </div>
     </div>
     <div id="cloud-step-otp" style="display:none;">
-      <p style="color:#94a3b8;font-size:13px;margin:0 0 16px;">Check your email for a 6-digit code</p>
+      <p style="color:#94a3b8;font-size:13px;margin:0 0 16px;" data-i18n="cloud.check_email">Check your email for a 6-digit code</p>
       <div style="display:flex;gap:8px;">
         <input id="cloud-otp-input" type="text" maxlength="6" placeholder="_ _ _ _ _ _" style="
           flex:1;
@@ -97,7 +97,7 @@
           font-size:14px;
           font-weight:600;
           cursor:pointer;
-          ">Verify</button>
+          " data-i18n="cloud.verify">Verify</button>
       </div>
       <p id="cloud-otp-error" style="color:#E5443A;font-size:12px;margin:6px 0 0;display:none;"></p>
       <p style="
@@ -106,12 +106,12 @@
         margin:10px 0 0;
         text-align:center;
         cursor:pointer;
-        " onclick="cloudResendOtp()">Resend code</p>
+        " onclick="cloudResendOtp()" data-i18n="cloud.resend_code">Resend code</p>
     </div>
     <div id="cloud-step-done" style="display:none;text-align:center;padding:16px 0;">
       <div style="font-size:36px;margin-bottom:12px;">&#10003;</div>
-      <p style="color:#22c55e;font-size:16px;font-weight:600;margin:0 0 6px;">Connected!</p>
-      <p style="color:#94a3b8;font-size:13px;margin:0;">Opening ClawMetry Cloud...</p>
+      <p style="color:#22c55e;font-size:16px;font-weight:600;margin:0 0 6px;" data-i18n="cloud.connected">Connected!</p>
+      <p style="color:#94a3b8;font-size:13px;margin:0;" data-i18n="cloud.opening">Opening ClawMetry Cloud...</p>
     </div>
   </div>
 </div>

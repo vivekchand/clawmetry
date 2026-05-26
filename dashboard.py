@@ -121,6 +121,11 @@ from routes.insights import bp_insights
 from routes.review import bp_review
 from routes.evals import bp_evals
 from routes.dives import bp_dives
+from routes.scheduler import bp_scheduler
+from routes.policy import bp_policy
+from routes.turn_anatomy import bp_turn_anatomy
+from routes.tool_catalog import bp_tool_catalog
+from routes.context_economics import bp_context_economics
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -148,7 +153,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.12.300"
+__version__ = "0.12.328"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
@@ -2209,16 +2214,32 @@ def _otel_to_row(span, resource_attrs):
       * ``gen_ai.usage.output_tokens`` / ``llm.usage.completion_tokens`` →
         ``tokens_output``
       * ``gen_ai.usage.total_tokens`` → ``token_count``
-      * ``gen_ai.usage.cost_usd`` / ``llm.usage.cost`` → ``cost_usd``
-      * ``tool.name`` / ``code.function`` → ``tool_name``
-      * ``session.id`` / ``openclaw.session_id`` → ``session_id``
-      * ``agent.id`` / ``openclaw.agent_id`` (also from resource) → ``agent_id``
+      * ``gen_ai.usage.cost_usd`` / ``llm.usage.cost`` → ``cost_usd``; when the
+        exporter ships no cost (the OTel GenAI norm — cost is not a standard
+        span attribute, so MLflow's OpenClaw plugin et al. emit token-only
+        spans), it is derived from tokens × model pricing, cache-aware, with
+        the provider resolved from ``gen_ai.provider.name`` / ``gen_ai.system``
+        or inferred from the model — same as the #2049 event path.
+      * ``gen_ai.tool.name`` / ``tool.name`` / ``code.function`` → ``tool_name``
+      * ``gen_ai.conversation.id`` / ``session.id`` / ``openclaw.session_id`` →
+        ``session_id``
+      * ``gen_ai.agent.id`` / ``agent.id`` / ``openclaw.agent_id`` (also from
+        resource) → ``agent_id``
       * ``agent.type`` (also from resource) → ``agent_type``
+      * ``gen_ai.input.messages`` / ``gen_ai.output.messages`` (current semconv)
+        and the legacy ``gen_ai.prompt`` / ``gen_ai.completion`` → ``input`` /
+        ``output``
       * Resource ``service.name`` → ``service_name``
+
+    Targets the OpenTelemetry GenAI semantic conventions (v1.37) so spans from
+    any conforming emitter — including MLflow's ``@mlflow/mlflow-openclaw``
+    tracer — light up ClawMetry's trace tree and cost views without a bespoke
+    per-SDK translator.
 
     Everything not projected lands in the ``attributes`` JSON blob so the
     span-detail panel can render any custom attributes the SDK exporter
-    set. Span events / links are passed through as JSON arrays.
+    set (e.g. ``gen_ai.operation.name``, ``gen_ai.agent.name``). Span events /
+    links are passed through as JSON arrays.
     """
     attrs = {}
     for attr in span.attributes:
@@ -2279,10 +2300,40 @@ def _otel_to_row(span, resource_attrs):
     token_count = _pick_int("gen_ai.usage.total_tokens", "llm.usage.total_tokens", "total_tokens")
     if token_count is None and (tokens_input or tokens_output):
         token_count = (tokens_input or 0) + (tokens_output or 0)
+    # Prompt-cache tokens (OTel GenAI semconv + Anthropic convention). Not
+    # stored as typed columns — they ride the attributes blob — but read here
+    # so the derived cost below is cache-aware (matches the #2049 event path).
+    cache_read = _pick_int("gen_ai.usage.cache_read_input_tokens", "cache_read_input_tokens") or 0
+    cache_write = _pick_int("gen_ai.usage.cache_creation_input_tokens", "cache_creation_input_tokens") or 0
+    # Provider: OTel GenAI semconv renamed gen_ai.system -> gen_ai.provider.name.
+    provider = _pick("gen_ai.provider.name", "gen_ai.system", "llm.provider", "provider") or ""
     cost_usd = _pick_float("gen_ai.usage.cost_usd", "llm.usage.cost", "cost_usd")
-    tool_name = _pick("tool.name", "code.function")
-    session_id = _pick("session.id", "openclaw.session_id", "session_id")
-    agent_id = _pick("agent.id", "openclaw.agent_id", "agent_id") or "main"
+    # Cost is NOT an OTel-standard span attribute, so GenAI emitters (MLflow's
+    # OpenClaw plugin, raw OpenAI/Anthropic auto-trace, …) ship token-only spans
+    # that would read as $0 in our usage/cost views. Derive it the same way the
+    # event ingest does (#2049): tokens x model pricing, cache-aware, provider
+    # resolved from the model when the span omits it. Only fill when the exporter
+    # supplied no cost at all, so an explicit cost (even 0 for a local model) wins.
+    if cost_usd is None and model and (tokens_input or tokens_output or cache_read or cache_write):
+        try:
+            from clawmetry.providers_pricing import estimate_event_cost_usd
+            derived = estimate_event_cost_usd(
+                model,
+                input_tokens=tokens_input or 0,
+                output_tokens=tokens_output or 0,
+                cache_read_tokens=cache_read,
+                cache_write_tokens=cache_write,
+                provider=provider,
+            )
+            if derived:
+                cost_usd = derived
+        except Exception:
+            pass
+    # tool.name: OTel GenAI semconv uses gen_ai.tool.name on execute_tool spans.
+    tool_name = _pick("gen_ai.tool.name", "tool.name", "code.function")
+    # session/conversation: semconv uses gen_ai.conversation.id.
+    session_id = _pick("gen_ai.conversation.id", "session.id", "openclaw.session_id", "session_id")
+    agent_id = _pick("gen_ai.agent.id", "agent.id", "openclaw.agent_id", "agent_id") or "main"
     agent_type = _pick("agent.type", "openclaw.agent_type", "agent_type") or "openclaw"
     service_name = resource_attrs.get("service.name") or attrs.get("service.name")
     node_id = _pick("node.id", "openclaw.node_id", "host.name")
@@ -2335,8 +2386,10 @@ def _otel_to_row(span, resource_attrs):
         "token_count": token_count,
         "tokens_input": tokens_input,
         "tokens_output": tokens_output,
-        "input": attrs.get("gen_ai.prompt") or attrs.get("llm.prompts") or attrs.get("input"),
-        "output": attrs.get("gen_ai.completion") or attrs.get("llm.completions") or attrs.get("output"),
+        "input": (attrs.get("gen_ai.input.messages") or attrs.get("gen_ai.prompt")
+                  or attrs.get("llm.prompts") or attrs.get("input")),
+        "output": (attrs.get("gen_ai.output.messages") or attrs.get("gen_ai.completion")
+                   or attrs.get("llm.completions") or attrs.get("output")),
         "attributes": attrs,
         "events": events,
         "links": links,
@@ -2995,7 +3048,7 @@ DASHBOARD_HTML = r"""
 <link rel="icon" href="/favicon.ico" type="image/x-icon">
 <link rel="icon" href="/static/img/logo.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+Arabic:wght@400;500;700&family=Noto+Sans+Hebrew:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
   :root {
     /* Light theme (default) */
@@ -9953,16 +10006,32 @@ def _otel_to_row(span, resource_attrs):
       * ``gen_ai.usage.output_tokens`` / ``llm.usage.completion_tokens`` →
         ``tokens_output``
       * ``gen_ai.usage.total_tokens`` → ``token_count``
-      * ``gen_ai.usage.cost_usd`` / ``llm.usage.cost`` → ``cost_usd``
-      * ``tool.name`` / ``code.function`` → ``tool_name``
-      * ``session.id`` / ``openclaw.session_id`` → ``session_id``
-      * ``agent.id`` / ``openclaw.agent_id`` (also from resource) → ``agent_id``
+      * ``gen_ai.usage.cost_usd`` / ``llm.usage.cost`` → ``cost_usd``; when the
+        exporter ships no cost (the OTel GenAI norm — cost is not a standard
+        span attribute, so MLflow's OpenClaw plugin et al. emit token-only
+        spans), it is derived from tokens × model pricing, cache-aware, with
+        the provider resolved from ``gen_ai.provider.name`` / ``gen_ai.system``
+        or inferred from the model — same as the #2049 event path.
+      * ``gen_ai.tool.name`` / ``tool.name`` / ``code.function`` → ``tool_name``
+      * ``gen_ai.conversation.id`` / ``session.id`` / ``openclaw.session_id`` →
+        ``session_id``
+      * ``gen_ai.agent.id`` / ``agent.id`` / ``openclaw.agent_id`` (also from
+        resource) → ``agent_id``
       * ``agent.type`` (also from resource) → ``agent_type``
+      * ``gen_ai.input.messages`` / ``gen_ai.output.messages`` (current semconv)
+        and the legacy ``gen_ai.prompt`` / ``gen_ai.completion`` → ``input`` /
+        ``output``
       * Resource ``service.name`` → ``service_name``
+
+    Targets the OpenTelemetry GenAI semantic conventions (v1.37) so spans from
+    any conforming emitter — including MLflow's ``@mlflow/mlflow-openclaw``
+    tracer — light up ClawMetry's trace tree and cost views without a bespoke
+    per-SDK translator.
 
     Everything not projected lands in the ``attributes`` JSON blob so the
     span-detail panel can render any custom attributes the SDK exporter
-    set. Span events / links are passed through as JSON arrays.
+    set (e.g. ``gen_ai.operation.name``, ``gen_ai.agent.name``). Span events /
+    links are passed through as JSON arrays.
     """
     attrs = {}
     for attr in span.attributes:
@@ -10023,10 +10092,40 @@ def _otel_to_row(span, resource_attrs):
     token_count = _pick_int("gen_ai.usage.total_tokens", "llm.usage.total_tokens", "total_tokens")
     if token_count is None and (tokens_input or tokens_output):
         token_count = (tokens_input or 0) + (tokens_output or 0)
+    # Prompt-cache tokens (OTel GenAI semconv + Anthropic convention). Not
+    # stored as typed columns — they ride the attributes blob — but read here
+    # so the derived cost below is cache-aware (matches the #2049 event path).
+    cache_read = _pick_int("gen_ai.usage.cache_read_input_tokens", "cache_read_input_tokens") or 0
+    cache_write = _pick_int("gen_ai.usage.cache_creation_input_tokens", "cache_creation_input_tokens") or 0
+    # Provider: OTel GenAI semconv renamed gen_ai.system -> gen_ai.provider.name.
+    provider = _pick("gen_ai.provider.name", "gen_ai.system", "llm.provider", "provider") or ""
     cost_usd = _pick_float("gen_ai.usage.cost_usd", "llm.usage.cost", "cost_usd")
-    tool_name = _pick("tool.name", "code.function")
-    session_id = _pick("session.id", "openclaw.session_id", "session_id")
-    agent_id = _pick("agent.id", "openclaw.agent_id", "agent_id") or "main"
+    # Cost is NOT an OTel-standard span attribute, so GenAI emitters (MLflow's
+    # OpenClaw plugin, raw OpenAI/Anthropic auto-trace, …) ship token-only spans
+    # that would read as $0 in our usage/cost views. Derive it the same way the
+    # event ingest does (#2049): tokens x model pricing, cache-aware, provider
+    # resolved from the model when the span omits it. Only fill when the exporter
+    # supplied no cost at all, so an explicit cost (even 0 for a local model) wins.
+    if cost_usd is None and model and (tokens_input or tokens_output or cache_read or cache_write):
+        try:
+            from clawmetry.providers_pricing import estimate_event_cost_usd
+            derived = estimate_event_cost_usd(
+                model,
+                input_tokens=tokens_input or 0,
+                output_tokens=tokens_output or 0,
+                cache_read_tokens=cache_read,
+                cache_write_tokens=cache_write,
+                provider=provider,
+            )
+            if derived:
+                cost_usd = derived
+        except Exception:
+            pass
+    # tool.name: OTel GenAI semconv uses gen_ai.tool.name on execute_tool spans.
+    tool_name = _pick("gen_ai.tool.name", "tool.name", "code.function")
+    # session/conversation: semconv uses gen_ai.conversation.id.
+    session_id = _pick("gen_ai.conversation.id", "session.id", "openclaw.session_id", "session_id")
+    agent_id = _pick("gen_ai.agent.id", "agent.id", "openclaw.agent_id", "agent_id") or "main"
     agent_type = _pick("agent.type", "openclaw.agent_type", "agent_type") or "openclaw"
     service_name = resource_attrs.get("service.name") or attrs.get("service.name")
     node_id = _pick("node.id", "openclaw.node_id", "host.name")
@@ -10079,8 +10178,10 @@ def _otel_to_row(span, resource_attrs):
         "token_count": token_count,
         "tokens_input": tokens_input,
         "tokens_output": tokens_output,
-        "input": attrs.get("gen_ai.prompt") or attrs.get("llm.prompts") or attrs.get("input"),
-        "output": attrs.get("gen_ai.completion") or attrs.get("llm.completions") or attrs.get("output"),
+        "input": (attrs.get("gen_ai.input.messages") or attrs.get("gen_ai.prompt")
+                  or attrs.get("llm.prompts") or attrs.get("input")),
+        "output": (attrs.get("gen_ai.output.messages") or attrs.get("gen_ai.completion")
+                   or attrs.get("llm.completions") or attrs.get("output")),
         "attributes": attrs,
         "events": events,
         "links": links,
@@ -10521,6 +10622,11 @@ def detect_config(args=None):
     app.register_blueprint(bp_plugins)
     app.register_blueprint(bp_local_query)
     app.register_blueprint(bp_dives)
+    app.register_blueprint(bp_scheduler)
+    app.register_blueprint(bp_policy)
+    app.register_blueprint(bp_turn_anatomy)
+    app.register_blueprint(bp_tool_catalog)
+    app.register_blueprint(bp_context_economics)
 
     # Register built-in agent adapters. External plugins can register more
     # via clawmetry.extensions entry points — see clawmetry/adapters/.
@@ -10553,26 +10659,17 @@ def detect_config(args=None):
     # via clawmetry.extensions entry points — see clawmetry/adapters/.
     from clawmetry.adapters import registry as _adapter_registry
     from clawmetry.adapters.openclaw import OpenClawAdapter
-    from clawmetry.adapters.hermes import HermesAdapter
     _adapter_registry.register(OpenClawAdapter())
-    _adapter_registry.register(HermesAdapter())
 
-    # OpenClaw-family runtimes that ClawMetry can observe but that use their
-    # OWN native session format (not OpenClaw's v3 JSONL), so each ships a
-    # dedicated reader adapter:
-    #   - PicoClaw  (github.com/sipeed/picoclaw): flat providers.Message JSONL
-    #     under ~/.picoclaw/workspace/sessions/.
-    #   - NanoClaw  (github.com/nanocoai/nanoclaw): per-session SQLite DBs
-    #     (inbound.db / outbound.db) under a CWD-relative <checkout>/data/
-    #     v2-sessions/ (discovered via common checkout locations or the
-    #     CLAWMETRY_NANOCLAW_DIR override).
-    # Register each only when its own detect() reports the runtime present, so
-    # an absent runtime never clutters the multi-agent chip bar. detect() is
-    # cheap (filesystem globs) and never raises, so this gate is safe.
+    # Non-OpenClaw runtimes ClawMetry can observe via a dedicated reader adapter
+    # (Hermes, Claude Code, Codex, Cursor, PicoClaw, NanoClaw, ...). Each uses
+    # its own native session format. Register each only when its own cheap,
+    # never-raising detect() reports the runtime present on this host, so an
+    # absent runtime never clutters the multi-agent view. The single source of
+    # truth for which runtimes exist is sync._family_adapter_classes().
     try:
-        from clawmetry.adapters.picoclaw import PicoClawAdapter
-        from clawmetry.adapters.nanoclaw import NanoClawAdapter
-        for _family_cls in (PicoClawAdapter, NanoClawAdapter):
+        from clawmetry.sync import _family_adapter_classes as _fam_classes
+        for _family_cls in _fam_classes():
             try:
                 _inst = _family_cls()
                 if _inst.detect().detected:
@@ -10585,7 +10682,7 @@ def detect_config(args=None):
     except Exception as _fam_import_err:  # pragma: no cover - defensive
         import logging as _logging
         _logging.getLogger(__name__).debug(
-            "OpenClaw-family adapters unavailable: %s", _fam_import_err
+            "Family-runtime adapters unavailable: %s", _fam_import_err
         )
 
     # Local-OSS shims for cloud-only endpoints. Return empty arrays so the
@@ -10869,7 +10966,7 @@ DASHBOARD_HTML = r"""
 <link rel="icon" href="/favicon.ico" type="image/x-icon">
 <link rel="icon" href="/static/img/logo.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+Arabic:wght@400;500;700&family=Noto+Sans+Hebrew:wght@400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css', v=version) }}">
 <script src="{{ url_for('static', filename='js/nav-dropdown.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/alerts.js', v=version) }}" defer></script>
@@ -10979,8 +11076,16 @@ DASHBOARD_HTML = r"""
         <div class="left-nav-item left-nav-item-sub" data-tab="context" onclick="switchTab('context')" data-i18n-title="nav.llm_context_tooltip" title="What the LLM sees on each turn">
           <span class="left-nav-label" data-i18n="nav.llm_context">LLM Context</span>
         </div>
-        <div class="left-nav-item left-nav-item-sub" id="left-nav-tracing" data-tab="tracing" onclick="switchTab('tracing')" data-i18n-title="nav.tracing_tooltip" title="Every trace: span waterfall, tree, and agent graph" style="display:none;">
+        <div class="left-nav-item left-nav-item-sub" id="left-nav-tracing" data-tab="tracing" onclick="switchTab('tracing')" data-i18n-title="nav.tracing_tooltip" title="Every trace: span waterfall, tree, and agent graph">
           <span class="left-nav-label" data-i18n="nav.tracing">Tracing</span>
+        </div>
+        <div class="left-nav-item left-nav-item-sub" id="left-nav-turn-anatomy" data-tab="turn-anatomy" onclick="switchTab('turn-anatomy')" title="Decompose a turn into prompt, model, tools, compaction and reply">
+          <span class="left-nav-label">Turn anatomy</span>
+        </div>
+        <div class="left-nav-item left-nav-item-sub" id="left-nav-tool-catalog" data-tab="tool-catalog" onclick="switchTab('tool-catalog')" title="Every tool the agent uses by provenance, with call count and p50/p95 latency">
+          <span class="left-nav-label">Tool catalog</span>
+        <div class="left-nav-item left-nav-item-sub" id="left-nav-context-economics" data-tab="context-economics" onclick="switchTab('context-economics')" title="Context-window utilization over time, compaction triggers and tokens reclaimed">
+          <span class="left-nav-label">Context economics</span>
         </div>
       </div>
 
@@ -11026,6 +11131,9 @@ DASHBOARD_HTML = r"""
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="security" onclick="switchTab('security')">
         <span class="left-nav-label" data-i18n="nav.security">Security</span>
+      </div>
+      <div class="left-nav-item left-nav-item-sub" data-tab="policy" onclick="switchTab('policy')" title="Which tools each agent can run, where they run, and what got approved or blocked">
+        <span class="left-nav-label" data-i18n="nav.tool_policy">Tool Policy</span>
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="skills" onclick="switchTab('skills')">
         <span class="left-nav-label" data-i18n="nav.skills">Skills</span>
@@ -11103,8 +11211,18 @@ DASHBOARD_HTML = r"""
 <!-- TRACING (Phoenix/Arize-style: span waterfall + tree + agent graph) -->
 {% include 'tabs/tracing.html' %}
 
+<!-- TURN ANATOMY (per-turn waterfall + stalled detector, P0-3) -->
+{% include 'tabs/turn-anatomy.html' %}
+
+<!-- TOOL CATALOG (provenance + p50/p95 latency + error rate, P1-3) -->
+{% include 'tabs/tool-catalog.html' %}
+{% include 'tabs/context-economics.html' %}
+
 <!-- SECURITY -->
 {% include 'tabs/security.html' %}
+
+<!-- TOOL POLICY + SANDBOX + EXEC-APPROVAL AUDIT (governance, PRD P1-1) -->
+{% include 'tabs/policy.html' %}
 
 <!-- APPROVALS — cloud-mediated approval queue (#667) -->
 {% include 'tabs/approvals.html' %}
@@ -11202,8 +11320,10 @@ DASHBOARD_HTML = r"""
       <code style="display:block;color:var(--text-accent, #0af); background:rgba(0,170,255,0.1); padding:6px 8px; border-radius:4px; font-size:11px; word-break:break-all;">cat ~/.openclaw/openclaw.json | python3 -c "import json,sys;print(json.load(sys.stdin)['gateway']['auth']['token'])"</code>
       <div style="font-weight:600;color:var(--text-secondary, #aaa);margin:8px 0 4px;">Docker install</div>
       <code style="display:block;color:var(--text-accent, #0af); background:rgba(0,170,255,0.1); padding:6px 8px; border-radius:4px; font-size:11px; word-break:break-all;">docker exec $(docker ps -q) env | grep TOKEN</code>
+      <div style="font-weight:600;color:var(--text-secondary, #aaa);margin:8px 0 4px;">Remote / Docker / reverse-proxy</div>
+      <span style="color:var(--text-muted, #888);">Set <code style="color:var(--text-accent, #0af);">OPENCLAW_GATEWAY_URL=http://&lt;host&gt;:18789</code> env var, or enter the URL below.</span>
     </div>
-    <p id="gw-url-hint" style="color:var(--text-muted, #666); font-size:11px; margin:0 0 16px; text-align:left;">Optional: <input id="gw-url-input" type="text" placeholder="http://localhost:18789 (auto-detected)" style="width:70%; padding:4px 8px; border:1px solid var(--border-primary, #444); border-radius:4px; background:var(--bg-primary, #111); color:var(--text-primary, #fff); font-size:11px; font-family:monospace;"></p>
+    <p id="gw-url-hint" style="color:var(--text-muted, #666); font-size:11px; margin:0 0 16px; text-align:left;"><span style="color:var(--text-secondary,#aaa);">Gateway URL</span> <span style="color:var(--text-faint,#555);">(auto-detected for local; required for remote / Docker / reverse-proxy)</span><br><input id="gw-url-input" type="text" placeholder="http://localhost:18789" style="width:100%; margin-top:4px; padding:4px 8px; border:1px solid var(--border-primary, #444); border-radius:4px; background:var(--bg-primary, #111); color:var(--text-primary, #fff); font-size:11px; font-family:monospace; box-sizing:border-box;"></p>
     <div id="gw-setup-error" style="color:#ff4444; font-size:13px; margin-bottom:12px; display:none;"></div>
     <div id="gw-setup-status" style="color:var(--text-accent, #0af); font-size:13px; margin-bottom:12px; display:none;"></div>
     <button onclick="gwSetupConnect()" id="gw-connect-btn"
@@ -11260,7 +11380,10 @@ def _load_gw_config():
     if token:
         GATEWAY_TOKEN = token
         if not GATEWAY_URL:
-            GATEWAY_URL = f"http://127.0.0.1:{port}"
+            # OPENCLAW_GATEWAY_URL lets Docker / reverse-proxy users point at a
+            # remote gateway (e.g. Android) without touching the setup wizard.
+            env_url = os.environ.get("OPENCLAW_GATEWAY_URL", "").strip()
+            GATEWAY_URL = env_url if env_url else f"http://127.0.0.1:{port}"
         # Update cache file with fresh token (backward compat, not used for reads)
         try:
             cache = {}
@@ -11443,6 +11566,11 @@ _pypi_cache = {"ts": 0, "version": None}
 
 def _auto_discover_gateway(token):
     """Scan common ports to find an OpenClaw gateway."""
+    # Honour explicit remote URL before scanning localhost (issue #2106 — Docker/reverse-proxy).
+    env_url = os.environ.get("OPENCLAW_GATEWAY_URL", "").strip()
+    if env_url:
+        return env_url  # Caller validates; wrong URL surfaces a clear error there.
+
     common_ports = [18789, 56089]
     # Also check env and config files
     env_port = os.environ.get("OPENCLAW_GATEWAY_PORT")
@@ -11756,7 +11884,7 @@ FLEET_HTML = r"""
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ClawMetry Fleet</title>
-<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+Arabic:wght@400;500;700&family=Noto+Sans+Hebrew:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: 'Manrope', sans-serif; background: #0f1117; color: #e0e0e0; padding: 24px; }

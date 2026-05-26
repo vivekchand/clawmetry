@@ -455,10 +455,12 @@ def _try_local_store_sessions():
             "total_tokens":   int(r.get("total_tokens") or 0),
             "total_cost":     float(r.get("cost_usd") or 0.0),
             "message_count":  int(r.get("message_count") or 0),
+            "model":          meta.get("recent_model") or meta.get("model") or "",
             "channel":        meta.get("channel", ""),
             "chat_type":      meta.get("chat_type", ""),
             "subject":        title or meta.get("subject", ""),
             "session_type":   meta.get("session_type", "main"),
+            "runtime":        meta.get("runtime", ""),
             "_source":        "local_store",
         })
     # Decorate with channel context from the typed openclaw_channels table.
@@ -1953,14 +1955,13 @@ def _try_local_store_subagents(_rows=None):
                          or _parse_ts_ms(r.get("updated_at"))
                          or 0)
         spawned_at_ms = _parse_ts_ms(r.get("spawned_at")) or updated_at_ms
-        runtime_ms = int(extra.get("runtime_ms") or 0)
-        if not runtime_ms and spawned_at_ms:
-            runtime_ms = max(0, int(now_ms - spawned_at_ms))
+        ended_at_ms = _parse_ts_ms(r.get("ended_at")) or 0
 
         # Status: prefer the daemon's explicit classification verbatim
         # (it may emit ``completed`` / ``running`` / etc. that aren't in
         # the legacy bucket set — the UI handles those directly).
         # Fall back to age-derived bucket only when status is missing.
+        # Computed BEFORE runtime so a dead agent's clock can be frozen.
         status = (r.get("status") or "").strip().lower()
         if not status:
             age_ms = now_ms - (updated_at_ms or 0)
@@ -1970,6 +1971,27 @@ def _try_local_store_subagents(_rows=None):
                 status = "idle"
             else:
                 status = "stale"
+
+        # Runtime is *active work time*, not wall-clock since spawn. #2031
+        # follow-up: the first fix recomputed only when runtime_ms was absent,
+        # but the daemon caches a `runtime_ms` that is itself a now-minus-spawn
+        # re-derived every snapshot (402M -> 403M -> 404M, ever-growing). So for
+        # a dead agent the cached value is poison and must be ignored, not
+        # trusted. Only an active/running agent's clock runs to now (and may use
+        # its cached value); idle / stale / completed / failed agents ALWAYS
+        # recompute frozen at their last known activity (ended_at, else last
+        # updated_at — updated_at_ms already prefers the real data-blob
+        # timestamp over the row's per-snapshot-bumped column).
+        _running = status in ("active", "running")
+        cached_rt = int(extra.get("runtime_ms") or 0)
+        if _running:
+            runtime_ms = cached_rt or (
+                max(0, int(now_ms - spawned_at_ms)) if spawned_at_ms else 0)
+        elif spawned_at_ms:
+            _end_ref = ended_at_ms or updated_at_ms or spawned_at_ms
+            runtime_ms = max(0, int(_end_ref - spawned_at_ms))
+        else:
+            runtime_ms = 0
 
         token_count = int(r.get("token_count") or 0)
         # Build key in OpenClaw's canonical shape so Active-Tasks modal
@@ -2984,6 +3006,40 @@ def _count_jsonl_renderable_lines(fpath: str) -> int:
     return count
 
 
+def _first_user_title(fpath: str) -> str:
+    """First user-message text from a session file — a ChatGPT-style title.
+
+    The cloud snapshot ships a derived title (see ``_derive_transcript_title``),
+    but the legacy local endpoint left ``title`` empty, so the Session-replay
+    list showed every session as "Untitled" and the client-side "Show plumbing"
+    filter (which keys off the title) couldn't tell a Self-Evolve run from real
+    work. Handles both Anthropic-shape rows (top-level ``role``) and OpenClaw v3
+    rows nested under ``message``. Cheap: stops at the first user turn. Capped so
+    it never bloats the list payload; the renderer ellipsises for display.
+    """
+    try:
+        with open(fpath) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                msg = obj.get("message") if isinstance(obj.get("message"), dict) else obj
+                if msg.get("role") != "user":
+                    continue
+                text = _stringify_content(msg.get("content")).strip()
+                if text:
+                    return text[:200]
+    except Exception:
+        pass
+    return ""
+
+
 def _try_local_store_transcripts():
     """Fast path for /api/transcripts. Lists distinct sessions with their
     event counts + most-recent ts, straight from DuckDB.
@@ -2999,6 +3055,10 @@ def _try_local_store_transcripts():
     rows = _ls_call("query_sessions", limit=50)
     if not rows:
         return None
+    import dashboard as _d
+    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
     transcripts = []
     for r in rows:
         sid = r.get("session_id") or ""
@@ -3031,6 +3091,10 @@ def _try_local_store_transcripts():
             msg_count = r.get("event_count") or 0
         transcripts.append({
             "id": sid,
+            # Derive the same ChatGPT-style title the legacy path / cloud use, so
+            # the client "Show plumbing" filter can spot Self-Evolve runs. Cheap:
+            # reads only up to the first user line of each session file.
+            "title": _first_user_title(os.path.join(sessions_dir, sid + ".jsonl")),
             "name": sid[:40],
             "messages": int(msg_count or 0),
             "size": 0,  # unknown from DuckDB; UI shows "—" when 0
@@ -3078,6 +3142,7 @@ def api_transcripts():
                 transcripts.append(
                     {
                         "id": fname.replace(".jsonl", ""),
+                        "title": _first_user_title(fpath),
                         "name": fname.replace(".jsonl", "")[:40],
                         "messages": msg_count,
                         "size": os.path.getsize(fpath),
@@ -5472,6 +5537,141 @@ def api_session_config_drift(sid):
         return jsonify({"sessionId": sid, "has_drift": False, "drift_count": 0, "drifts": []})
     result = _detect_config_drift_jsonl(path)
     result["sessionId"] = sid
+    return jsonify(result)
+
+
+# ---------------------------------------------------------------------------
+# Lexical drift endpoint — TF-IDF cosine similarity vs anchor turn (issue #569)
+# ---------------------------------------------------------------------------
+
+def _compute_lexical_drift(fpath: str, threshold: float = 0.1):
+    """Return per-turn lexical drift relative to the first message turn.
+
+    Uses smoothed TF-IDF cosine similarity (pure Python, zero deps). Labeled
+    as *lexical* drift — vocabulary overlap, not semantic embedding similarity.
+    Threshold default 0.1 is calibrated for TF-IDF on short conversation texts;
+    values differ from semantic-embedding cosine similarity.
+    """
+    import math
+    import re as _re
+
+    def _tokenize(text: str):
+        return _re.findall(r"[a-z0-9]+", text.lower())
+
+    def _tfidf(docs):
+        N = len(docs)
+        df: dict = {}
+        for doc in docs:
+            for term in set(doc):
+                df[term] = df.get(term, 0) + 1
+        idf = {t: math.log(1 + N / f) for t, f in df.items() if f > 0}
+        vecs = []
+        for doc in docs:
+            tf: dict = {}
+            for term in doc:
+                tf[term] = tf.get(term, 0) + 1
+            total = len(doc) or 1
+            vecs.append({t: (c / total) * idf.get(t, 0.0) for t, c in tf.items()})
+        return vecs
+
+    def _cosine(v1: dict, v2: dict) -> float:
+        dot = sum(v1.get(t, 0.0) * v for t, v in v2.items())
+        n1 = math.sqrt(sum(x * x for x in v1.values()))
+        n2 = math.sqrt(sum(x * x for x in v2.values()))
+        if n1 == 0.0 or n2 == 0.0:
+            return 0.0
+        return dot / (n1 * n2)
+
+    entries: list = []
+    try:
+        with open(fpath, "r", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                if obj.get("type") != "message":
+                    continue
+                role = obj.get("role", "")
+                if role not in ("user", "assistant"):
+                    continue
+                content = obj.get("content", "")
+                if isinstance(content, str):
+                    text = content
+                elif isinstance(content, list):
+                    parts = []
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            parts.append(block.get("text", ""))
+                        elif isinstance(block, str):
+                            parts.append(block)
+                    text = " ".join(parts)
+                else:
+                    continue
+                text = text.strip()
+                if text:
+                    entries.append({"role": role, "text": text})
+    except OSError:
+        return None
+
+    if len(entries) < 2:
+        return {
+            "turns": [],
+            "avg_similarity": None,
+            "min_similarity": None,
+            "min_turn": None,
+            "has_drift": False,
+            "message_count": len(entries),
+            "threshold": threshold,
+            "_note": "too few messages",
+        }
+
+    docs = [_tokenize(e["text"]) for e in entries]
+    vecs = _tfidf(docs)
+    anchor = vecs[0]
+
+    turns = []
+    for i, (entry, vec) in enumerate(zip(entries, vecs)):
+        sim = 1.0 if i == 0 else round(_cosine(anchor, vec), 4)
+        turns.append({"turn": i, "role": entry["role"], "similarity": sim, "flagged": i > 0 and sim < threshold})
+
+    sims = [t["similarity"] for t in turns]
+    avg_sim = round(sum(sims) / len(sims), 4)
+    min_sim = round(min(sims), 4)
+    min_turn = sims.index(min_sim)
+
+    return {
+        "turns": turns,
+        "avg_similarity": avg_sim,
+        "min_similarity": min_sim,
+        "min_turn": min_turn,
+        "has_drift": any(t["flagged"] for t in turns),
+        "message_count": len(entries),
+        "threshold": threshold,
+    }
+
+
+@bp_sessions.route("/api/sessions/<session_id>/lexical-drift")
+def api_session_lexical_drift(session_id):
+    """Return per-turn lexical drift (TF-IDF cosine vs anchor) for a session."""
+    import dashboard as _d
+    if not session_id or any(c in session_id for c in ("/", "\\", "..")):
+        return jsonify({"error": "invalid session id"}), 400
+    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    fpath = os.path.normpath(os.path.join(sessions_dir, session_id + ".jsonl"))
+    if not fpath.startswith(os.path.normpath(sessions_dir)):
+        return jsonify({"error": "access denied"}), 403
+    if not os.path.isfile(fpath):
+        return jsonify({"error": "session not found"}), 404
+    result = _compute_lexical_drift(fpath)
+    if result is None:
+        return jsonify({"error": "could not read session"}), 500
+    result["session_id"] = session_id
     return jsonify(result)
 
 

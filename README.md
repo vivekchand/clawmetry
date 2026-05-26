@@ -10,6 +10,8 @@
 
 **See your agent think.** Real-time observability for [OpenClaw](https://github.com/openclaw/openclaw) AI agents.
 
+> 🌐 **Read this in:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [more →](docs/i18n/)
+
 One command. Zero config. Auto-detects everything.
 
 ```bash
@@ -111,17 +113,48 @@ npm run build
 
 The production bundle is written to `clawmetry/static/v2/dist/`.
 
-## Runtime Compatibility
+## Runtime / Agent Compatibility
 
-ClawMetry observes the OpenClaw runtime family. Some members share OpenClaw's session format and work with zero config; others store sessions in their own native format and ship a dedicated reader adapter. See [`docs/compatibility.md`](docs/compatibility.md) for the full matrix, open questions, and a guide to adding runtimes, and [`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md) for a primer comparing OpenClaw, NanoClaw, and PicoClaw.
+ClawMetry observes many AI-agent runtimes, not just OpenClaw. Each non-OpenClaw runtime ships a dedicated reader adapter that translates its native session format into ClawMetry's unified shapes; the daemon ingests them into the same DuckDB store + cloud snapshot, tagged with the runtime, and the Session replay tab shows a **runtime switcher** when more than one is present. See [`docs/compatibility.md`](docs/compatibility.md) for the full matrix + a guide to adding runtimes, and [`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md) for the OpenClaw-family primer.
 
-| Runtime | Status | Notes |
+| Runtime / Agent | Status | Notes |
 |---|---|---|
 | **OpenClaw** | Native | Reference runtime, auto-detected |
-| **PicoClaw** | Beta adapter | Reads PicoClaw's native flat JSONL (`~/.picoclaw/workspace/sessions`). Transcripts, model, and tool calls. Tokens/cost are not written to disk by PicoClaw. |
-| **NanoClaw** | Beta adapter | Reads NanoClaw's native per-session SQLite (`data/v2-sessions`). Transcripts and message counts. Model/tokens/cost are not written to those tables. |
+| **PicoClaw** | Beta adapter | Flat `providers.Message` JSONL (`~/.picoclaw/workspace/sessions`). Transcripts, model, tool calls. |
+| **NanoClaw** | Beta adapter | Per-session SQLite (`data/v2-sessions`). Transcripts + message counts. |
+| **Hermes** | Beta adapter | SQLite `~/.hermes/state.db`. Transcripts, model, tokens/cost. |
+| **Claude Code** | Beta adapter | JSONL `~/.claude/projects/.../<id>.jsonl`. Transcripts, model, tool calls + thinking, token usage. |
+| **Codex** | Beta adapter | Rollout JSONL `~/.codex/sessions/...`. Transcripts, model, tool calls, token usage. |
+| **Cursor** | Beta adapter | SQLite `state.vscdb`. Chat/composer transcripts, model. |
+| **Aider** | Beta adapter | `.aider.chat.history.md` per project. Transcripts, model, token counts. |
+| **Goose** | Beta adapter | SQLite `~/.local/share/goose`. Transcripts, model, tool calls, token totals. |
+| **opencode** | Beta adapter | SQLite `~/.local/share/opencode`. Transcripts, model, tool calls, tokens + cost. |
+| **Qwen Code** | Beta adapter | JSONL `~/.qwen/projects/.../chats`. Transcripts, model, tool calls, token usage. |
 
-"Beta adapter" means ClawMetry ships a reader for that runtime's real on-disk format, validated against a session captured from a real install (we installed and ran both; see `tests/fixtures/runtimes/<rt>/REAL/` and the per-runtime PRDs) with fixture-backed CI tests. Runtime detection is also live-verified end to end in the cloud: a node running PicoClaw or NanoClaw is labeled with its runtime in the cloud Runtime panel alongside OpenClaw. Full ingest of each runtime's individual sessions into the cloud is the next phase.
+"Beta adapter" means ClawMetry ships a reader for that runtime's real on-disk format, each built + verified against a real install on a real machine (see `tests/fixtures/runtimes/<rt>/`). Adapters are read-only; each is honest about what its runtime actually stores (e.g. PicoClaw/NanoClaw/Cursor don't write token cost to disk). When several runtimes run on one node, the runtime switcher scopes the sessions view to one for a clean deep-dive.
+
+## OpenTelemetry — vendor-neutral, send your traces anywhere
+
+ClawMetry speaks **OpenTelemetry** in both directions, using the **GenAI semantic conventions**, so your agent traces are never locked into one tool.
+
+**Export** every session — LLM calls, tools, sub-agents, tokens, cost — as OTLP/HTTP GenAI spans to any collector (Datadog, Grafana, Honeycomb, or your own OTel Collector):
+
+```bash
+clawmetry --otel-export http://localhost:4318/v1/traces
+# equivalently:
+CLAWMETRY_OTEL_EXPORT_ENDPOINT=http://localhost:4318/v1/traces clawmetry
+```
+
+Auth headers and poll interval are optional env vars:
+
+```bash
+CLAWMETRY_OTEL_EXPORT_HEADERS='{"X-API-Key":"…"}'   # extra HTTP headers
+CLAWMETRY_OTEL_EXPORT_INTERVAL=60                    # seconds (default 60)
+```
+
+**Ingest** — the built-in OTLP receiver accepts traces and metrics from anything else at `/v1/traces` and `/v1/metrics` (`pip install clawmetry[otel]` for protobuf ingest).
+
+You get the zero-config, local-first ClawMetry dashboard **and** your data in whatever backend your team already runs — no lock-in, no second agent to install.
 
 ## Configuration
 

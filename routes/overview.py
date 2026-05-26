@@ -789,20 +789,44 @@ def _compute_gateway_tap_comms() -> dict:
 # skillHeaderTokens) that both /api/overview and the daemon snapshot now
 # expose so the Context tab reads one value on both sides.
 
-def _try_local_store_current_context_tokens():
-    """Live prompt size for the user's most-recent assistant turn.
+def _try_local_store_context_peek():
+    """Full context-window peek for the user's most-recent assistant turn.
 
-    Wraps ``routes.infra._try_local_store_session_history_tokens`` (which
-    in turn calls ``LocalStore.query_context_window_peek``) and pins
-    ``exclude_clawmetry=True`` so the gauge tracks the user's agent,
-    not ClawMetry-internal plumbing. Returns 0 when the local store is
-    cold or the daemon proxy can't be reached — the frontend then falls
-    back to mainTokens for backwards compatibility.
+    Returns ``{"input_tokens": int, "context_window": int}`` (other keys
+    from ``query_context_window_peek`` may be present). ``exclude_clawmetry``
+    is pinned True so the gauge tracks the user's agent, not ClawMetry's own
+    plumbing. ``context_window`` is sized from the turn's model + observed
+    size so a 1M-context session (≈323K live) reads against a 1M window
+    instead of the old hardcoded 200K (which showed ">100%"). Returns an
+    empty dict on any miss so callers fall back to defaults.
     """
     try:
-        from routes.infra import _try_local_store_session_history_tokens
-        v = _try_local_store_session_history_tokens(exclude_clawmetry=True)
-        return int(v or 0)
+        from routes.local_query import local_store_via_daemon
+        peek = local_store_via_daemon(
+            "query_context_window_peek", scan_sessions=5, exclude_clawmetry=True,
+        )
+    except Exception:
+        peek = None
+    if peek is None:
+        try:
+            from clawmetry import local_store
+            peek = local_store.get_store(read_only=True).query_context_window_peek(
+                scan_sessions=5, exclude_clawmetry=True,
+            )
+        except Exception:
+            return {}
+    return peek if isinstance(peek, dict) else {}
+
+
+def _try_local_store_current_context_tokens():
+    """Live prompt size (int) for the user's most-recent assistant turn.
+
+    Thin wrapper over :func:`_try_local_store_context_peek` kept for
+    backwards compatibility. Returns 0 on any miss — the frontend then
+    falls back to mainTokens.
+    """
+    try:
+        return int((_try_local_store_context_peek() or {}).get("input_tokens") or 0)
     except Exception:
         return 0
 
@@ -1034,11 +1058,16 @@ def _try_local_store_overview():
     user_session_count = len(user_sessions) if user_sessions else len(sessions)
 
     # `currentContextTokens` is the right "Context Window Usage" gauge —
-    # the most recent assistant turn's input_tokens (i.e. live prompt
-    # size), filtered to exclude clawmetry-* plumbing sessions. Falls
-    # back to 0 so the frontend can degrade to mainTokens for backwards
-    # compatibility (older daemons without the snapshot field).
-    current_context_tokens = _try_local_store_current_context_tokens()
+    # the most recent assistant turn's live prompt size (input + cache),
+    # filtered to exclude clawmetry-* plumbing sessions. `contextWindow`
+    # is sized from THAT turn's model + observed size so the gauge stays
+    # coherent: a 1M-context session (≈323K live) reads against a 1M
+    # window instead of the old hardcoded 200K (which showed ">100%").
+    # Falls back to 0 / 200K so the frontend can degrade to mainTokens
+    # for daemons without these fields.
+    _ctx_peek = _try_local_store_context_peek()
+    current_context_tokens = int(_ctx_peek.get("input_tokens") or 0)
+    context_window = int(_ctx_peek.get("context_window") or 0) or 200000
 
     # `skillHeaderTokens` lets the LLM Context Inspector render the
     # "## Skills" bar from the snapshot/overview without a separate
@@ -1056,7 +1085,7 @@ def _try_local_store_overview():
         "mainTokens": main.get("total_tokens", 0),
         "currentContextTokens": current_context_tokens or 0,
         "skillHeaderTokens": skill_header_tokens or 0,
-        "contextWindow": 200000,
+        "contextWindow": context_window,
         "cronCount": len(crons),
         "cronEnabled": enabled,
         "cronDisabled": disabled,

@@ -727,12 +727,24 @@ def save_state(state: dict) -> None:
 # file on every banner poll.
 SYNC_PROGRESS_FILE = CONFIG_DIR / "sync_progress.json"
 _sync_progress_started_at: str | None = None
+# Flipped True once the initial sync reaches "complete". After that, the
+# steady-state main-loop phase calls (sync_crons et al. run every tick) must NOT
+# re-open the "syncing…" banner, or it sticks forever on whatever phase ran last
+# (typically "crons", which early-returns when there is no cron jobs.json and so
+# never records a terminal state). The banner is a fresh-install affordance; a
+# daemon restart resets this to False so the initial sync shows again.
+_sync_progress_done: bool = False
 
 
 def _record_sync_progress(
     phase: str, done: int, total: int = 0, status: str = "running"
 ) -> None:
-    global _sync_progress_started_at
+    global _sync_progress_started_at, _sync_progress_done
+    # Suppress steady-state churn: once the first sync completed, only a
+    # terminal "complete" is allowed through (idempotent); ignore the per-tick
+    # "running" updates that would otherwise re-trigger the banner indefinitely.
+    if _sync_progress_done and status != "complete":
+        return
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         now = datetime.now(timezone.utc).isoformat()
@@ -755,6 +767,8 @@ def _record_sync_progress(
         tmp = SYNC_PROGRESS_FILE.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(payload, indent=2))
         os.replace(tmp, SYNC_PROGRESS_FILE)
+        if status == "complete":
+            _sync_progress_done = True
     except Exception as e:
         log.debug(f"Could not record sync progress ({phase}): {e}")
 
@@ -2052,6 +2066,42 @@ def _extract_cost_tokens_model(obj: dict) -> tuple:
                         cost_usd = float(cv)
                     except (TypeError, ValueError):
                         cost_usd = None
+
+    # #2049: derive cost when the provider didn't report it. OpenClaw / OAuth
+    # events carry tokens + model but no cost_usd, so the Cost tab showed ~$0
+    # for heavy usage (1.5M tokens -> $0.008). Compute the API-equivalent cost
+    # from this event's own token split x model pricing (cache-aware) and store
+    # it — chosen semantics: derive-at-ingest, store-as-cost, so aggregates,
+    # budgets and per-session costs all see a real number. Local/self-hosted
+    # models resolve to 0 (no per-token charge). Best-effort, never raises.
+    if cost_usd is None and model:
+        u = usage if (isinstance(msg, dict) and isinstance(usage, dict)) else {}
+        if not u and isinstance(obj.get("usage"), dict):
+            u = obj["usage"]
+
+        def _utok(*keys):
+            for _k in keys:
+                _v = u.get(_k)
+                if _v is not None:
+                    try:
+                        return int(_v)
+                    except (TypeError, ValueError):
+                        pass
+            return 0
+
+        _in = _utok("input_tokens", "inputTokens", "prompt_tokens", "promptTokens")
+        _out = _utok("output_tokens", "outputTokens", "completion_tokens", "completionTokens")
+        _cr = _utok("cache_read_input_tokens", "cacheReadInputTokens", "cache_read_tokens")
+        _cw = _utok("cache_creation_input_tokens", "cacheCreationInputTokens", "cache_write_tokens")
+        if _in or _out or _cr or _cw:
+            try:
+                from clawmetry.providers_pricing import estimate_event_cost_usd
+                _derived = estimate_event_cost_usd(model, _in, _out, _cr, _cw)
+                if _derived and _derived > 0:
+                    cost_usd = _derived
+            except Exception:
+                pass
+
     return cost_usd, token_count, model
 
 
@@ -5671,6 +5721,11 @@ _PENDING_ACTIONS = frozenset({
     "approval_decision",
     "selfevolve_fix",
     "selfevolve_analyze",
+    "cron_create",
+    "cron_action",
+    "cron_killall",
+    "cron_fix",
+    "dives_query",
 })
 
 
@@ -5862,6 +5917,21 @@ def _dispatch_pending_action(config: dict, action: dict) -> None:
     if atype == "selfevolve_analyze":
         _action_selfevolve_analyze(config, action)
         return
+    if atype == "cron_create":
+        _action_cron_create(config, action)
+        return
+    if atype == "cron_action":
+        _action_cron_op(config, action)
+        return
+    if atype == "cron_killall":
+        _action_cron_killall(config, action)
+        return
+    if atype == "cron_fix":
+        _action_cron_fix(config, action)
+        return
+    if atype == "dives_query":
+        _action_dives_query(config, action)
+        return
 
 
 def _selfevolve_fix_summary(stdout: str) -> str:
@@ -5968,6 +6038,462 @@ def _action_selfevolve_fix(config: dict, action: dict) -> None:
             )
         except Exception as e:
             log.warning("selfevolve_fix cache post failed: %s", e)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def cron_schedule_to_cli_args(schedule):
+    """Translate a schedule dict into ``openclaw cron add/edit`` flags.
+
+    Canonical home for the translation so both the daemon relay action
+    (``_action_cron_create``) and the local HTTP handlers (routes/crons.py)
+    share one implementation. Accepts the on-disk shapes:
+      {"kind":"cron","expr":"37 9-21 * * *","tz":"Europe/Berlin"}
+      {"kind":"every","everyMs":3600000} | {"kind":"interval","interval":"1h"}
+      {"kind":"at","atMs":...} | {"kind":"at","at":"2026-01-01T09:00:00Z"}
+    Returns (args_list, error_str); error_str non-empty on unsupported input.
+    """
+    if not isinstance(schedule, dict):
+        return [], "schedule must be an object"
+    kind = schedule.get("kind", "")
+    if kind == "cron":
+        expr = schedule.get("expr") or schedule.get("cron") or ""
+        if not expr:
+            return [], "cron schedule missing 'expr'"
+        args = ["--cron", str(expr)]
+        if schedule.get("tz"):
+            args += ["--tz", str(schedule["tz"])]
+        return args, ""
+    if kind in ("every", "interval"):
+        if schedule.get("interval"):
+            return ["--every", str(schedule["interval"])], ""
+        ms = schedule.get("everyMs")
+        if ms:
+            try:
+                mins = int(ms) // 60000
+                if mins >= 60 and mins % 60 == 0:
+                    return ["--every", "%dh" % (mins // 60)], ""
+                return ["--every", "%dm" % max(1, mins)], ""
+            except (TypeError, ValueError):
+                pass
+        return [], "interval schedule missing 'interval'/'everyMs'"
+    if kind == "at":
+        when = schedule.get("at")
+        if not when and schedule.get("atMs"):
+            try:
+                when = datetime.fromtimestamp(
+                    int(schedule["atMs"]) / 1000, tz=timezone.utc
+                ).isoformat()
+            except Exception:
+                when = None
+        if not when:
+            return [], "at schedule missing 'at'/'atMs'"
+        args = ["--at", str(when)]
+        if schedule.get("tz"):
+            args += ["--tz", str(schedule["tz"])]
+        return args, ""
+    return [], "unsupported schedule kind: %r" % kind
+
+
+def _action_cron_create(config: dict, action: dict) -> None:
+    """Cloud-relayed cron creation (the cloud "New Job" button).
+
+    The cloud server cannot reach the user's local OpenClaw gateway, so the
+    cloud enqueues a ``cron_create`` action on the heartbeat-piggyback relay;
+    this daemon runs ``openclaw cron add`` locally (OpenClaw's own creds — the
+    gateway token is read-only and v3 dropped the cron tool from /tools/invoke)
+    and posts the E2E-encrypted result to ``/ingest/cache`` under the action's
+    ``cache_key`` for the browser to poll + decrypt. Runs in a background
+    thread so the CLI call never blocks the heartbeat loop.
+
+    Wire shape (queued cloud-side by /api/cloud/cron-create):
+        {type:"cron_create", id, cache_key, name, schedule,
+         enabled, prompt?, channel?, model?, description?}
+    """
+    cache_key = action.get("cache_key")
+    name = (action.get("name") or "").strip()
+    schedule = action.get("schedule")
+    enc_key = config.get("encryption_key")
+    api_key = config.get("api_key", "")
+    node_id = config.get("node_id", "")
+    if not (cache_key and name and schedule and enc_key and api_key):
+        return
+    aid = action.get("id")
+    enabled = action.get("enabled", True)
+    prompt = (action.get("prompt") or action.get("message") or "").strip()
+    channel = action.get("channel")
+    model = action.get("model")
+    description = action.get("description")
+
+    def _run():
+        status, message, scope_pending = "error", "", False
+        try:
+            sched_args, sched_err = cron_schedule_to_cli_args(schedule)
+            if sched_err:
+                message = sched_err
+            else:
+                args = ["--name", name] + sched_args
+                if prompt:
+                    args += ["--message", prompt]
+                if channel:
+                    args += ["--channel", str(channel)]
+                if model:
+                    args += ["--model", str(model)]
+                if description:
+                    args += ["--description", str(description)]
+                if not enabled:
+                    args += ["--disabled"]
+                res = run_openclaw_cron("add", args, timeout=45)
+                scope_pending = bool(res.get("scope_pending"))
+                if res.get("ok"):
+                    status = "done"
+                    message = 'Job "%s" created' % name
+                else:
+                    message = res.get("error") or "cron add failed"
+        except Exception as e:  # never raise from the worker thread
+            message = str(e)[:400]
+        try:
+            blob = encrypt_payload(
+                {"status": status, "message": message,
+                 "scope_pending": scope_pending, "_shape": "cron_create"},
+                enc_key,
+            )
+            _post(
+                "/ingest/cache",
+                {
+                    "node_id": node_id,
+                    "id": aid,
+                    "cache_key": cache_key,
+                    "blob": blob,
+                    "shape": "cron_create",
+                    "ttl": 3600,
+                },
+                api_key,
+            )
+        except Exception as e:
+            log.warning("cron_create cache post failed: %s", e)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _action_dives_query(config: dict, action: dict) -> None:
+    """Cloud-relayed Dives NL-to-SQL query (the cloud Dives "Run" button).
+
+    The cloud server has no DuckDB and cannot decrypt the snapshot, so it can't
+    run arbitrary SQL. It enqueues a ``dives_query`` action on the
+    heartbeat-piggyback relay; this daemon runs the NL->SQL + query LOCALLY on
+    its OWN DuckDB writer handle (``local_store.get_store()`` — never a
+    ``read_only=True`` re-open, which would brick the writer lock, flywheel
+    #1771) and posts the E2E-encrypted ``{sql, chart_spec, rows}`` result to
+    ``/ingest/cache`` under the action's ``cache_key`` for the browser to poll +
+    decrypt. Runs in a background thread so the LLM + query latency never blocks
+    the heartbeat loop.
+
+    Wire shape (queued cloud-side by /api/cloud/dives-query):
+        {type:"dives_query", id, cache_key, question}
+
+    Result shape mirrors routes/dives.py::api_dives_query so the same Dives
+    frontend renders it: {sql, chart_spec, rows, error?} (or {error:"no_auth"}).
+    """
+    cache_key = action.get("cache_key")
+    question = (action.get("question") or "").strip()
+    enc_key = config.get("encryption_key")
+    api_key = config.get("api_key", "")
+    node_id = config.get("node_id", "")
+    if not (cache_key and question and enc_key and api_key):
+        return
+    aid = action.get("id")
+
+    def _run():
+        result: dict = {"_shape": "dives_query"}
+        try:
+            from clawmetry import local_store as _ls
+            from routes import dives as _dives
+            store = _ls.get_store()  # daemon's own writer handle, never read_only
+            spec = _dives._call_llm_for_sql(question, store)
+            sql = spec["sql"]
+            rows, sql_error = _dives._execute(sql, store)
+            result.update({
+                "sql": sql,
+                "chart_spec": {
+                    "chart_type":  spec.get("chart_type", "table"),
+                    "x":           spec.get("x"),
+                    "y":           spec.get("y"),
+                    "title":       spec.get("title", question[:60]),
+                    "description": spec.get("description", ""),
+                },
+                "rows": rows,
+            })
+            if sql_error:
+                result["error"] = sql_error
+        except ValueError as e:
+            # Mirror api_dives_query's error mapping so the frontend reacts the
+            # same way (no-auth banner vs upstream error).
+            msg = str(e)
+            if msg.startswith("no_auth"):
+                result["error"] = "no_auth"
+                result["message"] = msg[len("no_auth"):].strip(": ").strip()
+            else:
+                result["error"] = "upstream_error"
+                result["detail"] = msg[:200]
+        except Exception as e:  # never raise from the worker thread
+            result["error"] = str(e)[:200]
+        try:
+            blob = encrypt_payload(result, enc_key)
+            _post(
+                "/ingest/cache",
+                {
+                    "node_id": node_id,
+                    "id": aid,
+                    "cache_key": cache_key,
+                    "blob": blob,
+                    "shape": "dives_query",
+                    "ttl": 3600,
+                },
+                api_key,
+            )
+        except Exception as e:
+            log.warning("dives_query cache post failed: %s", e)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _action_cron_op(config: dict, action: dict) -> None:
+    """Cloud-relayed cron management op (delete / toggle / run / update).
+
+    Completes cloud cron management alongside _action_cron_create: the cloud
+    "Run / Disable / Edit / Delete" per-row buttons relay a `cron_action` here
+    and the daemon runs the matching `openclaw cron` subcommand locally
+    (OpenClaw's own creds; v3 dropped the gateway cron tool). E2E-encrypted
+    result -> cache_key, browser polls + decrypts. Runs in a background thread.
+
+    Wire shape (queued cloud-side by /api/cloud/cron-action):
+        {type:"cron_action", id, cache_key, action, jobId, enabled?, patch?}
+      action ∈ {delete, toggle, run, update}
+    """
+    cache_key = action.get("cache_key")
+    op = (action.get("action") or "").strip()
+    job_id = (action.get("jobId") or "").strip()
+    enc_key = config.get("encryption_key")
+    api_key = config.get("api_key", "")
+    node_id = config.get("node_id", "")
+    if not (cache_key and op and job_id and enc_key and api_key):
+        return
+    aid = action.get("id")
+    enabled = action.get("enabled", True)
+    patch = action.get("patch") if isinstance(action.get("patch"), dict) else {}
+
+    def _run():
+        status, message, scope_pending = "error", "", False
+        try:
+            if op == "delete":
+                res = run_openclaw_cron("rm", [job_id], timeout=40)
+                ok_msg = "Job deleted"
+            elif op == "run":
+                res = run_openclaw_cron("run", [job_id], timeout=45)
+                ok_msg = "Job triggered"
+            elif op == "toggle":
+                res = run_openclaw_cron(
+                    "enable" if enabled else "disable", [job_id], timeout=40)
+                ok_msg = "Job enabled" if enabled else "Job disabled"
+            elif op == "update":
+                eargs = [job_id]
+                if patch.get("name"):
+                    eargs += ["--name", str(patch["name"])]
+                if patch.get("description"):
+                    eargs += ["--description", str(patch["description"])]
+                if patch.get("prompt") or patch.get("message"):
+                    eargs += ["--message",
+                              str(patch.get("prompt") or patch.get("message"))]
+                if patch.get("model"):
+                    eargs += ["--model", str(patch["model"])]
+                if patch.get("channel"):
+                    eargs += ["--channel", str(patch["channel"])]
+                if isinstance(patch.get("schedule"), dict):
+                    sargs, serr = cron_schedule_to_cli_args(patch["schedule"])
+                    if serr:
+                        raise ValueError(serr)
+                    eargs += sargs
+                if "enabled" in patch:
+                    eargs += ["--enable"] if patch["enabled"] else ["--disable"]
+                res = run_openclaw_cron("edit", eargs, timeout=40)
+                ok_msg = "Job updated"
+            else:
+                res = {"ok": False, "error": "unsupported action: %s" % op}
+                ok_msg = ""
+            scope_pending = bool(res.get("scope_pending"))
+            if res.get("ok"):
+                status, message = "done", ok_msg
+            else:
+                message = res.get("error") or ("cron %s failed" % op)
+        except Exception as e:  # never raise from the worker thread
+            message = str(e)[:400]
+        try:
+            blob = encrypt_payload(
+                {"status": status, "message": message,
+                 "scope_pending": scope_pending, "_shape": "cron_action"},
+                enc_key,
+            )
+            _post(
+                "/ingest/cache",
+                {
+                    "node_id": node_id,
+                    "id": aid,
+                    "cache_key": cache_key,
+                    "blob": blob,
+                    "shape": "cron_action",
+                    "ttl": 3600,
+                },
+                api_key,
+            )
+        except Exception as e:
+            log.warning("cron_action cache post failed: %s", e)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _action_cron_killall(config: dict, action: dict) -> None:
+    """Cloud-relayed Emergency Stop All. Reads enabled jobs from local DuckDB
+    (cross-process safe; never via the dead v3 gateway cron tool) and disables
+    each via `openclaw cron disable <id>` in a daemon thread. Posts an
+    E2E-encrypted summary {status,disabled,errors,_shape:"cron_killall"} so
+    the browser can show a real count, not just "queued"."""
+    cache_key = action.get("cache_key")
+    enc_key = config.get("encryption_key")
+    api_key = config.get("api_key", "")
+    node_id = config.get("node_id", "")
+    if not (cache_key and enc_key and api_key):
+        return
+    aid = action.get("id")
+
+    def _run():
+        status, disabled, errors, scope_pending = "done", 0, [], False
+        try:
+            # Read the LIVE job list from the gateway via the CLI (not
+            # DuckDB). DuckDB lags the gateway and stale ids would either
+            # surface "unknown cron job id" errors or silently target jobs
+            # the user already deleted. The CLI is the gateway's own ground
+            # truth.
+            listed = run_openclaw_cron("list", ["--all"], timeout=20)
+            jobs = []
+            if listed.get("ok"):
+                lr = listed.get("result")
+                if isinstance(lr, list):
+                    jobs = lr
+                elif isinstance(lr, dict):
+                    jobs = lr.get("jobs") or lr.get("crons") or []
+            for j in jobs:
+                if not isinstance(j, dict) or not j.get("enabled", True):
+                    continue
+                jid = j.get("id") or j.get("cron_id") or ""
+                if not jid:
+                    continue
+                res = run_openclaw_cron("disable", [str(jid)], timeout=40)
+                if res.get("ok"):
+                    disabled += 1
+                else:
+                    if res.get("scope_pending"):
+                        scope_pending = True
+                    errors.append({"jobId": jid,
+                                   "error": (res.get("error") or "")[:200]})
+            if scope_pending and disabled == 0:
+                status = "error"
+        except Exception as e:
+            status = "error"; errors.append({"error": str(e)[:300]})
+        try:
+            blob = encrypt_payload(
+                {"status": status, "disabled": disabled,
+                 "errors": errors, "scope_pending": scope_pending,
+                 "message": ("Emergency stop: %d job(s) disabled." % disabled),
+                 "_shape": "cron_killall"},
+                enc_key,
+            )
+            _post(
+                "/ingest/cache",
+                {"node_id": node_id, "id": aid, "cache_key": cache_key,
+                 "blob": blob, "shape": "cron_killall", "ttl": 3600},
+                api_key,
+            )
+        except Exception as e:
+            log.warning("cron_killall cache post failed: %s", e)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _action_cron_fix(config: dict, action: dict) -> None:
+    """Cloud-relayed cron Fix. Dispatches `openclaw agent` against the cron's
+    error context in a daemon thread (mirror of _action_selfevolve_fix). The
+    agent's output lands in its own session, surfaced live in Brain. Posts a
+    short "dispatched" status blob so the cloud UI shows a real
+    acknowledgement instead of a stub."""
+    cache_key = action.get("cache_key")
+    job_id = (action.get("jobId") or "").strip()
+    name = (action.get("name") or job_id).strip()
+    last_err = (action.get("lastError") or "").strip()
+    schedule = action.get("schedule") or {}
+    consecutive = action.get("consecutiveFailures") or 0
+    enc_key = config.get("encryption_key")
+    api_key = config.get("api_key", "")
+    node_id = config.get("node_id", "")
+    if not (cache_key and job_id and enc_key and api_key):
+        return
+    aid = action.get("id")
+
+    def _run():
+        status, message = "error", ""
+        try:
+            binp = _resolve_openclaw_bin()
+            if not binp:
+                message = "openclaw CLI not found on this machine"
+            else:
+                import json as _j
+                msg = (
+                    "You are ClawMetry Cron-Fix in REPAIR mode. A scheduled "
+                    "job is failing repeatedly. Investigate and apply a "
+                    "concrete fix using your tools.\n\n"
+                    "Job: " + name + " (id " + job_id + ")\n"
+                    "Schedule: " + _j.dumps(schedule) + "\n"
+                    "Consecutive failures: " + str(consecutive) + "\n"
+                    "Last error: " + (last_err or "(none recorded)") + "\n\n"
+                    "End with a one-line summary that starts with 'DONE:' "
+                    "describing exactly what you changed."
+                )
+                env = dict(os.environ)
+                node_dirs = [
+                    os.path.dirname(binp),
+                    "/opt/homebrew/bin",
+                    "/usr/local/bin",
+                    os.path.expanduser("~/.local/bin"),
+                ]
+                env["PATH"] = os.pathsep.join(
+                    node_dirs + [env.get("PATH", "/usr/bin:/bin")]
+                )
+                sid = "clawmetry-cron-fix-" + job_id[:24]
+                # Fire-and-forget: don't block the post on the agent turn.
+                subprocess.Popen(
+                    [binp, "agent", "--session-id", sid,
+                     "--message", msg, "--json", "--timeout", "300"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
+                )
+                status = "done"
+                message = ('Fix dispatched. Agent is working on "%s" — '
+                           "watch the Brain feed for progress." % name)
+        except Exception as e:
+            message = str(e)[:400]
+        try:
+            blob = encrypt_payload(
+                {"status": status, "message": message,
+                 "_shape": "cron_fix"},
+                enc_key,
+            )
+            _post(
+                "/ingest/cache",
+                {"node_id": node_id, "id": aid, "cache_key": cache_key,
+                 "blob": blob, "shape": "cron_fix", "ttl": 3600},
+                api_key,
+            )
+        except Exception as e:
+            log.warning("cron_fix cache post failed: %s", e)
 
     threading.Thread(target=_run, daemon=True).start()
 
@@ -6525,6 +7051,7 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
     ]
     cron_file = next((str(p) for p in cron_candidates if p.exists()), None)
     if not cron_file:
+        _record_sync_progress("crons", 0, 0)  # terminal: no cron file, nothing to sync
         return 0
 
     try:
@@ -6860,6 +7387,238 @@ def sync_cron_runs(config: dict, state: dict, paths: dict) -> int:
     if n_ingested:
         log.debug("sync_cron_runs: ingested %d new rows", n_ingested)
     return n_ingested
+
+
+_RUN_LEDGER_SRC_COLS = (
+    "task_id", "runtime", "task_kind", "source_id", "requester_session_key",
+    "owner_key", "scope_kind", "child_session_key", "parent_flow_id",
+    "parent_task_id", "agent_id", "run_id", "label", "task", "status",
+    "delivery_status", "notify_policy", "created_at", "started_at", "ended_at",
+    "last_event_at", "cleanup_after", "error", "progress_summary",
+    "terminal_summary", "terminal_outcome",
+)
+
+
+def _openclaw_task_ledger_paths() -> list[Path]:
+    """Candidate locations of OpenClaw's run ledger SQLite, newest layout
+    first. OpenClaw 2026.5.x writes ``~/.openclaw/tasks/runs.sqlite``."""
+    oc = Path(_get_openclaw_dir())
+    return [
+        oc / "tasks" / "runs.sqlite",
+        Path("/root/.openclaw/tasks/runs.sqlite"),
+        Path("/sandbox/.openclaw/tasks/runs.sqlite"),
+    ]
+
+
+def sync_run_ledger(config: dict, state: dict, paths: dict) -> int:
+    """Mirror OpenClaw's background-run ledger (``tasks/runs.sqlite``) into
+    the local DuckDB ``run_ledger`` table.
+
+    This is the authoritative record of every background run — sub-agents
+    (``runtime='subagent'``), cron jobs (``runtime='cron'``) and inline
+    CLI/agent turns (``runtime='cli'``) — and is the shared source for the
+    Scheduler lane monitor, the sub-agent fan-out tree and the cron run log.
+
+    Idempotent + incremental: we keep a ``last_event_at`` watermark in
+    ``state['run_ledger_watermark']`` and only re-read rows that advanced
+    since the last cycle (status moves ``running`` -> terminal, so the
+    watermark catches updates as well as inserts). Returns rows ingested.
+
+    Degrades silently: missing ledger, locked DB, or malformed row each
+    return 0 / skip rather than raising (read-only-by-default contract).
+    """
+    try:
+        from clawmetry import local_store as _ls
+    except Exception as e:  # noqa: BLE001
+        log.debug("sync_run_ledger: local_store unavailable: %s", e)
+        return 0
+
+    src = next((p for p in _openclaw_task_ledger_paths() if p.exists()), None)
+    if src is None:
+        return 0
+
+    node_id = config.get("node_id", "") if isinstance(config, dict) else ""
+    watermark = int(state.get("run_ledger_watermark", 0) or 0)
+
+    import sqlite3
+    rows: list[dict] = []
+    try:
+        # Read-only URI open so we never contend with OpenClaw's writer.
+        conn = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=2.0)
+        try:
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute(
+                f"SELECT {', '.join(_RUN_LEDGER_SRC_COLS)} FROM task_runs "
+                "WHERE COALESCE(last_event_at, ended_at, created_at, 0) >= ? "
+                "ORDER BY COALESCE(last_event_at, ended_at, created_at, 0) ASC "
+                "LIMIT 5000",
+                [watermark],
+            )
+            rows = [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+    except Exception as e:  # noqa: BLE001 — locked / corrupt / schema drift
+        log.debug("sync_run_ledger: read failed (%s)", e)
+        return 0
+
+    if not rows:
+        return 0
+
+    try:
+        store = _ls.get_store()
+    except Exception as e:  # noqa: BLE001
+        log.debug("sync_run_ledger: get_store failed: %s", e)
+        return 0
+
+    n = 0
+    new_watermark = watermark
+    for r in rows:
+        try:
+            store.ingest_run_ledger_row(r, node_id=node_id)
+            n += 1
+            wm = r.get("last_event_at") or r.get("ended_at") or r.get("created_at") or 0
+            try:
+                new_watermark = max(new_watermark, int(wm))
+            except (TypeError, ValueError):
+                pass
+        except Exception as e_in:  # noqa: BLE001
+            log.debug("sync_run_ledger: ingest skipped for %s: %s",
+                      r.get("task_id"), e_in)
+    state["run_ledger_watermark"] = new_watermark
+    if n:
+        log.debug("sync_run_ledger: ingested %d rows (watermark=%d)",
+                  n, new_watermark)
+    return n
+
+
+def _openclaw_agent_ids() -> list[str]:
+    """Enumerate OpenClaw agent ids to inspect for tool policy.
+
+    Each agent has a dir under ``~/.openclaw/agents/<id>/``. ``main`` always
+    exists; we read the directory so multi-agent installs are covered. Falls
+    back to ``["main"]`` if the dir is missing/unreadable (read-only contract:
+    never crash, always return at least the default agent)."""
+    ids: list[str] = []
+    try:
+        agents_dir = Path(_get_openclaw_dir()) / "agents"
+        if agents_dir.is_dir():
+            for p in sorted(agents_dir.iterdir()):
+                if p.is_dir() and not p.name.startswith("."):
+                    ids.append(p.name)
+    except Exception as e:  # noqa: BLE001
+        log.debug("_openclaw_agent_ids: enumerate failed: %s", e)
+    if "main" not in ids:
+        ids.insert(0, "main")
+    return ids[:25]  # bound the fan-out — pathological installs only
+
+
+def _flatten_sandbox_explain(d: dict, agent_id: str) -> dict | None:
+    """Flatten one ``openclaw sandbox explain --json`` payload into the row
+    shape ``LocalStore.ingest_tool_policy_row`` expects. Returns None if the
+    payload has no ``sandbox`` block (nothing useful to store)."""
+    if not isinstance(d, dict):
+        return None
+    sb = d.get("sandbox")
+    if not isinstance(sb, dict):
+        return None
+    tools = sb.get("tools") if isinstance(sb.get("tools"), dict) else {}
+    elev = d.get("elevated") if isinstance(d.get("elevated"), dict) else {}
+    allow = tools.get("allow") if isinstance(tools.get("allow"), list) else []
+    deny = tools.get("deny") if isinstance(tools.get("deny"), list) else []
+    return {
+        "agent_id": d.get("agentId") or agent_id,
+        "session_key": d.get("sessionKey"),
+        "sandbox_mode": sb.get("mode"),
+        "sandbox_scope": sb.get("scope"),
+        "workspace_access": sb.get("workspaceAccess"),
+        "workspace_root": sb.get("workspaceRoot"),
+        "session_is_sandboxed": sb.get("sessionIsSandboxed"),
+        "allow": allow,
+        "deny": deny,
+        "sources": tools.get("sources") if isinstance(tools.get("sources"), dict) else {},
+        "elevated_enabled": elev.get("enabled"),
+        "elevated_channel": elev.get("channel"),
+        "elevated_allowed": elev.get("allowedByConfig"),
+        "observed_at": int(time.time() * 1000),
+    }
+
+
+def sync_tool_policy(config: dict, state: dict, paths: dict) -> int:
+    """Mirror OpenClaw's effective sandbox + tool policy into the DuckDB
+    ``tool_policy`` table (PRD P1-1 governance).
+
+    For each agent we shell out to ``openclaw sandbox explain --agent <id>
+    --json`` — OpenClaw's own CLI, which works on its OWN credentials and so
+    does NOT need the (scope-less) ClawMetry gateway token. The daemon's
+    launchd PATH lacks ``node``, so we augment PATH with the usual Homebrew /
+    local install dirs (same escape hatch as ``run_openclaw_cron`` /
+    Self-Evolve). One row per agent, upserted on ``agent_id``.
+
+    Degrades silently: CLI missing, timeout, non-zero exit, or malformed JSON
+    each skip that agent rather than raising (read-only-by-default). Returns
+    the number of agent rows ingested."""
+    binp = _resolve_openclaw_bin()
+    if not binp:
+        log.debug("sync_tool_policy: openclaw CLI not found; skipping")
+        return 0
+    try:
+        from clawmetry import local_store as _ls
+    except Exception as e:  # noqa: BLE001
+        log.debug("sync_tool_policy: local_store unavailable: %s", e)
+        return 0
+
+    env = dict(os.environ)
+    env["PATH"] = os.pathsep.join([
+        os.path.dirname(binp), "/opt/homebrew/bin", "/usr/local/bin",
+        os.path.expanduser("~/.local/bin"),
+        env.get("PATH", "/usr/bin:/bin"),
+    ])
+    node_id = config.get("node_id", "") if isinstance(config, dict) else ""
+
+    try:
+        store = _ls.get_store()
+    except Exception as e:  # noqa: BLE001
+        log.debug("sync_tool_policy: get_store failed: %s", e)
+        return 0
+
+    n = 0
+    for aid in _openclaw_agent_ids():
+        try:
+            proc = subprocess.run(
+                [binp, "sandbox", "explain", "--agent", aid, "--json"],
+                capture_output=True, text=True, timeout=20, env=env,
+            )
+        except subprocess.TimeoutExpired:
+            log.debug("sync_tool_policy: explain %s timed out", aid)
+            continue
+        except Exception as e:  # noqa: BLE001
+            log.debug("sync_tool_policy: explain %s failed: %s", aid, e)
+            continue
+        if proc.returncode != 0:
+            log.debug("sync_tool_policy: explain %s rc=%s", aid, proc.returncode)
+            continue
+        try:
+            payload = json.loads(proc.stdout.strip())
+        except Exception:
+            import re as _re
+            m = _re.search(r"\{.*\}", proc.stdout, _re.DOTALL)
+            if not m:
+                continue
+            try:
+                payload = json.loads(m.group(0))
+            except Exception:
+                continue
+        row = _flatten_sandbox_explain(payload, aid)
+        if not row:
+            continue
+        try:
+            store.ingest_tool_policy_row(row, node_id=node_id)
+            n += 1
+        except Exception as e_in:  # noqa: BLE001
+            log.debug("sync_tool_policy: ingest skipped for %s: %s", aid, e_in)
+    if n:
+        log.debug("sync_tool_policy: ingested %d agent rows", n)
+    return n
 
 
 def sync_session_metadata(config: dict, state: dict = None) -> int:
@@ -7442,27 +8201,84 @@ def _build_machine_info():
         return {"items": []}
 
 
-def _detect_family_runtimes():
-    """Detect OpenClaw-family runtimes installed alongside (PicoClaw, NanoClaw).
+# Non-OpenClaw runtimes ClawMetry observes via a dedicated reader adapter. Each
+# uses its OWN native session format; the adapter translates it to the unified
+# Session/Event shapes and we ingest those into DuckDB alongside OpenClaw,
+# namespaced + tagged with the runtime. To add a runtime: ship its adapter and
+# add a (module, class) row here. Import is per-adapter + defensive so a missing
+# or broken adapter (e.g. an older wheel) never blocks the others.
+_FAMILY_ADAPTER_SPECS = (
+    ("clawmetry.adapters.picoclaw", "PicoClawAdapter"),
+    ("clawmetry.adapters.nanoclaw", "NanoClawAdapter"),
+    ("clawmetry.adapters.hermes", "HermesAdapter"),
+    ("clawmetry.adapters.claude_code", "ClaudeCodeAdapter"),
+    ("clawmetry.adapters.codex", "CodexAdapter"),
+    ("clawmetry.adapters.cursor", "CursorAdapter"),
+    ("clawmetry.adapters.aider", "AiderAdapter"),
+    ("clawmetry.adapters.goose", "GooseAdapter"),
+    ("clawmetry.adapters.opencode", "OpencodeAdapter"),
+    ("clawmetry.adapters.qwen_code", "QwenCodeAdapter"),
+)
 
-    These runtimes use their OWN native session format (not OpenClaw's v3
-    JSONL), so ClawMetry ships dedicated reader adapters for them
-    (clawmetry/adapters/{picoclaw,nanoclaw}.py). Here we run each adapter's
-    cheap, never-raising ``detect()`` so the cloud can label which runtime a
-    node is actually running. Pure detection: no DuckDB access, no writes, no
-    writer lock involved.
+
+def _family_adapter_classes():
+    """Return the importable non-OpenClaw runtime adapter classes."""
+    classes = []
+    for mod_name, cls_name in _FAMILY_ADAPTER_SPECS:
+        try:
+            mod = __import__(mod_name, fromlist=[cls_name])
+            classes.append(getattr(mod, cls_name))
+        except Exception as exc:  # missing/broken adapter never blocks the rest
+            log.debug(f"family adapter {mod_name}.{cls_name} unavailable: {exc}")
+    return classes
+
+
+def _openclaw_spawned_claude_ids() -> set:
+    """Claude Code session ids that OpenClaw spawned (and already ingests).
+
+    OpenClaw's sessions.json index records the Claude CLI session id it spawned
+    under ``cliSessionIds.claude-cli`` (or ``claude_code`` / ``claude``).
+    sync_openclaw_claude_sessions_via_index already ingests those under the
+    OpenClaw session UUID, so the standalone ClaudeCode adapter must skip them to
+    avoid double-counting the same session. Cheap (one JSON read); never raises.
+    """
+    out: set = set()
+    idx = os.path.join(_get_openclaw_dir(), "agents", "main", "sessions", "sessions.json")
+    try:
+        if not os.path.isfile(idx):
+            return out
+        with open(idx) as fh:
+            data = json.load(fh)
+        for _k, meta in (data.items() if isinstance(data, dict) else []):
+            if not isinstance(meta, dict):
+                continue
+            cli = meta.get("cliSessionIds") or {}
+            if not isinstance(cli, dict):
+                continue
+            cc = cli.get("claude-cli") or cli.get("claude_code") or cli.get("claude")
+            if not cc:
+                continue
+            for v in (cc if isinstance(cc, list) else [cc]):
+                if v:
+                    out.add(str(v))
+    except Exception as exc:  # never block ingest on a bad/locked index
+        log.debug(f"openclaw spawned-claude index read failed: {exc}")
+    return out
+
+
+def _detect_family_runtimes():
+    """Detect non-OpenClaw runtimes present on this host (Hermes, Claude Code,
+    Codex, Cursor, PicoClaw, NanoClaw, ...).
+
+    Runs each adapter's cheap, never-raising ``detect()`` so the cloud can label
+    which runtimes a node is actually running. Pure detection: no DuckDB access,
+    no writes, no writer lock involved.
 
     Returns a list of ``{name, displayName, sessionCount, workspace}`` for the
-    runtimes whose data is present on this host. Empty list if none / on error.
+    runtimes whose data is present. Empty list if none / on error.
     """
     out = []
-    try:
-        from clawmetry.adapters.picoclaw import PicoClawAdapter
-        from clawmetry.adapters.nanoclaw import NanoClawAdapter
-    except Exception as exc:  # adapters unavailable (old wheel) — degrade quietly
-        log.debug(f"family-runtime adapters unavailable: {exc}")
-        return out
-    for cls in (PicoClawAdapter, NanoClawAdapter):
+    for cls in _family_adapter_classes():
         try:
             d = cls().detect()
             if d.detected:
@@ -7477,6 +8293,187 @@ def _detect_family_runtimes():
         except Exception as exc:  # one bad adapter never blocks the others
             log.debug(f"family-runtime detect failed for {cls.__name__}: {exc}")
     return out
+
+
+def _epoch_to_iso(epoch) -> str | None:
+    """Convert a float/int epoch-seconds timestamp to an ISO-8601 UTC string.
+
+    The family adapters return ``started_at`` / ``ended_at`` / event ``ts`` as
+    float epoch seconds, but every DuckDB ``ts`` / ``started_at`` column is an
+    ISO string (OpenClaw stamps ISO, and ``query_sessions`` does
+    ``CAST(ts AS TIMESTAMP)`` + string ``ts >= ?`` comparisons). Returns None on
+    anything unparseable so a bad timestamp never crashes ingest or breaks sort.
+    """
+    if not epoch:
+        return None
+    try:
+        return datetime.fromtimestamp(float(epoch), tz=timezone.utc).isoformat()
+    except (ValueError, OSError, OverflowError, TypeError):
+        return None
+
+
+def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
+    """Ingest PicoClaw + NanoClaw sessions into DuckDB (and the cloud) so they
+    appear in the sessions list + transcripts the same way OpenClaw does.
+
+    These runtimes store sessions in their OWN native formats (PicoClaw: flat
+    ``providers.Message`` JSONL; NanoClaw: per-session SQLite), so we read them
+    through the reader adapters (which translate to the unified Session/Event
+    shapes) and map those onto the SAME DuckDB rows OpenClaw uses:
+
+    - ``agent_type='openclaw'`` so every existing read path (``/api/sessions``,
+      transcripts, ``query_sessions_table``'s events-join) returns them with no
+      filter changes; the runtime is carried in ``metadata.runtime`` (session)
+      and ``data._runtime`` (events) as the discriminator.
+    - session ids are namespaced (``picoclaw:<key>`` / ``nanoclaw:<id>``) so a
+      runtime UUID can never collide with an OpenClaw one in the shared
+      ``(agent_type, session_id)`` PK.
+    - event types stay ``message`` / ``tool_call`` / ``tool_result`` (the
+      renderable set) so transcripts render and ``message_count`` counts.
+
+    Writes go through the daemon's OWN writer handle (``local_store.get_store()``),
+    never a ``read_only=True`` re-open (the #1771 brick-lock). Gated by
+    ``_sync_allowed()`` exactly like ``sync_sessions`` / ``sync_session_metadata``.
+    Returns the number of events ingested.
+    """
+    if not _sync_allowed():
+        return 0
+    try:
+        from clawmetry import local_store
+    except Exception as exc:  # local store unavailable (old wheel) — degrade quietly
+        log.debug(f"local_store unavailable for family ingest: {exc}")
+        return 0
+
+    node_id = config.get("node_id") or ""
+    api_key = config.get("api_key")
+    store = local_store.get_store()
+    total_events = 0
+    cloud_session_rows: list = []
+
+    # Claude Code sessions that OpenClaw SPAWNED are already ingested under the
+    # OpenClaw session UUID by sync_openclaw_claude_sessions_via_index. Skip them
+    # in the claude_code adapter ingest so an orchestrated session shows once
+    # (under OpenClaw, which owns it), not twice. Verified on a real machine:
+    # 29 of 387 ~/.claude sessions were OpenClaw-spawned.
+    openclaw_spawned_claude = _openclaw_spawned_claude_ids()
+
+    for cls in _family_adapter_classes():
+        try:
+            adapter = cls()  # construct once (discovery globs/DB opens are not free)
+            if not adapter.detect().detected:
+                continue
+            runtime = adapter.name
+            for s in adapter.list_sessions(limit=50):
+                if runtime == "claude_code" and s.id in openclaw_spawned_claude:
+                    continue  # owned by OpenClaw; avoid the double-count
+                ns_id = f"{runtime}:{s.id}"
+                started = _epoch_to_iso(s.started_at)
+                ended = _epoch_to_iso(s.ended_at)
+                metadata = {
+                    "runtime": runtime,
+                    "displayName": s.display_name or "",
+                    "model": s.model or "",
+                    # recent_model is the key the sessions list reads to label
+                    # the model column (OpenClaw rows use the same key).
+                    "recent_model": s.model or "",
+                    "source": s.source or "",
+                }
+                if isinstance(s.extra, dict):
+                    metadata.update(
+                        {k: v for k, v in s.extra.items() if k not in metadata}
+                    )
+                # Local upsert (the sessions list reads this).
+                try:
+                    store.ingest_session({
+                        "agent_type": "openclaw",
+                        "session_id": ns_id,
+                        "node_id": node_id,
+                        "agent_id": "main",
+                        "title": s.display_name or s.title or s.id,
+                        "started_at": started,
+                        "last_active_at": ended or started,
+                        "ended_at": ended,
+                        "status": "ended",
+                        "total_tokens": int(s.total_tokens or 0),
+                        "cost_usd": s.cost_usd,
+                        "message_count": int(s.message_count or 0),
+                        "metadata": metadata,
+                    })
+                except Exception as _se:
+                    log.warning("family session upsert failed (%s): %s", ns_id, _se)
+                    continue
+                # Carry the same row to cloud so the cloud Sessions list shows it.
+                cloud_session_rows.append({
+                    "agent_type": "openclaw",
+                    "session_id": ns_id,
+                    "node_id": node_id,
+                    "agent_id": "main",
+                    "title": s.display_name or s.title or s.id,
+                    "started_at": started,
+                    "last_active_at": ended or started,
+                    "ended_at": ended,
+                    "status": "ended",
+                    "total_tokens": int(s.total_tokens or 0),
+                    "cost_usd": s.cost_usd,
+                    "message_count": int(s.message_count or 0),
+                    "runtime": runtime,
+                    "model": s.model or "",
+                })
+                # Events → transcript (rides the existing _build_transcripts path).
+                rows = []
+                for e in adapter.list_events(s.id, limit=2000):
+                    ets = _epoch_to_iso(e.ts)
+                    if not ets:
+                        continue
+                    data = {"role": e.role, "content": e.content, "_runtime": runtime}
+                    if e.tool_calls:
+                        data["tool_calls"] = e.tool_calls
+                    if e.tool_name:
+                        data["tool_name"] = e.tool_name
+                    if isinstance(e.extra, dict) and e.extra:
+                        data["extra"] = e.extra
+                    rows.append({
+                        "id": f"{runtime}:{e.id}",
+                        "node_id": node_id,
+                        "agent_id": "main",
+                        "session_id": ns_id,
+                        "workspace_id": None,
+                        "event_type": e.type or "message",
+                        "ts": ets,
+                        "data": data,
+                        "cost_usd": None,
+                        "token_count": int(e.tokens or 0),
+                        "model": s.model or None,
+                    })
+                if rows:
+                    try:
+                        store.ingest_many(rows)
+                        total_events += len(rows)
+                    except Exception as _ee:
+                        log.warning("family event ingest failed (%s): %s", ns_id, _ee)
+        except Exception as exc:
+            log.warning(
+                "family runtime ingest failed for %s: %s",
+                getattr(cls, "name", cls.__name__), exc,
+            )
+
+    if total_events or cloud_session_rows:
+        try:
+            store.flush()
+        except Exception as _fe:
+            log.debug("family ingest flush failed (continuing): %s", _fe)
+    # Push session rows to cloud so the cloud Sessions list shows them. Mirrors
+    # sync_session_metadata's cloud push; best-effort and never blocks.
+    if cloud_session_rows and api_key:
+        try:
+            _post(
+                "/ingest/sessions",
+                {"node_id": node_id, "sessions": cloud_session_rows},
+                api_key,
+            )
+        except Exception as _pe:
+            log.debug("family sessions cloud push failed (continuing): %s", _pe)
+    return total_events
 
 
 def _build_runtime_info():
@@ -8033,6 +9030,93 @@ def _resolve_openclaw_bin():
     return None
 
 
+def run_openclaw_cron(subcmd, extra_args=None, timeout=40):
+    """Run ``openclaw cron <subcmd> [args] --json`` and parse the result.
+
+    This is the v3-correct way to MUTATE crons. OpenClaw v3 removed the
+    ``cron`` tool from the gateway's ``/tools/invoke`` surface (it returns
+    ``Tool not available: cron``), and ClawMetry's gateway token is
+    ``operator.read`` only, so the legacy ``_gw_invoke("cron", {...})`` path
+    in routes/crons.py is dead for every write. The official CLI talks to the
+    Gateway scheduler with OpenClaw's OWN credentials — same escape hatch the
+    Self-Evolve "Fix" feature uses for ``openclaw agent``.
+
+    ``openclaw`` is a Node script; under the daemon's launchd PATH ``node``
+    isn't found, so we augment PATH with the bin's dir + the usual install
+    locations (mirrors ``_action_selfevolve_fix``).
+
+    Returns a dict::
+
+        {ok: bool, result: <parsed JSON | None>, error: str,
+         scope_pending: bool, raw: str}
+
+    ``scope_pending`` is True when the gateway rejects the write because the
+    device needs a scope upgrade approved (``pairing required`` /
+    ``scope upgrade pending approval``) — the caller surfaces an actionable
+    "approve the device pairing" message instead of a generic failure.
+    """
+    binp = _resolve_openclaw_bin()
+    if not binp:
+        return {"ok": False, "result": None, "scope_pending": False,
+                "error": "openclaw CLI not found on this machine", "raw": ""}
+    env = dict(os.environ)
+    node_dirs = [
+        os.path.dirname(binp),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        os.path.expanduser("~/.local/bin"),
+    ]
+    env["PATH"] = os.pathsep.join(node_dirs + [env.get("PATH", "/usr/bin:/bin")])
+    # Only some subcommands accept --json (add/rm + the read commands); enable/
+    # disable/run/edit reject it with "unknown option '--json'". Append it only
+    # where supported so writes don't fail on an unrecognised flag.
+    _JSON_OK = {"add", "create", "rm", "list", "status", "runs", "show"}
+    cmd = [binp, "cron", subcmd] + list(extra_args or [])
+    if subcmd in _JSON_OK:
+        cmd.append("--json")
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout, env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "result": None, "scope_pending": False,
+                "error": "openclaw cron %s timed out" % subcmd, "raw": ""}
+    except Exception as e:
+        return {"ok": False, "result": None, "scope_pending": False,
+                "error": str(e)[:400], "raw": ""}
+
+    blob = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    low = blob.lower()
+    scope_pending = (
+        "pairing required" in low
+        or "scope upgrade" in low
+        or "more scopes than currently approved" in low
+    )
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "exit %d" % proc.returncode).strip()
+        if scope_pending:
+            err = ("Cron write needs a one-time gateway approval. On the host "
+                   "run `openclaw devices list` then `openclaw devices approve "
+                   "<id>` (or approve the pairing prompt), then retry.")
+        return {"ok": False, "result": None, "scope_pending": scope_pending,
+                "error": err[:500], "raw": blob[:1000]}
+    # Success: parse the JSON the CLI emitted (best-effort — some subcommands
+    # print a human line before/after the JSON object).
+    parsed = None
+    try:
+        parsed = json.loads(proc.stdout.strip())
+    except Exception:
+        import re as _re
+        m = _re.search(r"(\{.*\}|\[.*\])", proc.stdout, _re.DOTALL)
+        if m:
+            try:
+                parsed = json.loads(m.group(1))
+            except Exception:
+                parsed = None
+    return {"ok": True, "result": parsed, "scope_pending": False,
+            "error": "", "raw": blob[:1000]}
+
+
 def _selfevolve_build_context(workspace=None):
     """Compact telemetry context for the review, built on the daemon's OWN
     store handle (never a read-only re-open — that deadlocks the write lock).
@@ -8232,6 +9316,31 @@ def _build_selfevolve(workspace=None):
         return {}
 
 
+_cost_backfill_done = False
+
+
+def _backfill_event_costs_once(store) -> None:
+    """#2049: drain the cost_usd backfill once per daemon process. Bounded
+    batches with a hard iteration cap so a huge store can't stall the snapshot
+    build; remaining rows get picked up on the next process start. Never
+    raises."""
+    global _cost_backfill_done
+    if _cost_backfill_done:
+        return
+    _cost_backfill_done = True  # set first: a failure shouldn't retry-loop
+    try:
+        total = 0
+        for _ in range(40):  # cap: 40 x 5000 = up to 200k rows / process
+            n = store.backfill_event_costs(batch=5000)
+            total += n
+            if n < 5000:
+                break
+        if total:
+            log.info("cost backfill: populated cost_usd for %d events (#2049)", total)
+    except Exception as _e:
+        log.debug("cost backfill failed: %s", _e)
+
+
 def _build_daily_usage(days=14):
     """14-day token/cost history for the cloud Cost tab.
 
@@ -8250,6 +9359,11 @@ def _build_daily_usage(days=14):
         store = _ls.get_store()
         if store is None:
             return {}
+        # #2049: one-time backfill of cost_usd for events ingested before the
+        # derive-at-ingest fix (they carry tokens+model but no provider cost,
+        # so the Cost tab showed ~$0). Runs once per process, on the daemon's
+        # writer handle, draining in bounded batches before we read costs.
+        _backfill_event_costs_once(store)
         daily_tok: dict = {}
         daily_cost: dict = {}
         for r in (store.query_aggregates() or []):
@@ -8748,6 +9862,178 @@ def _build_brain_data():
     except Exception as e:
         log.warning(f"Brain data error: {e}")
         return {"stats": {}, "calls": [], "total": 0}
+
+
+def _build_tool_catalog_slice(limit: int = 5000, top: int = 60) -> dict:
+    """Per-tool call count + p50/p95 latency + error rate grouped by provenance
+    (PRD P1-3), derived from the DuckDB ``events`` table.
+
+    Mirrors the OSS ``routes/tool_catalog.py`` aggregation so the cloud Tool
+    Catalog tab shows the same rollup: each ``tool_call`` event is matched to
+    its closing ``tool_result`` by tool_use id (the ``turn_anatomy`` join),
+    duration = ``result_ts - call_ts``. Provenance: a name with ``__`` is MCP,
+    a name in the sandbox ``tool_policy`` allow set is builtin, else plugin.
+
+    Bounded to the ``top`` busiest tools so the slice stays tiny in the shared
+    snapshot. Returns ``{"tools": [...], "groups": {...}}``; degrades to an
+    empty catalog (never raises) when the store is unavailable."""
+    out = {"tools": [], "groups": {"builtin": 0, "mcp": 0, "plugin": 0}}
+    try:
+        from clawmetry import local_store as _ls_tc
+        store = _ls_tc.get_store()
+    except Exception:
+        return out
+    if store is None:
+        return out
+
+    try:
+        rows = store.query_events(limit=int(limit)) or []
+    except Exception:
+        return out
+
+    # Builtin universe from the mirrored sandbox tool policy.
+    builtin: set = set()
+    try:
+        for r in (store.query_tool_policy(limit=25) or []):
+            allow = r.get("allow")
+            if isinstance(allow, list):
+                for n in allow:
+                    if n:
+                        builtin.add(str(n).replace("mcp__openclaw__", ""))
+    except Exception:
+        pass
+
+    def _d(e):
+        d = e.get("data")
+        return d if isinstance(d, dict) else {}
+
+    def _ms(ts):
+        if ts is None:
+            return None
+        if isinstance(ts, (int, float)):
+            return int(ts * 1000) if ts < 1e12 else int(ts)
+        try:
+            return int(datetime.fromisoformat(
+                str(ts).replace("Z", "+00:00")).timestamp() * 1000)
+        except Exception:
+            return None
+
+    def _name(e):
+        d = _d(e)
+        n = d.get("tool_name")
+        if n:
+            return str(n).replace("mcp__openclaw__", "")
+        tcs = d.get("tool_calls")
+        if isinstance(tcs, list) and tcs and isinstance(tcs[0], dict):
+            nn = tcs[0].get("name") or (tcs[0].get("function") or {}).get("name")
+            if nn:
+                return str(nn).replace("mcp__openclaw__", "")
+        return ""
+
+    def _err(e):
+        d = _d(e)
+        ex = d.get("extra") if isinstance(d.get("extra"), dict) else {}
+        return bool(ex.get("isError") or d.get("isError") or d.get("is_error")
+                    or (e.get("event_type") or "").endswith("error"))
+
+    def _is_result(e):
+        et = (e.get("event_type") or "").lower()
+        if "tool_result" in et or "tool_use_result" in et:
+            return True
+        return (_d(e).get("role") or "").lower() == "tool"
+
+    def _is_call(e):
+        et = (e.get("event_type") or "").lower()
+        if "tool_result" in et or "tool_use_result" in et:
+            return False
+        d = _d(e)
+        if (d.get("role") or "").lower() == "tool":
+            return False
+        return bool("tool_call" in et or "tool.call" in et
+                    or d.get("tool_name") or d.get("tool_calls"))
+
+    # Index results by the tool_use id they close.
+    res_idx: dict = {}
+    for e in rows:
+        if not _is_result(e):
+            continue
+        d = _d(e)
+        ex = d.get("extra") if isinstance(d.get("extra"), dict) else {}
+        rid = ex.get("toolUseId") or ex.get("tool_use_id") or d.get("tool_use_id")
+        if rid is not None:
+            res_idx[str(rid)] = {"ts": _ms(e.get("ts")), "error": _err(e)}
+
+    agg: dict = {}
+    for e in rows:
+        if not _is_call(e):
+            continue
+        name = _name(e)
+        if not name:
+            continue
+        start = _ms(e.get("ts"))
+        dur = None
+        err = _err(e)
+        d = _d(e)
+        tcs = d.get("tool_calls")
+        ids = [str(tc["id"]) for tc in tcs
+               if isinstance(tc, dict) and tc.get("id")] if isinstance(tcs, list) else []
+        for tuid in ids:
+            m = res_idx.get(tuid)
+            if m:
+                if m["error"]:
+                    err = True
+                if m["ts"] is not None and start is not None:
+                    dur = max(0, m["ts"] - start)
+                break
+        a = agg.setdefault(name, {"calls": 0, "durs": [], "errs": 0})
+        a["calls"] += 1
+        if dur is not None:
+            a["durs"].append(dur)
+        if err:
+            a["errs"] += 1
+
+    def _pct(vals, p):
+        if not vals:
+            return None
+        if len(vals) == 1:
+            return int(vals[0])
+        k = (len(vals) - 1) * (p / 100.0)
+        f = int(k)
+        if f + 1 < len(vals):
+            return int(vals[f] + (vals[f + 1] - vals[f]) * (k - f))
+        return int(vals[f])
+
+    def _classify(name):
+        if "__" in name:
+            parts = [p for p in name.split("__") if p]
+            if name.startswith("mcp__"):
+                provider = parts[1] if len(parts) > 1 else "mcp"
+            else:
+                provider = parts[0] if parts else "mcp"
+            return ("mcp", provider)
+        if name in builtin:
+            return ("builtin", "")
+        return ("plugin", "")
+
+    tools = []
+    for name, a in agg.items():
+        prov, provider = _classify(name)
+        durs = sorted(a["durs"])
+        calls = a["calls"]
+        tools.append({
+            "name": name,
+            "provenance": prov,
+            "provider": provider or None,
+            "calls": calls,
+            "p50_ms": _pct(durs, 50),
+            "p95_ms": _pct(durs, 95),
+            "error_rate": round(a["errs"] / calls, 4) if calls else 0.0,
+            "errors": a["errs"],
+        })
+        out["groups"][prov] = out["groups"].get(prov, 0) + 1
+    tools.sort(key=lambda t: (-t["calls"], -(t["p95_ms"] or 0), t["name"]))
+    out["tools"] = tools[:int(top)]
+    return out
 
 
 def _build_tool_stats():
@@ -9456,8 +10742,20 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     # Memory files
     _mem_files = _build_memory_files(paths.get("workspace", ""))
 
-    # Spending (from state if available)
-    spending = state.get("spending", {"today": 0, "week": 0, "month": 0})
+    # Spending (#2142): derive from the same live source as `dailyUsage` so
+    # both cost surfaces agree. Pre-fix this read from the daemon's
+    # `state.json`, which is almost always stale (often {0, 0, 0} on fresh
+    # nodes) — meanwhile `dailyUsage.monthCost` was correctly derived live
+    # from DuckDB events × model pricing (#2058). The cloud Spending hero
+    # card reads `snap.spending` and rendered $0 while the Cost tab showed
+    # the real four-figure month — trust-destroying. Computing dailyUsage
+    # once here and reusing it bounds the cost.
+    _du = _build_daily_usage()
+    spending = {
+        "today": float(_du.get("todayCost") or state.get("spending", {}).get("today") or 0),
+        "week":  float(_du.get("weekCost")  or state.get("spending", {}).get("week")  or 0),
+        "month": float(_du.get("monthCost") or state.get("spending", {}).get("month") or 0),
+    }
 
     # LLM Context Inspector parity (2026-05-23): expose the SAME fields
     # the OSS /api/overview now adds so the Context tab reads one value
@@ -9465,6 +10763,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     # cloud. Both built on the daemon's OWN store handle (no read-only
     # re-open → no writer-lock brick; see FLYWHEEL.md §1).
     current_context_tokens = 0
+    context_window = 200000
     try:
         from clawmetry import local_store as _ls_ctx
         _ctx_store = _ls_ctx.get_store()
@@ -9473,6 +10772,9 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
                 scan_sessions=5, exclude_clawmetry=True,
             ) or {}
             current_context_tokens = int(_peek.get("input_tokens") or 0)
+            # Size the window from the peeked turn's model + observed size so
+            # the gauge stays coherent (1M for [1m]/large-context sessions).
+            context_window = int(_peek.get("context_window") or 0) or 200000
     except Exception as _e:
         log.debug("snapshot: query_context_window_peek failed: %s", _e)
 
@@ -9486,16 +10788,142 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _e:
         log.debug("snapshot: compute_skills_payload failed: %s", _e)
 
+    # OpenClaw run ledger (tasks/runs.sqlite mirror) → bounded snapshot slice
+    # for the cloud Scheduler lane monitor + sub-agent fan-out tree. We ship
+    # the lane rollup (tiny) plus the most-recent runs only, and trim the
+    # free-text fields to short prefixes so a long task description can't
+    # bloat the shared snapshot (the #1895 / 0.12.278 bloat lesson).
+    run_ledger_slice = {"lanes": [], "runs": []}
+    try:
+        from clawmetry import local_store as _ls_rl
+        _rl_store = _ls_rl.get_store()
+        if _rl_store is not None:
+            run_ledger_slice["lanes"] = _rl_store.query_run_ledger_lanes() or []
+            _RL_KEEP = (
+                "task_id", "runtime", "task_kind", "scope_kind", "agent_id",
+                "run_id", "label", "status", "delivery_status",
+                "terminal_outcome", "child_session_key", "parent_task_id",
+                "requester_session_key", "created_at", "started_at",
+                "ended_at", "last_event_at",
+            )
+            _runs = _rl_store.query_run_ledger(limit=120) or []
+            run_ledger_slice["runs"] = [
+                {
+                    **{k: r.get(k) for k in _RL_KEEP},
+                    # short prefixes only — never the full task/error body
+                    "label": (str(r.get("label") or r.get("task") or "")[:80]),
+                    "error": (str(r.get("error"))[:160] if r.get("error") else None),
+                }
+                for r in _runs
+            ]
+    except Exception as _e_rl:
+        log.debug("snapshot: run_ledger slice failed: %s", _e_rl)
+
+    # Effective sandbox + tool policy per agent (PRD P1-1 governance) →
+    # bounded snapshot slice for the cloud Tool Policy tab. One small row per
+    # agent (allow/deny lists are short tool-name arrays, capped here so a
+    # pathological config can't bloat the shared snapshot).
+    tool_policy_slice: list[dict] = []
+    try:
+        from clawmetry import local_store as _ls_tp
+        _tp_store = _ls_tp.get_store()
+        if _tp_store is not None:
+            for r in (_tp_store.query_tool_policy(limit=25) or []):
+                allow = r.get("allow") if isinstance(r.get("allow"), list) else []
+                deny = r.get("deny") if isinstance(r.get("deny"), list) else []
+                tool_policy_slice.append({
+                    "agent_id": r.get("agent_id"),
+                    "sandbox_mode": r.get("sandbox_mode"),
+                    "sandbox_scope": r.get("sandbox_scope"),
+                    "workspace_access": r.get("workspace_access"),
+                    "session_is_sandboxed": r.get("session_is_sandboxed"),
+                    "allow": allow[:80],
+                    "deny": deny[:80],
+                    "allow_count": r.get("allow_count"),
+                    "deny_count": r.get("deny_count"),
+                    "elevated_enabled": r.get("elevated_enabled"),
+                    "elevated_channel": r.get("elevated_channel"),
+                    "elevated_allowed": r.get("elevated_allowed"),
+                    "observed_at": r.get("observed_at"),
+                })
+    except Exception as _e_tp:
+        log.debug("snapshot: tool_policy slice failed: %s", _e_tp)
+
+    # Tool catalog (PRD P1-3): per-tool call count + p50/p95 latency + error
+    # rate grouped by provenance, derived from the DuckDB events table
+    # (tool_call → tool_result join). Bounded to the top tools by call count so
+    # the slice stays tiny in the shared snapshot. Mirrors the OSS
+    # ``/api/tool-catalog`` aggregation so the cloud tab shows the same rollup.
+    tool_catalog_slice: dict = {"tools": [], "groups": {}}
+    try:
+        tool_catalog_slice = _build_tool_catalog_slice()
+    except Exception as _e_tc:
+        log.debug("snapshot: tool_catalog slice failed: %s", _e_tc)
+    # Context-window economics (PRD P1-2) → bounded snapshot slice for the
+    # cloud Context Economics tab. Ships the compaction log (trigger + before/
+    # after + reclaimed) and the overflow-session flags, plus a small summary,
+    # but caps rows and truncates the free-text compaction summary so a long
+    # transcript summary can't bloat the shared snapshot (#1895 / 0.12.278
+    # bloat lesson). The full per-turn utilization series is intentionally
+    # NOT shipped — it can be hundreds of points per session; the cloud can
+    # re-derive a coarse view from the summary + compactions, and the OSS tab
+    # reads the live series directly.
+    context_economics_slice: dict = {
+        "compactions": [], "overflow_sessions": [], "summary": {},
+    }
+    try:
+        from clawmetry import local_store as _ls_ce
+        _ce_store = _ls_ce.get_store()
+        if _ce_store is not None:
+            _ce = _ce_store.query_context_economics(
+                util_limit=400, compaction_limit=80,
+            ) or {}
+            _ce_comps = _ce.get("compactions") or []
+            context_economics_slice["compactions"] = [
+                {
+                    "session_id":    c.get("session_id"),
+                    "ts":            c.get("ts"),
+                    "trigger":       c.get("trigger"),
+                    "tokens_before": c.get("tokens_before"),
+                    "tokens_after":  c.get("tokens_after"),
+                    "reclaimed":     c.get("reclaimed"),
+                    "from_hook":     c.get("from_hook"),
+                    # short prefix only — never the full compaction summary
+                    "summary":       (str(c.get("summary") or "")[:280]),
+                }
+                for c in _ce_comps[:80]
+            ]
+            context_economics_slice["overflow_sessions"] = (
+                _ce.get("overflow_sessions") or []
+            )[:50]
+            _ce_util = _ce.get("utilization") or []
+            _peak = max((float(u.get("pct") or 0) for u in _ce_util), default=0.0)
+            _overflow_n = sum(
+                1 for c in _ce_comps if c.get("trigger") == "overflow"
+            )
+            context_economics_slice["summary"] = {
+                "compaction_count":   len(_ce_comps),
+                "overflow_count":     _overflow_n,
+                "proactive_count":    len(_ce_comps) - _overflow_n,
+                "total_reclaimed":    sum(int(c.get("reclaimed") or 0) for c in _ce_comps),
+                "peak_pct":           round(_peak, 2),
+                "overflow_sessions":  len(_ce.get("overflow_sessions") or []),
+                "utilization_points": len(_ce_util),
+            }
+    except Exception as _e_ce:
+        log.debug("snapshot: context_economics slice failed: %s", _e_ce)
+
+    from clawmetry.providers_pricing import provider_for_model as _pfm
     payload = {
         "system": system,
         "infra": infra,
         "model": model_name or "unknown",
-        "provider": "",
+        "provider": _pfm(model_name or ""),
         "sessionCount": session_count,
         "mainTokens": main_tokens,
         "currentContextTokens": current_context_tokens,
         "skillHeaderTokens": skill_header_tokens,
-        "contextWindow": 200000,
+        "contextWindow": context_window,
         "cronCount": cron_enabled + cron_disabled,
         "cronEnabled": cron_enabled,
         "cronDisabled": cron_disabled,
@@ -9510,6 +10938,10 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
             "total": len(subagents_list),
         },
         "totalActive": active_count,
+        "runLedger": run_ledger_slice,
+        "toolPolicy": tool_policy_slice,
+        "toolCatalog": tool_catalog_slice,
+        "contextEconomics": context_economics_slice,
         "spending": spending,
         "cronJobs": _build_cron_jobs(paths),
         "channels": _build_channel_data(config),
@@ -9534,7 +10966,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
             ]
         ),
         "selfEvolve": _build_selfevolve(paths.get("workspace")),
-        "dailyUsage": _build_daily_usage(),
+        "dailyUsage": _du,  # #2142: computed once above, shared with `spending`
         "reliability": _build_reliability(),
         "memoryAccess": _build_memory_access(),
         "traces": _build_traces(),
@@ -10066,6 +11498,12 @@ def run_daemon() -> None:
     except Exception as e:
         log.warning(f"  Session metadata error: {e}")
     try:
+        fr = sync_family_runtimes(config, state, paths)
+        if fr:
+            log.info(f"  Family-runtime sessions (PicoClaw/NanoClaw): {fr} events synced")
+    except Exception as e:
+        log.warning(f"  Family-runtime sync error: {e}")
+    try:
         cr = sync_crons(config, state, paths)
         if cr:
             log.info(f"  Crons: {cr} synced")
@@ -10080,6 +11518,23 @@ def run_daemon() -> None:
             log.info(f"  Cron runs: {crr} rows ingested")
     except Exception as e:
         log.warning(f"  Cron-run ingest error: {e}")
+    # OpenClaw 2026.5.x run ledger (tasks/runs.sqlite) → DuckDB run_ledger.
+    # Feeds the Scheduler lane monitor + sub-agent fan-out tree.
+    try:
+        rl = sync_run_ledger(config, state, paths)
+        if rl:
+            log.info(f"  Run ledger: {rl} rows ingested")
+    except Exception as e:
+        log.warning(f"  Run-ledger ingest error: {e}")
+    # Effective sandbox + tool policy per agent (PRD P1-1 governance) →
+    # DuckDB tool_policy. Feeds the Tool Policy tab. Near-static config;
+    # re-synced on a slow cadence in the steady-state loop below.
+    try:
+        tp = sync_tool_policy(config, state, paths)
+        if tp:
+            log.info(f"  Tool policy: {tp} agent rows ingested")
+    except Exception as e:
+        log.warning(f"  Tool-policy ingest error: {e}")
     # Sync today's log lines immediately so Brain tab shows the most recent
     # activity right away — older log history is backfilled later
     try:
@@ -10245,6 +11700,12 @@ def run_daemon() -> None:
     heartbeat_interval = _pick_heartbeat_interval(_LAST_HEARTBEAT_RESPONSE)
     snapshot_interval = 60  # system snapshot (subagents, flow metrics) every 60s
     log_sync_interval = 60  # log lines are low-priority; streamer covers real-time
+    tool_policy_interval = 300  # sandbox/tool policy is near-static; refresh slowly
+    last_tool_policy = (
+        time.time()
+    )  # already synced at startup; next run after tool_policy_interval
+    family_interval = 60  # PicoClaw/NanoClaw ingest; cheap when absent, throttled when present
+    last_family = 0  # force first family-runtime ingest immediately
     last_heartbeat = time.time()
     last_snapshot = 0  # force first snapshot immediately
     last_log_sync = (
@@ -10305,6 +11766,17 @@ def run_daemon() -> None:
 
             ev = sync_sessions(config, state, paths)
             ev += sync_claude_cli_sessions(config, state, paths)
+            # OpenClaw-family runtimes (PicoClaw/NanoClaw) sessions -> DuckDB +
+            # cloud, throttled. Cheap no-op when neither runtime is present
+            # (detect() short-circuits), so the gate is just to bound the
+            # per-session file/SQLite reads when one IS present.
+            now_fam = time.time()
+            if now_fam - last_family > family_interval:
+                try:
+                    ev += sync_family_runtimes(config, state, paths)
+                except Exception as _fam_e:
+                    log.warning("family-runtime ingest failed (continuing): %s", _fam_e)
+                last_family = now_fam
             # PRIMARY: walk OpenClaw's sessions.json → ``cliSessionIds.claude-cli``
             # → ``~/.claude/projects/<encoded-cwd>/<id>.jsonl`` plus subagents/
             # and tool-results/. Tags events under the OpenClaw session UUID
@@ -10362,6 +11834,23 @@ def run_daemon() -> None:
             except Exception as _e_cr:
                 log.debug("sync_cron_runs error (non-fatal): %s", _e_cr)
                 cron_runs = 0
+            # OpenClaw run ledger (tasks/runs.sqlite) → DuckDB run_ledger.
+            try:
+                sync_run_ledger(config, state, paths)
+            except Exception as _e_rl:
+                log.debug("sync_run_ledger error (non-fatal): %s", _e_rl)
+
+            # Effective sandbox + tool policy per agent (PRD P1-1) → DuckDB
+            # tool_policy. Throttled — config is near-static and each agent is
+            # a CLI shell-out, so we refresh every tool_policy_interval, not
+            # every loop tick.
+            now_tp = time.time()
+            if now_tp - last_tool_policy > tool_policy_interval:
+                try:
+                    sync_tool_policy(config, state, paths)
+                except Exception as _e_tp:
+                    log.debug("sync_tool_policy error (non-fatal): %s", _e_tp)
+                last_tool_policy = now_tp
 
             # ── Low-priority: log lines (real-time covered by streamer) ──
             lg = 0
@@ -10503,7 +11992,30 @@ def run_daemon() -> None:
                     heartbeat_interval = HEARTBEAT_INTERVAL_SLOW
 
         except Exception as e:
-            log.error(f"Sync cycle error: {e}")
+            # #2073: self-heal DuckDB ART-index corruption from a prior
+            # kill-during-write (SIGKILL / OOM / reboot). The whole DB is
+            # invalidated for this connection — every subsequent op fails
+            # and the daemon crash-loops without this. Drop+recreate the
+            # explicit indexes on a fresh connection and continue; the next
+            # cycle runs on the healed DB. Data is intact (#2073;
+            # [[feedback_no_sigkill_daemon_duckdb_writes]]).
+            try:
+                from clawmetry import local_store as _ls
+                if _ls.is_index_corruption_error(e):
+                    n = _ls.heal_index_corruption()
+                    if n >= 0:
+                        log.warning(
+                            "Sync cycle hit DuckDB index corruption — "
+                            "self-healed (%d indexes rebuilt); next cycle "
+                            "will run on the recovered store.", n,
+                        )
+                    else:
+                        log.error("Sync cycle hit DuckDB index corruption "
+                                  "and self-heal failed; will retry next cycle")
+                else:
+                    log.error(f"Sync cycle error: {e}")
+            except Exception:
+                log.error(f"Sync cycle error: {e}")
 
         # Adaptive cycle sleep (P0 real-time MOAT, 2026-05-13). The
         # original `time.sleep(POLL_INTERVAL=15)` floored the heartbeat

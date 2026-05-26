@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -395,6 +396,84 @@ _DDL = [
         PRIMARY KEY (agent_type, subagent_id)
     )
     """,
+    # OpenClaw 2026.5.x moved its background-run bookkeeping out of the old
+    # ``~/.openclaw/subagents/runs.json`` (now usually empty) into a unified
+    # SQLite ledger at ``~/.openclaw/tasks/runs.sqlite``. That ledger is the
+    # authoritative record of EVERY background run — sub-agents
+    # (``runtime='subagent'``), cron jobs (``runtime='cron'``), and inline
+    # CLI/agent turns (``runtime='cli'``) — with status, delivery, timing,
+    # parent/child linkage and terminal outcome. We mirror it verbatim into
+    # ``run_ledger`` so three observability surfaces share one source of
+    # truth: the Scheduler/lane monitor (group by ``runtime``/``status``),
+    # the sub-agent fan-out tree (``parent_task_id``/``child_session_key``),
+    # and the cron run log. ``runtime`` IS the OpenClaw queue lane.
+    """
+    CREATE TABLE IF NOT EXISTS run_ledger (
+        task_id               VARCHAR PRIMARY KEY,
+        node_id               VARCHAR,
+        runtime               VARCHAR,
+        task_kind             VARCHAR,
+        source_id             VARCHAR,
+        requester_session_key VARCHAR,
+        owner_key             VARCHAR,
+        scope_kind            VARCHAR,
+        child_session_key     VARCHAR,
+        parent_flow_id        VARCHAR,
+        parent_task_id        VARCHAR,
+        agent_id              VARCHAR,
+        run_id                VARCHAR,
+        label                 VARCHAR,
+        task                  VARCHAR,
+        status                VARCHAR,
+        delivery_status       VARCHAR,
+        notify_policy         VARCHAR,
+        created_at            BIGINT,
+        started_at            BIGINT,
+        ended_at              BIGINT,
+        last_event_at         BIGINT,
+        cleanup_after         BIGINT,
+        error                 VARCHAR,
+        progress_summary      VARCHAR,
+        terminal_summary      VARCHAR,
+        terminal_outcome      VARCHAR,
+        updated_at            BIGINT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_run_ledger_runtime_status ON run_ledger(runtime, status)",
+    "CREATE INDEX IF NOT EXISTS idx_run_ledger_parent ON run_ledger(parent_task_id)",
+    "CREATE INDEX IF NOT EXISTS idx_run_ledger_last_event ON run_ledger(last_event_at)",
+    # PRD P1-1 (governance) — effective sandbox + tool-policy per agent.
+    # Mirrors `openclaw sandbox explain --json` (one row per agent_id): the
+    # sandbox mode (off/non-main/all), scope, workspace access, and the
+    # effective tool allow/deny lists. This is the authoritative answer to
+    # "which tools can this agent run, and where do they run." The daemon
+    # re-ingests on a slow cadence (config is near-static), upserting on
+    # agent_id. allow_json/deny_json are JSON-encoded string arrays so we
+    # don't drag a list type through DuckDB; sources_json keeps the
+    # provenance (which config key set each list) for the "why" column.
+    """
+    CREATE TABLE IF NOT EXISTS tool_policy (
+        agent_id              VARCHAR PRIMARY KEY,
+        node_id               VARCHAR,
+        session_key           VARCHAR,
+        sandbox_mode          VARCHAR,
+        sandbox_scope         VARCHAR,
+        workspace_access      VARCHAR,
+        workspace_root        VARCHAR,
+        session_is_sandboxed  BOOLEAN,
+        allow_json            VARCHAR,
+        deny_json             VARCHAR,
+        allow_count           INTEGER,
+        deny_count            INTEGER,
+        sources_json          VARCHAR,
+        elevated_enabled      BOOLEAN,
+        elevated_channel      VARCHAR,
+        elevated_allowed      BOOLEAN,
+        observed_at           BIGINT,
+        updated_at            BIGINT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_tool_policy_observed ON tool_policy(observed_at)",
     # Epic #1032 Phase 4 — approval queue. Authored locally when the policy
     # watcher fires on a tool-call, mirrored to the cloud cache via heartbeat
     # cache_push so the cloud Approvals inbox paints from cache, and resolved
@@ -1094,6 +1173,90 @@ def _reset_singleton_for_tests() -> None:
         _store_rw = None
         _store_ro = None
         _store_proxy = None
+
+
+# #2073: DuckDB ART-index corruption recovery. A SIGKILL / OOM / reboot during
+# a write (especially a bulk UPDATE — e.g. the cost backfill #2049) can leave
+# an explicit ``idx_%`` out of sync with its table, so the next DELETE/UPSERT
+# touching it raises one of these markers and DuckDB invalidates the whole
+# database for that session — every subsequent op fails and the daemon
+# crash-loops until manual recovery. Detection + heal lets the daemon self-heal
+# on the next cycle instead. (Burned 2026-05-25;
+# [[feedback_no_sigkill_daemon_duckdb_writes]].)
+_INDEX_CORRUPTION_MARKERS = (
+    "Failed to delete all rows from index",
+    "database has been invalidated",
+)
+
+
+def is_index_corruption_error(err: BaseException) -> bool:
+    """True if ``err``'s message matches a DuckDB index-invalidation FATAL.
+    Used by the daemon main loop to trigger ``heal_index_corruption()``."""
+    s = str(err)
+    return any(m in s for m in _INDEX_CORRUPTION_MARKERS)
+
+
+def heal_index_corruption() -> int:
+    """Repair DuckDB ART-index corruption on the daemon's writer DB. Drops
+    every explicit ``idx_%`` on a fresh connection, ``CHECKPOINT``s, then
+    re-runs the schema DDL (idempotent ``CREATE INDEX IF NOT EXISTS``) to
+    rebuild them clean from the table data. Data is intact — only the
+    indexes are rebuilt.
+
+    Closes and clears the singleton so the next ``get_store()`` reopens on
+    the healed DB. Returns the number of indexes rebuilt, or -1 on failure.
+    Never raises."""
+    global _store_rw, _store_ro, _store_proxy
+    try:
+        with _store_lock:
+            # The cached writer connection is invalidated post-corruption — drop
+            # it so the next get_store() opens fresh on the healed DB.
+            for name in ("_store_rw", "_store_ro"):
+                _st = globals().get(name)
+                if _st is None:
+                    continue
+                try:
+                    _st.stop(flush=False)
+                except Exception:
+                    pass
+            _store_rw = None
+            _store_ro = None
+            _store_proxy = None
+            # Open a fresh connection just for the repair.
+            conn = _open_connection(read_only=False)
+            n_dropped = 0
+            try:
+                try: conn.execute("CHECKPOINT")
+                except Exception: pass
+                try:
+                    rows = conn.execute(
+                        "SELECT index_name FROM duckdb_indexes() "
+                        "WHERE index_name LIKE 'idx_%'"
+                    ).fetchall()
+                except Exception:
+                    rows = []
+                for (idx_name,) in rows:
+                    try:
+                        conn.execute(f'DROP INDEX IF EXISTS "{idx_name}"')
+                        n_dropped += 1
+                    except Exception:
+                        pass
+                try: conn.execute("CHECKPOINT")
+                except Exception: pass
+                # Re-apply schema DDL — CREATE INDEX IF NOT EXISTS is
+                # idempotent for tables and recreates the dropped indexes
+                # from the table data, clean.
+                for stmt in _DDL:
+                    try: conn.execute(stmt)
+                    except Exception: pass
+                try: conn.execute("CHECKPOINT")
+                except Exception: pass
+            finally:
+                try: conn.close()
+                except Exception: pass
+        return n_dropped
+    except Exception:
+        return -1
 
 
 class LocalStore:
@@ -1978,6 +2141,145 @@ class LocalStore:
                   float(sa.get("cost_usd") or 0),
                   int(sa.get("token_count") or 0),
                   data_blob, now_ms])
+
+    # Columns mirrored 1:1 from OpenClaw's tasks/runs.sqlite ``task_runs`` row.
+    _RUN_LEDGER_COLS = (
+        "task_id", "node_id", "runtime", "task_kind", "source_id",
+        "requester_session_key", "owner_key", "scope_kind", "child_session_key",
+        "parent_flow_id", "parent_task_id", "agent_id", "run_id", "label",
+        "task", "status", "delivery_status", "notify_policy", "created_at",
+        "started_at", "ended_at", "last_event_at", "cleanup_after", "error",
+        "progress_summary", "terminal_summary", "terminal_outcome",
+    )
+
+    def ingest_run_ledger_row(self, r: dict[str, Any], *, node_id: str = "") -> None:
+        """Upsert one OpenClaw run-ledger row (from ``tasks/runs.sqlite``).
+
+        Required: ``task_id``. Re-ingesting a row whose ``status`` /
+        ``last_event_at`` advanced overwrites the prior copy (runs go
+        ``running`` -> ``succeeded``/``failed``), so the daemon can keep a
+        watermark on ``last_event_at`` and only re-read changed rows. Long
+        free-text fields are truncated so a runaway ``task`` description
+        can't bloat the row (and, downstream, the shared snapshot)."""
+        tid = r.get("task_id")
+        if not tid:
+            raise ValueError("run-ledger row must include 'task_id'")
+
+        def _txt(v: Any, n: int = 2000) -> Any:
+            if v is None:
+                return None
+            s = str(v)
+            return s[:n] if len(s) > n else s
+
+        def _int(v: Any) -> Any:
+            if v is None:
+                return None
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return None
+
+        vals = [
+            str(tid), node_id or None, _txt(r.get("runtime"), 64),
+            _txt(r.get("task_kind"), 64), _txt(r.get("source_id"), 256),
+            _txt(r.get("requester_session_key"), 256), _txt(r.get("owner_key"), 256),
+            _txt(r.get("scope_kind"), 64), _txt(r.get("child_session_key"), 256),
+            _txt(r.get("parent_flow_id"), 256), _txt(r.get("parent_task_id"), 256),
+            _txt(r.get("agent_id"), 128), _txt(r.get("run_id"), 256),
+            _txt(r.get("label"), 512), _txt(r.get("task"), 2000),
+            _txt(r.get("status"), 64), _txt(r.get("delivery_status"), 64),
+            _txt(r.get("notify_policy"), 64), _int(r.get("created_at")),
+            _int(r.get("started_at")), _int(r.get("ended_at")),
+            _int(r.get("last_event_at")), _int(r.get("cleanup_after")),
+            _txt(r.get("error"), 2000), _txt(r.get("progress_summary"), 2000),
+            _txt(r.get("terminal_summary"), 2000), _txt(r.get("terminal_outcome"), 256),
+        ]
+        now_ms = int(time.time() * 1000)
+        cols = ", ".join(self._RUN_LEDGER_COLS)
+        ph = ", ".join("?" for _ in self._RUN_LEDGER_COLS)
+        # Overwrite every non-key column on conflict — the source row is the
+        # source of truth and only ever moves forward (status/timing fill in).
+        upd = ", ".join(
+            f"{c} = excluded.{c}" for c in self._RUN_LEDGER_COLS if c != "task_id"
+        )
+        with self._write_lock:
+            self._conn.execute(
+                f"INSERT INTO run_ledger ({cols}, updated_at) "
+                f"VALUES ({ph}, ?) "
+                f"ON CONFLICT (task_id) DO UPDATE SET {upd}, updated_at = excluded.updated_at",
+                [*vals, now_ms],
+            )
+
+    _TOOL_POLICY_COLS = (
+        "agent_id", "node_id", "session_key", "sandbox_mode", "sandbox_scope",
+        "workspace_access", "workspace_root", "session_is_sandboxed",
+        "allow_json", "deny_json", "allow_count", "deny_count", "sources_json",
+        "elevated_enabled", "elevated_channel", "elevated_allowed", "observed_at",
+    )
+
+    def ingest_tool_policy_row(self, r: dict[str, Any], *, node_id: str = "") -> None:
+        """Upsert one effective sandbox/tool-policy row (PRD P1-1 governance).
+
+        ``r`` is the (already flattened) shape produced from one
+        ``openclaw sandbox explain --json`` invocation — see
+        ``clawmetry/sync.py:_flatten_sandbox_explain``. Required: ``agent_id``.
+        Re-ingest overwrites the prior copy on ``agent_id`` (config is
+        near-static; the newest read is the source of truth). The tool
+        allow/deny lists arrive as Python lists and are JSON-encoded so we
+        don't drag a list type through DuckDB.
+
+        Never raises on a malformed list/dict — degrades to ``[]``/``{}`` so
+        the read-only-by-default contract holds (the daemon must not crash on
+        an unexpected CLI shape)."""
+        aid = r.get("agent_id")
+        if not aid:
+            raise ValueError("tool-policy row must include 'agent_id'")
+
+        def _txt(v: Any, n: int = 512) -> Any:
+            if v is None:
+                return None
+            s = str(v)
+            return s[:n] if len(s) > n else s
+
+        def _json_list(v: Any) -> tuple[str, int]:
+            items = v if isinstance(v, list) else []
+            try:
+                return json.dumps(items)[:60000], len(items)
+            except (TypeError, ValueError):
+                return "[]", 0
+
+        def _bool(v: Any) -> Any:
+            return bool(v) if v is not None else None
+
+        allow_json, allow_n = _json_list(r.get("allow"))
+        deny_json, deny_n = _json_list(r.get("deny"))
+        try:
+            sources_json = json.dumps(r.get("sources") or {})[:8000]
+        except (TypeError, ValueError):
+            sources_json = "{}"
+
+        vals = [
+            str(aid), node_id or None, _txt(r.get("session_key"), 256),
+            _txt(r.get("sandbox_mode"), 32), _txt(r.get("sandbox_scope"), 32),
+            _txt(r.get("workspace_access"), 64), _txt(r.get("workspace_root"), 1024),
+            _bool(r.get("session_is_sandboxed")), allow_json, deny_json,
+            allow_n, deny_n, sources_json, _bool(r.get("elevated_enabled")),
+            _txt(r.get("elevated_channel"), 64), _bool(r.get("elevated_allowed")),
+            int(r.get("observed_at") or int(time.time() * 1000)),
+        ]
+        now_ms = int(time.time() * 1000)
+        cols = ", ".join(self._TOOL_POLICY_COLS)
+        ph = ", ".join("?" for _ in self._TOOL_POLICY_COLS)
+        upd = ", ".join(
+            f"{c} = excluded.{c}" for c in self._TOOL_POLICY_COLS if c != "agent_id"
+        )
+        with self._write_lock:
+            self._conn.execute(
+                f"INSERT INTO tool_policy ({cols}, updated_at) "
+                f"VALUES ({ph}, ?) "
+                f"ON CONFLICT (agent_id) DO UPDATE SET {upd}, updated_at = excluded.updated_at",
+                [*vals, now_ms],
+            )
 
     def ingest_loop_signal(
         self,
@@ -3496,6 +3798,87 @@ class LocalStore:
         params.append(int(limit))
         return [_row_to_event(r, _EVENT_COLS) for r in self._fetch(sql, params)]
 
+    def backfill_event_costs(self, *, batch: int = 5000) -> int:
+        """#2049: populate ``cost_usd`` for events that arrived without it.
+
+        OpenClaw / OAuth events carry tokens + model but no provider-reported
+        cost, so ``cost_usd`` was NULL/0 and the Cost tab showed ~$0 for heavy
+        usage (1.5M tokens -> $0.008). Recompute the API-equivalent cost from
+        each event's own token split x model pricing (cache-aware) and store
+        it. One bounded batch per call. Idempotent: only rows whose cost_usd
+        is NULL/0 AND whose derived cost is > 0 are written, so re-runs and
+        genuinely-free local-model rows are no-ops. Returns rows updated.
+        Daemon-only (needs the writer connection)."""
+        try:
+            from clawmetry.providers_pricing import estimate_event_cost_usd
+        except Exception:
+            return 0
+        try:
+            rows = self._conn.execute(
+                "SELECT id, data, model FROM events "
+                "WHERE (cost_usd IS NULL OR cost_usd = 0) "
+                "AND token_count > 0 AND model IS NOT NULL "
+                "LIMIT ?",
+                [int(batch)],
+            ).fetchall()
+        except Exception:
+            return 0
+
+        def _tok(u, *keys):
+            for k in keys:
+                v = u.get(k)
+                if v is not None:
+                    try:
+                        return int(v)
+                    except (TypeError, ValueError):
+                        pass
+            return 0
+
+        updates: list[tuple] = []
+        for (eid, data, model) in rows:
+            try:
+                if isinstance(data, (bytes, bytearray)):
+                    data = bytes(data).decode("utf-8", "replace")
+                obj = json.loads(data) if isinstance(data, str) else data
+            except Exception:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            msg = obj.get("message") if isinstance(obj.get("message"), dict) else None
+            src = msg or obj
+            u = src.get("usage") if isinstance(src.get("usage"), dict) else {}
+            # Family-runtime events (claude_code/cursor/…, ingested by
+            # sync_family_runtimes) carry the token split under
+            # ``data.extra.{inputTokens,outputTokens}`` rather than
+            # ``data.usage``. Without this fallback their cost stayed $0 even
+            # for heavy Opus sessions (the Tracing + Cost tabs showed $0 on
+            # hundreds of thousands of tokens). _tok() already accepts the
+            # camelCase keys, so the same estimate path then prices them.
+            if not u:
+                ex = obj.get("extra") if isinstance(obj.get("extra"), dict) else {}
+                if ex.get("inputTokens") is not None or ex.get("outputTokens") is not None:
+                    u = ex
+            if not u:
+                continue
+            cost = estimate_event_cost_usd(
+                model,
+                _tok(u, "input_tokens", "inputTokens", "prompt_tokens"),
+                _tok(u, "output_tokens", "outputTokens", "completion_tokens"),
+                _tok(u, "cache_read_input_tokens", "cacheReadInputTokens"),
+                _tok(u, "cache_creation_input_tokens", "cacheCreationInputTokens"),
+            )
+            if cost and cost > 0:
+                updates.append((float(cost), eid))
+        if not updates:
+            return 0
+        try:
+            self._conn.executemany(
+                "UPDATE events SET cost_usd = ? WHERE id = ?", updates
+            )
+        except Exception:
+            return 0
+        return len(updates)
+
     def query_events_with_subagents(
         self,
         *,
@@ -4234,6 +4617,105 @@ class LocalStore:
                 "ended_at", "task", "status", "cost_usd", "token_count",
                 "data", "updated_at"]
         return _decode_data_blob_rows(self._fetch(sql, params), cols)
+
+    def query_run_ledger(
+        self,
+        *,
+        runtime: str | None = None,
+        scope_kind: str | None = None,
+        status: str | None = None,
+        since_ms: int | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """OpenClaw background-run ledger rows (sub-agents, crons, CLI turns).
+
+        ``runtime`` is the OpenClaw queue lane (``cli``/``cron``/``subagent``).
+        Newest first by ``last_event_at`` (falling back to ``created_at``)."""
+        where: list[str] = []
+        params: list[Any] = []
+        if runtime:
+            where.append("runtime = ?"); params.append(runtime)
+        if scope_kind:
+            where.append("scope_kind = ?"); params.append(scope_kind)
+        if status:
+            where.append("status = ?"); params.append(status)
+        if since_ms is not None:
+            where.append("COALESCE(last_event_at, created_at, 0) >= ?")
+            params.append(int(since_ms))
+        clause = ("WHERE " + " AND ".join(where)) if where else ""
+        cols = list(self._RUN_LEDGER_COLS) + ["updated_at"]
+        sql = (
+            f"SELECT {', '.join(cols)} FROM run_ledger {clause} "
+            f"ORDER BY COALESCE(last_event_at, created_at, 0) DESC LIMIT ?"
+        )
+        params.append(int(limit))
+        return [dict(zip(cols, row)) for row in self._fetch(sql, params)]
+
+    def query_run_ledger_lanes(self) -> list[dict[str, Any]]:
+        """Per-lane occupancy rollup for the Scheduler/queue monitor.
+
+        One row per ``runtime`` lane with running / queued / done counts so
+        the UI can render lane-saturation bars without pulling every row.
+        ``running`` approximates live lane occupancy; ``queued`` is anything
+        accepted-but-not-started; ``failed_recent`` flags lanes with trouble."""
+        sql = """
+            SELECT
+                COALESCE(runtime, 'unknown')                                   AS lane,
+                COUNT(*)                                                       AS total,
+                COUNT(*) FILTER (WHERE status IN ('running', 'in_progress', 'active'))   AS running,
+                COUNT(*) FILTER (WHERE status IN ('queued', 'accepted', 'pending'))      AS queued,
+                COUNT(*) FILTER (WHERE status IN ('succeeded', 'success', 'ok', 'done')) AS succeeded,
+                COUNT(*) FILTER (WHERE status IN ('failed', 'error', 'timeout'))         AS failed,
+                MAX(COALESCE(last_event_at, created_at, 0))                     AS last_event_at
+            FROM run_ledger
+            GROUP BY 1
+            ORDER BY running DESC, total DESC
+        """
+        cols = ["lane", "total", "running", "queued", "succeeded",
+                "failed", "last_event_at"]
+        return [dict(zip(cols, row)) for row in self._fetch(sql, [])]
+
+    def query_tool_policy(
+        self,
+        *,
+        agent_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Effective sandbox + tool-policy rows, one per agent (PRD P1-1).
+
+        Returns the per-agent sandbox mode, scope, workspace access and the
+        decoded tool ``allow`` / ``deny`` lists (parsed back from JSON so the
+        caller hands them straight to the API). ``sources`` provenance is
+        decoded the same way. Newest-observed first. Empty list (fresh sync /
+        OpenClaw without ``sandbox explain``) is a normal, non-error state."""
+        where: list[str] = []
+        params: list[Any] = []
+        if agent_id:
+            where.append("agent_id = ?")
+            params.append(agent_id)
+        clause = ("WHERE " + " AND ".join(where)) if where else ""
+        cols = list(self._TOOL_POLICY_COLS) + ["updated_at"]
+        sql = (
+            f"SELECT {', '.join(cols)} FROM tool_policy {clause} "
+            f"ORDER BY COALESCE(observed_at, 0) DESC, agent_id LIMIT ?"
+        )
+        params.append(int(limit))
+        out: list[dict[str, Any]] = []
+        for row in self._fetch(sql, params):
+            d = dict(zip(cols, row))
+            for jk, outk in (("allow_json", "allow"), ("deny_json", "deny")):
+                try:
+                    d[outk] = json.loads(d.get(jk) or "[]")
+                except (ValueError, TypeError):
+                    d[outk] = []
+                d.pop(jk, None)
+            try:
+                d["sources"] = json.loads(d.get("sources_json") or "{}")
+            except (ValueError, TypeError):
+                d["sources"] = {}
+            d.pop("sources_json", None)
+            out.append(d)
+        return out
 
     def query_channel_configs(
         self,
@@ -5435,12 +5917,272 @@ class LocalStore:
                     + int(splits.get("cache_write_tokens", 0))
                 )
                 if tok > 0:
+                    # Carry the turn's model so callers can size the context
+                    # window correctly (e.g. 1M for the [1m] Opus variant).
+                    # Without it, currentContextTokens=323K rendered against
+                    # a hardcoded 200K window read ">100%". Probed across the
+                    # same shapes _extract_usage_splits handles.
+                    msg = data.get("message") if isinstance(data.get("message"), dict) else {}
+                    model = (
+                        msg.get("model")
+                        or data.get("model")
+                        or data.get("modelId")
+                        or ""
+                    )
                     return {
                         "session_id":   sid,
                         "input_tokens": tok,
                         "ts":           ts,
+                        "model":        model,
+                        "context_window": context_window_for_model(model, tok),
                     }
         return {"input_tokens": 0}
+
+    # Overflow-trigger signal strings. A compaction whose own summary/error
+    # text (or an error event adjacent to it) carries one of these was forced
+    # by the model rejecting an over-long prompt — i.e. the agent hit the wall
+    # rather than compacting proactively. Lower-cased substring match.
+    _OVERFLOW_MARKERS = (
+        "request_too_large",
+        "context length exceeded",
+        "context_length_exceeded",
+        "input is too long",
+        "input length and `max_tokens`",
+        "prompt is too long",
+        "maximum context length",
+        "too many tokens",
+        "exceeds the maximum",
+    )
+
+    def query_context_economics(
+        self,
+        *,
+        session_id: str | None = None,
+        util_limit: int = 400,
+        compaction_limit: int = 200,
+    ) -> dict[str, Any]:
+        """Context-window economics for the Context Economics tab (PRD P1-2).
+
+        Bundles three views off the ``events`` table so the dashboard reads
+        one round-trip:
+
+          * ``utilization`` — per-turn live context size over time. For each
+            assistant turn (``_ASSISTANT_EVENT_TYPES`` — v3-safe) we sum the
+            prompt-side tokens the model actually saw on that turn
+            (``input + cache_read + cache_write``, matching
+            ``query_context_window_peek``) and divide by the model's context
+            window. This is the gauge-over-time the PRD asks for.
+          * ``compactions`` — every ``compaction`` event tagged
+            ``proactive`` vs ``overflow``. ``tokens_before`` comes from the
+            event blob; ``tokens_after`` is the first post-compaction
+            assistant-turn context reading for that session (what the window
+            actually shrank to); ``reclaimed = before - after``.
+          * ``overflow_sessions`` — sessions that overflowed then kept going
+            (>=2 compactions with at least one ``overflow`` trigger), i.e. the
+            repeatedly-overflow-then-retry flag.
+
+        ``session_id`` scopes utilization to one conversation (the session
+        picker / clickable chips in the UI). Compactions + overflow flags are
+        always computed workspace-wide so the summary chips stay meaningful;
+        the route filters them client-side when a session is picked.
+
+        Never raises — an empty / fresh DB returns empty lists. Reads only;
+        the daemon owns the writer lock.
+        """
+        try:
+            util_limit = max(1, min(2000, int(util_limit)))
+        except (TypeError, ValueError):
+            util_limit = 400
+        try:
+            compaction_limit = max(1, min(1000, int(compaction_limit)))
+        except (TypeError, ValueError):
+            compaction_limit = 200
+
+        def _ctx_tokens(data: dict) -> int:
+            """Prompt-side token total the model saw this turn. Mirrors
+            query_context_window_peek, plus a ``data.extra`` fallback for the
+            Claude Code SDK echo shape (inputTokens / cacheReadInputTokens /
+            cacheCreationInputTokens live under ``extra``, which
+            ``_extract_usage_splits`` doesn't walk)."""
+            splits = _extract_usage_splits(data)
+            tok = (
+                int(splits.get("input_tokens", 0))
+                + int(splits.get("cache_read_tokens", 0))
+                + int(splits.get("cache_write_tokens", 0))
+            )
+            if tok > 0:
+                return tok
+            extra = data.get("extra") if isinstance(data.get("extra"), dict) else {}
+            if extra:
+                return (
+                    _read_usage_int(extra, _USAGE_KEYS_INPUT)
+                    + _read_usage_int(extra, _USAGE_KEYS_CACHE_READ)
+                    + _read_usage_int(extra, _USAGE_KEYS_CACHE_WRITE)
+                )
+            return 0
+
+        def _model_of(data: dict, fallback: str) -> str:
+            msg = data.get("message") if isinstance(data.get("message"), dict) else {}
+            extra = data.get("extra") if isinstance(data.get("extra"), dict) else {}
+            return (
+                msg.get("model")
+                or data.get("model")
+                or data.get("modelId")
+                or extra.get("model")
+                or fallback
+                or ""
+            )
+
+        def _parse(raw) -> dict:
+            if raw is None:
+                return {}
+            try:
+                text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                parsed = json.loads(text) if text else {}
+                return parsed if isinstance(parsed, dict) else {}
+            except (ValueError, TypeError, UnicodeDecodeError):
+                return {}
+
+        # ── utilization series (assistant turns, chronological) ──
+        ev_in = _sql_in_clause(_ASSISTANT_EVENT_TYPES)
+        util_clauses = [f"event_type IN {ev_in}"]
+        util_params: list[Any] = []
+        if session_id:
+            util_clauses.append("session_id = ?")
+            util_params.append(session_id)
+        util_where = "WHERE " + " AND ".join(util_clauses)
+        util_params.append(int(util_limit))
+        util_rows = self._fetch(
+            f"""
+            SELECT session_id, ts, data, model
+            FROM events
+            {util_where}
+            ORDER BY ts DESC, id DESC
+            LIMIT ?
+            """,
+            util_params,
+        )
+        utilization: list[dict[str, Any]] = []
+        for sid, ts, raw, model_col in util_rows:
+            data = _parse(raw)
+            tok = _ctx_tokens(data)
+            if tok <= 0:
+                continue
+            model = _model_of(data, model_col or "")
+            window = context_window_for_model(model, tok)
+            pct = round(100.0 * tok / window, 2) if window else 0.0
+            utilization.append({
+                "session_id": sid,
+                "ts":         ts,
+                "tokens":     tok,
+                "window":     window,
+                "model":      model,
+                "pct":        pct,
+            })
+        # Oldest-first so the gauge reads left-to-right as a timeline.
+        utilization.sort(key=lambda u: str(u.get("ts") or ""))
+
+        # ── compactions (workspace-wide) ──
+        comp_rows = self._fetch(
+            f"""
+            SELECT session_id, ts, data
+            FROM events
+            WHERE event_type = 'compaction'
+            ORDER BY ts DESC
+            LIMIT ?
+            """,
+            [int(compaction_limit)],
+        )
+        # First post-compaction context reading per session, so we can derive
+        # tokens_after. Build a per-session sorted list of (ts, tokens) once.
+        by_session_util: dict[str, list[tuple[str, int]]] = {}
+        for u in utilization:
+            by_session_util.setdefault(str(u["session_id"]), []).append(
+                (str(u["ts"] or ""), int(u["tokens"]))
+            )
+        # utilization is session-scoped when session_id is set; for the
+        # tokens_after lookup we want all sessions, so re-scan if scoped.
+        if session_id:
+            after_rows = self._fetch(
+                f"""
+                SELECT session_id, ts, data
+                FROM events
+                WHERE event_type IN {ev_in}
+                ORDER BY ts ASC, id ASC
+                LIMIT 4000
+                """,
+                [],
+            )
+            by_session_util = {}
+            for sid, ts, raw in after_rows:
+                tok = _ctx_tokens(_parse(raw))
+                if tok > 0:
+                    by_session_util.setdefault(str(sid), []).append((str(ts or ""), tok))
+
+        def _first_after(sid: str, comp_ts: str) -> int:
+            pts = by_session_util.get(str(sid)) or []
+            for ts, tok in sorted(pts):
+                if ts > (comp_ts or ""):
+                    return tok
+            return 0
+
+        compactions: list[dict[str, Any]] = []
+        overflow_counts: dict[str, dict[str, int]] = {}
+        for sid, ts, raw in comp_rows:
+            data = _parse(raw)
+            summary = str(data.get("summary") or "")
+            tokens_before = int(
+                data.get("tokensBefore") or data.get("tokens_before") or 0
+            )
+            from_hook = bool(data.get("fromHook") or data.get("from_hook") or False)
+            comp_ts = data.get("timestamp") or ts or ""
+            # Trigger inference: scan the compaction blob's own text for an
+            # overflow marker. ``fromHook`` (OpenClaw's proactive
+            # auto-compaction hook) is a strong proactive signal; an error /
+            # reason field carrying a too-large marker flips it to overflow.
+            blob_text = json.dumps(data, default=str).lower()
+            err_text = str(
+                data.get("error") or data.get("reason") or data.get("trigger") or ""
+            ).lower()
+            is_overflow = any(
+                m in blob_text or m in err_text for m in self._OVERFLOW_MARKERS
+            )
+            trigger = "overflow" if is_overflow else ("proactive" if from_hook else "proactive")
+            tokens_after = _first_after(str(sid), str(comp_ts))
+            reclaimed = max(0, tokens_before - tokens_after) if tokens_before else 0
+            compactions.append({
+                "session_id":    sid,
+                "ts":            comp_ts,
+                "trigger":       trigger,
+                "tokens_before": tokens_before,
+                "tokens_after":  tokens_after,
+                "reclaimed":     reclaimed,
+                "from_hook":     from_hook,
+                "summary":       summary,
+            })
+            oc = overflow_counts.setdefault(str(sid), {"total": 0, "overflow": 0})
+            oc["total"] += 1
+            if is_overflow:
+                oc["overflow"] += 1
+
+        # ── repeatedly-overflow-then-retry flag ──
+        # A session that overflowed at least once AND compacted >= 2 times is
+        # thrashing the context wall instead of staying under it.
+        overflow_sessions: list[dict[str, Any]] = []
+        for sid, c in overflow_counts.items():
+            if c["overflow"] >= 1 and c["total"] >= 2:
+                overflow_sessions.append({
+                    "session_id":       sid,
+                    "compaction_count": c["total"],
+                    "overflow_count":   c["overflow"],
+                })
+        overflow_sessions.sort(key=lambda s: s["overflow_count"], reverse=True)
+
+        return {
+            "utilization":       utilization,
+            "compactions":       compactions,
+            "overflow_sessions": overflow_sessions,
+        }
 
     def query_model_fallbacks(
         self,
@@ -6759,17 +7501,53 @@ def _extract_event_metrics(
                     except (TypeError, ValueError):
                         pass
 
-    # Derive cost only when input/output split + provider + model are all known.
-    # estimate_cost_usd uses asymmetric input/output rates; a single ``total``
-    # can't be priced correctly, so leave cost=None and let read-side compute.
-    if cost is None and provider and model and (tokens_in or tokens_out):
+    # Adapter shapes (Claude Code, Codex, …) pre-set ``token_count`` (the lumped
+    # total) and stash the input/output/cache split under ``data.extra`` — so
+    # the ``if tokens is None`` blocks above were skipped and the split is still
+    # unknown, leaving cost NULL ($0 in the Cost tab for sessions that clearly
+    # cost money). Recover the split + cache tokens here, from ``data.extra``
+    # then ``data.usage``, regardless of whether the total was pre-set, so the
+    # #2049 derivation below can run.
+    cache_read = cache_write = 0
+    for src in (d.get("extra"), d.get("usage")):
+        if not isinstance(src, dict):
+            continue
+        if tokens_in is None:
+            i = src.get("inputTokens") or src.get("input_tokens")
+            if i:
+                try:
+                    tokens_in = int(i)
+                except (TypeError, ValueError):
+                    pass
+        if tokens_out is None:
+            o = src.get("outputTokens") or src.get("output_tokens")
+            if o:
+                try:
+                    tokens_out = int(o)
+                except (TypeError, ValueError):
+                    pass
+        if not cache_read:
+            cache_read = int(src.get("cacheReadInputTokens")
+                             or src.get("cache_read_input_tokens") or 0)
+        if not cache_write:
+            cache_write = int(src.get("cacheCreationInputTokens")
+                              or src.get("cache_creation_input_tokens") or 0)
+
+    # Derive cost from tokens × model pricing (#2049), cache-aware, with the
+    # provider resolved from the model when the event didn't carry one (adapter
+    # events don't). ``estimate_event_cost_usd`` infers the provider and applies
+    # the Anthropic cache multipliers; an explicit/already-priced cost still
+    # wins (we only derive when ``cost is None``).
+    if cost is None and model and (tokens_in or tokens_out or cache_read or cache_write):
         try:
-            from clawmetry.providers_pricing import estimate_cost_usd
-            est = estimate_cost_usd(
-                provider=str(provider),
-                tokens_in=int(tokens_in or 0),
-                tokens_out=int(tokens_out or 0),
-                model=str(model),
+            from clawmetry.providers_pricing import estimate_event_cost_usd
+            est = estimate_event_cost_usd(
+                str(model),
+                input_tokens=int(tokens_in or 0),
+                output_tokens=int(tokens_out or 0),
+                cache_read_tokens=int(cache_read or 0),
+                cache_write_tokens=int(cache_write or 0),
+                provider=str(provider or ""),
             )
             if est:
                 cost = float(est)
@@ -6979,6 +7757,50 @@ def _sql_in_clause(values: tuple[str, ...]) -> str:
     so it's safe to interpolate them directly. Centralised so the four
     fast-path methods can keep their predicates in sync."""
     return "(" + ", ".join("'" + v.replace("'", "''") + "'" for v in values) + ")"
+
+
+# Standard Claude context window. Most models are 200K; the [1m] Opus/Sonnet
+# variants are 1M. Other providers/local models vary, but 200K is a safe
+# default that the observed-tokens guard below corrects upward when wrong.
+_DEFAULT_CONTEXT_WINDOW = 200_000
+_LARGE_CONTEXT_WINDOW = 1_000_000
+
+
+def context_window_for_model(model: str, observed_tokens: int = 0) -> int:
+    """Best-effort context-window size (in tokens) for ``model``.
+
+    Used to size the LLM Context Inspector gauge so currentContextTokens /
+    contextWindow is coherent. Before this, contextWindow was hardcoded to
+    200K everywhere, so a Claude Code turn on the 1M Opus variant
+    (currentContextTokens ≈ 323K) rendered as ">100%". (Surfaced
+    2026-05-25.)
+
+    Two signals, in order:
+      1. **Model string** — a ``1m`` marker (``claude-opus-4-7[1m]``,
+         ``...-1m``) means the 1M variant.
+      2. **Observed tokens** — a measured prompt can never exceed the
+         model's window, so if we saw MORE than the string-derived base we
+         must be on a larger variant whose marker we didn't recognise (the
+         beta 1M header isn't always echoed into the model string). Bump to
+         the next standard tier so the gauge never reads >100%.
+
+    Args:
+        model: the model string from the turn (may be empty).
+        observed_tokens: the measured live context size, if known. Acts as
+            a floor for the returned window.
+    """
+    m = (model or "").lower()
+    if "1m" in m:  # matches [1m], -1m, _1m, "1m"
+        base = _LARGE_CONTEXT_WINDOW
+    else:
+        base = _DEFAULT_CONTEXT_WINDOW
+    obs = int(observed_tokens or 0)
+    if obs > base:
+        if obs <= _LARGE_CONTEXT_WINDOW:
+            return _LARGE_CONTEXT_WINDOW
+        # Round up to the next whole-million tier for >1M contexts.
+        return int(math.ceil(obs / _LARGE_CONTEXT_WINDOW) * _LARGE_CONTEXT_WINDOW)
+    return base
 
 
 def _extract_input_tokens(data: dict) -> int:
