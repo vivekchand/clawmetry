@@ -10913,11 +10913,12 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _e_ce:
         log.debug("snapshot: context_economics slice failed: %s", _e_ce)
 
+    from clawmetry.providers_pricing import provider_for_model as _pfm
     payload = {
         "system": system,
         "infra": infra,
         "model": model_name or "unknown",
-        "provider": "",
+        "provider": _pfm(model_name or ""),
         "sessionCount": session_count,
         "mainTokens": main_tokens,
         "currentContextTokens": current_context_tokens,
