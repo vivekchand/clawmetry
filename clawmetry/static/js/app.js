@@ -11765,64 +11765,126 @@ function _saToggle(sid) {
 // subagent lane caps at 8 and the main lane at 4 concurrent runs. cli/cron
 // have no fixed small cap, so we show live running count without a "/cap".
 var _RUN_LEDGER_LANE_CAPS = { subagent: 8, main: 4 };
+// Interactive state: which lane is filtered (null = all) and which run rows
+// are expanded into their detail drawer. Kept module-level so a 5s refresh
+// re-render preserves the user's drill-down.
+var _rlLaneFilter = null;
+var _rlExpanded = {};
+var _rlData = { lanes: [], runs: [] };
 
 // Live OpenClaw run-ledger view: queue-lane saturation bars + recent runs.
 // `runtime` IS the OpenClaw queue lane (cli / cron / subagent), so the lane
 // rollup doubles as the queue/concurrency monitor. Reads /api/run-ledger,
 // which the sync daemon mirrors from ~/.openclaw/tasks/runs.sqlite.
+// Interactive: click a lane to filter, click a run to expand its detail +
+// jump to the child session transcript.
 async function loadRunLedger() {
   var el = document.getElementById('run-ledger-panel');
   if (!el) return;
   try {
-    var data = await fetch('/api/run-ledger?limit=60').then(function(r){ return r.json(); });
-    var lanes = data.lanes || [];
-    var runs = data.runs || [];
-    if (lanes.length === 0 && runs.length === 0) {
-      el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">No background runs yet. Sub-agent, cron and CLI runs from OpenClaw’s task ledger appear here as they execute.</div>';
-      return;
-    }
-    function laneColor(lane){ return ({subagent:'#8b5cf6',cron:'#0ea5e9',cli:'#16a34a'})[lane] || '#6b7280'; }
-    var laneHtml = '<div style="border:1px solid var(--border-primary);border-radius:10px;padding:14px;">';
-    laneHtml += '<div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;">Queue lanes</div>';
-    lanes.forEach(function(L){
-      var cap = _RUN_LEDGER_LANE_CAPS[L.lane];
-      var running = L.running||0, total = L.total||0, ok = L.succeeded||0, failed = L.failed||0, queued = L.queued||0;
-      var capLabel = cap ? (running + '/' + cap) : ('' + running);
-      function seg(n,color){ return total>0 ? '<span style="height:100%;width:'+(n/total*100)+'%;background:'+color+';display:inline-block;"></span>' : ''; }
-      laneHtml += '<div style="margin-bottom:12px;">';
-      laneHtml += '<div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:4px;">';
-      laneHtml += '<span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:'+laneColor(L.lane)+';"></span>';
-      laneHtml += '<span style="font-weight:700;color:var(--text-primary);">'+escHtml(L.lane)+'</span>';
-      laneHtml += '<span style="font-size:11px;font-weight:600;color:'+(running>0?'#16a34a':'var(--text-muted)')+';">'+(running>0 ? ('● '+capLabel+' running') : 'idle')+'</span>';
-      laneHtml += '<span style="flex:1;"></span>';
-      laneHtml += '<span style="font-size:11px;color:var(--text-muted);">'+total+' runs · '+ok+'✓'+(failed?(' · '+failed+'✗'):'')+'</span>';
-      laneHtml += '</div>';
-      laneHtml += '<div style="display:flex;height:7px;border-radius:4px;overflow:hidden;background:var(--bg-secondary);">';
-      laneHtml += seg(ok,'#16a34a')+seg(running,'#3b82f6')+seg(queued,'#d97706')+seg(failed,'#ef4444');
-      laneHtml += '</div></div>';
-    });
-    laneHtml += '</div>';
-    function pill(status){
-      var m = {succeeded:['#16a34a','rgba(22,163,74,.12)'],success:['#16a34a','rgba(22,163,74,.12)'],running:['#3b82f6','rgba(59,130,246,.12)'],failed:['#ef4444','rgba(239,68,68,.12)'],timeout:['#ef4444','rgba(239,68,68,.12)']};
-      var c = m[status] || ['#6b7280','var(--bg-secondary)'];
-      return '<span style="font-size:10px;font-weight:700;color:'+c[0]+';background:'+c[1]+';border-radius:4px;padding:1px 6px;">'+escHtml(String(status||'?'))+'</span>';
-    }
-    function dur(s){ if(!s.started_at||!s.ended_at) return ''; var ms=s.ended_at-s.started_at; if(ms<0) return ''; if(ms<1000) return ms+'ms'; if(ms<60000) return (ms/1000).toFixed(1)+'s'; return Math.round(ms/60000)+'m'; }
-    var runHtml = '<div style="border:1px solid var(--border-primary);border-radius:10px;margin-top:14px;overflow:hidden;">';
-    runHtml += '<div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;padding:12px 14px;border-bottom:1px solid var(--border-primary);">Recent runs</div>';
-    runs.slice(0,40).forEach(function(s){
-      runHtml += '<div style="display:flex;align-items:center;gap:10px;padding:7px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;">';
-      runHtml += pill(s.status);
-      runHtml += '<span style="font-size:10px;color:var(--text-faint);background:var(--bg-secondary);border-radius:4px;padding:1px 6px;min-width:54px;text-align:center;">'+escHtml(s.runtime||'')+'</span>';
-      runHtml += '<span style="flex:1;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+escHtml(s.label||'')+'">'+escHtml(s.label||'(untitled)')+'</span>';
-      var d = dur(s); if(d) runHtml += '<span style="color:var(--text-muted);white-space:nowrap;">'+d+'</span>';
-      runHtml += '</div>';
-    });
-    runHtml += '</div>';
-    el.innerHTML = laneHtml + runHtml;
+    var data = await fetch('/api/run-ledger?limit=120').then(function(r){ return r.json(); });
+    _rlData = { lanes: data.lanes || [], runs: data.runs || [] };
+    _rlRender();
   } catch(e) {
     el.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">Failed to load run ledger: '+escHtml(String(e))+'</div>';
   }
+}
+
+function _rlSetLane(lane) {
+  _rlLaneFilter = (_rlLaneFilter === lane) ? null : lane;  // toggle
+  _rlRender();
+}
+function _rlToggleRun(tid) {
+  _rlExpanded[tid] = !_rlExpanded[tid];
+  _rlRender();
+}
+function _rlOpenSession(key) {
+  // Jump to the child session's transcript (same deep-link the tree uses).
+  try { if (typeof viewTranscript === 'function') { viewTranscript(key); return; } } catch(e) {}
+  try { window.location.hash = 'session=' + encodeURIComponent(key); } catch(e) {}
+}
+
+function _rlRender() {
+  var el = document.getElementById('run-ledger-panel');
+  if (!el) return;
+  var lanes = _rlData.lanes || [], runs = _rlData.runs || [];
+  if (lanes.length === 0 && runs.length === 0) {
+    el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">No background runs yet. Sub-agent, cron and CLI runs from OpenClaw’s task ledger appear here as they execute.</div>';
+    return;
+  }
+  function laneColor(lane){ return ({subagent:'#8b5cf6',cron:'#0ea5e9',cli:'#16a34a'})[lane] || '#6b7280'; }
+  function jsq(s){ return String(s==null?'':s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
+
+  // ── Lane bars (clickable filters) ──
+  var laneHtml = '<div style="border:1px solid var(--border-primary);border-radius:10px;padding:14px;">';
+  laneHtml += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;"><span style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;">Queue lanes</span>';
+  if (_rlLaneFilter) laneHtml += '<span style="font-size:11px;color:var(--text-muted);">· filtered to <strong style="color:'+laneColor(_rlLaneFilter)+'">'+escHtml(_rlLaneFilter)+'</strong> <a onclick="_rlSetLane(\''+jsq(_rlLaneFilter)+'\')" style="cursor:pointer;color:var(--accent,#3b82f6);">clear ✕</a></span>';
+  else laneHtml += '<span style="font-size:11px;color:var(--text-faint);">click a lane to filter</span>';
+  laneHtml += '</div>';
+  lanes.forEach(function(L){
+    var cap = _RUN_LEDGER_LANE_CAPS[L.lane];
+    var running = L.running||0, total = L.total||0, ok = L.succeeded||0, failed = L.failed||0, queued = L.queued||0;
+    var capLabel = cap ? (running + '/' + cap) : ('' + running);
+    var active = (_rlLaneFilter === L.lane);
+    function seg(n,color){ return total>0 ? '<span style="height:100%;width:'+(n/total*100)+'%;background:'+color+';display:inline-block;"></span>' : ''; }
+    laneHtml += '<div onclick="_rlSetLane(\''+jsq(L.lane)+'\')" title="Filter runs to the '+escHtml(L.lane)+' lane" style="margin-bottom:10px;cursor:pointer;border-radius:7px;padding:6px 8px;'+(active?'background:var(--bg-hover);outline:1px solid '+laneColor(L.lane)+';':'')+'transition:background .1s;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\''+(active?'var(--bg-hover)':'')+'\'">';
+    laneHtml += '<div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:4px;">';
+    laneHtml += '<span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:'+laneColor(L.lane)+';"></span>';
+    laneHtml += '<span style="font-weight:700;color:var(--text-primary);">'+escHtml(L.lane)+'</span>';
+    laneHtml += '<span style="font-size:11px;font-weight:600;color:'+(running>0?'#16a34a':'var(--text-muted)')+';">'+(running>0 ? ('● '+capLabel+' running') : 'idle')+'</span>';
+    laneHtml += '<span style="flex:1;"></span>';
+    laneHtml += '<span style="font-size:11px;color:var(--text-muted);">'+total+' runs · '+ok+'✓'+(failed?(' · '+failed+'✗'):'')+'</span>';
+    laneHtml += '</div>';
+    laneHtml += '<div style="display:flex;height:7px;border-radius:4px;overflow:hidden;background:var(--bg-secondary);">';
+    laneHtml += seg(ok,'#16a34a')+seg(running,'#3b82f6')+seg(queued,'#d97706')+seg(failed,'#ef4444');
+    laneHtml += '</div></div>';
+  });
+  laneHtml += '</div>';
+
+  function pill(status){
+    var m = {succeeded:['#16a34a','rgba(22,163,74,.12)'],success:['#16a34a','rgba(22,163,74,.12)'],running:['#3b82f6','rgba(59,130,246,.12)'],failed:['#ef4444','rgba(239,68,68,.12)'],timeout:['#ef4444','rgba(239,68,68,.12)']};
+    var c = m[status] || ['#6b7280','var(--bg-secondary)'];
+    return '<span style="font-size:10px;font-weight:700;color:'+c[0]+';background:'+c[1]+';border-radius:4px;padding:1px 6px;">'+escHtml(String(status||'?'))+'</span>';
+  }
+  function dur(s){ if(!s.started_at||!s.ended_at) return ''; var ms=s.ended_at-s.started_at; if(ms<0) return ''; if(ms<1000) return ms+'ms'; if(ms<60000) return (ms/1000).toFixed(1)+'s'; return Math.round(ms/60000)+'m'; }
+  function tsLabel(ms){ if(!ms) return '-'; try { return new Date(ms).toLocaleString(); } catch(e){ return String(ms); } }
+
+  // ── Recent runs (filtered + clickable to expand) ──
+  var shown = _rlLaneFilter ? runs.filter(function(r){ return r.runtime === _rlLaneFilter; }) : runs;
+  var runHtml = '<div style="border:1px solid var(--border-primary);border-radius:10px;margin-top:14px;overflow:hidden;">';
+  runHtml += '<div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;padding:12px 14px;border-bottom:1px solid var(--border-primary);">Recent runs'+(_rlLaneFilter?(' · '+escHtml(_rlLaneFilter)):'')+' <span style="color:var(--text-faint);font-weight:500;">('+shown.length+')</span></div>';
+  if (shown.length === 0) {
+    runHtml += '<div style="padding:14px;color:var(--text-muted);font-size:12px;">No runs in this lane.</div>';
+  }
+  shown.slice(0,60).forEach(function(s){
+    var tid = s.task_id || s.run_id || '';
+    var open = !!_rlExpanded[tid];
+    runHtml += '<div onclick="_rlToggleRun(\''+jsq(tid)+'\')" style="display:flex;align-items:center;gap:10px;padding:7px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;cursor:pointer;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\'\'">';
+    runHtml += '<span style="color:var(--text-faint);font-size:10px;width:10px;">'+(open?'▼':'▶')+'</span>';
+    runHtml += pill(s.status);
+    runHtml += '<span style="font-size:10px;color:var(--text-faint);background:var(--bg-secondary);border-radius:4px;padding:1px 6px;min-width:54px;text-align:center;">'+escHtml(s.runtime||'')+'</span>';
+    runHtml += '<span style="flex:1;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+escHtml(s.label||'')+'">'+escHtml(s.label||'(untitled)')+'</span>';
+    var d = dur(s); if(d) runHtml += '<span style="color:var(--text-muted);white-space:nowrap;">'+d+'</span>';
+    runHtml += '</div>';
+    if (open) {
+      runHtml += '<div style="padding:10px 14px 12px 34px;background:var(--bg-secondary);border-bottom:1px solid var(--border-secondary);font-size:11px;color:var(--text-secondary);line-height:1.7;">';
+      function row(k,v){ return '<div><span style="color:var(--text-muted);display:inline-block;min-width:120px;">'+k+'</span>'+v+'</div>'; }
+      if (s.run_id) runHtml += row('run id', '<code style="color:var(--text-primary);">'+escHtml(s.run_id)+'</code>');
+      if (s.agent_id) runHtml += row('agent', escHtml(s.agent_id));
+      if (s.scope_kind || s.task_kind) runHtml += row('scope', escHtml((s.scope_kind||'')+(s.task_kind?(' · '+s.task_kind):'')));
+      if (s.delivery_status) runHtml += row('delivery', escHtml(s.delivery_status));
+      if (s.terminal_outcome) runHtml += row('outcome', escHtml(s.terminal_outcome));
+      runHtml += row('created', tsLabel(s.created_at));
+      if (s.ended_at) runHtml += row('ended', tsLabel(s.ended_at));
+      if (s.error) runHtml += '<div style="margin-top:4px;color:#ef4444;"><span style="color:var(--text-muted);display:inline-block;min-width:120px;">error</span>'+escHtml(String(s.error).slice(0,400))+'</div>';
+      if (s.child_session_key) {
+        runHtml += '<div style="margin-top:8px;"><button onclick="event.stopPropagation();_rlOpenSession(\''+jsq(s.child_session_key)+'\')" style="font-size:11px;font-weight:600;cursor:pointer;background:var(--accent,#3b82f6);color:#fff;border:none;border-radius:5px;padding:4px 10px;">Open session →</button> <span style="color:var(--text-faint);margin-left:6px;">'+escHtml(s.child_session_key)+'</span></div>';
+      }
+      runHtml += '</div>';
+    }
+  });
+  runHtml += '</div>';
+  el.innerHTML = laneHtml + runHtml;
 }
 
 // ── Tool catalog: provenance + p50/p95 latency (PRD P1-3) ───────────────────
