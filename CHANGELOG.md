@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Fixed: Spending hero card now matches Cost tab (2026-05-26)
+- The snapshot's `spending` block was read from the daemon's `state.json` (stale, usually `{today:0,week:0,month:0}` on fresh nodes), while `dailyUsage` was correctly derived live from DuckDB events × pricing (#2058). The cloud Spending hero card consumes `snap.spending` → rendered $0 while the Cost tab showed the real four-figure month. Now `spending` derives from `dailyUsage`'s `todayCost`/`weekCost`/`monthCost` so both surfaces agree; `state.json` stays as a fallback when dailyUsage is empty. (#2143, closes #2142)
+
+### Release: spending hero card matches Cost tab (2026-05-26)
+- Publishes #2143 (closes #2142): the Spending hero card on the cloud overview now reflects the same dollar figure as the Cost tab instead of showing $0 alongside a four-figure Cost tab.
+
 ### Release: interactive observability surfaces — tool catalog, context economics, drill-down runs (2026-05-26)
 - Publishes the last two PRD observability surfaces plus interactivity across the run-ledger tab, all on the on-disk / `openclaw`-CLI data path:
   - **Tool catalog + provenance + latency (#2136, P1-3):** every tool the agent invoked, grouped by provenance (builtin / MCP / plugin), with call count + **p50/p95 latency** + error rate (derived from the `tool.call`→`tool.result` join in DuckDB events). Rows are **click-to-expand** into recent individual calls (duration + ok/error + session deep-link); sortable + provenance-filterable. Bounded `toolCatalog` snapshot key for cloud.
