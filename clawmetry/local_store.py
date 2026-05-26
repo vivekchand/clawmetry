@@ -5938,6 +5938,252 @@ class LocalStore:
                     }
         return {"input_tokens": 0}
 
+    # Overflow-trigger signal strings. A compaction whose own summary/error
+    # text (or an error event adjacent to it) carries one of these was forced
+    # by the model rejecting an over-long prompt — i.e. the agent hit the wall
+    # rather than compacting proactively. Lower-cased substring match.
+    _OVERFLOW_MARKERS = (
+        "request_too_large",
+        "context length exceeded",
+        "context_length_exceeded",
+        "input is too long",
+        "input length and `max_tokens`",
+        "prompt is too long",
+        "maximum context length",
+        "too many tokens",
+        "exceeds the maximum",
+    )
+
+    def query_context_economics(
+        self,
+        *,
+        session_id: str | None = None,
+        util_limit: int = 400,
+        compaction_limit: int = 200,
+    ) -> dict[str, Any]:
+        """Context-window economics for the Context Economics tab (PRD P1-2).
+
+        Bundles three views off the ``events`` table so the dashboard reads
+        one round-trip:
+
+          * ``utilization`` — per-turn live context size over time. For each
+            assistant turn (``_ASSISTANT_EVENT_TYPES`` — v3-safe) we sum the
+            prompt-side tokens the model actually saw on that turn
+            (``input + cache_read + cache_write``, matching
+            ``query_context_window_peek``) and divide by the model's context
+            window. This is the gauge-over-time the PRD asks for.
+          * ``compactions`` — every ``compaction`` event tagged
+            ``proactive`` vs ``overflow``. ``tokens_before`` comes from the
+            event blob; ``tokens_after`` is the first post-compaction
+            assistant-turn context reading for that session (what the window
+            actually shrank to); ``reclaimed = before - after``.
+          * ``overflow_sessions`` — sessions that overflowed then kept going
+            (>=2 compactions with at least one ``overflow`` trigger), i.e. the
+            repeatedly-overflow-then-retry flag.
+
+        ``session_id`` scopes utilization to one conversation (the session
+        picker / clickable chips in the UI). Compactions + overflow flags are
+        always computed workspace-wide so the summary chips stay meaningful;
+        the route filters them client-side when a session is picked.
+
+        Never raises — an empty / fresh DB returns empty lists. Reads only;
+        the daemon owns the writer lock.
+        """
+        try:
+            util_limit = max(1, min(2000, int(util_limit)))
+        except (TypeError, ValueError):
+            util_limit = 400
+        try:
+            compaction_limit = max(1, min(1000, int(compaction_limit)))
+        except (TypeError, ValueError):
+            compaction_limit = 200
+
+        def _ctx_tokens(data: dict) -> int:
+            """Prompt-side token total the model saw this turn. Mirrors
+            query_context_window_peek, plus a ``data.extra`` fallback for the
+            Claude Code SDK echo shape (inputTokens / cacheReadInputTokens /
+            cacheCreationInputTokens live under ``extra``, which
+            ``_extract_usage_splits`` doesn't walk)."""
+            splits = _extract_usage_splits(data)
+            tok = (
+                int(splits.get("input_tokens", 0))
+                + int(splits.get("cache_read_tokens", 0))
+                + int(splits.get("cache_write_tokens", 0))
+            )
+            if tok > 0:
+                return tok
+            extra = data.get("extra") if isinstance(data.get("extra"), dict) else {}
+            if extra:
+                return (
+                    _read_usage_int(extra, _USAGE_KEYS_INPUT)
+                    + _read_usage_int(extra, _USAGE_KEYS_CACHE_READ)
+                    + _read_usage_int(extra, _USAGE_KEYS_CACHE_WRITE)
+                )
+            return 0
+
+        def _model_of(data: dict, fallback: str) -> str:
+            msg = data.get("message") if isinstance(data.get("message"), dict) else {}
+            extra = data.get("extra") if isinstance(data.get("extra"), dict) else {}
+            return (
+                msg.get("model")
+                or data.get("model")
+                or data.get("modelId")
+                or extra.get("model")
+                or fallback
+                or ""
+            )
+
+        def _parse(raw) -> dict:
+            if raw is None:
+                return {}
+            try:
+                text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                parsed = json.loads(text) if text else {}
+                return parsed if isinstance(parsed, dict) else {}
+            except (ValueError, TypeError, UnicodeDecodeError):
+                return {}
+
+        # ── utilization series (assistant turns, chronological) ──
+        ev_in = _sql_in_clause(_ASSISTANT_EVENT_TYPES)
+        util_clauses = [f"event_type IN {ev_in}"]
+        util_params: list[Any] = []
+        if session_id:
+            util_clauses.append("session_id = ?")
+            util_params.append(session_id)
+        util_where = "WHERE " + " AND ".join(util_clauses)
+        util_params.append(int(util_limit))
+        util_rows = self._fetch(
+            f"""
+            SELECT session_id, ts, data, model
+            FROM events
+            {util_where}
+            ORDER BY ts DESC, id DESC
+            LIMIT ?
+            """,
+            util_params,
+        )
+        utilization: list[dict[str, Any]] = []
+        for sid, ts, raw, model_col in util_rows:
+            data = _parse(raw)
+            tok = _ctx_tokens(data)
+            if tok <= 0:
+                continue
+            model = _model_of(data, model_col or "")
+            window = context_window_for_model(model, tok)
+            pct = round(100.0 * tok / window, 2) if window else 0.0
+            utilization.append({
+                "session_id": sid,
+                "ts":         ts,
+                "tokens":     tok,
+                "window":     window,
+                "model":      model,
+                "pct":        pct,
+            })
+        # Oldest-first so the gauge reads left-to-right as a timeline.
+        utilization.sort(key=lambda u: str(u.get("ts") or ""))
+
+        # ── compactions (workspace-wide) ──
+        comp_rows = self._fetch(
+            f"""
+            SELECT session_id, ts, data
+            FROM events
+            WHERE event_type = 'compaction'
+            ORDER BY ts DESC
+            LIMIT ?
+            """,
+            [int(compaction_limit)],
+        )
+        # First post-compaction context reading per session, so we can derive
+        # tokens_after. Build a per-session sorted list of (ts, tokens) once.
+        by_session_util: dict[str, list[tuple[str, int]]] = {}
+        for u in utilization:
+            by_session_util.setdefault(str(u["session_id"]), []).append(
+                (str(u["ts"] or ""), int(u["tokens"]))
+            )
+        # utilization is session-scoped when session_id is set; for the
+        # tokens_after lookup we want all sessions, so re-scan if scoped.
+        if session_id:
+            after_rows = self._fetch(
+                f"""
+                SELECT session_id, ts, data
+                FROM events
+                WHERE event_type IN {ev_in}
+                ORDER BY ts ASC, id ASC
+                LIMIT 4000
+                """,
+                [],
+            )
+            by_session_util = {}
+            for sid, ts, raw in after_rows:
+                tok = _ctx_tokens(_parse(raw))
+                if tok > 0:
+                    by_session_util.setdefault(str(sid), []).append((str(ts or ""), tok))
+
+        def _first_after(sid: str, comp_ts: str) -> int:
+            pts = by_session_util.get(str(sid)) or []
+            for ts, tok in sorted(pts):
+                if ts > (comp_ts or ""):
+                    return tok
+            return 0
+
+        compactions: list[dict[str, Any]] = []
+        overflow_counts: dict[str, dict[str, int]] = {}
+        for sid, ts, raw in comp_rows:
+            data = _parse(raw)
+            summary = str(data.get("summary") or "")
+            tokens_before = int(
+                data.get("tokensBefore") or data.get("tokens_before") or 0
+            )
+            from_hook = bool(data.get("fromHook") or data.get("from_hook") or False)
+            comp_ts = data.get("timestamp") or ts or ""
+            # Trigger inference: scan the compaction blob's own text for an
+            # overflow marker. ``fromHook`` (OpenClaw's proactive
+            # auto-compaction hook) is a strong proactive signal; an error /
+            # reason field carrying a too-large marker flips it to overflow.
+            blob_text = json.dumps(data, default=str).lower()
+            err_text = str(
+                data.get("error") or data.get("reason") or data.get("trigger") or ""
+            ).lower()
+            is_overflow = any(
+                m in blob_text or m in err_text for m in self._OVERFLOW_MARKERS
+            )
+            trigger = "overflow" if is_overflow else ("proactive" if from_hook else "proactive")
+            tokens_after = _first_after(str(sid), str(comp_ts))
+            reclaimed = max(0, tokens_before - tokens_after) if tokens_before else 0
+            compactions.append({
+                "session_id":    sid,
+                "ts":            comp_ts,
+                "trigger":       trigger,
+                "tokens_before": tokens_before,
+                "tokens_after":  tokens_after,
+                "reclaimed":     reclaimed,
+                "from_hook":     from_hook,
+                "summary":       summary,
+            })
+            oc = overflow_counts.setdefault(str(sid), {"total": 0, "overflow": 0})
+            oc["total"] += 1
+            if is_overflow:
+                oc["overflow"] += 1
+
+        # ── repeatedly-overflow-then-retry flag ──
+        # A session that overflowed at least once AND compacted >= 2 times is
+        # thrashing the context wall instead of staying under it.
+        overflow_sessions: list[dict[str, Any]] = []
+        for sid, c in overflow_counts.items():
+            if c["overflow"] >= 1 and c["total"] >= 2:
+                overflow_sessions.append({
+                    "session_id":       sid,
+                    "compaction_count": c["total"],
+                    "overflow_count":   c["overflow"],
+                })
+        overflow_sessions.sort(key=lambda s: s["overflow_count"], reverse=True)
+
+        return {
+            "utilization":       utilization,
+            "compactions":       compactions,
+            "overflow_sessions": overflow_sessions,
+        }
+
     def query_model_fallbacks(
         self,
         *,
