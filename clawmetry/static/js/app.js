@@ -3890,7 +3890,20 @@ function renderBrainStream(events) {
   // (filter changes, auto-refresh) recompute from the source of truth.
   filtered = _collapseBodylessOutbound(filtered);
   if (!filtered || filtered.length === 0) {
-    el.innerHTML = '<div style="color:var(--text-muted);padding:20px">No activity yet</div>';
+    // Runtime-aware empty state: the header switcher counts SESSIONS on record
+    // (lifetime), but this feed only shows RECENT events. Selecting a runtime
+    // with sessions but no recent activity used to read a bare "No activity
+    // yet", which contradicts the switcher's "Goose · 3 sessions". Explain it.
+    var _bf = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    var _bmsg = 'No activity yet';
+    if (_bf && _bf !== 'all') {
+      var _blbl = (_CM_RT_LABEL && _CM_RT_LABEL[_bf]) || _bf;
+      var _bn = (_cmGlobalRtCounts && _cmGlobalRtCounts[_bf]) || 0;
+      _bmsg = 'No recent ' + escHtml(_blbl) + ' activity in this live feed.'
+        + (_bn ? ' ' + escHtml(_blbl) + ' has ' + _bn + ' session' + (_bn === 1 ? '' : 's')
+            + ' on record (older than this window) — open the Tracing tab to explore them.' : '');
+    }
+    el.innerHTML = '<div style="color:var(--text-muted);padding:20px;line-height:1.6;">' + _bmsg + '</div>';
     return;
   }
   // Issue #1203: one-line banner when Telegram outbound rows are visible so
@@ -6798,6 +6811,8 @@ function _cmPopulateGlobalRuntime(counts) {
 function _cmOnGlobalRuntimeChange(sel) {
   if (!sel) return;
   _cmSetRuntimeFilter(sel.value);
+  // Swap the Flow + Overview diagram to the selected runtime's topology.
+  try { if (typeof _applyRuntimeFlowDiagram === 'function') _applyRuntimeFlowDiagram(sel.value); } catch (e) {}
   // Reload the current tab so any runtime-aware view re-filters in place.
   if (typeof switchTab === 'function' && _cmCurrentTab) switchTab(_cmCurrentTab);
 }
@@ -13641,6 +13656,97 @@ function initFlow() {
   // the browser tab is hidden — completes Phase 2 coverage.
   if (window._flowStatsTimer) { try { clearInterval(window._flowStatsTimer); } catch(e){} }
   window._flowStatsTimer = visibilitySetInterval(updateFlowStats, updateInterval);
+  // Per-adapter Flow diagram: reflect the runtime currently selected in the
+  // global switcher (OpenClaw/Hermes keep the rich channel→gateway SVG;
+  // coding-CLI + pico/nano get their own generated topology).
+  try { _applyRuntimeFlowDiagram((typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all'); } catch (e) {}
+}
+
+// ── Per-adapter Flow diagram (goal: distinct topology per runtime) ──────────
+// OpenClaw / Hermes keep the hand-built channel→gateway→agent→tools SVG. The
+// coding-CLI runtimes (Claude Code, Codex, Cursor, Aider, Goose, opencode,
+// Qwen) and the minimal PicoClaw/NanoClaw don't have channels or a chat
+// gateway, so showing them the OpenClaw topology was misleading. We swap
+// #flow-svg's content for a generated, runtime-correct diagram and re-mirror
+// the Overview pane. Driven by the global runtime switcher.
+var _origFlowSvgInner = null;
+var _RT_FLOW = {
+  claude_code: { label:'Claude Code', src:['⌨️','Terminal'], accent:'#d97706', stroke:'#b45309', tools:[['📝','Edit/Write'],['📖','Read'],['⚡','Bash'],['🔍','Grep/Glob'],['🐝','Subagents'],['🧩','MCP']] },
+  codex:       { label:'Codex',       src:['⌨️','Terminal'], accent:'#10a37f', stroke:'#0d8a6a', tools:[['📝','Apply patch'],['📖','Read'],['⚡','Shell'],['🔍','Search'],['🧩','MCP']] },
+  cursor:      { label:'Cursor',      src:['🖥️','Editor'], accent:'#6366f1', stroke:'#4f46e5', tools:[['📝','Edit'],['📖','Read'],['⚡','Terminal'],['🔍','Codebase'],['🧩','MCP']] },
+  aider:       { label:'Aider',       src:['⌨️','Terminal'], accent:'#22a559', stroke:'#1a8045', tools:[['📝','Edit'],['📖','Read'],['⚡','Shell'],['🔀','Git commit']] },
+  goose:       { label:'Goose',       src:['⌨️','Terminal'], accent:'#0ea5e9', stroke:'#0284c7', tools:[['📝','Edit'],['⚡','Shell'],['🔍','Search'],['🧩','Extensions']] },
+  opencode:    { label:'opencode',    src:['⌨️','Terminal'], accent:'#f59e0b', stroke:'#d97706', tools:[['📝','Edit'],['📖','Read'],['⚡','Bash'],['🔍','Grep']] },
+  qwen_code:   { label:'Qwen Code',   src:['⌨️','Terminal'], accent:'#7c3aed', stroke:'#6d28d9', tools:[['📝','Edit'],['📖','Read'],['⚡','Shell'],['🔍','Search']] },
+  picoclaw:    { label:'PicoClaw',    src:['👤','You'],      accent:'#ec4899', stroke:'#db2777', tools:[['⚡','Exec'],['🧠','Memory'],['📋','Sessions']], minimal:true },
+  nanoclaw:    { label:'NanoClaw',    src:['👤','You'],      accent:'#14b8a6', stroke:'#0d9488', tools:[['⚡','Exec'],['🧠','Memory']], minimal:true },
+};
+
+function _flowEdge(x1, y1, x2, y2, color, delay) {
+  var mx = (x1 + x2) / 2;
+  var d = 'M' + x1 + ' ' + y1 + ' C ' + mx + ' ' + y1 + ' ' + mx + ' ' + y2 + ' ' + x2 + ' ' + y2;
+  return '<path d="' + d + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-opacity="0.55" stroke-dasharray="6 6">'
+    + '<animate attributeName="stroke-dashoffset" from="24" to="0" dur="1.1s" begin="' + delay + 's" repeatCount="indefinite"/></path>';
+}
+
+function _buildRuntimeFlowInner(rt, model) {
+  var s = _RT_FLOW[rt];
+  if (!s) return null;
+  var tools = s.tools, n = tools.length;
+  var th = 40, gap = 14, colX = 715, colW = 160;
+  var totalH = n * th + (n - 1) * gap;
+  var y0 = 275 - totalH / 2;
+  var agentW = 210, agentH = 96, agentCx = 460, agentCy = 275;
+  var agentX = agentCx - agentW / 2, agentY = agentCy - agentH / 2;
+  var srcX = 45, srcY = 247, srcW = 150, srcH = 56, srcCx = srcX + srcW / 2, srcCy = srcY + srcH / 2;
+  var h = '<defs><filter id="rtShadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.35"/></filter></defs>';
+  // Edges first (under nodes): source→agent, agent→each tool.
+  h += _flowEdge(srcX + srcW, srcCy, agentX, agentCy, s.accent, 0);
+  for (var i = 0; i < n; i++) { var ty = y0 + i * (th + gap) + th / 2; h += _flowEdge(agentX + agentW, agentCy, colX, ty, s.accent, 0.12 + i * 0.1); }
+  // Source node.
+  h += '<g class="flow-node"><rect x="' + srcX + '" y="' + srcY + '" width="' + srcW + '" height="' + srcH + '" rx="12" fill="#1e293b" stroke="#334155" stroke-width="2" filter="url(#rtShadow)"/>'
+    + '<text x="' + srcCx + '" y="' + (srcCy - 3) + '" style="font-size:22px;text-anchor:middle;">' + s.src[0] + '</text>'
+    + '<text x="' + srcCx + '" y="' + (srcCy + 19) + '" style="font-size:12px;font-weight:700;fill:#cbd5e1;text-anchor:middle;">' + escHtml(s.src[1]) + '</text></g>';
+  // Agent node (runtime).
+  h += '<g class="flow-node flow-node-brain"><rect x="' + agentX + '" y="' + agentY + '" width="' + agentW + '" height="' + agentH + '" rx="14" fill="' + s.accent + '" stroke="' + s.stroke + '" stroke-width="3" filter="url(#rtShadow)"/>'
+    + '<text x="' + agentCx + '" y="' + (agentY + 31) + '" style="font-size:22px;text-anchor:middle;">🧠</text>'
+    + '<text x="' + agentCx + '" y="' + (agentY + 55) + '" style="font-size:17px;font-weight:800;fill:#fff;text-anchor:middle;">' + escHtml(s.label) + '</text>'
+    + '<text x="' + agentCx + '" y="' + (agentY + 73) + '" style="font-size:10px;fill:rgba(255,255,255,0.85);text-anchor:middle;">' + escHtml(model || (s.minimal ? 'OpenClaw-family' : 'coding agent')) + '</text>'
+    + '<circle cx="' + agentCx + '" cy="' + (agentY + agentH - 9) + '" r="4" fill="#fff"><animate attributeName="opacity" values="0.4;1;0.4" dur="1.4s" repeatCount="indefinite"/></circle></g>';
+  // Tool column (right).
+  for (var j = 0; j < n; j++) { var y = y0 + j * (th + gap), cy = y + th / 2;
+    h += '<g class="flow-node flow-node-tool"><rect x="' + colX + '" y="' + y + '" width="' + colW + '" height="' + th + '" rx="10" fill="#0f172a" stroke="' + s.accent + '" stroke-width="1.6" filter="url(#rtShadow)"/>'
+      + '<text x="' + (colX + colW / 2) + '" y="' + (cy + 1) + '" style="font-size:12px;font-weight:700;fill:#e2e8f0;text-anchor:middle;">' + tools[j][0] + ' ' + escHtml(tools[j][1]) + '</text></g>';
+  }
+  // Workspace sink for coding agents.
+  if (!s.minimal) {
+    var wy = y0 + totalH + 20;
+    h += '<g class="flow-node"><rect x="' + colX + '" y="' + wy + '" width="' + colW + '" height="38" rx="10" fill="#1e293b" stroke="#334155" stroke-width="1.6"/>'
+      + '<text x="' + (colX + colW / 2) + '" y="' + (wy + 23) + '" style="font-size:12px;font-weight:700;fill:#94a3b8;text-anchor:middle;">📂 Workspace</text></g>';
+  }
+  return h;
+}
+
+function _applyRuntimeFlowDiagram(rt) {
+  var svg = document.getElementById('flow-svg');
+  if (!svg) return;
+  if (_origFlowSvgInner === null) _origFlowSvgInner = svg.innerHTML;
+  var model = '';
+  try { var ml = document.getElementById('brain-model-text'); model = ml ? (ml.textContent || '') : ''; } catch (e) {}
+  if (model === 'unknown') model = '';
+  var inner = _buildRuntimeFlowInner(rt, model);
+  if (inner) {
+    svg.innerHTML = inner;
+  } else if (svg.innerHTML.indexOf('rtShadow') !== -1) {
+    // Currently showing a generated diagram → restore the original OpenClaw SVG.
+    svg.innerHTML = _origFlowSvgInner;
+    try { hideUnconfiguredChannels(document); } catch (e) {}
+  }
+  // Re-mirror the Overview pane from whatever #flow-svg now holds.
+  try {
+    var c = document.getElementById('overview-flow-container');
+    if (c) { c.innerHTML = ''; if (typeof initOverviewFlow === 'function') initOverviewFlow(); }
+  } catch (e) {}
 }
 
 // Map brain-history event types → Flow's active-tool buckets (exec/browser/
