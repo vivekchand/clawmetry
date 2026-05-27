@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Release: runtime switcher scopes Tracing + clearer "N sessions" labels (2026-05-27)
+- The global runtime switcher now also filters the **Tracing** tab (event-derived traces set `trace_id = session_id`, whose prefix is the runtime). Brain + Transcripts + Tracing now all de-merge by runtime. (#2167)
+- Switcher option labels now read **"Claude Code · 22 sessions"** / **"OpenClaw · 1 session"** / **"All runtimes · 23 sessions"** instead of a bare `(22)`, which had read as "22 Claude Code runtimes" (there is one runtime running many sessions). (#2167)
+
 ### Release: runtime switcher now scopes the Brain activity stream (2026-05-27)
 - The global runtime switcher (header dropdown) now filters the Brain "Unified Activity Stream" too, not just Transcripts. The Brain feed merged every runtime (OpenClaw + Claude Code + Codex + …) with no separation, which is the spot the merge most confused debugging. `renderBrainStream` honours `cm-runtime-filter` alongside the existing source/type/channel filters (each event's `sessionId` prefix is the runtime discriminator). Picking a runtime scopes the stream in place. Transcripts + Brain now both filter; Tracing/Cost/Overview still merge (follow-ups). (#2160)
 
