@@ -25,6 +25,7 @@ from collections import Counter, defaultdict
 
 from flask import Blueprint, jsonify, request
 
+from clawmetry import error_signal as _error_signal
 from routes.advisor import (
     _call_anthropic_api,
     _call_via_claude_cli,
@@ -74,13 +75,18 @@ def _save_cached(payload: dict) -> None:
 def _classify_event(ev: dict) -> tuple[str, bool]:
     """Return (bucket, is_error). Buckets: exec | tool | llm | context | agent | user | other."""
     typ = (ev.get("type") or "").lower()
-    detail = str(ev.get("detail") or "").lower()
+    detail_raw = str(ev.get("detail") or "")
+    detail = detail_raw.lower()
     is_error = (
         "error" in detail
         or "failed" in detail
         or "timeout" in detail
         or typ == "error"
     )
+    # Don't count benign read-guards / transient timeouts as errors — they were
+    # inflating the Self-Evolve error buckets (see clawmetry.error_signal).
+    if is_error and _error_signal.is_benign_tool_error(detail_raw):
+        is_error = False
     if typ in ("exec", "execution"):
         return "exec", is_error
     if typ in ("tool", "tool_use", "tool_result"):

@@ -3897,6 +3897,85 @@ class LocalStore:
             return 0
         return len(updates)
 
+    def backfill_benign_errors(self, *, after_id: str = "", batch: int = 5000):
+        """#2196: clear the error flag on historical tool results whose body
+        matches a known-benign signature (see ``clawmetry.error_signal``).
+
+        Runtime read-guards ("File has been modified since read", …) and
+        transient gateway timeouts carry ``isError`` but are not real failures,
+        and were inflating error counts across Tracing / Health / Self-Evolve
+        and the snapshot (measured: ~two thirds of all flagged tool errors).
+        New events are corrected at ingest; this heals the history.
+
+        Pages tool-result events by the ``id`` primary key (forward-only
+        cursor, so progress is guaranteed regardless of how sparse the matches
+        are) and rewrites only rows that still carry a truthy error flag AND are
+        not already stamped — idempotent. Returns ``(max_id, updated,
+        scanned)``. Daemon-only (needs the writer connection)."""
+        try:
+            from clawmetry import error_signal as _es
+        except Exception:
+            return (after_id, 0, 0)
+        try:
+            rows = self._conn.execute(
+                "SELECT id, data FROM events "
+                "WHERE id > ? AND event_type LIKE '%result%' "
+                "ORDER BY id LIMIT ?",
+                [after_id, int(batch)],
+            ).fetchall()
+        except Exception:
+            return (after_id, 0, 0)
+        if not rows:
+            return (after_id, 0, 0)
+
+        max_id = after_id
+        updates: list[tuple] = []
+        for (eid, data) in rows:
+            if eid is not None and str(eid) > str(max_id):
+                max_id = eid
+            try:
+                if isinstance(data, (bytes, bytearray)):
+                    data = bytes(data).decode("utf-8", "replace")
+                obj = json.loads(data) if isinstance(data, str) else data
+            except Exception:
+                continue
+            if not isinstance(obj, dict) or obj.get("benign_error"):
+                continue
+            extra = obj.get("extra") if isinstance(obj.get("extra"), dict) else {}
+            raw = bool(
+                extra.get("isError")
+                or extra.get("is_error")
+                or obj.get("isError")
+                or obj.get("is_error")
+            )
+            if not raw:
+                continue
+            if not _es.is_benign_tool_error(_es.extract_tool_result_text(obj)):
+                continue
+            if extra:
+                extra["isError"] = False
+                extra["is_error"] = False
+                obj["extra"] = extra
+            if "is_error" in obj:
+                obj["is_error"] = False
+            if "isError" in obj:
+                obj["isError"] = False
+            obj["benign_error"] = True
+            try:
+                blob = json.dumps(obj, separators=(",", ":"), default=str).encode("utf-8")
+            except Exception:
+                continue
+            updates.append((blob, eid))
+
+        if updates:
+            try:
+                self._conn.executemany(
+                    "UPDATE events SET data = ? WHERE id = ?", updates
+                )
+            except Exception:
+                return (max_id, 0, len(rows))
+        return (max_id, len(updates), len(rows))
+
     def query_events_with_subagents(
         self,
         *,
