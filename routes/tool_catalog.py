@@ -37,7 +37,7 @@ empty data.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from flask import Blueprint, jsonify, request
 
@@ -160,13 +160,41 @@ def _is_tool_result(e):
 
 # ── Provenance classification ───────────────────────────────────────────────
 
+# Well-known builtin tool names for the non-OpenClaw runtimes ClawMetry now
+# observes (Claude Code, Codex, …). The OpenClaw builtin universe is discovered
+# from the synced sandbox ``tool_policy``; other runtimes ship no such policy to
+# disk, so without this set their core tools (Bash/Read/Edit/Write/Task*…) fall
+# through to "plugin" and the whole provenance breakdown is wrong on, e.g., a
+# Claude Code node. Names are runtime-distinct (PascalCase Claude Code vs Codex
+# snake_case vs ``mcp__`` MCP) so a flat union can't collide across runtimes.
+RUNTIME_BUILTINS = frozenset({
+    # Claude Code core file/shell/search tools
+    "Bash", "BashOutput", "KillShell", "KillBash",
+    "Read", "Edit", "MultiEdit", "Write", "NotebookEdit",
+    "Glob", "Grep", "LS",
+    # Claude Code agent / planning / meta tools
+    "Task", "Agent", "TodoWrite", "WebFetch", "WebSearch",
+    "ExitPlanMode", "EnterPlanMode", "SlashCommand", "Skill",
+    "AskUserQuestion", "ToolSearch",
+    # Claude Code / FleetView task, cron, worktree & scheduling tools
+    "TaskCreate", "TaskUpdate", "TaskGet", "TaskList", "TaskOutput", "TaskStop",
+    "CronCreate", "CronDelete", "CronList",
+    "EnterWorktree", "ExitWorktree",
+    "Monitor", "PushNotification", "RemoteTrigger", "ScheduleWakeup",
+    # Codex CLI distinctive builtins (snake_case, unambiguous)
+    "apply_patch", "update_plan",
+})
+
+
 def _builtin_tool_set() -> set:
-    """The OpenClaw sandbox builtin-tool universe, read from the DuckDB
-    ``tool_policy`` table (mirrored from ``openclaw sandbox explain --json`` by
-    the sync daemon). The union of every agent's ``allow`` list. Empty set when
-    the policy hasn't been synced yet — callers then fall back to name shape
-    only."""
-    builtin: set = set()
+    """The builtin-tool universe. Unions the OpenClaw sandbox allow set (read
+    from the DuckDB ``tool_policy`` table, mirrored from ``openclaw sandbox
+    explain --json`` by the sync daemon) with ``RUNTIME_BUILTINS`` so non-
+    OpenClaw runtimes (Claude Code, Codex) classify their builtins correctly
+    even though they have no sandbox policy on disk. Falls back to just
+    ``RUNTIME_BUILTINS`` when the policy hasn't been synced yet — never empty,
+    so a Claude Code node no longer mislabels Bash/Read/Edit as plugin."""
+    builtin: set = set(RUNTIME_BUILTINS)
     for r in _coerce_rows(_ls_call("query_tool_policy", limit=25)):
         allow = r.get("allow")
         if isinstance(allow, list):
