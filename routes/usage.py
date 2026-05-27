@@ -2708,6 +2708,53 @@ def api_usage_export():
         return jsonify({'error': str(e)}), 500
 
 
+@bp_usage.route('/api/runtime-summary')
+def api_runtime_summary():
+    """Per-runtime rollup (tokens / cost / turns / sessions / primary model),
+    keyed by session-id prefix, so the Overview headline can scope to the
+    runtime switcher. Mirrors the daemon ``runtimeSummary`` snapshot slice; the
+    cloud serves that slice via an interceptor instead of this route. Reads the
+    local store (fast path); never 500s — empty store yields ``{}``."""
+    store = _ls_get_store() if is_local_store_read_enabled() else None
+    out = {}
+    if store is not None:
+        try:
+            evs = store.query_events(limit=20000) or []
+            agg = {}
+            for ev in evs:
+                rt = _runtime_of(ev.get("session_id"))
+                a = agg.setdefault(rt, {"turns": 0, "tokens": 0, "cost": 0.0,
+                                        "models": {}, "sessions": set()})
+                sid = ev.get("session_id") or ""
+                if sid:
+                    a["sessions"].add(sid)
+                try:
+                    a["tokens"] += int(ev.get("token_count") or 0)
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    a["cost"] += float(ev.get("cost_usd") or 0.0)
+                except (TypeError, ValueError):
+                    pass
+                m = (ev.get("model") or "").strip()
+                if m:
+                    a["turns"] += 1
+                    a["models"][m] = a["models"].get(m, 0) + 1
+            for rt, a in agg.items():
+                sorted_models = sorted(a["models"].items(), key=lambda x: -x[1])
+                out[rt] = {
+                    "sessions": len(a["sessions"]),
+                    "turns": a["turns"],
+                    "tokens": a["tokens"],
+                    "cost_usd": round(a["cost"], 4),
+                    "primary_model": sorted_models[0][0] if sorted_models else "",
+                    "total_turns": sum(a["models"].values()),
+                }
+        except Exception:
+            out = {}
+    return jsonify({"runtimes": out, "_source": "local_store"})
+
+
 @bp_usage.route('/api/model-attribution')
 def api_model_attribution():
     """Per-model turn/session breakdown and switch history (GH #300).
