@@ -6811,7 +6811,7 @@ function _cmRuntimeLabel(rt) { return _CM_RT_LABEL[rt] || rt; }
 // shows an honest "all runtimes" note rather than pretending the numbers are
 // runtime-specific. (Per-runtime aggregation is a follow-up.)
 var _CM_RT_AGGREGATE = {
-  models: 1, usage: 1, 'tool-catalog': 1, 'context-economics': 1, context: 1
+  usage: 1, 'tool-catalog': 1, 'context-economics': 1, context: 1
 };
 // Tabs that are NODE-WIDE concepts, not per-runtime: crons run on the gateway,
 // memory/skills are workspace-level, security is machine posture, self-evolve is
@@ -11215,7 +11215,12 @@ function exportUsageData() {
 // ===== Model Attribution =====
 async function loadModelAttribution() {
   try {
-    var data = await fetch('/api/model-attribution').then(function(r) { return r.json(); });
+    // Scope to the selected runtime (the server route + cloud interceptor both
+    // honour ?runtime=<prefix> and return that runtime's attribution, or an
+    // honest empty set — never the merged view).
+    var _maRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    var _maQ = (_maRt && _maRt !== 'all') ? ('?runtime=' + encodeURIComponent(_maRt)) : '';
+    var data = await fetch('/api/model-attribution' + _maQ).then(function(r) { return r.json(); });
     var models = data.models || [];
     var switches = data.switches || [];
     var totalTurns = data.total_turns || 0;
@@ -11248,7 +11253,10 @@ async function loadModelAttribution() {
       chartHtml += '<div style="min-width:55px;text-align:right;font-size:12px;color:var(--text-secondary);">' + m.turns.toLocaleString() + ' turns</div>';
       chartHtml += '</div>';
     });
-    document.getElementById('model-mix-chart').innerHTML = chartHtml || '<div style="color:#666;">No model data found in sessions.</div>';
+    var _maEmpty = (_maRt && _maRt !== 'all')
+      ? 'No model activity for <strong>' + escHtml(_cmRuntimeLabel(_maRt)) + '</strong> yet.'
+      : 'No model data found in sessions.';
+    document.getElementById('model-mix-chart').innerHTML = chartHtml || '<div style="color:#666;">' + _maEmpty + '</div>';
 
     // Per-model session table
     var tbodyHtml = '';

@@ -8677,6 +8677,106 @@ def _build_model_attribution():
         return {}
 
 
+# Cross-runtime builtin/runtime prefixes — mirrors the frontend `_cmRuntimeOf`
+# and `_CM_RT_LABEL` keys (agent_type is always "openclaw"; the runtime is the
+# session-id prefix). Keep in sync with clawmetry/static/js/app.js.
+_RUNTIME_PREFIXES = frozenset({
+    "picoclaw", "nanoclaw", "hermes", "claude_code", "codex", "cursor",
+    "aider", "goose", "opencode", "qwen_code",
+})
+
+
+def _runtime_of_session(sid: str) -> str:
+    """Runtime for a session id = its prefix before ':' if it's a known
+    non-OpenClaw runtime, else 'openclaw'. Mirrors frontend `_cmRuntimeOf`."""
+    sid = sid or ""
+    i = sid.find(":")
+    if i > 0:
+        p = sid[:i].lower()
+        if p in _RUNTIME_PREFIXES:
+            return p
+    return "openclaw"
+
+
+def _build_runtime_summary(limit: int = 20000):
+    """Per-runtime rollup so the cloud Models / Cost / Overview tabs can scope
+    aggregates to the selected runtime for real (not just show a note).
+
+    Buckets the DuckDB events by runtime (session-id prefix) on the daemon's
+    OWN store handle. Each runtime gets a per-turn model-attribution block in
+    the SAME shape as ``_build_model_attribution`` (``models``/``total_turns``/
+    ``primary_model``) plus ``tokens``/``cost_usd``/``sessions``, so the cloud
+    Models interceptor can return ``runtimeSummary[rt]`` verbatim and the
+    Overview headline can read the per-runtime totals. Bounded (≈10 runtimes ×
+    a 15-model list) so it stays tiny in the shared snapshot. Best-effort: any
+    failure yields ``{}``.
+    """
+    try:
+        from collections import defaultdict
+        from clawmetry import local_store as _ls
+
+        store = _ls.get_store()
+        if store is None:
+            return {}
+        evs = store.query_events(limit=int(limit))
+        if not evs:
+            return {}
+        agg: dict = {}
+        sess_models = defaultdict(list)  # (rt, sid) -> ordered model list
+        for ev in sorted(evs, key=lambda e: (e.get("session_id") or "", e.get("ts") or "")):
+            sid = ev.get("session_id") or ""
+            rt = _runtime_of_session(sid)
+            a = agg.setdefault(rt, {"turns": 0, "tokens": 0, "cost": 0.0,
+                                    "models": {}, "sessions": set()})
+            if sid:
+                a["sessions"].add(sid)
+            try:
+                a["tokens"] += int(ev.get("token_count") or 0)
+            except (TypeError, ValueError):
+                pass
+            try:
+                a["cost"] += float(ev.get("cost_usd") or 0.0)
+            except (TypeError, ValueError):
+                pass
+            m = (ev.get("model") or "").strip()
+            if not m:
+                continue
+            a["turns"] += 1
+            a["models"][m] = a["models"].get(m, 0) + 1
+            key = (rt, sid)
+            if sid and (not sess_models[key] or sess_models[key][-1] != m):
+                sess_models[key].append(m)
+        rt_model_sessions = defaultdict(lambda: defaultdict(int))
+        rt_switches = defaultdict(int)
+        for (rt, _sid), mlist in sess_models.items():
+            if mlist:
+                rt_model_sessions[rt][mlist[0]] += 1
+            rt_switches[rt] += max(0, len(mlist) - 1)
+        out: dict = {}
+        for rt, a in agg.items():
+            total = sum(a["models"].values())
+            sorted_models = sorted(a["models"].items(), key=lambda x: -x[1])
+            models_out = [{
+                "model": m, "turns": t,
+                "sessions": rt_model_sessions[rt].get(m, 0),
+                "share_pct": round(t / total * 100, 2) if total else 0,
+            } for m, t in sorted_models[:15]]
+            out[rt] = {
+                "sessions": len(a["sessions"]),
+                "turns": a["turns"],
+                "tokens": a["tokens"],
+                "cost_usd": round(a["cost"], 4),
+                "primary_model": sorted_models[0][0] if sorted_models else "",
+                "total_turns": total,
+                "models": models_out,
+                "switch_count": rt_switches[rt],
+            }
+        return out
+    except Exception as _e:
+        log.debug("runtime summary snapshot build failed: %s", _e)
+        return {}
+
+
 # #1911: bound the tool deep-dive detail before it rides the shared ~170 KB
 # encrypted snapshot. The local dashboard keeps the full input/output
 # (``_TOOL_DETAIL_CAP`` in routes/sessions.py); the cloud Embodied tab gets a
@@ -11016,6 +11116,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "ollamaInfo": _detect_ollama_for_heartbeat(),
         "diagnostics": _build_diagnostics(paths.get("workspace")),
         "modelAttribution": _build_model_attribution(),
+        "runtimeSummary": _build_runtime_summary(),
         "transcripts": _build_transcripts(
             extra_sids=[
                 s["sessionId"]

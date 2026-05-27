@@ -1148,11 +1148,16 @@ console.log('_cmApplyRuntimeScopeNote (honest note on aggregate / node-wide tabs
   vm.createContext(sandbox);
   vm.runInContext(maps + '\n' + fnSrc + '\nthis._note = _cmApplyRuntimeScopeNote;', sandbox);
 
-  // aggregate tab (models) → "all runtimes" note mentioning the runtime
-  thePage = null; sandbox.document.getElementById = function(id) { return id === 'page-models' ? (thePage = thePage || makePage()) : null; };
-  sandbox._note('models');
+  // aggregate tab (usage/Cost) → "all runtimes" note mentioning the runtime
+  thePage = null; sandbox.document.getElementById = function(id) { return id === 'page-usage' ? (thePage = thePage || makePage()) : null; };
+  sandbox._note('usage');
   truthy(thePage && thePage._html.indexOf('all runtimes') !== -1, 'aggregate tab → "all runtimes" note');
   truthy(thePage._html.indexOf('Qwen Code') !== -1, 'aggregate note names the selected runtime');
+
+  // models is NO LONGER aggregate (it filters for real now) → no note
+  thePage = null; sandbox.document.getElementById = function(id) { return id === 'page-models' ? (thePage = thePage || makePage()) : null; };
+  sandbox._note('models');
+  truthy(thePage && thePage._html === '', 'models tab → no note (filters for real now)');
 
   // node-wide tab (crons) → "node-wide" note
   thePage = null; sandbox.document.getElementById = function(id) { return id === 'page-crons' ? (thePage = thePage || makePage()) : null; };
