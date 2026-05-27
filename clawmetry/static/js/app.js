@@ -8839,6 +8839,13 @@ function _renderTraceRows() {
   var box = document.getElementById('trace-rows');
   if (!box) return;
   var traces = (window._allTraces || []).slice();
+  // Global runtime switcher (header): scope traces to one runtime. Each
+  // event-derived trace's `trace_id` IS its session_id, whose prefix is the
+  // runtime discriminator (OTLP traces with hex ids fall through to OpenClaw).
+  var _trRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  if (_trRt && _trRt !== 'all') {
+    traces = traces.filter(function(t) { return _cmRuntimeOf({ id: t.trace_id }) === _trRt; });
+  }
   var f = window._traceListFilter, q = window._traceListSearch;
   if (q) traces = traces.filter(function(t) {
     return (((t.trace_id || '') + ' ' + (t.model || '')).toLowerCase().indexOf(q) !== -1);
