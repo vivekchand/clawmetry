@@ -2481,6 +2481,45 @@ def _cmd_update() -> None:
         sys.exit(1)
 
 
+def _cmd_activate(args) -> None:
+    """clawmetry activate <KEY> — install a self-hosted Pro/Enterprise license."""
+    from clawmetry import license as _lic
+
+    ok, msg = _lic.activate(args.key, node_id=_lic._node_id())
+    if ok:
+        print(f"✅  {msg}")
+        print("    Run `clawmetry license` to see status. Restart the daemon to load Pro features.")
+    else:
+        print(f"❌  {msg}")
+        print("    Need a key? Buy a self-hosted license at https://clawmetry.com/pricing")
+        sys.exit(1)
+
+
+def _cmd_license(args) -> None:
+    """clawmetry license — show the current self-hosted license status."""
+    from clawmetry import license as _lic
+
+    info = _lic.current_license_info()
+    print("ClawMetry License\n" + "─" * 40)
+    if not info:
+        print("  Plan:        OSS (free)")
+        print("  License:     none installed")
+        print("  Unlocks:     OpenClaw runtime + NeMo governance + core observability")
+        print("\n  Upgrade for all runtimes + advanced features:")
+        print("    self-hosted key  →  clawmetry activate <KEY>   (https://clawmetry.com/pricing)")
+        return
+    if not info.get("valid"):
+        status = info.get("status", "invalid")
+        print(f"  License:     ⚠️  {status} (run `clawmetry activate <KEY>` with a current key)")
+        return
+    tier = str(info.get("tier", "pro")).capitalize()
+    print(f"  Plan:        {tier} (self-hosted)")
+    print(f"  Nodes:       {info.get('nodes', 1)}")
+    if info.get("days_left") is not None:
+        print(f"  Expires:     in {info['days_left']} day(s)")
+    print("  E2E:         🔒 verified offline")
+
+
 def main() -> None:
     import argparse
     # --v2 opt-in flag for the React SPA scaffold (see clawmetry/v2/routes.py).
@@ -2797,6 +2836,15 @@ def main() -> None:
         "uninstall", help="Fully uninstall clawmetry (stop daemons, remove all files)"
     )
 
+    # activate — install a self-hosted Pro/Enterprise license key
+    p_activate = sub.add_parser(
+        "activate", help="Activate a self-hosted Pro/Enterprise license key"
+    )
+    p_activate.add_argument("key", help="License key (CLAW1.…)")
+
+    # license — show the current license status
+    sub.add_parser("license", help="Show the current self-hosted license status")
+
     # Parse just the first token to decide if it's a sub-command or dashboard flag
     _subcmds = (
         "onboard",
@@ -2810,6 +2858,8 @@ def main() -> None:
         "eval",
         "update",
         "uninstall",
+        "activate",
+        "license",
         "nemoclaw-daemons",
     )
     if len(sys.argv) > 1 and sys.argv[1] in _subcmds:
@@ -2838,6 +2888,10 @@ def main() -> None:
             _cmd_update()
         elif args.cmd == "uninstall":
             _cmd_uninstall()
+        elif args.cmd == "activate":
+            _cmd_activate(args)
+        elif args.cmd == "license":
+            _cmd_license(args)
         elif args.cmd == "nemoclaw-daemons":
             _register_nemoclaw_sandbox_daemons()
     else:
