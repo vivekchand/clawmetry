@@ -387,6 +387,74 @@ def get_cost():
     })
 
 
+# ── Sub-Agents API ────────────────────────────────────────────────────────
+
+@bp_v2.route("/api/v2/subagents", methods=["GET"])
+def get_subagents():
+    return jsonify({
+        "summary": {
+            "total_runs": 412,
+            "failed": 1,
+            "agent_count": 6,
+            "tokens_spawned": "1.8M",
+        },
+        "lanes": [
+            {"name": "sub-research-1", "color": "sea", "runs": [
+                {"x": 4, "w": 6, "label": "scrape arxiv"},
+                {"x": 16, "w": 10, "label": "summarize 12 papers"},
+                {"x": 32, "w": 4, "label": "cite check"},
+                {"x": 52, "w": 12, "label": "monthly digest", "active": True},
+            ]},
+            {"name": "sub-cron-cleaner", "color": "moss", "runs": [
+                {"x": 6, "w": 2, "label": "purge logs"},
+                {"x": 24, "w": 2, "label": "purge logs"},
+                {"x": 42, "w": 2, "label": "purge logs"},
+                {"x": 60, "w": 2, "label": "purge logs"},
+            ]},
+            {"name": "sub-incident-bot", "color": "claw-red", "runs": [
+                {"x": 12, "w": 14, "label": "p1 \u00b7 db lag", "failed": True},
+            ]},
+            {"name": "sub-standup-writer", "color": "plum", "runs": [
+                {"x": 8, "w": 4, "label": "mon digest"},
+                {"x": 20, "w": 4, "label": "tue digest"},
+                {"x": 32, "w": 4, "label": "wed digest"},
+                {"x": 44, "w": 4, "label": "thu digest"},
+                {"x": 56, "w": 4, "label": "fri digest"},
+            ]},
+            {"name": "sub-doc-indexer", "color": "amber", "runs": [
+                {"x": 0, "w": 70, "label": "rolling index \u00b7 all repos"},
+            ]},
+            {"name": "sub-pr-reviewer", "color": "sea", "runs": [
+                {"x": 18, "w": 3, "label": "PR #244"},
+                {"x": 26, "w": 2, "label": "PR #245"},
+                {"x": 38, "w": 4, "label": "PR #248"},
+                {"x": 50, "w": 3, "label": "PR #251"},
+            ]},
+        ],
+        "failed_run": {
+            "agent": "sub-incident-bot",
+            "label": "p1 \u00b7 db lag",
+            "time": "Wed 14:22 \u2192 14:36 \u00b7 14 min",
+            "exit_code": 1,
+            "log": [
+                "! tool timeout",
+                "pg.explain('SELECT *...')",
+                "exceeded 60s \u00b7 agent retried 3\u00d7",
+                "! escalation never fired",
+                "slack webhook returned 502",
+            ],
+        },
+        "leaderboard": [
+            {"name": "sub-doc-indexer", "runs": 168},
+            {"name": "sub-research-1", "runs": 84},
+            {"name": "sub-standup-writer", "runs": 65},
+            {"name": "sub-pr-reviewer", "runs": 47},
+            {"name": "sub-cron-cleaner", "runs": 32},
+            {"name": "sub-incident-bot", "runs": 16},
+        ],
+    })
+
+
 # ── SPA serving ───────────────────────────────────────────────────────────
 # Registered after the API routes. Flask matches by rule specificity, so the
 # explicit /api/v2/* rules still win over the catch-all even in default mode.
