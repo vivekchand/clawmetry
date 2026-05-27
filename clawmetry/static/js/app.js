@@ -14589,14 +14589,33 @@ async function loadOverviewTasks() {
       else if (isRealFailure) failed.push(a);
       else done.push(a);
     });
-    // Filter old completed/failed (2h)
-    done = done.filter(function(a) { return a.runtimeMs < 2 * 60 * 60 * 1000; });
-    failed = failed.filter(function(a) { return a.runtimeMs < 2 * 60 * 60 * 1000; });
+    // "Recently Completed/Failed" must mean RECENT — bound by how long ago the
+    // task FINISHED, not its run duration. The old `runtimeMs < 2h` check used
+    // duration, so a 5-minute task that finished 6 days ago still passed and
+    // showed as "recent" (an idle node looked busy). Derive the end time the
+    // same way _ovRenderCard's "Finished N ago" does (completionTs → updatedAt
+    // → startedAt+runtime); unknown end time → not recent.
+    var RECENT_DONE_MS = 60 * 60 * 1000; // 1h
+    var _nowMs = Date.now();
+    function _ovEndedMs(a) {
+      var e = 0;
+      if (a.completionTs) { var ct = Date.parse(a.completionTs); if (!isNaN(ct)) e = ct; }
+      if (!e && a.updatedAt) e = a.updatedAt;
+      if (!e && a.startedAt && a.runtimeMs) e = a.startedAt + a.runtimeMs;
+      return e;
+    }
+    function _ovRecentlyFinished(a) {
+      var e = _ovEndedMs(a);
+      return e > 0 && (_nowMs - e) < RECENT_DONE_MS;
+    }
+    done = done.filter(_ovRecentlyFinished);
+    failed = failed.filter(_ovRecentlyFinished);
 
     if (countBadge) countBadge.textContent = running.length > 0 ? '(' + running.length + ' running)' : '(' + (done.length + failed.length) + ' recent)';
 
     var totalShown = running.length + done.length + failed.length;
     if (totalShown === 0) {
+      if (countBadge) countBadge.textContent = '';
       el.innerHTML = '<div style="text-align:center;padding:40px 20px;color:var(--text-muted);">'
         + '<div style="font-size:32px;margin-bottom:12px;" class="tasks-empty-icon">😴</div>'
         + '<div style="font-size:14px;font-weight:600;color:var(--text-tertiary);margin-bottom:4px;">No active tasks</div>'
