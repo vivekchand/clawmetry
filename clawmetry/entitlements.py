@@ -245,18 +245,15 @@ def _oss_free() -> Entitlement:
 
 
 def _read_local_license() -> Entitlement | None:
-    """Resolve a self-hosted entitlement from ``~/.clawmetry/license.key``.
-
-    Stub: signature verification + payload parsing land with the Ed25519
-    license client (Phase 2). Until then a present file is ignored (returns
-    None) so an unverified file can never grant access. Never raises."""
+    """Resolve a self-hosted entitlement from ``~/.clawmetry/license.key`` via
+    the Ed25519 license client. An absent/forged/expired key yields None, so an
+    unverified file can never grant access. Never raises."""
     try:
         if not os.path.isfile(_LICENSE_PATH):
             return None
-        # Phase 2: verify Ed25519 signature against the embedded public key,
-        # parse {tier, nodes, exp, features}, and _build(...) from it.
-        logger.debug("license.key present but verification not yet wired (Phase 2)")
-        return None
+        from clawmetry import license as _lic  # late import avoids import cycle
+
+        return _lic.load_license(_LICENSE_PATH)
     except Exception as exc:  # never crash on a bad/locked file
         logger.warning("entitlements: license read failed: %s", exc)
         return None
