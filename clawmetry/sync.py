@@ -9891,8 +9891,14 @@ def _build_tool_catalog_slice(limit: int = 5000, top: int = 60) -> dict:
     except Exception:
         return out
 
-    # Builtin universe from the mirrored sandbox tool policy.
-    builtin: set = set()
+    # Builtin universe: the mirrored OpenClaw sandbox tool policy unioned with
+    # the cross-runtime builtin names (Claude Code / Codex have no sandbox
+    # policy on disk, so without this their builtins mislabel as "plugin").
+    try:
+        from routes.tool_catalog import RUNTIME_BUILTINS as _rt_builtins
+        builtin: set = set(_rt_builtins)
+    except Exception:
+        builtin = set()
     try:
         for r in (store.query_tool_policy(limit=25) or []):
             allow = r.get("allow")
@@ -9985,12 +9991,23 @@ def _build_tool_catalog_slice(limit: int = 5000, top: int = 60) -> dict:
                 if m["ts"] is not None and start is not None:
                     dur = max(0, m["ts"] - start)
                 break
-        a = agg.setdefault(name, {"calls": 0, "durs": [], "errs": 0})
+        a = agg.setdefault(name, {"calls": 0, "durs": [], "errs": 0, "recent": []})
         a["calls"] += 1
         if dur is not None:
             a["durs"].append(dur)
         if err:
             a["errs"] += 1
+        # Per-call detail for the cloud drill-down (#tool-catalog calls). The
+        # OSS /api/tool-catalog/<name>/calls reads DuckDB live; the cloud
+        # container has none, so the cm-cloud-tool-catalog interceptor reads
+        # toolCatalog.calls[name] from the snapshot instead. Mirror its field
+        # shape: {ts_ms, duration_ms, status, session_id}.
+        a["recent"].append({
+            "ts_ms": start,
+            "duration_ms": dur,
+            "status": "error" if err else "ok",
+            "session_id": (e.get("session_id") or None),
+        })
 
     def _pct(vals, p):
         if not vals:
@@ -10033,6 +10050,18 @@ def _build_tool_catalog_slice(limit: int = 5000, top: int = 60) -> dict:
         out["groups"][prov] = out["groups"].get(prov, 0) + 1
     tools.sort(key=lambda t: (-t["calls"], -(t["p95_ms"] or 0), t["name"]))
     out["tools"] = tools[:int(top)]
+
+    # Per-tool recent calls for the cloud drill-down — only for the tools we
+    # actually ship (top N), newest first, capped per tool so a hot tool can't
+    # bloat the shared snapshot (#1895 lesson). Keyed by tool name to match the
+    # cloud interceptor's toolCatalog.calls[name] lookup.
+    recent_cap = 15
+    calls_map: dict = {}
+    for t in out["tools"]:
+        recent = agg.get(t["name"], {}).get("recent", [])
+        recent.sort(key=lambda c: c.get("ts_ms") or 0, reverse=True)
+        calls_map[t["name"]] = recent[:recent_cap]
+    out["calls"] = calls_map
     return out
 
 
