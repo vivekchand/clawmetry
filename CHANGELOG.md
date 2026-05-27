@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Fixed: Overview MODEL card now actually scopes to the runtime (2026-05-27)
+- The previous cut wired the Overview MODEL card via `applyBrainModelToAll` (Flow-diagram labels only) and `loadMiniWidgets` then overwrote `#model-primary` with the node-dominant model, so it still showed claude-opus-4-x when Qwen Code was selected. The scoping now lives in `loadMiniWidgets` itself (the single place the card is set on Overview): a selected runtime shows that runtime's primary model from `/api/runtime-summary` (`qwen3:8b` for Qwen Code), `—` if it has no model turns (#2191).
+
 ### Added: Overview model card scopes to the selected runtime (2026-05-27)
 - The Overview headline MODEL card showed the node-dominant model (claude-opus-4-7) even when a specific runtime was selected. It now shows the selected runtime's primary model (e.g. `qwen3:8b` for Qwen Code), matching the Models tab (#2187). New `GET /api/runtime-summary` (per-runtime tokens/cost/turns/sessions/primary_model; mirrors the daemon `runtimeSummary` snapshot slice). Cost/tokens stay node totals (today/week/month windows the all-time slice can't decompose per day).
 
