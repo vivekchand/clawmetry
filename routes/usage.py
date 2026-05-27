@@ -842,10 +842,30 @@ def _try_local_store_usage_forecast():
     }
 
 
-def _try_local_store_model_attribution():
+# Known non-OpenClaw runtime prefixes (session-id prefix = runtime; agent_type
+# is always "openclaw"). Mirrors the frontend `_cmRuntimeOf` / `_CM_RT_LABEL`.
+_RUNTIME_PREFIXES = frozenset({
+    "picoclaw", "nanoclaw", "hermes", "claude_code", "codex", "cursor",
+    "aider", "goose", "opencode", "qwen_code",
+})
+
+
+def _runtime_of(sid):
+    sid = sid or ""
+    i = sid.find(":")
+    if i > 0:
+        p = sid[:i].lower()
+        if p in _RUNTIME_PREFIXES:
+            return p
+    return "openclaw"
+
+
+def _try_local_store_model_attribution(runtime=None):
     """Fast path for /api/model-attribution. Per-model assistant turn count,
     session count, provider tag, and share %. Switches list is best-effort
-    — derived from per-session model variation."""
+    — derived from per-session model variation. When ``runtime`` is set (a
+    session-id prefix like ``qwen_code``), only that runtime's events count, so
+    the Models tab scopes to the runtime switcher selection."""
     store = _ls_get_store()
     if store is None:
         return None
@@ -855,6 +875,13 @@ def _try_local_store_model_attribution():
         return None
     if not evs:
         return None
+    if runtime and runtime != "all":
+        evs = [e for e in evs if _runtime_of(e.get("session_id")) == runtime]
+        if not evs:
+            # Honest empty — the runtime exists in the switcher but has no
+            # model-bearing turns; don't fall back to the merged view.
+            return {"models": [], "switches": [], "total_turns": 0,
+                    "primary_model": "", "runtime": runtime, "_source": "local_store"}
     try:
         import dashboard as _d
         provider_fn = getattr(_d, "_provider_from_model", None)
@@ -2683,12 +2710,16 @@ def api_usage_export():
 
 @bp_usage.route('/api/model-attribution')
 def api_model_attribution():
-    """Per-model turn/session breakdown and switch history (GH #300)."""
+    """Per-model turn/session breakdown and switch history (GH #300).
+
+    ``?runtime=<prefix>`` scopes the breakdown to one runtime (session-id
+    prefix) so the Models tab honours the runtime switcher."""
     import dashboard as _d
+    runtime = (request.args.get('runtime') or '').strip() or None
 
     # Epic #964 — local-store fast path.
     if is_local_store_read_enabled():
-        fast = _try_local_store_model_attribution()
+        fast = _try_local_store_model_attribution(runtime=runtime)
         if fast is not None:
             return jsonify(fast)
 
