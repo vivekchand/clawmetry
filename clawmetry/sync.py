@@ -26,6 +26,9 @@ from pathlib import Path
 from datetime import datetime, timezone
 from itertools import islice
 
+# Leaf module (typing-only deps) — safe to import at package load, no cycle.
+from clawmetry import error_signal as _error_signal
+
 
 def _get_openclaw_dir():
     """Return the OpenClaw config directory, respecting CLAWMETRY_OPENCLAW_DIR env var."""
@@ -2526,19 +2529,27 @@ def _parse_v3_event(
         # or a plain string; flatten so PR #1132's expander finds it under
         # ``data.output`` / ``data.result``.
         result_text = _v3_content_to_text(obj.get("content"))
+        # Filter benign read-guards / transient timeouts so they don't inflate
+        # error counts everywhere downstream (readers + snapshot read this
+        # stored flag). See clawmetry.error_signal.
+        raw_is_error = obj.get("is_error")
+        is_error = _error_signal.corrected_is_error(raw_is_error, result_text)
         data.update({
             "tool_use_id": obj.get("tool_use_id"),
             "output": result_text,
             "result": result_text,
-            "is_error": obj.get("is_error"),
+            "is_error": is_error,
             "timestamp": ts,
         })
         inner.update({
             "tool_use_id": obj.get("tool_use_id"),
             "output": result_text,
             "result": result_text,
-            "is_error": obj.get("is_error"),
+            "is_error": is_error,
         })
+        if raw_is_error and not is_error:
+            data["benign_error"] = True
+            inner["benign_error"] = True
 
     else:
         # Unknown v3 event — log + drop so future schema additions don't
@@ -8431,7 +8442,17 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                     if e.tool_name:
                         data["tool_name"] = e.tool_name
                     if isinstance(e.extra, dict) and e.extra:
-                        data["extra"] = e.extra
+                        extra = e.extra
+                        # Filter benign read-guards (the family error flag lives
+                        # in extra.isError) so they don't inflate error counts.
+                        if extra.get("isError") or extra.get("is_error"):
+                            txt = _error_signal.extract_tool_result_text(data) or (e.content or "")
+                            if _error_signal.is_benign_tool_error(txt):
+                                extra = dict(extra)
+                                extra["isError"] = False
+                                extra["is_error"] = False
+                                data["benign_error"] = True
+                        data["extra"] = extra
                     rows.append({
                         "id": f"{runtime}:{e.id}",
                         "node_id": node_id,
@@ -9441,6 +9462,32 @@ def _backfill_event_costs_once(store) -> None:
         log.debug("cost backfill failed: %s", _e)
 
 
+_benign_backfill_done = False
+
+
+def _backfill_benign_errors_once(store) -> None:
+    """#2196: drain the benign-error backfill once per daemon process. Pages
+    tool-result events by an ``id`` cursor (forward progress guaranteed), with a
+    hard iteration cap so a huge store can't stall the snapshot build; remaining
+    rows get picked up on the next process start. Never raises."""
+    global _benign_backfill_done
+    if _benign_backfill_done:
+        return
+    _benign_backfill_done = True  # set first: a failure shouldn't retry-loop
+    try:
+        after, total = "", 0
+        for _ in range(200):  # cap: 200 x 5000 = up to 1M tool-result rows
+            max_id, updated, scanned = store.backfill_benign_errors(after_id=after, batch=5000)
+            total += updated
+            if scanned == 0:
+                break
+            after = max_id
+        if total:
+            log.info("benign-error backfill: cleared %d flagged-but-benign tool errors (#2196)", total)
+    except Exception as _e:
+        log.debug("benign-error backfill failed: %s", _e)
+
+
 def _build_daily_usage(days=14):
     """14-day token/cost history for the cloud Cost tab.
 
@@ -9464,6 +9511,10 @@ def _build_daily_usage(days=14):
         # so the Cost tab showed ~$0). Runs once per process, on the daemon's
         # writer handle, draining in bounded batches before we read costs.
         _backfill_event_costs_once(store)
+        # #2196: one-time backfill to clear flagged-but-benign tool errors
+        # (read-guards / transient timeouts) on history, so error counts match
+        # the at-ingest correction. Same writer handle, bounded batches.
+        _backfill_benign_errors_once(store)
         daily_tok: dict = {}
         daily_cost: dict = {}
         for r in (store.query_aggregates() or []):
