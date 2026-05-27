@@ -1,377 +1,324 @@
-// Sub-Agents — OpenClaw run-ledger view.
-//
-// `runtime` IS the OpenClaw queue lane (cli / cron / subagent), so the lane
-// rollup doubles as a live queue/concurrency monitor. Three panels:
-//   1. Queue lanes — saturation bar (ok / running / queued / failed) + the
-//      OpenClaw default concurrency cap (subagent=8, main=4; cli/cron uncapped).
-//   2. Recent runs — status pill, lane chip, label, duration.
-//   3. Sub-agent fan-out tree — runs grouped by requesting session, nested.
-//
-// Mirrors v1 loadRunLedger() (clawmetry/static/js/app.js) on the live
-// /api/run-ledger + /api/run-ledger/tree endpoints (routes/scheduler.py).
-// Polls every 5s while the tab is visible; never crashes on empty data.
+import { useState, useEffect } from "react";
 
-import { useState, useEffect, useRef } from "react";
-
-// OpenClaw default per-lane concurrency caps. cli/cron have no fixed cap in
-// the queue, so we only show their running count.
-const LANE_CAPS: Record<string, number> = { subagent: 8, main: 4 };
-
-const LANE_COLORS: Record<string, string> = {
-  subagent: "var(--plum)",
-  cron: "var(--ocean, #3b82f6)",
-  cli: "var(--moss)",
-};
+interface SubAgentRun {
+  x: number;
+  w: number;
+  label: string;
+  failed?: boolean;
+  active?: boolean;
+}
 
 interface Lane {
-  lane: string;
-  total: number;
-  running: number;
-  queued: number;
-  succeeded: number;
+  name: string;
+  color: string;
+  runs: SubAgentRun[];
+}
+
+interface FailedRun {
+  agent: string;
+  label: string;
+  time: string;
+  exit_code: number;
+  log: string[];
+}
+
+interface LeaderboardEntry {
+  name: string;
+  runs: number;
+}
+
+interface Summary {
+  total_runs: number;
   failed: number;
-  last_event_at?: number | null;
+  agent_count: number;
+  tokens_spawned: string;
 }
 
-interface Run {
-  task_id?: string;
-  run_id?: string;
-  runtime?: string;
-  status?: string;
-  label?: string;
-  task?: string;
-  delivery_status?: string;
-  terminal_outcome?: string;
-  created_at?: number | null;
-  started_at?: number | null;
-  ended_at?: number | null;
-}
-
-interface LedgerData {
+interface SubAgentsData {
+  summary: Summary;
   lanes: Lane[];
-  runs: Run[];
+  failed_run: FailedRun | null;
+  leaderboard: LeaderboardEntry[];
 }
 
-interface TreeNode {
-  task_id?: string;
-  run_id?: string;
-  label?: string;
-  task?: string;
-  status?: string;
-  delivery_status?: string;
-  terminal_outcome?: string;
-  child_session_key?: string | null;
-  agent_id?: string | null;
-  created_at?: number | null;
-  started_at?: number | null;
-  ended_at?: number | null;
-  error?: string | null;
-  children?: TreeNode[];
-}
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-interface TreeGroup {
-  session_key: string;
-  runs: TreeNode[];
-}
-
-interface TreeData {
-  tree: TreeGroup[];
-  count: number;
-}
-
-function laneColor(lane: string): string {
-  return LANE_COLORS[lane] ?? "var(--ink-4)";
-}
-
-// status -> [text color, wash background]
-function statusColors(status: string | undefined): [string, string] {
-  switch ((status || "").toLowerCase()) {
-    case "succeeded":
-    case "success":
-      return ["var(--moss)", "var(--moss-soft)"];
-    case "running":
-      return ["var(--ocean, #3b82f6)", "rgba(59,130,246,0.12)"];
-    case "failed":
-    case "timeout":
-    case "error":
-      return ["var(--claw-red)", "var(--claw-red-wash)"];
-    case "queued":
-    case "pending":
-      return ["var(--amber)", "var(--amber-soft)"];
-    default:
-      return ["var(--ink-4)", "var(--panel-2)"];
-  }
-}
-
-// epoch-ms start/end -> human duration. Empty string when we can't compute it.
-function duration(started?: number | null, ended?: number | null): string {
-  if (!started || !ended) return "";
-  const ms = ended - started;
-  if (ms < 0) return "";
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${Math.round(ms / 60000)}m`;
-}
-
-function StatusPill({ status }: { status: string | undefined }) {
-  const [fg, bg] = statusColors(status);
-  return (
-    <span
-      style={{
-        fontSize: 10,
-        fontWeight: 700,
-        fontFamily: "var(--f-mono)",
-        color: fg,
-        background: bg,
-        borderRadius: 4,
-        padding: "1px 6px",
-        whiteSpace: "nowrap",
-      }}
-    >
-      {status || "?"}
-    </span>
-  );
-}
-
-function LaneRow({ lane }: { lane: Lane }) {
-  const cap = LANE_CAPS[lane.lane];
-  const total = lane.total || 0;
-  const running = lane.running || 0;
-  const ok = lane.succeeded || 0;
-  const failed = lane.failed || 0;
-  const queued = lane.queued || 0;
-  const capLabel = cap ? `${running}/${cap}` : `${running}`;
-
-  // Saturation segments — proportions of the lane's total runs.
-  const segs: Array<[number, string]> = [
-    [ok, "var(--moss)"],
-    [running, "var(--ocean, #3b82f6)"],
-    [queued, "var(--amber)"],
-    [failed, "var(--claw-red)"],
-  ];
-
-  return (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, marginBottom: 5 }}>
-        <span style={{ width: 9, height: 9, borderRadius: 2, background: laneColor(lane.lane), display: "inline-block" }} />
-        <span style={{ fontWeight: 700, color: "var(--ink)" }}>{lane.lane}</span>
-        <span style={{ fontSize: 11, fontWeight: 600, color: running > 0 ? "var(--moss)" : "var(--ink-4)" }}>
-          {running > 0 ? `● ${capLabel} running` : "idle"}
-        </span>
-        <span style={{ flex: 1 }} />
-        <span className="mono" style={{ fontSize: 11, color: "var(--ink-4)" }}>
-          {total} runs · {ok}✓{failed ? ` · ${failed}✗` : ""}
-        </span>
-      </div>
-      <div style={{ display: "flex", height: 7, borderRadius: 4, overflow: "hidden", background: "var(--panel-2)" }}>
-        {total > 0 &&
-          segs.map(([n, c], i) =>
-            n > 0 ? (
-              <span key={i} style={{ height: "100%", width: `${(n / total) * 100}%`, background: c, display: "inline-block" }} />
-            ) : null
-          )}
-      </div>
-    </div>
-  );
-}
-
-function RunRow({ run }: { run: Run }) {
-  const d = duration(run.started_at, run.ended_at);
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 10,
-        padding: "7px 14px",
-        borderTop: "1px dashed var(--line)",
-        fontSize: 12,
-      }}
-    >
-      <StatusPill status={run.status} />
-      <span
-        className="mono"
-        style={{
-          fontSize: 10,
-          color: "var(--ink-4)",
-          background: "var(--panel-2)",
-          borderRadius: 4,
-          padding: "1px 6px",
-          minWidth: 54,
-          textAlign: "center",
-        }}
-      >
-        {run.runtime || "—"}
-      </span>
-      <span
-        style={{ flex: 1, color: "var(--ink-2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}
-        title={run.label || run.task || ""}
-      >
-        {run.label || run.task || "(untitled)"}
-      </span>
-      {d && <span className="mono" style={{ fontSize: 11, color: "var(--ink-4)", whiteSpace: "nowrap" }}>{d}</span>}
-    </div>
-  );
-}
-
-function TreeNodeRow({ node, depth }: { node: TreeNode; depth: number }) {
-  const d = duration(node.started_at, node.ended_at);
-  const children = node.children ?? [];
-  return (
-    <>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          padding: "6px 0",
-          paddingLeft: 12 + depth * 18,
-          fontSize: 12,
-          borderTop: depth === 0 ? "1px dashed var(--line)" : "none",
-        }}
-      >
-        <span style={{ color: "var(--ink-4)", fontFamily: "var(--f-mono)", fontSize: 11 }}>
-          {depth > 0 ? "└─" : "•"}
-        </span>
-        <StatusPill status={node.status} />
-        <span
-          style={{ flex: 1, color: "var(--ink-2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}
-          title={node.label || node.task || ""}
-        >
-          {node.label || node.task || "(untitled)"}
-        </span>
-        {node.child_session_key && (
-          <span className="mono" style={{ fontSize: 10, color: "var(--ink-4)" }} title={node.child_session_key}>
-            {node.child_session_key.slice(0, 8)}
-          </span>
-        )}
-        {d && <span className="mono" style={{ fontSize: 11, color: "var(--ink-4)", whiteSpace: "nowrap" }}>{d}</span>}
-      </div>
-      {children.map((kid, i) => (
-        <TreeNodeRow key={kid.task_id ?? kid.run_id ?? i} node={kid} depth={depth + 1} />
-      ))}
-    </>
-  );
+function toVar(token: string): string {
+  return `var(--${token})`;
 }
 
 export function SubAgentsPage() {
-  const [ledger, setLedger] = useState<LedgerData | null>(null);
-  const [tree, setTree] = useState<TreeData | null>(null);
-  const [errored, setErrored] = useState(false);
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [data, setData] = useState<SubAgentsData | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function load() {
-      // Don't poll while the tab is hidden (matches v1 visibilitySetInterval).
-      if (typeof document !== "undefined" && document.hidden) return;
-      try {
-        const [l, t] = await Promise.all([
-          fetch("/api/run-ledger?limit=60").then((r) => r.json()),
-          fetch("/api/run-ledger/tree").then((r) => r.json()),
-        ]);
-        if (cancelled) return;
-        setLedger({ lanes: l?.lanes ?? [], runs: l?.runs ?? [] });
-        setTree({ tree: t?.tree ?? [], count: t?.count ?? 0 });
-        setErrored(false);
-      } catch (e) {
-        console.error(e);
-        if (!cancelled) setErrored(true);
-      }
-    }
-
-    load();
-    timer.current = setInterval(load, 5000);
-    return () => {
-      cancelled = true;
-      if (timer.current) clearInterval(timer.current);
-    };
+    fetch("/api/v2/subagents")
+      .then((r) => r.json())
+      .then(setData)
+      .catch(console.error);
   }, []);
 
-  if (!ledger) {
+  if (!data) {
     return (
       <div style={{ padding: 40, color: "var(--ink-4)" }} className="mono">
-        {errored ? "Failed to load run ledger." : "Loading sub-agents…"}
+        Loading sub-agents…
       </div>
     );
   }
 
-  const lanes = ledger.lanes ?? [];
-  const runs = ledger.runs ?? [];
-  const groups = tree?.tree ?? [];
-  const treeCount = tree?.count ?? 0;
-  const empty = lanes.length === 0 && runs.length === 0;
+  const { lanes, failed_run, leaderboard } = data;
 
-  if (empty) {
+  if (lanes.length === 0) {
     return (
       <div style={{ padding: "80px 40px", textAlign: "center" }}>
         <div style={{ fontSize: 32, marginBottom: 12 }}>⇲</div>
-        <div style={{ fontSize: 15, color: "var(--ink-3)" }}>No background runs yet.</div>
-        <div className="mono" style={{ fontSize: 11, color: "var(--ink-4)", marginTop: 8, lineHeight: 1.6 }}>
-          Sub-agent, cron and CLI runs from OpenClaw's task ledger appear here as they execute.
+        <div style={{ fontSize: 15, color: "var(--ink-3)" }}>
+          No sub-agents in this workspace yet.
         </div>
       </div>
     );
   }
 
+  const maxRuns = leaderboard.length > 0 ? leaderboard[0].runs : 1;
+
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
-      <div style={{ flex: 1, padding: 22, overflow: "auto", display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ flex: 1, display: "grid", gridTemplateColumns: "1fr 320px", minHeight: 0 }}>
 
-        {/* ── Queue lanes ── */}
-        <div className="cm-card" style={{ padding: 16 }}>
-          <div className="caps" style={{ color: "var(--ink-4)", marginBottom: 12 }}>
-            Queue lanes · runtime = OpenClaw queue lane
-          </div>
-          {lanes.length > 0 ? (
-            lanes.map((l) => <LaneRow key={l.lane} lane={l} />)
-          ) : (
-            <div className="mono" style={{ fontSize: 11, color: "var(--ink-4)" }}>No lanes active.</div>
-          )}
-        </div>
+        {/* ── Swimlanes (left) ── */}
+        <div style={{ padding: 22, overflow: "auto" }}>
 
-        {/* ── Recent runs + fan-out tree (two columns) ── */}
-        <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 16, minHeight: 0 }}>
-
-          {/* Recent runs */}
-          <div className="cm-card" style={{ padding: 0, overflow: "hidden", alignSelf: "start" }}>
-            <div
-              className="caps"
-              style={{ color: "var(--ink-4)", padding: "12px 14px", borderBottom: "1px solid var(--line)" }}
-            >
-              Recent runs · {runs.length}
-            </div>
-            {runs.length > 0 ? (
-              runs.slice(0, 40).map((r, i) => <RunRow key={r.task_id ?? r.run_id ?? i} run={r} />)
-            ) : (
-              <div className="mono" style={{ fontSize: 11, color: "var(--ink-4)", padding: 14 }}>No runs recorded.</div>
-            )}
+          {/* Day axis */}
+          <div
+            style={{
+              display: "flex",
+              paddingLeft: 150,
+              marginBottom: 8,
+              fontFamily: "var(--f-mono)",
+              fontSize: 10,
+              color: "var(--ink-4)",
+            }}
+          >
+            {DAYS.map((d) => (
+              <div key={d} style={{ flex: 1 }}>{d}</div>
+            ))}
           </div>
 
-          {/* Sub-agent fan-out tree */}
-          <div className="cm-card" style={{ padding: 16, background: "var(--panel-2)", alignSelf: "start" }}>
-            <div className="caps" style={{ color: "var(--ink-4)", marginBottom: 10 }}>
-              Sub-agent fan-out · {treeCount} spawned
-            </div>
-            {groups.length > 0 ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                {groups.map((g, gi) => (
-                  <div key={g.session_key ?? gi}>
-                    <div className="mono" style={{ fontSize: 10, color: "var(--ink-4)", marginBottom: 2 }}>
-                      session {(g.session_key || "unknown").slice(0, 12)} · {g.runs?.length ?? 0}
-                    </div>
-                    {(g.runs ?? []).map((n, ni) => (
-                      <TreeNodeRow key={n.task_id ?? n.run_id ?? ni} node={n} depth={0} />
+          {/* Lane rows */}
+          <div style={{ background: "var(--paper-deep)", borderRadius: 10, padding: 10 }}>
+            {lanes.map((lane, i) => {
+              const color = toVar(lane.color);
+              return (
+                <div
+                  key={i}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    padding: "8px 0",
+                    borderBottom: i < lanes.length - 1 ? "1px dashed var(--line)" : "none",
+                  }}
+                >
+                  {/* Agent name */}
+                  <div style={{ width: 140, paddingRight: 10, display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ width: 6, height: 26, background: color, borderRadius: 3 }} />
+                    <span
+                      className="mono"
+                      style={{ fontSize: 11, color: "var(--ink-2)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                    >
+                      {lane.name}
+                    </span>
+                  </div>
+
+                  {/* Timeline bar */}
+                  <div
+                    style={{
+                      flex: 1,
+                      position: "relative",
+                      height: 28,
+                      background: "var(--paper)",
+                      borderRadius: 4,
+                      border: "1px solid var(--line)",
+                    }}
+                  >
+                    {/* Day separator lines */}
+                    {[1, 2, 3, 4, 5, 6].map((d) => (
+                      <div
+                        key={d}
+                        style={{
+                          position: "absolute",
+                          left: `${(d / 7) * 100}%`,
+                          top: 0,
+                          bottom: 0,
+                          width: 1,
+                          background: "var(--line)",
+                        }}
+                      />
+                    ))}
+
+                    {/* Run blocks */}
+                    {lane.runs.map((r, j) => (
+                      <div
+                        key={j}
+                        title={r.label}
+                        style={{
+                          position: "absolute",
+                          left: `${r.x}%`,
+                          top: 4,
+                          bottom: 4,
+                          width: `${r.w}%`,
+                          background: r.failed ? "var(--claw-red)" : color,
+                          opacity: r.failed ? 1 : 0.85,
+                          borderRadius: 3,
+                          padding: "0 6px",
+                          display: "flex",
+                          alignItems: "center",
+                          color: "#FFF8EE",
+                          fontFamily: "var(--f-mono)",
+                          fontSize: 9,
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          border: r.active ? "1.5px solid var(--ink)" : "none",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {r.label}
+                        {r.failed && " \u2715"}
+                      </div>
                     ))}
                   </div>
-                ))}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* ── Aggregate strip ── */}
+          <div className="cm-card" style={{ marginTop: 14, padding: 14 }}>
+            <div className="caps" style={{ color: "var(--ink-4)", marginBottom: 8 }}>
+              Runs / hour · all subs
+            </div>
+            <svg viewBox="0 0 700 50" style={{ width: "100%", height: 50 }}>
+              {Array.from({ length: 168 }).map((_, i) => {
+                const h = 6 + ((i * 13 + (i % 7) * 4) % 32);
+                const c = i === 38 ? "var(--claw-red)" : "var(--claw-red-soft)";
+                return (
+                  <rect key={i} x={i * 4} y={48 - h} width="3" height={h} fill={c} />
+                );
+              })}
+            </svg>
+          </div>
+        </div>
+
+        {/* ── Right sidebar ── */}
+        <div
+          style={{
+            borderLeft: "1px solid var(--line)",
+            padding: 18,
+            background: "var(--paper-deep)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 12,
+            overflow: "auto",
+          }}
+        >
+          {/* Failed run card */}
+          {failed_run && (
+            <div className="cm-card" style={{ padding: 14, borderColor: "var(--claw-red)" }}>
+              <div className="caps" style={{ color: "var(--claw-red)", marginBottom: 6 }}>
+                Failed run
               </div>
-            ) : (
-              <div className="mono" style={{ fontSize: 11, color: "var(--ink-4)" }}>
-                No sub-agents spawned yet.
+              <div style={{ fontSize: 13, fontWeight: 500 }}>
+                {failed_run.agent} · {failed_run.label}
               </div>
-            )}
+              <div
+                className="mono"
+                style={{ fontSize: 10, color: "var(--ink-4)", marginTop: 2 }}
+              >
+                {failed_run.time} · exit code {failed_run.exit_code}
+              </div>
+              <div style={{ borderTop: "1px dashed var(--line)", margin: "10px 0" }} />
+              <div
+                className="mono"
+                style={{
+                  fontSize: 11,
+                  color: "var(--ink-2)",
+                  background: "var(--panel-2)",
+                  padding: 10,
+                  borderRadius: 6,
+                  lineHeight: 1.6,
+                }}
+              >
+                {failed_run.log.map((line, k) => {
+                  const isError = line.startsWith("!");
+                  const isDim =
+                    line.startsWith("exceeded") || line.startsWith("slack");
+                  return (
+                    <div
+                      key={k}
+                      style={{
+                        color: isError
+                          ? "var(--claw-red)"
+                          : isDim
+                            ? "var(--ink-4)"
+                            : undefined,
+                      }}
+                    >
+                      {line}
+                    </div>
+                  );
+                })}
+              </div>
+              <button className="cm-btn tiny" style={{ marginTop: 10 }}>
+                open trace →
+              </button>
+            </div>
+          )}
+
+          {/* Leaderboard */}
+          <div className="cm-card" style={{ padding: 14 }}>
+            <div className="caps" style={{ color: "var(--ink-4)", marginBottom: 8 }}>
+              Sub agent leaderboard · 7d
+            </div>
+            {leaderboard.map((s) => (
+              <div
+                key={s.name}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "3px 0",
+                  fontSize: 11,
+                }}
+              >
+                <span
+                  className="mono"
+                  style={{ width: 120, color: "var(--ink-2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                >
+                  {s.name}
+                </span>
+                <div
+                  style={{
+                    flex: 1,
+                    height: 6,
+                    background: "var(--panel-2)",
+                    borderRadius: 3,
+                    overflow: "hidden",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: `${(s.runs / maxRuns) * 100}%`,
+                      height: "100%",
+                      background: "var(--claw-red)",
+                    }}
+                  />
+                </div>
+                <span
+                  className="mono"
+                  style={{ width: 26, textAlign: "right", color: "var(--ink-4)" }}
+                >
+                  {s.runs}
+                </span>
+              </div>
+            ))}
           </div>
         </div>
       </div>
