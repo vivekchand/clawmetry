@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Fixed: Active Tasks showed week-old runs as "Recently Completed" (2026-05-27)
+- The overview Active Tasks panel filtered "Recently Completed/Failed" by each task's run **duration** (`runtimeMs < 2h`) instead of **how long ago it finished**, so a 5-minute task that ended days ago kept showing as "recent" and an idle node looked busy. Now bounded by finish age (1h), derived the same way the card's "Finished N ago" label is (`completionTs → updatedAt → startedAt+runtime`). Idle nodes correctly show "No active tasks — The AI is idle"; running tasks still always show. (#2170)
+
 ### Release: runtime switcher scopes Tracing + clearer "N sessions" labels (2026-05-27)
 - The global runtime switcher now also filters the **Tracing** tab (event-derived traces set `trace_id = session_id`, whose prefix is the runtime). Brain + Transcripts + Tracing now all de-merge by runtime. (#2167)
 - Switcher option labels now read **"Claude Code · 22 sessions"** / **"OpenClaw · 1 session"** / **"All runtimes · 23 sessions"** instead of a bare `(22)`, which had read as "22 Claude Code runtimes" (there is one runtime running many sessions). (#2167)
