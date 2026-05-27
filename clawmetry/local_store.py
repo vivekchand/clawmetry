@@ -1527,6 +1527,13 @@ class LocalStore:
             raise ValueError("event must include 'event_type'")
         if not event.get("ts"):
             raise ValueError("event must include 'ts'")
+        # Defense-in-depth: scrub secret-shaped values before they rest in
+        # DuckDB (events are stored plaintext pre-E2E). Issue #2197.
+        try:
+            from clawmetry import redaction as _redaction
+            event = _redaction.redact_event(event)
+        except Exception:
+            pass  # never let redaction block ingest
         with self._ring_lock:
             if len(self._ring) >= RING_MAX:
                 self._dropped += 1
