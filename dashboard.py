@@ -10674,6 +10674,13 @@ def detect_config(args=None):
         for _family_cls in _fam_classes():
             try:
                 _inst = _family_cls()
+                # A licensed install's clawmetry-pro plugin registers its own
+                # (closed) adapter for some runtimes at import time, before this
+                # loop runs. Don't clobber it — the registry intentionally lets
+                # plugins override the bundled adapter. Free installs have no
+                # plugin, so this is a no-op and OSS registers its own.
+                if _adapter_registry.get(_inst.name) is not None:
+                    continue
                 if _inst.detect().detected:
                     _adapter_registry.register(_inst)
             except Exception as _fam_err:  # pragma: no cover - defensive
