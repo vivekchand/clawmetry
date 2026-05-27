@@ -12141,9 +12141,10 @@ async function loadSubagents() {
       }
     });
     function statusDot(status) {
-      var colors = { active: '#16a34a', idle: '#d97706', stale: '#6b7280', failed: '#ef4444' };
+      var colors = { active: '#16a34a', idle: '#d97706', stale: '#6b7280', failed: '#ef4444', paused: '#7c3aed' };
       var glow = status === 'active' ? 'box-shadow:0 0 6px rgba(22,163,74,0.6);'
-               : status === 'failed' ? 'box-shadow:0 0 6px rgba(239,68,68,0.5);' : '';
+               : status === 'failed' ? 'box-shadow:0 0 6px rgba(239,68,68,0.5);'
+               : status === 'paused' ? 'box-shadow:0 0 6px rgba(124,58,237,0.5);' : '';
       return '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + (colors[status] || '#6b7280') + ';' + glow + 'flex-shrink:0;margin-right:4px;"></span>';
     }
     function renderAgent(a, depth) {
@@ -12174,6 +12175,18 @@ async function loadSubagents() {
       html += '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap;margin-left:8px;">' + escHtml(a.model || '') + '</span>';
       html += '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap;margin-left:8px;">' + tokens + ' tok</span>';
       html += '<span style="font-size:11px;color:var(--text-faint);white-space:nowrap;margin-left:8px;">' + escHtml(a.runtime || '') + '</span>';
+      if (a.status !== 'failed' && a.status !== 'stale' && a.status !== 'stopped') {
+        var keyBtn = (a.key || a.sessionId || '').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+        var isPaused = a.status === 'paused';
+        html += '<span onclick="event.stopPropagation();" style="margin-left:8px;display:inline-flex;gap:4px;flex-shrink:0;">';
+        if (isPaused) {
+          html += '<button onclick="event.stopPropagation();controlAgent(\'' + keyBtn + '\',\'resume\')" style="font-size:10px;padding:2px 6px;border-radius:4px;border:1px solid #16a34a;background:transparent;color:#16a34a;cursor:pointer;">Resume</button>';
+        } else {
+          html += '<button onclick="event.stopPropagation();controlAgent(\'' + keyBtn + '\',\'pause\')" style="font-size:10px;padding:2px 6px;border-radius:4px;border:1px solid var(--border-primary);background:transparent;color:var(--text-muted);cursor:pointer;">Pause</button>';
+        }
+        html += '<button onclick="event.stopPropagation();controlAgent(\'' + keyBtn + '\',\'stop\')" style="font-size:10px;padding:2px 6px;border-radius:4px;border:1px solid rgba(239,68,68,0.5);background:transparent;color:#ef4444;cursor:pointer;">Stop</button>';
+        html += '</span>';
+      }
       html += '</div>';
       if (hasChildren && isExpanded) {
         childrenOf[sid].forEach(function(child) { html += renderAgent(child, depth + 1); });
@@ -12199,6 +12212,28 @@ async function loadSubagents() {
 function _saToggle(sid) {
   _subagentsExpanded[sid] = (_subagentsExpanded[sid] === false) ? true : false;
   loadSubagents();
+}
+
+async function controlAgent(key, action) {
+  if (action === 'stop') {
+    if (!confirm('Stop agent ' + key + '? This will attempt to terminate it via the gateway and cannot be undone.')) return;
+  }
+  try {
+    var body = action === 'stop' ? {confirm: true} : {};
+    var r = await fetch('/api/agents/' + encodeURIComponent(key) + '/' + action, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    var d = await r.json();
+    if (d.ok) {
+      loadSubagents();
+    } else {
+      alert('Agent ' + action + ' failed: ' + (d.error || 'unknown error'));
+    }
+  } catch(e) {
+    alert('Request failed: ' + e);
+  }
 }
 
 // OpenClaw queue-lane defaults (docs.openclaw.ai/concepts/queue): the

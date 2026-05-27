@@ -16,6 +16,7 @@ Pure mechanical move — zero behaviour change from the previous in-file
 definitions.
 """
 
+import collections
 import json
 import os
 import re
@@ -39,6 +40,12 @@ _SUBAGENTS_SCAN_TAIL_BYTES = int(os.environ.get("CLAWMETRY_SUBAGENTS_SCAN_TAIL_B
 
 # Channels that don't identify a user-initiated session (generic/internal)
 _GENERIC_CHANNELS = frozenset({"unknown", "direct", "", "main", "internal"})
+
+# Per-agent pause tracking — in-memory only, resets on dashboard restart.
+# Actual pause/resume/stop is delegated to the gateway RPC; this set is the
+# dashboard's local view of which agent keys have been soft-paused.
+_paused_agents: set = set()
+_agent_control_audit: collections.deque = collections.deque(maxlen=200)
 
 
 def _ls_call(method_name, **kwargs):
@@ -2078,6 +2085,10 @@ def api_subagents():
     if not full_scan and is_local_store_read_enabled():
         fast = _try_local_store_subagents()
         if fast is not None:
+            if _paused_agents:
+                for _sa in fast.get("subagents", []):
+                    if (_sa.get("key") or _sa.get("sessionId") or "") in _paused_agents:
+                        _sa["status"] = "paused"
             _SUBAGENTS_CACHE["data"] = fast
             _SUBAGENTS_CACHE["ts"] = time.time()
             return jsonify(fast)
@@ -2274,7 +2285,11 @@ def api_subagents():
             "runId":     s.get("runId") or sp_match.get("runId") or "",
         })
 
-    _status_rank = {"active": 0, "idle": 1, "stale": 2, "failed": 3}
+    if _paused_agents:
+        for _sa in subagents:
+            if (_sa.get("key") or _sa.get("sessionId") or "") in _paused_agents:
+                _sa["status"] = "paused"
+    _status_rank = {"active": 0, "idle": 1, "stale": 2, "paused": 3, "failed": 4}
     subagents.sort(key=lambda x: (_status_rank.get(x["status"], 9), x["depth"]))
     payload = {"subagents": subagents, "counts": counts}
     if not full_scan:
@@ -2927,6 +2942,57 @@ def api_session_stop(session_id):
             "errors": errors,
         }
     )
+
+
+@bp_sessions.route("/api/agents/<path:agent_key>/pause", methods=["POST"])
+def api_agent_pause(agent_key):
+    """Pause a single agent via gateway RPC; tracks state in _paused_agents."""
+    import dashboard as _d
+    result = _d._gw_invoke("subagents", {"action": "pause", "key": agent_key})
+    _paused_agents.add(agent_key)
+    _agent_control_audit.append({
+        "ts": time.time(), "action": "pause", "key": agent_key,
+        "gw_ok": result is not None, "source": request.remote_addr,
+    })
+    return jsonify({"ok": True, "key": agent_key, "status": "paused",
+                    "gw_ok": result is not None})
+
+
+@bp_sessions.route("/api/agents/<path:agent_key>/resume", methods=["POST"])
+def api_agent_resume(agent_key):
+    """Resume a paused agent via gateway RPC; clears the key from _paused_agents."""
+    import dashboard as _d
+    result = _d._gw_invoke("subagents", {"action": "resume", "key": agent_key})
+    _paused_agents.discard(agent_key)
+    _agent_control_audit.append({
+        "ts": time.time(), "action": "resume", "key": agent_key,
+        "gw_ok": result is not None, "source": request.remote_addr,
+    })
+    return jsonify({"ok": True, "key": agent_key, "status": "active",
+                    "gw_ok": result is not None})
+
+
+@bp_sessions.route("/api/agents/<path:agent_key>/stop", methods=["POST"])
+def api_agent_stop(agent_key):
+    """Stop a single agent via gateway RPC. Requires {\"confirm\": true} in body."""
+    import dashboard as _d
+    body = request.get_json(silent=True) or {}
+    if not body.get("confirm"):
+        return jsonify({"ok": False, "error": "confirm:true required to stop an agent"}), 400
+    result = _d._gw_invoke("subagents", {"action": "stop", "key": agent_key})
+    _paused_agents.discard(agent_key)
+    _agent_control_audit.append({
+        "ts": time.time(), "action": "stop", "key": agent_key,
+        "gw_ok": result is not None, "source": request.remote_addr,
+    })
+    return jsonify({"ok": True, "key": agent_key, "status": "stopped",
+                    "gw_ok": result is not None})
+
+
+@bp_sessions.route("/api/agents/audit")
+def api_agents_audit():
+    """Return the last 50 agent control actions (pause/resume/stop)."""
+    return jsonify({"entries": list(_agent_control_audit)[-50:]})
 
 
 # Issue #1718: event_types whose ``data`` is a transcript-renderable turn.
