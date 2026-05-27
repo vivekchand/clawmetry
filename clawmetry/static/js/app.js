@@ -2581,19 +2581,6 @@ async function loadAll() {
     if (overview.model && overview.model !== 'unknown') {
       applyBrainModelToAll(overview.model);
     }
-    // Scope the Overview MODEL card to the selected runtime — the flagged
-    // "MODEL claude-opus-4-7 while Qwen Code is selected" confusion. Uses the
-    // per-runtime primary model from /api/runtime-summary (cloud serves the
-    // runtimeSummary snapshot slice). Cost/tokens stay node totals: they're
-    // today/week/month windows the all-time runtimeSummary can't decompose.
-    try {
-      var _ovRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
-      if (_ovRt && _ovRt !== 'all') {
-        var _rsd = await fetchJsonWithTimeout('/api/runtime-summary', 4000);
-        var _rs = _rsd && _rsd.runtimes && _rsd.runtimes[_ovRt];
-        applyBrainModelToAll((_rs && _rs.primary_model) ? _rs.primary_model : '—');
-      }
-    } catch (e) { /* non-fatal — leave the node-wide model */ }
 
     // Usage may be slow on first run; keep trying in background with timeout.
     try {
@@ -2679,14 +2666,30 @@ async function loadMiniWidgets(overview, usage) {
     document.getElementById('hot-sessions-count').textContent = overview.sessionCount || 0;
   });
   
-  // 📈 Model Mix
-  document.getElementById('model-primary').textContent = overview.model || 'unknown';
+  // 📈 Model Mix — scope the Overview MODEL card to the selected runtime (the
+  // "MODEL claude-opus-4-7 while Qwen Code is selected" confusion). The
+  // runtime's primary model comes from /api/runtime-summary (cloud serves the
+  // runtimeSummary snapshot slice); '—' when that runtime has no model turns.
+  // Done HERE (the single place #model-primary is set on Overview) so it isn't
+  // overwritten by the node-dominant model on the next refresh.
+  var _ovModel = overview.model || 'unknown';
+  try {
+    var _ovRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    if (_ovRt && _ovRt !== 'all') {
+      var _rsd = await fetchJsonWithTimeout('/api/runtime-summary', 4000);
+      var _rs = _rsd && _rsd.runtimes && _rsd.runtimes[_ovRt];
+      _ovModel = (_rs && _rs.primary_model) ? _rs.primary_model : '—';
+    }
+  } catch (e) { /* keep the node-dominant model */ }
+  document.getElementById('model-primary').textContent = _ovModel;
   var modelLabel = document.getElementById('main-activity-model');
-  if (modelLabel && overview.model) {
-    var m = overview.model;
+  if (modelLabel && _ovModel && _ovModel !== '—') {
+    var m = _ovModel;
     if (m.indexOf('/') !== -1) m = m.split('/').pop();
     m = m.replace(/-/g, ' ').replace(/\b\w/g, function(c){return c.toUpperCase();});
     modelLabel.textContent = m;
+  } else if (modelLabel && _ovModel === '—') {
+    modelLabel.textContent = '—';
   }
   var modelBreakdown = '';
   if (usage.modelBreakdown && usage.modelBreakdown.length > 0) {
