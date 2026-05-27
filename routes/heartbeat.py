@@ -16,6 +16,7 @@ All shared helpers (``SESSIONS_DIR``) stay in ``dashboard.py`` and are
 reached via late ``import dashboard as _d`` to avoid circular imports.
 """
 
+import difflib
 import json
 import os
 import time
@@ -158,6 +159,114 @@ def _compute_heartbeat_data(sessions_dir):
         "ok_ratio": ok_ratio,
         "recent_beats": recent_beats,
     }
+
+
+# ── Heartbeat-loop detector (issue #2009) ────────────────────────────────────
+
+_HB_LOOP_SIM = 0.7  # minimum pairwise text-similarity to flag a loop
+_HB_LOOP_MIN = 3    # minimum consecutive similar action beats to flag
+
+
+def _detect_heartbeat_loops(sessions_dir):
+    """Detect repetitive action-beat patterns across heartbeat sessions.
+
+    Scans heartbeat JSONL files for consecutive sessions whose last action
+    reply shares >= _HB_LOOP_SIM similarity with its neighbours.  Three or
+    more such consecutive beats is the named ``heartbeat_respond`` runaway
+    signature (issue #2009).
+
+    Returns a list of loop-hit dicts:
+      {"session_ids": [...], "start_ts": float, "end_ts": float,
+       "repeat_count": int, "excerpt": str}
+    """
+    try:
+        fnames = [
+            f for f in os.listdir(sessions_dir)
+            if f.endswith(".jsonl")
+            and ".deleted." not in f
+            and ".reset." not in f
+            and "heartbeat" in f.lower()
+        ]
+    except OSError:
+        return []
+
+    # Collect the last action reply per heartbeat session
+    action_beats = []  # (ts_float, session_id, reply_text)
+    for fname in fnames:
+        sid = os.path.splitext(fname)[0]
+        fpath = os.path.join(sessions_dir, fname)
+        last_action = None
+        try:
+            with open(fpath, "r", errors="replace") as fh:
+                for raw in fh:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        ev = json.loads(raw)
+                    except Exception:
+                        continue
+                    if ev.get("type") != "message":
+                        continue
+                    msg = ev.get("message") or {}
+                    if msg.get("role") != "assistant":
+                        continue
+                    ev_ts = _parse_iso_ts(ev.get("timestamp", ""))
+                    if ev_ts <= 0:
+                        continue
+                    content = msg.get("content") or []
+                    if not isinstance(content, list):
+                        continue
+                    text = ""
+                    for blk in content:
+                        if isinstance(blk, dict) and blk.get("type") == "text":
+                            text += blk.get("text") or ""
+                        elif isinstance(blk, str):
+                            text += blk
+                    text = text.strip()
+                    if text and text != "HEARTBEAT_OK":
+                        last_action = (ev_ts, text)
+        except Exception:
+            continue
+        if last_action is not None:
+            action_beats.append((last_action[0], sid, last_action[1]))
+
+    if len(action_beats) < _HB_LOOP_MIN:
+        return []
+
+    action_beats.sort(key=lambda x: x[0])
+    loops = []
+    n = len(action_beats)
+    i = 0
+    while i <= n - _HB_LOOP_MIN:
+        window = action_beats[i : i + _HB_LOOP_MIN]
+        texts = [b[2] for b in window]
+        all_sim = all(
+            difflib.SequenceMatcher(None, texts[j], texts[j + 1]).ratio() >= _HB_LOOP_SIM
+            for j in range(len(texts) - 1)
+        )
+        if all_sim:
+            end = i + _HB_LOOP_MIN
+            while end < n:
+                sim = difflib.SequenceMatcher(
+                    None, action_beats[end - 1][2], action_beats[end][2]
+                ).ratio()
+                if sim >= _HB_LOOP_SIM:
+                    end += 1
+                else:
+                    break
+            hit = action_beats[i:end]
+            loops.append({
+                "session_ids": [b[1] for b in hit],
+                "start_ts": hit[0][0],
+                "end_ts": hit[-1][0],
+                "repeat_count": len(hit),
+                "excerpt": hit[0][2][:300],
+            })
+            i = end
+        else:
+            i += 1
+    return loops
 
 
 def _try_local_store_heartbeat(interval, now):
@@ -377,4 +486,45 @@ def api_heartbeat():
             "ok_ratio": data["ok_ratio"],
         },
         "recent_beats": data["recent_beats"],
+    })
+
+
+@bp_heartbeat.route("/api/heartbeat-loops")
+def api_heartbeat_loops():
+    """Return detected heartbeat-loop signals (issue #2009).
+
+    Scans heartbeat session files for consecutive action beats whose reply
+    texts share >= 70% similarity — the named OpenClaw ``heartbeat_respond``
+    runaway signature.  Filters to the last 7 days and returns a flat
+    token-burn estimate (500 tokens per redundant beat).
+
+    Response shape:
+      {
+        "week_count": <int>,
+        "loops": [{"session_ids": [...], "start_ts": float, "end_ts": float,
+                   "repeat_count": int, "excerpt": str}],
+        "estimated_token_burn": <int>
+      }
+    """
+    import dashboard as _d
+
+    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    loops = []
+    if os.path.isdir(sessions_dir):
+        try:
+            loops = _detect_heartbeat_loops(sessions_dir)
+        except Exception:
+            pass
+
+    now = time.time()
+    cutoff = now - 7 * 86400
+    week_loops = [lp for lp in loops if lp["end_ts"] >= cutoff]
+    estimated_burn = sum(max(0, lp["repeat_count"] - 1) * 500 for lp in week_loops)
+
+    return jsonify({
+        "week_count": len(week_loops),
+        "loops": week_loops,
+        "estimated_token_burn": estimated_burn,
     })
