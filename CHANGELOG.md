@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Added: Models tab filters by the selected runtime (2026-05-27)
+- The Models tab was an aggregate that merged every runtime, so picking "Qwen Code" still showed claude-opus-4-7 / 19,802 turns (with only an honest "all runtimes" note from the prior release). It now filters for real (#2183): the daemon ships a compact `runtimeSummary` snapshot slice (per-runtime tokens/turns/cost/sessions + a model-attribution block), `/api/model-attribution?runtime=<prefix>` scopes the breakdown server-side, and the cloud `cm-cloud-models` interceptor returns `runtimeSummary[<runtime>]`. Selecting Qwen Code now correctly shows `qwen3:8b` / 9 turns instead of the merged claude-opus-4-7 totals — an honest empty set when a runtime has no model turns, never a silent merge. Overview headline + Cost tab reuse the same slice next.
+
 ### Fixed: runtime switcher is now honest on every tab (2026-05-27)
 - Picking a specific runtime (e.g. Qwen Code) in the header switcher used to leave almost every tab showing merged data from other runtimes (Claude Code / OpenClaw) with no indication — only Transcripts, Brain, Tracing, and the Flow diagram actually scoped. Now the selection is honest everywhere (#2180):
   - **Real client-side filtering** (session-id prefix = runtime) on the tabs that carry session-level data: **Turn anatomy** (`/api/traces`, scoped empty state), **Active Tasks** on Overview (`/api/subagents`), and the Overview **"Main Agent Activity" feed** (`/api/brain-history`) — the last was the "feed shows OpenClaw cron chatter while Qwen is selected" report.
