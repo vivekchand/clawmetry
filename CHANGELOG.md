@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Added: Overview model card scopes to the selected runtime (2026-05-27)
+- The Overview headline MODEL card showed the node-dominant model (claude-opus-4-7) even when a specific runtime was selected. It now shows the selected runtime's primary model (e.g. `qwen3:8b` for Qwen Code), matching the Models tab (#2187). New `GET /api/runtime-summary` (per-runtime tokens/cost/turns/sessions/primary_model; mirrors the daemon `runtimeSummary` snapshot slice). Cost/tokens stay node totals (today/week/month windows the all-time slice can't decompose per day).
+
 ### Added: Models tab filters by the selected runtime (2026-05-27)
 - The Models tab was an aggregate that merged every runtime, so picking "Qwen Code" still showed claude-opus-4-7 / 19,802 turns (with only an honest "all runtimes" note from the prior release). It now filters for real (#2183): the daemon ships a compact `runtimeSummary` snapshot slice (per-runtime tokens/turns/cost/sessions + a model-attribution block), `/api/model-attribution?runtime=<prefix>` scopes the breakdown server-side, and the cloud `cm-cloud-models` interceptor returns `runtimeSummary[<runtime>]`. Selecting Qwen Code now correctly shows `qwen3:8b` / 9 turns instead of the merged claude-opus-4-7 totals — an honest empty set when a runtime has no model turns, never a silent merge. Overview headline + Cost tab reuse the same slice next.
 
