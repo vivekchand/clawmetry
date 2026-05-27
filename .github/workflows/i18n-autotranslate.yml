@@ -31,7 +31,7 @@ jobs:
       # Claude Code subscription token (from `claude setup-token`), NOT an Anthropic API key.
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 2  # need the previous en.json to detect CHANGED keys
 
