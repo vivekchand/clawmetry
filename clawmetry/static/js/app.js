@@ -6782,9 +6782,13 @@ function _cmPopulateGlobalRuntime(counts) {
   var active = _cmRuntimeFilter();
   if (active !== 'all' && !counts[active]) active = 'all';
   var total = order.reduce(function(a, k) { return a + counts[k]; }, 0);
-  var html = '<option value="all">All runtimes (' + total + ')</option>';
+  // The count is the number of SESSIONS for that runtime — spell it out so the
+  // chip doesn't read as "22 Claude Code runtimes" (there's one runtime, many
+  // sessions). Singular/plural for the "1 session" case.
+  function _sessLabel(n) { return n + (n === 1 ? ' session' : ' sessions'); }
+  var html = '<option value="all">All runtimes · ' + _sessLabel(total) + '</option>';
   order.forEach(function(k) {
-    html += '<option value="' + k + '">' + escHtml(_CM_RT_LABEL[k] || k) + ' (' + counts[k] + ')</option>';
+    html += '<option value="' + k + '">' + escHtml(_CM_RT_LABEL[k] || k) + ' · ' + _sessLabel(counts[k]) + '</option>';
   });
   sel.innerHTML = html;
   sel.value = active;
