@@ -66,6 +66,22 @@ def emit(event: str, payload: Dict[str, Any] | None = None) -> None:
             )
 
 
+def _select_entry_points(group: str):
+    """Return entry points for ``group`` across Python versions.
+
+    The ``entry_points(group=...)`` keyword form is Python 3.10+. On 3.9
+    ``entry_points()`` returns a dict keyed by group, and passing ``group=``
+    raises ``TypeError`` — which previously made ``load_plugins`` silently load
+    nothing on 3.9 (still a supported runtime + CI matrix row), so no extension
+    package (e.g. clawmetry-pro) ever registered there.
+    """
+    eps = importlib.metadata.entry_points()
+    select = getattr(eps, "select", None)
+    if select is not None:  # 3.10+ SelectableGroups / EntryPoints
+        return list(select(group=group))
+    return list(eps.get(group, []))  # 3.9 dict form
+
+
 def load_plugins() -> None:
     """
     Auto-discover and load extension plugins via entry points.
@@ -84,7 +100,7 @@ def load_plugins() -> None:
     _loaded = True
 
     try:
-        eps = importlib.metadata.entry_points(group="clawmetry.extensions")
+        eps = _select_entry_points("clawmetry.extensions")
     except Exception:
         return
 
