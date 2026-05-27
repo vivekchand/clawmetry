@@ -1100,6 +1100,77 @@ console.log('tool alternatives toggle (issue #1616)');
          'null payload → unavailable hint rendered');
 }
 
+// ── Runtime filter: _cmRuntimeOf derivation (session-id prefix = runtime) ──
+console.log('_cmRuntimeOf (runtime from session-id prefix)');
+{
+  // Pull the runtime-label map + the deriver. _cmRuntimeOf references the
+  // module-level _CM_RT_LABEL, so eval both together.
+  const labelSrc = src.match(/var _CM_RT_LABEL = \{[\s\S]*?\};/)[0];
+  const fnSrc = extractFunction('_cmRuntimeOf');
+  const sandbox = {};
+  vm.createContext(sandbox);
+  vm.runInContext(labelSrc + '\n' + fnSrc + '\nthis._f = _cmRuntimeOf;', sandbox);
+  const rt = sandbox._f;
+  eq(rt({ id: 'qwen_code:f9f7f80f-c858' }), 'qwen_code', 'qwen_code: prefix → qwen_code');
+  eq(rt({ id: 'claude_code:bfb6be7d' }), 'claude_code', 'claude_code: prefix → claude_code');
+  eq(rt({ id: 'codex:019e28c2' }), 'codex', 'codex: prefix → codex');
+  eq(rt({ id: 'openclaw:abc' }), 'openclaw', 'openclaw: prefix → openclaw');
+  eq(rt({ id: '625c0ad9-71af-4a56' }), 'openclaw', 'bare uuid → openclaw (default)');
+  eq(rt({ id: 'clawmetry-selfevolve' }), 'openclaw', 'internal session → openclaw');
+  eq(rt({ trace_id: 'qwen_code:x' }), 'openclaw', 'trace_id is NOT read (only id/sessionId/session_id/key)');
+  eq(rt({ sessionId: 'goose:20260525_3' }), 'goose', 'sessionId field honoured');
+}
+
+// ── Runtime filter: _cmApplyRuntimeScopeNote picks the right scope ─────────
+console.log('_cmApplyRuntimeScopeNote (honest note on aggregate / node-wide tabs)');
+{
+  const maps = src.match(/var _CM_RT_AGGREGATE = \{[\s\S]*?\};/)[0]
+    + '\n' + src.match(/var _CM_RT_NODEWIDE = \{[\s\S]*?\};/)[0]
+    + '\n' + src.match(/var _CM_RT_LABEL = \{[\s\S]*?\};/)[0];
+  const fnSrc = extractFunction('_cmApplyRuntimeScopeNote');
+  let filterVal = 'qwen_code';
+  function makePage() {
+    let kids = [];
+    const page = {
+      _html: '',
+      querySelector: function(sel) { return this._note || null; },
+      insertAdjacentHTML: function(pos, html) { this._html = html; this._note = { outerHTML: html, parentNode: this }; },
+    };
+    return page;
+  }
+  let thePage = null;
+  const sandbox = {
+    document: { getElementById: function(id) { return id === 'page-models' || id === 'page-crons' || id === 'page-tracing' ? (thePage = thePage || makePage()) : null; } },
+    escHtml: function(s) { return String(s); },
+    _cmRuntimeFilter: function() { return filterVal; },
+    _cmRuntimeLabel: function(rt) { return ({ qwen_code: 'Qwen Code' })[rt] || rt; },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(maps + '\n' + fnSrc + '\nthis._note = _cmApplyRuntimeScopeNote;', sandbox);
+
+  // aggregate tab (models) → "all runtimes" note mentioning the runtime
+  thePage = null; sandbox.document.getElementById = function(id) { return id === 'page-models' ? (thePage = thePage || makePage()) : null; };
+  sandbox._note('models');
+  truthy(thePage && thePage._html.indexOf('all runtimes') !== -1, 'aggregate tab → "all runtimes" note');
+  truthy(thePage._html.indexOf('Qwen Code') !== -1, 'aggregate note names the selected runtime');
+
+  // node-wide tab (crons) → "node-wide" note
+  thePage = null; sandbox.document.getElementById = function(id) { return id === 'page-crons' ? (thePage = thePage || makePage()) : null; };
+  sandbox._note('crons');
+  truthy(thePage && thePage._html.indexOf('node-wide') !== -1, 'node-wide tab → "node-wide" note');
+
+  // filterable tab (tracing) → NO note (it filters itself)
+  thePage = null; sandbox.document.getElementById = function(id) { return id === 'page-tracing' ? (thePage = thePage || makePage()) : null; };
+  sandbox._note('tracing');
+  truthy(thePage && thePage._html === '', 'filterable tab → no scope note');
+
+  // filter === 'all' → never a note even on aggregate tab
+  filterVal = 'all'; thePage = null;
+  sandbox.document.getElementById = function(id) { return id === 'page-models' ? (thePage = thePage || makePage()) : null; };
+  sandbox._note('models');
+  truthy(thePage && thePage._html === '', 'all-runtimes selected → no note');
+}
+
 // Auth-bootstrap scenarios above are async — wait for the microtask /
 // macrotask queue to drain before printing the summary. (The previous
 // synchronous test blocks all completed in-tick, so no wait was needed

@@ -1128,6 +1128,10 @@ function switchTab(name) {
   document.querySelectorAll('.left-nav-item').forEach(function(t) { t.classList.remove('active'); });
   var page = document.getElementById('page-' + name);
   if (page) page.classList.add('active');
+  // Tell the user, on every tab, whether the selected runtime actually scopes
+  // this view (aggregate/node-wide tabs get an honest note; filterable tabs
+  // filter themselves below).
+  try { _cmApplyRuntimeScopeNote(name); } catch (e) {}
   var tabs = document.querySelectorAll('.nav-tab');
   tabs.forEach(function(t) { if (t.getAttribute('onclick') && t.getAttribute('onclick').indexOf("'" + name + "'") !== -1) t.classList.add('active'); });
   var leftItems = document.querySelectorAll('.left-nav-item[data-tab="' + name + '"]');
@@ -2945,6 +2949,9 @@ async function loadActiveTasks() {
     var RECENT_MS = 10 * 60 * 1000;
     var now = Date.now();
     var all = (saData.subagents || []);
+    // Scope to the selected runtime (sub-agent sessionId prefix = runtime).
+    var _atRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    if (_atRt !== 'all') all = all.filter(function(a) { return _cmRuntimeOf(a) === _atRt; });
     var live = all.filter(function(a) { return a.status === 'active' || a.status === 'idle'; });
     var recentFailed = all.filter(function(a) {
       return a.status === 'failed' && (now - (a.updatedAt || 0)) < RECENT_MS;
@@ -6798,6 +6805,47 @@ function _cmSetRuntimeFilter(v, reload) {
   try { localStorage.setItem('cm-runtime-filter', v); } catch (e) {}
   if (typeof reload === 'function') reload();
 }
+function _cmRuntimeLabel(rt) { return _CM_RT_LABEL[rt] || rt; }
+// Tabs whose data is a cross-runtime AGGREGATE (merged server/snapshot-side):
+// the switcher can't scope them client-side yet, so picking a specific runtime
+// shows an honest "all runtimes" note rather than pretending the numbers are
+// runtime-specific. (Per-runtime aggregation is a follow-up.)
+var _CM_RT_AGGREGATE = {
+  models: 1, usage: 1, 'tool-catalog': 1, 'context-economics': 1, context: 1
+};
+// Tabs that are NODE-WIDE concepts, not per-runtime: crons run on the gateway,
+// memory/skills are workspace-level, security is machine posture, self-evolve is
+// node findings. The runtime selector simply does not apply to these.
+var _CM_RT_NODEWIDE = {
+  crons: 1, memory: 1, security: 1, skills: 1, selfevolve: 1, approvals: 1,
+  alerts: 1, policy: 1, nemoclaw: 1, notifications: 1, dives: 1,
+  'version-impact': 1, clusters: 1, logs: 1, actions: 1
+};
+// Insert/update/remove the runtime-scope note at the top of a tab's page.
+// Called from switchTab. Only shows when a specific (non-'all') runtime is
+// selected AND the tab can't honour it — so the user is never left wondering
+// "is this for <runtime>?": the answer is stated inline. Idempotent.
+function _cmApplyRuntimeScopeNote(name) {
+  var page = document.getElementById('page-' + name);
+  if (!page) return;
+  var noteId = 'cm-rt-scope-note';
+  var existing = page.querySelector('#' + noteId);
+  var rt = _cmRuntimeFilter();
+  var scope = _CM_RT_NODEWIDE[name] ? 'nodewide' : (_CM_RT_AGGREGATE[name] ? 'aggregate' : null);
+  if (rt === 'all' || !scope) { if (existing) existing.parentNode.removeChild(existing); return; }
+  var label = _cmRuntimeLabel(rt);
+  var msg = scope === 'nodewide'
+    ? '<strong>' + escHtml(label) + '</strong> is selected, but this view is <strong>node-wide</strong> &mdash; it is not specific to any runtime.'
+    : 'Showing <strong>all runtimes</strong>. This summary is not yet filtered to <strong>' + escHtml(label) + '</strong>.';
+  var ic = scope === 'nodewide' ? '&#127760;' : '&#9888;';
+  var bg = scope === 'nodewide' ? 'rgba(59,130,246,0.10)' : 'rgba(245,158,11,0.10)';
+  var bd = scope === 'nodewide' ? 'rgba(59,130,246,0.35)' : 'rgba(245,158,11,0.35)';
+  var fg = scope === 'nodewide' ? '#3b82f6' : '#d97706';
+  var html = '<div id="' + noteId + '" style="display:flex;align-items:center;gap:8px;margin:0 0 14px;padding:9px 13px;border-radius:8px;background:' + bg + ';border:1px solid ' + bd + ';font-size:12px;color:var(--text-secondary);line-height:1.4;">'
+    + '<span style="color:' + fg + ';font-size:13px;flex-shrink:0;">' + ic + '</span><span>' + msg + '</span></div>';
+  if (existing) existing.outerHTML = html;
+  else page.insertAdjacentHTML('afterbegin', html);
+}
 // Render a runtime chip-switcher immediately before `anchor`. `counts` maps
 // runtime -> N. `reload` is invoked on chip click. Returns nothing; idempotent.
 function _cmRenderRuntimeSwitcher(counts, anchor, reload) {
@@ -6847,7 +6895,17 @@ function _cmRenderRuntimeSwitcher(counts, anchor, reload) {
 var _cmGlobalRtCounts = {};
 
 function _cmPopulateGlobalRuntime(counts) {
-  if (counts && Object.keys(counts).length) _cmGlobalRtCounts = counts;
+  // Merge-MAX into the running set, never replace. Per-tab loaders pass their
+  // own subset (e.g. the Transcripts tab only sees transcript-bearing
+  // sessions); replacing would drop runtimes that exist but have no rows on
+  // that tab (qwen with sessions but no transcripts), shrinking the header
+  // dropdown and silently reverting the selection to "all". Union keeps every
+  // runtime the node has ever reported.
+  if (counts && Object.keys(counts).length) {
+    Object.keys(counts).forEach(function(k) {
+      _cmGlobalRtCounts[k] = Math.max(_cmGlobalRtCounts[k] || 0, counts[k] || 0);
+    });
+  }
   counts = _cmGlobalRtCounts || {};
   var wrap = document.getElementById('cm-global-runtime-wrap');
   var sel = document.getElementById('cm-global-runtime');
@@ -8733,8 +8791,18 @@ async function loadTurnAnatomy() {
     return;
   }
   var traces = (data.traces || []).slice().sort(function(a, b){ return (b.start_ms || 0) - (a.start_ms || 0); });
+  // Runtime scoping — a trace's id IS the session id, whose prefix is the
+  // runtime (same derivation the Tracing tab uses). Don't silently merge when
+  // a specific runtime is picked; show a scoped empty state instead.
+  var _taRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  if (_taRt !== 'all') {
+    traces = traces.filter(function(t) { return _cmRuntimeOf({ id: t.trace_id }) === _taRt; });
+  }
   if (!traces.length) {
-    el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-secondary);font-size:13px;">No sessions yet. They appear here once your agent runs.</div>';
+    var _taEmpty = _taRt !== 'all'
+      ? 'No <strong>' + escHtml(_cmRuntimeLabel(_taRt)) + '</strong> sessions recorded yet.'
+      : 'No sessions yet. They appear here once your agent runs.';
+    el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-secondary);font-size:13px;">' + _taEmpty + '</div>';
     return;
   }
   el.style.cssText = 'padding:0;overflow:hidden;';
@@ -11317,9 +11385,12 @@ async function loadTranscripts() {
     var _rtCounts = {};
     _allTx.forEach(function(t) { var r = _cmRuntimeOf(t); _rtCounts[r] = (_rtCounts[r] || 0) + 1; });
     var _rtFilter = _cmRuntimeFilter();
-    if (_rtFilter !== 'all' && !_rtCounts[_rtFilter]) _rtFilter = 'all';
-    // Feed the freshest runtime counts to the global header switcher (it owns
-    // the control now; the old inline per-tab chip switcher is retired).
+    // Don't silently fall back to "all" when the selected runtime has no
+    // transcripts — that's exactly the "I picked Qwen but see Claude Code"
+    // confusion. Keep the filter and show a scoped empty state below.
+    var _rtNoTx = (_rtFilter !== 'all' && !_rtCounts[_rtFilter]);
+    // Feed the freshest runtime counts to the global header switcher (merge-MAX,
+    // so this transcript subset can't drop runtimes from the dropdown).
     _cmPopulateGlobalRuntime(_rtCounts);
     if (_rtFilter !== 'all') {
       data.transcripts = _allTx.filter(function(t) { return _cmRuntimeOf(t) === _rtFilter; });
@@ -11350,7 +11421,9 @@ async function loadTranscripts() {
     if (plumbCountEl) plumbCountEl.textContent = plumbingTotal > 0 ? (window._transcriptShowPlumbing ? '(' + plumbingTotal + ' shown)' : '(' + plumbingTotal + ' hidden)') : '';
     var plumbBtn = document.getElementById('transcript-plumbing-btn');
     if (plumbBtn) plumbBtn.style.display = plumbingTotal > 0 ? '' : 'none';
-    var emptyMsg = (plumbingTotal > 0 && !window._transcriptShowPlumbing)
+    var emptyMsg = _rtNoTx
+      ? '<div style="padding:16px;color:#666;">No <strong>' + escHtml(_cmRuntimeLabel(_rtFilter)) + '</strong> sessions have a transcript yet. Pick <strong>All runtimes</strong> in the header to see every session.</div>'
+      : (plumbingTotal > 0 && !window._transcriptShowPlumbing)
       ? '<div style="padding:16px;color:#666;">No sessions to show — ' + plumbingTotal + ' Self-Evolve session' + (plumbingTotal === 1 ? '' : 's') + ' hidden. Click “Show plumbing” to reveal.</div>'
       : '<div style="padding:16px;color:#666;">No transcript files found</div>';
     document.getElementById('transcript-list').innerHTML = html || emptyMsg;
@@ -12970,9 +13043,18 @@ async function loadMainActivity() {
     events.sort(function(a, b) {
       return (b.time || '').localeCompare(a.time || '');
     });
+    // Scope to the selected runtime — same per-event derivation as the Brain
+    // tab (event sessionId prefix = runtime). Previously this Overview panel
+    // showed every runtime's events regardless of the switcher, so picking
+    // "Qwen Code" still surfaced Claude Code / OpenClaw cron chatter.
+    var _maRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    if (_maRt !== 'all') events = events.filter(function(ev) { return _cmRuntimeOf(ev) === _maRt; });
 
     if (!events.length) {
-      el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted);">No recent activity</div>';
+      var _maEmpty = _maRt !== 'all'
+        ? 'No recent <strong>' + escHtml(_cmRuntimeLabel(_maRt)) + '</strong> activity'
+        : 'No recent activity';
+      el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted);">' + _maEmpty + '</div>';
       if (dot) dot.style.background = '#888';
       if (label) { label.textContent = 'No data'; label.style.color = 'var(--text-muted)'; }
       return;
