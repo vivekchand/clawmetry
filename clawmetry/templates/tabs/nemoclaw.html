@@ -161,6 +161,62 @@
         <div style="color:var(--text-muted);font-size:12px;padding:8px 0;">Loading...</div>
       </div>
     </div>
+    <!-- Guardrail Events Panel (issue #876) -->
+    <div style="
+      background:var(--bg-secondary);
+      border:1px solid rgba(118,185,0,0.35);
+      border-radius:8px;
+      padding:14px;
+      margin-top:12px;
+      " id="nc-events-panel">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;">GUARDRAIL EVENTS</span>
+          <span id="nc-events-count" style="
+            display:none;
+            font-size:11px;
+            font-weight:700;
+            background:rgba(118,185,0,0.12);
+            color:#76b900;
+            border:1px solid rgba(118,185,0,0.3);
+            border-radius:10px;
+            padding:1px 8px;
+            "></span>
+        </div>
+        <button class="refresh-btn" onclick="loadNemoClawEvents()" style="font-size:11px;">&#8635; <span data-i18n="common.refresh">Refresh</span></button>
+      </div>
+      <div id="nc-events-list">
+        <div style="color:var(--text-muted);font-size:12px;padding:8px 0;">Loading...</div>
+      </div>
+    </div>
+    <!-- NemoClaw Metrics Panel (issue #876) -->
+    <div style="
+      background:var(--bg-secondary);
+      border:1px solid rgba(118,185,0,0.35);
+      border-radius:8px;
+      padding:14px;
+      margin-top:12px;
+      " id="nc-metrics-panel">
+      <div style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;margin-bottom:10px;">METRICS</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;">
+        <div style="background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;padding:10px 12px;">
+          <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px;">TRIGGERS (24h)</div>
+          <div id="nc-metric-triggers" style="font-size:20px;font-weight:700;color:#76b900;">—</div>
+        </div>
+        <div style="background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;padding:10px 12px;">
+          <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px;">APPROVAL RATE</div>
+          <div id="nc-metric-approval-rate" style="font-size:20px;font-weight:700;color:#76b900;">—</div>
+        </div>
+        <div style="background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;padding:10px 12px;">
+          <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px;">AVG LATENCY</div>
+          <div id="nc-metric-latency" style="font-size:20px;font-weight:700;color:#76b900;">—</div>
+        </div>
+        <div style="background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;padding:10px 12px;">
+          <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px;">TOTAL APPROVALS</div>
+          <div id="nc-metric-total" style="font-size:20px;font-weight:700;color:#76b900;">—</div>
+        </div>
+      </div>
+    </div>
   </div>
 </div><!-- end page-nemoclaw (theme 2) -->
 {% endif %}

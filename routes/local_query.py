@@ -527,6 +527,13 @@ _DAEMON_METHODS = frozenset({
     "query_eval_summary",
     "persist_eval_score",
     "health",
+    # Issue #876 — NemoClaw guardrail enforcement events + metrics.
+    # Routed through the daemon proxy so /api/nemoclaw/events and
+    # /api/nemoclaw/metrics never open DuckDB writable in the dashboard
+    # process (same pattern as query_approvals above).
+    "query_guardrail_events",
+    "ingest_guardrail_event",
+    "query_nemoclaw_metrics",
 })
 
 

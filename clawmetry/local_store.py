@@ -500,6 +500,24 @@ _DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_approvals_owner_status ON approvals(owner_hash, status, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_approvals_session ON approvals(requestor_session_id, created_at)",
+    # Issue #876 — NemoClaw guardrail enforcement events. The sync daemon
+    # writes via ingest_guardrail_event(); the dashboard reads via
+    # query_guardrail_events() through the daemon proxy. Additive; no
+    # schema-version bump required (CREATE TABLE IF NOT EXISTS is idempotent).
+    """
+    CREATE TABLE IF NOT EXISTS guardrail_events (
+        id         VARCHAR PRIMARY KEY,
+        owner_hash VARCHAR,
+        ts         VARCHAR NOT NULL,
+        rule_name  VARCHAR,
+        verdict    VARCHAR,
+        session_id VARCHAR,
+        action     VARCHAR,
+        latency_ms DOUBLE
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_guardrail_events_ts      ON guardrail_events(ts)",
+    "CREATE INDEX IF NOT EXISTS idx_guardrail_events_session ON guardrail_events(session_id, ts)",
     # Issue #1088 Phase 4 (2026-05-13) — channel-message foundation. Replaces
     # the per-provider log-grep + JSONL-scan path that the 21 routes in
     # ``routes/channels.py`` use today. Each row is one inbound or outbound
@@ -5035,6 +5053,121 @@ class LocalStore:
                     d["args"] = None
             out.append(d)
         return out
+
+    def ingest_guardrail_event(self, event: dict[str, Any]) -> None:
+        """Upsert one NemoClaw guardrail-enforcement row. Required: ``id``, ``ts``."""
+        eid = event.get("id")
+        if not eid:
+            raise ValueError("guardrail event must include 'id'")
+        ts = event.get("ts") or datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO guardrail_events (
+                    id, owner_hash, ts, rule_name, verdict, session_id, action, latency_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET
+                    rule_name  = COALESCE(excluded.rule_name,  guardrail_events.rule_name),
+                    verdict    = COALESCE(excluded.verdict,    guardrail_events.verdict),
+                    session_id = COALESCE(excluded.session_id, guardrail_events.session_id),
+                    action     = COALESCE(excluded.action,     guardrail_events.action),
+                    latency_ms = COALESCE(excluded.latency_ms, guardrail_events.latency_ms)
+            """, [
+                str(eid),
+                event.get("owner_hash"),
+                ts,
+                event.get("rule_name"),
+                event.get("verdict"),
+                event.get("session_id"),
+                event.get("action"),
+                event.get("latency_ms"),
+            ])
+
+    def query_guardrail_events(
+        self,
+        *,
+        owner_hash: str | None = None,
+        since: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Read guardrail-event rows, most-recent first."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if owner_hash:
+            clauses.append("owner_hash = ?")
+            params.append(owner_hash)
+        if since:
+            clauses.append("ts >= ?")
+            params.append(since)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT id, owner_hash, ts, rule_name, verdict, session_id, action, latency_ms
+            FROM guardrail_events
+            {where}
+            ORDER BY ts DESC, id
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["id", "owner_hash", "ts", "rule_name", "verdict",
+                "session_id", "action", "latency_ms"]
+        return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
+
+    def query_nemoclaw_metrics(
+        self,
+        *,
+        owner_hash: str | None = None,
+    ) -> dict[str, Any]:
+        """Aggregate NemoClaw metrics from ``approvals`` and ``guardrail_events``.
+
+        Returns total approvals, approval/denial rates, average latency, and
+        last-24h guardrail-trigger count."""
+        params_a: list[Any] = []
+        where_a = ""
+        if owner_hash:
+            where_a = "WHERE owner_hash = ?"
+            params_a.append(owner_hash)
+        row = self._fetch(f"""
+            SELECT
+                COUNT(*)                                                       AS total,
+                SUM(CASE WHEN status='approved' THEN 1 ELSE 0 END)            AS approved_count,
+                SUM(CASE WHEN status='denied'   THEN 1 ELSE 0 END)            AS denied_count,
+                AVG(
+                    CASE WHEN resolved_at IS NOT NULL AND created_at IS NOT NULL
+                         THEN datediff('second',
+                                       created_at::TIMESTAMP,
+                                       resolved_at::TIMESTAMP)
+                         ELSE NULL END
+                )                                                              AS avg_latency_secs
+            FROM approvals
+            {where_a}
+        """, params_a)
+        agg = row[0] if row else (0, 0, 0, None)
+        total = int(agg[0] or 0)
+        approved = int(agg[1] or 0)
+        denied = int(agg[2] or 0)
+        avg_latency = round(float(agg[3]), 1) if agg[3] is not None else None
+
+        since_24h = datetime.utcnow().replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ).strftime("%Y-%m-%dT%H:%M:%S")
+        params_g: list[Any] = [since_24h]
+        where_g = "WHERE ts >= ? AND verdict = 'triggered'"
+        if owner_hash:
+            where_g += " AND owner_hash = ?"
+            params_g.append(owner_hash)
+        trig = self._fetch(
+            f"SELECT COUNT(*) FROM guardrail_events {where_g}",
+            params_g,
+        )
+        triggers_24h = int((trig[0][0] if trig else 0) or 0)
+
+        return {
+            "total_approvals": total,
+            "approved_count": approved,
+            "denied_count": denied,
+            "approval_rate_pct": round(approved / total * 100, 1) if total else None,
+            "avg_latency_secs": avg_latency,
+            "triggers_24h": triggers_24h,
+        }
 
     def query_memory_blobs(
         self,

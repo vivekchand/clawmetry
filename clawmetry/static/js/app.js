@@ -6296,8 +6296,10 @@ async function loadNemoClaw() {
     if (tab) tab.style.display = 'none';
     console.warn('NemoClaw governance load failed:', e);
   }
-  // Also load approvals
+  // Also load approvals, events and metrics
   loadNemoClawApprovals();
+  loadNemoClawEvents();
+  loadNemoClawMetrics();
 }
 
 // Auto-refresh approvals every 15 seconds when NemoClaw tab is active
@@ -6390,6 +6392,66 @@ async function loadNemoClawApprovals() {
     listEl.innerHTML = html;
   } catch(e) {
     listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">Failed to load approvals</div>';
+  }
+}
+
+// Issue #876 — Guardrail events list
+async function loadNemoClawEvents() {
+  var listEl = document.getElementById('nc-events-list');
+  var countEl = document.getElementById('nc-events-count');
+  if (!listEl) return;
+  try {
+    var data = await fetchJsonWithTimeout('/api/nemoclaw/events', 8000);
+    var events = data.events || [];
+    if (countEl) {
+      if (events.length > 0) {
+        countEl.textContent = events.length;
+        countEl.style.display = '';
+      } else {
+        countEl.style.display = 'none';
+      }
+    }
+    if (events.length === 0) {
+      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;text-align:center;">No guardrail events recorded yet</div>';
+      return;
+    }
+    var verdictColor = function(v) { return v === 'triggered' ? '#ef4444' : '#76b900'; };
+    var html = '<div style="display:grid;grid-template-columns:140px 1fr 90px 80px;gap:4px 8px;font-size:11px;">';
+    html += '<div style="color:var(--text-muted);padding-bottom:4px;border-bottom:1px solid var(--border);">TIME</div>';
+    html += '<div style="color:var(--text-muted);padding-bottom:4px;border-bottom:1px solid var(--border);">RULE</div>';
+    html += '<div style="color:var(--text-muted);padding-bottom:4px;border-bottom:1px solid var(--border);">VERDICT</div>';
+    html += '<div style="color:var(--text-muted);padding-bottom:4px;border-bottom:1px solid var(--border);">LATENCY</div>';
+    events.slice(0, 50).forEach(function(ev) {
+      var ts = (ev.ts || '').substring(0, 19).replace('T', ' ');
+      var latency = ev.latency_ms != null ? ev.latency_ms.toFixed(0) + ' ms' : '—';
+      var vc = verdictColor(ev.verdict);
+      html += '<div style="color:var(--text-muted);padding:3px 0;border-bottom:1px solid var(--border);">' + escHtml(ts) + '</div>';
+      html += '<div style="padding:3px 0;border-bottom:1px solid var(--border);word-break:break-all;">' + escHtml(ev.rule_name || '—') + '</div>';
+      html += '<div style="padding:3px 0;border-bottom:1px solid var(--border);"><span style="color:' + vc + ';font-weight:600;">' + escHtml(ev.verdict || '—') + '</span></div>';
+      html += '<div style="color:var(--text-muted);padding:3px 0;border-bottom:1px solid var(--border);">' + escHtml(latency) + '</div>';
+    });
+    html += '</div>';
+    listEl.innerHTML = html;
+  } catch(e) {
+    listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">Failed to load guardrail events</div>';
+  }
+}
+
+// Issue #876 — NemoClaw aggregate metrics
+async function loadNemoClawMetrics() {
+  try {
+    var data = await fetchJsonWithTimeout('/api/nemoclaw/metrics', 8000);
+    var m = data.metrics || {};
+    var trigEl = document.getElementById('nc-metric-triggers');
+    var rateEl = document.getElementById('nc-metric-approval-rate');
+    var latEl  = document.getElementById('nc-metric-latency');
+    var totEl  = document.getElementById('nc-metric-total');
+    if (trigEl) trigEl.textContent = m.triggers_24h != null ? m.triggers_24h : '—';
+    if (rateEl) rateEl.textContent = m.approval_rate_pct != null ? m.approval_rate_pct + '%' : '—';
+    if (latEl)  latEl.textContent  = m.avg_latency_secs  != null ? m.avg_latency_secs + 's'  : '—';
+    if (totEl)  totEl.textContent  = m.total_approvals   != null ? m.total_approvals           : '—';
+  } catch(e) {
+    console.warn('NemoClaw metrics load failed:', e);
   }
 }
 
