@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Release: per-adapter Flow diagram + runtime-aware Brain empty state (2026-05-27)
+- **Per-adapter Flow/Overview diagram (#2174):** the Flow diagram always showed OpenClaw's channel→gateway→agent→tools topology even for runtimes that have neither. Coding-CLI runtimes (Claude Code, Codex, Cursor, Aider, Goose, opencode, Qwen) and the minimal PicoClaw/NanoClaw now get a generated, runtime-correct diagram (Terminal → agent → coding tools → Workspace, animated edges); OpenClaw/Hermes keep the rich hand-built SVG. The Overview pane mirrors it. Driven by the global runtime switcher.
+- **Runtime-aware Brain empty state (#2174):** selecting a runtime with sessions on record but no recent events showed a bare "No activity yet" that contradicted the switcher's "Goose · 3 sessions". Now it explains the session count and points to the Tracing tab.
+
 ### Fixed: Active Tasks showed week-old runs as "Recently Completed" (2026-05-27)
 - The overview Active Tasks panel filtered "Recently Completed/Failed" by each task's run **duration** (`runtimeMs < 2h`) instead of **how long ago it finished**, so a 5-minute task that ended days ago kept showing as "recent" and an idle node looked busy. Now bounded by finish age (1h), derived the same way the card's "Finished N ago" label is (`completionTs → updatedAt → startedAt+runtime`). Idle nodes correctly show "No active tasks — The AI is idle"; running tasks still always show. (#2170)
 
