@@ -427,3 +427,82 @@ def api_nemoclaw_pending_approvals():
         return jsonify(_annotate_pro_upsell({'installed': True, 'approvals': approvals}))
     except Exception as e:
         return jsonify(_annotate_pro_upsell({'installed': True, 'approvals': [], 'error': str(e)}))
+
+
+# ── NemoClaw guardrail events + metrics (issue #876) ─────────────────────────
+
+def _try_local_store_guardrail_events(since=None, limit=100):
+    """Return guardrail events from DuckDB via daemon proxy, or None on failure."""
+    try:
+        from routes.local_query import local_store_via_daemon
+        kwargs = {"limit": limit}
+        if since:
+            kwargs["since"] = since
+        rows = local_store_via_daemon("query_guardrail_events", **kwargs)
+    except Exception:
+        rows = None
+    if rows is None:
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            kwargs = {"limit": limit}
+            if since:
+                kwargs["since"] = since
+            rows = store.query_guardrail_events(**kwargs)
+        except Exception:
+            return None
+    return rows if rows is not None else []
+
+
+@bp_nemoclaw.route('/api/nemoclaw/events')
+def api_nemoclaw_events():
+    """Return recent NemoClaw guardrail enforcement events from local DuckDB."""
+    import dashboard as _d
+    installed = _d._detect_nemoclaw() is not None
+    since = request.args.get('since')
+    try:
+        limit = max(1, min(500, int(request.args.get('limit', 100))))
+    except (TypeError, ValueError):
+        limit = 100
+    events = _try_local_store_guardrail_events(since=since, limit=limit) or []
+    return jsonify({
+        'installed': installed,
+        'events': events,
+        'total': len(events),
+    })
+
+
+def _try_local_store_nemoclaw_metrics():
+    """Return NemoClaw metrics from DuckDB via daemon proxy, or None on failure."""
+    try:
+        from routes.local_query import local_store_via_daemon
+        result = local_store_via_daemon("query_nemoclaw_metrics")
+    except Exception:
+        result = None
+    if result is None:
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            result = store.query_nemoclaw_metrics()
+        except Exception:
+            return None
+    return result
+
+
+@bp_nemoclaw.route('/api/nemoclaw/metrics')
+def api_nemoclaw_metrics():
+    """Return aggregate NemoClaw metrics (approval rates, latency, trigger count)."""
+    import dashboard as _d
+    installed = _d._detect_nemoclaw() is not None
+    metrics = _try_local_store_nemoclaw_metrics() or {
+        "total_approvals": 0,
+        "approved_count": 0,
+        "denied_count": 0,
+        "approval_rate_pct": None,
+        "avg_latency_secs": None,
+        "triggers_24h": 0,
+    }
+    return jsonify({
+        'installed': installed,
+        'metrics': metrics,
+    })
