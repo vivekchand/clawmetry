@@ -2539,6 +2539,16 @@ def _cmd_verify_integrity(args) -> None:
         print(f"  Error: verification failed — {exc}")
         raise SystemExit(1) from exc
 
+    # When a sync daemon is running, ``get_store(read_only=True)`` returns a
+    # proxy that forwards through HTTP. Older daemons (< 0.12.343) do not
+    # have ``verify_integrity`` in their method allowlist and return None.
+    # Degrade gracefully instead of crashing on ``result["status"]``.
+    if result is None:
+        print("  Result:      ?  Could not reach the running daemon's verifier.")
+        print("               This usually means the daemon is older than the CLI.")
+        print("               Restart the sync daemon to pick up the new wheel, then re-run.")
+        raise SystemExit(2)
+
     status = result["status"]
     checked = result["checked"]
     pre_chain = result["pre_chain"]
