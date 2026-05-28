@@ -5014,6 +5014,78 @@ def _pick_heartbeat_interval(resp_json: dict | None) -> int:
     )
 
 
+def _build_node_meta() -> dict:
+    """Plaintext machine metadata for the cloud Flow Machine modal (cloud#956).
+
+    Mirrors the fields cloud's /ingest/heartbeat extracts from body.node_meta:
+    os, arch, ram_gb, cpu_count, local_ips. The encrypted snapshot already
+    carries the richer machineInfo blob; this duplicates the trust-safe subset
+    so the keyless fallback in cm-cloud-machine fires with real data instead
+    of an empty {hostname, platform} shell.
+
+    Best-effort: any subcomponent failure yields an empty value rather than
+    raising — the heartbeat MUST keep flowing even on weird platforms.
+    """
+    import platform as _pm
+    import socket as _sk
+    meta = {
+        "os": "",
+        "arch": "",
+        "ram_gb": "",
+        "cpu_count": "",
+        "local_ips": [],
+    }
+    try:
+        meta["os"] = _pm.system()
+    except Exception:
+        pass
+    try:
+        meta["arch"] = _pm.machine()
+    except Exception:
+        pass
+    try:
+        import multiprocessing as _mp
+        meta["cpu_count"] = str(_mp.cpu_count())
+    except Exception:
+        pass
+    try:
+        # /proc/meminfo on Linux, sysctl on Mac. Skip silently when neither.
+        if _pm.system() == "Linux":
+            with open("/proc/meminfo") as _mf:
+                for _line in _mf:
+                    if _line.startswith("MemTotal:"):
+                        _kb = int(_line.split()[1])
+                        meta["ram_gb"] = str(round(_kb / 1024 / 1024, 1))
+                        break
+        elif _pm.system() == "Darwin":
+            import subprocess as _sp
+            _out = _sp.check_output(["sysctl", "-n", "hw.memsize"], timeout=2)
+            meta["ram_gb"] = str(round(int(_out.strip()) / 1024 / 1024 / 1024, 1))
+    except Exception:
+        pass
+    try:
+        # All non-loopback IPv4 addresses on the host. Bounded list, no PII.
+        _ips = set()
+        try:
+            for _info in _sk.getaddrinfo(_sk.gethostname(), None, _sk.AF_INET):
+                _ip = _info[4][0]
+                if _ip and not _ip.startswith("127."):
+                    _ips.add(_ip)
+        except Exception:
+            pass
+        try:
+            _s = _sk.socket(_sk.AF_INET, _sk.SOCK_DGRAM)
+            _s.connect(("8.8.8.8", 80))
+            _ips.add(_s.getsockname()[0])
+            _s.close()
+        except Exception:
+            pass
+        meta["local_ips"] = sorted(_ips)[:8]
+    except Exception:
+        pass
+    return meta
+
+
 def send_heartbeat(config: dict) -> bool:
     """Send heartbeat to cloud. Returns True on success, False on failure.
 
@@ -5039,6 +5111,7 @@ def send_heartbeat(config: dict) -> bool:
         "version": _get_version(),
         "e2e": bool(config.get("encryption_key")),
         "ollama": _detect_ollama_for_heartbeat(),
+        "node_meta": _build_node_meta(),
     }
     # Agent-install self-report (cloud bug fix 2026-05-18). Cloud Run pods
     # can't stat the user's home directory, so the daemon tells cloud what
