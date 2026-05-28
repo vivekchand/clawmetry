@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Fixed: Brain density chart leaked across runtimes + cross-adapter no-leak contract test (2026-05-28)
+- Picking a runtime emptied the Brain *list* ("No recent Claude Code activity, 87 sessions older than this window") but left the density *chart* full of bars from other runtimes — `renderBrainChart` filtered by source/type pills but never by `_cmRuntimeFilter` or the channel pill (#2214). It now mirrors the four filters `renderBrainStream` already applies.
+- New `tests/test_runtime_filter_no_leak.py` — cross-adapter contract test that seeds events from every known runtime (claude_code/qwen_code/codex/hermes/goose/opencode/cursor/nanoclaw/picoclaw/aider) plus a bare-UUID openclaw-default, then asserts `/api/model-attribution?runtime=` returns ONLY that runtime's turns (exact count, no leak / no loss) and `/api/runtime-summary` buckets every session into exactly one runtime. Plus pure-function bucketing coverage (mirror of frontend `_cmRuntimeOf` and `sync._runtime_of_session`) and JS static guards on renderBrainChart + renderBrainStream so a future edit can't drop the runtime filter from either function without CI failing.
+
 ### Release: tamper-evident hash chain for event audit log (carries #2210) (2026-05-28)
 - Per-node SHA-256 chain over events now ships on PyPI, plus the new `clawmetry verify-integrity` CLI. Off by default (set `CLAWMETRY_INTEGRITY=1` to enable stamping; existing stores migrate cleanly and pre-chain rows are reported separately by the verifier). See the detailed Added entry below for the design and the cost-backfill-safety guarantee. No cloud pin bump.
 
