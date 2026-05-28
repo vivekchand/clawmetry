@@ -476,6 +476,13 @@ _DAEMON_METHODS = frozenset({
     # decisions stay serialized.
     "ingest_approval",
     "update_approval_decision",
+    # Issue #2201: asset registry (Self-Evolve findings → reviewable assets).
+    # query_/get_ are reads; ingest_asset + update_asset_status are read-then-
+    # write under the daemon's _write_lock — same pattern as approvals above.
+    "query_assets",
+    "get_asset",
+    "ingest_asset",
+    "update_asset_status",
     # Issue #1364: surface clawmetry/proxy.py LoopDetector signals on the
     # dashboard. Read by routes/health.py:/api/loop-signals via the daemon
     # proxy so the dashboard process never opens DuckDB writable.

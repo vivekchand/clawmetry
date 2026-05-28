@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+### Added: evidence-based asset registry — first slice (2026-05-28)
+- New DuckDB-backed asset registry that converts individual agent discoveries (Self-Evolve findings, useful prompts, improved skills) into **reviewable, reusable assets with provenance** — without auto-promoting unreviewed local changes to team/company defaults (#2201). Lifecycle `pending → approved/rejected → deprecated`; every asset traces to a source `session_id`/`run_id`. Types: `skill`, `prompt`, `workflow`, `playbook`, `memory_snippet`, `tool_config`, `evaluation_case`. The daemon owns writes; reads ride the daemon proxy so the cloud can paint from a snapshot the same way (added to the `_DAEMON_METHODS` allowlist next to `ingest_approval` / `update_approval_decision`).
+- HTTP surface (`routes/assets.py`): `GET /api/assets` (filter by `status` / `asset_type` / `source_run_id` / `source_session_id` / `limit`), `GET /api/assets/<id>`, `POST /api/assets` (create candidate), `POST /api/assets/<id>/review` (`approve` / `reject` / `deprecate`).
+- Self-Evolve hook: `POST /api/selfevolve/findings/save-as-asset` packages a finding into a `pending` candidate asset with its source `session_id` attached and a `self-evolve` provenance tag — one-click promotion from a finding card to the registry. Approval still requires an explicit reviewer action.
+- Foundation lives in OSS (DuckDB-first); the richer review/promote console with reviewer identity + auto-recommendation is the planned Pro surface. 19 unit + HTTP tests; daemon-side only, no cloud pin bump.
+
+### Added: agents must work in an isolated git worktree (FLYWHEEL.md §0) (2026-05-28)
+- Documented hard rule: multiple Claude Code agents and crons run against this repo concurrently — editing the main checkout is unsafe because another process can switch branches mid-edit and clobber uncommitted changes. Future agents must start with `EnterWorktree` (or `git worktree add .claude/worktrees/<slug> -b feat/<slug> origin/main`). Burned 2026-05-28 when an autonomous process checked out a different branch in the shared working tree and wiped the in-progress asset-registry edits.
+
 ### Added: Compare-two-runs widget + Error-triage list on Overview (2026-05-28)
 - UI consumers for the two backend primitives shipped earlier this day in #2196: a **Compare two runs** card that calls `/api/run-compare` and renders the side-by-side panel with green/red signed deltas (lower-is-better for cost/steps/errors/flags; higher-is-better for cache hit); and an **Error triage** card that lists currently-resolved errors (most-recent-first, with `Unresolve` per row) plus an input row that POSTs to `/api/error-triage/resolve` with an optional note. Both cards live on Overview between the health-timeline strip and the existing refresh-bar, fire-and-forget on every `loadAll()` tick. Completes the user-visible loop for items #2 and #5 of #2196 (#2238).
 
@@ -27,7 +36,6 @@
 ### Fixed: Brain density chart leaked across runtimes + cross-adapter no-leak contract test (2026-05-28)
 - Picking a runtime emptied the Brain *list* ("No recent Claude Code activity, 87 sessions older than this window") but left the density *chart* full of bars from other runtimes — `renderBrainChart` filtered by source/type pills but never by `_cmRuntimeFilter` or the channel pill (#2214). It now mirrors the four filters `renderBrainStream` already applies.
 - New `tests/test_runtime_filter_no_leak.py` — cross-adapter contract test that seeds events from every known runtime (claude_code/qwen_code/codex/hermes/goose/opencode/cursor/nanoclaw/picoclaw/aider) plus a bare-UUID openclaw-default, then asserts `/api/model-attribution?runtime=` returns ONLY that runtime's turns (exact count, no leak / no loss) and `/api/runtime-summary` buckets every session into exactly one runtime. Plus pure-function bucketing coverage (mirror of frontend `_cmRuntimeOf` and `sync._runtime_of_session`) and JS static guards on renderBrainChart + renderBrainStream so a future edit can't drop the runtime filter from either function without CI failing.
-
 ### Release: tamper-evident hash chain for event audit log (carries #2210) (2026-05-28)
 - Per-node SHA-256 chain over events now ships on PyPI, plus the new `clawmetry verify-integrity` CLI. Off by default (set `CLAWMETRY_INTEGRITY=1` to enable stamping; existing stores migrate cleanly and pre-chain rows are reported separately by the verifier). See the detailed Added entry below for the design and the cost-backfill-safety guarantee. No cloud pin bump.
 

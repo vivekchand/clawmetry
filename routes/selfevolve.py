@@ -647,3 +647,72 @@ def api_selfevolve_fix_status():
             "error": job.get("error", ""),
         }
     )
+
+
+# ── #2201: file a Self-Evolve finding as a candidate asset ─────────────────
+# Thin wrapper so the dashboard / cloud UI can promote a finding into the
+# asset registry with one click — generates the asset id, packages the
+# finding body as the asset content, and ties it to its source session_id.
+# The reviewer still has to approve via POST /api/assets/<id>/review before
+# the asset becomes searchable / recommendable.
+
+@bp_selfevolve.route(
+    "/api/selfevolve/findings/save-as-asset", methods=["POST"]
+)
+def api_selfevolve_save_as_asset():
+    from datetime import datetime, timezone
+    import secrets as _secrets
+
+    data = request.get_json(silent=True) or {}
+    finding_id = (data.get("finding_id") or "").strip()
+    session_id = (data.get("session_id") or "").strip()
+    summary = (data.get("summary") or data.get("name") or "").strip()
+    body = data.get("body") or data.get("content") or ""
+    if not summary:
+        return jsonify({"error": "'summary' is required"}), 400
+    valid_types = {
+        "skill", "prompt", "workflow", "playbook",
+        "memory_snippet", "tool_config", "evaluation_case",
+    }
+    asset_type = (data.get("asset_type") or "prompt").strip()
+    if asset_type not in valid_types:
+        return jsonify({
+            "error": f"'asset_type' must be one of {sorted(valid_types)}",
+        }), 400
+
+    asset_id = data.get("id") or f"selfevolve:{finding_id or _secrets.token_hex(6)}"
+    payload = {
+        "id": asset_id,
+        "asset_type": asset_type,
+        "name": summary,
+        "description": data.get("description") or "",
+        "source_session_id": session_id,
+        "source_run_id": data.get("source_run_id") or "",
+        "author": data.get("author") or "self-evolve",
+        "team_id": data.get("team_id") or "",
+        "tags": (data.get("tags") or []) + ["self-evolve"],
+        "content": {
+            "finding_id": finding_id,
+            "summary": summary,
+            "body": body,
+            "filed_at": datetime.now(timezone.utc).isoformat(),
+        },
+        "status": "pending",
+    }
+
+    try:
+        from routes.local_query import local_store_via_daemon
+        local_store_via_daemon("ingest_asset", asset=payload)
+    except Exception:
+        try:
+            from clawmetry import local_store
+            local_store.get_store().ingest_asset(payload)
+        except Exception as exc:
+            return jsonify({"error": f"asset store unavailable: {exc}"}), 503
+
+    try:
+        from routes.local_query import local_store_via_daemon
+        row = local_store_via_daemon("get_asset", asset_id=asset_id)
+    except Exception:
+        row = None
+    return jsonify(row or {"id": asset_id, "status": "pending"}), 201
