@@ -736,6 +736,61 @@ def api_flow_runs():
     })
 
 
+@bp_logs.route("/api/flow/lanes")
+def api_flow_lanes():
+    """Active session lanes for the Flow tab (issue #721).
+
+    Returns sessions updated within the last 30 minutes, annotated with
+    channel type, event count, and active/failed status, so the Flow tab
+    can render per-session channel lanes alongside the topology SVG.
+
+    Response shape::
+
+        {"lanes": [{"session_id", "session_short", "channel",
+                    "event_count", "started_at", "updated_at",
+                    "status": "active"|"failed"}, ...],
+         "_source": "local_store"|"empty"}
+    """
+    active_since = (
+        datetime.now(timezone.utc) - timedelta(minutes=30)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    runs = None
+    try:
+        from routes.local_query import local_store_via_daemon
+        runs = local_store_via_daemon(
+            "query_flow_runs", since=active_since, limit=50,
+        )
+    except Exception:
+        runs = None
+
+    if runs is None:
+        try:
+            from clawmetry import local_store as _ls
+            store = _ls.get_store(read_only=True)
+            runs = store.query_flow_runs(since=active_since, limit=50)
+        except Exception:
+            runs = []
+
+    lanes = [
+        {
+            "session_id":    r.get("session_id") or "",
+            "session_short": (r.get("session_id") or "")[:8],
+            "channel":       r.get("channel") or "cli",
+            "event_count":   int(r.get("event_count") or 0),
+            "started_at":    r.get("started_at") or "",
+            "updated_at":    r.get("updated_at") or "",
+            "status":        "failed" if r.get("has_error") else "active",
+        }
+        for r in (runs or [])
+    ]
+
+    return jsonify({
+        "lanes":   lanes,
+        "_source": "local_store" if runs else "empty",
+    })
+
+
 @bp_logs.route("/api/logs-stream")
 def api_logs_stream():
     """SSE endpoint - streams new log lines in real-time."""

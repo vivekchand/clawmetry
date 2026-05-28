@@ -345,6 +345,24 @@
     </svg>
   </div>
 
+  <!-- Session Lanes (issue #721): active sessions grouped by channel.
+       Populated every 30 s by loadFlowLanes() in app.js. -->
+  <div id="flow-session-lanes" style="
+    margin-top:12px;
+    background:var(--bg-secondary,#111128);
+    border:1px solid var(--border-secondary,#2a2a4a);
+    border-radius:10px;
+    padding:10px 14px;
+    ">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <span style="font-size:13px;font-weight:600;color:#aaa;">&#128225; <span data-i18n="flow.session_lanes">Active Session Lanes</span></span>
+      <span id="flow-lanes-count" style="font-size:10px;color:#555;"></span>
+    </div>
+    <div id="flow-lanes-list" style="display:flex;flex-wrap:wrap;gap:6px;">
+      <span style="color:#555;font-size:11px;" data-i18n="flow.lanes_loading">Loading&hellip;</span>
+    </div>
+  </div>
+
   <!-- Live Tool Call Stream -->
   <div style="
     margin-top:12px;
