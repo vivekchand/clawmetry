@@ -387,6 +387,197 @@ def get_cost():
     })
 
 
+# ── Approvals API ─────────────────────────────────────────────────────────
+
+def _approvals_is_pro() -> bool:
+    try:
+        import dashboard as _d
+        return bool(_d._is_pro_user())
+    except Exception:
+        return False
+
+
+def _approvals_seed() -> dict:
+    """In-memory mock queue for Stage B — resets on process restart."""
+    return {
+        "items": [
+            {"id": "apr-vega", "agent": "vega-04", "tool": "post_tweet", "risk": "med", "age": "2m ago"},
+            {"id": "apr-leo", "agent": "leo-04", "tool": "git_branch.delete", "risk": "low", "age": "5m ago"},
+            {"id": "apr-kepler", "agent": "kepler-1f", "tool": "send_email", "risk": "high", "age": "8m ago"},
+            {"id": "apr-orion", "agent": "orion-1a", "tool": "stripe.refund", "risk": "high", "age": "auto · 12m ago", "done": "ok"},
+            {"id": "apr-ursa", "agent": "ursa-09", "tool": "db.drop_table", "risk": "high", "age": "blocked · 22m ago", "done": "blocked"},
+            {"id": "apr-draco", "agent": "draco-08", "tool": "open_door", "risk": "med", "age": "auto · 31m ago", "done": "ok"},
+        ],
+        "details": {
+            "apr-vega": {
+                "risk_score": 0.55,
+                "median_score": 0.18,
+                "risk_level": "med",
+                "title": "Tweet — agent wants to post publicly",
+                "agent": "agent-vega-04",
+                "session": "0x4F2A",
+                "age": "2m ago",
+                "action": {
+                    "method": "POST /tweet",
+                    "account": "@acme_ai",
+                    "body": "Whales sing 30-min songs across ocean basins, and the tune changes each season.",
+                    "reach": 42300,
+                },
+                "reasons": [
+                    {"label": "first time this account posts a tool-generated tweet", "weight": 0.30},
+                    {"label": "audience > 10k", "weight": 0.18},
+                    {"label": "contains an outbound link", "weight": 0.07},
+                ],
+                "rule_suggestion": "auto-approve post_tweet when risk ≤ 0.20 and reach ≤ 5k",
+            },
+            "apr-leo": {
+                "risk_score": 0.22,
+                "median_score": 0.18,
+                "risk_level": "low",
+                "title": "Delete branch — cleanup after merge",
+                "agent": "agent-leo-04",
+                "session": "0x8B1C",
+                "age": "5m ago",
+                "action": {
+                    "method": "DELETE /git/branch",
+                    "account": "github.com/acme/backend",
+                    "body": "feature/old-experiment",
+                    "reach": 0,
+                },
+                "reasons": [
+                    {"label": "branch already merged to main", "weight": 0.12},
+                    {"label": "agent deleted this branch pattern before", "weight": 0.10},
+                ],
+                "rule_suggestion": "auto-approve git_branch.delete when risk ≤ 0.25 and branch is merged",
+            },
+            "apr-kepler": {
+                "risk_score": 0.78,
+                "median_score": 0.18,
+                "risk_level": "high",
+                "title": "Email — agent wants to contact external recipient",
+                "agent": "agent-kepler-1f",
+                "session": "0x3D9E",
+                "age": "8m ago",
+                "action": {
+                    "method": "POST /email/send",
+                    "account": "noreply@acme.ai",
+                    "body": "Quarterly metrics summary attached — please review before EOD.",
+                    "reach": 1,
+                },
+                "reasons": [
+                    {"label": "first outbound email to this domain", "weight": 0.35},
+                    {"label": "contains attachment", "weight": 0.22},
+                    {"label": "recipient outside org allowlist", "weight": 0.21},
+                ],
+                "rule_suggestion": "auto-approve send_email when risk ≤ 0.30 and recipient is internal",
+            },
+            "apr-orion": {
+                "risk_score": 0.82,
+                "median_score": 0.18,
+                "risk_level": "high",
+                "title": "Refund — auto-approved by rule",
+                "agent": "agent-orion-1a",
+                "session": "0x1A04",
+                "age": "auto · 12m ago",
+                "action": {"method": "POST /stripe/refund", "account": "cus_8x2k", "body": "$12.00 · duplicate charge", "reach": 1},
+                "reasons": [{"label": "matched auto-approve rule", "weight": 1.0}],
+                "rule_suggestion": "",
+            },
+            "apr-ursa": {
+                "risk_score": 0.95,
+                "median_score": 0.18,
+                "risk_level": "high",
+                "title": "Drop table — blocked by policy",
+                "agent": "agent-ursa-09",
+                "session": "0xFF00",
+                "age": "blocked · 22m ago",
+                "action": {"method": "DROP TABLE sessions_staging", "account": "postgres://local", "body": "CASCADE", "reach": 0},
+                "reasons": [{"label": "destructive DDL always blocked", "weight": 1.0}],
+                "rule_suggestion": "",
+            },
+            "apr-draco": {
+                "risk_score": 0.48,
+                "median_score": 0.18,
+                "risk_level": "med",
+                "title": "Open door — auto-approved by rule",
+                "agent": "agent-draco-08",
+                "session": "0x2C11",
+                "age": "auto · 31m ago",
+                "action": {"method": "POST /iot/door/unlock", "account": "front-lobby", "body": "visitor badge #4421", "reach": 1},
+                "reasons": [{"label": "matched auto-approve rule", "weight": 1.0}],
+                "rule_suggestion": "",
+            },
+        },
+    }
+
+
+_APPROVALS_STORE: dict | None = None
+
+
+def _approvals_store() -> dict:
+    global _APPROVALS_STORE
+    if _APPROVALS_STORE is None:
+        _APPROVALS_STORE = _approvals_seed()
+    return _APPROVALS_STORE
+
+
+def _approvals_payload() -> dict:
+    store = _approvals_store()
+    items = store["items"]
+    pending = [i for i in items if not i.get("done")]
+    awaiting = len(pending)
+    is_pro = _approvals_is_pro()
+    return {
+        "summary": {
+            "awaiting": awaiting,
+            "median_response": "22s",
+            "auto_approved_pct": 84,
+        },
+        "items": items,
+        "details": store["details"],
+        "pro_gated_upsell": awaiting > 0 and not is_pro,
+        "is_pro": is_pro,
+    }
+
+
+@bp_v2.route("/api/v2/approvals", methods=["GET"])
+def get_approvals():
+    return jsonify(_approvals_payload())
+
+
+@bp_v2.route("/api/v2/approvals/<approval_id>", methods=["POST"])
+def post_approval(approval_id: str):
+    store = _approvals_store()
+    body = request.get_json(silent=True) or {}
+    decision = (body.get("decision") or "").strip().lower()
+    if decision not in ("approve", "deny", "edit"):
+        return jsonify({"error": "decision must be approve, deny, or edit"}), 400
+
+    item = next((i for i in store["items"] if i["id"] == approval_id), None)
+    if item is None:
+        return jsonify({"error": "approval not found"}), 404
+    if item.get("done"):
+        return jsonify({"error": "approval already resolved"}), 409
+
+    if decision in ("approve", "edit"):
+        item["done"] = "ok"
+        item["age"] = "just now" if decision == "approve" else "edited · just now"
+    else:
+        item["done"] = "blocked"
+        item["age"] = "blocked · just now"
+
+    detail = store["details"].get(approval_id)
+    if detail:
+        detail["age"] = item["age"]
+
+    payload = _approvals_payload()
+    payload["resolved_id"] = approval_id
+    payload["decision"] = decision
+    if body.get("auto_apply_rule"):
+        payload["rule_applied"] = bool(_approvals_is_pro())
+    return jsonify(payload)
+
+
 # ── Sub-Agents API ────────────────────────────────────────────────────────
 
 @bp_v2.route("/api/v2/subagents", methods=["GET"])
