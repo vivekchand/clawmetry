@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+### Added: evidence-based asset registry — first slice (2026-05-28)
+- New DuckDB-backed asset registry that converts individual agent discoveries (Self-Evolve findings, useful prompts, improved skills) into **reviewable, reusable assets with provenance** — without auto-promoting unreviewed local changes to team/company defaults (#2201). Lifecycle `pending → approved/rejected → deprecated`; every asset traces to a source `session_id`/`run_id`. Types: `skill`, `prompt`, `workflow`, `playbook`, `memory_snippet`, `tool_config`, `evaluation_case`. The daemon owns writes; reads ride the daemon proxy so the cloud can paint from a snapshot the same way (added to the `_DAEMON_METHODS` allowlist next to `ingest_approval` / `update_approval_decision`).
+- HTTP surface (`routes/assets.py`): `GET /api/assets` (filter by `status` / `asset_type` / `source_run_id` / `source_session_id` / `limit`), `GET /api/assets/<id>`, `POST /api/assets` (create candidate), `POST /api/assets/<id>/review` (`approve` / `reject` / `deprecate`).
+- Self-Evolve hook: `POST /api/selfevolve/findings/save-as-asset` packages a finding into a `pending` candidate asset with its source `session_id` attached and a `self-evolve` provenance tag — one-click promotion from a finding card to the registry. Approval still requires an explicit reviewer action.
+- Foundation lives in OSS (DuckDB-first); the richer review/promote console with reviewer identity + auto-recommendation is the planned Pro surface. 19 unit + HTTP tests; daemon-side only, no cloud pin bump.
+
+### Added: agents must work in an isolated git worktree (FLYWHEEL.md §0) (2026-05-28)
+- Documented hard rule: multiple Claude Code agents and crons run against this repo concurrently — editing the main checkout is unsafe because another process can switch branches mid-edit and clobber uncommitted changes. Future agents must start with `EnterWorktree` (or `git worktree add .claude/worktrees/<slug> -b feat/<slug> origin/main`). Burned 2026-05-28 when an autonomous process checked out a different branch in the shared working tree and wiped the in-progress asset-registry edits.
+
 ### Release: tamper-evident hash chain for event audit log (carries #2210) (2026-05-28)
 - Per-node SHA-256 chain over events now ships on PyPI, plus the new `clawmetry verify-integrity` CLI. Off by default (set `CLAWMETRY_INTEGRITY=1` to enable stamping; existing stores migrate cleanly and pre-chain rows are reported separately by the verifier). See the detailed Added entry below for the design and the cost-backfill-safety guarantee. No cloud pin bump.
 

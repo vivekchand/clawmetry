@@ -521,6 +521,39 @@ _DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_guardrail_events_ts      ON guardrail_events(ts)",
     "CREATE INDEX IF NOT EXISTS idx_guardrail_events_session ON guardrail_events(session_id, ts)",
+    # Issue #2201 — asset registry. Evidence + review layer that turns
+    # individual agent discoveries (Self-Evolve findings, useful prompts,
+    # improved skills) into reviewable, reusable assets without auto-promoting
+    # unreviewed local changes to team/company defaults. Lifecycle:
+    # pending → approved/rejected → deprecated. Every asset references a
+    # source ``run_id``/``session_id`` (evidence over claims). Tags + content
+    # are JSON-encoded into BLOB via ``_to_blob`` and decoded back via
+    # ``_decode_data_blob_rows``.
+    """
+    CREATE TABLE IF NOT EXISTS assets (
+        id                VARCHAR PRIMARY KEY,
+        asset_type        VARCHAR NOT NULL,
+        name              VARCHAR NOT NULL,
+        description       VARCHAR NOT NULL DEFAULT '',
+        source_run_id     VARCHAR NOT NULL DEFAULT '',
+        source_session_id VARCHAR NOT NULL DEFAULT '',
+        node_id           VARCHAR NOT NULL DEFAULT '',
+        author            VARCHAR NOT NULL DEFAULT '',
+        team_id           VARCHAR NOT NULL DEFAULT '',
+        version           VARCHAR NOT NULL DEFAULT '0.1.0',
+        status            VARCHAR NOT NULL DEFAULT 'pending',
+        tags              BLOB,
+        content           BLOB,
+        reviewer          VARCHAR NOT NULL DEFAULT '',
+        review_reason     VARCHAR NOT NULL DEFAULT '',
+        created_at        VARCHAR NOT NULL,
+        updated_at        BIGINT NOT NULL,
+        reviewed_at       VARCHAR
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_assets_status ON assets(status, updated_at)",
+    "CREATE INDEX IF NOT EXISTS idx_assets_type   ON assets(asset_type, updated_at)",
+    "CREATE INDEX IF NOT EXISTS idx_assets_run    ON assets(source_run_id)",
     # Issue #1088 Phase 4 (2026-05-13) — channel-message foundation. Replaces
     # the per-provider log-grep + JSONL-scan path that the 21 routes in
     # ``routes/channels.py`` use today. Each row is one inbound or outbound
@@ -3051,6 +3084,183 @@ class LocalStore:
             },
             "per_agent": per_agent,
         }
+
+    # ── Asset registry (#2201) ─────────────────────────────────────────────
+    # Evidence + review layer that turns individual agent discoveries
+    # (Self-Evolve findings, useful prompts, improved skills) into reviewable,
+    # reusable assets. Daemon owns writes; reads ride the local_query proxy
+    # so the cloud can paint from the snapshot the same way.
+
+    _ASSET_TYPES = frozenset({
+        "skill", "prompt", "workflow", "playbook",
+        "memory_snippet", "tool_config", "evaluation_case",
+    })
+    _ASSET_STATUSES = frozenset({"pending", "approved", "rejected", "deprecated"})
+
+    _ASSET_COLS = [
+        "id", "asset_type", "name", "description", "source_run_id",
+        "source_session_id", "node_id", "author", "team_id", "version",
+        "status", "tags", "content", "reviewer", "review_reason",
+        "created_at", "updated_at", "reviewed_at",
+    ]
+
+    def ingest_asset(self, asset: dict[str, Any]) -> None:
+        """Upsert one asset. Required: ``id``, ``asset_type``, ``name``.
+        Re-ingesting the same id refreshes name/description/content/tags but
+        preserves the existing status + reviewer (those move via
+        ``update_asset_status``). Tags/content are stored as ``_to_blob``-
+        encoded BLOBs and decoded back via ``_decode_data_blob_rows`` on read."""
+        from datetime import datetime, timezone
+
+        aid = asset.get("id")
+        if not aid:
+            raise ValueError("asset must include 'id'")
+        atype = asset.get("asset_type") or ""
+        if atype not in self._ASSET_TYPES:
+            raise ValueError(
+                f"asset_type {atype!r} not in {sorted(self._ASSET_TYPES)}"
+            )
+        name = asset.get("name") or ""
+        if not name:
+            raise ValueError("asset must include non-empty 'name'")
+        status = asset.get("status") or "pending"
+        if status not in self._ASSET_STATUSES:
+            raise ValueError(
+                f"status {status!r} not in {sorted(self._ASSET_STATUSES)}"
+            )
+        created_at = asset.get("created_at") or datetime.now(timezone.utc).isoformat()
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO assets (
+                    id, asset_type, name, description, source_run_id,
+                    source_session_id, node_id, author, team_id, version,
+                    status, tags, content, reviewer, review_reason,
+                    created_at, updated_at, reviewed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET
+                    name              = excluded.name,
+                    description       = excluded.description,
+                    source_run_id     = COALESCE(NULLIF(excluded.source_run_id, ''), assets.source_run_id),
+                    source_session_id = COALESCE(NULLIF(excluded.source_session_id, ''), assets.source_session_id),
+                    node_id           = COALESCE(NULLIF(excluded.node_id, ''), assets.node_id),
+                    author            = COALESCE(NULLIF(excluded.author, ''), assets.author),
+                    team_id           = COALESCE(NULLIF(excluded.team_id, ''), assets.team_id),
+                    version           = COALESCE(NULLIF(excluded.version, ''), assets.version),
+                    tags              = COALESCE(excluded.tags, assets.tags),
+                    content           = COALESCE(excluded.content, assets.content),
+                    updated_at        = excluded.updated_at
+            """, [
+                str(aid), atype, name,
+                asset.get("description") or "",
+                asset.get("source_run_id") or "",
+                asset.get("source_session_id") or "",
+                asset.get("node_id") or "",
+                asset.get("author") or "",
+                asset.get("team_id") or "",
+                asset.get("version") or "0.1.0",
+                status,
+                _to_blob(asset.get("tags")),
+                _to_blob(asset.get("content")),
+                asset.get("reviewer") or "",
+                asset.get("review_reason") or "",
+                created_at,
+                int(time.time() * 1000),
+                asset.get("reviewed_at"),
+            ])
+
+    def update_asset_status(
+        self, asset_id: str, *, status: str, reviewer: str = "",
+        reason: str = "",
+    ) -> bool:
+        """Move an asset to a new status (the review action). Returns True if
+        a row with ``asset_id`` existed and was updated, False otherwise."""
+        from datetime import datetime, timezone
+
+        if status not in self._ASSET_STATUSES:
+            raise ValueError(
+                f"status {status!r} not in {sorted(self._ASSET_STATUSES)}"
+            )
+        now_iso = datetime.now(timezone.utc).isoformat()
+        now_ms = int(time.time() * 1000)
+        with self._write_lock:
+            # DuckDB UPDATE doesn't return a useful affected-row count via the
+            # cursor; check existence first, then update.
+            row = self._conn.execute(
+                "SELECT 1 FROM assets WHERE id = ?", [str(asset_id)]
+            ).fetchone()
+            if not row:
+                return False
+            self._conn.execute("""
+                UPDATE assets SET
+                    status        = ?,
+                    reviewer      = COALESCE(NULLIF(?, ''), reviewer),
+                    review_reason = COALESCE(NULLIF(?, ''), review_reason),
+                    reviewed_at   = ?,
+                    updated_at    = ?
+                WHERE id = ?
+            """, [status, reviewer, reason, now_iso, now_ms, str(asset_id)])
+            return True
+
+    def query_assets(
+        self,
+        *,
+        status: str | None = None,
+        asset_type: str | None = None,
+        source_run_id: str | None = None,
+        source_session_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """List assets newest-first with optional filters."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if status:
+            clauses.append("status = ?"); params.append(status)
+        if asset_type:
+            clauses.append("asset_type = ?"); params.append(asset_type)
+        if source_run_id:
+            clauses.append("source_run_id = ?"); params.append(source_run_id)
+        if source_session_id:
+            clauses.append("source_session_id = ?"); params.append(source_session_id)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT {", ".join(self._ASSET_COLS)}
+            FROM assets
+            {where}
+            ORDER BY updated_at DESC
+            LIMIT ?
+        """
+        params.append(int(limit))
+        return self._decode_asset_rows(self._fetch(sql, params))
+
+    def get_asset(self, asset_id: str) -> dict[str, Any] | None:
+        """Return one asset detail by id, or None."""
+        if not asset_id:
+            return None
+        sql = f"SELECT {', '.join(self._ASSET_COLS)} FROM assets WHERE id = ?"
+        out = self._decode_asset_rows(self._fetch(sql, [str(asset_id)]))
+        return out[0] if out else None
+
+    def _decode_asset_rows(self, rows: Iterable[tuple]) -> list[dict[str, Any]]:
+        """tuple→dict for ``assets``. Mirrors ``_decode_data_blob_rows`` but
+        decodes BOTH BLOB columns (``tags`` + ``content``) — the shared helper
+        only handles a single ``data`` column."""
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(zip(self._ASSET_COLS, r))
+            for k in ("tags", "content"):
+                raw = d.get(k)
+                if raw is None:
+                    continue
+                try:
+                    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    try:
+                        d[k] = json.loads(text)
+                    except (ValueError, TypeError):
+                        d[k] = text
+                except (UnicodeDecodeError, AttributeError):
+                    d[k] = None
+            out.append(d)
+        return out
 
     def ingest_system_snapshot(self, snap: dict[str, Any]) -> None:
         """Insert one system-snapshot row. Append-only;

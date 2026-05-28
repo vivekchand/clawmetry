@@ -24,6 +24,7 @@ The north star: **don't stop at "code compiles." Stop at "verified working in pr
 1. **Scan open issues/PRs for human claims.** If a human said "picking this up" / "working on" / "I'll take" in the last 7 days, do NOT open a competing PR. Automation is the night-shift janitor, not the day-shift engineer.
 2. **Scan the user's recent comments** on open PRs/issues and address them first.
 3. **Re-read the goal.** If invoked via `/goal`, the goal persists until the *outcome* is achieved and verified — not until the code is written.
+4. **Work in an isolated worktree.** Multiple Claude Code agents and crons run against this repo at the same time. Editing the main checkout is unsafe: another process can switch branches mid-edit and clobber uncommitted changes (burned 2026-05-28 — `feat/asset-registry` working-tree wiped when a concurrent agent checked out `release/hash-chain-2210` in the same checkout). Always start with `EnterWorktree`, or `git worktree add .claude/worktrees/<slug> -b feat/<slug> origin/main`. The worktree gives you your own branch + working tree; the shared checkout is for the human, not for parallel automation. Use `ExitWorktree` (or `git worktree remove`) once the PR is merged.
 
 ## 1. The data-flow rule (this is the one that bites)
 
