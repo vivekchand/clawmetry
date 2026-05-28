@@ -541,6 +541,13 @@ _DAEMON_METHODS = frozenset({
     # this entry the proxy returns None and the CLI crashed on
     # `result["status"]`. Read-only walk over the events table.
     "verify_integrity",
+    # Issue #2196 item #5 — per-event resolved-error triage. Writes need the
+    # daemon's writer connection; the read returns a {event_id: {...}} map
+    # used by /api/error-triage/resolved + future "exclude resolved from
+    # error counts" filtering.
+    "mark_error_resolved",
+    "unmark_error_resolved",
+    "query_resolved_errors",
 })
 
 

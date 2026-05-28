@@ -9247,6 +9247,23 @@ def _build_health_timeline(session_limit: int = 60, events_per_session: int = 50
     return {"runtimes": runtimes_out}
 
 
+def _build_resolved_errors(limit: int = 5000):
+    """Per-event resolved-error markers (#2196 item #5).
+
+    Returns ``{event_id: {resolved_at, note}}`` for every entry currently in
+    the ``resolved_errors`` table. Built on the daemon's own store handle.
+    Best-effort; an empty map is returned on any failure or when the table is
+    empty (== nothing resolved)."""
+    try:
+        from clawmetry import local_store as _ls
+        store = _ls.get_store()
+        if store is None:
+            return {}
+        return store.query_resolved_errors(limit=int(limit)) or {}
+    except Exception:
+        return {}
+
+
 def _resolve_openclaw_bin():
     """Find the ``openclaw`` binary. The daemon runs under launchd with a
     minimal PATH, so ``shutil.which`` alone often misses Homebrew installs."""
@@ -11308,6 +11325,10 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # a session summary; severity = red (real error, post #2202 benign
         # filter), yellow (waste flag, #2215), green (clean).
         "healthTimeline": _build_health_timeline(),
+        # Per-event resolved-error markers (#2196 item #5). UIs render the
+        # corresponding rows in a muted state and may exclude them from
+        # error counts. Map keyed by event_id; empty == nothing resolved.
+        "resolvedErrors": _build_resolved_errors(),
     }
 
     # ── NemoClaw / sandbox enrichment ────────────────────────────────────────

@@ -840,6 +840,17 @@ _DDL = [
         updated_at  BIGINT NOT NULL
     )
     """,
+    # Issue #2196 item #5 — per-event "resolved" markers. Lets a user mute a
+    # known/expected error so it stops inflating counts on Tracing / Health /
+    # the run-compare deltas. Keyed by event_id (the unique error-bearing
+    # tool_result row id) so the relation joins cleanly back to events.
+    """
+    CREATE TABLE IF NOT EXISTS resolved_errors (
+        event_id     VARCHAR PRIMARY KEY,
+        resolved_at  BIGINT NOT NULL,
+        note         VARCHAR
+    )
+    """,
 ]
 
 
@@ -4186,6 +4197,75 @@ class LocalStore:
             except Exception:
                 return (max_id, 0, len(rows))
         return (max_id, len(updates), len(rows))
+
+    # ── Error triage (#2196 item #5) ────────────────────────────────────────
+    # Mark a known/expected error as resolved so it stops inflating counts.
+    # Idempotent — re-marking refreshes the timestamp + note; un-marking is a
+    # plain DELETE. Reads go through ``query_resolved_errors`` (returns a
+    # dict for cheap membership checks).
+
+    def mark_error_resolved(self, event_id: str, note: str | None = None) -> bool:
+        """Mark ``event_id`` as resolved. Returns True if a row was written,
+        False on bad input or write failure. Idempotent: re-marking the same
+        event refreshes its timestamp + note."""
+        if not isinstance(event_id, str) or not event_id.strip():
+            return False
+        eid = event_id.strip()
+        now_ms = int(time.time() * 1000)
+        n = None if note is None else str(note)[:1000]
+        try:
+            self._conn.execute(
+                "INSERT INTO resolved_errors (event_id, resolved_at, note) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT (event_id) DO UPDATE SET "
+                "  resolved_at = excluded.resolved_at, note = excluded.note",
+                [eid, now_ms, n],
+            )
+            return True
+        except Exception:
+            return False
+
+    def unmark_error_resolved(self, event_id: str) -> bool:
+        """Remove the resolved marker for ``event_id``. Returns True if a row
+        was deleted, False if it didn't exist or on write failure.
+
+        DuckDB's Python binding returns -1 from ``cursor.rowcount`` for DELETE,
+        so the existence check has to be a pre-delete SELECT — there's no way
+        to recover it from the deletion call itself."""
+        if not isinstance(event_id, str) or not event_id.strip():
+            return False
+        eid = event_id.strip()
+        try:
+            row = self._conn.execute(
+                "SELECT 1 FROM resolved_errors WHERE event_id = ?", [eid],
+            ).fetchone()
+            existed = row is not None
+            if existed:
+                self._conn.execute(
+                    "DELETE FROM resolved_errors WHERE event_id = ?", [eid],
+                )
+            return existed
+        except Exception:
+            return False
+
+    def query_resolved_errors(self, *, limit: int = 5000) -> dict[str, dict]:
+        """Return ``{event_id: {resolved_at, note}}`` for all current resolved
+        markers (most-recent-first up to ``limit``). Map shape keeps consumer
+        membership checks O(1)."""
+        try:
+            rows = self._conn.execute(
+                "SELECT event_id, resolved_at, note FROM resolved_errors "
+                "ORDER BY resolved_at DESC LIMIT ?",
+                [int(limit)],
+            ).fetchall()
+        except Exception:
+            return {}
+        out: dict[str, dict] = {}
+        for (eid, ts_ms, note) in rows:
+            if not eid:
+                continue
+            out[str(eid)] = {"resolved_at": int(ts_ms or 0), "note": note}
+        return out
 
     def query_events_with_subagents(
         self,

@@ -6611,3 +6611,84 @@ def api_run_compare():
         "b": stats_b,
         "deltas": _run_compare_deltas(stats_a, stats_b),
     })
+
+
+# ── Error triage: mark known/expected errors as resolved (#2196 item #5) ─────
+# Persists the resolved-set in DuckDB (the source-tool kept it in localStorage,
+# which would not survive our E2E-encrypted cloud model). Each entry is keyed
+# by the unique event_id of the error-bearing tool_result row so the relation
+# joins cleanly back to ``events``.
+
+def _err_triage_event_id():
+    """Pull ``event_id`` from JSON body or query string. Returns "" on miss."""
+    if request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        eid = body.get("event_id") or body.get("eventId")
+    else:
+        eid = request.args.get("event_id") or request.args.get("eventId")
+    return (eid or "").strip() if isinstance(eid, str) else ""
+
+
+@bp_sessions.route("/api/error-triage/resolve", methods=["POST"])
+def api_error_triage_resolve():
+    """Mark an error as resolved (idempotent — re-POST refreshes the note).
+
+    Body: ``{"event_id": "<id>", "note": "<optional>"}``. Returns
+    ``{"ok": true, "event_id": ...}`` on success.
+    """
+    from routes.local_query import local_store_via_daemon
+
+    eid = _err_triage_event_id()
+    if not eid:
+        return jsonify({"ok": False, "error": "missing event_id"}), 400
+    body = request.get_json(silent=True) or {}
+    note = body.get("note")
+    if note is not None and not isinstance(note, str):
+        return jsonify({"ok": False, "error": "note must be a string"}), 400
+    try:
+        ok = bool(local_store_via_daemon("mark_error_resolved", event_id=eid, note=note))
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"daemon unavailable: {exc}"}), 503
+    if not ok:
+        return jsonify({"ok": False, "error": "write failed"}), 500
+    return jsonify({"ok": True, "event_id": eid})
+
+
+@bp_sessions.route("/api/error-triage/resolve", methods=["DELETE"])
+def api_error_triage_unresolve():
+    """Remove the resolved marker for an error.
+
+    Query: ``?event_id=<id>``. ``{"ok": true, "removed": bool}`` on success;
+    ``removed`` is False when the id had no marker (idempotent).
+    """
+    from routes.local_query import local_store_via_daemon
+
+    eid = _err_triage_event_id()
+    if not eid:
+        return jsonify({"ok": False, "error": "missing event_id"}), 400
+    try:
+        removed = bool(local_store_via_daemon("unmark_error_resolved", event_id=eid))
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"daemon unavailable: {exc}"}), 503
+    return jsonify({"ok": True, "removed": removed, "event_id": eid})
+
+
+@bp_sessions.route("/api/error-triage/resolved")
+def api_error_triage_resolved():
+    """Return the current resolved-set as ``{event_id: {resolved_at, note}}``.
+
+    Query: ``?limit=<N>`` (default 5000, clamped 1-5000).
+    """
+    from routes.local_query import local_store_via_daemon
+
+    try:
+        limit = max(1, min(int(request.args.get("limit") or 5000), 5000))
+    except (TypeError, ValueError):
+        limit = 5000
+    try:
+        out = local_store_via_daemon("query_resolved_errors", limit=limit) or {}
+    except Exception as exc:
+        return jsonify({"resolved": {}, "error": f"daemon unavailable: {exc}"}), 503
+    if not isinstance(out, dict):
+        out = {}
+    return jsonify({"resolved": out, "count": len(out)})
