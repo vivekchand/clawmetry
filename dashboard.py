@@ -104,7 +104,7 @@ from routes.overview import bp_overview
 from routes.components import bp_components
 from routes.fleet_history import bp_fleet
 from routes.infra import bp_logs, bp_memory, bp_security, bp_config
-from routes.meta import bp_auth, bp_cloud_relay, bp_gateway, bp_otel, bp_version, bp_version_impact
+from routes.meta import bp_auth, bp_cloud_relay, bp_gateway, bp_otel, bp_otel_export, bp_version, bp_version_impact
 from routes.nemoclaw import bp_nemoclaw
 from routes.skills import bp_skills
 from routes.heartbeat import bp_heartbeat
@@ -10605,6 +10605,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_logs)
     app.register_blueprint(bp_memory)
     app.register_blueprint(bp_otel)
+    app.register_blueprint(bp_otel_export)
     app.register_blueprint(bp_overview)
     app.register_blueprint(bp_security)
     app.register_blueprint(bp_sessions)

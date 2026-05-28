@@ -51,6 +51,254 @@ bp_auth = Blueprint('auth', __name__)
 bp_otel = Blueprint('otel', __name__)
 bp_version_impact = Blueprint('version_impact', __name__)
 bp_cloud_relay = Blueprint('cloud_relay', __name__)
+bp_otel_export = Blueprint('otel_export', __name__)
+
+
+# ── OTLP trace export ──────────────────────────────────────────────────────────────
+
+
+def _ts_to_ns(val) -> int:
+    """Convert a timestamp to Unix nanoseconds."""
+    if val is None:
+        return 0
+    if isinstance(val, (int, float)):
+        return int(val * 1_000_000_000)
+    if isinstance(val, str):
+        for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                from datetime import datetime, timezone
+                dt = datetime.strptime(val, fmt).replace(tzinfo=timezone.utc)
+                return int(dt.timestamp() * 1_000_000_000)
+            except ValueError:
+                continue
+        try:
+            return int(float(val) * 1_000_000_000)
+        except (TypeError, ValueError):
+            pass
+    return 0
+
+
+def _iso_to_unix(val) -> "float | None":
+    """ISO timestamp string → float unix seconds (for query_spans since/until)."""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            from datetime import datetime, timezone
+            return datetime.strptime(val, fmt).replace(tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            continue
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None
+
+
+def _kv_attrs(d: dict) -> list:
+    """Flat dict → OTLP KeyValue attribute list."""
+    out = []
+    for k, v in d.items():
+        if v is None:
+            continue
+        if isinstance(v, bool):
+            out.append({"key": k, "value": {"boolValue": v}})
+        elif isinstance(v, int):
+            out.append({"key": k, "value": {"intValue": str(v)}})
+        elif isinstance(v, float):
+            out.append({"key": k, "value": {"doubleValue": v}})
+        else:
+            out.append({"key": k, "value": {"stringValue": str(v)}})
+    return out
+
+
+def _pad_tid(s: str) -> str:
+    return ((s or "").replace("-", "") + "0" * 32)[:32]
+
+
+def _pad_sid(s: str) -> str:
+    return ((s or "").replace("-", "") + "0" * 16)[:16]
+
+
+def _span_row_to_otlp(r: dict) -> dict:
+    start_ns = _ts_to_ns(r.get("start_ts"))
+    end_ns = _ts_to_ns(r.get("end_ts"))
+    if not end_ns or end_ns <= start_ns:
+        end_ns = start_ns + int((r.get("duration_ms") or 1) * 1_000_000)
+
+    raw_attrs = r.get("attributes") or {}
+    if isinstance(raw_attrs, str):
+        try:
+            raw_attrs = json.loads(raw_attrs)
+        except Exception:
+            raw_attrs = {}
+
+    extra = {k: v for k, v in {
+        "session.id": r.get("session_id"),
+        "agent.id": r.get("agent_id"),
+        "llm.model": r.get("model"),
+        "tool.name": r.get("tool_name"),
+        "cost.usd": r.get("cost_usd"),
+        "tokens.total": r.get("token_count"),
+        "tokens.input": r.get("tokens_input"),
+        "tokens.output": r.get("tokens_output"),
+    }.items() if v is not None}
+
+    _KIND = {"INTERNAL": 1, "SERVER": 2, "CLIENT": 3, "PRODUCER": 4, "CONSUMER": 5}
+    _STATUS = {"STATUS_CODE_OK": 1, "STATUS_CODE_ERROR": 2}
+
+    span = {
+        "traceId": _pad_tid(r.get("trace_id") or r.get("session_id") or ""),
+        "spanId": _pad_sid(r.get("span_id") or ""),
+        "name": r.get("name") or "span",
+        "kind": _KIND.get(r.get("kind") or "", 1),
+        "startTimeUnixNano": str(start_ns),
+        "endTimeUnixNano": str(end_ns),
+        "attributes": _kv_attrs({**raw_attrs, **extra}),
+        "status": {
+            "code": _STATUS.get(r.get("status_code") or "", 0),
+            "message": r.get("status_message") or "",
+        },
+    }
+    parent = r.get("parent_span_id") or ""
+    if parent:
+        span["parentSpanId"] = _pad_sid(parent)
+    return span
+
+
+def _rows_to_otlp(rows: list, version: str) -> dict:
+    """Convert LocalStore span rows to OTLP JSON resourceSpans."""
+    by_svc: dict = {}
+    for r in rows:
+        svc = r.get("service_name") or "clawmetry"
+        by_svc.setdefault(svc, []).append(_span_row_to_otlp(r))
+
+    res_attrs = _kv_attrs({
+        "telemetry.sdk.name": "clawmetry",
+        "telemetry.sdk.version": version,
+    })
+    return {
+        "resourceSpans": [
+            {
+                "resource": {
+                    "attributes": res_attrs + _kv_attrs({"service.name": svc}),
+                },
+                "scopeSpans": [{
+                    "scope": {"name": "clawmetry.exporter", "version": version},
+                    "spans": spans,
+                }],
+            }
+            for svc, spans in by_svc.items()
+        ]
+    }
+
+
+def _sessions_to_otlp_fallback(sessions: list, version: str) -> dict:
+    """Synthesise OTLP root spans from sessions when the spans table is empty."""
+    spans = []
+    for s in sessions:
+        sid = s.get("session_id") or ""
+        trace_id = _pad_tid(hashlib.md5(sid.encode(), usedforsecurity=False).hexdigest())
+        start_ns = _ts_to_ns(s.get("started_at") or s.get("last_active_at"))
+        end_ns = _ts_to_ns(s.get("last_active_at") or s.get("ended_at"))
+        if not end_ns or end_ns <= start_ns:
+            end_ns = start_ns + 1_000_000_000
+        attrs = {k: v for k, v in {
+            "session.id": sid,
+            "agent.id": s.get("agent_id"),
+            "agent.type": s.get("agent_type"),
+            "session.title": s.get("title"),
+            "session.status": s.get("status"),
+            "tokens.total": s.get("total_tokens"),
+            "cost.usd": s.get("cost_usd"),
+            "messages": s.get("message_count"),
+        }.items() if v is not None}
+        status = 2 if s.get("status") in ("error", "failed") else 1
+        spans.append({
+            "traceId": trace_id,
+            "spanId": trace_id[:16],
+            "name": f"session:{s.get('title') or sid[:12]}",
+            "kind": 1,
+            "startTimeUnixNano": str(start_ns),
+            "endTimeUnixNano": str(end_ns),
+            "attributes": _kv_attrs(attrs),
+            "status": {"code": status},
+        })
+    if not spans:
+        return {"resourceSpans": []}
+    res_attrs = _kv_attrs({
+        "service.name": "clawmetry",
+        "telemetry.sdk.name": "clawmetry",
+        "telemetry.sdk.version": version,
+    })
+    return {
+        "resourceSpans": [{
+            "resource": {"attributes": res_attrs},
+            "scopeSpans": [{
+                "scope": {"name": "clawmetry.session_synthesizer", "version": version},
+                "spans": spans,
+            }],
+        }]
+    }
+
+
+@bp_otel_export.route("/api/export/traces", methods=["GET"])
+def export_otlp_traces():
+    """Export agent traces as OTLP JSON.
+
+    Query params: limit (default 500, max 2000), session_id, since (ISO), until (ISO).
+    Returns OTLP JSON. When the spans table is empty, falls back to synthesising
+    root spans from the sessions table so the endpoint is always useful.
+    """
+    import dashboard as _d
+    from routes.local_query import local_store_via_daemon, _dispatch, _store
+
+    limit = min(max(int(request.args.get("limit") or 500), 1), 2000)
+    session_id = request.args.get("session_id") or None
+    since_f = _iso_to_unix(request.args.get("since"))
+    until_f = _iso_to_unix(request.args.get("until"))
+    version = getattr(_d, "__version__", "0")
+
+    # Primary: spans table (populated by OTLP ingestion or sync daemon)
+    kwargs = {"limit": limit}
+    if session_id:
+        kwargs["session_id"] = session_id
+    if since_f is not None:
+        kwargs["since"] = since_f
+    if until_f is not None:
+        kwargs["until"] = until_f
+
+    use_full = bool(session_id or since_f is not None or until_f is not None)
+    method = "query_spans" if use_full else "query_recent_spans"
+    rows = local_store_via_daemon(method, **kwargs)
+    if rows is None:
+        try:
+            store = _store()
+            fn = store.query_spans if use_full else store.query_recent_spans
+            rows = fn(**kwargs)
+        except Exception:
+            rows = []
+
+    if rows:
+        return make_response(
+            json.dumps(_rows_to_otlp(rows, version)),
+            200,
+            {"Content-Type": "application/json"},
+        )
+
+    # Fallback: synthesise from sessions table when spans table is empty
+    try:
+        body = _dispatch("sessions", {"limit": min(limit, 500)})
+        sessions = body.get("rows") or []
+    except Exception:
+        sessions = []
+
+    return make_response(
+        json.dumps(_sessions_to_otlp_fallback(sessions, version)),
+        200,
+        {"Content-Type": "application/json"},
+    )
 
 
 # ── Version check & self-update routes ─────────────────────────────────────────────

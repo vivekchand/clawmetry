@@ -483,6 +483,9 @@ _DAEMON_METHODS = frozenset({
     # Issue #1364 (MOAT 1.b): surface OTel spans we already persist.
     # Powers /api/spans + the Brain-tab "Spans" table.
     "query_recent_spans",
+    # Issue #853: OTLP trace export. Full-filter variant used by
+    # /api/export/traces when session_id / since / until are supplied.
+    "query_spans",
     # Issue #1364 (Tier-1 2026-05-15): /api/fallbacks model/provider
     # transition aggregator. Replaces a JSONL walker that opened up to 100
     # transcript files per request — multi-second on a busy workspace.
