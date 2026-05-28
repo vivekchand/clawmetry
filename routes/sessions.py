@@ -6477,3 +6477,137 @@ def api_session_intent_divergence(session_id):
     result = _detect_intent_divergence(path)
     result["sessionId"] = session_id
     return jsonify(result)
+
+
+# ── Per-run A/B compare (#2196 item #2) ───────────────────────────────────────
+# Pick two runs, get the side-by-side stats + signed deltas. Stats are
+# computed from the same primitives the snapshot uses (#2215 waste-flags
+# signals + #2202 corrected error flag), so a Compare view reads the same
+# truth the Overview health timeline + cost numbers do.
+
+_RUN_COMPARE_LOWER_BETTER = (
+    "cost_usd",
+    "total_tokens",
+    "step_count",
+    "max_event_token_count",
+    "max_tool_result_bytes",
+    "error_count",
+    "flag_count",
+)
+_RUN_COMPARE_HIGHER_BETTER = ("cache_hit_rate",)
+
+
+def _run_compare_stats(sid):
+    """Compute the per-session stats panel used by /api/run-compare. Returns a
+    dict (with ``missing: True`` when the session id has no events / summary)."""
+    from clawmetry import waste_flags as _wf
+    from routes.local_query import local_store_via_daemon
+
+    # Session summary: best-effort lookup in a bounded recent window.
+    try:
+        sessions = local_store_via_daemon("query_sessions", limit=500) or []
+    except Exception:
+        sessions = []
+    meta = next((s for s in sessions if s.get("session_id") == sid), None)
+
+    try:
+        events = local_store_via_daemon("query_events", session_id=sid, limit=500) or []
+    except Exception:
+        events = []
+
+    signals = _wf.compute_signals_from_events(events)
+    flags = _wf.compute_flags(signals)
+    error_count = sum(1 for e in events if _wf.event_is_real_error(e))
+
+    cache_read = int(signals.get("cache_read_tokens") or 0)
+    input_tokens = int(signals.get("input_tokens") or 0)
+    cache_total = cache_read + input_tokens
+    cache_hit_rate = (cache_read / cache_total) if cache_total > 0 else None
+
+    try:
+        cost_usd = float((meta or {}).get("cost_usd") or 0.0)
+    except (TypeError, ValueError):
+        cost_usd = 0.0
+    try:
+        total_tokens = int((meta or {}).get("token_count") or 0)
+    except (TypeError, ValueError):
+        total_tokens = 0
+
+    return {
+        "session_id": sid,
+        "runtime": _wf.runtime_from_session_id(sid),
+        "started_at": (meta or {}).get("started_at"),
+        "updated_at": (meta or {}).get("updated_at"),
+        "cost_usd": cost_usd,
+        "total_tokens": total_tokens,
+        "message_count": int((meta or {}).get("message_count") or 0),
+        "event_count": int((meta or {}).get("event_count") or 0),
+        "step_count": int(signals.get("step_count") or 0),
+        "max_event_token_count": int(signals.get("max_event_token_count") or 0),
+        "max_tool_result_bytes": int(signals.get("max_tool_result_bytes") or 0),
+        "cache_read_tokens": cache_read,
+        "input_tokens": input_tokens,
+        "cache_hit_rate": cache_hit_rate,
+        "error_count": error_count,
+        "flag_count": len(flags),
+        "flags": flags,
+        "severity": _wf.severity_from_counts(error_count, len(flags)),
+        "missing": meta is None and not events,
+    }
+
+
+def _run_compare_deltas(a, b):
+    """Signed deltas for every numeric metric in both stats panels. Each entry
+    carries ``favorable`` so the UI can colour improvements green and
+    regressions red without re-applying the rule."""
+    out = {}
+    for key in (_RUN_COMPARE_LOWER_BETTER + _RUN_COMPARE_HIGHER_BETTER):
+        va = a.get(key)
+        vb = b.get(key)
+        if va is None or vb is None:
+            continue
+        try:
+            absd = vb - va
+        except TypeError:
+            continue
+        # percent change relative to A; None when A is zero (avoid /0).
+        pct = (absd / va * 100.0) if va not in (0, 0.0) else None
+        if key in _RUN_COMPARE_LOWER_BETTER:
+            favorable = absd < 0  # decreased -> improvement
+        else:
+            favorable = absd > 0
+        out[key] = {
+            "a": va, "b": vb, "abs": absd, "pct": pct,
+            "favorable": favorable, "favorable_lower": key in _RUN_COMPARE_LOWER_BETTER,
+        }
+    return out
+
+
+@bp_sessions.route("/api/run-compare")
+def api_run_compare():
+    """Side-by-side stats + signed deltas for two runs (#2196 item #2).
+
+    Query params:
+
+    - ``a`` (required) — session id of the baseline run
+    - ``b`` (required) — session id of the candidate run
+
+    Stats per side: cost, tokens, step count, context, cache hit, errors,
+    waste flags, severity. Each numeric metric appears in ``deltas`` with
+    ``abs``, ``pct`` (None when A is zero), and ``favorable`` (lower-is-better
+    for cost/steps/errors/flags/etc.; higher-is-better for cache hit). The UI
+    colours improvements green, regressions red, off this flag.
+    """
+    a = (request.args.get("a") or "").strip()
+    b = (request.args.get("b") or "").strip()
+    if not a or not b:
+        return jsonify({"error": "missing 'a' or 'b' query parameter"}), 400
+    if a == b:
+        return jsonify({"error": "'a' and 'b' must be different session ids"}), 400
+    stats_a = _run_compare_stats(a)
+    stats_b = _run_compare_stats(b)
+    return jsonify({
+        "a": stats_a,
+        "b": stats_b,
+        "deltas": _run_compare_deltas(stats_a, stats_b),
+    })
