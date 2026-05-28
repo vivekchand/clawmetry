@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Release: server-side runtime filter on /api/usage — Cost/Tokens tab de-merges (2026-05-28)
+- The Cost / Tokens tab kept showing **merged** totals after Brain/Transcripts/Tracing de-merged: the aggregates are pre-grouped by `(agent_id, day)` without a runtime dimension, so client-side filtering wasn't possible. `query_aggregates` and `query_daily_usage_splits` now take an optional `runtime` param that adds a `session_id`-prefix `WHERE` clause **before** the dedupe CTE, reusing the same cost + token math. Per-runtime totals reconcile with the unfiltered total **by construction** (verified on a synthetic DuckDB: $10.20 unfiltered = $4.60 claude_code + $4.30 openclaw + $0.40 picoclaw + $0.90 goose, with the `model.completed` sibling correctly deduped). `/api/usage` reads `?runtime=…`; the frontend `loadUsage` appends it from the global switcher. (#2245)
+
 ### Release: evidence-based asset registry — first slice (carries #2231) (2026-05-28)
 - DuckDB-backed asset registry now ships on PyPI: turns Self-Evolve findings (and any other agent discovery) into reviewable, reusable assets with provenance — `pending → approved/rejected → deprecated`, every asset tied to a source `session_id`/`run_id`, daemon-proxied reads + writes, full `/api/assets` surface, and a one-click "save as asset" hook on the Self-Evolve route. See the detailed Added entry below for design + scope. No cloud pin bump.
 
