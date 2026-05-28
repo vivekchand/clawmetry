@@ -4603,12 +4603,24 @@ if (typeof module !== 'undefined' && module.exports) {
 function renderBrainChart(events) {
   var canvas = document.getElementById('brain-density-chart');
   if (!canvas || !canvas.getContext) return;
-  // Filter events by active pill
+  // Filter events by active pill — MUST mirror renderBrainStream so the chart
+  // and list never disagree. The previous cut filtered by source/type but NOT
+  // by the global runtime switcher or channel pill, so picking Claude Code
+  // would empty the list ("No recent Claude Code activity") yet leave the
+  // chart full of bars from other runtimes' events. Apply the same four
+  // filters here.
   if (_brainFilter !== 'all') {
     events = events.filter(function(ev) { return ev.source === _brainFilter; });
-    }
-    if (_brainTypeFilter !== 'all') {
+  }
+  if (_brainTypeFilter !== 'all') {
     events = events.filter(function(ev) { return ev.type === _brainTypeFilter; });
+  }
+  if (typeof _brainChannelFilter !== 'undefined' && _brainChannelFilter !== 'all') {
+    events = events.filter(function(ev) { return (ev.channel || '') === _brainChannelFilter; });
+  }
+  var _bcRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  if (_bcRt && _bcRt !== 'all') {
+    events = events.filter(function(ev) { return _cmRuntimeOf(ev) === _bcRt; });
   }
   var ctx = canvas.getContext('2d');
   var W = canvas.parentElement ? canvas.parentElement.offsetWidth : (canvas.offsetWidth || 800);
