@@ -9171,6 +9171,82 @@ def _build_waste_flags(session_limit: int = 60, events_per_session: int = 500):
     return out
 
 
+def _build_health_timeline(session_limit: int = 60, events_per_session: int = 500,
+                           dots_per_runtime: int = 30):
+    """Per-runtime sparkline of recent runs (#2196 item #4).
+
+    Returns ``{"runtimes": [{"runtime": str, "dots": [...]}, …]}`` where each
+    dot summarises one session — severity is ``red`` for any real error
+    (post #2202 benign-error filtering), ``yellow`` for any waste flag
+    (#2215), ``green`` otherwise. Runtimes are derived from the session-id
+    prefix (cf. ``waste_flags.runtime_from_session_id``); openclaw sessions
+    (raw UUIDs) bucket under ``"openclaw"``.
+
+    Daemon-only (uses the writer-owned store handle). Best-effort + bounded
+    so a busy store can't bloat the encrypted snapshot.
+    """
+    try:
+        from clawmetry import local_store as _ls
+        from clawmetry import waste_flags as _wf
+    except Exception:
+        return {"runtimes": []}
+    try:
+        store = _ls.get_store()
+        if store is None:
+            return {"runtimes": []}
+        sessions = store.query_sessions(limit=int(session_limit))
+    except Exception:
+        return {"runtimes": []}
+
+    buckets: dict[str, list] = {}
+    for s in sessions:
+        sid = s.get("session_id")
+        if not sid:
+            continue
+        try:
+            events = store.query_events(session_id=sid, limit=int(events_per_session))
+        except Exception:
+            continue
+        try:
+            signals = _wf.compute_signals_from_events(events)
+            flags = _wf.compute_flags(signals)
+            error_count = sum(1 for e in events if _wf.event_is_real_error(e))
+        except Exception:
+            continue
+        try:
+            cost = float(s.get("cost_usd") or 0.0)
+        except (TypeError, ValueError):
+            cost = 0.0
+        runtime = _wf.runtime_from_session_id(sid)
+        buckets.setdefault(runtime, []).append({
+            "session_id": str(sid),
+            "started_at": s.get("started_at"),
+            "updated_at": s.get("updated_at"),
+            "severity": _wf.severity_from_counts(error_count, len(flags)),
+            "error_count": error_count,
+            "flag_count": len(flags),
+            "flag_types": [f.get("type") for f in flags],
+            "cost_usd": cost,
+        })
+
+    runtimes_out = []
+    for runtime, dots in buckets.items():
+        # most-recent-first within each runtime, then cap so the slice stays
+        # small enough to fit comfortably in the encrypted snapshot.
+        dots.sort(key=lambda d: (d.get("started_at") or ""), reverse=True)
+        runtimes_out.append({"runtime": runtime, "dots": dots[: int(dots_per_runtime)]})
+    # Sort runtimes by their freshest dot so the dashboard shows active ones
+    # first (deterministic for empty buckets via runtime name fallback).
+    runtimes_out.sort(
+        key=lambda r: (
+            (r["dots"][0].get("started_at") if r["dots"] else "") or "",
+            r["runtime"],
+        ),
+        reverse=True,
+    )
+    return {"runtimes": runtimes_out}
+
+
 def _resolve_openclaw_bin():
     """Find the ``openclaw`` binary. The daemon runs under launchd with a
     minimal PATH, so ``shutil.which`` alone often misses Homebrew installs."""
@@ -11228,6 +11304,10 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # unscoped-result / bloated-context. Sessions without flags are
         # omitted so this slice stays tiny — empty == clean.
         "wasteFlags": _build_waste_flags(),
+        # Per-runtime sparkline of recent runs (#2196 item #4). Each dot is
+        # a session summary; severity = red (real error, post #2202 benign
+        # filter), yellow (waste flag, #2215), green (clean).
+        "healthTimeline": _build_health_timeline(),
     }
 
     # ── NemoClaw / sandbox enrichment ────────────────────────────────────────

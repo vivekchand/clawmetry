@@ -173,5 +173,117 @@ def test_build_waste_flags_in_snapshot(tmp_path, monkeypatch):
         store.stop(flush=True)
 
 
+# ── Health-timeline helpers + snapshot builder (#2196 item #4) ──────────────
+
+
+def test_runtime_from_session_id():
+    importlib.reload(wf)
+    assert wf.runtime_from_session_id("claude_code:abc-def") == "claude_code"
+    assert wf.runtime_from_session_id("Cursor:xyz") == "cursor"  # lower-cased
+    # OpenClaw sessions are bare UUIDs -> default bucket
+    assert wf.runtime_from_session_id("12345678-1234-1234-1234-1234567890ab") == "openclaw"
+    # garbage in -> default bucket, never raises
+    assert wf.runtime_from_session_id(None) == "openclaw"
+    assert wf.runtime_from_session_id("") == "openclaw"
+    assert wf.runtime_from_session_id(":no-head") == "openclaw"
+
+
+def test_severity_from_counts():
+    importlib.reload(wf)
+    assert wf.severity_from_counts(0, 0) == "green"
+    assert wf.severity_from_counts(0, 3) == "yellow"
+    assert wf.severity_from_counts(1, 0) == "red"
+    assert wf.severity_from_counts(2, 5) == "red"  # error wins
+    # garbage-safe
+    assert wf.severity_from_counts(None, "bad") == "green"
+
+
+def test_event_is_real_error_reads_corrected_flag():
+    importlib.reload(wf)
+    # Anthropic / v3 shape: top-level is_error
+    assert wf.event_is_real_error({"data": {"is_error": True}})
+    # Claude Code shape: nested in extra
+    assert wf.event_is_real_error({"data": {"extra": {"isError": True}}})
+    # Stored data may be encoded as JSON bytes
+    assert wf.event_is_real_error({"data": json.dumps({"is_error": True}).encode("utf-8")})
+    # Cleared (corrected) flag -> not an error
+    assert not wf.event_is_real_error({"data": {"is_error": False, "benign_error": True}})
+    # Garbage / no data -> not an error, no exception
+    assert not wf.event_is_real_error({})
+    assert not wf.event_is_real_error(None)
+    assert not wf.event_is_real_error({"data": "not json"})
+
+
+def test_build_health_timeline_bucketed_by_runtime(tmp_path, monkeypatch):
+    """End-to-end snapshot builder: real + clean + flagged sessions across two
+    runtimes; assert dots land in the right bucket with the right severity."""
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "ev.duckdb"))
+    monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_SECS", "0.05")
+    monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_BATCH", "2")
+    monkeypatch.delenv("CLAWMETRY_ROLE", raising=False)
+    import clawmetry.local_store as ls
+    importlib.reload(ls)
+    monkeypatch.setattr(ls, "_daemon_registered", lambda: False)
+    store = ls.get_store()
+
+    # Claude Code session — one tool_call (clean) + one real tool error
+    store.ingest({
+        "id": "cc:1", "node_id": "n", "agent_id": "main",
+        "session_id": "claude_code:sess-red",
+        "event_type": "tool_call", "ts": "2026-05-28T10:00:00Z",
+        "data": {"name": "Bash"}, "cost_usd": None, "token_count": 0,
+        "model": None,
+    })
+    store.ingest({
+        "id": "cc:2", "node_id": "n", "agent_id": "main",
+        "session_id": "claude_code:sess-red",
+        "event_type": "tool_result", "ts": "2026-05-28T10:00:01Z",
+        "data": {"role": "tool", "_runtime": "claude_code",
+                 "content": "Exit code 1\nTraceback ...",
+                 "extra": {"isError": True}},
+        "cost_usd": None, "token_count": 0, "model": None,
+    })
+    # OpenClaw session — runaway (35 tool_call events), no errors
+    for i in range(35):
+        store.ingest({
+            "id": f"oc:{i}", "node_id": "n", "agent_id": "main",
+            "session_id": "11111111-2222-3333-4444-555555555555",
+            "event_type": "tool_call", "ts": f"2026-05-28T11:00:{i:02d}Z",
+            "data": {"name": "Bash"}, "cost_usd": None, "token_count": 0,
+            "model": None,
+        })
+    # Goose session — clean
+    store.ingest({
+        "id": "g:1", "node_id": "n", "agent_id": "main",
+        "session_id": "goose:happy", "event_type": "tool_call",
+        "ts": "2026-05-28T12:00:00Z", "data": {"name": "Read"},
+        "cost_usd": None, "token_count": 0, "model": None,
+    })
+
+    import time as _t
+    end = _t.monotonic() + 3
+    while _t.monotonic() < end and store.health()["ring_depth"] > 0:
+        _t.sleep(0.02)
+
+    try:
+        from clawmetry import sync as syncmod
+        out = syncmod._build_health_timeline()
+        runtimes = {r["runtime"]: r["dots"] for r in out.get("runtimes", [])}
+        # All three runtimes represented
+        assert {"claude_code", "openclaw", "goose"}.issubset(set(runtimes.keys())), \
+            f"runtimes={list(runtimes.keys())}"
+        # Severity per session
+        cc_dot = next(d for d in runtimes["claude_code"] if "sess-red" in d["session_id"])
+        assert cc_dot["severity"] == "red", cc_dot
+        oc_dot = next(d for d in runtimes["openclaw"]
+                       if d["session_id"].startswith("11111111"))
+        assert oc_dot["severity"] == "yellow", oc_dot
+        assert oc_dot["flag_count"] >= 1 and "runaway" in oc_dot["flag_types"]
+        g_dot = next(d for d in runtimes["goose"] if d["session_id"] == "goose:happy")
+        assert g_dot["severity"] == "green", g_dot
+    finally:
+        store.stop(flush=True)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

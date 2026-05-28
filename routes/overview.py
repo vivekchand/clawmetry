@@ -1470,6 +1470,110 @@ def _try_local_store_prompt_errors(since_iso):
     return {"errors": errors, "count": len(errors), "_source": "local_store"}
 
 
+# ── Health timeline (#2196 item #4) ──────────────────────────────────────────
+# 30s cache: a dashboard widget polls this; recomputing it iterates events
+# across ~60 sessions, which is cheap but not free.
+
+_HEALTH_TIMELINE_CACHE_TTL = 30.0
+_health_timeline_cache: dict = {"ts": 0.0, "value": None}
+_health_timeline_cache_lock = threading.Lock()
+
+
+@bp_overview.route("/api/health-timeline")
+def api_health_timeline():
+    """Per-runtime sparkline of recent sessions, severity by health (#2196 item #4).
+
+    Each "dot" summarises one session: severity is ``red`` for any real
+    error (post #2202 benign-error filtering), ``yellow`` for any waste flag
+    (#2215), ``green`` otherwise. Runtimes come from the session-id prefix
+    (cf. ``waste_flags.runtime_from_session_id``). Same shape as the cloud
+    snapshot's ``healthTimeline`` slice.
+
+    Query params:
+
+    - ``session_limit`` (default 60, clamped 1-200) — newest sessions to scan
+    - ``events_per_session`` (default 500, clamped 1-500)
+    - ``dots_per_runtime``  (default 30, clamped 1-200)
+    """
+    try:
+        from clawmetry import waste_flags as _wf
+        from routes.local_query import local_store_via_daemon
+    except Exception as exc:
+        return jsonify({"runtimes": [], "error": f"unavailable: {exc}"}), 503
+
+    session_limit = max(1, min(int(request.args.get("session_limit") or 60), 200))
+    events_per_session = max(1, min(int(request.args.get("events_per_session") or 500), 500))
+    dots_per_runtime = max(1, min(int(request.args.get("dots_per_runtime") or 30), 200))
+
+    cache_key = (session_limit, events_per_session, dots_per_runtime)
+    with _health_timeline_cache_lock:
+        cached = _health_timeline_cache.get("value")
+        cached_key = _health_timeline_cache.get("key")
+        if (
+            cached is not None
+            and cached_key == cache_key
+            and (_time.time() - _health_timeline_cache["ts"]) < _HEALTH_TIMELINE_CACHE_TTL
+        ):
+            return jsonify(cached)
+
+    try:
+        sessions = local_store_via_daemon("query_sessions", limit=session_limit) or []
+    except Exception as exc:
+        return jsonify({"runtimes": [], "error": f"sessions unavailable: {exc}"}), 503
+
+    buckets: dict = {}
+    for s in sessions:
+        sid = s.get("session_id")
+        if not sid:
+            continue
+        try:
+            events = local_store_via_daemon(
+                "query_events", session_id=sid, limit=events_per_session,
+            ) or []
+        except Exception:
+            continue
+        try:
+            signals = _wf.compute_signals_from_events(events)
+            flags = _wf.compute_flags(signals)
+            error_count = sum(1 for e in events if _wf.event_is_real_error(e))
+        except Exception:
+            continue
+        try:
+            cost = float(s.get("cost_usd") or 0.0)
+        except (TypeError, ValueError):
+            cost = 0.0
+        runtime = _wf.runtime_from_session_id(sid)
+        buckets.setdefault(runtime, []).append({
+            "session_id": str(sid),
+            "started_at": s.get("started_at"),
+            "updated_at": s.get("updated_at"),
+            "severity": _wf.severity_from_counts(error_count, len(flags)),
+            "error_count": error_count,
+            "flag_count": len(flags),
+            "flag_types": [f.get("type") for f in flags],
+            "cost_usd": cost,
+        })
+
+    runtimes_out = []
+    for runtime, dots in buckets.items():
+        dots.sort(key=lambda d: (d.get("started_at") or ""), reverse=True)
+        runtimes_out.append({"runtime": runtime, "dots": dots[:dots_per_runtime]})
+    runtimes_out.sort(
+        key=lambda r: (
+            (r["dots"][0].get("started_at") if r["dots"] else "") or "",
+            r["runtime"],
+        ),
+        reverse=True,
+    )
+
+    payload = {"runtimes": runtimes_out, "generated_at": _time.time()}
+    with _health_timeline_cache_lock:
+        _health_timeline_cache["ts"] = _time.time()
+        _health_timeline_cache["key"] = cache_key
+        _health_timeline_cache["value"] = payload
+    return jsonify(payload)
+
+
 @bp_overview.route("/api/prompt-errors")
 def api_prompt_errors():
     """Return recent openclaw:prompt-error events from session JSONL files.

@@ -19,6 +19,16 @@
     </div>
   </div>
 
+  <!-- Per-runtime sparkline of recent runs (#2196 item #4). Severity: red=real
+       error, yellow=waste flag, green=clean. Empty when no runtime has data. -->
+  <div id="health-timeline-card" style="display:none;background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:14px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);">
+    <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px;">
+      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;">&#129488; <span data-i18n="overview.run_health_title">Run health</span></div>
+      <div style="font-size:11px;color:var(--text-muted);" data-i18n="overview.run_health_legend">red = error · yellow = waste · green = clean</div>
+    </div>
+    <div id="health-timeline-body"></div>
+  </div>
+
   <div class="refresh-bar" style="margin-bottom:6px;">
     <button class="refresh-btn" onclick="loadAll()" style="padding:4px 12px;font-size:12px;">↻</button>
     <span class="pulse"></span>

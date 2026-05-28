@@ -2527,6 +2527,63 @@ function renderOauthBanner(overview) {
   }
 }
 
+// Per-runtime sparkline of recent runs (#2196 item #4). Hides the card
+// when no runtime has dots, so a clean install never shows an empty box.
+async function loadHealthTimeline() {
+  var card = document.getElementById('health-timeline-card');
+  var body = document.getElementById('health-timeline-body');
+  if (!card || !body) return;
+  var data;
+  try {
+    var resp = await fetch('/api/health-timeline');
+    if (!resp.ok) { card.style.display = 'none'; return; }
+    data = await resp.json();
+  } catch (e) { card.style.display = 'none'; return; }
+  var runtimes = (data && data.runtimes) || [];
+  if (!runtimes.length || !runtimes.some(function(r){ return (r.dots||[]).length; })) {
+    card.style.display = 'none';
+    return;
+  }
+  var sevColor = {
+    red:    'var(--err, #ef4444)',
+    yellow: 'var(--warn, #eab308)',
+    green:  'var(--ok, #22c55e)'
+  };
+  var html = '';
+  runtimes.forEach(function (r) {
+    var dots = r.dots || [];
+    if (!dots.length) return;
+    var dotsHtml = dots.map(function (d) {
+      var bits = [];
+      if (d.error_count) bits.push(d.error_count + ' err');
+      if (d.flag_count)  bits.push(d.flag_count + ' flag');
+      if (d.cost_usd)    bits.push('$' + (d.cost_usd < 0.01 ? d.cost_usd.toFixed(4) : d.cost_usd.toFixed(2)));
+      var when = d.started_at ? new Date(d.started_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '?';
+      var tip = when + (bits.length ? ' · ' + bits.join(' · ') : ' · ok');
+      var fill = sevColor[d.severity] || sevColor.green;
+      return '<span title="' + tip.replace(/"/g,'&quot;') + '" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + fill + ';margin-right:3px;"></span>';
+    }).join('');
+    var summary = dots.length + ' runs';
+    var reds = dots.filter(function (d) { return d.severity === 'red'; }).length;
+    if (reds) summary += ', ' + reds + ' err';
+    html += '<div style="display:grid;grid-template-columns:140px 1fr auto;align-items:center;gap:10px;padding:4px 0;">'
+         +    '<div style="font-size:12px;color:var(--text-primary);font-weight:600;">' + escapeHtmlSafe(r.runtime) + '</div>'
+         +    '<div style="line-height:1;">' + dotsHtml + '</div>'
+         +    '<div style="font-size:11px;color:var(--text-muted);">' + summary + '</div>'
+         +  '</div>';
+  });
+  body.innerHTML = html;
+  card.style.display = '';
+}
+
+// Minimal HTML escape for the runtime label; the rest of the values are
+// hand-built from numbers/timestamps so they're safe without escaping.
+function escapeHtmlSafe(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 // #1969: coalesce concurrent + back-to-back loadAll() callers. Heartbeat-
 // landed handlers, connection-restored, switchTab('overview'), and the
 // periodic refresh interval can all fire within the same second; pre-fix
@@ -2590,6 +2647,9 @@ async function loadAll() {
       // Keep UI responsive with placeholder values until next refresh.
       loadMiniWidgets(overview, {todayCost:0, weekCost:0, monthCost:0, month:0, today:0});
     }
+    // Health timeline (#2196 item #4) — fire-and-forget; renderer hides the
+    // card if there's nothing to show.
+    try { loadHealthTimeline(); } catch (e) {}
     return true;
   } catch (e) {
     console.error('Initial load failed', e);
