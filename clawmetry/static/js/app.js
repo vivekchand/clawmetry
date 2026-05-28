@@ -97,7 +97,7 @@ async function loadBudgetConfig() {
         var note = document.createElement('div');
         note.id = upsellId;
         note.style.cssText = 'margin-top:6px;padding:8px 10px;background:var(--bg-tertiary);border:1px solid var(--border-primary);border-radius:6px;font-size:12px;color:var(--text-secondary);';
-        note.innerHTML = '<span style="font-weight:600;color:var(--text-primary);">Auto-pause is a Cloud Pro feature.</span> '
+        note.innerHTML = '<span style="font-weight:600;color:var(--text-primary);">' + t("app.auto_pause_is_a_cloud_pro_feature", null, "Auto-pause is a Cloud Pro feature.") + '</span> '
           + 'Budget warnings still fire here. To stop the gateway automatically at 100%, '
           + '<a href="https://app.clawmetry.com/upgrade" target="_blank" rel="noopener" style="color:var(--bg-accent);text-decoration:underline;font-weight:600;">start a 7-day free trial</a>.';
         if (apEl.parentNode) apEl.parentNode.appendChild(note);
@@ -186,7 +186,7 @@ async function loadAlertRules() {
     // (no OTLP installed — the audience PR #1410 unbroke).
     var comms = (data && data._comms) || {};
     if(rules.length === 0) {
-      document.getElementById('alert-rules-list').innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);">No alert rules configured</div>';
+      document.getElementById('alert-rules-list').innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);">' + t("app.no_alert_rules_configured", null, "No alert rules configured") + '</div>';
       return;
     }
     var html = '';
@@ -305,7 +305,7 @@ async function loadAlertHistory() {
     var data = await fetch('/api/alerts/history?limit=50').then(function(r){return r.json();});
     var alerts = data.alerts || [];
     if(alerts.length === 0) {
-      document.getElementById('alert-history-list').innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);">No alerts fired yet</div>';
+      document.getElementById('alert-history-list').innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);">' + t("app.no_alerts_fired_yet", null, "No alerts fired yet") + '</div>';
       return;
     }
     var html = '';
@@ -579,7 +579,7 @@ async function loadAnomalyPanel() {
     var listEl = document.getElementById('anomaly-list');
     if (!listEl) return;
     if (anomalies.length === 0) {
-      listEl.innerHTML = '<div style="text-align:center;padding:16px;color:var(--text-muted);font-size:12px;">No anomalies in last 48h. Baselines from 7-day rolling window.</div>';
+      listEl.innerHTML = '<div style="text-align:center;padding:16px;color:var(--text-muted);font-size:12px;">' + t("app.no_anomalies_in_last_48h_baselines_from_7_day_roll", null, "No anomalies in last 48h. Baselines from 7-day rolling window.") + '</div>';
       return;
     }
 
@@ -856,9 +856,9 @@ async function loadTelegramConfig() {
     if(cfg.telegram_chat_id) chatEl.value = cfg.telegram_chat_id;
     var statusEl = document.getElementById('tg-status');
     if(cfg.telegram_bot_token && cfg.telegram_chat_id) {
-      statusEl.innerHTML = '<span style="color:var(--text-success);">Configured</span>';
+      statusEl.innerHTML = '<span style="color:var(--text-success);">' + t("app.configured", null, "Configured") + '</span>';
     } else {
-      statusEl.innerHTML = '<span style="color:var(--text-muted);">Not configured</span>';
+      statusEl.innerHTML = '<span style="color:var(--text-muted);">' + t("app.not_configured", null, "Not configured") + '</span>';
     }
   } catch(e) {}
 }
@@ -871,22 +871,22 @@ async function saveTelegramConfig() {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({telegram_bot_token: token, telegram_chat_id: chatId})
   });
-  document.getElementById('tg-status').innerHTML = '<span style="color:var(--text-success);">Saved!</span>';
+  document.getElementById('tg-status').innerHTML = '<span style="color:var(--text-success);">' + t("app.saved", null, "Saved!") + '</span>';
 }
 
 async function testTelegram() {
   var statusEl = document.getElementById('tg-status');
-  statusEl.innerHTML = '<span style="color:var(--text-muted);">Sending...</span>';
+  statusEl.innerHTML = '<span style="color:var(--text-muted);">' + t("app.sending", null, "Sending...") + '</span>';
   try {
     var r = await fetch('/api/budget/test-telegram', {method: 'POST'});
     var data = await r.json();
     if(data.ok) {
-      statusEl.innerHTML = '<span style="color:var(--text-success);">Test sent!</span>';
+      statusEl.innerHTML = '<span style="color:var(--text-success);">' + t("app.test_sent", null, "Test sent!") + '</span>';
     } else {
       statusEl.innerHTML = '<span style="color:var(--text-error);">' + escHtml(data.error || 'Failed') + '</span>';
     }
   } catch(e) {
-    statusEl.innerHTML = '<span style="color:var(--text-error);">Request failed</span>';
+    statusEl.innerHTML = '<span style="color:var(--text-error);">' + t("app.request_failed", null, "Request failed") + '</span>';
   }
 }
 
@@ -1029,7 +1029,7 @@ async function loadContextEconomics() {
 
   // ── Utilization gauge over time (sparkline-style bars) ──
   if (util.length === 0) {
-    gaugeEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">No context-window readings yet. Once your agents take a few turns, per-turn utilization appears here.</div>';
+    gaugeEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">' + t("app.no_context_window_readings_yet_once_your_agents_ta", null, "No context-window readings yet. Once your agents take a few turns, per-turn utilization appears here.") + '</div>';
   } else {
     var maxPct = Math.max(100, util.reduce(function(m, u){ return Math.max(m, Number(u.pct || 0)); }, 0));
     var g = '<div style="border:1px solid var(--border-primary);border-radius:10px;padding:14px;">';
@@ -1493,7 +1493,7 @@ async function loadAutonomy() {
         });
         svgEl.innerHTML = svgContent;
       } else {
-        svgEl.innerHTML = '<text x="80" y="28" text-anchor="middle" fill="var(--text-muted)" font-size="10">Not enough data yet</text>';
+        svgEl.innerHTML = '<text x="80" y="28" text-anchor="middle" fill="var(--text-muted)" font-size="10">' + t("app.not_enough_data_yet", null, "Not enough data yet") + '</text>';
       }
     }
   } catch(e) {
@@ -1601,7 +1601,7 @@ async function loadHeartbeat() {
         return '<span title="' + title + '" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + cc + ';"></span>';
       }).join('');
     } else if (sparkEl) {
-      sparkEl.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">none yet</span>';
+      sparkEl.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">' + t("app.none_yet", null, "none yet") + '</span>';
     }
   } catch(e) { console.warn('heartbeat panel load failed', e); }
 }
@@ -1685,7 +1685,7 @@ async function loadSelfConfig() {
     tracked.forEach(function(t) { _selfconfigTrackedMeta[t.name] = t; });
 
     if (!realFiles.length) {
-      inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">No markdown files yet.</span>';
+      inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">' + t("app.no_markdown_files_yet", null, "No markdown files yet.") + '</span>';
       return;
     }
 
@@ -1807,7 +1807,7 @@ async function _selfconfigRenderTimeline(filename) {
   if (!wrap || !list) return;
   wrap.style.display = 'block';
   if (heading) heading.textContent = 'History \u00B7 ' + filename;
-  list.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">Loading...</span>';
+  list.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">' + t("app.loading", null, "Loading...") + '</span>';
   try {
     var d = await (typeof fetchJsonWithTimeout === 'function'
       ? fetchJsonWithTimeout('/api/selfconfig/' + encodeURIComponent(filename), 5000)
@@ -1945,7 +1945,7 @@ async function _selfconfigRenderReader(filename, ts) {
       if (!d.exists && ts == null) {
         bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">This file hasn\u2019t been created yet. Click <strong>Edit</strong> above to write the first version.</div>';
       } else if (!d.content || !d.content.trim()) {
-        bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">This file is empty.</div>';
+        bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">' + t("app.this_file_is_empty", null, "This file is empty.") + '</div>';
       } else {
         // Show raw markdown source, not rendered HTML — these files ARE the
         // agent's source-of-truth and editing them has agent-behaviour
@@ -2134,7 +2134,7 @@ async function loadSkills() {
   // interceptor (the daemon ships snapshot.skills). When the snapshot is cold
   // the route is oss-passthrough and returns an empty list (graceful), so the
   // fetch is safe in cloud too — no more "local-only" dead end.
-  listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div>';
+  listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">' + t("app.loading", null, "Loading...") + '</div>';
   try {
     var data = await fetch('/api/skills').then(function(r) { return r.json(); });
     var skills = data.skills || [];
@@ -2224,8 +2224,8 @@ async function openSkillBrowser(skillName) {
 
   listEl.style.display = 'none';
   browserEl.style.display = '';
-  treeEl.innerHTML = '<div style="padding:12px;color:var(--text-muted);">Loading...</div>';
-  contentEl.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:60px;">Loading skill...</div>';
+  treeEl.innerHTML = '<div style="padding:12px;color:var(--text-muted);">' + t("app.loading", null, "Loading...") + '</div>';
+  contentEl.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:60px;">' + t("app.loading_skill", null, "Loading skill...") + '</div>';
 
   try {
     var data = await fetch('/api/skills/' + encodeURIComponent(skillName)).then(function(r) { return r.json(); });
@@ -2262,7 +2262,7 @@ async function openSkillBrowser(skillName) {
 async function loadSkillFile(skillName, filePath) {
   var contentEl = document.getElementById('skills-browser-content');
   if (!contentEl) return;
-  contentEl.innerHTML = '<div style="color:var(--text-muted);padding:20px;">Loading...</div>';
+  contentEl.innerHTML = '<div style="color:var(--text-muted);padding:20px;">' + t("app.loading", null, "Loading...") + '</div>';
 
   try {
     var data = await fetch('/api/skills/' + encodeURIComponent(skillName) + '/file?path=' + encodeURIComponent(filePath)).then(function(r) { return r.json(); });
@@ -2608,8 +2608,8 @@ async function submitCompare() {
   var a = (document.getElementById('compare-input-a').value || '').trim();
   var b = (document.getElementById('compare-input-b').value || '').trim();
   var body = document.getElementById('compare-runs-body');
-  if (!a || !b) { body.innerHTML = '<div style="color:var(--err);font-size:12px;">Both session ids are required.</div>'; return; }
-  body.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">Loading…</div>';
+  if (!a || !b) { body.innerHTML = '<div style="color:var(--err);font-size:12px;">' + t("app.both_session_ids_are_required", null, "Both session ids are required.") + '</div>'; return; }
+  body.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">' + t("app.loading_2", null, "Loading…") + '</div>';
   var resp;
   try {
     resp = await fetch('/api/run-compare?a=' + encodeURIComponent(a) + '&b=' + encodeURIComponent(b));
@@ -2626,7 +2626,7 @@ async function submitCompare() {
 
 function renderCompareResult(data) {
   var body = document.getElementById('compare-runs-body');
-  if (!data || !data.a || !data.b) { body.innerHTML = '<div style="color:var(--text-muted);">No data.</div>'; return; }
+  if (!data || !data.a || !data.b) { body.innerHTML = '<div style="color:var(--text-muted);">' + t("app.no_data", null, "No data.") + '</div>'; return; }
   var rows = [
     ['cost_usd', 'Cost'],
     ['total_tokens', 'Tokens'],
@@ -2665,12 +2665,12 @@ async function loadTriageList() {
   var data;
   try {
     var resp = await fetch('/api/error-triage/resolved');
-    if (!resp.ok) { body.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">Triage unavailable.</div>'; return; }
+    if (!resp.ok) { body.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">' + t("app.triage_unavailable", null, "Triage unavailable.") + '</div>'; return; }
     data = await resp.json();
-  } catch (e) { body.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">Triage offline.</div>'; return; }
+  } catch (e) { body.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">' + t("app.triage_offline", null, "Triage offline.") + '</div>'; return; }
   var resolved = (data && data.resolved) || {};
   var keys = Object.keys(resolved);
-  if (!keys.length) { body.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">Nothing resolved yet. Paste an event id above to mute a known error.</div>'; return; }
+  if (!keys.length) { body.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">' + t("app.nothing_resolved_yet_paste_an_event_id_above_to_mu", null, "Nothing resolved yet. Paste an event id above to mute a known error.") + '</div>'; return; }
   // Sort most-recent-first by resolved_at.
   keys.sort(function (a, b) { return (resolved[b].resolved_at || 0) - (resolved[a].resolved_at || 0); });
   var html = '<div style="display:grid;grid-template-columns:1fr 2fr auto auto;gap:8px;font-size:12px;">'
@@ -3081,7 +3081,7 @@ async function loadSubAgents() {
   } catch(e) {
     document.getElementById('subagents-count').textContent = '?';
     document.getElementById('subagents-status').textContent = t("app.error_loading_sub_agents", null, "Error loading sub-agents");
-    document.getElementById('subagents-preview').innerHTML = '<div style="color:#e74c3c;font-size:11px;">Failed to load workforce</div>';
+    document.getElementById('subagents-preview').innerHTML = '<div style="color:#e74c3c;font-size:11px;">' + t("app.failed_to_load_workforce", null, "Failed to load workforce") + '</div>';
   }
 }
 
@@ -3323,7 +3323,7 @@ async function loadActivityStream() {
     
     document.getElementById('activity-stream').innerHTML = html;
   } catch(e) {
-    document.getElementById('activity-stream').innerHTML = '<div style="color:#666;">Error loading activity stream</div>';
+    document.getElementById('activity-stream').innerHTML = '<div style="color:#666;">' + t("app.error_loading_activity_stream", null, "Error loading activity stream") + '</div>';
   }
 }
 
@@ -4416,7 +4416,7 @@ function loadReasoningChain(sessionId, containerId) {
       var chains = data.chains || [];
       var summary = data.summary || {};
       if (!chains.length) {
-        container.innerHTML = '<span style="color:var(--text-muted);font-size:10px;">No reasoning chains found.</span>';
+        container.innerHTML = '<span style="color:var(--text-muted);font-size:10px;">' + t("app.no_reasoning_chains_found", null, "No reasoning chains found.") + '</span>';
         return;
       }
       var html = '';
@@ -4464,7 +4464,7 @@ function loadReasoningChain(sessionId, containerId) {
       container.innerHTML = html;
     })
     .catch(function(err) {
-      container.innerHTML = '<span style="color:#ef4444;font-size:10px;">Error loading reasoning chain.</span>';
+      container.innerHTML = '<span style="color:#ef4444;font-size:10px;">' + t("app.error_loading_reasoning_chain", null, "Error loading reasoning chain.") + '</span>';
     });
 }
 
@@ -4585,7 +4585,7 @@ function loadLlmCallTimeline(eventId, sessionId, containerId) {
     container.dataset.loaded = '0';
     return;
   }
-  container.innerHTML = '<span style="color:var(--text-muted);font-size:10px;">Loading timeline…</span>';
+  container.innerHTML = '<span style="color:var(--text-muted);font-size:10px;">' + t("app.loading_timeline", null, "Loading timeline…") + '</span>';
   var url = '/api/llm-call-timeline/' + encodeURIComponent(eventId);
   if (sessionId) url += '?session_id=' + encodeURIComponent(sessionId);
   fetch(url)
@@ -5255,7 +5255,7 @@ function _updateBrainLiveIndicator(connected) {
   if (connected) {
     el.innerHTML = '<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(34,197,94,0.15);color:#22c55e;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:700;"><span style="width:7px;height:7px;border-radius:50%;background:#22c55e;animation:livePulse 1.5s ease-in-out infinite;"></span> LIVE</span>';
   } else {
-    el.innerHTML = '<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(100,100,100,0.15);color:#888;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:600;">● POLLING</span>';
+    el.innerHTML = '<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(100,100,100,0.15);color:#888;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:600;">' + t("app.polling", null, "● POLLING") + '</span>';
   }
 }
 
@@ -5654,7 +5654,7 @@ window.advisorAsk = async function () {
   if (!q || !wrap || !out) return;
   wrap.style.display = '';
   if (qEl) qEl.textContent = '› ' + q;
-  out.innerHTML = '<span style="color:#a855f7;">Thinking…</span>';
+  out.innerHTML = '<span style="color:#a855f7;">' + t("app.thinking", null, "Thinking…") + '</span>';
   if (metaEl) metaEl.textContent = '';
   try {
     var resp = await fetch('/api/advisor/ask', {
@@ -6251,7 +6251,7 @@ async function loadSpansPanel() {
   var wrap = document.getElementById('spans-table-wrap');
   var countEl = document.getElementById('spans-count');
   if (!wrap) return;
-  wrap.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:12px;">Loading spans...</div>';
+  wrap.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:12px;">' + t("app.loading_spans", null, "Loading spans...") + '</div>';
   try {
     var resp = await fetch('/api/spans?limit=100');
     var data = await resp.json();
@@ -6380,7 +6380,7 @@ async function loadSecCatalog() {
   try {
     var data = await fetchJsonWithTimeout('/api/security/signatures', 5000);
     var sigs = data.signatures || [];
-    if (sigs.length === 0) { el.innerHTML = '<div style="color:var(--text-muted);font-size:11px;">No signatures loaded</div>'; return; }
+    if (sigs.length === 0) { el.innerHTML = '<div style="color:var(--text-muted);font-size:11px;">' + t("app.no_signatures_loaded", null, "No signatures loaded") + '</div>'; return; }
     var html = '<table style="width:100%;font-size:11px;border-collapse:collapse;">';
     html += '<tr style="color:var(--text-muted);border-bottom:1px solid var(--border);"><th style="text-align:left;padding:4px;">ID</th><th style="text-align:left;padding:4px;">Severity</th><th style="text-align:left;padding:4px;">Description</th><th style="text-align:left;padding:4px;">Pattern</th></tr>';
     sigs.forEach(function(s){
@@ -6490,7 +6490,7 @@ async function loadNemoClaw() {
     var tbl = document.getElementById('nc-policy-table');
     if (tbl) {
       if (netPol.length === 0 && !policy.hash) {
-        tbl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No policy file found at ~/.nemoclaw/source/nemoclaw-blueprint/policies/openclaw-sandbox.yaml</div>';
+        tbl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">' + t("app.no_policy_file_found_at_nemoclaw_source_nemoclaw_b", null, "No policy file found at ~/.nemoclaw/source/nemoclaw-blueprint/policies/openclaw-sandbox.yaml") + '</div>';
       } else if (netPol.length === 0) {
         tbl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">Policy loaded (' + (policy.lines || '?') + ' lines) — no network_policies section found.</div>';
       } else {
@@ -6509,7 +6509,7 @@ async function loadNemoClaw() {
     if (presetsEl) {
       var presets = data.presets || [];
       if (presets.length === 0) {
-        presetsEl.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">None detected</span>';
+        presetsEl.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">' + t("app.none_detected", null, "None detected") + '</span>';
       } else {
         presetsEl.innerHTML = presets.map(function(p) {
           return '<span style="background:rgba(118,185,0,0.1);border:1px solid rgba(118,185,0,0.25);color:#76b900;border-radius:12px;padding:3px 10px;font-size:12px;font-weight:600;">' + escHtml(p) + '</span>';
@@ -6546,7 +6546,7 @@ async function loadNemoClawApprovals() {
   try {
     var data = await fetchJsonWithTimeout('/api/nemoclaw/pending-approvals', 8000);
     if (!data.installed) {
-      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:6px 0;">openshell not available on this host</div>';
+      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:6px 0;">' + t("app.openshell_not_available_on_this_host", null, "openshell not available on this host") + '</div>';
       if (countEl) countEl.style.display = 'none';
       return;
     }
@@ -6560,7 +6560,7 @@ async function loadNemoClawApprovals() {
       }
     }
     if (approvals.length === 0) {
-      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;text-align:center;">✓ No pending requests</div>';
+      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;text-align:center;">' + t("app.no_pending_requests", null, "✓ No pending requests") + '</div>';
       return;
     }
     // Cloud-Pro upsell CTA (issue #1328): backend stamps ``pro_gated_upsell``
@@ -6617,7 +6617,7 @@ async function loadNemoClawApprovals() {
     });
     listEl.innerHTML = html;
   } catch(e) {
-    listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">Failed to load approvals</div>';
+    listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">' + t("app.failed_to_load_approvals", null, "Failed to load approvals") + '</div>';
   }
 }
 
@@ -6638,7 +6638,7 @@ async function loadNemoClawEvents() {
       }
     }
     if (events.length === 0) {
-      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;text-align:center;">No guardrail events recorded yet</div>';
+      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;text-align:center;">' + t("app.no_guardrail_events_recorded_yet", null, "No guardrail events recorded yet") + '</div>';
       return;
     }
     var verdictColor = function(v) { return v === 'triggered' ? '#ef4444' : '#76b900'; };
@@ -6659,7 +6659,7 @@ async function loadNemoClawEvents() {
     html += '</div>';
     listEl.innerHTML = html;
   } catch(e) {
-    listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">Failed to load guardrail events</div>';
+    listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">' + t("app.failed_to_load_guardrail_events", null, "Failed to load guardrail events") + '</div>';
   }
 }
 
@@ -8772,7 +8772,7 @@ function cronToHuman(expr) {
 async function loadLogs() {
   if (window.CLOUD_MODE) {
     var el = document.getElementById('logs-full');
-    if (el) el.innerHTML = '<div style="color:var(--text-secondary);padding:24px;text-align:center;font-size:13px;">Full logs are not available in cloud view. Use the live stream on the Flow tab.</div>';
+    if (el) el.innerHTML = '<div style="color:var(--text-secondary);padding:24px;text-align:center;font-size:13px;">' + t("app.full_logs_are_not_available_in_cloud_view_use_the_", null, "Full logs are not available in cloud view. Use the live stream on the Flow tab.") + '</div>';
     return;
   }
   var lines = document.getElementById('log-lines').value;
@@ -8888,21 +8888,21 @@ function memorySwitchView(view) {
 async function loadMemoryAccess() {
   var el = document.getElementById('memory-access-list');
   if (!el) return;
-  el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">Loading memory accesses…</div>';
+  el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.loading_memory_accesses", null, "Loading memory accesses…") + '</div>';
   var data;
   try {
     data = await fetch('/api/memory-access?limit=300').then(function(r){ return r.json(); });
   } catch (e) {
-    el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">Could not load memory accesses.</div>';
+    el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.could_not_load_memory_accesses", null, "Could not load memory accesses.") + '</div>';
     return;
   }
   if (!data || data.available === false) {
-    el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-secondary);font-size:13px;">Memory access history reads from the local event store, which is not available here.</div>';
+    el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-secondary);font-size:13px;">' + t("app.memory_access_history_reads_from_the_local_event_s", null, "Memory access history reads from the local event store, which is not available here.") + '</div>';
     return;
   }
   var rows = data.accesses || [];
   if (!rows.length) {
-    el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-secondary);font-size:13px;">No memory accesses recorded yet. They appear here once your agent reads its memory.</div>';
+    el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-secondary);font-size:13px;">' + t("app.no_memory_accesses_recorded_yet_they_appear_here_o", null, "No memory accesses recorded yet. They appear here once your agent reads its memory.") + '</div>';
     return;
   }
   var html = '<div style="display:flex;flex-direction:column;">';
@@ -8997,16 +8997,16 @@ async function loadTurnAnatomy() {
   var el = document.getElementById('ta-list');
   if (!el) return;
   el.style.cssText = '';
-  el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">Loading sessions&hellip;</div>';
+  el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.loading_sessions_hellip", null, "Loading sessions&hellip;") + '</div>';
   var data;
   try {
     data = await fetch('/api/traces?limit=200').then(function(r){ return r.json(); });
   } catch (e) {
-    el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">Could not load sessions.</div>';
+    el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.could_not_load_sessions", null, "Could not load sessions.") + '</div>';
     return;
   }
   if (!data || data.available === false) {
-    el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-secondary);font-size:13px;">Turn anatomy reads from the local event store, which is not available here.</div>';
+    el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-secondary);font-size:13px;">' + t("app.turn_anatomy_reads_from_the_local_event_store_whic", null, "Turn anatomy reads from the local event store, which is not available here.") + '</div>';
     return;
   }
   var traces = (data.traces || []).slice().sort(function(a, b){ return (b.start_ms || 0) - (a.start_ms || 0); });
@@ -9089,17 +9089,17 @@ async function viewTurnAnatomy(sessionId) {
   if (back) back.style.display = '';
   var meta = document.getElementById('ta-detail-meta');
   var turnsEl = document.getElementById('ta-turns');
-  if (meta) meta.innerHTML = '<div style="color:var(--text-muted);font-size:13px;">Loading turns&hellip;</div>';
+  if (meta) meta.innerHTML = '<div style="color:var(--text-muted);font-size:13px;">' + t("app.loading_turns_hellip", null, "Loading turns&hellip;") + '</div>';
   if (turnsEl) turnsEl.innerHTML = '';
   var data;
   try {
     data = await fetch('/api/turn-anatomy?session_id=' + encodeURIComponent(sessionId)).then(function(r){ return r.json(); });
   } catch (e) {
-    if (meta) meta.innerHTML = '<div style="color:var(--text-muted);font-size:13px;">Could not load turns.</div>';
+    if (meta) meta.innerHTML = '<div style="color:var(--text-muted);font-size:13px;">' + t("app.could_not_load_turns", null, "Could not load turns.") + '</div>';
     return;
   }
   if (!data || data.available === false) {
-    if (meta) meta.innerHTML = '<div style="color:var(--text-secondary);font-size:13px;">Event store not available here.</div>';
+    if (meta) meta.innerHTML = '<div style="color:var(--text-secondary);font-size:13px;">' + t("app.event_store_not_available_here", null, "Event store not available here.") + '</div>';
     return;
   }
   var turns = data.turns || [];
@@ -9108,7 +9108,7 @@ async function viewTurnAnatomy(sessionId) {
       + '<div style="font-size:12px;color:var(--text-muted);margin-top:4px;">' + turns.length + ' turn' + (turns.length === 1 ? '' : 's') + '</div>';
   }
   if (!turns.length) {
-    if (turnsEl) turnsEl.innerHTML = '<div class="card" style="padding:18px;color:var(--text-muted);">No turns in this session.</div>';
+    if (turnsEl) turnsEl.innerHTML = '<div class="card" style="padding:18px;color:var(--text-muted);">' + t("app.no_turns_in_this_session", null, "No turns in this session.") + '</div>';
     return;
   }
   if (turnsEl) turnsEl.innerHTML = turns.map(_taRenderTurn).join('');
@@ -9155,21 +9155,21 @@ async function loadTracing() {
   tracingShowList();
   var el = document.getElementById('trace-list');
   if (!el) return;
-  el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">Loading traces&hellip;</div>';
+  el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.loading_traces_hellip", null, "Loading traces&hellip;") + '</div>';
   var data;
   try {
     data = await fetch('/api/traces?limit=200').then(function(r){ return r.json(); });
   } catch (e) {
-    el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">Could not load traces.</div>';
+    el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.could_not_load_traces", null, "Could not load traces.") + '</div>';
     return;
   }
   if (!data || data.available === false) {
-    el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-secondary);font-size:13px;">Traces read from the local event store, which is not available here.</div>';
+    el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-secondary);font-size:13px;">' + t("app.traces_read_from_the_local_event_store_which_is_no", null, "Traces read from the local event store, which is not available here.") + '</div>';
     return;
   }
   window._allTraces = data.traces || [];
   if (!window._allTraces.length) {
-    el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-secondary);font-size:13px;">No traces yet. They appear here once your agent runs.</div>';
+    el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-secondary);font-size:13px;">' + t("app.no_traces_yet_they_appear_here_once_your_agent_run", null, "No traces yet. They appear here once your agent runs.") + '</div>';
     return;
   }
   el.style.cssText = 'padding:0;overflow:hidden;';
@@ -9271,7 +9271,7 @@ async function viewTrace(traceId) {
   if (back) back.style.display = '';
   // Reset left-pane loading state + right-pane placeholder until spans land.
   var tg = document.getElementById('trace-treegantt');
-  if (tg) tg.innerHTML = '<div style="padding:18px;color:var(--text-muted);">Loading trace&hellip;</div>';
+  if (tg) tg.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.loading_trace_hellip", null, "Loading trace&hellip;") + '</div>';
   var pane = document.getElementById('trace-span-pane');
   if (pane) pane.innerHTML = '<div style="color:var(--text-muted);font-size:12px;text-align:center;padding:32px 14px;">Select a span on the left to see its <b>Chat</b>, <b>Inputs</b>, <b>Outputs</b>, <b>Attributes</b>, and <b>Events</b>.</div>';
   window._traceActiveSpanId = null;
@@ -9280,7 +9280,7 @@ async function viewTrace(traceId) {
   try {
     data = await fetch('/api/trace/' + encodeURIComponent(traceId)).then(function(r){ return r.json(); });
   } catch (e) {
-    if (tg) tg.innerHTML = '<div style="padding:18px;color:var(--text-muted);">Could not load trace.</div>';
+    if (tg) tg.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.could_not_load_trace", null, "Could not load trace.") + '</div>';
     return;
   }
   window._traceData = data;
@@ -9351,7 +9351,7 @@ function tracingSwitchView(view) {
 function _traceRenderTreeGantt(spans, roots) {
   var el = document.getElementById('trace-treegantt');
   if (!el) return;
-  if (!spans.length) { el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">No spans in this trace.</div>'; return; }
+  if (!spans.length) { el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.no_spans_in_this_trace", null, "No spans in this trace.") + '</div>'; return; }
 
   // Trace timeline = earliest start → latest (start + duration).
   var t0 = Infinity, t1 = 0;
@@ -9442,7 +9442,7 @@ function _traceRenderTreeGantt(spans, roots) {
 function _traceRenderWaterfall(spans) {
   var el = document.getElementById('trace-waterfall');
   if (!el) return;
-  if (!spans.length) { el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">No spans in this trace.</div>'; return; }
+  if (!spans.length) { el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.no_spans_in_this_trace", null, "No spans in this trace.") + '</div>'; return; }
   var ordered = spans.slice().sort(function(a, b){ return (a.start_ms || 0) - (b.start_ms || 0); });
   var t0 = ordered[0].start_ms || 0;
   var t1 = 0;
@@ -9469,7 +9469,7 @@ function _traceRenderWaterfall(spans) {
 function _traceRenderTree(spans, roots) {
   var el = document.getElementById('trace-tree');
   if (!el) return;
-  if (!spans.length) { el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">No spans in this trace.</div>'; return; }
+  if (!spans.length) { el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.no_spans_in_this_trace", null, "No spans in this trace.") + '</div>'; return; }
   var byId = {}; spans.forEach(function(s){ byId[s.span_id] = s; });
   var children = {};
   spans.forEach(function(s) {
@@ -9503,7 +9503,7 @@ function _traceRenderGraph(graph) {
   var el = document.getElementById('trace-graph');
   if (!el) return;
   var nodes = graph.nodes || [];
-  if (!nodes.length) { el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">No agents in this trace.</div>'; return; }
+  if (!nodes.length) { el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.no_agents_in_this_trace", null, "No agents in this trace.") + '</div>'; return; }
   var html = '<div style="display:flex;align-items:center;gap:0;flex-wrap:wrap;padding:20px;">';
   nodes.forEach(function(n, i) {
     var color = n.kind === 'subagent' ? '#f59e0b' : '#6366f1';
@@ -9765,7 +9765,7 @@ async function loadMemory() {
 async function _loadMemoryAllFiles() {
   if (window.CLOUD_MODE) {
     var el = document.getElementById('memory-list');
-    if (el) el.innerHTML = '<div style="color:var(--text-secondary);padding:24px;text-align:center;font-size:13px;">Memory files are stored locally on the agent machine and are not synced to cloud.</div>';
+    if (el) el.innerHTML = '<div style="color:var(--text-secondary);padding:24px;text-align:center;font-size:13px;">' + t("app.memory_files_are_stored_locally_on_the_agent_machi", null, "Memory files are stored locally on the agent machine and are not synced to cloud.") + '</div>';
     return;
   }
   loadMemoryAnalytics();
@@ -9909,7 +9909,7 @@ async function _loadGatewayHealthSparkline() {
     rows = [];
   }
   if (!Array.isArray(rows) || rows.length === 0) {
-    el.innerHTML = '<div style="font-size:10px;color:var(--text-muted);font-style:italic;opacity:0.7;">Sparkline available after daemon captures 24h of samples.</div>';
+    el.innerHTML = '<div style="font-size:10px;color:var(--text-muted);font-style:italic;opacity:0.7;">' + t("app.sparkline_available_after_daemon_captures_24h_of_s", null, "Sparkline available after daemon captures 24h of samples.") + '</div>';
     return;
   }
   // Only keep rows with a numeric rss_mb — daemon may have written
@@ -9919,7 +9919,7 @@ async function _loadGatewayHealthSparkline() {
     return r && typeof r.rss_mb === 'number';
   });
   if (pts.length === 0) {
-    el.innerHTML = '<div style="font-size:10px;color:var(--text-muted);font-style:italic;opacity:0.7;">Sparkline available after daemon captures 24h of samples.</div>';
+    el.innerHTML = '<div style="font-size:10px;color:var(--text-muted);font-style:italic;opacity:0.7;">' + t("app.sparkline_available_after_daemon_captures_24h_of_s", null, "Sparkline available after daemon captures 24h of samples.") + '</div>';
     return;
   }
   var W = 240, H = 36, pad = 2;
@@ -10491,7 +10491,7 @@ async function loadDiagnostics() {
   // URLs, which the browser logs as console errors on every System Health
   // refresh. Skip the call entirely and render a static "local-only" note.
   if (window.CLOUD_MODE) {
-    el.innerHTML = '<div style="color:var(--text-muted);">Diagnostics are local-only — open the dashboard on the host to inspect detected config.</div>';
+    el.innerHTML = '<div style="color:var(--text-muted);">' + t("app.diagnostics_are_local_only_open_the_dashboard_on_t", null, "Diagnostics are local-only — open the dashboard on the host to inspect detected config.") + '</div>';
     return true;
   }
   try {
@@ -10521,7 +10521,7 @@ async function loadDiagnostics() {
     return true;
   } catch (e) {
     console.warn('diagnostics load failed', e);
-    el.innerHTML = '<div style="color:var(--text-muted);">Unable to load diagnostics right now</div>';
+    el.innerHTML = '<div style="color:var(--text-muted);">' + t("app.unable_to_load_diagnostics_right_now", null, "Unable to load diagnostics right now") + '</div>';
     return false;
   }
 }
@@ -10661,7 +10661,7 @@ async function loadHeatmap(days) {
     if (legend) legend.innerHTML = 'Less <div class="heatmap-legend-cell" style="background:#12122a"></div><div class="heatmap-legend-cell" style="background:#1a3a2a"></div><div class="heatmap-legend-cell" style="background:#2a6a3a"></div><div class="heatmap-legend-cell" style="background:#4a9a2a"></div><div class="heatmap-legend-cell" style="background:#6adb3a"></div> More';
   } catch(e) {
     var grid2 = document.getElementById('heatmap-grid');
-    if (grid2) grid2.innerHTML = '<span style="color:#555">No activity data</span>';
+    if (grid2) grid2.innerHTML = '<span style="color:#555">' + t("app.no_activity_data", null, "No activity data") + '</span>';
   }
 }
 
@@ -10764,14 +10764,14 @@ async function loadUsage() {
       renderSessionCostChart();
     }).catch(function() {
       var el = document.getElementById('usage-session-cost-table');
-      if (el) el.innerHTML = '<span style="color:var(--text-muted)">No session cost data available</span>';
+      if (el) el.innerHTML = '<span style="color:var(--text-muted)">' + t("app.no_session_cost_data_available", null, "No session cost data available") + '</span>';
     });
     // Load trace clusters
     fetch('/api/sessions/clusters').then(r => r.json()).then(function(cd) {
       renderTraceClusters(cd.clusters || [], cd.total_sessions || 0);
     }).catch(function() {
       var el = document.getElementById('trace-clusters-content');
-      if (el) el.innerHTML = '<span style="color:var(--text-muted)">No cluster data available</span>';
+      if (el) el.innerHTML = '<span style="color:var(--text-muted)">' + t("app.no_cluster_data_available", null, "No cluster data available") + '</span>';
     });
     // Load cost comparison panel (GH#554)
     loadCostComparison();
@@ -10787,7 +10787,7 @@ async function loadUsage() {
     // user has tripped the 1000-events/day ceiling.
     _refreshNemoCapBanner('usage-chart');
   } catch(e) {
-    document.getElementById('usage-chart').innerHTML = '<span style="color:#555">No usage data available</span>';
+    document.getElementById('usage-chart').innerHTML = '<span style="color:#555">' + t("app.no_usage_data_available", null, "No usage data available") + '</span>';
   }
 }
 
@@ -10977,7 +10977,7 @@ function renderProviderCostChart(providers) {
   var el = document.getElementById('provider-cost-chart');
   if (!el) return;
   if (!providers || providers.length === 0) {
-    el.innerHTML = '<span style="color:var(--text-muted);">No provider cost data yet — start using models from multiple providers.</span>';
+    el.innerHTML = '<span style="color:var(--text-muted);">' + t("app.no_provider_cost_data_yet_start_using_models_from_", null, "No provider cost data yet — start using models from multiple providers.") + '</span>';
     return;
   }
   var providerColors = {
@@ -11041,7 +11041,7 @@ function renderCostComparison(data) {
   var actualModel = actual.model || 'current model';
   var actualTokens = actual.tokens || 0;
   if (actualTokens === 0) {
-    el.innerHTML = '<span style="color:var(--text-muted)">No token data for the last 30 days — usage will appear here once available.</span>';
+    el.innerHTML = '<span style="color:var(--text-muted)">' + t("app.no_token_data_for_the_last_30_days_usage_will_appe", null, "No token data for the last 30 days — usage will appear here once available.") + '</span>';
     return;
   }
   var providerColors = {
@@ -11110,7 +11110,7 @@ function renderSpendOptimization(data) {
   if (!el) return;
   var recs = data.recommendations || [];
   if (recs.length === 0) {
-    el.innerHTML = '<span style="color:var(--text-muted)">No optimization suggestions yet — run more agents with span data enabled to see recommendations.</span>';
+    el.innerHTML = '<span style="color:var(--text-muted)">' + t("app.no_optimization_suggestions_yet_run_more_agents_wi", null, "No optimization suggestions yet — run more agents with span data enabled to see recommendations.") + '</span>';
     return;
   }
   var totalSave = data.total_projected_savings_usd_30d || 0;
@@ -11192,7 +11192,7 @@ function renderTraceClusters(clusters, totalSessions) {
   var el = document.getElementById('trace-clusters-content');
   if (!el) return;
   if (!clusters || clusters.length === 0) {
-    el.innerHTML = '<span style="color:var(--text-muted)">No sessions to cluster yet</span>';
+    el.innerHTML = '<span style="color:var(--text-muted)">' + t("app.no_sessions_to_cluster_yet", null, "No sessions to cluster yet") + '</span>';
     return;
   }
   var categoryIcons = {
@@ -11241,7 +11241,7 @@ function renderSessionCostChart() {
     ctx.font = '13px monospace';
     ctx.textAlign = 'center';
     ctx.fillText('No session cost data', W/2, H/2);
-    if (tableEl) tableEl.innerHTML = '<span style="color:var(--text-muted)">No sessions found</span>';
+    if (tableEl) tableEl.innerHTML = '<span style="color:var(--text-muted)">' + t("app.no_sessions_found", null, "No sessions found") + '</span>';
     return;
   }
   var maxCost = Math.max.apply(null, rows.map(function(r) { return r.cost_usd || 0; })) || 0.001;
@@ -11319,7 +11319,7 @@ function renderPluginPieChart(rows) {
   if (!data.length) {
     var ctxEmpty = canvas.getContext('2d');
     ctxEmpty.clearRect(0, 0, canvas.width, canvas.height);
-    legend.innerHTML = '<div style="color:var(--text-muted);">No plugin tool-call attribution detected yet.</div>';
+    legend.innerHTML = '<div style="color:var(--text-muted);">' + t("app.no_plugin_tool_call_attribution_detected_yet", null, "No plugin tool-call attribution detected yet.") + '</div>';
     return;
   }
 
@@ -11527,7 +11527,7 @@ async function loadSkillAttribution() {
     var totalCost = data.total_cost || 0;
     function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
     if (top5.length === 0) {
-      el.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">No skill invocations detected yet. Skills are detected when SKILL.md files are read during sessions.</span>';
+      el.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">' + t("app.no_skill_invocations_detected_yet_skills_are_detec", null, "No skill invocations detected yet. Skills are detected when SKILL.md files are read during sessions.") + '</span>';
       return;
     }
     var html = '<table class="usage-table" style="width:100%;">';
@@ -11548,7 +11548,7 @@ async function loadSkillAttribution() {
     html += '<div style="margin-top:8px;font-size:11px;color:var(--text-muted);">All-time total: ' + fmtCost(totalCost) + ' · ' + escHtml(data.note || '') + '</div>';
     el.innerHTML = html;
   } catch(e) {
-    if (el) el.innerHTML = '<span style="color:var(--text-muted)">Skill attribution unavailable</span>';
+    if (el) el.innerHTML = '<span style="color:var(--text-muted)">' + t("app.skill_attribution_unavailable", null, "Skill attribution unavailable") + '</span>';
     console.error('loadSkillAttribution', e);
   }
 }
@@ -11677,7 +11677,7 @@ async function loadTranscripts() {
       }
     } catch (e) {}
   } catch(e) {
-    document.getElementById('transcript-list').innerHTML = '<div style="padding:16px;color:#666;">Failed to load transcripts</div>';
+    document.getElementById('transcript-list').innerHTML = '<div style="padding:16px;color:#666;">' + t("app.failed_to_load_transcripts", null, "Failed to load transcripts") + '</div>';
   }
 }
 
@@ -11964,7 +11964,7 @@ function _replayFilteredEvents() {
 function _replayRenderCurrent() {
   var filtered = _replayFilteredEvents();
   if (!filtered.length) {
-    document.getElementById('transcript-messages').innerHTML = '<div style="color:var(--text-muted);padding:16px;">No events match this filter.</div>';
+    document.getElementById('transcript-messages').innerHTML = '<div style="color:var(--text-muted);padding:16px;">' + t("app.no_events_match_this_filter", null, "No events match this filter.") + '</div>';
     document.getElementById('replay-pos').textContent = '0/0';
     return;
   }
@@ -12030,7 +12030,7 @@ async function viewTranscript(sessionId) {
   document.getElementById('transcript-list').style.display = 'none';
   document.getElementById('transcript-viewer').style.display = '';
   document.getElementById('transcript-back-btn').style.display = '';
-  document.getElementById('transcript-messages').innerHTML = '<div style="padding:20px;color:#666;">Loading transcript...</div>';
+  document.getElementById('transcript-messages').innerHTML = '<div style="padding:20px;color:#666;">' + t("app.loading_transcript", null, "Loading transcript...") + '</div>';
   document.getElementById('replay-controls').style.display = 'none';
   // Reset replay state
   window._replayEvents = [];
@@ -12113,10 +12113,10 @@ async function viewTranscript(sessionId) {
       // Reset filter pills to "all"
       replayFilter('all');
     } else {
-      document.getElementById('transcript-messages').innerHTML = '<div style="color:#555;padding:16px;">No messages in this transcript</div>';
+      document.getElementById('transcript-messages').innerHTML = '<div style="color:#555;padding:16px;">' + t("app.no_messages_in_this_transcript", null, "No messages in this transcript") + '</div>';
     }
   } catch(e) {
-    document.getElementById('transcript-messages').innerHTML = '<div style="color:#e74c3c;padding:16px;">Failed to load transcript</div>';
+    document.getElementById('transcript-messages').innerHTML = '<div style="color:#e74c3c;padding:16px;">' + t("app.failed_to_load_transcript", null, "Failed to load transcript") + '</div>';
   }
 }
 
@@ -12339,7 +12339,7 @@ function _cmSyncRender(prog, health) {
     var msg = prog && prog.error
       ? String(prog.error)
       : 'Sync queued ' + (health && health.sync_dlq_depth || 0) + ' batches for retry — the daemon will keep trying.';
-    errBox.innerHTML = '<div style="font-weight:600;margin-bottom:4px;">⚠️ Sync needs attention</div>'
+    errBox.innerHTML = '<div style="font-weight:600;margin-bottom:4px;">' + t("app.sync_needs_attention", null, "⚠️ Sync needs attention") + '</div>'
       + '<div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;white-space:pre-wrap;word-break:break-word;">' + escHtml(msg) + '</div>'
       + '<div style="margin-top:6px;font-size:11px;"><a href="https://github.com/vivekchand/clawmetry#troubleshooting" target="_blank" rel="noopener" style="color:#fca5a5;">Open troubleshooting docs →</a></div>';
     errBox.style.display = 'block';
@@ -12350,7 +12350,7 @@ function _cmSyncRender(prog, health) {
 
   // Hard fail-safe: if no progress for 90s after start, surface an error.
   if (!hasErr && elapsed > 90 && (!prog || !prog.phase)) {
-    errBox.innerHTML = '<div style="font-weight:600;margin-bottom:4px;">⚠️ Sync hasn’t reported progress yet</div>'
+    errBox.innerHTML = '<div style="font-weight:600;margin-bottom:4px;">' + t("app.sync_hasn_t_reported_progress_yet", null, "⚠️ Sync hasn’t reported progress yet") + '</div>'
       + '<div style="font-size:12px;">Check that the daemon is running. On macOS: <code>launchctl kickstart -k gui/$(id -u)/com.clawmetry.sync</code></div>';
     errBox.style.display = 'block';
   }
@@ -12429,7 +12429,7 @@ async function loadSubagents() {
     var agents = data.subagents || [];
     var counts = data.counts || {};
     if (agents.length === 0) {
-      el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:24px;text-align:center;">No sub-agents found. Sub-agents appear here when spawned by the main session.</div>';
+      el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:24px;text-align:center;">' + t("app.no_sub_agents_found_sub_agents_appear_here_when_sp", null, "No sub-agents found. Sub-agents appear here when spawned by the main session.") + '</div>';
       return;
     }
     var byId = {};
@@ -12589,7 +12589,7 @@ function _rlRender() {
   if (!el) return;
   var lanes = _rlData.lanes || [], runs = _rlData.runs || [];
   if (lanes.length === 0 && runs.length === 0) {
-    el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">No background runs yet. Sub-agent, cron and CLI runs from OpenClaw’s task ledger appear here as they execute.</div>';
+    el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">' + t("app.no_background_runs_yet_sub_agent_cron_and_cli_runs", null, "No background runs yet. Sub-agent, cron and CLI runs from OpenClaw’s task ledger appear here as they execute.") + '</div>';
     return;
   }
   function laneColor(lane){ return ({subagent:'#8b5cf6',cron:'#0ea5e9',cli:'#16a34a'})[lane] || '#6b7280'; }
@@ -12797,7 +12797,7 @@ function renderToolCatalog() {
   if (!tableEl || !_toolCatalogData) return;
   var tools = _tcSortTools(_toolCatalogData.tools || []);
   if (tools.length === 0) {
-    tableEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:24px;text-align:center;">No tool calls recorded yet. Tools appear here as the agent invokes them (derived from tool_call &rarr; tool_result event pairs).</div>';
+    tableEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:24px;text-align:center;">' + t("app.no_tool_calls_recorded_yet_tools_appear_here_as_th", null, "No tool calls recorded yet. Tools appear here as the agent invokes them (derived from tool_call &rarr; tool_result event pairs).") + '</div>';
     return;
   }
   var html = '';
@@ -12852,7 +12852,7 @@ async function _tcLoadCalls(name) {
     }
     var calls = data.calls || [];
     if (calls.length === 0) {
-      el.innerHTML = '<div style="padding:4px 0;">No individual calls captured in the recent event window.</div>';
+      el.innerHTML = '<div style="padding:4px 0;">' + t("app.no_individual_calls_captured_in_the_recent_event_w", null, "No individual calls captured in the recent event window.") + '</div>';
       return;
     }
     var rows = '';
@@ -12914,7 +12914,7 @@ async function loadToolPolicy() {
       }
     }
     if (agents.length === 0) {
-      agEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">No tool policy recorded yet. Per-agent sandbox mode and tool allow/deny lists appear here once the sync daemon reads OpenClaw’s effective policy.</div>';
+      agEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">' + t("app.no_tool_policy_recorded_yet_per_agent_sandbox_mode", null, "No tool policy recorded yet. Per-agent sandbox mode and tool allow/deny lists appear here once the sync daemon reads OpenClaw’s effective policy.") + '</div>';
     } else {
       function modePill(mode){
         var m = {off:['#6b7280','var(--bg-secondary)'],'non-main':['#d97706','rgba(217,119,6,.12)'],nonmain:['#d97706','rgba(217,119,6,.12)'],all:['#16a34a','rgba(22,163,74,.12)']};
@@ -13026,7 +13026,7 @@ async function loadToolPolicy() {
       }
     }
     if (agents.length === 0) {
-      agEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">No tool policy recorded yet. Per-agent sandbox mode and tool allow/deny lists appear here once the sync daemon reads OpenClaw’s effective policy.</div>';
+      agEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">' + t("app.no_tool_policy_recorded_yet_per_agent_sandbox_mode", null, "No tool policy recorded yet. Per-agent sandbox mode and tool allow/deny lists appear here once the sync daemon reads OpenClaw’s effective policy.") + '</div>';
     } else {
       function modePill(mode){
         var m = {off:['#6b7280','var(--bg-secondary)'],'non-main':['#d97706','rgba(217,119,6,.12)'],nonmain:['#d97706','rgba(217,119,6,.12)'],all:['#16a34a','rgba(22,163,74,.12)']};
@@ -13107,7 +13107,7 @@ async function loadToolPolicy() {
 async function loadVersionImpact() {
   var el = document.getElementById('version-impact-content');
   if (!el) return;
-  el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading version impact data...</div>';
+  el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">' + t("app.loading_version_impact_data", null, "Loading version impact data...") + '</div>';
   try {
     var data = await fetch('/api/version-impact').then(r => r.json());
     if (!data.version_detected) {
@@ -13178,7 +13178,7 @@ async function loadVersionImpact() {
     }
     el.innerHTML = html;
   } catch(e) {
-    el.innerHTML = '<div style="padding:16px;color:var(--text-error);">Failed to load version impact data</div>';
+    el.innerHTML = '<div style="padding:16px;color:var(--text-error);">' + t("app.failed_to_load_version_impact_data", null, "Failed to load version impact data") + '</div>';
   }
 }
 
@@ -13188,7 +13188,7 @@ async function loadVersionImpact() {
 async function loadClusters() {
   var el = document.getElementById('clusters-content');
   if (!el) return;
-  el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Analyzing session patterns...</div>';
+  el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">' + t("app.analyzing_session_patterns", null, "Analyzing session patterns...") + '</div>';
   try {
     var data = await fetch('/api/clusters').then(r => r.json());
     if (!data.clusters || data.clusters.length === 0) {
@@ -13228,7 +13228,7 @@ async function loadClusters() {
     html += '<div class="card" style="padding:12px 16px;font-size:12px;color:var(--text-muted);">Total: <strong style="color:var(--text-primary);">' + total + ' sessions</strong> across <strong style="color:var(--text-primary);">' + data.clusters.length + ' clusters</strong></div>';
     el.innerHTML = html;
   } catch(e) {
-    el.innerHTML = '<div style="padding:16px;color:var(--text-error);">Failed to load clusters</div>';
+    el.innerHTML = '<div style="padding:16px;color:var(--text-error);">' + t("app.failed_to_load_clusters", null, "Failed to load clusters") + '</div>';
   }
 }
 
@@ -13931,7 +13931,7 @@ function loadFlowLanes() {
       var lanes = (d && d.lanes) || [];
       if (countEl) countEl.textContent = lanes.length ? lanes.length + ' active' : '';
       if (!lanes.length) {
-        container.innerHTML = '<span style="color:#555;font-size:11px;">No active sessions in the last 30 min</span>';
+        container.innerHTML = '<span style="color:#555;font-size:11px;">' + t("app.no_active_sessions_in_the_last_30_min", null, "No active sessions in the last 30 min") + '</span>';
         return;
       }
       container.innerHTML = lanes.map(function(lane) {
@@ -13951,7 +13951,7 @@ function loadFlowLanes() {
       }).join('');
     })
     .catch(function() {
-      if (container) container.innerHTML = '<span style="color:#555;font-size:11px;">Could not load lanes</span>';
+      if (container) container.innerHTML = '<span style="color:#555;font-size:11px;">' + t("app.could_not_load_lanes", null, "Could not load lanes") + '</span>';
     });
 }
 
@@ -14013,7 +14013,7 @@ function showFlowRunDetail(sid) {
   var body = document.getElementById('flow-runs-detail-body');
   if (!box || !body) return;
   if (title) title.textContent = t("app.run", null, "Run · ") + sid;
-  body.innerHTML = '<div style="color:var(--text-muted);">Loading transcript&hellip;</div>';
+  body.innerHTML = '<div style="color:var(--text-muted);">' + t("app.loading_transcript_hellip", null, "Loading transcript&hellip;") + '</div>';
   box.style.display = 'block';
   // Re-fetch /api/flow/runs to find this row (cheap; ≤200 rows). Then
   // render a compact summary. The live Flow diagram is intentionally not
@@ -14023,7 +14023,7 @@ function showFlowRunDetail(sid) {
     .then(function(r) { return r.json(); })
     .then(function(d) {
       var run = ((d && d.runs) || []).find(function(x) { return String(x.session_id) === String(sid); });
-      if (!run) { body.innerHTML = '<div style="color:#ef4444;">Run not found.</div>'; return; }
+      if (!run) { body.innerHTML = '<div style="color:#ef4444;">' + t("app.run_not_found", null, "Run not found.") + '</div>'; return; }
       var models = (run.models || []).map(function(m) {
         return '<span style="display:inline-block;background:var(--bg-tertiary,#0d0d1f);border:1px solid var(--border-secondary,#2a2a4a);border-radius:6px;padding:2px 8px;margin:2px 4px 2px 0;font-family:monospace;font-size:11px;">' + m + '</span>';
       }).join('') || '<span style="color:var(--text-muted);">(none)</span>';
@@ -14043,7 +14043,7 @@ function showFlowRunDetail(sid) {
         + '<div style="margin-top:14px;"><a href="/api/transcript/' + encodeURIComponent(sid) + '" target="_blank" style="font-size:12px;color:var(--accent-primary,#3b82f6);text-decoration:none;">View full transcript &rarr;</a></div>';
     })
     .catch(function() {
-      body.innerHTML = '<div style="color:#ef4444;">Failed to load run detail.</div>';
+      body.innerHTML = '<div style="color:#ef4444;">' + t("app.failed_to_load_run_detail", null, "Failed to load run detail.") + '</div>';
     });
 }
 
@@ -14614,7 +14614,7 @@ function clearToolStream() {
   _flowFeedItems = [];
   flowStats.events = 0;
   var el = document.getElementById('flow-live-feed');
-  if (el) el.innerHTML = '<div style="color:#555;">Stream cleared.</div>';
+  if (el) el.innerHTML = '<div style="color:#555;">' + t("app.stream_cleared", null, "Stream cleared.") + '</div>';
   var countEl = document.getElementById('flow-feed-count');
   if (countEl) countEl.textContent = t("app.0_events", null, "0 events");
 }
@@ -15463,7 +15463,7 @@ function openCompModal(nodeId) {
   }
 
   if (nodeId === 'node-irc') {
-    document.getElementById('comp-modal-body').innerHTML = '<div class="irc-loading">*** Connecting to IRC log... ***</div>';
+    document.getElementById('comp-modal-body').innerHTML = '<div class="irc-loading">' + t("app.connecting_to_irc_log", null, "*** Connecting to IRC log... ***") + '</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadIRCMessages(false);
     _ircRefreshTimer = visibilitySetInterval(function() { loadIRCMessages(true); }, 15000);
@@ -17363,7 +17363,7 @@ function openTaskModal(sessionId, taskName, sessionKey) {
   document.getElementById('modal-title').textContent = taskName || sessionId || sessionKey;
   document.getElementById('modal-session-key').textContent = sessionKey || sessionId;
   document.getElementById('task-modal-overlay').classList.add('open');
-  document.getElementById('modal-content').innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);">Loading transcript...</div>';
+  document.getElementById('modal-content').innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);">' + t("app.loading_transcript", null, "Loading transcript...") + '</div>';
   _modalTab = 'summary';
   document.querySelectorAll('.modal-tab').forEach(function(t,i){t.classList.toggle('active',i===0);});
   loadModalTranscript();
@@ -17476,7 +17476,7 @@ async function _renderModalSpawnInfo(sessionIdOrKey, reason) {
   // modal hard to read through.
   var alreadyRendered = !!document.getElementById('fallback-pane-overview');
   if (!alreadyRendered) {
-    el.innerHTML = '<div style="padding:20px;color:var(--text-muted);">Loading subagent info...</div>';
+    el.innerHTML = '<div style="padding:20px;color:var(--text-muted);">' + t("app.loading_subagent_info", null, "Loading subagent info...") + '</div>';
   }
   try {
     var saData = await fetch('/api/subagents').then(function(r){return r.json();}).catch(function(){return {subagents:[]};});
@@ -17920,10 +17920,10 @@ function renderModalFull(el) {
 
 async function renderModalTools(el) {
   if (!_modalSessionId) {
-    el.innerHTML = '<div style="padding:24px;color:var(--text-muted)">No session loaded.</div>';
+    el.innerHTML = '<div style="padding:24px;color:var(--text-muted)">' + t("app.no_session_loaded", null, "No session loaded.") + '</div>';
     return;
   }
-  el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Loading tool timeline…</div>';
+  el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">' + t("app.loading_tool_timeline", null, "Loading tool timeline…") + '</div>';
   var data;
   try {
     var r = await fetch('/api/session-tools?session_id=' + encodeURIComponent(_modalSessionId) + '&args_chars=200&result_chars=200&include_unpaired=1');
@@ -17934,12 +17934,12 @@ async function renderModalTools(el) {
       return;
     }
   } catch(e) {
-    el.innerHTML = '<div style="padding:24px;color:#ef5350">Failed to load tool timeline.</div>';
+    el.innerHTML = '<div style="padding:24px;color:#ef5350">' + t("app.failed_to_load_tool_timeline", null, "Failed to load tool timeline.") + '</div>';
     return;
   }
   var tools = data.tools || [];
   if (!tools.length) {
-    el.innerHTML = '<div style="padding:24px;color:var(--text-muted)">No tool calls recorded for this session.</div>';
+    el.innerHTML = '<div style="padding:24px;color:var(--text-muted)">' + t("app.no_tool_calls_recorded_for_this_session", null, "No tool calls recorded for this session.") + '</div>';
     return;
   }
   var stats = data.stats || {};
@@ -18008,10 +18008,10 @@ function _fmtDur(ms) {
 
 async function renderModalModelJourney(el) {
   if (!_modalSessionId) {
-    el.innerHTML = '<div style="padding:20px;color:var(--text-muted);">No session ID available</div>';
+    el.innerHTML = '<div style="padding:20px;color:var(--text-muted);">' + t("app.no_session_id_available", null, "No session ID available") + '</div>';
     return;
   }
-  el.innerHTML = '<div style="padding:20px;color:var(--text-muted);">Loading model journey...</div>';
+  el.innerHTML = '<div style="padding:20px;color:var(--text-muted);">' + t("app.loading_model_journey", null, "Loading model journey...") + '</div>';
   try {
     var r = await fetch('/api/session-model-journey/' + encodeURIComponent(_modalSessionId));
     var data = await r.json();
@@ -18023,7 +18023,7 @@ async function renderModalModelJourney(el) {
     var thinkingChanges = data.thinking_changes || [];
     var stats = data.stats || {};
     if (!segments.length && !thinkingChanges.length) {
-      el.innerHTML = '<div style="padding:20px;color:var(--text-muted);">No model changes detected in this session.</div>';
+      el.innerHTML = '<div style="padding:20px;color:var(--text-muted);">' + t("app.no_model_changes_detected_in_this_session", null, "No model changes detected in this session.") + '</div>';
       return;
     }
     var html = '';
@@ -18103,16 +18103,16 @@ async function renderModalModelJourney(el) {
 async function renderModalSubagents(el) {
   var key = window._modalSessionKey || _modalSessionId;
   if (!key) {
-    el.innerHTML = '<div style="padding:20px;color:var(--text-muted);">No session key available.</div>';
+    el.innerHTML = '<div style="padding:20px;color:var(--text-muted);">' + t("app.no_session_key_available", null, "No session key available.") + '</div>';
     return;
   }
-  el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Loading subagents…</div>';
+  el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">' + t("app.loading_subagents", null, "Loading subagents…") + '</div>';
   var data;
   try {
     var r = await fetch('/api/task-runs?requester_session_key=' + encodeURIComponent(key) + '&limit=200');
     data = await r.json();
   } catch(e) {
-    el.innerHTML = '<div style="padding:24px;color:#ef5350">Failed to load subagents.</div>';
+    el.innerHTML = '<div style="padding:24px;color:#ef5350">' + t("app.failed_to_load_subagents", null, "Failed to load subagents.") + '</div>';
     return;
   }
   var tasks = data.tasks || [];
@@ -18592,7 +18592,7 @@ async function selectWorkspace(w) {
     if (policyEl) {
       var policies = data.network_policies || [];
       if (policies.length === 0) {
-        policyEl.innerHTML = '<div style="color:var(--text-muted);">No network policies found</div>';
+        policyEl.innerHTML = '<div style="color:var(--text-muted);">' + t("app.no_network_policies_found", null, "No network policies found") + '</div>';
       } else {
         var rows = policies.map(function(p) {
           var hosts = Array.isArray(p.hosts) ? p.hosts.join(', ') : (p.hosts || '');
@@ -18608,7 +18608,7 @@ async function selectWorkspace(w) {
     if (presetsEl) {
       var presets = data.presets || [];
       if (presets.length === 0) {
-        presetsEl.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">None detected</span>';
+        presetsEl.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">' + t("app.none_detected", null, "None detected") + '</span>';
       } else {
         presetsEl.innerHTML = presets.map(function(p) {
           return '<span style="background:rgba(118,185,0,0.12);color:#76b900;border:1px solid rgba(118,185,0,0.25);border-radius:12px;padding:3px 12px;font-size:12px;font-weight:600;">' + _ncEsc(p) + '</span>';
