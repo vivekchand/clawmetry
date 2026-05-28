@@ -1,0 +1,1 @@
+SEE_EXTERNAL_FILE:/tmp/content.txt
