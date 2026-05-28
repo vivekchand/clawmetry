@@ -8806,11 +8806,15 @@ _SNAP_TOOL_FIELD_CAP = 600   # per tool input/output preview
 _SNAP_TOOL_BUDGET = 8000     # per-transcript total tool-detail budget
 
 
-def _project_snapshot_messages(msgs):
+def _project_snapshot_messages(msgs, redactor=None):
     """Strip the raw payload (#1895, ~12 KB each) and trim each tool turn's
     input/output to a budgeted preview so the Embodied transcripts stay small in
     the shared snapshot. Tool *names* are always kept — they're the headline of
-    the deep-dive and cost nothing."""
+    the deep-dive and cost nothing.
+
+    If *redactor* is provided (built from ``config.redact``), secrets are scrubbed
+    from every message before size-capping so truncated text is also clean.
+    """
     out = []
     spent = 0
     for m in msgs:
@@ -8818,6 +8822,12 @@ def _project_snapshot_messages(msgs):
             out.append(m)
             continue
         m = {k: v for k, v in m.items() if k != "raw"}
+        # Apply secret redaction before size-capping (issue #2198).
+        if redactor is not None:
+            try:
+                m = redactor(m)
+            except Exception:
+                pass
         tool = m.get("tool")
         if isinstance(tool, dict):
             tool = dict(tool)
@@ -8912,6 +8922,11 @@ def _build_transcripts(limit_sessions=8, msg_cap=80, extra_sids=None):
         if store is None:
             return {}
         from clawmetry.config import hide_clawmetry_session
+        from clawmetry.redact import build_redactor as _build_redactor
+        try:
+            _redactor = _build_redactor(load_config())
+        except Exception:
+            _redactor = None
         evs = store.query_events(limit=5000)  # DESC by ts (most recent first)
         recent_sids = []
         for e in (evs or []):
@@ -8960,7 +8975,7 @@ def _build_transcripts(limit_sessions=8, msg_cap=80, extra_sids=None):
                 # snapshot from ~170 KB to multiple MB. Strip raw and trim tool
                 # detail to a budgeted preview; the full detail stays on the
                 # local dashboard.
-                t["messages"] = _project_snapshot_messages(msgs)
+                t["messages"] = _project_snapshot_messages(msgs, redactor=_redactor)
                 if title:
                     t["title"] = title
                 out[sid] = t
