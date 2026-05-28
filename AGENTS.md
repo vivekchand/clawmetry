@@ -5,6 +5,21 @@
 ## Quick context
 ClawMetry is an open-source, real-time observability dashboard for OpenClaw (and other) AI agents. `pip install clawmetry && clawmetry` — zero config, read-only by default. It's a Flask app with an embedded, no-build vanilla-JS frontend; a sync daemon ingests filesystem/gateway/OTLP data into a local **DuckDB** store, and the app reads from DuckDB to serve the UI.
 
+## Where new code goes (open-core split)
+
+ClawMetry is open-core — there are **four repos**. Pick the right one *before* writing code; see `FLYWHEEL.md §1b` for the full decision tree.
+
+- **clawmetry** (this repo, public OSS) — OpenClaw runtime + NeMo governance + 21 chat channels + entitlement gate (`clawmetry/entitlements.py`) + license client (`clawmetry/license.py`) + Enterprise feature **endpoints** (entitlement-gated; impl may defer to clawmetry-pro). Examples: `routes/otel_export.py`, `routes/audit.py`.
+- **clawmetry-pro** (private; not on public PyPI; shipped via the license-server wheel download) — the 10 gated runtime adapters (Claude Code, Codex, Cursor, …), Pro paid CLI capabilities, advanced-feature implementations. Plugs in via `clawmetry.extensions` entry point.
+- **clawmetry-cloud** (private) — cloud SaaS app + license server (`routes/license.py`) + Stripe + admin + closed-wheel hosting (`wheels/`).
+- **clawmetry-landing** (private, public site) — marketing + pricing page + Buy buttons. No gated code.
+
+Quick chooser:
+- New non-OpenClaw runtime adapter → **clawmetry-pro**.
+- New Enterprise feature (OTel export, SSO, audit, RBAC) → **OSS** route, gated by `entitlements.allows_feature(...)`.
+- New billing/Stripe/license endpoint → **clawmetry-cloud**.
+- New pricing/copy/Buy → **clawmetry-landing**.
+
 ## The rules that bite
 - **DuckDB-first.** Every feature persists to and reads from the local DuckDB store (`clawmetry/local_store.py`; the daemon owns the writer lock). Reading raw JSONL / logs / `sessions.json` / process stats *inside a request handler* works locally but silently returns empty in cloud — that's a bug, not a shortcut. (FLYWHEEL.md §1.)
 - **Per-feature route modules.** New HTTP endpoints go in `routes/<feature>.py` on that feature's Blueprint, not in `dashboard.py`. The old "single file" rule is dead — it broke down at ~33K lines and caused constant PR conflicts. Shared helpers still in `dashboard.py` are reached via late `import dashboard as _d`.

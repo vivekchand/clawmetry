@@ -1176,6 +1176,31 @@ console.log('_cmApplyRuntimeScopeNote (honest note on aggregate / node-wide tabs
   truthy(thePage && thePage._html === '', 'all-runtimes selected → no note');
 }
 
+// ── Runtime filter: density chart honours _cmRuntimeFilter (image #14 bug) ─
+console.log('renderBrainChart + renderBrainStream apply the runtime filter');
+{
+  // Static guard against the class of bug that hit the Brain tab: the list
+  // (renderBrainStream) filtered by _cmRuntimeOf but the density chart
+  // (renderBrainChart) did NOT — so picking "Claude Code" showed an empty
+  // list AND a full bar chart from other runtimes. Both functions MUST apply
+  // the same runtime filter; if either drops the call, this test fails and
+  // future edits can't reintroduce the leak.
+  const stream = extractFunction('renderBrainStream');
+  const chart  = extractFunction('renderBrainChart');
+  truthy(/_cmRuntimeFilter\s*\(/.test(stream),
+         'renderBrainStream calls _cmRuntimeFilter()');
+  truthy(/_cmRuntimeOf\(\s*ev\s*\)/.test(stream),
+         'renderBrainStream filters events by _cmRuntimeOf(ev)');
+  truthy(/_cmRuntimeFilter\s*\(/.test(chart),
+         'renderBrainChart calls _cmRuntimeFilter() (image #14 leak guard)');
+  truthy(/_cmRuntimeOf\(\s*ev\s*\)/.test(chart),
+         'renderBrainChart filters events by _cmRuntimeOf(ev) (image #14 leak guard)');
+  // Channel filter should be mirrored too — otherwise the chart and list
+  // disagree when a channel pill is active.
+  truthy(/_brainChannelFilter/.test(chart),
+         'renderBrainChart honours the channel pill (mirrors the list)');
+}
+
 // Auth-bootstrap scenarios above are async — wait for the microtask /
 // macrotask queue to drain before printing the summary. (The previous
 // synchronous test blocks all completed in-tick, so no wait was needed

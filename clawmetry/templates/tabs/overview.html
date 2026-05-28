@@ -19,6 +19,45 @@
     </div>
   </div>
 
+  <!-- Per-runtime sparkline of recent runs (#2196 item #4). Severity: red=real
+       error, yellow=waste flag, green=clean. Empty when no runtime has data. -->
+  <div id="health-timeline-card" style="display:none;background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:14px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);">
+    <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px;">
+      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;">&#129488; <span data-i18n="overview.run_health_title">Run health</span></div>
+      <div style="font-size:11px;color:var(--text-muted);" data-i18n="overview.run_health_legend">red = error · yellow = waste · green = clean</div>
+    </div>
+    <div id="health-timeline-body"></div>
+  </div>
+
+  <!-- Per-run A/B compare (#2196 item #2). Pick two sessions, see the deltas
+       side by side. Result panel is hidden until the first successful fetch. -->
+  <div id="compare-runs-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:14px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);">
+    <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px;">
+      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;">&#9878;&#65039; <span data-i18n="overview.compare_runs_title">Compare two runs</span></div>
+      <div style="font-size:11px;color:var(--text-muted);" data-i18n="overview.compare_runs_hint">Paste session ids; green = improvement, red = regression</div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:center;">
+      <input id="compare-input-a" type="text" placeholder="Session A id" autocomplete="off" style="padding:6px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;font-family:monospace;">
+      <input id="compare-input-b" type="text" placeholder="Session B id" autocomplete="off" style="padding:6px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;font-family:monospace;">
+      <button onclick="submitCompare()" style="padding:6px 14px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;font-weight:600;cursor:pointer;">Compare</button>
+    </div>
+    <div id="compare-runs-body" style="margin-top:12px;"></div>
+  </div>
+
+  <!-- Error triage (#2196 item #5). List + manage resolved errors. -->
+  <div id="triage-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:14px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);">
+    <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px;">
+      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;">&#129701; <span data-i18n="overview.triage_title">Error triage</span></div>
+      <div style="font-size:11px;color:var(--text-muted);" data-i18n="overview.triage_hint">Mute known errors so they stop inflating counts</div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 2fr auto;gap:8px;align-items:center;margin-bottom:10px;">
+      <input id="triage-input-id" type="text" placeholder="Event id (errored row)" autocomplete="off" style="padding:6px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;font-family:monospace;">
+      <input id="triage-input-note" type="text" placeholder="Note (optional — why is this expected?)" autocomplete="off" style="padding:6px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
+      <button onclick="submitResolveError()" style="padding:6px 14px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;font-weight:600;cursor:pointer;">Mark resolved</button>
+    </div>
+    <div id="triage-list-body"></div>
+  </div>
+
   <div class="refresh-bar" style="margin-bottom:6px;">
     <button class="refresh-btn" onclick="loadAll()" style="padding:4px 12px;font-size:12px;">↻</button>
     <span class="pulse"></span>

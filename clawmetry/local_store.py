@@ -36,6 +36,7 @@ Concurrency model:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -194,19 +195,21 @@ _DDL = [
     # ── Layer 1: shared core ─────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS events (
-        id            VARCHAR PRIMARY KEY,
-        agent_type    VARCHAR NOT NULL DEFAULT 'openclaw',
-        node_id       VARCHAR NOT NULL,
-        agent_id      VARCHAR NOT NULL DEFAULT 'main',
-        session_id    VARCHAR,
-        workspace_id  VARCHAR,
-        event_type    VARCHAR NOT NULL,
-        ts            VARCHAR NOT NULL,
-        data          BLOB,
-        cost_usd      DOUBLE,
-        token_count   INTEGER,
-        model         VARCHAR,
-        created_at    BIGINT NOT NULL
+        id              VARCHAR PRIMARY KEY,
+        agent_type      VARCHAR NOT NULL DEFAULT 'openclaw',
+        node_id         VARCHAR NOT NULL,
+        agent_id        VARCHAR NOT NULL DEFAULT 'main',
+        session_id      VARCHAR,
+        workspace_id    VARCHAR,
+        event_type      VARCHAR NOT NULL,
+        ts              VARCHAR NOT NULL,
+        data            BLOB,
+        cost_usd        DOUBLE,
+        token_count     INTEGER,
+        model           VARCHAR,
+        created_at      BIGINT NOT NULL,
+        chain_prev_hash VARCHAR,
+        chain_hash      VARCHAR
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_events_ts          ON events(ts)",
@@ -518,6 +521,39 @@ _DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_guardrail_events_ts      ON guardrail_events(ts)",
     "CREATE INDEX IF NOT EXISTS idx_guardrail_events_session ON guardrail_events(session_id, ts)",
+    # Issue #2201 — asset registry. Evidence + review layer that turns
+    # individual agent discoveries (Self-Evolve findings, useful prompts,
+    # improved skills) into reviewable, reusable assets without auto-promoting
+    # unreviewed local changes to team/company defaults. Lifecycle:
+    # pending → approved/rejected → deprecated. Every asset references a
+    # source ``run_id``/``session_id`` (evidence over claims). Tags + content
+    # are JSON-encoded into BLOB via ``_to_blob`` and decoded back via
+    # ``_decode_data_blob_rows``.
+    """
+    CREATE TABLE IF NOT EXISTS assets (
+        id                VARCHAR PRIMARY KEY,
+        asset_type        VARCHAR NOT NULL,
+        name              VARCHAR NOT NULL,
+        description       VARCHAR NOT NULL DEFAULT '',
+        source_run_id     VARCHAR NOT NULL DEFAULT '',
+        source_session_id VARCHAR NOT NULL DEFAULT '',
+        node_id           VARCHAR NOT NULL DEFAULT '',
+        author            VARCHAR NOT NULL DEFAULT '',
+        team_id           VARCHAR NOT NULL DEFAULT '',
+        version           VARCHAR NOT NULL DEFAULT '0.1.0',
+        status            VARCHAR NOT NULL DEFAULT 'pending',
+        tags              BLOB,
+        content           BLOB,
+        reviewer          VARCHAR NOT NULL DEFAULT '',
+        review_reason     VARCHAR NOT NULL DEFAULT '',
+        created_at        VARCHAR NOT NULL,
+        updated_at        BIGINT NOT NULL,
+        reviewed_at       VARCHAR
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_assets_status ON assets(status, updated_at)",
+    "CREATE INDEX IF NOT EXISTS idx_assets_type   ON assets(asset_type, updated_at)",
+    "CREATE INDEX IF NOT EXISTS idx_assets_run    ON assets(source_run_id)",
     # Issue #1088 Phase 4 (2026-05-13) — channel-message foundation. Replaces
     # the per-provider log-grep + JSONL-scan path that the 21 routes in
     # ``routes/channels.py`` use today. Each row is one inbound or outbound
@@ -827,6 +863,27 @@ _DDL = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_sync_dlq_created ON sync_dlq(created_at)",
+    # Issue #2200 — tamper-evident hash chain. chain_heads tracks the current
+    # head hash per node; events.chain_prev_hash/chain_hash carry the per-row
+    # links. Added via _MIGRATIONS_V2 for existing stores.
+    """
+    CREATE TABLE IF NOT EXISTS chain_heads (
+        node_id     VARCHAR PRIMARY KEY,
+        chain_hash  VARCHAR NOT NULL,
+        updated_at  BIGINT NOT NULL
+    )
+    """,
+    # Issue #2196 item #5 — per-event "resolved" markers. Lets a user mute a
+    # known/expected error so it stops inflating counts on Tracing / Health /
+    # the run-compare deltas. Keyed by event_id (the unique error-bearing
+    # tool_result row id) so the relation joins cleanly back to events.
+    """
+    CREATE TABLE IF NOT EXISTS resolved_errors (
+        event_id     VARCHAR PRIMARY KEY,
+        resolved_at  BIGINT NOT NULL,
+        note         VARCHAR
+    )
+    """,
 ]
 
 
@@ -862,7 +919,40 @@ _MIGRATIONS_V2 = [
     ("sessions", "eval_judge_model",  "VARCHAR"),
     ("sessions", "eval_scored_at",    "BIGINT"),
     ("sessions", "eval_rubric",       "VARCHAR"),
+    # Issue #2200 — hash-chain columns. chain_prev_hash/chain_hash are NULL on
+    # existing rows and populated on new events when CLAWMETRY_INTEGRITY=1.
+    ("events",   "chain_prev_hash",   "VARCHAR"),
+    ("events",   "chain_hash",        "VARCHAR"),
 ]
+
+# ── Integrity / hash-chain (Issue #2200) ────────────────────────────────────
+#
+# Off by default. Set CLAWMETRY_INTEGRITY=1 to enable stamping new events with
+# a per-node SHA-256 chain. Existing rows keep chain_prev_hash/chain_hash=NULL
+# and are skipped by verify-integrity (reported as "pre-chain" events).
+_INTEGRITY_ENABLED = os.environ.get("CLAWMETRY_INTEGRITY", "0").strip().lower() not in (
+    "0", "false", "no", ""
+)
+
+def _integrity_hash(prev_hash: str, event: dict) -> str:
+    """Compute SHA-256(prev_hash + '|' + canonical JSON of immutable fields).
+
+    Applies the same field-level normalizations as _event_to_row so that
+    stamp-time hashes (using raw event dicts) and verify-time hashes (using
+    DB rows, already normalized) agree.
+    """
+    payload = {
+        "id":           str(event.get("id") or ""),
+        "agent_type":   str(event.get("agent_type") or "openclaw"),
+        "node_id":      str(event.get("node_id") or ""),
+        "agent_id":     str(event.get("agent_id") or "main"),
+        "session_id":   event.get("session_id"),
+        "workspace_id": event.get("workspace_id"),
+        "event_type":   str(event.get("event_type") or ""),
+        "ts":           str(event.get("ts") or ""),
+    }
+    canon = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(f"{prev_hash}|{canon}".encode()).hexdigest()
 
 
 def _apply_migrations(conn) -> None:
@@ -1306,6 +1396,9 @@ class LocalStore:
         self._flush_lock = threading.Lock()
         self._dropped = 0
         self._flusher_stop = threading.Event()
+        # Issue #2200 — in-memory chain-head cache (node_id -> current head hash).
+        # Populated lazily from chain_heads table on first flush for each node.
+        self._chain_heads: dict[str, str] = {}
         self._flusher_thread: threading.Thread | None = None
         self._last_flush_ts = time.monotonic()
         # Issue #1594 — auto-vacuum bookkeeping. ``_bytes_since_vacuum_check``
@@ -1527,6 +1620,22 @@ class LocalStore:
             raise ValueError("event must include 'event_type'")
         if not event.get("ts"):
             raise ValueError("event must include 'ts'")
+        # Defense-in-depth: scrub secret-shaped values before they rest in
+        # DuckDB (events are stored plaintext pre-E2E). Issue #2197.
+        try:
+            from clawmetry import redaction as _redaction
+            event = _redaction.redact_event(event)
+        except Exception:
+            pass  # never let redaction block ingest
+        # Optional SIEM/syslog forward (Issue #2199). Off unless
+        # CLAWMETRY_SIEM_HOST is set; non-blocking enqueue, drops + counts
+        # if the bounded queue is full. Runs *after* redaction so secrets
+        # never leave via syslog either.
+        try:
+            from clawmetry import siem as _siem
+            _siem.forward_event(event)
+        except Exception:
+            pass  # never let the SIEM hook block ingest
         with self._ring_lock:
             if len(self._ring) >= RING_MAX:
                 self._dropped += 1
@@ -2996,6 +3105,183 @@ class LocalStore:
             "per_agent": per_agent,
         }
 
+    # ── Asset registry (#2201) ─────────────────────────────────────────────
+    # Evidence + review layer that turns individual agent discoveries
+    # (Self-Evolve findings, useful prompts, improved skills) into reviewable,
+    # reusable assets. Daemon owns writes; reads ride the local_query proxy
+    # so the cloud can paint from the snapshot the same way.
+
+    _ASSET_TYPES = frozenset({
+        "skill", "prompt", "workflow", "playbook",
+        "memory_snippet", "tool_config", "evaluation_case",
+    })
+    _ASSET_STATUSES = frozenset({"pending", "approved", "rejected", "deprecated"})
+
+    _ASSET_COLS = [
+        "id", "asset_type", "name", "description", "source_run_id",
+        "source_session_id", "node_id", "author", "team_id", "version",
+        "status", "tags", "content", "reviewer", "review_reason",
+        "created_at", "updated_at", "reviewed_at",
+    ]
+
+    def ingest_asset(self, asset: dict[str, Any]) -> None:
+        """Upsert one asset. Required: ``id``, ``asset_type``, ``name``.
+        Re-ingesting the same id refreshes name/description/content/tags but
+        preserves the existing status + reviewer (those move via
+        ``update_asset_status``). Tags/content are stored as ``_to_blob``-
+        encoded BLOBs and decoded back via ``_decode_data_blob_rows`` on read."""
+        from datetime import datetime, timezone
+
+        aid = asset.get("id")
+        if not aid:
+            raise ValueError("asset must include 'id'")
+        atype = asset.get("asset_type") or ""
+        if atype not in self._ASSET_TYPES:
+            raise ValueError(
+                f"asset_type {atype!r} not in {sorted(self._ASSET_TYPES)}"
+            )
+        name = asset.get("name") or ""
+        if not name:
+            raise ValueError("asset must include non-empty 'name'")
+        status = asset.get("status") or "pending"
+        if status not in self._ASSET_STATUSES:
+            raise ValueError(
+                f"status {status!r} not in {sorted(self._ASSET_STATUSES)}"
+            )
+        created_at = asset.get("created_at") or datetime.now(timezone.utc).isoformat()
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO assets (
+                    id, asset_type, name, description, source_run_id,
+                    source_session_id, node_id, author, team_id, version,
+                    status, tags, content, reviewer, review_reason,
+                    created_at, updated_at, reviewed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET
+                    name              = excluded.name,
+                    description       = excluded.description,
+                    source_run_id     = COALESCE(NULLIF(excluded.source_run_id, ''), assets.source_run_id),
+                    source_session_id = COALESCE(NULLIF(excluded.source_session_id, ''), assets.source_session_id),
+                    node_id           = COALESCE(NULLIF(excluded.node_id, ''), assets.node_id),
+                    author            = COALESCE(NULLIF(excluded.author, ''), assets.author),
+                    team_id           = COALESCE(NULLIF(excluded.team_id, ''), assets.team_id),
+                    version           = COALESCE(NULLIF(excluded.version, ''), assets.version),
+                    tags              = COALESCE(excluded.tags, assets.tags),
+                    content           = COALESCE(excluded.content, assets.content),
+                    updated_at        = excluded.updated_at
+            """, [
+                str(aid), atype, name,
+                asset.get("description") or "",
+                asset.get("source_run_id") or "",
+                asset.get("source_session_id") or "",
+                asset.get("node_id") or "",
+                asset.get("author") or "",
+                asset.get("team_id") or "",
+                asset.get("version") or "0.1.0",
+                status,
+                _to_blob(asset.get("tags")),
+                _to_blob(asset.get("content")),
+                asset.get("reviewer") or "",
+                asset.get("review_reason") or "",
+                created_at,
+                int(time.time() * 1000),
+                asset.get("reviewed_at"),
+            ])
+
+    def update_asset_status(
+        self, asset_id: str, *, status: str, reviewer: str = "",
+        reason: str = "",
+    ) -> bool:
+        """Move an asset to a new status (the review action). Returns True if
+        a row with ``asset_id`` existed and was updated, False otherwise."""
+        from datetime import datetime, timezone
+
+        if status not in self._ASSET_STATUSES:
+            raise ValueError(
+                f"status {status!r} not in {sorted(self._ASSET_STATUSES)}"
+            )
+        now_iso = datetime.now(timezone.utc).isoformat()
+        now_ms = int(time.time() * 1000)
+        with self._write_lock:
+            # DuckDB UPDATE doesn't return a useful affected-row count via the
+            # cursor; check existence first, then update.
+            row = self._conn.execute(
+                "SELECT 1 FROM assets WHERE id = ?", [str(asset_id)]
+            ).fetchone()
+            if not row:
+                return False
+            self._conn.execute("""
+                UPDATE assets SET
+                    status        = ?,
+                    reviewer      = COALESCE(NULLIF(?, ''), reviewer),
+                    review_reason = COALESCE(NULLIF(?, ''), review_reason),
+                    reviewed_at   = ?,
+                    updated_at    = ?
+                WHERE id = ?
+            """, [status, reviewer, reason, now_iso, now_ms, str(asset_id)])
+            return True
+
+    def query_assets(
+        self,
+        *,
+        status: str | None = None,
+        asset_type: str | None = None,
+        source_run_id: str | None = None,
+        source_session_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """List assets newest-first with optional filters."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if status:
+            clauses.append("status = ?"); params.append(status)
+        if asset_type:
+            clauses.append("asset_type = ?"); params.append(asset_type)
+        if source_run_id:
+            clauses.append("source_run_id = ?"); params.append(source_run_id)
+        if source_session_id:
+            clauses.append("source_session_id = ?"); params.append(source_session_id)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT {", ".join(self._ASSET_COLS)}
+            FROM assets
+            {where}
+            ORDER BY updated_at DESC
+            LIMIT ?
+        """
+        params.append(int(limit))
+        return self._decode_asset_rows(self._fetch(sql, params))
+
+    def get_asset(self, asset_id: str) -> dict[str, Any] | None:
+        """Return one asset detail by id, or None."""
+        if not asset_id:
+            return None
+        sql = f"SELECT {', '.join(self._ASSET_COLS)} FROM assets WHERE id = ?"
+        out = self._decode_asset_rows(self._fetch(sql, [str(asset_id)]))
+        return out[0] if out else None
+
+    def _decode_asset_rows(self, rows: Iterable[tuple]) -> list[dict[str, Any]]:
+        """tuple→dict for ``assets``. Mirrors ``_decode_data_blob_rows`` but
+        decodes BOTH BLOB columns (``tags`` + ``content``) — the shared helper
+        only handles a single ``data`` column."""
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(zip(self._ASSET_COLS, r))
+            for k in ("tags", "content"):
+                raw = d.get(k)
+                if raw is None:
+                    continue
+                try:
+                    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    try:
+                        d[k] = json.loads(text)
+                    except (ValueError, TypeError):
+                        d[k] = text
+                except (UnicodeDecodeError, AttributeError):
+                    d[k] = None
+            out.append(d)
+        return out
+
     def ingest_system_snapshot(self, snap: dict[str, Any]) -> None:
         """Insert one system-snapshot row. Append-only;
         (agent_type, node_id, ts, kind) PK silently ignores duplicates."""
@@ -3689,6 +3975,7 @@ class LocalStore:
                             """,
                             rows,
                         )
+                        self._stamp_integrity(batch, self._conn)
                 last_exc = None
                 break
             except Exception as exc:  # noqa: BLE001 — surface any DuckDB error
@@ -3815,6 +4102,151 @@ class LocalStore:
         """
         params.append(int(limit))
         return [_row_to_event(r, _EVENT_COLS) for r in self._fetch(sql, params)]
+
+    # ── Issue #2200: integrity hash chain ────────────────────────────────────
+
+    def _stamp_integrity(self, batch: list[dict], conn) -> None:
+        """Compute and store chain_prev_hash/chain_hash for a flushed batch.
+
+        Called inside _flush_now_locked's _txn so hashes land atomically with
+        the events. No-op when _INTEGRITY_ENABLED is false or when an event was
+        already stamped (INSERT OR IGNORE skipped it, so we skip the UPDATE too).
+        """
+        if not _INTEGRITY_ENABLED:
+            return
+        from collections import defaultdict
+        by_node: dict[str, list[dict]] = defaultdict(list)
+        for e in batch:
+            node = str(e.get("node_id") or "unknown")
+            by_node[node].append(e)
+
+        for node_id, events in by_node.items():
+            if node_id not in self._chain_heads:
+                row = conn.execute(
+                    "SELECT chain_hash FROM chain_heads WHERE node_id = ?", [node_id]
+                ).fetchone()
+                self._chain_heads[node_id] = row[0] if row else "0" * 64
+
+            head = self._chain_heads[node_id]
+            # Sort by id so stamp order within a created_at bucket is deterministic
+            # and matches the ORDER BY id ASC used in verify_integrity.
+            events.sort(key=lambda e: str(e.get("id") or ""))
+            updates: list[tuple[str, str, str]] = []
+            for e in events:
+                eid = str(e.get("id") or "")
+                if not eid:
+                    continue
+                # Only stamp events that were actually inserted (not duplicates).
+                already = conn.execute(
+                    "SELECT chain_hash FROM events WHERE id = ? AND chain_hash IS NOT NULL",
+                    [eid],
+                ).fetchone()
+                if already:
+                    head = already[0]
+                    continue
+                new_hash = _integrity_hash(head, e)
+                updates.append((head, new_hash, eid))
+                head = new_hash
+
+            if updates:
+                conn.executemany(
+                    "UPDATE events SET chain_prev_hash = ?, chain_hash = ? WHERE id = ?",
+                    updates,
+                )
+            conn.execute(
+                """
+                INSERT INTO chain_heads (node_id, chain_hash, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT (node_id) DO UPDATE SET
+                    chain_hash = excluded.chain_hash,
+                    updated_at = excluded.updated_at
+                """,
+                [node_id, head, int(time.time() * 1000)],
+            )
+            self._chain_heads[node_id] = head
+
+    def verify_integrity(self, node_id: str | None = None) -> dict:
+        """Walk the hash chain and verify every stamped event in order.
+
+        Returns a dict with keys:
+          - status: 'valid' | 'invalid' | 'empty'
+          - node_id: the node checked (or 'all')
+          - checked: number of events verified
+          - pre_chain: events with no hash (inserted before integrity was enabled)
+          - broken_at: first event id where the chain breaks (or None)
+          - error: description of the break (or None)
+        """
+        where = "WHERE chain_hash IS NOT NULL"
+        params: list = []
+        if node_id:
+            where += " AND node_id = ?"
+            params.append(node_id)
+
+        rows = self._fetch(
+            f"""
+            SELECT id, node_id, chain_prev_hash, chain_hash,
+                   agent_type, agent_id, session_id, workspace_id, event_type, ts
+            FROM events
+            {where}
+            ORDER BY node_id, created_at ASC, id ASC
+            """,
+            params,
+        )
+
+        pre_chain_count = self._fetch(
+            "SELECT COUNT(*) FROM events WHERE chain_hash IS NULL"
+            + (" AND node_id = ?" if node_id else ""),
+            [node_id] if node_id else [],
+        )
+        pre_chain = pre_chain_count[0][0] if pre_chain_count else 0
+
+        if not rows:
+            return {
+                "status": "empty",
+                "node_id": node_id or "all",
+                "checked": 0,
+                "pre_chain": pre_chain,
+                "broken_at": None,
+                "error": None,
+            }
+
+        # Verify per node, in the order rows are sorted (node_id, created_at).
+        current_node: str | None = None
+        expected_prev = "0" * 64
+        checked = 0
+        for row in rows:
+            rid, rnid, prev_h, h, *rest_fields = row
+            # rest_fields = [agent_type, agent_id, session_id, workspace_id, event_type, ts]
+            event_dict = dict(zip(
+                ("id", "node_id", "agent_type", "agent_id", "session_id", "workspace_id", "event_type", "ts"),
+                (rid, rnid) + tuple(rest_fields),
+            ))
+            if rnid != current_node:
+                current_node = rnid
+                # Re-anchor expected_prev to the stored prev of the first row for this node
+                expected_prev = prev_h or "0" * 64
+
+            expected_hash = _integrity_hash(expected_prev, event_dict)
+            if h != expected_hash or prev_h != expected_prev:
+                return {
+                    "status": "invalid",
+                    "node_id": node_id or "all",
+                    "checked": checked,
+                    "pre_chain": pre_chain,
+                    "broken_at": rid,
+                    "error": f"chain break at event {rid} (node {rnid})",
+                }
+            expected_prev = h
+            checked += 1
+
+        return {
+            "status": "valid",
+            "node_id": node_id or "all",
+            "checked": checked,
+            "pre_chain": pre_chain,
+            "broken_at": None,
+            "error": None,
+        }
 
     def backfill_event_costs(self, *, batch: int = 5000) -> int:
         """#2049: populate ``cost_usd`` for events that arrived without it.
@@ -3975,6 +4407,75 @@ class LocalStore:
             except Exception:
                 return (max_id, 0, len(rows))
         return (max_id, len(updates), len(rows))
+
+    # ── Error triage (#2196 item #5) ────────────────────────────────────────
+    # Mark a known/expected error as resolved so it stops inflating counts.
+    # Idempotent — re-marking refreshes the timestamp + note; un-marking is a
+    # plain DELETE. Reads go through ``query_resolved_errors`` (returns a
+    # dict for cheap membership checks).
+
+    def mark_error_resolved(self, event_id: str, note: str | None = None) -> bool:
+        """Mark ``event_id`` as resolved. Returns True if a row was written,
+        False on bad input or write failure. Idempotent: re-marking the same
+        event refreshes its timestamp + note."""
+        if not isinstance(event_id, str) or not event_id.strip():
+            return False
+        eid = event_id.strip()
+        now_ms = int(time.time() * 1000)
+        n = None if note is None else str(note)[:1000]
+        try:
+            self._conn.execute(
+                "INSERT INTO resolved_errors (event_id, resolved_at, note) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT (event_id) DO UPDATE SET "
+                "  resolved_at = excluded.resolved_at, note = excluded.note",
+                [eid, now_ms, n],
+            )
+            return True
+        except Exception:
+            return False
+
+    def unmark_error_resolved(self, event_id: str) -> bool:
+        """Remove the resolved marker for ``event_id``. Returns True if a row
+        was deleted, False if it didn't exist or on write failure.
+
+        DuckDB's Python binding returns -1 from ``cursor.rowcount`` for DELETE,
+        so the existence check has to be a pre-delete SELECT — there's no way
+        to recover it from the deletion call itself."""
+        if not isinstance(event_id, str) or not event_id.strip():
+            return False
+        eid = event_id.strip()
+        try:
+            row = self._conn.execute(
+                "SELECT 1 FROM resolved_errors WHERE event_id = ?", [eid],
+            ).fetchone()
+            existed = row is not None
+            if existed:
+                self._conn.execute(
+                    "DELETE FROM resolved_errors WHERE event_id = ?", [eid],
+                )
+            return existed
+        except Exception:
+            return False
+
+    def query_resolved_errors(self, *, limit: int = 5000) -> dict[str, dict]:
+        """Return ``{event_id: {resolved_at, note}}`` for all current resolved
+        markers (most-recent-first up to ``limit``). Map shape keeps consumer
+        membership checks O(1)."""
+        try:
+            rows = self._conn.execute(
+                "SELECT event_id, resolved_at, note FROM resolved_errors "
+                "ORDER BY resolved_at DESC LIMIT ?",
+                [int(limit)],
+            ).fetchall()
+        except Exception:
+            return {}
+        out: dict[str, dict] = {}
+        for (eid, ts_ms, note) in rows:
+            if not eid:
+                continue
+            out[str(eid)] = {"resolved_at": int(ts_ms or 0), "note": note}
+        return out
 
     def query_events_with_subagents(
         self,

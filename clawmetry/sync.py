@@ -9132,6 +9132,138 @@ _SE_LOCK = threading.Lock()
 _SE_STATE = {"payload": None, "computed_at": 0.0, "running": False}
 
 
+def _build_waste_flags(session_limit: int = 60, events_per_session: int = 500):
+    """Per-session waste flags (#2196 item #3).
+
+    Returns ``{session_id: [{type, severity, msg}, …]}`` for the most recent
+    sessions that have any flags. Sessions with no flags are omitted so the
+    snapshot only carries the signal (saves bytes; "no entry" is read as
+    "clean run"). Built on the daemon's own store handle, bounded so a busy
+    store can't bloat the encrypted snapshot. Never raises."""
+    try:
+        from clawmetry import local_store as _ls
+        from clawmetry import waste_flags as _wf
+    except Exception:
+        return {}
+    try:
+        store = _ls.get_store()
+        if store is None:
+            return {}
+        sessions = store.query_sessions(limit=int(session_limit))
+    except Exception:
+        return {}
+    out: dict[str, list] = {}
+    for s in sessions:
+        sid = s.get("session_id")
+        if not sid:
+            continue
+        try:
+            events = store.query_events(session_id=sid, limit=int(events_per_session))
+        except Exception:
+            continue
+        try:
+            signals = _wf.compute_signals_from_events(events)
+            flags = _wf.compute_flags(signals)
+        except Exception:
+            continue
+        if flags:
+            out[str(sid)] = flags
+    return out
+
+
+def _build_health_timeline(session_limit: int = 60, events_per_session: int = 500,
+                           dots_per_runtime: int = 30):
+    """Per-runtime sparkline of recent runs (#2196 item #4).
+
+    Returns ``{"runtimes": [{"runtime": str, "dots": [...]}, …]}`` where each
+    dot summarises one session — severity is ``red`` for any real error
+    (post #2202 benign-error filtering), ``yellow`` for any waste flag
+    (#2215), ``green`` otherwise. Runtimes are derived from the session-id
+    prefix (cf. ``waste_flags.runtime_from_session_id``); openclaw sessions
+    (raw UUIDs) bucket under ``"openclaw"``.
+
+    Daemon-only (uses the writer-owned store handle). Best-effort + bounded
+    so a busy store can't bloat the encrypted snapshot.
+    """
+    try:
+        from clawmetry import local_store as _ls
+        from clawmetry import waste_flags as _wf
+    except Exception:
+        return {"runtimes": []}
+    try:
+        store = _ls.get_store()
+        if store is None:
+            return {"runtimes": []}
+        sessions = store.query_sessions(limit=int(session_limit))
+    except Exception:
+        return {"runtimes": []}
+
+    buckets: dict[str, list] = {}
+    for s in sessions:
+        sid = s.get("session_id")
+        if not sid:
+            continue
+        try:
+            events = store.query_events(session_id=sid, limit=int(events_per_session))
+        except Exception:
+            continue
+        try:
+            signals = _wf.compute_signals_from_events(events)
+            flags = _wf.compute_flags(signals)
+            error_count = sum(1 for e in events if _wf.event_is_real_error(e))
+        except Exception:
+            continue
+        try:
+            cost = float(s.get("cost_usd") or 0.0)
+        except (TypeError, ValueError):
+            cost = 0.0
+        runtime = _wf.runtime_from_session_id(sid)
+        buckets.setdefault(runtime, []).append({
+            "session_id": str(sid),
+            "started_at": s.get("started_at"),
+            "updated_at": s.get("updated_at"),
+            "severity": _wf.severity_from_counts(error_count, len(flags)),
+            "error_count": error_count,
+            "flag_count": len(flags),
+            "flag_types": [f.get("type") for f in flags],
+            "cost_usd": cost,
+        })
+
+    runtimes_out = []
+    for runtime, dots in buckets.items():
+        # most-recent-first within each runtime, then cap so the slice stays
+        # small enough to fit comfortably in the encrypted snapshot.
+        dots.sort(key=lambda d: (d.get("started_at") or ""), reverse=True)
+        runtimes_out.append({"runtime": runtime, "dots": dots[: int(dots_per_runtime)]})
+    # Sort runtimes by their freshest dot so the dashboard shows active ones
+    # first (deterministic for empty buckets via runtime name fallback).
+    runtimes_out.sort(
+        key=lambda r: (
+            (r["dots"][0].get("started_at") if r["dots"] else "") or "",
+            r["runtime"],
+        ),
+        reverse=True,
+    )
+    return {"runtimes": runtimes_out}
+
+
+def _build_resolved_errors(limit: int = 5000):
+    """Per-event resolved-error markers (#2196 item #5).
+
+    Returns ``{event_id: {resolved_at, note}}`` for every entry currently in
+    the ``resolved_errors`` table. Built on the daemon's own store handle.
+    Best-effort; an empty map is returned on any failure or when the table is
+    empty (== nothing resolved)."""
+    try:
+        from clawmetry import local_store as _ls
+        store = _ls.get_store()
+        if store is None:
+            return {}
+        return store.query_resolved_errors(limit=int(limit)) or {}
+    except Exception:
+        return {}
+
+
 def _resolve_openclaw_bin():
     """Find the ``openclaw`` binary. The daemon runs under launchd with a
     minimal PATH, so ``shutil.which`` alone often misses Homebrew installs."""
@@ -11185,6 +11317,18 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # Lets the cloud dashboard flag a 'down' inbound channel just like the
         # local dashboard's /api/system-health does.
         "connectorLiveness": _build_connector_liveness(config),
+        # Per-session waste flags (#2196 item #3): runaway / cold-cache /
+        # unscoped-result / bloated-context. Sessions without flags are
+        # omitted so this slice stays tiny — empty == clean.
+        "wasteFlags": _build_waste_flags(),
+        # Per-runtime sparkline of recent runs (#2196 item #4). Each dot is
+        # a session summary; severity = red (real error, post #2202 benign
+        # filter), yellow (waste flag, #2215), green (clean).
+        "healthTimeline": _build_health_timeline(),
+        # Per-event resolved-error markers (#2196 item #5). UIs render the
+        # corresponding rows in a muted state and may exclude them from
+        # error counts. Map keyed by event_id; empty == nothing resolved.
+        "resolvedErrors": _build_resolved_errors(),
     }
 
     # ── NemoClaw / sandbox enrichment ────────────────────────────────────────

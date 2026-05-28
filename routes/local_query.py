@@ -476,6 +476,13 @@ _DAEMON_METHODS = frozenset({
     # decisions stay serialized.
     "ingest_approval",
     "update_approval_decision",
+    # Issue #2201: asset registry (Self-Evolve findings → reviewable assets).
+    # query_/get_ are reads; ingest_asset + update_asset_status are read-then-
+    # write under the daemon's _write_lock — same pattern as approvals above.
+    "query_assets",
+    "get_asset",
+    "ingest_asset",
+    "update_asset_status",
     # Issue #1364: surface clawmetry/proxy.py LoopDetector signals on the
     # dashboard. Read by routes/health.py:/api/loop-signals via the daemon
     # proxy so the dashboard process never opens DuckDB writable.
@@ -537,6 +544,20 @@ _DAEMON_METHODS = frozenset({
     "query_guardrail_events",
     "ingest_guardrail_event",
     "query_nemoclaw_metrics",
+    # Issue #2200 — tamper-evident hash chain verifier. `clawmetry
+    # verify-integrity` calls this through the daemon proxy when a daemon
+    # is running (the daemon holds DuckDB's process-level writer lock so
+    # the CLI cannot open the file directly, even read-only). Without
+    # this entry the proxy returns None and the CLI crashed on
+    # `result["status"]`. Read-only walk over the events table.
+    "verify_integrity",
+    # Issue #2196 item #5 — per-event resolved-error triage. Writes need the
+    # daemon's writer connection; the read returns a {event_id: {...}} map
+    # used by /api/error-triage/resolved + future "exclude resolved from
+    # error counts" filtering.
+    "mark_error_resolved",
+    "unmark_error_resolved",
+    "query_resolved_errors",
 })
 
 

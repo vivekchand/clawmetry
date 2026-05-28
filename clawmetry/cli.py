@@ -2520,6 +2520,58 @@ def _cmd_license(args) -> None:
     print("  E2E:         🔒 verified offline")
 
 
+def _cmd_verify_integrity(args) -> None:
+    """clawmetry verify-integrity — walk the hash chain and report validity."""
+    from clawmetry.local_store import get_store
+
+    node_id = getattr(args, "node_id", None) or None
+    print("ClawMetry Integrity Verify\n" + "─" * 40)
+
+    try:
+        store = get_store(read_only=True)
+    except Exception as exc:
+        print(f"  Error: cannot open local store — {exc}")
+        raise SystemExit(1) from exc
+
+    try:
+        result = store.verify_integrity(node_id=node_id)
+    except Exception as exc:
+        print(f"  Error: verification failed — {exc}")
+        raise SystemExit(1) from exc
+
+    # When a sync daemon is running, ``get_store(read_only=True)`` returns a
+    # proxy that forwards through HTTP. Older daemons (< 0.12.343) do not
+    # have ``verify_integrity`` in their method allowlist and return None.
+    # Degrade gracefully instead of crashing on ``result["status"]``.
+    if result is None:
+        print("  Result:      ?  Could not reach the running daemon's verifier.")
+        print("               This usually means the daemon is older than the CLI.")
+        print("               Restart the sync daemon to pick up the new wheel, then re-run.")
+        raise SystemExit(2)
+
+    status = result["status"]
+    checked = result["checked"]
+    pre_chain = result["pre_chain"]
+    scope = result["node_id"]
+
+    print(f"  Scope:       {scope}")
+    print(f"  Checked:     {checked} stamped event(s)")
+    if pre_chain:
+        print(f"  Pre-chain:   {pre_chain} event(s) without hash (before integrity was enabled)")
+
+    if status == "empty":
+        print("  Result:      ○  No stamped events found")
+        print("               (set CLAWMETRY_INTEGRITY=1 to enable stamping)")
+    elif status == "valid":
+        print(f"  Result:      ✅  VALID — chain intact across {checked} event(s)")
+    else:
+        broken_at = result["broken_at"]
+        error = result["error"]
+        print(f"  Result:      ❌  INVALID — {error}")
+        print(f"  First break: {broken_at}")
+        raise SystemExit(1)
+
+
 def main() -> None:
     import argparse
     # --v2 opt-in flag for the React SPA scaffold (see clawmetry/v2/routes.py).
@@ -2845,6 +2897,18 @@ def main() -> None:
     # license — show the current license status
     sub.add_parser("license", help="Show the current self-hosted license status")
 
+    # verify-integrity — walk hash chain and report validity (Issue #2200)
+    p_verify = sub.add_parser(
+        "verify-integrity",
+        help="Verify the tamper-evident hash chain for local events",
+    )
+    p_verify.add_argument(
+        "--node-id",
+        dest="node_id",
+        default=None,
+        help="Limit verification to a single node (default: all nodes)",
+    )
+
     # Parse just the first token to decide if it's a sub-command or dashboard flag
     _subcmds = (
         "onboard",
@@ -2860,6 +2924,7 @@ def main() -> None:
         "uninstall",
         "activate",
         "license",
+        "verify-integrity",
         "nemoclaw-daemons",
     )
     if len(sys.argv) > 1 and sys.argv[1] in _subcmds:
@@ -2892,6 +2957,8 @@ def main() -> None:
             _cmd_activate(args)
         elif args.cmd == "license":
             _cmd_license(args)
+        elif args.cmd == "verify-integrity":
+            _cmd_verify_integrity(args)
         elif args.cmd == "nemoclaw-daemons":
             _register_nemoclaw_sandbox_daemons()
     else:
