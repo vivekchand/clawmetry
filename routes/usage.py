@@ -30,12 +30,42 @@ import os
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta
+from typing import Optional
 
 from flask import Blueprint, jsonify, make_response, request
 from clawmetry.config import is_local_store_read_enabled
 from routes._dedupe import build_sibling_bucket_max, is_sibling_dup
 
 bp_usage = Blueprint('usage', __name__)
+
+# In-memory mirror of ``_runtime_session_id_clause`` for paths that read raw
+# events (query_events doesn't take a runtime param). Same canonical prefix
+# list as the SQL filter, so client-side and server-side runtime scoping agree.
+# Duplicated rather than imported from clawmetry.local_store because that
+# module imports duckdb at top level and routes/usage.py must stay importable
+# in test environments where duckdb isn't installed. Keep in sync with
+# ``_NON_OPENCLAW_RUNTIME_PREFIXES`` in clawmetry/local_store.py and
+# ``_CM_RT_LABEL`` in clawmetry/static/js/app.js.
+_NON_OPENCLAW_RT_SET = frozenset((
+    "picoclaw", "nanoclaw", "hermes",
+    "claude_code", "codex", "cursor", "aider", "goose", "opencode", "qwen_code",
+))
+
+def _event_runtime(ev) -> str:
+    sid = str((ev or {}).get("session_id") or "")
+    if ":" in sid:
+        p = sid.split(":", 1)[0].lower()
+        if p in _NON_OPENCLAW_RT_SET:
+            return p
+    return "openclaw"
+
+def _filter_evs_by_runtime(evs, runtime):
+    if not runtime or runtime == "all":
+        return evs
+    rt = runtime.lower()
+    if rt != "openclaw" and rt not in _NON_OPENCLAW_RT_SET:
+        return []  # unknown runtime → empty, matching the SQL clause behaviour
+    return [e for e in (evs or []) if _event_runtime(e) == rt]
 
 _CLUSTER_CACHE = {"ts": 0.0, "key": None, "data": None}
 _CLUSTER_CACHE_TTL_SECONDS = 120
@@ -178,7 +208,7 @@ def _ls_call(method_name, **kwargs):
         return None
 
 
-def _try_local_store_usage():
+def _try_local_store_usage(runtime: Optional[str] = None):
     """Fast path for /api/usage. Builds the daily token/cost chart by
     aggregating ``daily_aggregates`` (with a ``query_events`` fallback if
     the aggregates table is empty). Returns the same shape as the legacy
@@ -197,7 +227,10 @@ def _try_local_store_usage():
     # Pull pre-rolled day buckets first — these are the "blessed" data
     # the daemon writes once per ingest. Falls back to live event scan
     # when aggregates are empty (e.g. fresh install, only events seeded).
-    agg_rows = _ls_call("query_aggregates")
+    # Optional ``runtime`` filter is threaded into query_aggregates +
+    # query_daily_usage_splits so filtered totals reuse the same dedupe +
+    # cost math (sum over runtimes == unfiltered, by construction).
+    agg_rows = _ls_call("query_aggregates", runtime=runtime)
     if agg_rows is None:
         return None
     daily_tokens = {}
@@ -213,6 +246,9 @@ def _try_local_store_usage():
         evs = _ls_call("query_events", limit=10000)
         if not evs:
             return None
+        # query_events has no SQL runtime filter; apply the same prefix logic
+        # in Python so the fallback path agrees with the aggregates path.
+        evs = _filter_evs_by_runtime(evs, runtime)
         for ev in evs:
             day = _ls_iso_day(ev.get("ts", ""))
             if not day:
@@ -224,7 +260,7 @@ def _try_local_store_usage():
     # build this from the assistant-event blob walker so we don't have
     # to wait for the daemon to backfill split columns. Empty list is
     # fine (caller renders zeros for the missing days).
-    splits_rows = _ls_call("query_daily_usage_splits") or []
+    splits_rows = _ls_call("query_daily_usage_splits", runtime=runtime) or []
     daily_input = {r["day"]: int(r.get("input_tokens") or 0) for r in splits_rows}
     daily_output = {r["day"]: int(r.get("output_tokens") or 0) for r in splits_rows}
     daily_cache_read = {r["day"]: int(r.get("cache_read_tokens") or 0) for r in splits_rows}
@@ -300,6 +336,7 @@ def _try_local_store_usage():
     # Per-model breakdown: scan recent events and group.
     model_usage = {}
     recent = _ls_call("query_events", limit=5000) or []
+    recent = _filter_evs_by_runtime(recent, runtime)
     for ev in recent:
         m = ev.get("model") or "unknown"
         model_usage[m] = model_usage.get(m, 0) + int(ev.get("token_count") or 0)
@@ -1622,10 +1659,18 @@ def api_usage():
     import dashboard as _d
     import time as _time
 
+    # Optional ?runtime=X scopes the Cost / Tokens tab to one agent runtime
+    # (Claude Code, Goose, PicoClaw, …). Mirrors the global runtime switcher;
+    # threaded into query_aggregates + query_daily_usage_splits so per-runtime
+    # totals reuse the same dedupe + cost math (sum across runtimes ==
+    # unfiltered, by construction). Only honoured on the local-store fast
+    # path; the legacy OTLP/cache fallback ignores it.
+    _rt = (request.args.get("runtime") or "").strip() or None
+
     # Epic #964 — local-store fast path. Opt-in via CLAWMETRY_LOCAL_STORE_READ=1;
     # falls through to OTLP/transcript scan when the store is empty / disabled.
     if is_local_store_read_enabled():
-        fast = _try_local_store_usage()
+        fast = _try_local_store_usage(runtime=_rt)
         if fast is not None:
             return jsonify(_apply_oss_24h_cap(fast))
 

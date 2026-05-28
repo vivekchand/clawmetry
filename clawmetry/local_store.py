@@ -7204,6 +7204,7 @@ class LocalStore:
         since: str | None = None,
         until: str | None = None,
         limit_events: int = 50000,
+        runtime: str | None = None,
     ) -> list[dict[str, Any]]:
         """Per-day input/output/cache_read/cache_write token + cost split.
 
@@ -7245,6 +7246,10 @@ class LocalStore:
         if until:
             clauses.append("ts <= ?")
             params.append(until)
+        _rt_clause, _rt_params = _runtime_session_id_clause(runtime)
+        if _rt_clause:
+            clauses.append(_rt_clause)
+            params.extend(_rt_params)
         where = "WHERE " + " AND ".join(clauses)
         sql = f"""
             SELECT id, ts, session_id, event_type, data, cost_usd
@@ -7584,9 +7589,16 @@ class LocalStore:
         agent_id: str | None = None,
         since: str | None = None,
         until: str | None = None,
+        runtime: str | None = None,
     ) -> list[dict[str, Any]]:
         """Per-day rollup. Computed on the fly from events; columnar storage
-        means this is cheap even at hundreds-of-thousands of rows."""
+        means this is cheap even at hundreds-of-thousands of rows.
+
+        ``runtime``: optional runtime/harness filter (``claude_code``,
+        ``openclaw``, ``picoclaw``, …). Adds a session_id-prefix WHERE clause
+        BEFORE the dedupe CTE so all downstream cost/token math reuses the
+        same code path. Sum across runtime values == unfiltered total, by
+        construction (RULE #1: filtered totals reconcile)."""
         clauses: list[str] = []
         params: list[Any] = []
         if agent_id:
@@ -7598,6 +7610,10 @@ class LocalStore:
         if until:
             clauses.append("ts <= ?")
             params.append(until)
+        _rt_clause, _rt_params = _runtime_session_id_clause(runtime)
+        if _rt_clause:
+            clauses.append(_rt_clause)
+            params.extend(_rt_params)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         # Same dedupe shape as ``query_sessions`` (PR #1462). On real v3
         # OpenClaw installs each LLM turn emits BOTH an ``assistant`` row
@@ -8413,6 +8429,45 @@ _BILLABLE_TURN_EVENT_TYPES = (
 _TOOL_CALL_TOPLEVEL_EVENT_TYPES = (
     "tool.call", "toolCall", "tool_use", "tool_call",
 )
+
+# ── Runtime filtering by session_id prefix ──────────────────────────────────
+# The global runtime switcher in the dashboard scopes views by runtime; runtime
+# is encoded in the session_id prefix (the daemon stamps it: ``claude_code:…``,
+# ``picoclaw:…``, …). ``agent_type`` is uselessly always ``"openclaw"`` and the
+# real runtime hint sits inside ``data._runtime`` (a JSON blob, not queryable).
+# Keep this list in sync with ``_CM_RT_LABEL`` in clawmetry/static/js/app.js so
+# the OpenClaw bucket matches the UI's definition (anything that isn't a known
+# non-openclaw prefix — including bare-UUID OpenClaw session ids).
+_NON_OPENCLAW_RUNTIME_PREFIXES = (
+    "picoclaw", "nanoclaw", "hermes",
+    "claude_code", "codex", "cursor", "aider", "goose", "opencode", "qwen_code",
+)
+
+def _runtime_session_id_clause(runtime: str | None) -> tuple[str | None, list[str]]:
+    """Build a WHERE-clause fragment + params filtering ``events.session_id``
+    by runtime prefix. Returns ``(None, [])`` for an empty / "all" / unknown
+    runtime so the caller can no-op. Used by ``query_aggregates`` /
+    ``query_daily_usage_splits`` to add a runtime filter that reuses the
+    method's existing dedupe + cost math, so per-runtime totals reconcile
+    with the unfiltered total by construction (no parallel aggregation path
+    → no risk of cost-number divergence).
+    """
+    if not runtime or runtime == "all":
+        return None, []
+    rt = runtime.lower()
+    if rt == "openclaw":
+        placeholders = ", ".join(["?"] * len(_NON_OPENCLAW_RUNTIME_PREFIXES))
+        # split_part returns the whole string when there's no separator → bare
+        # OpenClaw UUIDs land outside the known-non-openclaw set, as intended.
+        return (
+            f"split_part(session_id, ':', 1) NOT IN ({placeholders})",
+            list(_NON_OPENCLAW_RUNTIME_PREFIXES),
+        )
+    if rt in _NON_OPENCLAW_RUNTIME_PREFIXES:
+        return ("session_id LIKE ?", [f"{rt}:%"])
+    # Unknown runtime label: produce a clause that matches nothing, so callers
+    # get an empty result instead of silently leaking the unfiltered total.
+    return ("1 = 0", [])
 
 # Issue #1718: event_types whose ``data`` is rendered as a turn by the
 # transcript detail view (``routes/sessions.py:_try_local_store_transcript``

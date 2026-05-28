@@ -10668,8 +10668,13 @@ async function loadHeatmap(days) {
 // ===== Usage / Token Tracking =====
 async function loadUsage() {
   try {
+    // Append the global runtime filter so Cost/Tokens scopes to the selected
+    // runtime (server-side, via query_aggregates' runtime= param). Numbers
+    // reconcile with the unfiltered total by construction.
+    var _uRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    var _uRtQ = (_uRt && _uRt !== 'all') ? ('?runtime=' + encodeURIComponent(_uRt)) : '';
     var [_uResp, byPlugin] = await Promise.all([
-      fetch('/api/usage').then(async function(r) { return {s: r.status, b: await r.json()}; }),
+      fetch('/api/usage' + _uRtQ).then(async function(r) { return {s: r.status, b: await r.json()}; }),
       fetch('/api/usage/by-plugin').then(r => r.json()).catch(function(){ return {plugins: []}; })
     ]);
     var data = _uResp.b || {};
