@@ -127,6 +127,7 @@ from routes.turn_anatomy import bp_turn_anatomy
 from routes.tool_catalog import bp_tool_catalog
 from routes.context_economics import bp_context_economics
 from routes.entitlement import bp_entitlement
+from routes.otel_export import bp_otel_export
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -10629,6 +10630,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_tool_catalog)
     app.register_blueprint(bp_context_economics)
     app.register_blueprint(bp_entitlement)
+    app.register_blueprint(bp_otel_export)
 
     # Register built-in agent adapters. External plugins can register more
     # via clawmetry.extensions entry points — see clawmetry/adapters/.
