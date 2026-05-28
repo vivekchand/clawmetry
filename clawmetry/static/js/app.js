@@ -6909,6 +6909,12 @@ function _cmRenderRuntimeSwitcher(counts, anchor, reload) {
 // unchanged). Changing it reloads the current tab so any runtime-aware view
 // re-filters against the new scope.
 var _cmGlobalRtCounts = {};
+// Catalog of locked runtimes from /api/runtimes (Phase 5 open-core).
+// Stays empty in grace mode (the default), so the switcher renders unchanged
+// from before this endpoint existed. Populated only once enforcement is on
+// AND the install lacks the paid entitlement — then locked runtimes appear in
+// the dropdown with a 🔒 affordance regardless of session count.
+var _cmLockedRuntimes = {};
 
 function _cmPopulateGlobalRuntime(counts) {
   // Merge-MAX into the running set, never replace. Per-tab loaders pass their
@@ -6926,18 +6932,32 @@ function _cmPopulateGlobalRuntime(counts) {
   var wrap = document.getElementById('cm-global-runtime-wrap');
   var sel = document.getElementById('cm-global-runtime');
   if (!wrap || !sel) return;
-  var order = Object.keys(_CM_RT_LABEL).filter(function(k) { return counts[k]; });
+  // Observed runtimes (have local sessions) ∪ locked-but-visible runtimes.
+  // _cmLockedRuntimes is empty in grace mode, so this collapses to the
+  // previous behaviour (observed-only) by default.
+  var observed = Object.keys(_CM_RT_LABEL).filter(function(k) { return counts[k]; });
+  var seen = {};
+  observed.forEach(function(k) { seen[k] = 1; });
+  var locked = Object.keys(_cmLockedRuntimes).filter(function(k) { return !seen[k]; });
+  var order = observed.concat(locked);
   if (order.length < 2) { wrap.style.display = 'none'; return; }
   var active = _cmRuntimeFilter();
-  if (active !== 'all' && !counts[active]) active = 'all';
-  var total = order.reduce(function(a, k) { return a + counts[k]; }, 0);
+  if (active !== 'all' && !counts[active] && !_cmLockedRuntimes[active]) active = 'all';
+  var total = observed.reduce(function(a, k) { return a + counts[k]; }, 0);
   // The count is the number of SESSIONS for that runtime — spell it out so the
   // chip doesn't read as "22 Claude Code runtimes" (there's one runtime, many
   // sessions). Singular/plural for the "1 session" case.
   function _sessLabel(n) { return n + (n === 1 ? ' session' : ' sessions'); }
   var html = '<option value="all">All runtimes · ' + _sessLabel(total) + '</option>';
   order.forEach(function(k) {
-    html += '<option value="' + k + '">' + escHtml(_CM_RT_LABEL[k] || k) + ' · ' + _sessLabel(counts[k]) + '</option>';
+    var lbl = _CM_RT_LABEL[k] || k;
+    if (_cmLockedRuntimes[k]) {
+      // Padlock + "Upgrade" hint; the option stays selectable so users can see
+      // the empty-runtime state (and the upgrade CTA the tab will render).
+      html += '<option value="' + k + '">🔒 ' + escHtml(lbl) + ' · Upgrade</option>';
+    } else {
+      html += '<option value="' + k + '">' + escHtml(lbl) + ' · ' + _sessLabel(counts[k]) + '</option>';
+    }
   });
   sel.innerHTML = html;
   sel.value = active;
@@ -6953,10 +6973,30 @@ function _cmOnGlobalRuntimeChange(sel) {
   if (typeof switchTab === 'function' && _cmCurrentTab) switchTab(_cmCurrentTab);
 }
 
+async function _cmLoadRuntimeCatalog() {
+  // Read the entitlement-aware runtime catalog (Phase 5 open-core). In grace
+  // mode (the default) nothing is locked, so _cmLockedRuntimes stays {} and
+  // the switcher behaves exactly as it did before this endpoint existed.
+  // Once enforcement is on, the locked paid runtimes appear in the dropdown
+  // with a 🔒 affordance regardless of session count.
+  try {
+    var cat = await fetch('/api/runtimes', { credentials: 'same-origin' }).then(function(r) { return r.json(); });
+    if (!cat || !cat.enforced || !Array.isArray(cat.runtimes)) return;
+    var locked = {};
+    cat.runtimes.forEach(function(r) { if (r && r.locked && r.id) locked[r.id] = 1; });
+    _cmLockedRuntimes = locked;
+  } catch (e) { /* non-fatal — grace mode keeps the previous behaviour */ }
+}
+
 async function _cmInitGlobalRuntimeSwitcher() {
   // Derive the runtimes present from the session list (the session-id prefix is
   // the runtime discriminator — agent_type is always "openclaw"). One cheap
   // fetch on load; the Transcripts loader refreshes the counts as it runs.
+  // Also pull the locked-but-visible catalog so paid runtimes show up in the
+  // switcher (with a 🔒) when enforcement is on — no-op in grace mode.
+  try {
+    await _cmLoadRuntimeCatalog();
+  } catch (e) { /* non-fatal */ }
   try {
     var data = await fetch('/api/sessions', { credentials: 'same-origin' }).then(function(r) { return r.json(); });
     var counts = {};

@@ -87,6 +87,25 @@ PAID_RUNTIMES = frozenset(
 
 ALL_RUNTIMES = FREE_RUNTIMES | PAID_RUNTIMES
 
+# Display labels for every known runtime. Mirrors ``_CM_RT_LABEL`` in
+# ``clawmetry/static/js/app.js`` so the dashboard and the API agree on what to
+# call each runtime in human-readable copy. The frontend falls back to the
+# runtime id when a label is missing, so adding a runtime to ``PAID_RUNTIMES``
+# without a label here is safe — but please add one.
+RUNTIME_LABELS = {
+    "openclaw": "OpenClaw",
+    "claude_code": "Claude Code",
+    "codex": "Codex",
+    "cursor": "Cursor",
+    "aider": "Aider",
+    "goose": "Goose",
+    "opencode": "opencode",
+    "qwen_code": "Qwen Code",
+    "hermes": "Hermes",
+    "picoclaw": "PicoClaw",
+    "nanoclaw": "NanoClaw",
+}
+
 # ── Feature catalogue ───────────────────────────────────────────────────────
 # Core observability — always free. Keys are stable identifiers the route /
 # UI layer checks via Entitlement.allows_feature(...).
@@ -329,3 +348,62 @@ def available_runtimes() -> list[str]:
     if ent.grace:
         return sorted(ALL_RUNTIMES)
     return sorted(ent.runtimes)
+
+
+def runtime_label(runtime: str) -> str:
+    """Human-readable label for ``runtime``. Falls back to the id when unknown
+    so unknown plugin runtimes still render with *something*."""
+    rt = (runtime or "").strip().lower()
+    return RUNTIME_LABELS.get(rt, rt)
+
+
+def runtime_catalog() -> list[dict]:
+    """The full runtime catalog with the entitlement-derived availability for
+    each entry. Single source of truth the UI uses to render *every* known
+    runtime — including paid ones with zero local sessions — so the locked-
+    but-visible upgrade affordance has data to render against.
+
+    Each entry:
+        {
+          "id":       "<runtime>",         # canonical key
+          "label":    "<Display Name>",    # falls back to id
+          "free":     True | False,        # FREE_RUNTIMES membership
+          "allowed":  True | False,        # entitlement allows observing it
+          "locked":   True | False,        # paid + not allowed (UI shows 🔒)
+        }
+
+    Ordering: free runtimes first (alphabetical), then paid runtimes
+    (alphabetical) — stable so the UI dropdown is deterministic.
+
+    Never raises; on any resolution error every paid runtime is reported as
+    ``locked=False`` (grace) to match the OSS-free fallback in
+    :func:`get_entitlement`.
+    """
+    try:
+        ent = get_entitlement()
+    except Exception as exc:  # never crash a catalog read
+        logger.warning("entitlements: runtime_catalog falling back to grace: %s", exc)
+        ent = _oss_free()
+    out: list[dict] = []
+    for rt in sorted(FREE_RUNTIMES):
+        out.append(
+            {
+                "id": rt,
+                "label": runtime_label(rt),
+                "free": True,
+                "allowed": True,
+                "locked": False,
+            }
+        )
+    for rt in sorted(PAID_RUNTIMES):
+        allowed = ent.allows_runtime(rt)
+        out.append(
+            {
+                "id": rt,
+                "label": runtime_label(rt),
+                "free": False,
+                "allowed": allowed,
+                "locked": not allowed,
+            }
+        )
+    return out
