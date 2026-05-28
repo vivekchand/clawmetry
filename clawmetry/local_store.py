@@ -36,6 +36,7 @@ Concurrency model:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -194,19 +195,21 @@ _DDL = [
     # ── Layer 1: shared core ─────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS events (
-        id            VARCHAR PRIMARY KEY,
-        agent_type    VARCHAR NOT NULL DEFAULT 'openclaw',
-        node_id       VARCHAR NOT NULL,
-        agent_id      VARCHAR NOT NULL DEFAULT 'main',
-        session_id    VARCHAR,
-        workspace_id  VARCHAR,
-        event_type    VARCHAR NOT NULL,
-        ts            VARCHAR NOT NULL,
-        data          BLOB,
-        cost_usd      DOUBLE,
-        token_count   INTEGER,
-        model         VARCHAR,
-        created_at    BIGINT NOT NULL
+        id              VARCHAR PRIMARY KEY,
+        agent_type      VARCHAR NOT NULL DEFAULT 'openclaw',
+        node_id         VARCHAR NOT NULL,
+        agent_id        VARCHAR NOT NULL DEFAULT 'main',
+        session_id      VARCHAR,
+        workspace_id    VARCHAR,
+        event_type      VARCHAR NOT NULL,
+        ts              VARCHAR NOT NULL,
+        data            BLOB,
+        cost_usd        DOUBLE,
+        token_count     INTEGER,
+        model           VARCHAR,
+        created_at      BIGINT NOT NULL,
+        chain_prev_hash VARCHAR,
+        chain_hash      VARCHAR
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_events_ts          ON events(ts)",
@@ -827,6 +830,16 @@ _DDL = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_sync_dlq_created ON sync_dlq(created_at)",
+    # Issue #2200 — tamper-evident hash chain. chain_heads tracks the current
+    # head hash per node; events.chain_prev_hash/chain_hash carry the per-row
+    # links. Added via _MIGRATIONS_V2 for existing stores.
+    """
+    CREATE TABLE IF NOT EXISTS chain_heads (
+        node_id     VARCHAR PRIMARY KEY,
+        chain_hash  VARCHAR NOT NULL,
+        updated_at  BIGINT NOT NULL
+    )
+    """,
 ]
 
 
@@ -862,7 +875,40 @@ _MIGRATIONS_V2 = [
     ("sessions", "eval_judge_model",  "VARCHAR"),
     ("sessions", "eval_scored_at",    "BIGINT"),
     ("sessions", "eval_rubric",       "VARCHAR"),
+    # Issue #2200 — hash-chain columns. chain_prev_hash/chain_hash are NULL on
+    # existing rows and populated on new events when CLAWMETRY_INTEGRITY=1.
+    ("events",   "chain_prev_hash",   "VARCHAR"),
+    ("events",   "chain_hash",        "VARCHAR"),
 ]
+
+# ── Integrity / hash-chain (Issue #2200) ────────────────────────────────────
+#
+# Off by default. Set CLAWMETRY_INTEGRITY=1 to enable stamping new events with
+# a per-node SHA-256 chain. Existing rows keep chain_prev_hash/chain_hash=NULL
+# and are skipped by verify-integrity (reported as "pre-chain" events).
+_INTEGRITY_ENABLED = os.environ.get("CLAWMETRY_INTEGRITY", "0").strip().lower() not in (
+    "0", "false", "no", ""
+)
+
+def _integrity_hash(prev_hash: str, event: dict) -> str:
+    """Compute SHA-256(prev_hash + '|' + canonical JSON of immutable fields).
+
+    Applies the same field-level normalizations as _event_to_row so that
+    stamp-time hashes (using raw event dicts) and verify-time hashes (using
+    DB rows, already normalized) agree.
+    """
+    payload = {
+        "id":           str(event.get("id") or ""),
+        "agent_type":   str(event.get("agent_type") or "openclaw"),
+        "node_id":      str(event.get("node_id") or ""),
+        "agent_id":     str(event.get("agent_id") or "main"),
+        "session_id":   event.get("session_id"),
+        "workspace_id": event.get("workspace_id"),
+        "event_type":   str(event.get("event_type") or ""),
+        "ts":           str(event.get("ts") or ""),
+    }
+    canon = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(f"{prev_hash}|{canon}".encode()).hexdigest()
 
 
 def _apply_migrations(conn) -> None:
@@ -1306,6 +1352,9 @@ class LocalStore:
         self._flush_lock = threading.Lock()
         self._dropped = 0
         self._flusher_stop = threading.Event()
+        # Issue #2200 — in-memory chain-head cache (node_id -> current head hash).
+        # Populated lazily from chain_heads table on first flush for each node.
+        self._chain_heads: dict[str, str] = {}
         self._flusher_thread: threading.Thread | None = None
         self._last_flush_ts = time.monotonic()
         # Issue #1594 — auto-vacuum bookkeeping. ``_bytes_since_vacuum_check``
@@ -3696,6 +3745,7 @@ class LocalStore:
                             """,
                             rows,
                         )
+                        self._stamp_integrity(batch, self._conn)
                 last_exc = None
                 break
             except Exception as exc:  # noqa: BLE001 — surface any DuckDB error
@@ -3822,6 +3872,151 @@ class LocalStore:
         """
         params.append(int(limit))
         return [_row_to_event(r, _EVENT_COLS) for r in self._fetch(sql, params)]
+
+    # ── Issue #2200: integrity hash chain ────────────────────────────────────
+
+    def _stamp_integrity(self, batch: list[dict], conn) -> None:
+        """Compute and store chain_prev_hash/chain_hash for a flushed batch.
+
+        Called inside _flush_now_locked's _txn so hashes land atomically with
+        the events. No-op when _INTEGRITY_ENABLED is false or when an event was
+        already stamped (INSERT OR IGNORE skipped it, so we skip the UPDATE too).
+        """
+        if not _INTEGRITY_ENABLED:
+            return
+        from collections import defaultdict
+        by_node: dict[str, list[dict]] = defaultdict(list)
+        for e in batch:
+            node = str(e.get("node_id") or "unknown")
+            by_node[node].append(e)
+
+        for node_id, events in by_node.items():
+            if node_id not in self._chain_heads:
+                row = conn.execute(
+                    "SELECT chain_hash FROM chain_heads WHERE node_id = ?", [node_id]
+                ).fetchone()
+                self._chain_heads[node_id] = row[0] if row else "0" * 64
+
+            head = self._chain_heads[node_id]
+            # Sort by id so stamp order within a created_at bucket is deterministic
+            # and matches the ORDER BY id ASC used in verify_integrity.
+            events.sort(key=lambda e: str(e.get("id") or ""))
+            updates: list[tuple[str, str, str]] = []
+            for e in events:
+                eid = str(e.get("id") or "")
+                if not eid:
+                    continue
+                # Only stamp events that were actually inserted (not duplicates).
+                already = conn.execute(
+                    "SELECT chain_hash FROM events WHERE id = ? AND chain_hash IS NOT NULL",
+                    [eid],
+                ).fetchone()
+                if already:
+                    head = already[0]
+                    continue
+                new_hash = _integrity_hash(head, e)
+                updates.append((head, new_hash, eid))
+                head = new_hash
+
+            if updates:
+                conn.executemany(
+                    "UPDATE events SET chain_prev_hash = ?, chain_hash = ? WHERE id = ?",
+                    updates,
+                )
+            conn.execute(
+                """
+                INSERT INTO chain_heads (node_id, chain_hash, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT (node_id) DO UPDATE SET
+                    chain_hash = excluded.chain_hash,
+                    updated_at = excluded.updated_at
+                """,
+                [node_id, head, int(time.time() * 1000)],
+            )
+            self._chain_heads[node_id] = head
+
+    def verify_integrity(self, node_id: str | None = None) -> dict:
+        """Walk the hash chain and verify every stamped event in order.
+
+        Returns a dict with keys:
+          - status: 'valid' | 'invalid' | 'empty'
+          - node_id: the node checked (or 'all')
+          - checked: number of events verified
+          - pre_chain: events with no hash (inserted before integrity was enabled)
+          - broken_at: first event id where the chain breaks (or None)
+          - error: description of the break (or None)
+        """
+        where = "WHERE chain_hash IS NOT NULL"
+        params: list = []
+        if node_id:
+            where += " AND node_id = ?"
+            params.append(node_id)
+
+        rows = self._fetch(
+            f"""
+            SELECT id, node_id, chain_prev_hash, chain_hash,
+                   agent_type, agent_id, session_id, workspace_id, event_type, ts
+            FROM events
+            {where}
+            ORDER BY node_id, created_at ASC, id ASC
+            """,
+            params,
+        )
+
+        pre_chain_count = self._fetch(
+            "SELECT COUNT(*) FROM events WHERE chain_hash IS NULL"
+            + (" AND node_id = ?" if node_id else ""),
+            [node_id] if node_id else [],
+        )
+        pre_chain = pre_chain_count[0][0] if pre_chain_count else 0
+
+        if not rows:
+            return {
+                "status": "empty",
+                "node_id": node_id or "all",
+                "checked": 0,
+                "pre_chain": pre_chain,
+                "broken_at": None,
+                "error": None,
+            }
+
+        # Verify per node, in the order rows are sorted (node_id, created_at).
+        current_node: str | None = None
+        expected_prev = "0" * 64
+        checked = 0
+        for row in rows:
+            rid, rnid, prev_h, h, *rest_fields = row
+            # rest_fields = [agent_type, agent_id, session_id, workspace_id, event_type, ts]
+            event_dict = dict(zip(
+                ("id", "node_id", "agent_type", "agent_id", "session_id", "workspace_id", "event_type", "ts"),
+                (rid, rnid) + tuple(rest_fields),
+            ))
+            if rnid != current_node:
+                current_node = rnid
+                # Re-anchor expected_prev to the stored prev of the first row for this node
+                expected_prev = prev_h or "0" * 64
+
+            expected_hash = _integrity_hash(expected_prev, event_dict)
+            if h != expected_hash or prev_h != expected_prev:
+                return {
+                    "status": "invalid",
+                    "node_id": node_id or "all",
+                    "checked": checked,
+                    "pre_chain": pre_chain,
+                    "broken_at": rid,
+                    "error": f"chain break at event {rid} (node {rnid})",
+                }
+            expected_prev = h
+            checked += 1
+
+        return {
+            "status": "valid",
+            "node_id": node_id or "all",
+            "checked": checked,
+            "pre_chain": pre_chain,
+            "broken_at": None,
+            "error": None,
+        }
 
     def backfill_event_costs(self, *, batch: int = 5000) -> int:
         """#2049: populate ``cost_usd`` for events that arrived without it.
