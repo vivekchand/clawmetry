@@ -71,9 +71,15 @@
   function localStorageSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 
   // ---- translation lookup + interpolation + basic Intl pluralisation ----
-  function T(key, vars) {
+  function T(key, vars, fb) {
+    // Resolution chain: active locale -> English catalog -> caller-provided
+    // fallback (original English literal) -> the key itself. The third arg
+    // exists for dynamic app.js calls that may fire before en.json finishes
+    // loading - without it, the user would briefly see the raw key. Tab i18n
+    // via data-i18n attrs doesn't need it because the markup already carries
+    // the English text on first paint.
     var s = (DICT && DICT[key] != null) ? DICT[key]
-          : (EN[key] != null ? EN[key] : key); // English fallback, then the key
+          : (EN[key] != null ? EN[key] : (fb != null ? fb : key));
     // plural: key + "_one"/"_other"/... selected by Intl.PluralRules on vars.count
     if (vars && vars.count != null) {
       try {
