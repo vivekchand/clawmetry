@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Docs: FLYWHEEL.md ban on em-dashes is now a canonical rule (2026-05-28)
+- Promoted the buried one-liner in FLYWHEEL.md section 2 into a full rule with scope, allowed exceptions, and a belt-and-braces grep-before-send check. Covers landing HTML, dashboard banners, marketing copy, CHANGELOG entries, bounty and job posts (incl. external platforms), public docs, modals, and PR text users see. Allowed in code comments, internal notes, commit messages, internal-only PR bodies. Cites two prior burns (PR #211 landing copy, the rentahuman.ai bounty redraft) so the next agent does not repeat them. Doc-only; no code change, no version bump.
+
+
 ### Release: server-side runtime filter on /api/usage — Cost/Tokens tab de-merges (2026-05-28)
 - The Cost / Tokens tab kept showing **merged** totals after Brain/Transcripts/Tracing de-merged: the aggregates are pre-grouped by `(agent_id, day)` without a runtime dimension, so client-side filtering wasn't possible. `query_aggregates` and `query_daily_usage_splits` now take an optional `runtime` param that adds a `session_id`-prefix `WHERE` clause **before** the dedupe CTE, reusing the same cost + token math. Per-runtime totals reconcile with the unfiltered total **by construction** (verified on a synthetic DuckDB: $10.20 unfiltered = $4.60 claude_code + $4.30 openclaw + $0.40 picoclaw + $0.90 goose, with the `model.completed` sibling correctly deduped). `/api/usage` reads `?runtime=…`; the frontend `loadUsage` appends it from the global switcher. (#2245)
 
