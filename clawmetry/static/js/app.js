@@ -2584,6 +2584,135 @@ function escapeHtmlSafe(s) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+// ── Per-run compare modal (#2196 item #2) ───────────────────────────────────
+
+function _cmCompareFmt(key, v) {
+  if (v == null) return '—';
+  if (key === 'cost_usd') return '$' + (v < 0.01 ? v.toFixed(4) : v.toFixed(2));
+  if (key === 'cache_hit_rate') return Math.round(v * 100) + '%';
+  if (key === 'max_tool_result_bytes') return v < 1024 ? v + ' B' : v < 1048576 ? (v / 1024).toFixed(1) + ' KB' : (v / 1048576).toFixed(1) + ' MB';
+  if (typeof v === 'number' && Math.abs(v) >= 1000) return v.toLocaleString();
+  return String(v);
+}
+
+function _cmCompareDelta(key, d) {
+  if (!d) return '';
+  var color = d.favorable ? 'var(--ok, #22c55e)' : 'var(--err, #ef4444)';
+  if (d.abs === 0 || d.abs === 0.0) color = 'var(--text-muted)';
+  var sign = d.abs > 0 ? '+' : '';
+  var pct = d.pct == null ? '' : ' (' + (d.pct > 0 ? '+' : '') + d.pct.toFixed(1) + '%)';
+  return ' <span style="color:' + color + ';font-size:11px;font-weight:600;">' + sign + _cmCompareFmt(key, d.abs) + pct + '</span>';
+}
+
+async function submitCompare() {
+  var a = (document.getElementById('compare-input-a').value || '').trim();
+  var b = (document.getElementById('compare-input-b').value || '').trim();
+  var body = document.getElementById('compare-runs-body');
+  if (!a || !b) { body.innerHTML = '<div style="color:var(--err);font-size:12px;">Both session ids are required.</div>'; return; }
+  body.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">Loading…</div>';
+  var resp;
+  try {
+    resp = await fetch('/api/run-compare?a=' + encodeURIComponent(a) + '&b=' + encodeURIComponent(b));
+  } catch (e) { body.innerHTML = '<div style="color:var(--err);font-size:12px;">Network error: ' + escapeHtmlSafe(e.message) + '</div>'; return; }
+  if (!resp.ok) {
+    var msg = 'Request failed (' + resp.status + ')';
+    try { var err = await resp.json(); if (err && err.error) msg = err.error; } catch (e) {}
+    body.innerHTML = '<div style="color:var(--err);font-size:12px;">' + escapeHtmlSafe(msg) + '</div>';
+    return;
+  }
+  var data = await resp.json();
+  renderCompareResult(data);
+}
+
+function renderCompareResult(data) {
+  var body = document.getElementById('compare-runs-body');
+  if (!data || !data.a || !data.b) { body.innerHTML = '<div style="color:var(--text-muted);">No data.</div>'; return; }
+  var rows = [
+    ['cost_usd', 'Cost'],
+    ['total_tokens', 'Tokens'],
+    ['step_count', 'Steps'],
+    ['max_event_token_count', 'Max context'],
+    ['max_tool_result_bytes', 'Max tool result'],
+    ['cache_hit_rate', 'Cache hit'],
+    ['error_count', 'Errors'],
+    ['flag_count', 'Waste flags'],
+  ];
+  var sevColor = { red: 'var(--err, #ef4444)', yellow: 'var(--warn, #eab308)', green: 'var(--ok, #22c55e)' };
+  var header = function (s) {
+    var sev = sevColor[s.severity] || sevColor.green;
+    return '<div style="font-family:monospace;font-size:11px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;">' + escapeHtmlSafe(s.session_id) + '</div>'
+         + '<div style="font-size:11px;color:var(--text-muted);">' + escapeHtmlSafe(s.runtime || '') + ' · <span style="color:' + sev + ';font-weight:600;">' + escapeHtmlSafe(s.severity || '') + '</span></div>';
+  };
+  var html = '<div style="display:grid;grid-template-columns:160px 1fr 1fr;gap:10px;font-size:12px;">'
+           + '<div></div><div>' + header(data.a) + '</div><div>' + header(data.b) + '</div>';
+  rows.forEach(function (kv) {
+    var key = kv[0], label = kv[1];
+    var va = data.a[key], vb = data.b[key];
+    var d = (data.deltas || {})[key];
+    html += '<div style="color:var(--text-muted);padding:4px 0;border-top:1px solid var(--border-primary);">' + label + '</div>'
+         +  '<div style="padding:4px 0;border-top:1px solid var(--border-primary);">' + escapeHtmlSafe(_cmCompareFmt(key, va)) + '</div>'
+         +  '<div style="padding:4px 0;border-top:1px solid var(--border-primary);">' + escapeHtmlSafe(_cmCompareFmt(key, vb)) + _cmCompareDelta(key, d) + '</div>';
+  });
+  html += '</div>';
+  body.innerHTML = html;
+}
+
+// ── Error triage (#2196 item #5) ────────────────────────────────────────────
+
+async function loadTriageList() {
+  var body = document.getElementById('triage-list-body');
+  if (!body) return;
+  var data;
+  try {
+    var resp = await fetch('/api/error-triage/resolved');
+    if (!resp.ok) { body.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">Triage unavailable.</div>'; return; }
+    data = await resp.json();
+  } catch (e) { body.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">Triage offline.</div>'; return; }
+  var resolved = (data && data.resolved) || {};
+  var keys = Object.keys(resolved);
+  if (!keys.length) { body.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">Nothing resolved yet. Paste an event id above to mute a known error.</div>'; return; }
+  // Sort most-recent-first by resolved_at.
+  keys.sort(function (a, b) { return (resolved[b].resolved_at || 0) - (resolved[a].resolved_at || 0); });
+  var html = '<div style="display:grid;grid-template-columns:1fr 2fr auto auto;gap:8px;font-size:12px;">'
+           + '<div style="color:var(--text-muted);font-weight:600;">Event id</div>'
+           + '<div style="color:var(--text-muted);font-weight:600;">Note</div>'
+           + '<div style="color:var(--text-muted);font-weight:600;">When</div>'
+           + '<div></div>';
+  keys.forEach(function (k) {
+    var r = resolved[k];
+    var when = r.resolved_at ? new Date(r.resolved_at).toLocaleString() : '?';
+    html += '<div style="font-family:monospace;overflow:hidden;text-overflow:ellipsis;border-top:1px solid var(--border-primary);padding:4px 0;">' + escapeHtmlSafe(k) + '</div>'
+         +  '<div style="border-top:1px solid var(--border-primary);padding:4px 0;color:var(--text-muted);">' + escapeHtmlSafe(r.note || '—') + '</div>'
+         +  '<div style="border-top:1px solid var(--border-primary);padding:4px 0;color:var(--text-muted);font-size:11px;">' + escapeHtmlSafe(when) + '</div>'
+         +  '<div style="border-top:1px solid var(--border-primary);padding:4px 0;"><button onclick="unresolveError(\'' + k.replace(/'/g, "\\'") + '\')" style="padding:3px 8px;border:1px solid var(--border-primary);border-radius:6px;background:transparent;color:var(--text-primary);font-size:11px;cursor:pointer;">Unresolve</button></div>';
+  });
+  html += '</div>';
+  body.innerHTML = html;
+}
+
+async function submitResolveError() {
+  var idEl = document.getElementById('triage-input-id');
+  var noteEl = document.getElementById('triage-input-note');
+  var eid = (idEl.value || '').trim();
+  var note = (noteEl.value || '').trim() || null;
+  if (!eid) { idEl.focus(); return; }
+  try {
+    var resp = await fetch('/api/error-triage/resolve', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({event_id: eid, note: note}),
+    });
+    if (resp.ok) { idEl.value = ''; noteEl.value = ''; loadTriageList(); }
+  } catch (e) {}
+}
+
+async function unresolveError(eid) {
+  try {
+    var resp = await fetch('/api/error-triage/resolve?event_id=' + encodeURIComponent(eid), {method: 'DELETE'});
+    if (resp.ok) loadTriageList();
+  } catch (e) {}
+}
+
 // #1969: coalesce concurrent + back-to-back loadAll() callers. Heartbeat-
 // landed handlers, connection-restored, switchTab('overview'), and the
 // periodic refresh interval can all fire within the same second; pre-fix
@@ -2650,6 +2779,8 @@ async function loadAll() {
     // Health timeline (#2196 item #4) — fire-and-forget; renderer hides the
     // card if there's nothing to show.
     try { loadHealthTimeline(); } catch (e) {}
+    // Error-triage list (#2196 item #5) — also fire-and-forget.
+    try { loadTriageList(); } catch (e) {}
     return true;
   } catch (e) {
     console.error('Initial load failed', e);
