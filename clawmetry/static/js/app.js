@@ -13704,6 +13704,49 @@ function loadFlowRuns() {
     });
 }
 
+// Issue #721: per-session channel lanes panel in the Flow tab.
+// Fetches /api/flow/lanes (sessions active in the last 30 min) and renders
+// color-coded pill badges — one per session, colored by channel type.
+function loadFlowLanes() {
+  var container = document.getElementById('flow-lanes-list');
+  var countEl   = document.getElementById('flow-lanes-count');
+  if (!container) return;
+  var _CH_COLORS = {
+    telegram: '#2196F3', signal: '#2E8B7A', whatsapp: '#43A047',
+    discord:  '#5865F2', slack:  '#4A154B', webchat:  '#f59e0b',
+    tui:      '#8b5cf6', irc:    '#10b981', imessage: '#34C759',
+    cli:      '#6366f1',
+  };
+  fetch('/api/flow/lanes')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var lanes = (d && d.lanes) || [];
+      if (countEl) countEl.textContent = lanes.length ? lanes.length + ' active' : '';
+      if (!lanes.length) {
+        container.innerHTML = '<span style="color:#555;font-size:11px;">No active sessions in the last 30 min</span>';
+        return;
+      }
+      container.innerHTML = lanes.map(function(lane) {
+        var color = _CH_COLORS[lane.channel] || '#6b7280';
+        var dot   = lane.status === 'failed' ? '#ef4444' : '#22c55e';
+        var ch    = (lane.channel || 'cli').toUpperCase();
+        var sid   = lane.session_short || '';
+        var evts  = lane.event_count || 0;
+        return '<div style="display:inline-flex;align-items:center;gap:5px;'
+          + 'background:' + color + '22;border:1px solid ' + color + '55;'
+          + 'border-radius:8px;padding:4px 10px;font-size:11px;">'
+          + '<span style="width:7px;height:7px;border-radius:50%;background:' + dot + ';display:inline-block;flex-shrink:0;"></span>'
+          + '<span style="color:' + color + ';font-weight:600;">' + ch + '</span>'
+          + '<span style="color:#aaa;font-family:monospace;">' + sid + '</span>'
+          + '<span style="color:#666;">' + evts + '&nbsp;events</span>'
+          + '</div>';
+      }).join('');
+    })
+    .catch(function() {
+      if (container) container.innerHTML = '<span style="color:#555;font-size:11px;">Could not load lanes</span>';
+    });
+}
+
 // Render a small CTA row below the Flow Runs table when the OSS retention
 // cap kicked in (issue #1173). Lives in its own footer container so the
 // table tbody stays purely tabular.
@@ -13859,6 +13902,10 @@ function initFlow() {
   // the browser tab is hidden — completes Phase 2 coverage.
   if (window._flowStatsTimer) { try { clearInterval(window._flowStatsTimer); } catch(e){} }
   window._flowStatsTimer = visibilitySetInterval(updateFlowStats, updateInterval);
+  // Issue #721: session lanes panel — initial load + 30 s refresh.
+  loadFlowLanes();
+  if (window._flowLanesTimer) { try { clearInterval(window._flowLanesTimer); } catch(e){} }
+  window._flowLanesTimer = visibilitySetInterval(loadFlowLanes, 30000);
   // Per-adapter Flow diagram: reflect the runtime currently selected in the
   // global switcher (OpenClaw/Hermes keep the rich channel→gateway SVG;
   // coding-CLI + pico/nano get their own generated topology).
