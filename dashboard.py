@@ -111,6 +111,7 @@ from routes.heartbeat import bp_heartbeat
 from routes.autonomy import bp_autonomy
 from routes.selfconfig import bp_selfconfig
 from routes.agents import bp_agents
+from routes.assets import bp_assets
 from routes.reasoning import bp_reasoning
 from routes.plugins import bp_plugins
 from routes.local_query import bp_local_query
@@ -127,6 +128,8 @@ from routes.turn_anatomy import bp_turn_anatomy
 from routes.tool_catalog import bp_tool_catalog
 from routes.context_economics import bp_context_economics
 from routes.entitlement import bp_entitlement
+from routes.otel_export import bp_otel_export
+from routes.audit import bp_audit
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -10619,6 +10622,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_heartbeat)
     app.register_blueprint(bp_selfconfig)
     app.register_blueprint(bp_agents)
+    app.register_blueprint(bp_assets)
     app.register_blueprint(bp_reasoning)
     app.register_blueprint(bp_plugins)
     app.register_blueprint(bp_local_query)
@@ -10629,6 +10633,8 @@ def detect_config(args=None):
     app.register_blueprint(bp_tool_catalog)
     app.register_blueprint(bp_context_economics)
     app.register_blueprint(bp_entitlement)
+    app.register_blueprint(bp_otel_export)
+    app.register_blueprint(bp_audit)
 
     # Register built-in agent adapters. External plugins can register more
     # via clawmetry.extensions entry points — see clawmetry/adapters/.
