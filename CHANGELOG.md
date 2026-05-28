@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Release: evidence-based asset registry — first slice (carries #2231) (2026-05-28)
+- DuckDB-backed asset registry now ships on PyPI: turns Self-Evolve findings (and any other agent discovery) into reviewable, reusable assets with provenance — `pending → approved/rejected → deprecated`, every asset tied to a source `session_id`/`run_id`, daemon-proxied reads + writes, full `/api/assets` surface, and a one-click "save as asset" hook on the Self-Evolve route. See the detailed Added entry below for design + scope. No cloud pin bump.
+
 ### Added: evidence-based asset registry — first slice (2026-05-28)
 - New DuckDB-backed asset registry that converts individual agent discoveries (Self-Evolve findings, useful prompts, improved skills) into **reviewable, reusable assets with provenance** — without auto-promoting unreviewed local changes to team/company defaults (#2201). Lifecycle `pending → approved/rejected → deprecated`; every asset traces to a source `session_id`/`run_id`. Types: `skill`, `prompt`, `workflow`, `playbook`, `memory_snippet`, `tool_config`, `evaluation_case`. The daemon owns writes; reads ride the daemon proxy so the cloud can paint from a snapshot the same way (added to the `_DAEMON_METHODS` allowlist next to `ingest_approval` / `update_approval_decision`).
 - HTTP surface (`routes/assets.py`): `GET /api/assets` (filter by `status` / `asset_type` / `source_run_id` / `source_session_id` / `limit`), `GET /api/assets/<id>`, `POST /api/assets` (create candidate), `POST /api/assets/<id>/review` (`approve` / `reject` / `deprecate`).
