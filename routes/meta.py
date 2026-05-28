@@ -51,7 +51,14 @@ bp_auth = Blueprint('auth', __name__)
 bp_otel = Blueprint('otel', __name__)
 bp_version_impact = Blueprint('version_impact', __name__)
 bp_cloud_relay = Blueprint('cloud_relay', __name__)
-bp_otel_export = Blueprint('otel_export', __name__)
+# NOTE: This blueprint owns /api/export/traces (outbound OTLP traces export,
+# shipped in #2206). It must NOT share its name with routes/otel_export.py's
+# bp_otel_export (which owns /api/otel/export, the older Enterprise OTLP/JSON
+# export). Pre-0.12.353 both blueprints were named 'otel_export' -> Flask
+# refused the second registration -> /api/export/traces was silently dropped
+# at runtime. Distinct name 'otlp_traces' fixes the collision; keep the
+# variable name as bp_otlp_traces and update dashboard.py's import + register.
+bp_otlp_traces = Blueprint('otlp_traces', __name__)
 
 
 # ── OTLP trace export ──────────────────────────────────────────────────────────────
@@ -243,7 +250,7 @@ def _sessions_to_otlp_fallback(sessions: list, version: str) -> dict:
     }
 
 
-@bp_otel_export.route("/api/export/traces", methods=["GET"])
+@bp_otlp_traces.route("/api/export/traces", methods=["GET"])
 def export_otlp_traces():
     """Export agent traces as OTLP JSON.
 
