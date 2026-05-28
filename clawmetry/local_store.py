@@ -1583,6 +1583,15 @@ class LocalStore:
             event = _redaction.redact_event(event)
         except Exception:
             pass  # never let redaction block ingest
+        # Optional SIEM/syslog forward (Issue #2199). Off unless
+        # CLAWMETRY_SIEM_HOST is set; non-blocking enqueue, drops + counts
+        # if the bounded queue is full. Runs *after* redaction so secrets
+        # never leave via syslog either.
+        try:
+            from clawmetry import siem as _siem
+            _siem.forward_event(event)
+        except Exception:
+            pass  # never let the SIEM hook block ingest
         with self._ring_lock:
             if len(self._ring) >= RING_MAX:
                 self._dropped += 1
