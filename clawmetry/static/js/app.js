@@ -126,7 +126,7 @@ async function loadBudgetStatus() {
     }
     document.getElementById('budget-status-content').innerHTML = html;
   } catch(e) {
-    document.getElementById('budget-status-content').textContent = 'Failed to load';
+    document.getElementById('budget-status-content').textContent = t("app.failed_to_load", null, "Failed to load");
   }
 }
 
@@ -250,7 +250,7 @@ async function loadWebhookConfig() {
 
 async function saveWebhookConfig() {
   var status = document.getElementById('alert-webhook-status');
-  status.textContent = 'Saving...';
+  status.textContent = t("app.saving", null, "Saving...");
   var minSevEl = document.getElementById('alert-min-severity');
   var payload = {
     webhook_url: document.getElementById('alert-webhook-url').value.trim(),
@@ -272,14 +272,14 @@ async function saveWebhookConfig() {
     status.textContent = 'Saved';
   } catch(e) {
     status.style.color = 'var(--text-error)';
-    status.textContent = 'Save failed';
+    status.textContent = t("app.save_failed", null, "Save failed");
   }
 }
 
 async function testWebhookConfig(target) {
   var status = document.getElementById('alert-webhook-status');
   status.style.color = 'var(--text-muted)';
-  status.textContent = 'Sending test...';
+  status.textContent = t("app.sending_test", null, "Sending test...");
   try {
     var r = await fetch('/api/alert-channels/test', {
       method:'POST',
@@ -289,14 +289,14 @@ async function testWebhookConfig(target) {
     var data = await r.json();
     if(data.ok) {
       status.style.color = 'var(--text-success)';
-      status.textContent = 'Test sent to: ' + (data.sent || []).join(', ');
+      status.textContent = t("app.test_sent_to", null, "Test sent to: ") + (data.sent || []).join(', ');
     } else {
       status.style.color = 'var(--text-error)';
       status.textContent = data.error || 'No URL configured for ' + (target || 'all');
     }
   } catch(e) {
     status.style.color = 'var(--text-error)';
-    status.textContent = 'Test failed';
+    status.textContent = t("app.test_failed", null, "Test failed");
   }
 }
 
@@ -358,7 +358,7 @@ async function checkActiveAlerts() {
       if (sid) {
         var openBtn = document.createElement('button');
         openBtn.id = 'alert-banner-open-session';
-        openBtn.textContent = 'Open session →';
+        openBtn.textContent = t("app.open_session", null, "Open session →");
         openBtn.style.cssText = 'margin-left:12px;background:transparent;border:1px solid rgba(255,255,255,0.3);color:inherit;border-radius:6px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer;';
         openBtn.onclick = function () {
           // Deep-link via hash so the Session-replay tab can pick it up
@@ -558,7 +558,7 @@ async function loadAnomalyPanel() {
         badge.style.color = hasCrit ? '#fca5a5' : '#fbbf24';
         badge.style.display = 'inline-block';
       } else {
-        badge.textContent = 'all clear';
+        badge.textContent = t("app.all_clear", null, "all clear");
         badge.style.background = '#064e3b';
         badge.style.color = '#6ee7b7';
         badge.style.display = 'inline-block';
@@ -739,8 +739,8 @@ async function checkOnboardingStatus() {
     banner.style.display = 'flex';
     if (waitedMs < _CM_ONBOARDING_STALL_MS) {
       var remainingSec = Math.max(5, Math.round((_CM_ONBOARDING_STALL_MS - waitedMs) / 1000));
-      if (msgEl) msgEl.textContent = 'Setting up your node. First check-in usually arrives in about 30 seconds.';
-      if (etaEl) etaEl.textContent = 'checking again in 5s';
+      if (msgEl) msgEl.textContent = t("app.setting_up_your_node_first_check_in_usually_arrive", null, "Setting up your node. First check-in usually arrives in about 30 seconds.");
+      if (etaEl) etaEl.textContent = t("app.checking_again_in_5s", null, "checking again in 5s");
       if (spinEl) spinEl.style.display = 'inline-block';
       banner.style.background = 'linear-gradient(90deg,#0c1d3a 0%,#1a1a2e 100%)';
       banner.style.borderColor = '#3b82f6';
@@ -750,7 +750,7 @@ async function checkOnboardingStatus() {
       // Stalled past 90s. Swap to actionable copy. No demo data, no
       // pretend-it-worked - just tell the user what to check.
       if (msgEl) msgEl.textContent = "Still waiting for your daemon's first check-in. Try: run 'clawmetry status' in a terminal, or restart with 'clawmetry'.";
-      if (etaEl) etaEl.textContent = 'still retrying every 5s';
+      if (etaEl) etaEl.textContent = t("app.still_retrying_every_5s", null, "still retrying every 5s");
       if (spinEl) spinEl.style.display = 'none';
       banner.style.background = '#3f2a06';
       banner.style.borderColor = '#f59e0b';
@@ -1333,7 +1333,7 @@ async function loadOutcomeTile() {
   try {
     var d = await fetchJsonWithTimeout('/api/outcomes?window=1d', 3000);
     if (!d || d.total === 0) {
-      summaryEl.textContent = 'No completed tasks yet today. Outcomes will appear once sessions finish.';
+      summaryEl.textContent = t("app.no_completed_tasks_yet_today_outcomes_will_appear_", null, "No completed tasks yet today. Outcomes will appear once sessions finish.");
       return;
     }
     var pct = Math.round((d.success_rate || 0) * 100);
@@ -1350,7 +1350,7 @@ async function loadOutcomeTile() {
       return '<span style="' + color + '">' + p + '</span>';
     }).join('  ·  ');
   } catch (e) {
-    summaryEl.textContent = 'Task outcomes unavailable right now.';
+    summaryEl.textContent = t("app.task_outcomes_unavailable_right_now", null, "Task outcomes unavailable right now.");
   }
 }
 
@@ -1361,14 +1361,14 @@ async function toggleOutcomeDrilldown() {
   if (!dd) return;
   if (dd.style.display !== 'none') {
     dd.style.display = 'none';
-    if (chev) chev.textContent = 'show details';
+    if (chev) chev.textContent = t("app.show_details", null, "show details");
     return;
   }
   dd.style.display = 'block';
-  if (chev) chev.textContent = 'hide details';
+  if (chev) chev.textContent = t("app.hide_details", null, "hide details");
   var body = document.getElementById('outcome-drilldown-body');
   if (!body) return;
-  body.textContent = 'Loading...';
+  body.textContent = t("app.loading", null, "Loading...");
   try {
     var failed = await fetchJsonWithTimeout('/api/outcomes/sessions?outcome=failed&window=1d&limit=10', 3000).catch(function(){return {sessions:[]};});
     var esc    = await fetchJsonWithTimeout('/api/outcomes/sessions?outcome=escalated&window=1d&limit=10', 3000).catch(function(){return {sessions:[]};});
@@ -1392,7 +1392,7 @@ async function toggleOutcomeDrilldown() {
     }
     body.innerHTML = html;
   } catch (e) {
-    body.textContent = 'Could not load drill-down.';
+    body.textContent = t("app.could_not_load_drill_down", null, "Could not load drill-down.");
   }
 }
 
@@ -1418,7 +1418,7 @@ async function loadAutonomy() {
       : fetch('/api/autonomy').then(function(r){return r.json();}));
 
     if (d.score == null) {
-      labelEl.textContent = 'Just getting started';
+      labelEl.textContent = t("app.just_getting_started", null, "Just getting started");
       labelEl.style.color = 'var(--text-muted)';
       if (gapEl) gapEl.textContent = 'Use your agent a bit and we\u2019ll show how independent it\u2019s becoming.';
       if (badgeEl) { badgeEl.textContent = ''; badgeEl.style.background = ''; badgeEl.style.border = ''; }
@@ -1432,7 +1432,7 @@ async function loadAutonomy() {
     labelEl.style.color = lbl.color;
 
     if (gapEl && d.median_gap_seconds_7d != null) {
-      gapEl.textContent = 'You check in about every ' + _friendlyDuration(d.median_gap_seconds_7d) + '.';
+      gapEl.textContent = t("app.you_check_in_about_every", null, "You check in about every ") + _friendlyDuration(d.median_gap_seconds_7d) + '.';
     } else if (gapEl) {
       gapEl.textContent = '';
     }
@@ -1560,13 +1560,13 @@ async function loadHeartbeat() {
 
     if (lastBeat) {
       if (status === 'never') {
-        lastBeat.textContent = 'not yet';
+        lastBeat.textContent = t("app.not_yet", null, "not yet");
         lastBeat.style.color = '#9ca3af';
       } else if (d.last_heartbeat_age_seconds !== null && d.last_heartbeat_age_seconds !== undefined) {
         lastBeat.textContent = _friendlyAgo(d.last_heartbeat_age_seconds);
         lastBeat.style.color = colors[status] || '#9ca3af';
       } else {
-        lastBeat.textContent = 'not yet';
+        lastBeat.textContent = t("app.not_yet", null, "not yet");
         lastBeat.style.color = '#9ca3af';
       }
     }
@@ -1576,9 +1576,9 @@ async function loadHeartbeat() {
       if (c.expected_beats === 0) {
         cadenceEl.textContent = '';
       } else if (c.actual_beats === 0) {
-        cadenceEl.textContent = 'Expected ' + c.expected_beats + ' check-ins today, got none yet';
+        cadenceEl.textContent = t("app.expected", null, "Expected ") + c.expected_beats + ' check-ins today, got none yet';
       } else {
-        cadenceEl.textContent = 'Checked in ' + c.actual_beats + ' of ' + c.expected_beats + ' expected today';
+        cadenceEl.textContent = t("app.checked_in", null, "Checked in ") + c.actual_beats + ' of ' + c.expected_beats + ' expected today';
       }
     }
 
@@ -1915,7 +1915,7 @@ async function _selfconfigRenderReader(filename, ts) {
       bannerEl.style.display = 'none';
     } else {
       bannerEl.style.display = 'flex';
-      if (bannerText) bannerText.textContent = 'Viewing the version from ' + _friendlyTimestamp(ts);
+      if (bannerText) bannerText.textContent = t("app.viewing_the_version_from", null, "Viewing the version from ") + _friendlyTimestamp(ts);
     }
   }
 
@@ -1977,8 +1977,8 @@ function _selfconfigUpdateStatusBar(filename, ts, d) {
     sizeEl.textContent = lines + ' line' + (lines === 1 ? '' : 's') + ' \u00B7 ' + _friendlyBytes(bytes);
   }
   if (updatedEl) {
-    if (ts != null) updatedEl.textContent = 'Viewing ' + _friendlyTimestamp(ts);
-    else if (d && d.ts) updatedEl.textContent = 'Updated ' + _friendlyTimestamp(d.ts);
+    if (ts != null) updatedEl.textContent = t("app.viewing", null, "Viewing ") + _friendlyTimestamp(ts);
+    else if (d && d.ts) updatedEl.textContent = t("app.updated", null, "Updated ") + _friendlyTimestamp(d.ts);
     else updatedEl.textContent = '';
   }
 }
@@ -2041,7 +2041,7 @@ function selfconfigSyncGutterScroll() {
 function selfconfigDiscardEdit() {
   var textarea = document.getElementById('selfconfig-editor-textarea');
   if (textarea && textarea.value !== _selfconfigOriginal) {
-    if (!confirm('Discard unsaved changes?')) return;
+    if (!confirm(t("app.discard_unsaved_changes", null, "Discard unsaved changes?"))) return;
   }
   selfconfigSetMode('preview');
 }
@@ -2087,7 +2087,7 @@ async function selfconfigSave() {
 
 async function selfconfigRestoreVersion() {
   if (_selfconfigSelectedTs == null || !_selfconfigCurrentFile) return;
-  if (!confirm('Restore this version? The current content will be replaced (but saved as a new version in history).')) return;
+  if (!confirm(t("app.restore_this_version_the_current_content_will_be_r", null, "Restore this version? The current content will be replaced (but saved as a new version in history)."))) return;
   try {
     // Fetch the historical version's content, then save it as the live file.
     var url = '/api/selfconfig/' + encodeURIComponent(_selfconfigCurrentFile) + '/content?ts=' + _selfconfigSelectedTs;
@@ -2746,7 +2746,7 @@ async function loadAll() {
     if (typeof loadAnomalyPanel === 'function') setTimeout(function(){ loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)}); }, 3600);
     // Issue #1614 — outcome tile (Today: N tasks, X% success).
     if (typeof loadOutcomeTile === 'function') setTimeout(function(){ loadOutcomeTile().catch(function(e){console.warn('outcome tile failed',e)}); }, 800);
-    document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
+    document.getElementById('refresh-time').textContent = t("app.updated", null, "Updated ") + new Date().toLocaleTimeString();
 
     if (overview.infra) {
       var i = overview.infra;
@@ -2784,7 +2784,7 @@ async function loadAll() {
     return true;
   } catch (e) {
     console.error('Initial load failed', e);
-    document.getElementById('refresh-time').textContent = 'Load failed - retrying...';
+    document.getElementById('refresh-time').textContent = t("app.load_failed_retrying", null, "Load failed - retrying...");
     return false;
   }
   })();
@@ -2816,7 +2816,7 @@ async function loadMiniWidgets(overview, usage) {
   if (isOauthLikely) {
     if (badgeEl) {
       badgeEl.style.display = '';
-      badgeEl.textContent = 'est. equivalent if billed - OAuth likely';
+      badgeEl.textContent = t("app.est_equivalent_if_billed_oauth_likely", null, "est. equivalent if billed - OAuth likely");
     }
     trendEl.style.display = 'none';
   } else {
@@ -2922,7 +2922,7 @@ async function loadEvalSummary() {
     if (data.scored === 0) {
       avgEl.textContent = '--';
       avgEl.style.color = 'var(--text-muted)';
-      if (covEl) covEl.textContent = 'no scored sessions yet';
+      if (covEl) covEl.textContent = t("app.no_scored_sessions_yet", null, "no scored sessions yet");
       return;
     }
     var avg = Number(data.avg_score || 0);
@@ -2954,7 +2954,7 @@ async function loadEvalRegressionSummary() {
     if (data.regressed > 0) parts.push(data.regressed + ' regressed');
     if (data.same > 0) parts.push(data.same + ' same');
     if (!parts.length) { el.textContent = ''; return; }
-    el.textContent = 'Regression: ' + parts.join(', ') + ' (7d)';
+    el.textContent = t("app.regression", null, "Regression: ") + parts.join(', ') + ' (7d)';
     // Subtle color signal: red if anything regressed, green if any fixed
     // and none regressed, muted otherwise.
     if (data.regressed > 0) {
@@ -2978,7 +2978,7 @@ async function openEvalRubricModal() {
   var pathEl = document.getElementById('eval-rubric-path');
   if (!modal || !ta) return;
   modal.style.display = 'flex';
-  if (status) status.textContent = 'Loading...';
+  if (status) status.textContent = t("app.loading", null, "Loading...");
   try {
     var data = await fetch('/api/evals/rubric').then(function(r){return r.json();});
     ta.value = data.yaml || '';
@@ -2989,7 +2989,7 @@ async function openEvalRubricModal() {
         : 'Loaded.';
     }
   } catch (e) {
-    if (status) status.textContent = 'Failed to load: ' + e.message;
+    if (status) status.textContent = t("app.failed_to_load_2", null, "Failed to load: ") + e.message;
   }
 }
 
@@ -3003,7 +3003,7 @@ async function saveEvalRubric() {
   var status = document.getElementById('eval-rubric-status');
   if (!ta) return;
   var body = JSON.stringify({yaml: ta.value || ''});
-  if (status) status.textContent = 'Saving...';
+  if (status) status.textContent = t("app.saving", null, "Saving...");
   try {
     var resp = await fetch('/api/evals/rubric', {
       method: 'POST',
@@ -3012,13 +3012,13 @@ async function saveEvalRubric() {
     });
     var data = await resp.json();
     if (!resp.ok || data.error) {
-      if (status) status.textContent = 'Save failed: ' + (data.error || resp.status);
+      if (status) status.textContent = t("app.save_failed_2", null, "Save failed: ") + (data.error || resp.status);
       return;
     }
-    if (status) status.textContent = 'Saved. New scores use this rubric on the next scheduler tick.';
+    if (status) status.textContent = t("app.saved_new_scores_use_this_rubric_on_the_next_sched", null, "Saved. New scores use this rubric on the next scheduler tick.");
     setTimeout(closeEvalRubricModal, 1200);
   } catch (e) {
-    if (status) status.textContent = 'Save failed: ' + e.message;
+    if (status) status.textContent = t("app.save_failed_2", null, "Save failed: ") + e.message;
   }
 }
 
@@ -3028,7 +3028,7 @@ async function loadSubAgents() {
     var data = _saResp.b || {};
     // Issue #1804: show outage banner when ingest is offline (503 envelope).
     if (_saResp.s === 503 && data && data.error === 'local_store ingest is offline') {
-      document.getElementById('subagents-status').textContent = 'Ingest offline';
+      document.getElementById('subagents-status').textContent = t("app.ingest_offline", null, "Ingest offline");
       var _saPrev = document.getElementById('subagents-preview');
       if (_saPrev) _saPrev.innerHTML = '<div style="background:#fff7ed;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:6px;font-size:12px;"><strong>Ingest temporarily offline.</strong> Sub-agent data unavailable; the local_store writer is not responding.</div>';
       return;
@@ -3080,7 +3080,7 @@ async function loadSubAgents() {
     
   } catch(e) {
     document.getElementById('subagents-count').textContent = '?';
-    document.getElementById('subagents-status').textContent = 'Error loading sub-agents';
+    document.getElementById('subagents-status').textContent = t("app.error_loading_sub_agents", null, "Error loading sub-agents");
     document.getElementById('subagents-preview').innerHTML = '<div style="color:#e74c3c;font-size:11px;">Failed to load workforce</div>';
   }
 }
@@ -3260,7 +3260,7 @@ async function loadToolActivity() {
     });
     
     document.getElementById('tools-active').textContent = recentTools.slice(0, 3).join(', ') || 'Idle';
-    document.getElementById('tools-recent').textContent = 'Last ' + Math.min(logs.lines.length, 100) + ' log entries';
+    document.getElementById('tools-recent').textContent = t("app.last", null, "Last ") + Math.min(logs.lines.length, 100) + ' log entries';
     
     var sparks = document.querySelectorAll('.tool-spark span');
     sparks[0].textContent = toolCounts.exec;
@@ -5507,7 +5507,7 @@ async function loadContextInspector() {
     var windowMax = document.getElementById('ctx-window-max');
     if (windowMax) windowMax.textContent = _fmtTokens(contextWindow);
     var threshold = document.getElementById('ctx-compact-threshold');
-    if (threshold) threshold.textContent = 'Compaction at ~' + _fmtTokens(Math.round(contextWindow * 0.8));
+    if (threshold) threshold.textContent = t("app.compaction_at", null, "Compaction at ~") + _fmtTokens(Math.round(contextWindow * 0.8));
 
     // Stats cards
     var turns = events.filter(function(e){return e.type === 'USER';}).length;
@@ -5677,7 +5677,7 @@ window.advisorAsk = async function () {
       metaEl.textContent = parts.length ? parts.join(' · ') : '';
     }
   } catch (e) {
-    out.textContent = 'Network error: ' + e.message;
+    out.textContent = t("app.network_error", null, "Network error: ") + e.message;
   }
 };
 
@@ -5779,7 +5779,7 @@ function _seFixConfirm(f, onYes) {
 function _seFixRun(f, btn) {
   var statusEl = btn.parentElement.querySelector('.se-fix-status');
   btn.disabled = true; btn.style.opacity = '0.6';
-  if (statusEl) { statusEl.textContent = '⏳ Queued…'; statusEl.style.color = 'var(--text-muted)'; }
+  if (statusEl) { statusEl.textContent = t("app.queued", null, "⏳ Queued…"); statusEl.style.color = 'var(--text-muted)'; }
   fetch('/api/selfevolve/fix', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ title: f.title, suggestion: f.suggestion, category: f.category, evidence: f.evidence }) })
     .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
@@ -5791,7 +5791,7 @@ function _seFixRun(f, btn) {
       _seFixPoll(res.j.job_id, statusEl, btn);
     })
     .catch(function () {
-      if (statusEl) { statusEl.textContent = '⚠️ Network error'; statusEl.style.color = '#ef4444'; }
+      if (statusEl) { statusEl.textContent = t("app.network_error_2", null, "⚠️ Network error"); statusEl.style.color = '#ef4444'; }
       btn.disabled = false; btn.style.opacity = '1';
     });
 }
@@ -5803,11 +5803,11 @@ function _seFixPoll(jobId, statusEl, btn) {
       .then(function (r) { return r.json(); })
       .then(function (j) {
         if (j.status === 'running') {
-          if (statusEl) { statusEl.textContent = '⚙️ Agent working…'; statusEl.style.color = '#60a5fa'; }
+          if (statusEl) { statusEl.textContent = t("app.agent_working", null, "⚙️ Agent working…"); statusEl.style.color = '#60a5fa'; }
         } else if (j.status === 'done') {
           clearInterval(iv);
           if (statusEl) { statusEl.textContent = '✅ ' + (j.summary || 'Done'); statusEl.style.color = '#22c55e'; }
-          if (btn) { btn.textContent = '✅ Fixed'; }
+          if (btn) { btn.textContent = t("app.fixed", null, "✅ Fixed"); }
         } else if (j.status === 'error') {
           clearInterval(iv);
           if (statusEl) { statusEl.textContent = '⚠️ ' + (j.error || 'Failed'); statusEl.style.color = '#ef4444'; }
@@ -5878,7 +5878,7 @@ async function selfevolveProbe() {
         var cached = await fetchJsonWithTimeout('/api/selfevolve/latest', 3000);
         if (cached && (cached.findings || []).length) {
           selfevolveRenderFindings(cached);
-          if (runBtn) runBtn.textContent = 'Re-analyze';
+          if (runBtn) runBtn.textContent = t("app.re_analyze", null, "Re-analyze");
           return;
         }
       } catch (e) { /* fall through to empty state */ }
@@ -5893,8 +5893,8 @@ window.selfevolveRun = async function () {
   var btn = document.getElementById('selfevolve-run-btn');
   var status = document.getElementById('selfevolve-status');
   var origText = btn ? btn.textContent : '';
-  if (btn) { btn.disabled = true; btn.textContent = 'Analyzing…'; btn.style.opacity = '0.6'; }
-  if (status) status.textContent = 'Reviewing recent activity — this takes ~15 seconds…';
+  if (btn) { btn.disabled = true; btn.textContent = t("app.analyzing", null, "Analyzing…"); btn.style.opacity = '0.6'; }
+  if (status) status.textContent = t("app.reviewing_recent_activity_this_takes_15_seconds", null, "Reviewing recent activity — this takes ~15 seconds…");
   try {
     var resp = await fetch('/api/selfevolve/analyze', { method: 'POST' });
     var d = await resp.json();
@@ -5904,9 +5904,9 @@ window.selfevolveRun = async function () {
     }
     selfevolveRenderFindings(d);
   } catch (e) {
-    if (status) status.textContent = 'Network error: ' + e.message;
+    if (status) status.textContent = t("app.network_error", null, "Network error: ") + e.message;
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '🔄 Re-analyze'; btn.style.opacity = ''; }
+    if (btn) { btn.disabled = false; btn.textContent = t("app.re_analyze_2", null, "🔄 Re-analyze"); btn.style.opacity = ''; }
   }
 };
 
@@ -6446,7 +6446,7 @@ async function loadNemoClaw() {
     var sbStatus = document.getElementById('nc-sandbox-status');
     if (sbStatus) {
       if (sandboxes.length === 0) {
-        sbStatus.textContent = 'no sandboxes';
+        sbStatus.textContent = t("app.no_sandboxes", null, "no sandboxes");
         sbStatus.style.color = 'var(--text-muted)';
       } else {
         var running = sandboxes.filter(function(s) { return s.status === 'running' || s.status === 'active'; }).length;
@@ -6478,11 +6478,11 @@ async function loadNemoClaw() {
     var driftBadge = document.getElementById('nc-drift-badge');
     if (data.drift) {
       if (driftAlert) driftAlert.style.display = '';
-      if (driftDetail) driftDetail.textContent = 'Previous: ' + (data.drift.previous_hash || data.drift.old_hash || '?') + ' → Current: ' + (data.drift.current_hash || data.drift.new_hash || '?') + (data.drift.detected_at ? '  (detected ' + data.drift.detected_at.substring(0,19).replace('T',' ') + ' UTC)' : '');
-      if (driftBadge) { driftBadge.textContent = '⚠ Policy drift detected'; driftBadge.style.cssText = 'font-size:11px;font-weight:700;color:#ef4444;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:4px;padding:2px 8px;'; }
+      if (driftDetail) driftDetail.textContent = t("app.previous", null, "Previous: ") + (data.drift.previous_hash || data.drift.old_hash || '?') + ' → Current: ' + (data.drift.current_hash || data.drift.new_hash || '?') + (data.drift.detected_at ? '  (detected ' + data.drift.detected_at.substring(0,19).replace('T',' ') + ' UTC)' : '');
+      if (driftBadge) { driftBadge.textContent = t("app.policy_drift_detected", null, "⚠ Policy drift detected"); driftBadge.style.cssText = 'font-size:11px;font-weight:700;color:#ef4444;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:4px;padding:2px 8px;'; }
     } else {
       if (driftAlert) driftAlert.style.display = 'none';
-      if (driftBadge) { driftBadge.textContent = '✓ No drift'; driftBadge.style.cssText = 'font-size:11px;font-weight:600;color:#76b900;'; }
+      if (driftBadge) { driftBadge.textContent = t("app.no_drift", null, "✓ No drift"); driftBadge.style.cssText = 'font-size:11px;font-weight:600;color:#76b900;'; }
     }
 
     // Network policies table
@@ -6682,7 +6682,7 @@ async function loadNemoClawMetrics() {
 }
 
 async function ncApprove(sandbox, chunkId, btn) {
-  if (btn) { btn.disabled = true; btn.textContent = 'Approving...'; }
+  if (btn) { btn.disabled = true; btn.textContent = t("app.approving", null, "Approving..."); }
   try {
     var resp = await fetch('/api/nemoclaw/approve', {
       method: 'POST',
@@ -6693,11 +6693,11 @@ async function ncApprove(sandbox, chunkId, btn) {
     if (data.ok) {
       setTimeout(loadNemoClawApprovals, 500);
     } else {
-      if (btn) { btn.disabled = false; btn.textContent = '✓ Approve'; }
+      if (btn) { btn.disabled = false; btn.textContent = t("app.approve", null, "✓ Approve"); }
       alert('Approve failed: ' + (data.output || 'unknown error'));
     }
   } catch(e) {
-    if (btn) { btn.disabled = false; btn.textContent = '✓ Approve'; }
+    if (btn) { btn.disabled = false; btn.textContent = t("app.approve", null, "✓ Approve"); }
     console.error('ncApprove error:', e);
   }
 }
@@ -6705,7 +6705,7 @@ async function ncApprove(sandbox, chunkId, btn) {
 async function ncReject(sandbox, chunkId, btn) {
   var reason = window.prompt('Reject reason (optional):') || '';
   if (reason === null) return; // cancelled
-  if (btn) { btn.disabled = true; btn.textContent = 'Rejecting...'; }
+  if (btn) { btn.disabled = true; btn.textContent = t("app.rejecting", null, "Rejecting..."); }
   try {
     var resp = await fetch('/api/nemoclaw/reject', {
       method: 'POST',
@@ -6716,11 +6716,11 @@ async function ncReject(sandbox, chunkId, btn) {
     if (data.ok) {
       setTimeout(loadNemoClawApprovals, 500);
     } else {
-      if (btn) { btn.disabled = false; btn.textContent = '✗ Reject'; }
+      if (btn) { btn.disabled = false; btn.textContent = t("app.reject", null, "✗ Reject"); }
       alert('Reject failed: ' + (data.output || 'unknown error'));
     }
   } catch(e) {
-    if (btn) { btn.disabled = false; btn.textContent = '✗ Reject'; }
+    if (btn) { btn.disabled = false; btn.textContent = t("app.reject", null, "✗ Reject"); }
     console.error('ncReject error:', e);
   }
 }
@@ -6805,7 +6805,7 @@ async function loadSecurityPage(silent) {
     document.getElementById('sec-medium-count').textContent = counts.medium || 0;
     document.getElementById('sec-clean-count').textContent = counts.clean_sessions || 0;
     var scanTime = document.getElementById('security-scan-time');
-    if (scanTime) scanTime.textContent = 'Scanned ' + new Date().toLocaleTimeString();
+    if (scanTime) scanTime.textContent = t("app.scanned", null, "Scanned ") + new Date().toLocaleTimeString();
     // Compact "all-clear" mode: when there's nothing to triage, hide the four
     // zero-tiles + severity filter + perpetual "Scanning..." placeholder; show
     // one calm green line instead. Restored the moment anything > 0.
@@ -6973,14 +6973,14 @@ async function viewFile(path) {
   var title = document.getElementById('file-viewer-title');
   var content = document.getElementById('file-viewer-content');
   title.textContent = path;
-  content.textContent = 'Loading...';
+  content.textContent = t("app.loading", null, "Loading...");
   viewer.style.display = 'block';
   try {
     var data = await fetch('/api/file?path=' + encodeURIComponent(path)).then(r => r.json());
-    if (data.error) { content.textContent = 'Error: ' + data.error; return; }
+    if (data.error) { content.textContent = t("app.error", null, "Error: ") + data.error; return; }
     content.textContent = data.content;
   } catch(e) {
-    content.textContent = 'Failed to load: ' + e.message;
+    content.textContent = t("app.failed_to_load_2", null, "Failed to load: ") + e.message;
   }
   viewer.scrollIntoView({behavior:'smooth'});
 }
@@ -7827,7 +7827,7 @@ async function loadCronHealth() {
 }
 
 async function cronKillAll() {
-  if (!confirm('Emergency stop: disable ALL active cron jobs? This cannot be undone automatically.')) return;
+  if (!confirm(t("app.emergency_stop_disable_all_active_cron_jobs_this_c", null, "Emergency stop: disable ALL active cron jobs? This cannot be undone automatically."))) return;
   try {
     var r = await fetch('/api/cron/kill-all', {method:'POST'}).then(res => res.json());
     alert('Disabled ' + (r.disabled||0) + ' cron job(s).' + (r.errors && r.errors.length ? ' Failed: '+r.errors.join(', ') : ''));
@@ -8499,7 +8499,7 @@ async function loadCronLog(evt, sessionId) {
     }).join('\n');
     document.getElementById('cron-log-content').textContent = out || 'No events found';
   } catch(ex) {
-    document.getElementById('cron-log-content').textContent = 'Error: ' + ex.message;
+    document.getElementById('cron-log-content').textContent = t("app.error", null, "Error: ") + ex.message;
   }
 }
 
@@ -8548,7 +8548,7 @@ function cronEdit(jobId) {
   var job = _cronJobs.find(function(j) { return j.id === jobId; });
   if (!job) return;
   document.getElementById('cron-edit-mode').value = 'edit';
-  document.getElementById('cron-modal-title').textContent = 'Edit Cron Job';
+  document.getElementById('cron-modal-title').textContent = t("app.edit_cron_job", null, "Edit Cron Job");
   document.getElementById('cron-save-btn').textContent = 'Save';
   document.getElementById('cron-edit-id').value = job.id;
   document.getElementById('cron-edit-name').value = job.name || '';
@@ -8573,8 +8573,8 @@ function cronEdit(jobId) {
 
 function cronCreateNew() {
   document.getElementById('cron-edit-mode').value = 'create';
-  document.getElementById('cron-modal-title').textContent = 'Create New Cron Job';
-  document.getElementById('cron-save-btn').textContent = 'Create';
+  document.getElementById('cron-modal-title').textContent = t("app.create_new_cron_job", null, "Create New Cron Job");
+  document.getElementById('cron-save-btn').textContent = t("app.create", null, "Create");
   document.getElementById('cron-edit-id').value = '';
   document.getElementById('cron-edit-name').value = '';
   document.getElementById('cron-edit-schedule').value = '';
@@ -9778,7 +9778,7 @@ async function _loadMemoryAllFiles() {
   if (!document.getElementById('mem-ide-css')) {
     var cs = document.createElement('style');
     cs.id = 'mem-ide-css';
-    cs.textContent = '.mem-file:hover,.mem-file.active{background:var(--bg-tertiary,#1e293b)!important}';
+    cs.textContent = t("app.mem_file_hover_mem_file_active_background_var_bg_t", null, ".mem-file:hover,.mem-file.active{background:var(--bg-tertiary,#1e293b)!important}");
     document.head.appendChild(cs);
   }
   // IDE layout: sidebar + content viewer
@@ -9836,13 +9836,13 @@ async function _loadMemoryAllFiles() {
         '<pre style="margin:0;padding:16px;font-family:monospace;font-size:12px;line-height:1.6;color:var(--text-secondary);white-space:pre-wrap;word-break:break-word">Loading...</pre>';
       try {
         var d = await fetch('/api/file?path=' + encodeURIComponent(p)).then(function(r) { return r.json(); });
-        if (d.error) { viewer.querySelector('pre').textContent = 'Error: ' + d.error; return; }
+        if (d.error) { viewer.querySelector('pre').textContent = t("app.error", null, "Error: ") + d.error; return; }
         var content = d.content || '';
         viewer.innerHTML = '<div style="padding:8px 16px;border-bottom:1px solid var(--border-primary);display:flex;align-items:center;gap:8px;background:var(--bg-secondary);position:sticky;top:0;z-index:1">' +
           '<span style="font-size:12px">📝</span><span style="font-size:12px;font-weight:600;color:var(--text-primary)">' + escHtml(p) + '</span>' +
           '<span style="margin-left:auto;font-size:10px;color:var(--text-muted)">' + content.length + ' chars</span></div>' +
           '<pre style="margin:0;padding:16px;font-family:monospace;font-size:12px;line-height:1.6;color:var(--text-secondary);white-space:pre-wrap;word-break:break-word">' + escHtml(content) + '</pre>';
-      } catch(e) { viewer.querySelector('pre').textContent = 'Failed: ' + e.message; }
+      } catch(e) { viewer.querySelector('pre').textContent = t("app.failed", null, "Failed: ") + e.message; }
     };
   });
 }
@@ -10534,7 +10534,7 @@ function copyDiagnostics() {
   function done() {
     if (!btn) return;
     var old = btn.textContent;
-    btn.textContent = 'Copied';
+    btn.textContent = t("app.copied", null, "Copied");
     setTimeout(function(){ btn.textContent = old || '📋 Copy'; }, 1200);
   }
   if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -11420,7 +11420,7 @@ function displayTrendAnalysis(trend, usageData) {
 
     predictionEl.textContent = line;
   } else {
-    predictionEl.textContent = 'Analyzing usage patterns...';
+    predictionEl.textContent = t("app.analyzing_usage_patterns", null, "Analyzing usage patterns...");
   }
   
   card.style.display = 'block';
@@ -11767,7 +11767,7 @@ function copyTranscriptRaw(btn) {
     if (pre && navigator.clipboard) {
       navigator.clipboard.writeText(pre.textContent);
       var orig = btn.textContent;
-      btn.textContent = 'Copied';
+      btn.textContent = t("app.copied", null, "Copied");
       setTimeout(function () { btn.textContent = orig; }, 1200);
     }
   } catch (e) {}
@@ -12180,11 +12180,11 @@ function toggleMsg(idx) {
   if (short.style.display === 'none') {
     short.style.display = '';
     full.style.display = 'none';
-    short.nextElementSibling.nextElementSibling.textContent = 'Show more';
+    short.nextElementSibling.nextElementSibling.textContent = t("app.show_more", null, "Show more");
   } else {
     short.style.display = 'none';
     full.style.display = '';
-    event.target.textContent = 'Show less';
+    event.target.textContent = t("app.show_less", null, "Show less");
   }
 }
 
@@ -12312,7 +12312,7 @@ function _cmSyncRender(prog, health) {
     counts = ' · ' + (prog.done || 0) + (prog.total ? ' / ' + prog.total : '') + ' items';
   }
   var phaseLabel = phase ? phase.replace(/_/g, ' ') : 'starting';
-  sub.textContent = 'Step: ' + phaseLabel + counts + etaTxt;
+  sub.textContent = t("app.step", null, "Step: ") + phaseLabel + counts + etaTxt;
 
   // Details log (structured)
   var ts = new Date().toLocaleTimeString();
@@ -12338,7 +12338,7 @@ function _cmSyncRender(prog, health) {
       + '<div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;white-space:pre-wrap;word-break:break-word;">' + escHtml(msg) + '</div>'
       + '<div style="margin-top:6px;font-size:11px;"><a href="https://github.com/vivekchand/clawmetry#troubleshooting" target="_blank" rel="noopener" style="color:#fca5a5;">Open troubleshooting docs →</a></div>';
     errBox.style.display = 'block';
-    title.textContent = 'Sync needs attention';
+    title.textContent = t("app.sync_needs_attention", null, "Sync needs attention");
     bar.style.background = 'linear-gradient(90deg,#3b1416 0%,#1a0e15 100%)';
     bar.style.borderBottom = '1px solid #7f1d1d';
   }
@@ -12354,7 +12354,7 @@ function _cmSyncRender(prog, health) {
   var verified = prog && prog.status === 'complete' &&
                  health && (health.event_count || 0) > 0;
   if (verified) {
-    title.textContent = '✓ Verified — your data is live';
+    title.textContent = t("app.verified_your_data_is_live", null, "✓ Verified — your data is live");
     sub.textContent = (health.event_count || 0).toLocaleString() + ' events indexed';
     setTimeout(_cmSyncDismiss, 1500);
   }
@@ -13283,7 +13283,7 @@ async function loadMainActivity() {
         : 'No recent activity';
       el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted);">' + _maEmpty + '</div>';
       if (dot) dot.style.background = '#888';
-      if (label) { label.textContent = 'No data'; label.style.color = 'var(--text-muted)'; }
+      if (label) { label.textContent = t("app.no_data", null, "No data"); label.style.color = 'var(--text-muted)'; }
       return;
     }
 
@@ -13964,7 +13964,7 @@ function showFlowRunDetail(sid) {
   var title = document.getElementById('flow-runs-detail-title');
   var body = document.getElementById('flow-runs-detail-body');
   if (!box || !body) return;
-  if (title) title.textContent = 'Run · ' + sid;
+  if (title) title.textContent = t("app.run", null, "Run · ") + sid;
   body.innerHTML = '<div style="color:var(--text-muted);">Loading transcript&hellip;</div>';
   box.style.display = 'block';
   // Re-fetch /api/flow/runs to find this row (cheap; ≤200 rows). Then
@@ -14564,7 +14564,7 @@ function clearToolStream() {
   var el = document.getElementById('flow-live-feed');
   if (el) el.innerHTML = '<div style="color:#555;">Stream cleared.</div>';
   var countEl = document.getElementById('flow-feed-count');
-  if (countEl) countEl.textContent = '0 events';
+  if (countEl) countEl.textContent = t("app.0_events", null, "0 events");
 }
 
 function applyToolStreamFilter() {
@@ -14869,7 +14869,7 @@ function _showStuckBanner(sessionId, ageSec) {
   var label = sessionId ? sessionId.substring(0, 20) : 'unknown session';
   var ageStr = ageSec > 0 ? ' (' + ageSec + 's)' : '';
   var msg = document.getElementById('stuck-session-banner-msg');
-  if (msg) msg.textContent = '⚠️ Session stuck' + ageStr + ': ' + label + ' — agent may be looping';
+  if (msg) msg.textContent = t("app.session_stuck", null, "⚠️ Session stuck") + ageStr + ': ' + label + ' — agent may be looping';
   var link = document.getElementById('stuck-session-banner-link');
   if (link && sessionId) link.href = '#';
   banner.style.display = 'flex';
@@ -15532,7 +15532,7 @@ function openCompModal(nodeId) {
         html += '<div style="margin-top:12px;font-size:10px;color:var(--text-muted);font-style:italic;text-align:center;">' + escapeHtml(data.note) + '</div>';
       }
       sBody.innerHTML = html;
-      document.getElementById('comp-modal-footer').textContent = 'Auto-refreshing - Last updated: ' + new Date().toLocaleTimeString() + ' - ' + skills.length + ' skills';
+      document.getElementById('comp-modal-footer').textContent = t("app.auto_refreshing_last_updated", null, "Auto-refreshing - Last updated: ") + new Date().toLocaleTimeString() + ' - ' + skills.length + ' skills';
     }).catch(function(e) {
       if (!isCompModalActive('node-skills')) return;
       sBody.innerHTML = '<div style="padding:20px;color:var(--text-error);">Failed to load skills: ' + escapeHtml(e.message) + '</div>';
@@ -15573,7 +15573,7 @@ function openCompModal(nodeId) {
       });
       html += '</div>';
       body.innerHTML = html;
-      document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+      document.getElementById('comp-modal-footer').textContent = t("app.last_updated", null, "Last updated: ") + new Date().toLocaleTimeString();
     }).catch(function(e) {
       if (!isCompModalActive(nodeId)) return;
       document.getElementById('comp-modal-body').innerHTML = _compModalError('loadComponentWithTimeContext(\'' + nodeId + '\')', c.name, e);
@@ -15582,7 +15582,7 @@ function openCompModal(nodeId) {
   }
 
   document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:20px;"><div style="font-size:48px;margin-bottom:16px;">' + c.icon + '</div><div style="font-size:16px;font-weight:600;margin-bottom:8px;">' + c.name + '</div><div style="color:var(--text-muted);">Live view coming soon</div><div style="margin-top:8px;font-size:12px;color:var(--text-muted);text-transform:uppercase;">' + c.type + '</div></div>';
-  document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+  document.getElementById('comp-modal-footer').textContent = t("app.last_updated", null, "Last updated: ") + new Date().toLocaleTimeString();
   document.getElementById('comp-modal-overlay').classList.add('open');
 }
 
@@ -15631,7 +15631,7 @@ function loadTelegramMessages(isRefresh) {
     }
     html += '</div>';
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString() + ' - ' + data.total + ' total messages';
+    document.getElementById('comp-modal-footer').textContent = t("app.last_updated", null, "Last updated: ") + new Date().toLocaleTimeString() + ' - ' + data.total + ' total messages';
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     if (!isRefresh) {
@@ -15700,7 +15700,7 @@ function loadTuiMessages(isRefresh) {
     var scroll = body.querySelector('.tg-chat');
     if (scroll) scroll.scrollTop = scroll.scrollHeight;
     var f = document.getElementById('comp-modal-footer');
-    if (f) f.textContent = 'Last updated: ' + new Date().toLocaleTimeString() +
+    if (f) f.textContent = t("app.last_updated", null, "Last updated: ") + new Date().toLocaleTimeString() +
       ' - ' + (data.total || msgs.length) + ' total TUI messages';
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
@@ -15732,7 +15732,7 @@ function loadMoreTelegram() {
     });
     html += '</div>';
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString() + ' - ' + data.total + ' total messages';
+    document.getElementById('comp-modal-footer').textContent = t("app.last_updated", null, "Last updated: ") + new Date().toLocaleTimeString() + ' - ' + data.total + ' total messages';
   });
 }
 
@@ -15761,7 +15761,7 @@ function loadIMessageMessages(isRefresh) {
     });
     html += '</div>';
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString() + ' - ' + (data.total || msgs.length) + ' total messages';
+    document.getElementById('comp-modal-footer').textContent = t("app.last_updated", null, "Last updated: ") + new Date().toLocaleTimeString() + ' - ' + (data.total || msgs.length) + ' total messages';
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     if (!isRefresh) {
@@ -15795,7 +15795,7 @@ function loadWhatsAppMessages(isRefresh) {
     });
     html += '</div>';
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString() + ' - ' + (data.total || msgs.length) + ' total messages';
+    document.getElementById('comp-modal-footer').textContent = t("app.last_updated", null, "Last updated: ") + new Date().toLocaleTimeString() + ' - ' + (data.total || msgs.length) + ' total messages';
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     if (!isRefresh) {
@@ -15829,7 +15829,7 @@ function loadSignalMessages(isRefresh) {
     });
     html += '</div>';
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString() + ' - ' + (data.total || msgs.length) + ' total messages';
+    document.getElementById('comp-modal-footer').textContent = t("app.last_updated", null, "Last updated: ") + new Date().toLocaleTimeString() + ' - ' + (data.total || msgs.length) + ' total messages';
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     if (!isRefresh) {
@@ -15920,7 +15920,7 @@ function loadDiscordMessages(isRefresh) {
     });
     html += '</div>';
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+    document.getElementById('comp-modal-footer').textContent = t("app.last_updated", null, "Last updated: ") + new Date().toLocaleTimeString();
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     document.getElementById('comp-modal-body').innerHTML = _compModalError('loadDiscordMessages', 'Discord', e);
@@ -15963,7 +15963,7 @@ function loadSlackMessages(isRefresh) {
     });
     html += '</div>';
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+    document.getElementById('comp-modal-footer').textContent = t("app.last_updated", null, "Last updated: ") + new Date().toLocaleTimeString();
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     document.getElementById('comp-modal-body').innerHTML = _compModalError('loadSlackMessages', 'Slack', e);
@@ -16007,7 +16007,7 @@ function loadGenericChannelData(nodeId, chKey, comp, isRefresh) {
       html += '</div>';
     }
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+    document.getElementById('comp-modal-footer').textContent = t("app.last_updated", null, "Last updated: ") + new Date().toLocaleTimeString();
   }).catch(function(e) {
     if (!isCompModalActive(nodeId)) return;
     body.innerHTML = _compModalError(null, comp.name, e);
@@ -16056,7 +16056,7 @@ function loadWebchatMessages(isRefresh) {
       html += '</div>';
     }
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'WebChat - Last updated: ' + new Date().toLocaleTimeString();
+    document.getElementById('comp-modal-footer').textContent = t("app.webchat_last_updated", null, "WebChat - Last updated: ") + new Date().toLocaleTimeString();
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     body.innerHTML = _compModalError('loadWebchatMessages', 'WebChat', e);
@@ -16105,7 +16105,7 @@ function loadIRCMessages(isRefresh) {
       html += '</div>';
     }
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'IRC - ' + (channels.join(', ') || 'no channels') + ' - ' + new Date().toLocaleTimeString();
+    document.getElementById('comp-modal-footer').textContent = t("app.irc", null, "IRC - ") + (channels.join(', ') || 'no channels') + ' - ' + new Date().toLocaleTimeString();
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     body.innerHTML = _compModalError('loadIRCMessages', 'IRC', e);
@@ -16154,7 +16154,7 @@ function loadBlueBubblesMessages(isRefresh) {
       html += '</div>';
     }
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'BlueBubbles - ' + escapeHtml(status) + ' - ' + new Date().toLocaleTimeString();
+    document.getElementById('comp-modal-footer').textContent = t("app.bluebubbles", null, "BlueBubbles - ") + escapeHtml(status) + ' - ' + new Date().toLocaleTimeString();
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     body.innerHTML = _compModalError('loadBlueBubblesMessages', 'BlueBubbles', e);
@@ -16199,7 +16199,7 @@ function loadGoogleChatMessages(isRefresh) {
       html += '</div>';
     }
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Google Chat - Last updated: ' + new Date().toLocaleTimeString();
+    document.getElementById('comp-modal-footer').textContent = t("app.google_chat_last_updated", null, "Google Chat - Last updated: ") + new Date().toLocaleTimeString();
   }).catch(function(e) {
     if (!isCompModalActive(nodeId)) return;
     body.innerHTML = _compModalError('loadGoogleChatMessages', 'Google Chat', e);
@@ -16244,7 +16244,7 @@ function loadMSTeamsMessages(isRefresh) {
       html += '</div>';
     }
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Microsoft Teams - Last updated: ' + new Date().toLocaleTimeString();
+    document.getElementById('comp-modal-footer').textContent = t("app.microsoft_teams_last_updated", null, "Microsoft Teams - Last updated: ") + new Date().toLocaleTimeString();
   }).catch(function(e) {
     if (!isCompModalActive(nodeId)) return;
     body.innerHTML = _compModalError('loadMSTeamsMessages', 'Microsoft Teams', e);
@@ -16289,7 +16289,7 @@ function loadMattermostMessages(isRefresh) {
       html += '</div>';
     }
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Mattermost - Last updated: ' + new Date().toLocaleTimeString();
+    document.getElementById('comp-modal-footer').textContent = t("app.mattermost_last_updated", null, "Mattermost - Last updated: ") + new Date().toLocaleTimeString();
   }).catch(function(e) {
     if (!isCompModalActive(nodeId)) return;
     body.innerHTML = _compModalError('loadMattermostMessages', 'Mattermost', e);
@@ -16399,7 +16399,7 @@ function loadBrainData(isRefresh) {
     }
 
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Auto-refreshing - Last updated: ' + new Date().toLocaleTimeString() + ' - ' + (data.total||0) + ' API call' + ((data.total||0) === 1 ? '' : 's') + ' synced today (each = one HTTP round-trip to the LLM provider)';
+    document.getElementById('comp-modal-footer').textContent = t("app.auto_refreshing_last_updated", null, "Auto-refreshing - Last updated: ") + new Date().toLocaleTimeString() + ' - ' + (data.total||0) + ' API call' + ((data.total||0) === 1 ? '' : 's') + ' synced today (each = one HTTP round-trip to the LLM provider)';
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     var msg = String((e && e.message) || 'Unknown error');
@@ -16552,7 +16552,7 @@ function loadCostOptimizerData(isRefresh) {
     html += '</div>';
 
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Auto-refreshing - Last updated: ' + new Date().toLocaleTimeString() + ' - ' + (data.llmfitAvailable ? 'llmfit ✓' : 'no llmfit') + ' - ' + _accelLabel + ' backend';
+    document.getElementById('comp-modal-footer').textContent = t("app.auto_refreshing_last_updated", null, "Auto-refreshing - Last updated: ") + new Date().toLocaleTimeString() + ' - ' + (data.llmfitAvailable ? 'llmfit ✓' : 'no llmfit') + ' - ' + _accelLabel + ' backend';
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     if (!isRefresh) {
@@ -16641,7 +16641,7 @@ function updateTimeDisplay() {
   if (!display) return;
   
   if (!_currentTimeContext) {
-    display.textContent = 'Live (Now)';
+    display.textContent = t("app.live_now", null, "Live (Now)");
     display.style.color = 'var(--text-accent)';
   } else {
     var day = _timelineData.days.find(function(d) { return d.date === _currentTimeContext.date; });
@@ -16686,7 +16686,7 @@ function loadCostOptimizerDataWithTime() {
   var body = document.getElementById('comp-modal-body');
   var timeContext = _currentTimeContext ? ' (' + _currentTimeContext.date + ')' : '';
   body.innerHTML = '<div style="text-align:center;padding:20px;"><div style="font-size:48px;margin-bottom:16px;">💰</div><div style="font-size:16px;font-weight:600;margin-bottom:8px;">Cost Optimizer' + timeContext + '</div><div style="color:var(--text-muted);">Historical cost analysis coming soon</div><div style="margin-top:8px;font-size:12px;color:var(--text-muted);text-transform:uppercase;">optimizer</div></div>';
-  document.getElementById('comp-modal-footer').textContent = 'Time travel: ' + (_currentTimeContext ? _currentTimeContext.date : 'Live');
+  document.getElementById('comp-modal-footer').textContent = t("app.time_travel", null, "Time travel: ") + (_currentTimeContext ? _currentTimeContext.date : 'Live');
 }
 
 function loadAutomationAdvisorDataWithTime() {
@@ -16695,7 +16695,7 @@ function loadAutomationAdvisorDataWithTime() {
   
   if (_currentTimeContext) {
     body.innerHTML = '<div style="text-align:center;padding:20px;"><div style="font-size:48px;margin-bottom:16px;">🧠</div><div style="font-size:16px;font-weight:600;margin-bottom:8px;">Automation Advisor' + timeContext + '</div><div style="color:var(--text-muted);">Historical pattern analysis coming soon</div><div style="margin-top:8px;font-size:12px;color:var(--text-muted);text-transform:uppercase;">advisor</div></div>';
-    document.getElementById('comp-modal-footer').textContent = 'Time travel: ' + _currentTimeContext.date;
+    document.getElementById('comp-modal-footer').textContent = t("app.time_travel", null, "Time travel: ") + _currentTimeContext.date;
     return;
   }
   
@@ -16788,7 +16788,7 @@ function loadComponentWithTimeContext(nodeId) {
     var body = document.getElementById('comp-modal-body');
     var timeContext = _currentTimeContext ? ' (' + _currentTimeContext.date + ')' : '';
     body.innerHTML = '<div style="text-align:center;padding:20px;"><div style="font-size:48px;margin-bottom:16px;">' + c.icon + '</div><div style="font-size:16px;font-weight:600;margin-bottom:8px;">' + c.name + timeContext + '</div><div style="color:var(--text-muted);">Historical view coming soon</div><div style="margin-top:8px;font-size:12px;color:var(--text-muted);text-transform:uppercase;">' + c.type + '</div></div>';
-    document.getElementById('comp-modal-footer').textContent = 'Time travel: ' + (_currentTimeContext ? _currentTimeContext.date : 'Live');
+    document.getElementById('comp-modal-footer').textContent = t("app.time_travel", null, "Time travel: ") + (_currentTimeContext ? _currentTimeContext.date : 'Live');
   }
 }
 
@@ -16887,7 +16887,7 @@ function loadGatewayData(isRefresh) {
     }
 
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Auto-refreshing - Last updated: ' + new Date().toLocaleTimeString() + ' - ' + (data.total||0) + ' events today';
+    document.getElementById('comp-modal-footer').textContent = t("app.auto_refreshing_last_updated", null, "Auto-refreshing - Last updated: ") + new Date().toLocaleTimeString() + ' - ' + (data.total||0) + ' events today';
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     if (!isRefresh) {
@@ -17226,7 +17226,7 @@ function loadToolData(toolKey, comp, isRefresh) {
     }
 
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Auto-refreshing - Last updated: ' + new Date().toLocaleTimeString() + ' - ' + (data.total||0) + ' events today';
+    document.getElementById('comp-modal-footer').textContent = t("app.auto_refreshing_last_updated", null, "Auto-refreshing - Last updated: ") + new Date().toLocaleTimeString() + ' - ' + (data.total||0) + ' events today';
   }).catch(function(e) {
     if (!isCompModalActive(_expectedNodeId)) return;
     if (!isRefresh) {
@@ -18314,7 +18314,7 @@ async function bootDashboard() {
   startOverviewTasksRefresh();
 
   var sub = document.getElementById('boot-sub');
-  if (sub) sub.textContent = 'Dashboard ready';
+  if (sub) sub.textContent = t("app.dashboard_ready", null, "Dashboard ready");
   setTimeout(_safeFinishBoot, 180);
 }
 
@@ -18525,13 +18525,13 @@ async function selectWorkspace(w) {
     var driftAlert = document.getElementById('nc-drift-alert');
     var driftDetail = document.getElementById('nc-drift-detail');
     if (data.policy_drifted) {
-      if (driftBadge) { driftBadge.textContent = '⚠️ Policy drift detected'; driftBadge.style.color = '#ef4444'; }
+      if (driftBadge) { driftBadge.textContent = t("app.policy_drift_detected_2", null, "⚠️ Policy drift detected"); driftBadge.style.color = '#ef4444'; }
       if (driftAlert) driftAlert.style.display = 'block';
       if (driftDetail && data.drift_info) {
-        driftDetail.textContent = 'Old: ' + (data.drift_info.old_hash || '?') + '  →  New: ' + (data.drift_info.new_hash || '?') + '\nDetected: ' + (data.drift_info.detected_at || '');
+        driftDetail.textContent = t("app.old", null, "Old: ") + (data.drift_info.old_hash || '?') + '  →  New: ' + (data.drift_info.new_hash || '?') + '\nDetected: ' + (data.drift_info.detected_at || '');
       }
     } else {
-      if (driftBadge) { driftBadge.textContent = '✅ No drift'; driftBadge.style.color = '#22c55e'; }
+      if (driftBadge) { driftBadge.textContent = t("app.no_drift_2", null, "✅ No drift"); driftBadge.style.color = '#22c55e'; }
       if (driftAlert) driftAlert.style.display = 'none';
     }
 
@@ -18614,7 +18614,7 @@ async function checkUpdateStatus() {
     if (data.show_banner && banner && msg) {
       var latest = (data.latest_check && data.latest_check.latest) || 'newer';
       var current = (data.latest_check && data.latest_check.current) || '';
-      msg.textContent = 'Update available: v' + latest + ' is out. You are on v' + current + '.';
+      msg.textContent = t("app.update_available_v", null, "Update available: v") + latest + ' is out. You are on v' + current + '.';
       banner.style.display = 'flex';
       _renderAutoUpdateToggle(!!(data.config && data.config.auto_update));
     }
@@ -18634,7 +18634,7 @@ function _renderAutoUpdateToggle(isOn) {
     wrap.style.cursor = 'default';
     wrap.title = 'ClawMetry Cloud is kept on the latest release automatically.';
     if (box) box.style.display = 'none';
-    if (label) label.textContent = '☁ Auto-updates on Cloud';
+    if (label) label.textContent = t("app.auto_updates_on_cloud", null, "☁ Auto-updates on Cloud");
     return;
   }
   wrap.style.display = 'flex';
@@ -18688,16 +18688,16 @@ async function updateFromBanner() {
   } catch(e) {}
   if (!confirm('Update ClawMetry' + (target ? ' to v' + target : '') + ' now?\n\nThe dashboard and sync daemon will restart. In-flight requests may be interrupted.')) return;
   btn.disabled = true;
-  btn.textContent = 'Updating...';
+  btn.textContent = t("app.updating", null, "Updating...");
   btn.style.cursor = 'wait';
   btn.style.opacity = '0.7';
   if (changelog) changelog.style.display = 'none';
-  if (msg) msg.textContent = 'Running pip install -U clawmetry. This usually takes 10-30 seconds...';
+  if (msg) msg.textContent = t("app.running_pip_install_u_clawmetry_this_usually_takes", null, "Running pip install -U clawmetry. This usually takes 10-30 seconds...");
   try {
     var resp = await fetch('/api/update', {method: 'POST'});
     var d = await resp.json().catch(function(){return {};});
     if (resp.ok && d.ok) {
-      if (msg) msg.textContent = 'Updated to v' + (d.new_version || target) + '. Restarting dashboard...';
+      if (msg) msg.textContent = t("app.updated_to_v", null, "Updated to v") + (d.new_version || target) + '. Restarting dashboard...';
       var reloaded = false;
       var attempts = 0;
       var poll = setInterval(function(){
@@ -18715,25 +18715,25 @@ async function updateFromBanner() {
         }).catch(function(){});
         if (attempts > 60) {
           clearInterval(poll);
-          if (msg) msg.textContent = 'Restart taking longer than expected. Refresh the page manually.';
+          if (msg) msg.textContent = t("app.restart_taking_longer_than_expected_refresh_the_pa", null, "Restart taking longer than expected. Refresh the page manually.");
           btn.disabled = false;
-          btn.textContent = 'Update now';
+          btn.textContent = t("app.update_now", null, "Update now");
           btn.style.cursor = 'pointer';
           btn.style.opacity = '1';
         }
       }, 1000);
     } else {
-      if (msg) msg.textContent = 'Update failed: ' + ((d && d.error) || ('HTTP ' + resp.status));
+      if (msg) msg.textContent = t("app.update_failed", null, "Update failed: ") + ((d && d.error) || ('HTTP ' + resp.status));
       btn.disabled = false;
-      btn.textContent = 'Update now';
+      btn.textContent = t("app.update_now", null, "Update now");
       btn.style.cursor = 'pointer';
       btn.style.opacity = '1';
       if (changelog) changelog.style.display = '';
     }
   } catch(e) {
-    if (msg) msg.textContent = 'Update failed: ' + (e && e.message ? e.message : 'network error');
+    if (msg) msg.textContent = t("app.update_failed", null, "Update failed: ") + (e && e.message ? e.message : 'network error');
     btn.disabled = false;
-    btn.textContent = 'Update now';
+    btn.textContent = t("app.update_now", null, "Update now");
     btn.style.cursor = 'pointer';
     btn.style.opacity = '1';
     if (changelog) changelog.style.display = '';
