@@ -37,6 +37,35 @@ ClawMetry is **read-only** and **DuckDB-first**:
 - The daemon **owns the DuckDB writer lock**. Build snapshot data on the daemon's **own** store handle (`local_store.get_store()`), never a `read_only=True` re-open — that deadlocks the writer (the `#1771` brick-lock: a cached RO handle blocks every subsequent write; symptom is `cannot open writer — read-only handle already exists`). When you need a read in a separate process, go through the daemon's `/__local_query__/<method>` HTTP proxy (`local_store_via_daemon`), not a direct open.
 - If the agent runtime's **model** is needed (e.g. Self-Evolve), don't try to make ClawMetry call an LLM or get gateway write scope — it's read-only by design and its gateway token is `operator.read` only. Shell out to **`openclaw agent --session-id <stable> --message <prompt> --json`**: OpenClaw runs the turn on its own credentials, the transcript lands on disk → DuckDB, and you parse the result. (`openclaw` is a Node script — under the daemon's launchd PATH `node` isn't found, so pass an augmented `PATH` to the subprocess.)
 
+## 1b. Open-core code placement — where does this change go?
+
+ClawMetry is open-core. There are **four repos**, each with a clear remit; agents must pick the right one *before* writing code or the change ships in the wrong tier. Strategy + matrix: `clawmetry-cloud/docs/TIERING_AND_LICENSING.md` (private).
+
+| Repo | Visibility | Holds |
+|---|---|---|
+| **clawmetry** (this repo) | **Public OSS** | OpenClaw runtime + NeMo governance + 21 chat-channel adapters + entitlement gate (`clawmetry/entitlements.py`) + license client (`clawmetry/license.py`) + **hook points / stubs** for every gated feature. |
+| **clawmetry-pro** | **Private** (not on public PyPI; served only to activated installs by the license server) | The gated runtime adapters (Claude Code, Codex, Cursor, Aider, Goose, opencode, Qwen Code, Hermes, PicoClaw, NanoClaw) and the Pro paid CLI / analytical features. Plugs into OSS via the `clawmetry.extensions` entry point. |
+| **clawmetry-cloud** | Private | Cloud SaaS server + license server (`/api/license/*`) + Stripe + admin + heartbeat-relay + the closed-wheel hosting (`wheels/` baked into the Cloud Run image). Business + revenue + funnel docs (private). |
+| **clawmetry-landing** | Private repo, public site `clawmetry.com` | Marketing + pricing page + public Buy buttons + installer script. Storefront only; no gated code. |
+
+### Decision tree (do this before opening a PR)
+
+1. **A new agent-runtime adapter** (something OpenClaw-shaped that emits sessions/events from a *different* harness — Codex/Cursor/etc.) → **clawmetry-pro** (`clawmetry_pro/adapters/<runtime>.py`), registered in `clawmetry_pro.__init__._PAID_ADAPTERS`. Import only `from clawmetry.adapters.base import …` — never an OSS sibling adapter — so the file stays valid when OSS strips its bundled copies at enforce.
+2. **An advanced / paid feature** (custom alerts, multi-node fleet, anomaly detection, Self-Evolve, cost optimizer) → implementation in **clawmetry-pro**; OSS may ship a thin stub route guarded by `entitlements.get_entitlement().allows_feature(<key>)` that defers to the plugin when present and returns an upgrade CTA otherwise.
+3. **An Enterprise feature** (OTel export, SSO, audit logs, RBAC, air-gapped license) → OSS route, **entitlement-gated** (`allows_feature('otel_export'|'audit_logs'|'sso'|'rbac'|…)`). Examples already merged: `routes/otel_export.py`, `routes/audit.py`. Grace mode is permissive; enforce returns HTTP 402 `upgrade_required`.
+4. **A billing / Stripe / license / wheel-serving endpoint** → **clawmetry-cloud** `routes/`. Cloud-native routes need no `cloud_route_policy` entry; remember to exempt public ones (`/api/license/*`) from the `cm_`-key gate in `dashboard.py:before_request`.
+5. **Marketing / pricing / public copy / Buy button** → **clawmetry-landing**. i18n via `data-i18n` (missing keys fall back to English). No em-dashes in user-facing copy. Proactive screenshots on every landing PR.
+6. **Core OpenClaw observability** (anything OpenClaw-shaped, NeMo governance, chat-channel adapters, the dashboard tabs that serve OpenClaw data) → **stays in OSS** (this repo). Free in every tier.
+
+### Hard rules that fall out of the split
+
+- **OSS routes for gated features must call `entitlements.allows_feature(...)`** and return HTTP 402 (`upgrade_required`) when blocked. Never silently disable — the upgrade prompt is the conversion moment.
+- **Plugin override seam.** `dashboard.py` family-adapter loop must skip when `registry.get(name) is not None` (clawmetry-pro registered it first). Tested by `tests/test_adapter_registry_override.py`. Don't reintroduce a clobber.
+- **`load_plugins()` is already wired at `dashboard.py:162`** (import time) and works on Python 3.9+ via `_select_entry_points` — don't roll your own.
+- **The signing keypair.** PUBLIC Ed25519 key is embedded in `clawmetry/license.py` *and* `clawmetry-cloud/routes/license.py`. PRIVATE key lives ONLY in `clawmetry-cloud/secrets/license_signing_key.pem` (gitignored) + the `license-signing-key` Cloud Run Secret Manager entry. Rotating means bumping both embedded constants + an OSS release.
+- **Closed wheel distribution.** `clawmetry-pro` builds → wheel committed to `clawmetry-cloud/wheels/` (private repo) → `.dockerignore` allowlist must include `wheels/` and `wheels/**` (allowlist-style; new top-level dirs silently 404 without it) → `COPY wheels/ wheels/` in Dockerfile → `/api/license/download` streams it gated by activation. Never expose the wheel via a public URL.
+- **Business numbers stay private.** Pricing, MRR, funnel, conversion roadmaps → `clawmetry-cloud/docs/` only. Public OSS docs can mention features but never prices/funnels.
+
 ## 2. Make the change
 
 - New HTTP endpoints go in `routes/<feature>.py` on that feature's Blueprint, not in `dashboard.py`. Shared helpers reach back via late `import dashboard as _d`.
