@@ -252,3 +252,66 @@ def compute_signals_from_events(events: Iterable[dict]) -> dict:
         "cache_read_tokens": cache_read,
         "input_tokens": input_tokens,
     }
+
+
+# ── Health-timeline derivation ────────────────────────────────────────────────
+# Tiny derived primitives shared by the snapshot builder and the dashboard
+# route, so the read path doesn't have to re-derive runtime/severity from
+# scratch.
+
+
+def runtime_from_session_id(session_id: Any) -> str:
+    """Map a session id back to its runtime label.
+
+    Family-runtime sessions are namespaced with a ``<runtime>:`` prefix
+    (``claude_code:``, ``cursor:``, ``goose:``, …); OpenClaw sessions are raw
+    UUIDs without a prefix. Returns ``"openclaw"`` as the default so the
+    timeline always has *some* bucket for a session.
+    """
+    if not isinstance(session_id, str) or not session_id:
+        return "openclaw"
+    head, sep, _ = session_id.partition(":")
+    if not sep or not head:
+        return "openclaw"
+    return head.lower()
+
+
+def severity_from_counts(error_count: Any, flag_count: Any) -> str:
+    """Map (errors, flags) -> a dot colour.
+
+    - ``red``    — at least one real error (post benign-error filtering, #2202).
+    - ``yellow`` — no errors but at least one waste flag (#2215).
+    - ``green``  — clean run.
+    """
+    try:
+        ec = int(error_count or 0)
+    except (TypeError, ValueError):
+        ec = 0
+    try:
+        fc = int(flag_count or 0)
+    except (TypeError, ValueError):
+        fc = 0
+    if ec > 0:
+        return "red"
+    if fc > 0:
+        return "yellow"
+    return "green"
+
+
+def event_is_real_error(event: Any) -> bool:
+    """True when an event row carries the corrected error flag (after #2202).
+
+    Reads ``data.is_error`` / ``data.isError`` and ``data.extra.isError`` — the
+    union of what the snapshot's ``_err()`` predicate checks. Never raises.
+    """
+    if not isinstance(event, dict):
+        return False
+    data = _coerce_data(event.get("data"))
+    if not data:
+        return False
+    if data.get("is_error") or data.get("isError"):
+        return True
+    extra = data.get("extra") if isinstance(data.get("extra"), dict) else {}
+    if extra.get("isError") or extra.get("is_error"):
+        return True
+    return False
