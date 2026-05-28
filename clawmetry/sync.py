@@ -9132,6 +9132,45 @@ _SE_LOCK = threading.Lock()
 _SE_STATE = {"payload": None, "computed_at": 0.0, "running": False}
 
 
+def _build_waste_flags(session_limit: int = 60, events_per_session: int = 500):
+    """Per-session waste flags (#2196 item #3).
+
+    Returns ``{session_id: [{type, severity, msg}, …]}`` for the most recent
+    sessions that have any flags. Sessions with no flags are omitted so the
+    snapshot only carries the signal (saves bytes; "no entry" is read as
+    "clean run"). Built on the daemon's own store handle, bounded so a busy
+    store can't bloat the encrypted snapshot. Never raises."""
+    try:
+        from clawmetry import local_store as _ls
+        from clawmetry import waste_flags as _wf
+    except Exception:
+        return {}
+    try:
+        store = _ls.get_store()
+        if store is None:
+            return {}
+        sessions = store.query_sessions(limit=int(session_limit))
+    except Exception:
+        return {}
+    out: dict[str, list] = {}
+    for s in sessions:
+        sid = s.get("session_id")
+        if not sid:
+            continue
+        try:
+            events = store.query_events(session_id=sid, limit=int(events_per_session))
+        except Exception:
+            continue
+        try:
+            signals = _wf.compute_signals_from_events(events)
+            flags = _wf.compute_flags(signals)
+        except Exception:
+            continue
+        if flags:
+            out[str(sid)] = flags
+    return out
+
+
 def _resolve_openclaw_bin():
     """Find the ``openclaw`` binary. The daemon runs under launchd with a
     minimal PATH, so ``shutil.which`` alone often misses Homebrew installs."""
@@ -11185,6 +11224,10 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # Lets the cloud dashboard flag a 'down' inbound channel just like the
         # local dashboard's /api/system-health does.
         "connectorLiveness": _build_connector_liveness(config),
+        # Per-session waste flags (#2196 item #3): runaway / cold-cache /
+        # unscoped-result / bloated-context. Sessions without flags are
+        # omitted so this slice stays tiny — empty == clean.
+        "wasteFlags": _build_waste_flags(),
     }
 
     # ── NemoClaw / sandbox enrichment ────────────────────────────────────────
