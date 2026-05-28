@@ -534,6 +534,13 @@ _DAEMON_METHODS = frozenset({
     "query_guardrail_events",
     "ingest_guardrail_event",
     "query_nemoclaw_metrics",
+    # Issue #2200 — tamper-evident hash chain verifier. `clawmetry
+    # verify-integrity` calls this through the daemon proxy when a daemon
+    # is running (the daemon holds DuckDB's process-level writer lock so
+    # the CLI cannot open the file directly, even read-only). Without
+    # this entry the proxy returns None and the CLI crashed on
+    # `result["status"]`. Read-only walk over the events table.
+    "verify_integrity",
 })
 
 
