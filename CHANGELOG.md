@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Added: Compare-two-runs widget + Error-triage list on Overview (2026-05-28)
+- UI consumers for the two backend primitives shipped earlier this day in #2196: a **Compare two runs** card that calls `/api/run-compare` and renders the side-by-side panel with green/red signed deltas (lower-is-better for cost/steps/errors/flags; higher-is-better for cache hit); and an **Error triage** card that lists currently-resolved errors (most-recent-first, with `Unresolve` per row) plus an input row that POSTs to `/api/error-triage/resolve` with an optional note. Both cards live on Overview between the health-timeline strip and the existing refresh-bar, fire-and-forget on every `loadAll()` tick. Completes the user-visible loop for items #2 and #5 of #2196 (#2238).
+
 ### Release: syslog/SIEM export + verify-integrity daemon-proxy fix (carries #2217 + #2222) (2026-05-28)
 - The Enterprise-grade syslog/SIEM exporter from #2217 ships on PyPI, plus the verify-integrity CLI fix from #2222 (caught by FLYWHEEL §7 live verification — the new CLI crashed against a running daemon because the proxy allowlist did not include the new method). See the detailed entries below. Off by default; activates only when `CLAWMETRY_SIEM_HOST` is set. No cloud pin bump.
 
