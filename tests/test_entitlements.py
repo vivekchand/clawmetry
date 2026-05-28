@@ -141,3 +141,56 @@ def test_to_dict_shape(ent):
         assert key in d
     assert d["enforced"] == (not d["grace"])
     assert isinstance(d["runtimes"], list)
+
+
+# ── runtime_catalog (Phase 5: locked-but-visible foundation) ────────────────
+
+
+def test_runtime_catalog_grace_locks_nothing(ent):
+    cat = ent.runtime_catalog()
+    # Every known runtime is present exactly once.
+    ids = [r["id"] for r in cat]
+    assert set(ids) == set(ent.ALL_RUNTIMES)
+    assert len(ids) == len(set(ids))
+    # Free runtimes first, paid runtimes after — stable ordering.
+    free_count = len(ent.FREE_RUNTIMES)
+    assert set(ids[:free_count]) == set(ent.FREE_RUNTIMES)
+    assert set(ids[free_count:]) == set(ent.PAID_RUNTIMES)
+    # Grace mode: nothing is locked, everything is allowed.
+    for row in cat:
+        assert row["allowed"] is True
+        assert row["locked"] is False
+        assert isinstance(row["label"], str) and row["label"]
+        # `free` matches FREE_RUNTIMES membership.
+        assert row["free"] == (row["id"] in ent.FREE_RUNTIMES)
+
+
+def test_runtime_catalog_enforced_oss_locks_paid(ent, monkeypatch):
+    monkeypatch.setenv("CLAWMETRY_ENFORCE", "1")
+    ent.invalidate()
+    cat = {r["id"]: r for r in ent.runtime_catalog()}
+    # Free stays free + allowed.
+    for rt in ent.FREE_RUNTIMES:
+        assert cat[rt]["allowed"] is True
+        assert cat[rt]["locked"] is False
+    # Every paid runtime is locked when enforced + no entitlement.
+    for rt in ent.PAID_RUNTIMES:
+        assert cat[rt]["allowed"] is False, rt
+        assert cat[rt]["locked"] is True, rt
+
+
+def test_runtime_catalog_labels_match_paid_runtimes(ent):
+    # Every paid runtime has a human-readable label (not just the id) so the
+    # UI never has to guess. Catches "added a runtime but forgot the label".
+    for rt in ent.PAID_RUNTIMES | ent.FREE_RUNTIMES:
+        assert rt in ent.RUNTIME_LABELS, rt
+        assert ent.RUNTIME_LABELS[rt], rt
+
+
+def test_runtime_label_falls_back_to_id(ent):
+    assert ent.runtime_label("openclaw") == "OpenClaw"
+    # Unknown runtime → graceful fallback to the id so plugin runtimes still
+    # render with *something* in the UI.
+    assert ent.runtime_label("brand_new_plugin_runtime") == "brand_new_plugin_runtime"
+    assert ent.runtime_label("") == ""
+    assert ent.runtime_label(None) == ""
