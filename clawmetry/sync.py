@@ -776,6 +776,55 @@ def _record_sync_progress(
         log.debug(f"Could not record sync progress ({phase}): {e}")
 
 
+def _build_first_run() -> dict:
+    """Snapshot key for the activation first-run UX (#1189 P0.1).
+
+    Pure passthrough of ``sync_progress.json`` + the in-process
+    ``_sync_progress_done`` flag. The cloud ``cm-cloud-firstrun``
+    interceptor derives the 4-state UI from this:
+
+      0  Connecting     no progress file yet
+      1  Syncing        progress file exists, ``done`` is false
+      2  First value    first session present in the snapshot
+      3  Activated      done AND at least one session
+
+    Keeping the state machine client-side avoids coupling the daemon
+    to UI semantics — the cloud can adjust state derivation without an
+    OSS release.
+
+    Safe to call frequently: just a file read and a couple of in-process
+    globals. Never raises (graceful fallbacks per CLAUDE.md).
+    """
+    out = {
+        "done": bool(_sync_progress_done),
+        "started_at": _sync_progress_started_at,
+        "phase": None,
+        "phase_done": 0,
+        "phase_total": 0,
+        "status": None,
+        "updated_at": None,
+    }
+    try:
+        if SYNC_PROGRESS_FILE.exists():
+            p = json.loads(SYNC_PROGRESS_FILE.read_text())
+            out["phase"] = p.get("phase")
+            try:
+                out["phase_done"] = int(p.get("done") or 0)
+            except (TypeError, ValueError):
+                pass
+            try:
+                out["phase_total"] = int(p.get("total") or 0)
+            except (TypeError, ValueError):
+                pass
+            out["status"] = p.get("status")
+            out["updated_at"] = p.get("updated_at")
+            if p.get("started_at"):
+                out["started_at"] = p["started_at"]
+    except Exception as e:
+        log.debug(f"_build_first_run: progress read failed: {e}")
+    return out
+
+
 # ── HTTP ──────────────────────────────────────────────────────────────────────
 
 
@@ -11370,6 +11419,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "machineInfo": _build_machine_info(),
         "channelList": _build_channel_list(config),
         "ollamaInfo": _detect_ollama_for_heartbeat(),
+        "firstRun": _build_first_run(),
         "diagnostics": _build_diagnostics(paths.get("workspace")),
         "modelAttribution": _build_model_attribution(),
         "runtimeSummary": _build_runtime_summary(),
