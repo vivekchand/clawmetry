@@ -89,10 +89,12 @@ def test_is_enforced_env_parsing(ent, monkeypatch):
 # ── catalogue invariants ────────────────────────────────────────────────────────
 
 
-def test_free_runtimes_is_openclaw_only(ent):
-    assert ent.FREE_RUNTIMES == frozenset({"openclaw"})
+def test_free_runtimes_is_openclaw_and_nemoclaw(ent):
+    # NVIDIA NemoClaw is a free-tier agent runtime alongside OpenClaw
+    # (issue #2289). NeMo *governance* is a separate free feature.
+    assert ent.FREE_RUNTIMES == frozenset({"openclaw", "nemoclaw"})
     assert "claude_code" in ent.PAID_RUNTIMES
-    assert "nemoclaw" not in ent.PAID_RUNTIMES  # NeMo is governance, not a runtime
+    assert "nemoclaw" not in ent.PAID_RUNTIMES
     assert ent.FREE_RUNTIMES.isdisjoint(ent.PAID_RUNTIMES)
 
 

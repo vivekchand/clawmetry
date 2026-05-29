@@ -45,7 +45,7 @@ def api_entitlement():
                 "is_paid": False,
                 "grace": True,
                 "enforced": False,
-                "runtimes": ["openclaw"],
+                "runtimes": ["nemoclaw", "openclaw"],
                 "features": [],
             }
         )
@@ -91,12 +91,19 @@ def api_runtimes():
             {
                 "runtimes": [
                     {
+                        "id": "nemoclaw",
+                        "label": "NemoClaw",
+                        "free": True,
+                        "allowed": True,
+                        "locked": False,
+                    },
+                    {
                         "id": "openclaw",
                         "label": "OpenClaw",
                         "free": True,
                         "allowed": True,
                         "locked": False,
-                    }
+                    },
                 ],
                 "grace": True,
                 "enforced": False,
