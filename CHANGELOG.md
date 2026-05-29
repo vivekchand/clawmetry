@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Added: firstRun snapshot key for guided activation UX (2026-05-29)
+- The sync daemon now ships a `firstRun` top-level key in `sync_system_snapshot` so the cloud dashboard can render a guided "we are syncing your data" state instead of an empty page during the first 60 seconds after install. Pure passthrough of `sync_progress.json` (which has been recorded since #748) plus the in-process `_sync_progress_done` flag. The cloud reader derives a 4-state UI from this: Connecting (no progress file), Syncing (progress file present, not done), First value (first session present in the snapshot), Activated (done and at least one session). Keeping state derivation client-side means the cloud can tweak the state machine without an OSS release. Cheap to build (one file read), graceful on read failure (returns the empty default per the never-crash rule). Foundation slice for vivekchand/clawmetry-cloud#1189 (P0.1 activation). No behaviour change to local OSS users. (#2304)
+
 ### Docs: FLYWHEEL.md ban on em-dashes is now a canonical rule (2026-05-28)
 - Promoted the buried one-liner in FLYWHEEL.md section 2 into a full rule with scope, allowed exceptions, and a belt-and-braces grep-before-send check. Covers landing HTML, dashboard banners, marketing copy, CHANGELOG entries, bounty and job posts (incl. external platforms), public docs, modals, and PR text users see. Allowed in code comments, internal notes, commit messages, internal-only PR bodies. Cites two prior burns (PR #211 landing copy, the rentahuman.ai bounty redraft) so the next agent does not repeat them. Doc-only; no code change, no version bump.
 
