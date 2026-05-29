@@ -19,22 +19,35 @@ Three product pillars: **zero config**, **read-only by default** (we observe age
 ## 2. Target users and plans
 
 ### Personas
-- **Solo OSS dev** — runs one agent on one laptop. Pip-installs, opens dashboard, never touches cloud. Free forever.
-- **Cloud Free** — same as above but signed up for an account. Gets remote-view at `app.clawmetry.com` for the dashboard but no team features.
-- **Cloud Pro (paid)** — multi-node fleets, team alerts, human-approval workflows, longer retention, channel integrations.
-- **NemoClaw operator** — runs N sandboxed OpenClaw boxes; each registers as a separate node automatically.
+- **Solo OSS dev** — runs one agent on one laptop. Pip-installs, opens dashboard, never touches cloud. Free forever for OpenClaw + NemoClaw.
+- **Cloud Free** — same as above but signed up for an account. Gets remote-view at `app.clawmetry.com` for the dashboard but no team features. Free for OpenClaw + NemoClaw, 1 node.
+- **Local Pro** — self-hosts every harness (Claude Code, Codex, Cursor, etc.) without cloud sync. Activates a `$50 / node / year` Ed25519 license key.
+- **Cloud Pro (paid)** — multi-node fleets, team alerts, human-approval workflows, longer retention, channel integrations. Monthly or annual SKU.
+- **NemoClaw operator** — runs N sandboxed OpenClaw boxes; each registers as a separate node automatically. NemoClaw is free alongside OpenClaw.
 
-### Plan matrix
+### Pricing matrix (canonical)
+
+| Tier | Local (self-hosted) | Cloud monthly | Cloud annual |
+|---|---|---|---|
+| **Free** | OpenClaw + NemoClaw, all features | OpenClaw + NemoClaw, 1 node | — |
+| **Pro** | **$50 / node / year** (Ed25519 license key) | **$5 / node / month** | **$50 / node / year** (saves $10 vs monthly) |
+| **Trial** | — | **7 days**, all Pro features, no card | — |
+
+All non-free harnesses (Claude Code, Codex, Cursor, Aider, Goose, Opencode, QwenCode, NanoClaw, PicoClaw, Hermes) require Pro on any tier. See `vivekchand/clawmetry#2288` for the rationale.
+
+### Plan matrix (runtime gates)
 
 | Plan | Cost | Local dashboard | Remote dashboard | Cloud sync | Alerts | Approvals | Notifications | Multi-node | Trial-flag |
 |---|---|---|---|---|---|---|---|---|---|
-| **OSS only** | $0 | ✓ | — | — | local only | — | — | local only | n/a |
-| **Cloud Free** | $0 | ✓ | ✓ (heartbeat only) | heartbeat only | 1 alert visible | empty queue | — | — | `free` |
-| **Cloud Trial** | $0 / 14 d | ✓ | ✓ | full | unlimited | full | unlimited | full | `trial` |
-| **Cloud Pro** | paid | ✓ | ✓ | full | unlimited | full | unlimited | full | `cloud_pro` |
+| **OSS only (Free)** | $0 | ✓ (OpenClaw + NemoClaw) | — | — | local only | — | — | local only | n/a |
+| **Local Pro** | $50/node/year | ✓ (all harnesses) | — | — | local only | — | — | local only | `pro` |
+| **Cloud Free** | $0 | ✓ (OpenClaw + NemoClaw) | ✓ (heartbeat only) | heartbeat only | 1 alert visible | empty queue | — | — | `free` |
+| **Cloud Trial** | $0 / 7 d | ✓ | ✓ | full | unlimited | full | unlimited | full | `trial` |
+| **Cloud Pro (monthly)** | $5/node/mo | ✓ | ✓ | full | unlimited | full | unlimited | full | `cloud_pro` |
+| **Cloud Pro (annual)** | $50/node/year | ✓ | ✓ | full | unlimited | full | unlimited | full | `cloud_pro` |
 | **Trial-Expired** | $0 | ✓ | dashboard frozen at last sync | paused | view only | view only | view only | partial | `trial_expired` |
 
-Plan transitions are driven by Stripe webhooks and the `users.plan` column in Cloud SQL. Trial auto-starts on first signup, no card required.
+Cloud plan transitions are driven by Stripe webhooks and the `users.plan` column in Cloud SQL. Trial auto-starts on first signup, no card required. Local Pro is activated by dropping an Ed25519 license key at `~/.clawmetry/license.key` (see `clawmetry/license.py`).
 
 ---
 
