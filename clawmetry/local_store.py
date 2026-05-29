@@ -7886,6 +7886,79 @@ class LocalStore:
             "reclaimed_bytes": max(0, before_size - after_size),
         }
 
+    def prune_events_by_age(
+        self,
+        retention_days: int | None,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Age-based prune of the ``events`` table.
+
+        Deletes every row where ``ts`` is older than
+        ``retention_days * 86400`` seconds before ``now`` (defaults to
+        :func:`time.time`). Companion to :meth:`vacuum`, which is
+        size-based; this is tier-based per /pricing on clawmetry.com:
+
+            Free / OSS:       7 days
+            Starter / Trial: 30 days
+            Pro / Self-host: 90 days
+            Enterprise:      unlimited (pass ``None`` -> no-op)
+
+        Returns ``{deleted_rows, before_rows, after_rows, cutoff_ts}``.
+        A ``None`` or non-positive ``retention_days`` is a no-op; callers
+        can pass the result of ``Entitlement.event_retention_days()``
+        directly. Read-only stores raise.
+        """
+        if self._read_only:
+            raise RuntimeError("local_store: prune_events_by_age called on read-only store")
+        if retention_days is None or retention_days <= 0:
+            return {
+                "deleted_rows": 0,
+                "before_rows": 0,
+                "after_rows": 0,
+                "cutoff_ts": 0.0,
+                "skipped": True,
+            }
+        # Drain anything still ringside so the row count we report is
+        # accurate; otherwise an in-flight event could be counted in
+        # ``before`` but not in the SQL view yet.
+        self._flush_now()
+        # ``ts`` is VARCHAR (ISO string) in the events schema, so range
+        # comparisons aren't reliable across timezones. ``created_at`` is
+        # BIGINT millis-since-epoch set at insert time — perfect for an
+        # age-based prune.
+        cutoff_secs = (now if now is not None else time.time()) - (int(retention_days) * 86400)
+        cutoff_ms = int(cutoff_secs * 1000)
+        # NB: ``_fetch`` itself takes ``_write_lock`` to keep DuckDB's
+        # reader/writer transaction state happy, so we acquire the lock
+        # only around the DELETE + CHECKPOINT block — never around a
+        # ``_fetch`` call (regular ``threading.Lock`` would deadlock).
+        before = (self._fetch("SELECT COUNT(*) FROM events", []) or [(0,)])[0][0]
+        with self._write_lock:
+            with _txn(self._conn):
+                cur = self._conn.execute(
+                    "DELETE FROM events WHERE created_at < ?", [cutoff_ms]
+                )
+                try:
+                    deleted = cur.rowcount
+                except Exception:
+                    deleted = -1
+            # Best-effort CHECKPOINT so the on-disk file reflects the
+            # delete; mirrors the post-DELETE pattern in ``_vacuum_locked``.
+            try:
+                self._conn.execute("CHECKPOINT")
+            except Exception:
+                log.exception("local store: post-prune CHECKPOINT failed")
+        after = (self._fetch("SELECT COUNT(*) FROM events", []) or [(0,)])[0][0]
+        if deleted is None or deleted < 0:
+            deleted = max(0, before - after)
+        return {
+            "deleted_rows": int(deleted),
+            "before_rows": int(before),
+            "after_rows": int(after),
+            "cutoff_ts": cutoff_secs,
+        }
+
     # ── Issue #1594 — on-write auto-vacuum ──────────────────────────────
     #
     # Called from ``_flush_now_locked`` after every successful flush.
