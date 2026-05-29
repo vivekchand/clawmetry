@@ -1636,6 +1636,14 @@ class LocalStore:
             _siem.forward_event(event)
         except Exception:
             pass  # never let the SIEM hook block ingest
+        # Optional OTLP/HTTP push forward (Pro feature; #2262 catalogue).
+        # Off unless CLAWMETRY_OTLP_ENDPOINT is set + tier unlocks
+        # otel_export. Same non-blocking-enqueue contract as SIEM.
+        try:
+            from clawmetry import otel_push as _otelp
+            _otelp.forward_event(event)
+        except Exception:
+            pass  # never let the OTLP push hook block ingest
         with self._ring_lock:
             if len(self._ring) >= RING_MAX:
                 self._dropped += 1
