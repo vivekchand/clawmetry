@@ -140,67 +140,9 @@ def api_otel_export():
     return jsonify(_build_otlp_envelope(events))
 
 
-@bp_otel_export.route("/api/otel/push/status", methods=["GET"])
-def api_otel_push_status():
-    """Counters for the OTLP/HTTP push exporter (clawmetry/otel_push.py).
-
-    Returns ``{running: bool, sent, dropped, errors, flushes, queue_size,
-    endpoint, tier_allows}`` so operators can verify their
-    ``CLAWMETRY_OTLP_ENDPOINT`` is configured + the Pro tier unlocks the
-    feature. Free to call (no auth, no entitlement)."""
-    out: dict = {}
-    try:
-        from clawmetry import otel_push as _otelp
-        out.update(_otelp.stats())
-    except Exception as exc:
-        out["error"] = str(exc)
-    try:
-        import os as _os
-        out["endpoint"] = _os.environ.get("CLAWMETRY_OTLP_ENDPOINT", "") or None
-    except Exception:
-        out["endpoint"] = None
-    try:
-        from clawmetry import entitlements as _ent
-        en = _ent.get_entitlement()
-        out["tier"] = en.tier
-        out["tier_allows"] = en.allows_feature("otel_export")
-    except Exception:
-        out["tier_allows"] = None
-    return jsonify(out)
-
-
-@bp_otel_export.route("/api/otel/push/flush", methods=["POST"])
-def api_otel_push_flush():
-    """Sample the most recent events and synchronously POST them through
-    the push exporter's writer once. Useful for verifying a customer's
-    OTLP collector URL + headers without waiting for the next flush
-    tick. Pro+ gated."""
-    allowed, ent = _entitlement_allows()
-    if not allowed:
-        return jsonify({
-            "error": "upgrade_required",
-            "feature": "otel_export",
-            "tier": ent.get("tier"),
-            "hint": "OTel push is a Pro feature on clawmetry.com/pricing",
-        }), 402
-    try:
-        limit = max(1, min(int(request.args.get("limit", 50) or 50), 500))
-    except Exception:
-        limit = 50
-    events = _fetch_events(limit)
-    if not events:
-        return jsonify({"ok": True, "sent": 0, "detail": "no events to flush"})
-    try:
-        from clawmetry import otel_push as _otelp
-        writer = _otelp._build_default_writer()
-        if writer is None:
-            return jsonify({
-                "error": "not_configured",
-                "hint": "Set CLAWMETRY_OTLP_ENDPOINT (and optional CLAWMETRY_OTLP_HEADERS).",
-            }), 400
-        envelope = _otelp._build_otlp_envelope(events)
-        writer.send(envelope)
-    except Exception as exc:
-        logger.warning("otel_push: manual flush failed: %s", exc)
-        return jsonify({"error": "flush_failed", "detail": str(exc)}), 502
-    return jsonify({"ok": True, "sent": len(events)})
+# /api/otel/push/status and /api/otel/push/flush moved to the closed
+# source clawmetry-pro package (clawmetry_pro/routes/otel_push.py) as
+# part of the open-core split. The OSS dashboard registers the Pro
+# blueprint when clawmetry-pro is installed and falls back to the OSS
+# blueprint stubs otherwise; this file keeps only the always-free pull
+# endpoint above.
