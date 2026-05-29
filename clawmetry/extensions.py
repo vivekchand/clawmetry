@@ -66,6 +66,30 @@ def emit(event: str, payload: Dict[str, Any] | None = None) -> None:
             )
 
 
+def dispatch(event: str, payload: Dict[str, Any] | None = None) -> Any:
+    """Call handlers for *event* in order and return the first non-None result.
+
+    Unlike :func:`emit`, this is a request/response pattern: the first handler
+    that returns a non-None value wins and subsequent handlers are skipped.
+    If no handler is registered or every handler returns None, returns None.
+    Exceptions in handlers are caught and logged — never propagated.
+    """
+    if payload is None:
+        payload = {}
+    with _lock:
+        handlers = list(_registry.get(event, []))
+    for handler in handlers:
+        try:
+            result = handler(payload)
+            if result is not None:
+                return result
+        except Exception as exc:
+            logger.warning(
+                f"Extension handler {handler.__name__!r} raised on event {event!r}: {exc}"
+            )
+    return None
+
+
 def _select_entry_points(group: str):
     """Return entry points for ``group`` across Python versions.
 

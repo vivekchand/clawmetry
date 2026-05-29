@@ -136,6 +136,7 @@ PAID_FEATURES = frozenset(
         "anomaly_detection",
         "self_evolve",
         "cost_optimizer",
+        "custom_runtime_ingest",
     }
 )
 
