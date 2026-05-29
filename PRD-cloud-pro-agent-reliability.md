@@ -1,6 +1,6 @@
 # PRD — Cloud Pro: Agent Reliability (ClawBench on your real traffic) + Pipelines (CrawlBar)
 
-Status: Draft · Owner: ClawMetry · Date: 2026-05-20 · Tier: **Cloud Pro** ($5/node/mo)
+Status: Draft · Owner: ClawMetry · Date: 2026-05-20 · Tier: **Cloud Pro** ($5/node/mo or $50/node/year, saves $10)
 
 > TL;DR. ClawMetry already *observes* agents and *scores completed sessions* with an LLM judge (eval Phases 1–3). The natural next step — and the strongest paid differentiator we have — is to score **how reliably the agent works**, on the user's **own production traces**, using [ClawBench](https://github.com/openclaw/clawbench)'s trace-based methodology. Everyone else benchmarks models on synthetic tasks; we grade *your* agent on *your* traffic and tell you the one config change that buys the most reliability. A second, lighter surface borrows [CrawlBar](https://github.com/openclaw/crawlbar)'s manifest control-plane idea to give crawler/cron **data pipelines** a freshness + last-run view.
 
