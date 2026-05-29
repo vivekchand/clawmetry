@@ -37,7 +37,7 @@
 
   <div class="alerts-shared-note">
     <div class="l">
-      <span data-i18n="alerts.delivery_channels">Delivery channels:</span> <b id="alerts-channels-summary">Slack · Email · PagerDuty · Telegram</b>
+      <span data-i18n="alerts.delivery_channels">Delivery channels:</span> <b id="alerts-channels-summary" data-i18n="app.slack_email_pagerduty_telegram">Slack · Email · PagerDuty · Telegram</b>
       <span style="color:var(--text-muted);font-style:italic;" data-i18n="alerts.shared_with_approvals"> shared with Approvals</span>
     </div>
     <button class="alerts-btn-ghost" onclick="alertsHandleManageChannels()" data-i18n="alerts.manage_channels">Manage channels →</button>
@@ -48,12 +48,10 @@
 <div class="alerts-modal-overlay" id="alerts-paywall-modal" style="display:none;" onclick="alertsClosePaywall(event)">
   <div class="alerts-modal-card" onclick="event.stopPropagation()">
     <div class="alerts-modal-icon">🔔</div>
-    <h3 class="alerts-modal-title" id="alerts-paywall-title">Sign up for ClawMetry Cloud</h3>
-    <p class="alerts-modal-body" id="alerts-paywall-body">
-      Alerts need the cloud to deliver Slack / PagerDuty / Telegram / Email
+    <h3 class="alerts-modal-title" id="alerts-paywall-title" data-i18n="app.sign_up_for_clawmetry_cloud">Sign up for ClawMetry Cloud</h3>
+    <p class="alerts-modal-body" id="alerts-paywall-body" data-i18n="app.alerts_need_the_cloud_to_deliver_slack_pagerduty_t">Alerts need the cloud to deliver Slack / PagerDuty / Telegram / Email
       messages. Sign up — your data stays encrypted, Pro features include a
-      7-day free trial.
-    </p>
+      7-day free trial.</p>
     <div class="alerts-modal-actions">
       <button class="alerts-btn-pro" id="alerts-paywall-cta" onclick="alertsCtaClick()" data-i18n="alerts.signup_for_cloud">Sign up for Cloud</button>
       <button class="alerts-btn-ghost" onclick="alertsClosePaywall()" data-i18n="alerts.maybe_later">Maybe later</button>
@@ -76,7 +74,7 @@
 <div class="alerts-modal-overlay" id="alerts-editor-modal" style="display:none;" onclick="alertsCloseEditor(event)">
   <div class="alerts-editor-card" onclick="event.stopPropagation()">
     <div class="alerts-editor-head">
-      <h3 id="alerts-editor-title">New alert rule</h3>
+      <h3 id="alerts-editor-title" data-i18n="app.new_alert_rule">New alert rule</h3>
       <button class="alerts-modal-close" onclick="alertsCloseEditor()">×</button>
     </div>
 

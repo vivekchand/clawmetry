@@ -40,7 +40,7 @@
     </div>
 
     <div id="approvals-pending-list">
-      <div style="padding:18px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;">Loading...</div>
+      <div style="padding:18px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;" data-i18n="app.loading">Loading...</div>
     </div>
   </div>
 
@@ -146,7 +146,7 @@
         Get notified via Slack, Email, PagerDuty or Telegram, and approve or deny with one click.
       </div>
       <div style="background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.2);border-radius:10px;padding:14px;margin-bottom:20px;">
-        <div style="font-size:14px;font-weight:700;color:#60a5fa;margin-bottom:4px;">Cloud Pro</div>
+        <div style="font-size:14px;font-weight:700;color:#60a5fa;margin-bottom:4px;" data-i18n="app.cloud_pro">Cloud Pro</div>
         <div style="font-size:22px;font-weight:800;color:var(--text-primary,#e2e8f0);">$5<span style="font-size:13px;font-weight:400;color:var(--text-muted,#94a3b8);" data-i18n="approvals.per_node_month">/node/month</span></div>
         <div style="font-size:11px;color:#22c55e;margin-top:4px;font-weight:600;" data-i18n="approvals.trial_note">7-day free trial &middot; no credit card required</div>
       </div>
@@ -266,19 +266,19 @@
     {key:'phone', name:'Phone Call', icon:'&#128222;', desc:'Get a call, press 1 to approve',
      color:'#10b981',
      fields:[{key:'phone_number', label:'Phone Number', placeholder:'+1 (555) 123-4567'}],
-     howTo:'Enter your phone number with country code (e.g. +1 for US, +91 for India, +31 for NL).<br><br>When a risky action fires, you\'ll get a phone call:<br><b>"Press 1 to approve. Press 2 to deny."</b><br><br>That\'s it — no app to install, works on any phone.'},
+     howTo:'Enter your phone number with country code (e.g. +1 for US, +91 for India, +31 for NL).<br><br>When a risky action fires, you\'ll get a phone call:<br><b data-i18n="app.press_1_to_approve_press_2_to_deny">"Press 1 to approve. Press 2 to deny."</b><br><br>That\'s it — no app to install, works on any phone.'},
     {key:'slack', name:'Slack', icon:'&#128172;', desc:'Post to a Slack channel',
      color:'#4A154B',
      fields:[{key:'webhook_url', label:'Webhook URL', placeholder:'https://hooks.slack.com/services/T.../B.../xxx'}],
-     howTo:'1. Go to <b>api.slack.com/apps</b> and click <b>Create New App</b><br>2. Choose <b>From scratch</b>, name it "ClawMetry Alerts"<br>3. Click <b>Incoming Webhooks</b> → toggle ON<br>4. Click <b>Add New Webhook to Workspace</b> → pick your channel<br>5. Copy the webhook URL and paste it below'},
+     howTo:'1. Go to <b data-i18n="app.api_slack_com_apps">api.slack.com/apps</b> and click <b data-i18n="app.create_new_app">Create New App</b><br>2. Choose <b data-i18n="app.from_scratch">From scratch</b>, name it "ClawMetry Alerts"<br>3. Click <b data-i18n="app.incoming_webhooks">Incoming Webhooks</b> → toggle ON<br>4. Click <b data-i18n="app.add_new_webhook_to_workspace">Add New Webhook to Workspace</b> → pick your channel<br>5. Copy the webhook URL and paste it below'},
     {key:'pagerduty', name:'PagerDuty', icon:'&#128225;', desc:'Trigger PagerDuty incidents',
      color:'#06AC38',
      fields:[{key:'routing_key', label:'Integration Key', placeholder:'e.g. R03F...'}],
-     howTo:'1. In PagerDuty, go to <b>Services</b> → pick your service<br>2. Click <b>Integrations</b> tab → <b>+ Add Integration</b><br>3. Choose <b>Events API v2</b><br>4. Copy the <b>Integration Key</b> and paste it below'},
+     howTo:'1. In PagerDuty, go to <b data-i18n="app.services">Services</b> → pick your service<br>2. Click <b data-i18n="app.integrations">Integrations</b> tab → <b data-i18n="app.add_integration">+ Add Integration</b><br>3. Choose <b data-i18n="app.events_api_v2">Events API v2</b><br>4. Copy the <b data-i18n="app.integration_key">Integration Key</b> and paste it below'},
     {key:'telegram', name:'Telegram', icon:'&#9992;&#65039;', desc:'Send alerts to a Telegram chat',
      color:'#2AABEE',
      fields:[{key:'bot_token', label:'Bot Token', placeholder:'123456:ABC-DEF...'}, {key:'chat_id', label:'Chat ID', placeholder:'-1001234567890'}],
-     howTo:'1. Open Telegram, search for <b>@BotFather</b><br>2. Send <b>/newbot</b> and follow the prompts<br>3. Copy the <b>bot token</b> and paste it below<br>4. Add the bot to your group chat<br>5. Get the chat ID: send a message in the group, then visit<br>&nbsp;&nbsp;&nbsp;<code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code>'}
+     howTo:'1. Open Telegram, search for <b data-i18n="app.botfather">@BotFather</b><br>2. Send <b data-i18n="app.newbot">/newbot</b> and follow the prompts<br>3. Copy the <b data-i18n="app.bot_token">bot token</b> and paste it below<br>4. Add the bot to your group chat<br>5. Get the chat ID: send a message in the group, then visit<br>&nbsp;&nbsp;&nbsp;<code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code>'}
   ];
 
   /* ── Render preset cards ── */
@@ -296,15 +296,15 @@
       return '<div id="preset-card-' + p.key + '" style="background:var(--bg-secondary);border:1px solid ' + (on ? p.color + '55' : 'var(--border)') + ';border-radius:10px;padding:14px;transition:border-color 0.2s;">'
         + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">'
         + '<div style="display:flex;align-items:center;gap:8px;">'
-        + '<span style="font-size:16px;">' + p.icon + '</span>'
-        + '<span style="font-size:13px;font-weight:700;color:var(--text-primary);">' + escHtml(p.name) + '</span>'
+        + '<span style="font-size:16px;" data-i18n="app.p_icon">' + p.icon + '</span>'
+        + '<span style="font-size:13px;font-weight:700;color:var(--text-primary);" data-i18n="app.eschtml_p_name">' + escHtml(p.name) + '</span>'
         + '</div>'
         + '<div onclick="togglePresetPolicy(\'' + p.key + '\',' + (on ? 'false' : 'true') + ')" style="position:relative;width:42px;height:24px;cursor:pointer;flex-shrink:0;">'
         + '<div style="position:absolute;inset:0;background:' + (on ? p.color : '#374151') + ';border-radius:12px;transition:background 0.2s;"></div>'
         + '<div style="position:absolute;top:3px;left:' + (on ? '21px' : '3px') + ';width:18px;height:18px;background:#fff;border-radius:50%;transition:left 0.2s;box-shadow:0 1px 3px rgba(0,0,0,0.3);"></div>'
         + '</div>'
         + '</div>'
-        + '<div style="font-size:11px;color:var(--text-muted);line-height:1.4;">' + escHtml(p.desc) + '</div>'
+        + '<div style="font-size:11px;color:var(--text-muted);line-height:1.4;" data-i18n="app.eschtml_p_desc">' + escHtml(p.desc) + '</div>'
         + '</div>';
     }).join('');
   }
@@ -320,12 +320,12 @@
       var s = _savedIntegrations[ch.key];
       var on = s && s.enabled;
       return '<div style="background:var(--bg-secondary);border:1px solid ' + (on ? ch.color + '44' : 'var(--border)') + ';border-radius:10px;padding:14px;text-align:center;">'
-        + '<div style="font-size:20px;margin-bottom:6px;">' + ch.icon + '</div>'
-        + '<div style="font-size:12px;font-weight:700;color:var(--text-primary);margin-bottom:4px;">' + ch.name + '</div>'
-        + '<div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;">' + escHtml(ch.desc) + '</div>'
+        + '<div style="font-size:20px;margin-bottom:6px;" data-i18n="app.ch_icon">' + ch.icon + '</div>'
+        + '<div style="font-size:12px;font-weight:700;color:var(--text-primary);margin-bottom:4px;" data-i18n="app.ch_name">' + ch.name + '</div>'
+        + '<div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;" data-i18n="app.eschtml_ch_desc">' + escHtml(ch.desc) + '</div>'
         + (on
-          ? '<button onclick="openIntegrationSetup(\'' + ch.key + '\')" style="width:100%;padding:8px;border:1px solid ' + ch.color + '44;background:' + ch.color + '15;color:' + ch.color + ';border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">Connected</button>'
-          : '<button onclick="openIntegrationSetup(\'' + ch.key + '\')" style="width:100%;padding:8px;border:0;background:' + ch.color + ';color:#fff;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">Connect</button>'
+          ? '<button onclick="openIntegrationSetup(\'' + ch.key + '\')" style="width:100%;padding:8px;border:1px solid ' + ch.color + '44;background:' + ch.color + '15;color:' + ch.color + ';border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;" data-i18n="app.connected">Connected</button>'
+          : '<button onclick="openIntegrationSetup(\'' + ch.key + '\')" style="width:100%;padding:8px;border:0;background:' + ch.color + ';color:#fff;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;" data-i18n="app.connect">Connect</button>'
         )
         + '</div>';
     }).join('');
@@ -342,14 +342,14 @@
     // Reuse the modal container with different content
     var html = '<div style="background:var(--bg-secondary,#131929);border:1px solid ' + ch.color + '44;border-radius:16px;padding:28px 32px;max-width:440px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.5);">';
     html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">';
-    html += '<span style="font-size:24px;">' + ch.icon + '</span>';
-    html += '<span style="font-size:16px;font-weight:700;color:var(--text-primary,#e2e8f0);">Connect ' + ch.name + '</span>';
+    html += '<span style="font-size:24px;" data-i18n="app.ch_icon">' + ch.icon + '</span>';
+    html += '<span style="font-size:16px;font-weight:700;color:var(--text-primary,#e2e8f0);" data-i18n="app.connect_ch_name">Connect ' + ch.name + '</span>';
     html += '<span style="margin-left:auto;cursor:pointer;color:var(--text-muted);font-size:18px;" onclick="closeIntegrationSetup()">&times;</span>';
     html += '</div>';
     // How-to instructions
     if (ch.howTo) {
       html += '<div style="background:rgba(96,165,250,0.06);border:1px solid rgba(96,165,250,0.15);border-radius:8px;padding:12px 14px;margin-bottom:16px;font-size:12px;color:var(--text-secondary,#cbd5e1);line-height:1.7;">';
-      html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted,#94a3b8);margin-bottom:6px;">How to set up</div>';
+      html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted,#94a3b8);margin-bottom:6px;" data-i18n="app.how_to_set_up">How to set up</div>';
       html += ch.howTo;
       html += '</div>';
     }
@@ -357,15 +357,15 @@
     if (ch.fields.length > 0) {
       ch.fields.forEach(function(f) {
         var val = (s && s.config && s.config[f.key]) || '';
-        html += '<label style="font-size:11px;color:var(--text-muted,#94a3b8);display:block;margin-bottom:4px;">' + escHtml(f.label) + '</label>';
+        html += '<label style="font-size:11px;color:var(--text-muted,#94a3b8);display:block;margin-bottom:4px;" data-i18n="app.eschtml_f_label">' + escHtml(f.label) + '</label>';
         html += '<input type="text" id="setup-' + ch.key + '-' + f.key + '" value="' + escHtml(val) + '" placeholder="' + escHtml(f.placeholder) + '" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--border,#1e293b);border-radius:6px;background:var(--bg-primary,#0B0F1A);color:var(--text-primary,#e2e8f0);font-size:12px;margin-bottom:10px;">';
       });
     }
     // Buttons
     html += '<div style="display:flex;gap:8px;margin-top:6px;">';
-    html += '<button onclick="submitIntegrationSetup(\'' + ch.key + '\')" style="flex:1;padding:10px;border:0;background:' + ch.color + ';color:#fff;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;">' + (on ? 'Update' : 'Connect') + '</button>';
+    html += '<button onclick="submitIntegrationSetup(\'' + ch.key + '\')" style="flex:1;padding:10px;border:0;background:' + ch.color + ';color:#fff;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;" data-i18n="app.on_update_connect">' + (on ? 'Update' : 'Connect') + '</button>';
     if (on) {
-      html += '<button onclick="disconnectIntegration(\'' + ch.key + '\')" style="padding:10px 16px;border:1px solid #ef444444;background:transparent;color:#ef4444;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Disconnect</button>';
+      html += '<button onclick="disconnectIntegration(\'' + ch.key + '\')" style="padding:10px 16px;border:1px solid #ef444444;background:transparent;color:#ef4444;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;" data-i18n="app.disconnect">Disconnect</button>';
     }
     html += '</div>';
     html += '</div>';
@@ -435,21 +435,21 @@
       // initBulkSelection() listens for change events on the list.
       html += '<input type="checkbox" class="approval-bulk-checkbox" data-approval-id="' + escHtml(r.id) + '" style="cursor:pointer;flex-shrink:0;" title="Select for bulk action">';
     }
-    html += '<span style="font-weight:700;color:var(--text-primary);font-size:13px;">' + escHtml(r.tool_name || '?') + '</span>';
-    html += '<span style="background:' + c + '22;color:' + c + ';border:1px solid ' + c + '44;padding:1px 8px;border-radius:99px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">' + escHtml(r.status) + '</span>';
+    html += '<span style="font-weight:700;color:var(--text-primary);font-size:13px;" data-i18n="app.eschtml_r_tool_name">' + escHtml(r.tool_name || '?') + '</span>';
+    html += '<span style="background:' + c + '22;color:' + c + ';border:1px solid ' + c + '44;padding:1px 8px;border-radius:99px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;" data-i18n="app.eschtml_r_status">' + escHtml(r.status) + '</span>';
     if (r.policy_name) {
-      html += '<span style="color:var(--text-muted);font-size:11px;">rule: ' + escHtml(r.policy_name) + '</span>';
+      html += '<span style="color:var(--text-muted);font-size:11px;" data-i18n="app.rule_eschtml_r_policy_name">rule: ' + escHtml(r.policy_name) + '</span>';
     }
     if (r.session_id) {
-      html += '<span style="background:var(--bg-primary);color:var(--text-secondary);border:1px solid var(--border-secondary);padding:1px 6px;border-radius:4px;font-size:10px;font-family:var(--font-mono,monospace);">sess ' + escHtml(String(r.session_id).slice(0,8)) + '</span>';
+      html += '<span style="background:var(--bg-primary);color:var(--text-secondary);border:1px solid var(--border-secondary);padding:1px 6px;border-radius:4px;font-size:10px;font-family:var(--font-mono,monospace);" data-i18n="app.sess_eschtml_string_r_session_id_slice_0_8">sess ' + escHtml(String(r.session_id).slice(0,8)) + '</span>';
     }
     if (r.node_id) {
-      html += '<span style="background:var(--bg-primary);color:var(--text-secondary);border:1px solid var(--border-secondary);padding:1px 6px;border-radius:4px;font-size:10px;font-family:var(--font-mono,monospace);">node ' + escHtml(String(r.node_id).slice(0,8)) + '</span>';
+      html += '<span style="background:var(--bg-primary);color:var(--text-secondary);border:1px solid var(--border-secondary);padding:1px 6px;border-radius:4px;font-size:10px;font-family:var(--font-mono,monospace);" data-i18n="app.node_eschtml_string_r_node_id_slice_0_8">node ' + escHtml(String(r.node_id).slice(0,8)) + '</span>';
     }
-    html += '<span style="color:var(--text-faint);font-size:10px;margin-left:auto;">' + escHtml(when) + '</span>';
+    html += '<span style="color:var(--text-faint);font-size:10px;margin-left:auto;" data-i18n="app.eschtml_when">' + escHtml(when) + '</span>';
     html += '</div>';
     if (r.context) {
-      html += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px;">' + escHtml(r.context) + '</div>';
+      html += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px;" data-i18n="app.eschtml_r_context">' + escHtml(r.context) + '</div>';
     }
     html += '<pre style="margin:0;padding:8px 10px;font-size:11px;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;overflow:auto;max-height:200px;color:var(--text-secondary);white-space:pre-wrap;word-break:break-word;">' + escHtml(argsPretty) + '</pre>';
     if (pending) {
@@ -457,14 +457,14 @@
       html += '<input type="text" id="dec-reason-' + escHtml(r.id) + '" placeholder="Reason (optional — recorded in audit log)" style="width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid var(--border-secondary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">';
       html += '</div>';
       html += '<div style="display:flex;gap:8px;margin-top:8px;">';
-      html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'approve\')" style="background:#22c55e;color:#062614;border:0;padding:7px 16px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;">Approve</button>';
-      html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'deny\')" style="background:#ef4444;color:#fff;border:0;padding:7px 16px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;">Deny</button>';
-      html += '<span style="color:var(--text-muted);font-size:11px;align-self:center;margin-left:6px;">expires ' + escHtml((r.expires_at||'').slice(11,19)) + '</span>';
+      html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'approve\')" style="background:#22c55e;color:#062614;border:0;padding:7px 16px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;" data-i18n="app.approve_2">Approve</button>';
+      html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'deny\')" style="background:#ef4444;color:#fff;border:0;padding:7px 16px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;" data-i18n="app.deny">Deny</button>';
+      html += '<span style="color:var(--text-muted);font-size:11px;align-self:center;margin-left:6px;" data-i18n="app.expires_eschtml_r_expires_at_slice_11_19">expires ' + escHtml((r.expires_at||'').slice(11,19)) + '</span>';
       html += '</div>';
     } else if (r.decided_by) {
       html += '<div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Decided by ' + escHtml(r.decided_by) + ' at ' + escHtml((r.decided_at||'').slice(11,19));
       if (r.decision_reason) {
-        html += ' — <span style="font-style:italic;">' + escHtml(r.decision_reason) + '</span>';
+        html += ' — <span style="font-style:italic;" data-i18n="app.eschtml_r_decision_reason">' + escHtml(r.decision_reason) + '</span>';
       }
       html += '</div>';
     }
@@ -487,7 +487,7 @@
       // Pending
       var pe = document.getElementById('approvals-pending-list');
       if (p.length === 0) {
-        pe.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;">No pending approvals right now.</div>';
+        pe.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;" data-i18n="app.no_pending_approvals_right_now">No pending approvals right now.</div>';
         // Drop selections for IDs that are no longer pending (decided
         // elsewhere, expired, etc.) so the bulk header doesn't lie.
         _approvalsBulkSelected.clear();
@@ -518,7 +518,7 @@
 
       // History
       var he = document.getElementById('approvals-history-list');
-      he.innerHTML = h.length ? h.map(function(r){return _renderRow(r, false);}).join('') : '<div style="padding:14px;text-align:center;color:var(--text-faint);font-size:12px;">No decisions yet. Enable a protection rule above to get started.</div>';
+      he.innerHTML = h.length ? h.map(function(r){return _renderRow(r, false);}).join('') : '<div style="padding:14px;text-align:center;color:var(--text-faint);font-size:12px;" data-i18n="app.no_decisions_yet_enable_a_protection_rule_above_to">No decisions yet. Enable a protection rule above to get started.</div>';
 
       // Counts + badge
       document.getElementById('approvals-pending-count').textContent = p.length ? '(' + p.length + ' pending)' : '';
@@ -529,7 +529,7 @@
         else { nav.style.display = 'none'; }
       }
     } catch(e) {
-      document.getElementById('approvals-pending-list').innerHTML = '<div style="padding:14px;color:var(--text-error);font-size:12px;">Failed to load: ' + escHtml(String(e)) + '</div>';
+      document.getElementById('approvals-pending-list').innerHTML = '<div style="padding:14px;color:var(--text-error);font-size:12px;" data-i18n="app.failed_to_load_eschtml_string_e">Failed to load: ' + escHtml(String(e)) + '</div>';
     }
   };
 

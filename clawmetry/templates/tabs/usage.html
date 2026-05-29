@@ -32,13 +32,13 @@
   </div>
   <div class="section-title">📊 <span data-i18n="usage.token_usage_14d">Token Usage (14 days)</span></div>
   <div class="card">
-    <div class="usage-chart" id="usage-chart">Loading...</div>
+    <div class="usage-chart" id="usage-chart" data-i18n="app.loading">Loading...</div>
   </div>
   <div class="section-title">💰 <span data-i18n="usage.cost_breakdown">Cost Breakdown</span> <span id="usage-cost-info-icon" class="tooltip-info-icon" style="display:none;">i</span></div>
-  <div class="card"><table class="usage-table" id="usage-cost-table"><tbody><tr><td colspan="3" style="color:#666;">Loading...</td></tr></tbody></table></div>
+  <div class="card"><table class="usage-table" id="usage-cost-table"><tbody><tr><td colspan="3" style="color:#666;" data-i18n="app.loading">Loading...</td></tr></tbody></table></div>
   <!-- Issue #68 — top sessions by cost (per-session breakdown) -->
   <div class="section-title">🏆 <span data-i18n="usage.top_sessions_by_cost">Top Sessions by Cost</span> <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;" data-i18n="usage.top_sessions_hint">which session burned the budget · top 20</span></div>
-  <div class="card"><table class="usage-table" id="usage-top-sessions-table"><tbody><tr><td colspan="6" style="color:#666;">Loading...</td></tr></tbody></table></div>
+  <div class="card"><table class="usage-table" id="usage-top-sessions-table"><tbody><tr><td colspan="6" style="color:#666;" data-i18n="app.loading">Loading...</td></tr></tbody></table></div>
   <div id="usage-anomaly-section" style="display:none;">
     <div class="section-title">⚠️ <span data-i18n="usage.anomaly_alerts">Anomaly Alerts</span> <span id="usage-anomaly-badge" style="
       font-size:11px;
@@ -60,7 +60,7 @@
         min-width:220px;
         font-size:12px;
         color:var(--text-secondary);
-        ">Loading...</div>
+        " data-i18n="app.loading">Loading...</div>
     </div>
   </div>
   <div class="section-title">💸 <span data-i18n="usage.top_sessions_by_cost">Top Sessions by Cost</span>
@@ -78,7 +78,7 @@
   </div>
   <div class="card">
     <canvas id="usage-session-cost-bar" height="180" style="width:100%;display:block;margin-bottom:12px;"></canvas>
-    <div id="usage-session-cost-table" style="font-size:12px;color:var(--text-secondary);">Loading...</div>
+    <div id="usage-session-cost-table" style="font-size:12px;color:var(--text-secondary);" data-i18n="app.loading">Loading...</div>
   </div>
   <div id="otel-extra-sections" style="display:none;">
     <div class="grid" style="margin-top:16px;">
@@ -94,7 +94,7 @@
       </div>
     </div>
     <div class="section-title">🤖 <span data-i18n="usage.model_breakdown">Model Breakdown</span></div>
-    <div class="card"><table class="usage-table" id="usage-model-table"><tbody><tr><td colspan="2" style="color:#666;">No model data</td></tr></tbody></table></div>
+    <div class="card"><table class="usage-table" id="usage-model-table"><tbody><tr><td colspan="2" style="color:#666;" data-i18n="app.no_model_data">No model data</td></tr></tbody></table></div>
     <div style="
       margin-top:12px;
       padding:8px 12px;
@@ -108,12 +108,12 @@
   <!-- Cost Comparison Panel (GH#554) -->
   <div class="section-title" id="cost-comparison-section" style="display:flex;align-items:center;">💱 <span data-i18n="usage.cost_comparison">Cost Comparison</span> <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;" data-i18n="usage.cost_comparison_hint">what same workload costs elsewhere · 30 days</span></div>
   <div class="card" id="cost-comparison-card" style="display:none;">
-    <div id="cost-comparison-content" style="min-height:60px;color:var(--text-muted);">Loading...</div>
+    <div id="cost-comparison-content" style="min-height:60px;color:var(--text-muted);" data-i18n="app.loading">Loading...</div>
   </div>
   <!-- Spend Optimization Recommendations (issue #1415) -->
   <div class="section-title" id="spend-optimization-section" style="display:flex;align-items:center;">💡 <span data-i18n="usage.spend_optimization">Spend Optimization</span> <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;" data-i18n="usage.spend_optimization_hint">model downgrade suggestions · 30 days</span></div>
   <div class="card" id="spend-optimization-card" style="display:none;">
-    <div id="spend-optimization-content" style="min-height:60px;color:var(--text-muted);">Loading...</div>
+    <div id="spend-optimization-content" style="min-height:60px;color:var(--text-muted);" data-i18n="app.loading">Loading...</div>
   </div>
     <div class="section-title">🔮 <span data-i18n="usage.trace_clusters">Trace Clusters</span> <span style="
       font-size:11px;
@@ -122,7 +122,7 @@
       margin-left:8px;
       " data-i18n="usage.trace_clusters_hint">auto-group sessions by behavior pattern</span></div>
   <div class="card">
-    <div id="trace-clusters-content" style="min-height:60px;color:var(--text-muted);">Loading...</div>
+    <div id="trace-clusters-content" style="min-height:60px;color:var(--text-muted);" data-i18n="app.loading">Loading...</div>
   </div>
   <div class="section-title" style="display:flex;align-items:center;">📅 <span data-i18n="usage.activity_heatmap">Activity Heatmap</span> <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;" data-i18n="usage.activity_heatmap_hint">hourly usage intensity</span>
     <span style="margin-left:auto;display:flex;gap:6px;">
@@ -132,7 +132,7 @@
   </div>
   <div class="card">
     <div class="heatmap-wrap">
-      <div id="heatmap-grid" class="heatmap-grid">Loading...</div></div>
+      <div id="heatmap-grid" class="heatmap-grid" data-i18n="app.loading">Loading...</div></div>
     <div id="heatmap-legend" class="heatmap-legend"></div>
   </div>
   <div class="section-title">🎯 <span data-i18n="usage.skill_cost_leaderboard">Skill Cost Leaderboard</span> <span style="
@@ -142,6 +142,6 @@
     margin-left:8px;
     " data-i18n="usage.skill_cost_leaderboard_hint">heuristic attribution, 30s window</span></div>
   <div class="card" id="skill-leaderboard-card">
-    <div id="skill-leaderboard-content" style="min-height:60px;color:var(--text-muted);">Loading...</div>
+    <div id="skill-leaderboard-content" style="min-height:60px;color:var(--text-muted);" data-i18n="app.loading">Loading...</div>
   </div>
 </div>
