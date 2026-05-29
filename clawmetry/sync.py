@@ -8340,17 +8340,22 @@ def _build_machine_info():
 # namespaced + tagged with the runtime. To add a runtime: ship its adapter and
 # add a (module, class) row here. Import is per-adapter + defensive so a missing
 # or broken adapter (e.g. an older wheel) never blocks the others.
+# The 10 paid runtime adapters moved to the closed-source clawmetry-pro
+# package in Phase 4 of the open-core split. ``_family_adapter_classes()``
+# below imports them by absolute path; the import gracefully fails when
+# clawmetry-pro is not installed and the daemon proceeds with OpenClaw +
+# NeMo (the Free runtimes) only.
 _FAMILY_ADAPTER_SPECS = (
-    ("clawmetry.adapters.picoclaw", "PicoClawAdapter"),
-    ("clawmetry.adapters.nanoclaw", "NanoClawAdapter"),
-    ("clawmetry.adapters.hermes", "HermesAdapter"),
-    ("clawmetry.adapters.claude_code", "ClaudeCodeAdapter"),
-    ("clawmetry.adapters.codex", "CodexAdapter"),
-    ("clawmetry.adapters.cursor", "CursorAdapter"),
-    ("clawmetry.adapters.aider", "AiderAdapter"),
-    ("clawmetry.adapters.goose", "GooseAdapter"),
-    ("clawmetry.adapters.opencode", "OpencodeAdapter"),
-    ("clawmetry.adapters.qwen_code", "QwenCodeAdapter"),
+    ("clawmetry_pro.adapters.picoclaw", "PicoClawAdapter"),
+    ("clawmetry_pro.adapters.nanoclaw", "NanoClawAdapter"),
+    ("clawmetry_pro.adapters.hermes", "HermesAdapter"),
+    ("clawmetry_pro.adapters.claude_code", "ClaudeCodeAdapter"),
+    ("clawmetry_pro.adapters.codex", "CodexAdapter"),
+    ("clawmetry_pro.adapters.cursor", "CursorAdapter"),
+    ("clawmetry_pro.adapters.aider", "AiderAdapter"),
+    ("clawmetry_pro.adapters.goose", "GooseAdapter"),
+    ("clawmetry_pro.adapters.opencode", "OpencodeAdapter"),
+    ("clawmetry_pro.adapters.qwen_code", "QwenCodeAdapter"),
 )
 
 
