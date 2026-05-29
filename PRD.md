@@ -30,7 +30,7 @@ Three product pillars: **zero config**, **read-only by default** (we observe age
 |---|---|---|---|---|---|---|---|---|---|
 | **OSS only** | $0 | ✓ | — | — | local only | — | — | local only | n/a |
 | **Cloud Free** | $0 | ✓ | ✓ (heartbeat only) | heartbeat only | 1 alert visible | empty queue | — | — | `free` |
-| **Cloud Trial** | $0 / 14 d | ✓ | ✓ | full | unlimited | full | unlimited | full | `trial` |
+| **Cloud Trial** | $0 / 7 d | ✓ | ✓ | full | unlimited | full | unlimited | full | `trial` |
 | **Cloud Pro** | paid | ✓ | ✓ | full | unlimited | full | unlimited | full | `cloud_pro` |
 | **Trial-Expired** | $0 | ✓ | dashboard frozen at last sync | paused | view only | view only | view only | partial | `trial_expired` |
 
