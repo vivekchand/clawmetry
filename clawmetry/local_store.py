@@ -3604,6 +3604,67 @@ class LocalStore:
             out.append(d)
         return out
 
+    def query_traces(
+        self,
+        *,
+        session_id: str | None = None,
+        agent_type: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """One row per distinct trace_id with aggregate stats.
+
+        Aggregates MIN(start_ts), MAX(end_ts), span_count, cost_usd,
+        tokens_input, tokens_output, and has_error across all spans
+        that share a trace_id. Returns [] gracefully when the spans
+        table is empty or not yet populated.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if session_id:
+            clauses.append("session_id = ?")
+            params.append(str(session_id))
+        if agent_type:
+            clauses.append("agent_type = ?")
+            params.append(str(agent_type))
+        if since is not None:
+            clauses.append("start_ts >= ?")
+            params.append(float(since))
+        if until is not None:
+            clauses.append("start_ts <= ?")
+            params.append(float(until))
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT
+                trace_id,
+                MAX(session_id)    AS session_id,
+                MAX(agent_type)    AS agent_type,
+                MIN(start_ts)      AS start_ts,
+                MAX(end_ts)        AS end_ts,
+                CAST((MAX(end_ts) - MIN(start_ts)) * 1000 AS DOUBLE) AS duration_ms,
+                COUNT(*)           AS span_count,
+                SUM(cost_usd)      AS cost_usd,
+                SUM(tokens_input)  AS tokens_input,
+                SUM(tokens_output) AS tokens_output,
+                MAX(CASE WHEN status = 'ERROR' THEN 1 ELSE 0 END) AS has_error
+            FROM spans
+            {where}
+            GROUP BY trace_id
+            ORDER BY MIN(start_ts) DESC
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = [
+            "trace_id", "session_id", "agent_type",
+            "start_ts", "end_ts", "duration_ms", "span_count",
+            "cost_usd", "tokens_input", "tokens_output", "has_error",
+        ]
+        try:
+            return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
+        except Exception:
+            return []
+
     def query_recent_spans(
         self,
         *,
