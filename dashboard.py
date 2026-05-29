@@ -129,6 +129,7 @@ from routes.tool_catalog import bp_tool_catalog
 from routes.context_economics import bp_context_economics
 from routes.entitlement import bp_entitlement
 from routes.otel_export import bp_otel_export
+from routes.runtime_ingest import bp_runtime_ingest
 from routes.audit import bp_audit
 from helpers.openapi import bp_openapi
 
@@ -10609,6 +10610,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_memory)
     app.register_blueprint(bp_otel)
     app.register_blueprint(bp_otel_export)
+    app.register_blueprint(bp_runtime_ingest)
     app.register_blueprint(bp_otlp_traces)
     app.register_blueprint(bp_overview)
     app.register_blueprint(bp_security)
