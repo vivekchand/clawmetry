@@ -440,7 +440,7 @@ function _getOrCreateConnectorBanner() {
   var el = document.createElement('div');
   el.id = 'connector-down-banner';
   el.style.cssText = 'display:none;padding:10px 16px;background:#7f1d1d;border-bottom:2px solid #ef4444;color:#fecaca;font-size:13px;font-weight:600;align-items:center;gap:10px;';
-  el.innerHTML = '<span style="font-size:18px;">&#128227;</span><span id="connector-down-banner-msg" style="flex:1;"></span><a href="#" onclick="switchTab(\'overview\');return false;" style="color:#fecaca;text-decoration:underline;font-size:12px;margin-right:8px;">View</a><button onclick="document.getElementById(\'connector-down-banner\').style.display=\'none\';" style="background:#991b1b;color:#fee2e2;border:none;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;">Dismiss</button>';
+  el.innerHTML = '<span style="font-size:18px;">&#128227;</span><span id="connector-down-banner-msg" style="flex:1;"></span><a href="#" onclick="switchTab(\'overview\');return false;" style="color:#fecaca;text-decoration:underline;font-size:12px;margin-right:8px;">' + t("app.view", null, "View") + '</a><button onclick="document.getElementById(\'connector-down-banner\').style.display=\'none\';" style="background:#991b1b;color:#fee2e2;border:none;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;">' + t("app.dismiss", null, "Dismiss") + '</button>';
   var alertBanner = document.getElementById('alert-banner');
   if (alertBanner && alertBanner.parentNode) {
     alertBanner.parentNode.insertBefore(el, alertBanner.nextSibling);
@@ -478,7 +478,7 @@ function _getOrCreateAnomalyBanner() {
   var el = document.createElement('div');
   el.id = 'anomaly-engine-banner';
   el.style.cssText = 'display:none;padding:10px 16px;background:#451a03;border-bottom:2px solid #f59e0b;color:#fbbf24;font-size:13px;font-weight:600;align-items:center;gap:10px;';
-  el.innerHTML = '<span style="font-size:18px;">&#128680;</span><span id="anomaly-banner-msg" style="flex:1;"></span><a href="#" onclick="switchTab(\'usage\');loadAnomalyPanel();checkAnomalies();return false;" style="color:#fbbf24;text-decoration:underline;font-size:12px;margin-right:8px;">View Details</a><button onclick="document.getElementById(\'anomaly-engine-banner\').style.display=\'none\';" style="background:#92400e;color:#fef3c7;border:none;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;">Dismiss</button>';
+  el.innerHTML = '<span style="font-size:18px;">&#128680;</span><span id="anomaly-banner-msg" style="flex:1;"></span><a href="#" onclick="switchTab(\'usage\');loadAnomalyPanel();checkAnomalies();return false;" style="color:#fbbf24;text-decoration:underline;font-size:12px;margin-right:8px;">' + t("app.view_details", null, "View Details") + '</a><button onclick="document.getElementById(\'anomaly-engine-banner\').style.display=\'none\';" style="background:#92400e;color:#fef3c7;border:none;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;">' + t("app.dismiss", null, "Dismiss") + '</button>';
   // Insert after alert-banner
   var alertBanner = document.getElementById('alert-banner');
   if (alertBanner && alertBanner.parentNode) {
@@ -534,7 +534,7 @@ function _ensureAnomalyPanel() {
   var panel = document.createElement('div');
   panel.id = 'anomaly-panel';
   panel.style.cssText = 'background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:12px;padding:16px;margin-top:14px;box-shadow:var(--card-shadow);';
-  panel.innerHTML = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;"><div style="font-size:14px;font-weight:700;color:var(--text-primary);">&#128269; Anomaly Detection</div><span id="anomaly-panel-badge" style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;display:none;"></span></div><div id="anomaly-baselines" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;font-size:11px;"></div><div id="anomaly-list" style="max-height:300px;overflow-y:auto;"></div>';
+  panel.innerHTML = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;"><div style="font-size:14px;font-weight:700;color:var(--text-primary);">' + t("app.128269_anomaly_detection", null, "&#128269; Anomaly Detection") + '</div><span id="anomaly-panel-badge" style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;display:none;"></span></div><div id="anomaly-baselines" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;font-size:11px;"></div><div id="anomaly-list" style="max-height:300px;overflow-y:auto;"></div>';
   shPanel.parentNode.insertBefore(panel, shPanel.nextSibling);
   return panel;
 }
@@ -978,7 +978,7 @@ async function loadContextEconomics() {
   try {
     data = await fetch(url).then(function(r){ return r.json(); });
   } catch (e) {
-    gaugeEl.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">Failed to load context economics: ' + escHtml(String(e)) + '</div>';
+    gaugeEl.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">' + t("app.failed_to_load_context_economics", null, "Failed to load context economics") + ': ' + escHtml(String(e)) + '</div>';
     return;
   }
   var util = data.utilization || [];
@@ -1057,7 +1057,7 @@ async function loadContextEconomics() {
   // ── Compaction log (clickable rows -> before/after + summary) ──
   if (compEl) {
     if (comps.length === 0) {
-      compEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">No compactions recorded' + (_ceSessionId ? ' for this session' : '') + '. OpenClaw compacts the transcript when the window fills; events appear here as they happen.</div>';
+      compEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">' + t("app.no_compactions_recorded", null, "No compactions recorded") + '' + (_ceSessionId ? ' for this session' : '') + '. OpenClaw compacts the transcript when the window fills; events appear here as they happen.</div>';
     } else {
       var c = '<div style="border:1px solid var(--border-primary);border-radius:10px;overflow:hidden;">';
       c += '<div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;padding:12px 14px;border-bottom:1px solid var(--border-primary);">Compaction events <span style="color:var(--text-faint);font-weight:500;text-transform:none;">— click a row to expand</span></div>';
@@ -1943,7 +1943,7 @@ async function _selfconfigRenderReader(filename, ts) {
     }
     if (bodyEl) {
       if (!d.exists && ts == null) {
-        bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">This file hasn\u2019t been created yet. Click <strong>Edit</strong> above to write the first version.</div>';
+        bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">This file hasn\u2019t been created yet. Click <strong>' + t("app.edit", null, "Edit") + '</strong> above to write the first version.</div>';
       } else if (!d.content || !d.content.trim()) {
         bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">' + t("app.this_file_is_empty", null, "This file is empty.") + '</div>';
       } else {
@@ -2613,7 +2613,7 @@ async function submitCompare() {
   var resp;
   try {
     resp = await fetch('/api/run-compare?a=' + encodeURIComponent(a) + '&b=' + encodeURIComponent(b));
-  } catch (e) { body.innerHTML = '<div style="color:var(--err);font-size:12px;">Network error: ' + escapeHtmlSafe(e.message) + '</div>'; return; }
+  } catch (e) { body.innerHTML = '<div style="color:var(--err);font-size:12px;">' + t("app.network_error", null, "Network error") + ': ' + escapeHtmlSafe(e.message) + '</div>'; return; }
   if (!resp.ok) {
     var msg = 'Request failed (' + resp.status + ')';
     try { var err = await resp.json(); if (err && err.error) msg = err.error; } catch (e) {}
@@ -3030,7 +3030,7 @@ async function loadSubAgents() {
     if (_saResp.s === 503 && data && data.error === 'local_store ingest is offline') {
       document.getElementById('subagents-status').textContent = t("app.ingest_offline", null, "Ingest offline");
       var _saPrev = document.getElementById('subagents-preview');
-      if (_saPrev) _saPrev.innerHTML = '<div style="background:#fff7ed;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:6px;font-size:12px;"><strong>Ingest temporarily offline.</strong> Sub-agent data unavailable; the local_store writer is not responding.</div>';
+      if (_saPrev) _saPrev.innerHTML = '<div style="background:#fff7ed;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:6px;font-size:12px;"><strong>' + t("app.ingest_temporarily_offline", null, "Ingest temporarily offline.") + '</strong> Sub-agent data unavailable; the local_store writer is not responding.</div>';
       return;
     }
     var counts = data.counts;
@@ -4600,7 +4600,7 @@ function loadLlmCallTimeline(eventId, sessionId, containerId) {
       container.innerHTML = renderLlmCallTimeline(data);
     })
     .catch(function(err) {
-      container.innerHTML = '<span style="color:#ef4444;font-size:10px;">Timeline unavailable: ' + escHtml(String(err && err.message ? err.message : err)) + '</span>';
+      container.innerHTML = '<span style="color:#ef4444;font-size:10px;">' + t("app.timeline_unavailable", null, "Timeline unavailable") + ': ' + escHtml(String(err && err.message ? err.message : err)) + '</span>';
     });
 }
 
@@ -5599,7 +5599,7 @@ async function loadContextInspector() {
     }
   } catch(e) {
     var barsEl = document.getElementById('ctx-composition-bars');
-    if (barsEl) barsEl.innerHTML = '<div style="color:var(--text-error);font-size:12px;">Error loading context data: ' + escHtml(String(e)) + '</div>';
+    if (barsEl) barsEl.innerHTML = '<div style="color:var(--text-error);font-size:12px;">' + t("app.error_loading_context_data", null, "Error loading context data") + ': ' + escHtml(String(e)) + '</div>';
   }
 }
 
@@ -5940,7 +5940,7 @@ async function loadBrainPage(silent) {
     var data = await _bhRaw.json();
     if (_bhRaw.status === 503 && data && data.error === 'local_store ingest is offline') {
       var _bhEl = document.getElementById('brain-stream');
-      if (_bhEl) _bhEl.innerHTML = '<div style="background:#fff7ed;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:6px;margin:12px;"><strong>Ingest temporarily offline.</strong> Brain history unavailable; the local_store writer is not responding. New events will appear once the daemon recovers.</div>';
+      if (_bhEl) _bhEl.innerHTML = '<div style="background:#fff7ed;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:6px;margin:12px;"><strong>' + t("app.ingest_temporarily_offline", null, "Ingest temporarily offline.") + '</strong> Brain history unavailable; the local_store writer is not responding. New events will appear once the daemon recovers.</div>';
       _renderBrainHistoryCap(false);
       return;
     }
@@ -6288,7 +6288,7 @@ async function loadSpansPanel() {
       + '</tr></thead><tbody>' + rowsHtml + '</tbody></table>';
     _renderSpansCap(cappedAt24h);
   } catch (e) {
-    wrap.innerHTML = '<div style="color:var(--text-error);padding:20px;font-size:12px;">Failed to load spans: ' + _spansEsc(String(e)) + '</div>';
+    wrap.innerHTML = '<div style="color:var(--text-error);padding:20px;font-size:12px;">' + t("app.failed_to_load_spans", null, "Failed to load spans") + ': ' + _spansEsc(String(e)) + '</div>';
   }
 }
 
@@ -6395,7 +6395,7 @@ async function loadSecCatalog() {
     html += '</table>';
     el.innerHTML = html;
   } catch(e) {
-    el.innerHTML = '<div style="color:var(--text-error);font-size:11px;">Failed to load: ' + escHtml(String(e)) + '</div>';
+    el.innerHTML = '<div style="color:var(--text-error);font-size:11px;">' + t("app.failed_to_load", null, "Failed to load") + ': ' + escHtml(String(e)) + '</div>';
   }
 }
 
@@ -6412,7 +6412,7 @@ async function loadNemoClaw() {
       // Issue #1127: previously said "pip install nemoclaw" but the package
       // is not yet publicly released (only a 0.0.0a1 placeholder exists on
       // PyPI). Replace with an honest "Coming soon" empty state.
-      page.innerHTML = '<div style="padding:40px 20px;text-align:center;color:var(--text-muted);font-size:14px;">NemoClaw governance is not yet available on this host.<br><span style="font-size:12px;">Coming soon &mdash; NVIDIA NeMo Guardrails integration is in private preview.</span></div>';
+      page.innerHTML = '<div style="padding:40px 20px;text-align:center;color:var(--text-muted);font-size:14px;">NemoClaw governance is not yet available on this host.<br><span style="font-size:12px;">' + t("app.coming_soon_mdash_nvidia_nemo_guardrails_integrati", null, "Coming soon &mdash; NVIDIA NeMo Guardrails integration is in private preview.") + '</span></div>';
       return;
     }
 
@@ -6789,7 +6789,7 @@ async function loadSecurityPosture() {
     listEl.innerHTML = html;
   } catch(e) {
     var panel = document.getElementById('security-posture-panel');
-    if (panel) panel.innerHTML = '<div style="color:var(--text-error);padding:10px;font-size:12px;">Posture scan failed: ' + escHtml(String(e)) + '</div>';
+    if (panel) panel.innerHTML = '<div style="color:var(--text-error);padding:10px;font-size:12px;">' + t("app.posture_scan_failed", null, "Posture scan failed") + ': ' + escHtml(String(e)) + '</div>';
   }
 }
 
@@ -6831,7 +6831,7 @@ async function loadSecurityPage(silent) {
   } catch(e) {
     if (!silent) {
       var el = document.getElementById('security-threat-list');
-      if (el) el.innerHTML = '<div style="color:var(--text-error);padding:20px">Scan failed: ' + escHtml(String(e)) + '</div>';
+      if (el) el.innerHTML = '<div style="color:var(--text-error);padding:20px">' + t("app.scan_failed", null, "Scan failed") + ': ' + escHtml(String(e)) + '</div>';
     }
   }
   if (_securityRefreshTimer) clearTimeout(_securityRefreshTimer);
@@ -9313,7 +9313,7 @@ async function viewTrace(traceId) {
   var tg = document.getElementById('trace-treegantt');
   if (tg) tg.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.loading_trace_hellip", null, "Loading trace&hellip;") + '</div>';
   var pane = document.getElementById('trace-span-pane');
-  if (pane) pane.innerHTML = '<div style="color:var(--text-muted);font-size:12px;text-align:center;padding:32px 14px;">Select a span on the left to see its <b>Chat</b>, <b>Inputs</b>, <b>Outputs</b>, <b>Attributes</b>, and <b>Events</b>.</div>';
+  if (pane) pane.innerHTML = '<div style="color:var(--text-muted);font-size:12px;text-align:center;padding:32px 14px;">Select a span on the left to see its <b>' + t("app.chat", null, "Chat") + '</b>, <b>' + t("app.inputs", null, "Inputs") + '</b>, <b>' + t("app.outputs", null, "Outputs") + '</b>, <b>' + t("app.attributes", null, "Attributes") + '</b>, and <b>' + t("app.events", null, "Events") + '</b>.</div>';
   window._traceActiveSpanId = null;
   window._traceSpanCache = {};
   var data;
@@ -9670,7 +9670,7 @@ function _traceSpanRenderChat(s) {
   var full = window._traceSpanCache[window._traceActiveSpanId];
   var msgs = _traceExtractMessages(s, full);
   if (!msgs.length) {
-    content.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:6px;">No conversation content for this span. Try <b>Inputs</b> / <b>Outputs</b> for the raw payload.</div>';
+    content.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:6px;">No conversation content for this span. Try <b>' + t("app.inputs", null, "Inputs") + '</b> / <b>' + t("app.outputs", null, "Outputs") + '</b> for the raw payload.</div>';
     return;
   }
   var html = '<div style="display:flex;flex-direction:column;gap:10px;max-height:520px;overflow:auto;padding:2px;">';
@@ -10721,7 +10721,7 @@ async function loadUsage() {
     // Issue #1804: show outage banner when ingest is offline (503 envelope).
     if (_uResp.s === 503 && data && data.error === 'local_store ingest is offline') {
       var _uChart = document.getElementById('usage-chart');
-      if (_uChart) _uChart.innerHTML = '<div style="background:#fff7ed;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:6px;"><strong>Ingest temporarily offline.</strong> Token usage data unavailable; the local_store writer is not responding.</div>';
+      if (_uChart) _uChart.innerHTML = '<div style="background:#fff7ed;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:6px;"><strong>' + t("app.ingest_temporarily_offline", null, "Ingest temporarily offline.") + '</strong> Token usage data unavailable; the local_store writer is not responding.</div>';
       return;
     }
     function fmtTokens(n) { return n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(0) + 'K' : String(n); }
@@ -10916,7 +10916,7 @@ function renderTopSessionsByCost(rows) {
     return d || '—';
   }
   if (!rows || rows.length === 0) {
-    el.innerHTML = '<tbody><tr><td colspan="6" style="color:#666;">No session cost data yet</td></tr></tbody>';
+    el.innerHTML = '<tbody><tr><td colspan="6" style="color:#666;">' + t("app.no_session_cost_data_yet", null, "No session cost data yet") + '</td></tr></tbody>';
     return;
   }
   var html = '<thead><tr>'
@@ -12550,7 +12550,7 @@ async function loadSubagents() {
     treeHtml += '</div>';
     el.innerHTML = treeHtml;
   } catch(e) {
-    el.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">Failed to load sub-agents: ' + escHtml(String(e)) + '</div>';
+    el.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">' + t("app.failed_to_load_sub_agents", null, "Failed to load sub-agents") + ': ' + escHtml(String(e)) + '</div>';
   }
 }
 
@@ -12606,7 +12606,7 @@ async function loadRunLedger() {
     _rlData = { lanes: data.lanes || [], runs: data.runs || [] };
     _rlRender();
   } catch(e) {
-    el.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">Failed to load run ledger: '+escHtml(String(e))+'</div>';
+    el.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">' + t("app.failed_to_load_run_ledger", null, "Failed to load run ledger") + ': '+escHtml(String(e))+'</div>';
   }
 }
 
@@ -12775,7 +12775,7 @@ async function loadToolCatalog() {
     }
     renderToolCatalog();
   } catch (e) {
-    tableEl.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">Failed to load tool catalog: ' + escHtml(String(e)) + '</div>';
+    tableEl.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">' + t("app.failed_to_load_tool_catalog", null, "Failed to load tool catalog") + ': ' + escHtml(String(e)) + '</div>';
   }
   // Per-MCP-server rollup (#2007) — independent of the provenance filter.
   loadMcpServers();
@@ -12915,7 +12915,7 @@ async function _tcLoadCalls(name) {
     });
     el.innerHTML = '<div style="font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;padding:2px 0 4px;">' + calls.length + ' recent call' + (calls.length === 1 ? '' : 's') + '</div>' + rows;
   } catch (e) {
-    el.innerHTML = '<div style="color:#e74c3c;padding:4px 0;">Failed to load calls: ' + escHtml(String(e)) + '</div>';
+    el.innerHTML = '<div style="color:#e74c3c;padding:4px 0;">' + t("app.failed_to_load_calls", null, "Failed to load calls") + ': ' + escHtml(String(e)) + '</div>';
   }
 }
 
@@ -12987,7 +12987,7 @@ async function loadToolPolicy() {
     }
   } catch(e) {
     if (sumEl) sumEl.innerHTML = '';
-    agEl.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">Failed to load tool policy: '+escHtml(String(e))+'</div>';
+    agEl.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">' + t("app.failed_to_load_tool_policy", null, "Failed to load tool policy") + ': '+escHtml(String(e))+'</div>';
   }
   // ── Exec-approval audit ──
   if (!apEl) return;
@@ -13027,7 +13027,7 @@ async function loadToolPolicy() {
       apEl.innerHTML = rows;
     }
   } catch(e) {
-    apEl.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">Failed to load approval audit: '+escHtml(String(e))+'</div>';
+    apEl.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">' + t("app.failed_to_load_approval_audit", null, "Failed to load approval audit") + ': '+escHtml(String(e))+'</div>';
   }
 }
 
@@ -13099,7 +13099,7 @@ async function loadToolPolicy() {
     }
   } catch(e) {
     if (sumEl) sumEl.innerHTML = '';
-    agEl.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">Failed to load tool policy: '+escHtml(String(e))+'</div>';
+    agEl.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">' + t("app.failed_to_load_tool_policy", null, "Failed to load tool policy") + ': '+escHtml(String(e))+'</div>';
   }
   // ── Exec-approval audit ──
   if (!apEl) return;
@@ -13139,7 +13139,7 @@ async function loadToolPolicy() {
       apEl.innerHTML = rows;
     }
   } catch(e) {
-    apEl.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">Failed to load approval audit: '+escHtml(String(e))+'</div>';
+    apEl.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">' + t("app.failed_to_load_approval_audit", null, "Failed to load approval audit") + ': '+escHtml(String(e))+'</div>';
   }
 }
 
@@ -13151,7 +13151,7 @@ async function loadVersionImpact() {
   try {
     var data = await fetch('/api/version-impact').then(r => r.json());
     if (!data.version_detected) {
-      el.innerHTML = '<div class="card" style="padding:20px;text-align:center;"><div style="font-size:15px;font-weight:600;color:var(--text-primary);">Version not detected</div><div style="font-size:13px;color:var(--text-muted);margin-top:8px;">Could not detect OpenClaw version from config.</div></div>';
+      el.innerHTML = '<div class="card" style="padding:20px;text-align:center;"><div style="font-size:15px;font-weight:600;color:var(--text-primary);">' + t("app.version_not_detected", null, "Version not detected") + '</div><div style="font-size:13px;color:var(--text-muted);margin-top:8px;">' + t("app.could_not_detect_openclaw_version_from_config", null, "Could not detect OpenClaw version from config.") + '</div></div>';
       return;
     }
     var html = '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap;">';
@@ -13232,7 +13232,7 @@ async function loadClusters() {
   try {
     var data = await fetch('/api/clusters').then(r => r.json());
     if (!data.clusters || data.clusters.length === 0) {
-      el.innerHTML = '<div class="card" style="padding:20px;text-align:center;"><div style="font-size:13px;color:var(--text-muted);">No sessions found to cluster.</div></div>';
+      el.innerHTML = '<div class="card" style="padding:20px;text-align:center;"><div style="font-size:13px;color:var(--text-muted);">' + t("app.no_sessions_found_to_cluster", null, "No sessions found to cluster.") + '</div></div>';
       return;
     }
     var clusterColors = {'browsing-heavy':'#60a5fa','code-heavy':'#34d399','messaging':'#f472b6','doc-analysis':'#a78bfa','mixed-research':'#fbbf24','cron-light':'#94a3b8','expensive-outlier':'#ef4444','general':'#6b7280'};
@@ -13910,7 +13910,7 @@ function loadFlowRuns() {
   var countEl = document.getElementById('flow-runs-count');
   if (!tbody) return;
   var lim = sel ? parseInt(sel.value, 10) || 30 : 30;
-  tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text-muted);font-size:12px;">Loading flow runs&hellip;</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text-muted);font-size:12px;">' + t("app.loading_flow_runs_hellip", null, "Loading flow runs&hellip;") + '</td></tr>';
   fetch('/api/flow/runs?limit=' + lim)
     .then(function(r) { return r.json(); })
     .then(function(d) {
@@ -13918,7 +13918,7 @@ function loadFlowRuns() {
       var cappedAt24h = !!(d && d.capped_at_24h);
       if (countEl) countEl.textContent = runs.length + ' run' + (runs.length === 1 ? '' : 's');
       if (!runs.length) {
-        tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text-muted);font-size:12px;">No historical flow runs yet. The live Flow view will populate this once a session completes.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text-muted);font-size:12px;">' + t("app.no_historical_flow_runs_yet_the_live_flow_view_wil", null, "No historical flow runs yet. The live Flow view will populate this once a session completes.") + '</td></tr>';
         _renderFlowRunsCap(cappedAt24h);
         return;
       }
@@ -13948,7 +13948,7 @@ function loadFlowRuns() {
       _renderFlowRunsCap(cappedAt24h);
     })
     .catch(function() {
-      tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:#ef4444;font-size:12px;">Failed to load flow runs.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:#ef4444;font-size:12px;">' + t("app.failed_to_load_flow_runs", null, "Failed to load flow runs.") + '</td></tr>';
     });
 }
 
@@ -14128,7 +14128,7 @@ function initFlow() {
     var _ffBody = await r.json().catch(function(){return {};});
     if (_ffBody && _ffBody.error === 'local_store ingest is offline') {
       var _ffEl = document.getElementById('flow-live-feed');
-      if (_ffEl) _ffEl.innerHTML = '<div style="background:#fff7ed;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:6px;"><strong>Ingest temporarily offline.</strong> Live flow events unavailable; the local_store writer is not responding.</div>';
+      if (_ffEl) _ffEl.innerHTML = '<div style="background:#fff7ed;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:6px;"><strong>' + t("app.ingest_temporarily_offline", null, "Ingest temporarily offline.") + '</strong> Live flow events unavailable; the local_store writer is not responding.</div>';
     }
   }).catch(function(){});
   // Connect to the typed flow-events SSE (tails gateway.log + session JSONL)
@@ -15627,7 +15627,7 @@ function openCompModal(nodeId) {
       document.getElementById('comp-modal-footer').textContent = t("app.auto_refreshing_last_updated", null, "Auto-refreshing - Last updated: ") + new Date().toLocaleTimeString() + ' - ' + skills.length + ' skills';
     }).catch(function(e) {
       if (!isCompModalActive('node-skills')) return;
-      sBody.innerHTML = '<div style="padding:20px;color:var(--text-error);">Failed to load skills: ' + escapeHtml(e.message) + '</div>';
+      sBody.innerHTML = '<div style="padding:20px;color:var(--text-error);">' + t("app.failed_to_load_skills", null, "Failed to load skills") + ': ' + escapeHtml(e.message) + '</div>';
     });
     return;
   }
@@ -16791,7 +16791,7 @@ function loadAutomationAdvisorDataWithTime() {
     return;
   }
   
-  body.innerHTML = '<div style="text-align:center;padding:40px;"><div style="font-size:24px;margin-bottom:20px;">🧠 Loading automation analysis...</div></div>';
+  body.innerHTML = '<div style="text-align:center;padding:40px;"><div style="font-size:24px;margin-bottom:20px;">' + t("app.loading_automation_analysis", null, "🧠 Loading automation analysis...") + '</div></div>';
   document.getElementById('comp-modal-footer').textContent = 'Live';
   
   fetch('/api/automation-analysis').then(function(r){return r.json();}).then(function(data) {
@@ -17723,7 +17723,7 @@ async function _renderModalBrainEvents(match) {
         note = 'No Brain events recorded for this spawn'
              + (spawnStr ? ' (' + spawnStr + ')' : '') + '.';
       }
-      slot.innerHTML = '<div><div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:8px;">Brain events</div>'
+      slot.innerHTML = '<div><div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:8px;">' + t("app.brain_events", null, "Brain events") + '</div>'
                      + '<div style="padding:10px 12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:6px;font-size:12px;color:var(--text-muted);">'
                      + escHtml(note) + '</div></div>';
       return;
@@ -17970,7 +17970,7 @@ async function renderModalTools(el) {
     data = await r.json();
     // Issue #1804: show outage banner when ingest is offline (503 envelope).
     if (r.status === 503 && data && data.error === 'local_store ingest is offline') {
-      el.innerHTML = '<div style="background:#fff7ed;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:6px;margin:12px;"><strong>Ingest temporarily offline.</strong> Tool timeline unavailable; the local_store writer is not responding.</div>';
+      el.innerHTML = '<div style="background:#fff7ed;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:6px;margin:12px;"><strong>' + t("app.ingest_temporarily_offline", null, "Ingest temporarily offline.") + '</strong> Tool timeline unavailable; the local_store writer is not responding.</div>';
       return;
     }
   } catch(e) {
@@ -18136,7 +18136,7 @@ async function renderModalModelJourney(el) {
 
     el.innerHTML = html;
   } catch(e) {
-    el.innerHTML = '<div style="padding:20px;color:var(--text-error);">Failed to load model journey: ' + escHtml(e.message || String(e)) + '</div>';
+    el.innerHTML = '<div style="padding:20px;color:var(--text-error);">' + t("app.failed_to_load_model_journey", null, "Failed to load model journey") + ': ' + escHtml(e.message || String(e)) + '</div>';
   }
 }
 
