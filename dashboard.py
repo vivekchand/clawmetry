@@ -9243,117 +9243,101 @@ def _send_telegram_alert(message):
         pass
 
 
-# PagerDuty Events API v2 severity mapping. ClawMetry severities map onto
-# the four levels PD recognises; anything unknown becomes "warning".
+# PagerDuty and OpsGenie integration constants. The actual payload
+# builders + transport moved to the closed-source clawmetry-pro package
+# (clawmetry_pro/sinks/{pagerduty,opsgenie}.py) per the open-core plan.
+# These constants are public URLs / trivial maps and stay in OSS so the
+# alerts/webhook-test endpoint can reference them for its UI hints
+# without importing the closed package.
 _PD_SEVERITY = {"info": "info", "warning": "warning", "error": "error", "critical": "critical"}
-# OpsGenie priority mapping. P1 (critical) is the loudest; P5 is informational.
 _OG_PRIORITY = {"info": "P5", "warning": "P3", "error": "P2", "critical": "P1"}
-# Fixed PagerDuty enqueue endpoint (Events API v2).
 _PD_EVENTS_URL = "https://events.pagerduty.com/v2/enqueue"
-# Default OpsGenie REST API host; EU customers override via opsgenie_api_url.
 _OG_DEFAULT_API_URL = "https://api.opsgenie.com/v2/alerts"
 
 
-def _build_pagerduty_payload(alert_data: dict, routing_key: str) -> dict:
-    """Construct a PagerDuty Events API v2 ``trigger`` event.
+def _pro_sinks():
+    """Return ``clawmetry_pro.sinks`` when importable, else ``None``.
 
-    Reference: https://developer.pagerduty.com/api-reference/YXBpOjI3NDgyNjU-pager-duty-v2-events-api
+    Cached implicitly by the Python import system; first miss pays one
+    ImportError, subsequent misses are a dict lookup.
     """
-    severity = str(alert_data.get("severity", "warning")).lower()
-    summary = (
-        alert_data.get("message")
-        or alert_data.get("title")
-        or "[{t}] cost=${c} threshold=${th}".format(
-            t=alert_data.get("type", "alert"),
-            c=alert_data.get("cost_usd", 0),
-            th=alert_data.get("threshold", 0),
-        )
-    )
-    # PagerDuty caps summary at 1024 chars; trim defensively.
-    summary = str(summary)[:1024]
-    # dedup_key lets PD coalesce repeats of the same logical incident.
-    dedup_key = "clawmetry:{a}:{t}".format(
-        a=alert_data.get("agent", "main"),
-        t=alert_data.get("type", "alert"),
-    )
-    return {
-        "routing_key": routing_key,
-        "event_action": "trigger",
-        "dedup_key": dedup_key,
-        "payload": {
-            "summary": summary,
-            "severity": _PD_SEVERITY.get(severity, "warning"),
-            "source": "clawmetry",
-            "component": str(alert_data.get("agent", "main"))[:255],
-            "group": "clawmetry-alerts",
-            "class": str(alert_data.get("type", "alert"))[:255],
-            "custom_details": {
-                k: alert_data[k]
-                for k in alert_data
-                if k in ("cost_usd", "threshold", "agent", "type", "session_id", "model")
-            },
-        },
-    }
+    try:
+        from clawmetry_pro import sinks as _s
+        return _s
+    except Exception:
+        return None
+
+
+def _build_pagerduty_payload(alert_data: dict, routing_key: str) -> dict:
+    """Delegate to clawmetry-pro's PD payload builder.
+
+    Returns ``{}`` when the closed package is not installed so callers
+    can detect "no payload built" without exception handling. Public OSS
+    cannot actually send PagerDuty events (sink delegation no-ops); this
+    helper is here only for tests and for backward-compatible signatures
+    in routes/alerts.py callers.
+    """
+    sinks = _pro_sinks()
+    if sinks is None:
+        return {}
+    try:
+        return sinks.build_pagerduty_payload(alert_data, routing_key)
+    except Exception:
+        return {}
 
 
 def _build_opsgenie_payload(alert_data: dict) -> dict:
-    """Construct an OpsGenie ``createAlert`` body.
-
-    Reference: https://docs.opsgenie.com/docs/alert-api#create-alert
-    """
-    severity = str(alert_data.get("severity", "warning")).lower()
-    message = (
-        alert_data.get("message")
-        or alert_data.get("title")
-        or "[{t}] cost=${c}".format(
-            t=alert_data.get("type", "alert"),
-            c=alert_data.get("cost_usd", 0),
-        )
-    )
-    return {
-        "message": str(message)[:130],  # OpsGenie hard cap on message length
-        "alias": "clawmetry:{a}:{t}".format(
-            a=alert_data.get("agent", "main"),
-            t=alert_data.get("type", "alert"),
-        )[:512],
-        "description": str(alert_data.get("message", ""))[:15000],
-        "priority": _OG_PRIORITY.get(severity, "P3"),
-        "source": "clawmetry",
-        "tags": ["clawmetry", str(alert_data.get("type", "alert"))],
-        "details": {
-            str(k): str(v)
-            for k, v in alert_data.items()
-            if k in ("cost_usd", "threshold", "agent", "type", "session_id", "model")
-        },
-    }
+    """Delegate to clawmetry-pro's OpsGenie payload builder. Returns
+    ``{}`` when the closed package is not installed."""
+    sinks = _pro_sinks()
+    if sinks is None:
+        return {}
+    try:
+        return sinks.build_opsgenie_payload(alert_data)
+    except Exception:
+        return {}
 
 
 def _send_webhook_alert(url, alert_data, payload_type="generic"):
     """Send alert to a webhook URL (generic JSON, Slack attachment, Discord
-    embed, PagerDuty Events API v2, or OpsGenie createAlert)."""
+    embed). PagerDuty + OpsGenie are delegated to clawmetry-pro when
+    installed; when not installed the call is a no-op (Pro feature).
+    """
+    # PagerDuty + OpsGenie moved to clawmetry-pro/sinks/. Delegate when
+    # the closed package is installed; log + return when it isn't (so
+    # OSS-only callers don't pretend the alert went out).
+    if payload_type in ("pagerduty", "opsgenie"):
+        import logging as _lg
+        _wh_log = _lg.getLogger("clawmetry.dashboard.webhook")
+        sinks = _pro_sinks()
+        if sinks is None:
+            _wh_log.info(
+                "_send_webhook_alert: %s sink requires clawmetry-pro "
+                "(install with a license key, or use Cloud Pro). "
+                "Alert dropped.", payload_type,
+            )
+            return
+        try:
+            if payload_type == "pagerduty":
+                routing_key = str(alert_data.get("_pd_routing_key", "")).strip()
+                if not routing_key:
+                    return
+                sinks.send_pagerduty(alert_data, routing_key)
+            else:
+                api_key = str(alert_data.get("_og_api_key", "")).strip()
+                if not api_key:
+                    return
+                og_url = (url or "").strip() or None
+                sinks.send_opsgenie(alert_data, api_key, api_url=og_url)
+        except Exception as exc:
+            _wh_log.warning("_send_webhook_alert: %s delegation failed: %s", payload_type, exc)
+        return
+
     try:
         import urllib.request as _ur
 
         extra_headers: dict[str, str] = {}
-        if payload_type == "pagerduty":
-            # url here is ignored — PD has a fixed enqueue endpoint. The
-            # routing_key must live in alert_data["_pd_routing_key"] (the
-            # dispatcher sets it before calling).
-            routing_key = str(alert_data.get("_pd_routing_key", "")).strip()
-            if not routing_key:
-                return
-            body = _build_pagerduty_payload(alert_data, routing_key)
-            target_url = _PD_EVENTS_URL
-        elif payload_type == "opsgenie":
-            api_key = str(alert_data.get("_og_api_key", "")).strip()
-            if not api_key:
-                return
-            body = _build_opsgenie_payload(alert_data)
-            extra_headers["Authorization"] = "GenieKey " + api_key
-            target_url = url.strip() if url else _OG_DEFAULT_API_URL
-            if not target_url:
-                target_url = _OG_DEFAULT_API_URL
-        elif payload_type == "discord":
+        if payload_type == "discord":
             message_text = (
                 alert_data.get("message")
                 or "[{t}] cost=${c} threshold=${th}".format(
@@ -10784,7 +10768,19 @@ def detect_config(args=None):
     app.register_blueprint(bp_memory)
     app.register_blueprint(bp_otel)
     app.register_blueprint(bp_otel_export)
-    app.register_blueprint(bp_runtime_ingest)
+    # Custom-runtime HTTP ingest is a Pro feature; the impl lives in
+    # clawmetry-pro. When that package is installed, its blueprint was
+    # already registered by ``_ext_load(app)`` above and won the URL
+    # routes; skip the OSS 402-stub registration here to avoid a Flask
+    # blueprint-name collision. When the closed package is NOT installed
+    # the OSS stub registers and returns HTTP 402 ``upgrade_required``.
+    try:
+        import clawmetry_pro as _pro
+        _pro_loaded = bool(getattr(_pro, "is_loaded", lambda: False)())
+    except Exception:
+        _pro_loaded = False
+    if not _pro_loaded:
+        app.register_blueprint(bp_runtime_ingest)
     app.register_blueprint(bp_otlp_traces)
     app.register_blueprint(bp_overview)
     app.register_blueprint(bp_security)
