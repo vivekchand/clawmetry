@@ -7,16 +7,18 @@ nothing should gate on a hardcoded plan check scattered across routes.
 
 Open-core model
 ---------------
-* **FREE** (this OSS package): the OpenClaw runtime + NeMo governance + the
-  core observability surface. Always available — no key, no network call.
+* **FREE** (this OSS package): the OpenClaw + NVIDIA NemoClaw runtimes +
+  NeMo governance + the core observability surface. Always available — no
+  key, no network call.
 * **PAID** (the closed-source ``clawmetry-pro`` package, fetched only with
   a valid license key or a cloud entitlement — it is *not* shipped in this
   repo): the other agent runtimes (Claude Code, Codex, Cursor, …), the
   advanced features (custom alerts, multi-node fleet, anomaly detection, …),
   and paid CLI capabilities.
 
-  NeMo is a *governance feature*, not an agent runtime, so it stays FREE.
-  The free runtime set is therefore ``{"openclaw"}``.
+  NeMo governance (policy enforcement on top of any runtime) remains a free
+  *feature* (``nemo_governance``). The ``nemoclaw`` agent runtime is also
+  free and sits alongside ``openclaw`` in ``FREE_RUNTIMES``.
 
 Resolution order (first hit wins), all cached
 ---------------------------------------------
@@ -64,8 +66,10 @@ _PAID_TIERS = frozenset(
 )
 
 # ── Runtime catalogue ───────────────────────────────────────────────────────
-# FREE: the OpenClaw runtime only. NeMo is governance, not a runtime.
-FREE_RUNTIMES = frozenset({"openclaw"})
+# FREE: the OpenClaw and NVIDIA NemoClaw runtimes. NeMo *governance* (policy
+# enforcement) is a separate free feature; ``nemoclaw`` here is the agent
+# runtime itself, which is part of the free tier alongside ``openclaw``.
+FREE_RUNTIMES = frozenset({"openclaw", "nemoclaw"})
 
 # PAID: every other agent runtime ClawMetry can observe. These ship in the
 # closed-source ``clawmetry-pro`` package, not here — listed so the UI can
@@ -94,6 +98,7 @@ ALL_RUNTIMES = FREE_RUNTIMES | PAID_RUNTIMES
 # without a label here is safe — but please add one.
 RUNTIME_LABELS = {
     "openclaw": "OpenClaw",
+    "nemoclaw": "NemoClaw",
     "claude_code": "Claude Code",
     "codex": "Codex",
     "cursor": "Cursor",
