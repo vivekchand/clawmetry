@@ -1,153 +1,52 @@
-"""routes/assets.py — Asset registry HTTP surface.
+"""routes/assets.py: OSS stub after the impl moved to clawmetry-pro.
 
-Evidence + review layer that turns individual agent discoveries (Self-Evolve
-findings, useful prompts, improved skills) into reviewable, reusable assets
-without auto-promoting unreviewed local changes to team/company defaults
-(see issue #2201 + ``spec/asset-registry`` in the evotown adoption thread).
+The real asset-registry impl (list, get, upsert, review) ships in the
+closed-source ``clawmetry-pro`` package as
+``clawmetry_pro/routes/assets.py``. When that package is installed its
+blueprint registers via the ``clawmetry.extensions`` entry point at app
+startup and wins the URL routes. When clawmetry-pro is NOT installed
+this stub returns HTTP 402 ``upgrade_required`` at every URL the impl
+used to serve.
 
-Endpoints (first slice):
-
-  GET  /api/assets                  — list, newest first; ``status``,
-                                       ``asset_type``, ``source_run_id``,
-                                       ``source_session_id``, ``limit`` query
-                                       params
-  GET  /api/assets/<asset_id>       — single asset detail
-  POST /api/assets                  — create / upsert a candidate asset
-                                       (``id``, ``asset_type``, ``name``
-                                       required; ``source_run_id``,
-                                       ``source_session_id``, ``description``,
-                                       ``content``, ``tags``, ``author``,
-                                       ``team_id`` optional)
-  POST /api/assets/<asset_id>/review — move status (`approve`/`reject`/
-                                       `deprecate`); body: ``reviewer``,
-                                       ``reason``
-
-All reads + writes go through the daemon proxy (``local_store_via_daemon``)
-so the dashboard process never opens DuckDB writable — same pattern as
-``query_approvals`` / ``ingest_approval``. Auth is intentionally not enforced
-in this first slice; the dashboard binds to localhost and the richer
-review/promote console (with reviewer identity + audit) is the planned Pro
-surface.
+dashboard.py decides which blueprint to register by inspecting
+``clawmetry_pro.is_loaded()`` so the two never coexist on the URL map.
 """
 from __future__ import annotations
 
-from flask import Blueprint, jsonify, request
+import logging
+
+from flask import Blueprint, jsonify
+
+logger = logging.getLogger("clawmetry.routes.assets")
 
 bp_assets = Blueprint("assets", __name__)
 
-from clawmetry._gate import gate
 
-
-# Mirrors the lifecycle in the LocalStore (kept in sync — the daemon validates
-# again, this is just a friendlier 400 at the API edge).
-_VALID_TYPES = frozenset({
-    "skill", "prompt", "workflow", "playbook",
-    "memory_snippet", "tool_config", "evaluation_case",
-})
-_REVIEW_ACTIONS = {
-    "approve": "approved",
-    "approved": "approved",
-    "reject": "rejected",
-    "rejected": "rejected",
-    "deprecate": "deprecated",
-    "deprecated": "deprecated",
+_UPGRADE = {
+    "error": "upgrade_required",
+    "feature": "asset_registry",
+    "hint": (
+        "Asset registry is a Pro feature. Install ``clawmetry-pro`` with a "
+        "valid license key, or use Cloud Pro at clawmetry.com/pricing."
+    ),
 }
 
 
-def _ls_call(method_name, **kwargs):
-    """Cross-process LocalStore call with single-process fallback. Mirrors the
-    helper used by routes/agents.py / routes/components.py."""
-    try:
-        from routes.local_query import local_store_via_daemon
-        result = local_store_via_daemon(method_name, **kwargs)
-        if result is not None:
-            return result
-    except Exception:
-        pass
-    try:
-        from clawmetry import local_store
-        store = local_store.get_store(read_only=True)
-        return getattr(store, method_name)(**kwargs)
-    except Exception:
-        return None
-
-
-def _int_arg(name: str, default: int, *, lo: int, hi: int) -> int:
-    try:
-        v = int(request.args.get(name, default))
-    except (TypeError, ValueError):
-        return default
-    return max(lo, min(hi, v))
-
-
 @bp_assets.route("/api/assets", methods=["GET"])
-@gate("asset_registry")
-def list_assets():
-    kwargs = {"limit": _int_arg("limit", 100, lo=1, hi=1000)}
-    for key in ("status", "asset_type", "source_run_id", "source_session_id"):
-        val = (request.args.get(key) or "").strip()
-        if val:
-            kwargs[key] = val
-    rows = _ls_call("query_assets", **kwargs) or []
-    return jsonify({"assets": rows, "count": len(rows)})
+def _list_stub():
+    return jsonify(_UPGRADE), 402
 
 
 @bp_assets.route("/api/assets/<asset_id>", methods=["GET"])
-@gate("asset_registry")
-def get_asset_detail(asset_id: str):
-    row = _ls_call("get_asset", asset_id=asset_id)
-    if not row:
-        return jsonify({"error": f"asset {asset_id!r} not found"}), 404
-    return jsonify(row)
+def _get_stub(asset_id: str):
+    return jsonify(_UPGRADE), 402
 
 
 @bp_assets.route("/api/assets", methods=["POST"])
-@gate("asset_registry")
-def create_asset():
-    data = request.get_json(silent=True) or {}
-    aid = (data.get("id") or "").strip()
-    atype = (data.get("asset_type") or "").strip()
-    name = (data.get("name") or "").strip()
-    if not aid:
-        return jsonify({"error": "'id' is required"}), 400
-    if atype not in _VALID_TYPES:
-        return jsonify({
-            "error": f"'asset_type' must be one of {sorted(_VALID_TYPES)}",
-        }), 400
-    if not name:
-        return jsonify({"error": "'name' is required"}), 400
-    # Whitelist — refuse silently-ignored extras so callers learn the schema.
-    allowed = {
-        "id", "asset_type", "name", "description", "source_run_id",
-        "source_session_id", "node_id", "author", "team_id", "version",
-        "status", "tags", "content", "reviewer", "review_reason",
-        "created_at",
-    }
-    payload = {k: v for k, v in data.items() if k in allowed}
-    result = _ls_call("ingest_asset", asset=payload)
-    if result is None and not _ls_call("get_asset", asset_id=aid):
-        return jsonify({"error": "asset store unavailable"}), 503
-    row = _ls_call("get_asset", asset_id=aid)
-    return jsonify(row or {"id": aid, "status": "pending"}), 201
+def _create_stub():
+    return jsonify(_UPGRADE), 402
 
 
 @bp_assets.route("/api/assets/<asset_id>/review", methods=["POST"])
-@gate("asset_registry")
-def review_asset(asset_id: str):
-    data = request.get_json(silent=True) or {}
-    action = (data.get("action") or data.get("status") or "").strip().lower()
-    status = _REVIEW_ACTIONS.get(action)
-    if not status:
-        return jsonify({
-            "error": f"'action' must be one of {sorted(set(_REVIEW_ACTIONS))}",
-        }), 400
-    reviewer = (data.get("reviewer") or "").strip()
-    reason = (data.get("reason") or "").strip()
-    ok = _ls_call(
-        "update_asset_status",
-        asset_id=asset_id, status=status, reviewer=reviewer, reason=reason,
-    )
-    if not ok:
-        return jsonify({"error": f"asset {asset_id!r} not found"}), 404
-    row = _ls_call("get_asset", asset_id=asset_id)
-    return jsonify(row or {"id": asset_id, "status": status})
+def _review_stub(asset_id: str):
+    return jsonify(_UPGRADE), 402

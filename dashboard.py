@@ -10750,8 +10750,21 @@ def detect_config(args=None):
         USER_NAME = "You"
 
     # ── Register blueprints (Phase 4) ───────────────────────────────────────
+    # Pro features (selfevolve, asset_registry, custom_runtime_ingest, ...)
+    # live in clawmetry-pro. When that package is installed its Blueprints
+    # already registered earlier via ``_ext_load(app)`` and won the URL
+    # routes; the OSS-side 402-stub Blueprints must skip registration to
+    # avoid a Flask blueprint-name collision. When pro is NOT installed
+    # the OSS stubs register and serve HTTP 402 ``upgrade_required``.
+    try:
+        import clawmetry_pro as _pro
+        _pro_loaded = bool(getattr(_pro, "is_loaded", lambda: False)())
+    except Exception:
+        _pro_loaded = False
+
     app.register_blueprint(bp_advisor)
-    app.register_blueprint(bp_selfevolve)
+    if not _pro_loaded:
+        app.register_blueprint(bp_selfevolve)
     app.register_blueprint(bp_alerts)
     app.register_blueprint(bp_autonomy)
     app.register_blueprint(bp_auth)
@@ -10796,7 +10809,8 @@ def detect_config(args=None):
     app.register_blueprint(bp_heartbeat)
     app.register_blueprint(bp_selfconfig)
     app.register_blueprint(bp_agents)
-    app.register_blueprint(bp_assets)
+    if not _pro_loaded:
+        app.register_blueprint(bp_assets)
     app.register_blueprint(bp_reasoning)
     app.register_blueprint(bp_plugins)
     app.register_blueprint(bp_local_query)
