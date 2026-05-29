@@ -8981,6 +8981,12 @@ def _default_alerts_webhook_config():
         "webhook_url": "",
         "slack_webhook_url": "",
         "discord_webhook_url": "",
+        # PagerDuty Events API v2 integration key (32-char hex). Empty = disabled.
+        "pagerduty_routing_key": "",
+        # OpsGenie API key (Authorization: GenieKey ...). Empty = disabled.
+        "opsgenie_api_key": "",
+        # Optional EU host override for OpsGenie ("https://api.eu.opsgenie.com").
+        "opsgenie_api_url": "",
         "cost_spike_alerts": True,
         "agent_error_rate_alerts": True,
         "security_posture_changes": True,
@@ -9009,6 +9015,7 @@ def _save_alerts_webhook_config(updates):
     cfg = _load_alerts_webhook_config()
     allowed = {
         "webhook_url", "slack_webhook_url", "discord_webhook_url",
+        "pagerduty_routing_key", "opsgenie_api_key", "opsgenie_api_url",
         "cost_spike_alerts", "agent_error_rate_alerts", "security_posture_changes",
         "min_severity",
     }
@@ -9227,12 +9234,117 @@ def _send_telegram_alert(message):
         pass
 
 
+# PagerDuty Events API v2 severity mapping. ClawMetry severities map onto
+# the four levels PD recognises; anything unknown becomes "warning".
+_PD_SEVERITY = {"info": "info", "warning": "warning", "error": "error", "critical": "critical"}
+# OpsGenie priority mapping. P1 (critical) is the loudest; P5 is informational.
+_OG_PRIORITY = {"info": "P5", "warning": "P3", "error": "P2", "critical": "P1"}
+# Fixed PagerDuty enqueue endpoint (Events API v2).
+_PD_EVENTS_URL = "https://events.pagerduty.com/v2/enqueue"
+# Default OpsGenie REST API host; EU customers override via opsgenie_api_url.
+_OG_DEFAULT_API_URL = "https://api.opsgenie.com/v2/alerts"
+
+
+def _build_pagerduty_payload(alert_data: dict, routing_key: str) -> dict:
+    """Construct a PagerDuty Events API v2 ``trigger`` event.
+
+    Reference: https://developer.pagerduty.com/api-reference/YXBpOjI3NDgyNjU-pager-duty-v2-events-api
+    """
+    severity = str(alert_data.get("severity", "warning")).lower()
+    summary = (
+        alert_data.get("message")
+        or alert_data.get("title")
+        or "[{t}] cost=${c} threshold=${th}".format(
+            t=alert_data.get("type", "alert"),
+            c=alert_data.get("cost_usd", 0),
+            th=alert_data.get("threshold", 0),
+        )
+    )
+    # PagerDuty caps summary at 1024 chars; trim defensively.
+    summary = str(summary)[:1024]
+    # dedup_key lets PD coalesce repeats of the same logical incident.
+    dedup_key = "clawmetry:{a}:{t}".format(
+        a=alert_data.get("agent", "main"),
+        t=alert_data.get("type", "alert"),
+    )
+    return {
+        "routing_key": routing_key,
+        "event_action": "trigger",
+        "dedup_key": dedup_key,
+        "payload": {
+            "summary": summary,
+            "severity": _PD_SEVERITY.get(severity, "warning"),
+            "source": "clawmetry",
+            "component": str(alert_data.get("agent", "main"))[:255],
+            "group": "clawmetry-alerts",
+            "class": str(alert_data.get("type", "alert"))[:255],
+            "custom_details": {
+                k: alert_data[k]
+                for k in alert_data
+                if k in ("cost_usd", "threshold", "agent", "type", "session_id", "model")
+            },
+        },
+    }
+
+
+def _build_opsgenie_payload(alert_data: dict) -> dict:
+    """Construct an OpsGenie ``createAlert`` body.
+
+    Reference: https://docs.opsgenie.com/docs/alert-api#create-alert
+    """
+    severity = str(alert_data.get("severity", "warning")).lower()
+    message = (
+        alert_data.get("message")
+        or alert_data.get("title")
+        or "[{t}] cost=${c}".format(
+            t=alert_data.get("type", "alert"),
+            c=alert_data.get("cost_usd", 0),
+        )
+    )
+    return {
+        "message": str(message)[:130],  # OpsGenie hard cap on message length
+        "alias": "clawmetry:{a}:{t}".format(
+            a=alert_data.get("agent", "main"),
+            t=alert_data.get("type", "alert"),
+        )[:512],
+        "description": str(alert_data.get("message", ""))[:15000],
+        "priority": _OG_PRIORITY.get(severity, "P3"),
+        "source": "clawmetry",
+        "tags": ["clawmetry", str(alert_data.get("type", "alert"))],
+        "details": {
+            str(k): str(v)
+            for k, v in alert_data.items()
+            if k in ("cost_usd", "threshold", "agent", "type", "session_id", "model")
+        },
+    }
+
+
 def _send_webhook_alert(url, alert_data, payload_type="generic"):
-    """Send alert to a webhook URL (generic JSON, Slack attachment, or Discord embed)."""
+    """Send alert to a webhook URL (generic JSON, Slack attachment, Discord
+    embed, PagerDuty Events API v2, or OpsGenie createAlert)."""
     try:
         import urllib.request as _ur
 
-        if payload_type == "discord":
+        extra_headers: dict[str, str] = {}
+        if payload_type == "pagerduty":
+            # url here is ignored — PD has a fixed enqueue endpoint. The
+            # routing_key must live in alert_data["_pd_routing_key"] (the
+            # dispatcher sets it before calling).
+            routing_key = str(alert_data.get("_pd_routing_key", "")).strip()
+            if not routing_key:
+                return
+            body = _build_pagerduty_payload(alert_data, routing_key)
+            target_url = _PD_EVENTS_URL
+        elif payload_type == "opsgenie":
+            api_key = str(alert_data.get("_og_api_key", "")).strip()
+            if not api_key:
+                return
+            body = _build_opsgenie_payload(alert_data)
+            extra_headers["Authorization"] = "GenieKey " + api_key
+            target_url = url.strip() if url else _OG_DEFAULT_API_URL
+            if not target_url:
+                target_url = _OG_DEFAULT_API_URL
+        elif payload_type == "discord":
             message_text = (
                 alert_data.get("message")
                 or "[{t}] cost=${c} threshold=${th}".format(
@@ -9288,16 +9400,69 @@ def _send_webhook_alert(url, alert_data, payload_type="generic"):
             }
         else:
             body = alert_data
+            target_url = url
+        # PD/OpsGenie branches set their own target_url; everything else uses
+        # the caller-supplied url (covers generic / slack / discord).
+        if payload_type not in ("pagerduty", "opsgenie"):
+            target_url = url
         data = json.dumps(body).encode()
+        headers = {"Content-Type": "application/json"}
+        headers.update(extra_headers)
         req = _ur.Request(
-            url,
+            target_url,
             data=data,
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             method="POST",
         )
         _ur.urlopen(req, timeout=10)
     except Exception:
         pass
+
+
+def _dispatch_alert_to_all_sinks(alert_data: dict) -> list[str]:
+    """Send an alert to every configured sink in one shot.
+
+    Returns the list of sinks that were attempted (e.g. ``["slack",
+    "pagerduty"]``). Used by the dispatcher hooks + the /test endpoint.
+    Each ``_send_webhook_alert`` call is best-effort: failures are
+    swallowed so a flaky vendor doesn't break the rest of the fan-out.
+    """
+    cfg = _load_alerts_webhook_config()
+    sent: list = []
+    url = str(cfg.get("webhook_url", "")).strip()
+    if url:
+        _send_webhook_alert(url, alert_data, payload_type="generic")
+        sent.append("generic")
+    slack = str(cfg.get("slack_webhook_url", "")).strip()
+    if slack:
+        _send_webhook_alert(slack, alert_data, payload_type="slack")
+        sent.append("slack")
+    discord = str(cfg.get("discord_webhook_url", "")).strip()
+    if discord:
+        _send_webhook_alert(discord, alert_data, payload_type="discord")
+        sent.append("discord")
+    pd_key = str(cfg.get("pagerduty_routing_key", "")).strip()
+    if pd_key:
+        # Stash the key on the payload so the formatter can read it; it
+        # never leaks into outbound generic/slack/discord bodies because
+        # they don't read the underscore-prefixed keys.
+        _send_webhook_alert(
+            "",  # ignored; PD uses the fixed enqueue endpoint
+            dict(alert_data, _pd_routing_key=pd_key),
+            payload_type="pagerduty",
+        )
+        sent.append("pagerduty")
+    og_key = str(cfg.get("opsgenie_api_key", "")).strip()
+    if og_key:
+        og_url = str(cfg.get("opsgenie_api_url", "")).strip() or _OG_DEFAULT_API_URL
+        _send_webhook_alert(
+            og_url,
+            dict(alert_data, _og_api_key=og_key),
+            payload_type="opsgenie",
+        )
+        sent.append("opsgenie")
+    return sent
+
 
 def _get_alert_rules():
     """Get all alert rules."""

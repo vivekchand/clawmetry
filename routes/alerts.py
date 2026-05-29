@@ -683,6 +683,9 @@ def api_alerts_webhook():
             "webhook_url",
             "slack_webhook_url",
             "discord_webhook_url",
+            "pagerduty_routing_key",
+            "opsgenie_api_key",
+            "opsgenie_api_url",
             "cost_spike_alerts",
             "agent_error_rate_alerts",
             "security_posture_changes",
@@ -725,6 +728,25 @@ def api_alerts_webhook_test():
         if url:
             _d._send_webhook_alert(url, payload, payload_type="discord")
             sent.append("discord")
+    if target in ("all", "pagerduty"):
+        pd_key = str(cfg.get("pagerduty_routing_key", "")).strip()
+        if pd_key:
+            _d._send_webhook_alert(
+                "",  # PD uses the fixed enqueue URL
+                dict(payload, _pd_routing_key=pd_key),
+                payload_type="pagerduty",
+            )
+            sent.append("pagerduty")
+    if target in ("all", "opsgenie"):
+        og_key = str(cfg.get("opsgenie_api_key", "")).strip()
+        if og_key:
+            og_url = str(cfg.get("opsgenie_api_url", "")).strip() or _d._OG_DEFAULT_API_URL
+            _d._send_webhook_alert(
+                og_url,
+                dict(payload, _og_api_key=og_key),
+                payload_type="opsgenie",
+            )
+            sent.append("opsgenie")
     if not sent:
         return jsonify(
             {"ok": False, "error": "No configured webhook URL for selected target"}
@@ -763,6 +785,9 @@ def api_alert_channels():
             "webhook_url",
             "slack_webhook_url",
             "discord_webhook_url",
+            "pagerduty_routing_key",
+            "opsgenie_api_key",
+            "opsgenie_api_url",
             "cost_spike_alerts",
             "agent_error_rate_alerts",
             "security_posture_changes",
