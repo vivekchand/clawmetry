@@ -495,8 +495,40 @@ class ProxyDB:
             conn.close()
             return int(row["total"]) if row else 0
 
-    def prune_old_data(self, retention_days: int = 30) -> None:
-        """Remove data older than retention period."""
+    def prune_old_data(self, retention_days: int | None = None) -> None:
+        """Remove data older than the retention period.
+
+        Per-tier retention enforcement (matches /pricing on clawmetry.com):
+        Free=7d, Starter=30d, Pro=90d, Enterprise=custom (None = unlimited).
+        The default reads from the install's entitlement; an explicit
+        ``retention_days`` argument still wins (callers can voluntarily
+        shrink, never silently expand past the tier cap).
+        """
+        if retention_days is None:
+            # Resolve from entitlement; default to 30 (legacy fallback) if
+            # the entitlement lookup fails or returns no cap.
+            try:
+                from clawmetry import entitlements as _ent
+                tier_cap = _ent.get_entitlement().event_retention_days()
+            except Exception:
+                tier_cap = 30
+            if tier_cap is None:
+                # Enterprise / custom: read CLAWMETRY_RETENTION_DAYS or skip prune.
+                env_override = os.environ.get("CLAWMETRY_RETENTION_DAYS", "").strip()
+                if not env_override:
+                    return
+                try:
+                    retention_days = max(1, int(env_override))
+                except ValueError:
+                    return
+            else:
+                # Customer can shrink via env (never expand past the tier cap).
+                env_override = os.environ.get("CLAWMETRY_RETENTION_DAYS", "").strip()
+                try:
+                    requested = int(env_override) if env_override else tier_cap
+                except ValueError:
+                    requested = tier_cap
+                retention_days = min(requested, tier_cap)
         cutoff = time.time() - (retention_days * 86400)
         with self._lock:
             conn = self._connect()

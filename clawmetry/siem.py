@@ -426,9 +426,22 @@ def _build_default_writer() -> Optional[Any]:
     return None
 
 
+def _siem_entitled() -> bool:
+    """Whether this install may run the SIEM exporter. Grace mode lets
+    everyone through; after enforce, only Enterprise-tier installs do. Never
+    raises (a flaky entitlement read defaults open so the user is not
+    surprised by a silently-stopped exporter)."""
+    try:
+        from clawmetry import entitlements as _ent
+        return _ent.get_entitlement().allows_feature("siem_export")
+    except Exception:  # pragma: no cover
+        return True
+
+
 def get_default_exporter() -> Optional[SIEMExporter]:
     """Return the process-wide exporter, building it from env vars on first
-    call. Returns None when ``CLAWMETRY_SIEM_HOST`` is unset (the default)."""
+    call. Returns None when ``CLAWMETRY_SIEM_HOST`` is unset (the default)
+    OR when the install's tier does not unlock ``siem_export`` (Enterprise)."""
     global _singleton
     if _singleton is not None:
         return _singleton
@@ -437,6 +450,13 @@ def get_default_exporter() -> Optional[SIEMExporter]:
             return _singleton
         writer = _build_default_writer()
         if writer is None:
+            return None
+        if not _siem_entitled():
+            _log.warning(
+                "siem: CLAWMETRY_SIEM_HOST is set but the current tier does not "
+                "unlock 'siem_export' (Enterprise feature on clawmetry.com/pricing). "
+                "Exporter will not start. Set CLAWMETRY_ENFORCE=0 to bypass."
+            )
             return None
         fmt = (os.environ.get("CLAWMETRY_SIEM_FORMAT", "cef") or "cef").strip().lower()
         facility = int(os.environ.get("CLAWMETRY_SIEM_FACILITY", str(FACILITY_LOCAL0)))

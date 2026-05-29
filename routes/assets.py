@@ -35,6 +35,8 @@ from flask import Blueprint, jsonify, request
 
 bp_assets = Blueprint("assets", __name__)
 
+from clawmetry._gate import gate
+
 
 # Mirrors the lifecycle in the LocalStore (kept in sync — the daemon validates
 # again, this is just a friendlier 400 at the API edge).
@@ -79,6 +81,7 @@ def _int_arg(name: str, default: int, *, lo: int, hi: int) -> int:
 
 
 @bp_assets.route("/api/assets", methods=["GET"])
+@gate("asset_registry")
 def list_assets():
     kwargs = {"limit": _int_arg("limit", 100, lo=1, hi=1000)}
     for key in ("status", "asset_type", "source_run_id", "source_session_id"):
@@ -90,6 +93,7 @@ def list_assets():
 
 
 @bp_assets.route("/api/assets/<asset_id>", methods=["GET"])
+@gate("asset_registry")
 def get_asset_detail(asset_id: str):
     row = _ls_call("get_asset", asset_id=asset_id)
     if not row:
@@ -98,6 +102,7 @@ def get_asset_detail(asset_id: str):
 
 
 @bp_assets.route("/api/assets", methods=["POST"])
+@gate("asset_registry")
 def create_asset():
     data = request.get_json(silent=True) or {}
     aid = (data.get("id") or "").strip()
@@ -127,6 +132,7 @@ def create_asset():
 
 
 @bp_assets.route("/api/assets/<asset_id>/review", methods=["POST"])
+@gate("asset_registry")
 def review_asset(asset_id: str):
     data = request.get_json(silent=True) or {}
     action = (data.get("action") or data.get("status") or "").strip().lower()

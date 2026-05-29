@@ -35,6 +35,8 @@ from clawmetry.config import is_local_store_read_enabled
 
 bp_nemoclaw = Blueprint('nemoclaw', __name__)
 
+from clawmetry._gate import gate
+
 
 # ── Local DuckDB fast path (epic #1032 Phase 4 — approvals queue) ───────────
 #
@@ -272,6 +274,7 @@ def api_nemoclaw_policy():
 
 
 @bp_nemoclaw.route('/api/nemoclaw/approve', methods=['POST'])
+@gate("approval_queue")
 def api_nemoclaw_approve():
     """Approve a pending NemoClaw egress chunk."""
     data = request.get_json() or {}
@@ -288,6 +291,7 @@ def api_nemoclaw_approve():
 
 
 @bp_nemoclaw.route('/api/nemoclaw/reject', methods=['POST'])
+@gate("approval_queue")
 def api_nemoclaw_reject():
     """Reject a pending NemoClaw egress chunk."""
     data = request.get_json() or {}
@@ -342,6 +346,7 @@ def _annotate_pro_upsell(payload):
 
 
 @bp_nemoclaw.route('/api/nemoclaw/pending-approvals')
+@gate("approval_queue")
 def api_nemoclaw_pending_approvals():
     """Return pending egress approval requests from openshell.
 

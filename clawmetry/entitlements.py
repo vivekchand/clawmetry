@@ -126,27 +126,55 @@ FREE_FEATURES = frozenset(
     }
 )
 
-# Advanced features — part of the paid layer.
-PAID_FEATURES = frozenset(
+# Starter-tier features (Starter and above). Each key maps to a feature that
+# /pricing puts in the Starter card. Routes that implement these features call
+# Entitlement.allows_feature(<key>) and return HTTP 402 in enforce mode.
+STARTER_FEATURES = frozenset(
     {
-        "multi_runtime",
+        "multi_runtime",                  # Claude Code, Codex, Cursor, Aider, Goose, opencode, Qwen, Hermes
+        "fleet",                          # multi-node fleet view
+        "cloud_sync",                     # E2E-encrypted snapshot push to ClawMetry Cloud
+        "all_channels",                   # all 21 channel adapters (Free is limited to 3)
+        "approval_queue",                 # block tool calls by policy
+        "budget_limits",                  # budget limits + alerts
+        "per_runtime_health_timeline",    # the Overview sparkline
+    }
+)
+
+# Pro-only features (Pro and above, NOT Starter). These are the "this product
+# earns its keep at production scale" features per /pricing.
+PRO_ONLY_FEATURES = frozenset(
+    {
+        "per_run_waste_flags",      # runaway / cold cache / bloated context heuristics
+        "per_run_compare",          # A vs B side-by-side with deltas
+        "error_triage",             # resolve / mute known errors
+        "self_evolve",              # Self-Evolve findings + Fix-with-AI
+        "asset_registry",           # skills, prompts, workflows promotion lifecycle
+        "eval_suite",               # LLM-as-judge scoring
+        "tool_policy",              # tool catalog policy + pre-execution gate
+        "otel_export",              # moved from ENTERPRISE → Pro per /pricing
+        "custom_webhooks",          # custom webhooks + PagerDuty + OpsGenie sinks
+        "custom_runtime_ingest",    # custom runtime HTTP ingest API
+        # Kept-for-backwards-compat aliases that older callers may import:
         "custom_alerts",
         "alert_webhooks",
-        "fleet",
         "anomaly_detection",
-        "self_evolve",
         "cost_optimizer",
     }
 )
 
+# All paid features (Starter ∪ Pro-only).
+PAID_FEATURES = STARTER_FEATURES | PRO_ONLY_FEATURES
+
 # Enterprise-only features (a strict superset on top of paid).
 ENTERPRISE_FEATURES = frozenset(
     {
-        "otel_export",
-        "sso",
-        "audit_logs",
-        "rbac",
-        "air_gapped_license",
+        "siem_export",            # NEW: Splunk / QRadar / ArcSight / Elastic
+        "sso",                    # SAML / OIDC / Okta / Google / Azure AD
+        "audit_logs",             # the audit-log API; the hash chain itself is Free, always on
+        "rbac",                   # RBAC + teams + workspace scoping
+        "air_gapped_license",     # offline license verification
+        "custom_data_residency",  # NEW: choose where data lives (US / EU / Asia / on-prem)
     }
 )
 
@@ -156,11 +184,23 @@ ALL_FEATURES = FREE_FEATURES | PAID_FEATURES | ENTERPRISE_FEATURES
 _TIER_FEATURES = {
     TIER_OSS: frozenset(),
     TIER_CLOUD_FREE: frozenset(),
-    TIER_TRIAL: PAID_FEATURES,
-    TIER_CLOUD_STARTER: PAID_FEATURES - {"self_evolve"},
-    TIER_CLOUD_PRO: PAID_FEATURES,
-    TIER_PRO: PAID_FEATURES,
+    TIER_TRIAL: PAID_FEATURES,                          # trial gets full Pro feature set
+    TIER_CLOUD_STARTER: STARTER_FEATURES,               # explicit Starter slice
+    TIER_CLOUD_PRO: PAID_FEATURES,                      # Starter + Pro-only
+    TIER_PRO: PAID_FEATURES,                            # self-hosted Pro mirrors cloud Pro
     TIER_ENTERPRISE: PAID_FEATURES | ENTERPRISE_FEATURES,
+}
+
+# Per-tier event retention in days. None = unlimited / custom (Enterprise).
+# Read by the daemon's prune loop in clawmetry/sync.py.
+_TIER_RETENTION_DAYS = {
+    TIER_OSS: 7,
+    TIER_CLOUD_FREE: 7,
+    TIER_TRIAL: 30,
+    TIER_CLOUD_STARTER: 30,
+    TIER_CLOUD_PRO: 90,
+    TIER_PRO: 90,
+    TIER_ENTERPRISE: None,
 }
 
 # Tiers that unlock the paid runtimes.
@@ -223,6 +263,21 @@ class Entitlement:
         if self.expired:
             return False
         return feature in self.features
+
+    def event_retention_days(self) -> int | None:
+        """Days of event history this tier may keep. ``None`` means unlimited
+        / custom (Enterprise). The daemon's prune loop in ``clawmetry/sync.py``
+        reads this; if a customer override is set in env (``CLAWMETRY_RETENTION_DAYS``),
+        the daemon prefers the env value when it's <= the tier cap (so users
+        can voluntarily shrink, never silently expand).
+
+        Per-tier values (see ``_TIER_RETENTION_DAYS``):
+            Free / OSS:       7
+            Starter / Trial: 30
+            Pro / Self-host: 90
+            Enterprise:      None  (custom)
+        """
+        return _TIER_RETENTION_DAYS.get(self.tier, 7)
 
     def to_dict(self) -> dict:
         return {
