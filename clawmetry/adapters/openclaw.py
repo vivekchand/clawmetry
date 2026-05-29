@@ -31,6 +31,52 @@ def _d():
     return _dash
 
 
+def _gateway_live() -> bool:
+    """True only if the OpenClaw gateway is actually up (pid alive or port
+    18789 listening). Never raises."""
+    home = os.environ.get("OPENCLAW_HOME") or os.path.expanduser("~/.openclaw")
+    pid_file = os.path.join(home, "gateway", "gateway.pid")
+    try:
+        if os.path.exists(pid_file):
+            with open(pid_file) as fh:
+                pid = int((fh.read() or "0").strip())
+            if pid > 0:
+                os.kill(pid, 0)
+                return True
+    except (OSError, ValueError):
+        pass
+    try:
+        import socket as _sock
+        s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+        s.settimeout(0.2)
+        rc = s.connect_ex(("127.0.0.1", 18789))
+        s.close()
+        return rc == 0
+    except Exception:
+        return False
+
+
+def _real_install(sessions_dir: str) -> bool:
+    """A genuine OpenClaw install signal, NOT the bare ~/.openclaw dir that
+    ClawMetry itself creates as a scratch workspace. Any one of: the openclaw
+    CLI/app, a gateway.pid, real session .jsonl files, or workspace markers."""
+    import shutil as _shutil
+    if _shutil.which("openclaw") or os.path.isdir("/Applications/OpenClaw.app"):
+        return True
+    home = os.environ.get("OPENCLAW_HOME") or os.path.expanduser("~/.openclaw")
+    if os.path.exists(os.path.join(home, "gateway", "gateway.pid")):
+        return True
+    if sessions_dir and os.path.isdir(sessions_dir):
+        try:
+            if any(n.endswith(".jsonl") for n in os.listdir(sessions_dir)):
+                return True
+        except OSError:
+            pass
+    ws = os.path.join(home, "workspace")
+    return any(os.path.exists(os.path.join(ws, m))
+               for m in ("SOUL.md", "AGENTS.md", "MEMORY.md"))
+
+
 class OpenClawAdapter(AgentAdapter):
     name = "openclaw"
     display_name = "OpenClaw"
@@ -48,17 +94,17 @@ class OpenClawAdapter(AgentAdapter):
                 logger.debug(f"OpenClaw _get_sessions() failed in detect: {exc}")
 
             default_home = os.path.expanduser("~/.openclaw")
-            detected = bool(
-                sessions
-                or (workspace and os.path.isdir(workspace))
-                or (sessions_dir and os.path.isdir(sessions_dir))
-                or os.path.isdir(default_home)
-            )
+            running = _gateway_live()
+            # Require a GENUINE signal: real sessions, or an actual install
+            # artifact, or a live gateway. The bare ~/.openclaw (or its
+            # workspace dir) is NOT a signal — ClawMetry creates it, which
+            # false-positived OpenClaw on uninstalled machines.
+            detected = bool(sessions) or running or _real_install(sessions_dir)
             return DetectResult(
                 name=self.name,
                 display_name=self.display_name,
                 detected=detected,
-                running=bool(gateway_url),
+                running=running,
                 workspace=workspace or default_home,
                 session_count=len(sessions),
                 capabilities=[c.value for c in self.capabilities()],

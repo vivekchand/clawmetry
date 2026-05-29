@@ -4587,12 +4587,65 @@ _AGENT_INSTALL_TTL_SEC = 60
 _agent_install_cache: dict = {"ts": 0.0, "value": None}
 
 
+# ClawMetry creates ~/.openclaw/workspace as a scratch dir on startup (it drops
+# .clawmetry-fleet.db / .clawmetry-metrics.json there), so the mere existence of
+# ~/.openclaw is NOT evidence OpenClaw is installed — that bare-dir heuristic
+# false-positived "openclaw_detected" on a machine where OpenClaw was uninstalled
+# (verified 2026-05-30). These markers are ClawMetry's own; never count them.
+_CLAWMETRY_OWN_FILES = frozenset({".clawmetry-fleet.db", ".clawmetry-metrics.json"})
+
+
+def _openclaw_gateway_running() -> bool:
+    """True only if the OpenClaw gateway is actually live (pid alive or the
+    JSON-RPC port is listening). Stat + a 200ms localhost probe; never raises."""
+    home = os.environ.get("OPENCLAW_HOME") or os.path.expanduser("~/.openclaw")
+    pid_file = os.path.join(home, "gateway", "gateway.pid")
+    try:
+        if os.path.exists(pid_file):
+            with open(pid_file) as fh:
+                pid = int((fh.read() or "0").strip())
+            if pid > 0:
+                os.kill(pid, 0)  # raises if the process is gone
+                return True
+    except (OSError, ValueError):
+        pass
+    try:
+        import socket as _sock
+        s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+        s.settimeout(0.2)
+        rc = s.connect_ex(("127.0.0.1", 18789))
+        s.close()
+        if rc == 0:
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _detect_openclaw_install_for_heartbeat() -> bool:
-    """Stat-only OpenClaw presence check (no subprocess, no DB)."""
+    """True only when OpenClaw is GENUINELY installed (folder + a real runtime
+    artifact), not when only ClawMetry's own ~/.openclaw scratch dir exists.
+
+    Stat-only (plus shutil.which); no DB. Genuine signals, any one of:
+      * the ``openclaw`` CLI is on PATH, or /Applications/OpenClaw.app exists
+      * a live gateway (pid alive / port 18789 listening)
+      * a gateway.pid file (installed even if not currently running)
+      * real session data (~/.openclaw/agents/main/sessions/*.jsonl)
+      * a real OpenClaw workspace (SOUL.md / AGENTS.md / MEMORY.md)
+    The bare presence of ~/.openclaw is deliberately NOT a signal (ClawMetry
+    creates it), which is what caused the false positive this fix removes.
+    """
+    import shutil as _shutil
+    if _shutil.which("openclaw"):
+        return True
+    if os.path.isdir("/Applications/OpenClaw.app"):
+        return True
     home = os.environ.get("OPENCLAW_HOME") or os.path.expanduser("~/.openclaw")
     if not home:
         return False
     if os.path.exists(os.path.join(home, "gateway", "gateway.pid")):
+        return True
+    if _openclaw_gateway_running():
         return True
     sess_dir = os.path.join(home, "agents", "main", "sessions")
     if os.path.isdir(sess_dir):
@@ -4606,12 +4659,6 @@ def _detect_openclaw_install_for_heartbeat() -> bool:
     for marker in ("SOUL.md", "AGENTS.md", "MEMORY.md"):
         if os.path.exists(os.path.join(ws, marker)):
             return True
-    if os.path.isdir(home):
-        try:
-            if any(True for _ in os.scandir(home)):
-                return True
-        except OSError:
-            pass
     return False
 
 
@@ -4662,6 +4709,7 @@ def _detect_agent_install_for_heartbeat() -> dict:
     if cached and (now - _agent_install_cache["ts"]) < _AGENT_INSTALL_TTL_SEC:
         return cached
     openclaw = bool(_detect_openclaw_install_for_heartbeat())
+    openclaw_running = bool(_openclaw_gateway_running()) if openclaw else False
     nemoclaw = bool(_detect_nemoclaw_install_for_heartbeat())
     any_data = bool(_detect_any_local_data_for_heartbeat())
     signals = []
@@ -4673,6 +4721,7 @@ def _detect_agent_install_for_heartbeat() -> dict:
         signals.append("local_data")
     payload = {
         "openclaw_detected": openclaw,
+        "openclaw_running": openclaw_running,  # installed AND gateway live
         "nemoclaw_detected": nemoclaw,
         "any_data": any_data,
         "signals": signals,
@@ -8426,6 +8475,11 @@ def _detect_family_runtimes():
                         "displayName": d.display_name,
                         "sessionCount": int(d.session_count or 0),
                         "workspace": d.workspace or "",
+                        # installed (data/binary present) vs actually running
+                        # (a live process), so the API + UI can show
+                        # "installed & running" instead of conflating them.
+                        "installed": True,
+                        "running": bool(getattr(d, "running", False)),
                     }
                 )
         except Exception as exc:  # one bad adapter never blocks the others
