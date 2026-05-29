@@ -39,7 +39,7 @@
     <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:center;">
       <input id="compare-input-a" type="text" placeholder="Session A id" autocomplete="off" style="padding:6px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;font-family:monospace;">
       <input id="compare-input-b" type="text" placeholder="Session B id" autocomplete="off" style="padding:6px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;font-family:monospace;">
-      <button onclick="submitCompare()" style="padding:6px 14px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;font-weight:600;cursor:pointer;">Compare</button>
+      <button onclick="submitCompare()" style="padding:6px 14px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;font-weight:600;cursor:pointer;" data-i18n="app.compare">Compare</button>
     </div>
     <div id="compare-runs-body" style="margin-top:12px;"></div>
   </div>
@@ -53,7 +53,7 @@
     <div style="display:grid;grid-template-columns:1fr 2fr auto;gap:8px;align-items:center;margin-bottom:10px;">
       <input id="triage-input-id" type="text" placeholder="Event id (errored row)" autocomplete="off" style="padding:6px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;font-family:monospace;">
       <input id="triage-input-note" type="text" placeholder="Note (optional — why is this expected?)" autocomplete="off" style="padding:6px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
-      <button onclick="submitResolveError()" style="padding:6px 14px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;font-weight:600;cursor:pointer;">Mark resolved</button>
+      <button onclick="submitResolveError()" style="padding:6px 14px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;font-weight:600;cursor:pointer;" data-i18n="app.mark_resolved">Mark resolved</button>
     </div>
     <div id="triage-list-body"></div>
   </div>
@@ -62,7 +62,7 @@
     <button class="refresh-btn" onclick="loadAll()" style="padding:4px 12px;font-size:12px;">↻</button>
     <span class="pulse"></span>
     <span class="live-badge">LIVE</span>
-    <span class="refresh-time" id="refresh-time" style="font-size:11px;">Loading...</span>
+    <span class="refresh-time" id="refresh-time" style="font-size:11px;" data-i18n="app.loading">Loading...</span>
   </div>
 
   <!-- Heartbeat liveness card (closes #686) — pulse indicator + cadence + ok ratio -->
@@ -129,7 +129,7 @@
         <div class="stats-footer-label" data-i18n="overview.model">Model</div>
         <div class="stats-footer-value" id="model-primary">--</div>
       </div>
-      <div id="model-breakdown" style="display:none;">Loading...</div>
+      <div id="model-breakdown" style="display:none;" data-i18n="app.loading">Loading...</div>
     </div>
     <div class="stats-footer-item">
       <span class="stats-footer-icon">📊</span>
@@ -145,7 +145,7 @@
         <div class="stats-footer-label" data-i18n="overview.sessions">Sessions</div>
         <div class="stats-footer-value" id="hot-sessions-count">--</div>
       </div>
-      <div id="hot-sessions-list" style="display:none;">Loading...</div>
+      <div id="hot-sessions-list" style="display:none;" data-i18n="app.loading">Loading...</div>
     </div>
     <div class="stats-footer-item" id="reliability-card-lt">
       <span class="stats-footer-icon" id="reliability-icon-lt">🔄</span>
@@ -419,7 +419,7 @@
               font-size:13px;
               font-weight:700;
               color:var(--text-primary);
-              ">🧠 <span id="main-activity-model">Claude Opus</span></span>
+              ">🧠 <span id="main-activity-model" data-i18n="app.claude_opus">Claude Opus</span></span>
             <span id="main-activity-status" style="font-size:10px;color:var(--text-muted);">
               <span id="main-activity-label">...</span>
             </span>
@@ -470,7 +470,7 @@
     <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
       <div style="display:flex;flex-direction:column;align-items:center;gap:4px;min-width:48px;">
         <div id="hb-pulse-dot" style="width:20px;height:20px;border-radius:50%;background:#6b7280;animation:none;"></div>
-        <span id="hb-pulse-label" style="font-size:10px;color:var(--text-muted);">waiting...</span>
+        <span id="hb-pulse-label" style="font-size:10px;color:var(--text-muted);" data-i18n="app.waiting">waiting...</span>
       </div>
       <div style="flex:1;display:flex;flex-direction:column;gap:5px;min-width:240px;">
         <div style="font-size:13px;color:var(--text-primary);"><span data-i18n="overview.last_checkin">Last check-in:</span> <span id="hb-last-beat" style="font-weight:600;color:var(--text-success);">--</span></div>

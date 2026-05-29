@@ -73,22 +73,22 @@
     { key: 'phone',     name: 'Phone Call', icon: '📞',
       desc: 'Get a call, press 1 to approve',       color: '#10b981',
       fields: [{ key: 'phone_number', label: 'Phone number', placeholder: '+1 (555) 123-4567' }],
-      howTo: 'When something fires, you get a phone call: <b>"Press 1 to approve. Press 2 to deny."</b> Works on any phone, no app required.' },
+      howTo: 'When something fires, you get a phone call: <b data-i18n="app.press_1_to_approve_press_2_to_deny">"Press 1 to approve. Press 2 to deny."</b> Works on any phone, no app required.' },
     { key: 'slack',     name: 'Slack',      icon: '💬',
       desc: 'Post to a Slack channel',              color: '#4A154B',
       fields: [{ key: 'webhook_url', label: 'Incoming webhook URL', placeholder: 'https://hooks.slack.com/services/T.../B.../xxx' }],
-      howTo: '1. <b>api.slack.com/apps</b> → Create New App → From scratch.<br>2. Toggle <b>Incoming Webhooks</b> on, click <b>Add New Webhook to Workspace</b>, pick a channel.<br>3. Copy the webhook URL and paste it below.' },
+      howTo: '1. <b data-i18n="app.api_slack_com_apps">api.slack.com/apps</b> → Create New App → From scratch.<br>2. Toggle <b data-i18n="app.incoming_webhooks">Incoming Webhooks</b> on, click <b data-i18n="app.add_new_webhook_to_workspace">Add New Webhook to Workspace</b>, pick a channel.<br>3. Copy the webhook URL and paste it below.' },
     { key: 'pagerduty', name: 'PagerDuty',  icon: '📟',
       desc: 'Trigger PagerDuty incidents',          color: '#06AC38',
       fields: [{ key: 'routing_key', label: 'Integration key', placeholder: 'R03F...' }],
-      howTo: '1. PagerDuty → Services → pick your service → Integrations.<br>2. Add Integration → <b>Events API v2</b>.<br>3. Copy the Integration Key.' },
+      howTo: '1. PagerDuty → Services → pick your service → Integrations.<br>2. Add Integration → <b data-i18n="app.events_api_v2">Events API v2</b>.<br>3. Copy the Integration Key.' },
     { key: 'telegram',  name: 'Telegram',   icon: '✈️',
       desc: 'Send alerts to a Telegram chat',       color: '#2AABEE',
       fields: [
         { key: 'bot_token', label: 'Bot token',  placeholder: '123456:ABC-DEF...' },
         { key: 'chat_id',   label: 'Chat ID',    placeholder: '-1001234567890' }
       ],
-      howTo: '1. In Telegram, message <b>@BotFather</b> → <b>/newbot</b>.<br>2. Copy the bot token.<br>3. Add the bot to your group/chat.<br>4. Get the chat ID from <code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code>.' }
+      howTo: '1. In Telegram, message <b data-i18n="app.botfather">@BotFather</b> → <b data-i18n="app.newbot">/newbot</b>.<br>2. Copy the bot token.<br>3. Add the bot to your group/chat.<br>4. Get the chat ID from <code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code>.' }
   ];
 
   /* In-memory state — refreshed on every loadNotificationsPage() */
@@ -129,15 +129,15 @@
         + '<div style="background:var(--bg-secondary,#131929);border:1px solid '
         + (connected ? ch.color + '66' : 'var(--border,#1e293b)') + ';'
         + 'border-radius:10px;padding:14px 12px;text-align:center;">'
-        + '  <div style="font-size:22px;line-height:1;margin-bottom:6px;">' + ch.icon + '</div>'
-        + '  <div style="font-size:13px;font-weight:700;color:var(--text-primary,#e2e8f0);margin-bottom:3px;">' + ch.name + '</div>'
-        + '  <div style="font-size:10px;color:var(--text-muted,#94a3b8);margin-bottom:10px;line-height:1.4;min-height:28px;">' + _esc(ch.desc) + '</div>'
+        + '  <div style="font-size:22px;line-height:1;margin-bottom:6px;" data-i18n="app.ch_icon">' + ch.icon + '</div>'
+        + '  <div style="font-size:13px;font-weight:700;color:var(--text-primary,#e2e8f0);margin-bottom:3px;" data-i18n="app.ch_name">' + ch.name + '</div>'
+        + '  <div style="font-size:10px;color:var(--text-muted,#94a3b8);margin-bottom:10px;line-height:1.4;min-height:28px;" data-i18n="app.esc_ch_desc">' + _esc(ch.desc) + '</div>'
         + (connected
             ? '  <div style="display:flex;gap:6px;">'
-            + '    <button onclick="notifyOpenSetup(\'' + ch.key + '\',\'' + (existing ? existing.id : '') + '\')" style="flex:1;padding:7px;border:1px solid ' + ch.color + '66;background:' + ch.color + '22;color:' + ch.color + ';border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">✓ Edit</button>'
-            + '    <button onclick="notifySendTest(\'' + (existing ? existing.id : '') + '\',this)" title="Send a test to verify the channel works" style="flex:0 0 auto;padding:7px 10px;border:1px solid ' + ch.color + '44;background:transparent;color:' + ch.color + ';border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">Test</button>'
+            + '    <button onclick="notifyOpenSetup(\'' + ch.key + '\',\'' + (existing ? existing.id : '') + '\')" style="flex:1;padding:7px;border:1px solid ' + ch.color + '66;background:' + ch.color + '22;color:' + ch.color + ';border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;" data-i18n="app.edit_2">✓ Edit</button>'
+            + '    <button onclick="notifySendTest(\'' + (existing ? existing.id : '') + '\',this)" title="Send a test to verify the channel works" style="flex:0 0 auto;padding:7px 10px;border:1px solid ' + ch.color + '44;background:transparent;color:' + ch.color + ';border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;" data-i18n="app.test">Test</button>'
             + '  </div>'
-            : '  <button onclick="notifyOpenSetup(\'' + ch.key + '\',\'\')" style="width:100%;padding:7px;border:0;background:' + ch.color + ';color:#fff;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">Connect</button>')
+            : '  <button onclick="notifyOpenSetup(\'' + ch.key + '\',\'\')" style="width:100%;padding:7px;border:0;background:' + ch.color + ';color:#fff;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;" data-i18n="app.connect">Connect</button>')
         + '</div>';
     }).join('');
 
@@ -176,26 +176,26 @@
     var html = ''
       + '<div style="background:var(--bg-secondary,#131929);border:1px solid ' + ch.color + '44;border-radius:14px;padding:24px 28px;max-width:440px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.5);">'
       + '  <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">'
-      + '    <span style="font-size:22px;">' + ch.icon + '</span>'
-      + '    <span style="font-size:15px;font-weight:700;color:var(--text-primary,#e2e8f0);">'+(existing ? 'Edit' : 'Connect')+' ' + ch.name + '</span>'
+      + '    <span style="font-size:22px;" data-i18n="app.ch_icon">' + ch.icon + '</span>'
+      + '    <span style="font-size:15px;font-weight:700;color:var(--text-primary,#e2e8f0);" data-i18n="app.existing_edit_connect_ch_name">'+(existing ? 'Edit' : 'Connect')+' ' + ch.name + '</span>'
       + '    <span style="margin-left:auto;cursor:pointer;color:var(--text-muted,#94a3b8);font-size:20px;line-height:1;" onclick="notifyCloseSetup()">×</span>'
       + '  </div>';
     if (ch.howTo) {
       html += '<div style="background:rgba(96,165,250,0.06);border:1px solid rgba(96,165,250,0.15);border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:12px;color:var(--text-secondary);line-height:1.7;">'
-            + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:6px;">How to set up</div>'
+            + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:6px;" data-i18n="app.how_to_set_up">How to set up</div>'
             + ch.howTo
             + '</div>';
     }
     var existingCfg = (existing && existing.config) || {};
     ch.fields.forEach(function(f) {
       var val = existingCfg[f.key] || '';
-      html += '<label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">' + _esc(f.label) + '</label>'
+      html += '<label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;" data-i18n="app.esc_f_label">' + _esc(f.label) + '</label>'
             + '<input type="text" id="notify-fld-' + f.key + '" value="' + _esc(val) + '" placeholder="' + _esc(f.placeholder) + '" '
             + 'style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:13px;margin-bottom:10px;">';
     });
     html += '<div style="display:flex;gap:8px;margin-top:8px;">'
-          + '  <button onclick="notifySaveSetup(\'' + ch.key + '\',\'' + (channelId || '') + '\')" style="flex:1;padding:10px;border:0;background:' + ch.color + ';color:#fff;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;">' + (existing ? 'Update' : 'Connect') + '</button>'
-          + (existing ? '  <button onclick="notifyDelete(\'' + channelId + '\')" style="padding:10px 16px;border:1px solid #ef444466;background:transparent;color:#ef4444;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Disconnect</button>' : '')
+          + '  <button onclick="notifySaveSetup(\'' + ch.key + '\',\'' + (channelId || '') + '\')" style="flex:1;padding:10px;border:0;background:' + ch.color + ';color:#fff;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;" data-i18n="app.existing_update_connect">' + (existing ? 'Update' : 'Connect') + '</button>'
+          + (existing ? '  <button onclick="notifyDelete(\'' + channelId + '\')" style="padding:10px 16px;border:1px solid #ef444466;background:transparent;color:#ef4444;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;" data-i18n="app.disconnect">Disconnect</button>' : '')
           + '</div>'
           + '</div>';
     var ov = document.getElementById('notifications-setup-overlay');
@@ -307,13 +307,13 @@
       ov.onclick = function(e){ if (e.target === ov) ov.style.display = 'none'; };
       ov.innerHTML = '<div style="background:#111827;border:1px solid #1e293b;border-radius:16px;padding:32px;max-width:400px;width:90%;text-align:center;">'
         + '<div style="font-size:32px;margin-bottom:12px;">🔒</div>'
-        + '<h3 style="color:#fff;font-size:18px;font-weight:700;margin:0 0 8px;">This feature requires ClawMetry Pro</h3>'
-        + '<p style="color:#94a3b8;font-size:13px;line-height:1.6;margin:0 0 20px;">Unlock unlimited channels and multi-recipient delivery.</p>'
+        + '<h3 style="color:#fff;font-size:18px;font-weight:700;margin:0 0 8px;" data-i18n="app.this_feature_requires_clawmetry_pro">This feature requires ClawMetry Pro</h3>'
+        + '<p style="color:#94a3b8;font-size:13px;line-height:1.6;margin:0 0 20px;" data-i18n="app.unlock_unlimited_channels_and_multi_recipient_deli">Unlock unlimited channels and multi-recipient delivery.</p>'
         + '<button onclick="window.open(\'https://app.clawmetry.com/pricing\',\'_blank\')" '
-        + '  style="background:#E5443A;color:#fff;border:none;border-radius:10px;padding:14px 28px;font-size:15px;font-weight:700;cursor:pointer;width:100%;margin-bottom:8px;">Start 7-Day Free Trial</button>'
-        + '<div style="font-size:11px;color:#64748b;margin-top:4px;">No credit card required</div>'
+        + '  style="background:#E5443A;color:#fff;border:none;border-radius:10px;padding:14px 28px;font-size:15px;font-weight:700;cursor:pointer;width:100%;margin-bottom:8px;" data-i18n="app.start_7_day_free_trial">Start 7-Day Free Trial</button>'
+        + '<div style="font-size:11px;color:#64748b;margin-top:4px;" data-i18n="app.no_credit_card_required">No credit card required</div>'
         + '<a href="#" onclick="document.getElementById(\'notifications-paywall\').style.display=\'none\';return false;" '
-        + '  style="display:block;margin-top:16px;color:#64748b;font-size:12px;text-decoration:none;">Maybe later</a>'
+        + '  style="display:block;margin-top:16px;color:#64748b;font-size:12px;text-decoration:none;" data-i18n="app.maybe_later">Maybe later</a>'
         + '</div>';
       document.body.appendChild(ov);
     }

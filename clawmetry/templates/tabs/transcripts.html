@@ -4,7 +4,7 @@
     <button class="refresh-btn" id="transcript-plumbing-btn" onclick="toggleTranscriptPlumbing()" data-i18n-title="transcripts.plumbing_tooltip" title="Show Self-Evolve sessions: the agent's own self-review runs (FIX mode + re-analyze), hidden by default because they're plumbing, not your sessions" style="font-weight:500;display:none"><span id="transcript-plumbing-state">○</span> <span data-i18n="transcripts.show_plumbing">Show plumbing</span> <span id="transcript-plumbing-count" style="opacity:0.7;font-size:11px;"></span></button>
     <button class="refresh-btn" id="transcript-back-btn" style="display:none" onclick="showTranscriptList()">← <span data-i18n="transcripts.back_to_list">Back to list</span></button>
   </div>
-  <div class="card" id="transcript-list">Loading...</div>
+  <div class="card" id="transcript-list" data-i18n="app.loading">Loading...</div>
   <div id="transcript-viewer" style="display:none">
     <div class="transcript-viewer-meta" id="transcript-meta"></div>
     <!-- Authority footprint panel (#880) — populated async by _loadAuthorityPanel() -->

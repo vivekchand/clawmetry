@@ -11,14 +11,14 @@
   <div id="context-window-bar" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:10px;padding:16px 20px;margin-bottom:16px;">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
       <span style="font-size:13px;font-weight:600;color:var(--text-primary);" data-i18n="context.window_usage">Context Window Usage</span>
-      <span style="font-size:12px;color:var(--text-muted);" id="ctx-usage-text">-- / -- tokens</span>
+      <span style="font-size:12px;color:var(--text-muted);" id="ctx-usage-text" data-i18n="app.tokens">-- / -- tokens</span>
     </div>
     <div style="height:20px;background:var(--bg-primary);border-radius:10px;overflow:hidden;border:1px solid var(--border);">
       <div id="ctx-usage-fill" style="height:100%;border-radius:10px;transition:width 0.5s;width:0%;background:linear-gradient(90deg, #22c55e 0%, #f59e0b 70%, #ef4444 90%);"></div>
     </div>
     <div style="display:flex;justify-content:space-between;margin-top:4px;">
       <span style="font-size:10px;color:var(--text-muted);">0</span>
-      <span style="font-size:10px;color:var(--text-muted);" id="ctx-compact-threshold">Compaction threshold</span>
+      <span style="font-size:10px;color:var(--text-muted);" id="ctx-compact-threshold" data-i18n="app.compaction_threshold">Compaction threshold</span>
       <span style="font-size:10px;color:var(--text-muted);" id="ctx-window-max">--</span>
     </div>
   </div>
@@ -29,7 +29,7 @@
     <div style="flex:1;min-width:400px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:10px;padding:16px 20px;">
       <div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:12px;" data-i18n="context.composition">Context Composition</div>
       <div id="ctx-composition-bars">
-        <div style="color:var(--text-muted);font-size:12px;">Loading...</div>
+        <div style="color:var(--text-muted);font-size:12px;" data-i18n="app.loading">Loading...</div>
       </div>
     </div>
     <!-- Stats cards -->
@@ -53,10 +53,10 @@
   <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:10px;padding:16px 20px;margin-bottom:16px;">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
       <span style="font-size:13px;font-weight:600;color:var(--text-primary);" data-i18n="context.system_prompt_sections">System Prompt Sections</span>
-      <span style="font-size:11px;color:var(--text-muted);" id="ctx-sysprompt-total">-- tokens total</span>
+      <span style="font-size:11px;color:var(--text-muted);" id="ctx-sysprompt-total" data-i18n="app.tokens_total">-- tokens total</span>
     </div>
     <div id="ctx-sysprompt-sections">
-      <div style="color:var(--text-muted);font-size:12px;">Loading...</div>
+      <div style="color:var(--text-muted);font-size:12px;" data-i18n="app.loading">Loading...</div>
     </div>
   </div>
 

@@ -1,22 +1,22 @@
 <div class="page" id="page-tool-catalog">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:16px;flex-wrap:wrap;">
     <div>
-      <div style="font-size:18px;font-weight:700;color:var(--text-primary);">Tool catalog</div>
-      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Every tool the agent actually invoked, grouped by provenance (builtin / MCP / plugin), with call count, p50/p95 latency and error rate. Click a tool to expand its recent calls.</div>
+      <div style="font-size:18px;font-weight:700;color:var(--text-primary);" data-i18n="app.tool_catalog">Tool catalog</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;" data-i18n="app.every_tool_the_agent_actually_invoked_grouped_by_p">Every tool the agent actually invoked, grouped by provenance (builtin / MCP / plugin), with call count, p50/p95 latency and error rate. Click a tool to expand its recent calls.</div>
     </div>
     <div style="display:flex;gap:6px;align-items:center;">
       <select id="tc-prov-filter" onchange="loadToolCatalog()" title="Filter by provenance group" style="font-size:12px;padding:5px 8px;border:1px solid var(--border-primary);border-radius:7px;background:var(--bg-secondary);color:var(--text-primary);">
-        <option value="">All provenance</option>
-        <option value="builtin">Builtin only</option>
-        <option value="mcp">MCP only</option>
-        <option value="plugin">Plugin only</option>
+        <option value="" data-i18n="app.all_provenance">All provenance</option>
+        <option value="builtin" data-i18n="app.builtin_only">Builtin only</option>
+        <option value="mcp" data-i18n="app.mcp_only">MCP only</option>
+        <option value="plugin" data-i18n="app.plugin_only">Plugin only</option>
       </select>
       <select id="tc-sort" onchange="renderToolCatalog()" title="Sort tool rows" style="font-size:12px;padding:5px 8px;border:1px solid var(--border-primary);border-radius:7px;background:var(--bg-secondary);color:var(--text-primary);">
-        <option value="calls">Most calls</option>
-        <option value="p95">Slowest p95</option>
-        <option value="p50">Slowest p50</option>
-        <option value="errors">Highest error rate</option>
-        <option value="name">Name (A&ndash;Z)</option>
+        <option value="calls" data-i18n="app.most_calls">Most calls</option>
+        <option value="p95" data-i18n="app.slowest_p95">Slowest p95</option>
+        <option value="p50" data-i18n="app.slowest_p50">Slowest p50</option>
+        <option value="errors" data-i18n="app.highest_error_rate">Highest error rate</option>
+        <option value="name" data-i18n="app.name_az">Name (A&ndash;Z)</option>
       </select>
       <button class="refresh-btn" onclick="loadToolCatalog()">&#8635;</button>
     </div>
@@ -27,11 +27,11 @@
 
   <!-- Per-MCP-server rollup (#2007): which MCP server is hot / slow / failing. -->
   <div id="mcp-servers-section" style="display:none;margin-bottom:16px;">
-    <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:2px;">🧩 MCP servers</div>
-    <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Tool calls grouped by MCP server &mdash; volume, p50/p95 latency, error rate. Model spend is the cost of the turns that called each server.</div>
+    <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:2px;" data-i18n="app.mcp_servers">🧩 MCP servers</div>
+    <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;" data-i18n="app.tool_calls_grouped_by_mcp_server_volume_p50_p95_la">Tool calls grouped by MCP server &mdash; volume, p50/p95 latency, error rate. Model spend is the cost of the turns that called each server.</div>
     <div class="card" id="mcp-servers-card" style="padding:0;overflow:hidden;"></div>
   </div>
 
   <!-- Tool table -->
-  <div class="card" id="tc-table" style="color:var(--text-muted);font-size:13px;padding:0;overflow:hidden;">Loading tool catalog&hellip;</div>
+  <div class="card" id="tc-table" style="color:var(--text-muted);font-size:13px;padding:0;overflow:hidden;" data-i18n="app.loading_tool_catalog">Loading tool catalog&hellip;</div>
 </div>

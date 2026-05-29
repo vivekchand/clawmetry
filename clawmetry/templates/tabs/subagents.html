@@ -1,13 +1,13 @@
 <div class="page" id="page-subagents">
   <div class="refresh-bar">
-    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">&#129302; Sub-Agents &amp; Queue Lanes</h2>
-    <button class="refresh-btn" onclick="loadRunLedger();loadSubagents()">&#8635; Refresh</button>
+    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;" data-i18n="app.sub_agents_queue_lanes">&#129302; Sub-Agents &amp; Queue Lanes</h2>
+    <button class="refresh-btn" onclick="loadRunLedger();loadSubagents()" data-i18n="app.refresh">&#8635; Refresh</button>
   </div>
   <!-- OpenClaw run-ledger lane monitor (cli / cron / subagent) + recent runs.
        Populated by loadRunLedger() from /api/run-ledger. `runtime` is the
        OpenClaw queue lane, so this is the live queue/concurrency view. -->
   <div id="run-ledger-panel">
-    <div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading lanes...</div></div>
+    <div style="color:var(--text-muted);font-size:13px;padding:16px;" data-i18n="app.loading_lanes">Loading lanes...</div></div>
   <div id="subagents-list" style="margin-top:18px;">
-    <div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading sub-agent tree...</div></div>
+    <div style="color:var(--text-muted);font-size:13px;padding:16px;" data-i18n="app.loading_sub_agent_tree">Loading sub-agent tree...</div></div>
 </div><!-- end page-subagents (theme 2) -->

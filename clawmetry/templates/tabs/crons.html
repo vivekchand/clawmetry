@@ -24,7 +24,7 @@
     <button class="cron-view-tab" data-view="paused" onclick="setCronView('paused')"><span data-i18n="crons.view_paused">Paused</span> <span class="cron-view-count" id="crons-count-paused"></span></button>
     <button class="cron-view-tab" data-view="calendar" onclick="setCronView('calendar')">&#x1F4C5; <span data-i18n="crons.view_calendar">Calendar</span></button>
   </div>
-  <div class="card" id="crons-list">Loading...</div>
+  <div class="card" id="crons-list" data-i18n="app.loading">Loading...</div>
   <!-- Cron Health Monitor (GH #302) -->
   <div id="cron-health-anomaly-banner" style="
     display:none;
@@ -71,7 +71,7 @@
     overflow-y:auto;
     margin:auto;
     ">
-    <h3 id="cron-modal-title" style="margin:0 0 16px;color:var(--text-primary);font-size:16px;">Edit Cron Job</h3>
+    <h3 id="cron-modal-title" style="margin:0 0 16px;color:var(--text-primary);font-size:16px;" data-i18n="app.edit_cron_job">Edit Cron Job</h3>
     <input type="hidden" id="cron-edit-id">
     <input type="hidden" id="cron-edit-mode" value="edit">
     <div style="margin-bottom:12px;">
