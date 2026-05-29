@@ -630,8 +630,138 @@ class NeMoAdapter:
         return row
 
 
+# ── Read-side AgentAdapter facade ──────────────────────────────────────────
+#
+# The NeMoAdapter above is push-mode (callback receiver). For the multi-agent
+# UI (chip bar, runtime switcher, /api/agents) the dashboard expects every
+# observed runtime to be an :class:`AgentAdapter` subclass it can detect +
+# query for sessions/events. This thin facade exposes NeMo's ingested data
+# through the same shape as OpenClawAdapter, reading from DuckDB rather than
+# the filesystem.
+#
+# Without this, /api/agents never reports nemo, the runtime switcher cannot
+# filter to NeMo, and the homepage tooltip ("OpenClaw · NVIDIA NemoClaw ·
+# Claude Code · ...") promises a runtime the UI cannot select. Verified
+# during the 2026-05-29 runtime-coverage audit.
+from .base import AgentAdapter, Capability, DetectResult, Event, Session
+
+
+class NeMoReaderAdapter(AgentAdapter):
+    """Read-side facade so NeMo appears in /api/agents alongside the other
+    runtimes. NeMo events are ingested by the push-side ``NeMoAdapter``
+    above; this class only reads them back out of DuckDB."""
+
+    name = "nemo"
+    display_name = "NeMo"
+
+    def detect(self) -> DetectResult:
+        """Detect by checking whether DuckDB has any nemo-tagged events."""
+        n = 0
+        try:
+            from clawmetry import local_store as _ls
+            store = _ls.get_store(read_only=True)
+            rows = store._fetch(
+                "SELECT COUNT(*) FROM events WHERE agent_type = ?",
+                ["nemo"],
+            )
+            if rows:
+                n = int(rows[0][0])
+        except Exception as exc:
+            logger.debug("nemo detect read failed: %s", exc)
+        return DetectResult(
+            name=self.name,
+            display_name=self.display_name,
+            detected=n > 0,
+            running=False,
+            workspace="(push-mode receiver)",
+            session_count=0,
+            capabilities=[c.value for c in self.capabilities()],
+            meta={"event_count": n, "cap_per_day": NEMO_FREE_DAILY_CAP},
+        )
+
+    def list_sessions(self, limit: int = 100) -> list[Session]:
+        """List sessions for NeMo runtime by querying DuckDB."""
+        sessions: list[Session] = []
+        try:
+            from clawmetry import local_store as _ls
+            store = _ls.get_store(read_only=True)
+            rows = store._fetch(
+                "SELECT session_id, MIN(ts) AS started, MAX(ts) AS ended, "
+                "COUNT(*) AS n_events, SUM(token_count) AS tokens, "
+                "SUM(cost_usd) AS cost FROM events "
+                "WHERE agent_type = ? AND session_id IS NOT NULL "
+                "GROUP BY session_id ORDER BY started DESC LIMIT ?",
+                ["nemo", int(limit)],
+            )
+            for r in rows or []:
+                sid = r[0]
+                started = r[1] or 0.0
+                ended = r[2] or 0.0
+                # ts column is VARCHAR (ISO string or epoch-as-string);
+                # coerce to float for the dataclass typed fields.
+                try:
+                    started_f = float(started) if started not in ("", None) else 0.0
+                except (TypeError, ValueError):
+                    started_f = 0.0
+                try:
+                    ended_f = float(ended) if ended not in ("", None) else None
+                except (TypeError, ValueError):
+                    ended_f = None
+                n_ev = int(r[3] or 0)
+                tokens = int(r[4] or 0)
+                cost = float(r[5] or 0.0)
+                sessions.append(Session(
+                    agent=self.name,
+                    id=str(sid),
+                    title=f"NeMo session {str(sid)[:8]}",
+                    started_at=started_f,
+                    ended_at=ended_f,
+                    message_count=n_ev,
+                    total_tokens=tokens,
+                    cost_usd=cost,
+                ))
+        except Exception as exc:
+            logger.debug("nemo list_sessions read failed: %s", exc)
+        return sessions
+
+    def list_events(self, session_id: str, limit: int = 500) -> list[Event]:
+        """List events for one NeMo session by querying DuckDB."""
+        events: list[Event] = []
+        try:
+            from clawmetry import local_store as _ls
+            store = _ls.get_store(read_only=True)
+            rows = store._fetch(
+                "SELECT id, event_type, ts, model, token_count "
+                "FROM events WHERE agent_type = ? AND session_id = ? "
+                "ORDER BY ts ASC LIMIT ?",
+                ["nemo", str(session_id), int(limit)],
+            )
+            for r in rows or []:
+                events.append(Event(
+                    agent=self.name,
+                    session_id=str(session_id),
+                    id=str(r[0]),
+                    type=str(r[1] or "event"),
+                    ts=float(r[2]) if isinstance(r[2], (int, float)) else 0.0,
+                    tokens=int(r[4] or 0),
+                    extra={"model": r[3]} if r[3] else {},
+                ))
+        except Exception as exc:
+            logger.debug("nemo list_events read failed: %s", exc)
+        return events
+
+    def capabilities(self) -> set[Capability]:
+        return {
+            Capability.SESSIONS,
+            Capability.EVENTS,
+            Capability.BRAIN,
+            Capability.COST,
+        }
+
+
 __all__ = [
     "NeMoAdapter",
+    "NeMoReaderAdapter",
     "MAPPED_EVENT_TYPES",
     "NEMO_FREE_DAILY_CAP",
     "get_nemo_cap_state",

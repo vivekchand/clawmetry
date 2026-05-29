@@ -10856,6 +10856,21 @@ def detect_config(args=None):
     from clawmetry.adapters.openclaw import OpenClawAdapter
     _adapter_registry.register(OpenClawAdapter())
 
+    # NeMo is a Free observed runtime alongside OpenClaw (homepage hero
+    # promises "OpenClaw + NeMo"). The push-side NeMoAdapter ingests into
+    # DuckDB; this read-side facade lets /api/agents + the runtime switcher
+    # filter to nemo. Only registers when detect() finds nemo-tagged events
+    # already in the store, so an OSS install with no NeMo data does not
+    # clutter the multi-agent view.
+    try:
+        from clawmetry.adapters.nemo import NeMoReaderAdapter
+        _nemo_reader = NeMoReaderAdapter()
+        if _nemo_reader.detect().detected:
+            _adapter_registry.register(_nemo_reader)
+    except Exception as _nemo_err:  # pragma: no cover - defensive
+        import logging as _logging
+        _logging.getLogger(__name__).debug("Skipped NeMo reader registration: %s", _nemo_err)
+
     # Non-OpenClaw runtimes ClawMetry can observe via a dedicated reader adapter
     # (Hermes, Claude Code, Codex, Cursor, PicoClaw, NanoClaw, ...). Each uses
     # its own native session format. Register each only when its own cheap,
