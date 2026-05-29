@@ -44,6 +44,8 @@ _SHAPES = {
     "aggregates": "query_aggregates",
     "health":     None,                 # special: no args
     "transcript": "query_events",       # alias with session_id required
+    "spans":      "query_spans",        # Issue #1013: full-filter span list
+    "traces":     "query_traces",       # Issue #1013: one row per trace_id
 }
 
 
@@ -192,6 +194,23 @@ def _coerce_args(shape: str, raw: dict) -> dict:
         }
     if shape == "health":
         return {}
+    if shape == "spans":
+        return {
+            "trace_id":   raw.get("trace_id"),
+            "session_id": raw.get("session_id"),
+            "agent_type": raw.get("agent_type"),
+            "since":      raw.get("since"),
+            "until":      raw.get("until"),
+            "limit":      _safe_int(raw.get("limit"), default=200, lo=1, hi=2000),
+        }
+    if shape == "traces":
+        return {
+            "session_id": raw.get("session_id"),
+            "agent_type": raw.get("agent_type"),
+            "since":      raw.get("since"),
+            "until":      raw.get("until"),
+            "limit":      _safe_int(raw.get("limit"), default=100, lo=1, hi=1000),
+        }
     raise ValueError(f"unknown shape: {shape}")
 
 
@@ -348,6 +367,26 @@ def http_span_detail(span_id: str):
     return jsonify({"available": True, "span": rows[0]})
 
 
+@bp_local_query.route("/api/local/spans", methods=["GET"])
+def http_spans():
+    """List spans. Filters: trace_id, session_id, agent_type, since, until, limit."""
+    try:
+        args = _coerce_args("spans", request.args.to_dict())
+        return jsonify(_dispatch("spans", args))
+    except Exception as e:
+        return jsonify({"error": str(e)[:300]}), 500
+
+
+@bp_local_query.route("/api/local/traces", methods=["GET"])
+def http_traces():
+    """List traces (one row per trace_id). Filters: session_id, agent_type, since, until, limit."""
+    try:
+        args = _coerce_args("traces", request.args.to_dict())
+        return jsonify(_dispatch("traces", args))
+    except Exception as e:
+        return jsonify({"error": str(e)[:300]}), 500
+
+
 @bp_local_query.route("/api/local/query", methods=["POST"])
 def http_query():
     """Generic shape-dispatched endpoint. Mirrors the WS relay frame format,
@@ -493,6 +532,9 @@ _DAEMON_METHODS = frozenset({
     # Issue #853: OTLP trace export. Full-filter variant used by
     # /api/export/traces when session_id / since / until are supplied.
     "query_spans",
+    # Issue #1013: Trace 7 — one row per trace_id with aggregate stats.
+    # Powers /api/local/traces + the cloud relay query.traces shape.
+    "query_traces",
     # Issue #1364 (Tier-1 2026-05-15): /api/fallbacks model/provider
     # transition aggregator. Replaces a JSONL walker that opened up to 100
     # transcript files per request — multi-second on a busy workspace.

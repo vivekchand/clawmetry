@@ -47,6 +47,8 @@ _CAPABILITIES = [
     "query.aggregates",
     "query.transcript",
     "query.health",
+    "query.spans",    # Issue #1013
+    "query.traces",   # Issue #1013
 ]
 
 
