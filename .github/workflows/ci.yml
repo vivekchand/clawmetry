@@ -161,6 +161,7 @@ jobs:
             tests/test_runtime_detection_snapshot.py \
             tests/test_family_runtime_ingest.py \
             tests/test_phase4_adapter_move.py \
+            tests/test_openclaw_detection_real.py \
             -q
 
   # ── MOAT keystone (DuckDB-first invariant, 13-endpoint bar) ──────────────

@@ -8354,16 +8354,51 @@ _agent_presence_cache = {"ts": 0.0, "value": None}
 _AGENT_PRESENCE_TTL_SEC = 60
 
 
+def _openclaw_gateway_running():
+    """True only if the OpenClaw gateway is actually live (pid alive or the
+    JSON-RPC port is listening). Stat + a 200ms localhost probe; never raises."""
+    home = os.environ.get("OPENCLAW_HOME") or os.path.expanduser("~/.openclaw")
+    pid_path = os.path.join(home, "gateway", "gateway.pid")
+    try:
+        if os.path.exists(pid_path):
+            with open(pid_path) as fh:
+                pid = int((fh.read() or "0").strip())
+            if pid > 0:
+                os.kill(pid, 0)
+                return True
+    except (OSError, ValueError):
+        pass
+    try:
+        import socket as _sock
+        s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+        s.settimeout(0.2)
+        rc = s.connect_ex(("127.0.0.1", 18789))
+        s.close()
+        return rc == 0
+    except Exception:
+        return False
+
+
 def _detect_openclaw_install():
-    """Return True if OpenClaw appears installed (any of: PID file present,
-    workspace dir exists, session JSONLs exist, OPENCLAW_HOME env set to a
-    real dir). Cheap stat-only checks — no subprocess, no DuckDB."""
+    """Return True only when OpenClaw is GENUINELY installed (a real artifact),
+    not when only ClawMetry's own ~/.openclaw scratch dir exists.
+
+    ClawMetry creates ~/.openclaw/workspace (it drops .clawmetry-fleet.db /
+    .clawmetry-metrics.json there), so "the dir exists / is non-empty" is NOT a
+    signal — that bare-dir heuristic false-positived OpenClaw on uninstalled
+    machines (fixed 2026-05-30). Cheap stat-only checks; no subprocess, no DuckDB.
+    """
+    import shutil as _shutil
+    # 0. The openclaw CLI on PATH or the app bundle — unambiguous install.
+    if _shutil.which("openclaw") or os.path.isdir("/Applications/OpenClaw.app"):
+        return True
     home = os.environ.get("OPENCLAW_HOME") or os.path.expanduser("~/.openclaw")
     if not home:
         return False
-    # 1. Gateway PID file — strongest "openclaw is/was running" signal.
-    pid_path = os.path.join(home, "gateway", "gateway.pid")
-    if os.path.exists(pid_path):
+    # 1. Gateway PID file / live gateway — strongest "is/was running" signal.
+    if os.path.exists(os.path.join(home, "gateway", "gateway.pid")):
+        return True
+    if _openclaw_gateway_running():
         return True
     # 2. Session JSONLs (agent has produced events at some point).
     sess_dir = os.path.join(home, "agents", "main", "sessions")
@@ -8374,19 +8409,12 @@ def _detect_openclaw_install():
                     return True
         except OSError:
             pass
-    # 3. Workspace marker files (SOUL.md / AGENTS.md / MEMORY.md).
+    # 3. Workspace marker files (SOUL.md / AGENTS.md / MEMORY.md) — a real
+    # OpenClaw workspace, not ClawMetry's scratch dir.
     ws = os.path.join(home, "workspace")
     for marker in ("SOUL.md", "AGENTS.md", "MEMORY.md"):
         if os.path.exists(os.path.join(ws, marker)):
             return True
-    # 4. ~/.openclaw dir exists with *any* content (catches fresh installs
-    # that haven't run yet but have at least laid down config).
-    if os.path.isdir(home):
-        try:
-            if any(True for _ in os.scandir(home)):
-                return True
-        except OSError:
-            pass
     return False
 
 
@@ -8449,6 +8477,7 @@ def detect_agent_install():
     if cached and (now - _agent_presence_cache["ts"]) < _AGENT_PRESENCE_TTL_SEC:
         return cached
     openclaw = bool(_detect_openclaw_install())
+    openclaw_running = bool(_openclaw_gateway_running()) if openclaw else False
     nemoclaw = bool(_detect_nemoclaw_install())
     any_data = bool(_detect_any_local_data())
     signals = []
@@ -8460,6 +8489,7 @@ def detect_agent_install():
         signals.append("local_data")
     payload = {
         "openclaw_detected": openclaw,
+        "openclaw_running": openclaw_running,  # installed AND gateway live
         "nemoclaw_detected": nemoclaw,
         "any_data": any_data,
         "signals": signals,
