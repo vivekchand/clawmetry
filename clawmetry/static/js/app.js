@@ -1420,7 +1420,7 @@ async function loadAutonomy() {
     if (d.score == null) {
       labelEl.textContent = t("app.just_getting_started", null, "Just getting started");
       labelEl.style.color = 'var(--text-muted)';
-      if (gapEl) gapEl.textContent = 'Use your agent a bit and we\u2019ll show how independent it\u2019s becoming.';
+      if (gapEl) gapEl.textContent = t("app.use_your_agent_a_bit", null, "Use your agent a bit and we\u2019ll show how independent it\u2019s becoming.");
       if (badgeEl) { badgeEl.textContent = ''; badgeEl.style.background = ''; badgeEl.style.border = ''; }
       if (trendEl) trendEl.textContent = '';
       if (sampEl) sampEl.textContent = '';
@@ -1668,7 +1668,7 @@ function _folderIconSvg() {
 async function loadSelfConfig() {
   var inner = document.getElementById('selfconfig-files-inner');
   if (!inner) return;
-  inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">Loading\u2026</span>';
+  inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">' + t("app.loading_2", null, "Loading\u2026") + '</span>';
   try {
     // Fetch tracked-file metadata (for sensitive/history flags) and the
     // real filesystem listing in parallel.
@@ -1734,7 +1734,7 @@ async function loadSelfConfig() {
       selfconfigOpenFile(_selfconfigCurrentFile, _selfconfigSelectedTs);
     }
   } catch(e) {
-    inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">Couldn\u2019t load right now.</span>';
+    inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">' + t("app.couldnt_load_right_now", null, "Couldn\u2019t load right now.") + '</span>';
   }
 }
 
@@ -1814,7 +1814,7 @@ async function _selfconfigRenderTimeline(filename) {
       : fetch('/api/selfconfig/' + encodeURIComponent(filename)).then(function(r){return r.json();}));
     _selfconfigRevisions = d.revisions || [];
     if (!_selfconfigRevisions.length) {
-      list.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 6px;">No changes yet. When your agent updates this, it\u2019ll show up here.</div>';
+      list.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 6px;">' + t("app.no_changes_yet", null, "No changes yet. When your agent updates this, it\u2019ll show up here.") + '</div>';
       return;
     }
     // Pre-fetch summaries for each adjacent pair in the background (non-blocking).
@@ -1833,7 +1833,7 @@ async function _selfconfigRenderTimeline(filename) {
     });
     _renderTimelineRows(filename);
   } catch(e) {
-    list.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">Couldn\u2019t load.</span>';
+    list.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">' + t("app.couldnt_load", null, "Couldn\u2019t load.") + '</span>';
   }
 }
 
@@ -1904,7 +1904,7 @@ async function _selfconfigRenderReader(filename, ts) {
 
   if (titleEl) titleEl.textContent = filename;
   if (badgeEl) badgeEl.style.display = (meta && meta.is_values_file) ? 'inline-block' : 'none';
-  if (bodyEl) bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">Loading\u2026</div>';
+  if (bodyEl) bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">' + t("app.loading_2", null, "Loading\u2026") + '</div>';
 
   // Edit toolbar is available for live files (any, tracked or not). Past
   // versions are only reachable for tracked files — they remain read-only.
@@ -1957,7 +1957,7 @@ async function _selfconfigRenderReader(filename, ts) {
     }
     _selfconfigUpdateStatusBar(filename, ts, d);
   } catch(e) {
-    if (bodyEl) bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">Couldn\u2019t load this version.</div>';
+    if (bodyEl) bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">' + t("app.couldnt_load_this_version", null, "Couldn\u2019t load this version.") + '</div>';
   }
 }
 
@@ -2160,7 +2160,7 @@ async function loadSkills() {
         : '');
 
     if (skills.length === 0) {
-      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Nothing installed yet. Skills let your agent handle specific tasks \u2014 add some to get started.</div>';
+      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">' + t("app.nothing_installed_yet_skills", null, "Nothing installed yet. Skills let your agent handle specific tasks \u2014 add some to get started.") + '</div>';
       return;
     }
 
@@ -2210,7 +2210,7 @@ async function loadSkills() {
     html += '</tbody></table>';
     listEl.innerHTML = html;
   } catch (e) {
-    if (listEl) listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Couldn\u2019t load right now.</div>';
+    if (listEl) listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">' + t("app.couldnt_load_right_now", null, "Couldn\u2019t load right now.") + '</div>';
   }
 }
 
@@ -4408,7 +4408,7 @@ function loadReasoningChain(sessionId, containerId) {
     container.dataset.loaded = '0';
     return;
   }
-  container.innerHTML = '<span style="color:var(--text-muted);font-size:10px;">Loading\u2026</span>';
+  container.innerHTML = '<span style="color:var(--text-muted);font-size:10px;">' + t("app.loading_2", null, "Loading\u2026") + '</span>';
   fetch('/api/reasoning?session=' + encodeURIComponent(sessionId))
     .then(function(r) { return r.json(); })
     .then(function(data) {
@@ -8537,7 +8537,7 @@ async function loadCronLog(evt, sessionId) {
       var text = ev.text || ev.content || ev.summary || ev.tool || '';
       return '[' + (ev.ts || '').substring(11,19) + '] ' + role + ': ' + String(text).substring(0,200);
     }).join('\n');
-    document.getElementById('cron-log-content').textContent = out || 'No events found';
+    document.getElementById('cron-log-content').textContent = out || t("app.no_events_found", null, "No events found");
   } catch(ex) {
     document.getElementById('cron-log-content').textContent = t("app.error", null, "Error: ") + ex.message;
   }
@@ -11987,11 +11987,11 @@ function toggleCompaction(idx) {
   if (short.style.display === 'none') {
     short.style.display = '';
     full.style.display = 'none';
-    if (toggle) toggle.textContent = '\u2193 Expand summary';
+    if (toggle) toggle.textContent = t("app.expand_summary", null, "\u2193 Expand summary");
   } else {
     short.style.display = 'none';
     full.style.display = '';
-    if (toggle) toggle.textContent = '\u2191 Collapse summary';
+    if (toggle) toggle.textContent = t("app.collapse_summary", null, "\u2191 Collapse summary");
   }
 }
 
@@ -13502,11 +13502,11 @@ function startLogStream() {
   if (logStream) logStream.close();
   streamBuffer = [];
   var statusEl = document.getElementById('log-stream-status');
-  if (statusEl) statusEl.textContent = '\u25cf Connecting\u2026';
+  if (statusEl) statusEl.textContent = t("app.dot_connecting", null, "\u25cf Connecting\u2026");
   logStream = new EventSource('/api/logs-stream' + (localStorage.getItem('clawmetry-token') ? '?token=' + encodeURIComponent(localStorage.getItem('clawmetry-token')) : ''));
   logStream.onopen = function() {
     var s = document.getElementById('log-stream-status');
-    if (s) { s.textContent = '\u25cf Live'; s.style.color = '#22c55e'; }
+    if (s) { s.textContent = t("app.dot_live", null, "\u25cf Live"); s.style.color = '#22c55e'; }
     // Sibling of #1610 - successful (re)open clears backoff + banner.
     _resetLogSSEReconnectState();
   };
@@ -13521,7 +13521,7 @@ function startLogStream() {
   };
   logStream.onerror = function() {
     var s = document.getElementById('log-stream-status');
-    if (s) { s.textContent = '\u25cf Reconnecting\u2026'; s.style.color = '#f59e0b'; }
+    if (s) { s.textContent = t("app.dot_reconnecting", null, "\u25cf Reconnecting\u2026"); s.style.color = '#f59e0b'; }
     // Sibling of #1610 - replace one-shot reconnect with exponential
     // backoff chain so a sustained outage keeps trying, and surfaces an
     // explicit banner after 30s instead of staying silently broken.
