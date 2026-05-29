@@ -545,7 +545,7 @@ def _try_local_store_anomalies():
     }
 
 
-def _try_local_store_usage_by_plugin(threshold_pct):
+def _try_local_store_usage_by_plugin(threshold_pct, runtime=None):
     """Fast path for /api/usage/by-plugin. Groups events by plugin/tool
     name, splits each event's tokens/cost across the plugins implicated.
     Returns shape: {plugins: [...], warnings: [...]}."""
@@ -558,6 +558,7 @@ def _try_local_store_usage_by_plugin(threshold_pct):
         return None
     if not evs:
         return None
+    evs = _filter_evs_by_runtime(evs, runtime)
     # Issue #1451: sibling-dedupe so v3 assistant + model.completed pairs
     # don't double-count per-plugin tokens.
     bucket_max = build_sibling_bucket_max(evs)
@@ -1913,10 +1914,11 @@ def api_usage_by_plugin():
         threshold_pct_arg = float(request.args.get("threshold", 50.0))
     except (ValueError, TypeError):
         threshold_pct_arg = 50.0
+    _rt = (request.args.get("runtime") or "").strip() or None
 
     # Epic #964 — local-store fast path.
     if is_local_store_read_enabled():
-        fast = _try_local_store_usage_by_plugin(threshold_pct_arg)
+        fast = _try_local_store_usage_by_plugin(threshold_pct_arg, runtime=_rt)
         if fast is not None:
             return jsonify(fast)
 

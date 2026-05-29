@@ -7030,7 +7030,7 @@ function _cmRuntimeLabel(rt) { return _CM_RT_LABEL[rt] || rt; }
 // shows an honest "all runtimes" note rather than pretending the numbers are
 // runtime-specific. (Per-runtime aggregation is a follow-up.)
 var _CM_RT_AGGREGATE = {
-  usage: 1, 'tool-catalog': 1, 'context-economics': 1, context: 1
+  'tool-catalog': 1, 'context-economics': 1, context: 1
 };
 // Tabs that are NODE-WIDE concepts, not per-runtime: crons run on the gateway,
 // memory/skills are workspace-level, security is machine posture, self-evolve is
@@ -10715,7 +10715,7 @@ async function loadUsage() {
     var _uRtQ = (_uRt && _uRt !== 'all') ? ('?runtime=' + encodeURIComponent(_uRt)) : '';
     var [_uResp, byPlugin] = await Promise.all([
       fetch('/api/usage' + _uRtQ).then(async function(r) { return {s: r.status, b: await r.json()}; }),
-      fetch('/api/usage/by-plugin').then(r => r.json()).catch(function(){ return {plugins: []}; })
+      fetch('/api/usage/by-plugin' + _uRtQ).then(r => r.json()).catch(function(){ return {plugins: []}; })
     ]);
     var data = _uResp.b || {};
     // Issue #1804: show outage banner when ingest is offline (503 envelope).
@@ -10732,6 +10732,17 @@ async function loadUsage() {
     document.getElementById('usage-week-cost').textContent = '≈ ' + fmtCost(data.weekCost);
     document.getElementById('usage-month').textContent = fmtTokens(data.month);
     document.getElementById('usage-month-cost').textContent = '≈ ' + fmtCost(data.monthCost);
+    // Runtime-scoped empty state: when a specific runtime is selected but has
+    // no cost data in any window, surface a clear note rather than showing all zeros.
+    var _uEmptyEl = document.getElementById('usage-runtime-empty-note');
+    if (_uRt && _uRt !== 'all' && !data.today && !data.week && !data.month) {
+      var _uRtLabel = _cmRuntimeLabel(_uRt);
+      var _uEmptyHtml = '<div id="usage-runtime-empty-note" style="margin:8px 0 12px;padding:9px 13px;border-radius:8px;background:rgba(99,102,241,0.07);border:1px solid rgba(99,102,241,0.25);font-size:12px;color:var(--text-secondary);">No cost data recorded for <strong>' + escHtml(_uRtLabel) + '</strong> yet.</div>';
+      var _uChart = document.getElementById('usage-chart');
+      if (!_uEmptyEl && _uChart) _uChart.insertAdjacentHTML('beforebegin', _uEmptyHtml);
+    } else {
+      if (_uEmptyEl) _uEmptyEl.remove();
+    }
 
     // Display cost warnings
     displayCostWarnings(data.warnings || []);

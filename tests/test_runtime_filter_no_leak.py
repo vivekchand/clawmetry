@@ -203,3 +203,47 @@ def test_runtime_summary_buckets_each_session_into_one_runtime(app_and_store):
     # Sanity: claude_code's primary is claude-opus, qwen's is qwen3:8b.
     assert runtimes["claude_code"]["primary_model"] == "claude-opus-4-7"
     assert runtimes["qwen_code"]["primary_model"] == "qwen3:8b"
+
+
+# ── 4. /api/usage?runtime= scopes with zero leakage ────────────────────────
+
+
+def test_usage_api_per_runtime_no_leak(app_and_store):
+    """Seeding distinct token counts per runtime and querying /api/usage?runtime=
+    must return exactly that runtime's tokens — no cross-adapter leak or loss."""
+    a, ls = app_and_store
+    store = ls.get_store()
+    now = time.time()
+    seeds = {
+        "claude_code:c1": ("claude-opus-4-7", 500),
+        "qwen_code:q1":   ("qwen3:8b",        300),
+        "bareuuid-z1":    ("claude-opus-4-7", 200),  # → openclaw bucket
+    }
+    for i, (sid, (model, toks)) in enumerate(seeds.items()):
+        store.ingest({
+            "id": f"{sid}-{i}",
+            "node_id": "test",
+            "agent_id": "main",
+            "session_id": sid,
+            "event_type": "tool_call",
+            "ts": _iso(now - 3600 + i),
+            "data": {},
+            "cost_usd": 0.01,
+            "token_count": toks,
+            "model": model,
+        })
+    _wait_flush(store)
+    cli = a.test_client()
+
+    expected_tokens = {"claude_code": 500, "qwen_code": 300, "openclaw": 200}
+    for rt, exp in expected_tokens.items():
+        body = cli.get(f"/api/usage?runtime={rt}").get_json() or {}
+        # today = tokens from events in the last 24 h for this runtime only.
+        actual = body.get("today") or 0
+        assert actual == exp, (
+            f"{rt}: expected {exp} tokens today, got {actual}. Body keys={list(body)}")
+
+    # Unfiltered total must equal the sum of all seeded tokens.
+    body_all = cli.get("/api/usage").get_json() or {}
+    assert (body_all.get("today") or 0) == sum(t for _, t in seeds.values()), (
+        f"unfiltered today mismatch: {body_all.get('today')}")
