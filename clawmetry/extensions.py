@@ -82,7 +82,7 @@ def _select_entry_points(group: str):
     return list(eps.get(group, []))  # 3.9 dict form
 
 
-def load_plugins() -> None:
+def load_plugins(app=None) -> None:
     """
     Auto-discover and load extension plugins via entry points.
     Called once at dashboard startup.
@@ -91,8 +91,19 @@ def load_plugins() -> None:
         [project.entry-points."clawmetry.extensions"]
         myplugin = "mypkg.ext:register_all"
 
-    The entry point value must be a callable that takes no arguments
-    and calls register() for each event it handles.
+    The entry point value is a callable. Backward-compatible signatures:
+
+    * ``register_all()`` (no args) — receives only the event-bus handle via
+      :func:`register`. Plugins that only subscribe to events can stay this
+      shape; calling them with no args is what shipped pre-2026-05-29.
+    * ``register_all(app)`` — receives the Flask app so the plugin can
+      register Blueprints on it. Required for plugins that ship routes
+      (e.g., ``clawmetry-pro`` ships the runtime-ingest + OTel push
+      blueprints).
+
+    Detection is via :func:`inspect.signature`. A plugin that declares an
+    ``app`` parameter gets it; one that does not is still called with no
+    args. This way old plugins keep working without bumping their pin.
     """
     global _loaded
     if _loaded:
@@ -104,10 +115,24 @@ def load_plugins() -> None:
     except Exception:
         return
 
+    import inspect
+
     for ep in eps:
         try:
             fn = ep.load()
-            fn()
+            # Pass ``app`` only when the plugin accepts it. Older plugins
+            # with ``register_all()`` (no args) keep working unchanged.
+            accepts_app = False
+            if app is not None:
+                try:
+                    sig = inspect.signature(fn)
+                    accepts_app = len(sig.parameters) >= 1
+                except (TypeError, ValueError):
+                    accepts_app = False
+            if accepts_app:
+                fn(app)
+            else:
+                fn()
             logger.info(f"Loaded ClawMetry extension plugin: {ep.name!r}")
         except Exception as exc:
             logger.warning(f"Failed to load extension plugin {ep.name!r}: {exc}")

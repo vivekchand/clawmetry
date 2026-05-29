@@ -160,14 +160,18 @@ except ImportError:
 
 __version__ = "0.12.367"
 
-# Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
+# Extensions (Phase 2): import the plugin host now, but defer the actual
+# load_plugins() call until after the Flask app is created below so we can
+# hand each plugin the app and let it register blueprints. The host falls
+# back to a no-op when the package itself is unavailable.
 try:
     from clawmetry.extensions import emit as _ext_emit, load_plugins as _ext_load
-
-    _ext_load()
 except ImportError:
 
     def _ext_emit(event, payload=None):
+        pass  # noqa
+
+    def _ext_load(app=None):
         pass  # noqa
 
 
@@ -176,6 +180,11 @@ app = Flask(
     static_folder=os.path.join(os.path.dirname(__file__), 'clawmetry', 'static'),
     template_folder=os.path.join(os.path.dirname(__file__), 'clawmetry', 'templates'),
 )
+
+# Plugins (e.g. ``clawmetry-pro``) can now register Blueprints on ``app``.
+# Older plugins with ``register_all()`` (no args) keep working unchanged:
+# the loader inspects the signature and only passes ``app`` when accepted.
+_ext_load(app)
 
 # ── Cross-platform helpers ──────────────────────────────────────────────
 import re as _re
