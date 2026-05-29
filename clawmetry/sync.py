@@ -12118,6 +12118,77 @@ def run_daemon() -> None:
     except Exception as _e:
         log.warning(f"review sampler failed to start: {_e}")
 
+    # ── Per-tier event retention prune (#2262 catalogue) ─────────────────
+    # Hourly tick that reads ``Entitlement.event_retention_days()`` and
+    # calls ``LocalStore.prune_events_by_age`` so the events table never
+    # holds more history than the install's tier allows. /pricing on
+    # clawmetry.com:
+    #   Free / OSS:       7 days
+    #   Starter / Trial: 30 days
+    #   Pro / Self-host: 90 days
+    #   Enterprise:      unlimited (skipped)
+    # The companion ``vacuum`` job is size-based; this is age-based, so
+    # both must run.
+    try:
+        _retention_stop = threading.Event()
+
+        def _retention_prune_worker():
+            # Small initial delay so backfill finishes first; otherwise a
+            # fresh install with --since=72h would import 72h of events
+            # only to delete most of them on the first tick.
+            time.sleep(90)
+            try:
+                interval_hours = float(
+                    os.environ.get("CLAWMETRY_RETENTION_INTERVAL_HOURS", "1") or "1"
+                )
+            except ValueError:
+                interval_hours = 1.0
+            interval_secs = max(60.0, interval_hours * 3600.0)
+            while not _retention_stop.is_set():
+                try:
+                    from clawmetry import entitlements as _ent
+                    from clawmetry import local_store as _ls
+
+                    days = _ent.get_entitlement().event_retention_days()
+                    # Env override (shrink only — Entitlement.event_retention_days
+                    # is the ceiling).
+                    env_days = os.environ.get("CLAWMETRY_RETENTION_DAYS", "").strip()
+                    if env_days:
+                        try:
+                            ev = max(1, int(env_days))
+                            days = min(ev, days) if days is not None else ev
+                        except ValueError:
+                            pass
+                    if days is None or days <= 0:
+                        # Enterprise / unlimited — nothing to do.
+                        log.debug("retention prune: tier=unlimited, skip")
+                    else:
+                        store = _ls.get_store()
+                        if store is not None:
+                            res = store.prune_events_by_age(days)
+                            if res.get("deleted_rows"):
+                                log.info(
+                                    "retention prune: deleted %d events older than %d days "
+                                    "(before=%d after=%d)",
+                                    res["deleted_rows"], days,
+                                    res.get("before_rows", 0),
+                                    res.get("after_rows", 0),
+                                )
+                except Exception as _re:
+                    log.warning(f"retention prune tick failed: {_re}")
+                _retention_stop.wait(timeout=interval_secs)
+
+        t_ret = threading.Thread(
+            target=_retention_prune_worker, daemon=True, name="retention-prune"
+        )
+        t_ret.start()
+        log.info(
+            "retention prune thread started (interval=%s hours; tier-driven)",
+            os.environ.get("CLAWMETRY_RETENTION_INTERVAL_HOURS", "1"),
+        )
+    except Exception as _e:
+        log.warning(f"retention prune failed to start: {_e}")
+
     # Default to SLOW; flips to FAST after a heartbeat response with
     # `viewer_active: true` (epic #775 PR 2/3, adaptive sync cadence).
     # Seed from the startup heartbeat so the very first cycle picks up
