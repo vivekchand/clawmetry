@@ -16,6 +16,11 @@ from unittest.mock import patch
 
 import pytest
 
+# Phase 4 open-core move (#2335): PicoClaw + NanoClaw adapters live in
+# clawmetry-pro. Ingest paths exercised here go through the real
+# adapters; skip cleanly in OSS-only CI.
+pytest.importorskip("clawmetry_pro", reason="paid runtime adapters live in clawmetry-pro")
+
 _FIX = os.path.join(os.path.dirname(__file__), "fixtures", "runtimes")
 _PICO_HOME = os.path.join(_FIX, "picoclaw")          # <home>/workspace/sessions/*.jsonl
 _NANO_DIR = os.path.join(_FIX, "nanoclaw", "REAL")   # <group>/<session>/{inbound,outbound}.db

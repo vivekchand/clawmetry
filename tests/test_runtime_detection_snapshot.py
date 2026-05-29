@@ -12,6 +12,12 @@ import os
 
 import pytest
 
+# Phase 4 open-core move (#2335): the PicoClaw + NanoClaw adapter impls
+# live in clawmetry-pro now. These tests exercise the real adapter
+# detection paths, so they need clawmetry-pro on the import path. Skip
+# cleanly in OSS-only CI; still runs locally + in clawmetry-pro CI.
+pytest.importorskip("clawmetry_pro", reason="paid runtime adapters live in clawmetry-pro")
+
 import clawmetry.sync as sync
 
 _FIX = os.path.join(os.path.dirname(__file__), "fixtures", "runtimes")
