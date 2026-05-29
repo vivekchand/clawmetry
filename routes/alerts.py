@@ -44,6 +44,8 @@ from flask import Blueprint, jsonify, request
 from clawmetry.config import is_local_store_read_enabled
 
 bp_budget = Blueprint('budget', __name__)
+
+from clawmetry._gate import gate
 bp_alerts = Blueprint('alerts', __name__)
 
 
@@ -242,6 +244,7 @@ def _enrich_rules_with_comms(rules):
 
 
 @bp_budget.route("/api/budget/config", methods=["GET", "POST"])
+@gate("budget_limits")
 def api_budget_config():
     """Get or update budget configuration."""
     import dashboard as _d
@@ -294,6 +297,7 @@ def api_budget_config():
 
 
 @bp_budget.route("/api/budget/status")
+@gate("budget_limits")
 def api_budget_status():
     """Get current budget status with spending totals."""
     import dashboard as _d
@@ -301,6 +305,7 @@ def api_budget_status():
 
 
 @bp_budget.route("/api/budget/auto-pause", methods=["POST"])
+@gate("budget_limits")
 def api_budget_auto_pause():
     """Set absolute daily auto-pause/alert threshold."""
     import dashboard as _d
@@ -322,6 +327,7 @@ def api_budget_auto_pause():
 
 
 @bp_budget.route("/api/budget/pause", methods=["POST"])
+@gate("budget_limits")
 def api_budget_pause():
     """Manually pause the gateway."""
     import dashboard as _d
@@ -333,6 +339,7 @@ def api_budget_pause():
 
 
 @bp_budget.route("/api/budget/resume", methods=["POST"])
+@gate("budget_limits")
 def api_budget_resume():
     """Resume the gateway after budget pause."""
     import dashboard as _d
@@ -348,6 +355,7 @@ def api_budget_resume():
 
 
 @bp_budget.route("/api/budget/pause-gateway", methods=["POST"])
+@gate("budget_limits")
 def api_budget_pause_gateway():
     """Set the daemon-level paused flag for the cap-reached banner.
 
@@ -364,6 +372,7 @@ def api_budget_pause_gateway():
 
 
 @bp_budget.route("/api/budget/resume-gateway", methods=["POST"])
+@gate("budget_limits")
 def api_budget_resume_gateway():
     """Clear the daemon-level paused flag and reach into the gateway-stop
     fallback in case the user's tap is recovering from an auto-pause.
@@ -374,6 +383,7 @@ def api_budget_resume_gateway():
 
 
 @bp_budget.route("/api/budget/is-over-cap")
+@gate("budget_limits")
 def api_budget_is_over_cap():
     """Reflect ``_is_over_cap(scope)`` so the dashboard banner can decide
     whether to render without recomputing the cap math in JS."""
@@ -389,6 +399,7 @@ def api_budget_is_over_cap():
 
 
 @bp_budget.route("/api/budget", methods=["GET"])
+@gate("budget_limits")
 def api_budget_root():
     """Unified GET — global config + per-agent overrides map.
 
@@ -424,6 +435,7 @@ def api_budget_root():
 
 
 @bp_budget.route("/api/agents/<agent_id>/budget", methods=["GET"])
+@gate("budget_limits")
 def api_agent_budget_get(agent_id):
     """Return one agent's effective budget + current MTD/daily spend.
 
@@ -436,6 +448,7 @@ def api_agent_budget_get(agent_id):
 
 
 @bp_budget.route("/api/agents/<agent_id>/budget", methods=["PUT"])
+@gate("budget_limits")
 def api_agent_budget_put(agent_id):
     """Upsert a per-agent budget override row.
 
@@ -475,6 +488,7 @@ def api_agent_budget_put(agent_id):
 
 
 @bp_budget.route("/api/agents/<agent_id>/budget", methods=["DELETE"])
+@gate("budget_limits")
 def api_agent_budget_delete(agent_id):
     """Remove the per-agent override row — agent falls back to global."""
     import dashboard as _d
@@ -485,6 +499,7 @@ def api_agent_budget_delete(agent_id):
 
 
 @bp_budget.route("/api/budget/test-telegram", methods=["POST"])
+@gate("budget_limits")
 def api_budget_test_telegram():
     """Send a test Telegram notification using saved config."""
     import dashboard as _d
@@ -519,6 +534,7 @@ def api_budget_test_telegram():
 
 
 @bp_alerts.route("/api/alerts/rules", methods=["GET", "POST"])
+@gate("custom_alerts")
 def api_alert_rules():
     """List or create alert rules."""
     import dashboard as _d
@@ -589,6 +605,7 @@ def api_alert_rules():
 
 
 @bp_alerts.route("/api/alerts/rules/<rule_id>", methods=["PUT", "DELETE"])
+@gate("custom_alerts")
 def api_alert_rule(rule_id):
     """Update or delete an alert rule."""
     import dashboard as _d
@@ -656,6 +673,7 @@ def api_alerts_active():
 
 
 @bp_alerts.route("/api/alerts/webhook", methods=["GET", "POST"])
+@gate("custom_webhooks")
 def api_alerts_webhook():
     """Get or update outgoing webhook configuration."""
     import dashboard as _d
@@ -676,6 +694,7 @@ def api_alerts_webhook():
 
 
 @bp_alerts.route("/api/alerts/webhook/test", methods=["POST"])
+@gate("custom_webhooks")
 def api_alerts_webhook_test():
     """Send a test payload to configured outgoing webhooks."""
     import dashboard as _d
@@ -729,6 +748,7 @@ def api_alerts_velocity():
 
 
 @bp_alerts.route("/api/alert-channels", methods=["GET", "POST"])
+@gate("custom_webhooks")
 def api_alert_channels():
     """GET/POST alert channel configuration (webhook, Slack, Discord, severity filter).
 
@@ -755,6 +775,7 @@ def api_alert_channels():
 
 
 @bp_alerts.route("/api/alert-channels/test", methods=["POST"])
+@gate("custom_webhooks")
 def api_alert_channels_test():
     """Send a test alert to one or all configured channels.
 

@@ -1,12 +1,13 @@
 """
-routes/otel_export.py — Enterprise OTel/OTLP export.
+routes/otel_export.py — Pro+ OTel/OTLP export.
 
 Streams recent ClawMetry events as OTLP-JSON ``logRecords`` so a customer's
 Datadog / Grafana / Honeycomb / OTel collector can poll us and pipe agent
-activity into their existing observability stack. This is the first
-Enterprise-only feature (entitlement gate ``otel_export``); while the
-open-core rollout is in GRACE mode the gate is permissive, so the endpoint is
-reachable today for evaluation.
+activity into their existing observability stack. Pro-tier feature on
+clawmetry.com/pricing (entitlement gate ``otel_export``, moved from
+Enterprise to Pro in the 2026-05-29 catalogue rewrite to match the published
+pricing). While the open-core rollout is in GRACE mode the gate is
+permissive, so the endpoint is reachable today for evaluation.
 
   GET /api/otel/export[?limit=N]
     -> {"resourceLogs": [{"resource": ..., "scopeLogs": [...]}]}
@@ -29,7 +30,9 @@ bp_otel_export = Blueprint("otel_export", __name__)
 
 def _entitlement_allows() -> tuple[bool, dict]:
     """Whether this install may use OTel export. Grace lets everyone through;
-    after enforce, only Enterprise-tier installs do. Never raises."""
+    after enforce, only Pro+ installs do (Pro/Enterprise on clawmetry.com/pricing).
+    Kept for backward compatibility with the route handler below; new gated
+    routes use the shared :func:`clawmetry._gate.gate` decorator instead."""
     try:
         from clawmetry import entitlements as _ent
 
@@ -118,15 +121,15 @@ def _fetch_events(limit: int) -> list[dict]:
 
 @bp_otel_export.route("/api/otel/export", methods=["GET"])
 def api_otel_export():
-    """OTLP/JSON export of recent events. Enterprise-gated; permissive during
-    the open-core grace period. Never raises."""
+    """OTLP/JSON export of recent events. Pro+ entitlement-gated; permissive
+    during the open-core grace period. Never raises."""
     allowed, ent = _entitlement_allows()
     if not allowed:
         return jsonify({
             "error": "upgrade_required",
             "feature": "otel_export",
             "tier": ent.get("tier"),
-            "hint": "OTel export is an Enterprise feature. Contact sales at https://clawmetry.com/pricing",
+            "hint": "OTel export is a Pro feature on clawmetry.com/pricing",
         }), 402
 
     try:

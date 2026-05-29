@@ -35,6 +35,8 @@ from routes.advisor import (
 
 bp_selfevolve = Blueprint("selfevolve", __name__)
 
+from clawmetry._gate import gate
+
 MAX_CONTEXT_EVENTS = 300
 MAX_FINDINGS = 8
 REQUEST_TIMEOUT_SEC = 60
@@ -351,6 +353,7 @@ def _extract_findings(raw_text: str) -> tuple[list[dict], dict]:
 
 
 @bp_selfevolve.route("/api/selfevolve/status")
+@gate("self_evolve")
 def api_selfevolve_status():
     mode, credential = _load_anthropic_auth()
     cached = _load_cached()
@@ -391,6 +394,7 @@ def api_selfevolve_status():
 
 
 @bp_selfevolve.route("/api/selfevolve/latest")
+@gate("self_evolve")
 def api_selfevolve_latest():
     cached = _load_cached()
     if not cached:
@@ -400,6 +404,7 @@ def api_selfevolve_latest():
 
 
 @bp_selfevolve.route("/api/selfevolve/analyze", methods=["POST"])
+@gate("self_evolve")
 def api_selfevolve_analyze():
     mode, credential = _load_anthropic_auth()
     if not credential:
@@ -588,6 +593,7 @@ def _run_fix_job(job_id, message, timeout=300):
 
 
 @bp_selfevolve.route("/api/selfevolve/fix", methods=["POST"])
+@gate("self_evolve")
 def api_selfevolve_fix():
     """Dispatch a finding's suggestion to the local agent to apply it."""
     if _resolve_openclaw_bin_local() is None:
@@ -634,6 +640,7 @@ def api_selfevolve_fix():
 
 
 @bp_selfevolve.route("/api/selfevolve/fix/status")
+@gate("self_evolve")
 def api_selfevolve_fix_status():
     job_id = request.args.get("job_id", "")
     with _FIX_LOCK:
@@ -659,6 +666,7 @@ def api_selfevolve_fix_status():
 @bp_selfevolve.route(
     "/api/selfevolve/findings/save-as-asset", methods=["POST"]
 )
+@gate("self_evolve")
 def api_selfevolve_save_as_asset():
     from datetime import datetime, timezone
     import secrets as _secrets
