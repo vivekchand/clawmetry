@@ -544,7 +544,10 @@ jobs:
           # real LLM round-trip and write the session row the test asserts
           # on. Rotate via console.anthropic.com if leaked.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python3 -m pytest tests/test_moat_live_openclaw_e2e.py -v --tb=short
+        # test_e2e_real_openclaw_pipeline now drives a REAL turn (it used to
+        # seed synthetic JSONL), so it belongs here — the only job with the
+        # openclaw binary + a key. Elsewhere it skips gracefully.
+        run: python3 -m pytest tests/test_moat_live_openclaw_e2e.py tests/test_e2e_real_openclaw_pipeline.py -v --tb=short
       - name: Upload gateway logs on failure
         if: failure()
         uses: actions/upload-artifact@v7
