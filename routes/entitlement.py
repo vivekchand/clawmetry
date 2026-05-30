@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import logging
 
-from flask import Blueprint, jsonify
+import os
+
+from flask import Blueprint, jsonify, request
 
 logger = logging.getLogger("clawmetry.routes.entitlement")
 
@@ -109,3 +111,67 @@ def api_runtimes():
                 "enforced": False,
             }
         )
+
+
+@bp_entitlement.route("/api/license/status")
+def api_license_status():
+    """Return the current self-hosted license info as JSON.
+    Returns ``{plan: 'oss', status: 'no_license'}`` when nothing is installed."""
+    try:
+        from clawmetry import license as _lic
+
+        info = _lic.current_license_info()
+        if info is None:
+            return jsonify({"plan": "oss", "status": "no_license", "valid": False})
+        return jsonify(info)
+    except Exception as exc:
+        logger.warning("api_license_status: error: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@bp_entitlement.route("/api/license/activate", methods=["POST"])
+def api_license_activate():
+    """Activate a self-hosted Pro/Enterprise license key.
+
+    Body: ``{"key": "CLAW1.…"}``.
+    Returns ``{"ok": true, "message": "…"}`` on success or 400 on failure.
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+        key = str(body.get("key", "")).strip()
+        if not key:
+            return jsonify({"ok": False, "error": "key is required"}), 400
+        from clawmetry import license as _lic
+
+        ok, msg = _lic.activate(key)
+        status_code = 200 if ok else 400
+        return jsonify({"ok": ok, "message": msg}), status_code
+    except Exception as exc:
+        logger.warning("api_license_activate: error: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@bp_entitlement.route("/api/license/deactivate", methods=["POST"])
+def api_license_deactivate():
+    """Remove the installed license key and revert to OSS tier.
+
+    Idempotent — returns ``{"ok": true, "removed": false}`` when no key was
+    installed.
+    """
+    try:
+        from clawmetry import license as _lic
+
+        removed = False
+        if os.path.isfile(_lic.LICENSE_PATH):
+            os.remove(_lic.LICENSE_PATH)
+            removed = True
+        try:
+            from clawmetry import entitlements as _ent
+
+            _ent.invalidate()
+        except Exception:
+            pass
+        return jsonify({"ok": True, "removed": removed})
+    except Exception as exc:
+        logger.warning("api_license_deactivate: error: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500

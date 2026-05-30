@@ -2496,28 +2496,59 @@ def _cmd_activate(args) -> None:
 
 
 def _cmd_license(args) -> None:
-    """clawmetry license — show the current self-hosted license status."""
-    from clawmetry import license as _lic
+    """clawmetry license [activate|status|deactivate] — manage the self-hosted license."""
+    action = getattr(args, "license_action", None) or "status"
 
-    info = _lic.current_license_info()
-    print("ClawMetry License\n" + "─" * 40)
-    if not info:
-        print("  Plan:        OSS (free)")
-        print("  License:     none installed")
-        print("  Unlocks:     OpenClaw runtime + NeMo governance + core observability")
-        print("\n  Upgrade for all runtimes + advanced features:")
-        print("    self-hosted key  →  clawmetry activate <KEY>   (https://clawmetry.com/pricing)")
-        return
-    if not info.get("valid"):
-        status = info.get("status", "invalid")
-        print(f"  License:     ⚠️  {status} (run `clawmetry activate <KEY>` with a current key)")
-        return
-    tier = str(info.get("tier", "pro")).capitalize()
-    print(f"  Plan:        {tier} (self-hosted)")
-    print(f"  Nodes:       {info.get('nodes', 1)}")
-    if info.get("days_left") is not None:
-        print(f"  Expires:     in {info['days_left']} day(s)")
-    print("  E2E:         🔒 verified offline")
+    if action == "activate":
+        key = getattr(args, "license_key", None) or ""
+        if not key:
+            print("❌  Usage: clawmetry license activate <KEY>")
+            sys.exit(1)
+        from clawmetry import license as _lic
+        ok, msg = _lic.activate(key.strip(), node_id=_lic._node_id())
+        if ok:
+            print(f"✅  {msg}")
+            print("    Run `clawmetry license status` to verify. Restart the daemon to load Pro features.")
+        else:
+            print(f"❌  {msg}")
+            print("    Need a key? Buy a self-hosted license at https://clawmetry.com/pricing")
+            sys.exit(1)
+
+    elif action == "deactivate":
+        import os
+        from clawmetry import license as _lic
+        try:
+            from clawmetry import entitlements as _ent
+            _ent.invalidate()
+        except Exception:
+            pass
+        if os.path.isfile(_lic.LICENSE_PATH):
+            os.remove(_lic.LICENSE_PATH)
+            print("✅  License removed. ClawMetry will revert to OSS tier on next restart.")
+        else:
+            print("ℹ️  No license key installed — nothing to deactivate.")
+
+    else:
+        from clawmetry import license as _lic
+        info = _lic.current_license_info()
+        print("ClawMetry License\n" + "─" * 40)
+        if not info:
+            print("  Plan:        OSS (free)")
+            print("  License:     none installed")
+            print("  Unlocks:     OpenClaw runtime + NeMo governance + core observability")
+            print("\n  Upgrade for all runtimes + advanced features:")
+            print("    self-hosted key  →  clawmetry license activate <KEY>   (https://clawmetry.com/pricing)")
+            return
+        if not info.get("valid"):
+            status = info.get("status", "invalid")
+            print(f"  License:     ⚠️  {status} (run `clawmetry license activate <KEY>` with a current key)")
+            return
+        tier = str(info.get("tier", "pro")).capitalize()
+        print(f"  Plan:        {tier} (self-hosted)")
+        print(f"  Nodes:       {info.get('nodes', 1)}")
+        if info.get("days_left") is not None:
+            print(f"  Expires:     in {info['days_left']} day(s)")
+        print("  E2E:         🔒 verified offline")
 
 
 def _cmd_verify_integrity(args) -> None:
@@ -2894,8 +2925,21 @@ def main() -> None:
     )
     p_activate.add_argument("key", help="License key (CLAW1.…)")
 
-    # license — show the current license status
-    sub.add_parser("license", help="Show the current self-hosted license status")
+    # license — manage the self-hosted Pro/Enterprise license
+    p_license = sub.add_parser("license", help="Manage the self-hosted Pro/Enterprise license")
+    p_license.add_argument(
+        "license_action",
+        nargs="?",
+        default="status",
+        choices=["status", "activate", "deactivate"],
+        help="status (default) | activate <KEY> | deactivate",
+    )
+    p_license.add_argument(
+        "license_key",
+        nargs="?",
+        default=None,
+        help="License key (CLAW1.…) — required for 'activate'",
+    )
 
     # verify-integrity — walk hash chain and report validity (Issue #2200)
     p_verify = sub.add_parser(
