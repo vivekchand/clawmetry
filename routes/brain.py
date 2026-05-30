@@ -1774,3 +1774,47 @@ def api_brain_stream():
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@bp_brain.route("/api/brain/clusters")
+def api_brain_clusters():
+    """Session behavioral clusters for the Brain tab (issue #1650).
+
+    PostHog Clusters parity, local-first. Groups sessions by dominant tool
+    category, cost tier, error presence, and model family — the same
+    dimensions used by /api/sessions/clusters in routes/usage.py.
+
+    The time window mirrors the /api/brain-history 24h cap: OSS non-Pro
+    users are clamped to the last 24 hours; Pro users can query up to 90
+    days via ?days=<n>.
+
+    Query params:
+      days  int  Look-back window in days, 1–90 (default 30).
+    """
+    import dashboard as _d
+    try:
+        days = max(1, min(90, int(request.args.get("days", 30))))
+    except (TypeError, ValueError):
+        days = 30
+    try:
+        is_pro = bool(_d._is_pro_user())
+    except Exception:
+        is_pro = False
+    if not is_pro:
+        days = 1  # mirror the 24h cap applied by /api/brain-history
+    if is_local_store_read_enabled():
+        # Late import to avoid circular dependency at module load time.
+        from routes.usage import _try_local_store_sessions_clusters
+        payload = _try_local_store_sessions_clusters(days)
+        if payload is not None:
+            payload["_shape"] = "brain_clusters"
+            payload["capped_at_24h"] = not is_pro
+            return jsonify(payload)
+    return jsonify({
+        "clusters": [],
+        "total_sessions": 0,
+        "days": days,
+        "capped_at_24h": not is_pro,
+        "_source": "unavailable",
+        "_shape": "brain_clusters",
+    })
