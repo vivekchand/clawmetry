@@ -31,11 +31,13 @@ import urllib.request
 OWNER = "vivekchand"
 
 # Each tuple: (repo, exact job name as it appears in the workflow's `name:` field)
+# Landing job name: from landing-golden-path.yml job `name: Landing golden path (C3)`
+# (PR #279 merged 2026-05-29 -- superseded #325 which had a different name).
 REQUIRED_CHECKS: list[tuple[str, str]] = [
     ("clawmetry",         "OSS golden path (wheel + OpenClaw + 9 tabs)"),
     ("clawmetry-cloud",   "Cloud golden-path browser E2E"),
     ("clawmetry-cloud",   "cross-repo handoff golden path"),
-    ("clawmetry-landing", "Landing golden path (hero + CTA + subscribe + cloud handoff)"),
+    ("clawmetry-landing", "Landing golden path (C3)"),
 ]
 
 
@@ -129,7 +131,7 @@ def main() -> None:
     print("=== All 4 E2E checks are now required on main ===")
     print()
     print("Verify at:")
-    for repo, _ in dict.fromkeys((r for r, _ in REQUIRED_CHECKS)):
+    for repo in dict.fromkeys(r for r, _ in REQUIRED_CHECKS):
         print(f"  https://github.com/{OWNER}/{repo}/settings/branches")
 
 
