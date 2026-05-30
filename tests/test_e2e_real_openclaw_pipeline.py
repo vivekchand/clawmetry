@@ -256,13 +256,18 @@ def test_real_turn_ingests_into_duckdb(pipeline):
     sync = pipeline["sync"]
     store = pipeline["ls"].get_store()
     n = _drive_real_pipeline(sync, pipeline["sessions_dir"], store)
-    assert n > 0, "daemon processed 0 events from the real turn's JSONL"
+    assert n > 0, "daemon processed 0 lines from the real turn's JSONL"
     on_disk = store._fetch("SELECT COUNT(*) FROM events", [])[0][0]
-    assert on_disk == n, (
-        f"daemon reported {n} processed but DuckDB holds {on_disk} — "
-        f"ingest dropped rows between parse and write."
+    # The daemon's processed-line count (n) is an UPPER bound on events rows,
+    # not an equality: a session-metadata header line and deduped v3 sibling
+    # events (e.g. the model.completed dedupe, #1135) are processed but do not
+    # each become a distinct events row. So events rows are a non-empty subset
+    # of processed lines. (Exact counts are non-deterministic across real turns
+    # anyway — that's why this is relational.)
+    assert 0 < on_disk <= n, (
+        f"events rows ({on_disk}) must be a non-empty subset of processed "
+        f"lines ({n}); got out-of-range — a real drop or a double-count."
     )
-    assert on_disk > 0
 
 
 def test_single_session_id_no_drift(pipeline):
@@ -441,13 +446,21 @@ def test_re_running_sync_is_idempotent(pipeline):
     config = {"api_key": "cm_test", "encryption_key": None, "node_id": NODE_ID}
     state = {"last_event_ids": {}}
     paths = {"sessions_dir": str(pipeline["sessions_dir"])}
+    # Idempotency is about the DuckDB row count being STABLE across re-runs,
+    # not equal to the processed-line count (which exceeds events rows; see
+    # test_real_turn_ingests_into_duckdb). Capture the count after pass 1, then
+    # run twice more and assert it never changes.
     with patch.object(sync, "_post"):
-        n1 = sync.sync_sessions_recent(config, state, paths, minutes=60)
+        sync.sync_sessions_recent(config, state, paths, minutes=60)
+    _wait_drained(store)
+    after_first = store._fetch("SELECT COUNT(*) FROM events", [])[0][0]
+    with patch.object(sync, "_post"):
         sync.sync_sessions_recent(config, state, paths, minutes=60)
         sync.sync_sessions_recent(config, state, paths, minutes=60)
     _wait_drained(store)
-    count = store._fetch("SELECT COUNT(*) FROM events", [])[0][0]
-    assert count == n1 > 0, (
-        f"re-running daemon ingest changed the row count: first pass {n1}, "
-        f"DuckDB now {count} — idempotency (INSERT OR IGNORE / cursor) broke."
+    after_third = store._fetch("SELECT COUNT(*) FROM events", [])[0][0]
+    assert after_third == after_first > 0, (
+        f"re-running daemon ingest changed the row count: after 1 pass "
+        f"{after_first}, after 3 passes {after_third} — idempotency "
+        f"(INSERT OR IGNORE on id / cursor advancement) broke."
     )
