@@ -1295,6 +1295,23 @@ def create_app(claude_home: Optional[str] = None) -> Flask:
         )
 
     app = Flask(__name__)
+
+    # Open-core plugin host: when this module is run standalone (or its
+    # ``create_app()`` is called from a sibling entry point), it never imports
+    # ``dashboard.py`` — so the import-time ``load_plugins()`` there never
+    # fires for this process. Wire it explicitly so paid plugins (e.g.
+    # ``clawmetry-pro`` Blueprints scoped to the Claude Code surface) get a
+    # chance to register on this app too. Errors are swallowed with a logged
+    # warning — a broken plugin must never take down the claudecode dashboard.
+    try:
+        from clawmetry.extensions import load_plugins as _ext_load
+
+        _ext_load(app)
+    except Exception as _ext_exc:  # pragma: no cover - defensive
+        logger.warning(
+            "claudecode: extension plugin load failed: %s", _ext_exc
+        )
+
     app.register_blueprint(bp_claudecode, url_prefix="/")
     return app
 
