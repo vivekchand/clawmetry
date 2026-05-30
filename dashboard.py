@@ -131,6 +131,7 @@ from routes.entitlement import bp_entitlement
 from routes.otel_export import bp_otel_export
 from routes.runtime_ingest import bp_runtime_ingest
 from routes.audit import bp_audit
+from routes.sla import bp_sla
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -10828,6 +10829,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_overview)
     app.register_blueprint(bp_security)
     app.register_blueprint(bp_sessions)
+    app.register_blueprint(bp_sla)
     app.register_blueprint(bp_tracing)
     app.register_blueprint(bp_usage)
     app.register_blueprint(bp_version)
