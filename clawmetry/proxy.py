@@ -943,6 +943,23 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50MB max
 
+    # Open-core plugin host: the enforcement proxy is a SEPARATE long-running
+    # process (``python -m clawmetry.proxy``) from the dashboard and the sync
+    # daemon, so its Flask app needs its own ``load_plugins(app)`` call.
+    # Without this, a clawmetry-pro plugin that ships custom policy / routing
+    # blueprints (e.g. budget overrides, tool-policy enforcement endpoints)
+    # would register on the dashboard process but be missing here — the proxy
+    # would silently fall back to OSS behaviour. The extensions module's
+    # ``_loaded`` guard makes the call safe across processes (it is per-process
+    # state). Errors are swallowed with a warning: a broken plugin must never
+    # take the proxy down — it is the LLM-egress chokepoint.
+    try:
+        from clawmetry.extensions import load_plugins as _ext_load
+
+        _ext_load(app)
+    except Exception as _ext_e:
+        logger.warning("extensions load_plugins failed: %s", _ext_e)
+
     db = ProxyDB()
     budget = BudgetEnforcer(config.budget, db)
     loop_detector = LoopDetector(config.loop_detection, db)
