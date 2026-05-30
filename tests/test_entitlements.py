@@ -196,3 +196,56 @@ def test_runtime_label_falls_back_to_id(ent):
     assert ent.runtime_label("brand_new_plugin_runtime") == "brand_new_plugin_runtime"
     assert ent.runtime_label("") == ""
     assert ent.runtime_label(None) == ""
+
+
+# ── paid-tier coverage (issue #2293) ─────────────────────────────────────────
+
+
+def test_paid_runtimes_exact_membership(ent):
+    # Asserts the exact 10-entry PAID_RUNTIMES set so any accidental add/remove
+    # breaks loudly instead of silently skipping gate coverage.
+    expected = frozenset(
+        {
+            "claude_code",
+            "codex",
+            "cursor",
+            "aider",
+            "goose",
+            "opencode",
+            "qwen_code",
+            "hermes",
+            "picoclaw",
+            "nanoclaw",
+        }
+    )
+    assert ent.PAID_RUNTIMES == expected
+    assert len(ent.PAID_RUNTIMES) == 10
+
+
+def test_all_paid_runtimes_blocked_on_oss_enforced(ent, monkeypatch):
+    """Every entry in PAID_RUNTIMES is denied for an OSS install once enforced."""
+    monkeypatch.setenv("CLAWMETRY_ENFORCE", "1")
+    en = ent.get_entitlement(force=True)
+    assert en.grace is False
+    for rt in ent.PAID_RUNTIMES:
+        assert en.allows_runtime(rt) is False, rt
+    # Free runtimes are never blocked regardless of enforcement.
+    for rt in ent.FREE_RUNTIMES:
+        assert en.allows_runtime(rt) is True, rt
+
+
+def test_paid_runtimes_allowed_on_paid_tiers_enforced(ent, monkeypatch, tmp_path):
+    """Every paid runtime is allowed on trial / pro / cloud_pro even with
+    CLAWMETRY_ENFORCE=1 — the gate must pass for legitimate subscribers."""
+    monkeypatch.setenv("CLAWMETRY_ENFORCE", "1")
+    cache = tmp_path / ".clawmetry" / "cloud_plan.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    for tier in (ent.TIER_TRIAL, ent.TIER_PRO, ent.TIER_CLOUD_PRO):
+        cache.write_text(json.dumps({"plan": tier, "node_limit": 1, "expiry": None}))
+        en = ent.get_entitlement(force=True)
+        assert en.tier == tier, tier
+        assert en.grace is False, tier
+        for rt in ent.PAID_RUNTIMES:
+            assert en.allows_runtime(rt) is True, f"{tier}/{rt}"
+        for rt in ent.FREE_RUNTIMES:
+            assert en.allows_runtime(rt) is True, f"{tier}/{rt}"
