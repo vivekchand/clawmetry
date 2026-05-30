@@ -1,0 +1,46 @@
+name: Apply required E2E status checks (C6 -- one-shot)
+
+# Runs scripts/apply_required_status_checks.py from the GitHub Actions UI
+# so the admin does not need a local Python environment.
+#
+# Prerequisite: add repo secret E2E_ADMIN_PAT containing a fine-grained PAT
+# with Administration (read + write) on all three repos:
+#   vivekchand/clawmetry, vivekchand/clawmetry-cloud, vivekchand/clawmetry-landing
+#
+# First run with confirm=dry-run to preview, then confirm=APPLY to apply.
+# Running multiple times is safe: the underlying script is idempotent.
+#
+# Tracking: vivekchand/clawmetry#2146 (C6)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type APPLY to configure all 3 repos (anything else = dry run)"
+        required: true
+        default: "dry-run"
+
+jobs:
+  apply-required-checks:
+    name: Apply required E2E status checks (C6)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preview checks (dry run)
+        if: github.event.inputs.confirm != 'APPLY'
+        run: |
+          echo "=== DRY RUN -- checks that will be added when confirm=APPLY ==="
+          echo ""
+          echo "  clawmetry         : OSS golden path (wheel + OpenClaw + 9 tabs)"
+          echo "  clawmetry-cloud   : Cloud golden-path browser E2E"
+          echo "  clawmetry-cloud   : cross-repo handoff golden path"
+          echo "  clawmetry-landing : Landing golden path (C3)"
+          echo ""
+          echo "Re-run with confirm=APPLY to apply."
+
+      - name: Apply required status checks
+        if: github.event.inputs.confirm == 'APPLY'
+        env:
+          GITHUB_TOKEN: ${{ secrets.E2E_ADMIN_PAT }}
+        run: python3 scripts/apply_required_status_checks.py
