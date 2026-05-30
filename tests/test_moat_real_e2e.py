@@ -225,7 +225,11 @@ def _send_message(home: str, message: str) -> subprocess.CompletedProcess:
         [
             OPENCLAW_BIN, "agent", "--local",
             "--message", message, "--to", RECIPIENT,
-            "--model", "anthropic/claude-opus-4-7",
+            # Cheapest Anthropic model: real billed turn in CI, and we assert
+            # only the JSONL shape (provider/model rows), which Haiku writes
+            # identically to Opus. The anthropic/ prefix drives harness
+            # selection; the specific model is free to be cheap.
+            "--model", "anthropic/claude-3-5-haiku-20241022",
             "--json", "--timeout", "30",
         ],
         env=env, capture_output=True, text=True, timeout=60,
