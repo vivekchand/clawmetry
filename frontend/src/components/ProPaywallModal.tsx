@@ -2,10 +2,20 @@ interface ProPaywallModalProps {
   open: boolean;
   onClose: () => void;
   feature?: string;
+  harness?: string;
 }
 
-export function ProPaywallModal({ open, onClose, feature = "auto-promote rules" }: ProPaywallModalProps) {
+export function ProPaywallModal({ open, onClose, feature = "auto-promote rules", harness }: ProPaywallModalProps) {
   if (!open) return null;
+
+  const upgradeUrl = harness
+    ? `https://app.clawmetry.com/upgrade?source=runtime-switcher&harness=${encodeURIComponent(harness)}`
+    : "https://app.clawmetry.com/upgrade?source=v2-approvals";
+
+  const title = harness ? `${feature} is a Pro runtime` : `${feature} is a Pro feature`;
+  const description = harness
+    ? `OSS + Free tiers include OpenClaw and NemoClaw. Upgrade to Pro to observe ${feature}, plus Claude Code, Codex, Cursor, Aider, Goose, and more.`
+    : "On OSS/Free, you can review and approve actions manually. Cloud Pro unlocks auto-promote rules, notification dispatch, and one-click rule creation from the approval inbox.";
 
   return (
     <div
@@ -33,18 +43,17 @@ export function ProPaywallModal({ open, onClose, feature = "auto-promote rules" 
           Cloud Pro
         </div>
         <h2 id="pro-paywall-title" style={{ margin: "0 0 10px", fontSize: 20, fontWeight: 500, color: "var(--ink)" }}>
-          {feature} is a Pro feature
+          {title}
         </h2>
         <p style={{ margin: "0 0 18px", fontSize: 13, color: "var(--ink-3)", lineHeight: 1.5 }}>
-          On OSS/Free, you can review and approve actions manually. Cloud Pro unlocks auto-promote rules,
-          notification dispatch, and one-click rule creation from the approval inbox.
+          {description}
         </p>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
           <button type="button" className="cm-btn" onClick={onClose}>
             Not now
           </button>
           <a
-            href="https://app.clawmetry.com/upgrade?source=v2-approvals"
+            href={upgradeUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="cm-btn primary"

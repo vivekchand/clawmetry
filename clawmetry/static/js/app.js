@@ -7169,11 +7169,85 @@ function _cmPopulateGlobalRuntime(counts) {
 
 function _cmOnGlobalRuntimeChange(sel) {
   if (!sel) return;
-  _cmSetRuntimeFilter(sel.value);
+  var val = sel.value;
+  // If the chosen runtime is locked (paid, enforcement on) revert the
+  // selection and show the upgrade modal instead of switching.
+  if (val !== 'all' && _cmLockedRuntimes[val]) {
+    sel.value = _cmRuntimeFilter() || 'all';
+    _cmShowRuntimePaywall(val, _CM_RT_LABEL[val] || val);
+    return;
+  }
+  _cmSetRuntimeFilter(val);
   // Swap the Flow + Overview diagram to the selected runtime's topology.
-  try { if (typeof _applyRuntimeFlowDiagram === 'function') _applyRuntimeFlowDiagram(sel.value); } catch (e) {}
+  try { if (typeof _applyRuntimeFlowDiagram === 'function') _applyRuntimeFlowDiagram(val); } catch (e) {}
   // Reload the current tab so any runtime-aware view re-filters in place.
   if (typeof switchTab === 'function' && _cmCurrentTab) switchTab(_cmCurrentTab);
+}
+
+function _cmShowRuntimePaywall(harness, label) {
+  // Emit paywall_view telemetry (fire-and-forget).
+  try {
+    fetch('/api/paywall/event', {method:'POST', headers:{'Content-Type':'application/json'},
+      credentials:'same-origin',
+      body: JSON.stringify({event:'paywall_view', feature: harness + '_observability',
+        harness: harness, source:'runtime-switcher'})});
+  } catch(e) {}
+
+  var existing = document.getElementById('_cmRtPaywallOverlay');
+  if (existing) existing.remove();
+
+  var overlay = document.createElement('div');
+  overlay.id = '_cmRtPaywallOverlay';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(26,24,22,.45);'
+    + 'display:flex;align-items:center;justify-content:center;padding:24px;';
+
+  var upgradeUrl = 'https://app.clawmetry.com/upgrade?source=runtime-switcher&harness='
+    + encodeURIComponent(harness);
+
+  overlay.innerHTML = '<div style="max-width:420px;width:100%;padding:24px;'
+    + 'background:var(--bg-primary,#1a1a2e);border:1px solid var(--border-color,rgba(255,255,255,.15));'
+    + 'border-radius:12px;">'
+    + '<div style="font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:#a78bfa;'
+    + 'margin-bottom:8px;font-weight:600;">Cloud Pro</div>'
+    + '<h2 style="margin:0 0 10px;font-size:20px;font-weight:500;color:var(--text-primary,#e2e8f0);">'
+    + escHtml(label) + ' is a Pro runtime</h2>'
+    + '<p style="margin:0 0 18px;font-size:13px;color:var(--text-muted,#94a3b8);line-height:1.5;">'
+    + 'OSS + Free tiers include OpenClaw and NemoClaw. Upgrade to Pro to observe '
+    + escHtml(label) + ', plus Claude Code, Codex, Cursor, Aider, Goose, and more.</p>'
+    + '<div style="display:flex;gap:8px;justify-content:flex-end;">'
+    + '<button type="button" id="_cmRtPaywallCancel" style="padding:8px 16px;'
+    + 'border:1px solid var(--border-color,rgba(255,255,255,.2));border-radius:6px;'
+    + 'background:transparent;color:var(--text-secondary,#cbd5e1);cursor:pointer;font-size:13px;">Not now</button>'
+    + '<a href="' + upgradeUrl + '" target="_blank" rel="noopener noreferrer" id="_cmRtPaywallCTA"'
+    + ' style="padding:8px 16px;background:#7c3aed;color:#fff;border-radius:6px;'
+    + 'text-decoration:none;font-size:13px;font-weight:500;">Start free trial</a>'
+    + '</div></div>';
+
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', function(e) { if (e.target === overlay) _cmDismissRtPaywall(); });
+  document.getElementById('_cmRtPaywallCancel').addEventListener('click', _cmDismissRtPaywall);
+  var ctaEl = document.getElementById('_cmRtPaywallCTA');
+  if (ctaEl) {
+    ctaEl.addEventListener('click', function() {
+      try {
+        fetch('/api/paywall/event', {method:'POST', headers:{'Content-Type':'application/json'},
+          credentials:'same-origin',
+          body: JSON.stringify({event:'paywall_cta_click', harness: harness,
+            source:'runtime-switcher', plan_chosen:'pro'})});
+      } catch(e) {}
+    });
+  }
+  overlay._cmEscHandler = function(e) { if (e.key === 'Escape') _cmDismissRtPaywall(); };
+  document.addEventListener('keydown', overlay._cmEscHandler);
+}
+
+function _cmDismissRtPaywall() {
+  var overlay = document.getElementById('_cmRtPaywallOverlay');
+  if (!overlay) return;
+  if (overlay._cmEscHandler) document.removeEventListener('keydown', overlay._cmEscHandler);
+  overlay.remove();
 }
 
 async function _cmLoadRuntimeCatalog() {

@@ -129,6 +129,29 @@ def api_license_status():
         return jsonify({"error": str(exc)}), 500
 
 
+@bp_entitlement.route("/api/paywall/event", methods=["POST"])
+def api_paywall_event():
+    """Accept a client-side paywall telemetry ping (fire-and-forget).
+
+    Body: ``{"event": "paywall_view"|"paywall_cta_click",
+             "feature": "...", "harness": "...", "source": "..."}``
+    Always returns 204 — callers never need the response.
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+        event = str(body.get("event", ""))[:64]
+        harness = str(body.get("harness", ""))[:64]
+        source = str(body.get("source", ""))[:64]
+        feature = str(body.get("feature", ""))[:128]
+        logger.info(
+            "paywall: event=%s harness=%s feature=%s source=%s",
+            event, harness, feature, source,
+        )
+    except Exception as exc:
+        logger.debug("api_paywall_event: ignored error: %s", exc)
+    return "", 204
+
+
 @bp_entitlement.route("/api/license/activate", methods=["POST"])
 def api_license_activate():
     """Activate a self-hosted Pro/Enterprise license key.
