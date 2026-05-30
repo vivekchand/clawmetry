@@ -13,6 +13,8 @@ What this file covers:
   - POST /api/v1/runs/<id>/events returns 402
   - POST /api/v1/runs/<id>/end returns 402
   - GET  /api/v1/runs/<id> returns 402
+  - GET/POST /api/v1/engines returns 402 upgrade_required
+  - GET/POST /api/v1/engines/<path> returns 402 upgrade_required
 
 * ``clawmetry/otel_push.py`` (OSS delegating shim):
   - forward_event() is a no-op when pro is unavailable
@@ -84,6 +86,21 @@ def test_end_run_returns_402(app_with_stub):
 def test_get_run_returns_402(app_with_stub):
     with app_with_stub.test_client() as c:
         r = c.get("/api/v1/runs/r1")
+        assert r.status_code == 402
+
+
+def test_engines_root_returns_402(app_with_stub):
+    with app_with_stub.test_client() as c:
+        r = c.get("/api/v1/engines")
+        assert r.status_code == 402
+        body = r.get_json()
+        assert body["error"] == "upgrade_required"
+        assert body["feature"] == "custom_runtime_ingest"
+
+
+def test_engines_subpath_returns_402(app_with_stub):
+    with app_with_stub.test_client() as c:
+        r = c.post("/api/v1/engines/my-engine/runs", json={})
         assert r.status_code == 402
 
 
