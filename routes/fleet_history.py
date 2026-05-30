@@ -16,6 +16,7 @@ Module-level helpers (``_fleet_db``, ``_fleet_db_lock``, ``_fleet_check_key``,
 ``dashboard.py`` and are reached via late ``import dashboard as _d``.
 """
 
+import datetime
 import json
 import time
 
@@ -146,6 +147,33 @@ def api_nodes_list():
 
         db.close()
 
+    # Enrich the local node's entry with accurate DuckDB-derived totals so
+    # the fleet view can show real cost/token data without relying on the
+    # heartbeat payload (which doesn't include these fields today).
+    try:
+        from clawmetry.local_store import get_store
+        today = datetime.date.today().isoformat()
+        store = get_store()
+        if store is not None:
+            agg_rows = store.query_aggregates(since=today)
+            cost_today = round(sum(r.get("cost_usd", 0) or 0 for r in agg_rows), 4)
+            tokens_today = int(sum(r.get("token_count", 0) or 0 for r in agg_rows))
+            local_node_id = getattr(store, "node_id", None)
+            for n in result:
+                if local_node_id and n["node_id"] == local_node_id:
+                    n["duckdb_summary"] = {
+                        "cost_today_usd": cost_today,
+                        "token_count_today": tokens_today,
+                        "source": "local_duckdb",
+                    }
+                    n["is_local"] = True
+                    # Use DuckDB-sourced cost as the authoritative value for
+                    # fleet_summary rather than the (often empty) heartbeat figure.
+                    total_cost = max(total_cost, cost_today)
+                    break
+    except Exception:
+        pass
+
     return jsonify(
         {
             "nodes": result,
@@ -155,6 +183,10 @@ def api_nodes_list():
                 "offline": offline_count,
                 "total_cost_today": round(total_cost, 2),
                 "total_sessions_today": total_sessions,
+                # data_scope signals to callers that analytics tabs show
+                # local-node data only; multi_node_partial means remote nodes
+                # rely on heartbeat payloads which may lack DuckDB summaries.
+                "data_scope": "single_node" if len(result) <= 1 else "multi_node_partial",
             },
         }
     )
