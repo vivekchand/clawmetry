@@ -14317,7 +14317,13 @@ function _applyRuntimeFlowDiagram(rt) {
   var model = '';
   try { var ml = document.getElementById('brain-model-text'); model = ml ? (ml.textContent || '') : ''; } catch (e) {}
   if (model === 'unknown') model = '';
-  var inner = _buildRuntimeFlowInner(rt, model);
+  // Never render a LOCKED runtime (e.g. Claude Code on the free plan) as an
+  // active Flow topology — that contradicts the "install OpenClaw" empty-state
+  // and reads as if a Pro runtime is live. Fall back to the default OpenClaw
+  // diagram; the switcher carries the lock + upgrade affordance instead.
+  var inner = (typeof _cmLockedRuntimes !== 'undefined' && _cmLockedRuntimes && _cmLockedRuntimes[rt])
+    ? null
+    : _buildRuntimeFlowInner(rt, model);
   if (inner) {
     svg.innerHTML = inner;
   } else if (svg.innerHTML.indexOf('rtShadow') !== -1) {
@@ -18919,3 +18925,112 @@ async function updateFromBanner() {
 
 setInterval(checkUpdateStatus, 3600000);
 setTimeout(checkUpdateStatus, 5000);
+
+// ── Per-screen runtime chip (2nd switch point) ───────────────────────────────
+// A small fixed chip (bottom-right) on every tab that names the runtime the
+// current screen is showing, and is itself a switch point: clicking it opens a
+// menu mirroring the header dropdown (locked runtimes show a padlock + route to
+// upgrade instead of selecting). Reuses the same state as the header switcher
+// (_cmGlobalRtCounts / _cmLockedRuntimes / _cmRuntimeFilter) so the two stay in
+// lockstep. Self-contained IIFE appended at EOF so it can't disturb other code.
+(function () {
+  var CHIP_ID = 'cm-runtime-chip';
+  var MENU_ID = 'cm-runtime-chip-menu';
+  function _rt() { try { return (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all'; } catch (e) { return 'all'; } }
+  function _label(rt) {
+    if (rt === 'all') return 'All runtimes';
+    try { return (typeof _cmRuntimeLabel === 'function') ? _cmRuntimeLabel(rt) : rt; } catch (e) { return rt; }
+  }
+  function _locked(rt) { try { return !!(typeof _cmLockedRuntimes !== 'undefined' && _cmLockedRuntimes && _cmLockedRuntimes[rt]); } catch (e) { return false; } }
+  function _counts() { try { return (typeof _cmGlobalRtCounts !== 'undefined' && _cmGlobalRtCounts) || {}; } catch (e) { return {}; } }
+  function _labels() { try { return (typeof _CM_RT_LABEL !== 'undefined' && _CM_RT_LABEL) || {}; } catch (e) { return {}; } }
+  function _esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+  function _closeMenu() { var m = document.getElementById(MENU_ID); if (m && m.parentNode) m.parentNode.removeChild(m); }
+
+  function _openMenu(anchor) {
+    _closeMenu();
+    var counts = _counts(), locked = _cmLockedRuntimes || {}, labels = _labels();
+    var observed = Object.keys(labels).filter(function (k) { return counts[k]; });
+    var lockedKeys = Object.keys(locked).filter(function (k) { return observed.indexOf(k) < 0; });
+    var order = observed.concat(lockedKeys);
+    var cur = _rt();
+    var m = document.createElement('div');
+    m.id = MENU_ID;
+    m.style.cssText = 'position:fixed;z-index:99999;background:var(--bg-secondary,#161b22);border:1px solid var(--border-primary,#30363d);border-radius:10px;padding:6px;box-shadow:0 8px 24px rgba(0,0,0,0.4);min-width:200px;font-size:13px;';
+    var html = '';
+    var allActive = cur === 'all';
+    html += '<div data-rt="all" class="cm-rtc-item" style="padding:7px 10px;border-radius:7px;cursor:pointer;display:flex;justify-content:space-between;gap:10px;' + (allActive ? 'background:var(--bg-accent,#7c5cff);color:#fff;' : 'color:var(--text-primary,#e6edf3);') + '"><span>All runtimes</span></div>';
+    order.forEach(function (k) {
+      var isLocked = _locked(k), active = k === cur;
+      var right = isLocked ? '🔒 Upgrade' : ((counts[k] || 0) + (counts[k] === 1 ? ' session' : ' sessions'));
+      html += '<div data-rt="' + k + '" data-locked="' + (isLocked ? '1' : '') + '" class="cm-rtc-item" style="padding:7px 10px;border-radius:7px;cursor:pointer;display:flex;justify-content:space-between;gap:10px;' + (active ? 'background:var(--bg-accent,#7c5cff);color:#fff;' : 'color:var(--text-primary,#e6edf3);') + '"><span>' + (isLocked ? '🔒 ' : '') + _esc(_label(k)) + '</span><span style="opacity:.7;font-size:11px;white-space:nowrap;">' + _esc(right) + '</span></div>';
+    });
+    m.innerHTML = html;
+    document.body.appendChild(m);
+    var r = anchor.getBoundingClientRect();
+    var mh = m.offsetHeight, mw = m.offsetWidth;
+    m.style.left = Math.max(8, r.right - mw) + 'px';
+    m.style.top = Math.max(8, r.top - mh - 8) + 'px';
+    m.addEventListener('click', function (ev) {
+      var it = ev.target.closest ? ev.target.closest('.cm-rtc-item') : null;
+      if (!it) return;
+      var rt = it.getAttribute('data-rt');
+      if (it.getAttribute('data-locked')) {
+        window.open('https://app.clawmetry.com/upgrade?source=runtime_chip', '_blank', 'noopener');
+        _closeMenu();
+        return;
+      }
+      _closeMenu();
+      try { if (typeof _cmSetRuntimeFilter === 'function') _cmSetRuntimeFilter(rt); } catch (e) {}
+      try { if (typeof _applyRuntimeFlowDiagram === 'function') _applyRuntimeFlowDiagram(rt); } catch (e) {}
+      // Mirror the header <select> so both switch points agree.
+      try { var sel = document.getElementById('cm-global-runtime'); if (sel) sel.value = rt; } catch (e) {}
+      try { if (typeof switchTab === 'function' && _cmCurrentTab) switchTab(_cmCurrentTab); } catch (e) {}
+      _cmRenderRuntimeChip();
+    });
+    setTimeout(function () {
+      document.addEventListener('click', function _h(e) {
+        if (e.target.closest && (e.target.closest('#' + MENU_ID) || e.target.closest('#' + CHIP_ID))) return;
+        _closeMenu(); document.removeEventListener('click', _h);
+      });
+    }, 0);
+  }
+
+  window._cmRenderRuntimeChip = function () {
+    if (!document.body) return;
+    var cur = _rt();
+    var chip = document.getElementById(CHIP_ID);
+    if (!chip) {
+      chip = document.createElement('button');
+      chip.id = CHIP_ID;
+      chip.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:99998;display:inline-flex;align-items:center;gap:7px;padding:8px 13px;border-radius:20px;border:1px solid var(--border-primary,#30363d);background:var(--bg-secondary,#161b22);color:var(--text-secondary,#9ca3af);font-size:12px;font-weight:600;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,0.3);';
+      chip.title = 'Runtime this screen is showing — click to switch';
+      chip.addEventListener('click', function () {
+        var existing = document.getElementById(MENU_ID);
+        if (existing) { _closeMenu(); return; }
+        _openMenu(chip);
+      });
+      document.body.appendChild(chip);
+    }
+    var dot = _locked(cur) ? '🔒' : '🟢';
+    chip.innerHTML = '<span style="font-size:11px;opacity:.65;">Runtime</span> <span style="color:var(--text-primary,#e6edf3);">' + dot + ' ' + _esc(_label(cur)) + '</span> <span style="opacity:.5;">▾</span>';
+  };
+
+  function _boot() {
+    try { window._cmRenderRuntimeChip(); } catch (e) {}
+    // Keep the chip label in sync as the user navigates tabs / changes runtime.
+    if (typeof switchTab === 'function' && !switchTab.__cmChipWrapped) {
+      var _origSwitch = switchTab;
+      window.switchTab = function () {
+        var r = _origSwitch.apply(this, arguments);
+        try { window._cmRenderRuntimeChip(); } catch (e) {}
+        return r;
+      };
+      window.switchTab.__cmChipWrapped = true;
+    }
+    setInterval(function () { try { window._cmRenderRuntimeChip(); } catch (e) {} }, 5000);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(_boot, 800); });
+  else setTimeout(_boot, 800);
+})();
