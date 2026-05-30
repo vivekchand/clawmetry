@@ -11874,6 +11874,22 @@ def run_daemon() -> None:
     # racing supervisor restart sees the lock held until the flush is
     # done, instead of starting a second daemon mid-drain.
     _install_shutdown_handlers()
+
+    # Open-core plugin discovery. dashboard.py runs this at import time so the
+    # dashboard process picks up entry-point plugins (clawmetry-pro adapters,
+    # event handlers, etc.). The sync daemon is a SEPARATE process — started
+    # via `python -m clawmetry.sync` from launchd/systemd, so it never imports
+    # dashboard — and was therefore the only ClawMetry process where paid
+    # plugins did not register. Without this call, the ingest path (the
+    # daemon's primary job) cannot be extended by clawmetry-pro. The
+    # ``_loaded`` guard makes this safe even if the process somehow imports
+    # dashboard later. Never raises.
+    try:
+        from clawmetry.extensions import load_plugins as _ext_load
+        _ext_load()
+    except Exception as _ext_e:
+        log.warning("extensions load_plugins failed: %s", _ext_e)
+
     config = load_config()
     # If node_id looks like email prefix (contains + or @), use hostname instead
     nid = config.get("node_id", "")
