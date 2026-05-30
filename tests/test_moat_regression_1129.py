@@ -1,5 +1,15 @@
-"""End-to-end MOAT regression gauntlet for the 4 read-path bugs filed in
+"""Deterministic read-path regression gauntlet for the 4 bugs filed in
 issue #1129.
+
+NOTE ON NAMING (2026-05-31): renamed from ``test_moat_e2e_regression_1129``.
+Despite the old name this is NOT an end-to-end test and intentionally does NOT
+spawn the real OpenClaw binary — as the note below says, the 4 failure modes
+are 100% determined by the exact event field SHAPE, which a non-deterministic
+real LLM turn cannot reproduce. Per the "real e2e, no synthetic seeds"
+initiative, synthetic data is fine for a deterministic regression/integration
+test like this; the "e2e" label was the only thing wrong, so it was dropped.
+The genuine end-to-end coverage for these event shapes lives in
+``tests/test_moat_live_openclaw_e2e.py`` (real turn).
 
 Each of the 4 fixes is queued in its own PR (#1130, #1131, #1132 — #1128 is
 unrelated dead-code in sync.py) but **none are merged yet**. This file
