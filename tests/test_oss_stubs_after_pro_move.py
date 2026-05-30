@@ -13,6 +13,8 @@ What this file covers:
   - POST /api/v1/runs/<id>/events returns 402
   - POST /api/v1/runs/<id>/end returns 402
   - GET  /api/v1/runs/<id> returns 402
+  - GET/POST /api/v1/engines returns 402 upgrade_required
+  - GET/POST /api/v1/engines/<path> returns 402 upgrade_required
 
 * ``clawmetry/otel_push.py`` (OSS delegating shim):
   - forward_event() is a no-op when pro is unavailable
@@ -34,7 +36,7 @@ import pytest
 from flask import Flask
 
 
-# ── runtime_ingest stub ───────────────────────────────────────────────────────
+# ── runtime_ingest stub ─────────────────────────────────────────────────
 
 
 @pytest.fixture
@@ -87,7 +89,22 @@ def test_get_run_returns_402(app_with_stub):
         assert r.status_code == 402
 
 
-# ── otel_push delegating shim ────────────────────────────────────────────────
+def test_engines_root_returns_402(app_with_stub):
+    with app_with_stub.test_client() as c:
+        r = c.get("/api/v1/engines")
+        assert r.status_code == 402
+        body = r.get_json()
+        assert body["error"] == "upgrade_required"
+        assert body["feature"] == "custom_runtime_ingest"
+
+
+def test_engines_subpath_returns_402(app_with_stub):
+    with app_with_stub.test_client() as c:
+        r = c.post("/api/v1/engines/my-engine/runs", json={})
+        assert r.status_code == 402
+
+
+# ── otel_push delegating shim ──────────────────────────────────────────────
 
 
 def _hide_pro(monkeypatch):
@@ -121,7 +138,7 @@ def test_otel_push_reset_is_safe(monkeypatch):
     _otelp.reset_for_tests()  # no-op, no raise
 
 
-# ── PD/OG dashboard helpers delegate ──────────────────────────────────────────
+# ── PD/OG dashboard helpers delegate ────────────────────────────────────────────
 
 
 def test_build_pagerduty_payload_returns_empty_when_pro_absent(monkeypatch):
