@@ -1,0 +1,95 @@
+# i18n residual strings — clawmetry/static/js/app.js
+# Generated: 2026-05-29  Total: 89 sites (46 Class B, 43 Class D)
+# Related: https://github.com/vivekchand/clawmetry/issues/2258
+# Class B = JS-concat boundary; static English fragment + interpolated expression
+# Class D = multi-tag innerHTML blob; all text nodes need extraction
+file	line	class	english	suggested_key
+clawmetry/static/js/app.js	227	B	Failed to load: ' + escHtml(String(e)) +	app.failed_load_eschtml_string
+clawmetry/static/js/app.js	325	B	Failed to load: ' + escHtml(String(e)) +	app.failed_load_eschtml_string
+clawmetry/static/js/app.js	443	D	View Dismiss	app.view_dismiss
+clawmetry/static/js/app.js	481	D	View Details Dismiss	app.view_details_dismiss
+clawmetry/static/js/app.js	537	D	Anomaly Detection	app.anomaly_detection
+clawmetry/static/js/app.js	886	B	' + escHtml(data.error || 'Failed') +	app.eschtml_data_error_failed
+clawmetry/static/js/app.js	981	B	Failed to load context economics: ' + escHtml(String(e)) +	app.failed_load_context_economics_eschtml
+clawmetry/static/js/app.js	1060	B	No compactions recorded' + (_ceSessionId ? ' for this session' : '') +	app.compactions_recorded_cesessionid_this_session
+clawmetry/static/js/app.js	1946	D	This file hasn't been created yet. Click Edit above to write the first version.	app.this_file_hasn_been_created
+clawmetry/static/js/app.js	1955	B	' + escHtml(d.content) +	app.eschtml_content
+clawmetry/static/js/app.js	2258	B	Error: ' + escHtml(String(e)) +	app.error_eschtml_string
+clawmetry/static/js/app.js	2269	B	' + escHtml(data.error) +	app.eschtml_data_error
+clawmetry/static/js/app.js	2294	B	Error: ' + escHtml(String(e)) +	app.error_eschtml_string
+clawmetry/static/js/app.js	2616	B	Network error: ' + escapeHtmlSafe(e.message) +	app.network_error_escapehtmlsafe_message
+clawmetry/static/js/app.js	2620	B	' + escapeHtmlSafe(msg) +	app.escapehtmlsafe_msg
+clawmetry/static/js/app.js	3033	D	Ingest temporarily offline. Sub-agent data unavailable; the local_store writer is not responding.	app.ingest_temporarily_offline_sub_agent
+clawmetry/static/js/app.js	4120	B	' + _bmsg +	app.bmsg
+clawmetry/static/js/app.js	4603	B	Timeline unavailable: ' + escHtml(String(err && err.message ? err.message : err)) +	app.timeline_unavailable_eschtml_string_err
+clawmetry/static/js/app.js	5587	B	No compactions yet. Context hasnt exceeded the ~' + _fmtTokens(Math.round(contextWindow * 0.8)) +	app.compactions_yet_context_hasnt_exceeded
+clawmetry/static/js/app.js	5602	B	Error loading context data: ' + escHtml(String(e)) +	app.error_loading_context_data_eschtml
+clawmetry/static/js/app.js	5943	D	Ingest temporarily offline. Brain history unavailable; the local_store writer is not responding. New events will appear once the daemon reconnects.	app.ingest_temporarily_offline_brain_history
+clawmetry/static/js/app.js	5996	B	Failed to load: ' + escHtml(String(e)) +	app.failed_load_eschtml_string
+clawmetry/static/js/app.js	6266	B	' + hint +	app.hint
+clawmetry/static/js/app.js	6291	B	Failed to load spans: ' + _spansEsc(String(e)) +	app.failed_load_spans_spansesc_string
+clawmetry/static/js/app.js	6344	B	No threats detected' + (_securityFilter!=='all'?' at this severity level':'') +	app.threats_detected_securityfilter_all_this
+clawmetry/static/js/app.js	6398	B	Failed to load: ' + escHtml(String(e)) +	app.failed_load_eschtml_string
+clawmetry/static/js/app.js	6415	D	NemoClaw governance is not yet available on this host. Coming soon — NVIDIA NeMo Guardrails integration is in private preview.	app.nemoclaw_governance_not_yet_available
+clawmetry/static/js/app.js	6495	B	Policy loaded (' + (policy.lines || '?') +	app.policy_loaded_policy_lines
+clawmetry/static/js/app.js	6792	B	Posture scan failed: ' + escHtml(String(e)) +	app.posture_scan_failed_eschtml_string
+clawmetry/static/js/app.js	6834	B	Scan failed: ' + escHtml(String(e)) +	app.scan_failed_eschtml_string
+clawmetry/static/js/app.js	7981	B	' + msg +	app.msg
+clawmetry/static/js/app.js	8510	B	Could not load run history (' + escHtml(String(e.message||e)) +	app.could_not_load_run_history
+clawmetry/static/js/app.js	8572	D	Delete cron job	app.delete_cron_job
+clawmetry/static/js/app.js	8713	D	Ask AI to diagnose and fix	app.ask_diagnose_and_fix
+clawmetry/static/js/app.js	9064	B	' + _taEmpty +	app.taempty
+clawmetry/static/js/app.js	9147	B	' + escHtml(sessionId) +	app.eschtml_sessionid
+clawmetry/static/js/app.js	9316	D	Select a span on the left to see its Chat , Inputs , Outputs , Attributes , and Events .	app.select_span_left_see_chat
+clawmetry/static/js/app.js	9673	D	No conversation content for this span. Try Inputs / Outputs for the raw payload.	app.conversation_content_this_span_try
+clawmetry/static/js/app.js	9772	B	' + hint +	app.hint
+clawmetry/static/js/app.js	10443	B	' + badges +	app.badges
+clawmetry/static/js/app.js	10701	D	Less More	app.less_more
+clawmetry/static/js/app.js	10724	D	Ingest temporarily offline. Token usage data unavailable; the local_store writer is not responding.	app.ingest_temporarily_offline_token_usage
+clawmetry/static/js/app.js	10919	D	No session cost data yet	app.session_cost_data_yet
+clawmetry/static/js/app.js	12553	B	Failed to load sub-agents: ' + escHtml(String(e)) +	app.failed_load_sub_agents_eschtml
+clawmetry/static/js/app.js	12609	B	Failed to load run ledger: '+escHtml(String(e))+	app.failed_load_run_ledger_eschtml
+clawmetry/static/js/app.js	12778	B	Failed to load tool catalog: ' + escHtml(String(e)) +	app.failed_load_tool_catalog_eschtml
+clawmetry/static/js/app.js	12916	B	' + calls.length + ' recent call' + (calls.length === 1 ? '' : 's') +	app.calls_length_recent_call_calls
+clawmetry/static/js/app.js	12918	B	Failed to load calls: ' + escHtml(String(e)) +	app.failed_load_calls_eschtml_string
+clawmetry/static/js/app.js	12990	B	Failed to load tool policy: '+escHtml(String(e))+	app.failed_load_tool_policy_eschtml
+clawmetry/static/js/app.js	13030	B	Failed to load approval audit: '+escHtml(String(e))+	app.failed_load_approval_audit_eschtml
+clawmetry/static/js/app.js	13102	B	Failed to load tool policy: '+escHtml(String(e))+	app.failed_load_tool_policy_eschtml
+clawmetry/static/js/app.js	13142	B	Failed to load approval audit: '+escHtml(String(e))+	app.failed_load_approval_audit_eschtml
+clawmetry/static/js/app.js	13154	D	Version not detected Could not detect OpenClaw version from config.	app.version_not_detected_could_not
+clawmetry/static/js/app.js	13235	D	No sessions found to cluster.	app.sessions_found_cluster
+clawmetry/static/js/app.js	13329	B	' + _maEmpty +	app.maempty
+clawmetry/static/js/app.js	13573	B	' + parsed.html +	app.parsed_html
+clawmetry/static/js/app.js	13913	D	Loading flow runs…	app.loading_flow_runs
+clawmetry/static/js/app.js	13921	D	No historical flow runs yet. The live Flow view will populate this once a session completes.	app.historical_flow_runs_yet_live
+clawmetry/static/js/app.js	13951	D	Failed to load flow runs.	app.failed_load_flow_runs
+clawmetry/static/js/app.js	14131	D	Ingest temporarily offline. Live flow events unavailable; the local_store writer is not responding.	app.ingest_temporarily_offline_live_flow
+clawmetry/static/js/app.js	15416	D	Loading TUI messages...	app.loading_tui_messages
+clawmetry/static/js/app.js	15426	D	Loading messages...	app.loading_messages
+clawmetry/static/js/app.js	15434	D	Loading iMessages...	app.loading_imessages
+clawmetry/static/js/app.js	15442	D	Loading WhatsApp messages...	app.loading_whatsapp_messages
+clawmetry/static/js/app.js	15450	D	Loading Signal messages...	app.loading_signal_messages
+clawmetry/static/js/app.js	15458	D	Loading Discord messages...	app.loading_discord_messages
+clawmetry/static/js/app.js	15466	D	Loading Slack messages...	app.loading_slack_messages
+clawmetry/static/js/app.js	15474	D	Loading Google Chat messages...	app.loading_google_chat_messages
+clawmetry/static/js/app.js	15482	D	Loading MS Teams messages...	app.loading_teams_messages
+clawmetry/static/js/app.js	15490	D	Loading Mattermost messages...	app.loading_mattermost_messages
+clawmetry/static/js/app.js	15498	D	Loading WebChat...	app.loading_webchat
+clawmetry/static/js/app.js	15514	D	Loading BlueBubbles...	app.loading_bluebubbles
+clawmetry/static/js/app.js	15536	D	Loading gateway data...	app.loading_gateway_data
+clawmetry/static/js/app.js	15544	D	Loading AI brain data...	app.loading_brain_data
+clawmetry/static/js/app.js	15553	D	Analyzing costs...	app.analyzing_costs
+clawmetry/static/js/app.js	15582	D	Loading skills…	app.loading_skills
+clawmetry/static/js/app.js	15630	B	Failed to load skills: ' + escapeHtml(e.message) +	app.failed_load_skills_escapehtml_message
+clawmetry/static/js/app.js	15639	D	Analyzing your patterns...	app.analyzing_your_patterns
+clawmetry/static/js/app.js	16780	D	💰 Cost Optimizer	app.cost_optimizer
+clawmetry/static/js/app.js	16789	D	🧠 Automation Advisor	app.automation_advisor
+clawmetry/static/js/app.js	16794	D	🧠 Loading automation analysis...	app.loading_automation_analysis
+clawmetry/static/js/app.js	16840	D	⚠️ Analysis Unavailable Unable to load automation analysis:	app.analysis_unavailable_unable_load_automation
+clawmetry/static/js/app.js	17529	B	' + escHtml(reason) +	app.eschtml_reason
+clawmetry/static/js/app.js	17641	B	' + escHtml(reason) +	app.eschtml_reason
+clawmetry/static/js/app.js	17726	D	Brain events	app.brain_events
+clawmetry/static/js/app.js	17973	D	Ingest temporarily offline. Tool timeline unavailable; the local_store writer is not responding.	app.ingest_temporarily_offline_tool_timeline
+clawmetry/static/js/app.js	18059	B	' + escHtml(data.error) +	app.eschtml_data_error
+clawmetry/static/js/app.js	18139	B	Failed to load model journey: ' + escHtml(e.message || String(e)) +	app.failed_load_model_journey_eschtml
+clawmetry/static/js/app.js	18642	B	' + rows +	app.rows
