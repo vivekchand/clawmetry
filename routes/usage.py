@@ -10,6 +10,7 @@ Owns the 12 routes registered on bp_usage:
   POST /api/anomalies/<id>/ack            — acknowledge an anomaly
   GET  /api/usage/by-plugin               — plugin token/cost breakdown
   GET  /api/usage/by-plugin/trend         — plugin breakdown over time
+  GET  /api/usage/by-model                — per-model cost/token breakdown with cost-per-call
   GET  /api/sessions/clusters             — behavioural session clustering
   GET  /api/usage/cost-comparison         — alt-model savings estimate
   GET  /api/usage/export                  — CSV export of usage
@@ -979,6 +980,68 @@ def _try_local_store_model_attribution(runtime=None):
         "switch_count": len(switches),
         "_source": "local_store",
     }
+
+
+def _try_local_store_usage_by_model(runtime=None):
+    """Fast path for /api/usage/by-model (GH #588). Groups events by model
+    name, accumulates cost_usd and token_count with sibling-dedup, and
+    computes per-call averages. Returns shape: {models: [...], _source}."""
+    store = _ls_get_store()
+    if store is None:
+        return None
+    try:
+        evs = store.query_events(limit=20000)
+    except Exception:
+        return None
+    if not evs:
+        return None
+    if runtime and runtime != "all":
+        evs = _filter_evs_by_runtime(evs, runtime)
+    bucket_max = build_sibling_bucket_max(evs)
+    model_stats = defaultdict(lambda: {"tokens": 0.0, "cost": 0.0, "calls": 0})
+    saw_any = False
+    for ev in evs:
+        m = (ev.get("model") or "").strip()
+        if not m:
+            continue
+        if is_sibling_dup(ev, bucket_max):
+            continue
+        saw_any = True
+        model_stats[m]["tokens"] += float(ev.get("token_count") or 0)
+        model_stats[m]["cost"] += float(ev.get("cost_usd") or 0.0)
+        model_stats[m]["calls"] += 1
+    if not saw_any:
+        return None
+
+    try:
+        import dashboard as _d
+        provider_fn = getattr(_d, "_provider_from_model", None)
+    except Exception:
+        provider_fn = None
+
+    total_cost = sum(s["cost"] for s in model_stats.values()) or 1.0
+    rows = []
+    for m, st in model_stats.items():
+        calls = st["calls"]
+        cost = st["cost"]
+        toks = st["tokens"]
+        provider = ""
+        if provider_fn:
+            try:
+                provider = provider_fn(m) or ""
+            except Exception:
+                pass
+        rows.append({
+            "model": m,
+            "provider": provider,
+            "total_tokens": int(round(toks)),
+            "cost_usd": round(cost, 6),
+            "call_count": calls,
+            "cost_per_call": round(cost / calls, 8) if calls else 0.0,
+            "pct_of_total_cost": round(cost / total_cost * 100.0, 2),
+        })
+    rows.sort(key=lambda r: r["cost_usd"], reverse=True)
+    return {"models": rows, "_source": "local_store"}
 
 
 def _try_local_store_skill_attribution():
@@ -2898,6 +2961,44 @@ def api_model_attribution():
         'switches': switches[:50],  # cap at 50 for response size
         'switch_count': len(switches),
     })
+
+
+@bp_usage.route('/api/usage/by-model')
+def api_usage_by_model():
+    """Per-model cost and token breakdown (GH #588).
+
+    Shows total cost, total tokens, call count, and average cost-per-call for
+    each model seen in the local DuckDB event store. Sorted by cost descending
+    so the most expensive model surfaces first. Use this to compare whether a
+    more expensive model is delivering proportionally more value.
+
+    Optional ``?runtime=<prefix>`` scopes to one runtime (e.g. ``claude_code``).
+
+    Response shape::
+
+      {
+        "models": [
+          {
+            "model": "claude-opus-4-8",
+            "provider": "Anthropic",
+            "total_tokens": 284000,
+            "cost_usd": 4.218,
+            "call_count": 42,
+            "cost_per_call": 0.10042857,
+            "pct_of_total_cost": 78.4
+          },
+          ...
+        ],
+        "_source": "local_store"
+      }
+    """
+    runtime = (request.args.get("runtime") or "").strip() or None
+    if is_local_store_read_enabled():
+        fast = _try_local_store_usage_by_model(runtime=runtime)
+        if fast is not None:
+            return jsonify(fast)
+    # Cost data lives exclusively in DuckDB; return empty-but-valid fallback.
+    return jsonify({"models": [], "_source": "none"})
 
 
 @bp_usage.route('/api/skill-attribution')
