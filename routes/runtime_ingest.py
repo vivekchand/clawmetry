@@ -68,3 +68,16 @@ def end_run_stub(run_id: str):
 @bp_runtime_ingest.route("/api/v1/runs/<run_id>", methods=["GET"])
 def get_run_stub(run_id: str):
     return jsonify(_UPGRADE), 402
+
+
+@bp_runtime_ingest.route("/api/v1/engines", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+def engines_stub():
+    return jsonify(_UPGRADE), 402
+
+
+@bp_runtime_ingest.route(
+    "/api/v1/engines/<path:subpath>",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+)
+def engines_subpath_stub(subpath: str):
+    return jsonify(_UPGRADE), 402
