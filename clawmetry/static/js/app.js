@@ -11742,6 +11742,8 @@ function showTranscriptList() {
 window._replayEvents = [];
 window._replayIndex = 0;
 window._replayFilter = 'all';
+window._replayPlaying = false;
+window._replayInterval = null;
 
 function _buildReplayEvent(m, idx) {
   var role = m.role || 'unknown';
@@ -11776,7 +11778,9 @@ function _buildReplayEvent(m, idx) {
     // Issue #1895: verbatim event payload for the Raw/Pretty toggle.
     raw: (m.raw !== undefined ? m.raw : null),
     originalIndex: idx,
-    extra: extra
+    extra: extra,
+    modelId: m.modelId || null,
+    thinkingLevel: m.thinkingLevel || null
   };
 }
 
@@ -12038,6 +12042,7 @@ function _replayRenderCurrent() {
   // Scroll highlighted message into view
   var el = document.getElementById('replay-msg-' + filtered[idx].originalIndex);
   if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  _updateReplayStatePanel(filtered[idx] ? filtered[idx].timestamp : null);
 }
 
 function replayNext() {
@@ -12075,6 +12080,54 @@ function replayFilter(type) {
   scrubber.max = Math.max(0, filtered.length - 1);
   scrubber.value = 0;
   _replayRenderCurrent();
+}
+
+function _updateReplayStatePanel(currentTimestamp) {
+  var model = null;
+  var thinkingLevel = null;
+  var totalTokens = 0;
+  for (var i = 0; i < window._replayEvents.length; i++) {
+    var ev = window._replayEvents[i];
+    if (currentTimestamp && ev.timestamp && ev.timestamp > currentTimestamp) break;
+    if (ev.type === 'model_change' && ev.modelId) model = ev.modelId;
+    if (ev.type === 'thinking_level_change' && ev.thinkingLevel) thinkingLevel = ev.thinkingLevel;
+    if (typeof ev.tokens === 'number') totalTokens += ev.tokens;
+  }
+  var panel = document.getElementById('replay-state');
+  if (!panel) return;
+  panel.style.display = 'flex';
+  var el;
+  el = document.getElementById('replay-state-model');
+  if (el) el.textContent = model || '—';
+  el = document.getElementById('replay-state-thinking');
+  if (el) el.textContent = thinkingLevel || '—';
+  el = document.getElementById('replay-state-tokens');
+  if (el) el.textContent = totalTokens > 1000 ? (totalTokens / 1000).toFixed(1) + 'K' : String(totalTokens);
+}
+
+function replayTogglePlay() {
+  if (window._replayPlaying) {
+    clearInterval(window._replayInterval);
+    window._replayPlaying = false;
+    var btn = document.getElementById('replay-play-btn');
+    if (btn) btn.innerHTML = '&#9654; <span data-i18n="transcripts.play">Play</span>';
+  } else {
+    window._replayPlaying = true;
+    var btn = document.getElementById('replay-play-btn');
+    if (btn) btn.innerHTML = '&#9646;&#9646; <span data-i18n="transcripts.pause">Pause</span>';
+    window._replayInterval = setInterval(function() {
+      var filtered = _replayFilteredEvents();
+      if (window._replayIndex >= filtered.length - 1) {
+        clearInterval(window._replayInterval);
+        window._replayPlaying = false;
+        var doneBtn = document.getElementById('replay-play-btn');
+        if (doneBtn) doneBtn.innerHTML = '&#9654; <span data-i18n="transcripts.play">Play</span>';
+        return;
+      }
+      window._replayIndex++;
+      _replayRenderCurrent();
+    }, 100);
+  }
 }
 
 async function viewTranscript(sessionId) {
