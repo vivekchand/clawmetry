@@ -65,6 +65,16 @@
           font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
           white-space:nowrap;
           ">{ } <span data-i18n="transcripts.raw">Raw</span></button>
+        <button id="replay-play-btn" onclick="replayTogglePlay()" title="Auto-advance through turns at 10× speed" style="
+          padding:5px 12px;
+          border-radius:6px;
+          border:1px solid var(--border-secondary);
+          background:var(--button-bg);
+          color:var(--text-secondary);
+          cursor:pointer;
+          font-size:12px;
+          white-space:nowrap;
+          ">&#9654; <span data-i18n="transcripts.play">Play</span></button>
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;">
         <button class="replay-filter active-filter" data-type="all" onclick="replayFilter('all')" style="
@@ -113,6 +123,13 @@
           cursor:pointer;
           ">&#128100; <span data-i18n="transcripts.filter_user">User</span></button>
       </div>
+    </div>
+    <!-- Replay "as of T" state panel: model / thinking level / tokens accumulated.
+         Shown by _updateReplayStatePanel() when replay controls are active. -->
+    <div id="replay-state" style="display:none;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;padding:7px 14px;margin-bottom:8px;font-size:12px;color:var(--text-secondary);gap:14px;flex-wrap:wrap;align-items:center;">
+      <span>&#129302; <span data-i18n="transcripts.replay_model">Model</span>: <strong id="replay-state-model" style="color:var(--text-primary);">&#8212;</strong></span>
+      <span>&#128161; <span data-i18n="transcripts.replay_thinking">Thinking</span>: <strong id="replay-state-thinking" style="color:var(--text-primary);">&#8212;</strong></span>
+      <span>&#128200; <span data-i18n="transcripts.replay_tokens">Tokens so far</span>: <strong id="replay-state-tokens" style="color:var(--text-primary);">0</strong></span>
     </div>
     <div class="chat-messages" id="transcript-messages"></div>
   </div>
