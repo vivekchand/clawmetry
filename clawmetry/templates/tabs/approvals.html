@@ -204,6 +204,14 @@
     return true;
   }
 
+  // True when running as a plain OSS install (no cloud cm_ token).
+  // Rule creation is OSS-free per #1343; notification channels stay Pro-gated.
+  function _isOssMode() {
+    if (window.CLOUD_MODE || window.CLOUD_TOKEN) return false;
+    var t = localStorage.getItem('clawmetry_token') || '';
+    return !(t && t.startsWith('cm_'));
+  }
+
   window.showUpgradeModal = function() {
     var m = document.getElementById('approvals-upgrade-modal');
     if (m) m.style.display = 'flex';
@@ -475,14 +483,23 @@
   /* ── Main loader ── */
   window.loadApprovalsTab = async function() {
     try {
+      var ossMode = _isOssMode();
       var [pending, history, policies, integrations] = await Promise.all([
-        fetchJsonWithTimeout('/api/cloud/approvals?status=pending&limit=50' + _q(), 6000).catch(function(){return {approvals:[]};}),
-        fetchJsonWithTimeout('/api/cloud/approvals?limit=50' + _q(), 6000).catch(function(){return {approvals:[]};}),
-        fetchJsonWithTimeout('/api/cloud/policies?' + _q().replace(/^&/,''), 6000).catch(function(){return {policies:[]};}),
-        fetchJsonWithTimeout('/api/cloud/integrations?' + _q().replace(/^&/,''), 6000).catch(function(){return {integrations:[]};})
+        fetchJsonWithTimeout(
+          ossMode ? '/api/nemoclaw/pending-approvals'
+                  : '/api/cloud/approvals?status=pending&limit=50' + _q(),
+          6000).catch(function(){return {approvals:[]};}),
+        ossMode ? Promise.resolve({approvals:[]})
+                : fetchJsonWithTimeout('/api/cloud/approvals?limit=50' + _q(), 6000).catch(function(){return {approvals:[]};}),
+        fetchJsonWithTimeout(
+          ossMode ? '/api/nemoclaw/rules'
+                  : '/api/cloud/policies?' + _q().replace(/^&/,''),
+          6000).catch(function(){return {policies:[]};}),
+        ossMode ? Promise.resolve({integrations:[]})
+                : fetchJsonWithTimeout('/api/cloud/integrations?' + _q().replace(/^&/,''), 6000).catch(function(){return {integrations:[]};})
       ]);
       var p = (pending.approvals || []).filter(function(r){return r.status==='pending';});
-      var h = (history.approvals || []).filter(function(r){return r.status!=='pending';});
+      var h = ossMode ? [] : (history.approvals || []).filter(function(r){return r.status!=='pending';});
 
       // Pending
       var pe = document.getElementById('approvals-pending-list');
@@ -537,7 +554,9 @@
   var _toggleBusy = {};
   window.togglePresetPolicy = async function(presetKey, enabled) {
     if (_toggleBusy[presetKey]) return;
-    if (_showUpgradeIfNeeded()) return;
+    var ossMode = _isOssMode();
+    // OSS users can toggle preset rules (rule creation is free, per #1343).
+    if (!ossMode && _showUpgradeIfNeeded()) return;
     _toggleBusy[presetKey] = true;
     var preset = PRESETS.find(function(p){return p.key === presetKey;});
     if (!preset) { delete _toggleBusy[presetKey]; return; }
@@ -551,22 +570,40 @@
       card.style.borderColor = enabled ? preset.color + '55' : 'var(--border)';
     }
     try {
-      var r = await fetch('/api/cloud/policies', {
-        method: 'POST', headers: _authHeaders(),
-        body: JSON.stringify({
-          name: preset.name,
-          tool: preset.tool,
-          pattern_type: 'command_regex',
-          pattern: preset.pattern,
-          action: 'require_approval',
-          timeout: preset.timeout,
-          on_timeout: preset.on_timeout,
-          enabled: enabled,
-          preset_key: preset.key
-        })
-      });
+      var r;
+      if (ossMode) {
+        if (enabled) {
+          // Enable: upsert into ~/.clawmetry/policies.yml
+          r = await fetch('/api/nemoclaw/rules', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              name: preset.name, tool: preset.tool,
+              pattern_type: 'command_regex', pattern: preset.pattern,
+              action: 'require_approval', timeout: preset.timeout,
+              on_timeout: preset.on_timeout, preset_key: preset.key
+            })
+          });
+        } else {
+          // Disable: remove from YAML so the local daemon stops enforcing it.
+          // (The daemon enforces all YAML entries regardless of enabled flag.)
+          r = await fetch('/api/nemoclaw/rules/' + encodeURIComponent(presetKey), {
+            method: 'DELETE', headers: {'Content-Type': 'application/json'}
+          });
+        }
+      } else {
+        r = await fetch('/api/cloud/policies', {
+          method: 'POST', headers: _authHeaders(),
+          body: JSON.stringify({
+            name: preset.name, tool: preset.tool,
+            pattern_type: 'command_regex', pattern: preset.pattern,
+            action: 'require_approval', timeout: preset.timeout,
+            on_timeout: preset.on_timeout, enabled: enabled,
+            preset_key: preset.key
+          })
+        });
+        if (!r.ok && r.status === 402) { showUpgradeModal(); loadApprovalsTab(); return; }
+      }
       if (!r.ok) {
-        if (r.status === 402) { showUpgradeModal(); loadApprovalsTab(); return; }
         var d = await r.json().catch(function(){return {};});
         throw new Error(d.error || ('HTTP ' + r.status));
       }
@@ -581,7 +618,8 @@
 
   /* ── Save custom rule ── */
   window.saveCustomRule = async function() {
-    if (_showUpgradeIfNeeded()) return;
+    var ossMode = _isOssMode();
+    if (!ossMode && _showUpgradeIfNeeded()) return;
     var name = (document.getElementById('rule-name').value || '').trim();
     var tool = document.getElementById('rule-tool').value;
     var patternRaw = (document.getElementById('rule-pattern').value || '').trim();
@@ -592,12 +630,14 @@
     // Convert comma-separated keywords to regex alternation
     var pattern = patternRaw.split(',').map(function(s){return s.trim();}).filter(Boolean).join('|');
     try {
-      var r = await fetch('/api/cloud/policies', {
-        method: 'POST', headers: _authHeaders(),
+      var url = ossMode ? '/api/nemoclaw/rules' : '/api/cloud/policies';
+      var headers = ossMode ? {'Content-Type': 'application/json'} : _authHeaders();
+      var r = await fetch(url, {
+        method: 'POST', headers: headers,
         body: JSON.stringify({
           name: name, tool: tool, pattern_type: 'command_regex',
           pattern: pattern, action: 'require_approval',
-          timeout: timeout, on_timeout: onTimeout, enabled: true
+          timeout: timeout, on_timeout: onTimeout
         })
       });
       if (!r.ok) {
@@ -614,7 +654,7 @@
   };
 
   window.toggleCreateRuleForm = function() {
-    if (_showUpgradeIfNeeded()) return;
+    if (!_isOssMode() && _showUpgradeIfNeeded()) return;
     var f = document.getElementById('create-rule-form');
     f.style.display = f.style.display === 'none' ? '' : 'none';
   };
