@@ -7260,6 +7260,29 @@ var _cmGlobalRtCounts = {};
 // AND the install lacks the paid entitlement — then locked runtimes appear in
 // the dropdown with a 🔒 affordance regardless of session count.
 var _cmLockedRuntimes = {};
+// Runtimes actually DETECTED on this machine (from the daemon's
+// `detectedRuntimes` snapshot slice / overview): id -> {running:bool}. Lets the
+// switcher flag a locked runtime the user is genuinely running ("detected here
+// — upgrade to observe") vs a generic locked catalog row. Empty by default.
+var _cmRunningRuntimes = {};
+async function _cmLoadDetectedRuntimes() {
+  try {
+    var det = null;
+    if (window.CLOUD_MODE && typeof window.__cmSnap === 'function') {
+      var sp = await window.__cmSnap();
+      det = sp && sp.detectedRuntimes;            // daemon-detected, server-blind
+    } else {
+      var ov = await fetch('/api/overview', { credentials: 'same-origin' })
+        .then(function(r) { return r.json(); }).catch(function() { return null; });
+      det = ov && (ov.detectedRuntimes || ov.detected_runtimes);
+    }
+    var run = {};
+    (det || []).forEach(function(d) {
+      if (d && d.name) run[d.name] = { running: !!d.running };
+    });
+    _cmRunningRuntimes = run;
+  } catch (e) { /* non-fatal — switcher just omits the "detected here" hint */ }
+}
 
 function _cmPopulateGlobalRuntime(counts) {
   // Merge-MAX into the running set, never replace. Per-tab loaders pass their
@@ -7293,17 +7316,39 @@ function _cmPopulateGlobalRuntime(counts) {
   // chip doesn't read as "22 Claude Code runtimes" (there's one runtime, many
   // sessions). Singular/plural for the "1 session" case.
   function _sessLabel(n) { return n + (n === 1 ? ' session' : ' sessions'); }
-  var html = '<option value="all">All runtimes · ' + _sessLabel(total) + '</option>';
-  order.forEach(function(k) {
+  function _opt(k) {
     var lbl = _CM_RT_LABEL[k] || k;
     if (_cmLockedRuntimes[k]) {
-      // Padlock + "Upgrade" hint; the option stays selectable so users can see
-      // the empty-runtime state (and the upgrade CTA the tab will render).
-      html += '<option value="' + k + '">🔒 ' + escHtml(lbl) + ' · Upgrade</option>';
-    } else {
-      html += '<option value="' + k + '">' + escHtml(lbl) + ' · ' + _sessLabel(counts[k]) + '</option>';
+      // A locked (Pro) runtime that is ACTUALLY DETECTED on this machine is the
+      // strongest upgrade signal — "you're using it here, upgrade to observe
+      // it" — so call it out, distinct from a generic catalog row the user
+      // doesn't run. Both stay selectable so the tab can render its empty-state
+      // + upgrade CTA.
+      var det = _cmRunningRuntimes[k];
+      if (det) {
+        var tag = det.running ? '▶ running here' : 'detected here';
+        return '<option value="' + k + '">🔒 ' + escHtml(lbl) + ' · ' + tag + ' · Upgrade</option>';
+      }
+      return '<option value="' + k + '">🔒 ' + escHtml(lbl) + ' · Upgrade</option>';
     }
-  });
+    return '<option value="' + k + '">' + escHtml(lbl) + ' · ' + _sessLabel(counts[k]) + '</option>';
+  }
+  var lockedRunning = locked.filter(function(k) { return _cmRunningRuntimes[k]; });
+  var lockedOther = locked.filter(function(k) { return !_cmRunningRuntimes[k]; });
+  var html = '<option value="all">All runtimes · ' + _sessLabel(total) + '</option>';
+  observed.forEach(function(k) { html += _opt(k); });
+  // Group the detected-but-locked runtimes under their own header so the
+  // "running here, needs Pro" distinction is unmistakable in the dropdown.
+  if (lockedRunning.length) {
+    html += '<optgroup label="▶ Detected on this machine — upgrade to observe">';
+    lockedRunning.forEach(function(k) { html += _opt(k); });
+    html += '</optgroup>';
+  }
+  if (lockedOther.length) {
+    html += '<optgroup label="Available with Pro">';
+    lockedOther.forEach(function(k) { html += _opt(k); });
+    html += '</optgroup>';
+  }
   sel.innerHTML = html;
   sel.value = active;
   wrap.style.display = 'flex';
@@ -7426,6 +7471,9 @@ async function _cmInitGlobalRuntimeSwitcher() {
   // switcher (with a 🔒) when enforcement is on — no-op in grace mode.
   try {
     await _cmLoadRuntimeCatalog();
+  } catch (e) { /* non-fatal */ }
+  try {
+    await _cmLoadDetectedRuntimes();
   } catch (e) { /* non-fatal */ }
   try {
     var data = await fetch('/api/sessions', { credentials: 'same-origin' }).then(function(r) { return r.json(); });
