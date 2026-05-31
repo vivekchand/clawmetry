@@ -14891,7 +14891,39 @@ function updateFlowStats() {
   if (el2) el2.textContent = flowStats.events;
   var names = Object.keys(flowStats.activeTools).filter(function(k){return flowStats.activeTools[k];});
   var el3 = document.getElementById('flow-active-tools');
-  if (el3) el3.textContent = names.length > 0 ? names.join(', ') : '\u2014';
+  if (el3) {
+    // Show the COUNT (numeric, matches the other stat cards) rather than the
+    // comma-joined list, which overflowed the small card. The full list stays
+    // available as a hover tooltip.
+    el3.textContent = names.length > 0 ? String(names.length) : '0';
+    try { el3.title = names.length > 0 ? names.join(', ') : ''; } catch (e) {}
+  }
+  // Journey rail sub-stats \u2014 wired to the same live data every tick. Each is
+  // guarded so a missing node (e.g. runtime-variant SVG) never throws.
+  try {
+    var railCh = document.getElementById('rail-channels-stat');
+    if (railCh) railCh.textContent = flowStats.msgTimestamps.length + '/min';
+  } catch (e) {}
+  try {
+    var railBr = document.getElementById('rail-brain-stat');
+    if (railBr) {
+      var bm = document.getElementById('brain-model-text');
+      var mtxt = (bm && bm.textContent ? bm.textContent : '').trim();
+      railBr.textContent = (mtxt && mtxt !== 'unknown') ? mtxt
+        : (typeof t === 'function' ? t('app.model', null, 'model') : 'model');
+    }
+  } catch (e) {}
+  try {
+    var railTl = document.getElementById('rail-tools-stat');
+    if (railTl) {
+      if (names.length > 0) {
+        var aw = (typeof t === 'function') ? t('flow.active_word', null, 'active') : 'active';
+        railTl.textContent = names.length + ' ' + aw;
+      } else {
+        railTl.textContent = (typeof t === 'function') ? t('flow.idle', null, 'idle') : 'idle';
+      }
+    }
+  } catch (e) {}
   if (flowStats.events % 15 === 0) {
     fetchJsonWithTimeout('/api/overview', 5000).then(function(d) {
       var tok = document.getElementById('flow-tokens');
@@ -15099,19 +15131,19 @@ function triggerError() {
 }
 
 function triggerInfraNetwork() {
-  animateParticle('path-gw-network', '#40a0b0', 1200, false);
+  animateParticle('path-brain-infra', '#40a0b0', 1200, false);
   highlightNode('node-network', 2500);
 }
 function triggerInfraRuntime() {
-  animateParticle('path-brain-runtime', '#40a0b0', 1000, false);
+  animateParticle('path-brain-infra', '#40a0b0', 1000, false);
   highlightNode('node-runtime', 2200);
 }
 function triggerInfraMachine() {
-  animateParticle('path-brain-machine', '#40a0b0', 1000, false);
+  animateParticle('path-brain-infra', '#40a0b0', 1050, false);
   highlightNode('node-machine', 2200);
 }
 function triggerInfraStorage() {
-  animateParticle('path-memory-storage', '#40a0b0', 700, false);
+  animateParticle('path-brain-infra', '#40a0b0', 700, false);
   highlightNode('node-storage', 2000);
 }
 

@@ -2,10 +2,57 @@
   <div class="flow-stats">
     <div class="flow-stat"><span class="flow-stat-label" data-i18n="flow.messages_per_min">Messages / min</span><span class="flow-stat-value" id="flow-msg-rate">0</span></div>
     <div class="flow-stat"><span class="flow-stat-label" data-i18n="flow.actions_taken">Actions Taken</span><span class="flow-stat-value" id="flow-event-count">0</span></div>
-    <div class="flow-stat"><span class="flow-stat-label" data-i18n="flow.active_tools">Active Tools</span><span class="flow-stat-value" id="flow-active-tools"> - </span></div>
+    <div class="flow-stat"><span class="flow-stat-label" data-i18n="flow.active_tools">Active Tools</span><span class="flow-stat-value" id="flow-active-tools">0</span></div>
     <div class="flow-stat"><span class="flow-stat-label" data-i18n="flow.tokens_used">Tokens Used</span><span class="flow-stat-value" id="flow-tokens"> - </span></div>
   </div>
   <div class="flow-container">
+    <!-- Journey rail (issue: human-first Flow): a calm, left-to-right "how your
+         messages get answered" story. Sub-stats are wired to real data in
+         updateFlowStats(). The single travelling dot conveys direction; it is
+         suppressed under prefers-reduced-motion. -->
+    <div class="flow-journey" aria-label="How your messages get answered">
+      <div class="flow-journey-title" data-i18n="flow.journey_title">How your messages get answered</div>
+      <div class="flow-journey-rail">
+        <div class="fj-track" aria-hidden="true"><span class="fj-signal"></span></div>
+        <div class="fj-stations">
+          <div class="fj-station">
+            <span class="fj-icon">🧑</span>
+            <span class="fj-label" data-i18n="app.you">You</span>
+            <span class="fj-sub" data-i18n="flow.rail_you_sub">send a message</span>
+          </div>
+          <div class="fj-arrow" aria-hidden="true">→</div>
+          <div class="fj-station">
+            <span class="fj-icon">📨</span>
+            <span class="fj-label" data-i18n="app.channels">Channels</span>
+            <span class="fj-sub" id="rail-channels-stat">0/min</span>
+          </div>
+          <div class="fj-arrow" aria-hidden="true">→</div>
+          <div class="fj-station">
+            <span class="fj-icon">🔀</span>
+            <span class="fj-label" data-i18n="app.gateway_word">Gateway</span>
+            <span class="fj-sub" id="rail-gateway-stat" data-i18n="flow.rail_routing">routing</span>
+          </div>
+          <div class="fj-arrow" aria-hidden="true">→</div>
+          <div class="fj-station fj-station-accent">
+            <span class="fj-icon">🧠</span>
+            <span class="fj-label" data-i18n="app.brain">Brain</span>
+            <span class="fj-sub" id="rail-brain-stat" data-i18n="app.model">model</span>
+          </div>
+          <div class="fj-arrow" aria-hidden="true">→</div>
+          <div class="fj-station">
+            <span class="fj-icon">🛠️</span>
+            <span class="fj-label" data-i18n="app.tools">Tools</span>
+            <span class="fj-sub" id="rail-tools-stat" data-i18n="flow.idle">idle</span>
+          </div>
+          <div class="fj-arrow" aria-hidden="true">→</div>
+          <div class="fj-station">
+            <span class="fj-icon">↩️</span>
+            <span class="fj-label" data-i18n="flow.rail_reply">Reply</span>
+            <span class="fj-sub" data-i18n="flow.replies_back">replies back to you</span>
+          </div>
+        </div>
+      </div>
+    </div>
     <svg id="flow-svg" viewBox="0 0 980 550" preserveAspectRatio="xMidYMid meet">
       <defs>
         <pattern id="flow-grid" width="40" height="40" patternUnits="userSpaceOnUse">
@@ -50,11 +97,18 @@
       <path class="flow-path" id="path-brain-tts"     d="M 510 205 C 530 260, 545 325, 560 339"/>
       <path class="flow-path" id="path-brain-memory"  d="M 510 215 C 530 290, 545 370, 560 389"/>
 
-      <!-- Infrastructure paths (dashed) -->
-      <path class="flow-path flow-path-infra" id="path-gw-network"    d="M 235 205 C 235 350, 500 400, 590 450"/>
-      <path class="flow-path flow-path-infra" id="path-brain-runtime" d="M 380 220 C 300 350, 150 400, 95 450"/>
-      <path class="flow-path flow-path-infra" id="path-brain-machine" d="M 420 220 C 380 350, 300 400, 260 450"/>
-      <path class="flow-path flow-path-infra" id="path-memory-storage" d="M 615 408 C 550 420, 470 435, 425 450"/>
+      <!-- "Runs on" link (de-spaghetti): one tidy vertical connector from the
+           brain's bottom-center straight down to the INFRASTRUCTURE band —
+           replaces the four diagonal crossing paths that cut across the whole
+           canvas. No diagonals, no crossings. -->
+      <path class="flow-path flow-path-infra" id="path-brain-infra" d="M 420 235 L 420 438"/>
+
+      <!-- Faint reply/return loop: brain back to "You". Routed low/under the
+           diagram so it never crosses the brain->tool fan-out. -->
+      <path id="path-brain-reply" d="M 415 232 C 300 415, 130 230, 64 78"
+            fill="none" stroke="var(--text-muted)" stroke-width="1.4"
+            stroke-dasharray="3 5" stroke-linecap="round" opacity="0.28"/>
+      <text class="flow-label" x="225" y="372" style="font-size:9px;opacity:0.7;" data-i18n="flow.replies_back">replies back to you</text>
 
       <!-- Human Origin -->
       <g class="flow-node flow-node-human" id="node-human">
@@ -166,7 +220,7 @@
         <text x="420" y="211" style="font-size:8px;fill:#888;opacity:0.6;text-anchor:middle;" id="brain-fallback-1"></text>
         <text x="420" y="221" style="font-size:8px;fill:#888;opacity:0.6;text-anchor:middle;" id="brain-fallback-2"></text>
         <text x="420" y="228" style="font-size:8px;fill:#a5b4fc;text-anchor:middle;" id="brain-billing-text" data-i18n="app.auth_unknown">Auth: unknown</text>
-        <circle cx="420" cy="240" r="4" fill="#FF8A65">
+        <circle cx="420" cy="240" r="4" fill="#FF8A65" id="brain-status-dot">
           <animate attributeName="r" values="3;5;3" dur="1.1s" repeatCount="indefinite"/>
           <animate attributeName="opacity" values="0.5;1;0.5" dur="1.1s" repeatCount="indefinite"/>
         </circle>
