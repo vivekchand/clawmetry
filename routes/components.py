@@ -1277,6 +1277,14 @@ def api_component_gateway():
     log_dirs = [d for d in [_d.LOG_DIR, *_d._get_log_dirs()] if d]
     log_dirs = list(dict.fromkeys(log_dirs))
     candidates = []
+    # Robust resolver first — prefers ~/.openclaw/logs/gateway.log, else the
+    # newest /tmp/openclaw/openclaw-*.log (OpenClaw 2026.5.28+ writes here,
+    # NOT ~/.openclaw/logs/). Shared with routes/infra.py so both surfaces
+    # agree on which file is the live gateway log.
+    from routes.infra import resolve_gateway_log_path  # late import
+    resolved = resolve_gateway_log_path()
+    if resolved:
+        candidates.append(resolved)
     for d in log_dirs:
         candidates.extend([
             os.path.join(d, f"openclaw-{today}.log"),
@@ -1297,7 +1305,24 @@ def api_component_gateway():
     if not log_path:
         return jsonify({"routes": [], "stats": stats, "total": 0})
 
+    # Detect format by content, not just filename. OpenClaw 2026.5.28+
+    # writes plaintext "ISO-TS [tag] message" lines to dated files
+    # (/tmp/openclaw/openclaw-YYYY-MM-DD.log) as well as gateway.log, while
+    # older builds wrote JSON-per-line to openclaw-{today}.log. Sniff the
+    # first non-empty line: a leading ISO timestamp + "[tag]" ⇒ plaintext.
     is_plaintext = os.path.basename(log_path) == "gateway.log"
+    if not is_plaintext:
+        try:
+            with open(log_path, "r") as _f:
+                for _line in _f:
+                    _line = _line.strip()
+                    if not _line:
+                        continue
+                    if re.match(r"^\d{4}-\d{2}-\d{2}T[\d:.+\-]+\s+\[", _line):
+                        is_plaintext = True
+                    break
+        except Exception:
+            pass
 
     def _parse_plaintext_line(line):
         """Parse one '[TS] [tag] message' line from gateway.log.

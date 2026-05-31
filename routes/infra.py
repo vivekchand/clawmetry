@@ -38,6 +38,42 @@ from clawmetry.config import is_local_store_read_enabled, hide_clawmetry_session
 bp_logs = Blueprint('logs', __name__)
 bp_memory = Blueprint('memory', __name__)
 bp_security = Blueprint('security', __name__)
+
+
+def resolve_gateway_log_path():
+    """Resolve the OpenClaw gateway log path robustly across versions.
+
+    OpenClaw historically wrote ``~/.openclaw/logs/gateway.log`` but
+    2026.5.28+ writes ``/tmp/openclaw/openclaw-<YYYY-MM-DD>.log`` instead
+    (the ``~/.openclaw/logs/`` dir now holds only config-audit files).
+    Prefer the legacy path when it exists, else the newest dated log under
+    ``/tmp/openclaw``. Returns ``None`` when neither is present — callers
+    must treat that as "no gateway log" and never crash.
+    """
+    legacy = os.path.join(
+        os.path.expanduser("~"), ".openclaw", "logs", "gateway.log"
+    )
+    if os.path.exists(legacy):
+        return legacy
+    # Newest /tmp/openclaw/openclaw-*.log. Use os.listdir (not glob) so we
+    # don't depend on glob's stat behaviour, then pick the most recent by
+    # mtime — falling back to filename order if mtime can't be read.
+    tmp_dir = "/tmp/openclaw"
+    try:
+        names = [
+            n for n in os.listdir(tmp_dir)
+            if n.startswith("openclaw-") and n.endswith(".log")
+        ]
+    except Exception:
+        names = []
+    paths = [os.path.join(tmp_dir, n) for n in names]
+    paths = [p for p in paths if os.path.isfile(p)]
+    if not paths:
+        return None
+    try:
+        return max(paths, key=os.path.getmtime)
+    except Exception:
+        return max(paths)  # filename order: dated names sort chronologically
 bp_config = Blueprint('config', __name__)
 
 
@@ -141,16 +177,33 @@ def _try_local_store_flow_events(limit=200, since=None):
     if not matched:
         return None
 
+    # A provider name (e.g. "claude-cli", "anthropic") is NOT a channel —
+    # it identifies the LLM backend, not where the user's message came in.
+    # Treat these as "no channel hint" so we fall back to the real channel
+    # (the session's inbound) or the neutral local runtime, never a guess.
+    _PROVIDER_NAMES = frozenset({
+        "claude-cli", "claude_code", "anthropic", "openai", "google",
+        "gemini", "ollama", "openrouter", "groq", "deepseek", "mistral",
+        "xai", "cohere", "bedrock", "vertex", "azure",
+    })
+
     def _extract_channel(payload):
         """Pull a channel hint from a `data` blob. Looks at top-level
-        ``channel``/``provider`` first, then walks Sender-metadata in
-        prompt text the same way the SSE parser does."""
+        ``channel``/``origin`` first, then walks Sender-metadata in
+        prompt text the same way the SSE parser does.
+
+        Deliberately does NOT trust ``provider`` as a channel: the
+        provider is the model backend (claude-cli / anthropic / ...),
+        not the inbound channel. Returns ``None`` when no genuine channel
+        hint is present so the caller can apply the correct fallback."""
         if not isinstance(payload, dict):
             return None
-        for key in ("channel", "provider", "origin"):
+        for key in ("channel", "origin"):
             v = payload.get(key)
             if isinstance(v, str) and v:
                 lk = v.lower()
+                if lk in _PROVIDER_NAMES:
+                    continue
                 return _FLOW_CHANNEL_LABELS.get(lk, lk)
         text = payload.get("finalPromptText") or ""
         if not isinstance(text, str) or "Sender (untrusted metadata)" not in text:
@@ -160,9 +213,17 @@ def _try_local_store_flow_events(limit=200, since=None):
             end = text.index("```", start + 8)
             meta = json.loads(text[start + 7:end].strip())
             label = str(meta.get("label") or meta.get("id") or "").lower()
+            if label in _PROVIDER_NAMES:
+                return None
             return _FLOW_CHANNEL_LABELS.get(label, label) or None
         except Exception:
             return None
+
+    # Per-session inbound channel: the reply leg (msg_out) must carry the
+    # SAME channel the user reached us through — never the LLM provider
+    # name. We learn it from the inbound (msg_in) turn and reuse it for the
+    # matching session's outbound; unknown → neutral local runtime.
+    session_channel: dict = {}
 
     events: list = []
     for row in matched:
@@ -173,7 +234,11 @@ def _try_local_store_flow_events(limit=200, since=None):
 
         if et == "prompt.submitted" or (et in ("message", "user")
                                          and (data.get("role") == "user")):
-            ch = _extract_channel(data) or "telegram"
+            # Unknown inbound channel → "openclaw" (the local CLI/agent
+            # runtime). NEVER guess "telegram".
+            ch = _extract_channel(data) or "openclaw"
+            if sid:
+                session_channel[sid] = ch
             events.append({"type": "msg_in", "channel": ch,
                            "ts": ts, "session_id": sid,
                            "_source": "local_store"})
@@ -199,7 +264,13 @@ def _try_local_store_flow_events(limit=200, since=None):
                 events.append({"type": "tool_call", "tool": tool_key,
                                "ts": ts, "session_id": sid,
                                "_source": "local_store"})
-            ch = _extract_channel(data) or "telegram"
+            # Reply leg: carry the SAME channel as this session's inbound
+            # turn (the user's real channel), NOT the provider name. Only
+            # if we never saw the inbound do we consult the payload, and
+            # finally fall back to the neutral local runtime.
+            ch = (session_channel.get(sid)
+                  or _extract_channel(data)
+                  or "openclaw")
             events.append({"type": "msg_out", "channel": ch,
                            "ts": ts, "session_id": sid,
                            "_source": "local_store"})
@@ -432,7 +503,7 @@ def api_flow_events():
         ]
         return max(files, key=os.path.getmtime) if files else None
 
-    gw_log = os.path.join(os.path.expanduser("~"), ".openclaw", "logs", "gateway.log")
+    gw_log = resolve_gateway_log_path()
 
     # OpenClaw emits tool names verified in production session JSONLs.
     # Map → the short tool-key our Flow SVG path ids expect:
@@ -477,8 +548,8 @@ def api_flow_events():
         """Parse `Sender (untrusted metadata)` JSON block from user message text.
 
         Returns channel key ("tui" / "webchat" / "telegram" / ...) or None.
-        Telegram/Signal/WhatsApp don't set a special label, so fall through to
-        "telegram" as the legacy default (matches pre-fix behaviour).
+        When no genuine channel label is present the caller falls back to
+        "openclaw" (the local CLI/agent runtime) — never a guessed channel.
         """
         if not isinstance(text, str) or "Sender (untrusted metadata)" not in text:
             return None
@@ -545,7 +616,9 @@ def api_flow_events():
                 first = content[0]
                 if isinstance(first, dict):
                     text = first.get("text") or ""
-            ch = _extract_channel(text) or "telegram"
+            # Unknown inbound channel → "openclaw" (local CLI/agent
+            # runtime). NEVER guess "telegram".
+            ch = _extract_channel(text) or "openclaw"
             return {"type": "msg_in", "channel": ch}
         return None
 
@@ -558,7 +631,7 @@ def api_flow_events():
         started = time.time()
 
         # Seek to end of existing files — only emit NEW events
-        if os.path.exists(gw_log):
+        if gw_log and os.path.exists(gw_log):
             with open(gw_log, "rb") as f:
                 f.seek(0, 2)
                 gw_pos = f.tell()
@@ -577,7 +650,7 @@ def api_flow_events():
                 events = []
 
                 # Tail gateway.log
-                if os.path.exists(gw_log):
+                if gw_log and os.path.exists(gw_log):
                     try:
                         with open(gw_log, "rb") as f:
                             f.seek(gw_pos)
