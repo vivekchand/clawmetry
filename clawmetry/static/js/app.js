@@ -7177,9 +7177,26 @@ function _cmApplyRuntimeScopeNote(name) {
   var rt = _cmRuntimeFilter();
   var scope = _CM_RT_NODEWIDE[name] ? 'nodewide' : (_CM_RT_AGGREGATE[name] ? 'aggregate' : null);
   if (rt === 'all' || !scope) { if (existing) existing.parentNode.removeChild(existing); return; }
+  // For AGGREGATE tabs: if only one runtime actually has data, the cross-runtime
+  // aggregate IS that runtime — the "not yet filtered" warning is misleading
+  // noise (user-reported: a single-OpenClaw node showed "Showing all runtimes,
+  // not filtered to OpenClaw" on LLM Context / Tool catalog). Suppress it then;
+  // multi-runtime nodes still get the honest note until real per-runtime
+  // server-side slicing lands.
+  if (scope === 'aggregate') {
+    var observedRuntimes = 0;
+    try {
+      observedRuntimes = Object.keys(_cmGlobalRtCounts || {})
+        .filter(function (k) { return (_cmGlobalRtCounts[k] || 0) > 0; }).length;
+    } catch (e) {}
+    if (observedRuntimes <= 1) {
+      if (existing) existing.parentNode.removeChild(existing);
+      return;
+    }
+  }
   var label = _cmRuntimeLabel(rt);
   var msg = scope === 'nodewide'
-    ? '<strong>' + escHtml(label) + '</strong> is selected, but this view is <strong>node-wide</strong> &mdash; it is not specific to any runtime.'
+    ? '<strong>' + escHtml(label) + '</strong> is selected, but this view is <strong>node-wide</strong> - it is not specific to any runtime.'
     : 'Showing <strong>all runtimes</strong>. This summary is not yet filtered to <strong>' + escHtml(label) + '</strong>.';
   var ic = scope === 'nodewide' ? '&#127760;' : '&#9888;';
   var bg = scope === 'nodewide' ? 'rgba(59,130,246,0.10)' : 'rgba(245,158,11,0.10)';
