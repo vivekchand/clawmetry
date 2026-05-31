@@ -1,5 +1,14 @@
-"""End-to-end test for the DuckDB + relay-shape pipeline (Engineer B,
-2026-05-12).
+"""Deterministic integration test for the DuckDB + relay-shape data path.
+
+Renamed 2026-05-31 from test_e2e_duckdb_relay: it is explicitly "fully
+self-contained: no live daemon, no real WebSocket, no network" and drives the
+in-process ingest+relay helpers with controlled synthetic events to prove
+cross-layer row/content EQUALITY. That determinism is the point, so synthetic
+input is appropriate (the "real e2e, no synthetic seeds" rule applies to e2e
+tests, not deterministic integration tests). Genuine real-turn coverage of the
+same relay layer lives in tests/test_e2e_real_openclaw_pipeline.py.
+
+Original note (Engineer B, 2026-05-12):
 
 Proves the full local data path:
 
@@ -30,7 +39,7 @@ Why drive the helpers in-process instead of spawning a real daemon:
 Run as:
     make test-e2e-duckdb
 or:
-    pytest -v tests/test_e2e_duckdb_relay.py
+    pytest -v tests/test_duckdb_relay_integration.py
 """
 
 from __future__ import annotations
