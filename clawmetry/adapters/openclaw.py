@@ -157,12 +157,48 @@ class OpenClawAdapter(AgentAdapter):
         return None
 
     def list_events(self, session_id: str, limit: int = 500) -> List[Event]:
-        # PR 1 scope: events endpoint delegates to existing OpenClaw routes.
-        # Full event normalization into the unified schema is deferred to the
-        # follow-up PR that actually renders events in the per-agent session
-        # view; OpenClaw already has rich transcript endpoints users hit via
-        # the existing Sessions tab.
-        return []
+        """Return events for a session in the unified Event shape.
+
+        Reads from the DuckDB events table (filtered by agent_type='openclaw'
+        and session_id) so per-agent session views and runtime-aware
+        endpoints stay consistent with what /api/transcript would render.
+
+        Falls back to ``[]`` on any error so a flaky local store never
+        breaks the dashboard. The legacy rich transcript route in
+        ``dashboard.py`` is unchanged.
+        """
+        events: List[Event] = []
+        try:
+            from clawmetry import local_store as _ls
+            store = _ls.get_store(read_only=True)
+            rows = store._fetch(
+                "SELECT id, event_type, ts, model, token_count, data "
+                "FROM events WHERE agent_type = ? AND session_id = ? "
+                "ORDER BY ts ASC LIMIT ?",
+                ["openclaw", str(session_id), int(limit)],
+            )
+            for r in rows or []:
+                # ts column is VARCHAR; coerce to float, default 0.0.
+                ts_raw = r[2]
+                try:
+                    ts_f = float(ts_raw) if ts_raw not in (None, "") else 0.0
+                except (TypeError, ValueError):
+                    ts_f = 0.0
+                extra: dict = {}
+                if r[3]:
+                    extra["model"] = r[3]
+                events.append(Event(
+                    agent=self.name,
+                    session_id=str(session_id),
+                    id=str(r[0]),
+                    type=str(r[1] or "event"),
+                    ts=ts_f,
+                    tokens=int(r[4] or 0),
+                    extra=extra,
+                ))
+        except Exception as exc:
+            logger.debug("openclaw list_events read failed: %s", exc)
+        return events
 
     def capabilities(self) -> Set[Capability]:
         return {
