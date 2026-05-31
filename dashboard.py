@@ -14791,6 +14791,116 @@ def _scan_security_posture():
 # (bp_security /api/security/posture moved to routes/infra.py)
 
 
+# ── Content-policy scanners (PII / prompt-injection / credential-leak) ──────
+# Complement to _scan_events_for_threats: that checks WHAT the agent DID
+# (exec/read actions); these scan WHAT DATA flows through agent content
+# (prompts, completions, tool results) for data-policy violations.
+
+_POLICY_SIGNATURES = [
+    # PII ─────────────────────────────────────────────────────────────────
+    {
+        "id": "POL-PII-001", "type": "PII", "severity": "medium",
+        "description": "Email address in agent content",
+        "pattern": r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}",
+    },
+    {
+        "id": "POL-PII-002", "type": "PII", "severity": "high",
+        "description": "US Social Security Number in agent content",
+        "pattern": r"\b\d{3}-\d{2}-\d{4}\b",
+    },
+    {
+        "id": "POL-PII-003", "type": "PII", "severity": "medium",
+        "description": "Phone number in agent content",
+        "pattern": r"\b(?:\+\d{1,3}\s?)?\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}\b",
+    },
+    # Prompt injection ────────────────────────────────────────────────────
+    {
+        "id": "POL-INJECT-001", "type": "INJECT", "severity": "high",
+        "description": "Prompt injection: ignore-instructions override attempt",
+        "pattern": r"(?:ignore|disregard|forget|override)\s+(?:(?:all|your|my|the|those|any)\s+)?(?:previous|prior|above|original|earlier|current)?\s*(?:instructions?|prompts?|guidelines?|rules?|constraints?|system)",
+    },
+    {
+        "id": "POL-INJECT-002", "type": "INJECT", "severity": "high",
+        "description": "Prompt injection: role/persona override attempt",
+        "pattern": r"(?:you\s+are\s+now|act\s+as|pretend\s+(?:to\s+be|you\s+are)|your\s+new\s+(?:role|persona|instructions?|task|objective))",
+    },
+    {
+        "id": "POL-INJECT-003", "type": "INJECT", "severity": "medium",
+        "description": "Prompt injection: hidden system-prompt injection marker",
+        "pattern": r"(?:<\s*(?:system|sys|SYSTEM)\s*>|\[SYSTEM\s*PROMPT\]|#\s*SYSTEM\s*:)",
+    },
+    # Credential leak ─────────────────────────────────────────────────────
+    {
+        "id": "POL-LEAK-001", "type": "LEAK", "severity": "critical",
+        "description": "AWS access key in agent content",
+        "pattern": r"(?:AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16}",
+    },
+    {
+        "id": "POL-LEAK-002", "type": "LEAK", "severity": "critical",
+        "description": "Anthropic API key in agent content",
+        "pattern": r"sk-ant-(?:api\d{2}-)?[A-Za-z0-9\-_]{86,}",
+    },
+    {
+        "id": "POL-LEAK-003", "type": "LEAK", "severity": "critical",
+        "description": "OpenAI API key in agent content",
+        "pattern": r"sk-(?:proj-)?[A-Za-z0-9]{48,}",
+    },
+    {
+        "id": "POL-LEAK-004", "type": "LEAK", "severity": "critical",
+        "description": "GitHub personal access token in agent content",
+        "pattern": r"(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{36,}",
+    },
+    {
+        "id": "POL-LEAK-005", "type": "LEAK", "severity": "high",
+        "description": "Generic API key/secret assignment in agent content",
+        "pattern": r"(?:api[_\-]?key|api[_\-]?secret|secret[_\-]?key|access[_\-]?token)\s*[=:]\s*['\"]?[A-Za-z0-9\-_]{16,}",
+    },
+]
+
+for _pol in _POLICY_SIGNATURES:
+    _pol["_compiled"] = _sec_re.compile(_pol["pattern"], _sec_re.IGNORECASE)
+
+
+def _scan_content_for_policy_events(events):
+    """Scan brain-feed events for PII, prompt-injection, and credential-leak.
+
+    Unlike _scan_events_for_threats (action-based), this inspects the text
+    *content* in event detail fields — useful for finding data that should
+    not appear in prompts or completions (PII leaking out, credentials leaking
+    in/out, injection attempts arriving via tool results or user messages).
+
+    Returns (hits, counts) with the same shape as _scan_events_for_threats.
+    """
+    hits = []
+    for ev in events:
+        detail = ev.get("detail") or ""
+        if len(detail) < 8:
+            continue
+        for sig in _POLICY_SIGNATURES:
+            m = sig["_compiled"].search(detail)
+            if m:
+                raw = m.group(0)
+                redacted = (raw[:3] + "…" + raw[-2:]) if len(raw) > 6 else "***"
+                hits.append({
+                    "rule_id":     sig["id"],
+                    "type":        sig["type"],
+                    "severity":    sig["severity"],
+                    "description": sig["description"],
+                    "matched":     redacted,
+                    "time":        ev.get("time", ""),
+                    "session":     ev.get("source", ""),
+                    "event_type":  ev.get("type", ""),
+                })
+                break  # one match per signature family per event
+    counts = {
+        "PII":    sum(1 for h in hits if h["type"] == "PII"),
+        "INJECT": sum(1 for h in hits if h["type"] == "INJECT"),
+        "LEAK":   sum(1 for h in hits if h["type"] == "LEAK"),
+        "total":  len(hits),
+    }
+    return hits, counts
+
+
 def _detect_channel_status():
     """Return list of configured channels with live connectivity status.
 

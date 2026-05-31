@@ -173,6 +173,30 @@
         <div style="color:var(--text-muted);padding:20px" data-i18n="security.scanning">Scanning...</div>
       </div>
     </div>
+    <!-- Policy Events (PII / Injection / Credential-Leak) -->
+    <div style="margin-top:14px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;" id="policy-events-panel">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+        <span style="font-size:12px;font-weight:700;color:var(--text-primary);">&#128274; <span data-i18n="security.policy_events">Policy Events</span> <span style="font-size:11px;font-weight:400;color:var(--text-muted);" data-i18n="security.policy_events_sub">(PII · Injection · Credential Leak)</span></span>
+        <span id="policy-events-scan-time" style="font-size:11px;color:var(--text-muted);"></span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px;" id="policy-counts">
+        <div style="background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;padding:10px;text-align:center;">
+          <div style="font-size:20px;font-weight:700;color:#f59e0b;" id="pol-pii-count">-</div>
+          <div style="font-size:10px;color:var(--text-muted);" data-i18n="security.pol_pii">PII</div>
+        </div>
+        <div style="background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;padding:10px;text-align:center;">
+          <div style="font-size:20px;font-weight:700;color:#ef4444;" id="pol-inject-count">-</div>
+          <div style="font-size:10px;color:var(--text-muted);" data-i18n="security.pol_inject">Injection</div>
+        </div>
+        <div style="background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;padding:10px;text-align:center;">
+          <div style="font-size:20px;font-weight:700;color:#dc2626;" id="pol-leak-count">-</div>
+          <div style="font-size:10px;color:var(--text-muted);" data-i18n="security.pol_leak">Cred Leak</div>
+        </div>
+      </div>
+      <div id="policy-events-list" style="max-height:300px;overflow-y:auto;font-size:12px;">
+        <div style="color:var(--text-muted);padding:12px;" data-i18n="security.scanning">Scanning...</div>
+      </div>
+    </div>
     <div style="
       margin-top:14px;
       background:var(--bg-secondary);

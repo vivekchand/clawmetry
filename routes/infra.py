@@ -1469,6 +1469,31 @@ def api_security_posture():
         return jsonify({"error": str(e), "score": "U", "checks": []}), 500
 
 
+@bp_security.route("/api/security/policy-events")
+def api_security_policy_events():
+    """Scan agent event content for PII, prompt-injection, and credential-leak patterns.
+
+    Optional query param: session_id — narrows scan to one session.
+    Returns {hits, counts{PII,INJECT,LEAK,total}, scanned_events}.
+    """
+    import dashboard as _d
+    session_id = (request.args.get("session_id") or "").strip()
+    events = []
+    try:
+        if session_id:
+            from routes.brain import _fetch_session_chain
+            events = _fetch_session_chain(session_id, limit=500)
+        else:
+            from routes.brain import api_brain_history
+            brain_resp = api_brain_history()
+            brain_data = brain_resp.get_json()
+            events = brain_data.get("events", [])
+    except Exception:
+        events = []
+    hits, counts = _d._scan_content_for_policy_events(events)
+    return jsonify({"hits": hits[:200], "counts": counts, "scanned_events": len(events)})
+
+
 # ── Config / Cost optimization ─────────────────────────────────────────────
 
 
