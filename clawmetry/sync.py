@@ -1010,11 +1010,74 @@ _TRIAL_STATE = {
     "last_log_day": "",     # YYYY-MM-DD of the last "sync paused" log
 }
 
+# Cloud-plan cache file the entitlements resolver reads. The daemon writes it
+# from heartbeat responses so a separate process (the Flask dashboard) can pick
+# up a cloud Pro plan without re-running auth itself. Kept in sync with
+# ``clawmetry.entitlements._CLOUD_PLAN_CACHE``.
+_CLOUD_PLAN_CACHE_PATH = os.path.expanduser("~/.clawmetry/cloud_plan.json")
+
+# Heartbeat ``plan`` strings → entitlement tier codes. Anything not in this map
+# (incl. ``trial_expired`` / None / "") clears the cache so the resolver falls
+# back to OSS-free instead of mistakenly granting an expired Pro plan.
+_HEARTBEAT_PLAN_TO_TIER = {
+    "free": "cloud_free",
+    "cloud_free": "cloud_free",
+    "trial": "trial",
+    "cloud_trial": "trial",
+    "starter": "cloud_starter",
+    "cloud_starter": "cloud_starter",
+    "pro": "cloud_pro",
+    "cloud_pro": "cloud_pro",
+    "enterprise": "enterprise",
+}
+
+
+def _persist_cloud_plan_to_disk(plan: str | None, trial_days_left=None) -> None:
+    """Mirror the heartbeat plan into ``~/.clawmetry/cloud_plan.json`` so the
+    dashboard process (which runs ``clawmetry.entitlements.get_entitlement``)
+    can resolve a cloud entitlement.
+
+    Best-effort: any IO error logs at debug and is swallowed — the cache is an
+    optimisation, the daemon still works without it. When ``plan`` is unknown
+    or signals an inactive state (``trial_expired``, ``None``) the cache file
+    is removed instead of written, so the resolver falls back to OSS-free
+    rather than granting a dead plan."""
+    tier = _HEARTBEAT_PLAN_TO_TIER.get(str(plan or "").strip().lower())
+    try:
+        if tier is None:
+            if os.path.isfile(_CLOUD_PLAN_CACHE_PATH):
+                try:
+                    os.remove(_CLOUD_PLAN_CACHE_PATH)
+                except OSError as exc:
+                    log.debug("cloud_plan: could not remove cache: %s", exc)
+        else:
+            expiry = None
+            try:
+                if tier == "trial" and isinstance(trial_days_left, (int, float)) and trial_days_left > 0:
+                    expiry = time.time() + float(trial_days_left) * 86400.0
+            except Exception:
+                expiry = None
+            payload = {"plan": tier, "node_limit": 1, "expiry": expiry}
+            os.makedirs(os.path.dirname(_CLOUD_PLAN_CACHE_PATH), exist_ok=True)
+            tmp = _CLOUD_PLAN_CACHE_PATH + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh)
+            os.replace(tmp, _CLOUD_PLAN_CACHE_PATH)
+        try:
+            from clawmetry import entitlements as _ent
+            _ent.invalidate()
+        except Exception:
+            pass
+    except Exception as exc:
+        log.debug("cloud_plan: persist failed: %s", exc)
+
 
 def _update_trial_state(resp: dict) -> None:
     """Mirror plan info from a cloud response into the local cache + log
     a one-line "upgrade to resume" message once per UTC day on transition."""
     prev_allowed = _TRIAL_STATE["sync_allowed"]
+    prev_plan = _TRIAL_STATE.get("plan")
+    prev_days = _TRIAL_STATE.get("trial_days_left")
     new_allowed = bool(resp.get("sync_allowed", True))
     _TRIAL_STATE["sync_allowed"] = new_allowed
     if "plan" in resp:
@@ -1023,6 +1086,10 @@ def _update_trial_state(resp: dict) -> None:
         _TRIAL_STATE["trial_days_left"] = resp.get("trial_days_left")
     if resp.get("upgrade_url"):
         _TRIAL_STATE["upgrade_url"] = resp["upgrade_url"]
+    if _TRIAL_STATE.get("plan") != prev_plan or _TRIAL_STATE.get("trial_days_left") != prev_days:
+        _persist_cloud_plan_to_disk(
+            _TRIAL_STATE.get("plan"), _TRIAL_STATE.get("trial_days_left")
+        )
     reason = (resp.get("reason") or "").strip()
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if not new_allowed and _TRIAL_STATE["last_log_day"] != today:
