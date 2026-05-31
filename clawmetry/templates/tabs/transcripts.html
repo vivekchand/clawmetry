@@ -10,7 +10,7 @@
     <!-- Authority footprint panel (#880) — populated async by _loadAuthorityPanel() -->
     <div id="authority-panel" style="display:none;margin-bottom:10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;overflow:hidden;">
       <div id="authority-panel-toggle" onclick="document.getElementById('authority-panel-body').style.display=document.getElementById('authority-panel-body').style.display==='none'?'':'none'" style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;cursor:pointer;user-select:none;">
-        <span style="font-size:12px;font-weight:700;color:var(--text-primary);">&#128274; <span data-i18n="transcripts.authority_footprint">Authority Footprint</span></span>
+        <span style="font-size:12px;font-weight:700;color:var(--text-primary);">🔒 <span data-i18n="transcripts.authority_footprint">Authority Footprint</span></span>
         <span id="authority-panel-summary" style="font-size:11px;color:var(--text-muted);"></span>
       </div>
       <div id="authority-panel-body" style="padding:0 12px 10px 12px;display:none;"></div>
@@ -33,7 +33,7 @@
           color:var(--text-primary);
           cursor:pointer;
           font-size:14px;
-          ">&#9664;</button>
+          ">◀</button>
         <span id="replay-pos" style="
           font-size:13px;
           color:var(--text-muted);
@@ -48,7 +48,7 @@
           color:var(--text-primary);
           cursor:pointer;
           font-size:14px;
-          ">&#9654;</button>
+          ">▶</button>
         <input type="range" id="replay-scrubber" min="0" max="0" value="0" oninput="replayJumpTo(parseInt(this.value))" style="
           flex:1;
           min-width:120px;
@@ -74,7 +74,7 @@
           cursor:pointer;
           font-size:12px;
           white-space:nowrap;
-          ">&#9654; <span data-i18n="transcripts.play">Play</span></button>
+          ">▶ <span data-i18n="transcripts.play">Play</span></button>
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;">
         <button class="replay-filter active-filter" data-type="all" onclick="replayFilter('all')" style="
@@ -94,7 +94,7 @@
           color:var(--text-secondary);
           font-size:12px;
           cursor:pointer;
-          ">&#128295; <span data-i18n="transcripts.filter_tools">Tools</span></button>
+          ">🔧 <span data-i18n="transcripts.filter_tools">Tools</span></button>
         <button class="replay-filter" data-type="thinking" onclick="replayFilter('thinking')" style="
           padding:4px 10px;
           border-radius:20px;
@@ -103,7 +103,7 @@
           color:var(--text-secondary);
           font-size:12px;
           cursor:pointer;
-          ">&#129504; <span data-i18n="transcripts.filter_thinking">Thinking</span></button>
+          ">🧠 <span data-i18n="transcripts.filter_thinking">Thinking</span></button>
         <button class="replay-filter" data-type="assistant" onclick="replayFilter('assistant')" style="
           padding:4px 10px;
           border-radius:20px;
@@ -112,7 +112,7 @@
           color:var(--text-secondary);
           font-size:12px;
           cursor:pointer;
-          ">&#129776; <span data-i18n="transcripts.filter_ai">AI</span></button>
+          ">🫰 <span data-i18n="transcripts.filter_ai">AI</span></button>
         <button class="replay-filter" data-type="user" onclick="replayFilter('user')" style="
           padding:4px 10px;
           border-radius:20px;
@@ -121,15 +121,15 @@
           color:var(--text-secondary);
           font-size:12px;
           cursor:pointer;
-          ">&#128100; <span data-i18n="transcripts.filter_user">User</span></button>
+          ">👤 <span data-i18n="transcripts.filter_user">User</span></button>
       </div>
     </div>
     <!-- Replay "as of T" state panel: model / thinking level / tokens accumulated.
          Shown by _updateReplayStatePanel() when replay controls are active. -->
     <div id="replay-state" style="display:none;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;padding:7px 14px;margin-bottom:8px;font-size:12px;color:var(--text-secondary);gap:14px;flex-wrap:wrap;align-items:center;">
-      <span>&#129302; <span data-i18n="transcripts.replay_model">Model</span>: <strong id="replay-state-model" style="color:var(--text-primary);">&#8212;</strong></span>
-      <span>&#128161; <span data-i18n="transcripts.replay_thinking">Thinking</span>: <strong id="replay-state-thinking" style="color:var(--text-primary);">&#8212;</strong></span>
-      <span>&#128200; <span data-i18n="transcripts.replay_tokens">Tokens so far</span>: <strong id="replay-state-tokens" style="color:var(--text-primary);">0</strong></span>
+      <span>🤖 <span data-i18n="transcripts.replay_model">Model</span>: <strong id="replay-state-model" style="color:var(--text-primary);">—</strong></span>
+      <span>💡 <span data-i18n="transcripts.replay_thinking">Thinking</span>: <strong id="replay-state-thinking" style="color:var(--text-primary);">—</strong></span>
+      <span>📈 <span data-i18n="transcripts.replay_tokens">Tokens so far</span>: <strong id="replay-state-tokens" style="color:var(--text-primary);">0</strong></span>
     </div>
     <div class="chat-messages" id="transcript-messages"></div>
   </div>

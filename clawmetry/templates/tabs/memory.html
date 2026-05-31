@@ -8,7 +8,7 @@
       <div class="mem-view-tab" data-view="summary" onclick="memorySwitchView('summary')" style="padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:var(--bg-secondary);border:1px solid var(--border-primary);color:var(--text-primary);" data-i18n="memory.view_summary">Summary</div>
       <div class="mem-view-tab" data-view="all" onclick="memorySwitchView('all')" style="padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:transparent;border:1px solid transparent;color:var(--text-muted);" data-i18n="memory.view_all_files">All files</div>
       <div class="mem-view-tab" data-view="access" onclick="memorySwitchView('access')" style="padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:transparent;border:1px solid transparent;color:var(--text-muted);" data-i18n="memory.view_access_log">Access log</div>
-      <button class="refresh-btn" onclick="loadMemory()" style="margin-left:8px;">&#8635;</button>
+      <button class="refresh-btn" onclick="loadMemory()" style="margin-left:8px;">↻</button>
     </div>
   </div>
 
@@ -99,7 +99,7 @@
     <div class="file-viewer" id="file-viewer">
       <div class="file-viewer-header">
         <span class="file-viewer-title" id="file-viewer-title"></span>
-        <button class="file-viewer-close" onclick="closeFileViewer()">&times; <span data-i18n="common.close">Close</span></button>
+        <button class="file-viewer-close" onclick="closeFileViewer()">× <span data-i18n="common.close">Close</span></button>
       </div>
       <div class="file-viewer-content" id="file-viewer-content"></div>
     </div>

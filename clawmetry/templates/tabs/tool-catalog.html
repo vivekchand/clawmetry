@@ -16,9 +16,9 @@
         <option value="p95" data-i18n="app.slowest_p95">Slowest p95</option>
         <option value="p50" data-i18n="app.slowest_p50">Slowest p50</option>
         <option value="errors" data-i18n="app.highest_error_rate">Highest error rate</option>
-        <option value="name" data-i18n="app.name_az">Name (A&ndash;Z)</option>
+        <option value="name" data-i18n="app.name_az">Name (A–Z)</option>
       </select>
-      <button class="refresh-btn" onclick="loadToolCatalog()">&#8635;</button>
+      <button class="refresh-btn" onclick="loadToolCatalog()">↻</button>
     </div>
   </div>
 
@@ -28,10 +28,10 @@
   <!-- Per-MCP-server rollup (#2007): which MCP server is hot / slow / failing. -->
   <div id="mcp-servers-section" style="display:none;margin-bottom:16px;">
     <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:2px;" data-i18n="app.mcp_servers">🧩 MCP servers</div>
-    <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;" data-i18n="app.tool_calls_grouped_by_mcp_server_volume_p50_p95_la">Tool calls grouped by MCP server &mdash; volume, p50/p95 latency, error rate. Model spend is the cost of the turns that called each server.</div>
+    <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;" data-i18n="app.tool_calls_grouped_by_mcp_server_volume_p50_p95_la">Tool calls grouped by MCP server  -  volume, p50/p95 latency, error rate. Model spend is the cost of the turns that called each server.</div>
     <div class="card" id="mcp-servers-card" style="padding:0;overflow:hidden;"></div>
   </div>
 
   <!-- Tool table -->
-  <div class="card" id="tc-table" style="color:var(--text-muted);font-size:13px;padding:0;overflow:hidden;" data-i18n="app.loading_tool_catalog">Loading tool catalog&hellip;</div>
+  <div class="card" id="tc-table" style="color:var(--text-muted);font-size:13px;padding:0;overflow:hidden;" data-i18n="app.loading_tool_catalog">Loading tool catalog…</div>
 </div>
