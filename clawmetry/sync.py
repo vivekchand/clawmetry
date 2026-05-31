@@ -9344,11 +9344,19 @@ def _build_traces(limit_traces=5, span_cap=100):
                     if s["parent_span_id"] and s["parent_span_id"] not in ids:
                         s["parent_span_id"] = None
                 roots = [s["span_id"] for s in spans if not s["parent_span_id"]]
-            # Perf: drop the per-span free-text payload from the snapshot — it's
-            # the bulk of the size. Cloud renders the waterfall/tree/graph from
-            # the metadata; the full text is a local-dashboard detail.
+            # Keep a TRUNCATED per-span text in the snapshot so the cloud
+            # Tracing Chat tab can show the conversation (user prompt +
+            # assistant reply), not just the waterfall metadata. Previously we
+            # popped `detail` entirely to save size, which left the cloud Chat
+            # tab showing only the trace-title prompt and never the reply
+            # (user-reported 2026-05-31). Cap each field so the bulk-text bloat
+            # the pop was guarding against stays bounded: 400 chars/span ×
+            # span_cap(100) × limit_traces(5) ≈ 200KB worst case.
             for s in spans:
-                s.pop("detail", None)
+                if s.get("detail"):
+                    s["detail"] = s["detail"][:400]
+                if s.get("output"):
+                    s["output"] = s["output"][:400]
             detail[sid] = {
                 "trace_id": sid,
                 "summary": t,
