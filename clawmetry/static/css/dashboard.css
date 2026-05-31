@@ -446,6 +446,10 @@
   .flow-path { fill: none; stroke: var(--text-muted); stroke-width: 1.8; stroke-linecap: round; transition: stroke 0.35s, opacity 0.35s; opacity: 0.45; }
   .flow-path.glow-blue { stroke: #4080e0; filter: drop-shadow(0 0 6px rgba(64,128,224,0.6)); }
   .flow-path.glow-yellow { stroke: #f0c040; filter: drop-shadow(0 0 6px rgba(240,192,64,0.6)); }
+  /* Layer 2: static reduced-motion fallback for _flowPulseEdge — instead of a
+     travelling dot we briefly brighten the connector itself (amber, ~500ms). */
+  .flow-path.flow-pulse-glow { stroke: #f0c040; opacity: 1;
+    filter: drop-shadow(0 0 7px rgba(240,192,64,0.75)); transition: stroke 0.15s, opacity 0.15s; }
   .flow-path.glow-green { stroke: #50e080; filter: drop-shadow(0 0 6px rgba(80,224,128,0.6)); }
   .flow-path.glow-red { stroke: #e04040; filter: drop-shadow(0 0 6px rgba(224,64,64,0.6)); }
   @keyframes brainPulse { 0%,100% { filter: drop-shadow(0 0 6px rgba(129,140,248,0.18)); } 50% { filter: drop-shadow(0 0 18px rgba(129,140,248,0.45)); } }
@@ -478,6 +482,64 @@
   .flow-path-infra { stroke-dasharray: 6 3; opacity: 0.3; }
   .flow-path.glow-cyan { stroke: #40a0b0; filter: drop-shadow(0 0 6px rgba(64,160,176,0.6)); stroke-dasharray: none; opacity: 1; }
   .flow-path.glow-purple { stroke: #b080ff; filter: drop-shadow(0 0 6px rgba(176,128,255,0.6)); }
+
+  /* === Flow Journey Rail (human-first headline) ===
+     A calm, editorial left-to-right "how your messages get answered" story
+     above the topology. Cool slate station cards, one warm accent (amber) for
+     the live signal + the Brain station. Live sub-stats wired in updateFlowStats. */
+  .flow-journey { margin: 0 0 16px; padding: 18px 20px 16px; border-radius: 16px;
+    background: radial-gradient(120% 160% at 0% 0%, rgba(59,130,246,0.08), transparent 55%), linear-gradient(180deg, var(--bg-secondary), var(--bg-primary));
+    border: 1px solid var(--border-primary);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 30px rgba(0,0,0,0.18); }
+  .flow-journey-title { font-family: Georgia, 'Times New Roman', 'Noto Serif', serif;
+    font-size: 19px; font-weight: 600; letter-spacing: -0.2px; color: var(--text-primary);
+    margin: 0 0 14px; line-height: 1.25; }
+  .flow-journey-rail { position: relative; }
+  .fj-track { position: absolute; left: 6px; right: 6px; top: 30px; height: 2px;
+    background: linear-gradient(90deg, var(--border-secondary), var(--border-primary), var(--border-secondary));
+    border-radius: 2px; overflow: visible; z-index: 0; }
+  .fj-signal { position: absolute; top: -3px; left: 0; width: 8px; height: 8px; border-radius: 50%;
+    background: #f0c040; box-shadow: 0 0 8px rgba(240,192,64,0.8);
+    animation: fjSignal 4.5s linear infinite; }
+  @keyframes fjSignal { 0% { left: 0; opacity: 0; } 8% { opacity: 1; } 92% { opacity: 1; } 100% { left: 100%; opacity: 0; } }
+  .fj-stations { position: relative; z-index: 1; display: flex; align-items: stretch;
+    gap: 6px; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px;
+    scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
+  .fj-stations::-webkit-scrollbar { height: 5px; }
+  .fj-stations::-webkit-scrollbar-thumb { background: var(--border-primary); border-radius: 3px; }
+  .fj-station { flex: 1 1 0; min-width: 96px; display: flex; flex-direction: column; align-items: center;
+    text-align: center; gap: 3px; padding: 12px 8px 10px; border-radius: 12px;
+    background: var(--bg-tertiary); border: 1px solid var(--border-primary);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset, 0 4px 14px rgba(0,0,0,0.10);
+    transition: border-color 0.25s, box-shadow 0.25s, transform 0.25s; }
+  .fj-station-accent { border-color: rgba(240,192,64,0.55);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.05) inset, 0 4px 16px rgba(240,192,64,0.18); }
+  /* Layer 2: the station the live packet is currently passing through. Warm
+     amber border + soft glow, consistent with .fj-station-accent but brighter
+     so the moving "stage" reads against the resting Brain accent. JS toggles
+     this via _flowRailSetStage() as msg_in / tool / msg_out events fire. */
+  .fj-station-active { border-color: #f0c040;
+    box-shadow: 0 0 0 1px #f0c040, 0 4px 18px rgba(240,192,64,0.25);
+    transform: translateY(-1px); }
+  .fj-station-active .fj-sub { color: #c79a2e; }
+  [data-theme="dark"] .fj-station-active .fj-sub { color: #f0c040; }
+  .fj-icon { font-size: 20px; line-height: 1; }
+  .fj-label { font-size: 13px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.1px; }
+  .fj-sub { font-size: 11px; font-weight: 600; color: var(--text-muted); line-height: 1.2;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fj-station-accent .fj-sub { color: #c79a2e; }
+  [data-theme="dark"] .fj-station-accent .fj-sub { color: #f0c040; }
+  .fj-arrow { flex: 0 0 auto; align-self: center; color: var(--text-muted); font-size: 14px;
+    font-weight: 700; opacity: 0.55; padding: 0 1px; }
+
+  /* Active vs available legibility: channel + tool nodes read as "available"
+     (dimmed) by default and pop to full opacity when JS toggles .active. */
+  .flow-node-channel, .flow-node-tool { opacity: 0.45; transition: opacity 0.3s ease; }
+  .flow-node-channel.active, .flow-node-tool.active { opacity: 1; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .fj-signal { animation: none; opacity: 0; }
+  }
 
   /* === Activity Heatmap === */
   .heatmap-wrap { overflow-x: auto; padding: 8px 0; }
@@ -1014,6 +1076,13 @@
     .flow-label { font-size: 7px !important; }
     .flow-node rect { stroke-width: 1 !important; }
     .flow-node.active rect { stroke-width: 1.5 !important; }
+    .flow-journey { padding: 14px 14px 12px; }
+    .flow-journey-title { font-size: 16px; margin-bottom: 10px; }
+    .fj-station { min-width: 84px; padding: 10px 6px 8px; }
+    .fj-icon { font-size: 18px; }
+    .fj-label { font-size: 12px; }
+    .fj-sub { font-size: 10px; }
+    .fj-arrow { font-size: 12px; }
     .brain-group { animation-duration: 1.8s; } /* Faster on mobile */
     
     /* Mobile zoom controls */

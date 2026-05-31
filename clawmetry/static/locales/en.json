@@ -871,5 +871,17 @@
   "usage.trace_clusters": "Trace Clusters",
   "usage.trace_clusters_hint": "auto-group sessions by behavior pattern",
   "usage.trend": "Trend",
-  "version_impact.title": "Upgrade Impact"
+  "version_impact.title": "Upgrade Impact",
+  "flow.journey_title": "How your messages get answered",
+  "flow.replies_back": "replies back to you",
+  "flow.idle": "idle",
+  "flow.active_word": "active",
+  "flow.rail_you_sub": "send a message",
+  "flow.rail_routing": "routing",
+  "flow.rail_reply": "Reply",
+  "app.channels": "Channels",
+  "app.gateway_word": "Gateway",
+  "app.brain": "Brain",
+  "app.model": "model",
+  "app.tools": "Tools"
 }
