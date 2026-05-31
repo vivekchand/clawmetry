@@ -6010,6 +6010,48 @@ async function loadBrainPage(silent) {
   }
   // Loop-signals badge (#1364) — fire-and-forget; never blocks the Brain tab.
   loadLoopSignals();
+  // At-risk impact summary (issue #2008) — fire-and-forget; never blocks.
+  loadBrainAtRisk();
+}
+
+
+// Fetch /api/outcomes/impact?window=1h and render the "Sessions at risk"
+// card on the Brain tab (issue #2008). Called fire-and-forget from
+// loadBrainPage(). Hides the card when all impact counts are zero.
+async function loadBrainAtRisk() {
+  var card = document.getElementById('brain-at-risk-card');
+  var chips = document.getElementById('brain-at-risk-chips');
+  if (!card || !chips) return;
+  try {
+    var r = await fetch('/api/outcomes/impact?window=1h');
+    if (!r.ok) return;
+    var d = await r.json();
+    var counts = (d && d.impacts) || {};
+    var _IMPACT_META = {
+      'crash-loop':    {icon: '🔁', label: 'Crash loop'},
+      'message-loss':  {icon: '📨', label: 'Message loss'},
+      'session-state': {icon: '💾', label: 'Session state'},
+      'auth-provider': {icon: '🔑', label: 'Auth error'},
+      'security':      {icon: '🛡️', label: 'Security'},
+    };
+    var anyNonZero = Object.keys(counts).some(function(k) { return counts[k] > 0; });
+    card.style.display = anyNonZero ? '' : 'none';
+    if (!anyNonZero) return;
+    var win = document.getElementById('brain-at-risk-window');
+    if (win) win.textContent = '· last ' + (d.window || '1h');
+    chips.innerHTML = '';
+    Object.keys(_IMPACT_META).forEach(function(k) {
+      if (!counts[k]) return;
+      var m = _IMPACT_META[k];
+      var chip = document.createElement('span');
+      chip.style.cssText = 'display:inline-flex;align-items:center;gap:4px;padding:3px 10px;' +
+        'border-radius:12px;background:rgba(245,158,11,0.12);' +
+        'border:1px solid rgba(245,158,11,0.3);font-size:11px;color:#f59e0b;cursor:default;';
+      chip.title = escHtml(m.label) + ': ' + counts[k] + ' session' + (counts[k] !== 1 ? 's' : '');
+      chip.innerHTML = m.icon + ' ' + escHtml(m.label) + ' <strong>' + counts[k] + '</strong>';
+      chips.appendChild(chip);
+    });
+  } catch(e) { /* never block brain load */ }
 }
 
 
