@@ -2721,6 +2721,79 @@ async function unresolveError(eid) {
 var _loadAllInFlight = null;
 var _loadAllLastFinishedMs = 0;
 var _LOADALL_COALESCE_MS = 2000;
+// Human-first Overview hero (FLYWHEEL vision). Answers, in plain words a
+// first-timer gets in ~5s: is my agent alive, what did it just do, is it
+// healthy, what did it cost. Reads only already-fetched state (no new request):
+// alive-state from /api/subagents (window._cmAgentBusy), last reply from the
+// transcript loadActivityStream already pulled (window._cmLastAgentSay), model
+// + session count from the cached /api/overview, cost from the rendered stat.
+// Idempotent + self-healing: called after each overview/active-tasks refresh.
+function _renderOverviewHero() {
+  var hero = document.getElementById('overview-hero');
+  if (!hero) return;
+  function _txt(id) { var e = document.getElementById(id); return e ? e.textContent.trim() : ''; }
+  var ov = window._cmOverview || {};
+  var busy = !!window._cmAgentBusy;
+  var stateWord = busy ? 'working' : 'idle';
+  var dot = busy ? '#22c55e' : '#3b82f6';
+  var cost = _txt('cost-today') || '$0.00';
+  var model = ov.model || _txt('model-primary') || 'your model';
+  var sessions = (typeof ov.sessionCount === 'number') ? ov.sessionCount : null;
+  var free = cost === '$0.00' || cost === '$0' ||
+             /oauth/i.test((document.getElementById('cost-trend') || {}).textContent || '');
+  var say = window._cmLastAgentSay;
+  var sayText = say && say.text ? String(say.text).replace(/\s+/g, ' ').trim() : '';
+  if (sayText.length > 90) sayText = sayText.slice(0, 90) + '…';
+
+  var lastLine = sayText
+    ? 'Last thing it did: replied <strong style="color:var(--text-primary);">“' + escHtml(sayText) + '”</strong>.'
+    : (busy ? 'It’s working on something right now.'
+            : 'Send it a message and you’ll see what it does, right here.');
+  var stats = [];
+  if (sessions != null) stats.push('💬 <strong style="color:var(--text-primary);">' + sessions + (sessions === 1 ? ' session' : ' sessions') + '</strong> today');
+  stats.push('💸 <strong style="color:var(--text-primary);">' + escHtml(cost) + '</strong>' + (free ? ' <span style="color:#22c55e;">free on your plan</span>' : ''));
+  stats.push('🧠 running <strong style="color:var(--text-primary);">' + escHtml(model) + '</strong>');
+
+  hero.innerHTML =
+    '<div style="display:flex;align-items:center;gap:11px;">'
+      + '<span style="position:relative;display:inline-flex;width:14px;height:14px;flex-shrink:0;">'
+        + '<span style="position:absolute;inset:0;border-radius:50%;background:' + dot + ';opacity:.35;animation:cmHeroPulse 2s ease-out infinite;"></span>'
+        + '<span style="position:relative;margin:auto;width:10px;height:10px;border-radius:50%;background:' + dot + ';"></span>'
+      + '</span>'
+      + '<span style="font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">' + t('overview.hero_eyebrow', null, 'Your agent') + '</span>'
+    + '</div>'
+    + '<div style="font-family:Georgia,\'Times New Roman\',serif;font-size:32px;line-height:1.15;font-weight:600;color:var(--text-primary);margin:10px 0 4px;">'
+      + (busy ? 'It’s working right now.' : 'It’s idle right now.') + '</div>'
+    + '<div style="font-size:15px;color:var(--text-secondary);margin-bottom:18px;">' + lastLine + '</div>'
+    + '<div style="display:flex;flex-wrap:wrap;gap:8px 24px;align-items:baseline;font-size:15px;color:var(--text-secondary);">'
+      + stats.map(function (s) { return '<span>' + s + '</span>'; }).join('') + '</div>';
+  hero.style.display = '';
+
+  if (!document.getElementById('cm-hero-kf')) {
+    var st = document.createElement('style'); st.id = 'cm-hero-kf';
+    st.textContent = '@keyframes cmHeroPulse{0%{transform:scale(1);opacity:.35}70%{transform:scale(2.4);opacity:0}100%{opacity:0}}';
+    document.head.appendChild(st);
+  }
+
+  // Demote the power tools (autonomy / run-health / compare / triage) into a
+  // collapsed "Advanced" disclosure — present for power users, out of the
+  // newcomer's first view. Idempotent: only relocate once.
+  var page = document.getElementById('page-overview');
+  var adv = document.getElementById('overview-advanced');
+  if (page && !adv) {
+    adv = document.createElement('details');
+    adv.id = 'overview-advanced';
+    adv.style.cssText = 'margin:6px 0 14px;border:1px solid var(--border-primary);border-radius:12px;background:var(--bg-secondary);';
+    adv.innerHTML = '<summary style="cursor:pointer;padding:12px 18px;font-size:13px;font-weight:600;color:var(--text-secondary);list-style:none;">⚙️ ' + t('overview.advanced_tools', null, 'Advanced tools') + ' <span style="color:var(--text-muted);font-weight:400;">— independence, run health, compare runs, error triage</span></summary><div id="overview-advanced-body" style="padding:0 14px 8px;"></div>';
+    page.appendChild(adv);
+    var body = adv.querySelector('#overview-advanced-body');
+    ['autonomy-card', 'health-timeline-card', 'compare-runs-card', 'triage-card'].forEach(function (id) {
+      var c = document.getElementById(id);
+      if (c && body) { c.style.marginBottom = '12px'; body.appendChild(c); }
+    });
+  }
+}
+
 async function loadAll() {
   if (_loadAllInFlight) return _loadAllInFlight;
   if (Date.now() - _loadAllLastFinishedMs < _LOADALL_COALESCE_MS) return;
@@ -2728,7 +2801,9 @@ async function loadAll() {
   try {
     // Render overview quickly; do not block on heavy usage aggregation.
     var overview = await fetchJsonWithTimeout('/api/overview', 3000);
+    window._cmOverview = overview;
     try { renderOauthBanner(overview); } catch(e) {}
+    try { _renderOverviewHero(); } catch(e) {}
 
     // Start only critical secondary panels immediately. Expensive/non-critical
     // cards are staggered below so the initial widget load does not stampede
@@ -3282,7 +3357,19 @@ async function loadActivityStream() {
       try {
         var transcript = await fetchJsonWithTimeout('/api/transcript/' + recent.id, 4000);
         var recentMessages = transcript.messages.slice(-10); // Last 10 messages
-        
+        // Stash the latest assistant reply for the Overview hero ("Last thing
+        // it did: …") — reuses this already-fetched transcript, no new request.
+        try {
+          for (var _mi = transcript.messages.length - 1; _mi >= 0; _mi--) {
+            var _m = transcript.messages[_mi];
+            if (_m && _m.role === 'assistant' && _m.content && String(_m.content).trim()) {
+              window._cmLastAgentSay = { text: String(_m.content).trim(), when: _m.timestamp || null };
+              break;
+            }
+          }
+          try { if (typeof _renderOverviewHero === 'function') _renderOverviewHero(); } catch (_e2) {}
+        } catch (_e) {}
+
         recentMessages.forEach(function(msg) {
           if (msg.role === 'assistant' && msg.content) {
             var content = msg.content.toLowerCase();
@@ -15583,6 +15670,10 @@ async function loadOverviewTasks() {
       else if (isRealFailure) failed.push(a);
       else done.push(a);
     });
+    // Alive-state for the Overview hero: working when something is actively
+    // running, otherwise idle. Re-render the hero so it reflects the change.
+    window._cmAgentBusy = running.length > 0;
+    try { if (typeof _renderOverviewHero === 'function') _renderOverviewHero(); } catch (_e) {}
     // "Recently Completed/Failed" must mean RECENT — bound by how long ago the
     // task FINISHED, not its run duration. The old `runtimeMs < 2h` check used
     // duration, so a 5-minute task that finished 6 days ago still passed and
