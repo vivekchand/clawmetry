@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Release: Tracing Chat tab shows the agent reply, not just the prompt (carries #2381) (2026-05-31)
+- **Why:** user-reported (screenshot): clicking "invoke_agent main" in the Tracing tab showed the USER prompt but never the agent reply.
+- **What:** the agent-root span is a container with empty own detail (the user prompt lives on a child prompt span, the assistant reply on a child chat/llm span's detail). `_traceExtractMessages` now, for an agent-kind span, aggregates the whole descendant subtree (prompt to user, llm to assistant, tool to tool/result, in start-time order) so the Chat tab shows the full user to assistant(+tools) conversation.
+- **Verified:** aggregation logic emits both the prompt and the reply. Frontend-only; reaches the cloud via the pinned wheel.
+
 ### Release: fix raw HTML entities + missing i18n keys leaking into the UI (carries #2378) (2026-05-31)
 - **Why:** users saw raw codes on live prod, screenshots in hand: the Flow diagram rendered "&#x1F50D; Search" instead of the magnifier emoji, turn-anatomy showed "prompt &rarr; model call(s)" instead of arrows, the Overview showed the raw i18n key "OVERVIEW.RUN_HEALTH_TITLE" instead of "Run health", and the Flow footer showed "flow.session_lanes".
 - **What:** (1) Every emoji/arrow HTML entity is now a real Unicode glyph across all 26 tab/partial templates AND all 36 locale JSON catalogs (the i18n applier renders the locale VALUE via textContent, which does not decode entities, and SVG text nodes do not either; the entities were stored in the catalogs, so converting templates alone would not have fixed it). The em-dash entity becomes a spaced hyphen to honor the user-facing em-dash ban. (2) Added the 20 i18n keys that were used in templates but missing from en.json (overview.run_health_title, flow.session_lanes, tracing.tree_gantt, transcripts.replay_*, brain.*_title, security.pol_*, ...), and made the i18n applier fall back to the element's English markup text on a missing key so a missing key can never render as the raw key again, in any locale.
