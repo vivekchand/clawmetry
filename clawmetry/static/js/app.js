@@ -9930,13 +9930,14 @@ function _traceExtractMessages(s, full) {
     if (val.message)                     { walk(val.message, role); return; }
     if (val.messages)                    { walk(val.messages, role); return; }
   }
-  if (full) { walk(full.input, 'user'); walk(full.output, 'assistant'); }
   // Agent-root spans (invoke_agent) are CONTAINERS with empty own detail — the
   // user prompt lives on a child `prompt` span and the assistant reply on a
-  // child `chat`/llm span's detail. Aggregate the whole subtree so the Chat
-  // tab shows the full user -> assistant(+tools) conversation. (Bug: clicking
-  // "invoke_agent main" showed only the user prompt, never the reply.)
-  if (!out.length && s && s.kind === 'agent'
+  // child `chat`/llm span's detail. Aggregate the whole subtree FIRST so the
+  // Chat tab shows the full user -> assistant(+tools) conversation. (Bug:
+  // clicking "invoke_agent main" showed only the user prompt, never the reply
+  // — the trace-title fallback added the prompt before this could run, so it
+  // must come before the full/title fallbacks and win when it yields content.)
+  if (s && s.kind === 'agent'
       && window._traceData && Array.isArray(window._traceData.spans)) {
     var _kids = {};
     window._traceData.spans.forEach(function(x) {
@@ -9955,7 +9956,9 @@ function _traceExtractMessages(s, full) {
           _collect(c.span_id);
         });
     })(s.span_id);
+    if (out.length) return out;  // aggregated conversation wins for agent spans
   }
+  if (full) { walk(full.input, 'user'); walk(full.output, 'assistant'); }
   // Span-level captured detail + output (set by _build_spans). For tool
   // spans, detail is the tool input and output is the tool_result content.
   if (!out.length && s) {

@@ -9344,11 +9344,19 @@ def _build_traces(limit_traces=5, span_cap=100):
                     if s["parent_span_id"] and s["parent_span_id"] not in ids:
                         s["parent_span_id"] = None
                 roots = [s["span_id"] for s in spans if not s["parent_span_id"]]
-            # Perf: drop the per-span free-text payload from the snapshot — it's
-            # the bulk of the size. Cloud renders the waterfall/tree/graph from
-            # the metadata; the full text is a local-dashboard detail.
+            # Keep a TRUNCATED per-span text in the snapshot so the cloud
+            # Tracing Chat tab can show the conversation (user prompt +
+            # assistant reply), not just the waterfall metadata. Previously we
+            # popped `detail` entirely to save size, which left the cloud Chat
+            # tab showing only the trace-title prompt and never the reply
+            # (user-reported 2026-05-31). Cap each field so the bulk-text bloat
+            # the pop was guarding against stays bounded: 400 chars/span ×
+            # span_cap(100) × limit_traces(5) ≈ 200KB worst case.
             for s in spans:
-                s.pop("detail", None)
+                if s.get("detail"):
+                    s["detail"] = s["detail"][:400]
+                if s.get("output"):
+                    s["output"] = s["output"][:400]
             detail[sid] = {
                 "trace_id": sid,
                 "summary": t,
@@ -9361,6 +9369,51 @@ def _build_traces(limit_traces=5, span_cap=100):
     except Exception as _e:
         log.debug("traces snapshot build failed: %s", _e)
         return {"list": [], "detail": {}}
+
+
+def _build_turn_anatomy(limit_sessions=8, turn_cap=60):
+    """Per-session turn-anatomy 'turns' for the cloud Turn-anatomy detail view.
+
+    The cloud container has no local event store, so /api/turn-anatomy?session_id
+    returns ``available: false`` there and the detail view showed "Event store
+    not available here" (user-reported 2026-05-31). Ship a compact per-session
+    ``turns`` slice the cm-cloud-turn-anatomy interceptor serves — built daemon
+    -side from the same events as the trace slice, via the real
+    ``routes.turn_anatomy._build_turns`` so the shape matches the OSS endpoint.
+    Bounded: turns are short label/duration rows; limit_sessions × turn_cap.
+    Returns {"detail": {session_id: {available, session_id, turns}}}.
+    """
+    try:
+        from clawmetry import local_store as _ls
+        from clawmetry.config import hide_clawmetry_session
+        import routes.turn_anatomy as _ta
+        store = _ls.get_store()
+        if store is None:
+            return {"detail": {}}
+        rows = store.query_events(limit=14000)
+        by_sid = {}
+        for e in (rows or []):
+            sid = (e.get("session_id") or "").strip()
+            if not sid or hide_clawmetry_session(sid):
+                continue
+            by_sid.setdefault(sid, []).append(e)
+        # Most-recent sessions first (by latest event ms), bounded.
+        def _latest(evs):
+            ms = [_ta._ts_ms(_ta._data(x).get("timestamp") or x.get("ts"))
+                  for x in evs]
+            return max((m for m in ms if m is not None), default=0)
+        ordered = sorted(by_sid.items(), key=lambda kv: _latest(kv[1]), reverse=True)
+        detail = {}
+        for sid, evs in ordered[:limit_sessions]:
+            turns = _ta._build_turns(evs)
+            if not turns:
+                continue
+            detail[sid] = {"available": True, "session_id": sid,
+                           "turns": turns[:turn_cap]}
+        return {"detail": detail}
+    except Exception as _e:
+        log.debug("turn-anatomy snapshot build failed: %s", _e)
+        return {"detail": {}}
 
 
 # ── Self-Evolve: delegate the review to OpenClaw itself ──────────────────────
@@ -11561,6 +11614,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "reliability": _build_reliability(),
         "memoryAccess": _build_memory_access(),
         "traces": _build_traces(),
+        "turnAnatomy": _build_turn_anatomy(),
         "skills": _build_skills(),
         # Connector liveness (incident: a channel went deaf ~37h, no alarm).
         # Lets the cloud dashboard flag a 'down' inbound channel just like the
