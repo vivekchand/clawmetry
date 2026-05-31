@@ -403,8 +403,9 @@ class GatewayTap:
         ).rstrip("/")
         if not ws_url:
             raise RuntimeError("empty gateway URL")
-        if not self.token:
-            raise RuntimeError("missing gateway token")
+        # NOTE: a no-auth gateway (gateway.auth.mode = "none") has no token
+        # and still accepts connections — do NOT abort here. The connect
+        # frame below omits the `auth` block when there's no token.
 
         ws = websocket.create_connection(f"{ws_url}/", timeout=10)
         ws.settimeout(30)
@@ -418,26 +419,34 @@ class GatewayTap:
             pass
         ws.settimeout(30)
 
-        # Connect handshake.
+        # Connect handshake. Negotiate the widest protocol range we know
+        # (3..4): older gateways speak only 3, OpenClaw 2026.5.28+ requires
+        # 4 — sending a 3..3 window makes the newer gateway reject the
+        # handshake with `protocol-mismatch`.
         cid = f"clawmetry-tap-{uuid.uuid4().hex[:8]}"
+        connect_params = {
+            "minProtocol": 3,
+            "maxProtocol": 4,
+            "client": {
+                "id": "cli",
+                "version": "clawmetry-ws-tap",
+                "platform": "python",
+                "mode": "cli",
+                "instanceId": cid,
+            },
+            "role": "operator",
+            "scopes": ["operator.admin", "operator.read"],
+        }
+        # Only send `auth` when we actually have a token — a no-auth
+        # gateway (auth.mode = "none") rejects/ignores an empty token block,
+        # and we must never claim credentials we don't have.
+        if self.token:
+            connect_params["auth"] = {"token": self.token}
         connect_msg = {
             "type": "req",
             "id": cid,
             "method": "connect",
-            "params": {
-                "minProtocol": 3,
-                "maxProtocol": 3,
-                "client": {
-                    "id": "cli",
-                    "version": "clawmetry-ws-tap",
-                    "platform": "python",
-                    "mode": "cli",
-                    "instanceId": cid,
-                },
-                "role": "operator",
-                "scopes": ["operator.admin", "operator.read"],
-                "auth": {"token": self.token},
-            },
+            "params": connect_params,
         }
         ws.send(json.dumps(connect_msg))
 
