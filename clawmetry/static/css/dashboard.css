@@ -446,6 +446,10 @@
   .flow-path { fill: none; stroke: var(--text-muted); stroke-width: 1.8; stroke-linecap: round; transition: stroke 0.35s, opacity 0.35s; opacity: 0.45; }
   .flow-path.glow-blue { stroke: #4080e0; filter: drop-shadow(0 0 6px rgba(64,128,224,0.6)); }
   .flow-path.glow-yellow { stroke: #f0c040; filter: drop-shadow(0 0 6px rgba(240,192,64,0.6)); }
+  /* Layer 2: static reduced-motion fallback for _flowPulseEdge — instead of a
+     travelling dot we briefly brighten the connector itself (amber, ~500ms). */
+  .flow-path.flow-pulse-glow { stroke: #f0c040; opacity: 1;
+    filter: drop-shadow(0 0 7px rgba(240,192,64,0.75)); transition: stroke 0.15s, opacity 0.15s; }
   .flow-path.glow-green { stroke: #50e080; filter: drop-shadow(0 0 6px rgba(80,224,128,0.6)); }
   .flow-path.glow-red { stroke: #e04040; filter: drop-shadow(0 0 6px rgba(224,64,64,0.6)); }
   @keyframes brainPulse { 0%,100% { filter: drop-shadow(0 0 6px rgba(129,140,248,0.18)); } 50% { filter: drop-shadow(0 0 18px rgba(129,140,248,0.45)); } }
@@ -510,6 +514,15 @@
     transition: border-color 0.25s, box-shadow 0.25s, transform 0.25s; }
   .fj-station-accent { border-color: rgba(240,192,64,0.55);
     box-shadow: 0 1px 0 rgba(255,255,255,0.05) inset, 0 4px 16px rgba(240,192,64,0.18); }
+  /* Layer 2: the station the live packet is currently passing through. Warm
+     amber border + soft glow, consistent with .fj-station-accent but brighter
+     so the moving "stage" reads against the resting Brain accent. JS toggles
+     this via _flowRailSetStage() as msg_in / tool / msg_out events fire. */
+  .fj-station-active { border-color: #f0c040;
+    box-shadow: 0 0 0 1px #f0c040, 0 4px 18px rgba(240,192,64,0.25);
+    transform: translateY(-1px); }
+  .fj-station-active .fj-sub { color: #c79a2e; }
+  [data-theme="dark"] .fj-station-active .fj-sub { color: #f0c040; }
   .fj-icon { font-size: 20px; line-height: 1; }
   .fj-label { font-size: 13px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.1px; }
   .fj-sub { font-size: 11px; font-weight: 600; color: var(--text-muted); line-height: 1.2;

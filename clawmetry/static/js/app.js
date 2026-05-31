@@ -14288,14 +14288,23 @@ function _startFlowSse() {
       _flowSseDebounce[dk] = now;
       if (type === 'msg_in') {
         triggerInbound(evt.channel || 'tg');
+        // Layer 2: send the live packet You → channel → gateway → brain and
+        // walk the journey rail accent through the same stages.
+        _flowPulseInbound(evt.channel || 'tg');
         addFlowFeedItem('📨 Message via ' + (evt.channel || 'telegram'), '#c0a0ff', 'inbound');
         flowStats.msgTimestamps.push(now);
       } else if (type === 'msg_out') {
         triggerOutbound(evt.channel || 'tg');
+        // Layer 2: the reply travels brain → You along the low return loop.
+        _flowPulseEdge('path-brain-reply');
+        _flowRailSetStage('reply');
         addFlowFeedItem('📤 Replied via ' + (evt.channel || 'telegram'), '#50e080', 'reply');
       } else if (type === 'tool_call') {
         var toolName = evt.tool || 'exec';
         triggerToolCall(toolName);
+        // Layer 2: pulse the brain→tool edge for this bucket + accent Tools.
+        _flowPulseEdge('path-brain-' + toolName);
+        _flowRailSetStage('tools');
         var toolNames = {exec:'running a command',browser:'browsing the web',search:'searching the web',cron:'scheduling',tts:'generating speech',memory:'accessing memory'};
         addFlowFeedItem('⚡ ' + (toolName || 'tool') + ': ' + (toolNames[toolName] || 'using ' + toolName), '#f0c040', 'tool');
         flowStats.events++;
@@ -14745,6 +14754,99 @@ function _flowFeedLabelForTool(toolName) {
   return toolNames[toolName] || 'using ' + toolName;
 }
 
+// ── Layer 2: live "what's firing right now" packet view ─────────────────────
+// Flow STAYS a live view (turn-replay lives on the Tracing screen). These two
+// helpers make the diagram + rail visibly track real events as they fire:
+//   _flowPulseEdge(pathId) — one bright dot travels that exact connector once
+//   _flowRailSetStage(s)   — accents the matching journey-rail station
+// NOTE: the canvas nodes are harness component CLASSES (the bucket map collapses
+// many real tools into ~6); #flow-live-feed is the exact per-call truth. Deeper
+// per-component fidelity comes with the Tracing wiring.
+function _flowPulseEdge(pathId) {
+  try {
+    if (!pathId) return;
+    var svg = document.getElementById('flow-svg');
+    if (!svg) return;
+    var path = document.getElementById(pathId);
+    if (!path) return; // unknown connector → no-op (e.g. runtime-variant SVG)
+    var ns = 'http://www.w3.org/2000/svg';
+    // Reduced motion: skip the travelling dot, just briefly brighten the path.
+    var reduce = false;
+    try { reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) {}
+    if (reduce) {
+      path.classList.add('flow-pulse-glow');
+      setTimeout(function() { try { path.classList.remove('flow-pulse-glow'); } catch (e2) {} }, 500);
+      return;
+    }
+    var dot = document.createElementNS(ns, 'circle');
+    dot.setAttribute('r', '5');
+    dot.setAttribute('fill', '#f0c040');
+    dot.setAttribute('class', 'flow-pulse-dot');
+    dot.style.filter = 'drop-shadow(0 0 8px rgba(240,192,64,0.85))';
+    var anim = document.createElementNS(ns, 'animateMotion');
+    anim.setAttribute('dur', '0.7s');
+    anim.setAttribute('fill', 'remove');
+    anim.setAttribute('begin', 'indefinite');
+    var mpath = document.createElementNS(ns, 'mpath');
+    // Set BOTH href and the namespaced xlink:href for cross-browser support.
+    try { mpath.setAttribute('href', '#' + pathId); } catch (e3) {}
+    try { mpath.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', '#' + pathId); } catch (e4) {}
+    anim.appendChild(mpath);
+    dot.appendChild(anim);
+    svg.appendChild(dot);
+    var removed = false;
+    var remove = function() {
+      if (removed) return; removed = true;
+      try { if (dot.parentNode) dot.parentNode.removeChild(dot); } catch (e5) {}
+    };
+    try { anim.addEventListener('endEvent', remove); } catch (e6) {}
+    // Fallback in case endEvent never fires (older engines).
+    setTimeout(remove, 900);
+    try { anim.beginElement(); } catch (e7) { /* if begin fails, the fallback timeout still cleans up */ }
+  } catch (e) {}
+}
+
+// Module-level idle-decay timer: after ~4s of no events the rail returns to
+// its resting state (Brain accented), matching the default look.
+var _flowRailStageTimer = null;
+function _flowRailSetStage(stage) {
+  try {
+    var stations = document.querySelectorAll('#page-flow .fj-station[data-stage]');
+    if (stations && stations.length) {
+      for (var i = 0; i < stations.length; i++) {
+        var on = stations[i].getAttribute('data-stage') === stage;
+        stations[i].classList.toggle('fj-station-active', on);
+      }
+    }
+  } catch (e) {}
+  // Reset the idle-decay timer on every call; resting state = Brain.
+  try {
+    if (_flowRailStageTimer) { clearTimeout(_flowRailStageTimer); }
+    if (stage !== 'brain') {
+      _flowRailStageTimer = setTimeout(function() { _flowRailSetStage('brain'); }, 4000);
+    } else {
+      _flowRailStageTimer = null;
+    }
+  } catch (e2) {}
+}
+// Expose for manual testing + the live handlers below.
+try { window._flowPulseEdge = _flowPulseEdge; window._flowRailSetStage = _flowRailSetStage; } catch (e) {}
+
+// Drive the inbound packet: You → channel → gateway → brain, with a small
+// stagger so the dot visibly hops node to node. ``ch`` is a full channel name
+// (telegram/signal/...) or already-short code; _chPathKey maps it to the path
+// id suffix used by path-human-<ch> / path-<ch>-gw.
+function _flowPulseInbound(ch) {
+  try {
+    var key = (typeof _chPathKey === 'function') ? _chPathKey(ch) : 'tg';
+    setTimeout(function() { _flowPulseEdge('path-human-' + key); _flowRailSetStage('channels'); }, 0);
+    setTimeout(function() { _flowPulseEdge('path-' + key + '-gw'); _flowRailSetStage('gateway'); }, 180);
+    setTimeout(function() { _flowPulseEdge('path-gw-brain'); _flowRailSetStage('brain'); }, 360);
+  } catch (e) {
+    try { _flowPulseEdge('path-gw-brain'); } catch (e2) {}
+  }
+}
+
 function _backfillFlowFromBrain() {
   // One-shot historical backfill from /api/brain-history (DuckDB-backed).
   // Populates Active Tools with the most recent tool calls so the panel is
@@ -14794,12 +14896,25 @@ function _startFlowBrainStream() {
         var ev = JSON.parse(e.data);
         if (!ev || !ev.type) return;
         var tool = _brainTypeToFlowTool(ev.type);
-        if (!tool) return;
-        // Drive Active Tools + the existing tool-call animation off the same
-        // DuckDB-backed event. triggerToolCall already handles the 5s expiry.
-        triggerToolCall(tool);
-        var label = '⚡ ' + tool + ': ' + _flowFeedLabelForTool(tool);
-        addFlowFeedItem(label, '#f0c040', 'tool');
+        // Accuracy: a type that maps to a real bucket lights that component +
+        // pulses its edge; an UNMAPPED type must NOT falsely light "Exec" — we
+        // pulse the neutral Skills edge and still record the REAL name in the
+        // feed (#flow-live-feed is the exact per-call truth).
+        if (tool) {
+          // Drive Active Tools + the existing tool-call animation off the same
+          // DuckDB-backed event. triggerToolCall already handles the 5s expiry.
+          triggerToolCall(tool);
+          _flowPulseEdge('path-brain-' + tool);
+          _flowRailSetStage('tools');
+          var label = '⚡ ' + tool + ': ' + _flowFeedLabelForTool(tool);
+          addFlowFeedItem(label, '#f0c040', 'tool');
+        } else {
+          // Unknown tool class — neutral pulse, honest label with the raw type.
+          _flowPulseEdge('path-brain-skills');
+          _flowRailSetStage('tools');
+          var rawName = String(ev.tool || ev.type || 'tool');
+          addFlowFeedItem('⚡ ' + rawName, '#f0c040', 'tool');
+        }
         flowStats.events++;
       } catch(e2) {}
     };
@@ -14878,6 +14993,16 @@ function enhanceArchitectureClarity() {
   });
 }
 
+// Format a token count for the Flow stat cards / rail. Never emits "0K"
+// (which read like "OK"): show the raw number under 1k, "12K" up to a
+// million, and "1.2M" above. Returns "-" for missing/NaN input so the
+// card keeps its neutral placeholder instead of "0".
+function _fmtFlowTokens(tokens) {
+  var n = Number(tokens);
+  if (!isFinite(n) || n <= 0) return ' - ';
+  return n < 1000 ? String(n) : n < 1e6 ? Math.round(n / 1000) + 'K' : (n / 1e6).toFixed(1) + 'M';
+}
+
 function updateFlowStats() {
   // Tab-scoped: this polls /api/overview for the Flow tab's live stats. It
   // must NOT fire on every other screen — it was hitting /api/overview ~9x/15s
@@ -14927,7 +15052,7 @@ function updateFlowStats() {
   if (flowStats.events % 15 === 0) {
     fetchJsonWithTimeout('/api/overview', 5000).then(function(d) {
       var tok = document.getElementById('flow-tokens');
-      if (tok) tok.textContent = (d.mainTokens / 1000).toFixed(0) + 'K';
+      if (tok) tok.textContent = _fmtFlowTokens(d.mainTokens);
     }).catch(function(){});
   }
 }

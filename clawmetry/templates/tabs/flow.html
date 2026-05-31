@@ -15,37 +15,37 @@
       <div class="flow-journey-rail">
         <div class="fj-track" aria-hidden="true"><span class="fj-signal"></span></div>
         <div class="fj-stations">
-          <div class="fj-station">
+          <div class="fj-station" data-stage="you">
             <span class="fj-icon">🧑</span>
             <span class="fj-label" data-i18n="app.you">You</span>
             <span class="fj-sub" data-i18n="flow.rail_you_sub">send a message</span>
           </div>
           <div class="fj-arrow" aria-hidden="true">→</div>
-          <div class="fj-station">
+          <div class="fj-station" data-stage="channels">
             <span class="fj-icon">📨</span>
             <span class="fj-label" data-i18n="app.channels">Channels</span>
             <span class="fj-sub" id="rail-channels-stat">0/min</span>
           </div>
           <div class="fj-arrow" aria-hidden="true">→</div>
-          <div class="fj-station">
+          <div class="fj-station" data-stage="gateway">
             <span class="fj-icon">🔀</span>
             <span class="fj-label" data-i18n="app.gateway_word">Gateway</span>
             <span class="fj-sub" id="rail-gateway-stat" data-i18n="flow.rail_routing">routing</span>
           </div>
           <div class="fj-arrow" aria-hidden="true">→</div>
-          <div class="fj-station fj-station-accent">
+          <div class="fj-station fj-station-accent" data-stage="brain">
             <span class="fj-icon">🧠</span>
             <span class="fj-label" data-i18n="app.brain">Brain</span>
             <span class="fj-sub" id="rail-brain-stat" data-i18n="app.model">model</span>
           </div>
           <div class="fj-arrow" aria-hidden="true">→</div>
-          <div class="fj-station">
+          <div class="fj-station" data-stage="tools">
             <span class="fj-icon">🛠️</span>
             <span class="fj-label" data-i18n="app.tools">Tools</span>
             <span class="fj-sub" id="rail-tools-stat" data-i18n="flow.idle">idle</span>
           </div>
           <div class="fj-arrow" aria-hidden="true">→</div>
-          <div class="fj-station">
+          <div class="fj-station" data-stage="reply">
             <span class="fj-icon">↩️</span>
             <span class="fj-label" data-i18n="flow.rail_reply">Reply</span>
             <span class="fj-sub" data-i18n="flow.replies_back">replies back to you</span>
@@ -103,9 +103,13 @@
            canvas. No diagonals, no crossings. -->
       <path class="flow-path flow-path-infra" id="path-brain-infra" d="M 420 235 L 420 438"/>
 
-      <!-- Faint reply/return loop: brain back to "You". Routed low/under the
-           diagram so it never crosses the brain->tool fan-out. -->
-      <path id="path-brain-reply" d="M 415 232 C 300 415, 130 230, 64 78"
+      <!-- Faint reply/return loop: brain back to "You". Routed LOW — it drops
+           from the brain's bottom, sweeps along just above the infrastructure
+           band (well under the brain->tool fan-out on the right and the
+           channel/gateway boxes on the left), then rises up the far-left
+           margin (x~12, left of the channel column at x=20) back to "You".
+           No control point re-enters the node bands, so nothing crosses a box. -->
+      <path id="path-brain-reply" d="M 415 232 C 360 412, 120 422, 12 360 C 6 240, 8 120, 60 78"
             fill="none" stroke="var(--text-muted)" stroke-width="1.4"
             stroke-dasharray="3 5" stroke-linecap="round" opacity="0.28"/>
       <text class="flow-label" x="225" y="372" style="font-size:9px;opacity:0.7;" data-i18n="flow.replies_back">replies back to you</text>
