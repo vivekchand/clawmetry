@@ -6834,6 +6834,46 @@ async function loadSecurityPage(silent) {
       if (el) el.innerHTML = '<div style="color:var(--text-error);padding:20px">' + t("app.scan_failed", null, "Scan failed") + ': ' + escHtml(String(e)) + '</div>';
     }
   }
+  // Policy events (PII / injection / credential leak)
+  try {
+    var pd = await fetchJsonWithTimeout('/api/security/policy-events', 10000);
+    var pc = pd.counts || {};
+    var piiEl = document.getElementById('pol-pii-count');
+    var injEl = document.getElementById('pol-inject-count');
+    var lkEl  = document.getElementById('pol-leak-count');
+    if (piiEl) piiEl.textContent = pc.PII || 0;
+    if (injEl) injEl.textContent = pc.INJECT || 0;
+    if (lkEl)  lkEl.textContent  = pc.LEAK || 0;
+    var stEl = document.getElementById('policy-events-scan-time');
+    if (stEl) stEl.textContent = new Date().toLocaleTimeString();
+    var listEl = document.getElementById('policy-events-list');
+    if (listEl) {
+      var hits = pd.hits || [];
+      if (!hits.length) {
+        listEl.innerHTML = '<div style="color:var(--text-muted);padding:12px;" data-i18n="security.no_policy_events">No policy events detected in recent activity.</div>';
+      } else {
+        var _polSevColor = {critical:'#dc2626', high:'#ef4444', medium:'#f59e0b', low:'#64748b'};
+        var _polTypeIcon = {PII:'&#128100;', INJECT:'&#128680;', LEAK:'&#128273;'};
+        var html = '';
+        hits.slice(0, 30).forEach(function(h) {
+          var col = _polSevColor[h.severity] || '#64748b';
+          var icon = _polTypeIcon[h.type] || '&#9888;';
+          html += '<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);">';
+          html += '<span style="font-size:13px;flex-shrink:0;">' + icon + '</span>';
+          html += '<div style="flex:1;min-width:0;">';
+          html += '<span style="font-size:11px;font-weight:600;color:' + col + ';">' + escHtml(h.type) + ' · ' + escHtml(h.severity) + '</span>';
+          html += ' <span style="font-size:11px;color:var(--text-muted);">' + escHtml(h.description) + '</span>';
+          if (h.matched) html += ' <code style="font-size:10px;background:var(--bg-primary);padding:1px 4px;border-radius:3px;color:#a78bfa;">' + escHtml(h.matched) + '</code>';
+          if (h.time) html += '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">' + escHtml(String(h.time).slice(0, 19)) + (h.session ? ' · ' + escHtml(String(h.session).slice(0, 20)) : '') + '</div>';
+          html += '</div></div>';
+        });
+        listEl.innerHTML = html;
+      }
+    }
+  } catch(e) {
+    var pel = document.getElementById('policy-events-list');
+    if (pel && !silent) pel.innerHTML = '<div style="color:var(--text-muted);padding:12px;font-size:11px;">Policy scan unavailable.</div>';
+  }
   if (_securityRefreshTimer) clearTimeout(_securityRefreshTimer);
   if (document.getElementById('page-security') && document.getElementById('page-security').classList.contains('active')) {
     _securityRefreshTimer = setTimeout(function() { loadSecurityPage(true); }, 30000);
@@ -12226,12 +12266,13 @@ async function viewTranscript(sessionId) {
   window._replayIndex = 0;
   window._replayFilter = 'all';
   try {
-    // Fetch transcript, compaction markers, config-drift, and lexical drift in parallel
-    var [data, compactionsData, driftData, lexicalDriftData] = await Promise.all([
+    // Fetch transcript, compaction markers, config-drift, lexical drift, and policy events in parallel
+    var [data, compactionsData, driftData, lexicalDriftData, policyData] = await Promise.all([
       fetch('/api/transcript/' + encodeURIComponent(sessionId)).then(r => r.json()),
       fetch('/api/compactions?session_id=' + encodeURIComponent(sessionId) + '&summary_chars=5000').then(r => r.json()).catch(() => ({compactions: []})),
       fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/config-drift').then(r => r.json()).catch(() => ({has_drift: false})),
-      fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/lexical-drift').then(r => r.json()).catch(() => null)
+      fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/lexical-drift').then(r => r.json()).catch(() => null),
+      fetch('/api/security/policy-events?session_id=' + encodeURIComponent(sessionId)).then(r => r.json()).catch(() => null)
     ]);
     var compactions = compactionsData.compactions || [];
     // Metadata
@@ -12261,6 +12302,22 @@ async function viewTranscript(sessionId) {
     if (lexicalDriftData && lexicalDriftData.has_drift) {
       metaHtml += '<div class="stat-row" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border-secondary);">';
       metaHtml += '<span class="stat-label">⚠ Lexical Drift</span><span class="stat-val" title="TF-IDF cosine similarity vs turn 0 (lexical vocabulary overlap)">avg ' + lexicalDriftData.avg_similarity + ' · min ' + lexicalDriftData.min_similarity + ' at turn ' + lexicalDriftData.min_turn + '</span>';
+      metaHtml += '</div>';
+    }
+    // Policy events badge — shown when PII, injection, or credential-leak patterns fire
+    if (policyData && policyData.counts && policyData.counts.total > 0) {
+      var pc = policyData.counts;
+      var hasLeak = (pc.LEAK || 0) > 0;
+      var hasInj  = (pc.INJECT || 0) > 0;
+      var bgCol   = hasLeak ? 'rgba(220,38,38,0.12)' : 'rgba(245,158,11,0.12)';
+      var bdCol   = hasLeak ? 'rgba(220,38,38,0.4)'  : 'rgba(245,158,11,0.4)';
+      var txCol   = hasLeak ? '#fca5a5' : '#fde68a';
+      var parts   = [];
+      if (pc.LEAK)   parts.push('🔑 ' + pc.LEAK + ' cred-leak');
+      if (pc.INJECT) parts.push('⚠ ' + pc.INJECT + ' injection');
+      if (pc.PII)    parts.push('👤 ' + pc.PII + ' PII');
+      metaHtml += '<div style="margin-top:10px;padding:7px 10px;background:' + bgCol + ';border:1px solid ' + bdCol + ';border-radius:6px;font-size:11px;color:' + txCol + ';line-height:1.4;" title="Open the Security tab to view full policy event details">';
+      metaHtml += '🔒 <strong>Policy events:</strong> ' + parts.join(' · ') + '. <a href="#" onclick="switchTab(\'security\');return false;" style="color:inherit;text-decoration:underline;">View in Security tab</a>';
       metaHtml += '</div>';
     }
     document.getElementById('transcript-meta').innerHTML = metaHtml;
