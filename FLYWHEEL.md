@@ -6,6 +6,12 @@ How an autonomous agent should ship a change in this repo **end to end**: code �
 
 The north star: **don't stop at "code compiles." Stop at "verified working in production, by me, with evidence."** Use `/goal` and keep iterating until that's true.
 
+> ## 💗 The vision — who we build for (read before every UI change)
+> **We are building the observability tool for people who have never used one.** Not for SREs who live in dashboards — for everyone. We are entering an era where an ordinary person will run, delegate to, and have to *manage hundreds of AI agents*, and they will need to understand, at a glance and without jargon: *is my agent alive? what is it doing? is it stuck? what did it cost me? can I trust it?* ClawMetry is the calm, human window into that. The person opening it may never have heard the word "observability," may not know what a "span" or "session id" or "event" is, and should never have to.
+> - **Design for the newcomer, not the expert.** If a first-timer with zero context can't understand a screen in five seconds, it's not done. Lead with the human story (is it on, what's it doing, what did it cost), not the toolbox. Power tools (compare runs, error triage, raw-id inputs) are demoted and progressively disclosed, never the first thing a beginner sees. No empty box that asks them to paste an ID they don't have.
+> - **Empathy is the spec.** Every label, empty state, and default is a small act of care for a real, possibly-overwhelmed human. Plain words over jargon. Reassurance over noise. Beauty and warmth are features, not decoration.
+> - **Use the `frontend-design` skill for UI work** — bring real design taste (intentional typography, color, motion) plus the empathy above. Build with care and love for the person on the other side of the screen; never "fix UI like a backend dev."
+
 > ## ⛔ The "done" bar (non-negotiable)
 > **Never tell the user a fix is "done" until it is MERGED, RELEASED to PyPI, the cloud has DEPLOYED it, and you have VERIFIED it live (decrypt the snapshot AND/OR a browser screenshot of the actual tab).** "PR is up / CI green / merged" is *not* done — code that isn't deployed helps nobody. A diagnosis is not a fix; a merge is not a deploy; a deploy is not a verification. Land the whole chain, then say done — once, plainly, with the evidence.
 
