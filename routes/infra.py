@@ -53,8 +53,18 @@ def resolve_gateway_log_path():
     legacy = os.path.join(
         os.path.expanduser("~"), ".openclaw", "logs", "gateway.log"
     )
-    if os.path.exists(legacy):
-        return legacy
+    # Prefer the legacy path only when it actually holds data. OpenClaw
+    # 2026.5.28 leaves a 0-byte ~/.openclaw/logs/gateway.log behind while
+    # writing the real log to /tmp/openclaw/openclaw-<date>.log; preferring
+    # the empty file unconditionally made the Gateway panel and WebChat
+    # detection read nothing. A non-empty legacy file still wins (older
+    # gateways that genuinely write there).
+    try:
+        if os.path.exists(legacy) and os.path.getsize(legacy) > 0:
+            return legacy
+    except OSError:
+        if os.path.exists(legacy):
+            return legacy
     # Newest /tmp/openclaw/openclaw-*.log. Use os.listdir (not glob) so we
     # don't depend on glob's stat behaviour, then pick the most recent by
     # mtime — falling back to filename order if mtime can't be read.

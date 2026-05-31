@@ -683,12 +683,16 @@ def api_channels():
     # where the user is using the OpenClaw control UI but hasn't configured
     # webchat as a formal channel.
     try:
-        gw_log_paths = [
-            os.path.expanduser("~/.openclaw/logs/gateway.log"),
-            os.path.expanduser("~/.openclaw-dev/logs/gateway.log"),
-        ]
-        gw_log = next((p for p in gw_log_paths if os.path.isfile(p)), None)
-        if gw_log:
+        # Resolve the live gateway log across versions. OpenClaw 2026.5.28+
+        # writes /tmp/openclaw/openclaw-<date>.log (the legacy
+        # ~/.openclaw/logs/gateway.log is now an empty stub), so a hardcoded
+        # legacy path detected webchat nowhere. The "webchat connected"
+        # substring is present inside the new structured-JSON line's
+        # `message` field and the line also carries `"time":"<today>T..."`,
+        # so the plain substring test still works on the raw JSON line.
+        from routes.infra import resolve_gateway_log_path  # late import
+        gw_log = resolve_gateway_log_path()
+        if gw_log and os.path.isfile(gw_log):
             today = datetime.now().strftime("%Y-%m-%d")
             with open(gw_log) as _wf:
                 for line in _wf:

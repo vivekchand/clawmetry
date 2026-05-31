@@ -1305,12 +1305,18 @@ def api_component_gateway():
     if not log_path:
         return jsonify({"routes": [], "stats": stats, "total": 0})
 
-    # Detect format by content, not just filename. OpenClaw 2026.5.28+
-    # writes plaintext "ISO-TS [tag] message" lines to dated files
-    # (/tmp/openclaw/openclaw-YYYY-MM-DD.log) as well as gateway.log, while
-    # older builds wrote JSON-per-line to openclaw-{today}.log. Sniff the
-    # first non-empty line: a leading ISO timestamp + "[tag]" ⇒ plaintext.
+    # Detect format by content, not just filename. Three shapes exist:
+    #   * plaintext "ISO-TS [tag] message"   (some 2026.4+ gateway.log builds)
+    #   * structured JSON, one object/line   (OpenClaw 2026.5.28+, the new
+    #       default at /tmp/openclaw/openclaw-YYYY-MM-DD.log)
+    #   * legacy JSON-per-line               (older openclaw-{today}.log)
+    # The 2026.5.28 JSON object reconstructs the OLD plaintext body in its
+    # `message` field and carries the subsystem inside `["0"]` as a JSON
+    # string (e.g. '{"subsystem":"gateway/ws"}'); the last path segment ("ws")
+    # is the tag the plaintext parser already understands. We sniff the first
+    # non-empty line and pick a branch.
     is_plaintext = os.path.basename(log_path) == "gateway.log"
+    is_structured_json = False
     if not is_plaintext:
         try:
             with open(log_path, "r") as _f:
@@ -1320,9 +1326,52 @@ def api_component_gateway():
                         continue
                     if re.match(r"^\d{4}-\d{2}-\d{2}T[\d:.+\-]+\s+\[", _line):
                         is_plaintext = True
+                    elif _line.startswith("{"):
+                        try:
+                            _o = json.loads(_line)
+                        except (ValueError, TypeError):
+                            _o = None
+                        # 2026.5.28 lines carry a top-level "message" key AND
+                        # "time"; the legacy JSON schema keyed routing off "1"
+                        # ("embedded run start:", "Delivery failed", …) with no
+                        # standalone "message". Prefer the structured branch
+                        # only when "message" + "time" are present so we don't
+                        # hijack the legacy parser below.
+                        if isinstance(_o, dict) and "message" in _o and "time" in _o:
+                            is_structured_json = True
                     break
         except Exception:
             pass
+
+    def _reconstruct_structured_line(o):
+        """Reconstruct the legacy plaintext "TS [tag] body" line from a
+        2026.5.28 structured-JSON log object so the existing
+        ``_parse_plaintext_line`` categorizer can be reused verbatim.
+
+        Returns the reconstructed string, or ``None`` when the object lacks a
+        usable timestamp / body (caller skips it). Never raises.
+        """
+        try:
+            ts = o.get("time") or ""
+            body = o.get("message", "") or ""
+            if not ts or not body:
+                return None
+            # Subsystem lives in o["0"] as a JSON string like
+            # '{"subsystem":"gateway/ws"}'. Decode it and take the last path
+            # segment ("gateway/ws" -> "ws") as the tag. Fall back to
+            # "gateway" when "0" is a plain string (e.g. fatal error lines).
+            tag = "gateway"
+            zero = o.get("0")
+            if isinstance(zero, str) and zero.startswith("{"):
+                try:
+                    sub = json.loads(zero).get("subsystem") or ""
+                    if sub:
+                        tag = sub.rsplit("/", 1)[-1]
+                except (ValueError, TypeError):
+                    pass
+            return f"{ts} [{tag}] {body}"
+        except Exception:
+            return None
 
     def _parse_plaintext_line(line):
         """Parse one '[TS] [tag] message' line from gateway.log.
@@ -1390,6 +1439,24 @@ def api_component_gateway():
                 # Plain-text branch for OpenClaw 2026.4+ rolling gateway.log
                 if is_plaintext:
                     route, cat = _parse_plaintext_line(line)
+                    if route is not None:
+                        if cat:
+                            stats[cat] = stats.get(cat, 0) + 1
+                        routes.append(route)
+                    continue
+                # Structured-JSON branch for OpenClaw 2026.5.28+. Reconstruct
+                # the legacy "TS [tag] body" line and reuse the plaintext
+                # categorizer so res ✓/✗, connected, crons, heartbeats and
+                # the `today` date filter all behave identically.
+                if is_structured_json:
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    recon = _reconstruct_structured_line(obj)
+                    if not recon:
+                        continue
+                    route, cat = _parse_plaintext_line(recon)
                     if route is not None:
                         if cat:
                             stats[cat] = stats.get(cat, 0) + 1
