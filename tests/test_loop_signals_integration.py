@@ -1,4 +1,13 @@
-"""E2E tests for the LoopDetector → DuckDB → /api/loop-signals path (#1364).
+"""Integration tests for the loop-signal storage+read contract
+(LocalStore.ingest_loop_signal → DuckDB → /api/loop-signals), #1364.
+
+Renamed 2026-05-31 from test_loop_signals_e2e: this pins the deterministic
+STORAGE+READ contract (schema round-trip, upsert, query filters) with
+controlled synthetic loop-signal rows — not an end-to-end run of the proxy
+LoopDetector. Synthetic input is appropriate for a deterministic contract
+test (the no-synthetic-seeds rule targets e2e tests).
+
+Original note: E2E tests for the LoopDetector → DuckDB → /api/loop-signals path (#1364).
 
 Three surfaces:
   1. Schema round-trip — ``LocalStore.ingest_loop_signal`` writes a row

@@ -23,7 +23,7 @@ test-e2e:
 # Self-contained: drives the daemon ingest helper + relay shapes against an
 # isolated DuckDB file. No live server, no gateway, no network. ~5s.
 test-e2e-duckdb:
-	python3 -m pytest tests/test_e2e_duckdb_relay.py -v
+	python3 -m pytest tests/test_duckdb_relay_integration.py -v
 
 test-workflow:
 	python3 -m pytest tests/test_e2e_nightly_workflow.py -v
