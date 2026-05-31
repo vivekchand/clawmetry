@@ -9931,6 +9931,31 @@ function _traceExtractMessages(s, full) {
     if (val.messages)                    { walk(val.messages, role); return; }
   }
   if (full) { walk(full.input, 'user'); walk(full.output, 'assistant'); }
+  // Agent-root spans (invoke_agent) are CONTAINERS with empty own detail — the
+  // user prompt lives on a child `prompt` span and the assistant reply on a
+  // child `chat`/llm span's detail. Aggregate the whole subtree so the Chat
+  // tab shows the full user -> assistant(+tools) conversation. (Bug: clicking
+  // "invoke_agent main" showed only the user prompt, never the reply.)
+  if (!out.length && s && s.kind === 'agent'
+      && window._traceData && Array.isArray(window._traceData.spans)) {
+    var _kids = {};
+    window._traceData.spans.forEach(function(x) {
+      if (x.parent_span_id) (_kids[x.parent_span_id] = _kids[x.parent_span_id] || []).push(x);
+    });
+    (function _collect(id) {
+      (_kids[id] || []).slice()
+        .sort(function(a, b) { return (a.start_ms || 0) - (b.start_ms || 0); })
+        .forEach(function(c) {
+          if (c.kind === 'prompt') add('user', c.detail);
+          else if (c.kind === 'llm') add('assistant', c.detail);
+          else if (c.kind === 'tool') {
+            if (c.detail) add('tool', (c.tool ? c.tool + ': ' : '') + c.detail);
+            if (c.output) add('tool_result', c.output);
+          }
+          _collect(c.span_id);
+        });
+    })(s.span_id);
+  }
   // Span-level captured detail + output (set by _build_spans). For tool
   // spans, detail is the tool input and output is the tool_result content.
   if (!out.length && s) {
