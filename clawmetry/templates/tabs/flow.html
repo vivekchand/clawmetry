@@ -2,8 +2,8 @@
   <div class="flow-stats">
     <div class="flow-stat"><span class="flow-stat-label" data-i18n="flow.messages_per_min">Messages / min</span><span class="flow-stat-value" id="flow-msg-rate">0</span></div>
     <div class="flow-stat"><span class="flow-stat-label" data-i18n="flow.actions_taken">Actions Taken</span><span class="flow-stat-value" id="flow-event-count">0</span></div>
-    <div class="flow-stat"><span class="flow-stat-label" data-i18n="flow.active_tools">Active Tools</span><span class="flow-stat-value" id="flow-active-tools">&mdash;</span></div>
-    <div class="flow-stat"><span class="flow-stat-label" data-i18n="flow.tokens_used">Tokens Used</span><span class="flow-stat-value" id="flow-tokens">&mdash;</span></div>
+    <div class="flow-stat"><span class="flow-stat-label" data-i18n="flow.active_tools">Active Tools</span><span class="flow-stat-value" id="flow-active-tools"> - </span></div>
+    <div class="flow-stat"><span class="flow-stat-label" data-i18n="flow.tokens_used">Tokens Used</span><span class="flow-stat-value" id="flow-tokens"> - </span></div>
   </div>
   <div class="flow-container">
     <svg id="flow-svg" viewBox="0 0 980 550" preserveAspectRatio="xMidYMid meet">
@@ -157,7 +157,7 @@
       <g class="flow-node flow-node-brain brain-group" id="node-brain">
         <rect x="330" y="115" width="180" height="120" rx="12" ry="12" fill="#C62828" stroke="#B71C1C" stroke-width="3" filter="url(#dropShadow)"/>
         <text x="420" y="133" style="font-size:8px;fill:#a5b4fc;text-transform:uppercase;letter-spacing:1px;text-anchor:middle;" data-i18n="app.agent_runtime">Agent Runtime</text>
-        <text x="420" y="155" style="font-size:20px;text-anchor:middle;">&#x1F9E0;</text>
+        <text x="420" y="155" style="font-size:20px;text-anchor:middle;">🧠</text>
         <!-- Primary provider (active) — small status dot above the model name, centered -->
         <circle cx="420" cy="168" r="3" fill="#4ade80" id="brain-provider-dot"/>
         <text x="420" y="184" style="font-size:13px;font-weight:700;fill:#e0e7ff;text-anchor:middle;" id="brain-model-label" data-i18n="app.ai_model">AI Model</text>
@@ -195,7 +195,7 @@
           font-weight:700;
           fill:#ffffff;
           text-anchor:middle;
-          " data-i18n="app.search">&#x1F50D; Search</text>
+          " data-i18n="app.search">🔍 Search</text>
         <circle class="tool-indicator" id="ind-search" cx="665" cy="228" r="5" fill="#4DB6AC"/>
       </g>
       <g class="flow-node flow-node-tool" id="node-cron">
@@ -210,7 +210,7 @@
           font-weight:700;
           fill:#ffffff;
           text-anchor:middle;
-          " data-i18n="app.tts">&#x1F5E3;&#xFE0F; TTS</text>
+          " data-i18n="app.tts">🗣️ TTS</text>
         <circle class="tool-indicator" id="ind-tts" cx="665" cy="328" r="5" fill="#FFF176"/>
       </g>
       <g class="flow-node flow-node-tool" id="node-memory">
@@ -220,7 +220,7 @@
           font-weight:700;
           fill:#ffffff;
           text-anchor:middle;
-          " data-i18n="app.memory">&#x1F4BE; Memory</text>
+          " data-i18n="app.memory">💾 Memory</text>
         <circle class="tool-indicator" id="ind-memory" cx="665" cy="378" r="5" fill="#7986CB"/>
       </g>
 
@@ -247,7 +247,7 @@
       <g class="flow-node flow-node-optimizer" id="node-cost-optimizer">
         <rect x="680" y="370" width="145" height="44" rx="12" ry="12" fill="#2E7D32" stroke="#1B5E20" stroke-width="2" filter="url(#dropShadow)"/>
         <text x="752" y="389" style="font-size:12px;font-weight:700;fill:#ffffff;text-anchor:middle;">
-          <tspan x="752" dy="-5" data-i18n="app.cost">&#x1F4B0; Cost</tspan>
+          <tspan x="752" dy="-5" data-i18n="app.cost">💰 Cost</tspan>
           <tspan x="752" dy="13" data-i18n="app.optimizer">Optimizer</tspan>
         </text>
         <circle class="tool-indicator" id="ind-cost-optimizer" cx="817" cy="378" r="5" fill="#66BB6A"/>
@@ -257,7 +257,7 @@
       <g class="flow-node flow-node-advisor" id="node-automation-advisor">
         <rect x="835" y="370" width="145" height="44" rx="12" ry="12" fill="#7B1FA2" stroke="#4A148C" stroke-width="2" filter="url(#dropShadow)"/>
         <text x="907" y="389" style="font-size:12px;font-weight:700;fill:#ffffff;text-anchor:middle;">
-          <tspan x="907" dy="-5" data-i18n="app.automation">&#x1F9E0; Automation</tspan>
+          <tspan x="907" dy="-5" data-i18n="app.automation">🧠 Automation</tspan>
           <tspan x="907" dy="13" data-i18n="app.advisor">Advisor</tspan>
         </text>
         <circle class="tool-indicator" id="ind-automation-advisor" cx="972" cy="378" r="5" fill="#BA68C8"/>
@@ -274,7 +274,7 @@
           fill:#ffffff;
           font-weight:700;
           text-anchor:middle;
-          " data-i18n="app.runtime">&#x2699;&#xFE0F; Runtime</text>
+          " data-i18n="app.runtime">⚙️ Runtime</text>
         <text class="infra-sub" x="95" y="480" style="
           fill:#B0BEC5;
           font-size:8px;
@@ -288,7 +288,7 @@
           fill:#ffffff;
           font-weight:700;
           text-anchor:middle;
-          " data-i18n="app.machine">&#x1F5A5;&#xFE0F; Machine</text>
+          " data-i18n="app.machine">🖥️ Machine</text>
         <text class="infra-sub" x="260" y="480" style="
           fill:#BCAAA4;
           font-size:8px;
@@ -302,7 +302,7 @@
           fill:#ffffff;
           font-weight:700;
           text-anchor:middle;
-          " data-i18n="app.storage">&#x1F4BF; Storage</text>
+          " data-i18n="app.storage">💿 Storage</text>
         <text class="infra-sub" x="425" y="480" style="
           fill:#BCAAA4;
           font-size:8px;
@@ -316,7 +316,7 @@
           fill:#ffffff;
           font-weight:700;
           text-anchor:middle;
-          " data-i18n="app.network">&#x1F310; Network</text>
+          " data-i18n="app.network">🌐 Network</text>
         <text class="infra-sub" x="590" y="480" style="
           fill:#80CBC4;
           font-size:8px;
@@ -333,7 +333,7 @@
           fill:var(--text-secondary);
           letter-spacing:1px;
           text-anchor:middle;
-          " data-i18n="app.channels_gateway_ai_brain_tools">&#x1F4E8; Channels  &#x27A1;&#xFE0F;  🔀 Gateway  &#x27A1;&#xFE0F;  &#x1F9E0; AI Brain  &#x27A1;&#xFE0F;  &#x1F6E0;&#xFE0F; Tools</text>
+          " data-i18n="app.channels_gateway_ai_brain_tools">📨 Channels  ➡️  🔀 Gateway  ➡️  🧠 AI Brain  ➡️  🛠️ Tools</text>
       </g>
 
       <!-- Flow direction labels -->
@@ -353,11 +353,11 @@
     padding:10px 14px;
     ">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-      <span style="font-size:13px;font-weight:600;color:#aaa;">&#128225; <span data-i18n="flow.session_lanes">Active Session Lanes</span></span>
+      <span style="font-size:13px;font-weight:600;color:#aaa;">📡 <span data-i18n="flow.session_lanes">Active Session Lanes</span></span>
       <span id="flow-lanes-count" style="font-size:10px;color:#555;"></span>
     </div>
     <div id="flow-lanes-list" style="display:flex;flex-wrap:wrap;gap:6px;">
-      <span style="color:#555;font-size:11px;" data-i18n="flow.lanes_loading">Loading&hellip;</span>
+      <span style="color:#555;font-size:11px;" data-i18n="flow.lanes_loading">Loading…</span>
     </div>
   </div>
 
@@ -377,9 +377,9 @@
       flex-wrap:wrap;
       gap:8px;
       ">
-      <span style="font-size:13px;font-weight:600;color:#aaa;">&#128295; <span data-i18n="flow.live_tool_stream">Live Tool Call Stream</span></span>
+      <span style="font-size:13px;font-weight:600;color:#aaa;">🔧 <span data-i18n="flow.live_tool_stream">Live Tool Call Stream</span></span>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-        <input id="tool-stream-filter" type="text" data-i18n-placeholder="flow.filter_by_tool" placeholder="Filter by tool&hellip;" oninput="applyToolStreamFilter()" style="
+        <input id="tool-stream-filter" type="text" data-i18n-placeholder="flow.filter_by_tool" placeholder="Filter by tool…" oninput="applyToolStreamFilter()" style="
           font-size:11px;
           padding:3px 8px;
           border:1px solid var(--border-secondary,#2a2a4a);
@@ -397,7 +397,7 @@
           background:var(--bg-primary,#0a0a1a);
           color:#aaa;
           cursor:pointer;
-          " data-i18n="app.pause">&#9646;&#9646; Pause</button>
+          " data-i18n="app.pause">▮▮ Pause</button>
         <button onclick="clearToolStream()" style="
           font-size:11px;
           padding:3px 10px;
@@ -406,7 +406,7 @@
           background:var(--bg-primary,#0a0a1a);
           color:#aaa;
           cursor:pointer;
-          ">&#10005; <span data-i18n="flow.clear">Clear</span></button>
+          ">✕ <span data-i18n="flow.clear">Clear</span></button>
         <span style="font-size:10px;color:#555;" id="flow-feed-count" data-i18n="app.0_events">0 events</span>
       </div>
     </div>

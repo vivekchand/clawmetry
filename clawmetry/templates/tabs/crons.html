@@ -1,6 +1,6 @@
 <div class="page" id="page-crons">
   <div class="refresh-bar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-    <button class="refresh-btn" onclick="loadCrons()">&#x21bb; <span data-i18n="common.refresh">Refresh</span></button>
+    <button class="refresh-btn" onclick="loadCrons()">↻ <span data-i18n="common.refresh">Refresh</span></button>
     <button class="refresh-btn cron-action-btn" id="cron-new-job-btn" onclick="cronCreateNew()" style="
       background:#6366f1;
       color:#fff;
@@ -12,7 +12,7 @@
       color:#fff;
       border-color:#dc2626;
       display:none;
-      ">&#x1F6D1; <span data-i18n="crons.emergency_stop_all">Emergency Stop All</span></button>
+      ">🛑 <span data-i18n="crons.emergency_stop_all">Emergency Stop All</span></button>
     <label class="modal-auto-refresh" style="margin-left:auto;">
       <input type="checkbox" id="cron-auto-refresh" onchange="toggleCronAutoRefresh()" checked> <span data-i18n="crons.auto_refresh_30s">Auto-refresh (30s)</span>
     </label>
@@ -22,7 +22,7 @@
   <div class="cron-view-tabs" role="tablist">
     <button class="cron-view-tab active" data-view="active" onclick="setCronView('active')"><span data-i18n="crons.view_active">Active</span> <span class="cron-view-count" id="crons-count-active"></span></button>
     <button class="cron-view-tab" data-view="paused" onclick="setCronView('paused')"><span data-i18n="crons.view_paused">Paused</span> <span class="cron-view-count" id="crons-count-paused"></span></button>
-    <button class="cron-view-tab" data-view="calendar" onclick="setCronView('calendar')">&#x1F4C5; <span data-i18n="crons.view_calendar">Calendar</span></button>
+    <button class="cron-view-tab" data-view="calendar" onclick="setCronView('calendar')">📅 <span data-i18n="crons.view_calendar">Calendar</span></button>
   </div>
   <div class="card" id="crons-list" data-i18n="app.loading">Loading...</div>
   <!-- Cron Health Monitor (GH #302) -->
@@ -36,10 +36,10 @@
     color:#ef4444;
     font-size:13px;
     font-weight:600;
-    ">&#x26A0;&#xFE0F; <span data-i18n="crons.anomalies_detected">Anomalies detected in cron jobs, review health table below</span></div>
+    ">⚠️ <span data-i18n="crons.anomalies_detected">Anomalies detected in cron jobs, review health table below</span></div>
   <div style="margin-top:16px;">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
-      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#x1F4CA; <span data-i18n="crons.health_monitor">Cron Health Monitor</span></span>
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">📊 <span data-i18n="crons.health_monitor">Cron Health Monitor</span></span>
       <span style="font-size:11px;color:var(--text-muted);" data-i18n="crons.click_row_expand">Click row to expand run history</span>
     </div>
     <div id="cron-health-table" style="overflow-x:auto;">

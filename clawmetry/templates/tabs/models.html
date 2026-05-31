@@ -1,34 +1,34 @@
 <div class="page" id="page-models">
   <div class="refresh-bar">
-    <button class="refresh-btn" onclick="loadModelAttribution()">&#x21bb; <span data-i18n="common.refresh">Refresh</span></button>
+    <button class="refresh-btn" onclick="loadModelAttribution()">↻ <span data-i18n="common.refresh">Refresh</span></button>
   </div>
   <div class="grid">
     <div class="card">
-      <div class="card-title"><span class="icon">&#x1F916;</span> <span data-i18n="models.primary_model">Primary Model</span></div>
+      <div class="card-title"><span class="icon">🤖</span> <span data-i18n="models.primary_model">Primary Model</span></div>
       <div class="card-value" id="model-primary">--</div>
       <div class="card-sub" id="model-primary-pct"></div>
     </div>
     <div class="card">
-      <div class="card-title"><span class="icon">&#x1F504;</span> <span data-i18n="models.model_diversity">Model Diversity</span></div>
+      <div class="card-title"><span class="icon">🔄</span> <span data-i18n="models.model_diversity">Model Diversity</span></div>
       <div class="card-value" id="model-count">--</div>
       <div class="card-sub" data-i18n="models.distinct_models_used">distinct models used</div>
     </div>
     <div class="card">
-      <div class="card-title"><span class="icon">&#x26A1;</span> <span data-i18n="models.fallback_rate">Fallback Rate</span></div>
+      <div class="card-title"><span class="icon">⚡</span> <span data-i18n="models.fallback_rate">Fallback Rate</span></div>
       <div class="card-value" id="model-fallback-rate">--</div>
       <div class="card-sub" id="model-fallback-detail"></div>
     </div>
     <div class="card">
-      <div class="card-title"><span class="icon">&#x1F4AC;</span> <span data-i18n="models.total_turns">Total Turns</span></div>
+      <div class="card-title"><span class="icon">💬</span> <span data-i18n="models.total_turns">Total Turns</span></div>
       <div class="card-value" id="model-total-turns">--</div>
       <div class="card-sub" data-i18n="models.assistant_responses_tracked">assistant responses tracked</div>
     </div>
   </div>
-  <div class="section-title">&#x1F916; <span data-i18n="models.model_mix">Model Mix</span></div>
+  <div class="section-title">🤖 <span data-i18n="models.model_mix">Model Mix</span></div>
   <div class="card">
     <div id="model-mix-chart" style="padding:8px 0;" data-i18n="app.loading">Loading...</div>
   </div>
-  <div class="section-title">&#x1F4CA; <span data-i18n="models.per_session_breakdown">Per-Session Breakdown</span></div>
+  <div class="section-title">📊 <span data-i18n="models.per_session_breakdown">Per-Session Breakdown</span></div>
   <div class="card">
     <table class="usage-table" id="model-sessions-table" style="width:100%;">
       <thead><tr>
@@ -41,7 +41,7 @@
     </table>
   </div>
   <div id="model-switches-section" style="display:none;">
-    <div class="section-title">&#x1F500; <span data-i18n="models.model_switches">Model Switches</span> <span id="model-switches-count" style="
+    <div class="section-title">🔀 <span data-i18n="models.model_switches">Model Switches</span> <span id="model-switches-count" style="
       font-size:13px;
       color:var(--text-muted);
       font-weight:400;

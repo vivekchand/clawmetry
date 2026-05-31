@@ -3,7 +3,7 @@
     ℹ️ <strong>Local node only.</strong> These figures reflect only this node's DuckDB. See the <a href="#" onclick="showTab('fleet');return false" style="color:#3b82f6;text-decoration:none;">Fleet</a> tab for cross-node totals.
   </div>
   <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;flex-wrap:wrap;">
-    <h2 style="font-size:18px;font-weight:700;color:var(--text-primary);margin:0;">&#128202; <span data-i18n="history.title">History</span></h2>
+    <h2 style="font-size:18px;font-weight:700;color:var(--text-primary);margin:0;">📊 <span data-i18n="history.title">History</span></h2>
     <div style="display:flex;gap:4px;flex-wrap:wrap;" id="time-range-picker">
       <button class="time-btn active" onclick="setTimeRange(3600,this)">1h</button>
       <button class="time-btn" onclick="setTimeRange(21600,this)">6h</button>
@@ -96,7 +96,7 @@
           cursor:pointer;
           font-size:18px;
           color:var(--text-tertiary);
-          ">&times;</button>
+          ">×</button>
       </div>
       <pre id="snapshot-content" style="
         font-size:12px;

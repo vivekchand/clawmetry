@@ -109,10 +109,18 @@
     // text nodes: stash the original key once (attribute value, else initial text),
     // so we never read it back from text we already overwrote (the stable-key rule).
     root.querySelectorAll("[data-i18n]").forEach(function (el) {
-      if (el.__i18nKey == null) el.__i18nKey = (el.getAttribute("data-i18n") || el.textContent || "").trim();
+      if (el.__i18nKey == null) {
+        el.__i18nKey = (el.getAttribute("data-i18n") || el.textContent || "").trim();
+        // Stash the original English markup text as a fallback so a key that is
+        // MISSING from both the active locale and en.json degrades to readable
+        // English — never the raw key. (Burned: overview.* keys absent from
+        // en.json rendered "OVERVIEW.RUN_HEALTH_TITLE" on screen instead of
+        // "Run health". A missing key must never leak to a user.)
+        el.__i18nFallback = (el.textContent || "").trim();
+      }
       // only replace text for leaf elements; skip nodes with element children so we
       // don't wipe nested badges/icons (those children carry their own data-i18n).
-      if (el.children.length === 0) el.textContent = T(el.__i18nKey);
+      if (el.children.length === 0) el.textContent = T(el.__i18nKey, null, el.__i18nFallback);
     });
     // attributes
     root.querySelectorAll("[data-i18n-title]").forEach(function (el) { el.title = T(el.getAttribute("data-i18n-title")); });

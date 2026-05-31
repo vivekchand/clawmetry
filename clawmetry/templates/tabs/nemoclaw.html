@@ -35,7 +35,7 @@
           padding:2px 10px;
           "></span>
       </div>
-      <button class="refresh-btn" onclick="loadNemoClaw()">&#8635; <span data-i18n="common.refresh">Refresh</span></button>
+      <button class="refresh-btn" onclick="loadNemoClaw()">↻ <span data-i18n="common.refresh">Refresh</span></button>
     </div>
     <!-- Two-column info grid -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
@@ -47,10 +47,10 @@
             color:var(--text-muted);
             padding:3px 0;
             width:45%;
-            " data-i18n="nemoclaw.status">Status</td><td id="nc-sandbox-status" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">&#8212;</td></tr>
-          <tr><td style="color:var(--text-muted);padding:3px 0;" data-i18n="nemoclaw.blueprint">Blueprint</td><td id="nc-blueprint-ver2" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">&#8212;</td></tr>
-          <tr><td style="color:var(--text-muted);padding:3px 0;" data-i18n="nemoclaw.last_action">Last action</td><td id="nc-last-action" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">&#8212;</td></tr>
-          <tr><td style="color:var(--text-muted);padding:3px 0;" data-i18n="nemoclaw.run_id">Run ID</td><td id="nc-run-id" style="color:var(--text-tertiary);font-family:\'JetBrains Mono\',monospace;font-size:11px;">&#8212;</td></tr>
+            " data-i18n="nemoclaw.status">Status</td><td id="nc-sandbox-status" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">—</td></tr>
+          <tr><td style="color:var(--text-muted);padding:3px 0;" data-i18n="nemoclaw.blueprint">Blueprint</td><td id="nc-blueprint-ver2" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">—</td></tr>
+          <tr><td style="color:var(--text-muted);padding:3px 0;" data-i18n="nemoclaw.last_action">Last action</td><td id="nc-last-action" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">—</td></tr>
+          <tr><td style="color:var(--text-muted);padding:3px 0;" data-i18n="nemoclaw.run_id">Run ID</td><td id="nc-run-id" style="color:var(--text-tertiary);font-family:\'JetBrains Mono\',monospace;font-size:11px;">—</td></tr>
         </table>
       </div>
       <!-- Inference panel -->
@@ -61,10 +61,10 @@
             color:var(--text-muted);
             padding:3px 0;
             width:45%;
-            " data-i18n="nemoclaw.provider">Provider</td><td id="nc-provider" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">&#8212;</td></tr>
-          <tr><td style="color:var(--text-muted);padding:3px 0;" data-i18n="nemoclaw.model">Model</td><td id="nc-model" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">&#8212;</td></tr>
-          <tr><td style="color:var(--text-muted);padding:3px 0;" data-i18n="nemoclaw.endpoint">Endpoint</td><td id="nc-endpoint" style="color:var(--text-tertiary);font-family:\'JetBrains Mono\',monospace;font-size:11px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">&#8212;</td></tr>
-          <tr><td style="color:var(--text-muted);padding:3px 0;" data-i18n="nemoclaw.onboarded">Onboarded</td><td id="nc-onboarded" style="color:var(--text-tertiary);font-family:\'JetBrains Mono\',monospace;font-size:11px;">&#8212;</td></tr>
+            " data-i18n="nemoclaw.provider">Provider</td><td id="nc-provider" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">—</td></tr>
+          <tr><td style="color:var(--text-muted);padding:3px 0;" data-i18n="nemoclaw.model">Model</td><td id="nc-model" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">—</td></tr>
+          <tr><td style="color:var(--text-muted);padding:3px 0;" data-i18n="nemoclaw.endpoint">Endpoint</td><td id="nc-endpoint" style="color:var(--text-tertiary);font-family:\'JetBrains Mono\',monospace;font-size:11px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">—</td></tr>
+          <tr><td style="color:var(--text-muted);padding:3px 0;" data-i18n="nemoclaw.onboarded">Onboarded</td><td id="nc-onboarded" style="color:var(--text-tertiary);font-family:\'JetBrains Mono\',monospace;font-size:11px;">—</td></tr>
         </table>
       </div>
     </div>
@@ -98,7 +98,7 @@
         padding:10px;
         margin-bottom:10px;
         ">
-        <div style="font-size:12px;font-weight:700;color:#ef4444;">&#9888;&#65039; <span data-i18n="nemoclaw.policy_drift">Policy drift detected</span></div>
+        <div style="font-size:12px;font-weight:700;color:#ef4444;">⚠️ <span data-i18n="nemoclaw.policy_drift">Policy drift detected</span></div>
         <div id="nc-drift-detail" style="
           font-size:11px;
           color:var(--text-muted);
@@ -155,7 +155,7 @@
             padding:1px 8px;
             "></span>
         </div>
-        <button class="refresh-btn" onclick="loadNemoClawApprovals()" style="font-size:11px;">&#8635; <span data-i18n="common.refresh">Refresh</span></button>
+        <button class="refresh-btn" onclick="loadNemoClawApprovals()" style="font-size:11px;">↻ <span data-i18n="common.refresh">Refresh</span></button>
       </div>
       <div id="nc-approvals-list">
         <div style="color:var(--text-muted);font-size:12px;padding:8px 0;" data-i18n="app.loading">Loading...</div>
@@ -183,7 +183,7 @@
             padding:1px 8px;
             "></span>
         </div>
-        <button class="refresh-btn" onclick="loadNemoClawEvents()" style="font-size:11px;">&#8635; <span data-i18n="common.refresh">Refresh</span></button>
+        <button class="refresh-btn" onclick="loadNemoClawEvents()" style="font-size:11px;">↻ <span data-i18n="common.refresh">Refresh</span></button>
       </div>
       <div id="nc-events-list">
         <div style="color:var(--text-muted);font-size:12px;padding:8px 0;" data-i18n="app.loading">Loading...</div>

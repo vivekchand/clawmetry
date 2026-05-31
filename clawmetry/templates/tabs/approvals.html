@@ -11,7 +11,7 @@
     </div>
     <div style="display:flex;gap:8px;align-items:center;">
       <span id="approvals-updated" style="font-size:11px;color:var(--text-muted);"></span>
-      <button class="refresh-btn" onclick="loadApprovalsTab()">&#8635; <span data-i18n="common.refresh">Refresh</span></button>
+      <button class="refresh-btn" onclick="loadApprovalsTab()">↻ <span data-i18n="common.refresh">Refresh</span></button>
     </div>
   </div>
 
@@ -139,7 +139,7 @@
   <!-- ═══ Upgrade Modal ═══ -->
   <div id="approvals-upgrade-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;" onclick="if(event.target===this)closeUpgradeModal()">
     <div style="background:var(--bg-secondary,#131929);border:1px solid rgba(96,165,250,0.3);border-radius:16px;padding:32px 36px;max-width:420px;width:90%;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.5);">
-      <div style="font-size:32px;margin-bottom:12px;">&#128737;&#65039;</div>
+      <div style="font-size:32px;margin-bottom:12px;">🛡️</div>
       <div style="font-size:18px;font-weight:700;color:var(--text-primary,#e2e8f0);margin-bottom:8px;" data-i18n="approvals.protect_your_agents">Protect Your Agents</div>
       <div style="font-size:13px;color:var(--text-muted,#94a3b8);line-height:1.6;margin-bottom:20px;" data-i18n="approvals.upgrade_pitch">
         Cloud-mediated approvals block risky agent actions before they execute.
@@ -148,14 +148,14 @@
       <div style="background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.2);border-radius:10px;padding:14px;margin-bottom:20px;">
         <div style="font-size:14px;font-weight:700;color:#60a5fa;margin-bottom:4px;" data-i18n="app.cloud_pro">Cloud Pro</div>
         <div style="font-size:22px;font-weight:800;color:var(--text-primary,#e2e8f0);">$5<span style="font-size:13px;font-weight:400;color:var(--text-muted,#94a3b8);" data-i18n="approvals.per_node_month">/node/month</span></div>
-        <div style="font-size:11px;color:#22c55e;margin-top:4px;font-weight:600;" data-i18n="approvals.trial_note">7-day free trial &middot; no credit card required</div>
+        <div style="font-size:11px;color:#22c55e;margin-top:4px;font-weight:600;" data-i18n="approvals.trial_note">7-day free trial · no credit card required</div>
       </div>
       <div style="text-align:left;margin-bottom:20px;padding:0 8px;">
-        <div style="font-size:12px;color:var(--text-secondary,#cbd5e1);margin-bottom:6px;">&#10003; <span data-i18n="approvals.feat_queue">Cloud-mediated approval queue</span></div>
-        <div style="font-size:12px;color:var(--text-secondary,#cbd5e1);margin-bottom:6px;">&#10003; <span data-i18n="approvals.feat_alerts">Slack, Email, PagerDuty, Telegram alerts</span></div>
-        <div style="font-size:12px;color:var(--text-secondary,#cbd5e1);margin-bottom:6px;">&#10003; <span data-i18n="approvals.feat_rules">8 built-in protection rules + custom rules</span></div>
-        <div style="font-size:12px;color:var(--text-secondary,#cbd5e1);margin-bottom:6px;">&#10003; <span data-i18n="approvals.feat_audit">Audit log of all decisions</span></div>
-        <div style="font-size:12px;color:var(--text-secondary,#cbd5e1);">&#10003; <span data-i18n="approvals.feat_fleet">Multi-node fleet management</span></div>
+        <div style="font-size:12px;color:var(--text-secondary,#cbd5e1);margin-bottom:6px;">✓ <span data-i18n="approvals.feat_queue">Cloud-mediated approval queue</span></div>
+        <div style="font-size:12px;color:var(--text-secondary,#cbd5e1);margin-bottom:6px;">✓ <span data-i18n="approvals.feat_alerts">Slack, Email, PagerDuty, Telegram alerts</span></div>
+        <div style="font-size:12px;color:var(--text-secondary,#cbd5e1);margin-bottom:6px;">✓ <span data-i18n="approvals.feat_rules">8 built-in protection rules + custom rules</span></div>
+        <div style="font-size:12px;color:var(--text-secondary,#cbd5e1);margin-bottom:6px;">✓ <span data-i18n="approvals.feat_audit">Audit log of all decisions</span></div>
+        <div style="font-size:12px;color:var(--text-secondary,#cbd5e1);">✓ <span data-i18n="approvals.feat_fleet">Multi-node fleet management</span></div>
       </div>
       <button onclick="startProTrial()" style="width:100%;padding:12px;background:#3b82f6;color:#fff;border:0;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;transition:background 0.2s;" onmouseover="this.style.background='#2563eb'" onmouseout="this.style.background='#3b82f6'" data-i18n="approvals.start_free_trial">Start Free Trial</button>
       <div style="margin-top:10px;">
@@ -232,35 +232,35 @@
 
   /* ── Preset policies ── */
   var PRESETS = [
-    {key:'rm_rf', name:'Block destructive deletes', icon:'&#128465;',
+    {key:'rm_rf', name:'Block destructive deletes', icon:'🗑',
      desc:'Stops rm -rf, shred, unlink on important paths',
      tool:'exec', pattern:'rm\\s+-rf|shred\\s|unlink\\s+/', timeout:60, on_timeout:'deny',
      color:'#ef4444'},
-    {key:'force_push', name:'Block force pushes', icon:'&#9888;&#65039;',
+    {key:'force_push', name:'Block force pushes', icon:'⚠️',
      desc:'Requires approval before git push --force',
      tool:'exec', pattern:'git\\s+push.*--force|git\\s+push.*-f\\b', timeout:300, on_timeout:'deny',
      color:'#f59e0b'},
-    {key:'db_mutation', name:'Block database mutations', icon:'&#128451;',
+    {key:'db_mutation', name:'Block database mutations', icon:'🗃',
      desc:'Catches DROP TABLE, TRUNCATE, DELETE without WHERE',
      tool:'exec', pattern:'DROP\\s+TABLE|TRUNCATE\\s|DELETE\\s+FROM.*(?!WHERE)', timeout:120, on_timeout:'deny',
      color:'#f97316'},
-    {key:'sudo', name:'Block sudo / root commands', icon:'&#128274;',
+    {key:'sudo', name:'Block sudo / root commands', icon:'🔒',
      desc:'Prevents privilege escalation via sudo or su',
      tool:'exec', pattern:'\\bsudo\\s|\\bsu\\s+-|\\bsu\\s+root', timeout:60, on_timeout:'deny',
      color:'#dc2626'},
-    {key:'secrets', name:'Protect secrets & credentials', icon:'&#128273;',
+    {key:'secrets', name:'Protect secrets & credentials', icon:'🔑',
      desc:'Blocks access to .env, credentials, private keys',
      tool:'', pattern:'\\.env\\b|credentials|private_key|secret_key|api_key|AWS_SECRET', timeout:60, on_timeout:'deny',
      color:'#8b5cf6'},
-    {key:'pkg_install', name:'Block package installs', icon:'&#128230;',
+    {key:'pkg_install', name:'Block package installs', icon:'📦',
      desc:'Requires approval for pip install, npm install, apt install',
      tool:'exec', pattern:'pip\\s+install|npm\\s+install|apt\\s+install|brew\\s+install', timeout:120, on_timeout:'deny',
      color:'#6366f1'},
-    {key:'network', name:'Block outbound network calls', icon:'&#127760;',
+    {key:'network', name:'Block outbound network calls', icon:'🌐',
      desc:'Catches curl, wget, fetch to external URLs',
      tool:'exec', pattern:'\\bcurl\\s|\\bwget\\s|\\bfetch\\(|requests\\.get|httpx\\.', timeout:60, on_timeout:'deny',
      color:'#0ea5e9'},
-    {key:'sys_config', name:'Block system config changes', icon:'&#9881;&#65039;',
+    {key:'sys_config', name:'Block system config changes', icon:'⚙️',
      desc:'Prevents writes to /etc, systemctl, crontab edits',
      tool:'exec', pattern:'/etc/|systemctl|crontab|chmod\\s+777|chown\\s+root', timeout:60, on_timeout:'deny',
      color:'#64748b'}
@@ -268,22 +268,22 @@
 
   /* ── Integration channels ── */
   var CHANNELS = [
-    {key:'email', name:'Email', icon:'&#9993;&#65039;', desc:'Notifications to your signup email',
+    {key:'email', name:'Email', icon:'✉️', desc:'Notifications to your signup email',
      color:'#3b82f6', fields:[],
      howTo:'Approval alerts will be sent to the email you signed up with. No setup needed.'},
-    {key:'phone', name:'Phone Call', icon:'&#128222;', desc:'Get a call, press 1 to approve',
+    {key:'phone', name:'Phone Call', icon:'📞', desc:'Get a call, press 1 to approve',
      color:'#10b981',
      fields:[{key:'phone_number', label:'Phone Number', placeholder:'+1 (555) 123-4567'}],
      howTo:'Enter your phone number with country code (e.g. +1 for US, +91 for India, +31 for NL).<br><br>When a risky action fires, you\'ll get a phone call:<br><b data-i18n="app.press_1_to_approve_press_2_to_deny">"Press 1 to approve. Press 2 to deny."</b><br><br>That\'s it — no app to install, works on any phone.'},
-    {key:'slack', name:'Slack', icon:'&#128172;', desc:'Post to a Slack channel',
+    {key:'slack', name:'Slack', icon:'💬', desc:'Post to a Slack channel',
      color:'#4A154B',
      fields:[{key:'webhook_url', label:'Webhook URL', placeholder:'https://hooks.slack.com/services/T.../B.../xxx'}],
      howTo:'1. Go to <b data-i18n="app.api_slack_com_apps">api.slack.com/apps</b> and click <b data-i18n="app.create_new_app">Create New App</b><br>2. Choose <b data-i18n="app.from_scratch">From scratch</b>, name it "ClawMetry Alerts"<br>3. Click <b data-i18n="app.incoming_webhooks">Incoming Webhooks</b> → toggle ON<br>4. Click <b data-i18n="app.add_new_webhook_to_workspace">Add New Webhook to Workspace</b> → pick your channel<br>5. Copy the webhook URL and paste it below'},
-    {key:'pagerduty', name:'PagerDuty', icon:'&#128225;', desc:'Trigger PagerDuty incidents',
+    {key:'pagerduty', name:'PagerDuty', icon:'📡', desc:'Trigger PagerDuty incidents',
      color:'#06AC38',
      fields:[{key:'routing_key', label:'Integration Key', placeholder:'e.g. R03F...'}],
      howTo:'1. In PagerDuty, go to <b data-i18n="app.services">Services</b> → pick your service<br>2. Click <b data-i18n="app.integrations">Integrations</b> tab → <b data-i18n="app.add_integration">+ Add Integration</b><br>3. Choose <b data-i18n="app.events_api_v2">Events API v2</b><br>4. Copy the <b data-i18n="app.integration_key">Integration Key</b> and paste it below'},
-    {key:'telegram', name:'Telegram', icon:'&#9992;&#65039;', desc:'Send alerts to a Telegram chat',
+    {key:'telegram', name:'Telegram', icon:'✈️', desc:'Send alerts to a Telegram chat',
      color:'#2AABEE',
      fields:[{key:'bot_token', label:'Bot Token', placeholder:'123456:ABC-DEF...'}, {key:'chat_id', label:'Chat ID', placeholder:'-1001234567890'}],
      howTo:'1. Open Telegram, search for <b data-i18n="app.botfather">@BotFather</b><br>2. Send <b data-i18n="app.newbot">/newbot</b> and follow the prompts<br>3. Copy the <b data-i18n="app.bot_token">bot token</b> and paste it below<br>4. Add the bot to your group chat<br>5. Get the chat ID: send a message in the group, then visit<br>&nbsp;&nbsp;&nbsp;<code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code>'}
@@ -352,7 +352,7 @@
     html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">';
     html += '<span style="font-size:24px;" data-i18n="app.ch_icon">' + ch.icon + '</span>';
     html += '<span style="font-size:16px;font-weight:700;color:var(--text-primary,#e2e8f0);" data-i18n="app.connect_ch_name">Connect ' + ch.name + '</span>';
-    html += '<span style="margin-left:auto;cursor:pointer;color:var(--text-muted);font-size:18px;" onclick="closeIntegrationSetup()">&times;</span>';
+    html += '<span style="margin-left:auto;cursor:pointer;color:var(--text-muted);font-size:18px;" onclick="closeIntegrationSetup()">×</span>';
     html += '</div>';
     // How-to instructions
     if (ch.howTo) {

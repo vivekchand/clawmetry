@@ -2,18 +2,18 @@
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:16px;flex-wrap:wrap;">
     <div>
       <div style="font-size:18px;font-weight:700;color:var(--text-primary);" data-i18n="tracing.title">Tracing</div>
-      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;" data-i18n="tracing.subtitle">Every session as a trace. Open one for the span tree, waterfall, and agent graph &mdash; with full inputs/outputs per span.</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;" data-i18n="tracing.subtitle">Every session as a trace. Open one for the span tree, waterfall, and agent graph  -  with full inputs/outputs per span.</div>
     </div>
     <div style="display:flex;gap:6px;align-items:center;">
-      <button class="refresh-btn" id="trace-back-btn" style="display:none;" onclick="tracingShowList()">&larr; <span data-i18n="tracing.back_to_traces">Back to traces</span></button>
-      <button class="refresh-btn" onclick="loadTracing()">&#8635;</button>
+      <button class="refresh-btn" id="trace-back-btn" style="display:none;" onclick="tracingShowList()">← <span data-i18n="tracing.back_to_traces">Back to traces</span></button>
+      <button class="refresh-btn" onclick="loadTracing()">↻</button>
     </div>
   </div>
 
   <!-- TRACE LIST -->
-  <div class="card" id="trace-list" style="color:var(--text-muted);font-size:13px;" data-i18n="tracing.loading_traces">Loading traces&hellip;</div>
+  <div class="card" id="trace-list" style="color:var(--text-muted);font-size:13px;" data-i18n="tracing.loading_traces">Loading traces…</div>
 
-  <!-- TRACE DETAIL &mdash; MLflow-style split-pane (tree-left, span-detail-right) -->
+  <!-- TRACE DETAIL  -  MLflow-style split-pane (tree-left, span-detail-right) -->
   <div id="trace-detail" style="display:none;">
     <!-- Trace header: title (first prompt) + key stats inline -->
     <div class="card" id="trace-detail-meta" style="margin-bottom:10px;padding:14px 16px;"></div>

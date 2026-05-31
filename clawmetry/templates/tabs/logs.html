@@ -1,6 +1,6 @@
 <div class="page" id="page-logs">
   <div class="refresh-bar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-    <button class="refresh-btn" onclick="loadLogs()" data-i18n="app.refresh">&#8635; Refresh</button>
+    <button class="refresh-btn" onclick="loadLogs()" data-i18n="app.refresh">↻ Refresh</button>
     <label style="font-size:12px;color:var(--text-secondary);">Lines:
       <input id="log-lines" type="number" value="200" min="10" max="2000" step="10"
         style="
@@ -41,7 +41,7 @@
       ">
       <input type="checkbox" id="log-autoscroll" checked> Auto-scroll
     </label>
-    <span id="log-stream-status" style="font-size:11px;color:var(--text-muted);" data-i18n="app.connecting">&#9679; Connecting…</span>
+    <span id="log-stream-status" style="font-size:11px;color:var(--text-muted);" data-i18n="app.connecting">● Connecting…</span>
   </div>
   <div class="card" style="padding:0;overflow:hidden;margin-top:8px;">
     <div id="logs-full"
