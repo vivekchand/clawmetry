@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Release: UI/UX pass round 2 - tracing reply, turn-anatomy in cloud, runtime-note + detected-runtime switcher (carries #2385/#2386/#2387) (2026-05-31)
+- **Why:** follow-ups from the user's live-prod screenshots after the raw-codes fix (0.12.374).
+- **What:** (1) Tracing Chat tab shows the agent reply, not just the prompt: the snapshot now keeps a truncated per-span detail/output (was dropped for size, leaving the cloud Chat tab empty) and `_traceExtractMessages` aggregates an agent span's descendant subtree first. (2) Cloud Turn-anatomy detail: new `turnAnatomy` snapshot slice (per-session turns built daemon-side via `routes.turn_anatomy._build_turns`) so the cloud interceptor renders the waterfall instead of "Event store not available here". (3) The misleading "Showing all runtimes, not filtered to X" note is suppressed on aggregate tabs when only one runtime actually has data. (4) The runtime switcher now groups locked (Pro) runtimes that are actually DETECTED on this machine under "Detected on this machine - upgrade to observe", distinct from generic catalog rows.
+- **Verified:** confirmed live on app.clawmetry.com (logged in) that 0.12.374's raw-code fixes render correctly; the cloud span-detail gap that broke the tracing reply was found via live data inspection and fixed. Daemon-side slices reach a node when its daemon upgrades to this wheel; frontend reaches the cloud via the pinned wheel.
+
 ### Release: Tracing Chat tab shows the agent reply, not just the prompt (carries #2381) (2026-05-31)
 - **Why:** user-reported (screenshot): clicking "invoke_agent main" in the Tracing tab showed the USER prompt but never the agent reply.
 - **What:** the agent-root span is a container with empty own detail (the user prompt lives on a child prompt span, the assistant reply on a child chat/llm span's detail). `_traceExtractMessages` now, for an agent-kind span, aggregates the whole descendant subtree (prompt to user, llm to assistant, tool to tool/result, in start-time order) so the Chat tab shows the full user to assistant(+tools) conversation.
