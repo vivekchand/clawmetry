@@ -134,6 +134,21 @@
       </div>
       <div id="brain-at-risk-chips" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
     </div>
+    <!-- Forward-progress card (issue #1707): per-session token-to-delta ratio
+         badges. Hidden when all sessions are green (healthy). Populated by
+         loadBrainProgress() in app.js. -->
+    <div id="brain-progress-card" style="display:none;
+      background:var(--bg-secondary);
+      border:1px solid #6366f1;
+      border-radius:8px;
+      padding:10px 14px;
+      margin-bottom:12px;">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
+        <span style="font-size:13px;font-weight:700;color:#818cf8;">&#128260; <span data-i18n="brain.progress_title">Unproductive burn detected</span></span>
+        <span id="brain-progress-window" style="font-size:11px;color:var(--text-muted);"></span>
+      </div>
+      <div id="brain-progress-chips" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+    </div>
     <div class="brain-view-toggle" data-i18n-title="brain.view_toggle_tooltip" title="Switch between list view and neural-network view">
       <button class="brain-view-btn active" data-view="list" onclick="setBrainViewMode('list', this)" data-i18n="brain.view_list">List</button>
       <button class="brain-view-btn" data-view="graph" onclick="setBrainViewMode('graph', this)" data-i18n-title="brain.view_graph_tooltip" title="Neural-network visualization of agent activity (closes #53)" data-i18n="brain.view_graph">Graph</button>

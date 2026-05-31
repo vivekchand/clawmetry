@@ -6012,6 +6012,8 @@ async function loadBrainPage(silent) {
   loadLoopSignals();
   // At-risk impact summary (issue #2008) — fire-and-forget; never blocks.
   loadBrainAtRisk();
+  // Forward-progress badge (issue #1707) — fire-and-forget; never blocks.
+  loadBrainProgress();
 }
 
 
@@ -6049,6 +6051,47 @@ async function loadBrainAtRisk() {
         'border:1px solid rgba(245,158,11,0.3);font-size:11px;color:#f59e0b;cursor:default;';
       chip.title = escHtml(m.label) + ': ' + counts[k] + ' session' + (counts[k] !== 1 ? 's' : '');
       chip.innerHTML = m.icon + ' ' + escHtml(m.label) + ' <strong>' + counts[k] + '</strong>';
+      chips.appendChild(chip);
+    });
+  } catch(e) { /* never block brain load */ }
+}
+
+
+// Forward-progress badge (issue #1707) — per-session token-to-delta ratio
+// pills on the Brain tab. Called fire-and-forget from loadBrainPage().
+// Shows only yellow/red sessions; hides the card when all are green.
+async function loadBrainProgress() {
+  var card  = document.getElementById('brain-progress-card');
+  var chips = document.getElementById('brain-progress-chips');
+  if (!card || !chips) return;
+  try {
+    var since1h = new Date(Date.now() - 3600000).toISOString().slice(0, 19) + 'Z';
+    var r = await fetch('/api/forward-progress?since=' + encodeURIComponent(since1h));
+    if (!r.ok) return;
+    var d = await r.json();
+    var rows = (d && d.rows) || [];
+    var concerning = rows.filter(function(row) {
+      return row.badge === 'yellow' || row.badge === 'red';
+    });
+    card.style.display = concerning.length ? '' : 'none';
+    if (!concerning.length) return;
+    var win = document.getElementById('brain-progress-window');
+    if (win) win.textContent = '· last 1h';
+    chips.innerHTML = '';
+    concerning.forEach(function(row) {
+      var isRed = row.badge === 'red';
+      var color = isRed ? '#ef4444' : '#f59e0b';
+      var bg    = isRed ? 'rgba(239,68,68,0.12)'  : 'rgba(245,158,11,0.12)';
+      var bdr   = isRed ? 'rgba(239,68,68,0.3)'   : 'rgba(245,158,11,0.3)';
+      var icon  = isRed ? '🔴' : '🟡';
+      var sid   = (row.session_id || '').slice(0, 8);
+      var ratio = Math.round(row.ratio || 0).toLocaleString();
+      var chip  = document.createElement('span');
+      chip.style.cssText = 'display:inline-flex;align-items:center;gap:4px;padding:3px 10px;' +
+        'border-radius:12px;background:' + bg + ';border:1px solid ' + bdr + ';' +
+        'font-size:11px;color:' + color + ';cursor:default;';
+      chip.title = 'Session ' + escHtml(row.session_id || '') + ' — ' + ratio + ' tok/Δ';
+      chip.innerHTML = icon + ' ' + escHtml(sid) + '… <strong>' + ratio + '</strong> tok/Δ';
       chips.appendChild(chip);
     });
   } catch(e) { /* never block brain load */ }
