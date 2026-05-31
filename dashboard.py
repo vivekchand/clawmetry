@@ -10888,20 +10888,25 @@ def detect_config(args=None):
     from clawmetry.adapters.openclaw import OpenClawAdapter
     _adapter_registry.register(OpenClawAdapter())
 
-    # NeMo is a Free observed runtime alongside OpenClaw (homepage hero
-    # promises "OpenClaw + NeMo"). The push-side NeMoAdapter ingests into
-    # DuckDB; this read-side facade lets /api/agents + the runtime switcher
-    # filter to nemo. Only registers when detect() finds nemo-tagged events
-    # already in the store, so an OSS install with no NeMo data does not
-    # clutter the multi-agent view.
+    # NemoClaw is a Free observed runtime alongside OpenClaw (homepage hero
+    # promises "OpenClaw + NemoClaw"). The runtime is a NVIDIA OpenClaw
+    # wrapper; this read-side facade reads its DuckDB events (tagged
+    # agent_type='nemoclaw') so /api/agents + the runtime switcher list it
+    # alongside the rest. Register only when detect() finds nemoclaw-tagged
+    # events already in the store so an OSS install with no NemoClaw data
+    # does not clutter the multi-agent view.
+    #
+    # NB: NemoClawAdapter (runtime) is distinct from NeMo Guardrails
+    # (governance feature, agent_type='nemo'). The latter is exposed via
+    # routes/nemoclaw.py governance endpoints, NOT /api/agents.
     try:
-        from clawmetry.adapters.nemo import NeMoReaderAdapter
-        _nemo_reader = NeMoReaderAdapter()
-        if _nemo_reader.detect().detected:
-            _adapter_registry.register(_nemo_reader)
+        from clawmetry.adapters.nemo import NemoClawAdapter
+        _nemoclaw_reader = NemoClawAdapter()
+        if _nemoclaw_reader.detect().detected:
+            _adapter_registry.register(_nemoclaw_reader)
     except Exception as _nemo_err:  # pragma: no cover - defensive
         import logging as _logging
-        _logging.getLogger(__name__).debug("Skipped NeMo reader registration: %s", _nemo_err)
+        _logging.getLogger(__name__).debug("Skipped NemoClaw reader registration: %s", _nemo_err)
 
     # Non-OpenClaw runtimes ClawMetry can observe via a dedicated reader adapter
     # (Hermes, Claude Code, Codex, Cursor, PicoClaw, NanoClaw, ...). Each uses

@@ -630,57 +630,63 @@ class NeMoAdapter:
         return row
 
 
-# ── Read-side AgentAdapter facade ──────────────────────────────────────────
+# ── NemoClaw RUNTIME read-side AgentAdapter ────────────────────────────────
 #
-# The NeMoAdapter above is push-mode (callback receiver). For the multi-agent
-# UI (chip bar, runtime switcher, /api/agents) the dashboard expects every
-# observed runtime to be an :class:`AgentAdapter` subclass it can detect +
-# query for sessions/events. This thin facade exposes NeMo's ingested data
-# through the same shape as OpenClawAdapter, reading from DuckDB rather than
-# the filesystem.
+# NemoClaw is a Free runtime alongside OpenClaw (FREE_RUNTIMES in
+# clawmetry/entitlements.py contains {"openclaw", "nemoclaw"}). It is the
+# NVIDIA-flavored wrapper of OpenClaw that ingests events tagged with
+# ``agent_type='nemoclaw'`` (filesystem source or in-process). This facade
+# exposes those events through the standard :class:`AgentAdapter` shape so
+# the multi-agent UI chip bar + /api/agents + the runtime switcher all see
+# NemoClaw alongside OpenClaw.
 #
-# Without this, /api/agents never reports nemo, the runtime switcher cannot
-# filter to NeMo, and the homepage tooltip ("OpenClaw · NVIDIA NemoClaw ·
-# Claude Code · ...") promises a runtime the UI cannot select. Verified
-# during the 2026-05-29 runtime-coverage audit.
+# Distinct from the push-mode ``NeMoAdapter`` above, which receives NeMo
+# Guardrails (governance) callback events tagged ``agent_type='nemo'``.
+# Guardrails is a Free *feature* (``nemo_governance``), not a runtime.
+#
+# Renamed from ``NeMoReaderAdapter`` (PR #2339, OSS 0.12.370) which
+# incorrectly used ``name='nemo'`` and queried governance events. The
+# canonical runtime id per /api/runtimes + FREE_RUNTIMES is ``nemoclaw``;
+# this rename aligns /api/agents with the rest of the runtime catalogue.
 from .base import AgentAdapter, Capability, DetectResult, Event, Session
 
 
-class NeMoReaderAdapter(AgentAdapter):
-    """Read-side facade so NeMo appears in /api/agents alongside the other
-    runtimes. NeMo events are ingested by the push-side ``NeMoAdapter``
-    above; this class only reads them back out of DuckDB."""
+class NemoClawAdapter(AgentAdapter):
+    """Read-side adapter for the NemoClaw Free runtime.
 
-    name = "nemo"
-    display_name = "NeMo"
+    Reads events tagged ``agent_type='nemoclaw'`` from DuckDB. Detection
+    is "any nemoclaw-tagged events present" so an OSS install with no
+    NemoClaw data does not clutter the chip bar.
+    """
+
+    name = "nemoclaw"
+    display_name = "NemoClaw"
 
     def detect(self) -> DetectResult:
-        """Detect by checking whether DuckDB has any nemo-tagged events."""
         n = 0
         try:
             from clawmetry import local_store as _ls
             store = _ls.get_store(read_only=True)
             rows = store._fetch(
                 "SELECT COUNT(*) FROM events WHERE agent_type = ?",
-                ["nemo"],
+                ["nemoclaw"],
             )
             if rows:
                 n = int(rows[0][0])
         except Exception as exc:
-            logger.debug("nemo detect read failed: %s", exc)
+            logger.debug("nemoclaw detect read failed: %s", exc)
         return DetectResult(
             name=self.name,
             display_name=self.display_name,
             detected=n > 0,
             running=False,
-            workspace="(push-mode receiver)",
+            workspace="(DuckDB-backed runtime view)",
             session_count=0,
             capabilities=[c.value for c in self.capabilities()],
-            meta={"event_count": n, "cap_per_day": NEMO_FREE_DAILY_CAP},
+            meta={"event_count": n},
         )
 
     def list_sessions(self, limit: int = 100) -> list[Session]:
-        """List sessions for NeMo runtime by querying DuckDB."""
         sessions: list[Session] = []
         try:
             from clawmetry import local_store as _ls
@@ -691,7 +697,7 @@ class NeMoReaderAdapter(AgentAdapter):
                 "SUM(cost_usd) AS cost FROM events "
                 "WHERE agent_type = ? AND session_id IS NOT NULL "
                 "GROUP BY session_id ORDER BY started DESC LIMIT ?",
-                ["nemo", int(limit)],
+                ["nemoclaw", int(limit)],
             )
             for r in rows or []:
                 sid = r[0]
@@ -713,7 +719,7 @@ class NeMoReaderAdapter(AgentAdapter):
                 sessions.append(Session(
                     agent=self.name,
                     id=str(sid),
-                    title=f"NeMo session {str(sid)[:8]}",
+                    title=f"NemoClaw session {str(sid)[:8]}",
                     started_at=started_f,
                     ended_at=ended_f,
                     message_count=n_ev,
@@ -721,11 +727,10 @@ class NeMoReaderAdapter(AgentAdapter):
                     cost_usd=cost,
                 ))
         except Exception as exc:
-            logger.debug("nemo list_sessions read failed: %s", exc)
+            logger.debug("nemoclaw list_sessions read failed: %s", exc)
         return sessions
 
     def list_events(self, session_id: str, limit: int = 500) -> list[Event]:
-        """List events for one NeMo session by querying DuckDB."""
         events: list[Event] = []
         try:
             from clawmetry import local_store as _ls
@@ -734,7 +739,7 @@ class NeMoReaderAdapter(AgentAdapter):
                 "SELECT id, event_type, ts, model, token_count "
                 "FROM events WHERE agent_type = ? AND session_id = ? "
                 "ORDER BY ts ASC LIMIT ?",
-                ["nemo", str(session_id), int(limit)],
+                ["nemoclaw", str(session_id), int(limit)],
             )
             for r in rows or []:
                 events.append(Event(
@@ -747,7 +752,7 @@ class NeMoReaderAdapter(AgentAdapter):
                     extra={"model": r[3]} if r[3] else {},
                 ))
         except Exception as exc:
-            logger.debug("nemo list_events read failed: %s", exc)
+            logger.debug("nemoclaw list_events read failed: %s", exc)
         return events
 
     def capabilities(self) -> set[Capability]:
@@ -759,9 +764,17 @@ class NeMoReaderAdapter(AgentAdapter):
         }
 
 
+# Back-compat alias: the previous (mis-named) class still imports OK so
+# any out-of-tree code that referenced ``NeMoReaderAdapter`` from
+# ``clawmetry.adapters.nemo`` keeps working. Marked for removal once
+# downstream usage is confirmed clean.
+NeMoReaderAdapter = NemoClawAdapter
+
+
 __all__ = [
     "NeMoAdapter",
-    "NeMoReaderAdapter",
+    "NemoClawAdapter",
+    "NeMoReaderAdapter",  # back-compat alias for NemoClawAdapter
     "MAPPED_EVENT_TYPES",
     "NEMO_FREE_DAILY_CAP",
     "get_nemo_cap_state",
