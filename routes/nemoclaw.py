@@ -511,3 +511,118 @@ def api_nemoclaw_metrics():
         'installed': installed,
         'metrics': metrics,
     })
+
+
+# ── Approval policy rule CRUD (OSS YAML-backed, issue #1343) ─────────────────
+#
+# Cloud users manage rules at /api/cloud/policies (Pro-gated, Postgres-backed).
+# OSS users get equivalent local capability: rules live in
+# ~/.clawmetry/policies.yml, already watched by clawmetry/approvals.py for
+# enforcement. Notification channels (Slack / PagerDuty / email / phone) stay
+# Cloud-Pro gated — this layer is rule-definition only.
+#
+# Tier boundary (per issue #1343): "Approvals queue + basic rule editor: OSS
+# free (already user-asked). Slack/PagerDuty/email notifications: Cloud-Pro."
+
+def _load_local_policies() -> list:
+    """Read ~/.clawmetry/policies.yml; return [] on any error."""
+    from clawmetry.approvals import POLICIES_PATH, _load_yaml
+    try:
+        if POLICIES_PATH.exists():
+            return _load_yaml(POLICIES_PATH.read_text(errors='replace')) or []
+    except Exception:
+        pass
+    return []
+
+
+def _write_local_policies(policies: list) -> None:
+    """Atomically write policies list to ~/.clawmetry/policies.yml."""
+    from clawmetry.approvals import POLICIES_PATH
+    import tempfile
+    POLICIES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import yaml as _yaml  # type: ignore
+        text = _yaml.dump(policies, default_flow_style=False, allow_unicode=True)
+    except ImportError:
+        # Hand-roll for the documented flat-dict format (no PyYAML dep).
+        lines = []
+        for p in policies:
+            first = True
+            for k, v in p.items():
+                if v is None:
+                    vs = 'null'
+                elif isinstance(v, bool):
+                    vs = 'true' if v else 'false'
+                elif isinstance(v, (int, float)):
+                    vs = str(v)
+                else:
+                    s = str(v)
+                    # Quote strings containing YAML special characters.
+                    if any(c in s for c in ':#{}[]|>&!\'",%@`'):
+                        s = "'" + s.replace("'", "''") + "'"
+                    vs = s
+                lines.append(('- ' if first else '  ') + k + ': ' + vs)
+                first = False
+            lines.append('')
+        text = '\n'.join(lines)
+    with tempfile.NamedTemporaryFile('w', dir=POLICIES_PATH.parent,
+                                     delete=False, suffix='.tmp') as f:
+        f.write(text)
+        tmp_path = f.name
+    os.replace(tmp_path, POLICIES_PATH)
+
+
+@bp_nemoclaw.route('/api/nemoclaw/rules', methods=['GET'])
+def api_nemoclaw_rules_list():
+    """Return all approval rules from ~/.clawmetry/policies.yml."""
+    return jsonify({'policies': _load_local_policies()})
+
+
+@bp_nemoclaw.route('/api/nemoclaw/rules', methods=['POST'])
+def api_nemoclaw_rules_create():
+    """Create or update a rule in ~/.clawmetry/policies.yml.
+
+    Upserts by preset_key (for preset-card toggles) or by name (for custom
+    rules). The local daemon enforces every entry in policies.yml regardless
+    of an ``enabled`` field, so callers should DELETE rather than set
+    enabled=false to disable a rule.
+    """
+    data = request.get_json(silent=True) or {}
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({'error': 'name is required'}), 400
+    rule = {k: v for k, v in data.items() if v is not None and k != 'id'}
+    rule['name'] = name
+    policies = _load_local_policies()
+    preset_key = data.get('preset_key')
+    updated = False
+    for i, p in enumerate(policies):
+        if not isinstance(p, dict):
+            continue
+        if preset_key and p.get('preset_key') == preset_key:
+            policies[i] = rule
+            updated = True
+            break
+        if not preset_key and p.get('name') == name:
+            policies[i] = rule
+            updated = True
+            break
+    if not updated:
+        policies.append(rule)
+    _write_local_policies(policies)
+    return jsonify({'ok': True, 'updated': updated})
+
+
+@bp_nemoclaw.route('/api/nemoclaw/rules/<path:rule_key>', methods=['DELETE'])
+def api_nemoclaw_rules_delete(rule_key):
+    """Remove a rule from ~/.clawmetry/policies.yml by preset_key or name."""
+    policies = _load_local_policies()
+    before = len(policies)
+    policies = [
+        p for p in policies
+        if isinstance(p, dict)
+        and p.get('preset_key') != rule_key
+        and p.get('name') != rule_key
+    ]
+    _write_local_policies(policies)
+    return jsonify({'ok': True, 'deleted': before - len(policies)})
