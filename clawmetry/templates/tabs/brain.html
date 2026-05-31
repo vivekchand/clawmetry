@@ -119,6 +119,21 @@
         " data-i18n="brain.activity_density">Activity density · last 60 min (30s buckets)</div>
       <canvas id="brain-density-chart" height="60" style="width:100%;display:block;"></canvas>
     </div>
+    <!-- Sessions-at-risk card (issue #2008): surfaces the existing
+         /api/outcomes/impact endpoint in a visible UI summary. Hidden when
+         all impact counts are zero; rendered by loadBrainAtRisk() in app.js. -->
+    <div id="brain-at-risk-card" style="display:none;
+      background:var(--bg-secondary);
+      border:1px solid #f59e0b;
+      border-radius:8px;
+      padding:10px 14px;
+      margin-bottom:12px;">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
+        <span style="font-size:13px;font-weight:700;color:#f59e0b;">⚠ <span data-i18n="brain.at_risk_title">Sessions at risk</span></span>
+        <span id="brain-at-risk-window" style="font-size:11px;color:var(--text-muted);"></span>
+      </div>
+      <div id="brain-at-risk-chips" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+    </div>
     <div class="brain-view-toggle" data-i18n-title="brain.view_toggle_tooltip" title="Switch between list view and neural-network view">
       <button class="brain-view-btn active" data-view="list" onclick="setBrainViewMode('list', this)" data-i18n="brain.view_list">List</button>
       <button class="brain-view-btn" data-view="graph" onclick="setBrainViewMode('graph', this)" data-i18n-title="brain.view_graph_tooltip" title="Neural-network visualization of agent activity (closes #53)" data-i18n="brain.view_graph">Graph</button>
