@@ -1057,7 +1057,7 @@ async function loadContextEconomics() {
   // ── Compaction log (clickable rows -> before/after + summary) ──
   if (compEl) {
     if (comps.length === 0) {
-      compEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">' + t("app.no_compactions_recorded", null, "No compactions recorded") + '' + (_ceSessionId ? ' for this session' : '') + '. OpenClaw compacts the transcript when the window fills; events appear here as they happen.</div>';
+      compEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">' + t("app.no_compactions_recorded", null, "No compactions recorded") + '' + (_ceSessionId ? ' for this session' : '') + '. Your agent compacts the transcript when the window fills; events appear here as they happen.</div>';
     } else {
       var c = '<div style="border:1px solid var(--border-primary);border-radius:10px;overflow:hidden;">';
       c += '<div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;padding:12px 14px;border-bottom:1px solid var(--border-primary);">Compaction events <span style="color:var(--text-faint);font-weight:500;text-transform:none;">— click a row to expand</span></div>';
