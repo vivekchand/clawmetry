@@ -1554,3 +1554,85 @@
 [dir="rtl"] .cron-schedule,
 [dir="rtl"] code,
 [dir="rtl"] pre { direction: ltr; text-align: left; unicode-bidi: isolate; }
+
+/* ── Swimlane Compare ─────────────────────────────────────────────────────
+   N parallel live lanes (sessions / runtimes), each a header (model, cost,
+   in/out tokens, context %) + a dense scrollable event stream. */
+.swimlane-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.swimlane-toolbar-spacer { flex: 1; }
+.swimlane-modes, .swimlane-race-sort { display: inline-flex; align-items: center; gap: 4px; background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 8px; padding: 3px; }
+.swimlane-race-sort { gap: 6px; padding: 3px 8px; }
+.swimlane-mode-btn, .swimlane-sort-btn { border: none; background: transparent; color: var(--text-muted); font-size: 12px; font-weight: 600; padding: 5px 12px; border-radius: 6px; cursor: pointer; }
+.swimlane-mode-btn:hover, .swimlane-sort-btn:hover { color: var(--text-primary); }
+.swimlane-mode-btn.active, .swimlane-sort-btn.active { background: var(--accent, #3b82f6); color: #fff; }
+
+.swimlane-single-picker { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.swimlane-single-tab { border: 1px solid var(--border-primary); background: var(--bg-secondary); color: var(--text-muted); font-size: 12px; padding: 4px 10px; border-radius: 6px; cursor: pointer; }
+.swimlane-single-tab.active { background: var(--accent, #3b82f6); color: #fff; border-color: transparent; }
+
+.swimlane-lanes { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+.swimlane-lanes.single { grid-template-columns: 1fr; }
+.swimlane-lanes.single .swimlane-events { font-size: 13px; }
+
+.swimlane-empty { text-align: center; padding: 48px 20px; border: 1px dashed var(--border-primary); border-radius: 12px; color: var(--text-muted); }
+
+.swimlane-col { border: 1px solid var(--border-primary); border-radius: 10px; overflow: hidden; background: var(--bg-secondary); display: flex; flex-direction: column; min-width: 0; }
+.swimlane-col.filtered-out { opacity: 0.45; }
+
+.swimlane-header { padding: 10px 12px; border-bottom: 1px solid var(--border-primary); background: var(--bg-primary); }
+.swimlane-hrow1 { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.swimlane-rt-chip { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: #7eb8f7; background: rgba(59, 130, 246, 0.12); border-radius: 4px; padding: 1px 6px; flex-shrink: 0; }
+.swimlane-rank { font-size: 11px; font-weight: 800; color: #f59e0b; flex-shrink: 0; }
+.swimlane-title { font-size: 13px; font-weight: 700; color: var(--text-primary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.swimlane-live-dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 6px rgba(34, 197, 94, 0.8); flex-shrink: 0; }
+.swimlane-x { cursor: pointer; color: var(--text-muted); font-size: 12px; flex-shrink: 0; padding: 0 2px; }
+.swimlane-x:hover { color: var(--text-error, #ef4444); }
+.swimlane-model { font-size: 11px; color: var(--text-muted); margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.swimlane-stats { display: flex; gap: 14px; margin-top: 8px; flex-wrap: wrap; }
+.swimlane-stat { display: flex; flex-direction: column; line-height: 1.25; }
+.swimlane-stat b { font-size: 12px; color: var(--text-primary); font-family: monospace; }
+.swimlane-stat i { font-size: 9px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; font-style: normal; }
+.swimlane-ctx { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.swimlane-ctx-bar { flex: 1; height: 5px; border-radius: 3px; background: var(--border-primary); overflow: hidden; }
+.swimlane-ctx-fill { height: 100%; background: linear-gradient(90deg, #3b82f6, #8b5cf6); }
+.swimlane-ctx-lbl { font-size: 10px; color: var(--text-muted); font-family: monospace; flex-shrink: 0; }
+.swimlane-filtered-note { font-size: 10px; color: var(--text-error, #ef4444); margin-top: 6px; }
+
+.swimlane-events { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; overflow-y: auto; max-height: calc(100vh - 240px); padding: 6px 0; }
+.swimlane-ev { padding: 3px 12px; line-height: 1.4; border-bottom: 1px solid rgba(127, 127, 127, 0.06); display: flex; gap: 6px; align-items: baseline; min-width: 0; }
+.swimlane-ev.swimlane-ind { padding-left: 22px; }
+.swimlane-turn { background: rgba(59, 130, 246, 0.06); font-weight: 700; border-top: 1px solid var(--border-primary); }
+.swimlane-divider { justify-content: center; color: var(--text-muted); font-size: 10px; font-style: italic; background: var(--bg-primary); }
+.swimlane-ev-text { min-width: 0; word-break: break-word; color: var(--text-primary); }
+.swimlane-ev-text.think { font-style: italic; color: #f59e0b; }
+.swimlane-ev-text.result { color: #22c55e; }
+.swimlane-ev-text.agent { color: #a78bfa; }
+.swimlane-ev-code { min-width: 0; word-break: break-all; color: #ef4444; font-family: inherit; }
+.swimlane-ev-empty { padding: 16px 12px; color: var(--text-muted); font-style: italic; }
+.swimlane-badge { flex-shrink: 0; font-size: 9px; font-weight: 700; letter-spacing: 0.4px; padding: 1px 5px; border-radius: 3px; color: #fff; }
+.swimlane-b-turn { background: #3b82f6; }
+.swimlane-b-think { background: #f59e0b; }
+.swimlane-b-exec { background: #ef4444; }
+.swimlane-b-read { background: #6b7280; }
+.swimlane-b-result { background: #22c55e; }
+.swimlane-b-agent { background: #a78bfa; }
+.swimlane-tool-badge { flex-shrink: 0; font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 3px; color: #fff; }
+
+.swimlane-race-caption { grid-column: 1 / -1; font-size: 11px; color: var(--text-muted); margin-bottom: 2px; }
+
+.swimlane-add-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55); display: flex; align-items: center; justify-content: center; z-index: 9999; backdrop-filter: blur(3px); }
+.swimlane-add-panel { background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 12px; width: 92%; max-width: 560px; max-height: 72vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5); }
+.swimlane-add-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--border-primary); }
+.swimlane-add-close { cursor: pointer; color: var(--text-muted); font-size: 16px; }
+.swimlane-add-list { overflow-y: auto; padding: 6px 0; }
+.swimlane-add-row { display: flex; align-items: center; gap: 10px; padding: 9px 18px; cursor: pointer; border-bottom: 1px solid rgba(127, 127, 127, 0.07); }
+.swimlane-add-row:hover { background: var(--bg-primary); }
+.swimlane-add-row.is-added { opacity: 0.55; cursor: default; }
+.swimlane-add-name { flex: 1; font-size: 13px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.swimlane-add-tok { font-size: 11px; color: var(--text-muted); font-family: monospace; flex-shrink: 0; }
+.swimlane-add-state { font-size: 11px; font-weight: 700; color: #3b82f6; flex-shrink: 0; }
+.swimlane-add-row.is-added .swimlane-add-state { color: var(--text-muted); }
+
+@media (max-width: 768px) {
+  .swimlane-lanes { grid-template-columns: 1fr; }
+}

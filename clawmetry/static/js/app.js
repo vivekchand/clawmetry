@@ -1180,6 +1180,8 @@ function switchTab(name) {
   if (name !== 'nemoclaw') _stopNcApprovalsAutoRefresh();
   if (name === 'subagents') { loadRunLedger(); loadSubagents(); if (!_subagentsTimer) _subagentsTimer = visibilitySetInterval(function(){ loadRunLedger(); loadSubagents(); }, 5000); }
   if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
+  if (name === 'swimlane') { loadSwimlane(); if (!_swimlaneTimer) _swimlaneTimer = visibilitySetInterval(loadSwimlane, 3000); }
+  if (name !== 'swimlane' && _swimlaneTimer) { clearInterval(_swimlaneTimer); _swimlaneTimer = null; }
 }
 
 // ── Left-nav Advanced drawer + mobile toggle (Phase 1 IA refactor #1659) ─
@@ -19758,3 +19760,425 @@ setTimeout(checkUpdateStatus, 5000);
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(_boot, 800); });
   else setTimeout(_boot, 800);
 })();
+
+// ── Swimlane Compare ──────────────────────────────────────────────────────
+// N agents / sessions / runtimes rendered as parallel live columns. Each lane
+// has a header (model, cost, in/out tokens, context %) and a dense event
+// stream (reuses /api/transcript-events). Differentiator vs single-agent trace
+// tools: swimlane the runtimes and sessions side by side. Lanes persist in
+// localStorage. Live = 3s re-poll (no SSE in MVP). Only polls while the tab is
+// active (timer cleared in switchTab).
+var _swimlaneTimer = null;
+// Per-cycle cache of the cross-lane data we fetch once (sessions + usage) so
+// the renderer can decorate each lane header without re-fetching per lane.
+var _swimlaneSessionIndex = {};   // session_id -> /api/sessions row
+var _swimlaneCostIndex = {};      // session_id -> cost_usd (from /api/usage)
+var _swimlaneEventCache = {};     // session_id -> {events, ts}
+
+// Tool-badge colors mirror the Brain/Flow convention so badges read the same
+// across tabs.
+var _SWIMLANE_TOOL_COLORS = {
+  exec: '#f59e0b', browser: '#3b82f6', web_search: '#8b5cf6', web_fetch: '#06b6d4',
+  message: '#ec4899', read: '#6b7280', write: '#22c55e', edit: '#f97316',
+  tts: '#a855f7', image: '#ef4444', canvas: '#14b8a6', nodes: '#6366f1',
+  process: '#64748b'
+};
+
+function _swimlaneLanes() {
+  try {
+    var raw = localStorage.getItem('cm-swimlane-lanes');
+    var arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr.slice(0, 4) : [];
+  } catch (e) { return []; }
+}
+function _swimlaneSetLanes(arr) {
+  try { localStorage.setItem('cm-swimlane-lanes', JSON.stringify((arr || []).slice(0, 4))); }
+  catch (e) {}
+}
+function _swimlaneMode() {
+  try { return localStorage.getItem('cm-swimlane-mode') || 'swimlane'; }
+  catch (e) { return 'swimlane'; }
+}
+function _swimlaneRaceSort() {
+  try { return localStorage.getItem('cm-swimlane-race-sort') || 'cost'; }
+  catch (e) { return 'cost'; }
+}
+
+function setSwimlaneMode(mode) {
+  try { localStorage.setItem('cm-swimlane-mode', mode); } catch (e) {}
+  loadSwimlane();
+}
+function setSwimlaneRaceSort(sort) {
+  try { localStorage.setItem('cm-swimlane-race-sort', sort); } catch (e) {}
+  loadSwimlane();
+}
+
+function _swimlaneShortSid(sid) {
+  sid = String(sid || '');
+  var i = sid.indexOf(':');
+  var rest = i > 0 ? sid.slice(i + 1) : sid;
+  return rest.length > 14 ? rest.slice(0, 6) + '…' + rest.slice(-4) : rest;
+}
+function _swimlaneSessionLabel(sid) {
+  var s = _swimlaneSessionIndex[sid] || {};
+  return s.displayName || s.title || s.subject || _swimlaneShortSid(sid);
+}
+
+// Add a lane (deduped, capped at 4) and re-render.
+function swimlaneAddLane(sid) {
+  if (!sid) return;
+  var lanes = _swimlaneLanes();
+  if (lanes.indexOf(sid) !== -1) return;
+  if (lanes.length >= 4) { lanes = lanes.slice(0, 3); }
+  lanes.push(sid);
+  _swimlaneSetLanes(lanes);
+  closeSwimlaneAddLane();
+  loadSwimlane();
+}
+function swimlaneRemoveLane(sid) {
+  _swimlaneSetLanes(_swimlaneLanes().filter(function (x) { return x !== sid; }));
+  loadSwimlane();
+}
+function clearSwimlaneLanes() {
+  _swimlaneSetLanes([]);
+  loadSwimlane();
+}
+
+// One-click preset: most-recent session per distinct runtime (cap 4). This is
+// the headline demo path — the 12 runtimes side by side. Respects the global
+// runtime switcher: when scoped to one runtime, only that runtime is picked.
+function swimlanePresetPerRuntime() {
+  var rtFilter = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  fetch('/api/sessions').then(function (r) { return r.json(); }).then(function (d) {
+    var sessions = (d && d.sessions) || (Array.isArray(d) ? d : []) || [];
+    // newest-first
+    sessions = sessions.slice().sort(function (a, b) {
+      return _swimlaneActiveEpoch(b) - _swimlaneActiveEpoch(a);
+    });
+    var seen = {};
+    var picks = [];
+    sessions.forEach(function (s) {
+      if (picks.length >= 4) return;
+      var sid = s.session_id || s.sessionId;
+      if (!sid) return;
+      var rt = (typeof _cmRuntimeOf === 'function') ? _cmRuntimeOf(s) : 'openclaw';
+      if (rtFilter !== 'all' && rt !== rtFilter) return;
+      if (seen[rt]) return;
+      seen[rt] = 1;
+      picks.push(sid);
+    });
+    _swimlaneSetLanes(picks);
+    loadSwimlane();
+  }).catch(function () {});
+}
+
+function _swimlaneActiveEpoch(s) {
+  var v = s.last_active_at || s.updated_at || s.updatedAt || s.started_at || s.lastActivityAt;
+  if (!v) return 0;
+  if (typeof v === 'number') return v < 1e12 ? v * 1000 : v;
+  var t = Date.parse(String(v));
+  return isNaN(t) ? 0 : t;
+}
+
+// ── Add-lane picker ───────────────────────────────────────────────────────
+function openSwimlaneAddLane() {
+  var ov = document.getElementById('swimlane-add-overlay');
+  if (ov) ov.style.display = 'flex';
+  var list = document.getElementById('swimlane-add-list');
+  if (list) list.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:16px;">Loading sessions...</div>';
+  var rtFilter = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  fetch('/api/sessions').then(function (r) { return r.json(); }).then(function (d) {
+    var sessions = (d && d.sessions) || (Array.isArray(d) ? d : []) || [];
+    sessions = sessions.slice().sort(function (a, b) {
+      return _swimlaneActiveEpoch(b) - _swimlaneActiveEpoch(a);
+    });
+    var chosen = _swimlaneLanes();
+    var html = '';
+    var shown = 0;
+    sessions.forEach(function (s) {
+      var sid = s.session_id || s.sessionId;
+      if (!sid) return;
+      var rt = (typeof _cmRuntimeOf === 'function') ? _cmRuntimeOf(s) : 'openclaw';
+      // Filter the picker to the scoped runtime (don't drop already-pinned).
+      if (rtFilter !== 'all' && rt !== rtFilter) return;
+      shown++;
+      var already = chosen.indexOf(sid) !== -1;
+      var rtLbl = (typeof _cmRuntimeLabel === 'function') ? _cmRuntimeLabel(rt) : rt;
+      var label = s.displayName || s.title || s.subject || _swimlaneShortSid(sid);
+      var tok = Number(s.total_tokens || 0);
+      var tokStr = tok > 1e6 ? (tok / 1e6).toFixed(1) + 'M' : (tok > 1e3 ? (tok / 1e3).toFixed(0) + 'K' : tok);
+      html += '<div class="swimlane-add-row' + (already ? ' is-added' : '') + '" onclick="' + (already ? '' : 'swimlaneAddLane(' + JSON.stringify(sid) + ')') + '">';
+      html += '<span class="swimlane-rt-chip">' + escHtml(rtLbl) + '</span>';
+      html += '<span class="swimlane-add-name" title="' + escHtml(sid) + '">' + escHtml(label) + '</span>';
+      html += '<span class="swimlane-add-tok">' + tokStr + ' tok</span>';
+      html += '<span class="swimlane-add-state">' + (already ? 'added' : '+ add') + '</span>';
+      html += '</div>';
+    });
+    if (!shown) {
+      var note = rtFilter !== 'all'
+        ? 'No ' + escHtml((typeof _cmRuntimeLabel === 'function') ? _cmRuntimeLabel(rtFilter) : rtFilter) + ' sessions found. Clear the runtime filter to see all.'
+        : 'No sessions found yet.';
+      html = '<div style="color:var(--text-muted);font-size:12px;padding:16px;">' + note + '</div>';
+    }
+    var l = document.getElementById('swimlane-add-list');
+    if (l) l.innerHTML = html;
+  }).catch(function () {
+    var l = document.getElementById('swimlane-add-list');
+    if (l) l.innerHTML = '<div style="color:var(--text-error);font-size:12px;padding:16px;">Failed to load sessions.</div>';
+  });
+}
+function closeSwimlaneAddLane() {
+  var ov = document.getElementById('swimlane-add-overlay');
+  if (ov) ov.style.display = 'none';
+}
+
+// ── Loader ────────────────────────────────────────────────────────────────
+async function loadSwimlane() {
+  if (_cmCurrentTab !== 'swimlane') return;
+  var host = document.getElementById('swimlane-lanes');
+  if (!host) return;
+
+  // Reflect mode + race-sort button state.
+  var mode = _swimlaneMode();
+  document.querySelectorAll('.swimlane-mode-btn').forEach(function (b) {
+    b.classList.toggle('active', b.getAttribute('data-mode') === mode);
+  });
+  var raceSortWrap = document.getElementById('swimlane-race-sort');
+  if (raceSortWrap) raceSortWrap.style.display = (mode === 'race') ? 'flex' : 'none';
+  var raceSort = _swimlaneRaceSort();
+  document.querySelectorAll('.swimlane-sort-btn').forEach(function (b) {
+    b.classList.toggle('active', b.getAttribute('data-sort') === raceSort);
+  });
+
+  var lanes = _swimlaneLanes();
+  if (!lanes.length) {
+    if (host) host.innerHTML =
+      '<div class="swimlane-empty">'
+      + '<div style="font-size:28px;margin-bottom:10px;">🏊</div>'
+      + '<div style="font-size:14px;color:var(--text-primary);font-weight:600;margin-bottom:6px;">Pick up to 4 sessions to compare</div>'
+      + '<div style="font-size:12px;color:var(--text-muted);margin-bottom:16px;">Each lane streams its turns, tools and results side by side.</div>'
+      + '<button type="button" class="refresh-btn" onclick="swimlanePresetPerRuntime()">Compare 1 per runtime</button> '
+      + '<button type="button" class="refresh-btn" onclick="openSwimlaneAddLane()">+ Add lane</button>'
+      + '</div>';
+    var sp0 = document.getElementById('swimlane-single-picker');
+    if (sp0) sp0.style.display = 'none';
+    return;
+  }
+
+  // Fetch cross-lane context once + per-lane transcript-events concurrently.
+  var rtFilter = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var sessionsP = fetch('/api/sessions').then(function (r) { return r.json(); }).catch(function () { return {}; });
+  var usageP = fetch('/api/usage').then(function (r) { return r.json(); }).catch(function () { return {}; });
+  var eventPs = lanes.map(function (sid) {
+    return fetch('/api/transcript-events/' + encodeURIComponent(sid))
+      .then(function (r) { return r.json(); })
+      .then(function (j) { return { sid: sid, data: j }; })
+      .catch(function () { return { sid: sid, data: { events: [] } }; });
+  });
+
+  var results;
+  try {
+    results = await Promise.all([sessionsP, usageP].concat(eventPs));
+  } catch (e) {
+    return;
+  }
+  var sessData = results[0] || {};
+  var usageData = results[1] || {};
+  var eventResults = results.slice(2);
+
+  // Index sessions + costs for header decoration.
+  _swimlaneSessionIndex = {};
+  var sessList = (sessData && sessData.sessions) || (Array.isArray(sessData) ? sessData : []) || [];
+  sessList.forEach(function (s) {
+    var sid = s.session_id || s.sessionId;
+    if (sid) _swimlaneSessionIndex[sid] = s;
+  });
+  _swimlaneCostIndex = (usageData && usageData.sessionCosts) || {};
+
+  // Build lane view-models.
+  var laneModels = eventResults.map(function (er) {
+    return _swimlaneBuildLane(er.sid, er.data, rtFilter);
+  });
+
+  // Single mode: render one lane full-width with a lane selector.
+  var sp = document.getElementById('swimlane-single-picker');
+  if (mode === 'single') {
+    var activeSid = _swimlaneLanes().indexOf(window._swimlaneSingleSid) !== -1
+      ? window._swimlaneSingleSid : lanes[0];
+    window._swimlaneSingleSid = activeSid;
+    if (sp) {
+      if (lanes.length > 1) {
+        var ph = '<span style="font-size:11px;color:var(--text-muted);margin-right:6px;">Lane:</span>';
+        lanes.forEach(function (sid) {
+          ph += '<button type="button" class="swimlane-single-tab' + (sid === activeSid ? ' active' : '')
+            + '" onclick="window._swimlaneSingleSid=' + JSON.stringify(sid) + ';loadSwimlane()">'
+            + escHtml(_swimlaneSessionLabel(sid)) + '</button>';
+        });
+        sp.innerHTML = ph;
+        sp.style.display = 'flex';
+      } else { sp.style.display = 'none'; }
+    }
+    var one = laneModels.filter(function (lm) { return lm.sid === activeSid; });
+    host.className = 'swimlane-lanes single';
+    host.innerHTML = one.map(function (lm) { return _swimlaneRenderLane(lm, false, 0); }).join('');
+    return;
+  }
+  if (sp) sp.style.display = 'none';
+
+  // Race mode: reorder by cost or latency desc and add rank pills.
+  var ranked = false;
+  if (mode === 'race') {
+    ranked = true;
+    var key = _swimlaneRaceSort();
+    laneModels.sort(function (a, b) {
+      if (key === 'latency') return b.latencyMs - a.latencyMs;
+      return b.costUsd - a.costUsd;
+    });
+  }
+
+  host.className = 'swimlane-lanes' + (mode === 'race' ? ' race' : '');
+  var capHtml = '';
+  if (mode === 'race') {
+    capHtml = '<div class="swimlane-race-caption">Race mode (beta): lanes ordered by '
+      + escHtml(_swimlaneRaceSort()) + '. No live animation yet.</div>';
+  }
+  host.innerHTML = capHtml + laneModels.map(function (lm, i) {
+    return _swimlaneRenderLane(lm, ranked, i + 1);
+  }).join('');
+}
+
+// Build a lane view-model from the events payload + indexed session/cost data.
+function _swimlaneBuildLane(sid, data, rtFilter) {
+  var events = (data && data.events) || [];
+  var s = _swimlaneSessionIndex[sid] || {};
+  var rt = (typeof _cmRuntimeOf === 'function') ? _cmRuntimeOf(s.session_id ? s : { session_id: sid }) : 'openclaw';
+  var model = s.model || '';
+  var cost = Number(_swimlaneCostIndex[sid] != null ? _swimlaneCostIndex[sid] : (s.total_cost || 0)) || 0;
+  // No reliable in/out split in /api/sessions or /api/usage top rows — fall
+  // back to total + "--" rather than inventing a split (per spec).
+  var inTok = (typeof s.input_tokens === 'number') ? s.input_tokens : null;
+  var outTok = (typeof s.output_tokens === 'number') ? s.output_tokens : null;
+  var totalTok = Number(s.total_tokens || 0);
+  // Context %: derive from ctx tokens (input+cache if present) vs cap.
+  var ctxTok = (inTok != null ? inTok : totalTok);
+  var cap = /\[1m\]/i.test(model) ? 1000000 : 200000;
+  var pct = ctxTok > 0 ? Math.min(100, (ctxTok / cap) * 100) : null;
+  // latency = span of the lane's events.
+  var firstTs = null, lastTs = null;
+  events.forEach(function (ev) {
+    if (typeof ev.timestamp === 'number') {
+      if (firstTs == null || ev.timestamp < firstTs) firstTs = ev.timestamp;
+      if (lastTs == null || ev.timestamp > lastTs) lastTs = ev.timestamp;
+    }
+  });
+  var latencyMs = (firstTs != null && lastTs != null) ? (lastTs - firstTs) : 0;
+  var liveTs = _swimlaneActiveEpoch(s);
+  var isLive = liveTs > 0 && (Date.now() - liveTs) < 60000;
+  // Filtered-out flag: a pinned lane whose runtime is excluded by the global
+  // switcher gets a dimmed state (don't silently drop the user's pick).
+  var filteredOut = (rtFilter && rtFilter !== 'all' && rt !== rtFilter);
+  return {
+    sid: sid, events: events, runtime: rt, model: model, costUsd: cost,
+    inTok: inTok, outTok: outTok, totalTok: totalTok, ctxPct: pct,
+    latencyMs: latencyMs, isLive: isLive, filteredOut: filteredOut,
+    label: s.displayName || s.title || s.subject || _swimlaneShortSid(sid)
+  };
+}
+
+function _swimlaneRenderLane(lm, ranked, rank) {
+  var rtLbl = (typeof _cmRuntimeLabel === 'function') ? _cmRuntimeLabel(lm.runtime) : lm.runtime;
+  var costStr = '$' + (lm.costUsd || 0).toFixed(4);
+  var inStr = (lm.inTok != null) ? lm.inTok.toLocaleString() : '--';
+  var outStr = (lm.outTok != null) ? lm.outTok.toLocaleString() : '--';
+  var totStr = (lm.totalTok || 0).toLocaleString();
+  var pctStr = (lm.ctxPct != null) ? Math.round(lm.ctxPct) + '%' : '--';
+  var pctW = (lm.ctxPct != null) ? Math.round(lm.ctxPct) : 0;
+
+  var h = '<div class="swimlane-col' + (lm.filteredOut ? ' filtered-out' : '') + '">';
+  h += '<div class="swimlane-header">';
+  h += '<div class="swimlane-hrow1">';
+  if (ranked) h += '<span class="swimlane-rank">#' + rank + '</span>';
+  h += '<span class="swimlane-rt-chip">' + escHtml(rtLbl) + '</span>';
+  h += '<span class="swimlane-title" title="' + escHtml(lm.sid) + '">' + escHtml(lm.label) + '</span>';
+  if (lm.isLive) h += '<span class="swimlane-live-dot" title="active in the last 60s"></span>';
+  h += '<span class="swimlane-x" title="Remove lane" onclick="swimlaneRemoveLane(' + JSON.stringify(lm.sid) + ')">✕</span>';
+  h += '</div>';
+  h += '<div class="swimlane-model">' + escHtml(lm.model || 'model unknown') + '</div>';
+  h += '<div class="swimlane-stats">';
+  h += '<span class="swimlane-stat"><b>' + costStr + '</b><i>cost</i></span>';
+  h += '<span class="swimlane-stat"><b>' + inStr + ' / ' + outStr + '</b><i>in / out</i></span>';
+  if (lm.inTok == null) h += '<span class="swimlane-stat"><b>' + totStr + '</b><i>total tok</i></span>';
+  h += '</div>';
+  h += '<div class="swimlane-ctx"><div class="swimlane-ctx-bar"><div class="swimlane-ctx-fill" style="width:' + pctW + '%;"></div></div><span class="swimlane-ctx-lbl">ctx ' + pctStr + '</span></div>';
+  if (lm.filteredOut) h += '<div class="swimlane-filtered-note">Filtered out by runtime switcher</div>';
+  h += '</div>';
+
+  h += '<div class="swimlane-events">';
+  h += _swimlaneRenderEvents(lm.events);
+  h += '</div>';
+  h += '</div>';
+  return h;
+}
+
+function _swimlaneTrunc(s, n) {
+  s = String(s || '').replace(/\s+/g, ' ').trim();
+  return s.length > n ? s.slice(0, n) + '…' : s;
+}
+
+// Render the dense event stream. Turn boundaries are synthesized: a `user`
+// event opens a turn; we count turns as we go. Per-turn token deltas are
+// deferred (transcript-events carries no per-event tokens).
+function _swimlaneRenderEvents(events) {
+  if (!events || !events.length) {
+    return '<div class="swimlane-ev-empty">No events recorded for this lane yet.</div>';
+  }
+  var turnN = 0;
+  var rows = '';
+  events.forEach(function (ev) {
+    var type = ev.type || '';
+    if (type === 'user') {
+      turnN++;
+      rows += '<div class="swimlane-ev swimlane-turn" data-type="turn">';
+      rows += '<span class="swimlane-badge swimlane-b-turn">TURN ' + turnN + '</span>';
+      rows += '<span class="swimlane-ev-text">' + escHtml(_swimlaneTrunc(ev.text, 120)) + '</span>';
+      rows += '</div>';
+    } else if (type === 'thinking') {
+      rows += '<div class="swimlane-ev swimlane-ind">';
+      rows += '<span class="swimlane-badge swimlane-b-think">THINK</span>';
+      rows += '<span class="swimlane-ev-text think">' + escHtml(_swimlaneTrunc(ev.text, 140)) + '</span>';
+      rows += '</div>';
+    } else if (type === 'exec') {
+      rows += '<div class="swimlane-ev swimlane-ind">';
+      rows += '<span class="swimlane-badge swimlane-b-exec">EXEC</span>';
+      rows += '<code class="swimlane-ev-code">' + escHtml(_swimlaneTrunc(ev.command || ev.text, 120)) + '</code>';
+      rows += '</div>';
+    } else if (type === 'read') {
+      rows += '<div class="swimlane-ev swimlane-ind">';
+      rows += '<span class="swimlane-badge swimlane-b-read">READ</span>';
+      rows += '<span class="swimlane-ev-text">' + escHtml(_swimlaneTrunc(ev.file || ev.text, 120)) + '</span>';
+      rows += '</div>';
+    } else if (type === 'tool') {
+      var tn = ev.toolName || '?';
+      var col = _SWIMLANE_TOOL_COLORS[tn] || '#6b7280';
+      rows += '<div class="swimlane-ev swimlane-ind">';
+      rows += '<span class="swimlane-tool-badge" style="background:' + col + ';">' + escHtml(tn) + '</span>';
+      if (ev.text) rows += '<span class="swimlane-ev-text">' + escHtml(_swimlaneTrunc(ev.text, 100)) + '</span>';
+      rows += '</div>';
+    } else if (type === 'result') {
+      rows += '<div class="swimlane-ev swimlane-ind">';
+      rows += '<span class="swimlane-badge swimlane-b-result">RESULT</span>';
+      rows += '<span class="swimlane-ev-text result">✓ ' + escHtml(_swimlaneTrunc(ev.text, 100)) + '</span>';
+      rows += '</div>';
+    } else if (type === 'agent') {
+      rows += '<div class="swimlane-ev swimlane-ind">';
+      rows += '<span class="swimlane-badge swimlane-b-agent">AGENT</span>';
+      rows += '<span class="swimlane-ev-text agent">' + escHtml(_swimlaneTrunc(ev.text, 140)) + '</span>';
+      rows += '</div>';
+    } else if (type === 'model_change') {
+      rows += '<div class="swimlane-ev swimlane-divider">model → ' + escHtml(_swimlaneTrunc(ev.modelId, 60)) + '</div>';
+    } else if (type === 'thinking_level_change') {
+      rows += '<div class="swimlane-ev swimlane-divider">thinking level → ' + escHtml(_swimlaneTrunc(ev.thinkingLevel, 40)) + '</div>';
+    }
+  });
+  return rows;
+}

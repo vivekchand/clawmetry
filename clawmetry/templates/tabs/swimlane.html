@@ -1,0 +1,51 @@
+<div class="page" id="page-swimlane">
+  <div class="refresh-bar">
+    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">🏊 Swimlane Compare</h2>
+    <button class="refresh-btn" onclick="loadSwimlane()">↻ Refresh</button>
+  </div>
+
+  <!-- Swimlane: N agents / sessions / runtimes shown as parallel live columns.
+       Each lane has a header (model, cost, in/out tokens, context %) and a
+       dense event stream reusing /api/transcript-events. Our differentiator
+       vs single-agent trace tools: swimlane the runtimes and sessions side by
+       side, one click per distinct runtime. Live updates = 3s re-poll. -->
+
+  <div class="swimlane-toolbar">
+    <div class="swimlane-modes" role="group" aria-label="Swimlane layout mode">
+      <button type="button" class="swimlane-mode-btn" data-mode="single" onclick="setSwimlaneMode('single')">Single</button>
+      <button type="button" class="swimlane-mode-btn" data-mode="swimlane" onclick="setSwimlaneMode('swimlane')">Swimlane</button>
+      <button type="button" class="swimlane-mode-btn" data-mode="race" onclick="setSwimlaneMode('race')">Race</button>
+    </div>
+
+    <div class="swimlane-race-sort" id="swimlane-race-sort" style="display:none;">
+      <span style="font-size:11px;color:var(--text-muted);">Order by</span>
+      <button type="button" class="swimlane-sort-btn" data-sort="cost" onclick="setSwimlaneRaceSort('cost')">cost</button>
+      <button type="button" class="swimlane-sort-btn" data-sort="latency" onclick="setSwimlaneRaceSort('latency')">latency</button>
+    </div>
+
+    <div class="swimlane-toolbar-spacer"></div>
+
+    <button type="button" class="refresh-btn" onclick="swimlanePresetPerRuntime()" title="Auto-pick the most recent session for each distinct runtime">Compare 1 per runtime</button>
+    <button type="button" class="refresh-btn" onclick="openSwimlaneAddLane()">+ Add lane</button>
+    <button type="button" class="refresh-btn" onclick="clearSwimlaneLanes()" title="Remove all lanes">Clear</button>
+  </div>
+
+  <div id="swimlane-single-picker" class="swimlane-single-picker" style="display:none;"></div>
+
+  <div id="swimlane-lanes" class="swimlane-lanes">
+    <div style="color:var(--text-muted);font-size:13px;padding:24px;text-align:center;">Loading swimlanes...</div>
+  </div>
+
+  <!-- Add-lane picker dropdown (session list). Hidden by default. -->
+  <div id="swimlane-add-overlay" class="swimlane-add-overlay" style="display:none;" onclick="if(event.target===this)closeSwimlaneAddLane()">
+    <div class="swimlane-add-panel">
+      <div class="swimlane-add-head">
+        <span style="font-size:14px;font-weight:700;color:var(--text-primary);">Add a lane (up to 4 total)</span>
+        <span class="swimlane-add-close" onclick="closeSwimlaneAddLane()">✕</span>
+      </div>
+      <div id="swimlane-add-list" class="swimlane-add-list">
+        <div style="color:var(--text-muted);font-size:12px;padding:16px;">Loading sessions...</div>
+      </div>
+    </div>
+  </div>
+</div><!-- end page-swimlane -->
