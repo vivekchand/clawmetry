@@ -41,7 +41,6 @@ jobs:
             echo "  Using GITHUB_TOKEN (no E2E_ADMIN_PAT set) -- clawmetry only:"
             echo "  clawmetry         : OSS golden path (wheel + OpenClaw + 9 tabs)"
             echo "  clawmetry         : Cross-repo handoff (C4)"
-            echo "  clawmetry         : visual-diff"
             echo ""
             echo "  For the remaining repos, run the equivalent workflow in each:"
             echo "  clawmetry-cloud   : Cloud golden-path browser E2E  (needs E2E_ADMIN_PAT or own workflow)"
@@ -50,10 +49,13 @@ jobs:
             echo "  Using E2E_ADMIN_PAT -- applying to all 3 repos:"
             echo "  clawmetry         : OSS golden path (wheel + OpenClaw + 9 tabs)"
             echo "  clawmetry         : Cross-repo handoff (C4)"
-            echo "  clawmetry         : visual-diff"
             echo "  clawmetry-cloud   : Cloud golden-path browser E2E"
             echo "  clawmetry-landing : Landing golden path (C3)"
           fi
+          echo ""
+          echo "  NOTE: visual-diff is not in this list -- pr-screenshots.yml has a"
+          echo "  paths: filter so it only runs on UI-touching PRs. Adding it as"
+          echo "  required would permanently block non-UI PRs."
           echo ""
           echo "Re-run with confirm=APPLY to apply."
 
