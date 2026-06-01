@@ -471,6 +471,22 @@ class TestHeartbeatStatus:
         assert "resources" in ss
         assert ss["resources"] in ("ok", "warn", "critical")
 
+    def test_system_health_includes_daemon_error_rate_per_min(self, api, base_url):
+        """system-health returns daemon_error_rate_per_min (PRD #1133 layer 4)."""
+        d = assert_ok(get(api, base_url, "/api/system-health"))
+        assert "daemon_error_rate_per_min" in d, (
+            "system-health must include daemon_error_rate_per_min"
+        )
+        rate = d["daemon_error_rate_per_min"]
+        assert isinstance(rate, (int, float)), "daemon_error_rate_per_min must be numeric"
+        assert rate >= 0, "daemon_error_rate_per_min must be non-negative"
+        # Must equal daemon.errors_last_5min / 5 (the source window)
+        daemon = d.get("daemon", {})
+        expected = round(daemon.get("errors_last_5min", 0) / 5.0, 2)
+        assert rate == expected, (
+            f"daemon_error_rate_per_min {rate} != daemon.errors_last_5min/5 {expected}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Heartbeat Liveness Panel (#686)
