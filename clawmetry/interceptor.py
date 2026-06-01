@@ -38,6 +38,24 @@ _LLM_URL_PATTERNS = [
     "openrouter.ai",
 ]
 
+# Hosts to exclude from external-API capture (noise / internal traffic).
+# User can extend via CLAWMETRY_INTERCEPT_HOSTS_EXCLUDE=host1,host2 (substring).
+_EXCLUDED_HOST_DEFAULTS = frozenset([
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+    "169.254.",        # link-local / AWS metadata
+    "::1",
+    # LLM providers already tracked as llm_call
+    "api.anthropic.com",
+    "api.openai.com",
+    "generativelanguage.googleapis.com",
+    "openrouter.ai",
+    # ClawMetry infra — don't capture our own sync calls
+    "ingest.clawmetry.com",
+    "app.clawmetry.com",
+])
+
 
 # Output file — in OpenClaw dir so ClawMetry sync picks it up
 def _get_output_file() -> Path:
@@ -110,6 +128,43 @@ def _is_llm_url(url: str) -> bool:
         return False
     url_lower = url.lower()
     return any(pattern in url_lower for pattern in _LLM_URL_PATTERNS)
+
+
+def _is_excluded_host(url: str) -> bool:
+    """Return True if the URL should be silently skipped for external-call capture."""
+    if not url:
+        return True
+    url_lower = url.lower()
+    if any(h in url_lower for h in _EXCLUDED_HOST_DEFAULTS):
+        return True
+    extra = os.environ.get("CLAWMETRY_INTERCEPT_HOSTS_EXCLUDE", "").strip()
+    if extra:
+        for part in extra.split(","):
+            part = part.strip().lower()
+            if part and part in url_lower:
+                return True
+    return False
+
+
+def _build_external_event(
+    url: str, method: str, status_code: int, latency_ms: float, library: str
+) -> dict[str, Any]:
+    """Build an external_api_call event dict."""
+    try:
+        from urllib.parse import urlparse
+        host = urlparse(url).netloc or url.split("/")[2]
+    except Exception:
+        host = ""
+    return {
+        "type": "external_api_call",
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "url": url,
+        "host": host,
+        "method": (method or "").upper(),
+        "status_code": status_code,
+        "latency_ms": round(latency_ms, 1),
+        "library": library,
+    }
 
 
 def _detect_provider(url: str) -> str:
@@ -257,6 +312,16 @@ def _patch_httpx() -> bool:
         ) -> httpx.Response:
             url = str(request.url)
             if not _is_llm_url(url):
+                if not _is_excluded_host(url):
+                    t0 = time.monotonic()
+                    response = _original_send(self, request, **kwargs)
+                    _write_event(_build_external_event(
+                        url, str(getattr(request, "method", "")),
+                        response.status_code,
+                        (time.monotonic() - t0) * 1000,
+                        "httpx",
+                    ))
+                    return response
                 return _original_send(self, request, **kwargs)
 
             provider = _detect_provider(url)
@@ -311,6 +376,16 @@ def _patch_httpx() -> bool:
             ) -> httpx.Response:
                 url = str(request.url)
                 if not _is_llm_url(url):
+                    if not _is_excluded_host(url):
+                        t0 = time.monotonic()
+                        response = await _original_async_send(self, request, **kwargs)
+                        _write_event(_build_external_event(
+                            url, str(getattr(request, "method", "")),
+                            response.status_code,
+                            (time.monotonic() - t0) * 1000,
+                            "httpx.async",
+                        ))
+                        return response
                     return await _original_async_send(self, request, **kwargs)
 
                 provider = _detect_provider(url)
@@ -383,6 +458,16 @@ def _patch_requests() -> bool:
         ) -> requests.Response:
             url = str(request.url or "")
             if not _is_llm_url(url):
+                if not _is_excluded_host(url):
+                    t0 = time.monotonic()
+                    response = _original_session_send(self, request, **kwargs)
+                    _write_event(_build_external_event(
+                        url, str(getattr(request, "method", "")),
+                        response.status_code,
+                        (time.monotonic() - t0) * 1000,
+                        "requests",
+                    ))
+                    return response
                 return _original_session_send(self, request, **kwargs)
 
             provider = _detect_provider(url)

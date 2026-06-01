@@ -39,13 +39,14 @@ bp_local_query = Blueprint("local_query", __name__)
 # arbitrary SELECT against the user's local DuckDB — only what we've
 # whitelisted here.
 _SHAPES = {
-    "events":     "query_events",
-    "sessions":   "query_sessions",
-    "aggregates": "query_aggregates",
-    "health":     None,                 # special: no args
-    "transcript": "query_events",       # alias with session_id required
-    "spans":      "query_spans",        # Issue #1013: full-filter span list
-    "traces":     "query_traces",       # Issue #1013: one row per trace_id
+    "events":          "query_events",
+    "sessions":        "query_sessions",
+    "aggregates":      "query_aggregates",
+    "health":          None,                      # special: no args
+    "transcript":      "query_events",            # alias with session_id required
+    "spans":           "query_spans",             # Issue #1013: full-filter span list
+    "traces":          "query_traces",            # Issue #1013: one row per trace_id
+    "external_calls":  "query_external_calls",   # Issue #883: external API tracing
 }
 
 
@@ -210,6 +211,13 @@ def _coerce_args(shape: str, raw: dict) -> dict:
             "since":      raw.get("since"),
             "until":      raw.get("until"),
             "limit":      _safe_int(raw.get("limit"), default=100, lo=1, hi=1000),
+        }
+    if shape == "external_calls":
+        return {
+            "session_id": raw.get("session_id"),
+            "since":      raw.get("since"),
+            "until":      raw.get("until"),
+            "limit":      _safe_int(raw.get("limit"), default=200, lo=1, hi=2000),
         }
     raise ValueError(f"unknown shape: {shape}")
 
@@ -383,6 +391,20 @@ def http_traces():
     try:
         args = _coerce_args("traces", request.args.to_dict())
         return jsonify(_dispatch("traces", args))
+    except Exception as e:
+        return jsonify({"error": str(e)[:300]}), 500
+
+
+@bp_local_query.route("/api/local/external-calls", methods=["GET"])
+def http_external_calls():
+    """List external (non-LLM) API calls captured by the interceptor.
+
+    Optional query params: session_id, since (ISO), until (ISO), limit (int).
+    When session_id is given, results are filtered to calls whose timestamp
+    falls within that session's start/end window."""
+    try:
+        args = _coerce_args("external_calls", request.args.to_dict())
+        return jsonify(_dispatch("external_calls", args))
     except Exception as e:
         return jsonify({"error": str(e)[:300]}), 500
 
@@ -600,6 +622,9 @@ _DAEMON_METHODS = frozenset({
     "mark_error_resolved",
     "unmark_error_resolved",
     "query_resolved_errors",
+    # Issue #883: external API tracing. Read-only; the daemon owns the writer
+    # connection so the proxy is required for multi-process installs.
+    "query_external_calls",
 })
 
 
