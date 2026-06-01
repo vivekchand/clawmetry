@@ -11350,6 +11350,9 @@ DASHBOARD_HTML = r"""
         <div class="left-nav-item left-nav-item-sub" id="left-nav-context-economics" data-tab="context-economics" onclick="switchTab('context-economics')" title="Context-window utilization over time, compaction triggers and tokens reclaimed">
           <span class="left-nav-label">Context economics</span>
         </div>
+        <div class="left-nav-item left-nav-item-sub" id="left-nav-swimlane" data-tab="swimlane" onclick="switchTab('swimlane')" title="Compare up to 4 sessions or runtimes side by side as parallel live lanes">
+          <span class="left-nav-label">Swimlane</span>
+        </div>
       </div>
 
       <div class="left-nav-item" data-tab="approvals" onclick="switchTab('approvals')" data-i18n-title="nav.approvals_tooltip" title="Cloud-mediated approval queue">
@@ -11480,6 +11483,9 @@ DASHBOARD_HTML = r"""
 <!-- TOOL CATALOG (provenance + p50/p95 latency + error rate, P1-3) -->
 {% include 'tabs/tool-catalog.html' %}
 {% include 'tabs/context-economics.html' %}
+
+<!-- SWIMLANE COMPARE — N parallel live lanes (sessions / runtimes) -->
+{% include 'tabs/swimlane.html' %}
 
 <!-- SECURITY -->
 {% include 'tabs/security.html' %}
