@@ -2,8 +2,8 @@
 """Apply required status checks for E2E Robustness criterion C6.
 
 This script is idempotent: running it multiple times is safe.
-It adds the named E2E job checks without removing any existing
-required status checks on main.
+It adds checks listed in REQUIRED_CHECKS and removes any in DEPRECATED_CHECKS
+from the main branch protection of each repo.
 
 Usage
 -----
@@ -14,7 +14,7 @@ When run inside GitHub Actions, GITHUB_REPOSITORY is set automatically
 to only the matching repo so that a GITHUB_TOKEN with single-repo
 Administration write access is sufficient.
 
-When run locally (GITHUB_REPOSITORY not set), the script applies all 5
+When run locally (GITHUB_REPOSITORY not set), the script applies all 4
 checks and requires a token with cross-repo Administration access.
 
 Requirements
@@ -43,17 +43,29 @@ OWNER = "vivekchand"
 # Job names verified against workflow files 2026-06-01:
 #   clawmetry/.github/workflows/oss-golden-path.yml      -> "OSS golden path (wheel + OpenClaw + 9 tabs)"
 #   clawmetry/.github/workflows/cross-repo-handoff.yml   -> "Cross-repo handoff (C4)"
-#   clawmetry/.github/workflows/pr-screenshots.yml       -> "visual-diff"
-#     (no `name:` on the job -- GitHub uses the job key; continue-on-error: true
-#      means the check always reports success, ensuring screenshots run on every PR)
 #   clawmetry-cloud/.github/workflows/e2e.yml            -> "Cloud golden-path browser E2E"
 #   clawmetry-landing/.github/workflows/landing-golden-path.yml -> "Landing golden path (C3)"
+#
+# visual-diff (pr-screenshots.yml) is intentionally excluded: that workflow has
+# a paths: filter so the job only runs on PRs that touch UI files. Adding it as
+# a required check would permanently stall non-UI PRs on "Expected -- Waiting
+# for status to be reported."
 REQUIRED_CHECKS: list[tuple[str, str]] = [
     ("clawmetry",         "OSS golden path (wheel + OpenClaw + 9 tabs)"),
     ("clawmetry",         "Cross-repo handoff (C4)"),
-    ("clawmetry",         "visual-diff"),
     ("clawmetry-cloud",   "Cloud golden-path browser E2E"),
     ("clawmetry-landing", "Landing golden path (C3)"),
+]
+
+# Checks previously added as required that must be actively removed.
+# This list is processed on every run so the script is self-healing:
+# if a deprecated check re-appears (e.g. via a manual UI edit) it is
+# removed on the next push-triggered run.
+DEPRECATED_CHECKS: list[tuple[str, str]] = [
+    # Added in error before 2026-06-02: pr-screenshots.yml has a paths: filter
+    # so visual-diff only fires on UI-touching PRs. As a required check it
+    # permanently stalls non-UI PRs waiting for a status that never arrives.
+    ("clawmetry", "visual-diff"),
 ]
 
 
@@ -127,6 +139,62 @@ def add_required_check(repo: str, context: str, token: str) -> None:
     print(f"  [{repo}] added required check ({len(existing)} total): {context!r}")
 
 
+def remove_required_check(repo: str, context: str, token: str) -> None:
+    """Idempotently remove context from required status checks on repo/main."""
+    path = f"/repos/{OWNER}/{repo}/branches/main/protection/required_status_checks"
+    try:
+        current = _api("GET", path, token=token)
+        existing: list[str] = current.get("contexts", [])
+    except RuntimeError:
+        print(f"  [{repo}] no branch protection found, skipping removal of: {context!r}")
+        return
+
+    if context not in existing:
+        print(f"  [{repo}] not present (clean), nothing to remove: {context!r}")
+        return
+
+    updated = [c for c in existing if c != context]
+    _api("PATCH", path, body={"strict": False, "contexts": updated}, token=token)
+    print(f"  [{repo}] removed deprecated check ({len(updated)} remaining): {context!r}")
+
+
+def verify_required_checks(
+    checks: list[tuple[str, str]],
+    deprecated: list[tuple[str, str]],
+    token: str,
+) -> bool:
+    """Read back branch protection state and assert it matches intent.
+
+    Returns True if all required checks are present and no deprecated checks
+    remain. Prints a FAIL line for each discrepancy so CI logs are actionable.
+    Catches silent 403 / administration:write failures before they go unnoticed.
+    """
+    repos = dict.fromkeys([r for r, _ in checks + deprecated])
+    ok = True
+    for repo in repos:
+        path = f"/repos/{OWNER}/{repo}/branches/main/protection/required_status_checks"
+        try:
+            current = _api("GET", path, token=token)
+            actual: set[str] = set(current.get("contexts", []))
+        except RuntimeError as exc:
+            print(f"  [{repo}] FAIL: could not read required checks: {exc}")
+            ok = False
+            continue
+        required = {ctx for r, ctx in checks if r == repo}
+        blocked = {ctx for r, ctx in deprecated if r == repo}
+        missing = required - actual
+        stale = blocked & actual
+        if missing:
+            print(f"  [{repo}] FAIL: check not yet required: {sorted(missing)}")
+            ok = False
+        if stale:
+            print(f"  [{repo}] FAIL: deprecated check still present: {sorted(stale)}")
+            ok = False
+        if not missing and not stale:
+            print(f"  [{repo}] OK: {sorted(actual)}")
+    return ok
+
+
 def _checks_to_apply() -> list[tuple[str, str]]:
     """Return the subset of REQUIRED_CHECKS applicable to the current context.
 
@@ -160,6 +228,15 @@ def _checks_to_apply() -> list[tuple[str, str]]:
     return REQUIRED_CHECKS
 
 
+def _deprecated_to_remove() -> list[tuple[str, str]]:
+    """Return the DEPRECATED_CHECKS subset applicable to the current repo context."""
+    github_repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    if not github_repository:
+        return DEPRECATED_CHECKS
+    current_repo = github_repository.split("/", 1)[-1]
+    return [(repo, ctx) for repo, ctx in DEPRECATED_CHECKS if repo == current_repo]
+
+
 def main() -> None:
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     if not token:
@@ -169,6 +246,8 @@ def main() -> None:
         )
 
     checks = _checks_to_apply()
+    deprecated = _deprecated_to_remove()
+
     total = len(checks)
     print(f"=== E2E Robustness C6: applying {total} required status check(s) ===")
     for repo, context in checks:
@@ -177,6 +256,17 @@ def main() -> None:
         except RuntimeError as exc:
             print(f"  ERROR [{repo}]: {exc}")
             sys.exit(1)
+
+    if deprecated:
+        print()
+        print(f"=== Removing {len(deprecated)} deprecated check(s) ===")
+        for repo, context in deprecated:
+            try:
+                remove_required_check(repo, context, token)
+            except RuntimeError as exc:
+                # Removal failure is non-fatal: log a warning and continue.
+                # The check will be retried on the next push-triggered run.
+                print(f"  WARNING [{repo}]: could not remove {context!r}: {exc}")
 
     print()
     print(f"=== {total} E2E check(s) are now required on main ===")
@@ -192,6 +282,19 @@ def main() -> None:
     print("Verify at:")
     for repo in dict.fromkeys(r for r, _ in checks):
         print(f"  https://github.com/{OWNER}/{repo}/settings/branches")
+
+    print()
+    print("=== Verification: reading back branch protection state ===")
+    if not verify_required_checks(checks, deprecated, token):
+        print()
+        print(
+            "ERROR: branch protection state does not match expected config (see above).\n"
+            "If this is a 403, GITHUB_TOKEN may not have administration:write on this "
+            "repo. Set E2E_ADMIN_PAT as a repo secret (fine-grained PAT, "
+            "Administration read+write) and re-run."
+        )
+        sys.exit(2)
+    print("=== Verification passed: C6 branch protection is correctly configured ===")
 
 
 if __name__ == "__main__":

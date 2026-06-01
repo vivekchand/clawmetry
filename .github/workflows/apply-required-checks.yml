@@ -5,8 +5,8 @@ name: Apply required E2E status checks (C6 -- one-shot)
 #
 # Triggers:
 #   push to main: automatically re-applies required checks on every merge
-#     so the configuration is self-healing. No manual action needed after
-#     this PR is merged.
+#     so the configuration is self-healing. Also removes any deprecated
+#     checks (e.g. visual-diff) if they were previously added in error.
 #   workflow_dispatch: manual trigger from the Actions UI. Use confirm=APPLY
 #     to apply immediately; anything else previews what would change.
 #
@@ -47,7 +47,10 @@ jobs:
             echo "  Using GITHUB_TOKEN (no E2E_ADMIN_PAT set) -- clawmetry only:"
             echo "  clawmetry         : OSS golden path (wheel + OpenClaw + 9 tabs)"
             echo "  clawmetry         : Cross-repo handoff (C4)"
-            echo "  clawmetry         : visual-diff"
+            echo ""
+            echo "  NOTE: visual-diff is excluded -- pr-screenshots.yml has a paths:"
+            echo "  filter so it only runs on UI-touching PRs. Requiring it would"
+            echo "  permanently stall non-UI PRs."
             echo ""
             echo "  For the remaining repos, the push-triggered workflow in each"
             echo "  repo handles those repos automatically on next merge."
@@ -55,10 +58,16 @@ jobs:
             echo "  Using E2E_ADMIN_PAT -- applying to all 3 repos:"
             echo "  clawmetry         : OSS golden path (wheel + OpenClaw + 9 tabs)"
             echo "  clawmetry         : Cross-repo handoff (C4)"
-            echo "  clawmetry         : visual-diff"
             echo "  clawmetry-cloud   : Cloud golden-path browser E2E"
             echo "  clawmetry-landing : Landing golden path (C3)"
+            echo ""
+            echo "  NOTE: visual-diff is excluded -- pr-screenshots.yml has a paths:"
+            echo "  filter so it only runs on UI-touching PRs. Requiring it would"
+            echo "  permanently stall non-UI PRs."
           fi
+          echo ""
+          echo "  Also removes visual-diff from required checks if it was previously"
+          echo "  added in error (self-healing DEPRECATED_CHECKS cleanup)."
           echo ""
           echo "Re-run with confirm=APPLY to apply."
 
