@@ -3,9 +3,12 @@ name: Apply required E2E status checks (C6 -- one-shot)
 # Runs scripts/apply_required_status_checks.py from the GitHub Actions UI
 # so the admin does not need a local Python environment.
 #
-# Prerequisite: add repo secret E2E_ADMIN_PAT containing a fine-grained PAT
-# with Administration (read + write) on all three repos:
-#   vivekchand/clawmetry, vivekchand/clawmetry-cloud, vivekchand/clawmetry-landing
+# When E2E_ADMIN_PAT is set: applies required checks across all three repos
+#   (vivekchand/clawmetry, vivekchand/clawmetry-cloud, vivekchand/clawmetry-landing).
+# When E2E_ADMIN_PAT is NOT set: falls back to GITHUB_TOKEN, which has
+#   Administration write access on THIS repo only (vivekchand/clawmetry).
+#   For clawmetry-cloud and clawmetry-landing, run the equivalent workflow
+#   in each of those repos.
 #
 # First run with confirm=dry-run to preview, then confirm=APPLY to apply.
 # Running multiple times is safe: the underlying script is idempotent.
@@ -16,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: "Type APPLY to configure all 3 repos (anything else = dry run)"
+        description: "Type APPLY to configure repos (anything else = dry run)"
         required: true
         default: "dry-run"
 
@@ -24,6 +27,8 @@ jobs:
   apply-required-checks:
     name: Apply required E2E status checks (C6)
     runs-on: ubuntu-latest
+    permissions:
+      administration: write
     steps:
       - uses: actions/checkout@v4
 
@@ -32,15 +37,26 @@ jobs:
         run: |
           echo "=== DRY RUN -- checks that will be added when confirm=APPLY ==="
           echo ""
-          echo "  clawmetry         : OSS golden path (wheel + OpenClaw + 9 tabs)"
-          echo "  clawmetry         : Cross-repo handoff (C4)"
-          echo "  clawmetry-cloud   : Cloud golden-path browser E2E"
-          echo "  clawmetry-landing : Landing golden path (C3)"
+          if [ -z "${{ secrets.E2E_ADMIN_PAT }}" ]; then
+            echo "  Using GITHUB_TOKEN (no E2E_ADMIN_PAT set) -- clawmetry only:"
+            echo "  clawmetry         : OSS golden path (wheel + OpenClaw + 9 tabs)"
+            echo "  clawmetry         : Cross-repo handoff (C4)"
+            echo ""
+            echo "  For the remaining repos, run the equivalent workflow in each:"
+            echo "  clawmetry-cloud   : Cloud golden-path browser E2E  (needs E2E_ADMIN_PAT or own workflow)"
+            echo "  clawmetry-landing : Landing golden path (C3)        (needs E2E_ADMIN_PAT or own workflow)"
+          else
+            echo "  Using E2E_ADMIN_PAT -- applying to all 3 repos:"
+            echo "  clawmetry         : OSS golden path (wheel + OpenClaw + 9 tabs)"
+            echo "  clawmetry         : Cross-repo handoff (C4)"
+            echo "  clawmetry-cloud   : Cloud golden-path browser E2E"
+            echo "  clawmetry-landing : Landing golden path (C3)"
+          fi
           echo ""
           echo "Re-run with confirm=APPLY to apply."
 
       - name: Apply required status checks
         if: github.event.inputs.confirm == 'APPLY'
         env:
-          GITHUB_TOKEN: ${{ secrets.E2E_ADMIN_PAT }}
+          GITHUB_TOKEN: ${{ secrets.E2E_ADMIN_PAT || github.token }}
         run: python3 scripts/apply_required_status_checks.py
