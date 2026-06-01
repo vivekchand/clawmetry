@@ -8,6 +8,9 @@ is the single source of truth — handlers never re-derive tier logic here.
 
   GET /api/entitlement — the current Entitlement as JSON.
   GET /api/runtimes    — the full runtime catalog with locked/free flags.
+  GET /api/license     — safe metadata about the installed self-hosted
+                         license (tier, nodes, days_left, status). Never
+                         returns the raw key or signature bytes.
 
 Side-effect-free and never-raise, so it is safe to classify ``oss-passthrough``
 on the cloud side: when no license/cloud plan is present it returns a graceful
@@ -111,6 +114,44 @@ def api_runtimes():
                 "enforced": False,
             }
         )
+
+
+@bp_entitlement.route("/api/license")
+def api_license():
+    """Return safe metadata about the installed self-hosted license.
+
+    Today this data only surfaces via the ``clawmetry license`` CLI; exposing
+    it on the HTTP surface lets the dashboard render a license-status badge
+    (tier / nodes / days remaining) without shelling out.
+
+    Response shape::
+
+        # No license file on disk:
+        {"installed": false, "status": "none"}
+
+        # Active, valid license:
+        {"installed": true, "valid": true, "status": "active",
+         "tier": "pro", "nodes": 7, "sub": "acct_abc",
+         "exp": 1781234567, "days_left": 320}
+
+        # Tampered / unrecognised file:
+        {"installed": true, "valid": false, "status": "invalid"}
+
+    Never returns the raw key bytes or the signature — only the verified
+    payload metadata that the CLI already prints. Side-effect-free and
+    never-raise: any failure falls back to a not-installed shape so the UI
+    always has something safe to render.
+    """
+    try:
+        from clawmetry import license as _lic
+
+        info = _lic.current_license_info()
+        if info is None:
+            return jsonify({"installed": False, "status": "none"})
+        return jsonify({"installed": True, **info})
+    except Exception as exc:  # never crash the dashboard over a license read
+        logger.warning("api_license: falling back to not-installed: %s", exc)
+        return jsonify({"installed": False, "status": "error"})
 
 
 @bp_entitlement.route("/api/license/status")
