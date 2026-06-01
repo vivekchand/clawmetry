@@ -8771,6 +8771,23 @@ _DEFAULT_CONTEXT_WINDOW = 200_000
 _LARGE_CONTEXT_WINDOW = 1_000_000
 
 
+def _is_1m_default_model(m: str) -> bool:
+    """True for models that ship a 1M context window *by default*, so the
+    plain model string (no ``[1m]`` marker) should still size the gauge at
+    1M rather than the 200K default.
+
+    Currently the Opus 4.8 family (``claude-opus-4-8``, ``claude-opus-4.8``,
+    any ``...-opus-4-8...`` variant) ships with a 1M window. Older models
+    (opus-4-7, sonnet, haiku, claude-3-*) keep the 200K default unless they
+    carry an explicit ``[1m]`` marker. ``m`` is already lower-cased.
+    """
+    if not m:
+        return False
+    # Normalise separator: "claude-opus-4.8" / "claude-opus-4_8" -> "...4-8".
+    norm = m.replace(".", "-").replace("_", "-")
+    return ("opus-4-8" in norm) or ("opus4-8" in norm)
+
+
 def context_window_for_model(model: str, observed_tokens: int = 0) -> int:
     """Best-effort context-window size (in tokens) for ``model``.
 
@@ -8780,9 +8797,11 @@ def context_window_for_model(model: str, observed_tokens: int = 0) -> int:
     (currentContextTokens ≈ 323K) rendered as ">100%". (Surfaced
     2026-05-25.)
 
-    Two signals, in order:
+    Three signals, in order:
       1. **Model string** — a ``1m`` marker (``claude-opus-4-7[1m]``,
-         ``...-1m``) means the 1M variant.
+         ``...-1m``) means the 1M variant. Some models ship a 1M window by
+         default (Opus 4.8 family), so the plain string with no marker is
+         still treated as 1M (see ``_is_1m_default_model``).
       2. **Observed tokens** — a measured prompt can never exceed the
          model's window, so if we saw MORE than the string-derived base we
          must be on a larger variant whose marker we didn't recognise (the
@@ -8796,6 +8815,11 @@ def context_window_for_model(model: str, observed_tokens: int = 0) -> int:
     """
     m = (model or "").lower()
     if "1m" in m:  # matches [1m], -1m, _1m, "1m"
+        base = _LARGE_CONTEXT_WINDOW
+    elif _is_1m_default_model(m):
+        # Some models ship a 1M context window by default, so OpenClaw may
+        # record the plain model string (e.g. "claude-opus-4-8") with no
+        # [1m] marker. That omission must NOT downgrade the gauge to 200K.
         base = _LARGE_CONTEXT_WINDOW
     else:
         base = _DEFAULT_CONTEXT_WINDOW

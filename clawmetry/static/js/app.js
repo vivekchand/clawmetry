@@ -1396,6 +1396,55 @@ async function toggleOutcomeDrilldown() {
   }
 }
 
+// Fills the Overview RELIABILITY stat card (#reliability-direction-lt /
+// -detail-lt / -icon-lt). This function used to be CALLED in loadAll() but was
+// NEVER DEFINED, so the card stayed a dangling "--" forever. /api/reliability
+// returns a behavioral-trend object; on a fresh node with no history it returns
+// {"direction":"insufficient_data", ...} — in that case we show an HONEST
+// "No data yet" empty state, never a bare "--" that reads as broken.
+async function loadReliabilityCard() {
+  var dirEl = document.getElementById('reliability-direction-lt');
+  var detEl = document.getElementById('reliability-detail-lt');
+  var iconEl = document.getElementById('reliability-icon-lt');
+  if (!dirEl) return;
+  try {
+    var d = await fetchJsonWithTimeout('/api/reliability', 5000);
+    d = d || {};
+    var dir = d.direction || 'insufficient_data';
+    var sessionCount = Number(d.session_count || 0);
+    // No usable history yet (this node's case): honest empty state.
+    if (dir === 'insufficient_data' || d.error || sessionCount <= 0) {
+      dirEl.textContent = t('overview.reliability_no_data', null, 'No data yet');
+      if (detEl) detEl.textContent = '';
+      if (iconEl) iconEl.textContent = '🔄';
+      return;
+    }
+    // Map the trend direction to a short word + neutral/positive/negative icon.
+    var word, icon;
+    if (dir === 'improving') { word = t('overview.reliability_improving', null, 'Improving'); icon = '📈'; }
+    else if (dir === 'degrading') { word = t('overview.reliability_degrading', null, 'Degrading'); icon = '📉'; }
+    else { word = t('overview.reliability_stable', null, 'Stable'); icon = '🔄'; }
+    dirEl.textContent = word;
+    if (iconEl) iconEl.textContent = icon;
+    if (detEl) {
+      // Sub-text: success rate over the window, when present.
+      var sr = Number(d.success_rate);
+      if (isFinite(sr) && sr > 0) {
+        detEl.textContent = Math.round(sr * 100) + '% ' + t('overview.reliability_success', null, 'success');
+      } else {
+        detEl.textContent = '';
+      }
+    }
+  } catch (e) {
+    // Never throw out of a stat-card loader; show the honest empty state.
+    try {
+      dirEl.textContent = t('overview.reliability_no_data', null, 'No data yet');
+      if (detEl) detEl.textContent = '';
+      if (iconEl) iconEl.textContent = '🔄';
+    } catch (e2) {}
+  }
+}
+
 async function loadAutonomy() {
   var labelEl = document.getElementById('autonomy-score-label');
   var badgeEl = document.getElementById('autonomy-trend-badge');
@@ -2924,14 +2973,14 @@ async function loadMiniWidgets(overview, usage) {
   document.getElementById('token-rate').textContent = fmtTokens(usage.month || 0);
   document.getElementById('tokens-today').textContent = fmtTokens(usage.today || 0);
   
-  // 🔥 Hot Sessions -- use /api/sessions for consistency with modal
-  fetch('/api/sessions').then(function(r){return r.json()}).then(function(sd) {
-    var sl = sd.sessions || sd || [];
-    if (!Array.isArray(sl)) sl = [];
-    document.getElementById('hot-sessions-count').textContent = sl.length;
-  }).catch(function() {
-    document.getElementById('hot-sessions-count').textContent = overview.sessionCount || 0;
-  });
+  // SESSIONS card — show "sessions today" (overview.sessionCount), the SAME
+  // definition as the Overview hero. Previously this card showed the LENGTH of
+  // /api/sessions (active/recent list, =1) while the hero showed sessionCount
+  // (today, =2) with no label saying which — two cards silently disagreeing,
+  // and it briefly read "0" on a slow/failed fetch. Set synchronously from the
+  // value already in hand so the card is never blank and never contradicts the
+  // hero. (Card relabeled "Sessions today" in overview.html.)
+  document.getElementById('hot-sessions-count').textContent = overview.sessionCount || 0;
   
   // 📈 Model Mix — scope the Overview MODEL card to the selected runtime (the
   // "MODEL claude-opus-4-7 while Qwen Code is selected" confusion). The
@@ -3584,9 +3633,81 @@ function _parseProvenancePrefix(s) {
   return { meta: firstMeta, body: rest.trim() };
 }
 
+// Coerce an arbitrary brain-event `detail` (which may arrive as a string,
+// an array of content blocks, or a raw object — e.g. from the live SSE
+// before the server flattens it) into a readable string. NEVER produces the
+// literal "[object Object]" / "[object Object],[object Object]" leak that
+// `String(arr)` / array.join() caused. Pulls text/thinking out of Anthropic
+// content blocks; otherwise falls back to a length-capped JSON dump.
+function _brainDetailToString(detail) {
+  if (detail == null) return '';
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    var parts = [];
+    for (var i = 0; i < detail.length; i++) {
+      var b = detail[i];
+      if (b == null) continue;
+      if (typeof b === 'string') { parts.push(b); continue; }
+      if (typeof b === 'object') {
+        // Anthropic content blocks: {type:'text',text}/{type:'thinking',thinking}
+        if (typeof b.text === 'string' && b.text) { parts.push(b.text); continue; }
+        if (typeof b.thinking === 'string' && b.thinking) { parts.push(b.thinking); continue; }
+        // tool_use / tool_result and friends: a compact label, never [object Object].
+        if (b.type === 'tool_use' && b.name) { parts.push('🔧 ' + b.name); continue; }
+        if (b.type === 'tool_result') { parts.push(_brainDetailToString(b.content)); continue; }
+        // Unknown object block: short JSON, not [object Object].
+        try { parts.push(JSON.stringify(b)); } catch (e) {}
+      }
+    }
+    return parts.filter(function(p){return p;}).join('\n');
+  }
+  if (typeof detail === 'object') {
+    if (typeof detail.text === 'string' && detail.text) return detail.text;
+    try { return JSON.stringify(detail); } catch (e) { return ''; }
+  }
+  return String(detail);
+}
+
+// Detect + summarise an OpenClaw `<task-notification>` envelope so the Brain
+// feed shows a compact friendly line (summary + a status chip) instead of
+// dumping the raw XML/JSON blob. Returns an HTML string, or null if `s` is
+// not a task-notification.
+function _renderTaskNotification(s) {
+  if (s.indexOf('<task-notification') < 0) return null;
+  var sumMatch = s.match(/<summary>([\s\S]*?)<\/summary>/i);
+  var statMatch = s.match(/<status>([\s\S]*?)<\/status>/i);
+  var summary = sumMatch ? sumMatch[1].trim() : '';
+  var status = statMatch ? statMatch[1].trim().toLowerCase() : '';
+  if (!summary) {
+    // No parseable summary: truncate the raw blob rather than dumping it all.
+    var trunc = s.length > 200 ? s.slice(0, 200) + '…' : s;
+    summary = trunc;
+  }
+  if (summary.length > 240) summary = summary.slice(0, 240) + '…';
+  var chip = '';
+  if (status) {
+    var ok = status === 'completed' || status === 'success' || status === 'done';
+    var col = ok ? '#10b981' : (status === 'failed' || status === 'error' ? '#ef4444' : '#94a3b8');
+    var label = status.charAt(0).toUpperCase() + status.slice(1);
+    chip = '<span style="margin-left:6px;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:700;background:' + col + '22;color:' + col + ';white-space:nowrap;">' + escHtml(label) + '</span>';
+  }
+  var tnLabel = (typeof t === 'function') ? t('brain.task_notification', null, 'Task') : 'Task';
+  return '<span style="white-space:pre-wrap;word-break:break-word;">'
+    + '<span style="color:var(--text-muted);font-size:10px;">📋 ' + escHtml(tnLabel) + ':</span> '
+    + escHtml(summary) + chip + '</span>';
+}
+
 function renderBrainDetail(detail) {
+  // Defensive: detail can arrive as an array/object (live SSE) — coerce to a
+  // readable string first so we never render "[object Object]". (BUG: the
+  // Unified Activity Stream showed "[object Object],[object Object]" + raw
+  // <task-notification> blobs.)
+  detail = _brainDetailToString(detail);
   if (!detail) return '';
   var s = detail.trim();
+  // task-notification envelope → compact friendly summary (not raw XML/JSON).
+  var tn = _renderTaskNotification(s);
+  if (tn) return tn;
   // Provenance prefix → channel pill + body
   var prov = _parseProvenancePrefix(s);
   if (prov) {
@@ -14647,6 +14768,7 @@ function initFlow() {
   // DuckDB store that drives the rest of the Brain tab, so we backfill
   // recent tool events and subscribe to the live stream from there.
   _backfillFlowFromBrain();
+  _backfillFlowEventCount();
   _startFlowBrainStream();
 
   // Lazy-load Phase 2 follow-up: this used to be a raw `setInterval(...)`
@@ -14872,6 +14994,34 @@ function _flowPulseInbound(ch) {
   } catch (e) {
     try { _flowPulseEdge('path-gw-brain'); } catch (e2) {}
   }
+}
+
+function _backfillFlowEventCount() {
+  // Seed ACTIONS TAKEN (#flow-event-count / flowStats.events) from DuckDB so it
+  // reflects real recent activity instead of 0 on page load. Previously this
+  // counter was incremented ONLY by the live flow SSE, so a turn that already
+  // happened (e.g. an earlier deep-research session) showed "0 actions" while
+  // TOKENS USED correctly showed the real total (it comes from /api/overview).
+  //
+  // BACKFILLED (this fn): ACTIONS TAKEN <- today's gateway messages
+  //   (/api/component/gateway stats.today_messages), the most honest DuckDB
+  //   value matching "actions taken today". The live SSE then ADDS to this as
+  //   new events arrive.
+  // NOT backfilled (intentionally, honest-0-when-idle):
+  //   - MESSAGES/MIN (#flow-msg-rate): a rolling 60s rate. 0/min is correct for
+  //     an idle agent; faking it would be dishonest.
+  //   - ACTIVE TOOLS (#flow-active-tools): "active" = firing right now (5-min
+  //     window, seeded by _backfillFlowFromBrain). 0 is correct when idle.
+  fetch('/api/component/gateway').then(function(r){return r.json();}).then(function(d) {
+    var st = (d && d.stats) || d || {};
+    var today = Number(st.today_messages);
+    // Only seed when DuckDB reports a real positive count AND we haven't already
+    // counted more live events than the backfill (don't shrink a live counter).
+    if (isFinite(today) && today > 0 && today > flowStats.events) {
+      flowStats.events = today;
+      updateFlowStats();
+    }
+  }).catch(function(){});
 }
 
 function _backfillFlowFromBrain() {
