@@ -2848,6 +2848,87 @@ def _cmd_license(args) -> None:
         print("  E2E:         🔒 verified offline")
 
 
+def _cmd_entitlement(args) -> None:
+    """clawmetry entitlement [--json] — show the resolved open-core entitlement.
+
+    Mirrors the GET /api/entitlement endpoint as a command-line tool so an
+    operator can verify what the install thinks it has (tier, source, grace
+    flag, runtimes, features) on a real machine without curling the dashboard.
+
+    Complements ``clawmetry license`` (which only reports the on-disk license
+    file): this command shows the FULL resolution — license -> cloud cache ->
+    OSS fallback — so a wrong-tier puzzle ("my Pro key is installed but the
+    UI still shows OSS") has a single command to diagnose.
+
+    Never raises: any resolution error falls back to the OSS-free shape that
+    ``routes/entitlement.py`` already returns to the dashboard.
+    """
+    import json as _json
+
+    as_json = bool(getattr(args, "as_json", False))
+    try:
+        from clawmetry import entitlements as _ent
+
+        en = _ent.get_entitlement(force=True)
+        data = en.to_dict()
+    except Exception as exc:
+        # Mirror the OSS-free fallback the HTTP route uses, so operator
+        # tooling can rely on a stable shape even on a misconfigured install.
+        data = {
+            "tier": "oss",
+            "source": "oss",
+            "node_limit": 1,
+            "expiry": None,
+            "expired": False,
+            "is_paid": False,
+            "grace": True,
+            "enforced": False,
+            "runtimes": ["nemoclaw", "openclaw"],
+            "features": [],
+            "error": str(exc),
+        }
+
+    if as_json:
+        print(_json.dumps(data, sort_keys=True, indent=2))
+        return
+
+    print("ClawMetry Entitlement\n" + "─" * 40)
+    print(f"  Tier:        {data.get('tier', 'oss')}")
+    print(f"  Source:      {data.get('source', 'oss')}")
+    print(f"  Paid:        {'yes' if data.get('is_paid') else 'no'}")
+    print(f"  Node limit:  {data.get('node_limit', 1)}")
+    grace = bool(data.get("grace", True))
+    enforced = bool(data.get("enforced", False))
+    print(f"  Grace:       {'on' if grace else 'off'}")
+    print(f"  Enforced:    {'yes' if enforced else 'no'}")
+    expiry = data.get("expiry")
+    if expiry:
+        import time as _t
+
+        days = int((float(expiry) - _t.time()) // 86400)
+        suffix = " (EXPIRED)" if data.get("expired") else f" (~{days} day(s) left)"
+        print(f"  Expiry:      {int(expiry)}{suffix}")
+    runtimes = data.get("runtimes") or []
+    features = data.get("features") or []
+    print(f"  Runtimes:    {', '.join(runtimes) if runtimes else '(none)'}")
+    if features:
+        # Wrap so a wide feature list doesn't run off a narrow terminal.
+        line = "  Features:    "
+        indent = " " * len(line)
+        wrapped = [line + features[0]]
+        for f in features[1:]:
+            if len(wrapped[-1]) + 2 + len(f) > 78:
+                wrapped.append(indent + f)
+            else:
+                wrapped[-1] = wrapped[-1] + ", " + f
+        for w in wrapped:
+            print(w)
+    else:
+        print("  Features:    (none — gates inert in grace)")
+    if "error" in data:
+        print(f"  Note:        resolution error fell back to OSS-free: {data['error']}")
+
+
 def _cmd_verify_integrity(args) -> None:
     """clawmetry verify-integrity — walk the hash chain and report validity."""
     from clawmetry.local_store import get_store
@@ -3255,6 +3336,18 @@ def main() -> None:
         help="License key (CLAW1.…) — required for 'activate'",
     )
 
+    # entitlement — show the resolved open-core entitlement (mirrors /api/entitlement)
+    p_entitlement = sub.add_parser(
+        "entitlement",
+        help="Show the resolved open-core entitlement (tier, runtimes, features)",
+    )
+    p_entitlement.add_argument(
+        "--json",
+        dest="as_json",
+        action="store_true",
+        help="Emit the entitlement as JSON for scripting",
+    )
+
     # verify-integrity — walk hash chain and report validity (Issue #2200)
     p_verify = sub.add_parser(
         "verify-integrity",
@@ -3283,6 +3376,7 @@ def main() -> None:
         "uninstall",
         "activate",
         "license",
+        "entitlement",
         "verify-integrity",
         "nemoclaw-daemons",
     )
@@ -3318,6 +3412,8 @@ def main() -> None:
             _cmd_activate(args)
         elif args.cmd == "license":
             _cmd_license(args)
+        elif args.cmd == "entitlement":
+            _cmd_entitlement(args)
         elif args.cmd == "verify-integrity":
             _cmd_verify_integrity(args)
         elif args.cmd == "nemoclaw-daemons":
