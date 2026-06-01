@@ -4615,6 +4615,47 @@ def sync_logs(config: dict, state: dict, paths: dict) -> int:
     return total
 
 
+def sync_intercepted_events(config: dict, state: dict, paths: dict) -> int:
+    """Tail ~/.openclaw/clawmetry-intercepted.jsonl and ingest external_api_call
+    rows into the local DuckDB store. Uses a byte-offset cursor in state so
+    only new lines are read each tick. Returns the number of rows ingested."""
+    openclaw_dir = paths.get("openclaw_dir", str(Path.home() / ".openclaw"))
+    fpath = Path(openclaw_dir) / "clawmetry-intercepted.jsonl"
+    if not fpath.exists():
+        return 0
+    node_id = config.get("node_id", "")
+    offset_key = "last_intercepted_offset"
+    offset = state.get(offset_key, 0)
+    ingested = 0
+    try:
+        from clawmetry import local_store as _ls
+        store = _ls.get_store()
+        with open(fpath, "r", errors="replace") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            if offset > size:
+                offset = 0
+            f.seek(offset)
+            for raw in f:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    ev = json.loads(raw)
+                except Exception:
+                    continue
+                if ev.get("type") == "external_api_call":
+                    try:
+                        store.ingest_external_call(ev, node_id)
+                        ingested += 1
+                    except Exception as _ie:
+                        log.debug("ingest_external_call failed: %s", _ie)
+            state[offset_key] = f.tell()
+    except Exception as e:
+        log.warning("sync_intercepted_events error: %s", e)
+    return ingested
+
+
 def _flush_log_batch(
     entries: list, fname: str, api_key: str, enc_key: str | None, node_id: str
 ) -> None:
@@ -12216,6 +12257,12 @@ def run_daemon() -> None:
             log.info(f"  Recent logs: {lg} lines synced")
     except Exception as e:
         log.warning(f"  Recent log sync error: {e}")
+    try:
+        ie = sync_intercepted_events(config, state, paths)
+        if ie:
+            log.info(f"  External API calls: {ie} rows ingested")
+    except Exception as e:
+        log.warning(f"  Intercepted-events sync error: {e}")
 
     state["last_sync"] = datetime.now(timezone.utc).isoformat()
     # Force a sync local-store flush before persisting the startup cursor.
@@ -12602,6 +12649,12 @@ def run_daemon() -> None:
             if now_log - last_log_sync > log_sync_interval:
                 lg = sync_logs(config, state, paths)
                 last_log_sync = now_log
+
+            # ── External API call tracing (issue #883) ──────────────────
+            try:
+                sync_intercepted_events(config, state, paths)
+            except Exception as _ie:
+                log.debug("sync_intercepted_events tick error (non-fatal): %s", _ie)
 
             # ── Telegram outbound from gateway.log (#1192 follow-up) ──
             # OpenClaw stores Telegram chats in memory only — no JSONL is
