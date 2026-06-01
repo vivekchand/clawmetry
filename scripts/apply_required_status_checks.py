@@ -158,6 +158,43 @@ def remove_required_check(repo: str, context: str, token: str) -> None:
     print(f"  [{repo}] removed deprecated check ({len(updated)} remaining): {context!r}")
 
 
+def verify_required_checks(
+    checks: list[tuple[str, str]],
+    deprecated: list[tuple[str, str]],
+    token: str,
+) -> bool:
+    """Read back branch protection state and assert it matches intent.
+
+    Returns True if all required checks are present and no deprecated checks
+    remain. Prints a FAIL line for each discrepancy so CI logs are actionable.
+    Catches silent 403 / administration:write failures before they go unnoticed.
+    """
+    repos = dict.fromkeys([r for r, _ in checks + deprecated])
+    ok = True
+    for repo in repos:
+        path = f"/repos/{OWNER}/{repo}/branches/main/protection/required_status_checks"
+        try:
+            current = _api("GET", path, token=token)
+            actual: set[str] = set(current.get("contexts", []))
+        except RuntimeError as exc:
+            print(f"  [{repo}] FAIL: could not read required checks: {exc}")
+            ok = False
+            continue
+        required = {ctx for r, ctx in checks if r == repo}
+        blocked = {ctx for r, ctx in deprecated if r == repo}
+        missing = required - actual
+        stale = blocked & actual
+        if missing:
+            print(f"  [{repo}] FAIL: check not yet required: {sorted(missing)}")
+            ok = False
+        if stale:
+            print(f"  [{repo}] FAIL: deprecated check still present: {sorted(stale)}")
+            ok = False
+        if not missing and not stale:
+            print(f"  [{repo}] OK: {sorted(actual)}")
+    return ok
+
+
 def _checks_to_apply() -> list[tuple[str, str]]:
     """Return the subset of REQUIRED_CHECKS applicable to the current context.
 
@@ -245,6 +282,19 @@ def main() -> None:
     print("Verify at:")
     for repo in dict.fromkeys(r for r, _ in checks):
         print(f"  https://github.com/{OWNER}/{repo}/settings/branches")
+
+    print()
+    print("=== Verification: reading back branch protection state ===")
+    if not verify_required_checks(checks, deprecated, token):
+        print()
+        print(
+            "ERROR: branch protection state does not match expected config (see above).\n"
+            "If this is a 403, GITHUB_TOKEN may not have administration:write on this "
+            "repo. Set E2E_ADMIN_PAT as a repo secret (fine-grained PAT, "
+            "Administration read+write) and re-run."
+        )
+        sys.exit(2)
+    print("=== Verification passed: C6 branch protection is correctly configured ===")
 
 
 if __name__ == "__main__":
