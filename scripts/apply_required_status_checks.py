@@ -14,7 +14,7 @@ When run inside GitHub Actions, GITHUB_REPOSITORY is set automatically
 to only the matching repo so that a GITHUB_TOKEN with single-repo
 Administration write access is sufficient.
 
-When run locally (GITHUB_REPOSITORY not set), the script applies all 4
+When run locally (GITHUB_REPOSITORY not set), the script applies all 5
 checks and requires a token with cross-repo Administration access.
 
 Requirements
@@ -43,11 +43,15 @@ OWNER = "vivekchand"
 # Job names verified against workflow files 2026-06-01:
 #   clawmetry/.github/workflows/oss-golden-path.yml      -> "OSS golden path (wheel + OpenClaw + 9 tabs)"
 #   clawmetry/.github/workflows/cross-repo-handoff.yml   -> "Cross-repo handoff (C4)"
+#   clawmetry/.github/workflows/pr-screenshots.yml       -> "visual-diff"
+#     (no `name:` on the job -- GitHub uses the job key; continue-on-error: true
+#      means the check always reports success, ensuring screenshots run on every PR)
 #   clawmetry-cloud/.github/workflows/e2e.yml            -> "Cloud golden-path browser E2E"
 #   clawmetry-landing/.github/workflows/landing-golden-path.yml -> "Landing golden path (C3)"
 REQUIRED_CHECKS: list[tuple[str, str]] = [
     ("clawmetry",         "OSS golden path (wheel + OpenClaw + 9 tabs)"),
     ("clawmetry",         "Cross-repo handoff (C4)"),
+    ("clawmetry",         "visual-diff"),
     ("clawmetry-cloud",   "Cloud golden-path browser E2E"),
     ("clawmetry-landing", "Landing golden path (C3)"),
 ]
