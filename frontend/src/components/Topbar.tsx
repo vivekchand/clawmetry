@@ -7,7 +7,10 @@
 //   - LIVE / AWAIT / ALERT status pill (defaults to LIVE)
 //   - Pill-link "✨ You're on v2 (beta) · Back to v1 ↩" pointing at "/"
 //     (the cross-version link required by the README "What to communicate" rule)
+//   - Language picker (i18n foundation, issue #1986)
 
+import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useLocation } from "react-router-dom";
 import { getNavItemBySlug } from "./nav";
 
@@ -41,6 +44,53 @@ function metaForPath(pathname: string): RouteMeta {
     title: getNavItemBySlug(slug)?.label ?? "ClawMetry v2",
     subtitle: "preview build",
   };
+}
+
+interface LangMeta {
+  code: string;
+  endonym: string;
+  enabled: boolean;
+}
+
+// Language picker that loads the shared _meta.json catalog and calls
+// i18n.changeLanguage() on selection.  Renders nothing until the catalog
+// arrives so there's no layout shift on fast connections.
+function LanguagePicker() {
+  const { i18n } = useTranslation();
+  const [langs, setLangs] = useState<LangMeta[]>([]);
+
+  useEffect(() => {
+    fetch("/static/locales/_meta.json")
+      .then((r) => r.json())
+      .then((data: LangMeta[]) => setLangs(data.filter((l) => l.enabled)))
+      .catch(() => {/* silently degrade when locales endpoint is unreachable */});
+  }, []);
+
+  if (langs.length === 0) return null;
+
+  return (
+    <select
+      aria-label="Language"
+      value={i18n.language}
+      onChange={(e) => void i18n.changeLanguage(e.target.value)}
+      style={{
+        fontSize: 11,
+        padding: "3px 6px",
+        borderRadius: 6,
+        border: "1px solid var(--line)",
+        background: "var(--paper)",
+        color: "var(--ink-3)",
+        cursor: "pointer",
+        fontFamily: "inherit",
+      }}
+    >
+      {langs.map((l) => (
+        <option key={l.code} value={l.code}>
+          {l.endonym}
+        </option>
+      ))}
+    </select>
+  );
 }
 
 export function Topbar() {
@@ -103,6 +153,9 @@ export function Topbar() {
         >
           share ↗
         </button>
+
+        {/* Language picker — loads _meta.json, calls i18n.changeLanguage() */}
+        <LanguagePicker />
 
         {/* Default LIVE pill — per-tab overrides land in week 2+ */}
         <span
