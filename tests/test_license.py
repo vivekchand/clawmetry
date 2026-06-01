@@ -47,6 +47,10 @@ def lic(monkeypatch, tmp_path):
     monkeypatch.setattr(L, "LICENSE_PATH", str(tmp_path / "license.key"))
     monkeypatch.setattr(L, "_CONFIG_PATH", str(tmp_path / "config.json"))
     monkeypatch.delenv("CLAWMETRY_LICENSE_SERVER", raising=False)
+    # Clear the cloud server override too so `activate` stays fully offline (no
+    # network) in unit tests — the self-hosted install path only phones home
+    # when a server is explicitly configured.
+    monkeypatch.delenv("CLAWMETRY_INGEST_URL", raising=False)
     monkeypatch.delenv("CLAWMETRY_ENFORCE", raising=False)
     return SimpleNamespace(L=L, priv=priv, pub_pem=pub_pem)
 
@@ -177,3 +181,107 @@ def test_activate_then_entitlement_resolves_pro(lic, monkeypatch):
     assert en.node_limit == 42
     assert en.allows_runtime("claude_code") is True  # paid runtime unlocked
     assert en.grace is False
+
+
+# ── auto-provision-on-connect (cloud cm_ account path) ──────────────────────────
+
+
+@pytest.fixture
+def prov(lic, monkeypatch, tmp_path):
+    """license module with the pro marker redirected to a temp file + the cloud
+    base pointed at a fake server, and no real pro package present."""
+    monkeypatch.setattr(lic.L, "_PRO_MARKER_PATH", str(tmp_path / "pro.json"))
+    monkeypatch.setenv("CLAWMETRY_INGEST_URL", "https://fake.clawmetry.test")
+    monkeypatch.setattr(lic.L, "_pro_installed_version", lambda: None)
+    return lic
+
+
+def _fake_entitlement(monkeypatch, L, *, entitled, pro_available=True):
+    """Stub urllib so the /api/license/entitlement probe returns a canned body
+    and any download attempt is observable."""
+    import io
+    import json as _j
+    import urllib.request
+
+    calls = {"download": 0, "entitlement": 0}
+
+    class _Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def _fake_urlopen(req, timeout=0):
+        url = req.full_url
+        if "/api/license/entitlement" in url:
+            calls["entitlement"] += 1
+            assert req.headers.get("X-api-key", "").startswith("cm_")
+            return _Resp(_j.dumps({"entitled": entitled, "plan": "cloud_pro" if entitled else "free", "pro_available": pro_available}).encode())
+        if "/api/license/download" in url:
+            calls["download"] += 1
+            return _Resp(b"PK\x03\x04fake-wheel-bytes")
+        raise AssertionError(f"unexpected URL {url}")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    return calls
+
+
+def test_auto_provision_free_account_installs_nothing(prov, monkeypatch):
+    L = prov.L
+    calls = _fake_entitlement(monkeypatch, L, entitled=False)
+    installed, msg = L.auto_provision_pro("cm_freeuser", node_id="n1")
+    assert installed is False
+    assert msg == ""  # free accounts produce no user-facing message
+    assert calls["entitlement"] == 1
+    assert calls["download"] == 0  # NEVER downloads the wheel for a free account
+
+
+def test_auto_provision_entitled_account_downloads_and_installs(prov, monkeypatch):
+    L = prov.L
+    calls = _fake_entitlement(monkeypatch, L, entitled=True)
+    # Pro absent at probe time, present after the (stubbed) pip install — this
+    # exercises the real download + install branch end to end.
+    _state = {"v": None}
+    monkeypatch.setattr(L, "_pro_installed_version", lambda: _state["v"])
+
+    def _fake_pip(path):
+        assert path and path.endswith(".whl")
+        _state["v"] = "0.2.0"
+        return True, "installed"
+
+    monkeypatch.setattr(L, "_pip_install_wheel", _fake_pip)
+    installed, msg = L.auto_provision_pro("cm_prouser", node_id="n1")
+    assert installed is True
+    assert calls["entitlement"] == 1
+    assert calls["download"] == 1  # actually fetched the wheel
+    assert "installed" in msg.lower()
+
+
+def test_auto_provision_non_cm_key_is_noop(prov):
+    installed, msg = prov.L.auto_provision_pro("not-a-key", node_id="n1")
+    assert installed is False and msg == ""
+
+
+def test_auto_provision_never_raises_on_install_failure(prov, monkeypatch):
+    L = prov.L
+    _fake_entitlement(monkeypatch, L, entitled=True)
+    monkeypatch.setattr(L, "_pip_install_wheel", lambda p: (False, "pip blew up"))
+    # download succeeds, install fails -> installed=False, message, no raise.
+    installed, msg = L.auto_provision_pro("cm_prouser", node_id="n1")
+    assert installed is False
+    assert "failed" in msg.lower()
+
+
+def test_auto_provision_idempotent_when_pro_present(prov, monkeypatch):
+    L = prov.L
+    calls = _fake_entitlement(monkeypatch, L, entitled=True)
+    monkeypatch.setattr(L, "_pro_installed_version", lambda: "0.2.0")
+    installed, msg = L.auto_provision_pro("cm_prouser", node_id="n1")
+    assert installed is True
+    assert calls["download"] == 0  # already current -> no re-download
+    assert "already installed" in msg
+
+
+def test_download_wheel_refuses_non_https(prov):
+    assert prov.L._download_wheel("http://evil.example.com/x.whl") is None

@@ -668,6 +668,26 @@ def _cmd_connect(args) -> None:
 
     print()
     print(f"  Connected as: {node_id}")
+
+    # Auto-provision clawmetry-pro for entitled cloud accounts (Starter/Pro/
+    # Trial/Enterprise). The cloud is the single source of truth: license.py
+    # probes /api/license/entitlement with this cm_ key first and only then
+    # downloads+installs the closed-source wheel over HTTPS. A FREE account
+    # installs nothing and this prints nothing. This NEVER blocks or crashes
+    # connect — any failure (offline, server down, install error) is swallowed
+    # and the node keeps running on the free runtimes (OpenClaw + NemoClaw).
+    try:
+        from clawmetry.license import auto_provision_pro
+        _pro_installed, _pro_msg = auto_provision_pro(api_key, node_id)
+        if _pro_installed:
+            print("  Pro adapters installed - all 12 runtimes available.")
+        elif _pro_msg:
+            # Entitled but the wheel could not be installed right now; surface a
+            # quiet hint without alarming the user (connect still succeeded).
+            print(f"  Note: {_pro_msg}")
+    except Exception:
+        pass  # connect must never fail because of pro provisioning
+
     print()
 
     # --key-only: just save config, don't start daemon (for host-side NemoClaw OTP flow)

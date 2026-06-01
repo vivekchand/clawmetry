@@ -36,6 +36,17 @@ import os
 
 logger = logging.getLogger("clawmetry.license")
 
+# Where the cloud / license server lives. The clawmetry-pro wheel is streamed
+# from ``<base>/api/license/download`` (HTTPS only — we never exec a wheel from
+# an arbitrary host). ``CLAWMETRY_INGEST_URL`` is the same Cloud Run app that
+# serves the license endpoints; ``CLAWMETRY_LICENSE_SERVER`` overrides it for
+# self-hosted / air-gapped license servers.
+_DEFAULT_CLOUD_BASE = "https://ingest.clawmetry.com"
+
+# Marker recording the clawmetry-pro version this node provisioned, so connect /
+# activate are idempotent (don't re-download an already-current wheel).
+_PRO_MARKER_PATH = os.path.expanduser("~/.clawmetry/pro_installed.json")
+
 # Ed25519 PUBLIC verification key. The matching PRIVATE key lives only on the
 # license server (clawmetry-cloud, never shipped). Rotating the server key
 # means bumping this constant + an OSS release.
@@ -140,24 +151,238 @@ def _node_id() -> str | None:
         return None
 
 
-def _download_and_install_pro(payload: dict) -> str:
-    """Register this node with the license server and install ``clawmetry-pro``.
+def _cloud_base() -> str:
+    """Base URL of the cloud / license server that serves the clawmetry-pro
+    wheel. ``CLAWMETRY_LICENSE_SERVER`` wins (self-hosted/air-gapped), else the
+    cloud ingest app (which also hosts /api/license/*). Always HTTPS in prod;
+    the only non-HTTPS values are explicit localhost overrides for tests."""
+    return (
+        os.environ.get("CLAWMETRY_LICENSE_SERVER", "").strip()
+        or os.environ.get("CLAWMETRY_INGEST_URL", "").strip()
+        or _DEFAULT_CLOUD_BASE
+    ).rstrip("/")
 
-    Gated on ``CLAWMETRY_LICENSE_SERVER`` — when unset (e.g. before the license
-    server exists) this is a graceful no-op so offline activation still saves a
-    verified license. Returns a human status string. Never raises."""
-    server = os.environ.get("CLAWMETRY_LICENSE_SERVER", "").strip()
+
+def _pro_installed_version() -> str | None:
+    """The installed clawmetry-pro version, or None if the package is not
+    importable. Used to make download+install idempotent. Never raises."""
+    try:
+        import importlib.metadata as _md
+
+        return _md.version("clawmetry-pro")
+    except Exception:
+        return None
+
+
+def _read_pro_marker() -> dict:
+    try:
+        with open(_PRO_MARKER_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_pro_marker(extra: dict) -> None:
+    """Record that clawmetry-pro is provisioned (best-effort, never raises)."""
+    try:
+        import time as _t
+
+        os.makedirs(os.path.dirname(_PRO_MARKER_PATH), exist_ok=True)
+        rec = {"installed_at": int(_t.time()), "version": _pro_installed_version()}
+        rec.update(extra or {})
+        with open(_PRO_MARKER_PATH, "w", encoding="utf-8") as fh:
+            json.dump(rec, fh)
+    except Exception as exc:
+        logger.debug("license: pro marker write skipped: %s", exc)
+
+
+def _download_wheel(url: str, headers: dict | None = None) -> str | None:
+    """Download the clawmetry-pro wheel from ``url`` (HTTPS only) to a temp file
+    and return its path, or None on failure. Security: refuses any non-HTTPS URL
+    (except an explicit localhost test override) so we never fetch+install code
+    from an attacker-controlled plaintext endpoint. Never raises."""
+    try:
+        import tempfile
+        import urllib.request
+
+        is_local = url.startswith("http://127.0.0.1") or url.startswith("http://localhost")
+        if not url.startswith("https://") and not is_local:
+            logger.warning("license: refusing non-HTTPS wheel URL %r", url)
+            return None
+        req = urllib.request.Request(url, headers=headers or {}, method="GET")
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            # 2xx only; redirects are followed by urlopen, 402/403/503 raise HTTPError.
+            data = resp.read()
+        if not data:
+            return None
+        fd, path = tempfile.mkstemp(prefix="clawmetry_pro-", suffix=".whl")
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        return path
+    except Exception as exc:
+        logger.warning("license: wheel download failed: %s", exc)
+        return None
+
+
+def _pip_install_wheel(wheel_path: str) -> tuple[bool, str]:
+    """pip-install ``wheel_path`` into THIS interpreter's environment (the same
+    venv the daemon/dashboard run from — ``sys.executable``). The daemon picks
+    the adapters up on its next start via extensions.load_plugins() /
+    _family_adapter_classes(). Never raises."""
+    try:
+        import subprocess
+        import sys
+
+        proc = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--upgrade",
+             "--no-deps", "--disable-pip-version-check", wheel_path],
+            capture_output=True, text=True, timeout=300,
+        )
+        if proc.returncode == 0:
+            return True, "installed"
+        tail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        return False, (tail[-1] if tail else f"pip exited {proc.returncode}")
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _provision_pro_wheel(download_url: str, *, headers: dict | None = None,
+                         node_id: str | None = None) -> str:
+    """Shared core: download + install the clawmetry-pro wheel from
+    ``download_url`` (already entitlement-gated by the caller), idempotently.
+
+    Returns a human status string. NEVER raises and NEVER blocks the caller —
+    on any failure it logs a warning and returns a message; the node keeps
+    running on the free runtimes."""
+    # Idempotent: if pro is already importable, don't re-download. A version
+    # bump still re-installs because the marker is rewritten on every success
+    # and the server serves the current wheel.
+    already = _pro_installed_version()
+    if already:
+        _write_pro_marker({"node_id": node_id, "source": "already_present"})
+        return f"clawmetry-pro {already} already installed"
+    wheel = _download_wheel(download_url, headers=headers)
+    if not wheel:
+        return "clawmetry-pro wheel unavailable (will retry on next connect)"
+    ok, detail = _pip_install_wheel(wheel)
+    try:
+        os.unlink(wheel)
+    except Exception:
+        pass
+    if not ok:
+        logger.warning("license: clawmetry-pro install failed: %s", detail)
+        return f"clawmetry-pro install failed: {detail}"
+    # Refresh entitlements + record the marker; the daemon loads the adapters on
+    # its next start (extensions.load_plugins + _family_adapter_classes).
+    try:
+        from clawmetry import entitlements as _ent
+
+        _ent.invalidate()
+    except Exception:
+        pass
+    _write_pro_marker({"node_id": node_id, "source": "downloaded"})
+    return f"clawmetry-pro installed ({_pro_installed_version() or 'ok'})"
+
+
+def _download_and_install_pro(payload: dict) -> str:
+    """Self-hosted SIGNED-LICENSE path: register this node against the license
+    server and install ``clawmetry-pro``.
+
+    The license server's POST /api/license/activate verifies the signed token,
+    registers the node against the key's node count, and returns a scoped
+    download URL. We then download+install that wheel (HTTPS only).
+
+    Offline-first: this only phones home when a license server is EXPLICITLY
+    configured (``CLAWMETRY_LICENSE_SERVER``, or ``CLAWMETRY_INGEST_URL`` for the
+    cloud-hosted server). A pure-offline `clawmetry activate` with neither set is
+    a graceful no-op — the verified license is already saved on disk and unlocks
+    entitlements offline; the wheel can be fetched later. Returns a human status
+    string. Never raises."""
+    server = (
+        os.environ.get("CLAWMETRY_LICENSE_SERVER", "").strip()
+        or os.environ.get("CLAWMETRY_INGEST_URL", "").strip()
+    )
     if not server:
         return "clawmetry-pro install deferred (no license server configured)"
+    base = _cloud_base()
+    node_id = _node_id() or "unknown"
     try:
-        # Phase 3: POST {key, node_id} to <server>/activate, receive a scoped
-        # wheel/index URL bounded by the key's node count, pip-install it into
-        # the daemon venv; extensions.load_plugins() then discovers it.
-        logger.info("license: would activate node %s against %s", _node_id(), server)
-        return f"node registration + clawmetry-pro install via {server} (pending Phase 3)"
+        import urllib.request
+
+        # Re-read the raw token from disk (we only have the decoded payload here).
+        token = ""
+        try:
+            with open(LICENSE_PATH, "r", encoding="utf-8") as fh:
+                token = fh.read().strip()
+        except Exception:
+            token = ""
+        if not token:
+            return "clawmetry-pro install deferred (no license on disk)"
+        body = json.dumps({"key": token, "node_id": node_id}).encode()
+        req = urllib.request.Request(
+            base + "/api/license/activate", data=body,
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8") or "{}")
+        if not data.get("ok"):
+            return f"node registration declined: {data.get('error', 'unknown')}"
+        rel = data.get("download_url") or "/api/license/download"
+        url = rel if rel.startswith("http") else base + rel
+        return _provision_pro_wheel(url, node_id=node_id)
     except Exception as exc:
-        logger.warning("license: pro install failed: %s", exc)
-        return f"clawmetry-pro install failed: {exc}"
+        logger.warning("license: pro install (self-hosted) failed: %s", exc)
+        return f"clawmetry-pro install deferred ({exc})"
+
+
+def auto_provision_pro(api_key: str, node_id: str | None = None) -> tuple[bool, str]:
+    """CLOUD ACCOUNT path, called by ``clawmetry connect`` after the cm_ key is
+    saved. Ask the cloud whether this account is ENTITLED to clawmetry-pro and,
+    if so, download+install the wheel so the node gets all 12 runtimes.
+
+    HARD RULES enforced here:
+      * Pro is installed ONLY for an entitled plan (Starter/Pro/Trial/
+        Enterprise). A FREE account returns (False, "") and installs NOTHING.
+      * NEVER raises / NEVER blocks connect — any failure returns (False, msg)
+        and the node continues on the free runtimes.
+      * Idempotent — skips the download when clawmetry-pro is already current.
+      * The wheel is fetched only from our own HTTPS /api/license/download.
+
+    Returns (installed, status_message). ``installed`` is True only when the
+    pro wheel is now present (newly installed or already there for an entitled
+    account)."""
+    try:
+        key = (api_key or "").strip()
+        if not key.startswith("cm_"):
+            return False, ""
+        base = _cloud_base()
+        headers = {"X-Api-Key": key}
+        # 1) Probe entitlement WITHOUT downloading the wheel.
+        try:
+            import urllib.request
+
+            req = urllib.request.Request(
+                base + "/api/license/entitlement", headers=headers, method="GET",
+            )
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                ent = json.loads(resp.read().decode("utf-8") or "{}")
+        except Exception as exc:
+            logger.warning("license: entitlement probe failed: %s", exc)
+            return False, ""
+        if not ent.get("entitled"):
+            # Free / un-entitled account — install nothing, stay on free runtimes.
+            return False, ""
+        if not ent.get("pro_available", True):
+            return False, "Pro entitled, but the clawmetry-pro wheel is not yet published."
+        # 2) Entitled: download + install (idempotent, never-raise).
+        url = base + "/api/license/download"
+        msg = _provision_pro_wheel(url, headers=headers, node_id=node_id)
+        installed = bool(_pro_installed_version())
+        return installed, msg
+    except Exception as exc:  # belt-and-suspenders: connect must never crash here
+        logger.warning("license: auto_provision_pro failed: %s", exc)
+        return False, ""
 
 
 def activate(key: str, node_id: str | None = None) -> tuple[bool, str]:
