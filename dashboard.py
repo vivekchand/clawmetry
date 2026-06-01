@@ -10837,7 +10837,14 @@ def detect_config(args=None):
     app.register_blueprint(bp_version_impact)
 
     app.register_blueprint(bp_cloud_relay)
-    app.register_blueprint(bp_nemoclaw)
+    # NeMo governance + approval queue is a Pro feature; the impl lives in
+    # clawmetry-pro. When that package is installed, its blueprint was
+    # already registered by ``_ext_load(app)`` above and won the URL
+    # routes; skip the OSS 402-stub registration here to avoid a Flask
+    # blueprint-name collision. When the closed package is NOT installed
+    # the OSS stub registers and returns HTTP 402 ``upgrade_required``.
+    if not _pro_loaded:
+        app.register_blueprint(bp_nemoclaw)
     app.register_blueprint(bp_skills)
     app.register_blueprint(bp_heartbeat)
     app.register_blueprint(bp_selfconfig)

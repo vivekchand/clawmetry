@@ -28,90 +28,39 @@ def _make_app():
     return app
 
 
-class TestNemoClawEventsEndpoint(unittest.TestCase):
+# The /api/nemoclaw/events + /metrics endpoints moved to clawmetry-pro;
+# vanilla OSS now serves the 402 upgrade stub on both. The real impl
+# (DuckDB-backed events + aggregate metrics) is covered by clawmetry-pro's
+# own suite. The LocalStore guardrail helpers below stay in OSS and keep
+# their direct unit coverage.
+
+
+def _assert_upgrade_required(test, resp):
+    test.assertEqual(resp.status_code, 402)
+    data = json.loads(resp.data)
+    test.assertEqual(data.get("error"), "upgrade_required")
+    test.assertEqual(data.get("feature"), "nemo_governance")
+    test.assertIn("hint", data)
+
+
+class TestNemoClawEventsEndpointStub(unittest.TestCase):
 
     def setUp(self):
         self.app = _make_app()
         self.client = self.app.test_client()
 
-    def _get(self, url):
-        with patch("routes.local_query.local_store_via_daemon", side_effect=Exception("no daemon")):
-            with patch("clawmetry.local_store.get_store", side_effect=Exception("no store")):
-                return self.client.get(url)
-
-    def test_events_returns_200(self):
-        resp = self._get("/api/nemoclaw/events")
-        self.assertEqual(resp.status_code, 200)
-
-    def test_events_has_required_keys(self):
-        resp = self._get("/api/nemoclaw/events")
-        data = json.loads(resp.data)
-        self.assertIn("installed", data)
-        self.assertIn("events", data)
-        self.assertIn("total", data)
-
-    def test_events_not_installed_when_nemoclaw_absent(self):
-        resp = self._get("/api/nemoclaw/events")
-        data = json.loads(resp.data)
-        self.assertFalse(data["installed"])
-
-    def test_events_list_is_list(self):
-        resp = self._get("/api/nemoclaw/events")
-        data = json.loads(resp.data)
-        self.assertIsInstance(data["events"], list)
-
-    def test_events_total_matches_list(self):
-        resp = self._get("/api/nemoclaw/events")
-        data = json.loads(resp.data)
-        self.assertEqual(data["total"], len(data["events"]))
-
-    def test_events_empty_on_no_store(self):
-        resp = self._get("/api/nemoclaw/events")
-        data = json.loads(resp.data)
-        self.assertEqual(data["events"], [])
+    def test_events_returns_402(self):
+        _assert_upgrade_required(self, self.client.get("/api/nemoclaw/events"))
 
 
-class TestNemoClawMetricsEndpoint(unittest.TestCase):
+class TestNemoClawMetricsEndpointStub(unittest.TestCase):
 
     def setUp(self):
         self.app = _make_app()
         self.client = self.app.test_client()
 
-    def _get(self, url):
-        with patch("routes.local_query.local_store_via_daemon", side_effect=Exception("no daemon")):
-            with patch("clawmetry.local_store.get_store", side_effect=Exception("no store")):
-                return self.client.get(url)
-
-    def test_metrics_returns_200(self):
-        resp = self._get("/api/nemoclaw/metrics")
-        self.assertEqual(resp.status_code, 200)
-
-    def test_metrics_has_required_keys(self):
-        resp = self._get("/api/nemoclaw/metrics")
-        data = json.loads(resp.data)
-        self.assertIn("installed", data)
-        self.assertIn("metrics", data)
-
-    def test_metrics_not_installed_when_nemoclaw_absent(self):
-        resp = self._get("/api/nemoclaw/metrics")
-        data = json.loads(resp.data)
-        self.assertFalse(data["installed"])
-
-    def test_metrics_object_has_expected_fields(self):
-        resp = self._get("/api/nemoclaw/metrics")
-        data = json.loads(resp.data)
-        m = data["metrics"]
-        self.assertIn("total_approvals", m)
-        self.assertIn("approved_count", m)
-        self.assertIn("denied_count", m)
-        self.assertIn("triggers_24h", m)
-
-    def test_metrics_defaults_to_zeros_on_no_store(self):
-        resp = self._get("/api/nemoclaw/metrics")
-        data = json.loads(resp.data)
-        m = data["metrics"]
-        self.assertEqual(m["total_approvals"], 0)
-        self.assertEqual(m["triggers_24h"], 0)
+    def test_metrics_returns_402(self):
+        _assert_upgrade_required(self, self.client.get("/api/nemoclaw/metrics"))
 
 
 class TestLocalStoreGuardrailMethods(unittest.TestCase):
