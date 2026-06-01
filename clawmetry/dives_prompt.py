@@ -491,6 +491,7 @@ def build_schema_descriptor(store: "LocalStore | None" = None) -> str:
 def build_dives_prompt(
     question: str,
     store: "LocalStore | None" = None,
+    history: "list[dict] | None" = None,
 ) -> dict[str, str]:
     """Build the system + user messages for a Dives LLM call.
 
@@ -500,6 +501,11 @@ def build_dives_prompt(
                   descriptor is generated from ``PRAGMA table_info`` so it
                   reflects any live migrations; otherwise a static descriptor
                   is used (sufficient for unit tests).
+        history:  Optional list of prior Q+SQL turns (most recent last).
+                  Each entry should have ``question`` and ``sql`` keys.
+                  When provided, the last up to 3 turns are injected into the
+                  system prompt so the model can resolve follow-up references
+                  like "show me the same broken down by hour".
 
     Returns:
         ``{"system": ..., "user": ...}`` — pass ``system`` as the Anthropic
@@ -515,11 +521,25 @@ def build_dives_prompt(
     schema = build_schema_descriptor(store)
     few_shot_json = json.dumps(_FEW_SHOT_EXAMPLES, indent=2)
 
-    system = "\n\n".join([
+    parts = [
         _SYSTEM_PROMPT_HEADER,
         "## Schema\n" + schema,
         "## Few-shot examples\n" + few_shot_json,
-    ])
+    ]
+
+    if history:
+        recent = history[-3:]
+        ctx_lines = ["## Prior conversation context (most recent last)"]
+        for i, turn in enumerate(recent, 1):
+            q = (turn.get("question") or "").strip()
+            sql = (turn.get("sql") or "").strip()
+            if q and sql:
+                ctx_lines.append(f"Turn {i} — question: {q}")
+                ctx_lines.append(f"Turn {i} — SQL you generated: {sql}")
+        if len(ctx_lines) > 1:
+            parts.append("\n".join(ctx_lines))
+
+    system = "\n\n".join(parts)
 
     return {"system": system, "user": question.strip()}
 
