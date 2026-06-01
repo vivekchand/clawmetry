@@ -104,6 +104,34 @@ def _brain_history_bool_arg(value):
     return str(value or "").strip().lower() in {"1", "true", "yes", "on", "all"}
 
 
+import re as _re
+
+_TASK_NOTIF_SUMMARY_RE = _re.compile(r"<summary>([\s\S]*?)</summary>", _re.IGNORECASE)
+_TASK_NOTIF_STATUS_RE = _re.compile(r"<status>([\s\S]*?)</status>", _re.IGNORECASE)
+
+
+def _summarise_task_notification(text: str) -> str:
+    """Collapse an OpenClaw ``<task-notification>`` envelope to a compact
+    ``[status] summary`` line.
+
+    These envelopes are large raw XML/JSON blobs whose ``<summary>`` (the
+    only useful part) sits well past the 200-char truncation the brain feed
+    applies, so the UI used to surface only the noisy head. Returns "" when
+    ``text`` isn't a task-notification, so callers fall back to the raw text.
+    """
+    if not isinstance(text, str) or "<task-notification" not in text:
+        return ""
+    sm = _TASK_NOTIF_SUMMARY_RE.search(text)
+    summary = (sm.group(1).strip() if sm else "")
+    st = _TASK_NOTIF_STATUS_RE.search(text)
+    status = (st.group(1).strip() if st else "")
+    if not summary:
+        return ""
+    if len(summary) > 180:
+        summary = summary[:180] + "…"
+    return ("[" + status + "] " + summary) if status else summary
+
+
 def _v3_message_content_to_text(content) -> str:
     """Flatten an OpenClaw v3 ``data.message.content`` payload into plain text.
 
@@ -135,6 +163,20 @@ def _v3_message_content_to_text(content) -> str:
 
 
 def _extract_brain_detail(row: dict) -> str:
+    """Pull a human-readable ``detail`` snippet from a DuckDB event row, then
+    collapse any OpenClaw ``<task-notification>`` envelope to its summary so the
+    Brain feed never dumps the raw XML/JSON blob (which the 200-char truncation
+    would otherwise show only the noisy head of). Thin wrapper over
+    ``_extract_brain_detail_raw`` so every return path is covered."""
+    raw = _extract_brain_detail_raw(row)
+    if isinstance(raw, str) and "<task-notification" in raw:
+        tn = _summarise_task_notification(raw)
+        if tn:
+            return tn
+    return raw
+
+
+def _extract_brain_detail_raw(row: dict) -> str:
     """Pull a human-readable ``detail`` snippet from a DuckDB event row.
 
     Two ingest paths populate ``data`` with different shapes (P0 #1143 fix
@@ -163,6 +205,8 @@ def _extract_brain_detail(row: dict) -> str:
     if has_message_envelope:
         text = _v3_message_content_to_text(msg.get("content"))
         if text:
+            # (`<task-notification>` envelopes are summarised by the
+            # _extract_brain_detail wrapper, covering every return path.)
             return text
         # Encrypted-thinking-only assistant turns ship as
         # ``[{type:"thinking", thinking:"", signature:"…"}]``. The text is
