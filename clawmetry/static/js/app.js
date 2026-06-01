@@ -2819,6 +2819,7 @@ async function loadAll() {
     if (typeof loadHeartbeat === 'function') loadHeartbeat().catch(function(e){console.warn('heartbeat panel failed',e)});
     if (typeof loadAutonomy === 'function') setTimeout(function(){ loadAutonomy().catch(function(e){console.warn('autonomy failed',e)}); }, 2600);
     if (typeof loadAnomalyPanel === 'function') setTimeout(function(){ loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)}); }, 3600);
+    if (typeof loadActivityHeatmap === 'function') setTimeout(function(){ loadActivityHeatmap().catch(function(e){console.warn('activity heatmap failed',e)}); }, 4500);
     // Issue #1614 — outcome tile (Today: N tasks, X% success).
     if (typeof loadOutcomeTile === 'function') setTimeout(function(){ loadOutcomeTile().catch(function(e){console.warn('outcome tile failed',e)}); }, 800);
     document.getElementById('refresh-time').textContent = t("app.updated", null, "Updated ") + new Date().toLocaleTimeString();
@@ -11055,6 +11056,32 @@ async function loadSandboxStatus() {
   } catch(e) {
     console.warn('loadSandboxStatus failed', e);
   }
+}
+
+// ===== 30-day Session Activity Heatmap (#875) =====
+async function loadActivityHeatmap() {
+  var card = document.getElementById('activity-heatmap-card');
+  var grid = document.getElementById('activity-heatmap-grid');
+  if (!card || !grid) return;
+  var data;
+  try { data = await fetchJsonWithTimeout('/api/activity-heatmap', 5000); } catch(e) { return; }
+  var days = (data && data.days) || [];
+  if (!days.length) return;
+  var maxSessions = Math.max.apply(null, days.map(function(d){ return d.sessions || 0; }));
+  var shades = ['#12122a','#1a3a2a','#2a6a3a','#4a9a2a','#6adb3a'];
+  var html = '';
+  days.forEach(function(day) {
+    var s = day.sessions || 0;
+    var idx = (maxSessions > 0 && s > 0) ? Math.min(4, Math.ceil(s / maxSessions * 4)) : 0;
+    var tooltip = day.label + ': ' + s + ' session' + (s !== 1 ? 's' : '')
+      + ', ' + (day.tokens || 0).toLocaleString() + ' tokens'
+      + (day.cost > 0 ? ', $' + day.cost.toFixed(4) : '');
+    html += '<div class="heatmap-cell" style="background:' + shades[idx] + ';" title="' + tooltip + '"></div>';
+  });
+  grid.innerHTML = html;
+  var legend = document.getElementById('activity-heatmap-legend');
+  if (legend) legend.innerHTML = 'Less <div class="heatmap-legend-cell" style="background:#12122a"></div><div class="heatmap-legend-cell" style="background:#1a3a2a"></div><div class="heatmap-legend-cell" style="background:#2a6a3a"></div><div class="heatmap-legend-cell" style="background:#4a9a2a"></div><div class="heatmap-legend-cell" style="background:#6adb3a"></div> More';
+  card.style.display = '';
 }
 
 // ===== Activity Heatmap =====
