@@ -9,6 +9,14 @@ Usage
 -----
   GITHUB_TOKEN=ghp_xxx python3 scripts/apply_required_status_checks.py
 
+When run inside GitHub Actions, GITHUB_REPOSITORY is set automatically
+(e.g. "vivekchand/clawmetry"). The script restricts the checks it applies
+to only the matching repo so that a GITHUB_TOKEN with single-repo
+Administration write access is sufficient.
+
+When run locally (GITHUB_REPOSITORY not set), the script applies all 4
+checks and requires a token with cross-repo Administration access.
+
 Requirements
 ------------
 A fine-grained PAT (or classic token) with:
@@ -115,6 +123,39 @@ def add_required_check(repo: str, context: str, token: str) -> None:
     print(f"  [{repo}] added required check ({len(existing)} total): {context!r}")
 
 
+def _checks_to_apply() -> list[tuple[str, str]]:
+    """Return the subset of REQUIRED_CHECKS applicable to the current context.
+
+    Inside GitHub Actions, GITHUB_REPOSITORY is set to "owner/repo". When it
+    matches one of the repos in REQUIRED_CHECKS, only that repo's checks are
+    returned so that a single-repo GITHUB_TOKEN is sufficient.
+
+    When GITHUB_REPOSITORY is not set (local run with a cross-repo PAT),
+    all checks are returned.
+    """
+    github_repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    if not github_repository:
+        return REQUIRED_CHECKS
+
+    # Extract the repo name (strip owner prefix if present)
+    current_repo = github_repository.split("/", 1)[-1]
+    filtered = [(repo, ctx) for repo, ctx in REQUIRED_CHECKS if repo == current_repo]
+    if filtered:
+        print(
+            f"  Scope: GITHUB_REPOSITORY={github_repository!r} -- "
+            f"applying {len(filtered)} check(s) for {current_repo!r} only"
+        )
+        return filtered
+
+    # GITHUB_REPOSITORY is set but doesn't match any entry -- apply all and
+    # let the API calls fail with a clear error if the token lacks access.
+    print(
+        f"  Warning: GITHUB_REPOSITORY={github_repository!r} did not match any "
+        "entry in REQUIRED_CHECKS; applying all checks."
+    )
+    return REQUIRED_CHECKS
+
+
 def main() -> None:
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     if not token:
@@ -123,8 +164,10 @@ def main() -> None:
             "Usage: GITHUB_TOKEN=ghp_xxx python3 scripts/apply_required_status_checks.py"
         )
 
-    print("=== E2E Robustness C6: applying required status checks ===")
-    for repo, context in REQUIRED_CHECKS:
+    checks = _checks_to_apply()
+    total = len(checks)
+    print(f"=== E2E Robustness C6: applying {total} required status check(s) ===")
+    for repo, context in checks:
         try:
             add_required_check(repo, context, token)
         except RuntimeError as exc:
@@ -132,10 +175,18 @@ def main() -> None:
             sys.exit(1)
 
     print()
-    print("=== All 4 E2E checks are now required on main ===")
+    print(f"=== {total} E2E check(s) are now required on main ===")
+
+    if total < len(REQUIRED_CHECKS):
+        print()
+        print(
+            "Note: to apply checks in other repos, run the equivalent workflow "
+            "in clawmetry-cloud and clawmetry-landing."
+        )
+
     print()
     print("Verify at:")
-    for repo in dict.fromkeys(r for r, _ in REQUIRED_CHECKS):
+    for repo in dict.fromkeys(r for r, _ in checks):
         print(f"  https://github.com/{OWNER}/{repo}/settings/branches")
 
 
