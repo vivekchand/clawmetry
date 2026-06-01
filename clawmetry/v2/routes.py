@@ -646,6 +646,63 @@ def get_subagents():
     })
 
 
+# ── Fleet API ─────────────────────────────────────────────────────────────
+
+@bp_v2.route("/api/v2/fleet", methods=["GET"])
+def get_fleet():
+    """Radar data for the /v2/fleet page (issue #1518).
+
+    Wire shape: {nodes: [{id, label, status, r, theta, last_seen_ts}],
+                 is_single_node: bool}
+
+    ``r`` is 0..1 (fraction of radar radius); ``theta`` is radians.
+    OSS installs with no registered remote nodes return a single synthetic
+    local-node record so the radar always has something to render.
+    """
+    import math
+    import time
+
+    nodes: list = []
+    try:
+        import dashboard as _d
+        with _d._fleet_db_lock:
+            db = _d._fleet_db()
+            rows = db.execute(
+                "SELECT node_id, name, status, last_seen_at"
+                " FROM nodes ORDER BY registered_at ASC"
+            ).fetchall()
+        count = len(rows)
+        for i, row in enumerate(rows):
+            node_id, name, status, last_seen_at = row
+            if count == 1:
+                r, theta = 0.35, 0.0
+            else:
+                theta = 2 * math.pi * i / count
+                r = 0.55 + 0.15 * (i % 2)
+            nodes.append({
+                "id": node_id or f"node-{i}",
+                "label": name or node_id or f"Node {i + 1}",
+                "status": status or "await",
+                "r": round(r, 3),
+                "theta": round(theta, 4),
+                "last_seen_ts": int(last_seen_at) if last_seen_at else 0,
+            })
+    except Exception:
+        pass
+
+    if not nodes:
+        nodes = [{
+            "id": "local",
+            "label": "This node",
+            "status": "live",
+            "r": 0.35,
+            "theta": 0.0,
+            "last_seen_ts": int(time.time()),
+        }]
+
+    return jsonify({"nodes": nodes, "is_single_node": len(nodes) <= 1})
+
+
 # ── SPA serving ───────────────────────────────────────────────────────────
 # Registered after the API routes. Flask matches by rule specificity, so the
 # explicit /api/v2/* rules still win over the catch-all even in default mode.
