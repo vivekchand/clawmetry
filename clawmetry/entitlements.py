@@ -111,6 +111,12 @@ RUNTIME_LABELS = {
     "nanoclaw": "NanoClaw",
 }
 
+# ── Tier identifiers for feature_tier() ─────────────────────────────────────
+TIER_LABEL_FREE = "free"
+TIER_LABEL_STARTER = "starter"
+TIER_LABEL_PRO = "pro"
+TIER_LABEL_ENTERPRISE = "enterprise"
+
 # ── Feature catalogue ───────────────────────────────────────────────────────
 # Core observability — always free. Keys are stable identifiers the route /
 # UI layer checks via Entitlement.allows_feature(...).
@@ -184,6 +190,58 @@ ENTERPRISE_FEATURES = frozenset(
 )
 
 ALL_FEATURES = FREE_FEATURES | PAID_FEATURES | ENTERPRISE_FEATURES
+
+# Display labels for every known feature. Mirrors the copy /pricing on
+# clawmetry.com uses so the dashboard, the API and the marketing page agree on
+# what to call each feature. Missing labels fall back to a humanised
+# ``snake_case`` -> ``Snake Case`` derivation in :func:`feature_label`, so a
+# newly added feature key still renders with *something* readable while a
+# proper label gets reviewed.
+FEATURE_LABELS = {
+    # Free / core observability
+    "sessions": "Sessions",
+    "transcripts": "Transcripts",
+    "usage": "Token & cost usage",
+    "brain": "Reasoning brain feed",
+    "flow": "Message flow",
+    "tracing": "Tracing",
+    "health": "System health",
+    "logs": "Logs",
+    "crons": "Cron jobs",
+    "channels": "Chat channels",
+    "nemo_governance": "NeMo governance",
+    "overview": "Overview dashboard",
+    # Starter
+    "multi_runtime": "Multi-runtime support",
+    "fleet": "Multi-node fleet",
+    "cloud_sync": "Cloud sync",
+    "all_channels": "All chat channel adapters",
+    "approval_queue": "Approval queue",
+    "budget_limits": "Budget limits",
+    "per_runtime_health_timeline": "Per-runtime health timeline",
+    # Pro-only
+    "per_run_waste_flags": "Per-run waste flags",
+    "per_run_compare": "Per-run compare (A vs B)",
+    "error_triage": "Error triage",
+    "self_evolve": "Self-Evolve",
+    "asset_registry": "Asset registry",
+    "eval_suite": "Eval suite",
+    "tool_policy": "Tool policy",
+    "otel_export": "OpenTelemetry export",
+    "custom_webhooks": "Custom webhooks",
+    "custom_runtime_ingest": "Custom runtime ingest",
+    "custom_alerts": "Custom alerts",
+    "alert_webhooks": "Alert webhooks",
+    "anomaly_detection": "Anomaly detection",
+    "cost_optimizer": "Cost optimizer",
+    # Enterprise
+    "siem_export": "SIEM export",
+    "sso": "SSO (SAML / OIDC)",
+    "audit_logs": "Audit logs",
+    "rbac": "Role-based access control",
+    "air_gapped_license": "Air-gapped licensing",
+    "custom_data_residency": "Custom data residency",
+}
 
 # Per-tier paid feature grants (free features are always included on top).
 _TIER_FEATURES = {
@@ -481,4 +539,88 @@ def runtime_catalog() -> list[dict]:
                 "entitled": ent.entitled_runtime(rt),
             }
         )
+    return out
+
+
+def feature_label(feature: str) -> str:
+    """Human-readable label for ``feature``. Falls back to a humanised version
+    of the feature id when no explicit label is registered, so an unknown or
+    newly-added feature still renders with *something* readable."""
+    fid = (feature or "").strip()
+    if not fid:
+        return ""
+    if fid in FEATURE_LABELS:
+        return FEATURE_LABELS[fid]
+    return fid.replace("_", " ").strip().capitalize()
+
+
+def feature_tier(feature: str) -> str:
+    """Which tier bucket ``feature`` belongs to.
+
+    Returns one of ``"free"``, ``"starter"``, ``"pro"``, ``"enterprise"``.
+    Unknown features default to ``"pro"`` so the UI errs on the safe side
+    (showing a locked affordance) rather than silently leaking access.
+    """
+    fid = (feature or "").strip()
+    if fid in FREE_FEATURES:
+        return TIER_LABEL_FREE
+    if fid in STARTER_FEATURES:
+        return TIER_LABEL_STARTER
+    if fid in PRO_ONLY_FEATURES:
+        return TIER_LABEL_PRO
+    if fid in ENTERPRISE_FEATURES:
+        return TIER_LABEL_ENTERPRISE
+    return TIER_LABEL_PRO
+
+
+def feature_catalog() -> list[dict]:
+    """The full feature catalog with the entitlement-derived availability for
+    each entry. Companion to :func:`runtime_catalog` — single source of truth
+    the UI uses to render *every* known feature (free / starter / pro /
+    enterprise) so the locked-but-visible upgrade affordance and the
+    /pricing-style comparison table have data to render against.
+
+    Each entry::
+
+        {
+          "id":      "<feature>",           # canonical key
+          "label":   "<Display Name>",      # falls back to a humanised id
+          "tier":    "free"|"starter"|"pro"|"enterprise",
+          "free":    True | False,          # FREE_FEATURES membership
+          "allowed": True | False,          # entitlement allows the feature
+          "locked":  True | False,          # paid + not allowed (UI shows 🔒)
+        }
+
+    Ordering: free first, then starter, pro, enterprise — each bucket sorted
+    alphabetically — so the UI list is deterministic.
+
+    Never raises; on any resolution error every paid feature is reported as
+    ``locked=False`` (grace) to match the OSS-free fallback in
+    :func:`get_entitlement`.
+    """
+    try:
+        ent = get_entitlement()
+    except Exception as exc:  # never crash a catalog read
+        logger.warning("entitlements: feature_catalog falling back to grace: %s", exc)
+        ent = _oss_free()
+    buckets = (
+        (TIER_LABEL_FREE, sorted(FREE_FEATURES), True),
+        (TIER_LABEL_STARTER, sorted(STARTER_FEATURES), False),
+        (TIER_LABEL_PRO, sorted(PRO_ONLY_FEATURES), False),
+        (TIER_LABEL_ENTERPRISE, sorted(ENTERPRISE_FEATURES), False),
+    )
+    out: list[dict] = []
+    for tier_name, feats, is_free in buckets:
+        for fid in feats:
+            allowed = True if is_free else ent.allows_feature(fid)
+            out.append(
+                {
+                    "id": fid,
+                    "label": feature_label(fid),
+                    "tier": tier_name,
+                    "free": is_free,
+                    "allowed": allowed,
+                    "locked": (not is_free) and (not allowed),
+                }
+            )
     return out

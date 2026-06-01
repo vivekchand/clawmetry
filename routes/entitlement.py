@@ -8,6 +8,7 @@ is the single source of truth — handlers never re-derive tier logic here.
 
   GET /api/entitlement — the current Entitlement as JSON.
   GET /api/runtimes    — the full runtime catalog with locked/free flags.
+  GET /api/features    — the full feature catalog with locked/free flags.
 
 Side-effect-free and never-raise, so it is safe to classify ``oss-passthrough``
 on the cloud side: when no license/cloud plan is present it returns a graceful
@@ -107,6 +108,71 @@ def api_runtimes():
                         "locked": False,
                     },
                 ],
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/features")
+def api_features():
+    """Return the full feature catalog with per-feature ``tier``/``free``/
+    ``allowed``/``locked`` flags so the dashboard can render *every* known
+    feature in a paywall / upgrade table — including paid ones the install
+    cannot currently use — and overlay a lock affordance on the locked rows
+    once enforcement is on.
+
+    Shape::
+
+        {
+          "features": [
+            {"id": "sessions", "label": "Sessions", "tier": "free",
+             "free": true, "allowed": true, "locked": false},
+            {"id": "multi_runtime", "label": "Multi-runtime support",
+             "tier": "starter", "free": false, "allowed": true,
+             "locked": false},
+            ...
+          ],
+          "grace":    true | false,   # mirrors /api/entitlement.grace
+          "enforced": true | false
+        }
+
+    Side-effect-free and never-raise: any resolution error falls back to a
+    grace OSS-free shape with just the free features unlocked, so the UI
+    still has something safe to render.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "features": _ent.feature_catalog(),
+                "grace": ent.grace,
+                "enforced": not ent.grace,
+            }
+        )
+    except Exception as exc:  # never crash the dashboard over a gate read
+        logger.warning("api_features: falling back to OSS-free: %s", exc)
+        try:
+            from clawmetry import entitlements as _ent
+
+            free_only = [
+                {
+                    "id": fid,
+                    "label": _ent.feature_label(fid),
+                    "tier": "free",
+                    "free": True,
+                    "allowed": True,
+                    "locked": False,
+                }
+                for fid in sorted(_ent.FREE_FEATURES)
+            ]
+        except Exception:
+            free_only = []
+        return jsonify(
+            {
+                "features": free_only,
                 "grace": True,
                 "enforced": False,
             }
