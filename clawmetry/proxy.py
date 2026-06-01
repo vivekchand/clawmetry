@@ -75,6 +75,15 @@ PROXY_CONFIG_FILE = CONFIG_DIR / "proxy.json"
 PROXY_DB_FILE = CONFIG_DIR / "proxy.db"
 PROXY_PID_FILE = CONFIG_DIR / "proxy.pid"
 PROXY_LOG_FILE = CONFIG_DIR / "proxy.log"
+_HITL_DIR = CONFIG_DIR / "hitl"
+
+
+def _is_session_hitl_paused(session_id: str) -> bool:
+    """Return True if an operator has flagged this session for HITL review."""
+    if not session_id:
+        return False
+    return (_HITL_DIR / f"pause_{session_id}").exists()
+
 
 # Model pricing per 1M tokens (input, output) — kept in sync with dashboard.py
 MODEL_PRICING = {
@@ -1359,6 +1368,25 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
             )
             logger.warning(f"Velocity exceeded: {spike_reason}")
             return _error_response(429, "velocity_exceeded", spike_reason, provider)
+
+        # ── HITL pause check ───────────────────────────────────────────
+        if _is_session_hitl_paused(session_id):
+            with _stats_lock:
+                _stats["blocked"] += 1
+            db.record_event(
+                "hitl_paused",
+                f"Session '{session_id}' paused for human review",
+                severity="warning",
+                details={"model": model, "session_id": session_id},
+            )
+            logger.warning("HITL: session '%s' blocked pending operator decision", session_id)
+            return _error_response(
+                503,
+                "session_paused",
+                f"Session '{session_id}' is paused for human-in-the-loop review. "
+                "Approve or reject via POST /api/hitl/decide.",
+                provider,
+            )
 
         # ── Model routing ──────────────────────────────────────────────
         new_model, new_provider = router.route(model, session_id)
