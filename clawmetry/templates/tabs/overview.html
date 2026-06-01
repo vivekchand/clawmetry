@@ -497,6 +497,13 @@
     </style>
   </div>
 
+  <!-- 30-day session activity heatmap (#875) -->
+  <div id="activity-heatmap-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:14px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);display:none;">
+    <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px;">&#128197; 30-day Activity</div>
+    <div id="activity-heatmap-grid" style="display:grid;grid-template-columns:repeat(30,1fr);gap:3px;"></div>
+    <div class="heatmap-legend" id="activity-heatmap-legend"></div>
+  </div>
+
   <!-- Renderer for the overview heartbeat card (#686). Reads the `heartbeat`
        block injected by /api/overview and updates the inline panel. Lives in
        the template (not app.js) so the card is fully self-contained. -->

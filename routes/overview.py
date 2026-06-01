@@ -1670,6 +1670,40 @@ def api_prompt_errors():
     return jsonify({"errors": errors, "count": len(errors)})
 
 
+@bp_overview.route("/api/activity-heatmap")
+def api_activity_heatmap():
+    """30-day session activity heatmap data (#875)."""
+    from datetime import datetime, timedelta
+
+    now = datetime.now()
+    cutoff = (now - timedelta(days=29)).strftime("%Y-%m-%d") + "T00:00:00"
+    rows = _ls_call("query_sessions", since=cutoff, limit=10000) or []
+
+    day_sessions: dict = {}
+    day_tokens: dict = {}
+    day_cost: dict = {}
+    for row in rows:
+        started = (row.get("started_at") or "")[:10]
+        if not started:
+            continue
+        day_sessions[started] = day_sessions.get(started, 0) + 1
+        day_tokens[started] = day_tokens.get(started, 0) + int(row.get("token_count") or 0)
+        day_cost[started] = day_cost.get(started, 0) + float(row.get("cost_usd") or 0)
+
+    days = []
+    for i in range(29, -1, -1):
+        d = now - timedelta(days=i)
+        ds = d.strftime("%Y-%m-%d")
+        days.append({
+            "date": ds,
+            "label": d.strftime("%b ") + str(d.day),
+            "sessions": day_sessions.get(ds, 0),
+            "tokens": day_tokens.get(ds, 0),
+            "cost": round(day_cost.get(ds, 0), 4),
+        })
+    return jsonify({"days": days})
+
+
 @bp_overview.route("/api/cloud-cta/status")
 def cloud_cta_status():
     import dashboard as _d
