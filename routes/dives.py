@@ -29,6 +29,8 @@ bp_dives = Blueprint("dives", __name__)
 _MAX_QUESTION_LEN = 1_000
 _MAX_NAME_LEN = 200
 _QUERY_TIMEOUT_SEC = 30
+_MAX_HISTORY_ENTRIES = 200
+_HISTORY_CONTEXT_TURNS = 3
 
 
 # ── Storage helpers ────────────────────────────────────────────────────────────
@@ -38,6 +40,34 @@ def _dives_dir() -> str:
     d = os.path.expanduser("~/.clawmetry/dives")
     os.makedirs(d, exist_ok=True)
     return d
+
+
+def _history_path() -> str:
+    return os.path.join(_dives_dir(), "_history.json")
+
+
+def _read_history() -> list:
+    path = _history_path()
+    if not os.path.isfile(path):
+        return []
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _append_history(entry: dict) -> None:
+    history = _read_history()
+    history.append(entry)
+    if len(history) > _MAX_HISTORY_ENTRIES:
+        history = history[-_MAX_HISTORY_ENTRIES:]
+    try:
+        with open(_history_path(), "w") as f:
+            json.dump(history, f)
+    except OSError:
+        pass
 
 
 def _safe_slug(raw: str) -> str:
@@ -95,7 +125,7 @@ def _list_dives() -> list[dict]:
 # ── LLM dispatch ──────────────────────────────────────────────────────────────
 
 
-def _call_llm_for_sql(question: str, store) -> dict:
+def _call_llm_for_sql(question: str, store, history: list | None = None) -> dict:
     """Return the LLM-generated {sql, chart_type, x, y, title, description} spec."""
     import shutil
     from routes.advisor import (
@@ -112,7 +142,7 @@ def _call_llm_for_sql(question: str, store) -> dict:
             "Export ANTHROPIC_API_KEY or run `claude` CLI to set up OAuth."
         )
 
-    msgs = build_dives_prompt(question, store)
+    msgs = build_dives_prompt(question, store, history=history)
 
     if mode == "claude_cli":
         claude_bin = shutil.which("claude") or "claude"
@@ -179,9 +209,21 @@ def _execute(sql: str, store) -> tuple[list[dict], str | None]:
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
 
+@bp_dives.route("/api/dives/history")
+def api_dives_history():
+    """GET → {history: [{ts, question, sql, chart_spec}]} most-recent-first."""
+    try:
+        limit = max(1, min(200, int(request.args.get("limit", "50"))))
+    except (TypeError, ValueError):
+        limit = 50
+    history = _read_history()
+    recent = list(reversed(history[-limit:]))
+    return jsonify({"history": recent})
+
+
 @bp_dives.route("/api/dives/query", methods=["POST"])
 def api_dives_query():
-    """POST {question} → {sql, chart_spec, rows, ms, error?}"""
+    """POST {question, history?} → {sql, chart_spec, rows, ms, error?}"""
     payload = request.get_json(silent=True) or {}
     question = (payload.get("question") or "").strip()
     if not question:
@@ -206,9 +248,16 @@ def api_dives_query():
                      "stays on your machine.",
         }), 200
 
+    # Client may pass explicit history; fall back to last N turns from disk.
+    client_history = payload.get("history")
+    if isinstance(client_history, list):
+        ctx_history = client_history[-_HISTORY_CONTEXT_TURNS:]
+    else:
+        ctx_history = _read_history()[-_HISTORY_CONTEXT_TURNS:]
+
     t0 = time.monotonic()
     try:
-        spec = _call_llm_for_sql(question, store)
+        spec = _call_llm_for_sql(question, store, history=ctx_history or None)
     except ValueError as e:
         msg = str(e)
         if msg.startswith("no_auth"):
@@ -229,6 +278,16 @@ def api_dives_query():
     body: dict = {"sql": sql, "chart_spec": chart_spec, "rows": rows, "ms": ms}
     if sql_error:
         body["error"] = sql_error
+
+    # Persist to history only on non-error queries so history stays meaningful.
+    if not sql_error:
+        _append_history({
+            "ts":         time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "question":   question,
+            "sql":        sql,
+            "chart_spec": chart_spec,
+        })
+
     return jsonify(body)
 
 
