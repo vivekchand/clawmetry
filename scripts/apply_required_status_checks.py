@@ -31,12 +31,16 @@ import urllib.request
 OWNER = "vivekchand"
 
 # Each tuple: (repo, exact job name as it appears in the workflow's `name:` field)
-# Landing job name: from landing-golden-path.yml job `name: Landing golden path (C3)`
-# (PR #279 merged 2026-05-29 -- superseded #325 which had a different name).
+#
+# Job names verified against workflow files 2026-06-01:
+#   clawmetry/.github/workflows/oss-golden-path.yml      -> "OSS golden path (wheel + OpenClaw + 9 tabs)"
+#   clawmetry/.github/workflows/cross-repo-handoff.yml   -> "Cross-repo handoff (C4)"
+#   clawmetry-cloud/.github/workflows/e2e.yml            -> "Cloud golden-path browser E2E"
+#   clawmetry-landing/.github/workflows/landing-golden-path.yml -> "Landing golden path (C3)"
 REQUIRED_CHECKS: list[tuple[str, str]] = [
     ("clawmetry",         "OSS golden path (wheel + OpenClaw + 9 tabs)"),
+    ("clawmetry",         "Cross-repo handoff (C4)"),
     ("clawmetry-cloud",   "Cloud golden-path browser E2E"),
-    ("clawmetry-cloud",   "cross-repo handoff golden path"),
     ("clawmetry-landing", "Landing golden path (C3)"),
 ]
 
