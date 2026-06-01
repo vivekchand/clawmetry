@@ -26,6 +26,12 @@ The north star: **don't stop at "code compiles." Stop at "verified working in pr
 > - **Before adding any poller/fetch, ask:** does this need to run on *every* tab? every *N* seconds? can it reuse an existing fetch or the snapshot?
 > - **Measure before shipping:** open the Network panel / Resource Timing and confirm no endpoint is fetched N× per cycle and no background poller fires off its own screen. "It works" is not enough — "it works without a request storm" is the bar.
 
+> ## Multi-runtime: ClawMetry observes 12 agent runtimes, not just OpenClaw (non-negotiable)
+> **ClawMetry is runtime-neutral. It observes 12 AI agent runtimes, not OpenClaw alone.** Free on every plan: **OpenClaw, NVIDIA NemoClaw**. Also supported: **Aider, Claude Code, Codex, Cursor, Goose, Hermes, NanoClaw, opencode, PicoClaw, Qwen Code**. The enabled set is live at `GET /api/runtimes` (authed); read it, never hardcode a stale copy.
+> - **User-facing copy and UI must never imply OpenClaw-only.** Framing like "designed for OpenClaw agents", "your OpenClaw machine", "No OpenClaw detected", or "Looking for OpenClaw activity" is a bug. Use runtime-neutral language ("your AI agent", "the machine your agent runs on") or name the runtimes ("OpenClaw, NVIDIA NemoClaw + 10 more runtimes", matching the homepage install card). Naming runtimes is public; pricing and tier internals stay private.
+> - **Verify across all 12 runtimes, end to end.** Never ship a change verified only on OpenClaw. Use a `/workflow` to fan out a per-runtime E2E check: one agent per runtime that installs or configures it, runs a real turn, and asserts it lands correctly (in Brain by agent_type, in the right tab, with cost and tokens). "Works on OpenClaw" is not "works".
+> Burned 2026-06-01: the docs FAQ said "ClawMetry is designed for OpenClaw agents" and the cloud empty-states plus the radar assumed OpenClaw-only. Many surfaces still need this sweep; when you touch a screen, fix its runtime framing.
+
 ---
 
 ## 0. Before you touch anything
