@@ -688,17 +688,21 @@ def _cmd_connect(args) -> None:
         print()
         return
 
-    # Default: defer the sync daemon until the user runs `clawmetry sync`.
-    # --start-sync-now restores the historical auto-spawn behavior.
-    _start_now = getattr(args, "start_sync_now", False)
-
-    if _start_now:
-        _start_daemon(config, args)
-    else:
-        print("  Sync is paused. Start it whenever you're ready:")
+    # Default (2026-06-01): start the sync daemon immediately on connect, so
+    # the dashboard populates without an extra step. A user who runs
+    # `clawmetry connect` wants their observability now; the previous deferred
+    # default ("Sync is paused") was a confusing trap where the node never
+    # heartbeated and the dashboard stayed empty. Pass `--defer-sync` to keep
+    # the old behavior (e.g. provisioning a node you do not want syncing yet).
+    # `--start-sync-now` is retained as a no-op alias for back-compat (it is
+    # now the default), so existing scripts and the cloud dashboard's copy of
+    # the connect command keep working.
+    if getattr(args, "defer_sync", False):
+        print("  Sync is paused (--defer-sync). Start it whenever you're ready:")
         print("    clawmetry sync")
-        print("  (or run `clawmetry connect --start-sync-now` to keep today's auto-start)")
         print()
+    else:
+        _start_daemon(config, args)
 
     # Open browser with encryption key in URL fragment (never sent to server)
     # The #key=... fragment stays client-side — true E2E encryption
@@ -2742,7 +2746,13 @@ def main() -> None:
         "--start-sync-now",
         action="store_true",
         dest="start_sync_now",
-        help="Start the sync daemon immediately after connect (default: defer until `clawmetry sync`)",
+        help="No-op (now the default). Retained for back-compat.",
+    )
+    p_connect.add_argument(
+        "--defer-sync",
+        action="store_true",
+        dest="defer_sync",
+        help="Connect but leave sync paused; start it later with `clawmetry sync`",
     )
     p_connect.add_argument(
         "--foreground", action="store_true", help="Run daemon in foreground"
