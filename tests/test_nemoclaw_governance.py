@@ -117,122 +117,51 @@ class TestDetectNemoclaw(unittest.TestCase):
             self.assertEqual(loaded_cfg.get('provider'), 'anthropic')
 
 
-class TestGovernanceEndpoint(unittest.TestCase):
-    """Integration-style tests for /api/nemoclaw/governance Flask endpoint."""
+class TestGovernanceEndpointStub(unittest.TestCase):
+    """In vanilla OSS the NeMo governance impl is gone — it moved to the
+    closed-source ``clawmetry-pro`` package. The OSS ``bp_nemoclaw`` stub
+    now returns HTTP 402 ``upgrade_required`` on every governance endpoint.
 
-    @classmethod
-    def setUpClass(cls):
-        """Create a minimal Flask test client from dashboard."""
-        try:
-            import dashboard as _d
-            cls.app = _d.create_app()
-            cls.client = cls.app.test_client()
-            cls.app_available = True
-        except Exception as e:
-            cls.app_available = False
-            cls.skip_reason = str(e)
+    These tests register the OSS stub blueprint directly (the same blueprint
+    dashboard.py registers when ``clawmetry_pro.is_loaded()`` is False) and
+    assert the 402 upgrade contract. The real behaviour is covered by
+    clawmetry-pro's own test suite."""
 
-    def _skip_if_unavailable(self):
-        if not self.app_available:
-            self.skipTest(f"Dashboard app not available: {self.skip_reason}")
+    def setUp(self):
+        from flask import Flask
+        from routes.nemoclaw import bp_nemoclaw
+        app = Flask(__name__)
+        app.config["TESTING"] = True
+        app.register_blueprint(bp_nemoclaw)
+        self.client = app.test_client()
 
-    def test_not_installed_returns_200(self):
-        self._skip_if_unavailable()
-        import dashboard as _d
-        with self.app.test_request_context():
-            with patch.object(_d, '_detect_nemoclaw', return_value=None):
-                resp = self.client.get('/api/nemoclaw/governance')
-        self.assertEqual(resp.status_code, 200)
+    def _assert_upgrade_required(self, resp):
+        self.assertEqual(resp.status_code, 402)
         data = json.loads(resp.data)
-        self.assertFalse(data['installed'])
+        self.assertEqual(data.get("error"), "upgrade_required")
+        self.assertEqual(data.get("feature"), "nemo_governance")
+        self.assertIn("hint", data)
 
-    def test_installed_returns_expected_keys(self):
-        self._skip_if_unavailable()
-        import dashboard as _d
-        mock_info = {
-            'installed': True,
-            'config': {'version': '1.0', 'provider': 'anthropic'},
-            'state': {'sandboxes': {}},
-            'policy_yaml': 'network_policies:\n  allow_api:\n    - api.anthropic.com\n',
-            'policy_hash': 'abc123def456',
-            'presets': ['clawmetry'],
-        }
-        with self.app.test_request_context():
-            with patch.object(_d, '_detect_nemoclaw', return_value=mock_info):
-                resp = self.client.get('/api/nemoclaw/governance')
-        self.assertEqual(resp.status_code, 200)
-        data = json.loads(resp.data)
-        self.assertTrue(data['installed'])
-        self.assertIn('sandboxes', data)
-        self.assertIn('network_policies', data)
-        self.assertIn('presets', data)
-        self.assertIn('config', data)
+    def test_governance_returns_402(self):
+        self._assert_upgrade_required(self.client.get('/api/nemoclaw/governance'))
 
-    def test_sensitive_config_keys_filtered(self):
-        """API keys and tokens should be stripped from config."""
-        self._skip_if_unavailable()
-        import dashboard as _d
-        mock_info = {
-            'installed': True,
-            'config': {
-                'version': '1.0',
-                'apiKey': 'sk-secret-12345',
-                'token': 'tok-secret',
-                'provider': 'anthropic',
-            },
-            'state': {},
-        }
-        with self.app.test_request_context():
-            with patch.object(_d, '_detect_nemoclaw', return_value=mock_info):
-                resp = self.client.get('/api/nemoclaw/governance')
-        data = json.loads(resp.data)
-        cfg = data.get('config', {})
-        self.assertNotIn('apiKey', cfg)
-        self.assertNotIn('token', cfg)
-        self.assertIn('provider', cfg)  # non-sensitive key preserved
+    def test_acknowledge_drift_returns_402(self):
+        self._assert_upgrade_required(
+            self.client.post('/api/nemoclaw/governance/acknowledge-drift'))
 
-    def test_drift_detection_triggers(self):
-        """Second call with different policy hash sets drift info."""
-        self._skip_if_unavailable()
-        import dashboard as _d
+    def test_status_returns_402(self):
+        self._assert_upgrade_required(self.client.get('/api/nemoclaw/status'))
 
-        # Reset module-level drift state
-        _d._nemoclaw_policy_hash = None
-        _d._nemoclaw_drift_info = {}
+    def test_policy_returns_402(self):
+        self._assert_upgrade_required(self.client.get('/api/nemoclaw/policy'))
 
-        def make_info(h):
-            return {
-                'installed': True,
-                'config': {},
-                'state': {},
-                'policy_yaml': '# hash ' + h,
-                'policy_hash': h,
-            }
+    def test_approve_returns_402(self):
+        self._assert_upgrade_required(
+            self.client.post('/api/nemoclaw/approve', json={}))
 
-        with self.app.test_request_context():
-            with patch.object(_d, '_detect_nemoclaw', return_value=make_info('aaa111')):
-                self.client.get('/api/nemoclaw/governance')  # sets baseline
-            with patch.object(_d, '_detect_nemoclaw', return_value=make_info('bbb222')):
-                resp = self.client.get('/api/nemoclaw/governance')  # should trigger drift
-
-        data = json.loads(resp.data)
-        self.assertIsNotNone(data.get('drift'))
-        drift = data['drift']
-        self.assertIn('previous_hash', drift)
-        self.assertEqual(drift['previous_hash'], 'aaa111')
-        self.assertEqual(drift['current_hash'], 'bbb222')
-
-    def test_acknowledge_drift_clears_it(self):
-        """POST /acknowledge-drift clears the drift dict."""
-        self._skip_if_unavailable()
-        import dashboard as _d
-        _d._nemoclaw_drift_info = {'previous_hash': 'x', 'current_hash': 'y', 'detected_at': '2026-01-01T00:00:00Z'}
-        with self.app.test_request_context():
-            resp = self.client.post('/api/nemoclaw/governance/acknowledge-drift')
-        self.assertEqual(resp.status_code, 200)
-        data = json.loads(resp.data)
-        self.assertTrue(data['ok'])
-        self.assertEqual(_d._nemoclaw_drift_info, {})
+    def test_reject_returns_402(self):
+        self._assert_upgrade_required(
+            self.client.post('/api/nemoclaw/reject', json={}))
 
 
 if __name__ == '__main__':
