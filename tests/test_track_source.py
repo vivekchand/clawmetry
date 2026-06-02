@@ -116,6 +116,17 @@ def test_external_call_source_round_trips(fresh_store):
     assert len(tagged) == 1
 
 
+def test_cost_fallback_prices_models_outside_local_table():
+    # The interceptor's small _PRICING table predates models like o3 / grok /
+    # gemini-2.5; out-loop cost must NOT silently read $0 for them — the
+    # providers_pricing fallback returns a conservative non-zero estimate.
+    for m in ("o3", "grok-2", "gemini-2.5-pro", "gpt-5"):
+        c = I._estimate_cost(m, 1000, 500)
+        assert c and c > 0, (m, c)
+    # but a call with no tokens is still None (nothing to price)
+    assert I._estimate_cost("o3", 0, 0) is None
+
+
 def test_external_call_cost_round_trips(fresh_store):
     # llm_call events carry cost/tokens/model — the out-loop card's per-source
     # $ spend depends on these surviving ingest+query.

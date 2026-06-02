@@ -116,7 +116,16 @@ def _estimate_cost(
                 input_tokens * prices["input"] + output_tokens * prices["output"]
             ) / 1_000_000
             return round(cost, 8)
-    return None
+    # Fall back to the canonical multi-provider table so a real out-loop call is
+    # never silently $0 just because this small table predates the model
+    # (gpt-4.1/5, o3/o4, gemini-2.5, grok, …). providers_pricing infers the
+    # provider from the model and returns a conservative non-zero estimate.
+    try:
+        from clawmetry.providers_pricing import estimate_event_cost_usd as _pp_cost
+        c = _pp_cost(model, input_tokens, output_tokens)
+        return round(c, 8) if c and c > 0 else None
+    except Exception:
+        return None
 
 
 # ── URL detection ──────────────────────────────────────────────────────────────
