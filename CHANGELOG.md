@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Release: /api/session-insight is now the complete per-session context-graph answer (carries #2479) (2026-06-02)
+- **What:** the session-insight endpoint now folds in the governance lineage, so one call returns cost + waste flags + sub-agent fan-out + governance (approval/guardrail decision + denied counts, with a `policy_denied` flag when blocked) — the single endpoint that will power the decision-insight card.
+- **Verified:** py_compile clean; insight unit tests green; full OSS CI matrix green.
+
+
 ### Release: context graph — governance lineage edge + per-session 🛡 chip (carries #2476, #2477) (2026-06-02)
 - **Why:** the decision->approval / decision->guardrail edge — which tool calls a session put through governance, and how they were decided — is core to a context graph and was unrendered.
 - **What:** `_session_governance()` + `GET /api/session-governance/<id>` join the approval queue (by requestor_session_id) with NeMo guardrail verdicts (by session_id) into a session's policy lineage with a denied-count; cost-breakdown aggregates the same per session; the session chip renders 🛡 N gated · M denied (green / red if denied) next to the cost-intel + fan-out chips.
