@@ -36,4 +36,23 @@ def get_stats() -> dict:
         return {}
 
 
-__all__ = ["get_stats"]
+def set_source(name: str) -> None:
+    """Tag every intercepted LLM call with a named source — your production
+    agent's name (e.g. "support-agent"). Makes an out-loop agent built on any
+    SDK (OpenAI Agents, LangChain, Vercel AI SDK, E2B, …) a first-class source
+    in ClawMetry, so you can attribute cost per product. Equivalent to setting
+    the ``CLAWMETRY_SOURCE`` env var.
+
+    Usage::
+
+        import clawmetry.track
+        clawmetry.track.set_source("support-agent")
+    """
+    try:
+        from clawmetry.interceptor import set_source as _set
+        _set(name)
+    except Exception:
+        pass
+
+
+__all__ = ["get_stats", "set_source"]
