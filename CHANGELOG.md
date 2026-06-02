@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: context graph — unified session insight + the true-cost fan-out chip (carries #2466, #2467) (2026-06-02)
+- **Why:** the lineage traversal needs to become an answer a user sees — "what did this ask really cost, and where did it waste?"
+- **What:** (1) `_derive_session_insight()` + `GET /api/session-insight/<id>` join the cost-intel cluster with the lineage into one answer no flat tab gives — the TRUE cost of an ask (own + sub-agent fan-out) + the waste flags that fired (reasoning_heavy / cache_poor / tools_failing / compaction_thrash / model_fallback / fanned_out). (2) The first VISIBLE context-graph signal in the session list: `query_subagent_cost_rollup()` rolls up each parent's sub-agent spend in one GROUP BY; the session chip renders `↳ +$X · N agents` (the real cost of an ask incl. its fan-out) next to the cost-intel chips.
+- **Verified:** 4 new unit tests (insight all-flags/true-cost/clean/empty; rollup GROUP BY); py_compile + node --check clean; full OSS CI matrix green.
+
+
 ### Release: context graph — session decision-lineage traversal, the first view (carries #2463) (2026-06-02)
 - **Why:** the cost-intelligence cluster shipped today is the rich per-session signal a temporal decision graph needs; this is the first materialized projection of it (founder direction).
 - **What:** `query_session_lineage(session_id)` walks the parent->subagent edges (`subagents.parent_session_id` -> `subagent_id`) with a DuckDB `WITH RECURSIVE` CTE and returns every node in the fan-out with depth + cost + outcome — one ask's full delegation tree and the cost each branch incurred downstream, one round-trip. No new tables (edges are JOINs over existing rows). Exposed at `GET /api/session-lineage/<id>` with a root/downstream/total cost rollup; added to the daemon allowlist.
