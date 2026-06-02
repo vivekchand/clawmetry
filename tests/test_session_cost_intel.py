@@ -91,3 +91,39 @@ def test_tool_health_clean_session_zero_errors():
     evs = [_FakeEvent(type="tool.result", tool_name="read"), _FakeEvent(type="tool.result", tool_name="bash")]
     h = _session_tool_health(evs)
     assert h["toolResults"] == 2 and h["toolErrors"] == 0 and h["toolErrorPct"] == 0.0
+
+
+def test_cache_reread_tax_quantified():
+    # A churny Anthropic session: large cache WRITE, tiny cache READ → it keeps
+    # rebuilding the cache (5-min TTL expired) instead of reusing it. The
+    # re-read tax = what was paid to rebuild; savings = what little reuse gave.
+    intel = _session_cost_intel(
+        _FakeSession(input=2000, output=500, cache_read=200, cache_write=8000,
+                     model="claude-opus-4-8")
+    )
+    # opus input $15/1M; writes bill at 1.25x → 8000*15*1.25/1e6 = 0.15
+    assert abs(intel["cacheWriteCostUsd"] - 0.15) < 1e-6
+    # savings on the 200 read tokens: 200*(15 - 1.5)/1e6 = 0.0027
+    assert abs(intel["cacheSavedUsd"] - 0.0027) < 1e-6
+    # rebuild cost dwarfs savings → the re-read tax is real here
+    assert intel["cacheWriteCostUsd"] > intel["cacheSavedUsd"]
+
+
+def test_cache_fields_omitted_without_cache_tokens():
+    intel = _session_cost_intel(
+        _FakeSession(input=1000, output=200, model="claude-opus-4-8")
+    )
+    assert "cacheWriteCostUsd" not in intel
+    assert "cacheSavedUsd" not in intel
+
+
+def test_reread_tax_waste_flag():
+    from routes.sessions import _derive_session_insight, _WASTE_RECOMMENDATIONS
+    churn = {"cost_usd": 1.0, "cache_hit_pct": 9.1,
+             "cache_write_cost_usd": 0.15, "cache_saved_usd": 0.0027}
+    assert "reread_tax" in _derive_session_insight(churn, [])["waste_flags"]
+    assert "reread_tax" in _WASTE_RECOMMENDATIONS
+    # healthy reuse (savings exceed rebuild) must NOT flag
+    healthy = {"cost_usd": 1.0, "cache_hit_pct": 85,
+               "cache_write_cost_usd": 0.01, "cache_saved_usd": 0.50}
+    assert "reread_tax" not in _derive_session_insight(healthy, [])["waste_flags"]

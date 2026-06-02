@@ -2656,6 +2656,7 @@ _WASTE_RECOMMENDATIONS = {
     "cache_poor": "Low cache hit — context is being re-sent at full price every turn. Keep the system prompt stable and reuse the session so the prompt cache stays warm.",
     "tools_failing": "A tool came back a real error on 20%+ of calls — you're paying tokens on the retries. Fix or remove the failing tool.",
     "compaction_thrash": "This session auto-compacted repeatedly, re-summarising (and re-billing) the context each time. Work in a smaller context window.",
+    "reread_tax": "This session paid more to REBUILD the prompt cache than reuse saved — the cache's 5-minute TTL expired between turns, so it re-derived context that never changed. Keep the session warm (a heartbeat or batched turns inside the TTL) so the cache is read at ~0.1x instead of re-written at full price.",
     "model_fallback": "This session silently ran on more than one model — a downgrade/upcharge you didn't choose. Pin the model you actually want.",
     "fanned_out": "This ask spawned sub-agents, so its true cost includes everything they spent (see the fan-out figure) — not just this session's own line.",
     "policy_denied": "A tool call was denied by governance. Review the policy if it blocked legitimate work.",
@@ -2680,6 +2681,13 @@ def _derive_session_insight(sess: dict, lineage: list) -> dict:
     chp = sess.get("cache_hit_pct")
     if chp is not None and chp < 40:
         flags.append("cache_poor")
+    # Cache re-read tax (sharper than cache_poor): you paid MORE to rebuild the
+    # cache than reuse saved — the 5-min TTL expired between turns and the
+    # context was re-derived. Material write cost that dwarfs the savings.
+    cwc = sess.get("cache_write_cost_usd")
+    csv = float(sess.get("cache_saved_usd") or 0.0)
+    if cwc and float(cwc) > 0.005 and float(cwc) > csv:
+        flags.append("reread_tax")
     if (sess.get("tool_error_pct") or 0) >= 20:
         flags.append("tools_failing")
     if (sess.get("compaction_count") or 0) >= 2:
@@ -2692,6 +2700,8 @@ def _derive_session_insight(sess: dict, lineage: list) -> dict:
         "cost_usd": round(cost, 6),
         "reasoning_cost_usd": sess.get("reasoning_cost_usd"),
         "cache_hit_pct": sess.get("cache_hit_pct"),
+        "cache_write_cost_usd": sess.get("cache_write_cost_usd"),
+        "cache_saved_usd": sess.get("cache_saved_usd"),
         "tool_error_pct": sess.get("tool_error_pct"),
         "compaction_count": sess.get("compaction_count"),
         "model_mix": bool(sess.get("model_mix")),

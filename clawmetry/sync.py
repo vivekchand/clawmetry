@@ -8654,6 +8654,26 @@ def _session_cost_intel(s) -> dict:
                     out["reasoningCostUsd"] = round(float(_rc), 6)
             except Exception:
                 pass
+        # Cache re-read tax: Anthropic's prompt cache has a 5-minute TTL, so a
+        # session that idles past it re-derives context it already had — paying
+        # to REBUILD the cache (cache writes bill ~1.25x input) instead of
+        # reading it cheaply (~0.1x). Surface what was paid to (re)build the
+        # cache vs what reuse actually saved; a churny session (high write, low
+        # read / low cacheHitPct) is paying the re-read tax. Anthropic-style
+        # cache split only — omitted (honest "unknown") for other providers.
+        if model and (cw > 0 or cr > 0):
+            try:
+                from clawmetry.providers_pricing import estimate_event_cost_usd as _ec
+                _wc = _ec(model, cache_write_tokens=cw)
+                if _wc and _wc > 0:
+                    out["cacheWriteCostUsd"] = round(float(_wc), 6)
+                if cr > 0:
+                    _full = _ec(model, input_tokens=cr) or 0.0
+                    _read = _ec(model, cache_read_tokens=cr) or 0.0
+                    if (_full - _read) > 0:
+                        out["cacheSavedUsd"] = round(float(_full - _read), 6)
+            except Exception:
+                pass
     except Exception:
         pass
     return out
@@ -8834,6 +8854,8 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                     "reasoning_cost_usd": _intel.get("reasoningCostUsd"),
                     "cache_hit_pct": _intel.get("cacheHitPct"),
                     "token_split": _intel.get("tokenSplit"),
+                    "cache_write_cost_usd": _intel.get("cacheWriteCostUsd"),
+                    "cache_saved_usd": _intel.get("cacheSavedUsd"),
                     "tool_error_pct": _thealth.get("toolErrorPct"),
                     "compaction_count": _compactions or None,
                 })
