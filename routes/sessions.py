@@ -2596,6 +2596,61 @@ def _try_local_store_delegation_tree():
     }
 
 
+def _derive_waste_summary(sessions: list) -> dict:
+    """Fleet-level 'recoverable spend' — the blog's framework as a real number.
+
+    Aggregates the per-session cost-intel rows (from cost-breakdown) into a
+    breakdown of where the bill is going to waste: reasoning tax, low cache,
+    failing tools, compaction thrash, silent model fallbacks. Pure (testable).
+    Counts are honest (a session is flagged once per category it trips); the
+    reasoning figure is a real $ sum, the rest are session counts the operator
+    can drill into. We deliberately do NOT invent a single 'you saved $X' total.
+    """
+    sessions = sessions or []
+    total_cost = sum(float(s.get("cost_usd") or 0.0) for s in sessions)
+    reasoning = round(sum(float(s.get("reasoning_cost_usd") or 0.0) for s in sessions), 4)
+    low_cache, failing, compacting, mixed, flagged = [], [], [], [], set()
+    for s in sessions:
+        sid = s.get("session_id")
+        chp = s.get("cache_hit_pct")
+        if chp is not None and chp < 40 and (s.get("cost_usd") or 0) > 0:
+            low_cache.append(sid); flagged.add(sid)
+        if (s.get("tool_error_pct") or 0) >= 20:
+            failing.append(sid); flagged.add(sid)
+        if (s.get("compaction_count") or 0) >= 2:
+            compacting.append(sid); flagged.add(sid)
+        if s.get("model_mix"):
+            mixed.append(sid); flagged.add(sid)
+        if (s.get("reasoning_cost_usd") or 0) > 0 and s.get("cost_usd") and (s["reasoning_cost_usd"] / s["cost_usd"]) > 0.25:
+            flagged.add(sid)
+    return {
+        "total_cost_usd": round(total_cost, 4),
+        "session_count": len(sessions),
+        "flagged_session_count": len(flagged),
+        "reasoning_cost_usd": reasoning,
+        "reasoning_pct_of_cost": round(reasoning / total_cost * 100, 1) if total_cost else 0.0,
+        "low_cache_sessions": len(low_cache),
+        "tool_failing_sessions": len(failing),
+        "compaction_heavy_sessions": len(compacting),
+        "model_fallback_sessions": len(mixed),
+    }
+
+
+@bp_sessions.route("/api/waste-summary")
+def api_waste_summary():
+    """Fleet 'recoverable spend' breakdown — where the agent bill is going to
+    waste across recent sessions (reasoning tax, low cache, failing tools,
+    compaction thrash, silent model fallbacks). The cost-intel cluster rolled
+    up to the fleet level; the productivity-gains framework as a live number.
+    """
+    try:
+        cb = _try_local_store_cost_breakdown() or {"sessions": []}
+        sessions = cb.get("sessions", [])
+    except Exception:
+        sessions = []
+    return jsonify(_derive_waste_summary(sessions))
+
+
 def _derive_session_insight(sess: dict, lineage: list) -> dict:
     """Unify the per-session cost-intel + the lineage fan-out into ONE decision
     insight: the TRUE cost of an ask (its own spend + everything its sub-agents
