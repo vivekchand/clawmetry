@@ -2691,6 +2691,52 @@ def _derive_session_insight(sess: dict, lineage: list) -> dict:
     }
 
 
+def _session_governance(approvals: list, guardrails: list, session_id: str) -> dict:
+    """Context graph — the decision->approval / decision->guardrail edges for one
+    session: which tool calls were gated, and how they were decided. Joins the
+    approval queue (by requestor_session_id) with NeMo guardrail verdicts (by
+    session_id) into the session's governance lineage. Pure (testable).
+    """
+    _DENY = {"deny", "denied", "reject", "rejected", "block", "blocked"}
+    appr = [
+        {"kind": "approval", "action": a.get("action"),
+         "decision": a.get("decision") or a.get("status") or "", "reason": a.get("decision_reason") or "",
+         "status": a.get("status") or ""}
+        for a in (approvals or []) if a.get("requestor_session_id") == session_id
+    ]
+    grd = [
+        {"kind": "guardrail", "action": g.get("action"), "rule": g.get("rule_name"),
+         "verdict": g.get("verdict") or ""}
+        for g in (guardrails or []) if g.get("session_id") == session_id
+    ]
+    denied = sum(1 for a in appr if str(a.get("decision", "")).lower() in _DENY) \
+        + sum(1 for g in grd if str(g.get("verdict", "")).lower() in _DENY)
+    return {
+        "approvals": appr,
+        "guardrails": grd,
+        "decision_count": len(appr) + len(grd),
+        "denied_count": denied,
+    }
+
+
+@bp_sessions.route("/api/session-governance/<path:session_id>")
+def api_session_governance(session_id):
+    """Context graph — a session's governance lineage: its approval decisions +
+    NeMo guardrail verdicts (decision->approval / decision->guardrail edges).
+    """
+    try:
+        approvals = _ls_call("query_approvals", limit=500) or []
+    except Exception:
+        approvals = []
+    try:
+        guardrails = _ls_call("query_guardrail_events", limit=500) or []
+    except Exception:
+        guardrails = []
+    out = _session_governance(approvals, guardrails, session_id)
+    out["session_id"] = session_id
+    return jsonify(out)
+
+
 @bp_sessions.route("/api/session-insight/<path:session_id>")
 def api_session_insight(session_id):
     """Context graph — the unified per-session decision insight: true cost
