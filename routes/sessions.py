@@ -2868,6 +2868,24 @@ def _try_local_store_cost_breakdown():
                     row["cache_hit_pct"] = md["cacheHitPct"]
     except Exception:
         pass
+    # Cache-hit % (for the event-usage runtimes: OpenClaw / Claude Code) + the
+    # silent model-mix flag, from the existing per-session cost-split aggregator.
+    # Family runtimes get cache % from the metadata above; this covers the rest
+    # and adds the >1-model fallback flag for any session.
+    try:
+        by_id = {r["session_id"]: r for r in result}
+        for sr in (_ls_call("query_cost_split", limit=1000) or []):
+            row = by_id.get(sr.get("session_id") or "")
+            if not row:
+                continue
+            if row.get("cache_hit_pct") is None and sr.get("cache_hit_ratio_pct") is not None:
+                row["cache_hit_pct"] = sr["cache_hit_ratio_pct"]
+            if int(sr.get("model_count") or 0) > 1:
+                row["model_mix"] = True
+                row["primary_model"] = sr.get("primary_model") or ""
+                row["secondary_model"] = sr.get("secondary_model") or ""
+    except Exception:
+        pass
     result.sort(key=lambda x: x["cost_usd"], reverse=True)
     top10 = result[:10]
     total_cost = sum(r["cost_usd"] for r in result)

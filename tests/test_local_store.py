@@ -523,6 +523,12 @@ def test_query_cost_split_aggregates_per_session(store):
     assert aggregated["total_cost_usd"] == pytest.approx(0.063, abs=1e-6)
     # Cache hit ratio = cache_read / (input + cache_read) = 4000 / 6000 = 66.7%
     assert aggregated["cache_hit_ratio_pct"] == pytest.approx(66.7, abs=0.1)
+    # Model-mix fields (silent-fallback flag): a count of distinct billed models
+    # + the secondary model. When >1 model, secondary is real and != primary.
+    assert aggregated["model_count"] >= 1
+    assert isinstance(aggregated["secondary_model"], str)
+    if aggregated["model_count"] > 1:
+        assert aggregated["secondary_model"] and aggregated["secondary_model"] != aggregated["primary_model"]
     # Single-session lookup ignores aggregations from other sessions.
     only = store.query_cost_split(session_id="sess-cs")
     assert len(only) == 1

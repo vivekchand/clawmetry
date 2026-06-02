@@ -6509,9 +6509,13 @@ class LocalStore:
         out: list[dict[str, Any]] = []
         for agg in per_session.values():
             mt = agg.pop("_model_tokens", {})
-            agg["primary_model"] = (
-                max(mt.items(), key=lambda kv: kv[1])[0] if mt else ""
-            )
+            _ranked = sorted(mt.items(), key=lambda kv: kv[1], reverse=True)
+            agg["primary_model"] = _ranked[0][0] if _ranked else ""
+            # Silent model-mix / fallback: a session that ran on >1 model the
+            # user never chose (a downgrade/fallback no CLI flags). Expose the
+            # count + the secondary (fallback) model so the UI can flag it.
+            agg["model_count"] = len([m for m, t in mt.items() if t > 0])
+            agg["secondary_model"] = _ranked[1][0] if len(_ranked) > 1 else ""
             agg["total_tokens"] = (
                 agg["input_tokens"] + agg["output_tokens"]
                 + agg["cache_read_tokens"] + agg["cache_write_tokens"]

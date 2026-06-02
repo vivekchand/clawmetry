@@ -7852,6 +7852,11 @@ async function loadSessions() {
       var _chc = _chp >= 70 ? '#22c55e' : (_chp >= 40 ? '#f59e0b' : '#ef4444');
       html += '<span title="Share of input context served from prompt cache (far cheaper). Low = re-sending context at full price every turn." style="font-size:11px;color:' + _chc + ';font-weight:600;">⚡ ' + _chp.toFixed(0) + '% cache</span>';
     }
+    if (sessCost && sessCost.model_mix) {
+      var _mmt = 'This session silently ran on more than one model — a fallback/downgrade you did not choose';
+      if (sessCost.primary_model) _mmt += ' (' + escHtml(sessCost.primary_model) + (sessCost.secondary_model ? ' + ' + escHtml(sessCost.secondary_model) : '') + ')';
+      html += '<span title="' + _mmt + '" style="font-size:11px;color:#f59e0b;font-weight:600;">🔀 model fallback</span>';
+    }
     // Issue #1619 Phase 1 — Score pill. Color band matches the overview
     // tile (4+ green, 3-4 yellow, <3 red). Hover shows the judge's reason.
     var evalRow = evalMap[sid];
