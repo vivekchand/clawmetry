@@ -2596,6 +2596,66 @@ def _try_local_store_delegation_tree():
     }
 
 
+def _derive_session_insight(sess: dict, lineage: list) -> dict:
+    """Unify the per-session cost-intel + the lineage fan-out into ONE decision
+    insight: the TRUE cost of an ask (its own spend + everything its sub-agents
+    spent) plus the waste flags that fired. The context graph's per-session
+    answer — no single flat tab gives it. Pure function (so it's testable).
+    """
+    sess = sess or {}
+    lineage = lineage or []
+    cost = float(sess.get("cost_usd") or 0.0)
+    children = [n for n in lineage if (n.get("depth") or 0) > 0]
+    downstream = round(sum(float(n.get("cost_usd") or 0.0) for n in children), 6)
+    flags: list[str] = []
+    rc = sess.get("reasoning_cost_usd")
+    if rc and cost and (rc / cost) > 0.25:
+        flags.append("reasoning_heavy")
+    chp = sess.get("cache_hit_pct")
+    if chp is not None and chp < 40:
+        flags.append("cache_poor")
+    if (sess.get("tool_error_pct") or 0) >= 20:
+        flags.append("tools_failing")
+    if (sess.get("compaction_count") or 0) >= 2:
+        flags.append("compaction_thrash")
+    if sess.get("model_mix"):
+        flags.append("model_fallback")
+    if children:
+        flags.append("fanned_out")
+    return {
+        "cost_usd": round(cost, 6),
+        "reasoning_cost_usd": sess.get("reasoning_cost_usd"),
+        "cache_hit_pct": sess.get("cache_hit_pct"),
+        "tool_error_pct": sess.get("tool_error_pct"),
+        "compaction_count": sess.get("compaction_count"),
+        "model_mix": bool(sess.get("model_mix")),
+        "subagent_count": len(children),
+        "downstream_cost_usd": downstream,
+        "true_cost_usd": round(cost + downstream, 6),
+        "waste_flags": flags,
+    }
+
+
+@bp_sessions.route("/api/session-insight/<path:session_id>")
+def api_session_insight(session_id):
+    """Context graph — the unified per-session decision insight: true cost
+    (own + sub-agent fan-out) + the waste flags that fired, joining the
+    cost-intel cluster with the lineage traversal in one answer.
+    """
+    try:
+        cb = _try_local_store_cost_breakdown() or {"sessions": []}
+        sess = next((s for s in cb.get("sessions", []) if s.get("session_id") == session_id), {})
+    except Exception:
+        sess = {}
+    try:
+        lineage = _ls_call("query_session_lineage", session_id=session_id) or []
+    except Exception:
+        lineage = []
+    out = _derive_session_insight(sess, lineage)
+    out["session_id"] = session_id
+    return jsonify(out)
+
+
 @bp_sessions.route("/api/session-lineage/<path:session_id>")
 def api_session_lineage(session_id):
     """Context graph — first view: the decision-lineage tree rooted at a session.
