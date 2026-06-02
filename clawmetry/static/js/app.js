@@ -7857,6 +7857,11 @@ async function loadSessions() {
       if (sessCost.primary_model) _mmt += ' (' + escHtml(sessCost.primary_model) + (sessCost.secondary_model ? ' + ' + escHtml(sessCost.secondary_model) : '') + ')';
       html += '<span title="' + _mmt + '" style="font-size:11px;color:#f59e0b;font-weight:600;">🔀 model fallback</span>';
     }
+    if (sessCost && sessCost.tool_error_pct != null && Number(sessCost.tool_error_pct) > 0) {
+      var _tep = Number(sessCost.tool_error_pct);
+      var _tec = _tep >= 30 ? '#ef4444' : '#f59e0b';
+      html += '<span title="Share of this session\'s tool calls that came back a real (non-benign) error — a failing tool you only ever see as the agent \'thinking\'." style="font-size:11px;color:' + _tec + ';font-weight:600;">⚠ ' + _tep.toFixed(0) + '% tools failing</span>';
+    }
     // Issue #1619 Phase 1 — Score pill. Color band matches the overview
     // tile (4+ green, 3-4 yellow, <3 red). Hover shows the judge's reason.
     var evalRow = evalMap[sid];

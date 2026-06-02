@@ -2855,7 +2855,7 @@ def _try_local_store_cost_breakdown():
         intel = {}
         for mr in meta_rows:
             md = mr.get("metadata") or {}
-            if isinstance(md, dict) and (md.get("reasoningCostUsd") is not None or md.get("cacheHitPct") is not None):
+            if isinstance(md, dict) and (md.get("reasoningCostUsd") is not None or md.get("cacheHitPct") is not None or md.get("toolErrorPct") is not None):
                 intel[mr.get("session_id") or ""] = md
         if intel:
             for row in result:
@@ -2866,6 +2866,8 @@ def _try_local_store_cost_breakdown():
                     row["reasoning_cost_usd"] = md["reasoningCostUsd"]
                 if md.get("cacheHitPct") is not None:
                     row["cache_hit_pct"] = md["cacheHitPct"]
+                if md.get("toolErrorPct") is not None:
+                    row["tool_error_pct"] = md["toolErrorPct"]
     except Exception:
         pass
     # Cache-hit % (for the event-usage runtimes: OpenClaw / Claude Code) + the

@@ -8653,6 +8653,51 @@ def _session_cost_intel(s) -> dict:
     return out
 
 
+def _session_tool_health(events) -> dict:
+    """Per-session tool failure-rate from the adapter events: how many tool
+    results came back as a REAL (non-benign) error. A tool that keeps failing
+    (e.g. "browser fails 40%") is invisible to the user, who just sees the agent
+    "thinking". Benign read-guards / transient gateway timeouts are filtered out
+    (mirrors the transcript-ingest benign filter) so the rate is actionable, not
+    alarmist. Returns {} when there are no tool results. Never raises.
+    """
+    try:
+        from clawmetry import error_signal as _es
+    except Exception:
+        _es = None
+    results = 0
+    errors = 0
+    try:
+        for e in events:
+            et = (getattr(e, "type", "") or "").lower()
+            if "result" not in et and not getattr(e, "tool_name", ""):
+                continue
+            results += 1
+            extra = getattr(e, "extra", None)
+            extra = extra if isinstance(extra, dict) else {}
+            if not (extra.get("isError") or extra.get("is_error")):
+                continue
+            if _es is not None:
+                try:
+                    txt = _es.extract_tool_result_text(
+                        {"content": getattr(e, "content", ""), "extra": extra}
+                    ) or (getattr(e, "content", "") or "")
+                except Exception:
+                    txt = getattr(e, "content", "") or ""
+                if _es.is_benign_tool_error(txt):
+                    continue
+            errors += 1
+    except Exception:
+        return {}
+    if results <= 0:
+        return {}
+    return {
+        "toolResults": results,
+        "toolErrors": errors,
+        "toolErrorPct": round(errors / results * 100, 1),
+    }
+
+
 def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
     """Ingest PicoClaw + NanoClaw sessions into DuckDB (and the cloud) so they
     appear in the sessions list + transcripts the same way OpenClaw does.
@@ -8728,6 +8773,11 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 # only place the adapter's authoritative split survives).
                 _intel = _session_cost_intel(s)
                 metadata.update(_intel)
+                # Pre-fetch the events once (the transcript loop below reuses
+                # them) so we can also derive the per-session tool failure-rate.
+                _events = list(adapter.list_events(s.id, limit=2000))
+                _thealth = _session_tool_health(_events)
+                metadata.update(_thealth)
                 # Local upsert (the sessions list reads this).
                 try:
                     store.ingest_session({
@@ -8769,10 +8819,11 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                     "reasoning_cost_usd": _intel.get("reasoningCostUsd"),
                     "cache_hit_pct": _intel.get("cacheHitPct"),
                     "token_split": _intel.get("tokenSplit"),
+                    "tool_error_pct": _thealth.get("toolErrorPct"),
                 })
                 # Events → transcript (rides the existing _build_transcripts path).
                 rows = []
-                for e in adapter.list_events(s.id, limit=2000):
+                for e in _events:
                     ets = _epoch_to_iso(e.ts)
                     if not ets:
                         continue

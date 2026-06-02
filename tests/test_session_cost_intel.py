@@ -57,3 +57,37 @@ def test_never_raises_on_garbage():
         model = None
     # Must not raise; returns at worst an empty-ish dict.
     assert isinstance(_session_cost_intel(Bad()), dict)
+
+
+from clawmetry.sync import _session_tool_health
+
+
+class _FakeEvent:
+    def __init__(self, type="", tool_name="", content="", extra=None):
+        self.type = type
+        self.tool_name = tool_name
+        self.content = content
+        self.extra = extra or {}
+
+
+def test_tool_health_counts_real_errors():
+    evs = [
+        _FakeEvent(type="tool.result", tool_name="browser", extra={"isError": True}, content="Connection refused: fatal"),
+        _FakeEvent(type="tool.result", tool_name="browser"),
+        _FakeEvent(type="tool.result", tool_name="bash"),
+        _FakeEvent(type="message", content="hi"),  # not a tool result -> ignored
+    ]
+    h = _session_tool_health(evs)
+    assert h["toolResults"] == 3
+    assert h["toolErrors"] >= 1
+    assert 0 < h["toolErrorPct"] <= 100
+
+
+def test_tool_health_empty_when_no_tools():
+    assert _session_tool_health([_FakeEvent(type="message")]) == {}
+
+
+def test_tool_health_clean_session_zero_errors():
+    evs = [_FakeEvent(type="tool.result", tool_name="read"), _FakeEvent(type="tool.result", tool_name="bash")]
+    h = _session_tool_health(evs)
+    assert h["toolResults"] == 2 and h["toolErrors"] == 0 and h["toolErrorPct"] == 0.0
