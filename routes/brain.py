@@ -1862,3 +1862,79 @@ def api_brain_clusters():
         "_source": "unavailable",
         "_shape": "brain_clusters",
     })
+
+
+_WHY_HINT = (
+    "These rows are events from an AI agent session (oldest first). "
+    "The last row is the target assistant turn. "
+    "Explain in exactly 3 sentences why that assistant output happened. "
+    "Lead with the most direct cause (which user message or tool result triggered it). "
+    "If the same tool or query appears 3+ times (loop / anomaly), say so first."
+)
+
+
+@bp_brain.route("/api/brain/why/<session_id>/<event_id>")
+def api_brain_why(session_id, event_id):
+    """Return an LLM-narrated explanation of why a specific assistant turn happened.
+
+    Reads up to 10 preceding events from DuckDB as context, then calls the
+    same synthesis path used by the weekly digest (insights.py). Falls back
+    to a stub message when no LLM key is configured — never a 500.
+
+    Query params: none required (session_id and event_id are path params).
+    """
+    rows = _fetch_session_chain(session_id)
+    if rows is None:
+        return jsonify({"error": "local store unavailable", "event_id": event_id}), 503
+
+    # Find the target event; rows are oldest-first from _fetch_session_chain.
+    target_idx = None
+    for i, r in enumerate(rows):
+        if str(r.get("id") or "") == str(event_id):
+            target_idx = i
+            break
+
+    if target_idx is None:
+        return jsonify({"error": "event not found", "event_id": event_id}), 404
+
+    # Context window: up to 10 preceding events + the target event itself.
+    context = rows[max(0, target_idx - 10): target_idx + 1]
+
+    # Anomaly: any non-conversation event_type that repeats 3+ times in context.
+    from collections import Counter
+    type_counts = Counter(r.get("event_type", "") for r in context)
+    anomaly = any(
+        count >= 3 and et not in ("assistant", "user", "message", "")
+        for et, count in type_counts.items()
+    )
+
+    from clawmetry.insights import _resolve_synthesis_credential, _synthesize_narrative
+    from clawmetry.config import load_config
+
+    cfg = load_config()
+    mode, secret = _resolve_synthesis_credential(cfg)
+
+    if mode == "none":
+        narration = (
+            f"{len(context)} context events. "
+            "Connect to Cloud for AI narration — no key required."
+        )
+        used_model = "none"
+    else:
+        narration, _ = _synthesize_narrative(
+            secret,
+            "Why did this agent turn happen?",
+            _WHY_HINT,
+            context,
+            mode=mode,
+        )
+        used_model = "claude-sonnet-4-6"
+
+    return jsonify({
+        "session_id": session_id,
+        "event_id": event_id,
+        "narration": narration,
+        "anomaly": anomaly,
+        "model": used_model,
+        "_source": "local_store",
+    })
