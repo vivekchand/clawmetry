@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: fleet 'recoverable spend' waste summary (carries #2469) (2026-06-02)
+- **Why:** the productivity-gains framework (today's blog post) deserves to be a live number, not just prose — aggregate the per-session cost-intel into where the bill is actually going to waste.
+- **What:** `_derive_waste_summary()` + `GET /api/waste-summary` roll up reasoning tax ($ sum), low-cache / tool-failing / compaction-heavy / model-fallback session counts, and the flagged-session total across recent sessions. Deliberately no fabricated single "you saved $X" headline (mirrors the blog's honesty); the operator drills into the flagged sessions via the per-session chips.
+- **Verified:** 2 new unit tests (aggregation correctness + empty-safe); full OSS CI matrix green (the MOAT perf-benchmark flake on the untouched gateway_health endpoint cleared on rerun).
+
+
 ### Release: context graph — unified session insight + the true-cost fan-out chip (carries #2466, #2467) (2026-06-02)
 - **Why:** the lineage traversal needs to become an answer a user sees — "what did this ask really cost, and where did it waste?"
 - **What:** (1) `_derive_session_insight()` + `GET /api/session-insight/<id>` join the cost-intel cluster with the lineage into one answer no flat tab gives — the TRUE cost of an ask (own + sub-agent fan-out) + the waste flags that fired (reasoning_heavy / cache_poor / tools_failing / compaction_thrash / model_fallback / fanned_out). (2) The first VISIBLE context-graph signal in the session list: `query_subagent_cost_rollup()` rolls up each parent's sub-agent spend in one GROUP BY; the session chip renders `↳ +$X · N agents` (the real cost of an ask incl. its fan-out) next to the cost-intel chips.
