@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: context graph — governance lineage edge + per-session 🛡 chip (carries #2476, #2477) (2026-06-02)
+- **Why:** the decision->approval / decision->guardrail edge — which tool calls a session put through governance, and how they were decided — is core to a context graph and was unrendered.
+- **What:** `_session_governance()` + `GET /api/session-governance/<id>` join the approval queue (by requestor_session_id) with NeMo guardrail verdicts (by session_id) into a session's policy lineage with a denied-count; cost-breakdown aggregates the same per session; the session chip renders 🛡 N gated · M denied (green / red if denied) next to the cost-intel + fan-out chips.
+- **Verified:** 2 new unit tests (join + denied-count; empty-safe); py_compile + node --check clean; full OSS CI matrix green.
+
+
 ### Release: Overview 'Recoverable spend' card — the cost-intel cluster's glanceable payoff (carries #2472) (2026-06-02)
 - **Why:** the per-session chips + the /api/waste-summary roll-up deserve a glanceable home — the one card that answers "where is my agent bill going to waste?"
 - **What:** a "Recoverable spend" card under the Overview hero rendering the fleet waste roll-up (reasoning tax $, low-cache / tool-failing / compaction-heavy / model-fallback session counts, "N of M recent sessions show a waste signal") with a link to the productivity-gains blog post. Hidden entirely when nothing is flagged (honest empty state). Caps the cost-intelligence cluster shipped today (💰🧠⚡🔀⚠♻↳) + the context-graph lineage/insight.
