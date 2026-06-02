@@ -481,6 +481,8 @@ _DAEMON_METHODS = frozenset({
     "query_session_lineage",
     # Context graph: per-parent sub-agent cost rollup (true-cost-of-an-ask chip).
     "query_subagent_cost_rollup",
+    # Context graph: the error->cause edge (failed spans + their parent).
+    "query_session_errors",
     # OpenClaw run ledger (tasks/runs.sqlite mirror): sub-agents + crons +
     # CLI turns with status/timing/parent-child. Powers the Scheduler lane
     # monitor + sub-agent fan-out tree + cron run log off one source.

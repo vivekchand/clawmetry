@@ -796,3 +796,22 @@ def test_query_subagent_cost_rollup(store):
     assert roll["root-x"]["child_cost_usd"] == pytest.approx(0.25, abs=1e-6)
     assert roll["root-x"]["child_count"] == 2
     assert roll["root-y"]["child_count"] == 1
+
+
+def test_query_session_errors_edge(store):
+    """Context-graph error->cause edge: only failed spans, with their parent."""
+    store.ingest_span({"span_id": "e1", "trace_id": "t1", "name": "browser", "start_ts": 100.0,
+                       "session_id": "err-s", "parent_span_id": "p1", "tool_name": "browser",
+                       "status_code": "ERROR", "status_message": "Connection refused"})
+    store.ingest_span({"span_id": "e2", "trace_id": "t1", "name": "bash", "start_ts": 101.0,
+                       "session_id": "err-s", "parent_span_id": "p1", "tool_name": "bash",
+                       "status": "failed"})
+    store.ingest_span({"span_id": "ok1", "trace_id": "t1", "name": "read", "start_ts": 102.0,
+                       "session_id": "err-s", "parent_span_id": "p1", "tool_name": "read",
+                       "status_code": "OK"})
+    errs = store.query_session_errors("err-s")
+    ids = {e["span_id"] for e in errs}
+    assert ids == {"e1", "e2"}                      # ok1 excluded
+    e1 = next(e for e in errs if e["span_id"] == "e1")
+    assert e1["parent_span_id"] == "p1" and e1["tool_name"] == "browser"
+    assert store.query_session_errors("") == []

@@ -2787,6 +2787,17 @@ def api_session_insight(session_id):
     return jsonify(out)
 
 
+@bp_sessions.route("/api/session-errors/<path:session_id>")
+def api_session_errors(session_id):
+    """Context graph — the error->cause edge: this session's failed spans, each
+    with its parent span (the upstream decision one hop away)."""
+    try:
+        errors = _ls_call("query_session_errors", session_id=session_id) or []
+    except Exception:
+        errors = []
+    return jsonify({"session_id": session_id, "errors": errors, "error_count": len(errors)})
+
+
 @bp_sessions.route("/api/session-lineage/<path:session_id>")
 def api_session_lineage(session_id):
     """Context graph — first view: the decision-lineage tree rooted at a session.
