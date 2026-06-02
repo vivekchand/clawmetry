@@ -2799,10 +2799,24 @@ function _renderWasteSummary() {
         + '<span>' + r[0] + '</span><strong style="color:var(--text-primary);">' + escHtml(r[1]) + '</strong>'
         + '<span style="color:var(--text-muted);">' + escHtml(r[2]) + '</span></div>';
     }).join('');
+    // "Start here" — the single highest-leverage fix, picked from the fields
+    // (works the same in cloud + self-hosted; no backend needed).
+    var _opps = [];
+    if (Number(w.reasoning_cost_usd) > 0 && Number(w.total_cost_usd) > 0 && (w.reasoning_cost_usd / w.total_cost_usd) > 0.15)
+      _opps.push([w.reasoning_cost_usd * 2, 'Reasoning is $' + Number(w.reasoning_cost_usd).toFixed(2) + ' of your spend — lower the reasoning effort, or use a cheaper model for routine work.']);
+    if (Number(w.tool_failing_sessions) > 0)
+      _opps.push([Number(w.tool_failing_sessions) * 1.5, 'Fix the failing tool in ' + w.tool_failing_sessions + ' session' + (w.tool_failing_sessions == 1 ? '' : 's') + ' — you\'re paying tokens on the retries.']);
+    if (Number(w.low_cache_sessions) > 0)
+      _opps.push([Number(w.low_cache_sessions), w.low_cache_sessions + ' session' + (w.low_cache_sessions == 1 ? '' : 's') + ' re-send context at full price — keep the prompt stable to warm the cache.']);
+    if (Number(w.compaction_heavy_sessions) > 0)
+      _opps.push([Number(w.compaction_heavy_sessions) * 0.8, w.compaction_heavy_sessions + ' session' + (w.compaction_heavy_sessions == 1 ? '' : 's') + ' thrash context with repeated compaction — work in a smaller window.']);
+    _opps.sort(function(a, b){ return b[0] - a[0]; });
+    var startHere = _opps.length ? ('<div style="font-size:12px;color:#22c55e;background:rgba(34,197,94,0.08);border-radius:6px;padding:7px 10px;margin-top:10px;"><strong>Start here:</strong> ' + escHtml(_opps[0][1]) + '</div>') : '';
     var html = '<div id="cm-waste-summary" style="background:var(--bg-secondary,#161b22);border:1px solid var(--border-primary,#30363d);border-left:3px solid #E5443A;border-radius:10px;padding:14px 18px;margin:0 0 16px;">'
       + '<div style="font-size:13px;font-weight:700;color:var(--text-primary,#e6edf3);margin-bottom:8px;">💡 Recoverable spend '
       + '<span style="font-weight:500;color:var(--text-muted,#6b7280);">— ' + w.flagged_session_count + ' of ' + w.session_count + ' recent sessions show a waste signal</span></div>'
       + inner
+      + startHere
       + '<div style="font-size:12px;color:var(--text-muted,#6b7280);margin-top:8px;">Drill into each on the Cost tab. <a href="https://clawmetry.com/blog/estimating-productivity-gains" target="_blank" rel="noopener" style="color:#E5443A;">How to estimate what this is worth →</a></div>'
       + '</div>';
     var heroEl = document.getElementById('overview-hero');
