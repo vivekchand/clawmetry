@@ -3,20 +3,27 @@ name: Apply required E2E status checks (C6 -- one-shot)
 # Runs scripts/apply_required_status_checks.py to configure required
 # status checks on main across all three repos.
 #
-# Triggers:
-#   push to main: automatically re-applies required checks on every merge
-#     so the configuration is self-healing. Also removes any deprecated
-#     checks (e.g. visual-diff) if they were previously added in error.
-#   workflow_dispatch: manual trigger from the Actions UI. Use confirm=APPLY
-#     to apply immediately; anything else previews what would change.
+# Trigger: workflow_dispatch only (manual).
 #
-# When E2E_ADMIN_PAT is set: applies checks across all 3 repos in one run.
-# When E2E_ADMIN_PAT is NOT set: falls back to GITHUB_TOKEN (administration:
-#   write) for this repo only. The equivalent push-triggered workflow in
-#   clawmetry-cloud and clawmetry-landing handles those repos automatically.
+# HISTORY: push trigger was removed 2026-06-02 because permissions:
+#   administration: write at the JOB level caused every push-triggered
+#   run to fail with 0 jobs. GitHub blocks the token before any job
+#   starts when the repo's Actions token cap is below administration:write
+#   (the default setting). Moved to workflow level; push trigger removed
+#   to eliminate noise. See vivekchand/clawmetry#2146 for details.
+#
+# REQUIREMENTS (choose one before triggering with confirm=APPLY):
+#   A) Settings > Actions > General > Workflow permissions =
+#      "Read and write permissions". Then the built-in GITHUB_TOKEN
+#      will have administration:write and apply checks for this repo.
+#   B) Set repo secret E2E_ADMIN_PAT to a fine-grained PAT with
+#      Administration (read+write) on clawmetry, clawmetry-cloud,
+#      clawmetry-landing. This applies checks for all 3 repos at once.
+#
+# When only Option A is used: trigger the equivalent workflow in
+#   clawmetry-cloud and clawmetry-landing separately.
 #
 # Idempotent: running multiple times is safe.
-#
 # Tracking: vivekchand/clawmetry#2146 (C6)
 
 on:
@@ -26,53 +33,53 @@ on:
         description: "Type APPLY to configure repos (anything else = dry run)"
         required: true
         default: "dry-run"
-  push:
-    branches: [main]
+
+# Workflow-level permissions: provisioned at run start, not job setup.
+# administration:write is required to modify branch protection rules.
+# contents:read is required for actions/checkout.
+permissions:
+  administration: write
+  contents: read
 
 jobs:
   apply-required-checks:
     name: Apply required E2E status checks (C6)
     runs-on: ubuntu-latest
-    permissions:
-      administration: write
     steps:
       - uses: actions/checkout@v4
 
       - name: Preview checks (dry run)
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.confirm != 'APPLY'
+        if: github.event.inputs.confirm != 'APPLY'
         run: |
           echo "=== DRY RUN -- checks that will be added when confirm=APPLY ==="
           echo ""
           if [ -z "${{ secrets.E2E_ADMIN_PAT }}" ]; then
-            echo "  Using GITHUB_TOKEN (no E2E_ADMIN_PAT set) -- clawmetry only:"
+            echo "  Using GITHUB_TOKEN (E2E_ADMIN_PAT not set) -- clawmetry only:"
             echo "  clawmetry         : OSS golden path (wheel + OpenClaw + 9 tabs)"
             echo "  clawmetry         : Cross-repo handoff (C4)"
             echo ""
-            echo "  NOTE: visual-diff is excluded -- pr-screenshots.yml has a paths:"
-            echo "  filter so it only runs on UI-touching PRs. Requiring it would"
-            echo "  permanently stall non-UI PRs."
+            echo "  REQUIREMENT: ensure Settings > Actions > General > Workflow"
+            echo "  permissions is set to 'Read and write permissions' before"
+            echo "  triggering with confirm=APPLY. Otherwise the PATCH to branch"
+            echo "  protection will return 403 even with administration:write here."
             echo ""
-            echo "  For the remaining repos, the push-triggered workflow in each"
-            echo "  repo handles those repos automatically on next merge."
+            echo "  For clawmetry-cloud and clawmetry-landing: trigger the"
+            echo "  equivalent workflow in each repo separately."
           else
             echo "  Using E2E_ADMIN_PAT -- applying to all 3 repos:"
             echo "  clawmetry         : OSS golden path (wheel + OpenClaw + 9 tabs)"
             echo "  clawmetry         : Cross-repo handoff (C4)"
             echo "  clawmetry-cloud   : Cloud golden-path browser E2E"
             echo "  clawmetry-landing : Landing golden path (C3)"
-            echo ""
-            echo "  NOTE: visual-diff is excluded -- pr-screenshots.yml has a paths:"
-            echo "  filter so it only runs on UI-touching PRs. Requiring it would"
-            echo "  permanently stall non-UI PRs."
           fi
           echo ""
-          echo "  Also removes visual-diff from required checks if it was previously"
-          echo "  added in error (self-healing DEPRECATED_CHECKS cleanup)."
+          echo "  DEPRECATED_CHECKS removed if present:"
+          echo "  clawmetry : visual-diff (has paths: filter -- stalls non-UI PRs)"
           echo ""
           echo "Re-run with confirm=APPLY to apply."
 
       - name: Apply required status checks
-        if: github.event_name == 'push' || github.event.inputs.confirm == 'APPLY'
+        if: github.event.inputs.confirm == 'APPLY'
         env:
           GITHUB_TOKEN: ${{ secrets.E2E_ADMIN_PAT || github.token }}
         run: python3 scripts/apply_required_status_checks.py
