@@ -46,7 +46,7 @@ jobs:
     name: Apply required E2E status checks (C6)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Preview checks (dry run)
         if: github.event.inputs.confirm != 'APPLY'
