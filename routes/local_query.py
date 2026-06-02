@@ -477,6 +477,8 @@ _DAEMON_METHODS = frozenset({
     # ``routes/crons.py:_cron_runs_from_duckdb`` via the daemon proxy.
     "query_cron_runs",
     "query_subagents",
+    # Context graph: decision-lineage tree (recursive subagent fan-out) for a session.
+    "query_session_lineage",
     # OpenClaw run ledger (tasks/runs.sqlite mirror): sub-agents + crons +
     # CLI turns with status/timing/parent-child. Powers the Scheduler lane
     # monitor + sub-agent fan-out tree + cron run log off one source.

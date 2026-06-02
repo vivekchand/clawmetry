@@ -5199,6 +5199,58 @@ class LocalStore:
                 "data", "created_at"]
         return _decode_data_blob_rows(self._fetch(sql, params), cols)
 
+    def query_session_lineage(self, session_id: str, *, max_depth: int = 25) -> list[dict[str, Any]]:
+        """Context-graph traversal — the decision-lineage tree rooted at a session.
+
+        Walks the parent->subagent edges (``subagents.parent_session_id`` ->
+        ``subagent_id``) with a DuckDB ``WITH RECURSIVE`` CTE and returns every
+        node in the fan-out with its own cost/outcome, so one ask's full
+        delegation tree + the cost it incurred downstream is a single
+        round-trip. This is the first materialized projection of the context
+        graph (no new tables — edges are JOINs over existing rows). Read-only,
+        best-effort -> []. The ``max_depth`` guard makes cyclic data safe.
+        """
+        if not session_id:
+            return []
+        sql = """
+        WITH RECURSIVE tree(node_id, parent_id, depth) AS (
+            SELECT CAST(? AS VARCHAR), CAST(NULL AS VARCHAR), 0
+          UNION ALL
+            SELECT s.subagent_id, s.parent_session_id, t.depth + 1
+            FROM subagents s
+            JOIN tree t ON s.parent_session_id = t.node_id
+            WHERE t.depth < ?
+        )
+        SELECT t.node_id, t.parent_id, t.depth,
+               sub.task, sub.status, sub.cost_usd, sub.token_count,
+               ses.cost_usd, ses.outcome, ses.agent_type, ses.total_tokens
+        FROM tree t
+        LEFT JOIN subagents sub ON sub.subagent_id = t.node_id
+        LEFT JOIN sessions ses ON ses.session_id = t.node_id
+        ORDER BY t.depth, t.node_id
+        """
+        try:
+            rows = self._fetch(sql, [str(session_id), int(max_depth)])
+        except Exception:
+            return []
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            node_id, parent_id, depth, task, status, sub_cost, sub_tok, ses_cost, outcome, agent_type, ses_tok = r
+            cost = ses_cost if ses_cost is not None else (sub_cost or 0.0)
+            tok = ses_tok if ses_tok is not None else (sub_tok or 0)
+            out.append({
+                "session_id": node_id,
+                "parent_id": parent_id,
+                "depth": int(depth or 0),
+                "task": task or "",
+                "status": status or "",
+                "cost_usd": round(float(cost or 0.0), 6),
+                "token_count": int(tok or 0),
+                "outcome": outcome or "",
+                "runtime": agent_type or "",
+            })
+        return out
+
     def query_subagents(
         self,
         *,

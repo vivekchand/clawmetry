@@ -2596,6 +2596,30 @@ def _try_local_store_delegation_tree():
     }
 
 
+@bp_sessions.route("/api/session-lineage/<path:session_id>")
+def api_session_lineage(session_id):
+    """Context graph — first view: the decision-lineage tree rooted at a session.
+
+    The full subagent fan-out of one ask + the cost each branch incurred,
+    traversed recursively over the existing subagent edges (no new tables). The
+    seed of the temporal decision graph that unifies Brain/Tracing/Subagents.
+    """
+    try:
+        nodes = _ls_call("query_session_lineage", session_id=session_id) or []
+    except Exception:
+        nodes = []
+    root_cost = next((n.get("cost_usd", 0.0) for n in nodes if n.get("depth") == 0), 0.0)
+    downstream = round(sum(n.get("cost_usd", 0.0) for n in nodes if (n.get("depth") or 0) > 0), 6)
+    return jsonify({
+        "session_id": session_id,
+        "nodes": nodes,
+        "node_count": len(nodes),
+        "root_cost_usd": round(float(root_cost or 0.0), 6),
+        "downstream_cost_usd": downstream,
+        "total_cost_usd": round(float(root_cost or 0.0) + downstream, 6),
+    })
+
+
 @bp_sessions.route("/api/delegation-tree")
 def api_delegation_tree():
     """Agent delegation chains -- inspired by AgentWeave provenance tracing.
