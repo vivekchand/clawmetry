@@ -80,3 +80,17 @@ def test_session_governance_joins_approvals_and_guardrails():
 
 def test_session_governance_empty_is_safe():
     assert _session_governance([], [], "x")["decision_count"] == 0
+
+
+from routes.sessions import _WASTE_RECOMMENDATIONS
+
+
+def test_every_waste_flag_has_a_recommendation():
+    # Every flag _derive_session_insight can emit (+ policy_denied from the route)
+    # must have actionable advice, or the insight card shows a flag with no "what to do".
+    sess = {"cost_usd": 1.0, "reasoning_cost_usd": 0.4, "cache_hit_pct": 11.0,
+            "tool_error_pct": 40.0, "compaction_count": 3, "model_mix": True}
+    flags = set(_derive_session_insight(sess, [{"depth": 0, "cost_usd": 1.0}, {"depth": 1, "cost_usd": 0.5}])["waste_flags"])
+    flags.add("policy_denied")
+    for f in flags:
+        assert f in _WASTE_RECOMMENDATIONS and _WASTE_RECOMMENDATIONS[f]

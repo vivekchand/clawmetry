@@ -2651,6 +2651,17 @@ def api_waste_summary():
     return jsonify(_derive_waste_summary(sessions))
 
 
+_WASTE_RECOMMENDATIONS = {
+    "reasoning_heavy": "Reasoning is over a quarter of this session's cost — billed like output but with no visible deliverable. Lower the reasoning effort, or use a cheaper model for routine work.",
+    "cache_poor": "Low cache hit — context is being re-sent at full price every turn. Keep the system prompt stable and reuse the session so the prompt cache stays warm.",
+    "tools_failing": "A tool came back a real error on 20%+ of calls — you're paying tokens on the retries. Fix or remove the failing tool.",
+    "compaction_thrash": "This session auto-compacted repeatedly, re-summarising (and re-billing) the context each time. Work in a smaller context window.",
+    "model_fallback": "This session silently ran on more than one model — a downgrade/upcharge you didn't choose. Pin the model you actually want.",
+    "fanned_out": "This ask spawned sub-agents, so its true cost includes everything they spent (see the fan-out figure) — not just this session's own line.",
+    "policy_denied": "A tool call was denied by governance. Review the policy if it blocked legitimate work.",
+}
+
+
 def _derive_session_insight(sess: dict, lineage: list) -> dict:
     """Unify the per-session cost-intel + the lineage fan-out into ONE decision
     insight: the TRUE cost of an ask (its own spend + everything its sub-agents
@@ -2766,6 +2777,12 @@ def api_session_insight(session_id):
             out["waste_flags"].append("policy_denied")
     except Exception:
         out["governance"] = {"decision_count": 0, "denied_count": 0}
+    # Turn the waste flags into actionable advice — what to DO, not just what
+    # happened. This is what makes the decision insight useful, not just a readout.
+    out["recommendations"] = [
+        {"flag": f, "text": _WASTE_RECOMMENDATIONS[f]}
+        for f in out.get("waste_flags", []) if f in _WASTE_RECOMMENDATIONS
+    ]
     out["session_id"] = session_id
     return jsonify(out)
 
