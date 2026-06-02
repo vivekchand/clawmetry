@@ -138,14 +138,21 @@ def _get_rates(provider: str, model: str) -> tuple[float, float]:
     ):
         return 0.0, 0.0
 
+    # `provider_for_model` returns "google" for Gemini, but the pricing tables
+    # key on "gemini" — without this alias every Gemini call fell through to the
+    # conservative unknown default (a ~10x over-charge on flash). Normalise so
+    # the lookup matches. Compare case-insensitively too (callers vary).
+    if prov_lower == "google":
+        prov_lower = "gemini"
+
     if model:
         for (prov, prefix), rates in MODEL_OVERRIDES.items():
-            if prov == provider and model_lower.startswith(prefix.lower()):
+            if prov == prov_lower and model_lower.startswith(prefix.lower()):
                 return rates
 
     # Fall back to provider baseline
     for info in PROVIDER_MAP.values():
-        if info["name"] == provider:
+        if info["name"] == prov_lower:
             return info["input_per_1m"], info["output_per_1m"]
 
     return 1.0, 3.0  # unknown provider — conservative default
