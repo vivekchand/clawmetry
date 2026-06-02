@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Release: 'Start here' — the #1 fix on the Recoverable-spend card (carries #2485) (2026-06-02)
+- **What:** the Overview Recoverable-spend card now surfaces the single highest-leverage fix as a green "Start here:" line, picked from the waste-summary fields (reasoning $ share / failing tools / low cache / compaction). Computed in the frontend so it works identically in cloud + self-hosted with no backend.
+- **Verified:** node --check clean; full OSS CI matrix green.
+
+
 ### Release: actionable recommendations on the decision insight (carries #2483) (2026-06-02)
 - **What:** /api/session-insight now turns each waste flag into advice — what to DO, not just what happened (reasoning-heavy -> lower effort/cheaper model; cache-poor -> warm the cache; tools-failing -> fix the tool; compaction -> smaller context; model-fallback -> pin the model; fanned-out -> true cost incl children; policy-denied -> review). Returns a `recommendations` list; a guard test asserts every flag the insight can emit has advice.
 - **Verified:** py_compile clean; insight + recommendations unit tests green; full OSS CI matrix green.
