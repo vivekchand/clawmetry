@@ -7336,7 +7336,8 @@ function closeFileViewer() {
 // `<name>:<id>` session-id prefix the daemon stamps). Order here drives the
 // switcher chip order (OpenClaw always first). To add a runtime, add a label.
 var _CM_RT_LABEL = {
-  openclaw: 'OpenClaw', picoclaw: 'PicoClaw', nanoclaw: 'NanoClaw',
+  openclaw: 'OpenClaw', nemoclaw: 'NemoClaw',
+  picoclaw: 'PicoClaw', nanoclaw: 'NanoClaw',
   hermes: 'Hermes', claude_code: 'Claude Code', codex: 'Codex', cursor: 'Cursor',
   aider: 'Aider', goose: 'Goose', opencode: 'opencode', qwen_code: 'Qwen Code'
 };
