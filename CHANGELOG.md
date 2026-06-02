@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Release: context graph — error->cause edge (carries #2488) (2026-06-02)
+- **What:** query_session_errors(session_id) + GET /api/session-errors/<id> return a session's failed spans, each with its parent span (the upstream decision one hop away) — the error->cause edge that completes the graph's core edge set (session->tool, parent->subagent, decision->approval/guardrail, cost->decision, error->cause). OTel-only; the per-session tool-failure rate covers the non-OTel case.
+- **Verified:** 1 new unit test (failed spans only, with parent; empty-safe); full OSS CI matrix green.
+
+
 ### Release: 'Start here' — the #1 fix on the Recoverable-spend card (carries #2485) (2026-06-02)
 - **What:** the Overview Recoverable-spend card now surfaces the single highest-leverage fix as a green "Start here:" line, picked from the waste-summary fields (reasoning $ share / failing tools / low cache / compaction). Computed in the frontend so it works identically in cloud + self-hosted with no backend.
 - **Verified:** node --check clean; full OSS CI matrix green.
