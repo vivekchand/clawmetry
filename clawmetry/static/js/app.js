@@ -2779,6 +2779,39 @@ var _LOADALL_COALESCE_MS = 2000;
 // transcript loadActivityStream already pulled (window._cmLastAgentSay), model
 // + session count from the cached /api/overview, cost from the rendered stat.
 // Idempotent + self-healing: called after each overview/active-tasks refresh.
+function _renderWasteSummary() {
+  // Overview "recoverable spend" card — the fleet roll-up of the per-session
+  // cost-intel waste signals (the productivity-gains framework as a live number).
+  var page = document.getElementById('page-overview');
+  if (!page) return;
+  fetch('/api/waste-summary').then(function(r){ return r.json(); }).then(function(w){
+    var ex = document.getElementById('cm-waste-summary');
+    if (!w || typeof w !== 'object') { if (ex) ex.remove(); return; }
+    var rows = [];
+    if (Number(w.reasoning_cost_usd) > 0) rows.push(['🧠', '$' + Number(w.reasoning_cost_usd).toFixed(2) + ' on reasoning', '(' + (w.reasoning_pct_of_cost || 0) + '% of spend — billed, no deliverable)']);
+    if (Number(w.low_cache_sessions) > 0) rows.push(['⚡', w.low_cache_sessions + ' session' + (w.low_cache_sessions == 1 ? '' : 's'), 'with low cache hit (context re-sent at full price)']);
+    if (Number(w.tool_failing_sessions) > 0) rows.push(['⚠', w.tool_failing_sessions + ' session' + (w.tool_failing_sessions == 1 ? '' : 's'), 'with a tool failing (tokens burned on retries)']);
+    if (Number(w.compaction_heavy_sessions) > 0) rows.push(['♻', w.compaction_heavy_sessions + ' session' + (w.compaction_heavy_sessions == 1 ? '' : 's'), 'thrashing context (re-summarised repeatedly)']);
+    if (Number(w.model_fallback_sessions) > 0) rows.push(['🔀', w.model_fallback_sessions + ' session' + (w.model_fallback_sessions == 1 ? '' : 's'), 'on a silent model fallback']);
+    if (!rows.length || !Number(w.flagged_session_count)) { if (ex) ex.remove(); return; }
+    var inner = rows.map(function(r){
+      return '<div style="display:flex;gap:8px;align-items:baseline;font-size:13px;color:var(--text-secondary);padding:4px 0;">'
+        + '<span>' + r[0] + '</span><strong style="color:var(--text-primary);">' + escHtml(r[1]) + '</strong>'
+        + '<span style="color:var(--text-muted);">' + escHtml(r[2]) + '</span></div>';
+    }).join('');
+    var html = '<div id="cm-waste-summary" style="background:var(--bg-secondary,#161b22);border:1px solid var(--border-primary,#30363d);border-left:3px solid #E5443A;border-radius:10px;padding:14px 18px;margin:0 0 16px;">'
+      + '<div style="font-size:13px;font-weight:700;color:var(--text-primary,#e6edf3);margin-bottom:8px;">💡 Recoverable spend '
+      + '<span style="font-weight:500;color:var(--text-muted,#6b7280);">— ' + w.flagged_session_count + ' of ' + w.session_count + ' recent sessions show a waste signal</span></div>'
+      + inner
+      + '<div style="font-size:12px;color:var(--text-muted,#6b7280);margin-top:8px;">Drill into each on the Cost tab. <a href="https://clawmetry.com/blog/estimating-productivity-gains" target="_blank" rel="noopener" style="color:#E5443A;">How to estimate what this is worth →</a></div>'
+      + '</div>';
+    var heroEl = document.getElementById('overview-hero');
+    if (ex) { ex.outerHTML = html; }
+    else if (heroEl && heroEl.parentNode) { heroEl.insertAdjacentHTML('afterend', html); }
+    else { page.insertAdjacentHTML('afterbegin', html); }
+  }).catch(function(){});
+}
+
 function _renderOverviewHero() {
   var hero = document.getElementById('overview-hero');
   if (!hero) return;
@@ -3419,7 +3452,8 @@ async function loadActivityStream() {
               break;
             }
           }
-          try { if (typeof _renderOverviewHero === 'function') _renderOverviewHero(); } catch (_e2) {}
+          try { if (typeof _renderOverviewHero === 'function') _renderOverviewHero(); } catch (_e_hero) {}
+          try { if (typeof _renderWasteSummary === 'function') _renderWasteSummary(); } catch (_e2) {}
         } catch (_e) {}
 
         recentMessages.forEach(function(msg) {
@@ -16080,7 +16114,8 @@ async function loadOverviewTasks() {
     // Alive-state for the Overview hero: working when something is actively
     // running, otherwise idle. Re-render the hero so it reflects the change.
     window._cmAgentBusy = running.length > 0;
-    try { if (typeof _renderOverviewHero === 'function') _renderOverviewHero(); } catch (_e) {}
+    try { if (typeof _renderOverviewHero === 'function') _renderOverviewHero(); } catch (_e_hero) {}
+          try { if (typeof _renderWasteSummary === 'function') _renderWasteSummary(); } catch (_e) {}
     // "Recently Completed/Failed" must mean RECENT — bound by how long ago the
     // task FINISHED, not its run duration. The old `runtimeMs < 2h` check used
     // duration, so a 5-minute task that finished 6 days ago still passed and
