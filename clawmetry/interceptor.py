@@ -108,14 +108,21 @@ def _estimate_cost(
     """Estimate cost in USD for given model and token counts."""
     if not model or (input_tokens == 0 and output_tokens == 0):
         return None
-    # Find best match (model names can have version suffixes like -20240229)
+    # Find the MOST SPECIFIC match (model names have version suffixes like
+    # -20240229). First-substring would let "gpt-4o" swallow "gpt-4o-mini" (a
+    # 16x over-charge) or "o1" swallow "o1-mini" — so pick the longest matching
+    # key, which is the more specific model.
     model_lower = model.lower()
+    best_key = None
+    best_prices = None
     for key, prices in _PRICING.items():
-        if key in model_lower:
-            cost = (
-                input_tokens * prices["input"] + output_tokens * prices["output"]
-            ) / 1_000_000
-            return round(cost, 8)
+        if key in model_lower and (best_key is None or len(key) > len(best_key)):
+            best_key, best_prices = key, prices
+    if best_prices is not None:
+        cost = (
+            input_tokens * best_prices["input"] + output_tokens * best_prices["output"]
+        ) / 1_000_000
+        return round(cost, 8)
     # Fall back to the canonical multi-provider table so a real out-loop call is
     # never silently $0 just because this small table predates the model
     # (gpt-4.1/5, o3/o4, gemini-2.5, grok, …). providers_pricing infers the
