@@ -2851,6 +2851,16 @@ function _renderOverviewHero() {
   if (sessions != null) stats.push('💬 <strong style="color:var(--text-primary);">' + sessions + (sessions === 1 ? ' session' : ' sessions') + '</strong> today');
   stats.push('💸 <strong style="color:var(--text-primary);">' + escHtml(cost) + '</strong>' + (free ? ' <span style="color:#22c55e;">free on your plan</span>' : ''));
   stats.push('🧠 running <strong style="color:var(--text-primary);">' + escHtml(model) + '</strong>');
+  // Live throughput (⚡ tok/s) from the today-token delta between renders —
+  // matches `clawmetry status --live`. Shown only while the agent is producing.
+  try {
+    var _nowMs = Date.now(), _tt = Number(window._cmTodayTokensRaw || 0), _prevT = window._cmHeroTpsPrev;
+    if (busy && _prevT && _nowMs > _prevT.t) {
+      var _tps = (_tt - _prevT.k) / ((_nowMs - _prevT.t) / 1000);
+      if (_tps > 0.5) stats.push('⚡ <strong style="color:var(--text-primary);">' + Math.round(_tps) + '</strong> tok/s');
+    }
+    window._cmHeroTpsPrev = { k: _tt, t: _nowMs };
+  } catch (_e) {}
 
   hero.innerHTML =
     '<div style="display:flex;align-items:center;gap:11px;">'
@@ -3021,6 +3031,8 @@ async function loadMiniWidgets(overview, usage) {
   function fmtTokens(n) { return n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(0) + 'K' : String(n); }
   document.getElementById('token-rate').textContent = fmtTokens(usage.month || 0);
   document.getElementById('tokens-today').textContent = fmtTokens(usage.today || 0);
+  // Raw today-token total (unformatted) so the hero can compute live tokens/sec.
+  window._cmTodayTokensRaw = Number(usage.today || 0);
   
   // SESSIONS card — show "sessions today" (overview.sessionCount), the SAME
   // definition as the Overview hero. Previously this card showed the LENGTH of
