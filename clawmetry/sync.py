@@ -12716,6 +12716,51 @@ def run_daemon() -> None:
     except Exception as _e:
         log.warning(f"review sampler failed to start: {_e}")
 
+    # ── Pro-entitlement watcher ──────────────────────────────────────────
+    # A user can start a trial (or upgrade to Starter/Pro) AT ANY TIME, often
+    # while the daemon is already running. Provisioning at connect + at daemon
+    # start (above) covers link-time and restarts; this thread closes the gap
+    # in between — it re-checks entitlement every ~30 min and installs
+    # clawmetry-pro the moment the account becomes entitled, so the paid
+    # runtime adapters (Claude Code, Codex, Cursor, …) start being ingested
+    # within the same session, no restart needed. Idempotent + never-raises;
+    # a free account installs nothing. Adapters import lazily per sync cycle,
+    # so a mid-run install is picked up on the next cycle.
+    try:
+        _pro_stop = threading.Event()
+
+        def _pro_entitlement_worker():
+            time.sleep(120)  # let startup provisioning + first sync settle
+            from clawmetry.license import (
+                auto_provision_pro as _wp,
+                _pro_installed_version as _pv,
+            )
+            while not _pro_stop.is_set():
+                try:
+                    _ak = (load_config() or {}).get("api_key", "")
+                    if _ak:
+                        _was = bool(_pv())
+                        _ok, _msg = _wp(_ak, config.get("node_id"))
+                        if _ok and not _was:
+                            log.info("clawmetry-pro just installed (account became "
+                                     "entitled) — paid runtimes now enabled")
+                            try:
+                                from clawmetry.extensions import load_plugins as _lp
+                                _lp()
+                            except Exception:
+                                pass
+                except Exception as _pwe:
+                    log.debug("pro entitlement tick skipped: %s", _pwe)
+                _pro_stop.wait(timeout=1800)  # ~30 min
+
+        t_pro = threading.Thread(
+            target=_pro_entitlement_worker, daemon=True, name="pro-entitlement"
+        )
+        t_pro.start()
+        log.info("pro-entitlement watcher thread started")
+    except Exception as _e:
+        log.warning(f"pro-entitlement watcher failed to start: {_e}")
+
     # ── Per-tier event retention prune (#2262 catalogue) ─────────────────
     # Hourly tick that reads ``Entitlement.event_retention_days()`` and
     # calls ``LocalStore.prune_events_by_age`` so the events table never
