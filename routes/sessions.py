@@ -2974,6 +2974,17 @@ def _try_local_store_cost_breakdown():
                 row["secondary_model"] = sr.get("secondary_model") or ""
     except Exception:
         pass
+    # Sub-agent fan-out cost — the TRUE cost of an ask = its own cost + what its
+    # children spent (one GROUP BY, not an N-query recursive walk). Context graph.
+    try:
+        roll = {r["parent_session_id"]: r for r in (_ls_call("query_subagent_cost_rollup", limit=2000) or [])}
+        for row in result:
+            rr = roll.get(row["session_id"])
+            if rr and rr.get("child_cost_usd", 0) > 0:
+                row["downstream_cost_usd"] = rr["child_cost_usd"]
+                row["subagent_count"] = rr.get("child_count") or 0
+    except Exception:
+        pass
     result.sort(key=lambda x: x["cost_usd"], reverse=True)
     top10 = result[:10]
     total_cost = sum(r["cost_usd"] for r in result)

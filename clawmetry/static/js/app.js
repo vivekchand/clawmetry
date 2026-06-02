@@ -7866,6 +7866,10 @@ async function loadSessions() {
       var _cc = Number(sessCost.compaction_count);
       html += '<span title="Times this session auto-compacted — each one silently re-summarises (and re-bills) the context window. Frequent compaction = context thrash / wasted tokens." style="font-size:11px;color:#f59e0b;font-weight:600;">♻ compacted ' + _cc + '×</span>';
     }
+    if (sessCost && sessCost.downstream_cost_usd != null && Number(sessCost.downstream_cost_usd) > 0) {
+      var _dc = Number(sessCost.downstream_cost_usd), _sa = Number(sessCost.subagent_count || 0);
+      html += '<span title="The TRUE cost of this ask: it spawned ' + _sa + ' sub-agent(s) that spent this much downstream — billed under their own keys but caused by this session. (Context graph)" style="font-size:11px;color:#60a5fa;font-weight:600;">&#8627; +$' + _dc.toFixed(4) + (_sa ? ' · ' + _sa + ' agents' : '') + '</span>';
+    }
     // Issue #1619 Phase 1 — Score pill. Color band matches the overview
     // tile (4+ green, 3-4 yellow, <3 red). Hover shows the judge's reason.
     var evalRow = evalMap[sid];
