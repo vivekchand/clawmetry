@@ -2690,10 +2690,12 @@ def _derive_session_insight(sess: dict, lineage: list) -> dict:
         flags.append("cache_poor")
     # Cache re-read tax (sharper than cache_poor): you paid MORE to rebuild the
     # cache than reuse saved — the 5-min TTL expired between turns and the
-    # context was re-derived. Material write cost that dwarfs the savings.
+    # context was re-derived. Fires on the cost heuristic (write cost dwarfs
+    # savings) OR on direct evidence: turns that idled past the TTL (≥2).
     cwc = sess.get("cache_write_cost_usd")
     csv = float(sess.get("cache_saved_usd") or 0.0)
-    if cwc and float(cwc) > 0.005 and float(cwc) > csv:
+    expiry = int(sess.get("cache_expiry_count") or 0)
+    if (cwc and float(cwc) > 0.005 and float(cwc) > csv) or expiry >= 2:
         flags.append("reread_tax")
     if (sess.get("tool_error_pct") or 0) >= 20:
         flags.append("tools_failing")
@@ -2709,6 +2711,7 @@ def _derive_session_insight(sess: dict, lineage: list) -> dict:
         "cache_hit_pct": sess.get("cache_hit_pct"),
         "cache_write_cost_usd": sess.get("cache_write_cost_usd"),
         "cache_saved_usd": sess.get("cache_saved_usd"),
+        "cache_expiry_count": sess.get("cache_expiry_count"),
         "tool_error_pct": sess.get("tool_error_pct"),
         "compaction_count": sess.get("compaction_count"),
         "model_mix": bool(sess.get("model_mix")),
@@ -3098,7 +3101,7 @@ def _try_local_store_cost_breakdown():
         intel = {}
         for mr in meta_rows:
             md = mr.get("metadata") or {}
-            if isinstance(md, dict) and any(md.get(k) is not None for k in ("reasoningCostUsd", "cacheHitPct", "toolErrorPct", "compactionCount")):
+            if isinstance(md, dict) and any(md.get(k) is not None for k in ("reasoningCostUsd", "cacheHitPct", "toolErrorPct", "compactionCount", "cacheExpiryCount")):
                 intel[mr.get("session_id") or ""] = md
         if intel:
             for row in result:
@@ -3113,6 +3116,8 @@ def _try_local_store_cost_breakdown():
                     row["tool_error_pct"] = md["toolErrorPct"]
                 if md.get("compactionCount") is not None:
                     row["compaction_count"] = md["compactionCount"]
+                if md.get("cacheExpiryCount") is not None:
+                    row["cache_expiry_count"] = md["cacheExpiryCount"]
     except Exception:
         pass
     # Cache-hit % (for the event-usage runtimes: OpenClaw / Claude Code) + the

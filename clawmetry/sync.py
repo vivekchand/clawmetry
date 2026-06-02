@@ -8724,6 +8724,48 @@ def _session_tool_health(events) -> dict:
     }
 
 
+def _session_idle_gaps(events, ttl_sec: int = 300) -> dict:
+    """Count idle gaps that crossed the prompt-cache TTL. Anthropic's cache
+    expires after ~5 minutes, so every consecutive-event gap longer than that
+    forced the next call to RE-READ (re-derive) context it already had — a
+    direct, timestamp-only count of the re-read tax events (no per-event cache
+    split needed, which family events drop at ingest). Returns {} for <2 events.
+    Never raises."""
+    ts: list[float] = []
+    try:
+        for e in events or []:
+            t = getattr(e, "ts", None)
+            if t is None:
+                continue
+            try:
+                ts.append(float(t))
+            except (TypeError, ValueError):
+                try:
+                    ts.append(datetime.fromisoformat(
+                        str(t).replace("Z", "+00:00")).timestamp())
+                except Exception:
+                    continue
+    except Exception:
+        return {}
+    if len(ts) < 2:
+        return {}
+    ts.sort()
+    expiries = 0
+    max_gap = 0.0
+    for a, b in zip(ts, ts[1:]):
+        gap = b - a
+        if gap > max_gap:
+            max_gap = gap
+        if gap > ttl_sec:
+            expiries += 1
+    out: dict = {}
+    if expiries:
+        out["cacheExpiryCount"] = expiries
+    if max_gap > 0:
+        out["maxIdleGapSec"] = round(max_gap, 1)
+    return out
+
+
 def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
     """Ingest PicoClaw + NanoClaw sessions into DuckDB (and the cloud) so they
     appear in the sessions list + transcripts the same way OpenClaw does.
@@ -8804,6 +8846,8 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 _events = list(adapter.list_events(s.id, limit=2000))
                 _thealth = _session_tool_health(_events)
                 metadata.update(_thealth)
+                _idle = _session_idle_gaps(_events)
+                metadata.update(_idle)
                 # Compaction count: each auto-compaction silently re-summarises
                 # (and re-bills) the context. A session that compacted N times
                 # is thrashing its context window — a glanceable waste signal.
@@ -8856,6 +8900,7 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                     "token_split": _intel.get("tokenSplit"),
                     "cache_write_cost_usd": _intel.get("cacheWriteCostUsd"),
                     "cache_saved_usd": _intel.get("cacheSavedUsd"),
+                    "cache_expiry_count": _idle.get("cacheExpiryCount"),
                     "tool_error_pct": _thealth.get("toolErrorPct"),
                     "compaction_count": _compactions or None,
                 })

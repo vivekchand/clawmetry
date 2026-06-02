@@ -140,3 +140,30 @@ def test_waste_summary_rolls_up_reread_tax():
     w = _derive_waste_summary(sessions)
     assert w["reread_tax_sessions"] == 1
     assert abs(w["reread_tax_usd"] - 0.15) < 1e-9
+
+
+def test_idle_gap_cache_expiry_count():
+    from clawmetry.sync import _session_idle_gaps
+    class _E:
+        def __init__(self, ts): self.ts = ts
+    # gaps: 100s (ok), 500s (>300 → expiry), 700s (expiry)
+    evs = [_E(1000.0), _E(1100.0), _E(1600.0), _E(2300.0)]
+    out = _session_idle_gaps(evs)
+    assert out["cacheExpiryCount"] == 2
+    assert out["maxIdleGapSec"] == 700.0
+    # ISO timestamps also parse
+    iso = [_E("2026-06-02T00:00:00Z"), _E("2026-06-02T00:10:00Z")]  # 600s gap
+    assert _session_idle_gaps(iso)["cacheExpiryCount"] == 1
+    # fewer than 2 events → empty
+    assert _session_idle_gaps([_E(1.0)]) == {}
+
+
+def test_reread_tax_flag_on_idle_evidence():
+    from routes.sessions import _derive_session_insight
+    # direct idle evidence (>=2 expiries) flags even without the cost heuristic
+    out = _derive_session_insight({"cost_usd": 1.0, "cache_expiry_count": 2}, [])
+    assert "reread_tax" in out["waste_flags"]
+    assert out["cache_expiry_count"] == 2
+    # a single brief idle does not
+    assert "reread_tax" not in _derive_session_insight(
+        {"cost_usd": 1.0, "cache_expiry_count": 1}, [])["waste_flags"]
