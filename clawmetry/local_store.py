@@ -906,6 +906,11 @@ _DDL = [
     "CREATE INDEX IF NOT EXISTS idx_ext_api_calls_host ON external_api_calls(host, ts)",
     # Named source for out-loop / production agents (clawmetry.track.set_source).
     "ALTER TABLE external_api_calls ADD COLUMN IF NOT EXISTS source VARCHAR",
+    # Cost attribution for out-loop LLM calls (interceptor llm_call events).
+    "ALTER TABLE external_api_calls ADD COLUMN IF NOT EXISTS cost_usd DOUBLE",
+    "ALTER TABLE external_api_calls ADD COLUMN IF NOT EXISTS input_tokens INTEGER",
+    "ALTER TABLE external_api_calls ADD COLUMN IF NOT EXISTS output_tokens INTEGER",
+    "ALTER TABLE external_api_calls ADD COLUMN IF NOT EXISTS model VARCHAR",
 ]
 
 
@@ -8362,8 +8367,9 @@ class LocalStore:
         with self._write_lock:
             self._conn.execute("""
                 INSERT INTO external_api_calls
-                    (id, node_id, ts, host, url, method, status_code, latency_ms, library, source)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, node_id, ts, host, url, method, status_code, latency_ms,
+                     library, source, cost_usd, input_tokens, output_tokens, model)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (id) DO NOTHING
             """, [
                 row_id,
@@ -8376,6 +8382,10 @@ class LocalStore:
                 ev.get("latency_ms"),
                 ev.get("library") or "",
                 ev.get("source") or "",
+                float(ev.get("cost_usd") or 0.0),
+                int(ev.get("input_tokens") or 0),
+                int(ev.get("output_tokens") or 0),
+                ev.get("model") or "",
             ])
 
     def query_external_calls(
@@ -8392,11 +8402,13 @@ class LocalStore:
         session's ``started_at`` and ``updated_at`` are returned (time-window
         attribution — no ABI changes to the interceptor required)."""
         cols = ["id", "node_id", "ts", "host", "url", "method",
-                "status_code", "latency_ms", "library", "source"]
+                "status_code", "latency_ms", "library", "source",
+                "cost_usd", "input_tokens", "output_tokens", "model"]
         if session_id:
             sql = """
                 SELECT e.id, e.node_id, e.ts, e.host, e.url, e.method,
-                       e.status_code, e.latency_ms, e.library, e.source
+                       e.status_code, e.latency_ms, e.library, e.source,
+                       e.cost_usd, e.input_tokens, e.output_tokens, e.model
                 FROM external_api_calls e
                 JOIN sessions s ON (
                     e.ts >= s.started_at
@@ -8420,7 +8432,8 @@ class LocalStore:
             where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
             sql = f"""
                 SELECT id, node_id, ts, host, url, method,
-                       status_code, latency_ms, library, source
+                       status_code, latency_ms, library, source,
+                       cost_usd, input_tokens, output_tokens, model
                 FROM external_api_calls {where}
                 ORDER BY ts DESC LIMIT ?
             """

@@ -2841,29 +2841,40 @@ function _renderOutLoopSources() {
     var by = {};
     named.forEach(function(c){
       var k = String(c.source);
-      var g = by[k] || (by[k] = { calls: 0, errors: 0, lat: 0, hosts: {} });
+      var g = by[k] || (by[k] = { calls: 0, errors: 0, lat: 0, cost: 0, tokens: 0, hosts: {}, models: {} });
       g.calls += 1;
       if (Number(c.status_code) >= 400) g.errors += 1;
       g.lat += Number(c.latency_ms) || 0;
+      g.cost += Number(c.cost_usd) || 0;
+      g.tokens += (Number(c.input_tokens) || 0) + (Number(c.output_tokens) || 0);
       if (c.host) g.hosts[c.host] = 1;
+      if (c.model) g.models[c.model] = 1;
     });
-    var keys = Object.keys(by).sort(function(a, b){ return by[b].calls - by[a].calls; });
+    var keys = Object.keys(by).sort(function(a, b){ return by[b].cost - by[a].cost || by[b].calls - by[a].calls; });
+    var fleetCost = keys.reduce(function(s, k){ return s + by[k].cost; }, 0);
+    function _fmtCost(v){ return v >= 1 ? ('$' + v.toFixed(2)) : ('$' + v.toFixed(4)); }
+    function _fmtTok(n){ return n >= 1000 ? (Math.round(n / 100) / 10) + 'k' : String(n); }
     var inner = keys.map(function(k){
       var g = by[k];
       var hosts = Object.keys(g.hosts);
+      var models = Object.keys(g.models);
       var avg = g.calls ? Math.round(g.lat / g.calls) : 0;
       var errPct = g.calls ? Math.round((g.errors / g.calls) * 100) : 0;
       var meta = g.calls + ' call' + (g.calls == 1 ? '' : 's')
-        + ' · ' + hosts.length + ' provider' + (hosts.length == 1 ? '' : 's')
+        + (g.tokens ? ' · ' + _fmtTok(g.tokens) + ' tok' : '')
+        + ' · ' + (models.length === 1 ? models[0] : hosts.length + ' provider' + (hosts.length == 1 ? '' : 's'))
         + ' · ~' + avg + 'ms'
         + (g.errors ? ' · ' + errPct + '% errors' : '');
+      var costStr = g.cost > 0 ? _fmtCost(g.cost) : '';
       return '<div style="display:flex;gap:8px;align-items:baseline;font-size:13px;color:var(--text-secondary);padding:4px 0;">'
         + '<span>🔌</span><strong style="color:var(--text-primary);">' + escHtml(k) + '</strong>'
+        + (costStr ? '<strong style="color:#8b5cf6;">' + escHtml(costStr) + '</strong>' : '')
         + '<span style="color:var(--text-muted);">' + escHtml(meta) + '</span></div>';
     }).join('');
+    var fleetStr = fleetCost > 0 ? (' · ' + _fmtCost(fleetCost) + ' total') : '';
     var html = '<div id="cm-outloop-sources" style="background:var(--bg-secondary,#161b22);border:1px solid var(--border-primary,#30363d);border-left:3px solid #8b5cf6;border-radius:10px;padding:14px 18px;margin:0 0 16px;">'
       + '<div style="font-size:13px;font-weight:700;color:var(--text-primary,#e6edf3);margin-bottom:8px;">🔌 Out-loop sources '
-      + '<span style="font-weight:500;color:var(--text-muted,#6b7280);">— ' + keys.length + ' production agent' + (keys.length == 1 ? '' : 's') + ' reporting via the SDK</span></div>'
+      + '<span style="font-weight:500;color:var(--text-muted,#6b7280);">— ' + keys.length + ' production agent' + (keys.length == 1 ? '' : 's') + ' reporting via the SDK' + fleetStr + '</span></div>'
       + inner
       + '<div style="font-size:12px;color:var(--text-muted,#6b7280);margin-top:8px;">Tag any SDK agent with <code style="background:rgba(139,92,246,0.12);padding:1px 5px;border-radius:4px;">clawmetry.track.set_source("name")</code> to attribute its cost here.</div>'
       + '</div>';

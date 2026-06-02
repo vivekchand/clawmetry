@@ -116,6 +116,23 @@ def test_external_call_source_round_trips(fresh_store):
     assert len(tagged) == 1
 
 
+def test_external_call_cost_round_trips(fresh_store):
+    # llm_call events carry cost/tokens/model — the out-loop card's per-source
+    # $ spend depends on these surviving ingest+query.
+    _ls, store = fresh_store
+    ev = _ev("2026-06-02T00:00:05Z", "billing-agent")
+    ev.update({"cost_usd": 0.0123, "input_tokens": 400, "output_tokens": 120,
+               "model": "claude-opus-4-8"})
+    store.ingest_external_call(ev)
+    row = next((r for r in store.query_external_calls(limit=10)
+                if r.get("source") == "billing-agent"), None)
+    assert row is not None
+    assert abs(float(row.get("cost_usd") or 0) - 0.0123) < 1e-9
+    assert int(row.get("input_tokens") or 0) == 400
+    assert int(row.get("output_tokens") or 0) == 120
+    assert row.get("model") == "claude-opus-4-8"
+
+
 def test_external_calls_migration_is_idempotent(fresh_store):
     # Re-running the migration set (as happens on every store open) must not
     # fail on the ALTER ... ADD COLUMN IF NOT EXISTS source.
