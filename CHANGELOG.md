@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: context graph — session decision-lineage traversal, the first view (carries #2463) (2026-06-02)
+- **Why:** the cost-intelligence cluster shipped today is the rich per-session signal a temporal decision graph needs; this is the first materialized projection of it (founder direction).
+- **What:** `query_session_lineage(session_id)` walks the parent->subagent edges (`subagents.parent_session_id` -> `subagent_id`) with a DuckDB `WITH RECURSIVE` CTE and returns every node in the fan-out with depth + cost + outcome — one ask's full delegation tree and the cost each branch incurred downstream, one round-trip. No new tables (edges are JOINs over existing rows). Exposed at `GET /api/session-lineage/<id>` with a root/downstream/total cost rollup; added to the daemon allowlist.
+- **Verified:** 2 new unit tests exercising the real DuckDB recursive CTE (tree depth + downstream cost rollup; root-only/empty); full OSS CI matrix green.
+
+
 ### Release: per-session compaction-count chip — completes the cost-intel cluster (carries #2460) (2026-06-02)
 - **Why:** each auto-compaction silently re-summarises (and re-bills) the context window; a session that compacted many times is thrashing its context — wasted tokens you never see.
 - **What:** counts compaction events from the events already fetched once per family session, stashes `compactionCount` onto the metadata + cloud rows; `/api/sessions/cost-breakdown` surfaces it; the chip renders ♻ compacted N× next to 💰/🧠/⚡/🔀/⚠. This completes the per-session cost-intelligence chip cluster: 💰 total · 🧠 reasoning · ⚡ cache · 🔀 model-fallback · ⚠ tools-failing · ♻ compactions.
