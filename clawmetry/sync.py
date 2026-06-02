@@ -10861,6 +10861,36 @@ def _build_tool_catalog_slice(limit: int = 5000, top: int = 60) -> dict:
     return out
 
 
+def _build_external_calls():
+    """Snapshot slice for the out-loop sources card — source-tagged external
+    API calls only (clawmetry.track.set_source()). Capped + field-trimmed so
+    the cloud lights up the per-source attribution card the same as local,
+    without bloating the snapshot for users who don't use the out-loop SDK.
+    Returns ``[]`` when nothing is tagged (the card self-removes)."""
+    try:
+        from clawmetry import local_store as _ls
+        store = _ls.get_store(read_only=True)
+        rows = store.query_external_calls(limit=2000) or []
+        out = []
+        for c in rows:
+            src = (c or {}).get("source")
+            if not src:
+                continue
+            out.append({
+                "source":      str(src)[:80],
+                "host":        (c.get("host") or "")[:120],
+                "method":      (c.get("method") or "")[:10],
+                "status_code": c.get("status_code"),
+                "latency_ms":  c.get("latency_ms"),
+            })
+            if len(out) >= 500:
+                break
+        return out
+    except Exception as _e_ext:
+        log.debug("snapshot: external_calls slice failed: %s", _e_ext)
+        return []
+
+
 def _build_tool_stats():
     """Build tool usage stats from recent session logs."""
     try:
@@ -11800,6 +11830,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "cronJobs": _build_cron_jobs(paths),
         "channels": _build_channel_data(config),
         "toolStats": _build_tool_stats(),
+        "externalCalls": _build_external_calls(),
         "brainData": _build_brain_data(),
         "gateway": {},
         "runtimeInfo": _build_runtime_info(),
