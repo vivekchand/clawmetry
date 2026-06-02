@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: per-session compaction-count chip — completes the cost-intel cluster (carries #2460) (2026-06-02)
+- **Why:** each auto-compaction silently re-summarises (and re-bills) the context window; a session that compacted many times is thrashing its context — wasted tokens you never see.
+- **What:** counts compaction events from the events already fetched once per family session, stashes `compactionCount` onto the metadata + cloud rows; `/api/sessions/cost-breakdown` surfaces it; the chip renders ♻ compacted N× next to 💰/🧠/⚡/🔀/⚠. This completes the per-session cost-intelligence chip cluster: 💰 total · 🧠 reasoning · ⚡ cache · 🔀 model-fallback · ⚠ tools-failing · ♻ compactions.
+- **Verified:** py_compile + node --check clean; cost-intel unit tests green; full OSS CI matrix green.
+
+
 ### Release: per-session tool failure-rate chip (carries #2456) (2026-06-02)
 - **Why:** a tool that keeps erroring (browser 40%, a flaky MCP) is invisible — the user just sees the agent "thinking" while tokens burn on retries.
 - **What:** `_session_tool_health(events)` counts tool-result events + the share that came back a REAL (non-benign) error (reuses `error_signal`'s benign filter so it's actionable, not alarmist); the family ingest fetches events once (transcript loop reuses them) and stashes `toolErrorPct` onto the session metadata + cloud rows; `/api/sessions/cost-breakdown` surfaces it; the chip renders ⚠ N% tools failing (amber, red >=30%) next to 💰/🧠/⚡/🔀.
