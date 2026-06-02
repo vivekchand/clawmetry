@@ -116,6 +116,16 @@ def test_external_call_source_round_trips(fresh_store):
     assert len(tagged) == 1
 
 
+def test_cost_picks_most_specific_model_match():
+    # First-substring matching let "gpt-4o" swallow "gpt-4o-mini" (16x over) and
+    # "o1" swallow "o1-mini" (5x over). Longest-match must price the specific one.
+    assert abs(I._estimate_cost("gpt-4o-mini", 1_000_000, 0) - 0.15) < 1e-6
+    assert abs(I._estimate_cost("o1-mini", 1_000_000, 0) - 3.0) < 1e-6
+    assert abs(I._estimate_cost("gpt-4o", 1_000_000, 0) - 2.5) < 1e-6
+    # and the more-specific claude haiku key isn't swallowed by the shorter one
+    assert abs(I._estimate_cost("claude-3-5-haiku", 1_000_000, 0) - 0.8) < 1e-6
+
+
 def test_cost_fallback_prices_models_outside_local_table():
     # The interceptor's small _PRICING table predates models like o3 / grok /
     # gemini-2.5; out-loop cost must NOT silently read $0 for them — the
