@@ -8778,6 +8778,15 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 _events = list(adapter.list_events(s.id, limit=2000))
                 _thealth = _session_tool_health(_events)
                 metadata.update(_thealth)
+                # Compaction count: each auto-compaction silently re-summarises
+                # (and re-bills) the context. A session that compacted N times
+                # is thrashing its context window — a glanceable waste signal.
+                _compactions = sum(
+                    1 for e in _events
+                    if "compact" in ((getattr(e, "type", "") or "").lower())
+                )
+                if _compactions:
+                    metadata["compactionCount"] = _compactions
                 # Local upsert (the sessions list reads this).
                 try:
                     store.ingest_session({
@@ -8820,6 +8829,7 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                     "cache_hit_pct": _intel.get("cacheHitPct"),
                     "token_split": _intel.get("tokenSplit"),
                     "tool_error_pct": _thealth.get("toolErrorPct"),
+                    "compaction_count": _compactions or None,
                 })
                 # Events → transcript (rides the existing _build_transcripts path).
                 rows = []

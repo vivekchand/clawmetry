@@ -7862,6 +7862,10 @@ async function loadSessions() {
       var _tec = _tep >= 30 ? '#ef4444' : '#f59e0b';
       html += '<span title="Share of this session\'s tool calls that came back a real (non-benign) error — a failing tool you only ever see as the agent \'thinking\'." style="font-size:11px;color:' + _tec + ';font-weight:600;">⚠ ' + _tep.toFixed(0) + '% tools failing</span>';
     }
+    if (sessCost && sessCost.compaction_count != null && Number(sessCost.compaction_count) > 0) {
+      var _cc = Number(sessCost.compaction_count);
+      html += '<span title="Times this session auto-compacted — each one silently re-summarises (and re-bills) the context window. Frequent compaction = context thrash / wasted tokens." style="font-size:11px;color:#f59e0b;font-weight:600;">♻ compacted ' + _cc + '×</span>';
+    }
     // Issue #1619 Phase 1 — Score pill. Color band matches the overview
     // tile (4+ green, 3-4 yellow, <3 red). Hover shows the judge's reason.
     var evalRow = evalMap[sid];
