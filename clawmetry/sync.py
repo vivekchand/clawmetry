@@ -8756,6 +8756,18 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                         "model": s.model or None,
                     })
                 if rows:
+                    # Per-event USD isn't on disk for family runtimes (the
+                    # adapter derives one accurate cost at the SESSION level).
+                    # Spread that real cost across the session's events in
+                    # proportion to each event's token_count so the event-based
+                    # Cost tab sums to the true session cost instead of $0.
+                    if s.cost_usd is not None:
+                        _tot_tok = sum(r["token_count"] for r in rows)
+                        if _tot_tok > 0:
+                            for r in rows:
+                                r["cost_usd"] = round(s.cost_usd * r["token_count"] / _tot_tok, 8)
+                        else:
+                            rows[-1]["cost_usd"] = s.cost_usd
                     try:
                         store.ingest_many(rows)
                         total_events += len(rows)
