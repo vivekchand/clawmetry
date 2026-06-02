@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: `clawmetry status --live` — in-terminal live status bar (carries #2491) (2026-06-02)
+- **Why:** Pi-parity for the terminal-native crowd — see what your agent is doing + what it's costing without leaving the shell.
+- **What:** a refreshing one-line terminal status (sessions · tokens · cost · running model · live tokens/sec), read from the daemon's local store via the read-only proxy (falls back to a direct read when no daemon). Live TPS is the total-token delta over wall time. `_status_live_line()` is a pure, unit-tested helper.
+- **Verified:** 3 new unit tests (aggregation, TPS from delta, empty-safe); full OSS CI matrix green.
+
+
 ### Release: context graph — error->cause edge (carries #2488) (2026-06-02)
 - **What:** query_session_errors(session_id) + GET /api/session-errors/<id> return a session's failed spans, each with its parent span (the upstream decision one hop away) — the error->cause edge that completes the graph's core edge set (session->tool, parent->subagent, decision->approval/guardrail, cost->decision, error->cause). OTel-only; the per-session tool-failure rate covers the non-OTel case.
 - **Verified:** 1 new unit test (failed spans only, with parent; empty-safe); full OSS CI matrix green.
