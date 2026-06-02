@@ -2610,11 +2610,16 @@ def _derive_waste_summary(sessions: list) -> dict:
     total_cost = sum(float(s.get("cost_usd") or 0.0) for s in sessions)
     reasoning = round(sum(float(s.get("reasoning_cost_usd") or 0.0) for s in sessions), 4)
     low_cache, failing, compacting, mixed, flagged = [], [], [], [], set()
+    reread, reread_usd = [], 0.0
     for s in sessions:
         sid = s.get("session_id")
         chp = s.get("cache_hit_pct")
         if chp is not None and chp < 40 and (s.get("cost_usd") or 0) > 0:
             low_cache.append(sid); flagged.add(sid)
+        # Re-read tax: paid more to rebuild the prompt cache than reuse saved.
+        cwc = s.get("cache_write_cost_usd")
+        if cwc and float(cwc) > 0.005 and float(cwc) > float(s.get("cache_saved_usd") or 0.0):
+            reread.append(sid); reread_usd += float(cwc); flagged.add(sid)
         if (s.get("tool_error_pct") or 0) >= 20:
             failing.append(sid); flagged.add(sid)
         if (s.get("compaction_count") or 0) >= 2:
@@ -2630,6 +2635,8 @@ def _derive_waste_summary(sessions: list) -> dict:
         "reasoning_cost_usd": reasoning,
         "reasoning_pct_of_cost": round(reasoning / total_cost * 100, 1) if total_cost else 0.0,
         "low_cache_sessions": len(low_cache),
+        "reread_tax_sessions": len(reread),
+        "reread_tax_usd": round(reread_usd, 4),
         "tool_failing_sessions": len(failing),
         "compaction_heavy_sessions": len(compacting),
         "model_fallback_sessions": len(mixed),

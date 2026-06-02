@@ -127,3 +127,16 @@ def test_reread_tax_waste_flag():
     healthy = {"cost_usd": 1.0, "cache_hit_pct": 85,
                "cache_write_cost_usd": 0.01, "cache_saved_usd": 0.50}
     assert "reread_tax" not in _derive_session_insight(healthy, [])["waste_flags"]
+
+
+def test_waste_summary_rolls_up_reread_tax():
+    from routes.sessions import _derive_waste_summary
+    sessions = [
+        {"session_id": "a", "cost_usd": 1.0, "cache_write_cost_usd": 0.15,
+         "cache_saved_usd": 0.0027, "cache_hit_pct": 9},   # churn → counted
+        {"session_id": "b", "cost_usd": 2.0, "cache_write_cost_usd": 0.01,
+         "cache_saved_usd": 0.50, "cache_hit_pct": 85},      # healthy → not
+    ]
+    w = _derive_waste_summary(sessions)
+    assert w["reread_tax_sessions"] == 1
+    assert abs(w["reread_tax_usd"] - 0.15) < 1e-9
