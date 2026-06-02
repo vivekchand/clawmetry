@@ -291,7 +291,31 @@ def _build_event(
         event["model"] = model
     if cost is not None:
         event["cost_usd"] = cost
+    src = _get_source()
+    if src:
+        event["source"] = src
     return event
+
+
+# ── Named source (out-loop / production agents) ────────────────────────────────
+# A production agent built on an SDK (OpenAI Agents, LangChain, Vercel AI SDK,
+# E2B, …) is auto-tracked by `import clawmetry.track`. Tagging it with a name
+# makes it a first-class *source* in the dashboard (e.g. "support-agent",
+# "investment-agent") instead of an anonymous script, so you can attribute cost
+# per product. Set via CLAWMETRY_SOURCE=<name> or clawmetry.track.set_source().
+_source: str = ""
+
+
+def set_source(name: str) -> None:
+    """Tag every subsequently-intercepted LLM call with a named source."""
+    global _source
+    _source = (str(name or "").strip())[:120]
+
+
+def _get_source() -> str:
+    if _source:
+        return _source
+    return (os.environ.get("CLAWMETRY_SOURCE", "") or "").strip()[:120]
 
 
 # ── httpx patching ─────────────────────────────────────────────────────────────
