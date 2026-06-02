@@ -7904,6 +7904,11 @@ async function loadSessions() {
       var _dc = Number(sessCost.downstream_cost_usd), _sa = Number(sessCost.subagent_count || 0);
       html += '<span title="The TRUE cost of this ask: it spawned ' + _sa + ' sub-agent(s) that spent this much downstream — billed under their own keys but caused by this session. (Context graph)" style="font-size:11px;color:#60a5fa;font-weight:600;">&#8627; +$' + _dc.toFixed(4) + (_sa ? ' · ' + _sa + ' agents' : '') + '</span>';
     }
+    if (sessCost && Number(sessCost.governance_count) > 0) {
+      var _gn = Number(sessCost.governance_count), _gd = Number(sessCost.governance_denied || 0);
+      var _gc = _gd > 0 ? '#ef4444' : '#22c55e';
+      html += '<span title="Tool calls this session put through governance (NeMo guardrails + the approval queue): ' + _gn + ' gated, ' + _gd + ' denied/blocked. (Context graph)" style="font-size:11px;color:' + _gc + ';font-weight:600;">&#128737; ' + _gn + ' gated' + (_gd ? ' · ' + _gd + ' denied' : '') + '</span>';
+    }
     // Issue #1619 Phase 1 — Score pill. Color band matches the overview
     // tile (4+ green, 3-4 yellow, <3 red). Hover shows the judge's reason.
     var evalRow = evalMap[sid];

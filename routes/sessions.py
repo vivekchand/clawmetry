@@ -3086,6 +3086,32 @@ def _try_local_store_cost_breakdown():
                 row["subagent_count"] = rr.get("child_count") or 0
     except Exception:
         pass
+    # Governance lineage counts per session — tool calls gated by the approval
+    # queue + NeMo guardrails, and how many were denied/blocked. Context graph.
+    try:
+        _DENY = {"deny", "denied", "reject", "rejected", "block", "blocked"}
+        gov: dict = {}
+        for a in (_ls_call("query_approvals", limit=1000) or []):
+            sid = a.get("requestor_session_id")
+            if not sid:
+                continue
+            d = gov.setdefault(sid, {"n": 0, "deny": 0}); d["n"] += 1
+            if str(a.get("decision", "")).lower() in _DENY:
+                d["deny"] += 1
+        for g in (_ls_call("query_guardrail_events", limit=1000) or []):
+            sid = g.get("session_id")
+            if not sid:
+                continue
+            d = gov.setdefault(sid, {"n": 0, "deny": 0}); d["n"] += 1
+            if str(g.get("verdict", "")).lower() in _DENY:
+                d["deny"] += 1
+        for row in result:
+            gv = gov.get(row["session_id"])
+            if gv and gv["n"] > 0:
+                row["governance_count"] = gv["n"]
+                row["governance_denied"] = gv["deny"]
+    except Exception:
+        pass
     result.sort(key=lambda x: x["cost_usd"], reverse=True)
     top10 = result[:10]
     total_cost = sum(r["cost_usd"] for r in result)
