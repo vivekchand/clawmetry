@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Release: live ⚡ tok/s in the Overview hero (carries #2494) (2026-06-02)
+- **What:** the web Overview hero now shows live tokens/sec while the agent is producing — matching `clawmetry status --live`. Computed from the today-token delta between renders (a raw token total is stashed alongside the formatted one). Frontend-only; reaches cloud via the pinned wheel.
+- **Verified:** node --check clean; full OSS CI matrix green.
+
+
 ### Release: `clawmetry status --live` — in-terminal live status bar (carries #2491) (2026-06-02)
 - **Why:** Pi-parity for the terminal-native crowd — see what your agent is doing + what it's costing without leaving the shell.
 - **What:** a refreshing one-line terminal status (sessions · tokens · cost · running model · live tokens/sec), read from the daemon's local store via the read-only proxy (falls back to a direct read when no daemon). Live TPS is the total-token delta over wall time. `_status_live_line()` is a pure, unit-tested helper.
