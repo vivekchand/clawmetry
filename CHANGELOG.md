@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: silent model-fallback flag + cache-% chip for OpenClaw/Claude Code (carries #2454) (2026-06-02)
+- **Why:** a session that silently ran on >1 model (a fallback/downgrade no CLI surfaces) is a cost+quality signal; and the cache-hit % chip from the foundation should also light up for the event-usage runtimes.
+- **What:** `query_cost_split` now returns `model_count` + `secondary_model` per session; `/api/sessions/cost-breakdown` grafts `cache_hit_pct` for OpenClaw/Claude Code (family runtimes get it from the metadata foundation) and sets a `model_mix` flag when >1 model; the session chip renders 🔀 model fallback (amber, models in the tooltip) next to 💰/🧠/⚡.
+- **Verified:** extended `test_local_store` cost-split test (model_count + secondary); py_compile + node --check clean; full OSS CI matrix green.
+
+
 ### Release: cost-intelligence foundation — reasoning-tax $ + cache-hit % per session (carries #2450) (2026-06-02)
 - **Why:** the next "where did my money go" gems (reasoning-tax, cache-efficiency, model-mix) had no queryable data — the per-session token split (input/output/cache/reasoning) was dropped at event ingest and the sessions table never stored it.
 - **What:** `_session_cost_intel(s)` stashes the token split + derives reasoning-tax $ (reasoning billed at the OUTPUT rate via OSS pricing) + cache-hit % onto the session metadata at family ingest (and the cloud session rows); `/api/sessions/cost-breakdown` grafts those onto each row; the session chip renders 🧠 $X reasoning + ⚡ N% cache (color-coded) next to 💰 total, shown only for runtimes whose adapter reports the field (reasoning: codex/qwen/opencode/hermes/nemo; cache: those + claude_code). Also the data layer the context graph needs.
