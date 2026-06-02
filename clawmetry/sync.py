@@ -4644,7 +4644,13 @@ def sync_intercepted_events(config: dict, state: dict, paths: dict) -> int:
                     ev = json.loads(raw)
                 except Exception:
                     continue
-                if ev.get("type") == "external_api_call":
+                _evt = ev.get("type")
+                if _evt in ("external_api_call", "llm_call"):
+                    # llm_call carries cost/tokens/model + provider; normalise
+                    # provider→host so both event types share external_api_calls
+                    # (the out-loop card then shows real per-source $ spend).
+                    if _evt == "llm_call" and not ev.get("host"):
+                        ev["host"] = ev.get("provider") or ""
                     try:
                         store.ingest_external_call(ev, node_id)
                         ingested += 1
@@ -10882,6 +10888,10 @@ def _build_external_calls():
                 "method":      (c.get("method") or "")[:10],
                 "status_code": c.get("status_code"),
                 "latency_ms":  c.get("latency_ms"),
+                "cost_usd":    c.get("cost_usd") or 0,
+                "input_tokens":  c.get("input_tokens") or 0,
+                "output_tokens": c.get("output_tokens") or 0,
+                "model":       (c.get("model") or "")[:60],
             })
             if len(out) >= 500:
                 break
