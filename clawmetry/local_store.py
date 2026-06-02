@@ -5199,6 +5199,32 @@ class LocalStore:
                 "data", "created_at"]
         return _decode_data_blob_rows(self._fetch(sql, params), cols)
 
+    def query_subagent_cost_rollup(self, *, limit: int = 2000) -> list[dict[str, Any]]:
+        """Per-parent sub-agent cost rollup in ONE pass: for each session that
+        spawned sub-agents, the total $ + count its children spent. Lets the
+        session chip show the TRUE cost of an ask (its own spend + the fan-out
+        it caused) without an N-query recursive walk per row. One level deep —
+        the common, glanceable case. Read-only, best-effort -> [].
+        """
+        sql = """
+            SELECT parent_session_id,
+                   ROUND(SUM(COALESCE(cost_usd, 0)), 6) AS child_cost,
+                   COUNT(*) AS child_count
+            FROM subagents
+            WHERE parent_session_id IS NOT NULL AND parent_session_id != ''
+            GROUP BY parent_session_id
+            ORDER BY child_cost DESC
+            LIMIT ?
+        """
+        try:
+            rows = self._fetch(sql, [int(limit)])
+        except Exception:
+            return []
+        return [
+            {"parent_session_id": p, "child_cost_usd": float(c or 0.0), "child_count": int(n or 0)}
+            for (p, c, n) in rows
+        ]
+
     def query_session_lineage(self, session_id: str, *, max_depth: int = 25) -> list[dict[str, Any]]:
         """Context-graph traversal — the decision-lineage tree rooted at a session.
 

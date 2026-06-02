@@ -785,3 +785,14 @@ def test_query_session_lineage_root_only_and_empty(store):
     # An unknown root still returns itself (depth 0), just with empty attrs.
     only = store.query_session_lineage("nope")
     assert len(only) == 1 and only[0]["session_id"] == "nope" and only[0]["depth"] == 0
+
+
+def test_query_subagent_cost_rollup(store):
+    """True-cost chip: one GROUP BY rolls up each parent's sub-agent spend."""
+    store.ingest_subagent({"subagent_id": "c1", "parent_session_id": "root-x", "cost_usd": 0.20})
+    store.ingest_subagent({"subagent_id": "c2", "parent_session_id": "root-x", "cost_usd": 0.05})
+    store.ingest_subagent({"subagent_id": "c3", "parent_session_id": "root-y", "cost_usd": 0.10})
+    roll = {r["parent_session_id"]: r for r in store.query_subagent_cost_rollup()}
+    assert roll["root-x"]["child_cost_usd"] == pytest.approx(0.25, abs=1e-6)
+    assert roll["root-x"]["child_count"] == 2
+    assert roll["root-y"]["child_count"] == 1
