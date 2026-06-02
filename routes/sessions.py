@@ -2753,6 +2753,19 @@ def api_session_insight(session_id):
     except Exception:
         lineage = []
     out = _derive_session_insight(sess, lineage)
+    # Fold in the governance lineage so this is the COMPLETE per-session graph
+    # answer (cost + waste + fan-out + policy) — one call powers the card.
+    try:
+        gov = _session_governance(
+            _ls_call("query_approvals", limit=500) or [],
+            _ls_call("query_guardrail_events", limit=500) or [],
+            session_id,
+        )
+        out["governance"] = {"decision_count": gov["decision_count"], "denied_count": gov["denied_count"]}
+        if gov["denied_count"] > 0:
+            out["waste_flags"].append("policy_denied")
+    except Exception:
+        out["governance"] = {"decision_count": 0, "denied_count": 0}
     out["session_id"] = session_id
     return jsonify(out)
 
