@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: Overview 'Recoverable spend' card — the cost-intel cluster's glanceable payoff (carries #2472) (2026-06-02)
+- **Why:** the per-session chips + the /api/waste-summary roll-up deserve a glanceable home — the one card that answers "where is my agent bill going to waste?"
+- **What:** a "Recoverable spend" card under the Overview hero rendering the fleet waste roll-up (reasoning tax $, low-cache / tool-failing / compaction-heavy / model-fallback session counts, "N of M recent sessions show a waste signal") with a link to the productivity-gains blog post. Hidden entirely when nothing is flagged (honest empty state). Caps the cost-intelligence cluster shipped today (💰🧠⚡🔀⚠♻↳) + the context-graph lineage/insight.
+- **Verified:** node --check clean; full OSS CI matrix green. Frontend-only; reaches a node when its daemon upgrades to this wheel (and the cloud via the pinned wheel).
+
+
 ### Release: fleet 'recoverable spend' waste summary (carries #2469) (2026-06-02)
 - **Why:** the productivity-gains framework (today's blog post) deserves to be a live number, not just prose — aggregate the per-session cost-intel into where the bill is actually going to waste.
 - **What:** `_derive_waste_summary()` + `GET /api/waste-summary` roll up reasoning tax ($ sum), low-cache / tool-failing / compaction-heavy / model-fallback session counts, and the flagged-session total across recent sessions. Deliberately no fabricated single "you saved $X" headline (mirrors the blog's honesty); the operator drills into the flagged sessions via the per-session chips.
