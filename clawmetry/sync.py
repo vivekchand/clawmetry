@@ -12761,6 +12761,21 @@ def run_daemon() -> None:
     except Exception as _e:
         log.warning(f"pro-entitlement watcher failed to start: {_e}")
 
+    # ── Opt-in auto-update worker ────────────────────────────────────────
+    # routes/update_check.py runs a background checker that self-updates ONLY
+    # when the `auto_update` config is on (default OFF → no behaviour change
+    # for anyone who hasn't opted in), via the same vetted pip+restart path as
+    # the manual "Update now". It was started only in the DASHBOARD process —
+    # but a headless / cloud-synced node runs only this daemon, so auto-update
+    # never fired where it's most needed. Start it here too (idempotent: the
+    # module guards against a double-started thread). Never blocks/raises.
+    try:
+        from routes.update_check import start_update_check_thread as _start_uc
+        _start_uc()
+        log.info("update-check thread started (auto-update honours the opt-in flag)")
+    except Exception as _e:
+        log.warning(f"update-check thread failed to start: {_e}")
+
     # ── Per-tier event retention prune (#2262 catalogue) ─────────────────
     # Hourly tick that reads ``Entitlement.event_retention_days()`` and
     # calls ``LocalStore.prune_events_by_age`` so the events table never
