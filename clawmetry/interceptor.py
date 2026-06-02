@@ -155,7 +155,7 @@ def _build_external_event(
         host = urlparse(url).netloc or url.split("/")[2]
     except Exception:
         host = ""
-    return {
+    ev: dict[str, Any] = {
         "type": "external_api_call",
         "ts": datetime.now(timezone.utc).isoformat(),
         "url": url,
@@ -165,6 +165,10 @@ def _build_external_event(
         "latency_ms": round(latency_ms, 1),
         "library": library,
     }
+    src = _get_source()
+    if src:
+        ev["source"] = src
+    return ev
 
 
 def _detect_provider(url: str) -> str:

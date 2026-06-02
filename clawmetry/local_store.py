@@ -904,6 +904,8 @@ _DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_ext_api_calls_ts   ON external_api_calls(ts)",
     "CREATE INDEX IF NOT EXISTS idx_ext_api_calls_host ON external_api_calls(host, ts)",
+    # Named source for out-loop / production agents (clawmetry.track.set_source).
+    "ALTER TABLE external_api_calls ADD COLUMN IF NOT EXISTS source VARCHAR",
 ]
 
 
@@ -8360,8 +8362,8 @@ class LocalStore:
         with self._write_lock:
             self._conn.execute("""
                 INSERT INTO external_api_calls
-                    (id, node_id, ts, host, url, method, status_code, latency_ms, library)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, node_id, ts, host, url, method, status_code, latency_ms, library, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (id) DO NOTHING
             """, [
                 row_id,
@@ -8373,6 +8375,7 @@ class LocalStore:
                 ev.get("status_code"),
                 ev.get("latency_ms"),
                 ev.get("library") or "",
+                ev.get("source") or "",
             ])
 
     def query_external_calls(
@@ -8389,11 +8392,11 @@ class LocalStore:
         session's ``started_at`` and ``updated_at`` are returned (time-window
         attribution — no ABI changes to the interceptor required)."""
         cols = ["id", "node_id", "ts", "host", "url", "method",
-                "status_code", "latency_ms", "library"]
+                "status_code", "latency_ms", "library", "source"]
         if session_id:
             sql = """
                 SELECT e.id, e.node_id, e.ts, e.host, e.url, e.method,
-                       e.status_code, e.latency_ms, e.library
+                       e.status_code, e.latency_ms, e.library, e.source
                 FROM external_api_calls e
                 JOIN sessions s ON (
                     e.ts >= s.started_at
@@ -8417,7 +8420,7 @@ class LocalStore:
             where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
             sql = f"""
                 SELECT id, node_id, ts, host, url, method,
-                       status_code, latency_ms, library
+                       status_code, latency_ms, library, source
                 FROM external_api_calls {where}
                 ORDER BY ts DESC LIMIT ?
             """
