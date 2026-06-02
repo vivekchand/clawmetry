@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: per-session tool failure-rate chip (carries #2456) (2026-06-02)
+- **Why:** a tool that keeps erroring (browser 40%, a flaky MCP) is invisible — the user just sees the agent "thinking" while tokens burn on retries.
+- **What:** `_session_tool_health(events)` counts tool-result events + the share that came back a REAL (non-benign) error (reuses `error_signal`'s benign filter so it's actionable, not alarmist); the family ingest fetches events once (transcript loop reuses them) and stashes `toolErrorPct` onto the session metadata + cloud rows; `/api/sessions/cost-breakdown` surfaces it; the chip renders ⚠ N% tools failing (amber, red >=30%) next to 💰/🧠/⚡/🔀.
+- **Verified:** 3 new unit tests (real errors counted, empty when no tools, clean=0%); py_compile + node --check clean; full OSS CI matrix green.
+
+
 ### Release: silent model-fallback flag + cache-% chip for OpenClaw/Claude Code (carries #2454) (2026-06-02)
 - **Why:** a session that silently ran on >1 model (a fallback/downgrade no CLI surfaces) is a cost+quality signal; and the cache-hit % chip from the foundation should also light up for the event-usage runtimes.
 - **What:** `query_cost_split` now returns `model_count` + `secondary_model` per session; `/api/sessions/cost-breakdown` grafts `cache_hit_pct` for OpenClaw/Claude Code (family runtimes get it from the metadata foundation) and sets a `model_mix` flag when >1 model; the session chip renders 🔀 model fallback (amber, models in the tooltip) next to 💰/🧠/⚡.
