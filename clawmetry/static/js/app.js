@@ -2790,6 +2790,7 @@ function _renderWasteSummary() {
     var rows = [];
     if (Number(w.reasoning_cost_usd) > 0) rows.push(['🧠', '$' + Number(w.reasoning_cost_usd).toFixed(2) + ' on reasoning', '(' + (w.reasoning_pct_of_cost || 0) + '% of spend — billed, no deliverable)']);
     if (Number(w.low_cache_sessions) > 0) rows.push(['⚡', w.low_cache_sessions + ' session' + (w.low_cache_sessions == 1 ? '' : 's'), 'with low cache hit (context re-sent at full price)']);
+    if (Number(w.reread_tax_usd) > 0) rows.push(['⏱', '$' + Number(w.reread_tax_usd).toFixed(2) + ' re-read tax', 'rebuilding the prompt cache after its 5-min TTL expired (' + w.reread_tax_sessions + ' session' + (w.reread_tax_sessions == 1 ? '' : 's') + ')']);
     if (Number(w.tool_failing_sessions) > 0) rows.push(['⚠', w.tool_failing_sessions + ' session' + (w.tool_failing_sessions == 1 ? '' : 's'), 'with a tool failing (tokens burned on retries)']);
     if (Number(w.compaction_heavy_sessions) > 0) rows.push(['♻', w.compaction_heavy_sessions + ' session' + (w.compaction_heavy_sessions == 1 ? '' : 's'), 'thrashing context (re-summarised repeatedly)']);
     if (Number(w.model_fallback_sessions) > 0) rows.push(['🔀', w.model_fallback_sessions + ' session' + (w.model_fallback_sessions == 1 ? '' : 's'), 'on a silent model fallback']);
@@ -2808,6 +2809,8 @@ function _renderWasteSummary() {
       _opps.push([Number(w.tool_failing_sessions) * 1.5, 'Fix the failing tool in ' + w.tool_failing_sessions + ' session' + (w.tool_failing_sessions == 1 ? '' : 's') + ' — you\'re paying tokens on the retries.']);
     if (Number(w.low_cache_sessions) > 0)
       _opps.push([Number(w.low_cache_sessions), w.low_cache_sessions + ' session' + (w.low_cache_sessions == 1 ? '' : 's') + ' re-send context at full price — keep the prompt stable to warm the cache.']);
+    if (Number(w.reread_tax_usd) > 0)
+      _opps.push([Number(w.reread_tax_usd) * 2, '$' + Number(w.reread_tax_usd).toFixed(2) + ' went to rebuilding the prompt cache after its 5-min TTL expired — keep sessions warm (a heartbeat or batched turns) so context is read at ~0.1x instead of re-written at full price.']);
     if (Number(w.compaction_heavy_sessions) > 0)
       _opps.push([Number(w.compaction_heavy_sessions) * 0.8, w.compaction_heavy_sessions + ' session' + (w.compaction_heavy_sessions == 1 ? '' : 's') + ' thrash context with repeated compaction — work in a smaller window.']);
     _opps.sort(function(a, b){ return b[0] - a[0]; });
