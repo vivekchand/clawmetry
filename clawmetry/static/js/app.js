@@ -2826,6 +2826,58 @@ function _renderWasteSummary() {
   }).catch(function(){});
 }
 
+function _renderOutLoopSources() {
+  // Overview "out-loop sources" card — surfaces named sources reported by
+  // clawmetry.track.set_source()/CLAWMETRY_SOURCE from production agents built
+  // on any SDK (OpenAI Agents, LangChain, Vercel AI SDK, E2B, …). Self-removing
+  // when no source is tagged, so it is invisible for users who don't use it.
+  var page = document.getElementById('page-overview');
+  if (!page) return;
+  fetch('/api/local/external-calls?limit=2000').then(function(r){ return r.json(); }).then(function(d){
+    var ex = document.getElementById('cm-outloop-sources');
+    var rows = (d && Array.isArray(d.rows)) ? d.rows : (Array.isArray(d) ? d : []);
+    var named = rows.filter(function(c){ return c && c.source; });
+    if (!named.length) { if (ex) ex.remove(); return; }
+    var by = {};
+    named.forEach(function(c){
+      var k = String(c.source);
+      var g = by[k] || (by[k] = { calls: 0, errors: 0, lat: 0, hosts: {} });
+      g.calls += 1;
+      if (Number(c.status_code) >= 400) g.errors += 1;
+      g.lat += Number(c.latency_ms) || 0;
+      if (c.host) g.hosts[c.host] = 1;
+    });
+    var keys = Object.keys(by).sort(function(a, b){ return by[b].calls - by[a].calls; });
+    var inner = keys.map(function(k){
+      var g = by[k];
+      var hosts = Object.keys(g.hosts);
+      var avg = g.calls ? Math.round(g.lat / g.calls) : 0;
+      var errPct = g.calls ? Math.round((g.errors / g.calls) * 100) : 0;
+      var meta = g.calls + ' call' + (g.calls == 1 ? '' : 's')
+        + ' · ' + hosts.length + ' provider' + (hosts.length == 1 ? '' : 's')
+        + ' · ~' + avg + 'ms'
+        + (g.errors ? ' · ' + errPct + '% errors' : '');
+      return '<div style="display:flex;gap:8px;align-items:baseline;font-size:13px;color:var(--text-secondary);padding:4px 0;">'
+        + '<span>🔌</span><strong style="color:var(--text-primary);">' + escHtml(k) + '</strong>'
+        + '<span style="color:var(--text-muted);">' + escHtml(meta) + '</span></div>';
+    }).join('');
+    var html = '<div id="cm-outloop-sources" style="background:var(--bg-secondary,#161b22);border:1px solid var(--border-primary,#30363d);border-left:3px solid #8b5cf6;border-radius:10px;padding:14px 18px;margin:0 0 16px;">'
+      + '<div style="font-size:13px;font-weight:700;color:var(--text-primary,#e6edf3);margin-bottom:8px;">🔌 Out-loop sources '
+      + '<span style="font-weight:500;color:var(--text-muted,#6b7280);">— ' + keys.length + ' production agent' + (keys.length == 1 ? '' : 's') + ' reporting via the SDK</span></div>'
+      + inner
+      + '<div style="font-size:12px;color:var(--text-muted,#6b7280);margin-top:8px;">Tag any SDK agent with <code style="background:rgba(139,92,246,0.12);padding:1px 5px;border-radius:4px;">clawmetry.track.set_source("name")</code> to attribute its cost here.</div>'
+      + '</div>';
+    var anchor = document.getElementById('cm-waste-summary');
+    if (ex) { ex.outerHTML = html; }
+    else if (anchor && anchor.parentNode) { anchor.insertAdjacentHTML('afterend', html); }
+    else {
+      var heroEl = document.getElementById('overview-hero');
+      if (heroEl && heroEl.parentNode) { heroEl.insertAdjacentHTML('afterend', html); }
+      else { page.insertAdjacentHTML('afterbegin', html); }
+    }
+  }).catch(function(){});
+}
+
 function _renderOverviewHero() {
   var hero = document.getElementById('overview-hero');
   if (!hero) return;
@@ -3480,6 +3532,7 @@ async function loadActivityStream() {
           }
           try { if (typeof _renderOverviewHero === 'function') _renderOverviewHero(); } catch (_e_hero) {}
           try { if (typeof _renderWasteSummary === 'function') _renderWasteSummary(); } catch (_e2) {}
+          try { if (typeof _renderOutLoopSources === 'function') _renderOutLoopSources(); } catch (_e3) {}
         } catch (_e) {}
 
         recentMessages.forEach(function(msg) {
@@ -16147,6 +16200,7 @@ async function loadOverviewTasks() {
     window._cmAgentBusy = running.length > 0;
     try { if (typeof _renderOverviewHero === 'function') _renderOverviewHero(); } catch (_e_hero) {}
           try { if (typeof _renderWasteSummary === 'function') _renderWasteSummary(); } catch (_e) {}
+          try { if (typeof _renderOutLoopSources === 'function') _renderOutLoopSources(); } catch (_e4) {}
     // "Recently Completed/Failed" must mean RECENT — bound by how long ago the
     // task FINISHED, not its run duration. The old `runtimeMs < 2h` check used
     // duration, so a 5-minute task that finished 6 days ago still passed and
