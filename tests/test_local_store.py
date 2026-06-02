@@ -757,3 +757,31 @@ def test_query_channel_summary_groups_across_providers(store):
     sl = by_prov["slack"]
     assert sl["msg_in"] == 1
     assert sl["distinct_channels"] == 1
+
+
+def test_query_session_lineage_recursive_tree(store):
+    """Context-graph first view: the recursive CTE walks the parent->subagent
+    tree and returns every node with depth + cost (downstream cost rollup)."""
+    store.ingest_session({
+        "agent_type": "openclaw", "session_id": "lin-root", "node_id": "n",
+        "cost_usd": 0.10, "total_tokens": 1000, "outcome": "success",
+    })
+    store.ingest_subagent({"subagent_id": "lin-a", "parent_session_id": "lin-root",
+                           "task": "child A", "status": "ended", "cost_usd": 0.20})
+    store.ingest_subagent({"subagent_id": "lin-b", "parent_session_id": "lin-a",
+                           "task": "grandchild B", "status": "ended", "cost_usd": 0.05})
+    nodes = store.query_session_lineage("lin-root")
+    by_id = {n["session_id"]: n for n in nodes}
+    assert set(by_id) == {"lin-root", "lin-a", "lin-b"}
+    assert by_id["lin-root"]["depth"] == 0
+    assert by_id["lin-a"]["depth"] == 1 and by_id["lin-a"]["parent_id"] == "lin-root"
+    assert by_id["lin-b"]["depth"] == 2 and by_id["lin-b"]["parent_id"] == "lin-a"
+    downstream = sum(n["cost_usd"] for n in nodes if n["depth"] > 0)
+    assert downstream == pytest.approx(0.25, abs=1e-6)
+
+
+def test_query_session_lineage_root_only_and_empty(store):
+    assert store.query_session_lineage("") == []
+    # An unknown root still returns itself (depth 0), just with empty attrs.
+    only = store.query_session_lineage("nope")
+    assert len(only) == 1 and only[0]["session_id"] == "nope" and only[0]["depth"] == 0
