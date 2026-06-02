@@ -5199,6 +5199,39 @@ class LocalStore:
                 "data", "created_at"]
         return _decode_data_blob_rows(self._fetch(sql, params), cols)
 
+    def query_session_errors(self, session_id: str, *, limit: int = 200) -> list[dict[str, Any]]:
+        """Context graph — the error->cause edge for a session: the spans that
+        ended in an error (OTel status ERROR or a failed tool), each with its
+        parent span so the upstream decision that led to the failure is one hop
+        away. Read-only, best-effort -> []. (Spans come from OTel-instrumented
+        runs; the per-session tool-failure rate covers the non-OTel case.)
+        """
+        if not session_id:
+            return []
+        sql = """
+            SELECT span_id, parent_span_id, tool_name, status, status_code, status_message
+            FROM spans
+            WHERE session_id = ?
+              AND (UPPER(COALESCE(status_code, '')) = 'ERROR'
+                   OR LOWER(COALESCE(status, '')) IN ('error', 'failed', 'failure'))
+            ORDER BY start_ts DESC
+            LIMIT ?
+        """
+        try:
+            rows = self._fetch(sql, [str(session_id), int(limit)])
+        except Exception:
+            return []
+        out: list[dict[str, Any]] = []
+        for sp, parent, tool, status, scode, smsg in rows:
+            out.append({
+                "span_id": sp,
+                "parent_span_id": parent,
+                "tool_name": tool or "",
+                "status": status or scode or "error",
+                "message": (smsg or "")[:300],
+            })
+        return out
+
     def query_subagent_cost_rollup(self, *, limit: int = 2000) -> list[dict[str, Any]]:
         """Per-parent sub-agent cost rollup in ONE pass: for each session that
         spawned sub-agents, the total $ + count its children spent. Lets the
