@@ -9865,6 +9865,53 @@ def _selfevolve_refresh_async(ctx):
     threading.Thread(target=_run, daemon=True, name="selfevolve-refresh").start()
 
 
+def _build_governance():
+    """NemoClaw governance slice for the cloud governance tab.
+
+    Mirrors the shape the OSS frontend renders (app.js: ``installed``,
+    ``sandboxes[]``, ``policy{}``, ``config{}``, ``drift``, ``network_policies[]``,
+    ``presets[]``). The cloud ``cm-cloud-nemoclaw`` interceptor serves this slice
+    to paid users; without it they fall back to ``{installed: false}``.
+
+    Honest by construction: we only emit fields the daemon can actually observe
+    via ``_detect_nemoclaw()`` (sandbox state + inference + the two security
+    flags). ``policy`` / ``network_policies`` / ``presets`` are left empty rather
+    than fabricated — the OSS renderer degrades gracefully on missing fields.
+    Best-effort: returns ``{"installed": False}`` when NemoClaw is absent or on
+    any error (the UI shows a clean "not available" for that).
+    """
+    try:
+        nemo = _detect_nemoclaw()
+        if not nemo.get("detected"):
+            return {"installed": False}
+        sandboxes = []
+        if nemo.get("sandbox_name") or nemo.get("sandbox_status"):
+            sandboxes.append({
+                "name": nemo.get("sandbox_name") or "(default)",
+                "status": nemo.get("sandbox_status", "unknown"),
+                "type": nemo.get("sandbox_type", "nemoclaw"),
+                "inference_provider": nemo.get("inference_provider", ""),
+                "inference_model": nemo.get("inference_model", ""),
+            })
+        config = {}
+        if nemo.get("version"):
+            config["version"] = nemo["version"]
+        config["sandbox_enabled"] = bool(nemo.get("security_sandbox_enabled"))
+        config["network_policy"] = bool(nemo.get("security_network_policy"))
+        return {
+            "installed": True,
+            "sandboxes": sandboxes,
+            "policy": {},
+            "network_policies": [],
+            "presets": [],
+            "drift": None,
+            "config": config,
+        }
+    except Exception as _e:
+        log.debug("governance snapshot build failed: %s", _e)
+        return {"installed": False}
+
+
 def _build_selfevolve(workspace=None):
     """Self-Evolve findings for the cloud Self-Evolve tab — computed by asking
     OpenClaw itself (see module note above). Best-effort -> {}."""
@@ -11651,6 +11698,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
             ]
         ),
         "selfEvolve": _build_selfevolve(paths.get("workspace")),
+        "governance": _build_governance(),
         "dailyUsage": _du,  # #2142: computed once above, shared with `spending`
         "reliability": _build_reliability(),
         "memoryAccess": _build_memory_access(),
