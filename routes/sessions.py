@@ -2846,6 +2846,28 @@ def _try_local_store_cost_breakdown():
             "day": day,
             "start_ts": start_ts,
         })
+    # Merge per-session cost-intelligence (reasoning-tax $, cache-hit %) that the
+    # daemon stashed on the sessions-table metadata. query_sessions (above)
+    # aggregates events and can't see the per-session token split, so we read it
+    # from the sessions table here and graft it onto the matching rows.
+    try:
+        meta_rows = _ls_call("query_sessions_table", limit=1000) or []
+        intel = {}
+        for mr in meta_rows:
+            md = mr.get("metadata") or {}
+            if isinstance(md, dict) and (md.get("reasoningCostUsd") is not None or md.get("cacheHitPct") is not None):
+                intel[mr.get("session_id") or ""] = md
+        if intel:
+            for row in result:
+                md = intel.get(row["session_id"])
+                if not md:
+                    continue
+                if md.get("reasoningCostUsd") is not None:
+                    row["reasoning_cost_usd"] = md["reasoningCostUsd"]
+                if md.get("cacheHitPct") is not None:
+                    row["cache_hit_pct"] = md["cacheHitPct"]
+    except Exception:
+        pass
     result.sort(key=lambda x: x["cost_usd"], reverse=True)
     top10 = result[:10]
     total_cost = sum(r["cost_usd"] for r in result)

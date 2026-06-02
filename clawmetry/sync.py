@@ -8612,6 +8612,47 @@ def _epoch_to_iso(epoch) -> str | None:
         return None
 
 
+def _session_cost_intel(s) -> dict:
+    """Per-session cost-intelligence foundation: the token split + the derived
+    reasoning-tax $ and cache-hit %, computed from the adapter Session.
+
+    The split (input/output/cache/reasoning) is dropped at event ingest (family
+    events carry only a total) and the ``sessions`` table doesn't store it — so
+    this is the single place every adapter's authoritative split is available.
+    We stash it on the session metadata here so the cost-intelligence chip and
+    the context graph can read it. Reasoning bills at the OUTPUT rate (there is
+    no separate reasoning rate). Best-effort: a field is OMITTED (honest
+    "unknown") when its source data is absent. Never raises.
+    """
+    out: dict = {}
+    try:
+        in_t = int(getattr(s, "input_tokens", 0) or 0)
+        out_t = int(getattr(s, "output_tokens", 0) or 0)
+        cr = int(getattr(s, "cache_read_tokens", 0) or 0)
+        cw = int(getattr(s, "cache_write_tokens", 0) or 0)
+        rt = int(getattr(s, "reasoning_tokens", 0) or 0)
+        model = getattr(s, "model", "") or ""
+        out["tokenSplit"] = {
+            "input": in_t, "output": out_t,
+            "cacheRead": cr, "cacheWrite": cw, "reasoning": rt,
+        }
+        # Cache-hit %: share of read context served from cache (cheaper).
+        if (in_t + cr) > 0:
+            out["cacheHitPct"] = round(cr / (in_t + cr) * 100, 1)
+        # Reasoning-tax $: reasoning tokens priced at the model's output rate.
+        if model and rt > 0:
+            try:
+                from clawmetry.providers_pricing import estimate_event_cost_usd
+                _rc = estimate_event_cost_usd(model, output_tokens=rt)
+                if _rc is not None:
+                    out["reasoningCostUsd"] = round(float(_rc), 6)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return out
+
+
 def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
     """Ingest PicoClaw + NanoClaw sessions into DuckDB (and the cloud) so they
     appear in the sessions list + transcripts the same way OpenClaw does.
@@ -8682,6 +8723,11 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                     metadata.update(
                         {k: v for k, v in s.extra.items() if k not in metadata}
                     )
+                # Cost-intelligence foundation: stash the per-session token split
+                # + derived reasoning-tax $ / cache-hit % onto the metadata (the
+                # only place the adapter's authoritative split survives).
+                _intel = _session_cost_intel(s)
+                metadata.update(_intel)
                 # Local upsert (the sessions list reads this).
                 try:
                     store.ingest_session({
@@ -8718,6 +8764,11 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                     "message_count": int(s.message_count or 0),
                     "runtime": runtime,
                     "model": s.model or "",
+                    # Cost-intelligence (foundation): carried to the cloud so the
+                    # chip renders from the snapshot, not just the local store.
+                    "reasoning_cost_usd": _intel.get("reasoningCostUsd"),
+                    "cache_hit_pct": _intel.get("cacheHitPct"),
+                    "token_split": _intel.get("tokenSplit"),
                 })
                 # Events → transcript (rides the existing _build_transcripts path).
                 rows = []
