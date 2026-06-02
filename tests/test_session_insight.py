@@ -56,3 +56,27 @@ def test_waste_summary_aggregates_recoverable_spend():
 def test_waste_summary_empty_is_safe():
     w = _derive_waste_summary([])
     assert w["total_cost_usd"] == 0.0 and w["flagged_session_count"] == 0
+
+
+from routes.sessions import _session_governance
+
+
+def test_session_governance_joins_approvals_and_guardrails():
+    approvals = [
+        {"requestor_session_id": "s1", "action": "bash", "decision": "approve", "status": "resolved"},
+        {"requestor_session_id": "s1", "action": "write", "decision": "deny", "decision_reason": "outside scope", "status": "resolved"},
+        {"requestor_session_id": "s2", "action": "bash", "decision": "approve"},
+    ]
+    guardrails = [
+        {"session_id": "s1", "action": "curl", "rule_name": "egress", "verdict": "block"},
+        {"session_id": "s1", "action": "read", "rule_name": "fs", "verdict": "allow"},
+        {"session_id": "s2", "action": "x", "verdict": "allow"},
+    ]
+    g = _session_governance(approvals, guardrails, "s1")
+    assert len(g["approvals"]) == 2 and len(g["guardrails"]) == 2
+    assert g["decision_count"] == 4
+    assert g["denied_count"] == 2          # 1 deny + 1 block
+
+
+def test_session_governance_empty_is_safe():
+    assert _session_governance([], [], "x")["decision_count"] == 0
