@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: named source for out-loop / production agents (carries #2497) (2026-06-02)
+- **Why:** `import clawmetry.track` already auto-tracks any Python agent's LLM calls (it patches httpx/requests, so OpenAI Agents SDK / LangChain / Vercel AI SDK / E2B all flow through), but they showed up as anonymous scripts. The first step toward out-loop SDK products as a first-class source class (the biggest TAM gap).
+- **What:** `clawmetry.track.set_source("my-agent")` + a `CLAWMETRY_SOURCE` env var tag every intercepted LLM call with a name, so a production agent becomes a first-class source you can attribute cost to per product. Each `llm_call` event now carries a `source` field.
+- **Verified:** 4 new unit tests (set_source, env fallback, default, bounded); full OSS CI matrix green.
+
+
 ### Release: live ⚡ tok/s in the Overview hero (carries #2494) (2026-06-02)
 - **What:** the web Overview hero now shows live tokens/sec while the agent is producing — matching `clawmetry status --live`. Computed from the today-token delta between renders (a raw token total is stashed alongside the formatted one). Frontend-only; reaches cloud via the pinned wheel.
 - **Verified:** node --check clean; full OSS CI matrix green.
