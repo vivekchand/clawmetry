@@ -31,3 +31,28 @@ def test_clean_session_has_no_flags():
 def test_empty_is_safe():
     ins = _derive_session_insight({}, [])
     assert ins["true_cost_usd"] == 0.0 and ins["waste_flags"] == []
+
+
+from routes.sessions import _derive_waste_summary
+
+
+def test_waste_summary_aggregates_recoverable_spend():
+    sessions = [
+        {"session_id": "a", "cost_usd": 1.00, "reasoning_cost_usd": 0.40, "cache_hit_pct": 11.0,
+         "tool_error_pct": 40.0, "compaction_count": 3, "model_mix": True},
+        {"session_id": "b", "cost_usd": 0.50, "cache_hit_pct": 85.0, "tool_error_pct": 0, "compaction_count": 0},
+        {"session_id": "c", "cost_usd": 0.30, "cache_hit_pct": 20.0},
+    ]
+    w = _derive_waste_summary(sessions)
+    assert w["total_cost_usd"] == 1.80
+    assert w["reasoning_cost_usd"] == 0.40
+    assert w["low_cache_sessions"] == 2          # a + c
+    assert w["tool_failing_sessions"] == 1       # a
+    assert w["compaction_heavy_sessions"] == 1   # a
+    assert w["model_fallback_sessions"] == 1     # a
+    assert w["flagged_session_count"] == 2       # a + c (b is clean)
+
+
+def test_waste_summary_empty_is_safe():
+    w = _derive_waste_summary([])
+    assert w["total_cost_usd"] == 0.0 and w["flagged_session_count"] == 0
