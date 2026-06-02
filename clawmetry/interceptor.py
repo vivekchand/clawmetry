@@ -116,7 +116,18 @@ def _estimate_cost(
     best_key = None
     best_prices = None
     for key, prices in _PRICING.items():
-        if key in model_lower and (best_key is None or len(key) > len(best_key)):
+        idx = model_lower.find(key)
+        if idx == -1:
+            continue
+        # Reject a match immediately followed by a digit or "." — that's a
+        # different version (e.g. "gpt-4" must NOT price "gpt-4.1"/"gpt-4.5";
+        # let those fall through to the canonical table instead of classic
+        # gpt-4's $30/$60). "-"/letter suffixes (gpt-4-turbo, claude-opus-4-8)
+        # are still valid matches.
+        after = model_lower[idx + len(key): idx + len(key) + 1]
+        if after.isdigit() or after == ".":
+            continue
+        if best_key is None or len(key) > len(best_key):
             best_key, best_prices = key, prices
     if best_prices is not None:
         cost = (

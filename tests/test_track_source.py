@@ -126,6 +126,15 @@ def test_cost_picks_most_specific_model_match():
     assert abs(I._estimate_cost("claude-3-5-haiku", 1_000_000, 0) - 0.8) < 1e-6
 
 
+def test_cost_version_boundary_no_false_match():
+    # "gpt-4" must NOT price "gpt-4.1"/"gpt-4.5" (different versions) as classic
+    # gpt-4 ($30/$60); they fall through to the canonical table instead.
+    assert abs(I._estimate_cost("gpt-4.1", 1_000_000, 0) - 2.5) < 1e-6   # openai baseline, not 30
+    assert abs(I._estimate_cost("gpt-4", 1_000_000, 0) - 30.0) < 1e-6    # classic still 30
+    assert abs(I._estimate_cost("gpt-4-turbo", 1_000_000, 0) - 10.0) < 1e-6
+    assert abs(I._estimate_cost("claude-opus-4-8", 1_000_000, 0) - 15.0) < 1e-6
+
+
 def test_cost_fallback_prices_models_outside_local_table():
     # The interceptor's small _PRICING table predates models like o3 / grok /
     # gemini-2.5; out-loop cost must NOT silently read $0 for them — the
