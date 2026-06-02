@@ -4496,6 +4496,13 @@ function renderBrainStream(events) {
             _altContainerId = 'toolalt-' + ((te.eventId || (te.time || '') + (te.source || '')) + '').replace(/[^a-z0-9-]/gi, '').slice(0, 24);
             turnTimeline += '<button onclick="event.stopPropagation();toggleToolAlternatives(this,\'' + escHtml(_altContainerId) + '\')" data-ta=\'' + escHtml(JSON.stringify(te.tool_alternatives || null)) + '\' style="flex-shrink:0;padding:1px 7px;border-radius:10px;border:1px solid #a78bfa;background:transparent;color:#a78bfa;font-size:10px;cursor:pointer;white-space:nowrap;" title="What other tools did the model consider before picking this one?">&#9879; Alternatives</button>';
           }
+          // Issue #1414: "Why did this happen?" — LLM-narrated explanation for AGENT turns.
+          var _whyContainerId = null;
+          if (te.type === 'AGENT' && te.eventId) {
+            var _whySid = te.sessionId || '';
+            _whyContainerId = 'why-' + te.eventId.replace(/[^a-z0-9-]/gi, '').slice(0, 24);
+            turnTimeline += '<button onclick="event.stopPropagation();loadBrainWhy(\'' + escHtml(_whySid) + '\',\'' + escHtml(te.eventId) + '\',\'' + escHtml(_whyContainerId) + '\')" style="flex-shrink:0;padding:1px 7px;border-radius:10px;border:1px solid #f43f5e;background:transparent;color:#fb7185;font-size:10px;cursor:pointer;white-space:nowrap;" title="Why did this happen? (AI narration)">&#128269; Why?</button>';
+          }
           turnTimeline += '</div>';
           if (_rcContainerId) {
             turnTimeline += '<div id="' + escHtml(_rcContainerId) + '" style="margin:2px 0 4px 56px;"></div>';
@@ -4508,6 +4515,9 @@ function renderBrainStream(events) {
           }
           if (_altContainerId) {
             turnTimeline += '<div id="' + escHtml(_altContainerId) + '" class="tool-alternatives-host" style="margin:2px 0 4px 56px;"></div>';
+          }
+          if (_whyContainerId) {
+            turnTimeline += '<div id="' + escHtml(_whyContainerId) + '" class="brain-why-host" style="margin:2px 0 4px 56px;"></div>';
           }
         });
         if (currentSubagent) turnTimeline += '</div>'; // close last sub-agent group
@@ -4676,6 +4686,39 @@ function loadReasoningChain(sessionId, containerId) {
     })
     .catch(function(err) {
       container.innerHTML = '<span style="color:#ef4444;font-size:10px;">' + t("app.error_loading_reasoning_chain", null, "Error loading reasoning chain.") + '</span>';
+    });
+}
+
+// Issue #1414: "Why did this happen?" — fetch LLM narration for one AGENT turn.
+function loadBrainWhy(sessionId, eventId, containerId) {
+  var container = document.getElementById(containerId);
+  if (!container) return;
+  // Toggle: second click clears the panel.
+  if (container.dataset.loaded === '1') {
+    container.innerHTML = '';
+    container.dataset.loaded = '0';
+    return;
+  }
+  container.innerHTML = '<span style="color:var(--text-muted);font-size:10px;">Asking AI…</span>';
+  fetch('/api/brain/why/' + encodeURIComponent(sessionId) + '/' + encodeURIComponent(eventId))
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      container.dataset.loaded = '1';
+      var narration = data.narration || '(no narration)';
+      var anomaly = data.anomaly || false;
+      var html = '<div style="padding:6px 10px;background:rgba(244,63,94,0.08);border:1px solid rgba(244,63,94,0.2);border-radius:6px;font-size:11px;line-height:1.5;">';
+      if (anomaly) {
+        html += '<div style="color:#f43f5e;font-weight:700;margin-bottom:4px;">⚠ Anomaly detected</div>';
+      }
+      html += '<div style="color:var(--text-secondary);">🔍 ' + escHtml(narration) + '</div>';
+      if (data.model && data.model !== 'none') {
+        html += '<div style="color:var(--text-faint);font-size:9px;margin-top:4px;">via ' + escHtml(data.model) + '</div>';
+      }
+      html += '</div>';
+      container.innerHTML = html;
+    })
+    .catch(function() {
+      container.innerHTML = '<span style="color:#ef4444;font-size:10px;">Error loading explanation.</span>';
     });
 }
 
