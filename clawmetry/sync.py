@@ -12341,6 +12341,31 @@ def run_daemon() -> None:
         config["node_id"] = socket.gethostname() or platform.node() or "unknown"
         save_config(config)
         log.info(f"Auto-set node_id:  → {config['node_id']!r}")
+    # Auto-provision clawmetry-pro for an ENTITLED account (Trial/Pro/Enterprise)
+    # on every daemon start — so an already-connected node picks up the paid
+    # runtime adapters (Claude Code, Codex, Cursor, …) when its plan changes
+    # (e.g. a trial starts) WITHOUT re-running `clawmetry connect`. Previously
+    # provisioning ran only at connect time, so a node that linked while free
+    # never gained the adapters after upgrading. Idempotent (skips when the
+    # wheel is already current) + never-raises + installs nothing for free
+    # accounts. Adapters import lazily per sync cycle, so a fresh install takes
+    # effect this run; re-run plugin discovery so pro entry-points register too.
+    try:
+        _ak = config.get("api_key", "")
+        if _ak:
+            from clawmetry.license import auto_provision_pro as _auto_pro
+            _pro_ok, _pro_msg = _auto_pro(_ak, config.get("node_id"))
+            if _pro_ok:
+                log.info("clawmetry-pro present (entitled account) — all runtimes enabled")
+                try:
+                    from clawmetry.extensions import load_plugins as _ext_reload
+                    _ext_reload()
+                except Exception:
+                    pass
+            elif _pro_msg:
+                log.info("clawmetry-pro: %s", _pro_msg)
+    except Exception as _pe:
+        log.debug("pro auto-provision (daemon) skipped: %s", _pe)
     paths = detect_paths()
     enc = "🔒 E2E encrypted" if config.get("encryption_key") else "⚠️  unencrypted"
     try:
