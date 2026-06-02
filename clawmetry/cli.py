@@ -1517,8 +1517,64 @@ def _cmd_uninstall() -> None:
     print()
 
 
+def _status_live_line(rows, prev, now):
+    """Build the one-line live status from session rows. ``prev`` is the last
+    ``(total_tokens, time)`` sample (or None); ``now`` is the current time.
+    Returns ``(line, (total_tokens, now))``. Pure so it's unit-testable — the
+    refresh loop is the only impure part. Live tokens/sec is the total-token
+    delta over wall time (so it's ~0 when idle, and climbs while an agent works).
+    """
+    rows = rows or []
+    tot_tok = sum(int(r.get("total_tokens") or 0) for r in rows)
+    tot_cost = sum(float(r.get("cost_usd") or 0) for r in rows)
+    cur, best = {}, ""
+    for r in rows:
+        k = r.get("last_active_at") or r.get("updated_at") or r.get("started_at") or ""
+        if k >= best:
+            best, cur = k, r
+    _md = cur.get("metadata") if isinstance(cur.get("metadata"), dict) else {}
+    model = cur.get("model") or _md.get("model") or "—"
+    tps = 0.0
+    if prev is not None and now > prev[1]:
+        tps = max(0.0, (tot_tok - prev[0]) / (now - prev[1]))
+    line = f"\U0001F99E {len(rows)} sessions · {tot_tok:,} tokens · ${tot_cost:,.4f} · {model} · {tps:,.0f} tok/s"
+    return line, (tot_tok, now)
+
+
+def _status_live() -> None:
+    """clawmetry status --live — a refreshing one-line terminal status bar
+    (sessions · tokens · cost · model · live tokens/sec), read from the running
+    daemon's local store via the read-only proxy. Ctrl-C to exit."""
+    import sys as _sys
+    import time as _t
+    from clawmetry.local_store import get_store
+    try:
+        store = get_store(read_only=True)
+    except Exception as exc:
+        print(f"  Cannot open the local store (is the sync daemon running?): {exc}")
+        return
+    print("ClawMetry live  ·  Ctrl-C to exit\n")
+    prev = None
+    try:
+        while True:
+            try:
+                rows = store.query_sessions_table(limit=300) or []
+            except Exception:
+                rows = []
+            line, prev = _status_live_line(rows, prev, _t.time())
+            _sys.stdout.write("\r\033[2K" + line)
+            _sys.stdout.flush()
+            _t.sleep(2)
+    except KeyboardInterrupt:
+        _sys.stdout.write("\n")
+        _sys.stdout.flush()
+
+
 def _cmd_status(args) -> None:
     """clawmetry status — show local + cloud sync status."""
+    if getattr(args, "live", False):
+        _status_live()
+        return
     import platform
     from clawmetry.sync import CONFIG_FILE, STATE_FILE, LOG_FILE
 
@@ -2901,6 +2957,7 @@ def main() -> None:
     # status
     p_status = sub.add_parser("status", help="Show local + cloud sync status")
     p_status.add_argument("--show-key", action="store_true", help="Reveal secret key")
+    p_status.add_argument("--live", action="store_true", help="Live one-line status bar (sessions · tokens · cost · model · tok/s); Ctrl-C to exit")
 
     # proxy
     p_proxy = sub.add_parser(
