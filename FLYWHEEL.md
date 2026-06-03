@@ -91,6 +91,14 @@ When the global runtime switcher is set to a runtime, **every view must show ONL
 - **Two-renderer mirror.** If the same data has two renderers (e.g. a list and a chart), BOTH must apply the runtime filter or the chart fills while the list empties. CI guard: `tests/test_runtime_filter_no_leak.py` (server-side no-leak) + assert both render functions reference the filter.
 - **Verify per runtime, not just one.** Picking one runtime and eyeballing it is not enough — a filter that hard-codes the first runtime passes that check. For each runtime in `/api/v1/nodes/<id>/runtimes`, hit the v1 endpoints with `runtime=<id>` and assert the response scopes (counts match the runtimes list; `claude_code` ≠ `picoclaw`; an absent runtime returns zero, not the node total). The helper `scripts/verify_runtime_filtering.py` does this sweep — run it before claiming a runtime-aware view works, and wire it into the per-runtime E2E matrix (see [`feedback_workflows_all_runtimes_e2e`]).
 
+## 1d. Don't let an LLM analyze a fact the code declares — extract it, then judge
+
+When a decision depends on a fact the codebase **declares** (a `Capability` enum, a config constant, a route-policy entry, a DB schema, a pinned version, the pricing table), **EXTRACT it deterministically** — never ask an LLM (or a workflow agent) to "analyse" it from prose. LLMs hallucinate facts. Burned 2026-06-03: a `/workflows` agent called NemoClaw a "NeMo toolkit" when it is **sandboxed OpenClaw** (runs the OpenClaw adapter); the derived per-runtime tab config inherited the error and reached `main` before the founder caught it.
+
+- **Derive from the contract.** The per-runtime sidebar tabs DERIVE from each adapter's declared `Capability` enum (`_CM_RT_CAPS` ← `grep Capability. <adapter>`), so a new runtime/capability flows automatically and nothing can drift it. Prefer "derive from the declared source" over "hand-maintain a list."
+- **LLM-as-judge is for JUDGMENT, not facts.** When the question is genuinely judgmental (not extractable), the pattern is: extract the ground-truth facts → the LLM proposes → an **independent judge verifies the proposal against those facts and rejects on contradiction** (e.g. "agent says NemoClaw lacks CRONS, but it runs the OpenClaw adapter which declares `CRONS` → contradiction → reject"). A workflow that fans out analysis MUST add this verify/judge phase; never let an agent's prose be the source of truth for an extractable fact.
+- **Guard with an eval.** Add a CI test that re-extracts the fact and asserts the derived artifact matches (`tests/test_runtime_tab_capability_parity.py`), so correctness is mechanical, not "trust me."
+
 ## 2. Make the change
 
 - New HTTP endpoints go in `routes/<feature>.py` on that feature's Blueprint, not in `dashboard.py`. Shared helpers reach back via late `import dashboard as _d`.
