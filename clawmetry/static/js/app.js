@@ -7648,48 +7648,70 @@ var _CM_RT_NODEWIDE = {
   alerts: 1, policy: 1, nemoclaw: 1, notifications: 1, dives: 1,
   'version-impact': 1, clusters: 1, logs: 1, actions: 1
 };
-// Per-runtime sidebar tab visibility — HIDE the tabs a runtime can't populate,
-// so each runtime gets the leanest sensible sidebar (founder 2026-06-03: "have
-// minimal tabs for each runtime that make sense"). Derived from a per-runtime
-// adapter-capability analysis (which fields each adapter emits: tool_call /
-// reasoning / cron / memory / skill / cache-tokens), corrected from the raw
-// workflow output (which over-hid models/cost/brain for some). Values = data-tab
-// names to HIDE. A tab NOT listed is shown. Unknown runtime / 'all' => show
-// everything (never silently drop a tab on an unmapped runtime). overview /
-// models / cost / context / alerts / notifications / security stay everywhere
-// (universal: every runtime has tokens+cost+model; alerts/notifications/security
-// are node/account-level).
-var _CM_RT_TAB_VISIBILITY = {
-  // OpenClaw = reference (full); NeMo tab + context-economics (no cache fields) hidden.
-  openclaw:    ['nemoclaw', 'context-economics'],
-  // NemoClaw = light NeMo-toolkit wrapper, NOT full OpenClaw: no gateway/crons/memory/skills/policy.
-  nemoclaw:    ['flow','tracing','context-economics','approvals','dives','crons','memory','policy','skills','selfevolve'],
-  claude_code: ['flow','approvals','crons','memory','policy','skills','selfevolve','nemoclaw'],
-  codex:       ['flow','approvals','crons','memory','policy','skills','selfevolve','nemoclaw'],
-  cursor:      ['flow','approvals','context-economics','memory','policy','skills','selfevolve','nemoclaw'], // keeps crons (cursor has a cron signal)
-  aider:       ['flow','brain','tracing','turn-anatomy','context-economics','approvals','dives','crons','memory','policy','skills','selfevolve','nemoclaw'], // light: no tool stream
-  goose:       ['flow','approvals','context-economics','crons','memory','policy','skills','selfevolve','nemoclaw'],
-  opencode:    ['flow','approvals','crons','memory','policy','skills','selfevolve','nemoclaw'],
-  qwen_code:   ['flow','approvals','crons','memory','policy','skills','selfevolve','nemoclaw'],
-  hermes:      ['flow','approvals','policy','selfevolve','nemoclaw'], // keeps crons + memory + skills (Hermes adapter has them)
-  picoclaw:    ['flow','approvals','crons','memory','policy','skills','selfevolve','nemoclaw'],
-  nanoclaw:    ['flow','brain','tracing','turn-anatomy','context-economics','approvals','dives','memory','policy','skills','selfevolve','nemoclaw'] // light; keeps crons (has cron)
+// Per-runtime sidebar tab visibility, DERIVED from each adapter's DECLARED
+// Capability enum — the authoritative contract, not an LLM "analysis" (founder
+// 2026-06-03: a workflow agent hallucinated NemoClaw as a "NeMo toolkit" when
+// it is sandboxed OpenClaw; deriving from the declared capabilities makes the
+// config hallucination-proof and self-maintaining). Source of truth:
+//   - pro adapters: clawmetry_pro/adapters/<rt>.py `capabilities()` return.
+//   - openclaw: clawmetry/adapters/openclaw.py. nemoclaw runs the OpenClaw
+//     adapter (sandboxed), so it shares OpenClaw's capabilities.
+// To verify/regenerate: grep `Capability.` in each adapter.
+var _CM_RT_CAPS = {
+  openclaw:    ['SESSIONS','EVENTS','COST','SUBAGENTS','CRONS','SKILLS','MEMORY','BRAIN','LOGS','GATEWAY_RPC','CHANNELS'],
+  nemoclaw:    ['SESSIONS','EVENTS','COST','SUBAGENTS','CRONS','SKILLS','MEMORY','BRAIN','LOGS','GATEWAY_RPC','CHANNELS'], // sandboxed OpenClaw
+  claude_code: ['SESSIONS','EVENTS','COST'],
+  codex:       ['SESSIONS','EVENTS','COST'],
+  aider:       ['SESSIONS','EVENTS','COST'],
+  goose:       ['SESSIONS','EVENTS','COST'],
+  opencode:    ['SESSIONS','EVENTS','COST'],
+  qwen_code:   ['SESSIONS','EVENTS','COST'],
+  hermes:      ['SESSIONS','EVENTS','COST','SUBAGENTS'],
+  cursor:      ['SESSIONS','EVENTS'],   // no COST
+  picoclaw:    ['SESSIONS','EVENTS'],   // no COST
+  nanoclaw:    ['SESSIONS','EVENTS']    // no COST
 };
-// Every togglable sidebar tab — so switching runtimes RE-SHOWS tabs a prior
-// runtime hid. overview is never togglable (always visible).
+// Capability -> the sidebar tabs it enables. A tab shows iff the runtime
+// declares (at least) one capability that enables it.
+var _CM_CAP_TABS = {
+  SESSIONS:    ['overview','dives'],
+  EVENTS:      ['brain','models','context','tracing','turn-anatomy'],
+  COST:        ['cost','context-economics'],
+  SUBAGENTS:   ['subagents'],
+  CRONS:       ['crons'],
+  SKILLS:      ['skills'],
+  MEMORY:      ['memory'],
+  GATEWAY_RPC: ['approvals','policy','selfevolve'],
+  CHANNELS:    ['flow']
+};
+// Node/account-level tabs — not capability-gated, shown for every runtime.
+var _CM_NODE_TABS = ['alerts','notifications','security'];
+// Every togglable sidebar tab (so switching runtimes RE-SHOWS what a prior one
+// hid). overview is never togglable.
 var _CM_RT_ALL_TABS = ['flow','brain','models','context','tracing','turn-anatomy',
   'context-economics','approvals','alerts','cost','dives','crons','memory',
-  'notifications','security','policy','skills','selfevolve','nemoclaw'];
+  'notifications','security','policy','skills','selfevolve','subagents','nemoclaw'];
+// Tabs shown for a runtime = node tabs + every tab enabled by its declared caps
+// (+ the NeMo tab for the nemoclaw runtime only).
+function _cmShownTabsForRuntime(rt) {
+  var show = {};
+  _CM_NODE_TABS.forEach(function (t) { show[t] = 1; });
+  (_CM_RT_CAPS[rt] || []).forEach(function (cap) {
+    (_CM_CAP_TABS[cap] || []).forEach(function (t) { show[t] = 1; });
+  });
+  if (rt === 'nemoclaw') show['nemoclaw'] = 1;
+  return show;
+}
 function _cmApplyRuntimeTabVisibility() {
   var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
-  var hide = (rt && rt !== 'all') ? (_CM_RT_TAB_VISIBILITY[rt] || []) : [];
-  var hideSet = {}; hide.forEach(function (t) { hideSet[t] = 1; });
+  // 'all' or an unknown/unmapped runtime => show everything (never silently drop).
+  var showAll = !rt || rt === 'all' || !_CM_RT_CAPS[rt];
+  var shown = showAll ? null : _cmShownTabsForRuntime(rt);
   _CM_RT_ALL_TABS.forEach(function (tab) {
-    var show = !hideSet[tab];
+    var show = showAll || !!shown[tab];
     Array.prototype.forEach.call(document.querySelectorAll('.left-nav-item[data-tab="' + tab + '"], .nav-tab[data-tab="' + tab + '"]'), function (el) {
       el.style.display = show ? '' : 'none';
     });
-    // On a now-hidden tab? fall back to Overview.
     if (!show && _cmCurrentTab === tab && typeof switchTab === 'function') {
       try { switchTab('overview'); } catch (e) {}
     }
