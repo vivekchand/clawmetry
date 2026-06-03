@@ -11074,7 +11074,20 @@ def _build_tool_catalog_slice(limit: int = 5000, top: int = 60) -> dict:
         if rid is not None:
             res_idx[str(rid)] = {"ts": _ms(e.get("ts")), "error": _err(e)}
 
+    def _accum(store, name, dur, err, detail):
+        a = store.setdefault(name, {"calls": 0, "durs": [], "errs": 0, "recent": []})
+        a["calls"] += 1
+        if dur is not None:
+            a["durs"].append(dur)
+        if err:
+            a["errs"] += 1
+        a["recent"].append(detail)
+
     agg: dict = {}
+    # Per-runtime aggregation so the Tool-catalog tab can scope to the selected
+    # runtime (founder 2026-06-03: opencode/codex showed Claude Code's tools).
+    # runtime -> name -> counts; the cloud interceptor picks byRuntime[<rt>].
+    agg_rt: dict = {}
     for e in rows:
         if not _is_call(e):
             continue
@@ -11096,23 +11109,20 @@ def _build_tool_catalog_slice(limit: int = 5000, top: int = 60) -> dict:
                 if m["ts"] is not None and start is not None:
                     dur = max(0, m["ts"] - start)
                 break
-        a = agg.setdefault(name, {"calls": 0, "durs": [], "errs": 0, "recent": []})
-        a["calls"] += 1
-        if dur is not None:
-            a["durs"].append(dur)
-        if err:
-            a["errs"] += 1
         # Per-call detail for the cloud drill-down (#tool-catalog calls). The
         # OSS /api/tool-catalog/<name>/calls reads DuckDB live; the cloud
         # container has none, so the cm-cloud-tool-catalog interceptor reads
         # toolCatalog.calls[name] from the snapshot instead. Mirror its field
         # shape: {ts_ms, duration_ms, status, session_id}.
-        a["recent"].append({
+        detail = {
             "ts_ms": start,
             "duration_ms": dur,
             "status": "error" if err else "ok",
             "session_id": (e.get("session_id") or None),
-        })
+        }
+        _accum(agg, name, dur, err, detail)
+        _rt = _runtime_of_session(e.get("session_id") or "")
+        _accum(agg_rt.setdefault(_rt, {}), name, dur, err, detail)
 
     def _pct(vals, p):
         if not vals:
@@ -11137,24 +11147,39 @@ def _build_tool_catalog_slice(limit: int = 5000, top: int = 60) -> dict:
             return ("builtin", "")
         return ("plugin", "")
 
-    tools = []
-    for name, a in agg.items():
-        prov, provider = _classify(name)
-        durs = sorted(a["durs"])
-        calls = a["calls"]
-        tools.append({
-            "name": name,
-            "provenance": prov,
-            "provider": provider or None,
-            "calls": calls,
-            "p50_ms": _pct(durs, 50),
-            "p95_ms": _pct(durs, 95),
-            "error_rate": round(a["errs"] / calls, 4) if calls else 0.0,
-            "errors": a["errs"],
-        })
-        out["groups"][prov] = out["groups"].get(prov, 0) + 1
-    tools.sort(key=lambda t: (-t["calls"], -(t["p95_ms"] or 0), t["name"]))
-    out["tools"] = tools[:int(top)]
+    def _tools_from_agg(a_dict, n):
+        groups = {"builtin": 0, "mcp": 0, "plugin": 0}
+        tl = []
+        for name, a in a_dict.items():
+            prov, provider = _classify(name)
+            durs = sorted(a["durs"])
+            calls = a["calls"]
+            tl.append({
+                "name": name,
+                "provenance": prov,
+                "provider": provider or None,
+                "calls": calls,
+                "p50_ms": _pct(durs, 50),
+                "p95_ms": _pct(durs, 95),
+                "error_rate": round(a["errs"] / calls, 4) if calls else 0.0,
+                "errors": a["errs"],
+            })
+            groups[prov] = groups.get(prov, 0) + 1
+        tl.sort(key=lambda t: (-t["calls"], -(t["p95_ms"] or 0), t["name"]))
+        return tl[:int(n)], groups
+
+    out["tools"], out["groups"] = _tools_from_agg(agg, top)
+    # Per-runtime catalogs for the runtime filter. Only runtimes that actually
+    # invoked a tool appear; the cloud interceptor falls back to the aggregate
+    # for the all-runtimes view. Tiny for a single-runtime user.
+    out["byRuntime"] = {}
+    for _rt, _a in agg_rt.items():
+        _tl, _gr = _tools_from_agg(_a, top)
+        out["byRuntime"][_rt] = {
+            "tools": _tl,
+            "groups": _gr,
+            "totals": {"tool_count": len(_tl), "total_calls": sum(t["calls"] for t in _tl)},
+        }
 
     # Per-tool recent calls for the cloud drill-down — only for the tools we
     # actually ship (top N), newest first, capped per tool so a hot tool can't

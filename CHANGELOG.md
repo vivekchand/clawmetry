@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Release: Tool catalog filters per-runtime (snapshot byRuntime slice) (2026-06-03)
+- **Why:** selecting opencode/codex on the node page showed Claude Code's tools (Bash/Read/Edit/chrome-devtools) — the all-runtimes aggregate (founder report). The Tool-catalog snapshot slice was a single aggregate.
+- **What:** `_build_tool_catalog_slice` now also emits `byRuntime` (runtime -> {tools, groups, totals}), derived from each tool_call event's session_id prefix. The cloud interceptor serves the selected runtime's catalog (empty for a runtime that never invoked a tool). Verified on a real node: claude_code 26 tools / 1425 calls, opencode/codex absent (correctly empty). Removed tool-catalog from `_CM_RT_AGGREGATE` so its 'not yet filtered' banner no longer shows.
+- **Guard:** `tests/test_tool_catalog_per_runtime.py` (per-runtime split + sum reconciles to the aggregate).
+
 ### Release: Fleet shows only runtimes with REAL sessions (drop 0-session phantoms) (2026-06-03)
 - **Why:** the Fleet rendered a "Cursor — detected here / appears shortly / Syncing…" card that never resolved. The lite detector flags a runtime from directory/config presence alone — the Cursor *IDE* being installed makes `~/Library/Application Support/Cursor` exist even when the Cursor *agent* was never used — so the daemon reported it with `sessions=0` and the cloud showed a stuck phantom (founder report).
 - **What:** `_detect_runtimes_for_heartbeat()` now drops any runtime with 0 sessions. "Installed & running" for observability means there is real data; a runtime with zero sessions isn't advertised until it produces one. Verified on the founder's machine: Cursor (0) dropped; Claude Code/Codex/Qwen/Goose/opencode/Hermes/PicoClaw (all >0, all real) kept.
