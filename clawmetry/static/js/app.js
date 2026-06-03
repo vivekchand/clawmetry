@@ -7648,6 +7648,31 @@ var _CM_RT_NODEWIDE = {
   alerts: 1, policy: 1, nemoclaw: 1, notifications: 1, dives: 1,
   'version-impact': 1, clusters: 1, logs: 1, actions: 1
 };
+// Tabs ONLY meaningful for the OpenClaw runtime family (OpenClaw + NemoClaw).
+// Memory reads ~/.openclaw/workspace/*.md; Skills/Self-Evolve/Crons/Tool-Policy/
+// NeMo are OpenClaw-gateway concepts. For a non-OpenClaw runtime (Claude Code,
+// Codex, …) they show OpenClaw's data, not that runtime's — pure cognitive load.
+// HIDE them when such a runtime is selected, instead of an "it's node-wide"
+// apology banner (founder 2026-06-03: "why have tabs not relevant to a runtime").
+var _CM_RT_OPENCLAW_ONLY = {
+  memory: 1, skills: 1, selfevolve: 1, crons: 1, policy: 1, nemoclaw: 1
+};
+function _cmIsOpenClawFamily(rt) {
+  return !rt || rt === 'all' || rt === 'openclaw' || rt === 'nemoclaw';
+}
+function _cmApplyRuntimeTabVisibility() {
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var show = _cmIsOpenClawFamily(rt);
+  Object.keys(_CM_RT_OPENCLAW_ONLY).forEach(function (tab) {
+    var sel = '[data-tab="' + tab + '"]';
+    Array.prototype.forEach.call(document.querySelectorAll('.left-nav-item' + sel + ', .nav-tab' + sel), function (el) {
+      el.style.display = show ? '' : 'none';
+    });
+    if (!show && _cmCurrentTab === tab && typeof switchTab === 'function') {
+      try { switchTab('overview'); } catch (e) {}
+    }
+  });
+}
 // Insert/update/remove the runtime-scope note at the top of a tab's page.
 // Called from switchTab. Only shows when a specific (non-'all') runtime is
 // selected AND the tab can't honour it — so the user is never left wondering
@@ -7835,6 +7860,9 @@ function _cmPopulateGlobalRuntime(counts) {
   sel.innerHTML = html;
   sel.value = active;
   wrap.style.display = 'flex';
+  // Apply OpenClaw-only tab visibility on load (the node view opens with a
+  // pinned ?runtime=, so irrelevant tabs are hidden from first paint).
+  try { _cmApplyRuntimeTabVisibility(); } catch (e) {}
 }
 
 function _cmOnGlobalRuntimeChange(sel) {
@@ -7848,6 +7876,9 @@ function _cmOnGlobalRuntimeChange(sel) {
     return;
   }
   _cmSetRuntimeFilter(val);
+  // Hide OpenClaw-only tabs (Memory/Skills/Self-Evolve/Crons/Tool-Policy/NeMo)
+  // for non-OpenClaw runtimes — they'd only show OpenClaw's data.
+  try { _cmApplyRuntimeTabVisibility(); } catch (e) {}
   // Swap the Flow + Overview diagram to the selected runtime's topology.
   try { if (typeof _applyRuntimeFlowDiagram === 'function') _applyRuntimeFlowDiagram(val); } catch (e) {}
   // Reload the current tab so any runtime-aware view re-filters in place.
