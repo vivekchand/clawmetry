@@ -5348,6 +5348,84 @@ def _build_node_meta() -> dict:
     return meta
 
 
+_LITE_RT_LABELS = {
+    "claude_code": "Claude Code", "codex": "Codex", "cursor": "Cursor",
+    "aider": "Aider", "goose": "Goose", "opencode": "opencode",
+    "qwen_code": "Qwen Code", "hermes": "Hermes", "picoclaw": "PicoClaw",
+    "nanoclaw": "NanoClaw",
+}
+
+
+def _detect_runtimes_lite() -> list:
+    """FREE, dependency-free detection of which paid runtimes have data on this
+    machine — just enough (data path + a cheap session count) to TELL the user
+    "you're running Claude Code / Codex / …" and drive the upgrade. The actual
+    ingestion stays in clawmetry-pro; this only powers the Fleet "detected,
+    upgrade to observe" teaser so free accounts (without the pro adapters) still
+    get the nudge. Best-effort, never raises."""
+    import glob
+    home = os.path.expanduser("~")
+    out: dict = {}
+
+    def _put(rid, count):
+        n = int(count or 0)
+        if n > out.get(rid, 0):
+            out[rid] = n
+    try:
+        _put("claude_code", len(glob.glob(os.path.join(home, ".claude", "projects", "*", "*.jsonl"))))
+    except Exception:
+        pass
+    try:
+        _put("codex", len(glob.glob(os.path.join(home, ".codex", "sessions", "**", "*.jsonl"), recursive=True)))
+    except Exception:
+        pass
+    try:
+        _put("qwen_code", len(glob.glob(os.path.join(home, ".qwen", "**", "*.jsonl"), recursive=True)))
+    except Exception:
+        pass
+    # Presence-only (non-JSONL formats — count unknown) → report with 0 sessions.
+    _present = {
+        "cursor": [os.path.join(home, "Library", "Application Support", "Cursor", "User", "globalStorage", "state.vscdb")],
+        "goose": [os.path.join(home, ".local", "share", "goose")],
+        "opencode": [os.path.join(home, ".local", "share", "opencode")],
+        "hermes": [os.path.join(home, ".hermes", "state.db")],
+        "picoclaw": [os.path.join(home, ".picoclaw")],
+        "nanoclaw": [os.path.join(home, ".nanoclaw")],
+    }
+    for rid, paths in _present.items():
+        try:
+            if rid not in out and any(os.path.exists(p) for p in paths):
+                out[rid] = 0
+        except Exception:
+            pass
+    return [{"id": rid, "label": _LITE_RT_LABELS.get(rid, rid), "sessions": n} for rid, n in out.items()]
+
+
+def _detect_runtimes_for_heartbeat() -> list:
+    """Detected runtimes to report to the cloud Fleet. Merges the authoritative
+    clawmetry-pro adapter counts (when installed) with the free lite detector,
+    preferring the higher session count per runtime. Never raises."""
+    merged: dict = {}
+    try:
+        for r in (_detect_runtimes_lite() or []):
+            merged[r["id"]] = {"id": r["id"], "label": r["label"], "sessions": int(r.get("sessions") or 0)}
+    except Exception:
+        pass
+    try:
+        for r in (_detect_family_runtimes() or []):
+            rid = (r.get("name") or "").lower()
+            if not rid:
+                continue
+            n = int(r.get("sessionCount") or 0)
+            label = r.get("displayName") or _LITE_RT_LABELS.get(rid, rid)
+            cur = merged.get(rid)
+            if cur is None or n > cur["sessions"]:
+                merged[rid] = {"id": rid, "label": label, "sessions": n}
+    except Exception:
+        pass
+    return list(merged.values())
+
+
 def send_heartbeat(config: dict) -> bool:
     """Send heartbeat to cloud. Returns True on success, False on failure.
 
@@ -5374,6 +5452,11 @@ def send_heartbeat(config: dict) -> bool:
         "e2e": bool(config.get("encryption_key")),
         "ollama": _detect_ollama_for_heartbeat(),
         "node_meta": _build_node_meta(),
+        # Runtimes DETECTED on this machine (Claude Code, Codex, …) — reported
+        # even when not synced, so the Fleet can show "you're running these,
+        # upgrade to observe them". Free lite-detection so the nudge reaches
+        # accounts without the clawmetry-pro adapters too.
+        "detected_runtimes": _detect_runtimes_for_heartbeat(),
     }
     # Agent-install self-report (cloud bug fix 2026-05-18). Cloud Run pods
     # can't stat the user's home directory, so the daemon tells cloud what
