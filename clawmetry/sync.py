@@ -11195,6 +11195,40 @@ def _build_tool_catalog_slice(limit: int = 5000, top: int = 60) -> dict:
     return out
 
 
+def _context_econ_by_runtime(compactions, overflow_sessions, base_summary):
+    """Group context-economics compactions + overflow sessions per runtime
+    (session_id prefix) for the Context-economics runtime filter. Returns
+    ``{runtime: {compactions, overflow_sessions, summary}}``; a runtime that
+    never compacted is absent (the cloud interceptor then serves an empty
+    slice). ``peak_pct``/``utilization_points`` inherit the node-wide value —
+    utilization points are not per-session, so they aren't split."""
+    by: dict = {}
+    for c in (compactions or []):
+        rt = _runtime_of_session((c or {}).get("session_id") or "")
+        by.setdefault(rt, []).append(c)
+    base = base_summary or {}
+    out: dict = {}
+    for rt, comps in by.items():
+        ovn = sum(1 for c in comps if c.get("trigger") == "overflow")
+        rt_ovf = [s for s in (overflow_sessions or [])
+                  if _runtime_of_session(
+                      (s.get("session_id") if isinstance(s, dict) else s) or "") == rt]
+        out[rt] = {
+            "compactions": comps,
+            "overflow_sessions": rt_ovf,
+            "summary": {
+                "compaction_count": len(comps),
+                "overflow_count": ovn,
+                "proactive_count": len(comps) - ovn,
+                "total_reclaimed": sum(int(c.get("reclaimed") or 0) for c in comps),
+                "peak_pct": base.get("peak_pct", 0),
+                "overflow_sessions": len(rt_ovf),
+                "utilization_points": base.get("utilization_points", 0),
+            },
+        }
+    return out
+
+
 def _build_external_calls():
     """Snapshot slice for the out-loop sources card — source-tagged external
     API calls only (clawmetry.track.set_source()). Capped + field-trimmed so
@@ -12131,6 +12165,15 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
                 "overflow_sessions":  len(_ce.get("overflow_sessions") or []),
                 "utilization_points": len(_ce_util),
             }
+            # Per-runtime context-economics for the runtime filter (founder
+            # 2026-06-03: opencode/codex showed Claude Code's compactions). The
+            # cloud interceptor picks byRuntime[<rt>]; empty for a runtime that
+            # never compacted.
+            context_economics_slice["byRuntime"] = _context_econ_by_runtime(
+                context_economics_slice["compactions"],
+                context_economics_slice["overflow_sessions"],
+                context_economics_slice["summary"],
+            )
     except Exception as _e_ce:
         log.debug("snapshot: context_economics slice failed: %s", _e_ce)
 

@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Release: Context economics filters per-runtime (snapshot byRuntime slice) (2026-06-03)
+- **Why:** like Tool catalog, the Context-economics tab showed the all-runtimes aggregate on every runtime tab (founder report). Compactions from every runtime were lumped together.
+- **What:** the contextEconomics snapshot slice now carries `byRuntime` (runtime -> {compactions, overflow_sessions, summary}) via `_context_econ_by_runtime`, grouped by each compaction's session_id prefix. The cloud interceptor serves the selected runtime's view (empty for a runtime that never compacted). Removed context-economics from `_CM_RT_AGGREGATE` so its 'not yet filtered' banner no longer shows.
+- **Guard:** `tests/test_context_econ_per_runtime.py` (per-runtime split + reconciliation).
+
 ### Release: Tool catalog filters per-runtime (snapshot byRuntime slice) (2026-06-03)
 - **Why:** selecting opencode/codex on the node page showed Claude Code's tools (Bash/Read/Edit/chrome-devtools) — the all-runtimes aggregate (founder report). The Tool-catalog snapshot slice was a single aggregate.
 - **What:** `_build_tool_catalog_slice` now also emits `byRuntime` (runtime -> {tools, groups, totals}), derived from each tool_call event's session_id prefix. The cloud interceptor serves the selected runtime's catalog (empty for a runtime that never invoked a tool). Verified on a real node: claude_code 26 tools / 1425 calls, opencode/codex absent (correctly empty). Removed tool-catalog from `_CM_RT_AGGREGATE` so its 'not yet filtered' banner no longer shows.
