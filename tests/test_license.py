@@ -353,3 +353,97 @@ def test_pip_install_prefers_pip_when_available(prov, tmp_path, monkeypatch):
     ok, detail = L._pip_install_wheel(str(tmp_path / "any.whl"))
     assert ok and detail == "installed"
     assert called["unzip"] is False  # never fell back
+
+
+# ── check_license (dry-run verify) ─────────────────────────────────────────────
+
+
+def test_check_license_active(lic):
+    tok = lic.L._encode_token(_payload("pro", nodes=7), lic.priv)
+    info = lic.L.check_license(tok)
+    assert info["valid"] is True
+    assert info["status"] == "active"
+    assert info["tier"] == "pro"
+    assert info["nodes"] == 7
+    assert info["sub"] == "acct_test"
+    assert info["days_left"] > 300
+    assert isinstance(info["iat"], int)
+
+
+def test_check_license_enterprise_tier_preserved(lic):
+    tok = lic.L._encode_token(_payload("enterprise", nodes=20), lic.priv)
+    info = lic.L.check_license(tok)
+    assert info["valid"] is True
+    assert info["tier"] == "enterprise"
+    assert info["nodes"] == 20
+
+
+def test_check_license_expired(lic):
+    tok = lic.L._encode_token(_payload("pro", exp_delta=-86400), lic.priv)  # 1 day ago
+    info = lic.L.check_license(tok)
+    assert info["valid"] is False
+    assert info["status"] == "expired"
+    # Metadata is still surfaced so the operator can see WHICH key expired:
+    assert info["tier"] == "pro"
+    assert info["days_left"] < 0
+
+
+def test_check_license_invalid_signature(lic):
+    other_priv, _ = _keypair()
+    tok = lic.L._encode_token(_payload(), other_priv)
+    info = lic.L.check_license(tok)
+    assert info["valid"] is False
+    assert info["status"] == "invalid"
+
+
+@pytest.mark.parametrize("bad", ["", None, "   ", "garbage", "CLAW1.only-two", "NOPE.x.y"])
+def test_check_license_malformed(lic, bad):
+    info = lic.L.check_license(bad)
+    assert info["valid"] is False
+    assert info["status"] in ("missing", "invalid")
+
+
+def test_check_license_no_side_effects(lic):
+    """check_license must NEVER write the license file or trigger the wheel
+    install path, even on a fully valid key."""
+    import os
+
+    tok = lic.L._encode_token(_payload("pro", nodes=5), lic.priv)
+    assert not os.path.isfile(lic.L.LICENSE_PATH)
+    info = lic.L.check_license(tok)
+    assert info["valid"] is True
+    # No file should be written:
+    assert not os.path.isfile(lic.L.LICENSE_PATH)
+
+
+def test_check_license_never_raises(lic, monkeypatch):
+    """Even if the underlying verifier blows up, check_license returns the
+    error shape rather than propagating."""
+    def _boom(_tok):
+        raise RuntimeError("simulated parser failure")
+
+    monkeypatch.setattr(lic.L, "verify_token", _boom)
+    info = lic.L.check_license("CLAW1.anything.here")
+    assert info == {"valid": False, "status": "error"}
+
+
+def test_check_license_does_not_change_entitlement_cache(lic, monkeypatch, tmp_path):
+    """A dry-run check on a valid Pro key must not flip the resolved
+    entitlement — only activate() does that."""
+    import clawmetry.entitlements as e
+
+    monkeypatch.setattr(e, "_LICENSE_PATH", lic.L.LICENSE_PATH)
+    # Pin the cloud-plan cache to an empty tmp path so a sibling test that
+    # reloaded entitlements with a patched HOME cannot leak a cached plan in.
+    monkeypatch.setattr(e, "_CLOUD_PLAN_CACHE", str(tmp_path / "cloud_plan.json"))
+    monkeypatch.setenv("CLAWMETRY_ENFORCE", "1")
+    e.invalidate()
+    before = e.get_entitlement(force=True)
+    assert before.tier == e.TIER_OSS  # no license on disk
+
+    tok = lic.L._encode_token(_payload("pro", nodes=11), lic.priv)
+    info = lic.L.check_license(tok)
+    assert info["valid"] is True
+
+    after = e.get_entitlement(force=True)
+    assert after.tier == e.TIER_OSS  # unchanged

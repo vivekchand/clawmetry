@@ -152,6 +152,30 @@ def api_paywall_event():
     return "", 204
 
 
+@bp_entitlement.route("/api/license/check", methods=["POST"])
+def api_license_check():
+    """Dry-run verify a license key WITHOUT writing it to disk.
+
+    Body: ``{"key": "CLAW1.…"}``. Returns the would-be license info — the
+    same shape ``/api/license/status`` reports for an installed license, so
+    a UI can show "this key is valid: Pro, N nodes, expires …" before the
+    user commits it with ``/api/license/activate``.
+
+    Side-effect-free: no license file is created, no node is registered,
+    no wheel is fetched, the entitlement cache is left alone. Always
+    returns 200 — the verification *result* is in the body.
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+        key = str(body.get("key", "")).strip()
+        from clawmetry import license as _lic
+
+        return jsonify(_lic.check_license(key))
+    except Exception as exc:
+        logger.warning("api_license_check: error: %s", exc)
+        return jsonify({"valid": False, "status": "error"})
+
+
 @bp_entitlement.route("/api/license/activate", methods=["POST"])
 def api_license_activate():
     """Activate a self-hosted Pro/Enterprise license key.

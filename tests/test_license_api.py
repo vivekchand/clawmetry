@@ -168,3 +168,105 @@ def test_deactivate_idempotent_when_no_license(app):
     data = resp.get_json()
     assert data["ok"] is True
     assert data["removed"] is False
+
+
+# ── /api/license/check — dry-run verify, no side effects ──────────────────────
+
+
+def test_check_valid_key(app):
+    import os
+
+    tok = app.lic._encode_token(_payload("pro", nodes=4), app.priv)
+    with app.app.test_client() as c:
+        resp = c.post(
+            "/api/license/check",
+            data=json.dumps({"key": tok}),
+            content_type="application/json",
+        )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["valid"] is True
+    assert data["status"] == "active"
+    assert data["tier"] == "pro"
+    assert data["nodes"] == 4
+    # Must NOT have written the license file:
+    assert not os.path.isfile(app.license_path)
+
+
+def test_check_invalid_key(app):
+    with app.app.test_client() as c:
+        resp = c.post(
+            "/api/license/check",
+            data=json.dumps({"key": "CLAW1.not.real"}),
+            content_type="application/json",
+        )
+    # Verification result is in the body — not a 4xx:
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["valid"] is False
+    assert data["status"] == "invalid"
+
+
+def test_check_expired_key(app):
+    tok = app.lic._encode_token(_payload(exp_delta=-3600), app.priv)
+    with app.app.test_client() as c:
+        resp = c.post(
+            "/api/license/check",
+            data=json.dumps({"key": tok}),
+            content_type="application/json",
+        )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["valid"] is False
+    assert data["status"] == "expired"
+    # Metadata still surfaced so the operator can see WHICH key expired:
+    assert data["tier"] == "pro"
+
+
+def test_check_missing_body(app):
+    with app.app.test_client() as c:
+        resp = c.post(
+            "/api/license/check",
+            data=json.dumps({}),
+            content_type="application/json",
+        )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["valid"] is False
+    assert data["status"] == "missing"
+
+
+def test_check_no_body_at_all(app):
+    """POST with no body must still return 200 + a missing-key shape."""
+    with app.app.test_client() as c:
+        resp = c.post("/api/license/check")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["valid"] is False
+    assert data["status"] == "missing"
+
+
+def test_check_does_not_overwrite_installed_license(app):
+    """If a valid license is already installed, /check on a DIFFERENT key must
+    not disturb it."""
+    import os
+
+    installed = app.lic._encode_token(_payload("pro", nodes=2), app.priv)
+    app.lic.activate(installed)
+    assert os.path.isfile(app.license_path)
+    with open(app.license_path) as fh:
+        before = fh.read()
+
+    other = app.lic._encode_token(_payload("enterprise", nodes=99), app.priv)
+    with app.app.test_client() as c:
+        resp = c.post(
+            "/api/license/check",
+            data=json.dumps({"key": other}),
+            content_type="application/json",
+        )
+    assert resp.status_code == 200
+    assert resp.get_json()["tier"] == "enterprise"
+
+    with open(app.license_path) as fh:
+        after = fh.read()
+    assert before == after  # file untouched

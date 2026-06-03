@@ -472,6 +472,56 @@ def activate(key: str, node_id: str | None = None) -> tuple[bool, str]:
     return True, f"Activated {tier} license for {nodes} node(s). {install_status}"
 
 
+def check_license(token: str) -> dict:
+    """Dry-run verify ``token`` and return its would-be license info.
+
+    Pure read-only: never writes the key to disk, never registers a node,
+    never downloads/installs the clawmetry-pro wheel, never invalidates the
+    entitlement cache. Useful for confirming a key parses + verifies before
+    committing it with :func:`activate`, and for support flows that want to
+    inspect a key the operator was sent without storing it.
+
+    Returns a dict with the same shape ``current_license_info()`` uses for an
+    installed license, plus a ``status`` that is one of:
+
+      * ``"missing"`` — token was empty/None
+      * ``"invalid"`` — signature failed, malformed, or unparseable
+      * ``"expired"`` — signature OK but the ``exp`` claim has passed
+      * ``"active"``  — signature OK and not expired
+      * ``"error"``   — something else went wrong (never crashes; falls here)
+
+    Never raises.
+    """
+    import time as _t
+
+    try:
+        tok = (token or "").strip()
+        if not tok:
+            return {"valid": False, "status": "missing"}
+        payload = verify_token(tok)
+        if payload is None:
+            return {"valid": False, "status": "invalid"}
+        exp = payload.get("exp")
+        days_left: int | None = None
+        expired = False
+        if isinstance(exp, (int, float)):
+            days_left = int((exp - _t.time()) // 86400)
+            expired = _t.time() > exp
+        return {
+            "valid": not expired,
+            "status": "expired" if expired else "active",
+            "tier": str(payload.get("tier", "pro")).lower(),
+            "nodes": int(payload.get("nodes", 1) or 1),
+            "sub": payload.get("sub", ""),
+            "exp": exp,
+            "iat": payload.get("iat"),
+            "days_left": days_left,
+        }
+    except Exception as exc:
+        logger.warning("license: check failed: %s", exc)
+        return {"valid": False, "status": "error"}
+
+
 def current_license_info() -> dict | None:
     """Human-readable summary of the installed license, or None if there is no
     valid one. Never raises."""

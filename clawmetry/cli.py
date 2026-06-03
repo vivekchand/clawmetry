@@ -2713,8 +2713,46 @@ def _cmd_activate(args) -> None:
 
 
 def _cmd_license(args) -> None:
-    """clawmetry license [activate|status|deactivate] — manage the self-hosted license."""
+    """clawmetry license [activate|status|deactivate|check] — manage the self-hosted license."""
     action = getattr(args, "license_action", None) or "status"
+
+    if action == "check":
+        key = getattr(args, "license_key", None) or ""
+        if not key:
+            print("❌  Usage: clawmetry license check <KEY>")
+            sys.exit(1)
+        from clawmetry import license as _lic
+        info = _lic.check_license(key.strip())
+        status = info.get("status", "error")
+        print("ClawMetry License Check\n" + "─" * 40)
+        if status == "missing":
+            print("  Result:      ❌  no key provided")
+            sys.exit(1)
+        if status == "invalid":
+            print("  Result:      ❌  signature invalid or key unparseable")
+            print("               (the key did not verify against the embedded public key)")
+            sys.exit(1)
+        if status == "error":
+            print("  Result:      ❌  could not verify (see logs)")
+            sys.exit(1)
+        # active or expired — print the parsed metadata either way
+        tier = str(info.get("tier", "pro")).capitalize()
+        print(f"  Plan:        {tier} (self-hosted)")
+        print(f"  Nodes:       {info.get('nodes', 1)}")
+        if info.get("sub"):
+            print(f"  Account:     {info['sub']}")
+        if info.get("days_left") is not None:
+            if status == "expired":
+                print(f"  Expires:     {abs(info['days_left'])} day(s) ago")
+            else:
+                print(f"  Expires:     in {info['days_left']} day(s)")
+        if status == "active":
+            print("  Result:      ✅  VALID — signature verified, not expired")
+            print("               (no changes made — run `clawmetry license activate <KEY>` to install)")
+        else:
+            print("  Result:      ⚠️   EXPIRED — signature verified but past its `exp`")
+            sys.exit(1)
+        return
 
     if action == "activate":
         key = getattr(args, "license_key", None) or ""
@@ -3159,14 +3197,14 @@ def main() -> None:
         "license_action",
         nargs="?",
         default="status",
-        choices=["status", "activate", "deactivate"],
-        help="status (default) | activate <KEY> | deactivate",
+        choices=["status", "activate", "deactivate", "check"],
+        help="status (default) | activate <KEY> | deactivate | check <KEY>",
     )
     p_license.add_argument(
         "license_key",
         nargs="?",
         default=None,
-        help="License key (CLAW1.…) — required for 'activate'",
+        help="License key (CLAW1.…) — required for 'activate' and 'check'",
     )
 
     # verify-integrity — walk hash chain and report validity (Issue #2200)
