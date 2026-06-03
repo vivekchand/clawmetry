@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: hide OpenClaw-only tabs for non-OpenClaw runtimes (carries #2571) (2026-06-03)
+- **Why:** selecting a non-OpenClaw runtime (Claude Code, Codex, …) and opening Memory/Skills/Self-Evolve/Crons/Tool-Policy/NeMo showed OpenClaw's data under a "this view is node-wide" banner — irrelevant tabs that just add cognitive load (founder feedback).
+- **What:** those six OpenClaw-only sidebar tabs are now HIDDEN when a non-OpenClaw runtime is selected; OpenClaw + NemoClaw (and "all runtimes") still show everything. On a now-hidden tab, the view falls back to Overview. Applied on load (pinned ?runtime=) and on every runtime switch.
+- **Verified:** node --check clean; per-runtime hide logic unit-checked.
+
+
 ### Release: on-demand runtime backfill — daemon capability (carries #2568) (2026-06-03)
 - **Why:** family runtimes default-sync the most-recent 50 sessions (cost/payload bound), but the local DuckDB can hold all history. The user should be able to dig back as far as they want on demand (founder 2026-06-03).
 - **What:** a `runtime_backfill` pending action raises ONE runtime's ingest depth (`_effective_family_limit` = max(default-50, on-demand override), capped 5000); the next `sync_family_runtimes` pass pulls the older sessions into DuckDB and uploads them. The cloud Fleet card's "sync N older" affordance triggers it (clawmetry-cloud #1361).
