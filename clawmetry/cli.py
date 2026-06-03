@@ -1664,8 +1664,12 @@ def _cmd_status(args) -> None:
             print(f"    • {_nm:<18} {_state}  ({_n} session{'s' if _n != 1 else ''})")
         if not _prover:
             print("    ⚠ Claude Code / Codex / Cursor / Aider / Goose / opencode / Qwen — NOT syncing")
-            print("      → paid runtimes need clawmetry-pro. It auto-installs once your account")
-            print("        is Trial/Pro; or: pip install clawmetry-pro && clawmetry sync --restart")
+            if _entitled:
+                print("      → your account is entitled — the daemon auto-downloads the paid runtime")
+                print("        pack on start (no pip needed). If it hasn't yet: clawmetry sync --restart")
+            else:
+                print("      → paid runtimes need a Trial/Pro account. The daemon auto-downloads the")
+                print("        runtime pack on start once entitled — link your account in the dashboard.")
         elif _det and not _entitled:
             print(f"    clawmetry-pro {_prover} installed and detecting the above — but your account")
             print(f"      is on the FREE plan ({_plan or 'free'}), so paid runtimes are NOT synced to")
