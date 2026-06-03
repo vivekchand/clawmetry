@@ -11354,6 +11354,7 @@ DASHBOARD_HTML = r"""
         </div>
         <div class="left-nav-item left-nav-item-sub" id="left-nav-tool-catalog" data-tab="tool-catalog" onclick="switchTab('tool-catalog')" title="Every tool the agent uses by provenance, with call count and p50/p95 latency">
           <span class="left-nav-label">Tool catalog</span>
+        </div>
         <div class="left-nav-item left-nav-item-sub" id="left-nav-context-economics" data-tab="context-economics" onclick="switchTab('context-economics')" title="Context-window utilization over time, compaction triggers and tokens reclaimed">
           <span class="left-nav-label">Context economics</span>
         </div>
