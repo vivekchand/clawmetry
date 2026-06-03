@@ -5975,6 +5975,57 @@ async function loadContextInspector() {
     el = document.getElementById('ctx-compactions'); if (el) el.textContent = compactions;
     el = document.getElementById('ctx-model-name'); if (el) { el.textContent = model.split('/').pop(); el.style.fontSize = model.length > 20 ? '14px' : '20px'; }
 
+    // Active model + model mix, scoped to the selected runtime. The overview
+    // model (ov.model) is the node-wide active model — for a non-OpenClaw
+    // runtime that's wrong (e.g. it showed claude-opus-4-7 for Codex, which
+    // actually ran gpt-5.4). Pull the per-runtime attribution: the MOST-USED
+    // model becomes the "active" one, the rest are listed with % of turns
+    // (founder spec 2026-06-04). /api/model-attribution honours ?runtime=.
+    (function _ctxModelMix() {
+      var mixEl = document.getElementById('ctx-model-mix');
+      var nameEl = document.getElementById('ctx-model-name');
+      var _rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+      var _q = (_rt && _rt !== 'all') ? ('?runtime=' + encodeURIComponent(_rt)) : '';
+      fetch('/api/model-attribution' + _q).then(function (r) { return r.json(); }).then(function (ma) {
+        var models = (ma && ma.models) || [];
+        var total = (ma && ma.total_turns) || models.reduce(function (s, m) { return s + (m.turns || 0); }, 0);
+        if (!models.length || !total) {
+          if (mixEl) mixEl.style.display = 'none';
+          // A specific runtime with no model data must NOT leak the node-wide
+          // model (Codex showed claude-opus-4-7 for this reason). Show a dash.
+          if (_rt && _rt !== 'all' && nameEl) {
+            nameEl.textContent = '—';
+            nameEl.style.fontSize = '20px';
+            nameEl.title = 'No model usage recorded for ' + _rt + ' yet';
+          }
+          return;
+        }
+        // most-used first
+        models = models.slice().sort(function (a, b) { return (b.turns || 0) - (a.turns || 0); });
+        var top = (ma.primary_model && ma.primary_model !== '--') ? ma.primary_model : models[0].model;
+        if (nameEl) {
+          var shortTop = String(top).replace('anthropic/', '').replace('openai/', '').split('/').pop();
+          nameEl.textContent = shortTop;
+          nameEl.style.fontSize = shortTop.length > 20 ? '14px' : '20px';
+          nameEl.title = top + ' — most-used model for ' + (_rt === 'all' ? 'all runtimes' : _rt);
+        }
+        if (!mixEl) return;
+        // List the OTHER models with % of turns (skip the primary already shown above).
+        var others = models.filter(function (m) { return m.model !== top; });
+        if (!others.length) { mixEl.style.display = 'none'; return; }
+        var html = '';
+        others.slice(0, 4).forEach(function (m) {
+          var pct = total > 0 ? (m.turns / total * 100) : 0;
+          var nm = String(m.model || '').replace('anthropic/', '').replace('openai/', '').split('/').pop();
+          html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:10px;color:var(--text-muted);margin:2px 0;">'
+            + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(m.model || '') + '">' + escHtml(nm) + '</span>'
+            + '<span style="flex-shrink:0;font-weight:600;color:var(--text-secondary);">' + pct.toFixed(0) + '%</span></div>';
+        });
+        mixEl.innerHTML = html;
+        mixEl.style.display = 'block';
+      }).catch(function () { if (mixEl) mixEl.style.display = 'none'; });
+    })();
+
     // Context composition breakdown
     var skillHeaderTokens = (skills.summary || {}).total_header_tokens || 0;
     var memoryFiles = ov.memoryCount || 0;

@@ -43,8 +43,12 @@
         <div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;" data-i18n="context.compactions">Compactions</div>
       </div>
       <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px 16px;">
-        <div style="font-size:20px;font-weight:700;color:#22c55e;" id="ctx-model-name">--</div>
+        <div style="font-size:20px;font-weight:700;color:#22c55e;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" id="ctx-model-name">--</div>
         <div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;" data-i18n="context.active_model">Active Model</div>
+        <!-- Per-runtime model mix: the most-used model is the "active" one above;
+             the rest are listed here with % of turns (populated by
+             loadContextInspector from /api/model-attribution?runtime=). -->
+        <div id="ctx-model-mix" style="margin-top:8px;display:none;border-top:1px solid var(--border);padding-top:8px;"></div>
       </div>
     </div>
   </div>
