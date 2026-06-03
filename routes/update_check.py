@@ -223,12 +223,34 @@ def _check_for_update():
 
     _record_update_check(current, latest, update_available, CHANGELOG_URL)
 
+    # Age (hours) of the latest release, for the auto-update staleness rail.
+    # NEVER blocks the banner — only the silent upgrade waits for the release
+    # to have survived a stability window before installing it unattended.
+    _age_h = None
+    try:
+        _files = (data.get("releases", {}) or {}).get(latest) or []
+        _times = [
+            f.get("upload_time_iso_8601") or f.get("upload_time")
+            for f in _files
+            if f.get("upload_time_iso_8601") or f.get("upload_time")
+        ]
+        if _times:
+            from datetime import datetime as _dt, timezone as _tz
+            _t0 = min(
+                _dt.fromisoformat(str(t).replace("Z", "+00:00")) for t in _times
+            )
+            if _t0.tzinfo is None:
+                _t0 = _t0.replace(tzinfo=_tz.utc)
+            _age_h = (_dt.now(_tz.utc) - _t0).total_seconds() / 3600.0
+    except Exception:
+        _age_h = None
+
     # Auto-update: if the user opted in, install the newer release now (no
     # click). Runs in the always-on dashboard server process, so it works
     # with no browser open. Guarded so a pending restart isn't re-triggered.
     if update_available:
         try:
-            _maybe_auto_update(current, latest)
+            _maybe_auto_update(current, latest, _age_h)
         except Exception as exc:
             log.warning("auto-update trigger failed: %s", exc)
 
@@ -246,13 +268,29 @@ def _check_for_update():
 _auto_update_in_progress = False
 
 
-def _maybe_auto_update(current, latest):
-    """Install a newer release automatically when ``auto_update`` is enabled."""
+def _maybe_auto_update(current, latest, age_hours=None):
+    """Install a newer release automatically when ``auto_update`` is enabled.
+
+    Staleness rail: unattended upgrades wait until the release has been on PyPI
+    for at least ``CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS`` (default 48h), so a node
+    never auto-installs a brand-new (possibly broken) release the instant it
+    publishes. The update banner is unaffected — only the silent upgrade waits.
+    ``age_hours=None`` (age unknown) does not block, preserving prior behaviour.
+    """
     global _auto_update_in_progress
     if _auto_update_in_progress:
         return
     cfg = _get_update_check_config()
     if not cfg.get("auto_update"):
+        return
+    try:
+        import os as _os
+        _min_age = float(_os.environ.get("CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS", "48") or 48)
+    except Exception:
+        _min_age = 48.0
+    if age_hours is not None and age_hours < _min_age:
+        log.info("auto-update: holding v%s (released %.1fh ago < %.0fh stability "
+                 "window) — will install once it ages in", latest, age_hours, _min_age)
         return
     _auto_update_in_progress = True
     log.info("auto-update: opted in — upgrading clawmetry v%s -> v%s", current, latest)
