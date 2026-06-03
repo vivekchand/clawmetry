@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: on-demand runtime backfill — daemon capability (carries #2568) (2026-06-03)
+- **Why:** family runtimes default-sync the most-recent 50 sessions (cost/payload bound), but the local DuckDB can hold all history. The user should be able to dig back as far as they want on demand (founder 2026-06-03).
+- **What:** a `runtime_backfill` pending action raises ONE runtime's ingest depth (`_effective_family_limit` = max(default-50, on-demand override), capped 5000); the next `sync_family_runtimes` pass pulls the older sessions into DuckDB and uploads them. The cloud Fleet card's "sync N older" affordance triggers it (clawmetry-cloud #1361).
+- **Verified:** 7 new unit tests (default, per-runtime isolation, monotonic, step-up, cap, allowlist, bad-input); full OSS CI matrix.
+
+
 ### Release: scoped Overview shows the runtime's footprint, not an empty today-window (carries #2565) (2026-06-03)
 - **Why:** selecting a runtime whose sessions are older than today (e.g. OpenClaw, 2 sessions from 2 days ago) made the Overview show "0 sessions today" while the switcher said "OpenClaw · 2 sessions" — it read as "sessions gone." Not a data bug (verified via v1 usage day=0 / month=2).
 - **What:** when a runtime is selected, the Overview shows that runtime's FOOTPRINT matching the switcher — SESSIONS = the switcher's per-runtime total, the tile label flips "Sessions today" -> "Sessions", the hero drops the "today" suffix, and cost/tokens use the month figure. Node-wide ('all') keeps the live "today" framing.
