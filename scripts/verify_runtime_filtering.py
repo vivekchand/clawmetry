@@ -112,9 +112,44 @@ def main() -> int:
     bogus = _get(args.base, f"sessions?node_id={node}&runtime=__nope__", api_key)
     bogus_n = _session_count(bogus)
     if bogus_n:
-        failures.append(f"unknown runtime returned {bogus_n} sessions (should be 0)")
+        failures.append(f"unknown runtime: /sessions returned {bogus_n} (should be 0)")
     else:
         print("  /sessions runtime=__nope__ -> 0  [ok]")
+
+    # 5. /usage is the OTHER server-side-filtered surface (the Cost/Models cards
+    #    read it). It must scope by runtime too — a leak here is what makes the
+    #    Overview header show node-wide tokens/cost while a runtime is selected.
+    #    Default period=day, so totals can be 0 for an idle runtime; we assert
+    #    the filter is *honoured* (echoed runtime + not-all-identical + unknown=0)
+    #    rather than a specific magnitude.
+    usage_tokens: dict[str, int] = {}
+    for rid in expected:
+        resp = _get(args.base, f"usage?node_id={node}&runtime={rid}", api_key)
+        data = (resp or {}).get("data") if isinstance(resp, dict) else None
+        echoed = (data or {}).get("runtime")
+        toks = (data or {}).get("total_tokens")
+        usage_tokens[rid] = toks if isinstance(toks, int) else -1
+        ok = isinstance(data, dict) and echoed == rid
+        print(f"  /usage    runtime={rid:<12} -> tokens={toks} (echo={echoed})  [{'ok' if ok else 'FAIL'}]")
+        if not ok:
+            failures.append(f"{rid}: /usage did not echo the runtime filter (got {echoed!r})")
+    # Cross-runtime: usage totals shouldn't be identical across every runtime
+    # (the classic aggregate leak — everyone sees the node total). Allow the
+    # all-zero case (a brand-new node in the period) since that's legitimately
+    # uniform, not a leak.
+    nonzero = set(v for v in usage_tokens.values() if v > 0)
+    if len(expected) >= 2 and len(nonzero) == 1 and len(set(usage_tokens.values())) == 1:
+        failures.append(
+            f"all runtimes returned identical /usage tokens ({nonzero}) — "
+            "usage filter is not scoping (aggregate leak)"
+        )
+    # Unknown runtime -> zero usage, never the node total.
+    u_bogus = _get(args.base, f"usage?node_id={node}&runtime=__nope__", api_key)
+    u_bn = ((u_bogus or {}).get("data") or {}).get("total_tokens") if isinstance(u_bogus, dict) else None
+    if u_bn:
+        failures.append(f"unknown runtime: /usage returned {u_bn} tokens (should be 0)")
+    else:
+        print("  /usage    runtime=__nope__ -> 0  [ok]")
 
     print()
     if failures:
