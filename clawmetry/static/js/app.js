@@ -1178,7 +1178,7 @@ function switchTab(name) {
   if (name === 'models') loadModelAttribution();
   if (name === 'nemoclaw') { loadNemoClaw(); _startNcApprovalsAutoRefresh(); }
   if (name !== 'nemoclaw') _stopNcApprovalsAutoRefresh();
-  if (name === 'subagents') { loadRunLedger(); loadSubagents(); if (!_subagentsTimer) _subagentsTimer = visibilitySetInterval(function(){ loadRunLedger(); loadSubagents(); }, 5000); }
+  if (name === 'subagents') { loadOrchestration(); loadRunLedger(); loadSubagents(); if (!_subagentsTimer) _subagentsTimer = visibilitySetInterval(function(){ loadOrchestration(); loadRunLedger(); loadSubagents(); }, 5000); }
   if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
   if (name === 'swimlane') { loadSwimlane(); if (!_swimlaneTimer) _swimlaneTimer = visibilitySetInterval(loadSwimlane, 3000); }
   if (name !== 'swimlane' && _swimlaneTimer) { clearInterval(_swimlaneTimer); _swimlaneTimer = null; }
@@ -13381,6 +13381,59 @@ async function loadSubagents() {
 function _saToggle(sid) {
   _subagentsExpanded[sid] = (_subagentsExpanded[sid] === false) ? true : false;
   loadSubagents();
+}
+
+async function loadOrchestration() {
+  var el = document.getElementById('orchestration-board');
+  if (!el) return;
+  try {
+    var data = await fetch('/api/orchestration').then(function(r) { return r.json(); });
+    var agents = data.agents || [];
+    var summary = data.summary || {};
+    if (agents.length === 0) { el.innerHTML = ''; return; }
+    var statusColors = {
+      active: '#16a34a', running: '#16a34a', idle: '#d97706',
+      stale: '#6b7280', failed: '#ef4444', paused: '#7c3aed', completed: '#3b82f6'
+    };
+    var html = '<div style="border:1px solid var(--border-primary);border-radius:10px;overflow:hidden;margin-bottom:4px;">';
+    html += '<div style="display:flex;align-items:center;gap:16px;padding:8px 14px;background:var(--bg-secondary);border-bottom:1px solid var(--border-primary);font-size:12px;flex-wrap:wrap;">';
+    html += '<span style="font-weight:700;color:var(--text-primary);font-size:13px;">🤖 Orchestration</span>';
+    html += '<span style="color:var(--text-muted);"><strong style="color:var(--text-primary);">' + (summary.total || 0) + '</strong> agents</span>';
+    if (summary.active) html += '<span style="color:#16a34a;"><strong>' + summary.active + '</strong> active</span>';
+    if (summary.total_cost_usd) {
+      html += '<span style="color:var(--text-muted);">$<strong style="color:var(--text-primary);">' + summary.total_cost_usd.toFixed(4) + '</strong> total cost</span>';
+    }
+    html += '</div>';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:8px;padding:10px;">';
+    agents.forEach(function(a) {
+      var color = statusColors[a.status] || '#6b7280';
+      var glow = (a.status === 'active' || a.status === 'running') ? 'box-shadow:0 0 0 1px ' + color + '40;' : '';
+      var costStr = (a.costUsd > 0) ? '$' + a.costUsd.toFixed(4) : '';
+      var tokens = a.totalTokens >= 1000 ? (a.totalTokens / 1000).toFixed(1) + 'K tok' : (a.totalTokens > 0 ? a.totalTokens + ' tok' : '');
+      var depthBadge = (a.depth > 1) ? '<span style="font-size:9px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:3px;padding:0 4px;color:var(--text-muted);margin-left:4px;">d' + a.depth + '</span>' : '';
+      html += '<div style="flex:0 0 auto;min-width:155px;max-width:215px;border:1px solid var(--border-primary);border-radius:8px;padding:8px 10px;background:var(--bg-card);' + glow + '">';
+      html += '<div style="display:flex;align-items:center;gap:5px;margin-bottom:4px;">';
+      html += '<span style="width:8px;height:8px;border-radius:50%;background:' + color + ';display:inline-block;flex-shrink:0;"></span>';
+      html += '<span style="font-size:12px;font-weight:600;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;" title="' + escHtml(a.displayName) + '">' + escHtml(a.displayName) + '</span>';
+      html += depthBadge;
+      html += '</div>';
+      if (a.model && a.model !== 'unknown') {
+        html += '<div style="font-size:10px;color:var(--text-muted);margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(a.model) + '</div>';
+      }
+      if (costStr || tokens) {
+        html += '<div style="display:flex;gap:8px;font-size:10px;color:var(--text-faint);">';
+        if (costStr) html += '<span style="color:#16a34a;">' + escHtml(costStr) + '</span>';
+        if (tokens) html += '<span>' + escHtml(tokens) + '</span>';
+        html += '</div>';
+      }
+      html += '</div>';
+    });
+    html += '</div></div>';
+    el.innerHTML = html;
+  } catch(e) {
+    var board = document.getElementById('orchestration-board');
+    if (board) board.innerHTML = '';
+  }
 }
 
 async function controlAgent(key, action) {
