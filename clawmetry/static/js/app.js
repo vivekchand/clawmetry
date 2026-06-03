@@ -7523,11 +7523,36 @@ function _cmRuntimeOf(o) {
   }
   return 'openclaw';
 }
+// The active runtime filter. A `?runtime=<id>` URL param takes precedence over
+// the localStorage value and is TAB-LOCAL: localStorage is shared across all
+// tabs of an origin, so without this a Fleet "open <runtime> in a new tab" would
+// have every tab fight over one shared key. Pinning via the URL lets you open
+// Claude Code in one tab and Codex in another, each independent.
+function _cmRuntimeFilterUrlPin() {
+  try {
+    var p = new URLSearchParams(window.location.search);
+    if (p.has('runtime')) { var v = p.get('runtime'); if (v) return v; }
+  } catch (e) {}
+  return null;
+}
 function _cmRuntimeFilter() {
+  var pin = _cmRuntimeFilterUrlPin();
+  if (pin) return pin;
   try { return localStorage.getItem('cm-runtime-filter') || 'all'; } catch (e) { return 'all'; }
 }
 function _cmSetRuntimeFilter(v, reload) {
-  try { localStorage.setItem('cm-runtime-filter', v); } catch (e) {}
+  // If this tab is URL-pinned to a runtime, keep the selection tab-local by
+  // updating the URL param (not the shared localStorage key) so sibling tabs
+  // stay on their own runtime.
+  if (_cmRuntimeFilterUrlPin() !== null) {
+    try {
+      var u = new URL(window.location.href);
+      u.searchParams.set('runtime', v);
+      window.history.replaceState(null, '', u.toString());
+    } catch (e) {}
+  } else {
+    try { localStorage.setItem('cm-runtime-filter', v); } catch (e) {}
+  }
   if (typeof reload === 'function') reload();
 }
 function _cmRuntimeLabel(rt) { return _CM_RT_LABEL[rt] || rt; }
