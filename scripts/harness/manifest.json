@@ -90,11 +90,11 @@
     {
       "runtime": "picoclaw",
       "display": "PicoClaw",
-      "repo": null,
+      "repo": "https://github.com/sipeed/picoclaw",
       "adapter": "clawmetry_pro/adapters/picoclaw.py",
       "adapter_repo": "clawmetry-pro",
       "tier": "pro",
-      "note": "Repo URL not yet known — needs founder. OpenClaw-family, JSONL provider Messages."
+      "note": "Sipeed PicoClaw — OpenClaw-family, JSONL provider Messages (no on-disk token/cost)."
     },
     {
       "runtime": "nanoclaw",
