@@ -2922,7 +2922,11 @@ function _renderOverviewHero() {
     : (busy ? 'It’s working on something right now.'
             : 'Send it a message and you’ll see what it does, right here.');
   var stats = [];
-  if (sessions != null) stats.push('💬 <strong style="color:var(--text-primary);">' + sessions + (sessions === 1 ? ' session' : ' sessions') + '</strong> today');
+  // When scoped to a runtime, `sessions` is that runtime's TOTAL footprint
+  // (matches the switcher), so don't append "today" — the runtime may have 0
+  // sessions today but N on record, and "N sessions today" would be wrong while
+  // "0 sessions today" reads as gone. For all-runtimes it stays the live "today".
+  if (sessions != null) stats.push('💬 <strong style="color:var(--text-primary);">' + sessions + (sessions === 1 ? ' session' : ' sessions') + '</strong>' + (_scope ? '' : ' today'));
   stats.push('💸 <strong style="color:var(--text-primary);">' + escHtml(cost) + '</strong>' + (free ? ' <span style="color:#22c55e;">free on your plan</span>' : ''));
   stats.push('🧠 running <strong style="color:var(--text-primary);">' + escHtml(model) + '</strong>');
   // Live throughput (⚡ tok/s) from the today-token delta between renders —
@@ -3135,6 +3139,13 @@ async function loadMiniWidgets(overview, usage) {
       var _rsd = await fetchJsonWithTimeout('/api/runtime-summary', 4000);
       var _rs = _rsd && _rsd.runtimes && _rsd.runtimes[_ovRt];
       _ovModel = (_rs && _rs.primary_model) ? _rs.primary_model : '—';
+      // The SESSIONS card must match what the runtime switcher promises
+      // ("OpenClaw · 2 sessions"), NOT a today-window that's empty for a runtime
+      // whose sessions are older than today. Otherwise selecting an idle-today
+      // runtime reads as "sessions gone" (founder report 2026-06-03: OpenClaw has
+      // 2 sessions on record but the Overview showed 0). Use the switcher's
+      // per-runtime total; fall back to the period count if it's not populated.
+      var _rtTotal = (window._cmGlobalRtCounts && window._cmGlobalRtCounts[_ovRt]) || 0;
       var _scope = null;
       if (window.CLOUD_MODE) {
         // Server-side filtered, period-accurate (the founder's chosen contract).
@@ -3146,9 +3157,10 @@ async function loadMiniWidgets(overview, usage) {
             // Guard against an echo/stale mismatch (only trust a response that
             // confirms it filtered to the runtime we asked for).
             if (String(_d.runtime || '') === _ovRt) {
-              _scope = { runtime: _ovRt, sessions: _d.sessions_count | 0,
+              _scope = { runtime: _ovRt, sessions: _rtTotal || (_m.sessions_count | 0) || (_d.sessions_count | 0),
+                         sessionsToday: _d.sessions_count | 0,
                          tokensToday: _d.total_tokens | 0, tokensMonth: _m.total_tokens | 0,
-                         cost: +_d.total_cost || 0, costWeek: +_w.total_cost || 0,
+                         cost: +_m.total_cost || 0, costWeek: +_w.total_cost || 0,
                          costMonth: +_m.total_cost || 0, model: _ovModel };
             }
           }
@@ -3157,7 +3169,8 @@ async function loadMiniWidgets(overview, usage) {
       if (!_scope && _rs) {
         // Local-mode fallback: the runtime-summary slice has per-runtime totals
         // (not period-split, but scoped to the runtime — better than node-wide).
-        _scope = { runtime: _ovRt, sessions: _rs.sessions | 0,
+        _scope = { runtime: _ovRt, sessions: _rtTotal || (_rs.sessions | 0),
+                   sessionsToday: _rs.sessions | 0,
                    tokensToday: _rs.tokens | 0, tokensMonth: _rs.tokens | 0,
                    cost: +_rs.cost_usd || 0, costWeek: +_rs.cost_usd || 0,
                    costMonth: +_rs.cost_usd || 0, model: _ovModel };
@@ -3178,6 +3191,14 @@ async function loadMiniWidgets(overview, usage) {
     }
   } catch (e) { /* keep the node-dominant values */ }
   document.getElementById('model-primary').textContent = _ovModel;
+  // Relabel the SESSIONS tile: scoped shows the runtime's TOTAL (matches the
+  // switcher) so "today" would be wrong; node-wide stays the live "today".
+  try {
+    var _slbl = document.getElementById('hot-sessions-label');
+    if (_slbl) _slbl.textContent = window._cmRuntimeScope
+      ? t('overview.sessions', null, 'Sessions')
+      : t('overview.sessions_today', null, 'Sessions today');
+  } catch (e) {}
   // Re-render the hero so its headline (sessions / cost / model) reflects the
   // scope just applied (it may have first painted node-wide from loadAll).
   try { if (typeof _renderOverviewHero === 'function') _renderOverviewHero(); } catch (e) {}
