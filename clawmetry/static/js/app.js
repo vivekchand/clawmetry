@@ -7637,8 +7637,11 @@ function _cmRuntimeLabel(rt) { return _CM_RT_LABEL[rt] || rt; }
 // the switcher can't scope them client-side yet, so picking a specific runtime
 // shows an honest "all runtimes" note rather than pretending the numbers are
 // runtime-specific. (Per-runtime aggregation is a follow-up.)
+// Tool catalog now filters per-runtime (snapshot byRuntime slice + cloud
+// interceptor), so it's no longer an aggregate-only tab. context-economics +
+// context (LLM Context) still pending per-runtime slicing.
 var _CM_RT_AGGREGATE = {
-  'tool-catalog': 1, 'context-economics': 1, context: 1
+  'context-economics': 1, context: 1
 };
 // Tabs that are NODE-WIDE concepts, not per-runtime: crons run on the gateway,
 // memory/skills are workspace-level, security is machine posture, self-evolve is
