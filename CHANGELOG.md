@@ -1,6 +1,11 @@
 ## [Unreleased]
 
-### Release: hide OpenClaw-only tabs for non-OpenClaw runtimes (carries #2571) (2026-06-03)
+### Release: per-runtime sidebars derive from DECLARED capabilities (#2575) (2026-06-03)
+- **Why:** the first pass (#2571/#2572) hid tabs from a hand-written list that an LLM helper had hallucinated parts of (NemoClaw mislabeled a "NeMo toolkit"; Hermes/Cursor/NanoClaw credited with crons/memory/skills they don't have). Founder caught it — "should I even trust you?".
+- **What:** tab visibility now derives mechanically from each adapter's declared `Capability` enum (`_CM_RT_CAPS` → `_CM_CAP_TABS`), not prose. OpenClaw + NemoClaw (sandboxed OpenClaw, identical caps) show the full set; cost runtimes (Claude Code, Codex, Aider, Goose, opencode, Qwen) show Sessions/Events/Cost tabs; Cursor/PicoClaw/NanoClaw (no COST) show less. A CI parity guard (`test_runtime_tab_capability_parity.py`) re-extracts the contract and fails on drift, so this can't silently rot again.
+- **Verified:** node --check clean; parity test green; closed-source pro adapters guarded by the parallel test in clawmetry-pro.
+
+### hide OpenClaw-only tabs for non-OpenClaw runtimes (carries #2571) (2026-06-03)
 - **Why:** selecting a non-OpenClaw runtime (Claude Code, Codex, …) and opening Memory/Skills/Self-Evolve/Crons/Tool-Policy/NeMo showed OpenClaw's data under a "this view is node-wide" banner — irrelevant tabs that just add cognitive load (founder feedback).
 - **What:** those six OpenClaw-only sidebar tabs are now HIDDEN when a non-OpenClaw runtime is selected; OpenClaw + NemoClaw (and "all runtimes") still show everything. On a now-hidden tab, the view falls back to Overview. Applied on load (pinned ?runtime=) and on every runtime switch.
 - **Verified:** node --check clean; per-runtime hide logic unit-checked.
