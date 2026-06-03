@@ -2900,9 +2900,17 @@ function _renderOverviewHero() {
   var busy = !!window._cmAgentBusy;
   var stateWord = busy ? 'working' : 'idle';
   var dot = busy ? '#22c55e' : '#3b82f6';
-  var cost = _txt('cost-today') || '$0.00';
-  var model = ov.model || _txt('model-primary') || 'your model';
-  var sessions = (typeof ov.sessionCount === 'number') ? ov.sessionCount : null;
+  // When a runtime is selected, the hero must mirror the (runtime-scoped) stat
+  // cards, not the node-wide overview. _cmRuntimeScope is set by loadMiniWidgets
+  // from the v1 API (FLYWHEEL §1c); null = node-wide. Note: prefer the scoped
+  // model card over ov.model here, else the hero kept showing the node's
+  // dominant model (e.g. "running claude-opus-4-8" while PicoClaw is selected).
+  var _scope = window._cmRuntimeScope;
+  var cost = _scope ? ('$' + _scope.cost.toFixed(2)) : (_txt('cost-today') || '$0.00');
+  var model = _scope ? (_txt('model-primary') || _scope.model || '—')
+                     : (ov.model || _txt('model-primary') || 'your model');
+  var sessions = _scope ? _scope.sessions
+                        : ((typeof ov.sessionCount === 'number') ? ov.sessionCount : null);
   var free = cost === '$0.00' || cost === '$0' ||
              /oauth/i.test((document.getElementById('cost-trend') || {}).textContent || '');
   var say = window._cmLastAgentSay;
@@ -3108,23 +3116,66 @@ async function loadMiniWidgets(overview, usage) {
   // value already in hand so the card is never blank and never contradicts the
   // hero. (Card relabeled "Sessions today" in overview.html.)
   document.getElementById('hot-sessions-count').textContent = overview.sessionCount || 0;
-  
-  // 📈 Model Mix — scope the Overview MODEL card to the selected runtime (the
-  // "MODEL claude-opus-4-7 while Qwen Code is selected" confusion). The
-  // runtime's primary model comes from /api/runtime-summary (cloud serves the
-  // runtimeSummary snapshot slice); '—' when that runtime has no model turns.
-  // Done HERE (the single place #model-primary is set on Overview) so it isn't
-  // overwritten by the node-dominant model on the next refresh.
+
+  // 📈 Runtime scope — when a runtime is selected, the Overview stat cards
+  // (sessions / tokens / cost / model) must show ONLY that runtime's data
+  // (FLYWHEEL §1c). Without this the cards stayed node-wide while the switcher
+  // said e.g. "PicoClaw · 1 session" (node showed 68 sessions / 3.8M tokens).
+  //
+  // Source of truth: the public v1 API, which filters SERVER-SIDE by ?runtime=
+  // (cloud mode). period=day -> the "today" cards, period=month -> token-rate.
+  // Local mode has no v1 API, so it falls back to the /api/runtime-summary slice
+  // (per-runtime totals; the model already used this). `_cmRuntimeScope` is the
+  // override the hero reads; null = node-wide (unchanged path).
   var _ovModel = overview.model || 'unknown';
+  window._cmRuntimeScope = null;
   try {
     var _ovRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
     if (_ovRt && _ovRt !== 'all') {
       var _rsd = await fetchJsonWithTimeout('/api/runtime-summary', 4000);
       var _rs = _rsd && _rsd.runtimes && _rsd.runtimes[_ovRt];
       _ovModel = (_rs && _rs.primary_model) ? _rs.primary_model : '—';
+      var _scope = null;
+      if (window.CLOUD_MODE) {
+        // Server-side filtered, period-accurate (the founder's chosen contract).
+        try {
+          var _b = '/api/v1/usage?node_id=' + encodeURIComponent(window.CLOUD_NODE_ID || '') + '&runtime=' + encodeURIComponent(_ovRt);
+          var _dR = await fetch(_b + '&period=day'), _mR = await fetch(_b + '&period=month');
+          if (_dR.ok && _mR.ok) {
+            var _d = ((await _dR.json()) || {}).data || {}, _m = ((await _mR.json()) || {}).data || {};
+            // Guard against an echo/stale mismatch (only trust a response that
+            // confirms it filtered to the runtime we asked for).
+            if (String(_d.runtime || '') === _ovRt) {
+              _scope = { runtime: _ovRt, sessions: _d.sessions_count | 0,
+                         tokensToday: _d.total_tokens | 0, tokensMonth: _m.total_tokens | 0,
+                         cost: +_d.total_cost || 0, model: _ovModel };
+            }
+          }
+        } catch (e2) { /* fall through to slice */ }
+      }
+      if (!_scope && _rs) {
+        // Local-mode fallback: the runtime-summary slice has per-runtime totals
+        // (not period-split, but scoped to the runtime — better than node-wide).
+        _scope = { runtime: _ovRt, sessions: _rs.sessions | 0,
+                   tokensToday: _rs.tokens | 0, tokensMonth: _rs.tokens | 0,
+                   cost: +_rs.cost_usd || 0, model: _ovModel };
+      }
+      if (_scope) {
+        window._cmRuntimeScope = _scope;
+        var _fmtT = function (n) { return n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(0) + 'K' : String(n); };
+        var _set = function (id, v) { var e = document.getElementById(id); if (e) e.textContent = v; };
+        _set('hot-sessions-count', _scope.sessions);
+        _set('tokens-today', _fmtT(_scope.tokensToday));
+        _set('token-rate', _fmtT(_scope.tokensMonth));
+        _set('cost-today', '$' + _scope.cost.toFixed(2));
+        window._cmTodayTokensRaw = _scope.tokensToday;
+      }
     }
-  } catch (e) { /* keep the node-dominant model */ }
+  } catch (e) { /* keep the node-dominant values */ }
   document.getElementById('model-primary').textContent = _ovModel;
+  // Re-render the hero so its headline (sessions / cost / model) reflects the
+  // scope just applied (it may have first painted node-wide from loadAll).
+  try { if (typeof _renderOverviewHero === 'function') _renderOverviewHero(); } catch (e) {}
   var modelLabel = document.getElementById('main-activity-model');
   if (modelLabel && _ovModel && _ovModel !== '—') {
     var m = _ovModel;
