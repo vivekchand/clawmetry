@@ -3140,15 +3140,16 @@ async function loadMiniWidgets(overview, usage) {
         // Server-side filtered, period-accurate (the founder's chosen contract).
         try {
           var _b = '/api/v1/usage?node_id=' + encodeURIComponent(window.CLOUD_NODE_ID || '') + '&runtime=' + encodeURIComponent(_ovRt);
-          var _dR = await fetch(_b + '&period=day'), _mR = await fetch(_b + '&period=month');
-          if (_dR.ok && _mR.ok) {
-            var _d = ((await _dR.json()) || {}).data || {}, _m = ((await _mR.json()) || {}).data || {};
+          var _dR = await fetch(_b + '&period=day'), _wR = await fetch(_b + '&period=week'), _mR = await fetch(_b + '&period=month');
+          if (_dR.ok && _wR.ok && _mR.ok) {
+            var _d = ((await _dR.json()) || {}).data || {}, _w = ((await _wR.json()) || {}).data || {}, _m = ((await _mR.json()) || {}).data || {};
             // Guard against an echo/stale mismatch (only trust a response that
             // confirms it filtered to the runtime we asked for).
             if (String(_d.runtime || '') === _ovRt) {
               _scope = { runtime: _ovRt, sessions: _d.sessions_count | 0,
                          tokensToday: _d.total_tokens | 0, tokensMonth: _m.total_tokens | 0,
-                         cost: +_d.total_cost || 0, model: _ovModel };
+                         cost: +_d.total_cost || 0, costWeek: +_w.total_cost || 0,
+                         costMonth: +_m.total_cost || 0, model: _ovModel };
             }
           }
         } catch (e2) { /* fall through to slice */ }
@@ -3158,7 +3159,8 @@ async function loadMiniWidgets(overview, usage) {
         // (not period-split, but scoped to the runtime — better than node-wide).
         _scope = { runtime: _ovRt, sessions: _rs.sessions | 0,
                    tokensToday: _rs.tokens | 0, tokensMonth: _rs.tokens | 0,
-                   cost: +_rs.cost_usd || 0, model: _ovModel };
+                   cost: +_rs.cost_usd || 0, costWeek: +_rs.cost_usd || 0,
+                   costMonth: +_rs.cost_usd || 0, model: _ovModel };
       }
       if (_scope) {
         window._cmRuntimeScope = _scope;
@@ -3168,6 +3170,9 @@ async function loadMiniWidgets(overview, usage) {
         _set('tokens-today', _fmtT(_scope.tokensToday));
         _set('token-rate', _fmtT(_scope.tokensMonth));
         _set('cost-today', '$' + _scope.cost.toFixed(2));
+        // SPENDING wk/mo sub-figures scope too (were node-wide projections).
+        if (_scope.costWeek != null) _set('cost-week', fmtCost(_scope.costWeek));
+        if (_scope.costMonth != null) _set('cost-month', fmtCost(_scope.costMonth));
         window._cmTodayTokensRaw = _scope.tokensToday;
       }
     }
