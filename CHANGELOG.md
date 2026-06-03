@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: provision clawmetry-pro into pip-less daemon venvs (carries #2548) (2026-06-03)
+- **Why:** the cloud sync daemon runs from `~/.clawmetry/bin/python3`, a venv that on many installs has no `pip` (sometimes no `ensurepip`). `auto_provision_pro` shelled to `python -m pip install <wheel>` and failed every cycle with `No module named pip` — so on entitled (Trial/Pro) accounts the paid runtime adapters (Claude Code, Codex, Cursor, Aider, Goose, opencode, Qwen, …) downloaded but never installed and stayed locked in the Fleet despite a valid entitlement.
+- **What:** `clawmetry-pro` is a pure-Python `--no-deps` wheel (a zip), so the installer is now resilient: `pip install → ensurepip+retry → unzip wheel into site-packages`. The unzip fallback writes the `.dist-info` so both `import` and `importlib.metadata.version` resolve it on the daemon's next start. Also fixed the `clawmetry status` hint that wrongly suggested `pip install clawmetry-pro` (closed-source, served via `/api/license/download`, not PyPI).
+- **Verified:** 3 new unit tests (unzip extracts importably, pip-missing falls back to unzip, pip-present never falls back), 26 pass. Verified live on a real pip-less daemon venv: after install + graceful restart the node synced Claude Code/Codex/Cursor/Goose/opencode/Qwen/Hermes/Nano/Pico (45945 events) to the cloud Fleet.
+
+
 ### Release: named source for out-loop / production agents (carries #2497) (2026-06-02)
 - **Why:** `import clawmetry.track` already auto-tracks any Python agent's LLM calls (it patches httpx/requests, so OpenAI Agents SDK / LangChain / Vercel AI SDK / E2B all flow through), but they showed up as anonymous scripts. The first step toward out-loop SDK products as a first-class source class (the biggest TAM gap).
 - **What:** `clawmetry.track.set_source("my-agent")` + a `CLAWMETRY_SOURCE` env var tag every intercepted LLM call with a name, so a production agent becomes a first-class source you can attribute cost to per product. Each `llm_call` event now carries a `source` field.
