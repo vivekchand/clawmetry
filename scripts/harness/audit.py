@@ -238,6 +238,10 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--file-issues", action="store_true", help="actually open issues (default: dry-run)")
     ap.add_argument("--runtime", help="audit a single runtime")
+    ap.add_argument("--max-per-runtime", type=int, default=5,
+                    help="cap issues filed per runtime (highest-severity first); 0 = no cap")
+    ap.add_argument("--include-low", action="store_true",
+                    help="also file low-severity gaps (default: skip them)")
     args = ap.parse_args()
 
     manifest = _load_manifest()
@@ -263,9 +267,20 @@ def main() -> int:
         raw = _run_claude(_build_prompt(h, surface, adapter, caps))
         gaps = _extract_json_array(raw)
         print(f"  {len(gaps)} gap(s) reported")
-        for gap in gaps:
-            if not gap.get("where"):  # ungrounded -> drop (anti-hallucination)
-                continue
+        # Ground (anti-hallucination), severity-sort, drop low, cap per runtime so a
+        # daily run produces a focused, high-value stream — not 100+ noisy issues.
+        # The cap is LOGGED (no silent truncation, FLYWHEEL "no silent caps").
+        _sev = {"high": 0, "medium": 1, "low": 2}
+        grounded = [g for g in gaps if g.get("where")]
+        grounded.sort(key=lambda g: _sev.get(str(g.get("severity", "medium")).lower(), 1))
+        keep = grounded if args.include_low else [
+            g for g in grounded if str(g.get("severity", "medium")).lower() != "low"]
+        capped = keep if args.max_per_runtime <= 0 else keep[:args.max_per_runtime]
+        deferred = len(grounded) - len(capped)
+        if deferred:
+            print(f"  filing {len(capped)} of {len(grounded)} grounded gap(s); "
+                  f"{deferred} lower-priority deferred (raise --max-per-runtime / --include-low)")
+        for gap in capped:
             fp = _fingerprint(rt, gap)
             if fp in existing:
                 print(f"  [dup] {gap.get('title')} ({fp}) — already filed")
