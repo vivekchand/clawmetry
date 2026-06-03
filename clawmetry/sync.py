@@ -5459,7 +5459,17 @@ def _detect_runtimes_lite() -> list:
 def _detect_runtimes_for_heartbeat() -> list:
     """Detected runtimes to report to the cloud Fleet. Merges the authoritative
     clawmetry-pro adapter counts (when installed) with the free lite detector,
-    preferring the higher session count per runtime. Never raises."""
+    preferring the higher session count per runtime. Never raises.
+
+    Only runtimes with **real sessions on disk** (sessions > 0) are reported.
+    The lite detector flags a runtime from its directory/config presence alone —
+    e.g. the Cursor *IDE* being installed makes ``~/Library/Application Support/
+    Cursor`` exist even when the Cursor *agent* was never used. Reporting such a
+    0-session runtime makes the Fleet render a "detected here / appears shortly"
+    card that never resolves (nothing to sync), which reads as a stuck phantom.
+    "Installed & running" for observability means there is actual data — so a
+    runtime with zero sessions is not shown until it produces one.
+    """
     merged: dict = {}
     try:
         for r in (_detect_runtimes_lite() or []):
@@ -5478,7 +5488,8 @@ def _detect_runtimes_for_heartbeat() -> list:
                 merged[rid] = {"id": rid, "label": label, "sessions": n}
     except Exception:
         pass
-    return list(merged.values())
+    # Drop 0-session phantoms (directory/config detected but no real data).
+    return [r for r in merged.values() if int(r.get("sessions") or 0) > 0]
 
 
 def send_heartbeat(config: dict) -> bool:
