@@ -855,8 +855,13 @@ def _cmd_sync(args) -> None:
         print("❌  Config has no api_key. Run `clawmetry connect` first.")
         sys.exit(1)
 
-    print(f"  Starting sync daemon for {config.get('node_id', '<unknown>')}…")
+    _verb = "Restarting" if getattr(args, "restart", False) else "Starting"
+    print(f"  {_verb} sync daemon for {config.get('node_id', '<unknown>')}…")
+    # _start_daemon already bootout+bootstraps (launchd) / restarts (systemd),
+    # so it is itself a safe restart — `--restart` just makes the intent explicit.
     _start_daemon(config, args)
+    if getattr(args, "restart", False):
+        print("  ✅  Daemon restarted — re-checking entitlement & provisioning runtimes.")
     if not getattr(args, "foreground", False):
         print("  ✅  Sync daemon started.")
 
@@ -2666,10 +2671,14 @@ def _cmd_update() -> None:
 
                     if CONFIG_FILE.exists():
                         print("Restarting sync daemon...")
+                        # `clawmetry sync` re-registers the launchd/systemd unit
+                        # (bootout+bootstrap) = a safe restart. The old call to
+                        # the non-existent `daemon restart` subcommand silently
+                        # failed, so the daemon kept running the OLD wheel.
                         subprocess.run(
-                            ["clawmetry", "daemon", "restart"],
+                            ["clawmetry", "sync", "--restart"],
                             capture_output=True,
-                            timeout=15,
+                            timeout=20,
                         )
                         print("Daemon restarted with new version")
                 except Exception:
@@ -3002,6 +3011,10 @@ def main() -> None:
     )
     p_sync.add_argument(
         "--foreground", action="store_true", help="Run daemon in foreground"
+    )
+    p_sync.add_argument(
+        "--restart", action="store_true",
+        help="Restart the running daemon (bounces launchd/systemd; safe, no SIGKILL)",
     )
 
     # status
