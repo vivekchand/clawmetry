@@ -70,3 +70,26 @@ def test_auto_update_in_allowed_config_keys(monkeypatch):
     with app.test_request_context(json={"auto_update": True, "bogus": "x"}):
         uc.api_update_check_config_post()
     assert captured == {"auto_update": True}, "auto_update must pass the allow-list, bogus keys filtered"
+
+
+def test_auto_update_holds_fresh_release(monkeypatch):
+    uc = _uc()
+    calls = []
+    _mock_self_update(monkeypatch, calls)
+    monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
+    monkeypatch.setenv("CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS", "48")
+    # 2h-old release → held (too fresh)
+    uc._maybe_auto_update("0.12.1", "0.12.2", age_hours=2.0)
+    assert calls == [], "must hold a release younger than the stability window"
+    # 72h-old release → installs
+    uc._maybe_auto_update("0.12.1", "0.12.2", age_hours=72.0)
+    assert calls == ["auto"], "must install once the release has aged in"
+
+
+def test_auto_update_unknown_age_does_not_block(monkeypatch):
+    uc = _uc()
+    calls = []
+    _mock_self_update(monkeypatch, calls)
+    monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
+    uc._maybe_auto_update("0.12.1", "0.12.2", age_hours=None)
+    assert calls == ["auto"], "unknown age must not block (back-compat)"
