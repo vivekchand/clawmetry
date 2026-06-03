@@ -68,6 +68,12 @@ function isHarmlessConsoleError(e) {
     /Unexpected string/.test(e) ||
     (/\/api\/skills/.test(e) && /\b410\b/.test(e)) ||
     /posthog|clarity|analytics|gtag/i.test(e) ||
+    // Third-party ad/measurement pixels we don't control: Google Tag Manager
+    // fires DoubleClick / Google Ads conversion beacons that intermittently
+    // 4xx (ad blockers, consent state, Google-side throttling). These are not
+    // ClawMetry resources and must not gate a release. (A DoubleClick 400
+    // false-failed the 0.12.423 release — 59 passed, 1 failed on an ad pixel.)
+    /doubleclick\.net|googletagmanager\.com|google-analytics\.com|googleadservices|googlesyndication|\/ccm\/|\/collect\b/i.test(e) ||
     // TEMPORARY (revert after cloud is on clawmetry==0.12.167+):
     // Live cloud still serves OSS 0.12.166's broken app.js (PR #753
     // shipped a missing `}`, fixed in PR #1019). Until cloud's

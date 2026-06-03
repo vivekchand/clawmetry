@@ -1,5 +1,12 @@
 ## [Unreleased]
 
+### Release: per-runtime Fleet tabs + pip-less pro provisioning (carries #2548, #2551) + release-flake fix (2026-06-03)
+- **Per-runtime tabs:** the global runtime filter now honours a tab-local `?runtime=<id>` URL param (overrides the shared `localStorage` key). This lets the cloud Fleet open each synced runtime in its own browser tab — Claude Code in one, Codex in another — each independent. `_cmRuntimeFilter()` prefers the URL pin; `_cmSetRuntimeFilter()` updates the URL (not localStorage) in a pinned tab. (#2551)
+- **Pip-less pro provisioning:** the daemon venv (`~/.clawmetry/bin/python3`) often has no `pip`, so `auto_provision_pro` failed forever with `No module named pip` and paid runtimes never installed on entitled accounts. The installer now does `pip → ensurepip → unzip the (pure-Python --no-deps) wheel into site-packages`, so it always succeeds. Also fixed the wrong `clawmetry status` hint (it suggested `pip install clawmetry-pro`, which is closed-source + needs no pip). (#2548)
+- **Release-flake fix:** a third-party DoubleClick/Google-Ads pixel returning 400 false-failed the cloud-contract release gate (`zero unexpected JS errors`). Added ad/measurement domains to `isHarmlessConsoleError` so third-party beacons we don't control can't block a publish.
+- **Verified:** OSS CI matrix green; pip-less install proven live on a real pip-less daemon venv (synced 10 runtimes / 45945 events to the Fleet); 7 URL-pin assertions + 3 install-fallback unit tests.
+
+
 ### Release: provision clawmetry-pro into pip-less daemon venvs (carries #2548) (2026-06-03)
 - **Why:** the cloud sync daemon runs from `~/.clawmetry/bin/python3`, a venv that on many installs has no `pip` (sometimes no `ensurepip`). `auto_provision_pro` shelled to `python -m pip install <wheel>` and failed every cycle with `No module named pip` — so on entitled (Trial/Pro) accounts the paid runtime adapters (Claude Code, Codex, Cursor, Aider, Goose, opencode, Qwen, …) downloaded but never installed and stayed locked in the Fleet despite a valid entitlement.
 - **What:** `clawmetry-pro` is a pure-Python `--no-deps` wheel (a zip), so the installer is now resilient: `pip install → ensurepip+retry → unzip wheel into site-packages`. The unzip fallback writes the `.dist-info` so both `import` and `importlib.metadata.version` resolve it on the daemon's next start. Also fixed the `clawmetry status` hint that wrongly suggested `pip install clawmetry-pro` (closed-source, served via `/api/license/download`, not PyPI).
