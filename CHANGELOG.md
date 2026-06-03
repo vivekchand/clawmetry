@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: Overview cards scope to the selected runtime (carries #2558) (2026-06-03)
+- **Why:** with a runtime selected, the node-detail Overview stat cards + hero showed NODE-WIDE numbers (e.g. 68 sessions / 3.8M tokens / claude-opus-4-8 while "PicoClaw" was selected). Only the switcher label changed, not the data (the FLYWHEEL runtime-filter rule, §1c).
+- **What:** `loadMiniWidgets` now scopes sessions / tokens / cost / model to the selected runtime. Cloud mode sources the period-accurate numbers from the public v1 API (`/api/v1/usage?runtime=&period=day|month`, server-side filtered); local mode falls back to the `/api/runtime-summary` per-runtime slice. `_renderOverviewHero` reads the scope so the headline mirrors the cards. `runtime=all` keeps the node-wide path unchanged.
+- **Verified:** live v1 data — PicoClaw -> 0 sessions / 0 tokens; Claude Code -> 2 sessions / 490K today / 82M month. Auth rides the cm_token cookie the cloud page already sets. node --check clean.
+
+
 ### Release: per-runtime Fleet tabs + pip-less pro provisioning (carries #2548, #2551) + release-flake fix (2026-06-03)
 - **Per-runtime tabs:** the global runtime filter now honours a tab-local `?runtime=<id>` URL param (overrides the shared `localStorage` key). This lets the cloud Fleet open each synced runtime in its own browser tab — Claude Code in one, Codex in another — each independent. `_cmRuntimeFilter()` prefers the URL pin; `_cmSetRuntimeFilter()` updates the URL (not localStorage) in a pinned tab. (#2551)
 - **Pip-less pro provisioning:** the daemon venv (`~/.clawmetry/bin/python3`) often has no `pip`, so `auto_provision_pro` failed forever with `No module named pip` and paid runtimes never installed on entitled accounts. The installer now does `pip → ensurepip → unzip the (pure-Python --no-deps) wheel into site-packages`, so it always succeeds. Also fixed the wrong `clawmetry status` hint (it suggested `pip install clawmetry-pro`, which is closed-source + needs no pip). (#2548)
