@@ -1620,6 +1620,56 @@ def _cmd_status(args) -> None:
         except Exception:
             pass
 
+    # Runtimes — which agent runtimes this node detects + actually SYNCS, so it's
+    # obvious at a glance whether Claude Code / Codex / etc. are being captured
+    # (the #1 "why don't I see my runtime?" question). The honest distinction:
+    # the adapter may DETECT a runtime locally, but paid runtimes only SYNC to
+    # the cloud on a Trial/Pro account — so we read the daemon's plan cache.
+    try:
+        print()
+        # Is this node's account entitled? (daemon mirrors the cloud plan here.)
+        _entitled = False
+        _plan = ""
+        try:
+            import json as _j2
+            _cp = Path(os.path.expanduser("~/.clawmetry/cloud_plan.json"))
+            if _cp.is_file():
+                _plan = str((json.loads(_cp.read_text()) or {}).get("plan", "")).lower()
+                _entitled = _plan not in ("", "cloud_free", "free")
+        except Exception:
+            pass
+        _prover = None
+        try:
+            from clawmetry.license import _pro_installed_version as _pv
+            _prover = _pv()
+        except Exception:
+            _prover = None
+        _det = []
+        try:
+            from clawmetry.sync import _detect_family_runtimes as _dfr
+            _det = _dfr() or []
+        except Exception:
+            _det = []
+        print("  Runtimes:")
+        print("    🦞 OpenClaw            ✅ syncing  (free)")
+        for _r in _det:
+            _n = int(_r.get("sessionCount") or 0)
+            _nm = _r.get("displayName") or _r.get("name") or "runtime"
+            _state = "✅ syncing" if _entitled else "○ detected, NOT syncing"
+            print(f"    • {_nm:<18} {_state}  ({_n} session{'s' if _n != 1 else ''})")
+        if not _prover:
+            print("    ⚠ Claude Code / Codex / Cursor / Aider / Goose / opencode / Qwen — NOT syncing")
+            print("      → paid runtimes need clawmetry-pro. It auto-installs once your account")
+            print("        is Trial/Pro; or: pip install clawmetry-pro && clawmetry sync --restart")
+        elif _det and not _entitled:
+            print(f"    clawmetry-pro {_prover} installed and detecting the above — but your account")
+            print(f"      is on the FREE plan ({_plan or 'free'}), so paid runtimes are NOT synced to")
+            print("      the cloud. Link to a Trial/Pro account (the dashboard prompts you) to sync them.")
+        elif _prover and not _det:
+            print(f"    clawmetry-pro {_prover} installed — no other runtimes found on this machine yet.")
+    except Exception:
+        pass
+
     # Daemon status
     system = platform.system()
     print()
