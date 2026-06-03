@@ -5330,6 +5330,21 @@ def _build_node_meta() -> dict:
         meta["local_ips"] = sorted(_ips)[:8]
     except Exception:
         pass
+    # Pro-adapter + auto-update status so the cloud Fleet can show whether an
+    # entitled node is actually running clawmetry-pro (the paid runtime
+    # adapters) and keeping itself current — turning the "I'm on Pro but Claude
+    # Code isn't showing" guesswork into a visible state on the node card.
+    try:
+        from clawmetry.license import _pro_installed_version as _pv
+        _pver = _pv()
+        meta["pro_version"] = str(_pver) if _pver else ""
+    except Exception:
+        pass
+    try:
+        from routes.update_check import _get_update_check_config as _gucc
+        meta["auto_update"] = bool((_gucc() or {}).get("auto_update"))
+    except Exception:
+        pass
     return meta
 
 
