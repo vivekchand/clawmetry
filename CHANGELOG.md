@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Release: Overview SPENDING wk/mo scope to selected runtime (carries #2562) (2026-06-03)
+- **What:** completes the node-detail Overview runtime scoping (follows #2558). The SPENDING card's wk/mo sub-figures now scope to the selected runtime via a v1 usage `period=week|month` fetch (local-mode fallback uses the runtime-summary slice); `runtime=all` keeps node-wide. The whole Overview screen (sessions / tokens / cost / model / spending) now reflects only the selected runtime.
+- **Verified:** v1 `period=week` live (claude_code 52.9M tokens / $0 OAuth); node --check clean.
+
+
 ### Release: Overview cards scope to the selected runtime (carries #2558) (2026-06-03)
 - **Why:** with a runtime selected, the node-detail Overview stat cards + hero showed NODE-WIDE numbers (e.g. 68 sessions / 3.8M tokens / claude-opus-4-8 while "PicoClaw" was selected). Only the switcher label changed, not the data (the FLYWHEEL runtime-filter rule, §1c).
 - **What:** `loadMiniWidgets` now scopes sessions / tokens / cost / model to the selected runtime. Cloud mode sources the period-accurate numbers from the public v1 API (`/api/v1/usage?runtime=&period=day|month`, server-side filtered); local mode falls back to the `/api/runtime-summary` per-runtime slice. `_renderOverviewHero` reads the scope so the headline mirrors the cards. `runtime=all` keeps the node-wide path unchanged.
