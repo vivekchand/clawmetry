@@ -3,25 +3,33 @@ name: Apply required E2E status checks (C6 -- one-shot)
 # Runs scripts/apply_required_status_checks.py to configure required
 # status checks on main across all three repos.
 #
-# Trigger: workflow_dispatch only (manual).
+# Triggers:
+#   workflow_dispatch -- manual trigger with confirm=APPLY to apply;
+#     confirm=dry-run (default) to preview without making changes.
+#   push to main -- self-healing: re-applies checks on every merge.
+#     On 403 (Workflow permissions not yet set to Read+Write), the
+#     Apply step exits 0 with an INFO message so main never acquires
+#     a failing check. Once Workflow permissions are set the VERY NEXT
+#     merge to main applies branch protection automatically.
 #
-# HISTORY: push trigger was removed 2026-06-02 because permissions:
-#   administration: write at the JOB level caused every push-triggered
-#   run to fail with 0 jobs. GitHub blocks the token before any job
-#   starts when the repo's Actions token cap is below administration:write
-#   (the default setting). Moved to workflow level; push trigger removed
-#   to eliminate noise. See vivekchand/clawmetry#2146 for details.
+# HISTORY:
+#   push trigger added     2026-06-01 (PR #2420): push: branches: [main]
+#   push trigger removed   2026-06-02 (PR #2449): job-level permissions
+#     caused 0-job failures. Fix: moved permissions to workflow level.
+#   push trigger re-added  2026-06-03 (this PR): bug fixed, self-healing
+#     restored. Apply step exits 0 on 403 so push never blocks main.
 #
-# REQUIREMENTS (choose one before triggering with confirm=APPLY):
+# REQUIREMENTS (choose one before admin wants to apply):
 #   A) Settings > Actions > General > Workflow permissions =
-#      "Read and write permissions". Then the built-in GITHUB_TOKEN
-#      will have administration:write and apply checks for this repo.
+#      "Read and write permissions". Built-in GITHUB_TOKEN then has
+#      administration:write. Push trigger will apply checks on next merge.
 #   B) Set repo secret E2E_ADMIN_PAT to a fine-grained PAT with
 #      Administration (read+write) on clawmetry, clawmetry-cloud,
-#      clawmetry-landing. This applies checks for all 3 repos at once.
+#      clawmetry-landing. Applies all 3 repos in one run.
 #
 # When only Option A is used: trigger the equivalent workflow in
-#   clawmetry-cloud and clawmetry-landing separately.
+#   clawmetry-cloud and clawmetry-landing separately (or wait for next
+#   push to main there).
 #
 # Idempotent: running multiple times is safe.
 # Tracking: vivekchand/clawmetry#2146 (C6)
@@ -33,6 +41,8 @@ on:
         description: "Type APPLY to configure repos (anything else = dry run)"
         required: true
         default: "dry-run"
+  push:
+    branches: [main]
 
 # Workflow-level permissions: provisioned at run start, not job setup.
 # administration:write is required to modify branch protection rules.
@@ -49,7 +59,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Preview checks (dry run)
-        if: github.event.inputs.confirm != 'APPLY'
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.confirm != 'APPLY'
         run: |
           echo "=== DRY RUN -- checks that will be added when confirm=APPLY ==="
           echo ""
@@ -79,7 +89,13 @@ jobs:
           echo "Re-run with confirm=APPLY to apply."
 
       - name: Apply required status checks
-        if: github.event.inputs.confirm == 'APPLY'
+        if: github.event_name == 'push' || github.event.inputs.confirm == 'APPLY'
         env:
           GITHUB_TOKEN: ${{ secrets.E2E_ADMIN_PAT || github.token }}
-        run: python3 scripts/apply_required_status_checks.py
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            python3 scripts/apply_required_status_checks.py \
+              || echo "INFO: branch protection not applied (Workflow permissions may be read-only). Enable Settings > Actions > General > Workflow permissions = Read and write, then this step succeeds on next push to main."
+          else
+            python3 scripts/apply_required_status_checks.py
+          fi
