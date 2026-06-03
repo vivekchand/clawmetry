@@ -306,6 +306,25 @@ def _family_session_limit() -> int:
     except (TypeError, ValueError):
         return 50
 
+# On-demand backfill (founder 2026-06-03): the default sync is the most-recent
+# 50, but the local DuckDB can hold as much history as the user wants. When the
+# cloud UI requests older sessions (a `runtime_backfill` pending action), we
+# raise the effective per-runtime ingest depth here; the next `sync_family_runtimes`
+# pass (every 60s) honours it and uploads the deeper history. In-memory for the
+# session; a restart resets to the default-50 (re-requestable on demand).
+_RUNTIME_BACKFILL_OVERRIDES: dict = {}
+_RUNTIME_BACKFILL_MAX = 5000  # hard ceiling so a bad request can't ingest unbounded
+
+def _effective_family_limit(runtime: str) -> int:
+    """The ingest depth for one family runtime: the larger of the default cap and
+    any on-demand backfill override requested for that runtime."""
+    base = _family_session_limit()
+    try:
+        ov = int(_RUNTIME_BACKFILL_OVERRIDES.get(runtime, 0) or 0)
+    except (TypeError, ValueError):
+        ov = 0
+    return max(base, min(ov, _RUNTIME_BACKFILL_MAX))
+
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 log = logging.getLogger("clawmetry-sync")
 log.setLevel(logging.INFO)
@@ -6191,6 +6210,7 @@ _PENDING_ACTIONS = frozenset({
     "cron_killall",
     "cron_fix",
     "dives_query",
+    "runtime_backfill",
 })
 
 
@@ -6382,6 +6402,9 @@ def _dispatch_pending_action(config: dict, action: dict) -> None:
     if atype == "selfevolve_analyze":
         _action_selfevolve_analyze(config, action)
         return
+    if atype == "runtime_backfill":
+        _action_runtime_backfill(config, action)
+        return
     if atype == "cron_create":
         _action_cron_create(config, action)
         return
@@ -6397,6 +6420,39 @@ def _dispatch_pending_action(config: dict, action: dict) -> None:
     if atype == "dives_query":
         _action_dives_query(config, action)
         return
+
+
+def _action_runtime_backfill(config: dict, action: dict) -> None:
+    """On-demand backfill: raise the ingest depth for ONE family runtime so the
+    next ``sync_family_runtimes`` pass pulls older sessions into DuckDB and
+    uploads them. Triggered by the cloud UI when the user digs into the past
+    (founder 2026-06-03: "we should be able to go back as much as the user
+    prefers but default-sync 50 recent"). Never raises.
+
+    Action shape: ``{"type": "runtime_backfill", "runtime": "claude_code",
+    "limit": 500}``. The limit is the TOTAL most-recent sessions to ingest for
+    that runtime (capped at _RUNTIME_BACKFILL_MAX); it only ever increases the
+    override, so repeated "load more" requests deepen monotonically."""
+    try:
+        runtime = str(action.get("runtime") or "").strip()
+        if not runtime:
+            return
+        try:
+            want = int(action.get("limit") or 0)
+        except (TypeError, ValueError):
+            want = 0
+        if want <= 0:
+            # No explicit target -> step the current depth up by one page.
+            want = _effective_family_limit(runtime) + max(50, _family_session_limit())
+        want = min(want, _RUNTIME_BACKFILL_MAX)
+        prev = int(_RUNTIME_BACKFILL_OVERRIDES.get(runtime, 0) or 0)
+        if want <= prev:
+            return  # already at or beyond this depth
+        _RUNTIME_BACKFILL_OVERRIDES[runtime] = want
+        log.info("runtime_backfill: %s ingest depth raised to %d (was %d); next "
+                 "sync pass will pull the older sessions", runtime, want, prev)
+    except Exception as e:
+        log.debug("runtime_backfill action skipped: %s", e)
 
 
 def _selfevolve_fix_summary(stdout: str) -> str:
@@ -8986,7 +9042,7 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
             if not adapter.detect().detected:
                 continue
             runtime = adapter.name
-            for s in adapter.list_sessions(limit=_family_session_limit()):
+            for s in adapter.list_sessions(limit=_effective_family_limit(runtime)):
                 if runtime == "claude_code" and s.id in openclaw_spawned_claude:
                     continue  # owned by OpenClaw; avoid the double-count
                 ns_id = f"{runtime}:{s.id}"
