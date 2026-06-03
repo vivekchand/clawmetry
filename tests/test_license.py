@@ -285,3 +285,71 @@ def test_auto_provision_idempotent_when_pro_present(prov, monkeypatch):
 
 def test_download_wheel_refuses_non_https(prov):
     assert prov.L._download_wheel("http://evil.example.com/x.whl") is None
+
+
+# ── pip-less venv install (the ~/.clawmetry/bin/python3 "No module named pip"
+# bug: the daemon venv has no pip, so `python -m pip install` fails forever and
+# the paid runtimes never provision). The installer must fall back to unzipping
+# the (pure-Python, --no-deps) wheel straight into site-packages. ──────────────
+
+def _make_fake_wheel(tmp_path):
+    """Build a minimal pure-Python wheel zip: one package + a .dist-info."""
+    import zipfile
+    wheel = tmp_path / "clawfake-1.2.3-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as zf:
+        zf.writestr("clawfake/__init__.py", "VERSION = '1.2.3'\n")
+        zf.writestr("clawfake-1.2.3.dist-info/METADATA",
+                    "Metadata-Version: 2.1\nName: clawfake\nVersion: 1.2.3\n")
+        zf.writestr("clawfake-1.2.3.dist-info/RECORD", "")
+    return wheel
+
+
+def test_unzip_wheel_into_site_extracts_importably(prov, tmp_path, monkeypatch):
+    L = prov.L
+    import sysconfig
+    site = tmp_path / "site"
+    site.mkdir()
+    monkeypatch.setattr(sysconfig, "get_path",
+                        lambda name: str(site) if name in ("purelib", "platlib") else None)
+    wheel = _make_fake_wheel(tmp_path)
+    ok, detail = L._unzip_wheel_into_site(str(wheel))
+    assert ok, detail
+    # package + dist-info landed in site-packages
+    assert (site / "clawfake" / "__init__.py").is_file()
+    assert (site / "clawfake-1.2.3.dist-info" / "METADATA").is_file()
+
+
+def test_pip_install_falls_back_to_unzip_when_pip_missing(prov, tmp_path, monkeypatch):
+    """Simulate a pip-less venv: `python -m pip` reports 'No module named pip'
+    and ensurepip can't bootstrap it. The installer must still install via the
+    unzip fallback rather than failing the whole provision."""
+    L = prov.L
+    import sysconfig
+    import subprocess
+    site = tmp_path / "site"
+    site.mkdir()
+    monkeypatch.setattr(sysconfig, "get_path",
+                        lambda name: str(site) if name in ("purelib", "platlib") else None)
+    # pip is absent every time it's invoked.
+    monkeypatch.setattr(L, "_pip_run",
+                        lambda args: (False, "No module named pip"))
+    # ensurepip is a no-op (still no pip afterwards) — covers venvs without it.
+    monkeypatch.setattr(subprocess, "run",
+                        lambda *a, **k: __import__("types").SimpleNamespace(returncode=1, stdout="", stderr=""))
+    wheel = _make_fake_wheel(tmp_path)
+    ok, detail = L._pip_install_wheel(str(wheel))
+    assert ok, detail
+    assert "unzip" in detail
+    assert (site / "clawfake" / "__init__.py").is_file()
+
+
+def test_pip_install_prefers_pip_when_available(prov, tmp_path, monkeypatch):
+    """When pip works, we use it and DON'T touch site-packages directly."""
+    L = prov.L
+    monkeypatch.setattr(L, "_pip_run", lambda args: (True, "installed"))
+    called = {"unzip": False}
+    monkeypatch.setattr(L, "_unzip_wheel_into_site",
+                        lambda p: (called.__setitem__("unzip", True), (True, "x"))[1])
+    ok, detail = L._pip_install_wheel(str(tmp_path / "any.whl"))
+    assert ok and detail == "installed"
+    assert called["unzip"] is False  # never fell back

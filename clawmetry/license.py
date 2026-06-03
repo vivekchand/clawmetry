@@ -225,26 +225,83 @@ def _download_wheel(url: str, headers: dict | None = None) -> str | None:
         return None
 
 
-def _pip_install_wheel(wheel_path: str) -> tuple[bool, str]:
-    """pip-install ``wheel_path`` into THIS interpreter's environment (the same
-    venv the daemon/dashboard run from — ``sys.executable``). The daemon picks
-    the adapters up on its next start via extensions.load_plugins() /
-    _family_adapter_classes(). Never raises."""
-    try:
-        import subprocess
-        import sys
+def _pip_run(args: list) -> tuple[bool, str]:
+    """Run ``python -m pip <args>`` in THIS interpreter. Returns (ok, tail)."""
+    import subprocess
+    import sys
 
-        proc = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--upgrade",
-             "--no-deps", "--disable-pip-version-check", wheel_path],
-            capture_output=True, text=True, timeout=300,
-        )
-        if proc.returncode == 0:
-            return True, "installed"
-        tail = (proc.stderr or proc.stdout or "").strip().splitlines()
-        return False, (tail[-1] if tail else f"pip exited {proc.returncode}")
+    proc = subprocess.run(
+        [sys.executable, "-m", "pip", *args],
+        capture_output=True, text=True, timeout=300,
+    )
+    if proc.returncode == 0:
+        return True, "installed"
+    tail = (proc.stderr or proc.stdout or "").strip().splitlines()
+    return False, (tail[-1] if tail else f"pip exited {proc.returncode}")
+
+
+def _unzip_wheel_into_site(wheel_path: str) -> tuple[bool, str]:
+    """pip-less fallback: a wheel is a zip of pure-Python packages, so for a
+    ``--no-deps`` pure-Python wheel (clawmetry-pro) we can simply extract it into
+    this interpreter's site-packages and it becomes importable. This is the path
+    that rescues a daemon venv created WITHOUT pip (``~/.clawmetry/bin/python3``
+    on some installs has no pip / no ensurepip), where ``python -m pip`` fails
+    with ``No module named pip``. Never raises."""
+    try:
+        import sysconfig
+        import zipfile
+
+        target = sysconfig.get_path("purelib") or sysconfig.get_path("platlib")
+        if not target or not os.path.isdir(target):
+            return False, f"no writable site-packages ({target!r})"
+        with zipfile.ZipFile(wheel_path) as zf:
+            # Skip RECORD-only metadata noise; extract packages + dist-info so the
+            # import system (and _pro_installed_version's importlib.metadata) work.
+            zf.extractall(target)
+        return True, "installed (unzip)"
     except Exception as exc:
-        return False, str(exc)
+        return False, f"unzip install failed: {exc}"
+
+
+def _pip_install_wheel(wheel_path: str) -> tuple[bool, str]:
+    """Install ``wheel_path`` into THIS interpreter's environment (the same venv
+    the daemon/dashboard run from — ``sys.executable``). The daemon picks the
+    adapters up on its next start via extensions.load_plugins() /
+    _family_adapter_classes().
+
+    Resilient to a pip-less venv: tries ``python -m pip``; if pip is missing,
+    bootstraps it with ``ensurepip`` and retries; if that too is unavailable,
+    falls back to unzipping the (pure-Python, --no-deps) wheel straight into
+    site-packages. Never raises."""
+    import subprocess
+    import sys
+
+    args = ["install", "--upgrade", "--no-deps",
+            "--disable-pip-version-check", wheel_path]
+    try:
+        ok, detail = _pip_run(args)
+        if ok:
+            return True, detail
+        # pip absent? bootstrap it via ensurepip, then retry once.
+        if "No module named pip" in detail or "No module named 'pip'" in detail:
+            try:
+                subprocess.run(
+                    [sys.executable, "-m", "ensurepip", "--upgrade"],
+                    capture_output=True, text=True, timeout=180,
+                )
+                ok2, detail2 = _pip_run(args)
+                if ok2:
+                    return True, detail2
+                detail = detail2
+            except Exception as ee:
+                detail = f"{detail}; ensurepip: {ee}"
+            # ensurepip also unavailable — last resort: unzip the wheel.
+            return _unzip_wheel_into_site(wheel_path)
+        return False, detail
+    except Exception as exc:
+        # Any unexpected pip failure: still try the pip-less unzip path.
+        ok3, detail3 = _unzip_wheel_into_site(wheel_path)
+        return (True, detail3) if ok3 else (False, f"{exc}; {detail3}")
 
 
 def _provision_pro_wheel(download_url: str, *, headers: dict | None = None,
