@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: scoped Overview shows the runtime's footprint, not an empty today-window (carries #2565) (2026-06-03)
+- **Why:** selecting a runtime whose sessions are older than today (e.g. OpenClaw, 2 sessions from 2 days ago) made the Overview show "0 sessions today" while the switcher said "OpenClaw · 2 sessions" — it read as "sessions gone." Not a data bug (verified via v1 usage day=0 / month=2).
+- **What:** when a runtime is selected, the Overview shows that runtime's FOOTPRINT matching the switcher — SESSIONS = the switcher's per-runtime total, the tile label flips "Sessions today" -> "Sessions", the hero drops the "today" suffix, and cost/tokens use the month figure. Node-wide ('all') keeps the live "today" framing.
+- **Verified:** node --check clean; hero-wording logic unit-checked (scoped "2 sessions"; all "68 sessions today").
+
+
 ### Release: Overview SPENDING wk/mo scope to selected runtime (carries #2562) (2026-06-03)
 - **What:** completes the node-detail Overview runtime scoping (follows #2558). The SPENDING card's wk/mo sub-figures now scope to the selected runtime via a v1 usage `period=week|month` fetch (local-mode fallback uses the runtime-summary slice); `runtime=all` keeps node-wide. The whole Overview screen (sessions / tokens / cost / model / spending) now reflects only the selected runtime.
 - **Verified:** v1 `period=week` live (claude_code 52.9M tokens / $0 OAuth); node --check clean.
