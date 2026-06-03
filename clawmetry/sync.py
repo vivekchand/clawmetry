@@ -1032,6 +1032,39 @@ _HEARTBEAT_PLAN_TO_TIER = {
 }
 
 
+def _sync_auto_update_with_plan(tier: str | None) -> None:
+    """Entitled accounts (Trial / Starter / Pro / Enterprise) keep the node
+    current automatically: enable the opt-in ``auto_update`` flag so the
+    daemon's update-check worker installs new releases (riding the 48h
+    staleness rail). This is what makes "I'm on Pro, the node should just stay
+    current" real without a manual ``pip install -U``.
+
+    Safety: respects an explicit opt-out (``CLAWMETRY_AUTO_UPDATE`` in
+    0/false/no/off), only ever ENABLES (never auto-disables, so a user's manual
+    choice survives a downgrade), and no-ops for free / inactive plans. Best
+    effort — never raises."""
+    try:
+        if not tier or tier == "cloud_free":
+            return
+        _ov = os.environ.get("CLAWMETRY_AUTO_UPDATE", "").strip().lower()
+        if _ov in ("0", "false", "no", "off"):
+            return
+        from routes.update_check import (
+            _get_update_check_config as _gucc,
+            _set_update_check_config as _succ,
+        )
+        cfg = _gucc() or {}
+        if not cfg.get("auto_update"):
+            _succ({"auto_update": True})
+            log.info(
+                "auto-update enabled for entitled plan (%s) — this node will keep "
+                "itself current (48h stability window). Opt out any time with "
+                "CLAWMETRY_AUTO_UPDATE=0.", tier,
+            )
+    except Exception as exc:
+        log.debug("auto-update plan sync skipped: %s", exc)
+
+
 def _persist_cloud_plan_to_disk(plan: str | None, trial_days_left=None) -> None:
     """Mirror the heartbeat plan into ``~/.clawmetry/cloud_plan.json`` so the
     dashboard process (which runs ``clawmetry.entitlements.get_entitlement``)
@@ -1043,6 +1076,8 @@ def _persist_cloud_plan_to_disk(plan: str | None, trial_days_left=None) -> None:
     is removed instead of written, so the resolver falls back to OSS-free
     rather than granting a dead plan."""
     tier = _HEARTBEAT_PLAN_TO_TIER.get(str(plan or "").strip().lower())
+    # Entitled plan → keep this node current automatically (opt-out + 48h rail).
+    _sync_auto_update_with_plan(tier)
     try:
         if tier is None:
             if os.path.isfile(_CLOUD_PLAN_CACHE_PATH):

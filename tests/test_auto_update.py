@@ -93,3 +93,32 @@ def test_auto_update_unknown_age_does_not_block(monkeypatch):
     monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
     uc._maybe_auto_update("0.12.1", "0.12.2", age_hours=None)
     assert calls == ["auto"], "unknown age must not block (back-compat)"
+
+
+def test_entitled_plan_enables_auto_update(monkeypatch):
+    import clawmetry.sync as S
+    import routes.update_check as uc
+    state = {"auto_update": False}
+    monkeypatch.setattr(uc, "_get_update_check_config", lambda: dict(state))
+    monkeypatch.setattr(uc, "_set_update_check_config", lambda upd: state.update(upd))
+    monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
+    # free / inactive → unchanged
+    S._sync_auto_update_with_plan("cloud_free"); assert state["auto_update"] is False
+    S._sync_auto_update_with_plan(None);         assert state["auto_update"] is False
+    # entitled → enabled
+    S._sync_auto_update_with_plan("trial");      assert state["auto_update"] is True
+    S._sync_auto_update_with_plan("cloud_pro");  assert state["auto_update"] is True
+
+
+def test_entitled_plan_respects_optout_and_never_disables(monkeypatch):
+    import clawmetry.sync as S
+    import routes.update_check as uc
+    state = {"auto_update": False}
+    monkeypatch.setattr(uc, "_get_update_check_config", lambda: dict(state))
+    monkeypatch.setattr(uc, "_set_update_check_config", lambda upd: state.update(upd))
+    monkeypatch.setenv("CLAWMETRY_AUTO_UPDATE", "0")
+    S._sync_auto_update_with_plan("cloud_pro");  assert state["auto_update"] is False  # opt-out
+    # never auto-DISABLES a user's manual choice on downgrade
+    monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
+    state["auto_update"] = True
+    S._sync_auto_update_with_plan("cloud_free"); assert state["auto_update"] is True
