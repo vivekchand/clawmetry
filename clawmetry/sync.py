@@ -1063,6 +1063,31 @@ def _sync_auto_update_with_plan(tier: str | None) -> None:
             )
     except Exception as exc:
         log.debug("auto-update plan sync skipped: %s", exc)
+    # Entitled NOW (e.g. a trial just started this heartbeat) → provision
+    # clawmetry-pro IMMEDIATELY rather than waiting up to ~30 min for the
+    # entitlement watcher, so the paid runtimes (Claude Code, Codex, …) start
+    # syncing within a cycle or two of the upgrade — no daemon restart needed.
+    try:
+        if tier and tier != "cloud_free":
+            from clawmetry.license import (
+                _pro_installed_version as _pv2,
+                auto_provision_pro as _app2,
+            )
+            if not _pv2():
+                _cfg2 = load_config() or {}
+                _ak2 = _cfg2.get("api_key", "")
+                if _ak2:
+                    _ok2, _ = _app2(_ak2, _cfg2.get("node_id"))
+                    if _ok2:
+                        log.info("clawmetry-pro provisioned on upgrade to %s — paid "
+                                 "runtimes will sync on the next cycle", tier)
+                        try:
+                            from clawmetry.extensions import load_plugins as _lp2
+                            _lp2()
+                        except Exception:
+                            pass
+    except Exception as _ppe:
+        log.debug("immediate pro provision on upgrade skipped: %s", _ppe)
 
 
 def _persist_cloud_plan_to_disk(plan: str | None, trial_days_left=None) -> None:
