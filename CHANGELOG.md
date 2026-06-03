@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Release: Fleet shows only runtimes with REAL sessions (drop 0-session phantoms) (2026-06-03)
+- **Why:** the Fleet rendered a "Cursor — detected here / appears shortly / Syncing…" card that never resolved. The lite detector flags a runtime from directory/config presence alone — the Cursor *IDE* being installed makes `~/Library/Application Support/Cursor` exist even when the Cursor *agent* was never used — so the daemon reported it with `sessions=0` and the cloud showed a stuck phantom (founder report).
+- **What:** `_detect_runtimes_for_heartbeat()` now drops any runtime with 0 sessions. "Installed & running" for observability means there is real data; a runtime with zero sessions isn't advertised until it produces one. Verified on the founder's machine: Cursor (0) dropped; Claude Code/Codex/Qwen/Goose/opencode/Hermes/PicoClaw (all >0, all real) kept.
+- **Guard:** `tests/test_detected_runtimes_no_phantom.py` asserts 0-session runtimes never leak.
+
 ### Release: per-runtime sidebars derive from DECLARED capabilities (#2575) (2026-06-03)
 - **Why:** the first pass (#2571/#2572) hid tabs from a hand-written list that an LLM helper had hallucinated parts of (NemoClaw mislabeled a "NeMo toolkit"; Hermes/Cursor/NanoClaw credited with crons/memory/skills they don't have). Founder caught it — "should I even trust you?".
 - **What:** tab visibility now derives mechanically from each adapter's declared `Capability` enum (`_CM_RT_CAPS` → `_CM_CAP_TABS`), not prose. OpenClaw + NemoClaw (sandboxed OpenClaw, identical caps) show the full set; cost runtimes (Claude Code, Codex, Aider, Goose, opencode, Qwen) show Sessions/Events/Cost tabs; Cursor/PicoClaw/NanoClaw (no COST) show less. A CI parity guard (`test_runtime_tab_capability_parity.py`) re-extracts the contract and fails on drift, so this can't silently rot again.
