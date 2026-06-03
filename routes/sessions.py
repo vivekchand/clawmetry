@@ -2027,6 +2027,7 @@ def _try_local_store_subagents(_rows=None):
             "depth":            int(extra.get("depth") or 1),
             "parent":           r.get("parent_session_id") or extra.get("spawnedBy"),
             "totalTokens":      token_count,
+            "costUsd":          round(float(r.get("cost_usd") or 0.0), 4),
             "runtime":          runtime,
             "runtimeMs":        runtime_ms,
             "startedAt":        spawned_at_ms or updated_at_ms,
@@ -2415,6 +2416,29 @@ def _check_integrity(subagents):
             _dfs(key, [])
 
     return violations
+
+
+@bp_sessions.route("/api/orchestration")
+def api_orchestration():
+    """Compact orchestration status board — agent cards with cost and model tags.
+
+    Wraps the subagents DuckDB fast-path (same source as /api/subagents) and
+    adds a per-agent ``costUsd`` field for the status-board panel rendered
+    above the subagent tree. Returns an empty board when the local store is
+    unavailable so the existing tree view still works via its own fallback.
+    """
+    fast = _try_local_store_subagents()
+    agents = (fast or {}).get("subagents", [])
+    counts = (fast or {}).get("counts", {})
+    total_cost_usd = round(sum(a.get("costUsd", 0.0) for a in agents), 4)
+    return jsonify({
+        "agents": agents,
+        "summary": {
+            "total":          counts.get("total", 0),
+            "active":         counts.get("active", 0),
+            "total_cost_usd": total_cost_usd,
+        },
+    })
 
 
 @bp_sessions.route("/api/subagents/integrity")

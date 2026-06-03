@@ -1,8 +1,12 @@
 <div class="page" id="page-subagents">
   <div class="refresh-bar">
     <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;" data-i18n="app.sub_agents_queue_lanes">🤖 Sub-Agents &amp; Queue Lanes</h2>
-    <button class="refresh-btn" onclick="loadRunLedger();loadSubagents()" data-i18n="app.refresh">↻ Refresh</button>
+    <button class="refresh-btn" onclick="loadOrchestration();loadRunLedger();loadSubagents()" data-i18n="app.refresh">↻ Refresh</button>
   </div>
+  <!-- Orchestration status board: one card per agent with status badge, cost,
+       model tag. Populated by loadOrchestration() from /api/orchestration.
+       Hidden automatically when no agents exist. -->
+  <div id="orchestration-board" style="margin-bottom:12px;"></div>
   <!-- OpenClaw run-ledger lane monitor (cli / cron / subagent) + recent runs.
        Populated by loadRunLedger() from /api/run-ledger. `runtime` is the
        OpenClaw queue lane, so this is the live queue/concurrency view. -->
