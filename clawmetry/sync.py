@@ -294,6 +294,17 @@ BATCH_SIZE = (
 MAX_EVENTS_PER_CYCLE = (
     5000  # cap per sync cycle so initial sync doesn't block the main loop
 )
+# How many sessions per family runtime (Claude Code / Codex / Cursor / …) to
+# ingest — the MOST-RECENT N. Default 50 keeps storage + initial-sync payload
+# bounded (a machine with 1000s of historical Claude Code sessions would
+# otherwise push a huge one-time ingest). Power users who want deeper history
+# can raise it via CLAWMETRY_FAMILY_SESSION_LIMIT. Floored at 1, never crashes
+# on a bad value.
+def _family_session_limit() -> int:
+    try:
+        return max(1, int(os.environ.get("CLAWMETRY_FAMILY_SESSION_LIMIT", "50")))
+    except (TypeError, ValueError):
+        return 50
 
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 log = logging.getLogger("clawmetry-sync")
@@ -8975,7 +8986,7 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
             if not adapter.detect().detected:
                 continue
             runtime = adapter.name
-            for s in adapter.list_sessions(limit=50):
+            for s in adapter.list_sessions(limit=_family_session_limit()):
                 if runtime == "claude_code" and s.id in openclaw_spawned_claude:
                     continue  # owned by OpenClaw; avoid the double-count
                 ns_id = f"{runtime}:{s.id}"

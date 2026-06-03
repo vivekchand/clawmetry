@@ -164,6 +164,7 @@ OPENCLAW_GATEWAY_TOKEN=token           # Gateway auth token
 CLAWMETRY_PROVIDER=local|turso         # Data backend (default: local)
 CLAWMETRY_INTERCEPT=1                  # Enable HTTP interceptor
 CLAWMETRY_FLEET_KEY=...               # Multi-node fleet auth key
+CLAWMETRY_FAMILY_SESSION_LIMIT=50      # Max sessions/runtime to ingest for Claude Code/Codex/Cursor/… (most-recent N; raise for deeper history)
 DEBUG=1                                # Enable debug logging
 ```
 
