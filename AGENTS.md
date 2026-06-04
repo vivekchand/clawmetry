@@ -28,7 +28,7 @@ Quick chooser:
 - **Read-only by default.** ClawMetry observes; it doesn't modify agent behavior (the exceptions are cron management and enforcement, which go through the gateway RPC or OpenClaw's own credentials, never a new write path).
 - **Auto-detect everything.** Users should never have to configure anything manually.
 - **Never crash on bad input.** Graceful fallbacks plus a logged warning, always.
-- **Performance is a cost.** At $5/node/mo, every poller and fetch is money — cache + dedup shared fetches, scope pollers to the active tab. (FLYWHEEL.md ⚡.)
+- **Performance is a cost.** At $19/node/mo, every poller and fetch is money: cache + dedup shared fetches, scope pollers to the active tab. (FLYWHEEL.md ⚡.)
 
 ## Common tasks
 - **Add an API endpoint:** add it to `routes/<feature>.py` on the feature Blueprint; reach shared helpers via late `import dashboard as _d`.
