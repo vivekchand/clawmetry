@@ -192,6 +192,33 @@ class OpenClawAdapter(AgentAdapter):
                 extra: dict = {}
                 if r[3]:
                     extra["model"] = r[3]
+                # r[5] = data BLOB — decode and surface per-type token split
+                # (input/output/cache_read/cache_write) so callers can measure
+                # per-turn cache efficiency without re-reading the raw file.
+                raw_data = r[5]
+                if raw_data is not None:
+                    try:
+                        if isinstance(raw_data, (bytes, bytearray)):
+                            raw_data = bytes(raw_data).decode("utf-8", "replace")
+                        obj = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
+                        if isinstance(obj, dict):
+                            msg = obj.get("message")
+                            src = msg if isinstance(msg, dict) else obj
+                            usage = src.get("usage") if isinstance(src.get("usage"), dict) else {}
+                            if usage:
+                                for dst, *keys in [
+                                    ("inputTokens", "input_tokens", "inputTokens"),
+                                    ("outputTokens", "output_tokens", "outputTokens"),
+                                    ("cacheReadTokens", "cache_read_input_tokens", "cacheReadInputTokens"),
+                                    ("cacheWriteTokens", "cache_creation_input_tokens", "cacheCreationInputTokens"),
+                                ]:
+                                    for k in keys:
+                                        v = usage.get(k)
+                                        if v is not None:
+                                            extra[dst] = int(v)
+                                            break
+                    except Exception:
+                        pass
                 events.append(Event(
                     agent=self.name,
                     session_id=str(session_id),

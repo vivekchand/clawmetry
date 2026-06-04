@@ -116,3 +116,46 @@ def test_list_events_respects_limit(isolated_store):
 def test_list_events_unknown_session_returns_empty(isolated_store):
     from clawmetry.adapters.openclaw import OpenClawAdapter
     assert OpenClawAdapter().list_events("no-such-session") == []
+
+
+def test_list_events_surfaces_cache_token_split(isolated_store):
+    """Per-type token fields from the data blob land in event.extra (#2603).
+
+    Seed an assistant event whose data contains message.usage with input,
+    output, and cache_read token counts; verify list_events() populates
+    the corresponding extra keys so per-turn cache efficiency is measurable.
+    """
+    import uuid, time as _t
+    isolated_store.ingest({
+        "id": str(uuid.uuid4()),
+        "node_id": "agent+test-node",
+        "agent_id": "main",
+        "agent_type": "openclaw",
+        "session_id": "sess-E",
+        "event_type": "model.completed",
+        "ts": _t.time(),
+        "model": "claude-opus-4-7",
+        "token_count": 150,
+        "data": {
+            "type": "assistant",
+            "message": {
+                "model": "claude-opus-4-7",
+                "usage": {
+                    "input_tokens": 30,
+                    "output_tokens": 20,
+                    "cache_read_input_tokens": 80,
+                    "cache_creation_input_tokens": 10,
+                },
+            },
+        },
+    })
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess-E")
+    assert len(events) == 1
+    ex = events[0].extra
+    assert ex.get("inputTokens") == 30
+    assert ex.get("outputTokens") == 20
+    assert ex.get("cacheReadTokens") == 80
+    assert ex.get("cacheWriteTokens") == 10
