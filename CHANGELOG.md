@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Release: OTLP /v1/logs receiver — ingest Claude Code / Codex OTel event stream (#2596) (2026-06-04)
+- **Why:** the OTLP receiver had /v1/metrics + /v1/traces but no /v1/logs. Claude Code (and Codex) export their per-turn EVENT stream as OTel *logs* (event_name like `claude_code.api_request` with cost/token/model attributes), so OTel-configured installs gave signal we dropped. Surfaced by the harness-observability audit.
+- **What:** add `POST /v1/logs` (mirrors /v1/traces; 501 without the `clawmetry[otel]` extra) + `_process_otlp_logs`, which maps any OTLP LogRecord carrying cost/token/duration attributes into the cost / tokens / runs metric tiles. Point an agent at it with `OTEL_LOGS_EXPORTER=otlp`, `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://localhost:8900`.
+- **Test:** `tests/test_otlp_logs.py` builds a synthetic ExportLogsServiceRequest and asserts a claude_code.api_request lands in cost+tokens+runs; a non-cost event is ignored.
+
 ### Release: Context economics filters per-runtime (snapshot byRuntime slice) (2026-06-03)
 - **Why:** like Tool catalog, the Context-economics tab showed the all-runtimes aggregate on every runtime tab (founder report). Compactions from every runtime were lumped together.
 - **What:** the contextEconomics snapshot slice now carries `byRuntime` (runtime -> {compactions, overflow_sessions, summary}) via `_context_econ_by_runtime`, grouped by each compaction's session_id prefix. The cloud interceptor serves the selected runtime's view (empty for a runtime that never compacted). Removed context-economics from `_CM_RT_AGGREGATE` so its 'not yet filtered' banner no longer shows.

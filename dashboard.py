@@ -154,11 +154,13 @@ _HAS_OTEL_PROTO = False
 try:
     from opentelemetry.proto.collector.metrics.v1 import metrics_service_pb2
     from opentelemetry.proto.collector.trace.v1 import trace_service_pb2
+    from opentelemetry.proto.collector.logs.v1 import logs_service_pb2
 
     _HAS_OTEL_PROTO = True
 except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
+    logs_service_pb2 = None
 
 __version__ = "0.12.434"
 
@@ -2494,6 +2496,76 @@ def _process_otlp_traces(pb_data):
                             )
                         except Exception:
                             pass
+
+
+def _process_otlp_logs(pb_data):
+    """Decode OTLP logs protobuf and ingest agent EVENT records (#2596).
+
+    Claude Code (and other runtimes) export their per-turn event stream as OTel
+    *logs* — ``event_name`` like ``claude_code.api_request`` / ``tool_decision``
+    with cost/token/model attributes — not just metrics/traces, so an OTel-
+    configured install gives signal we previously dropped. We map any log record
+    carrying cost or token attributes into the same metrics cache categories as
+    /v1/metrics (cost / tokens / runs), so the cost + usage tiles light up.
+    Best-effort: a bad record never breaks the batch.
+    """
+    req = logs_service_pb2.ExportLogsServiceRequest()
+    req.ParseFromString(pb_data)
+
+    def _f(attrs, *keys):
+        for k in keys:
+            if k in attrs and attrs[k] not in (None, ""):
+                return attrs[k]
+        return None
+
+    for resource_logs in req.resource_logs:
+        resource_attrs = {}
+        if resource_logs.resource:
+            for attr in resource_logs.resource.attributes:
+                resource_attrs[attr.key] = _otel_attr_value(attr.value)
+
+        for scope_logs in resource_logs.scope_logs:
+            for rec in scope_logs.log_records:
+                attrs = {}
+                for attr in rec.attributes:
+                    attrs[attr.key] = _otel_attr_value(attr.value)
+                ts = time.time()
+                model = _f(attrs, "model") or resource_attrs.get("model", "")
+                channel = _f(attrs, "channel") or resource_attrs.get("channel", "")
+                provider = _f(attrs, "provider") or resource_attrs.get("provider", "")
+
+                cost = _f(attrs, "cost_usd", "cost.usd", "cost")
+                if cost is not None:
+                    try:
+                        _add_metric("cost", {
+                            "timestamp": ts, "usd": float(cost),
+                            "model": model, "channel": channel, "provider": provider,
+                        })
+                    except (TypeError, ValueError):
+                        pass
+
+                itok = _f(attrs, "input_tokens", "tokens.input", "prompt_tokens")
+                otok = _f(attrs, "output_tokens", "tokens.output", "completion_tokens")
+                if itok is not None or otok is not None:
+                    try:
+                        i, o = int(itok or 0), int(otok or 0)
+                        _add_metric("tokens", {
+                            "timestamp": ts, "input": i, "output": o, "total": i + o,
+                            "model": model, "channel": channel, "provider": provider,
+                        })
+                    except (TypeError, ValueError):
+                        pass
+
+                dur = _f(attrs, "duration_ms", "duration.ms")
+                ev = (getattr(rec, "event_name", "") or "").lower()
+                if dur is not None and any(k in ev for k in ("request", "run", "completion")):
+                    try:
+                        _add_metric("runs", {
+                            "timestamp": ts, "duration_ms": float(dur),
+                            "model": model, "channel": channel,
+                        })
+                    except (TypeError, ValueError):
+                        pass
 
 
 def _get_otel_usage_data():
@@ -8119,11 +8191,13 @@ _HAS_OTEL_PROTO = False
 try:
     from opentelemetry.proto.collector.metrics.v1 import metrics_service_pb2
     from opentelemetry.proto.collector.trace.v1 import trace_service_pb2
+    from opentelemetry.proto.collector.logs.v1 import logs_service_pb2
 
     _HAS_OTEL_PROTO = True
 except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
+    logs_service_pb2 = None
 
 
 app = Flask(
@@ -10465,6 +10539,76 @@ def _process_otlp_traces(pb_data):
                             )
                         except Exception:
                             pass
+
+
+def _process_otlp_logs(pb_data):
+    """Decode OTLP logs protobuf and ingest agent EVENT records (#2596).
+
+    Claude Code (and other runtimes) export their per-turn event stream as OTel
+    *logs* — ``event_name`` like ``claude_code.api_request`` / ``tool_decision``
+    with cost/token/model attributes — not just metrics/traces, so an OTel-
+    configured install gives signal we previously dropped. We map any log record
+    carrying cost or token attributes into the same metrics cache categories as
+    /v1/metrics (cost / tokens / runs), so the cost + usage tiles light up.
+    Best-effort: a bad record never breaks the batch.
+    """
+    req = logs_service_pb2.ExportLogsServiceRequest()
+    req.ParseFromString(pb_data)
+
+    def _f(attrs, *keys):
+        for k in keys:
+            if k in attrs and attrs[k] not in (None, ""):
+                return attrs[k]
+        return None
+
+    for resource_logs in req.resource_logs:
+        resource_attrs = {}
+        if resource_logs.resource:
+            for attr in resource_logs.resource.attributes:
+                resource_attrs[attr.key] = _otel_attr_value(attr.value)
+
+        for scope_logs in resource_logs.scope_logs:
+            for rec in scope_logs.log_records:
+                attrs = {}
+                for attr in rec.attributes:
+                    attrs[attr.key] = _otel_attr_value(attr.value)
+                ts = time.time()
+                model = _f(attrs, "model") or resource_attrs.get("model", "")
+                channel = _f(attrs, "channel") or resource_attrs.get("channel", "")
+                provider = _f(attrs, "provider") or resource_attrs.get("provider", "")
+
+                cost = _f(attrs, "cost_usd", "cost.usd", "cost")
+                if cost is not None:
+                    try:
+                        _add_metric("cost", {
+                            "timestamp": ts, "usd": float(cost),
+                            "model": model, "channel": channel, "provider": provider,
+                        })
+                    except (TypeError, ValueError):
+                        pass
+
+                itok = _f(attrs, "input_tokens", "tokens.input", "prompt_tokens")
+                otok = _f(attrs, "output_tokens", "tokens.output", "completion_tokens")
+                if itok is not None or otok is not None:
+                    try:
+                        i, o = int(itok or 0), int(otok or 0)
+                        _add_metric("tokens", {
+                            "timestamp": ts, "input": i, "output": o, "total": i + o,
+                            "model": model, "channel": channel, "provider": provider,
+                        })
+                    except (TypeError, ValueError):
+                        pass
+
+                dur = _f(attrs, "duration_ms", "duration.ms")
+                ev = (getattr(rec, "event_name", "") or "").lower()
+                if dur is not None and any(k in ev for k in ("request", "run", "completion")):
+                    try:
+                        _add_metric("runs", {
+                            "timestamp": ts, "duration_ms": float(dur),
+                            "model": model, "channel": channel,
+                        })
+                    except (TypeError, ValueError):
+                        pass
 
 
 def _get_otel_usage_data():
