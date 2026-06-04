@@ -9,24 +9,27 @@ Usage
 -----
   GITHUB_TOKEN=ghp_xxx python3 scripts/apply_required_status_checks.py
 
+Token types
+-----------
+GITHUB_TOKEN from Actions (prefix ghs_):
+  Can read branch protection state but CANNOT write it. The script detects
+  this automatically: it verifies current state (read-only) and exits 0 with
+  actionable instructions. Push-triggered runs are always informational.
+  Note: requesting administration:write in the workflow permissions block is
+  invalid for GITHUB_TOKEN and causes 0-job workflow failures -- do not add it.
+
+Fine-grained PAT (prefix ghp_ or github_pat_, set as E2E_ADMIN_PAT secret):
+  Required to write branch protection rules. Needs Administration (read+write)
+  on clawmetry, clawmetry-cloud, clawmetry-landing. Full apply + verify.
+
 When run inside GitHub Actions, GITHUB_REPOSITORY is set automatically
 (e.g. "vivekchand/clawmetry"). The script restricts the checks it applies
-to only the matching repo so that a GITHUB_TOKEN with single-repo
-Administration write access is sufficient.
+to only the matching repo so that a single-repo token is sufficient.
 
 When run locally (GITHUB_REPOSITORY not set), the script applies all 4
 checks and requires a token with cross-repo Administration access.
 
-Requirements
-------------
-A fine-grained PAT (or classic token) with:
-  - Repository access: clawmetry, clawmetry-cloud, clawmetry-landing
-  - Permissions: Administration (read + write) on each repo
-    (required to modify branch protection rules)
-
-If branch protection does not yet exist on main, the script creates a
-minimal protection rule first (no push restrictions, no required reviews)
-before adding the status checks. Existing protection rules are preserved.
+Tracking: vivekchand/clawmetry#2146 (C6)
 """
 from __future__ import annotations
 
@@ -58,9 +61,6 @@ REQUIRED_CHECKS: list[tuple[str, str]] = [
 ]
 
 # Checks previously added as required that must be actively removed.
-# This list is processed on every run so the script is self-healing:
-# if a deprecated check re-appears (e.g. via a manual UI edit) it is
-# removed on the next push-triggered run.
 DEPRECATED_CHECKS: list[tuple[str, str]] = [
     # Added in error before 2026-06-02: pr-screenshots.yml has a paths: filter
     # so visual-diff only fires on UI-touching PRs. As a required check it
@@ -167,7 +167,6 @@ def verify_required_checks(
 
     Returns True if all required checks are present and no deprecated checks
     remain. Prints a FAIL line for each discrepancy so CI logs are actionable.
-    Catches silent 403 / administration:write failures before they go unnoticed.
     """
     repos = dict.fromkeys([r for r, _ in checks + deprecated])
     ok = True
@@ -196,20 +195,11 @@ def verify_required_checks(
 
 
 def _checks_to_apply() -> list[tuple[str, str]]:
-    """Return the subset of REQUIRED_CHECKS applicable to the current context.
-
-    Inside GitHub Actions, GITHUB_REPOSITORY is set to "owner/repo". When it
-    matches one of the repos in REQUIRED_CHECKS, only that repo's checks are
-    returned so that a single-repo GITHUB_TOKEN is sufficient.
-
-    When GITHUB_REPOSITORY is not set (local run with a cross-repo PAT),
-    all checks are returned.
-    """
+    """Return the subset of REQUIRED_CHECKS applicable to the current context."""
     github_repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
     if not github_repository:
         return REQUIRED_CHECKS
 
-    # Extract the repo name (strip owner prefix if present)
     current_repo = github_repository.split("/", 1)[-1]
     filtered = [(repo, ctx) for repo, ctx in REQUIRED_CHECKS if repo == current_repo]
     if filtered:
@@ -219,8 +209,6 @@ def _checks_to_apply() -> list[tuple[str, str]]:
         )
         return filtered
 
-    # GITHUB_REPOSITORY is set but doesn't match any entry -- apply all and
-    # let the API calls fail with a clear error if the token lacks access.
     print(
         f"  Warning: GITHUB_REPOSITORY={github_repository!r} did not match any "
         "entry in REQUIRED_CHECKS; applying all checks."
@@ -245,10 +233,47 @@ def main() -> None:
             "Usage: GITHUB_TOKEN=ghp_xxx python3 scripts/apply_required_status_checks.py"
         )
 
+    # Token type detection:
+    #   ghs_ prefix  = GITHUB_TOKEN from Actions (scoped to current repo only).
+    #                  Cannot write branch protection rules. Read-only path.
+    #   ghp_ or github_pat_ = Personal Access Token. Can write branch protection
+    #                  when it has Administration (read+write) on target repos.
+    is_pat = not token.startswith("ghs_")
+
     checks = _checks_to_apply()
     deprecated = _deprecated_to_remove()
-
     total = len(checks)
+
+    if not is_pat:
+        # Read-only path: GITHUB_TOKEN cannot write branch protection.
+        # Verify current state so push runs detect if checks were already
+        # configured by a prior PAT run or via the GitHub Settings UI.
+        print("=== E2E Robustness C6: read-only verify (GITHUB_TOKEN, no write access) ===")
+        print()
+        print("INFO: GITHUB_TOKEN cannot write branch protection rules.")
+        print("INFO: To auto-apply on every push to main, set E2E_ADMIN_PAT as a")
+        print("  repo secret (fine-grained PAT, Administration read+write on")
+        print("  clawmetry, clawmetry-cloud, clawmetry-landing).")
+        print("INFO: Manual alternative -- Settings > Branches > main >")
+        print("  Required status checks > add:")
+        for repo, ctx in REQUIRED_CHECKS:
+            print(f"    [{repo}] {ctx!r}")
+        print()
+        print("=== Reading current required status checks ===")
+        if verify_required_checks(checks, deprecated, token):
+            print()
+            print("=== C6: checks already correctly configured ===")
+            print("=== (Set by manual Settings UI action or a prior PAT run.) ===")
+        else:
+            print()
+            print("INFO: Required checks not yet configured. Next steps:")
+            print("  A) Set E2E_ADMIN_PAT repo secret (see above) -- auto-applies on")
+            print("     next push to main.")
+            print("  B) Settings > Branches > main > Required status checks (manual).")
+        # Always exit 0: push-triggered runs are informational, never blocking.
+        return
+
+    # PAT path: full apply + verify.
     print(f"=== E2E Robustness C6: applying {total} required status check(s) ===")
     for repo, context in checks:
         try:
@@ -264,8 +289,7 @@ def main() -> None:
             try:
                 remove_required_check(repo, context, token)
             except RuntimeError as exc:
-                # Removal failure is non-fatal: log a warning and continue.
-                # The check will be retried on the next push-triggered run.
+                # Removal failure is non-fatal: log and continue.
                 print(f"  WARNING [{repo}]: could not remove {context!r}: {exc}")
 
     print()
@@ -289,9 +313,8 @@ def main() -> None:
         print()
         print(
             "ERROR: branch protection state does not match expected config (see above).\n"
-            "If this is a 403, GITHUB_TOKEN may not have administration:write on this "
-            "repo. Set E2E_ADMIN_PAT as a repo secret (fine-grained PAT, "
-            "Administration read+write) and re-run."
+            "If this is a 403, E2E_ADMIN_PAT may lack Administration (read+write) on "
+            "this repo. Check the PAT permissions and re-run."
         )
         sys.exit(2)
     print("=== Verification passed: C6 branch protection is correctly configured ===")
