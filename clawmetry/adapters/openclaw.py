@@ -141,6 +141,10 @@ class OpenClawAdapter(AgentAdapter):
                     source=s.get("channel") or "",
                     started_at=started_at,
                     total_tokens=int(s.get("totalTokens") or 0),
+                    input_tokens=int(s.get("inputTokens") or 0),
+                    output_tokens=int(s.get("outputTokens") or 0),
+                    cache_read_tokens=int(s.get("cacheReadTokens") or 0),
+                    cache_write_tokens=int(s.get("cacheWriteTokens") or 0),
                     extra={
                         "kind": s.get("kind") or "direct",
                         "contextTokens": s.get("contextTokens"),
