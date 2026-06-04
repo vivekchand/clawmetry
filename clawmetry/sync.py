@@ -2780,7 +2780,7 @@ def _parse_v3_event(
         "id": str(eid),
         "agent_type": "openclaw",
         "node_id": node_id,
-        "agent_id": "main",
+        "agent_id": obj.get("agent_id") or "main",
         "session_id": session_id,
         "workspace_id": None,
         "event_type": event_type,
@@ -2881,7 +2881,7 @@ def _local_ingest_session_batch(
         rows.append({
             "id": str(eid),
             "node_id": node_id,
-            "agent_id": "main",  # OpenClaw harness; Claude Code adapter will use 'claude-code'
+            "agent_id": obj.get("agent_id") or "main",
             "session_id": session_id,
             "workspace_id": obj.get("workspace") or obj.get("workspace_id"),
             "event_type": str(obj.get("type") or obj.get("event_type") or "unknown"),
