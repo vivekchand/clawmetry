@@ -2481,6 +2481,40 @@ def _process_otlp_traces(pb_data):
                         },
                     )
 
+                # Generic cost/token mapping from span ATTRIBUTES. Codex (and
+                # OTel-instrumented agents) emit cost/token telemetry on spans
+                # like ``codex.api_request`` — without this they persist to the
+                # spans table but never light the cost/usage tiles. OpenClaw cost
+                # arrives via the /v1/metrics path (openclaw.cost.usd), not span
+                # attrs, so this doesn't double-count. Same shape as /v1/logs
+                # (#2591).
+                _sc = attrs.get("cost_usd") or attrs.get("cost.usd") or attrs.get("cost")
+                if _sc is not None:
+                    try:
+                        _add_metric("cost", {
+                            "timestamp": ts, "usd": float(_sc),
+                            "model": attrs.get("model", resource_attrs.get("model", "")),
+                            "channel": attrs.get("channel", resource_attrs.get("channel", "")),
+                            "provider": attrs.get("provider", resource_attrs.get("provider", "")),
+                        })
+                    except (TypeError, ValueError):
+                        pass
+                _si = (attrs.get("input_tokens") or attrs.get("tokens.input")
+                       or attrs.get("prompt_tokens"))
+                _so = (attrs.get("output_tokens") or attrs.get("tokens.output")
+                       or attrs.get("completion_tokens"))
+                if _si is not None or _so is not None:
+                    try:
+                        _i, _o = int(_si or 0), int(_so or 0)
+                        _add_metric("tokens", {
+                            "timestamp": ts, "input": _i, "output": _o, "total": _i + _o,
+                            "model": attrs.get("model", resource_attrs.get("model", "")),
+                            "channel": attrs.get("channel", resource_attrs.get("channel", "")),
+                            "provider": attrs.get("provider", resource_attrs.get("provider", "")),
+                        })
+                    except (TypeError, ValueError):
+                        pass
+
                 # DuckDB write-through. Failures here are logged but do not
                 # break the metrics cache path above (which is what the
                 # live tiles read from). Idempotent on span_id — OTLP
@@ -10523,6 +10557,40 @@ def _process_otlp_traces(pb_data):
                             "duration_ms": duration_ms,
                         },
                     )
+
+                # Generic cost/token mapping from span ATTRIBUTES. Codex (and
+                # OTel-instrumented agents) emit cost/token telemetry on spans
+                # like ``codex.api_request`` — without this they persist to the
+                # spans table but never light the cost/usage tiles. OpenClaw cost
+                # arrives via the /v1/metrics path (openclaw.cost.usd), not span
+                # attrs, so this doesn't double-count. Same shape as /v1/logs
+                # (#2591).
+                _sc = attrs.get("cost_usd") or attrs.get("cost.usd") or attrs.get("cost")
+                if _sc is not None:
+                    try:
+                        _add_metric("cost", {
+                            "timestamp": ts, "usd": float(_sc),
+                            "model": attrs.get("model", resource_attrs.get("model", "")),
+                            "channel": attrs.get("channel", resource_attrs.get("channel", "")),
+                            "provider": attrs.get("provider", resource_attrs.get("provider", "")),
+                        })
+                    except (TypeError, ValueError):
+                        pass
+                _si = (attrs.get("input_tokens") or attrs.get("tokens.input")
+                       or attrs.get("prompt_tokens"))
+                _so = (attrs.get("output_tokens") or attrs.get("tokens.output")
+                       or attrs.get("completion_tokens"))
+                if _si is not None or _so is not None:
+                    try:
+                        _i, _o = int(_si or 0), int(_so or 0)
+                        _add_metric("tokens", {
+                            "timestamp": ts, "input": _i, "output": _o, "total": _i + _o,
+                            "model": attrs.get("model", resource_attrs.get("model", "")),
+                            "channel": attrs.get("channel", resource_attrs.get("channel", "")),
+                            "provider": attrs.get("provider", resource_attrs.get("provider", "")),
+                        })
+                    except (TypeError, ValueError):
+                        pass
 
                 # DuckDB write-through. Failures here are logged but do not
                 # break the metrics cache path above (which is what the
