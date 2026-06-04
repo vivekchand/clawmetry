@@ -92,3 +92,7 @@ def test_harness_endpoints_smoke():
     assert d["runtime"] == "openclaw"
     assert set(d["summary"].keys()) >= {"sessions", "cost_usd", "tokens"}
     assert isinstance(d["sessions"], list)
+    assert isinstance(d.get("extra"), dict)
+    # every session carries an `extra` dict so `sessions[].extra.*` always resolves
+    for s in d["sessions"]:
+        assert isinstance(s.get("extra"), dict)
