@@ -1062,6 +1062,33 @@ def otlp_traces():
         return jsonify({"error": str(e)}), 400
 
 
+@bp_otel.route("/v1/logs", methods=["POST"])
+def otlp_logs():
+    """OTLP/HTTP receiver for logs (protobuf). Ingests the agent EVENT stream
+    that Claude Code / Codex export as OTel logs (cost/token/model per record),
+    mapping them into the cost + usage tiles. Closes obs-gap #2596."""
+    import dashboard as _d
+    if _d._budget_paused:
+        return jsonify(
+            {"error": "Budget limit exceeded - intake paused", "paused": True}
+        ), 429
+    if not _d._HAS_OTEL_PROTO:
+        return jsonify(
+            {
+                "error": "opentelemetry-proto not installed",
+                "message": "Install OTLP support: pip install clawmetry[otel]  "
+                "or: pip install opentelemetry-proto protobuf",
+            }
+        ), 501
+
+    try:
+        pb_data = request.get_data()
+        _d._process_otlp_logs(pb_data)
+        return "{}", 200, {"Content-Type": "application/json"}
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
 @bp_otel.route("/api/otel-status")
 def api_otel_status():
     """Return OTLP receiver + exporter status."""
