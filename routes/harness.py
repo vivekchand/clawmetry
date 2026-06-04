@@ -97,6 +97,14 @@ def http_harness_data():
         return r.get("updated_at") or r.get("ended_at") or r.get("started_at") or ""
 
     mine.sort(key=_sort_key, reverse=True)
+
+    # Per-session adapter `extra` + runtime-wide aggregates, harvested from the
+    # events stream (the adapters stash their unique surface in event/session
+    # `data.extra` — goose scheduleId/recipe, codex cliVersion/rolloutFile,
+    # claude_code cache-token splits, …). Reusing the cloud-safe `events`
+    # dispatch means no new store code and this works in the cloud container.
+    per_session_extra, models = _harvest_event_extra(runtime)
+
     sessions = [{
         "session_id": r.get("session_id", ""),
         "session_type": r.get("session_type") or r.get("agent_id") or "",
@@ -104,6 +112,7 @@ def http_harness_data():
         "ended_at": r.get("updated_at") or r.get("ended_at") or "",
         "cost_usd": round(_num(r.get("cost_usd")), 4),
         "tokens": int(_num(r.get("token_count", r.get("tokens")))),
+        "extra": per_session_extra.get(r.get("session_id", ""), {}),
     } for r in mine[:50]]
 
     blob["summary"] = {
@@ -112,4 +121,49 @@ def http_harness_data():
         "tokens": int(total_tok),
     }
     blob["sessions"] = sessions
+    if models:
+        blob["extra"]["models"] = models
     return jsonify(blob)
+
+
+def _harvest_event_extra(runtime: str):
+    """Aggregate per-session ``data.extra`` (last value wins per key) and the
+    distinct models seen, from the runtime's recent events. Returns
+    ``({session_id: extra_dict}, [models])``. Never raises — returns empties."""
+    import json
+    per_session: dict = {}
+    models: list = []
+    seen_models: set = set()
+    try:
+        from routes.local_query import _dispatch
+        body = _dispatch("events", {"limit": 2000})
+        rows = body.get("rows") or []
+    except Exception as exc:
+        logger.warning("harness extra harvest failed: %s", exc)
+        return per_session, models
+    for r in rows:
+        sid = r.get("session_id", "")
+        if not _runtime_match(sid, runtime):
+            continue
+        m = r.get("model")
+        if m and m not in seen_models:
+            seen_models.add(m)
+            models.append(m)
+        d = r.get("data")
+        if isinstance(d, str):
+            try:
+                d = json.loads(d)
+            except Exception:
+                d = None
+        ex = d.get("extra") if isinstance(d, dict) else None
+        if isinstance(ex, dict) and ex:
+            bucket = per_session.setdefault(sid, {})
+            for k, v in ex.items():
+                # keep concise, JSON-friendly scalars; skip the noisy token
+                # split keys that already have first-class tiles
+                if k in ("inputTokens", "outputTokens", "cacheReadInputTokens",
+                         "cacheCreationInputTokens"):
+                    continue
+                if isinstance(v, (str, int, float, bool)) or v is None:
+                    bucket[k] = v
+    return per_session, models
