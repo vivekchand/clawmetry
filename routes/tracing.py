@@ -36,6 +36,16 @@ _TRACE_PLUMBING_TYPES = frozenset({
     "agent.heartbeat", "queue-operation", "custom", "custom_message",
 })
 
+# NeMo Guardrails compact tool-catalog meta-tools. When NEMOCLAW_TOOL_CATALOG
+# is active these names appear as tool_use blocks in the JSONL transcript; they
+# are guardrail dispatches, not real agent actions. Spans for these names get
+# nemoclaw_meta=True so the frontend can filter/style them separately.
+_NEMOCLAW_CATALOG_TOOLS: frozenset = frozenset({
+    "tool_search",
+    "tool_describe",
+    "tool_call",
+})
+
 
 def _events_for(session_id=None, limit=12000):
     """Read events via the daemon proxy, RO-fallback for single-process boots."""
@@ -504,6 +514,8 @@ def _build_spans(rows):
                 ts = _mk(tuid, chat["span_id"], "execute_tool " + tname, "tool",
                          start, nxt, is_sub=is_sub, tool=tname,
                          detail=_short_input(tu.get("input")), event_type=et)
+                if (tu.get("name") or "") in _NEMOCLAW_CATALOG_TOOLS:
+                    ts["nemoclaw_meta"] = True
                 tool_spans[tu.get("id") or tuid] = ts
             continue
 
