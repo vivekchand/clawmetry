@@ -162,7 +162,7 @@ except ImportError:
     trace_service_pb2 = None
     logs_service_pb2 = None
 
-__version__ = "0.12.434"
+__version__ = "0.12.435"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
