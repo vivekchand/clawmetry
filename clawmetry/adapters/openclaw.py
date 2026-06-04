@@ -23,6 +23,16 @@ from .base import AgentAdapter, Capability, DetectResult, Event, Session
 
 logger = logging.getLogger("clawmetry.adapters.openclaw")
 
+# NeMo Guardrails compact tool-catalog injects these three meta-tool names into
+# the JSONL transcript when NEMOCLAW_TOOL_CATALOG is active. They are guardrail
+# dispatches, not real agent actions; tag them so consumers can filter/style
+# them separately from ordinary tool calls.
+_NEMOCLAW_CATALOG_TOOLS: frozenset = frozenset({
+    "tool_search",
+    "tool_describe",
+    "tool_call",
+})
+
 
 def _d():
     """Late import to avoid circular init with dashboard module."""
@@ -327,7 +337,7 @@ class OpenClawAdapter(AgentAdapter):
                             continue
                         tool_name = block.get("name") or "tool"
                         tool_id = block.get("id") or ""
-                        spans.append({
+                        tool_span: dict = {
                             "span_id": _sid("tool", session_id, str(raw_ts), tool_id, tool_name),
                             "trace_id": trace_id,
                             "parent_span_id": llm_sid,
@@ -338,7 +348,10 @@ class OpenClawAdapter(AgentAdapter):
                             "agent_type": "openclaw",
                             "tool_name": tool_name,
                             "input": block.get("input"),
-                        })
+                        }
+                        if tool_name in _NEMOCLAW_CATALOG_TOOLS:
+                            tool_span["attributes"] = {"nemoclaw.catalog_guardrail": True}
+                        spans.append(tool_span)
 
             elif t in ("subagent_spawn", "agent_spawn"):
                 sub_id = (

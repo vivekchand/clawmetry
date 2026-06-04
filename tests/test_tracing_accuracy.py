@@ -97,3 +97,39 @@ def test_summarize_trace_derives_total_cost():
     summ = _summarize_trace("claude_code:s1", rows)
     assert summ["total_cost_usd"] > 0, "trace total cost still $0 for a priced turn"
     assert summ["total_tokens"] == 3212
+
+
+# ── NeMo catalog meta-tool tagging (issue #2607) ────────────────────────────
+
+
+def _oc_tool_event(eid, tool_names, *, ts="2026-06-03T10:00:00Z"):
+    """An OpenClaw v3 assistant message event with tool_use blocks in content."""
+    content = [{"type": "text", "text": "searching"}]
+    for i, name in enumerate(tool_names):
+        content.append({"type": "tool_use", "id": f"tu{i}", "name": name, "input": {}})
+    return {
+        "id": eid, "session_id": "oc:s1", "event_type": "model.completed",
+        "ts": ts, "model": "claude-sonnet-4-6", "token_count": 50, "cost_usd": None,
+        "data": {"role": "assistant", "message": {"role": "assistant", "content": content}},
+    }
+
+
+def test_nemoclaw_catalog_tools_tagged():
+    rows = [_oc_tool_event("e1", ["tool_search", "Bash"])]
+    spans, _ = _build_spans(rows)
+    tool_spans = [s for s in spans if s["kind"] == "tool"]
+    assert tool_spans, "expected tool spans"
+    by_name = {s["tool"]: s for s in tool_spans}
+    assert by_name.get("tool_search", {}).get("nemoclaw_meta") is True, \
+        "tool_search span should have nemoclaw_meta=True"
+    assert "nemoclaw_meta" not in by_name.get("Bash", {}), \
+        "regular tool span should not have nemoclaw_meta"
+
+
+def test_nemoclaw_all_three_meta_tools_tagged():
+    rows = [_oc_tool_event("e2", ["tool_search", "tool_describe", "tool_call"])]
+    spans, _ = _build_spans(rows)
+    tool_spans = [s for s in spans if s["kind"] == "tool"]
+    assert len(tool_spans) == 3
+    for s in tool_spans:
+        assert s.get("nemoclaw_meta") is True, f"{s['tool']} should be tagged as nemoclaw_meta"
