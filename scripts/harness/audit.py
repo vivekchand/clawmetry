@@ -101,19 +101,16 @@ def _harness_surface(clone: str) -> str:
 
 
 def _adapter_source(h: dict) -> str:
-    """Read the FULL ClawMetry adapter for this runtime (from clawmetry or a
-    sibling clawmetry-pro checkout). Read the whole file (up to 60k) — truncating
-    drops the tail, and capabilities()/cost-derivation often live at the BOTTOM
-    of the adapter, which caused false-positive gaps (e.g. aider's conditional
-    COST at line ~527 was cut, so the audit wrongly flagged 'no COST')."""
-    rel = h["adapter"]
-    if h.get("adapter_repo") == "clawmetry-pro":
-        for base in (os.path.join(REPO_ROOT, "..", "clawmetry-pro"),
-                     os.environ.get("CLAWMETRY_PRO_DIR", "")):
-            if base and os.path.exists(os.path.join(base, rel)):
-                return _read(os.path.join(base, rel), 60000)
-        return "(clawmetry-pro adapter not checked out in this run — audit the harness surface alone)"
-    return _read(os.path.join(REPO_ROOT, rel), 60000)
+    """Read the FULL ClawMetry adapter for this runtime. Read the whole file (up
+    to 60k) — truncating drops the tail, and capabilities()/cost-derivation often
+    live at the BOTTOM of the adapter, which caused false-positive gaps (e.g.
+    aider's conditional COST at line ~527 was cut, so the audit wrongly flagged
+    'no COST').
+
+    OSS audits only the FREE runtimes (openclaw + nemoclaw), whose adapters are in
+    this repo. The 10 closed pro adapters are audited by clawmetry-pro's own
+    private copy of this script, so no closed adapter path is referenced here."""
+    return _read(os.path.join(REPO_ROOT, h["adapter"]), 60000)
 
 
 def _capabilities_enum() -> str:

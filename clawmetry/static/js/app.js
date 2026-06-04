@@ -1156,6 +1156,7 @@ function switchTab(name) {
   if (name === 'tracing') loadTracing();
   if (name === 'turn-anatomy') loadTurnAnatomy();
   if (name === 'tool-catalog') { if (typeof loadToolCatalog === 'function') loadToolCatalog(); }
+  if (name === 'harness') { if (typeof loadHarness === 'function') loadHarness(); }
   if (name === 'context-economics') { if (typeof loadContextEconomics === 'function') loadContextEconomics(); }
   if (name === 'brain') loadBrainPage();
   if (name === 'selfevolve') loadSelfEvolvePage();
@@ -13982,6 +13983,197 @@ function renderToolCatalog() {
   tools.forEach(function(tool) {
     if (_tcExpanded[tool.name]) _tcLoadCalls(tool.name);
   });
+}
+
+// ── Harness tab: declarative per-runtime custom panels ────────────────────
+// A "harness template" (served by /api/harness/templates; OSS ships openclaw +
+// nemoclaw, clawmetry-pro registers its 10 closed ones) declares ordered
+// sections, each with a data `source` path and a `render` hint. This renderer is
+// generic — it never hard-codes a harness; it just interprets the template.
+var _cmHarnessTemplates = null;   // {runtime: template}, fetched once
+var _cmHarnessData = null;
+
+async function loadHarness() {
+  var el = document.getElementById('harness-container');
+  if (!el) return;
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  if (!rt || rt === 'all') rt = 'openclaw';
+  try {
+    if (!_cmHarnessTemplates) {
+      var t = await fetch('/api/harness/templates').then(function (r) { return r.json(); });
+      _cmHarnessTemplates = (t && t.templates) || {};
+    }
+    var tmpl = _cmHarnessTemplates[rt];
+    if (!tmpl) { el.innerHTML = _cmHarnessNoTemplate(rt); return; }
+    var data = await fetch('/api/harness/data?runtime=' + encodeURIComponent(rt))
+                 .then(function (r) { return r.json(); });
+    _cmHarnessData = data;
+    el.innerHTML = renderHarnessPanel(tmpl, data);
+  } catch (e) {
+    el.innerHTML = '<div style="color:var(--muted,#888);">Failed to load harness view: '
+      + escapeHtml(String((e && e.message) || e)) + '</div>';
+  }
+}
+
+function _cmHarnessNoTemplate(rt) {
+  return '<div style="color:var(--muted,#888);line-height:1.5;">No harness panel for <b>'
+    + escapeHtml(rt) + '</b> yet.<br>Pro runtimes light up their panels when '
+    + 'clawmetry-pro is installed (Cloud Pro or a self-hosted license).</div>';
+}
+
+// Resolve a template `source` path against the data blob:
+//   "summary.cost_usd"        -> data.summary.cost_usd  (scalar)
+//   "sessions[]"              -> data.sessions          (array, for tables)
+//   "sessions[].extra.recipe" -> [s.extra.recipe ...]   (plucked, non-empty)
+//   "extra.skills"            -> data.extra.skills
+function _cmHarnessResolve(source, data) {
+  if (!source) return undefined;
+  var m = String(source).match(/^([a-zA-Z0-9_]+)\[\](?:\.(.+))?$/);
+  if (m) {
+    var arr = data && data[m[1]];
+    if (!Array.isArray(arr)) return [];
+    if (!m[2]) return arr;
+    return arr.map(function (it) { return _cmHarnessGet(it, m[2]); })
+              .filter(function (v) { return v !== undefined && v !== null && v !== ''; });
+  }
+  return _cmHarnessGet(data, source);
+}
+
+function _cmHarnessGet(obj, path) {
+  var parts = String(path).split('.'), cur = obj;
+  for (var i = 0; i < parts.length; i++) {
+    if (cur == null) return undefined;
+    cur = cur[parts[i]];
+  }
+  return cur;
+}
+
+function renderHarnessPanel(tmpl, data) {
+  var pro = tmpl.tier === 'pro'
+    ? '<span style="background:#3a2f00;color:#ffd24a;border:1px solid #6b5600;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700;">PRO</span>'
+    : '';
+  var html = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">'
+    + '<span style="font-size:22px;">' + escapeHtml(tmpl.icon || '🧩') + '</span>'
+    + '<span style="font-size:17px;font-weight:700;">' + escapeHtml(tmpl.title || tmpl.runtime) + '</span>'
+    + pro + '</div>';
+  html += '<div style="display:flex;flex-wrap:wrap;gap:14px;">';
+  (tmpl.sections || []).forEach(function (sec) { html += renderHarnessSection(sec, data); });
+  html += '</div>';
+  return html;
+}
+
+function renderHarnessSection(sec, data) {
+  var val = _cmHarnessResolve(sec.source, data);
+  var body;
+  switch (sec.render) {
+    case 'count':      body = _hrCount(sec, val); break;
+    case 'kv':         body = _hrKv(sec, val); break;
+    case 'table':      body = _hrTable(sec, val); break;
+    case 'badge-list': body = _hrBadges(sec, val); break;
+    case 'timeline':   body = _hrTimeline(sec, val); break;
+    case 'bar':        body = _hrBar(sec, val); break;
+    default:           body = _hrJson(sec, val); break;   // json + unknown render
+  }
+  var empty = (val === undefined || val === null || val === ''
+               || (Array.isArray(val) && val.length === 0));
+  if (empty && sec.render !== 'count') {
+    body = '<div style="color:var(--muted,#888);font-size:13px;">'
+      + escapeHtml(sec.empty || 'No data') + '</div>';
+  }
+  var wide = (sec.render === 'table' || sec.render === 'timeline' || sec.render === 'json');
+  return '<div class="card" style="padding:12px 14px;flex:' + (wide ? '1 1 100%' : '1 1 200px')
+    + ';min-width:180px;">'
+    + '<div style="font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted,#888);margin-bottom:8px;">'
+    + escapeHtml(sec.title || sec.id) + '</div>' + body + '</div>';
+}
+
+function _hrFmtVal(sec, v) {
+  if (sec.format === 'money') {
+    var n = Number(v) || 0;
+    return '$' + (n > 0 && n < 0.01 ? n.toFixed(4) : n.toFixed(2));
+  }
+  return escapeHtml(String(v == null ? '0' : v));
+}
+
+function _hrCount(sec, v) {
+  return '<div style="font-size:26px;font-weight:700;">' + _hrFmtVal(sec, v == null ? 0 : v)
+    + (sec.unit ? ' <span style="font-size:13px;font-weight:400;color:var(--muted,#888);">'
+                  + escapeHtml(sec.unit) + '</span>' : '')
+    + '</div>';
+}
+
+function _hrKv(sec, v) {
+  if (v == null) return '';
+  if (typeof v !== 'object') return '<div>' + escapeHtml(String(v)) + '</div>';
+  return Object.keys(v).map(function (k) {
+    return '<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 0;border-bottom:1px solid var(--border,#222);">'
+      + '<span style="color:var(--muted,#888);">' + escapeHtml(k) + '</span>'
+      + '<span>' + escapeHtml(String(v[k])) + '</span></div>';
+  }).join('');
+}
+
+function _hrTable(sec, rows) {
+  if (!Array.isArray(rows) || !rows.length) return '';
+  var cols = sec.columns || Object.keys(rows[0] || {});
+  var head = cols.map(function (c) {
+    return '<th style="text-align:left;padding:6px 10px;color:var(--muted,#888);font-weight:600;font-size:12px;">'
+      + escapeHtml(c) + '</th>';
+  }).join('');
+  var body = rows.map(function (r) {
+    return '<tr>' + cols.map(function (c) {
+      var cell = (r && typeof r === 'object') ? r[c] : '';
+      if (c === 'cost_usd') { var n = Number(cell) || 0; cell = '$' + (n > 0 && n < 0.01 ? n.toFixed(4) : n.toFixed(2)); }
+      return '<td style="padding:6px 10px;border-top:1px solid var(--border,#222);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px;">'
+        + escapeHtml(String(cell == null ? '' : cell)) + '</td>';
+    }).join('') + '</tr>';
+  }).join('');
+  return '<div style="overflow-x:auto;"><table style="border-collapse:collapse;width:100%;">'
+    + '<thead><tr>' + head + '</tr></thead><tbody>' + body + '</tbody></table></div>';
+}
+
+function _hrBadges(sec, v) {
+  var items = Array.isArray(v) ? v : (v == null ? [] : [v]);
+  var counts = {};
+  items.forEach(function (it) { var k = String(it); counts[k] = (counts[k] || 0) + 1; });
+  var keys = Object.keys(counts);
+  if (!keys.length) return '';
+  return '<div style="display:flex;flex-wrap:wrap;gap:6px;">' + keys.map(function (k) {
+    var c = counts[k];
+    return '<span style="background:var(--chip,#1c1c1c);border:1px solid var(--border,#333);border-radius:12px;padding:3px 10px;font-size:12px;">'
+      + escapeHtml(k) + (c > 1 ? ' <b>×' + c + '</b>' : '') + '</span>';
+  }).join('') + '</div>';
+}
+
+function _hrTimeline(sec, rows) {
+  if (!Array.isArray(rows) || !rows.length) return '';
+  return rows.slice(0, 50).map(function (r) {
+    var ts = (r && (r.ts || r.time || r.ended_at)) || '';
+    var label = (r && (r.label || r.title || r.name)) || (typeof r === 'string' ? r : JSON.stringify(r));
+    return '<div style="display:flex;gap:10px;padding:4px 0;border-bottom:1px solid var(--border,#222);font-size:13px;">'
+      + '<span style="color:var(--muted,#888);white-space:nowrap;">' + escapeHtml(String(ts)) + '</span>'
+      + '<span>' + escapeHtml(String(label)) + '</span></div>';
+  }).join('');
+}
+
+function _hrBar(sec, rows) {
+  var pairs = [];
+  if (Array.isArray(rows)) pairs = rows.map(function (r) { return [r.label || r.name || '', Number(r.value) || 0]; });
+  else if (rows && typeof rows === 'object') pairs = Object.keys(rows).map(function (k) { return [k, Number(rows[k]) || 0]; });
+  if (!pairs.length) return '';
+  var max = Math.max.apply(null, pairs.map(function (p) { return p[1]; })) || 1;
+  return pairs.map(function (p) {
+    var pct = Math.round(p[1] / max * 100);
+    return '<div style="margin:4px 0;font-size:12px;"><div style="display:flex;justify-content:space-between;">'
+      + '<span>' + escapeHtml(String(p[0])) + '</span><span>' + escapeHtml(String(p[1])) + '</span></div>'
+      + '<div style="height:6px;background:var(--border,#222);border-radius:3px;overflow:hidden;">'
+      + '<div style="height:100%;width:' + pct + '%;background:var(--accent,#5b8def);"></div></div></div>';
+  }).join('');
+}
+
+function _hrJson(sec, v) {
+  if (v === undefined || v === null) return '';
+  return '<pre style="white-space:pre-wrap;word-break:break-word;font-size:12px;margin:0;max-height:300px;overflow:auto;">'
+    + escapeHtml(JSON.stringify(v, null, 2)) + '</pre>';
 }
 
 function _tcToggle(name) {

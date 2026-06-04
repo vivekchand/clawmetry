@@ -97,6 +97,7 @@ from helpers.gateway import (  # noqa: F401 — re-export for routes/
 )
 from routes.usage import bp_usage
 from routes.crons import bp_crons
+from routes.harness import bp_harness
 from routes.health import bp_health
 from routes.alerts import bp_alerts, bp_budget
 from routes.channels import bp_channels
@@ -162,7 +163,7 @@ except ImportError:
     trace_service_pb2 = None
     logs_service_pb2 = None
 
-__version__ = "0.12.436"
+__version__ = "0.12.437"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -11020,6 +11021,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_crons)
     app.register_blueprint(bp_fleet)
     app.register_blueprint(bp_gateway)
+    app.register_blueprint(bp_harness)
     app.register_blueprint(bp_health)
     app.register_blueprint(bp_logs)
     app.register_blueprint(bp_memory)
@@ -11570,6 +11572,9 @@ DASHBOARD_HTML = r"""
         <div class="left-nav-item left-nav-item-sub" id="left-nav-context-economics" data-tab="context-economics" onclick="switchTab('context-economics')" title="Context-window utilization over time, compaction triggers and tokens reclaimed">
           <span class="left-nav-label">Context economics</span>
         </div>
+        <div class="left-nav-item left-nav-item-sub" id="left-nav-harness" data-tab="harness" onclick="switchTab('harness')" title="What the selected runtime uniquely exposes — beyond the generic tabs">
+          <span class="left-nav-label">Harness</span>
+        </div>
         <div class="left-nav-item left-nav-item-sub" id="left-nav-swimlane" data-tab="swimlane" onclick="switchTab('swimlane')" title="Compare up to 4 sessions or runtimes side by side as parallel live lanes">
           <span class="left-nav-label">Swimlane</span>
         </div>
@@ -11703,6 +11708,9 @@ DASHBOARD_HTML = r"""
 <!-- TOOL CATALOG (provenance + p50/p95 latency + error rate, P1-3) -->
 {% include 'tabs/tool-catalog.html' %}
 {% include 'tabs/context-economics.html' %}
+
+<!-- HARNESS (declarative per-runtime custom panel; #2667) -->
+{% include 'tabs/harness.html' %}
 
 <!-- SWIMLANE COMPARE — N parallel live lanes (sessions / runtimes) -->
 {% include 'tabs/swimlane.html' %}
