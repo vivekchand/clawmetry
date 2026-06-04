@@ -1,10 +1,14 @@
 name: Harness observability audit (daily)
 
-# Every day: sync the upstream source of every agent runtime ClawMetry monitors
-# (scripts/harness/manifest.json), then have Claude compare what each harness
-# EXPOSES against what our adapter CAPTURES, and file a GitHub issue for each gap
-# so it can be picked up. This is how we keep up as the harnesses evolve — new
-# fields, new telemetry, new features to observe.
+# Every day: sync the upstream source of every FREE agent runtime ClawMetry
+# monitors (scripts/harness/manifest.json = openclaw + nemoclaw), then have Claude
+# compare what each harness EXPOSES against what our OSS adapter CAPTURES, and file
+# a GitHub issue for each gap so it can be picked up. This is how we keep up as the
+# harnesses evolve — new fields, new telemetry, new features to observe.
+#
+# The 10 closed PRO runtimes are audited by clawmetry-pro's own private workflow
+# (its adapters + manifest live there) so no closed adapter path is referenced from
+# this public repo.
 #
 # Safe to merge before the secret exists: with no CLAUDE_CODE_OAUTH_TOKEN the
 # model pass is skipped (clones + dry-run still run, logged as a warning), exactly
@@ -40,20 +44,9 @@ jobs:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       GH_TOKEN: ${{ github.token }}
       HARNESS_DIR: ${{ github.workspace }}/.harness
-      CLAWMETRY_PRO_DIR: ${{ github.workspace }}/clawmetry-pro
     steps:
       - name: Checkout clawmetry (OSS)
         uses: actions/checkout@v4
-
-      # Closed adapters live in clawmetry-pro — best-effort so the audit still
-      # runs (with reduced context) if the cross-repo token is absent.
-      - name: Checkout clawmetry-pro (adapter context, optional)
-        continue-on-error: true
-        uses: actions/checkout@v4
-        with:
-          repository: vivekchand/clawmetry-pro
-          token: ${{ secrets.CLOUD_REPO_PAT }}
-          path: clawmetry-pro
 
       - uses: actions/setup-python@v5
         with:
@@ -69,7 +62,6 @@ jobs:
       - name: Token visibility (presence only)
         run: |
           [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] && echo "CLAUDE_CODE_OAUTH_TOKEN: set" || echo "::warning::CLAUDE_CODE_OAUTH_TOKEN not set — clones run, model audit skipped. Add it with 'claude setup-token'."
-          [ -d "$CLAWMETRY_PRO_DIR/clawmetry_pro" ] && echo "clawmetry-pro: checked out" || echo "::warning::clawmetry-pro not checked out (set CLOUD_REPO_PAT) — auditing harness surface with reduced adapter context."
 
       - name: Sync harness sources
         run: bash scripts/harness/sync.sh

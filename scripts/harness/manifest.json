@@ -1,6 +1,6 @@
 {
-  "_comment": "Single source of truth for the harness-observability audit. Each entry maps an agent runtime ClawMetry monitors to its upstream source repo + the ClawMetry adapter that observes it. The daily audit (.github/workflows/harness-observability-audit.yml) clones/pulls each repo, reviews what the harness exposes that's observable, and files a GH issue for anything ClawMetry's adapter doesn't yet capture. repo=null => no public source to clone (closed, or URL not yet known); those are audited from on-disk format + docs instead.",
-  "_verified": "2026-06-04 — repo URLs HTTP-checked; closed/unknown left null on purpose (no guessing).",
+  "_comment": "Single source of truth for the OSS harness-observability audit. Each entry maps a FREE agent runtime ClawMetry monitors to its upstream source repo + the OSS adapter that observes it. The daily audit (.github/workflows/harness-observability-audit.yml) clones/pulls each repo, reviews what the harness exposes that's observable, and files a GH issue for anything ClawMetry's adapter doesn't yet capture. Only the free runtimes (openclaw + nemoclaw) live here; the 10 closed pro runtimes are audited by clawmetry-pro's own private manifest + workflow.",
+  "_verified": "2026-06-04 — free-only; pro runtime entries moved to clawmetry-pro to keep closed adapter paths out of the public repo.",
   "clone_dir": "../harness",
   "harnesses": [
     {
@@ -19,91 +19,6 @@
       "adapter_repo": "clawmetry",
       "tier": "free",
       "note": "Sandboxed OpenClaw — runs the OpenClaw adapter; audit NeMo-specific guardrail/sandbox telemetry."
-    },
-    {
-      "runtime": "claude_code",
-      "display": "Claude Code",
-      "repo": "https://github.com/yasasbanukaofficial/claude-code",
-      "adapter": "clawmetry_pro/adapters/claude_code.py",
-      "adapter_repo": "clawmetry-pro",
-      "tier": "pro",
-      "note": "Full Claude Code source (founder-provided mirror)."
-    },
-    {
-      "runtime": "codex",
-      "display": "OpenAI Codex",
-      "repo": "https://github.com/openai/codex",
-      "adapter": "clawmetry_pro/adapters/codex.py",
-      "adapter_repo": "clawmetry-pro",
-      "tier": "pro"
-    },
-    {
-      "runtime": "goose",
-      "display": "Goose",
-      "repo": "https://github.com/aaif-goose/goose",
-      "adapter": "clawmetry_pro/adapters/goose.py",
-      "adapter_repo": "clawmetry-pro",
-      "tier": "pro"
-    },
-    {
-      "runtime": "aider",
-      "display": "Aider",
-      "repo": "https://github.com/Aider-AI/aider",
-      "adapter": "clawmetry_pro/adapters/aider.py",
-      "adapter_repo": "clawmetry-pro",
-      "tier": "pro"
-    },
-    {
-      "runtime": "opencode",
-      "display": "opencode",
-      "repo": "https://github.com/anomalyco/opencode",
-      "adapter": "clawmetry_pro/adapters/opencode.py",
-      "adapter_repo": "clawmetry-pro",
-      "tier": "pro"
-    },
-    {
-      "runtime": "qwen_code",
-      "display": "Qwen Code",
-      "repo": "https://github.com/QwenLM/qwen-code",
-      "adapter": "clawmetry_pro/adapters/qwen_code.py",
-      "adapter_repo": "clawmetry-pro",
-      "tier": "pro"
-    },
-    {
-      "runtime": "cursor",
-      "display": "Cursor",
-      "repo": "https://github.com/cursor/agent-trace",
-      "adapter": "clawmetry_pro/adapters/cursor.py",
-      "adapter_repo": "clawmetry-pro",
-      "tier": "pro",
-      "note": "Cursor is a closed IDE; agent-trace is its agent trace/telemetry format — audit that against our state.vscdb reader."
-    },
-    {
-      "runtime": "hermes",
-      "display": "Hermes",
-      "repo": "https://github.com/NousResearch/hermes-agent",
-      "adapter": "clawmetry_pro/adapters/hermes.py",
-      "adapter_repo": "clawmetry-pro",
-      "tier": "pro",
-      "note": "Nous Research Hermes agent. Binary `tirith`, ~/.hermes/state.db."
-    },
-    {
-      "runtime": "picoclaw",
-      "display": "PicoClaw",
-      "repo": "https://github.com/sipeed/picoclaw",
-      "adapter": "clawmetry_pro/adapters/picoclaw.py",
-      "adapter_repo": "clawmetry-pro",
-      "tier": "pro",
-      "note": "Sipeed PicoClaw — OpenClaw-family, JSONL provider Messages (no on-disk token/cost)."
-    },
-    {
-      "runtime": "nanoclaw",
-      "display": "NanoClaw",
-      "repo": "https://github.com/nanocoai/nanoclaw",
-      "adapter": "clawmetry_pro/adapters/nanoclaw.py",
-      "adapter_repo": "clawmetry-pro",
-      "tier": "pro",
-      "note": "Per-session inbound.db/outbound.db SQLite."
     }
   ]
 }
