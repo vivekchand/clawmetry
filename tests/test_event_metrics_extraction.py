@@ -223,3 +223,47 @@ def test_openclaw_message_shape_with_priced_cost():
     assert tokens == 280
     # The pre-priced value wins, not the re-derivation.
     assert cost == 0.0123
+
+
+def test_local_model_event_cost_is_zero_not_none():
+    """Local/self-hosted model (e.g. ollama) with real token counts must produce
+    cost=0.0, NOT None. None renders as 'no data' in the Cost tab; 0.0 renders
+    as '$0 — local model, no API cost'. The derivation gate was `if est:` which
+    silently dropped 0.0; it must be `if est is not None:` (#2576)."""
+    ev = {
+        "id": "local1",
+        "node_id": "n",
+        "event_type": "message",
+        "ts": "2026-06-04T00:00:00Z",
+        "model": "ollama/llama3.2:3b",
+        "data": {"extra": {"inputTokens": 100, "outputTokens": 50}},
+    }
+    cost, tokens, model = _extract_event_metrics(ev)
+    assert model == "ollama/llama3.2:3b"
+    assert cost == 0.0, (
+        "local model cost must be 0.0 (not None) so the UI can label it "
+        "'local model — no API cost' rather than 'no data'"
+    )
+
+
+def test_unknown_provider_event_derives_conservative_nonzero_cost():
+    """Events whose model is completely unknown must get a non-zero conservative
+    cost (1.0/3.0 per-1M default), not None. This guards the 'Hermes drops
+    unknown-priced models' regression claim from #2576."""
+    ev = {
+        "id": "unk1",
+        "node_id": "n",
+        "event_type": "message",
+        "ts": "2026-06-04T00:00:00Z",
+        "data": {
+            "modelId": "totally-unknown-model-xyz",
+            "provider": "nobody",
+            "promptCache": {"lastCallUsage": {"input": 500, "output": 100}},
+        },
+    }
+    cost, tokens, model = _extract_event_metrics(ev)
+    assert model == "totally-unknown-model-xyz"
+    assert tokens == 600
+    assert cost is not None and cost > 0, (
+        "unknown provider must use conservative non-zero default, not be dropped"
+    )
