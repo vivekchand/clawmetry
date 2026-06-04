@@ -11647,6 +11647,69 @@ def _build_cron_jobs(paths):
         return []
 
 
+def _build_device_summary(spending, daily_usage):
+    """Compact, all-runtime payload for a WiFi hardware companion.
+
+    Mirrors ``routes/device.py``'s ``/api/device/snapshot`` but built on the
+    daemon's OWN store handle (never a ``read_only`` re-open — FLYWHEEL §1) so
+    it rides the E2E-encrypted snapshot to cloud. The device GETs the snapshot,
+    decrypts with the user's key, and reads this one small slice — the cloud
+    never sees plaintext (E2E invariant preserved). Approve/Deny is wired (the
+    daemon owns the approvals queue); ``alert`` is sourced LAN-side for now
+    (the alert history lives in the dashboard process, not the daemon), so the
+    cloud summary leaves it ``null`` until that store is daemon-readable.
+
+    Never raises — every read degrades to a safe default so the device always
+    gets a valid shape.
+    """
+    summary = {
+        "schema": 1,
+        "cost_today_usd": round(float((spending or {}).get("today") or 0.0), 4),
+        "tokens_today": int((daily_usage or {}).get("today") or 0),
+        "active_sessions": 0,
+        "runtimes_active": [],
+        "health": "green",
+        "alert": None,
+        "approval": None,
+    }
+    try:
+        from clawmetry import local_store as _ls
+        store = _ls.get_store()
+    except Exception:
+        return summary
+    try:
+        from clawmetry import waste_flags as _wf
+        rows = store.query_sessions_table(limit=300) or []
+        active = [s for s in rows
+                  if isinstance(s, dict) and s.get("status") == "active"]
+        summary["active_sessions"] = len(active)
+        summary["runtimes_active"] = sorted({
+            (_wf.runtime_from_session_id(s.get("session_id") or "") or "openclaw")
+            for s in active
+        })
+    except Exception:
+        pass
+    try:
+        from clawmetry import waste_flags as _wf
+        ap = [r for r in (store.query_approvals(status="pending", limit=200) or [])
+              if isinstance(r, dict)]
+        if ap:
+            oldest = min(ap, key=lambda r: (r.get("created_at") or ""))
+            sid = oldest.get("requestor_session_id") or ""
+            summary["approval"] = {
+                "id": oldest.get("id"),
+                "action": oldest.get("action") or "tool call",
+                "runtime": _wf.runtime_from_session_id(sid) or "openclaw",
+                "session_id": sid,
+            }
+    except Exception:
+        pass
+    # A waiting approval is the one thing on this slice that needs a human.
+    if summary["approval"]:
+        summary["health"] = "amber"
+    return summary
+
+
 def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     """Push system info + subagent data as encrypted snapshot.
 
@@ -12208,6 +12271,10 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "mcpServers": mcp_servers_slice,
         "contextEconomics": context_economics_slice,
         "spending": spending,
+        # Compact all-runtime slice a WiFi hardware companion decrypts + renders
+        # (the device GETs the snapshot, decrypts with the user's key, reads
+        # this). Cloud stays blind; E2E preserved.
+        "deviceSummary": _build_device_summary(spending, _du),
         "cronJobs": _build_cron_jobs(paths),
         "channels": _build_channel_data(config),
         "toolStats": _build_tool_stats(),
