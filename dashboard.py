@@ -15902,6 +15902,10 @@ def _get_sessions():
                     "model": s.get("model", s.get("modelRef", "unknown")),
                     "channel": s.get("channel", "unknown"),
                     "totalTokens": s.get("totalTokens", 0),
+                    "inputTokens": s.get("inputTokens", 0),
+                    "outputTokens": s.get("outputTokens", 0),
+                    "cacheReadTokens": s.get("cacheReadInputTokens", s.get("cacheReadTokens", 0)),
+                    "cacheWriteTokens": s.get("cacheCreationInputTokens", s.get("cacheWriteTokens", 0)),
                     "contextTokens": api_data.get("defaults", {}).get(
                         "contextTokens", 200000
                     ),
