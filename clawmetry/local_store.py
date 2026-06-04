@@ -8646,7 +8646,7 @@ def _extract_event_metrics(
                 cache_write_tokens=int(cache_write or 0),
                 provider=str(provider or ""),
             )
-            if est:
+            if est is not None:
                 cost = float(est)
         except Exception:
             pass
