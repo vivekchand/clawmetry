@@ -15879,6 +15879,26 @@ def _build_context_inspector_data():
 # ── Data Helpers ────────────────────────────────────────────────────────
 
 
+def _extract_gw_session_cost(s: dict):
+    """Return the session cost in USD from a gateway sessions.list entry.
+
+    The gateway has emitted this value under several key names across versions
+    (costUsd, totalCostUsd, cost_usd) and also as a nested cost.total dict.
+    Returns float or None (honest unknown).
+    """
+    raw = s.get("costUsd") or s.get("totalCostUsd") or s.get("cost_usd")
+    if raw is None:
+        co = s.get("cost")
+        if isinstance(co, dict):
+            raw = co.get("total") or co.get("total_usd")
+        elif isinstance(co, (int, float)):
+            raw = co
+    try:
+        return float(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _get_sessions():
     """Get sessions via gateway API first, file fallback."""
     now = time.time()
@@ -15906,6 +15926,7 @@ def _get_sessions():
                     "outputTokens": s.get("outputTokens", 0),
                     "cacheReadTokens": s.get("cacheReadInputTokens", s.get("cacheReadTokens", 0)),
                     "cacheWriteTokens": s.get("cacheCreationInputTokens", s.get("cacheWriteTokens", 0)),
+                    "costUsd": _extract_gw_session_cost(s),
                     "contextTokens": api_data.get("defaults", {}).get(
                         "contextTokens", 200000
                     ),

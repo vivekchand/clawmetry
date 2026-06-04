@@ -145,6 +145,7 @@ class OpenClawAdapter(AgentAdapter):
                     output_tokens=int(s.get("outputTokens") or 0),
                     cache_read_tokens=int(s.get("cacheReadTokens") or 0),
                     cache_write_tokens=int(s.get("cacheWriteTokens") or 0),
+                    cost_usd=float(s["costUsd"]) if s.get("costUsd") is not None else None,
                     extra={
                         "kind": s.get("kind") or "direct",
                         "contextTokens": s.get("contextTokens"),
