@@ -101,16 +101,19 @@ def _harness_surface(clone: str) -> str:
 
 
 def _adapter_source(h: dict) -> str:
-    """Read the ClawMetry adapter for this runtime (from clawmetry or, if present,
-    a sibling clawmetry-pro checkout). Missing pro checkout => note it."""
+    """Read the FULL ClawMetry adapter for this runtime (from clawmetry or a
+    sibling clawmetry-pro checkout). Read the whole file (up to 60k) — truncating
+    drops the tail, and capabilities()/cost-derivation often live at the BOTTOM
+    of the adapter, which caused false-positive gaps (e.g. aider's conditional
+    COST at line ~527 was cut, so the audit wrongly flagged 'no COST')."""
     rel = h["adapter"]
     if h.get("adapter_repo") == "clawmetry-pro":
         for base in (os.path.join(REPO_ROOT, "..", "clawmetry-pro"),
                      os.environ.get("CLAWMETRY_PRO_DIR", "")):
             if base and os.path.exists(os.path.join(base, rel)):
-                return _read(os.path.join(base, rel))
+                return _read(os.path.join(base, rel), 60000)
         return "(clawmetry-pro adapter not checked out in this run — audit the harness surface alone)"
-    return _read(os.path.join(REPO_ROOT, rel))
+    return _read(os.path.join(REPO_ROOT, rel), 60000)
 
 
 def _capabilities_enum() -> str:
@@ -144,6 +147,12 @@ counter, an OTel/telemetry stream, tool-call metadata, error/retry signals, a ne
 storage format, a new feature that emits data. Ground EVERY gap in a real file or
 path you can point to in the harness; if you can't point to where the harness
 exposes it, DO NOT include it (no speculation).
+
+CRITICAL — verify against the FULL adapter above before reporting (it is provided
+in full): do NOT flag something the adapter already handles. In particular check
+``capabilities()`` (capabilities are often added CONDITIONALLY at the bottom of
+the file), any ``derive_cost_usd`` / cost-derivation, and the field mapping. If
+the adapter already captures or derives it, it is NOT a gap.
 
 Output ONLY a JSON array (no prose). Each element:
 {{"title": "<short, runtime-prefixed>", "exposes": "<what the harness emits>",
