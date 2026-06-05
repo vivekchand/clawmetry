@@ -159,3 +159,72 @@ def test_list_events_surfaces_cache_token_split(isolated_store):
     assert ex.get("outputTokens") == 20
     assert ex.get("cacheReadTokens") == 80
     assert ex.get("cacheWriteTokens") == 10
+
+
+def test_list_events_populates_content_from_log_message_text(isolated_store):
+    """Log records with a string ``message`` populate Event.content (#2700).
+
+    OpenClaw gateway log records (per docs/logging.md) put the flattened
+    log text in a top-level string ``message`` field for full-text search.
+    Previously list_events read obj["message"] only to choose a usage
+    source (dict vs. string branch) and discarded the string, so log
+    events came back with empty content. Pin the new behavior so the
+    unified event stream stays searchable.
+    """
+    import uuid, time as _t
+    isolated_store.ingest({
+        "id": str(uuid.uuid4()),
+        "node_id": "agent+test-node",
+        "agent_id": "main",
+        "agent_type": "openclaw",
+        "session_id": "sess-LOG",
+        "event_type": "log",
+        "ts": _t.time(),
+        "data": {
+            "channel": "gateway",
+            "hostname": "Dhriti-1",
+            "level": "info",
+            "message": "tool dispatched: bash exit=0",
+        },
+    })
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess-LOG")
+    assert len(events) == 1
+    e = events[0]
+    assert e.content == "tool dispatched: bash exit=0"
+    # channel/hostname still come through extra.
+    assert e.extra.get("channel") == "gateway"
+    assert e.extra.get("hostname") == "Dhriti-1"
+
+
+def test_list_events_dict_message_does_not_set_content(isolated_store):
+    """Sanity guard: when ``message`` is a dict (assistant turn shape),
+    Event.content stays empty — only string ``message`` values are
+    treated as flattened log text. Keeps the dict branch — which is
+    the usage source — unchanged.
+    """
+    import uuid, time as _t
+    isolated_store.ingest({
+        "id": str(uuid.uuid4()),
+        "node_id": "agent+test-node",
+        "agent_id": "main",
+        "agent_type": "openclaw",
+        "session_id": "sess-DICT",
+        "event_type": "model.completed",
+        "ts": _t.time(),
+        "data": {
+            "type": "assistant",
+            "message": {
+                "model": "claude-opus-4-7",
+                "usage": {"input_tokens": 1, "output_tokens": 2},
+            },
+        },
+    })
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess-DICT")
+    assert len(events) == 1
+    assert events[0].content == ""
