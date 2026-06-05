@@ -651,6 +651,39 @@ class NeMoAdapter:
 from .base import AgentAdapter, Capability, DetectResult, Event, Session
 
 
+def _read_nemoclaw_skill_catalog() -> dict:
+    """Read catalog-metadata.json from the nemoclaw skills directory.
+
+    Checks two candidate locations (blueprint dir first, then a flat
+    ~/.nemoclaw/skills/ fallback). Returns a dict of skill_catalog_*
+    keys if the file is found; empty dict otherwise — never raises.
+    """
+    import json
+    from pathlib import Path
+
+    home = Path.home()
+    candidates = [
+        home / ".nemoclaw" / "source" / "nemoclaw-blueprint" / "skills" / "catalog-metadata.json",
+        home / ".nemoclaw" / "skills" / "catalog-metadata.json",
+    ]
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            raw = json.loads(path.read_text())
+            meta = raw.get("metadata", {})
+            return {
+                "skill_catalog_min_version": meta.get("minNemoClawVersion", ""),
+                "skill_catalog_tested_version": meta.get("testedNemoClawVersion", ""),
+                "skill_catalog_export_sha256": raw.get("exportContentSha256", ""),
+                "skill_catalog_source_commit": raw.get("sourceCommit", meta.get("sourceCommit", "")),
+                "skill_catalog_source_sha256": raw.get("sourceContentSha256", meta.get("sourceContentSha256", "")),
+            }
+        except Exception as exc:
+            logger.debug("nemoclaw skill catalog read failed (%s): %s", path, exc)
+    return {}
+
+
 class NemoClawAdapter(AgentAdapter):
     """Read-side adapter for the NemoClaw Free runtime.
 
@@ -675,6 +708,8 @@ class NemoClawAdapter(AgentAdapter):
                 n = int(rows[0][0])
         except Exception as exc:
             logger.debug("nemoclaw detect read failed: %s", exc)
+        meta: dict = {"event_count": n}
+        meta.update(_read_nemoclaw_skill_catalog())
         return DetectResult(
             name=self.name,
             display_name=self.display_name,
@@ -683,7 +718,7 @@ class NemoClawAdapter(AgentAdapter):
             workspace="(DuckDB-backed runtime view)",
             session_count=0,
             capabilities=[c.value for c in self.capabilities()],
-            meta={"event_count": n},
+            meta=meta,
         )
 
     def list_sessions(self, limit: int = 100) -> list[Session]:
@@ -761,6 +796,7 @@ class NemoClawAdapter(AgentAdapter):
             Capability.EVENTS,
             Capability.BRAIN,
             Capability.COST,
+            Capability.SKILLS,
         }
 
 
