@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: evals judge works without httpx (stdlib urllib fallback) (#2715) (2026-06-06)
+- **Why:** the evals judge hard-imported `httpx` to route its LLM call through the cost interceptor, but httpx is not a clawmetry dependency (deps stay minimal: flask + waitress + cryptography). On the daemon's own venv every judge call died with "No module named 'httpx'" (sync.log: "evals: judge call failed ... No module named 'httpx'") and no session was ever scored.
+- **What:** `_judge_http_post_json` prefers httpx when installed (keeps interceptor cost tracking for eval spend) and falls back to stdlib urllib when it is not, so the judge runs on a minimal install. Both provider branches (Anthropic + OpenAI) route through it.
+- **Verified:** `tests/test_eval_judge_httpx_fallback.py` (urllib fallback when httpx absent, Anthropic + OpenAI parse paths, missing-key raises).
+
+
 ### Release: `clawmetry status` shows the linked account email (#2710) (2026-06-05)
 - **Why:** status showed the api_key but not which account the node is linked to, so a node connected to the wrong account (the two-account trap) was invisible from the box.
 - **What:** an `Account:` line resolves the email (and plan) from the cloud via `/api/cloud/account`. Best-effort: a non-`cm_` key skips the call, and a short 2.5s timeout plus never-raise keep status fast and offline-safe (the line is simply omitted when the lookup fails). Honours `CLAWMETRY_APP_BASE`. Wired into both status output paths.
