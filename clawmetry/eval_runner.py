@@ -607,6 +607,40 @@ class EvalRunner:
 # ── Judge LLM call ─────────────────────────────────────────────────────────────
 
 
+def _judge_http_post_json(url: str, payload: dict, headers: dict, timeout: float) -> dict:
+    """POST JSON to ``url`` and return the parsed response dict.
+
+    Prefers ``httpx`` when installed (so ``clawmetry/interceptor.py`` cost
+    tracking picks up eval spend), but FALLS BACK to the stdlib ``urllib`` when
+    httpx is absent. httpx is NOT a clawmetry dependency (deps stay minimal:
+    flask + waitress + cryptography), so on the daemon's own venv the judge used
+    to die with ``No module named 'httpx'`` and no session ever got scored.
+    Raises on HTTP / network / JSON error; the caller catches and degrades."""
+    try:
+        import httpx  # noqa: F401
+        _have_httpx = True
+    except Exception:
+        _have_httpx = False
+    if _have_httpx:
+        import httpx
+        with httpx.Client(timeout=timeout) as client:
+            r = client.post(url, json=payload, headers=headers)
+            r.raise_for_status()
+            return r.json()
+    # stdlib fallback (always available). urlopen raises HTTPError on 4xx/5xx,
+    # mirroring httpx's raise_for_status so the caller's error handling is uniform.
+    import json as _json
+    import urllib.request as _ur
+
+    body = _json.dumps(payload).encode("utf-8")
+    req = _ur.Request(
+        url, data=body, method="POST",
+        headers={**(headers or {}), "Content-Type": "application/json"},
+    )
+    with _ur.urlopen(req, timeout=timeout) as resp:
+        return _json.loads(resp.read() or b"{}")
+
+
 def _call_judge(model: str, prompt: str, *, timeout: float = 30.0) -> str:
     """Call the Anthropic Messages API with the user's existing API key.
 
@@ -623,8 +657,6 @@ def _call_judge(model: str, prompt: str, *, timeout: float = 30.0) -> str:
     Anything else falls back to Anthropic — Phase 1 is Haiku-by-default,
     so the long tail of providers can wait for Phase 2.
     """
-    import httpx
-
     model_lower = model.lower()
     if model_lower.startswith(("gpt-", "o1-", "o3-", "o4-")):
         api_key = os.environ.get("OPENAI_API_KEY", "")
@@ -641,10 +673,7 @@ def _call_judge(model: str, prompt: str, *, timeout: float = 30.0) -> str:
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
-        with httpx.Client(timeout=timeout) as client:
-            r = client.post(url, json=payload, headers=headers)
-            r.raise_for_status()
-            data = r.json()
+        data = _judge_http_post_json(url, payload, headers, timeout)
         choices = data.get("choices") or []
         if not choices:
             return ""
@@ -665,10 +694,7 @@ def _call_judge(model: str, prompt: str, *, timeout: float = 30.0) -> str:
         "anthropic-version": "2023-06-01",
         "Content-Type": "application/json",
     }
-    with httpx.Client(timeout=timeout) as client:
-        r = client.post(url, json=payload, headers=headers)
-        r.raise_for_status()
-        data = r.json()
+    data = _judge_http_post_json(url, payload, headers, timeout)
     blocks = data.get("content") or []
     parts: list[str] = []
     for blk in blocks:
