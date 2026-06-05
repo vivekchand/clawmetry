@@ -1575,6 +1575,30 @@ def _status_live() -> None:
         _sys.stdout.flush()
 
 
+def _resolve_account_email(api_key: str):
+    """Best-effort: ask the cloud which ACCOUNT this node's api_key is linked to,
+    so `clawmetry status` can show the email (and plan). This is the fastest way
+    to catch the "my node is on the wrong account" trap. Short timeout + never
+    raises, so status stays fast and works offline (returns (None, None) then)."""
+    try:
+        if not api_key or not str(api_key).startswith("cm_"):
+            return None, None
+        import json as _json
+        import os as _os
+        import urllib.parse as _up
+        import urllib.request as _ur
+
+        base = _os.environ.get("CLAWMETRY_APP_BASE", "https://app.clawmetry.com").rstrip("/")
+        url = base + "/api/cloud/account?token=" + _up.quote(api_key)
+        with _ur.urlopen(url, timeout=2.5) as resp:
+            data = _json.loads(resp.read() or b"{}")
+        email = (data.get("email") or "").strip()
+        plan = (data.get("plan") or "").strip()
+        return (email or None), (plan or None)
+    except Exception:
+        return None, None
+
+
 def _cmd_status(args) -> None:
     """clawmetry status — show local + cloud sync status."""
     if getattr(args, "live", False):
@@ -1598,6 +1622,10 @@ def _cmd_status(args) -> None:
             )
             print("  Cloud sync:  ✅  Connected")
             print(f"  API key:     {masked_api}")
+            _acct_email, _acct_plan = _resolve_account_email(api_key)
+            if _acct_email:
+                _plan_suffix = f"  ({_acct_plan})" if _acct_plan else ""
+                print(f"  Account:     {_acct_email}{_plan_suffix}")
             print(f"  Node ID:     {cfg.get('node_id', '?')}")
             print(f"  Connected:   {cfg.get('connected_at', '?')[:19]}")
             if enc_key:
@@ -1820,6 +1848,10 @@ def _print_nemoclaw_nodes(args) -> None:
             )
             print("  Cloud sync:  ✅  Connected")
             print(f"  API key:     {masked_api}")
+            _acct_email, _acct_plan = _resolve_account_email(api_key)
+            if _acct_email:
+                _plan_suffix = f"  ({_acct_plan})" if _acct_plan else ""
+                print(f"  Account:     {_acct_email}{_plan_suffix}")
             print(f"  Node ID:     {node_id}")
             if enc_key:
                 if getattr(args, "show_key", False):
