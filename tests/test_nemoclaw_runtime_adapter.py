@@ -129,6 +129,50 @@ def test_nemoclaw_capabilities():
     assert Capability.EVENTS in caps
     assert Capability.BRAIN in caps
     assert Capability.COST in caps
+    assert Capability.SKILLS in caps
+
+
+# ── skill catalog metadata (issue #2610) ─────────────────────────────────────
+
+
+def test_nemoclaw_detect_surfaces_skill_catalog_meta(isolated_store, tmp_path, monkeypatch):
+    """detect() merges skill catalog version fields into meta when catalog-metadata.json exists."""
+    import json as _json
+    from pathlib import Path
+
+    catalog_dir = tmp_path / ".nemoclaw" / "skills"
+    catalog_dir.mkdir(parents=True)
+    catalog_path = catalog_dir / "catalog-metadata.json"
+    catalog_path.write_text(_json.dumps({
+        "metadata": {
+            "minNemoClawVersion": "1.2.0",
+            "testedNemoClawVersion": "1.4.1",
+            "sourceCommit": "deadbeef",
+        },
+        "exportContentSha256": "abc123",
+        "sourceContentSha256": "def456",
+    }))
+
+    _seed_nemoclaw_event(isolated_store)
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.nemo import NemoClawAdapter
+    res = NemoClawAdapter().detect()
+    assert res.meta["skill_catalog_min_version"] == "1.2.0"
+    assert res.meta["skill_catalog_tested_version"] == "1.4.1"
+    assert res.meta["skill_catalog_source_commit"] == "deadbeef"
+    assert res.meta["skill_catalog_export_sha256"] == "abc123"
+    assert res.meta["skill_catalog_source_sha256"] == "def456"
+
+
+def test_nemoclaw_detect_no_catalog_meta_when_file_absent(isolated_store):
+    """detect() works normally and emits no skill_catalog_* keys when no catalog file exists."""
+    _seed_nemoclaw_event(isolated_store)
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.nemo import NemoClawAdapter
+    res = NemoClawAdapter().detect()
+    assert "skill_catalog_min_version" not in res.meta
 
 
 # ── isolation: doesn't pick up non-nemo runtimes ────────────────────────────
