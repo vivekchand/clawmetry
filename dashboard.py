@@ -11574,7 +11574,7 @@ DASHBOARD_HTML = r"""
         <div class="left-nav-item left-nav-item-sub" id="left-nav-context-economics" data-tab="context-economics" onclick="switchTab('context-economics')" title="Context-window utilization over time, compaction triggers and tokens reclaimed">
           <span class="left-nav-label">Context economics</span>
         </div>
-        <div class="left-nav-item left-nav-item-sub" id="left-nav-harness" data-tab="harness" onclick="switchTab('harness')" title="What the selected runtime uniquely exposes — beyond the generic tabs">
+        <div class="left-nav-item left-nav-item-sub" id="left-nav-harness" data-tab="harness" onclick="switchTab('harness')" title="What the selected runtime uniquely exposes — beyond the generic tabs" style="display:none">
           <span class="left-nav-label">Harness</span>
         </div>
         <div class="left-nav-item left-nav-item-sub" id="left-nav-swimlane" data-tab="swimlane" onclick="switchTab('swimlane')" title="Compare up to 4 sessions or runtimes side by side as parallel live lanes">
