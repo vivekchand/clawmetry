@@ -47,6 +47,16 @@ _DEFAULT_CLOUD_BASE = "https://ingest.clawmetry.com"
 # activate are idempotent (don't re-download an already-current wheel).
 _PRO_MARKER_PATH = os.path.expanduser("~/.clawmetry/pro_installed.json")
 
+# User-writable fallback for the clawmetry-pro install. The provisioner normally
+# extracts the wheel into the interpreter's site-packages, but a SYSTEM-WIDE
+# install (e.g. /opt/clawmetry owned by root) is NOT writable by a non-root
+# daemon (systemd --user). Installing there fails with PermissionError and the
+# paid runtimes silently never load. When site-packages is read-only we install
+# into this HOME-owned dir instead and put it on sys.path. Always writable by the
+# daemon user, no sudo/chown needed. (Founder hit this on a root-owned /opt
+# install with a --user systemd daemon, 2026-06-05.)
+_PRO_FALLBACK_DIR = os.path.expanduser("~/.clawmetry/pro-packages")
+
 # Ed25519 PUBLIC verification key. The matching PRIVATE key lives only on the
 # license server (clawmetry-cloud, never shipped). Rotating the server key
 # means bumping this constant + an OSS release.
@@ -240,24 +250,74 @@ def _pip_run(args: list) -> tuple[bool, str]:
     return False, (tail[-1] if tail else f"pip exited {proc.returncode}")
 
 
-def _unzip_wheel_into_site(wheel_path: str) -> tuple[bool, str]:
-    """pip-less fallback: a wheel is a zip of pure-Python packages, so for a
-    ``--no-deps`` pure-Python wheel (clawmetry-pro) we can simply extract it into
-    this interpreter's site-packages and it becomes importable. This is the path
-    that rescues a daemon venv created WITHOUT pip (``~/.clawmetry/bin/python3``
-    on some installs has no pip / no ensurepip), where ``python -m pip`` fails
-    with ``No module named pip``. Never raises."""
+def _site_packages_target() -> tuple[str, bool]:
+    """Return (interpreter site-packages dir, is_writable_by_us)."""
     try:
         import sysconfig
+        target = sysconfig.get_path("purelib") or sysconfig.get_path("platlib") or ""
+        writable = bool(target) and os.path.isdir(target) and os.access(target, os.W_OK)
+        return target, writable
+    except Exception:
+        return "", False
+
+
+def ensure_pro_on_path() -> None:
+    """Put the user-writable fallback dir on ``sys.path`` if it exists, so a
+    clawmetry-pro installed there (because site-packages was read-only) is
+    importable. Idempotent, never raises. Call this at daemon/dashboard startup
+    BEFORE plugin discovery, and before each provision attempt so an already-
+    fallback-installed pro is detected as present."""
+    try:
+        import sys
+        d = _PRO_FALLBACK_DIR
+        if os.path.isdir(d) and d not in sys.path:
+            sys.path.insert(0, d)
+            try:
+                import importlib
+                importlib.invalidate_caches()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _unzip_wheel_into_site(wheel_path: str) -> tuple[bool, str]:
+    """pip-less fallback: a wheel is a zip of pure-Python packages, so for a
+    ``--no-deps`` pure-Python wheel (clawmetry-pro) we can simply extract it and
+    it becomes importable. Rescues a daemon venv created WITHOUT pip
+    (``~/.clawmetry/bin/python3`` with no pip/ensurepip) AND a read-only
+    interpreter site-packages (root-owned ``/opt`` install run by a non-root
+    --user daemon): when site-packages is not writable we extract into the
+    HOME-owned ``_PRO_FALLBACK_DIR`` and add it to ``sys.path`` so the adapters
+    still load with no sudo/chown. Never raises."""
+    try:
+        import sys
         import zipfile
 
-        target = sysconfig.get_path("purelib") or sysconfig.get_path("platlib")
+        target, writable = _site_packages_target()
+        if not writable:
+            # Interpreter site-packages is read-only (e.g. root-owned /opt
+            # install, non-root daemon). Use the HOME-owned fallback dir.
+            target = _PRO_FALLBACK_DIR
+            try:
+                os.makedirs(target, exist_ok=True)
+            except Exception as _me:
+                return False, f"no writable install target ({target!r}): {_me}"
         if not target or not os.path.isdir(target):
-            return False, f"no writable site-packages ({target!r})"
+            return False, f"no writable install target ({target!r})"
         with zipfile.ZipFile(wheel_path) as zf:
-            # Skip RECORD-only metadata noise; extract packages + dist-info so the
-            # import system (and _pro_installed_version's importlib.metadata) work.
+            # Extract packages + dist-info so the import system (and
+            # _pro_installed_version's importlib.metadata) work.
             zf.extractall(target)
+        if target == _PRO_FALLBACK_DIR:
+            if target not in sys.path:
+                sys.path.insert(0, target)
+            try:
+                import importlib
+                importlib.invalidate_caches()
+            except Exception:
+                pass
+            return True, f"installed (unzip -> fallback {target})"
         return True, "installed (unzip)"
     except Exception as exc:
         return False, f"unzip install failed: {exc}"
@@ -275,6 +335,14 @@ def _pip_install_wheel(wheel_path: str) -> tuple[bool, str]:
     site-packages. Never raises."""
     import subprocess
     import sys
+
+    # If the interpreter's site-packages is READ-ONLY (root-owned /opt install
+    # run by a non-root daemon), pip can't write it either -> go straight to the
+    # HOME-owned fallback unzip. This is the path that makes a system-wide
+    # install work for a --user daemon without sudo/chown.
+    _, _writable = _site_packages_target()
+    if not _writable:
+        return _unzip_wheel_into_site(wheel_path)
 
     args = ["install", "--upgrade", "--no-deps",
             "--disable-pip-version-check", wheel_path]
@@ -312,6 +380,9 @@ def _provision_pro_wheel(download_url: str, *, headers: dict | None = None,
     Returns a human status string. NEVER raises and NEVER blocks the caller —
     on any failure it logs a warning and returns a message; the node keeps
     running on the free runtimes."""
+    # Make a prior fallback-dir install importable before the idempotency check,
+    # so we don't re-download when pro is already present in the HOME fallback.
+    ensure_pro_on_path()
     # Idempotent: if pro is already importable, don't re-download. A version
     # bump still re-installs because the marker is rewritten on every success
     # and the server serves the current wheel.
