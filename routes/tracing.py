@@ -516,6 +516,9 @@ def _build_spans(rows):
                          detail=_short_input(tu.get("input")), event_type=et)
                 if (tu.get("name") or "") in _NEMOCLAW_CATALOG_TOOLS:
                     ts["nemoclaw_meta"] = True
+                    dispatched = (tu.get("input") or {}).get("name")
+                    if dispatched:
+                        ts["dispatched_tool"] = dispatched
                 tool_spans[tu.get("id") or tuid] = ts
             continue
 
