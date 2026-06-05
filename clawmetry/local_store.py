@@ -5703,6 +5703,68 @@ class LocalStore:
                 ],
             )
 
+    def ingest_talk_lifecycle(
+        self,
+        *,
+        node_id: str,
+        session_id: str = "",
+        event_type: str,
+        mode: str = "",
+        transport: str = "",
+        brain: str = "",
+        provider: str = "",
+        final: Any = None,
+        duration_ms: Any = None,
+        byte_length: Any = None,
+        ts_iso: str,
+        raw: str = "",
+    ) -> None:
+        """Idempotently record one Talk/voice lifecycle signal in ``events``.
+
+        Gap #2604. OpenClaw's realtime Talk subsystem emits structured JSONL
+        log records (subsystem="talk") carrying flattened attributes
+        (``talkEventType`` / ``talkMode`` / ``talkTransport`` / ``talkBrain``
+        / ``talkProvider`` / ``talkFinal`` / ``talkDurationMs`` /
+        ``talkByteLength``). The daemon
+        (``sync.sync_talk_lifecycle_from_logs``) tails the file logs and
+        records each one here as a ``talk.lifecycle`` event so the dashboard /
+        cloud snapshot can surface per-session voice activity.
+
+        Modeled byte-for-byte on ``ingest_connector_health``: idempotent on a
+        stable id derived from session+event_type+ts so re-tailing the log
+        (after a rotation/truncation rescan) never double-counts. Never raises.
+        """
+        if not event_type or not ts_iso:
+            return
+        ev_id = "talk-" + hashlib.sha1(
+            f"{session_id or ''}|{event_type}|{ts_iso}|{(raw or '')[:80]}".encode("utf-8")
+        ).hexdigest()[:24]
+        payload = json.dumps({
+            "talkEventType": event_type,
+            "talkMode": mode or "",
+            "talkTransport": transport or "",
+            "talkBrain": brain or "",
+            "talkProvider": provider or "",
+            "talkFinal": final,
+            "talkDurationMs": duration_ms,
+            "talkByteLength": byte_length,
+        }).encode("utf-8")
+        with self._write_lock:
+            self._conn.execute(
+                """
+                INSERT OR IGNORE INTO events
+                  (id, agent_type, node_id, agent_id, session_id, workspace_id,
+                   event_type, ts, data, cost_usd, token_count, model, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                [
+                    ev_id, "openclaw", node_id or "local", "main",
+                    (session_id or None), None,
+                    "talk.lifecycle", ts_iso, payload, None, None, None,
+                    int(time.time() * 1000),
+                ],
+            )
+
     def query_connector_health(self, since_hours: int = 24) -> list[dict[str, Any]]:
         """Recent ``connector.health`` signals, newest first.
 
