@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Release: `clawmetry status` shows the linked account email (#2710) (2026-06-05)
+- **Why:** status showed the api_key but not which account the node is linked to, so a node connected to the wrong account (the two-account trap) was invisible from the box.
+- **What:** an `Account:` line resolves the email (and plan) from the cloud via `/api/cloud/account`. Best-effort: a non-`cm_` key skips the call, and a short 2.5s timeout plus never-raise keep status fast and offline-safe (the line is simply omitted when the lookup fails). Honours `CLAWMETRY_APP_BASE`. Wired into both status output paths.
+- **Verified:** `tests/test_status_account_email.py` (resolves email+plan, non-`cm_` key skips the network, offline is graceful, honours `CLAWMETRY_APP_BASE`).
+
 ### Release: detected runtimes classified by activity (last_active + status + source) (#2707) (2026-06-05)
 - **Why:** detecting a runtime by its on-disk data dir does not mean it is in active use. A Cursor `state.vscdb` or an `opencode.db` can sit untouched for months, but the Fleet showed every detected runtime as "syncing" next to the one you used minutes ago. On a real box a Cursor chat history last written in July 2025 rendered like a live node, and an OpenClaw sub-agent looked like a standalone install.
 - **What:** `_detect_runtimes_for_heartbeat` now enriches each reported runtime with `last_active` (epoch, newest mtime of its native store via a bounded walk so a large `~/.claude/projects` tree cannot slow the heartbeat), `status` (`active` used within 7 days, `idle` within 30 days, `stale` older, `unknown`), and `source` (`standalone` vs `openclaw_subagent` when the only or most recent activity is via `~/.openclaw/agents/<runtime>`). Additive and back-compat; consumers that ignore the new keys are unaffected. The cloud Fleet badge that renders this ships separately.
