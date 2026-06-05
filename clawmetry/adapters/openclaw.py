@@ -87,6 +87,102 @@ def _real_install(sessions_dir: str) -> bool:
                for m in ("SOUL.md", "AGENTS.md", "MEMORY.md"))
 
 
+def _model_router_fingerprint() -> dict:
+    """Read the NemoClaw model-router source fingerprint (``git:<sha>``)
+    written by harness onboarding to ``<venv>/.nemoclaw-source-fingerprint``
+    (model-router.ts writeModelRouterInstalledFingerprint). Surfaces the
+    install-provenance / version-drift signal on DetectResult.meta (#2608).
+
+    Read-only and never raises. Returns ``{}`` when the file/venv is absent
+    (plain OpenClaw or old NemoClaw installs), so the meta dict is unchanged.
+    """
+    venv = os.environ.get("NEMOCLAW_MODEL_ROUTER_VENV") or os.path.expanduser(
+        os.path.join("~", ".nemoclaw", "model-router-venv"))
+    fp_path = os.path.join(venv, ".nemoclaw-source-fingerprint")
+    try:
+        with open(fp_path, encoding="utf-8") as fh:
+            raw = (fh.read() or "").strip()
+        if not raw:
+            return {}
+        out = {"modelRouterFingerprint": raw}
+        # raw looks like "git:<40hex>" / "gitlink:<40hex>" / "files:<hex>"
+        if ":" in raw:
+            kind, _, val = raw.partition(":")
+            out["modelRouterFingerprintKind"] = kind
+            if kind in ("git", "gitlink") and val:
+                out["modelRouterSourceSha"] = val[:12]
+        return out
+    except (OSError, ValueError):
+        return {}
+
+
+# NOTE (#2610, deferred): NemoClaw's skill-catalog version/provenance lives in
+# ``skills/catalog-metadata.json`` (min/tested NemoClaw version, content shas),
+# but that file is a SOURCE-repo build artifact — it is not shipped in the npm
+# ``files`` list and no install/Docker step copies it to any host-readable path,
+# and the NemoClaw skills bundle lives inside the sandbox container, not the host
+# ``~/.openclaw`` ClawMetry reads. So there is no reliable on-disk location to
+# read it from today. Deferred rather than ship a dead read; revisit if NemoClaw
+# starts exporting the catalog to the host (e.g. ~/.nemoclaw/skills/).
+
+
+def _nemoclaw_tool_catalog_state() -> Optional[bool]:
+    """Whether the NemoClaw compact tool-catalog wrapper is active for this
+    runtime (#2683).
+
+    The harness patch (scripts/patch-openclaw-tool-catalog.js) injects
+    ``NEMOCLAW_TOOL_CATALOG !== "0"`` into every agent turn, after rewriting
+    the pinned OpenClaw ``selection-*.js`` and stamping the marker
+    ``/* nemoclaw compact tool catalog (#2600) */``. We surface a defensive
+    session-level boolean so the dashboard can tell a guardrail-wrapped
+    session from one where the catalog was disabled.
+
+    Returns ``True``/``False`` ONLY when there is positive NemoClaw signal
+    (the patch marker is present in the openclaw dist, or the env var is
+    explicitly set); returns ``None`` on plain OpenClaw so we never assert a
+    catalog state that doesn't exist. Never raises.
+    """
+    env = os.environ.get("NEMOCLAW_TOOL_CATALOG")
+    # Look for the applied patch marker in the openclaw dist selection runtime.
+    patched = False
+    try:
+        home = os.environ.get("OPENCLAW_HOME") or os.path.expanduser("~/.openclaw")
+        dist_dirs = [
+            os.path.join(home, "node_modules", "openclaw", "dist"),
+            "/usr/local/lib/node_modules/openclaw/dist",
+        ]
+        marker = b"/* nemoclaw compact tool catalog (#2600) */"
+        for dist in dist_dirs:
+            if not os.path.isdir(dist):
+                continue
+            try:
+                names = os.listdir(dist)
+            except OSError:
+                continue
+            for n in names:
+                if not (n.startswith("selection-") and n.endswith(".js")):
+                    continue
+                fp = os.path.join(dist, n)
+                try:
+                    with open(fp, "rb") as fh:
+                        # Marker sits early in the rewritten module; cap the read.
+                        if marker in fh.read(2_000_000):
+                            patched = True
+                            break
+                except OSError:
+                    continue
+            if patched:
+                break
+    except Exception:
+        patched = False
+
+    if not patched and env is None:
+        # No NemoClaw signal at all → don't claim a catalog state.
+        return None
+    # Mirror the harness gate exactly: enabled unless explicitly "0".
+    return env != "0"
+
+
 class OpenClawAdapter(AgentAdapter):
     name = "openclaw"
     display_name = "OpenClaw"
@@ -110,6 +206,17 @@ class OpenClawAdapter(AgentAdapter):
             # workspace dir) is NOT a signal — ClawMetry creates it, which
             # false-positived OpenClaw on uninstalled machines.
             detected = bool(sessions) or running or _real_install(sessions_dir)
+            meta = {
+                "gatewayUrl": gateway_url,
+                "sessionsDir": sessions_dir,
+            }
+            # NemoClaw install-provenance signal (#2608). Returns {} on plain
+            # OpenClaw, so meta is unchanged there. (#2610 skill-catalog deferred
+            # — see note above: no host-readable on-disk location.)
+            meta.update(_model_router_fingerprint())
+            _tc_enabled = _nemoclaw_tool_catalog_state()
+            if _tc_enabled is not None:
+                meta["nemoclawToolCatalogEnabled"] = _tc_enabled
             return DetectResult(
                 name=self.name,
                 display_name=self.display_name,
@@ -118,10 +225,7 @@ class OpenClawAdapter(AgentAdapter):
                 workspace=workspace or default_home,
                 session_count=len(sessions),
                 capabilities=[c.value for c in self.capabilities()],
-                meta={
-                    "gatewayUrl": gateway_url,
-                    "sessionsDir": sessions_dir,
-                },
+                meta=meta,
             )
         except Exception as exc:
             logger.warning(f"OpenClaw detect() raised: {exc}")
@@ -138,10 +242,21 @@ class OpenClawAdapter(AgentAdapter):
         except Exception as exc:
             logger.warning(f"OpenClaw list_sessions() failed: {exc}")
             return []
+        # Runtime-level NemoClaw tool-catalog state (#2683): whether the
+        # compact tool-catalog wrapper is active for this install. None on
+        # plain OpenClaw (no NemoClaw signal) — we don't stamp a state then.
+        _tc_enabled = _nemoclaw_tool_catalog_state()
         out: List[Session] = []
         for s in raw[:limit]:
             updated_ms = s.get("updatedAt") or 0
             started_at = (updated_ms / 1000.0) if updated_ms else 0.0
+            extra = {
+                "kind": s.get("kind") or "direct",
+                "contextTokens": s.get("contextTokens"),
+                "agentId": s.get("agent") or "main",
+            }
+            if _tc_enabled is not None:
+                extra["nemoclawToolCatalogEnabled"] = _tc_enabled
             out.append(
                 Session(
                     agent=self.name,
@@ -156,11 +271,7 @@ class OpenClawAdapter(AgentAdapter):
                     cache_read_tokens=int(s.get("cacheReadTokens") or 0),
                     cache_write_tokens=int(s.get("cacheWriteTokens") or 0),
                     cost_usd=float(s["costUsd"]) if s.get("costUsd") is not None else None,
-                    extra={
-                        "kind": s.get("kind") or "direct",
-                        "contextTokens": s.get("contextTokens"),
-                        "agentId": s.get("agent") or "main",
-                    },
+                    extra=extra,
                 )
             )
         return out
@@ -347,8 +458,34 @@ class OpenClawAdapter(AgentAdapter):
                     for block in content:
                         if not isinstance(block, dict) or block.get("type") != "tool_use":
                             continue
-                        tool_name = block.get("name") or "tool"
+                        orig_name = block.get("name") or "tool"
+                        tool_name = orig_name
                         tool_id = block.get("id") or ""
+                        blk_input = block.get("input")
+                        # NemoClaw compact tool-catalog dispatch (#2682): the
+                        # injected meta-tool is named "tool_call" and carries the
+                        # REAL dispatched tool in input.name (the wrapper
+                        # dispatches via catalog.get(name)). Unwrap it so the
+                        # Tracing tab shows the real tool, not a generic
+                        # "tool_call" span. Falls back to the literal name on
+                        # old/missing data so it never crashes.
+                        attrs: dict = {}
+                        if tool_name == "tool_call" and isinstance(blk_input, dict):
+                            real = blk_input.get("name")
+                            if isinstance(real, str) and real.strip():
+                                real = real.strip()
+                                attrs.update({
+                                    "nemoclaw.catalog_dispatch": True,
+                                    "nemoclaw.meta_tool": "tool_call",
+                                    "nemoclaw.dispatched_tool": real,
+                                })
+                                tool_name = real
+                        # Catalog meta-tools (tool_search/tool_describe/tool_call)
+                        # are guardrail dispatches, not real agent actions — tag
+                        # by the ORIGINAL name (tool_name may now be the unwrapped
+                        # real tool).
+                        if orig_name in _NEMOCLAW_CATALOG_TOOLS:
+                            attrs["nemoclaw.catalog_guardrail"] = True
                         tool_span: dict = {
                             "span_id": _sid("tool", session_id, str(raw_ts), tool_id, tool_name),
                             "trace_id": trace_id,
@@ -359,10 +496,9 @@ class OpenClawAdapter(AgentAdapter):
                             "session_id": session_id,
                             "agent_type": "openclaw",
                             "tool_name": tool_name,
-                            "input": block.get("input"),
+                            "input": blk_input,
+                            "attributes": attrs or None,
                         }
-                        if tool_name in _NEMOCLAW_CATALOG_TOOLS:
-                            tool_span["attributes"] = {"nemoclaw.catalog_guardrail": True}
                         spans.append(tool_span)
 
             elif t in ("subagent_spawn", "agent_spawn"):
