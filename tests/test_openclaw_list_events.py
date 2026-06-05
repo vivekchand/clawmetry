@@ -228,3 +228,49 @@ def test_list_events_dict_message_does_not_set_content(isolated_store):
     events = OpenClawAdapter().list_events("sess-DICT")
     assert len(events) == 1
     assert events[0].content == ""
+
+
+def test_list_events_surfaces_cache_token_split_sdk_keys(isolated_store):
+    """SDK-normalized cacheRead/cacheWrite usage keys are read by list_events.
+
+    The OpenClaw plugin SDK completeSimple() returns Usage with the
+    normalized keys ``cacheRead`` / ``cacheWrite`` (instead of the raw
+    Anthropic-style ``cache_read_input_tokens`` /
+    ``cache_creation_input_tokens``). Sessions recorded via that SDK
+    path should still surface the per-turn cache split through
+    Event.extra. Regression for #2699.
+    """
+    import uuid, time as _t
+    isolated_store.ingest({
+        "id": str(uuid.uuid4()),
+        "node_id": "agent+test-node",
+        "agent_id": "main",
+        "agent_type": "openclaw",
+        "session_id": "sess-SDK",
+        "event_type": "model.completed",
+        "ts": _t.time(),
+        "model": "claude-opus-4-7",
+        "token_count": 150,
+        "data": {
+            "type": "assistant",
+            "message": {
+                "model": "claude-opus-4-7",
+                "usage": {
+                    "input_tokens": 30,
+                    "output_tokens": 20,
+                    "cacheRead": 80,
+                    "cacheWrite": 10,
+                },
+            },
+        },
+    })
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess-SDK")
+    assert len(events) == 1
+    ex = events[0].extra
+    assert ex.get("inputTokens") == 30
+    assert ex.get("outputTokens") == 20
+    assert ex.get("cacheReadTokens") == 80
+    assert ex.get("cacheWriteTokens") == 10

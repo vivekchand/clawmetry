@@ -345,8 +345,8 @@ class OpenClawAdapter(AgentAdapter):
                                 for dst, *keys in [
                                     ("inputTokens", "input_tokens", "inputTokens"),
                                     ("outputTokens", "output_tokens", "outputTokens"),
-                                    ("cacheReadTokens", "cache_read_input_tokens", "cacheReadInputTokens"),
-                                    ("cacheWriteTokens", "cache_creation_input_tokens", "cacheCreationInputTokens"),
+                                    ("cacheReadTokens", "cache_read_input_tokens", "cacheReadInputTokens", "cacheRead"),
+                                    ("cacheWriteTokens", "cache_creation_input_tokens", "cacheCreationInputTokens", "cacheWrite"),
                                 ]:
                                     for k in keys:
                                         v = usage.get(k)
