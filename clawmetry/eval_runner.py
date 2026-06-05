@@ -513,6 +513,31 @@ class EvalRunner:
         judge_model = str(rubric.get("judge_model") or DEFAULT_RUBRIC["judge_model"])
         scored_at = int(time.time() * 1000)
 
+        # Judge-key guard. Evals are default-on, but the judge calls a real LLM
+        # (Anthropic/OpenAI) that needs an API key in the env. With no key,
+        # return a quiet SKIP (not a per-session WARNING) so we (a) never spam
+        # sync.log every scheduler tick when the feature simply isn't configured,
+        # and (b) never spend silently. The user opts in implicitly by setting
+        # ANTHROPIC_API_KEY / OPENAI_API_KEY. Logged once per process.
+        if not _judge_key_present(judge_model):
+            global _NO_KEY_LOGGED
+            if not _NO_KEY_LOGGED:
+                log.info(
+                    "evals: no judge API key in env (set ANTHROPIC_API_KEY or "
+                    "OPENAI_API_KEY to enable session scoring) — skipping until then"
+                )
+                _NO_KEY_LOGGED = True
+            return EvalResult(
+                session_id=session_id,
+                score=None,
+                reason=None,
+                judge_model=judge_model,
+                rubric_name=self.rubric_name,
+                scored_at=scored_at,
+                skipped=True,
+                skip_reason="no judge API key configured",
+            )
+
         transcript, total_tokens = self._collect_transcript(session_id)
 
         # Trivial-session guard. The threshold is intentionally low —
@@ -605,6 +630,21 @@ class EvalRunner:
 
 
 # ── Judge LLM call ─────────────────────────────────────────────────────────────
+
+
+# Logged once per process when evals are on but no judge key is configured, so
+# we don't repeat the notice on every scheduler tick.
+_NO_KEY_LOGGED = False
+
+
+def _judge_key_present(model: str) -> bool:
+    """True if the API key for this judge model's provider is set in the env.
+    Mirrors the provider routing in ``_call_judge`` (gpt/o* -> OpenAI, else
+    Anthropic)."""
+    m = (model or "").lower()
+    if m.startswith(("gpt-", "o1-", "o3-", "o4-")):
+        return bool(os.environ.get("OPENAI_API_KEY", "").strip())
+    return bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
 
 
 def _judge_http_post_json(url: str, payload: dict, headers: dict, timeout: float) -> dict:
