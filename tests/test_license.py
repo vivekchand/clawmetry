@@ -344,8 +344,11 @@ def test_pip_install_falls_back_to_unzip_when_pip_missing(prov, tmp_path, monkey
 
 
 def test_pip_install_prefers_pip_when_available(prov, tmp_path, monkeypatch):
-    """When pip works, we use it and DON'T touch site-packages directly."""
+    """When pip works AND site-packages is writable, we use it and DON'T touch
+    site-packages directly (pip is skipped only when site-packages is read-only,
+    where it would fail anyway -> HOME fallback)."""
     L = prov.L
+    monkeypatch.setattr(L, "_site_packages_target", lambda: ("/writable/site", True))
     monkeypatch.setattr(L, "_pip_run", lambda args: (True, "installed"))
     called = {"unzip": False}
     monkeypatch.setattr(L, "_unzip_wheel_into_site",

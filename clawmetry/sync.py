@@ -12960,6 +12960,15 @@ def run_daemon() -> None:
     # daemon's primary job) cannot be extended by clawmetry-pro. The
     # ``_loaded`` guard makes this safe even if the process somehow imports
     # dashboard later. Never raises.
+    # If clawmetry-pro was installed into the HOME-owned fallback dir (because
+    # the interpreter site-packages is read-only, e.g. a root-owned /opt
+    # install run by a --user daemon), put that dir on sys.path BEFORE plugin
+    # discovery so the paid adapters import on this start.
+    try:
+        from clawmetry.license import ensure_pro_on_path as _ensure_pro_path
+        _ensure_pro_path()
+    except Exception:
+        pass
     try:
         from clawmetry.extensions import load_plugins as _ext_load
         _ext_load()
