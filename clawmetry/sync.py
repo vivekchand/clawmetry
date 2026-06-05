@@ -1434,7 +1434,13 @@ def _detect_nemoclaw() -> dict:
         result["inference_provider"] = ""
         result["inference_model"] = ""
 
-    # 4. Try `openshell sandbox list` as alternative discovery
+    # 4. Capture tool-catalog mode (NEMOCLAW_TOOL_CATALOG env var).
+    # Harness logic: enabled = (env !== '0'). Absent means default-on.
+    _tc_env = os.environ.get("NEMOCLAW_TOOL_CATALOG")
+    result["tool_catalog_enabled"] = _tc_env != "0"
+    result["tool_catalog_env"] = _tc_env or ""
+
+    # 5. Try `openshell sandbox list` as alternative discovery
     openshell_bin = _find_openshell_bin()
     if openshell_bin and not result.get("sandbox_name"):
         try:
@@ -12340,6 +12346,8 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
             "inference.model": nemo.get("inference_model", ""),
             "security.sandbox_enabled": nemo.get("security_sandbox_enabled", True),
             "security.network_policy": nemo.get("security_network_policy", True),
+            "nemoclaw.tool_catalog_enabled": nemo.get("tool_catalog_enabled", True),
+            "nemoclaw.tool_catalog_env": nemo.get("tool_catalog_env", ""),
         }
         payload["sandbox"] = sandbox_meta
         log.info(
