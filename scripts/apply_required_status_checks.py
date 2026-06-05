@@ -7,6 +7,10 @@ from the main branch protection of each repo.
 
 Usage
 -----
+  # Quickest path (no PAT needed -- uses your existing gh CLI session):
+  bash scripts/close-c6.sh
+
+  # Or directly with a token:
   GITHUB_TOKEN=ghp_xxx python3 scripts/apply_required_status_checks.py
 
 Token types
@@ -18,16 +22,22 @@ GITHUB_TOKEN from Actions (prefix ghs_):
   Note: requesting administration:write in the workflow permissions block is
   invalid for GITHUB_TOKEN and causes 0-job workflow failures -- do not add it.
 
-Fine-grained PAT (prefix ghp_ or github_pat_, set as E2E_ADMIN_PAT secret):
+Fine-grained PAT (prefix ghp_ or github_pat_), classic OAuth (gho_), or
+any non-ghs_ token:
   Required to write branch protection rules. Needs Administration (read+write)
-  on clawmetry, clawmetry-cloud, clawmetry-landing. Full apply + verify.
+  or repo ownership on clawmetry, clawmetry-cloud, clawmetry-landing.
+  Full apply + verify.
+
+  Easiest way to get one: gh auth token (uses your gh CLI session, which
+  already has admin rights if you own the repos -- run close-c6.sh instead
+  of calling this script directly).
 
 When run inside GitHub Actions, GITHUB_REPOSITORY is set automatically
 (e.g. "vivekchand/clawmetry"). The script restricts the checks it applies
 to only the matching repo so that a single-repo token is sufficient.
 
 When run locally (GITHUB_REPOSITORY not set), the script applies all 4
-checks and requires a token with cross-repo Administration access.
+checks and requires a token with cross-repo admin access.
 
 Tracking: vivekchand/clawmetry#2146 (C6)
 """
@@ -230,14 +240,15 @@ def main() -> None:
     if not token:
         sys.exit(
             "Error: GITHUB_TOKEN is not set.\n"
-            "Usage: GITHUB_TOKEN=ghp_xxx python3 scripts/apply_required_status_checks.py"
+            "Quickest path: bash scripts/close-c6.sh (uses gh CLI session)\n"
+            "Or: GITHUB_TOKEN=ghp_xxx python3 scripts/apply_required_status_checks.py"
         )
 
     # Token type detection:
     #   ghs_ prefix  = GITHUB_TOKEN from Actions (scoped to current repo only).
     #                  Cannot write branch protection rules. Read-only path.
-    #   ghp_ or github_pat_ = Personal Access Token. Can write branch protection
-    #                  when it has Administration (read+write) on target repos.
+    #   Anything else = PAT or OAuth token (gho_, ghp_, github_pat_, etc.).
+    #                  Full apply when token has admin/owner rights.
     is_pat = not token.startswith("ghs_")
 
     checks = _checks_to_apply()
@@ -246,14 +257,18 @@ def main() -> None:
 
     if not is_pat:
         # Read-only path: GITHUB_TOKEN cannot write branch protection.
-        # Verify current state so push runs detect if checks were already
-        # configured by a prior PAT run or via the GitHub Settings UI.
         print("=== E2E Robustness C6: read-only verify (GITHUB_TOKEN, no write access) ===")
         print()
         print("INFO: GITHUB_TOKEN cannot write branch protection rules.")
-        print("INFO: To auto-apply on every push to main, set E2E_ADMIN_PAT as a")
-        print("  repo secret (fine-grained PAT, Administration read+write on")
-        print("  clawmetry, clawmetry-cloud, clawmetry-landing).")
+        print()
+        print("INFO: Quickest path to close C6 (no PAT needed):")
+        print("  bash scripts/close-c6.sh")
+        print("  (Requires: gh CLI installed and 'gh auth login' run as repo admin.)")
+        print()
+        print("INFO: Alternative -- set E2E_ADMIN_PAT repo secret (fine-grained PAT,")
+        print("  Administration read+write on clawmetry, clawmetry-cloud,")
+        print("  clawmetry-landing). Next push to main auto-applies checks.")
+        print()
         print("INFO: Manual alternative -- Settings > Branches > main >")
         print("  Required status checks > add:")
         for repo, ctx in REQUIRED_CHECKS:
@@ -263,17 +278,14 @@ def main() -> None:
         if verify_required_checks(checks, deprecated, token):
             print()
             print("=== C6: checks already correctly configured ===")
-            print("=== (Set by manual Settings UI action or a prior PAT run.) ===")
+            print("=== (Set by manual Settings UI action or a prior admin run.) ===")
         else:
             print()
-            print("INFO: Required checks not yet configured. Next steps:")
-            print("  A) Set E2E_ADMIN_PAT repo secret (see above) -- auto-applies on")
-            print("     next push to main.")
-            print("  B) Settings > Branches > main > Required status checks (manual).")
+            print("INFO: Required checks not yet configured. Run: bash scripts/close-c6.sh")
         # Always exit 0: push-triggered runs are informational, never blocking.
         return
 
-    # PAT path: full apply + verify.
+    # PAT / OAuth path: full apply + verify.
     print(f"=== E2E Robustness C6: applying {total} required status check(s) ===")
     for repo, context in checks:
         try:
@@ -313,8 +325,9 @@ def main() -> None:
         print()
         print(
             "ERROR: branch protection state does not match expected config (see above).\n"
-            "If this is a 403, E2E_ADMIN_PAT may lack Administration (read+write) on "
-            "this repo. Check the PAT permissions and re-run."
+            "If this is a 403, your token may lack admin rights on this repo.\n"
+            "Run 'gh auth status' to verify your gh CLI session has the repo scope,\n"
+            "then re-run: bash scripts/close-c6.sh"
         )
         sys.exit(2)
     print("=== Verification passed: C6 branch protection is correctly configured ===")
