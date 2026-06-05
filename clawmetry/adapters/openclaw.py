@@ -499,6 +499,7 @@ class OpenClawAdapter(AgentAdapter):
                             "input": blk_input,
                             "attributes": attrs or None,
                         }
+
                         spans.append(tool_span)
 
             elif t in ("subagent_spawn", "agent_spawn"):
