@@ -4705,6 +4705,110 @@ def sync_logs(config: dict, state: dict, paths: dict) -> int:
     return total
 
 
+# ── Voice/realtime lifecycle event ingest from gateway logs ──────────────────
+#
+# OpenClaw emits structured JSONL lifecycle records for Talk, realtime voice,
+# and managed-room activity through the standard gateway log pipeline.  The
+# records carry event_type, mode, transport, provider, and size/timing fields.
+# sync_logs() already reads the same files for cloud-sync but never writes them
+# to local DuckDB.  This function runs without _sync_allowed() so voice events
+# land locally even when cloud sync is paused or the user is on the free tier.
+# Ref: docs/logging.md §"File logs (JSONL)" — Talk/realtime/managed-room records.
+
+_VOICE_EVENT_TYPE_PREFIXES = ("talk.", "realtime.", "voice.", "managed_room.")
+
+
+def _is_voice_lifecycle_record(obj: dict) -> bool:
+    et = obj.get("event_type") or obj.get("type")
+    return isinstance(et, str) and any(
+        et.startswith(p) for p in _VOICE_EVENT_TYPE_PREFIXES
+    )
+
+
+def sync_voice_log_events(config: dict, state: dict, paths: dict) -> int:
+    """Tail gateway log files for voice/realtime lifecycle records and ingest
+    them into the local DuckDB events table.
+
+    Uses 'last_voice_log_offsets' in state as its own byte-offset cursor,
+    independent of sync_logs.  Returns the count of rows ingested.
+    """
+    import hashlib as _hashlib
+
+    log_dir = paths.get("log_dir", "")
+    if not log_dir:
+        return 0
+    node_id = config.get("node_id", "")
+    if not node_id:
+        return 0
+    offsets: dict = state.setdefault("last_voice_log_offsets", {})
+
+    rows: list[dict] = []
+    log_files = sorted(glob.glob(os.path.join(log_dir, "openclaw-*.log")))[-5:]
+    for fpath in log_files:
+        fname = os.path.basename(fpath)
+        offset = offsets.get(fname, 0)
+        try:
+            with open(fpath, "r", errors="replace") as f:
+                f.seek(0, 2)
+                size = f.tell()
+                if offset > size:
+                    offset = 0
+                f.seek(offset)
+                for raw in f:
+                    stripped = raw.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        obj = json.loads(stripped)
+                    except Exception:
+                        continue
+                    if not _is_voice_lifecycle_record(obj):
+                        continue
+                    et = obj.get("event_type") or obj.get("type") or "voice.unknown"
+                    ts = (
+                        obj.get("timestamp")
+                        or obj.get("ts")
+                        or obj.get("time")
+                        or ""
+                    )
+                    if not ts:
+                        continue
+                    session_id = obj.get("session_id") or obj.get("session") or None
+                    raw_id = ":".join(
+                        [node_id, fname, str(ts), str(et), str(session_id or "")]
+                    )
+                    row_id = _hashlib.sha256(raw_id.encode()).hexdigest()[:32]
+                    rows.append({
+                        "id":         row_id,
+                        "node_id":    node_id,
+                        "agent_type": "openclaw",
+                        "agent_id":   obj.get("agent_id") or "main",
+                        "session_id": session_id,
+                        "event_type": et,
+                        "ts":         ts,
+                        "data":       json.dumps({
+                            "mode":        obj.get("mode"),
+                            "transport":   obj.get("transport"),
+                            "provider":    obj.get("provider"),
+                            "duration_ms": obj.get("duration_ms"),
+                            "size_bytes":  obj.get("size_bytes") or obj.get("size"),
+                        }, separators=(",", ":")),
+                    })
+                offsets[fname] = f.tell()
+        except Exception as _e:
+            log.debug("sync_voice_log_events read error (%s): %s", fname, _e)
+
+    if not rows:
+        return 0
+    try:
+        from clawmetry import local_store as _ls
+        _ls.get_store().ingest_many(rows)
+    except Exception as _e:
+        log.debug("sync_voice_log_events local ingest failed (non-fatal): %s", _e)
+        return 0
+    return len(rows)
+
+
 def sync_intercepted_events(config: dict, state: dict, paths: dict) -> int:
     """Tail ~/.openclaw/clawmetry-intercepted.jsonl and ingest external_api_call
     rows into the local DuckDB store. Uses a byte-offset cursor in state so
@@ -12934,6 +13038,12 @@ def run_daemon() -> None:
     except Exception as e:
         log.warning(f"  Recent log sync error: {e}")
     try:
+        vl = sync_voice_log_events(config, state, paths)
+        if vl:
+            log.info(f"  Voice/realtime events: {vl} rows ingested")
+    except Exception as e:
+        log.warning(f"  Voice-event ingest error: {e}")
+    try:
         ie = sync_intercepted_events(config, state, paths)
         if ie:
             log.info(f"  External API calls: {ie} rows ingested")
@@ -12995,6 +13105,14 @@ def run_daemon() -> None:
                 log.info(f"Background backfill: {lg} log lines synced")
             except Exception as e:
                 log.warning(f"Background backfill log error: {e}")
+            try:
+                bf_state = load_state()
+                vl = sync_voice_log_events(config, bf_state, paths)
+                save_state(bf_state)
+                if vl:
+                    log.info(f"Background backfill: {vl} voice events ingested")
+            except Exception as e:
+                log.warning(f"Background backfill voice error: {e}")
             _backfill_done.set()
             log.info("Background backfill complete")
 
@@ -13385,6 +13503,10 @@ def run_daemon() -> None:
             if now_log - last_log_sync > log_sync_interval:
                 lg = sync_logs(config, state, paths)
                 last_log_sync = now_log
+            try:
+                sync_voice_log_events(config, state, paths)
+            except Exception as _ve:
+                log.debug("sync_voice_log_events tick error (non-fatal): %s", _ve)
 
             # ── External API call tracing (issue #883) ──────────────────
             try:
