@@ -5671,6 +5671,111 @@ _LITE_RT_LABELS = {
     "nanoclaw": "NanoClaw",
 }
 
+# Activity thresholds (seconds) for classifying a detected runtime. Detecting a
+# runtime by its on-disk data dir does NOT mean it is actively in use: a Cursor
+# IDE state.vscdb or an opencode.db can sit untouched for months. Reporting such
+# a runtime as "syncing" alongside a runtime you used five minutes ago is the
+# conflation founders flagged (a 10-month-old Cursor history shown like a live
+# node). We attach last_active + status so the Fleet can render honestly.
+_RT_ACTIVE_SECS = 7 * 86400     # used within a week -> active
+_RT_IDLE_SECS = 30 * 86400      # used within a month -> idle
+
+
+def _runtime_data_paths(rid: str) -> list:
+    """Native on-disk data location(s) for a runtime, used to compute recency.
+    Mirrors the per-adapter stores (the same dirs the lite/pro detectors read).
+    Returns file or dir paths; non-existent ones are ignored by the caller."""
+    home = os.path.expanduser("~")
+    if rid == "cursor":
+        import sys as _sys
+        roots = {
+            "darwin": os.path.join(home, "Library", "Application Support", "Cursor"),
+            "linux": os.path.join(home, ".config", "Cursor"),
+            "win32": os.path.join(home, "AppData", "Roaming", "Cursor"),
+        }
+        base = roots.get(_sys.platform, os.path.join(home, ".config", "Cursor"))
+        return [os.path.join(base, "User", "globalStorage", "state.vscdb")]
+    _M = {
+        "claude_code": [os.path.join(home, ".claude", "projects")],
+        "codex": [os.path.join(home, ".codex", "sessions")],
+        "qwen_code": [os.path.join(home, ".qwen")],
+        "opencode": [os.path.join(home, ".local", "share", "opencode", "opencode.db")],
+        "goose": [os.path.join(home, ".local", "share", "goose")],
+        "hermes": [os.path.join(home, ".hermes", "state.db")],
+        "aider": [os.path.join(home, ".aider")],
+        "picoclaw": [os.path.join(home, ".picoclaw")],
+        "nanoclaw": [os.path.join(home, ".nanoclaw")],
+    }
+    return _M.get(rid, [])
+
+
+def _newest_mtime(paths: list, cap: int = 4000):
+    """Newest mtime (epoch float) across the given files/dirs, or None. Bounded
+    walk (cap files) so a huge ~/.claude/projects tree can't make the heartbeat
+    expensive. Never raises."""
+    newest = 0.0
+    seen = 0
+    for p in (paths or []):
+        try:
+            if os.path.isfile(p):
+                m = os.path.getmtime(p)
+                if m > newest:
+                    newest = m
+            elif os.path.isdir(p):
+                for root, _dirs, files in os.walk(p):
+                    for f in files:
+                        seen += 1
+                        if seen > cap:
+                            return newest or None
+                        try:
+                            m = os.path.getmtime(os.path.join(root, f))
+                            if m > newest:
+                                newest = m
+                        except OSError:
+                            pass
+        except OSError:
+            pass
+    return newest or None
+
+
+def _openclaw_subagent_mtime(rid: str):
+    """Newest mtime of this runtime's sessions when run AS an OpenClaw sub-agent
+    (``~/.openclaw/agents/<alias>/sessions``). Used to classify a runtime whose
+    only activity is via OpenClaw (so we don't present it as a standalone tool).
+    None when there is no such sub-agent data. Never raises."""
+    home = os.path.expanduser("~")
+    aliases = {rid, rid.replace("_code", ""), rid.replace("_", "-"), rid.replace("_", "")}
+    if rid == "claude_code":
+        aliases |= {"claude", "claude-code"}
+    paths = [os.path.join(home, ".openclaw", "agents", a, "sessions") for a in aliases]
+    return _newest_mtime([p for p in paths if os.path.isdir(p)])
+
+
+def _classify_runtime(rid: str) -> dict:
+    """Return {last_active, status, source} for a detected runtime.
+
+    status: 'active' (used <7d), 'idle' (<30d), 'stale' (older), 'unknown'.
+    source: 'standalone' (its own native store has the most recent activity) or
+            'openclaw_subagent' (only/most-recent activity is via OpenClaw).
+    Never raises."""
+    try:
+        native = _newest_mtime(_runtime_data_paths(rid))
+        sub = _openclaw_subagent_mtime(rid)
+        last = max([t for t in (native, sub) if t], default=None)
+        source = "standalone"
+        if sub and (not native or sub >= native):
+            source = "openclaw_subagent"
+        if last:
+            age = time.time() - last
+            status = ("active" if age < _RT_ACTIVE_SECS
+                      else "idle" if age < _RT_IDLE_SECS else "stale")
+        else:
+            status = "unknown"
+        return {"last_active": int(last) if last else None,
+                "status": status, "source": source}
+    except Exception:
+        return {"last_active": None, "status": "unknown", "source": "standalone"}
+
 
 def _detect_runtimes_lite() -> list:
     """FREE, dependency-free detection of which paid runtimes have data on this
@@ -5749,8 +5854,21 @@ def _detect_runtimes_for_heartbeat() -> list:
                 merged[rid] = {"id": rid, "label": label, "sessions": n}
     except Exception:
         pass
-    # Drop 0-session phantoms (directory/config detected but no real data).
-    return [r for r in merged.values() if int(r.get("sessions") or 0) > 0]
+    # Drop 0-session phantoms (directory/config detected but no real data),
+    # then enrich each with activity classification (last_active + status +
+    # source) so the Fleet stops presenting a months-old Cursor history or an
+    # OpenClaw sub-agent as a live standalone runtime. Back-compat: consumers
+    # that don't read the new keys are unaffected.
+    out = []
+    for r in merged.values():
+        if int(r.get("sessions") or 0) <= 0:
+            continue
+        try:
+            r.update(_classify_runtime(r["id"]))
+        except Exception:
+            pass
+        out.append(r)
+    return out
 
 
 def send_heartbeat(config: dict) -> bool:
