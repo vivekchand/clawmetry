@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: evals skip quietly when no judge API key is configured (#2718) (2026-06-06)
+- **Why:** evals are default-on, but the judge calls a real LLM (Anthropic/OpenAI) needing an API key. With no key the scheduler attempted every session and logged a warning each tick ("evals: judge call failed ... ANTHROPIC_API_KEY not set"), spamming sync.log; on a box that did have a key in the daemon env it would also spend silently.
+- **What:** `score_session` checks for the judge model's provider key up front (gpt/o* -> OPENAI_API_KEY, else ANTHROPIC_API_KEY). With no key it returns a quiet SKIP, never invokes the judge, and logs the notice once per process. Evals are now effectively implicit opt-in: they run (and spend) only when an LLM key is set.
+- **Verified:** `tests/test_eval_skip_without_key.py` (no key -> skip + judge not called; with key -> not the no-key path).
+
+
 ### Release: evals judge works without httpx (stdlib urllib fallback) (#2715) (2026-06-06)
 - **Why:** the evals judge hard-imported `httpx` to route its LLM call through the cost interceptor, but httpx is not a clawmetry dependency (deps stay minimal: flask + waitress + cryptography). On the daemon's own venv every judge call died with "No module named 'httpx'" (sync.log: "evals: judge call failed ... No module named 'httpx'") and no session was ever scored.
 - **What:** `_judge_http_post_json` prefers httpx when installed (keeps interceptor cost tracking for eval spend) and falls back to stdlib urllib when it is not, so the judge runs on a minimal install. Both provider branches (Anthropic + OpenAI) route through it.
