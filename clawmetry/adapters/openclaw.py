@@ -187,7 +187,7 @@ class OpenClawAdapter(AgentAdapter):
             from clawmetry import local_store as _ls
             store = _ls.get_store(read_only=True)
             rows = store._fetch(
-                "SELECT id, event_type, ts, model, token_count, data "
+                "SELECT id, event_type, ts, model, token_count, data, agent_id, node_id "
                 "FROM events WHERE agent_type = ? AND session_id = ? "
                 "ORDER BY ts ASC LIMIT ?",
                 ["openclaw", str(session_id), int(limit)],
@@ -202,9 +202,17 @@ class OpenClawAdapter(AgentAdapter):
                 extra: dict = {}
                 if r[3]:
                     extra["model"] = r[3]
+                # r[6] = agent_id, r[7] = node_id — surface structured log
+                # context fields so callers can correlate events by agent and node.
+                if r[6]:
+                    extra["agent_id"] = r[6]
+                if r[7]:
+                    extra["node_id"] = r[7]
                 # r[5] = data BLOB — decode and surface per-type token split
                 # (input/output/cache_read/cache_write) so callers can measure
                 # per-turn cache efficiency without re-reading the raw file.
+                # Also extract channel/hostname from gateway log record top-level
+                # fields when present (no dedicated DB columns for these).
                 raw_data = r[5]
                 if raw_data is not None:
                     try:
@@ -212,6 +220,10 @@ class OpenClawAdapter(AgentAdapter):
                             raw_data = bytes(raw_data).decode("utf-8", "replace")
                         obj = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
                         if isinstance(obj, dict):
+                            for _field in ("channel", "hostname"):
+                                _val = obj.get(_field)
+                                if _val:
+                                    extra[_field] = _val
                             msg = obj.get("message")
                             src = msg if isinstance(msg, dict) else obj
                             usage = src.get("usage") if isinstance(src.get("usage"), dict) else {}
