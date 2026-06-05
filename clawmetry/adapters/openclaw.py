@@ -311,6 +311,7 @@ class OpenClawAdapter(AgentAdapter):
                 except (TypeError, ValueError):
                     ts_f = 0.0
                 extra: dict = {}
+                content_text = ""
                 if r[3]:
                     extra["model"] = r[3]
                 # r[6] = agent_id, r[7] = node_id — surface structured log
@@ -336,6 +337,8 @@ class OpenClawAdapter(AgentAdapter):
                                 if _val:
                                     extra[_field] = _val
                             msg = obj.get("message")
+                            if isinstance(msg, str):
+                                content_text = msg
                             src = msg if isinstance(msg, dict) else obj
                             usage = src.get("usage") if isinstance(src.get("usage"), dict) else {}
                             if usage:
@@ -358,6 +361,7 @@ class OpenClawAdapter(AgentAdapter):
                     id=str(r[0]),
                     type=str(r[1] or "event"),
                     ts=ts_f,
+                    content=content_text,
                     tokens=int(r[4] or 0),
                     extra=extra,
                 ))
