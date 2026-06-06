@@ -12086,15 +12086,25 @@ def _build_device_summary(spending, daily_usage):
     loop-detection signals, and ``approval.waiting_seconds`` from the approval's
     ``created_at`` -- the device reads all three, so they must be populated here.
 
+    Schema 2 adds a per-runtime ``runtimes`` array (cost / tokens / session
+    count per active runtime, costliest first) alongside the names-only
+    ``runtimes_active``; every schema-1 field is preserved (additive only).
+
     Never raises — every read degrades to a safe default so the device always
     gets a valid shape.
     """
     summary = {
-        "schema": 1,
+        # schema 2 adds the per-runtime ``runtimes`` array (cost/tokens/
+        # sessions per active runtime). Every schema-1 field is kept
+        # unchanged for back-compat -- the addition is purely additive and
+        # the firmware tolerates unknown fields, so an older device that
+        # only reads schema-1 keys keeps working.
+        "schema": 2,
         "cost_today_usd": round(float((spending or {}).get("today") or 0.0), 4),
         "tokens_today": int((daily_usage or {}).get("today") or 0),
         "active_sessions": 0,
         "runtimes_active": [],
+        "runtimes": [],
         "health": "green",
         "alert": None,
         "approval": None,
@@ -12114,6 +12124,50 @@ def _build_device_summary(spending, daily_usage):
             (_wf.runtime_from_session_id(s.get("session_id") or "") or "openclaw")
             for s in active
         })
+        # schema 2: per-runtime spend/tokens/session-count. Group the same
+        # active rows by runtime (session_id prefix) and sum the cost_usd +
+        # total_tokens that query_sessions_table already resolves (it
+        # GREATEST()s the stored column with the events SUM). Guarded
+        # separately so a grouping error degrades to the names-only
+        # ``runtimes_active`` above rather than dropping the whole slice.
+        try:
+            agg: dict = {}
+            for s in active:
+                name = (
+                    _wf.runtime_from_session_id(s.get("session_id") or "")
+                    or "openclaw"
+                )
+                bucket = agg.setdefault(
+                    name, {"cost": 0.0, "tokens": 0, "sessions": 0}
+                )
+                try:
+                    bucket["cost"] += float(s.get("cost_usd") or 0.0)
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    bucket["tokens"] += int(s.get("total_tokens") or 0)
+                except (TypeError, ValueError):
+                    pass
+                bucket["sessions"] += 1
+            summary["runtimes"] = [
+                {
+                    "name": name,
+                    "cost_today_usd": round(b["cost"], 4),
+                    "tokens_today": b["tokens"],
+                    "sessions": b["sessions"],
+                    # An active runtime is healthy here; a stuck approval is
+                    # surfaced separately on the top-level ``health`` field.
+                    "health": "green",
+                }
+                # Highest spend first so the device shows the costliest
+                # runtime at the top.
+                for name, b in sorted(
+                    agg.items(),
+                    key=lambda kv: (-kv[1]["cost"], kv[0]),
+                )
+            ]
+        except Exception:
+            pass
     except Exception:
         pass
     try:
