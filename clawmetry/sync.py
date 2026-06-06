@@ -5468,13 +5468,14 @@ def _today_start_iso_utc() -> str:
     return start.isoformat()
 
 
-def _outcomes_slice_for_snapshot() -> dict:
+def _outcomes_slice_for_snapshot(runtime: str | None = None) -> dict:
     """Outcome roll-up (1d) for the Overview tile on the hosted dashboard.
 
     Mirrors ``routes/sessions.api_outcomes`` (``query_outcomes`` then
     ``aggregate_outcomes``) so the cloud can render the tile from the snapshot
-    instead of an empty /api/outcomes. Best-effort; ``{}`` on any error so the
-    snapshot never fails.
+    instead of an empty /api/outcomes. ``runtime`` scopes to one runtime
+    (session_id prefix) for the per-runtime breakdown. Best-effort; ``{}`` on
+    any error so the snapshot never fails.
     """
     try:
         from clawmetry import local_store as _ls_oc
@@ -5482,7 +5483,7 @@ def _outcomes_slice_for_snapshot() -> dict:
         from datetime import datetime as _dt, timedelta as _td, timezone as _tz
         since = (_dt.now(_tz.utc) - _td(days=1)).isoformat().replace("+00:00", "Z")
         rows = _ls_oc.get_store().query_outcomes(
-            agent_type="openclaw", since=since, limit=1000) or []
+            agent_type="openclaw", since=since, runtime=runtime, limit=1000) or []
         agg = aggregate_outcomes(rows)
         agg["window"] = "1d"
         return agg
@@ -5491,8 +5492,12 @@ def _outcomes_slice_for_snapshot() -> dict:
         return {}
 
 
-def _collect_activity_counters_today() -> dict | None:
+def _collect_activity_counters_today(runtime: str | None = None) -> dict | None:
     """Plaintext activity counters for the heartbeat envelope (issue #1652).
+
+    ``runtime`` (optional): scope the counts to one runtime (session_id prefix,
+    e.g. "openclaw", "codex"). None / "all" = node-wide. Used to build the
+    per-runtime breakdown so the Overview cards re-scope with the runtime switcher.
 
     Cloud has no plaintext source for real exec/tool-call activity counts —
     sessions + nodes.metadata carry version/health bits but no per-day
@@ -5529,7 +5534,8 @@ def _collect_activity_counters_today() -> dict | None:
         # per ACTUAL tool call, not once per row (an assistant message
         # carrying 3 toolMetas yields 3 invocations, not 1).
         try:
-            invs = store.query_tool_call_invocations(since=since, limit=200_000)
+            invs = store.query_tool_call_invocations(
+                since=since, runtime=runtime, limit=200_000)
         except Exception:
             invs = []
         tool_calls = 0
@@ -5557,7 +5563,7 @@ def _collect_activity_counters_today() -> dict | None:
         for et in _MESSAGE_EVENT_TYPES_TODAY:
             try:
                 rows = store.query_events(
-                    event_type=et, since=since, limit=100_000,
+                    event_type=et, since=since, runtime=runtime, limit=100_000,
                 )
             except Exception:
                 continue
@@ -12692,6 +12698,29 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _e_ev:
         log.debug("snapshot: evals slice failed: %s", _e_ev)
 
+    # Per-runtime breakdowns so the Overview cards (outcome tile + activity
+    # strip) re-scope with the runtime switcher on the hosted dashboard. Keyed
+    # by the runtimes that actually have data (runtimeSummary keys), so cost is
+    # bounded. The cloud cm-cloud-outcomes / cm-cloud-activity interceptors read
+    # ?runtime= and serve byRuntime[rt], falling back to the node-wide slice.
+    _runtime_summary = _build_runtime_summary()
+    _outcomes_by_rt: dict = {}
+    _activity_by_rt: dict = {}
+    try:
+        _rt_keys = list(_runtime_summary.keys()) if isinstance(_runtime_summary, dict) else []
+        for _rtk in _rt_keys:
+            try:
+                _o = _outcomes_slice_for_snapshot(runtime=_rtk)
+                if _o:
+                    _outcomes_by_rt[_rtk] = _o
+                _a = _collect_activity_counters_today(runtime=_rtk)
+                if _a:
+                    _activity_by_rt[_rtk] = _a
+            except Exception:
+                continue
+    except Exception as _e_rtb:
+        log.debug("snapshot: per-runtime breakdown failed: %s", _e_rtb)
+
     from clawmetry.providers_pricing import provider_for_model as _pfm
     payload = {
         "system": system,
@@ -12724,7 +12753,9 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "contextEconomics": context_economics_slice,
         "evals": evals_slice,
         "activityToday": _collect_activity_counters_today() or {},
+        "activityTodayByRuntime": _activity_by_rt,
         "outcomes": _outcomes_slice_for_snapshot(),
+        "outcomesByRuntime": _outcomes_by_rt,
         "spending": spending,
         # Compact all-runtime slice a WiFi hardware companion decrypts + renders
         # (the device GETs the snapshot, decrypts with the user's key, reads
@@ -12747,7 +12778,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "firstRun": _build_first_run(),
         "diagnostics": _build_diagnostics(paths.get("workspace")),
         "modelAttribution": _build_model_attribution(),
-        "runtimeSummary": _build_runtime_summary(),
+        "runtimeSummary": _runtime_summary,
         "transcripts": _build_transcripts(
             extra_sids=[
                 s["sessionId"]

@@ -1850,6 +1850,7 @@ class LocalStore:
         agent_type: str = "openclaw",
         since: str | None = None,
         until: str | None = None,
+        runtime: str | None = None,
         limit: int = 2000,
     ) -> list[dict[str, Any]]:
         """Read per-session outcome rows for the dashboard tile / drill-down.
@@ -1870,6 +1871,12 @@ class LocalStore:
         if until:
             clauses.append("COALESCE(last_active_at, started_at, '') <= ?")
             params.append(until)
+        # Runtime scope (session_id prefix), same canonical clause as
+        # query_aggregates so per-runtime outcomes reconcile with the total.
+        _rt_clause, _rt_params = _runtime_session_id_clause(runtime)
+        if _rt_clause:
+            clauses.append(_rt_clause)
+            params.extend(_rt_params)
         where = "WHERE " + " AND ".join(clauses)
         sql = f"""
             SELECT session_id, title, last_active_at, ended_at, status,
@@ -3887,6 +3894,7 @@ class LocalStore:
         self,
         *,
         since: str | None = None,
+        runtime: str | None = None,
         limit: int = 50_000,
     ) -> list[dict[str, Any]]:
         """Tier-1 MOAT: /api/plugins fast-path.
@@ -3935,6 +3943,10 @@ class LocalStore:
         if since:
             clauses.append("ts >= ?")
             params.append(since)
+        _rt_clause, _rt_params = _runtime_session_id_clause(runtime)
+        if _rt_clause:
+            clauses.append(_rt_clause)
+            params.extend(_rt_params)
         where = "WHERE " + " AND ".join(clauses)
         sql = f"""
             SELECT ts, event_type, data
@@ -4211,6 +4223,7 @@ class LocalStore:
         event_type: str | None = None,
         since: str | None = None,
         until: str | None = None,
+        runtime: str | None = None,
         limit: int = 500,
     ) -> list[dict[str, Any]]:
         """Read events. Defaults to most recent first."""
@@ -4219,6 +4232,10 @@ class LocalStore:
         if session_id:
             clauses.append("session_id = ?")
             params.append(session_id)
+        _rt_clause, _rt_params = _runtime_session_id_clause(runtime)
+        if _rt_clause:
+            clauses.append(_rt_clause)
+            params.extend(_rt_params)
         if agent_id:
             clauses.append("agent_id = ?")
             params.append(agent_id)

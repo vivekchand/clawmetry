@@ -2818,29 +2818,31 @@ def api_usage_export():
         return jsonify({'error': str(e)}), 500
 
 
-_ACTIVITY_TODAY_CACHE = {"ts": 0.0, "data": None}
+_ACTIVITY_TODAY_CACHE: dict = {}   # runtime-key -> {"ts": float, "data": dict}
 _ACTIVITY_TODAY_TTL = 30.0
 
 
 @bp_usage.route('/api/activity-today')
 def api_activity_today():
     """Today's activity counters (tool calls / exec / browser / messages /
-    unique tools) for the Overview activity strip. Mirrors the daemon
-    ``activityToday`` snapshot slice (cloud serves that via an interceptor).
+    unique tools) for the Overview activity strip. ``?runtime=`` scopes to one
+    runtime (session_id prefix); omitted/"all" = node-wide. Mirrors the daemon
+    ``activityToday`` snapshot slice (cloud serves it via cm-cloud-activity).
     DuckDB-backed via ``clawmetry.sync._collect_activity_counters_today``;
-    cached 30s; never 500s (empty dict on any error)."""
+    cached 30s per runtime; never 500s (empty dict on any error)."""
+    runtime = (request.args.get("runtime") or "all").lower()
+    rt_arg = None if runtime in ("", "all") else runtime
     now = time.time()
-    c = _ACTIVITY_TODAY_CACHE
-    if c["data"] is not None and (now - c["ts"]) < _ACTIVITY_TODAY_TTL:
+    c = _ACTIVITY_TODAY_CACHE.get(runtime)
+    if c is not None and c["data"] is not None and (now - c["ts"]) < _ACTIVITY_TODAY_TTL:
         return jsonify(c["data"])
     out = {}
     try:
         from clawmetry.sync import _collect_activity_counters_today
-        out = _collect_activity_counters_today() or {}
+        out = _collect_activity_counters_today(runtime=rt_arg) or {}
     except Exception:
         out = {}
-    c["data"] = out
-    c["ts"] = now
+    _ACTIVITY_TODAY_CACHE[runtime] = {"data": out, "ts": now}
     return jsonify(out)
 
 
