@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: revive dead-UI cards from the UI-coverage audit (#2739, #2740) (2026-06-06)
+- **Why:** a verified UI-coverage audit ("every signal we capture must have a UI") found several cards that existed only in the dead first DASHBOARD_HTML block, so they never rendered despite fully-working JS, the same trap that hid the eval tile.
+- **What:** lifted four cards into live templates: Cost Forecast + Prompt Cache (Usage tab), the Today task-outcome tile (Overview), and the proxy Loop-signals badge + table (Brain). No JS changes needed; the existing loaders (loadCostForecast, loadCacheAnalytics, loadOutcomeTile, loadLoopSignals) already targeted these ids.
+- **Verified:** Jinja renders usage.html / overview.html / brain.html with every revived id present; JS call sites confirmed in loadUsage / overview load / loadBrainPage.
+
+
 ### Release: eval scores in the encrypted snapshot (hosted dashboard) (#2736) (2026-06-06)
 - **Why:** the Eval card fetches /api/evals/summary, which on the hosted dashboard hits a server with no local DuckDB, so it always showed an empty placeholder.
 - **What:** the daemon now adds an `evals` slice (avg score + coverage over 24h, plus recent scored sessions) to the E2E-encrypted snapshot, built on the daemon's own store handle. A cloud interceptor can render the Eval card client-side from the decrypted snapshot; the cloud server never sees the data. Best-effort; empty until a judge key is set.
