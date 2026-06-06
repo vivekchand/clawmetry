@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: CPU budget, the daemon stays light (#2750, #2751) (2026-06-06)
+- **Why:** the sync daemon was observed at ~200% CPU (two full cores) on a 12-core box. Profiling showed ~100% inside DuckDB (allocator + BufferPool::EvictBlocks). Root cause: DuckDB defaulted to threads == core count (so one aggregate query fanned across all 12 cores) and the hot query_aggregates rollup was re-run on every dashboard poll with no cache.
+- **What:** (1) every DuckDB connection now caps threads (default 2) + memory_limit (default 2GB), env-overridable via CLAWMETRY_DUCKDB_THREADS / CLAWMETRY_DUCKDB_MEMORY_LIMIT, so no single query can take over the machine. (2) query_aggregates is result-cached with a short TTL (default 20s, CLAWMETRY_AGG_CACHE_TTL, 0=off); the daemon recomputes on a timer and handlers read the cache, which is what actually cuts AVERAGE CPU. Now a FLYWHEEL principle (the daemon targets <=5-10% CPU).
+- **Verified:** tests/test_duckdb_cpu_cap.py + tests/test_aggregate_cache.py; live profile confirmed DuckDB was the hot path.
+
+
 ### Release: outcomes snapshot slice for the hosted Outcome tile (#2746) (2026-06-06)
 - **Why:** the revived Overview Outcome tile fetches /api/outcomes, which on the hosted dashboard hits a server with no local DuckDB, so it showed "no completed tasks" even when the node had outcomes.
 - **What:** an `outcomes` slice (1d roll-up) added to the E2E snapshot, mirroring routes/sessions.api_outcomes (query_outcomes then aggregate_outcomes) on the daemon's own store handle. A cm-cloud-outcomes interceptor renders the tile client-side from the snapshot; cloud stays blind.
