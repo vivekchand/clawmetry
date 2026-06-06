@@ -4,40 +4,36 @@ name: Apply required E2E status checks (C6 -- one-shot)
 # status checks on main across all three repos.
 #
 # Triggers:
-#   workflow_dispatch -- manual trigger with confirm=APPLY to apply;
-#     confirm=dry-run (default) to preview without making changes.
-#   push to main -- self-healing: re-applies checks on every merge.
-#     The script detects GITHUB_TOKEN vs PAT and behaves accordingly:
-#       - PAT (E2E_ADMIN_PAT set): applies and verifies branch protection.
-#       - GITHUB_TOKEN (no PAT): read-only verify + print instructions.
-#     Push runs always exit 0 -- they are informational, never blocking.
+#   workflow_dispatch -- manual trigger.
+#     confirm=APPLY  : apply (or verify if using GITHUB_TOKEN).
+#     confirm=dry-run: preview without making changes (default).
+#     pat_token      : optional fine-grained PAT with Administration
+#                      (read+write) on clawmetry, clawmetry-cloud,
+#                      clawmetry-landing.  Pasting a PAT here closes
+#                      C6 directly from the GitHub Actions UI -- no
+#                      local clone, no gh CLI, no secret setup needed.
+#                      The token is masked via ::add-mask:: before use.
 #
-# HISTORY:
-#   push trigger added     2026-06-01 (PR #2420): push: branches: [main]
-#   push trigger removed   2026-06-02 (PR #2449): job-level permissions
-#     caused 0-job failures. Fix: moved permissions to workflow level.
-#   push trigger re-added  2026-06-03 (PR #2468): permissions moved to
-#     workflow level. But administration:write is still invalid for
-#     GITHUB_TOKEN -- all 283 runs failed with 0 jobs.
-#   ROOT CAUSE FIX        2026-06-04 (this PR): removed administration:write
-#     from permissions block. It is NOT a valid GITHUB_TOKEN permission in
-#     Actions; requesting it causes GitHub to reject the workflow run before
-#     any jobs are queued. Script now handles GITHUB_TOKEN path gracefully.
+#   push to main -- self-healing: re-verifies checks on every merge.
+#     GITHUB_TOKEN path: read-only verify + print instructions (no write).
+#     E2E_ADMIN_PAT set: applies and verifies branch protection.
 #
-# REQUIREMENTS:
-#   To automatically apply required checks on every push to main:
-#     Set repo secret E2E_ADMIN_PAT to a fine-grained PAT with
-#     Administration (read+write) on clawmetry, clawmetry-cloud,
-#     clawmetry-landing. The GITHUB_TOKEN in Actions cannot write branch
-#     protection rules -- administration:write is not a valid permission
-#     for GITHUB_TOKEN and requesting it caused 0-job workflow failures.
+# TOKEN PATHS (priority order):
+#   1. inputs.pat_token  -- PAT typed into the Run workflow dialog
+#   2. secrets.E2E_ADMIN_PAT -- pre-stored repo secret
+#   3. github.token (ghs_) -- read-only fallback; prints instructions,
+#                              never blocks (always exits 0)
 #
-#   Manual alternative (no PAT needed):
-#     Settings > Branches > main > Required status checks > add:
-#       clawmetry         : "OSS golden path (wheel + OpenClaw + 9 tabs)"
-#       clawmetry         : "Cross-repo handoff (C4)"
-#       clawmetry-cloud   : "Cloud golden-path browser E2E"
-#       clawmetry-landing : "Landing golden path (C3)"
+# NOTE: administration:write is intentionally absent from permissions.
+#   It is NOT a valid GITHUB_TOKEN permission in Actions; requesting it
+#   caused GitHub to reject all workflow runs before any jobs were queued
+#   (conclusion: failure, total_jobs: 0).  Branch-protection writes
+#   require a PAT or OAuth token with admin rights (see token paths above).
+#
+# REQUIREMENTS (to auto-apply on every push):
+#   Set repo secret E2E_ADMIN_PAT to a fine-grained PAT with
+#   Administration (read+write) on clawmetry, clawmetry-cloud,
+#   clawmetry-landing.
 #
 # Idempotent: running multiple times is safe.
 # Tracking: vivekchand/clawmetry#2146 (C6)
@@ -49,14 +45,19 @@ on:
         description: "Type APPLY to configure repos (anything else = dry run)"
         required: true
         default: "dry-run"
+      pat_token:
+        description: |
+          Optional: fine-grained PAT with Administration (read+write) on
+          clawmetry, clawmetry-cloud, clawmetry-landing.
+          Paste here to close C6 from the browser -- no local setup needed.
+          Leave blank to use E2E_ADMIN_PAT secret (or GITHUB_TOKEN read-only).
+        required: false
+        default: ""
   push:
     branches: [main]
 
 # contents:read is required for actions/checkout.
-# administration:write is intentionally absent: it is NOT a valid GITHUB_TOKEN
-# permission in Actions. Requesting it caused GitHub to reject all workflow
-# runs before any jobs were queued (0-job failure, conclusion: failure).
-# Branch-protection writes require a PAT (see REQUIREMENTS above).
+# administration:write is intentionally absent (see note above).
 permissions:
   contents: read
 
@@ -72,31 +73,38 @@ jobs:
         run: |
           echo "=== DRY RUN -- checks that will be added when confirm=APPLY ==="
           echo ""
-          if [ -z "${{ secrets.E2E_ADMIN_PAT }}" ]; then
-            echo "  E2E_ADMIN_PAT is not set. Without it, the Apply step runs"
-            echo "  in read-only mode: it verifies current state but cannot"
-            echo "  write branch protection rules (GITHUB_TOKEN lacks admin"
-            echo "  rights -- administration:write is not a valid GITHUB_TOKEN"
-            echo "  permission in Actions)."
+          if [ -z "${{ inputs.pat_token }}" ] && [ -z "${{ secrets.E2E_ADMIN_PAT }}" ]; then
+            echo "  No admin token available (neither pat_token input nor E2E_ADMIN_PAT secret)."
+            echo "  Quickest path: paste a fine-grained PAT into the pat_token input and"
+            echo "  re-run with confirm=APPLY.  No local setup required."
             echo ""
-            echo "  To enable auto-apply: set E2E_ADMIN_PAT as a repo secret"
-            echo "  (fine-grained PAT, Administration read+write on:"
-            echo "    clawmetry, clawmetry-cloud, clawmetry-landing)"
+            echo "  PAT permissions needed: Administration (read+write) on:"
+            echo "    clawmetry, clawmetry-cloud, clawmetry-landing"
+          elif [ -n "${{ inputs.pat_token }}" ]; then
+            echo "  Using pat_token input -- will apply to all 3 repos:"
+            echo "  clawmetry         : OSS golden path (wheel + OpenClaw + 9 tabs)"
+            echo "  clawmetry         : Cross-repo handoff (C4)"
+            echo "  clawmetry-cloud   : Cloud golden-path browser E2E"
+            echo "  clawmetry-landing : Landing golden path (C3)"
           else
-            echo "  Using E2E_ADMIN_PAT -- will apply to all 3 repos:"
+            echo "  Using E2E_ADMIN_PAT secret -- will apply to all 3 repos:"
             echo "  clawmetry         : OSS golden path (wheel + OpenClaw + 9 tabs)"
             echo "  clawmetry         : Cross-repo handoff (C4)"
             echo "  clawmetry-cloud   : Cloud golden-path browser E2E"
             echo "  clawmetry-landing : Landing golden path (C3)"
           fi
           echo ""
-          echo "  DEPRECATED_CHECKS removed if present:"
-          echo "  clawmetry : visual-diff (has paths: filter -- stalls non-UI PRs)"
+          echo "  Deprecated checks removed if present:"
+          echo "  clawmetry : visual-diff (paths: filter -- stalls non-UI PRs)"
           echo ""
           echo "Re-run with confirm=APPLY to apply."
+
+      - name: Mask PAT token
+        if: inputs.pat_token != ''
+        run: echo "::add-mask::${{ inputs.pat_token }}"
 
       - name: Apply required status checks
         if: github.event_name == 'push' || github.event.inputs.confirm == 'APPLY'
         env:
-          GITHUB_TOKEN: ${{ secrets.E2E_ADMIN_PAT || github.token }}
+          GITHUB_TOKEN: ${{ inputs.pat_token || secrets.E2E_ADMIN_PAT || github.token }}
         run: python3 scripts/apply_required_status_checks.py
