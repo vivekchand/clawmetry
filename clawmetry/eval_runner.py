@@ -673,14 +673,83 @@ def _redact_for_judge(text: str) -> str:
     return text
 
 
-def _judge_key_present(model: str) -> bool:
-    """True if the API key for this judge model's provider is set in the env.
-    Mirrors the provider routing in ``_call_judge`` (gpt/o* -> OpenAI, else
-    Anthropic)."""
+# Local judge-key store, so the dashboard can enable evals by saving a key (no
+# need to set an env var + restart the daemon). Lives ONLY on disk (chmod 600),
+# never in the cloud snapshot — it's a real LLM API key. Read fresh per call so
+# a key saved from the UI takes effect on the next scheduler tick without a
+# daemon restart.
+_EVAL_KEYS_PATH = os.path.expanduser("~/.clawmetry/eval_keys.json")
+_JUDGE_PROVIDERS = ("anthropic", "openai")
+
+
+def _provider_for_model(model: str) -> str:
     m = (model or "").lower()
-    if m.startswith(("gpt-", "o1-", "o3-", "o4-")):
-        return bool(os.environ.get("OPENAI_API_KEY", "").strip())
-    return bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
+    return "openai" if m.startswith(("gpt-", "o1-", "o3-", "o4-")) else "anthropic"
+
+
+def _stored_judge_key(provider: str) -> str:
+    """Read the UI-saved key for ``provider`` from the local key store. Never
+    raises; returns '' when absent."""
+    try:
+        import json as _json
+        with open(_EVAL_KEYS_PATH, encoding="utf-8") as fh:
+            data = _json.load(fh)
+        return str((data or {}).get(provider, "") or "").strip()
+    except Exception:
+        return ""
+
+
+def _judge_api_key(model: str) -> str:
+    """The API key to use for this judge model: env var first (operator intent
+    / CI), then the UI-saved local key. Empty string when neither is set."""
+    provider = _provider_for_model(model)
+    env_name = "OPENAI_API_KEY" if provider == "openai" else "ANTHROPIC_API_KEY"
+    return os.environ.get(env_name, "").strip() or _stored_judge_key(provider)
+
+
+def save_judge_key(provider: str, api_key: str) -> None:
+    """Persist a judge API key locally (chmod 600). Used by the dashboard so a
+    user can enable evals without setting an env var. ``api_key=""`` clears it."""
+    import json as _json
+    provider = (provider or "").strip().lower()
+    if provider not in _JUDGE_PROVIDERS:
+        raise ValueError(f"unknown provider {provider!r} (expected one of {_JUDGE_PROVIDERS})")
+    os.makedirs(os.path.dirname(_EVAL_KEYS_PATH), exist_ok=True)
+    data = {}
+    try:
+        with open(_EVAL_KEYS_PATH, encoding="utf-8") as fh:
+            data = _json.load(fh) or {}
+    except Exception:
+        data = {}
+    key = (api_key or "").strip()
+    if key:
+        data[provider] = key
+    else:
+        data.pop(provider, None)
+    # Write 0600 so the key is not world-readable.
+    fd = os.open(_EVAL_KEYS_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        _json.dump(data, fh)
+    try:
+        os.chmod(_EVAL_KEYS_PATH, 0o600)
+    except Exception:
+        pass
+
+
+def judge_keys_present() -> dict:
+    """Presence map for the UI — NEVER returns the key values themselves. Each
+    provider is True if a key is available via env OR the local store."""
+    out = {}
+    for prov in _JUDGE_PROVIDERS:
+        env_name = "OPENAI_API_KEY" if prov == "openai" else "ANTHROPIC_API_KEY"
+        out[prov] = bool(os.environ.get(env_name, "").strip() or _stored_judge_key(prov))
+    return out
+
+
+def _judge_key_present(model: str) -> bool:
+    """True if an API key for this judge model's provider is available (env or
+    the UI-saved local store)."""
+    return bool(_judge_api_key(model))
 
 
 def _judge_http_post_json(url: str, payload: dict, headers: dict, timeout: float) -> dict:
@@ -735,7 +804,7 @@ def _call_judge(model: str, prompt: str, *, timeout: float = 30.0) -> str:
     """
     model_lower = model.lower()
     if model_lower.startswith(("gpt-", "o1-", "o3-", "o4-")):
-        api_key = os.environ.get("OPENAI_API_KEY", "")
+        api_key = _judge_api_key(model)  # env var, else UI-saved local key
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY not set")
         url = "https://api.openai.com/v1/chat/completions"
@@ -756,7 +825,7 @@ def _call_judge(model: str, prompt: str, *, timeout: float = 30.0) -> str:
         return choices[0].get("message", {}).get("content", "") or ""
 
     # Default: Anthropic (Claude Haiku/Sonnet/Opus).
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    api_key = _judge_api_key(model)  # env var, else UI-saved local key
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY not set")
     url = "https://api.anthropic.com/v1/messages"

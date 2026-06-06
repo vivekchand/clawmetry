@@ -4690,6 +4690,21 @@ function clawmetryLogout(){
         <button onclick="closeEvalRubricModal()" style="background:transparent;border:none;color:var(--text-muted);font-size:18px;cursor:pointer;">&times;</button>
       </div>
       <div style="font-size:11px;color:var(--text-muted);">Edit the YAML rubric used by the local LLM judge. Saved to <code id="eval-rubric-path">~/.clawmetry/evals.yaml</code>. Disable scoring entirely with <code>CLAWMETRY_EVALS_ENABLED=0</code>.</div>
+      <div style="border:1px solid var(--border-primary);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:8px;background:var(--bg-secondary);">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div style="font-size:12px;font-weight:700;color:var(--text-primary);">Judge API key</div>
+          <span id="eval-key-status" style="font-size:11px;color:var(--text-muted);"></span>
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);line-height:1.5;">Scoring sends a redacted transcript to a judge LLM, which needs your own API key. Stored locally only (chmod 600), never synced to the cloud. Leave blank and Save to clear.</div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <select id="eval-key-provider" onchange="loadEvalKeyStatus()" style="font-size:12px;padding:6px 8px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border-primary);border-radius:6px;">
+            <option value="anthropic">Anthropic (claude-*)</option>
+            <option value="openai">OpenAI (gpt-*/o*)</option>
+          </select>
+          <input id="eval-key-input" type="password" autocomplete="off" placeholder="sk-ant-... / sk-..." style="flex:1;min-width:200px;font-family:monospace;font-size:12px;padding:6px 10px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border-primary);border-radius:6px;">
+          <button onclick="saveEvalKey()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;">Save key</button>
+        </div>
+      </div>
       <textarea id="eval-rubric-yaml" style="font-family:monospace;font-size:12px;width:100%;min-height:280px;padding:10px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-primary);border-radius:8px;resize:vertical;" spellcheck="false"></textarea>
       <div id="eval-rubric-status" style="font-size:11px;color:var(--text-muted);min-height:14px;"></div>
       <div style="display:flex;justify-content:flex-end;gap:8px;">
