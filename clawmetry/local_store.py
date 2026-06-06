@@ -1132,6 +1132,27 @@ def _duckdb_runtime_config() -> dict:
     return cfg
 
 
+# Layer 2 of the CPU budget (FLYWHEEL.md): the hot rollup ``query_aggregates`` is
+# a full-table dedupe scan, and the dashboard re-requests it many times a minute.
+# It only changes when the daemon ingests new events (~every sync cycle), so a
+# short TTL cache collapses those repeats into ~one real compute per window. This
+# is what actually pulls AVERAGE daemon CPU down (the thread cap only bounds the
+# peak). TTL is env-overridable (CLAWMETRY_AGG_CACHE_TTL seconds); 0 disables it.
+_AGG_CACHE: dict = {}
+_AGG_CACHE_LOCK = threading.Lock()
+try:
+    _AGG_CACHE_TTL = float(os.environ.get("CLAWMETRY_AGG_CACHE_TTL", "20") or "0")
+except ValueError:
+    _AGG_CACHE_TTL = 20.0
+
+
+def invalidate_aggregate_cache() -> None:
+    """Drop the query_aggregates TTL cache. Reads tolerate <=TTL staleness, so
+    this is only needed when a caller wants sub-TTL freshness after an ingest."""
+    with _AGG_CACHE_LOCK:
+        _AGG_CACHE.clear()
+
+
 def _open_connection(*, read_only: bool = False) -> duckdb.DuckDBPyConnection:
     """Open a DuckDB connection at DB_PATH, creating the directory if needed.
 
@@ -7895,6 +7916,12 @@ class LocalStore:
         BEFORE the dedupe CTE so all downstream cost/token math reuses the
         same code path. Sum across runtime values == unfiltered total, by
         construction (RULE #1: filtered totals reconcile)."""
+        _ck = (agent_id, since, until, runtime)
+        if _AGG_CACHE_TTL > 0:
+            with _AGG_CACHE_LOCK:
+                _hit = _AGG_CACHE.get(_ck)
+                if _hit is not None and (time.monotonic() - _hit[0]) < _AGG_CACHE_TTL:
+                    return _hit[1]
         clauses: list[str] = []
         params: list[Any] = []
         if agent_id:
@@ -7967,8 +7994,12 @@ class LocalStore:
             GROUP BY r.day, r.agent_id, ds.cost_usd_d, ds.token_count_d
             ORDER BY r.day DESC
         """
-        return [_row_to_dict(r, ["day","agent_id","event_count","cost_usd","token_count"])
-                for r in self._fetch(sql, params)]
+        _rows = [_row_to_dict(r, ["day","agent_id","event_count","cost_usd","token_count"])
+                 for r in self._fetch(sql, params)]
+        if _AGG_CACHE_TTL > 0:
+            with _AGG_CACHE_LOCK:
+                _AGG_CACHE[_ck] = (time.monotonic(), _rows)
+        return _rows
 
     # ── ops / maintenance ──────────────────────────────────────────────
 
