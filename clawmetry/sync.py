@@ -10123,6 +10123,40 @@ def _build_autonomy_snapshot():
         return {}
 
 
+def _build_usage_snapshot():
+    """Usage tab slices (anomalies, cost-comparison, cache-trends, cost-breakdown,
+    spend-optimization, forecast). Trial-bug #12: these Usage cards were blank on
+    the hosted dashboard (the /api/usage/* + /api/sessions/cost-breakdown routes
+    return empty without DuckDB and had no interceptor). Reuses the store-backed
+    fast-paths; each returns {} when the builder defers."""
+    out = {}
+    def _safe(fn):
+        try:
+            r = fn()
+            return r if r is not None else {}
+        except Exception:
+            return {}
+    try:
+        from routes.usage import (
+            _try_local_store_anomalies, _try_local_store_cost_comparison,
+            _try_local_store_cache_trends, _try_local_store_spend_optimization,
+            _try_local_store_usage_forecast,
+        )
+        out["anomalies"] = _safe(_try_local_store_anomalies)
+        out["costComparison"] = _safe(_try_local_store_cost_comparison)
+        out["cacheTrends"] = _safe(lambda: _try_local_store_cache_trends(30))
+        out["spendOptimization"] = _safe(_try_local_store_spend_optimization)
+        out["forecast"] = _safe(_try_local_store_usage_forecast)
+    except Exception:
+        pass
+    try:
+        from routes.sessions import _try_local_store_cost_breakdown
+        out["costBreakdown"] = _safe(_try_local_store_cost_breakdown)
+    except Exception:
+        out["costBreakdown"] = {}
+    return out
+
+
 def _build_harness_snapshot():
     """Harness tab slice: templates + per-runtime data blobs. Trial-bug #10:
     the Harness tab was blank ("Loading harness view...") on the hosted
@@ -12917,6 +12951,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "cronJobs": _build_cron_jobs(paths),
         "cronHealthSummary": _build_cron_health_summary_snapshot(),
         "harness": _build_harness_snapshot(),
+        "usage": _build_usage_snapshot(),
         "channels": _build_channel_data(config),
         "toolStats": _build_tool_stats(),
         "externalCalls": _build_external_calls(),
