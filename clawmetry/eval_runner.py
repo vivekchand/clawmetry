@@ -432,6 +432,13 @@ class EvalRunner:
     def _build_prompt(self, rubric: dict[str, Any], transcript: str) -> str:
         """Compose the final judge prompt: rubric instructions + transcript."""
         instructions = str(rubric.get("prompt") or DEFAULT_RUBRIC["prompt"])
+        # PRIVACY: the transcript is about to leave the machine for a THIRD-PARTY
+        # judge LLM (Anthropic/OpenAI). Everything else in ClawMetry is E2E
+        # encrypted so even our own cloud cannot read it; the judge is the one
+        # place raw session text goes out. Redact secrets + PII first. Done
+        # BEFORE the length cap so a secret near the truncation boundary is still
+        # scrubbed.
+        transcript = _redact_for_judge(transcript)
         # Cap transcript length so a 100K-token session doesn't run the
         # judge bill into the ground. The first/last ~4K chars carry the
         # signal we need (intent + outcome) without the toolchain noise.
@@ -635,6 +642,35 @@ class EvalRunner:
 # Logged once per process when evals are on but no judge key is configured, so
 # we don't repeat the notice on every scheduler tick.
 _NO_KEY_LOGGED = False
+
+# Email PII pattern, redacted before the transcript goes to the third-party
+# judge LLM (the secret redactor in clawmetry/redaction.py handles keys/tokens).
+_JUDGE_EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")
+
+
+def _redact_for_judge(text: str) -> str:
+    """Scrub secrets + PII from a transcript before it leaves the machine for
+    the third-party judge LLM. Reuses the ingest secret redactor (API keys,
+    tokens, Bearer, private keys) and adds email PII. Respects the global
+    CLAWMETRY_REDACT opt-out (so a user who explicitly disables redaction owns
+    that). Never raises; never returns None."""
+    if not text:
+        return text
+    try:
+        from clawmetry import redaction as _redaction
+        if _redaction._disabled():
+            return text
+        text = _redaction.redact_text(text)
+        text = _JUDGE_EMAIL_RE.sub("[REDACTED:email]", text)
+    except Exception:
+        # Never lose the transcript on a redaction bug, but also never send raw
+        # if we cannot confirm redaction ran: on import/other failure, drop a
+        # conservative best-effort email scrub at minimum.
+        try:
+            text = _JUDGE_EMAIL_RE.sub("[REDACTED:email]", text)
+        except Exception:
+            pass
+    return text
 
 
 def _judge_key_present(model: str) -> bool:
