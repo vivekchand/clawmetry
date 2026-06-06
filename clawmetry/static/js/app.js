@@ -7403,6 +7403,15 @@ async function ncReject(sandbox, chunkId, btn) {
 // disclosure, and condenses the hero card so the action items aren't
 // buried under a wall of green PASS cards.
 async function loadSecurityPosture() {
+  if (window.CLOUD_MODE) {
+    // Trial-bug fix #23: posture scans the local OpenClaw config (no DuckDB in
+    // cloud) so it errored on the hosted dashboard. Show an honest state.
+    var _pb = document.getElementById('posture-score-badge');
+    if (_pb) _pb.textContent = '--';
+    var _pl = document.getElementById('posture-score-label');
+    if (_pl) _pl.textContent = t('app.local_dashboard_only', null, 'Local dashboard only');
+    return;
+  }
   try {
     var data = await fetchJsonWithTimeout('/api/security/posture', 25000);
     var badge = document.getElementById('posture-score-badge');
@@ -7467,7 +7476,14 @@ async function loadSecurityPosture() {
 }
 
 async function loadSecurityPage(silent) {
-  if (window.CLOUD_MODE) return;
+  if (window.CLOUD_MODE) {
+    // Trial-bug fix #24: threat scanning runs on the local node (no DuckDB in
+    // cloud); the early-return left "Scanning..." spinning forever. Render an
+    // honest state instead.
+    var _tl = document.getElementById('security-threat-list');
+    if (_tl) _tl.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:13px;">' + t('app.security_threats_local_only', null, 'Threat detection runs on your local node. Open the local dashboard to scan for misconfigurations.') + '</div>';
+    return;
+  }
   try {
     var data = await fetchJsonWithTimeout('/api/security/threats', 10000);
     var threats = data.threats || [];
