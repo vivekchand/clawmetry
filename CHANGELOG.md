@@ -1,5 +1,12 @@
 ## [Unreleased]
 
+### Trial-bug daemon slices: autonomy, context util, transcript runtime (2026-06-06)
+- **autonomy**: snapshot now carries the autonomy block (reusing the store-backed `routes.autonomy._try_local_store_autonomy`) so the Overview "How independent is your agent?" card renders on the hosted dashboard instead of being stuck on "Just getting started".
+- **contextEconomics.utilization**: ship the utilization time-series (it was computed but never stored) so the cloud context-window gauge has readings.
+- **transcripts**: stamp `runtime` on each snapshot transcript so the cloud Transcripts tab can filter by runtime (was unset, so every session looked like openclaw).
+- Part of the verified trial-bug remediation; cloud interceptors that read these slices follow.
+
+
 ### Release: honest per-runtime scope banner on Overview (#2763) (2026-06-06)
 - **Why:** Overview mixes runtime-scoped cards (today's tasks/outcome, activity strip, hero token/cost) with node-wide cards (autonomy, reliability, activity heatmap). Showing node-wide numbers under a runtime filter confused users.
 - **What:** when a specific runtime is selected, Overview shows one banner stating exactly what is scoped vs node-wide, so a node-wide number never looks runtime-specific. Removed on "all".

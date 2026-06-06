@@ -10093,10 +10093,33 @@ def _build_transcripts(limit_sessions=8, msg_cap=80, extra_sids=None):
                 t["messages"] = _project_snapshot_messages(msgs)
                 if title:
                     t["title"] = title
+                # Trial-bug fix: stamp the runtime so the cloud transcripts tab
+                # can filter by runtime (was unset -> every session looked like
+                # openclaw, so "Claude Code" filter showed "no sessions").
+                t["runtime"] = _runtime_of_session(sid)
                 out[sid] = t
         return out
     except Exception as _e:
         log.debug("transcripts snapshot build failed: %s", _e)
+        return {}
+
+
+def _build_autonomy_snapshot():
+    """Autonomy block for the cloud snapshot (same shape as /api/autonomy).
+
+    Trial-bug fix: the Overview "How independent is your agent?" card fetches
+    /api/autonomy, which is empty on the hosted dashboard (no DuckDB) because no
+    snapshot slice carried it -> the card was stuck on "Just getting started".
+    Reuses the store-backed compute from routes.autonomy (best-effort -> empty).
+    """
+    try:
+        from routes.autonomy import _try_local_store_autonomy, _empty_response
+        try:
+            r = _try_local_store_autonomy()
+        except Exception:
+            r = None
+        return r if r is not None else _empty_response()
+    except Exception:
         return {}
 
 
@@ -12686,7 +12709,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     # re-derive a coarse view from the summary + compactions, and the OSS tab
     # reads the live series directly.
     context_economics_slice: dict = {
-        "compactions": [], "overflow_sessions": [], "summary": {},
+        "compactions": [], "overflow_sessions": [], "summary": {}, "utilization": [],
     }
     try:
         from clawmetry import local_store as _ls_ce
@@ -12727,6 +12750,10 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
                 "overflow_sessions":  len(_ce.get("overflow_sessions") or []),
                 "utilization_points": len(_ce_util),
             }
+            # Trial-bug fix: ship the utilization time-series so the cloud
+            # context-window gauge has readings (it was computing _ce_util but
+            # never storing it -> "No readings" on the hosted dashboard).
+            context_economics_slice["utilization"] = _ce_util
             # Per-runtime context-economics for the runtime filter (founder
             # 2026-06-03: opencode/codex showed Claude Code's compactions). The
             # cloud interceptor picks byRuntime[<rt>]; empty for a runtime that
@@ -12805,6 +12832,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "toolCatalog": tool_catalog_slice,
         "mcpServers": mcp_servers_slice,
         "contextEconomics": context_economics_slice,
+        "autonomy": _build_autonomy_snapshot(),
         "evals": evals_slice,
         "activityToday": _collect_activity_counters_today() or {},
         "activityTodayByRuntime": _activity_by_rt,
