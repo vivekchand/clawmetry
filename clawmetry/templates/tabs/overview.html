@@ -25,6 +25,21 @@
     </div>
   </div>
 
+  <!-- Eval quality (LLM-as-judge). Score tile + a button to set the judge API
+       key / rubric. The judge needs your own LLM key; scoring is paused until
+       one is set (transcripts are redacted before they go to the judge). -->
+  <div id="eval-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:18px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;">
+    <div>
+      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px;">✅ <span data-i18n="overview.eval_quality">Session quality (LLM judge)</span></div>
+      <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
+        <span id="eval-avg-score" style="font-size:26px;font-weight:800;line-height:1.1;color:var(--text-muted);">--</span>
+        <span id="eval-coverage" style="font-size:12px;color:var(--text-muted);"></span>
+      </div>
+      <div id="eval-regression-line" style="font-size:12px;color:var(--text-muted);margin-top:6px;"></div>
+    </div>
+    <button onclick="openEvalRubricModal()" title="Set the judge API key and edit the scoring rubric" style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:8px 14px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;">&#9881; <span data-i18n="overview.eval_setup">Judge key &amp; rubric</span></button>
+  </div>
+
   <!-- Per-runtime sparkline of recent runs (#2196 item #4). Severity: red=real
        error, yellow=waste flag, green=clean. Empty when no runtime has data. -->
   <div id="health-timeline-card" style="display:none;background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:14px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);">

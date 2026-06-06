@@ -3308,6 +3308,7 @@ async function openEvalRubricModal() {
   var pathEl = document.getElementById('eval-rubric-path');
   if (!modal || !ta) return;
   modal.style.display = 'flex';
+  loadEvalKeyStatus();
   if (status) status.textContent = t("app.loading", null, "Loading...");
   try {
     var data = await fetch('/api/evals/rubric').then(function(r){return r.json();});
@@ -3320,6 +3321,57 @@ async function openEvalRubricModal() {
     }
   } catch (e) {
     if (status) status.textContent = t("app.failed_to_load_2", null, "Failed to load: ") + e.message;
+  }
+}
+
+// Judge API key: presence-only status (never the value) so the user knows
+// whether scoring can run, and can paste a key to enable it without an env var.
+async function loadEvalKeyStatus() {
+  var el = document.getElementById('eval-key-status');
+  var sel = document.getElementById('eval-key-provider');
+  if (!el) return;
+  try {
+    var d = await fetch('/api/evals/key').then(function(r){return r.json();}).catch(function(){return null;});
+    var present = (d && d.present) || {};
+    var prov = sel ? sel.value : 'anthropic';
+    if (present[prov]) {
+      el.textContent = '✓ key set';
+      el.style.color = '#22c55e';
+    } else if (d && d.any) {
+      el.textContent = 'set for another provider';
+      el.style.color = 'var(--text-muted)';
+    } else {
+      el.textContent = 'not set — scoring paused';
+      el.style.color = '#f59e0b';
+    }
+  } catch (e) {
+    el.textContent = '';
+  }
+}
+
+// Save the judge API key (or clear it with an empty value). POSTs to
+// /api/evals/key, which stores it locally chmod 600; never echoed back.
+async function saveEvalKey() {
+  var sel = document.getElementById('eval-key-provider');
+  var inp = document.getElementById('eval-key-input');
+  var el = document.getElementById('eval-key-status');
+  if (!sel || !inp) return;
+  if (el) { el.textContent = t("app.saving", null, "Saving..."); el.style.color = 'var(--text-muted)'; }
+  try {
+    var resp = await fetch('/api/evals/key', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({provider: sel.value, api_key: inp.value || ''})
+    }).then(function(r){return r.json();});
+    if (resp && resp.ok) {
+      inp.value = '';  // never keep the secret in the DOM after save
+      loadEvalKeyStatus();
+    } else if (el) {
+      el.textContent = (resp && resp.error) || 'Save failed';
+      el.style.color = '#ef4444';
+    }
+  } catch (e) {
+    if (el) { el.textContent = 'Save failed: ' + e.message; el.style.color = '#ef4444'; }
   }
 }
 

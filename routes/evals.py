@@ -166,6 +166,45 @@ def evals_regression_summary():
     return jsonify(payload)
 
 
+@bp_evals.route("/api/evals/key", methods=["GET"])
+def evals_key_get():
+    """Presence-only: which judge providers have a key (env or UI-saved).
+    NEVER returns the key value itself."""
+    try:
+        from clawmetry import eval_runner
+    except Exception as e:
+        return jsonify({"error": f"eval runner unavailable: {e}"}), 503
+    try:
+        present = eval_runner.judge_keys_present()
+    except Exception:
+        present = {"anthropic": False, "openai": False}
+    return jsonify({"present": present, "any": any(present.values())})
+
+
+@bp_evals.route("/api/evals/key", methods=["POST"])
+def evals_key_save():
+    """Save (or clear) a judge API key locally so evals can run without an env
+    var. Body: ``{"provider": "anthropic"|"openai", "api_key": "<key>"}``. An
+    empty ``api_key`` clears it. The key is stored chmod 600 on disk only and is
+    never echoed back or synced to the cloud."""
+    try:
+        from clawmetry import eval_runner
+    except Exception as e:
+        return jsonify({"error": f"eval runner unavailable: {e}"}), 503
+    body = request.get_json(silent=True) or {}
+    provider = str(body.get("provider", "")).strip().lower()
+    api_key = body.get("api_key", "")
+    if provider not in ("anthropic", "openai"):
+        return jsonify({"error": "provider must be 'anthropic' or 'openai'"}), 400
+    if not isinstance(api_key, str):
+        return jsonify({"error": "api_key must be a string"}), 400
+    try:
+        eval_runner.save_judge_key(provider, api_key)
+    except Exception as e:
+        return jsonify({"error": f"save failed: {e}"}), 400
+    return jsonify({"ok": True, "present": eval_runner.judge_keys_present()})
+
+
 @bp_evals.route("/api/evals/rubric", methods=["POST"])
 def evals_rubric_save():
     """Replace the rubric YAML. Validates parse before writing.
