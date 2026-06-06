@@ -1,7 +1,7 @@
 """
 ClawMetry - See your agent think 🦞
 
-Real-time observability dashboard for OpenClaw AI agents.
+Real-time observability dashboard for your AI agents (OpenClaw, NVIDIA NemoClaw, Claude Code, Codex + 8 more runtimes).
 Single-file Flask app with zero config - auto-detects your setup.
 
 Usage:
