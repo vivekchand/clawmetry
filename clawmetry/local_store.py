@@ -1110,6 +1110,28 @@ def _to_blob(value: Any) -> bytes | None:
         return str(value).encode("utf-8", errors="replace")
 
 
+# DuckDB defaults to threads == CPU core count, so a single aggregate query
+# fans out across every core (observed: a 12-core box pegged at ~200% CPU just
+# re-running query_aggregates). ClawMetry is an observability sidecar, not a
+# warehouse: it must stay light (CPU budget, see FLYWHEEL.md). We cap threads to
+# a small number and bound the buffer pool so no query can take over the
+# machine. Both are env-overridable for power users with big stores.
+#   CLAWMETRY_DUCKDB_THREADS       (default 2; 0/blank = DuckDB default = all cores)
+#   CLAWMETRY_DUCKDB_MEMORY_LIMIT  (default "2GB"; blank = DuckDB default)
+def _duckdb_runtime_config() -> dict:
+    cfg: dict = {}
+    try:
+        threads = int(os.environ.get("CLAWMETRY_DUCKDB_THREADS", "2") or "0")
+    except ValueError:
+        threads = 2
+    if threads > 0:
+        cfg["threads"] = threads
+    mem = os.environ.get("CLAWMETRY_DUCKDB_MEMORY_LIMIT", "2GB")
+    if mem:
+        cfg["memory_limit"] = mem
+    return cfg
+
+
 def _open_connection(*, read_only: bool = False) -> duckdb.DuckDBPyConnection:
     """Open a DuckDB connection at DB_PATH, creating the directory if needed.
 
@@ -1126,9 +1148,10 @@ def _open_connection(*, read_only: bool = False) -> duckdb.DuckDBPyConnection:
     # if the conflicting holder is genuinely stuck we surface the real
     # DuckDB error instead of silently sleeping past it.
     last_exc: Exception | None = None
+    _cfg = _duckdb_runtime_config()
     for attempt in range(5):
         try:
-            return duckdb.connect(str(DB_PATH), read_only=read_only)
+            return duckdb.connect(str(DB_PATH), read_only=read_only, config=_cfg)
         except duckdb.IOException as exc:
             msg = str(exc)
             if "Conflicting lock" not in msg and "could not set lock" not in msg:
@@ -1138,7 +1161,7 @@ def _open_connection(*, read_only: bool = False) -> duckdb.DuckDBPyConnection:
     # Out of retries — re-raise the last lock error so the caller sees it.
     if last_exc is not None:
         raise last_exc
-    return duckdb.connect(str(DB_PATH), read_only=read_only)  # unreachable
+    return duckdb.connect(str(DB_PATH), read_only=read_only, config=_cfg)  # unreachable
 
 
 # ── Singleton store ─────────────────────────────────────────────────────────
