@@ -1,12 +1,22 @@
 <div class="page" id="page-brain">
   <div style="padding:12px 0 8px 0;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🧠 <span data-i18n="brain.title">Brain · Unified Activity Stream</span></span>
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🧠 <span data-i18n="brain.title">Brain · Unified Activity Stream</span>
+        <!-- Loop-signals badge (#1364): hidden until /api/loop-signals returns >0. JS: app.js loadLoopSignals() (called from loadBrainPage). Revived from the dead DASHBOARD_HTML block (UI-coverage audit 2026-06-06). -->
+        <button id="brain-loops-badge" type="button" onclick="toggleLoopSignalsList()" style="display:none;margin-left:8px;background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.4);border-radius:10px;padding:2px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;" title="LoopDetector signals from the ClawMetry proxy"><span id="brain-loops-badge-count">0</span> loops</button></span>
       <div style="
         display:flex;
         align-items:center;
         gap:8px;
         "><span id="brain-live-indicator"></span><button id="brain-plumbing-btn" class="refresh-btn" onclick="toggleBrainPlumbing()" data-i18n-title="brain.plumbing_tooltip" title="Show internal queue/dequeue events (hidden by default, they're plumbing, not content)" style="font-weight:500;"><span id="brain-plumbing-state">○</span> <span data-i18n="brain.show_plumbing">Show plumbing</span> <span id="brain-plumbing-count" style="opacity:0.7;font-size:11px;"></span></button><button id="brain-focus-btn" class="refresh-btn" onclick="toggleBrainFocus()" data-i18n-title="brain.focus_tooltip" title="Focus mode: hide everything except the event stream">⛶ Focus</button><button class="refresh-btn" onclick="loadBrainPage()">↻ <span data-i18n="common.refresh">Refresh</span></button></div>
+    </div>
+    <!-- Loop-signals table (#1364): collapsed until the badge is clicked. JS: app.js loadLoopSignals() fills #brain-loops-table; toggleLoopSignalsList() shows it. Revived from the dead DASHBOARD_HTML block. -->
+    <div id="brain-loops-panel" style="display:none;background:var(--bg-secondary);border:1px solid rgba(239,68,68,0.4);border-radius:8px;padding:10px 14px;margin-bottom:12px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <span style="font-size:11px;font-weight:600;color:#ef4444;text-transform:uppercase;letter-spacing:1px;">Loops detected (proxy)</span>
+        <span style="font-size:10px;color:var(--text-muted);">From the ClawMetry proxy LoopDetector (last 60 min)</span>
+      </div>
+      <div id="brain-loops-table" style="font-size:11px;font-family:'JetBrains Mono','SF Mono',monospace;color:var(--text-secondary);"></div>
     </div>
     <style>
       /* Focus mode: hide chrome, expand event stream to viewport */
