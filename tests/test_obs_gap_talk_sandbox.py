@@ -149,3 +149,108 @@ def test_catalog_dispatch_span_unwraps_real_tool():
     assert by["Bash"]["attributes"] is None
     # other catalog meta-tools -> guardrail tag only (not a dispatcher)
     assert by["tool_search"]["attributes"] == {"nemoclaw.catalog_guardrail": True}
+
+
+# -- #2733 tool_result details fold-back -------------------------------------
+
+def test_tool_result_details_attach_to_originating_tool_span():
+    """NemoClaw nemoClawBuildToolResult emits structured `details` on the
+    result block in the user-role message. The span builder must look the
+    matching tool_use_id up and fold details + is_error + text onto the
+    pre-existing tool span via Event.extra-shaped attributes.
+    """
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    catalog_payload = {
+        "tools": [{"name": "Read", "schema": {"path": "str"}}],
+        "matched": 1,
+    }
+    events = [
+        {"type": "session", "version": "v1", "timestamp": "1700000000"},
+        {"type": "message", "timestamp": "1700000001",
+         "message": {"role": "assistant", "content": [
+             {"type": "tool_use", "id": "tu-1", "name": "tool_search",
+              "input": {"q": "read"}},
+         ]}},
+        {"type": "message", "timestamp": "1700000002",
+         "message": {"role": "user", "content": [
+             {"type": "tool_result", "tool_use_id": "tu-1",
+              "is_error": False,
+              "content": [{"type": "text", "text": '{"matched":1}'}],
+              "details": catalog_payload},
+         ]}},
+    ]
+    spans = OpenClawAdapter._build_spans_from_events(events, "s1")
+    tool_spans = [s for s in spans if s.get("tool_name") == "tool_search"]
+    assert len(tool_spans) == 1, "exactly one tool_search span expected"
+    ts_span = tool_spans[0]
+    attrs = ts_span["attributes"]
+    assert attrs["tool.result_present"] is True
+    assert attrs["tool.result_is_error"] is False
+    assert attrs["tool.result_details"] == catalog_payload
+    assert attrs["tool.result_details_keys"] == ["matched", "tools"]
+    assert attrs["tool.result_text"] == '{"matched":1}'
+    # End-timestamp is stamped to the result's clock.
+    assert ts_span["end_ts"] == 1700000002.0
+
+
+def test_orphan_tool_result_is_silently_skipped():
+    """A tool_result whose tool_use_id never appeared upstream must not crash
+    the span builder, and must not produce a phantom span."""
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = [
+        {"type": "message", "timestamp": "1700000002",
+         "message": {"role": "user", "content": [
+             {"type": "tool_result", "tool_use_id": "ghost",
+              "details": {"x": 1}, "content": "ignored"},
+         ]}},
+    ]
+    spans = OpenClawAdapter._build_spans_from_events(events, "s1")
+    assert spans == []
+
+
+def test_tool_result_without_details_still_marks_result_present():
+    """Native (non-NemoClaw) tools omit `details`. We still want to flag that
+    the result arrived so consumers can distinguish in-flight from completed
+    tool calls."""
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = [
+        {"type": "message", "timestamp": "1700000001",
+         "message": {"role": "assistant", "content": [
+             {"type": "tool_use", "id": "tu-9", "name": "Bash",
+              "input": {"command": "ls"}},
+         ]}},
+        {"type": "message", "timestamp": "1700000002",
+         "message": {"role": "user", "content": [
+             {"type": "tool_result", "tool_use_id": "tu-9",
+              "content": "file1\nfile2\n"},
+         ]}},
+    ]
+    spans = OpenClawAdapter._build_spans_from_events(events, "s1")
+    bash = next(s for s in spans if s.get("tool_name") == "Bash")
+    attrs = bash["attributes"]
+    assert attrs["tool.result_present"] is True
+    assert "tool.result_details" not in attrs
+    assert "tool.result_details_keys" not in attrs
+    assert "tool.result_is_error" not in attrs
+    assert attrs["tool.result_text"] == "file1\nfile2\n"
+
+
+def test_tool_result_camelcase_tool_use_id_alias_supported():
+    """JS-side emitters sometimes carry the camelCase variant (toolUseId).
+    Accept both so we don't lose results from harness JSON shape drift."""
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = [
+        {"type": "message", "timestamp": "1700000001",
+         "message": {"role": "assistant", "content": [
+             {"type": "tool_use", "id": "tu-77", "name": "Edit",
+              "input": {"file_path": "/x"}},
+         ]}},
+        {"type": "message", "timestamp": "1700000002",
+         "message": {"role": "user", "content": [
+             {"type": "tool_result", "toolUseId": "tu-77",
+              "details": {"applied": True}},
+         ]}},
+    ]
+    spans = OpenClawAdapter._build_spans_from_events(events, "s1")
+    edit = next(s for s in spans if s.get("tool_name") == "Edit")
+    assert edit["attributes"]["tool.result_details"] == {"applied": True}
