@@ -1,7 +1,7 @@
 ## [Unreleased]
 
-### Trial-bug daemon slice: Usage tab cards (2026-06-06)
-- **usage**: ship the Usage slices (anomalies, cost-comparison, cache-trends, cost-breakdown, spend-optimization, forecast) reusing the store-backed fast-paths so the Usage tab cards render on the hosted dashboard instead of "No data" / "Loading...". Cloud interceptors follow.
+### Trial-bug daemon slice: approvals audit (2026-06-06)
+- **approvalsAudit**: ship the exec-approval decision audit (refactored routes/policy.py into a reusable _approvals_audit_payload) so the Policy tab audit renders on the hosted dashboard. The cloud interceptor already reads sp.approvalsAudit.
 
 
 ### Trial-bug daemon slice: Harness tab (templates + per-runtime data) (2026-06-06)

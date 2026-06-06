@@ -120,6 +120,13 @@ def api_approvals_audit():
         limit = 100
     status = (request.args.get("status") or "").strip() or None
 
+    return jsonify(_approvals_audit_payload(status=status, limit=limit))
+
+
+def _approvals_audit_payload(status=None, limit=100):
+    """Exec-approval decision audit payload, shared by the HTTP route and the
+    cloud snapshot builder (trial-bug #22: the Policy tab audit was blank on the
+    hosted dashboard). Returns {decisions, summary, _source}."""
     rows = _coerce_rows(_ls_call("query_approvals", status=status, limit=limit))
 
     def _arg_preview(args) -> str:
@@ -171,4 +178,4 @@ def api_approvals_audit():
         "approved": approved,
         "denied": denied,
     }
-    return jsonify({"decisions": decisions, "summary": summary, "_source": "local_store"})
+    return {"decisions": decisions, "summary": summary, "_source": "local_store"}

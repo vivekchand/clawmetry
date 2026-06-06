@@ -10157,6 +10157,16 @@ def _build_usage_snapshot():
     return out
 
 
+def _build_approvals_audit_snapshot():
+    """Approvals audit slice (mirrors /api/approvals-audit). Trial-bug #22: the
+    Policy tab's exec-approval audit was blank on the hosted dashboard."""
+    try:
+        from routes.policy import _approvals_audit_payload
+        return _approvals_audit_payload(limit=100)
+    except Exception:
+        return {}
+
+
 def _build_harness_snapshot():
     """Harness tab slice: templates + per-runtime data blobs. Trial-bug #10:
     the Harness tab was blank ("Loading harness view...") on the hosted
@@ -12952,6 +12962,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "cronHealthSummary": _build_cron_health_summary_snapshot(),
         "harness": _build_harness_snapshot(),
         "usage": _build_usage_snapshot(),
+        "approvalsAudit": _build_approvals_audit_snapshot(),
         "channels": _build_channel_data(config),
         "toolStats": _build_tool_stats(),
         "externalCalls": _build_external_calls(),
