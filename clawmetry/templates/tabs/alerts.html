@@ -69,8 +69,11 @@
    composer. The {% if is_pro %} branch keeps the editor entirely out of
    the page for non-Pro users; alerts.js still calls alertsOpenPaywall()
    on the + New alert rule button so the upsell flow is unchanged. #}
-{% if is_pro %}
-<!-- ── Rule editor modal (Pro-tier only) ────────────────────────────────── -->
+<!-- ── Rule editor modal ─────────────────────────────────────────────────── -->
+<!-- Always rendered; access is gated client-side in alertsHandleNewRule (free ->
+     openPaywall, trial/pro -> openEditor). Trial-bug #17: the old {% raw %}{% if is_pro %}{% endraw %}
+     gate dropped the modal for trial users whose server-side plan lookup mismatched
+     the JS tier, so "+ New alert rule" silently did nothing. -->
 <div class="alerts-modal-overlay" id="alerts-editor-modal" style="display:none;" onclick="alertsCloseEditor(event)">
   <div class="alerts-editor-card" onclick="event.stopPropagation()">
     <div class="alerts-editor-head">
@@ -123,4 +126,3 @@
     </div>
   </div>
 </div>
-{% endif %}
