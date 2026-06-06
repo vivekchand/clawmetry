@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Trial-bug daemon slices: Flow runs + Flow lanes (2026-06-06)
+- **flowRuns**: ship the historical flow-runs list (mirrors /api/flow/runs via query_flow_runs) so the Flow tab "Runs" subtab renders on the hosted dashboard instead of "No historical flow runs yet".
+- **flowLanes**: ship the active-session lanes (sessions touched in the last 30 min) so "Active Session Lanes" renders. Cloud interceptors that read these follow.
+
+
 ### Trial-bug daemon slices: autonomy, context util, transcript runtime (2026-06-06)
 - **autonomy**: snapshot now carries the autonomy block (reusing the store-backed `routes.autonomy._try_local_store_autonomy`) so the Overview "How independent is your agent?" card renders on the hosted dashboard instead of being stuck on "Just getting started".
 - **contextEconomics.utilization**: ship the utilization time-series (it was computed but never stored) so the cloud context-window gauge has readings.

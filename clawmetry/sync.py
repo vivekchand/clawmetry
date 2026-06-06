@@ -10123,6 +10123,43 @@ def _build_autonomy_snapshot():
         return {}
 
 
+def _build_flow_runs_snapshot(limit=60):
+    """Flow runs slice (mirrors /api/flow/runs). Trial-bug fix: the Flow "Runs"
+    subtab was blank on the hosted dashboard (no interceptor + no slice)."""
+    try:
+        from clawmetry import local_store as _ls
+        runs = _ls.get_store().query_flow_runs(limit=limit) or []
+        return {
+            "runs": runs, "count": len(runs),
+            "_source": "local_store" if runs else "empty",
+            "capped_at_24h": False,
+        }
+    except Exception:
+        return {"runs": [], "count": 0, "_source": "empty", "capped_at_24h": False}
+
+
+def _build_flow_lanes_snapshot():
+    """Active session lanes slice (mirrors /api/flow/lanes): sessions touched in
+    the last 30 minutes. Trial-bug fix: "Active Session Lanes" was blank."""
+    try:
+        from datetime import datetime as _D, timezone as _TZ, timedelta as _TD
+        active_since = (_D.now(_TZ.utc) - _TD(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        from clawmetry import local_store as _ls
+        runs = _ls.get_store().query_flow_runs(since=active_since, limit=50) or []
+        lanes = [{
+            "session_id":    r.get("session_id") or "",
+            "session_short": (r.get("session_id") or "")[:8],
+            "channel":       r.get("channel") or "cli",
+            "event_count":   int(r.get("event_count") or 0),
+            "started_at":    r.get("started_at") or "",
+            "updated_at":    r.get("updated_at") or "",
+            "status":        "failed" if r.get("has_error") else "active",
+        } for r in runs]
+        return {"lanes": lanes, "_source": "local_store" if lanes else "empty"}
+    except Exception:
+        return {"lanes": [], "_source": "empty"}
+
+
 def _build_memory_access(limit=200):
     """Memory access log for the cloud Memory tab (issue #1896).
 
@@ -12833,6 +12870,8 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "mcpServers": mcp_servers_slice,
         "contextEconomics": context_economics_slice,
         "autonomy": _build_autonomy_snapshot(),
+        "flowRuns": _build_flow_runs_snapshot(),
+        "flowLanes": _build_flow_lanes_snapshot(),
         "evals": evals_slice,
         "activityToday": _collect_activity_counters_today() or {},
         "activityTodayByRuntime": _activity_by_rt,
