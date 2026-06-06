@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: per-runtime scoping for the Overview outcome tile + activity strip (#2761) (2026-06-06)
+- **Why:** with the runtime switcher set to a specific runtime, the Outcome tile and the activity-counters strip showed identical node-wide numbers for every runtime (only the header session count + spend re-scoped). Confusing: codex and openclaw appeared to do the same work.
+- **What:** query_outcomes / query_events / query_tool_call_invocations accept a runtime filter (the canonical session-prefix clause); the snapshot emits outcomesByRuntime + activityTodayByRuntime; /api/outcomes + /api/activity-today accept ?runtime=; the loaders pass the switcher value. Cloud cm-cloud-outcomes / cm-cloud-activity interceptors serve byRuntime and never fall back to the node-wide number for a specific runtime.
+- **Verified:** tests/test_per_runtime_filter.py (per-runtime filtering; unknown runtime leaks nothing).
+
+
 ### Release: CPU budget, the daemon stays light (#2750, #2751) (2026-06-06)
 - **Why:** the sync daemon was observed at ~200% CPU (two full cores) on a 12-core box. Profiling showed ~100% inside DuckDB (allocator + BufferPool::EvictBlocks). Root cause: DuckDB defaulted to threads == core count (so one aggregate query fanned across all 12 cores) and the hot query_aggregates rollup was re-run on every dashboard poll with no cache.
 - **What:** (1) every DuckDB connection now caps threads (default 2) + memory_limit (default 2GB), env-overridable via CLAWMETRY_DUCKDB_THREADS / CLAWMETRY_DUCKDB_MEMORY_LIMIT, so no single query can take over the machine. (2) query_aggregates is result-cached with a short TTL (default 20s, CLAWMETRY_AGG_CACHE_TTL, 0=off); the daemon recomputes on a timer and handlers read the cache, which is what actually cuts AVERAGE CPU. Now a FLYWHEEL principle (the daemon targets <=5-10% CPU).
