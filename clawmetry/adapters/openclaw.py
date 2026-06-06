@@ -458,10 +458,13 @@ class OpenClawAdapter(AgentAdapter):
         """Map raw JSONL objects to OTel-shaped span dicts.
 
         Mapping per issue #1010:
-        - ``session`` (version set)   → root span (INTERNAL)
+        - ``session`` (version set)    → root span (INTERNAL)
         - ``message`` (role=assistant) → llm.call span (CLIENT, child of root)
-          - each tool_use block       → tool.<name> span (CLIENT, child of llm)
-        - ``subagent_spawn``          → agent.spawn span (INTERNAL, link to child trace)
+          - each tool_use block        → tool.<name> span (CLIENT, child of llm)
+        - ``message`` (role=user)      → matched tool_result blocks fold their
+          structured ``details`` payload + ``is_error`` flag + text content back
+          onto the tool span identified by ``tool_use_id`` (#2733).
+        - ``subagent_spawn``           → agent.spawn span (INTERNAL, link to child trace)
 
         Span IDs are deterministic SHA-256 prefixes so re-ingesting is idempotent.
         """
@@ -470,6 +473,10 @@ class OpenClawAdapter(AgentAdapter):
         session_span_id = _sid("session", session_id)
         now = _time.time()
         spans: list = []
+        # tool_use_id → tool span dict, populated as assistant tool_use blocks
+        # are emitted; consumed when a later user tool_result block references
+        # the same id (#2733).
+        tool_span_by_id: dict = {}
 
         for obj in events:
             if not isinstance(obj, dict):
@@ -495,7 +502,59 @@ class OpenClawAdapter(AgentAdapter):
 
             elif t == "message" and isinstance(obj.get("message"), dict):
                 msg = obj["message"]
-                if msg.get("role") != "assistant":
+                role = msg.get("role")
+                content = msg.get("content") or []
+                if role == "user":
+                    # Tool results live in user-role messages. Fold the
+                    # structured details payload + is_error flag + text content
+                    # back onto the originating tool span (#2733). Orphan
+                    # tool_results (no matching tool_use_id) are skipped.
+                    if not isinstance(content, list):
+                        continue
+                    for block in content:
+                        if not isinstance(block, dict) or block.get("type") != "tool_result":
+                            continue
+                        tu_id = block.get("tool_use_id") or block.get("toolUseId") or ""
+                        target = tool_span_by_id.get(tu_id)
+                        if target is None:
+                            continue
+                        attrs = target.get("attributes") or {}
+                        attrs["tool.result_present"] = True
+                        if "is_error" in block:
+                            attrs["tool.result_is_error"] = bool(block.get("is_error"))
+                        # NemoClaw nemoClawBuildToolResult helper attaches a
+                        # top-level structured ``details`` dict on the result
+                        # (catalog hits, schemas, dispatch output). Surface it
+                        # so downstream Tracing/Event.extra can render the real
+                        # payload instead of just the stringified text wrapper.
+                        details = block.get("details")
+                        if details is not None:
+                            attrs["tool.result_details"] = details
+                            if isinstance(details, dict):
+                                attrs["tool.result_details_keys"] = sorted(details.keys())
+                        # Text content blocks (the JSON-stringified wrapper that
+                        # NemoClaw co-emits, or plain text from native tools)
+                        # collapsed into a single string for quick read.
+                        result_content = block.get("content")
+                        text_parts: list = []
+                        if isinstance(result_content, str):
+                            text_parts.append(result_content)
+                        elif isinstance(result_content, list):
+                            for inner in result_content:
+                                if isinstance(inner, dict) and inner.get("type") == "text":
+                                    val = inner.get("text")
+                                    if isinstance(val, str):
+                                        text_parts.append(val)
+                        if text_parts:
+                            attrs["tool.result_text"] = "".join(text_parts)
+                        target["attributes"] = attrs
+                        # End-time the tool span to whatever the result arrived
+                        # at. start_ts ≤ end_ts isn't enforced (assistant emits
+                        # tool_use and user tool_result share clock); but the
+                        # signal is still useful for duration heuristics.
+                        target["end_ts"] = ts
+                    continue
+                if role != "assistant":
                     continue
                 model = msg.get("model") or ""
                 usage = msg.get("usage") or {}
@@ -516,7 +575,6 @@ class OpenClawAdapter(AgentAdapter):
                     "tokens_output": tok_out or None,
                     "token_count": (tok_in + tok_out) or None,
                 })
-                content = msg.get("content") or []
                 if isinstance(content, list):
                     for block in content:
                         if not isinstance(block, dict) or block.get("type") != "tool_use":
@@ -564,6 +622,8 @@ class OpenClawAdapter(AgentAdapter):
                         }
 
                         spans.append(tool_span)
+                        if tool_id:
+                            tool_span_by_id[tool_id] = tool_span
 
             elif t in ("subagent_spawn", "agent_spawn"):
                 sub_id = (
