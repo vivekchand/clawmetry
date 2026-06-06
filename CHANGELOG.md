@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Trial-bug daemon slice: Harness tab (templates + per-runtime data) (2026-06-06)
+- **harness**: ship the Harness slice (templates + per-runtime data blobs) so the Harness tab renders on the hosted dashboard instead of "Loading harness view..." forever. Refactored routes/harness.py http_harness_data into a reusable _harness_data_for(runtime) shared by the route + the snapshot. Cloud interceptor follows.
+
+
 ### Trial-bug daemon slice: cron health summary (2026-06-06)
 - **cronHealthSummary**: ship the cron health summary (reuse routes.crons._try_local_store_cron_health_summary) so the "Cron Health Monitor" card renders on the hosted dashboard instead of blank. Cloud interceptor follows.
 

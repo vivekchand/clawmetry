@@ -10123,6 +10123,27 @@ def _build_autonomy_snapshot():
         return {}
 
 
+def _build_harness_snapshot():
+    """Harness tab slice: templates + per-runtime data blobs. Trial-bug #10:
+    the Harness tab was blank ("Loading harness view...") on the hosted
+    dashboard (no slice + no interceptor)."""
+    out = {"templates": {}, "runtimes": [], "dataByRuntime": {}}
+    try:
+        from clawmetry import harness_templates as _ht
+        tmpls = _ht.all_templates()
+        out["templates"] = tmpls
+        out["runtimes"] = sorted(tmpls.keys())
+        from routes.harness import _harness_data_for
+        for _rt in out["runtimes"]:
+            try:
+                out["dataByRuntime"][_rt] = _harness_data_for(_rt)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return out
+
+
 def _build_cron_health_summary_snapshot():
     """Cron health summary slice (mirrors /api/cron/health-summary). Trial-bug
     fix: the "Cron Health Monitor" card was blank on the hosted dashboard."""
@@ -12895,6 +12916,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "deviceSummary": _build_device_summary(spending, _du),
         "cronJobs": _build_cron_jobs(paths),
         "cronHealthSummary": _build_cron_health_summary_snapshot(),
+        "harness": _build_harness_snapshot(),
         "channels": _build_channel_data(config),
         "toolStats": _build_tool_stats(),
         "externalCalls": _build_external_calls(),
