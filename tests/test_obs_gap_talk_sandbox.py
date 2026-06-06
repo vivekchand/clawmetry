@@ -254,3 +254,122 @@ def test_tool_result_camelcase_tool_use_id_alias_supported():
     spans = OpenClawAdapter._build_spans_from_events(events, "s1")
     edit = next(s for s in spans if s.get("tool_name") == "Edit")
     assert edit["attributes"]["tool.result_details"] == {"applied": True}
+
+
+# -- #2731 MCP tool_result non-text content blocks ---------------------------
+
+def test_tool_result_content_types_capture_non_text_blocks():
+    """OpenClaw's MCP path materializes tool_result content arrays that may
+    include resource_link, resource, audio, or malformed-image blocks
+    alongside text. The span builder must record every block type that
+    appears so downstream Tracing/Event.extra can tell a text-only result
+    from one that carried a resource or audio payload."""
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = [
+        {"type": "message", "timestamp": "1700000001",
+         "message": {"role": "assistant", "content": [
+             {"type": "tool_use", "id": "tu-1", "name": "mcp__docs__fetch",
+              "input": {"id": "rfc-7807"}},
+         ]}},
+        {"type": "message", "timestamp": "1700000002",
+         "message": {"role": "user", "content": [
+             {"type": "tool_result", "tool_use_id": "tu-1",
+              "content": [
+                  {"type": "text", "text": "fetched 1 doc"},
+                  {"type": "resource_link", "uri": "https://example/rfc7807",
+                   "title": "Problem Details"},
+              ]},
+         ]}},
+    ]
+    spans = OpenClawAdapter._build_spans_from_events(events, "s1")
+    tool_span = next(s for s in spans if s.get("tool_name") == "mcp__docs__fetch")
+    attrs = tool_span["attributes"]
+    assert attrs["tool.result_content_types"] == ["resource_link", "text"]
+    assert attrs["tool.result_text"] == "fetched 1 doc"
+
+
+def test_tool_result_coercion_metadata_surfaces_original_type():
+    """When the harness materializes a non-text MCP block at the boundary
+    (e.g. an audio block coerced into a text-safe wrapper), it preserves
+    the original block type on the coerced block. Capture {from, to} pairs
+    so consumers can tell raw text apart from a coerced payload."""
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = [
+        {"type": "message", "timestamp": "1700000001",
+         "message": {"role": "assistant", "content": [
+             {"type": "tool_use", "id": "tu-2", "name": "mcp__media__play",
+              "input": {"track": "x"}},
+         ]}},
+        {"type": "message", "timestamp": "1700000002",
+         "message": {"role": "user", "content": [
+             {"type": "tool_result", "tool_use_id": "tu-2",
+              "content": [
+                  {"type": "text",
+                   "text": "[audio omitted]",
+                   "coerced_from": "audio"},
+                  {"type": "text",
+                   "text": "[image omitted]",
+                   "originalType": "image"},
+              ]},
+         ]}},
+    ]
+    spans = OpenClawAdapter._build_spans_from_events(events, "s1")
+    tool_span = next(s for s in spans if s.get("tool_name") == "mcp__media__play")
+    attrs = tool_span["attributes"]
+    assert attrs["tool.result_coercions"] == [
+        {"from": "audio", "to": "text"},
+        {"from": "image", "to": "text"},
+    ]
+    assert attrs["tool.result_content_types"] == ["text"]
+    assert attrs["tool.result_text"] == "[audio omitted][image omitted]"
+
+
+def test_tool_result_resource_and_audio_only_blocks_visible():
+    """A tool_result with no text blocks (purely resource + audio) still
+    surfaces a content-types list; the text accumulator stays absent."""
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = [
+        {"type": "message", "timestamp": "1700000001",
+         "message": {"role": "assistant", "content": [
+             {"type": "tool_use", "id": "tu-3", "name": "mcp__bundle__pull",
+              "input": {}},
+         ]}},
+        {"type": "message", "timestamp": "1700000002",
+         "message": {"role": "user", "content": [
+             {"type": "tool_result", "tool_use_id": "tu-3",
+              "content": [
+                  {"type": "resource", "uri": "file:///x.bin"},
+                  {"type": "audio", "source": {"mime_type": "audio/wav"}},
+              ]},
+         ]}},
+    ]
+    spans = OpenClawAdapter._build_spans_from_events(events, "s1")
+    tool_span = next(s for s in spans if s.get("tool_name") == "mcp__bundle__pull")
+    attrs = tool_span["attributes"]
+    assert attrs["tool.result_content_types"] == ["audio", "resource"]
+    assert "tool.result_text" not in attrs
+
+
+def test_tool_result_string_content_does_not_emit_content_types():
+    """Pre-existing native-tool shape (content is a plain string, not a
+    block list) must not pick up a content_types attribute — that field
+    only describes block-array results."""
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = [
+        {"type": "message", "timestamp": "1700000001",
+         "message": {"role": "assistant", "content": [
+             {"type": "tool_use", "id": "tu-4", "name": "Bash",
+              "input": {"command": "ls"}},
+         ]}},
+        {"type": "message", "timestamp": "1700000002",
+         "message": {"role": "user", "content": [
+             {"type": "tool_result", "tool_use_id": "tu-4",
+              "content": "file1\nfile2\n"},
+         ]}},
+    ]
+    spans = OpenClawAdapter._build_spans_from_events(events, "s1")
+    bash = next(s for s in spans if s.get("tool_name") == "Bash")
+    attrs = bash["attributes"]
+    assert "tool.result_content_types" not in attrs
+    assert "tool.result_coercions" not in attrs
+    assert attrs["tool.result_text"] == "file1\nfile2\n"
