@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Release: trial-bug alerts modal + remaining frontend (2026-06-06)
+- Publishes the alerts editor-modal fix (#17, always-render + client-side gate) plus all trial-bug frontend on main (clusters endpoint, security guards) so the hosted dashboard serves them after the cloud pin.
+
+
 ### Trial-bug daemon slice: approvals audit (2026-06-06)
 - **approvalsAudit**: ship the exec-approval decision audit (refactored routes/policy.py into a reusable _approvals_audit_payload) so the Policy tab audit renders on the hosted dashboard. The cloud interceptor already reads sp.approvalsAudit.
 
