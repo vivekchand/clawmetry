@@ -1330,6 +1330,24 @@ function _friendlyBytes(n) {
 // escalated, Z failed). Drill-down is lazy-loaded on click. Per memory
 // `feedback_no_em_dashes_in_user_facing_copy.md`, copy uses commas not
 // em-dashes.
+// UI-coverage audit: today's activity counters strip. Reads /api/activity-today
+// (local: cached DuckDB rollup; cloud: cm-cloud-activity serves it from the
+// snapshot's activityToday slice). Hidden until there is any activity today.
+async function loadActivityToday() {
+  var strip = document.getElementById('activity-today-strip');
+  if (!strip) return;
+  var d = {};
+  try { d = await fetchJsonWithTimeout('/api/activity-today', 4000) || {}; } catch (e) { return; }
+  var tool = d.tool_calls_today || 0, exec = d.exec_calls_today || 0,
+      brow = d.browser_actions_today || 0, msgs = d.messages_today || 0,
+      uniq = d.unique_tools_today || 0;
+  if (!(tool || exec || brow || msgs || uniq)) { strip.style.display = 'none'; return; }
+  var set = function(id, v){ var el = document.getElementById(id); if (el) el.textContent = v; };
+  set('at-tool-calls', tool); set('at-exec-calls', exec); set('at-browser-actions', brow);
+  set('at-messages', msgs); set('at-unique-tools', uniq);
+  strip.style.display = '';
+}
+
 async function loadOutcomeTile() {
   var summaryEl = document.getElementById('outcome-tile-summary');
   if (!summaryEl) return;
@@ -3009,6 +3027,8 @@ async function loadAll() {
     if (typeof loadActivityHeatmap === 'function') setTimeout(function(){ loadActivityHeatmap().catch(function(e){console.warn('activity heatmap failed',e)}); }, 4500);
     // Issue #1614 — outcome tile (Today: N tasks, X% success).
     if (typeof loadOutcomeTile === 'function') setTimeout(function(){ loadOutcomeTile().catch(function(e){console.warn('outcome tile failed',e)}); }, 800);
+    // UI-coverage audit — today's activity counters strip.
+    if (typeof loadActivityToday === 'function') setTimeout(function(){ loadActivityToday().catch(function(e){console.warn('activity today failed',e)}); }, 900);
     document.getElementById('refresh-time').textContent = t("app.updated", null, "Updated ") + new Date().toLocaleTimeString();
 
     if (overview.infra) {
