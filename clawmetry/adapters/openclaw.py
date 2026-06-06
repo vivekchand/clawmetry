@@ -126,6 +126,61 @@ def _model_router_fingerprint() -> dict:
 # starts exporting the catalog to the host (e.g. ~/.nemoclaw/skills/).
 
 
+def _scan_openclaw_selection_runtime() -> tuple[bool, bool]:
+    """Scan the pinned OpenClaw ``selection-*.js`` once and report whether
+    (a) the NemoClaw compact-catalog patch marker is present, and
+    (b) all three native tool-search symbols are present.
+
+    Returns ``(nemoclaw_patched, native_tool_search)``. Never raises.
+    """
+    nemoclaw_marker = b"/* nemoclaw compact tool catalog (#2600) */"
+    # Mirror scripts/patch-openclaw-tool-catalog.js NATIVE_TOOL_SEARCH_PATTERNS:
+    # all three symbols must be present before the patch script considers the
+    # dist to already have a native tool-search build (#2732).
+    native_markers = (
+        b"applyToolSearchCatalog",
+        b"buildToolSearchRunPlan",
+        b"uncompactedEffectiveTools",
+    )
+    patched = False
+    native = False
+    try:
+        home = os.environ.get("OPENCLAW_HOME") or os.path.expanduser("~/.openclaw")
+        dist_dirs = [
+            os.path.join(home, "node_modules", "openclaw", "dist"),
+            "/usr/local/lib/node_modules/openclaw/dist",
+        ]
+        for dist in dist_dirs:
+            if not os.path.isdir(dist):
+                continue
+            try:
+                names = os.listdir(dist)
+            except OSError:
+                continue
+            for n in names:
+                if not (n.startswith("selection-") and n.endswith(".js")):
+                    continue
+                fp = os.path.join(dist, n)
+                try:
+                    with open(fp, "rb") as fh:
+                        # Patch marker + native symbols sit early in the
+                        # rewritten module; cap the read.
+                        blob = fh.read(2_000_000)
+                except OSError:
+                    continue
+                if not patched and nemoclaw_marker in blob:
+                    patched = True
+                if not native and all(m in blob for m in native_markers):
+                    native = True
+                if patched and native:
+                    break
+            if patched and native:
+                break
+    except Exception:
+        return patched, native
+    return patched, native
+
+
 def _nemoclaw_tool_catalog_state() -> Optional[bool]:
     """Whether the NemoClaw compact tool-catalog wrapper is active for this
     runtime (#2683).
@@ -143,44 +198,36 @@ def _nemoclaw_tool_catalog_state() -> Optional[bool]:
     catalog state that doesn't exist. Never raises.
     """
     env = os.environ.get("NEMOCLAW_TOOL_CATALOG")
-    # Look for the applied patch marker in the openclaw dist selection runtime.
-    patched = False
-    try:
-        home = os.environ.get("OPENCLAW_HOME") or os.path.expanduser("~/.openclaw")
-        dist_dirs = [
-            os.path.join(home, "node_modules", "openclaw", "dist"),
-            "/usr/local/lib/node_modules/openclaw/dist",
-        ]
-        marker = b"/* nemoclaw compact tool catalog (#2600) */"
-        for dist in dist_dirs:
-            if not os.path.isdir(dist):
-                continue
-            try:
-                names = os.listdir(dist)
-            except OSError:
-                continue
-            for n in names:
-                if not (n.startswith("selection-") and n.endswith(".js")):
-                    continue
-                fp = os.path.join(dist, n)
-                try:
-                    with open(fp, "rb") as fh:
-                        # Marker sits early in the rewritten module; cap the read.
-                        if marker in fh.read(2_000_000):
-                            patched = True
-                            break
-                except OSError:
-                    continue
-            if patched:
-                break
-    except Exception:
-        patched = False
-
+    patched, _native = _scan_openclaw_selection_runtime()
     if not patched and env is None:
-        # No NemoClaw signal at all → don't claim a catalog state.
+        # No NemoClaw signal at all -> don't claim a catalog state.
         return None
     # Mirror the harness gate exactly: enabled unless explicitly "0".
     return env != "0"
+
+
+def _openclaw_tool_catalog_kind() -> Optional[str]:
+    """Provenance of the active OpenClaw tool-catalog mechanism, if any (#2732).
+
+    Returns:
+        ``"nemoclaw"`` when the NemoClaw compact-catalog patch is applied
+        (matches ``_nemoclaw_tool_catalog_state() is True``).
+        ``"native"`` when the dist ships native ``applyToolSearchCatalog`` /
+        ``buildToolSearchRunPlan`` / ``uncompactedEffectiveTools`` symbols and
+        the NemoClaw patch was skipped — previously indistinguishable from
+        "no catalog at all".
+        ``None`` when neither signal is present.
+
+    The NemoClaw patch wins over native detection: when both fire (e.g. a
+    forward-port window) the patched wrapper is what's actually intercepting
+    catalog calls. Never raises.
+    """
+    patched, native = _scan_openclaw_selection_runtime()
+    if patched:
+        return "nemoclaw"
+    if native:
+        return "native"
+    return None
 
 
 class OpenClawAdapter(AgentAdapter):
@@ -217,6 +264,12 @@ class OpenClawAdapter(AgentAdapter):
             _tc_enabled = _nemoclaw_tool_catalog_state()
             if _tc_enabled is not None:
                 meta["nemoclawToolCatalogEnabled"] = _tc_enabled
+            # Provenance — distinguish NemoClaw patch from native OpenClaw
+            # tool-search builds where the patch is a no-op (#2732). Stamped
+            # in addition to the back-compat boolean above.
+            _tc_kind = _openclaw_tool_catalog_kind()
+            if _tc_kind is not None:
+                meta["openclawToolCatalogKind"] = _tc_kind
             return DetectResult(
                 name=self.name,
                 display_name=self.display_name,
@@ -246,6 +299,10 @@ class OpenClawAdapter(AgentAdapter):
         # compact tool-catalog wrapper is active for this install. None on
         # plain OpenClaw (no NemoClaw signal) — we don't stamp a state then.
         _tc_enabled = _nemoclaw_tool_catalog_state()
+        # Catalog provenance (#2732): "nemoclaw" or "native" when either
+        # signal is present, so native-tool-search OpenClaw builds are no
+        # longer indistinguishable from "no catalog at all".
+        _tc_kind = _openclaw_tool_catalog_kind()
         out: List[Session] = []
         for s in raw[:limit]:
             updated_ms = s.get("updatedAt") or 0
@@ -257,6 +314,8 @@ class OpenClawAdapter(AgentAdapter):
             }
             if _tc_enabled is not None:
                 extra["nemoclawToolCatalogEnabled"] = _tc_enabled
+            if _tc_kind is not None:
+                extra["openclawToolCatalogKind"] = _tc_kind
             out.append(
                 Session(
                     agent=self.name,
