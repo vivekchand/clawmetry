@@ -10123,6 +10123,17 @@ def _build_autonomy_snapshot():
         return {}
 
 
+def _build_cron_health_summary_snapshot():
+    """Cron health summary slice (mirrors /api/cron/health-summary). Trial-bug
+    fix: the "Cron Health Monitor" card was blank on the hosted dashboard."""
+    try:
+        from routes.crons import _try_local_store_cron_health_summary
+        r = _try_local_store_cron_health_summary()
+        return r if r is not None else {}
+    except Exception:
+        return {}
+
+
 def _build_flow_runs_snapshot(limit=60):
     """Flow runs slice (mirrors /api/flow/runs). Trial-bug fix: the Flow "Runs"
     subtab was blank on the hosted dashboard (no interceptor + no slice)."""
@@ -12883,6 +12894,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # this). Cloud stays blind; E2E preserved.
         "deviceSummary": _build_device_summary(spending, _du),
         "cronJobs": _build_cron_jobs(paths),
+        "cronHealthSummary": _build_cron_health_summary_snapshot(),
         "channels": _build_channel_data(config),
         "toolStats": _build_tool_stats(),
         "externalCalls": _build_external_calls(),

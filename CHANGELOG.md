@@ -1,8 +1,7 @@
 ## [Unreleased]
 
-### Trial-bug daemon slices: Flow runs + Flow lanes (2026-06-06)
-- **flowRuns**: ship the historical flow-runs list (mirrors /api/flow/runs via query_flow_runs) so the Flow tab "Runs" subtab renders on the hosted dashboard instead of "No historical flow runs yet".
-- **flowLanes**: ship the active-session lanes (sessions touched in the last 30 min) so "Active Session Lanes" renders. Cloud interceptors that read these follow.
+### Trial-bug daemon slice: cron health summary (2026-06-06)
+- **cronHealthSummary**: ship the cron health summary (reuse routes.crons._try_local_store_cron_health_summary) so the "Cron Health Monitor" card renders on the hosted dashboard instead of blank. Cloud interceptor follows.
 
 
 ### Trial-bug daemon slices: autonomy, context util, transcript runtime (2026-06-06)
