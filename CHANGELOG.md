@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: honest per-runtime scope banner on Overview (#2763) (2026-06-06)
+- **Why:** Overview mixes runtime-scoped cards (today's tasks/outcome, activity strip, hero token/cost) with node-wide cards (autonomy, reliability, activity heatmap). Showing node-wide numbers under a runtime filter confused users.
+- **What:** when a specific runtime is selected, Overview shows one banner stating exactly what is scoped vs node-wide, so a node-wide number never looks runtime-specific. Removed on "all".
+- **Verified:** node --check.
+
+
 ### Release: per-runtime scoping for the Overview outcome tile + activity strip (#2761) (2026-06-06)
 - **Why:** with the runtime switcher set to a specific runtime, the Outcome tile and the activity-counters strip showed identical node-wide numbers for every runtime (only the header session count + spend re-scoped). Confusing: codex and openclaw appeared to do the same work.
 - **What:** query_outcomes / query_events / query_tool_call_invocations accept a runtime filter (the canonical session-prefix clause); the snapshot emits outcomesByRuntime + activityTodayByRuntime; /api/outcomes + /api/activity-today accept ?runtime=; the loaders pass the switcher value. Cloud cm-cloud-outcomes / cm-cloud-activity interceptors serve byRuntime and never fall back to the node-wide number for a specific runtime.
