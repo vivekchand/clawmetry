@@ -12049,6 +12049,25 @@ def _build_cron_jobs(paths):
         return []
 
 
+def _seconds_since(ts) -> int:
+    """Seconds elapsed since an ISO-ish timestamp string (the store writes naive
+    local wall-clock), clamped to >= 0; returns 0 on any parse failure. Used so
+    the device's approval ``waiting_seconds`` is a real value, not always 0."""
+    if not ts:
+        return 0
+    try:
+        from datetime import datetime
+        s = str(ts).strip().replace("Z", "")
+        try:
+            dt = datetime.fromisoformat(s)
+        except ValueError:
+            dt = datetime.fromisoformat(s.split(".")[0].split("+")[0])
+        ref = datetime.now(dt.tzinfo) if dt.tzinfo else datetime.now()
+        return max(0, int((ref - dt).total_seconds()))
+    except Exception:
+        return 0
+
+
 def _build_device_summary(spending, daily_usage):
     """Compact, all-runtime payload for a WiFi hardware companion.
 
@@ -12057,9 +12076,9 @@ def _build_device_summary(spending, daily_usage):
     it rides the E2E-encrypted snapshot to cloud. The device GETs the snapshot,
     decrypts with the user's key, and reads this one small slice — the cloud
     never sees plaintext (E2E invariant preserved). Approve/Deny is wired (the
-    daemon owns the approvals queue); ``alert`` is sourced LAN-side for now
-    (the alert history lives in the dashboard process, not the daemon), so the
-    cloud summary leaves it ``null`` until that store is daemon-readable.
+    daemon owns the approvals queue), ``alert`` is sourced from the daemon's
+    loop-detection signals, and ``approval.waiting_seconds`` from the approval's
+    ``created_at`` -- the device reads all three, so they must be populated here.
 
     Never raises — every read degrades to a safe default so the device always
     gets a valid shape.
@@ -12103,11 +12122,29 @@ def _build_device_summary(spending, daily_usage):
                 "action": oldest.get("action") or "tool call",
                 "runtime": _wf.runtime_from_session_id(sid) or "openclaw",
                 "session_id": sid,
+                # The device renders a live "waiting Ns" timer; it read this
+                # field and got 0 every time because we never sent it (#contract).
+                "waiting_seconds": _seconds_since(oldest.get("created_at")),
             }
     except Exception:
         pass
-    # A waiting approval is the one thing on this slice that needs a human.
-    if summary["approval"]:
+    # Surface a "something is stuck" alert from the daemon's loop-detection
+    # signals so the device alert card can fire. It was always null while the
+    # alert source lived only in the dashboard process (#contract-drift).
+    try:
+        from clawmetry import waste_flags as _wf
+        sigs = store.query_recent_loop_signals(limit=5, since_minutes=30) or []
+        hot = next((s for s in sigs if isinstance(s, dict)
+                    and int(s.get("repeat_count") or 0) >= 5), None)
+        if hot:
+            rt = (_wf.runtime_from_session_id(hot.get("session_id") or "")
+                  or hot.get("agent_type") or "an agent")
+            n = int(hot.get("repeat_count") or 0)
+            summary["alert"] = {"message": f"{rt} looping, {n} repeats, no progress"}
+    except Exception:
+        pass
+    # A waiting approval or a stuck/looping agent is what needs a human.
+    if summary["approval"] or summary["alert"]:
         summary["health"] = "amber"
     return summary
 
