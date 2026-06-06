@@ -1336,8 +1336,10 @@ function _friendlyBytes(n) {
 async function loadActivityToday() {
   var strip = document.getElementById('activity-today-strip');
   if (!strip) return;
+  var _rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var _q = (_rt && _rt !== 'all') ? ('?runtime=' + encodeURIComponent(_rt)) : '';
   var d = {};
-  try { d = await fetchJsonWithTimeout('/api/activity-today', 4000) || {}; } catch (e) { return; }
+  try { d = await fetchJsonWithTimeout('/api/activity-today' + _q, 4000) || {}; } catch (e) { return; }
   var tool = d.tool_calls_today || 0, exec = d.exec_calls_today || 0,
       brow = d.browser_actions_today || 0, msgs = d.messages_today || 0,
       uniq = d.unique_tools_today || 0;
@@ -1351,8 +1353,10 @@ async function loadActivityToday() {
 async function loadOutcomeTile() {
   var summaryEl = document.getElementById('outcome-tile-summary');
   if (!summaryEl) return;
+  var _ocRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var _ocQ = (_ocRt && _ocRt !== 'all') ? ('&runtime=' + encodeURIComponent(_ocRt)) : '';
   try {
-    var d = await fetchJsonWithTimeout('/api/outcomes?window=1d', 3000);
+    var d = await fetchJsonWithTimeout('/api/outcomes?window=1d' + _ocQ, 3000);
     if (!d || d.total === 0) {
       summaryEl.textContent = t("app.no_completed_tasks_yet_today_outcomes_will_appear_", null, "No completed tasks yet today. Outcomes will appear once sessions finish.");
       return;

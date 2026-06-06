@@ -6354,6 +6354,7 @@ def api_outcomes():
         "query_outcomes",
         agent_type=agent_type,
         since=since,
+        runtime=(request.args.get("runtime") or None),
         limit=int(request.args.get("limit") or 1000),
     )
     if rows is None:
