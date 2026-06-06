@@ -8,7 +8,7 @@
 
 <a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=light&period=daily&t=1771491508782" alt="ClawMetry - #5 Product of the Day on Product Hunt" width="250" height="54" /></a>
 
-**See your agent think.** Real-time observability for **12 AI agent runtimes** — [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex & 8 more. One dashboard for your whole agent fleet.
+**See your agent think.** Real-time observability for **12 AI agent runtimes**: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex & 8 more. One dashboard for your whole agent fleet.
 
 > 🌐 **Read this in:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [more →](docs/i18n/)
 
@@ -24,7 +24,7 @@ Opens at **http://localhost:8900** and you're done.
 
 ## Works with 12 agent runtimes
 
-ClawMetry started as observability for OpenClaw — it now meters your **whole agent fleet** in one dashboard, auto-detecting each runtime on your machine:
+ClawMetry started as observability for OpenClaw, and now meters your **whole agent fleet** in one dashboard, auto-detecting each runtime on your machine:
 
 🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw**
 
@@ -240,7 +240,7 @@ docker build -t clawmetry .
 # Run with default settings
 docker run -p 8900:8900 clawmetry
 
-# Or with your OpenClaw workspace mounted
+# Or mount your agent's data dir (shown: OpenClaw's ~/.openclaw)
 docker run -p 8900:8900 \
   -v ~/.openclaw:/root/.openclaw \
   -v /tmp/moltbot:/tmp/moltbot \
@@ -262,13 +262,13 @@ services:
     restart: unless-stopped
 ```
 
-> **Note:** When running in Docker, make sure to mount your OpenClaw workspace and log directories so ClawMetry can auto-detect your setup.
+> **Note:** When running in Docker, mount your agent's data + log directories (e.g. `~/.openclaw`, `~/.claude`, `~/.codex`) so ClawMetry can auto-detect your setup.
 
 ## Requirements
 
 - Python 3.8+
 - Flask (installed automatically via pip)
-- OpenClaw running on the same machine (or mounted volumes for Docker)
+- An AI agent runtime on the same machine: OpenClaw, NVIDIA NemoClaw, Claude Code, Codex, Cursor, Goose, Hermes, opencode, Qwen Code, Aider, NanoClaw, or PicoClaw (or mounted volumes for Docker)
 - Linux or macOS
 
 ## NemoClaw / OpenShell Support
