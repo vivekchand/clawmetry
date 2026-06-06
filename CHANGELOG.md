@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: eval scores in the encrypted snapshot (hosted dashboard) (#2736) (2026-06-06)
+- **Why:** the Eval card fetches /api/evals/summary, which on the hosted dashboard hits a server with no local DuckDB, so it always showed an empty placeholder.
+- **What:** the daemon now adds an `evals` slice (avg score + coverage over 24h, plus recent scored sessions) to the E2E-encrypted snapshot, built on the daemon's own store handle. A cloud interceptor can render the Eval card client-side from the decrypted snapshot; the cloud server never sees the data. Best-effort; empty until a judge key is set.
+- **Verified:** py_compile; mirrors the existing contextEconomics/toolCatalog snapshot slices. Live-verified by decrypting the snapshot for the `evals` key after release.
+
+
 ### Release: evals privacy + a live UI to set the judge API key (#2725, #2726) (2026-06-06)
 - **Why:** the eval judge sends session transcripts to a third-party LLM (Anthropic/OpenAI), but transcripts were sent UNREDACTED, and the only way to provide the required key was a daemon env var most users never set. The eval UI that would expose this had been orphaned in the dead DASHBOARD_HTML block, so it never rendered.
 - **What:** (1) transcripts are now redacted before the judge: the ingest secret redactor (API keys, tokens, Bearer, private keys) plus an email-PII pass, before truncation, respecting CLAWMETRY_REDACT. (2) A live Eval card on the Overview tab (avg score + coverage) opens a modal with a Judge API key section: pick provider, paste key, Save. The key is stored locally chmod 600 (never synced), and the eval runner resolves env var first then the saved key, fresh each tick. Presence-only status, never the value.
