@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: outcomes snapshot slice for the hosted Outcome tile (#2746) (2026-06-06)
+- **Why:** the revived Overview Outcome tile fetches /api/outcomes, which on the hosted dashboard hits a server with no local DuckDB, so it showed "no completed tasks" even when the node had outcomes.
+- **What:** an `outcomes` slice (1d roll-up) added to the E2E snapshot, mirroring routes/sessions.api_outcomes (query_outcomes then aggregate_outcomes) on the daemon's own store handle. A cm-cloud-outcomes interceptor renders the tile client-side from the snapshot; cloud stays blind.
+- **Verified:** py_compile; reuses the same store method + classifier as the OSS route.
+
+
 ### Release: surface today's activity counters (#2742) (2026-06-06)
 - **Why:** _collect_activity_counters_today (tool calls / exec / browser / messages / unique tools today) was defined but never called, so the numbers were computed and dropped with no UI (UI-coverage audit).
 - **What:** an activityToday slice in the E2E snapshot, a cached (30s) /api/activity-today route reading the same DuckDB rollup, and a compact "Today" activity strip on the Overview tab (hidden until there is activity).
