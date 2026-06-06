@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: evals privacy + a live UI to set the judge API key (#2725, #2726) (2026-06-06)
+- **Why:** the eval judge sends session transcripts to a third-party LLM (Anthropic/OpenAI), but transcripts were sent UNREDACTED, and the only way to provide the required key was a daemon env var most users never set. The eval UI that would expose this had been orphaned in the dead DASHBOARD_HTML block, so it never rendered.
+- **What:** (1) transcripts are now redacted before the judge: the ingest secret redactor (API keys, tokens, Bearer, private keys) plus an email-PII pass, before truncation, respecting CLAWMETRY_REDACT. (2) A live Eval card on the Overview tab (avg score + coverage) opens a modal with a Judge API key section: pick provider, paste key, Save. The key is stored locally chmod 600 (never synced), and the eval runner resolves env var first then the saved key, fresh each tick. Presence-only status, never the value.
+- **Verified:** tests/test_eval_redact_before_judge.py + tests/test_eval_judge_key_store.py; Jinja renders the live overview card + modal with the key input present.
+
+
 ### Release: evals skip quietly when no judge API key is configured (#2718) (2026-06-06)
 - **Why:** evals are default-on, but the judge calls a real LLM (Anthropic/OpenAI) needing an API key. With no key the scheduler attempted every session and logged a warning each tick ("evals: judge call failed ... ANTHROPIC_API_KEY not set"), spamming sync.log; on a box that did have a key in the daemon env it would also spend silently.
 - **What:** `score_session` checks for the judge model's provider key up front (gpt/o* -> OPENAI_API_KEY, else ANTHROPIC_API_KEY). With no key it returns a quiet SKIP, never invokes the judge, and logs the notice once per process. Evals are now effectively implicit opt-in: they run (and spend) only when an LLM key is set.
