@@ -14624,7 +14624,7 @@ async function loadClusters() {
   if (!el) return;
   el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">' + t("app.analyzing_session_patterns", null, "Analyzing session patterns...") + '</div>';
   try {
-    var data = await fetch('/api/clusters').then(r => r.json());
+    var data = await fetch('/api/sessions/clusters').then(r => r.json());
     if (!data.clusters || data.clusters.length === 0) {
       el.innerHTML = '<div class="card" style="padding:20px;text-align:center;"><div style="font-size:13px;color:var(--text-muted);">' + t("app.no_sessions_found_to_cluster", null, "No sessions found to cluster.") + '</div></div>';
       return;
