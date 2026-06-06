@@ -99,6 +99,16 @@ When a decision depends on a fact the codebase **declares** (a `Capability` enum
 - **LLM-as-judge is for JUDGMENT, not facts.** When the question is genuinely judgmental (not extractable), the pattern is: extract the ground-truth facts → the LLM proposes → an **independent judge verifies the proposal against those facts and rejects on contradiction** (e.g. "agent says NemoClaw lacks CRONS, but it runs the OpenClaw adapter which declares `CRONS` → contradiction → reject"). A workflow that fans out analysis MUST add this verify/judge phase; never let an agent's prose be the source of truth for an extractable fact.
 - **Guard with an eval.** Add a CI test that re-extracts the fact and asserts the derived artifact matches (`tests/test_runtime_tab_capability_parity.py`), so correctness is mechanical, not "trust me."
 
+## 1e. The CPU budget: the daemon stays light (target <=5-10%)
+
+ClawMetry runs on the user's machine 24/7. It is an observability **sidecar**, not a warehouse, and must be nearly invisible. **Hard budget: the sync daemon idles near 0% and averages no more than ~5-10% of one core.** A daemon that sustains a whole core is a bug, not "busy working." (Burned 2026-06-06: a 12-core box sat at ~200% CPU because DuckDB defaulted to all 12 threads AND the dashboard re-ran a full-table aggregate on every poll. Profile was ~100% inside the DuckDB allocator + `BufferPool::EvictBlocks` thrash.)
+
+Hold the line with:
+- **Cap DuckDB.** Every connection passes `config={threads, memory_limit}` (defaults 2 / 2GB; env `CLAWMETRY_DUCKDB_THREADS` / `CLAWMETRY_DUCKDB_MEMORY_LIMIT`). DuckDB's default `threads` equals the core count, so an uncapped query fans across the whole machine. Never ship an uncapped connection.
+- **No full-table scan per request.** Hot rollups (`query_aggregates`, snapshot / overview / cost queries) are result-cached with a short TTL (`CLAWMETRY_AGG_CACHE_TTL`, default 20s). The daemon recomputes on a timer; handlers read the cache. The thread cap alone does NOT fix average CPU (same total work, fewer cores), only fewer runs do.
+- **Poll in seconds-to-minutes, never sub-second.** The daemon wakes, works, then sleeps.
+- **Profile before shipping anything on the ingest / query / snapshot path.** `sample <pid> 4` (macOS) or py-spy. If it sustains more than ~1 core, it does not ship. Guard the caps + cache with a regression test so it stays mechanical.
+
 ## 2. Make the change
 
 - New HTTP endpoints go in `routes/<feature>.py` on that feature's Blueprint, not in `dashboard.py`. Shared helpers reach back via late `import dashboard as _d`.
