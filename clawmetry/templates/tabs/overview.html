@@ -21,6 +21,20 @@
     </div>
   </div>
 
+  <!-- Today's activity counters. JS: app.js loadActivityToday() -> /api/activity-today
+       (cloud: cm-cloud-activity serves it from the snapshot's activityToday slice).
+       Surfaces signals that were captured but never shown (UI-coverage audit 2026-06-06). -->
+  <div id="activity-today-strip" style="display:none;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:10px;padding:10px 16px;margin-bottom:10px;box-shadow:var(--card-shadow);">
+    <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;">
+      <span style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.2px;">Today</span>
+      <span style="font-size:13px;color:var(--text-secondary);">&#128296; <b id="at-tool-calls" style="color:var(--text-primary);">0</b> tool calls</span>
+      <span style="font-size:13px;color:var(--text-secondary);">&#9889; <b id="at-exec-calls" style="color:var(--text-primary);">0</b> exec</span>
+      <span style="font-size:13px;color:var(--text-secondary);">&#127760; <b id="at-browser-actions" style="color:var(--text-primary);">0</b> browser</span>
+      <span style="font-size:13px;color:var(--text-secondary);">&#128172; <b id="at-messages" style="color:var(--text-primary);">0</b> messages</span>
+      <span style="font-size:13px;color:var(--text-secondary);">&#128295; <b id="at-unique-tools" style="color:var(--text-primary);">0</b> unique tools</span>
+    </div>
+  </div>
+
   <!-- How independently your agent runs -->
   <div id="autonomy-card" data-i18n-title="overview.autonomy_tooltip" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:18px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start;" title="How often you need to step in. Higher means more independent.">
     <div>

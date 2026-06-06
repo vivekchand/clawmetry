@@ -2818,6 +2818,32 @@ def api_usage_export():
         return jsonify({'error': str(e)}), 500
 
 
+_ACTIVITY_TODAY_CACHE = {"ts": 0.0, "data": None}
+_ACTIVITY_TODAY_TTL = 30.0
+
+
+@bp_usage.route('/api/activity-today')
+def api_activity_today():
+    """Today's activity counters (tool calls / exec / browser / messages /
+    unique tools) for the Overview activity strip. Mirrors the daemon
+    ``activityToday`` snapshot slice (cloud serves that via an interceptor).
+    DuckDB-backed via ``clawmetry.sync._collect_activity_counters_today``;
+    cached 30s; never 500s (empty dict on any error)."""
+    now = time.time()
+    c = _ACTIVITY_TODAY_CACHE
+    if c["data"] is not None and (now - c["ts"]) < _ACTIVITY_TODAY_TTL:
+        return jsonify(c["data"])
+    out = {}
+    try:
+        from clawmetry.sync import _collect_activity_counters_today
+        out = _collect_activity_counters_today() or {}
+    except Exception:
+        out = {}
+    c["data"] = out
+    c["ts"] = now
+    return jsonify(out)
+
+
 @bp_usage.route('/api/runtime-summary')
 def api_runtime_summary():
     """Per-runtime rollup (tokens / cost / turns / sessions / primary model),

@@ -12663,6 +12663,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "mcpServers": mcp_servers_slice,
         "contextEconomics": context_economics_slice,
         "evals": evals_slice,
+        "activityToday": _collect_activity_counters_today() or {},
         "spending": spending,
         # Compact all-runtime slice a WiFi hardware companion decrypts + renders
         # (the device GETs the snapshot, decrypts with the user's key, reads
