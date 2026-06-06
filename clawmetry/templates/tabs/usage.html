@@ -39,6 +39,16 @@
   </div>
   <div class="section-title">💰 <span data-i18n="usage.cost_breakdown">Cost Breakdown</span> <span id="usage-cost-info-icon" class="tooltip-info-icon" style="display:none;">i</span></div>
   <div class="card"><table class="usage-table" id="usage-cost-table"><tbody><tr><td colspan="3" style="color:#666;" data-i18n="app.loading">Loading...</td></tr></tbody></table></div>
+  <!-- Cost Forecast (#1413) — projected month-end spend. JS: app.js loadCostForecast() -> /api/cost-forecast. Revived from the dead DASHBOARD_HTML block (UI-coverage audit 2026-06-06). -->
+  <div class="section-title" id="cost-forecast-title" style="display:none;">📈 Cost Forecast <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">projected month-end · based on last 7 days</span></div>
+  <div class="card" id="cost-forecast-card" style="display:none;">
+    <div id="cost-forecast-content" style="min-height:48px;color:var(--text-muted);"></div>
+  </div>
+  <!-- Prompt Cache Analytics (#979) — hit rate / savings per model. JS: app.js loadCachePerf() -> /api/cache-trends. Revived from the dead block. -->
+  <div class="section-title" id="cache-perf-title" style="display:none;">⚡ Prompt Cache <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">hit rate · savings · per model · 14 days</span></div>
+  <div class="card" id="cache-perf-card" style="display:none;">
+    <div id="cache-perf-content" style="min-height:48px;color:var(--text-muted);"></div>
+  </div>
   <!-- Issue #68 — top sessions by cost (per-session breakdown) -->
   <div class="section-title">🏆 <span data-i18n="usage.top_sessions_by_cost">Top Sessions by Cost</span> <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;" data-i18n="usage.top_sessions_hint">which session burned the budget · top 20</span></div>
   <div class="card"><table class="usage-table" id="usage-top-sessions-table"><tbody><tr><td colspan="6" style="color:#666;" data-i18n="app.loading">Loading...</td></tr></tbody></table></div>
