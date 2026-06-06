@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: surface today's activity counters (#2742) (2026-06-06)
+- **Why:** _collect_activity_counters_today (tool calls / exec / browser / messages / unique tools today) was defined but never called, so the numbers were computed and dropped with no UI (UI-coverage audit).
+- **What:** an activityToday slice in the E2E snapshot, a cached (30s) /api/activity-today route reading the same DuckDB rollup, and a compact "Today" activity strip on the Overview tab (hidden until there is activity).
+- **Verified:** py_compile (sync + usage), node --check app.js, Jinja renders the strip ids. Cloud cm-cloud-activity interceptor follows for hosted parity.
+
+
 ### Release: revive dead-UI cards from the UI-coverage audit (#2739, #2740) (2026-06-06)
 - **Why:** a verified UI-coverage audit ("every signal we capture must have a UI") found several cards that existed only in the dead first DASHBOARD_HTML block, so they never rendered despite fully-working JS, the same trap that hid the eval tile.
 - **What:** lifted four cards into live templates: Cost Forecast + Prompt Cache (Usage tab), the Today task-outcome tile (Overview), and the proxy Loop-signals badge + table (Brain). No JS changes needed; the existing loaders (loadCostForecast, loadCacheAnalytics, loadOutcomeTile, loadLoopSignals) already targeted these ids.
