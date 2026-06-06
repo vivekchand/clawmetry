@@ -12619,6 +12619,19 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _e_ce:
         log.debug("snapshot: context_economics slice failed: %s", _e_ce)
 
+    # Eval (LLM-judge) scores, so the hosted dashboard's Eval card populates from
+    # the encrypted snapshot (cloud stays blind; E2E preserved). Built on the
+    # daemon's own store handle. Best-effort; empty until evals run (needs a
+    # judge key), which the card then reads as "scoring paused".
+    evals_slice = {"summary": {}, "recent": []}
+    try:
+        from clawmetry import local_store as _ls_ev
+        _ev_store = _ls_ev.get_store()
+        evals_slice["summary"] = _ev_store.query_eval_summary(window_hours=24) or {}
+        evals_slice["recent"] = _ev_store.query_recent_evals(limit=10) or []
+    except Exception as _e_ev:
+        log.debug("snapshot: evals slice failed: %s", _e_ev)
+
     from clawmetry.providers_pricing import provider_for_model as _pfm
     payload = {
         "system": system,
@@ -12649,6 +12662,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "toolCatalog": tool_catalog_slice,
         "mcpServers": mcp_servers_slice,
         "contextEconomics": context_economics_slice,
+        "evals": evals_slice,
         "spending": spending,
         # Compact all-runtime slice a WiFi hardware companion decrypts + renders
         # (the device GETs the snapshot, decrypts with the user's key, reads
