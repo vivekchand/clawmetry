@@ -5468,6 +5468,29 @@ def _today_start_iso_utc() -> str:
     return start.isoformat()
 
 
+def _outcomes_slice_for_snapshot() -> dict:
+    """Outcome roll-up (1d) for the Overview tile on the hosted dashboard.
+
+    Mirrors ``routes/sessions.api_outcomes`` (``query_outcomes`` then
+    ``aggregate_outcomes``) so the cloud can render the tile from the snapshot
+    instead of an empty /api/outcomes. Best-effort; ``{}`` on any error so the
+    snapshot never fails.
+    """
+    try:
+        from clawmetry import local_store as _ls_oc
+        from clawmetry.outcome_classifier import aggregate_outcomes
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+        since = (_dt.now(_tz.utc) - _td(days=1)).isoformat().replace("+00:00", "Z")
+        rows = _ls_oc.get_store().query_outcomes(
+            agent_type="openclaw", since=since, limit=1000) or []
+        agg = aggregate_outcomes(rows)
+        agg["window"] = "1d"
+        return agg
+    except Exception as e:
+        log.debug("snapshot: outcomes slice failed: %s", e)
+        return {}
+
+
 def _collect_activity_counters_today() -> dict | None:
     """Plaintext activity counters for the heartbeat envelope (issue #1652).
 
@@ -12664,6 +12687,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "contextEconomics": context_economics_slice,
         "evals": evals_slice,
         "activityToday": _collect_activity_counters_today() or {},
+        "outcomes": _outcomes_slice_for_snapshot(),
         "spending": spending,
         # Compact all-runtime slice a WiFi hardware companion decrypts + renders
         # (the device GETs the snapshot, decrypts with the user's key, reads
