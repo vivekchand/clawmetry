@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: OpenLLMetry ingest + eval-to-alert loop (#2822, #2823) (2026-06-08)
+- **Accept OpenLLMetry traffic end to end (#2822):** any OpenLLMetry/OTel-instrumented app (LangChain, CrewAI, OpenAI Agents, custom) can now point its OTLP exporter at ClawMetry and render correctly. The /v1/* receivers accept OTLP/JSON and gzip (previously protobuf-only, others got HTTP 400); indexed gen_ai.prompt.N.content / gen_ai.completion.N.content attributes assemble into input/output (size-capped); resource service.name maps to a per-app agent_type slug (fallback "custom") so foreign spans no longer mis-bucket under the OpenClaw runtime; live tiles read gen_ai.usage.* keys and count GenAI spans as runs; /v1/metrics ingests gen_ai.client.token.usage and gen_ai.client.operation.duration.
+- **Why:** OpenLLMetry is the neutral OTel GenAI instrumentation standard (it remains open source post acquisition). This makes "bring your own agent" real: two lines of their code, zero ClawMetry SDK.
+- **Eval-to-monitor loop (#2823):** two new alert rule types, eval_score_below (average judge score over a window drops below threshold) and outcome_failure_rate (failed/stuck/loop sessions exceed a percent of classified sessions), both gated by min_sessions to avoid single-sample noise; /api/run-compare now includes eval_score with signed delta, eval_reason, per-side outcome and an improved/regressed/same verdict. Eval scores and outcome labels existed but triggered nothing; now they alert and grade run comparisons.
+- **Verified:** 25/25 CI checks on both PRs; 14 new OTLP edge-case tests incl. a real OpenLLMetry-shaped fixture; 15 new alert/run-compare tests; runtime-filter no-leak contract test passes.
+
 ### Added
 - **Billing-mode detection** — the daemon now detects whether each runtime is on a **subscription** (Claude Pro/Max, ChatGPT, Cursor) vs **metered** API key vs **local** (Ollama/llama.cpp), cross-platform (macOS/Windows/Linux), reading only non-secret config (`~/.claude.json` `oauthAccount`, env/config keys — never a keychain secret, never a prompt). Pushed on the heartbeat so the cloud + desk device show **actual cash** big and **API-equivalent** small (a Max-20x user's $7k/day API-equivalent is ~$6.67/day actual). Spec: `docs/BILLING_MODE_DETECTION.md`.
 
