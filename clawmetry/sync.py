@@ -16032,6 +16032,47 @@ def _iso_now_minus(seconds: int) -> str:
     return (datetime.now(timezone.utc) - _td(seconds=seconds)).isoformat()
 
 
+def _alerts_quality_window_minutes(rules: list) -> int:
+    """Return the widest window (minutes) any enabled quality rule needs, or 0
+    when no quality rule (eval_score_below / outcome_failure_rate) is present.
+
+    Lets ``evaluate_alerts`` skip the per-session quality query entirely on
+    the common case where the user only has cost/error rules. Reads the rule
+    body the same way ``alert_evaluator._normalise_rule`` does (``type`` or
+    legacy ``alert_type``)."""
+    try:
+        from clawmetry import alert_evaluator
+    except Exception:
+        return 0
+    quality_types = getattr(alert_evaluator, "QUALITY_RULE_TYPES", frozenset())
+    default_window = getattr(
+        alert_evaluator, "DEFAULT_QUALITY_WINDOW_MINUTES", 60,
+    )
+    widest = 0
+    for raw in (rules or []):
+        try:
+            cond = raw.get("condition_json")
+            if isinstance(cond, str):
+                import json as _json
+                cond = _json.loads(cond)
+            if not isinstance(cond, dict):
+                continue
+            rtype = cond.get("type") or cond.get("alert_type")
+            if rtype not in quality_types:
+                continue
+            wm = cond.get("window_minutes")
+            if wm is None and cond.get("window_sec") is not None:
+                wm = int(cond.get("window_sec")) // 60
+            try:
+                wm = int(wm) if wm is not None else default_window
+            except (TypeError, ValueError):
+                wm = default_window
+            widest = max(widest, max(1, wm))
+        except Exception:
+            continue
+    return widest
+
+
 def evaluate_alerts(config: dict, state: dict) -> int:
     """Local DuckDB evaluation -> cloud dispatch on match (PRD #779 PR-D pt2).
 
@@ -16105,8 +16146,26 @@ def evaluate_alerts(config: dict, state: dict) -> int:
         last_eval_state = {}
         state["alerts_eval_memo"] = last_eval_state
 
+    # Eval->monitor loop: the quality rule types (eval_score_below,
+    # outcome_failure_rate) read the per-session eval-score / outcome slice,
+    # not the event stream. Only pay for that DuckDB query when at least one
+    # such rule is enabled (otherwise it's wasted work every tick).
+    quality = None
     try:
-        matches = alert_evaluator.evaluate(rules, events, last_eval_state)
+        quality_window = _alerts_quality_window_minutes(rules)
+    except Exception:
+        quality_window = 0
+    if quality_window > 0:
+        try:
+            quality = store.query_session_quality_window(
+                window_minutes=quality_window,
+            )
+        except Exception as e:
+            log.warning("alerts: query_session_quality_window failed: %s", e)
+            quality = None
+
+    try:
+        matches = alert_evaluator.evaluate(rules, events, last_eval_state, quality)
     except Exception as e:
         log.warning("alerts: evaluator errored: %s", e)
         state["alerts_last_eval_ts"] = _iso_now()

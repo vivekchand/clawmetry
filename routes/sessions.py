@@ -6848,12 +6848,48 @@ _RUN_COMPARE_LOWER_BETTER = (
     "error_count",
     "flag_count",
 )
-_RUN_COMPARE_HIGHER_BETTER = ("cache_hit_rate",)
+_RUN_COMPARE_HIGHER_BETTER = ("cache_hit_rate", "eval_score")
+
+# Outcome rank for the run-compare quality row. Higher = better. Drives the
+# improved / regressed / same verdict (no delta arithmetic on the textual
+# label). Mirrors clawmetry/outcome_classifier.py's label vocabulary; the
+# three failure-ish labels share the lowest rank.
+_RUN_COMPARE_OUTCOME_RANK = {
+    "success":         4,
+    "escalated":       3,
+    "ongoing":         2,
+    "tool_call_stuck": 1,
+    "cognitive_loop":  1,
+    "failed":          1,
+}
 
 
-def _run_compare_stats(sid):
+def _run_compare_outcome_verdict(outcome_a, outcome_b):
+    """improved / regressed / same / null for the textual outcome row.
+
+    ``null`` when either side has no outcome (so the UI can show a neutral
+    dash instead of a bogus verdict). Uses the rank table above."""
+    if not outcome_a or not outcome_b:
+        return None
+    ra = _RUN_COMPARE_OUTCOME_RANK.get(outcome_a)
+    rb = _RUN_COMPARE_OUTCOME_RANK.get(outcome_b)
+    if ra is None or rb is None:
+        return None
+    if rb > ra:
+        return "improved"
+    if rb < ra:
+        return "regressed"
+    return "same"
+
+
+def _run_compare_stats(sid, quality=None):
     """Compute the per-session stats panel used by /api/run-compare. Returns a
-    dict (with ``missing: True`` when the session id has no events / summary)."""
+    dict (with ``missing: True`` when the session id has no events / summary).
+
+    ``quality`` is the optional ``{session_id: {eval_score, eval_reason,
+    outcome, outcome_confidence}}`` map from query_session_quality. Null-safe:
+    a session with no eval score / outcome simply reports those fields as
+    ``None`` (the response shape stays additive + backward compatible)."""
     from clawmetry import waste_flags as _wf
     from routes.local_query import local_store_via_daemon
 
@@ -6887,6 +6923,16 @@ def _run_compare_stats(sid):
     except (TypeError, ValueError):
         total_tokens = 0
 
+    # Quality fields (eval->monitor loop): null-safe pull from the per-session
+    # eval-score / outcome map. Sessions never scored / classified report
+    # ``None`` so the row renders a neutral dash instead of a fake number.
+    q = (quality or {}).get(sid) or {}
+    eval_score = q.get("eval_score")
+    try:
+        eval_score = None if eval_score is None else float(eval_score)
+    except (TypeError, ValueError):
+        eval_score = None
+
     return {
         "session_id": sid,
         "runtime": _wf.runtime_from_session_id(sid),
@@ -6906,6 +6952,13 @@ def _run_compare_stats(sid):
         "flag_count": len(flags),
         "flags": flags,
         "severity": _wf.severity_from_counts(error_count, len(flags)),
+        # Additive quality fields. ``eval_score`` (0-5, higher better) gets a
+        # signed delta in _run_compare_deltas; ``outcome`` is textual (verdict
+        # below, no delta arithmetic).
+        "eval_score": eval_score,
+        "eval_reason": q.get("eval_reason"),
+        "outcome": q.get("outcome"),
+        "outcome_confidence": q.get("outcome_confidence"),
         "missing": meta is None and not events,
     }
 
@@ -6958,12 +7011,29 @@ def api_run_compare():
         return jsonify({"error": "missing 'a' or 'b' query parameter"}), 400
     if a == b:
         return jsonify({"error": "'a' and 'b' must be different session ids"}), 400
-    stats_a = _run_compare_stats(a)
-    stats_b = _run_compare_stats(b)
+
+    # Eval->monitor loop: pull eval scores + outcomes for both runs in one
+    # round-trip so the quality rows render with deltas. Null-safe — a read
+    # failure leaves the map empty and the quality fields come back as null.
+    from routes.local_query import local_store_via_daemon
+    try:
+        quality = local_store_via_daemon(
+            "query_session_quality", session_ids=[a, b],
+        ) or {}
+    except Exception:
+        quality = {}
+
+    stats_a = _run_compare_stats(a, quality)
+    stats_b = _run_compare_stats(b, quality)
     return jsonify({
         "a": stats_a,
         "b": stats_b,
         "deltas": _run_compare_deltas(stats_a, stats_b),
+        # Textual outcome verdict (improved / regressed / same / null). No
+        # delta arithmetic on the label — it's a simple rank comparison.
+        "outcome_verdict": _run_compare_outcome_verdict(
+            stats_a.get("outcome"), stats_b.get("outcome"),
+        ),
     })
 
 
