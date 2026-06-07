@@ -9993,6 +9993,17 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 metadata.update(_thealth)
                 _idle = _session_idle_gaps(_events)
                 metadata.update(_idle)
+                # Readable title: a raw UUID is unreadable on the dashboard/device.
+                # When the adapter gives no display_name (Claude Code, Codex, ...),
+                # derive a human title from the first real user message.
+                _ftitle = (s.display_name or s.title or "").strip()
+                if not _ftitle:
+                    for _e in _events:
+                        _txt = (getattr(_e, "content", "") or getattr(_e, "text", "") or "").strip()
+                        if _txt and not _txt.startswith("<") and len(_txt) > 3:
+                            _ftitle = _txt[:80]
+                            break
+                _ftitle = _ftitle or s.id
                 # Compaction count: each auto-compaction silently re-summarises
                 # (and re-bills) the context. A session that compacted N times
                 # is thrashing its context window — a glanceable waste signal.
@@ -10009,7 +10020,7 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                         "session_id": ns_id,
                         "node_id": node_id,
                         "agent_id": "main",
-                        "title": s.display_name or s.title or s.id,
+                        "title": _ftitle,
                         "started_at": started,
                         "last_active_at": ended or started,
                         "ended_at": ended,
@@ -10028,7 +10039,7 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                     "session_id": ns_id,
                     "node_id": node_id,
                     "agent_id": "main",
-                    "title": s.display_name or s.title or s.id,
+                    "title": _ftitle,
                     "started_at": started,
                     "last_active_at": ended or started,
                     "ended_at": ended,
