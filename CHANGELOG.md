@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Added
+- **Billing-mode detection** — the daemon now detects whether each runtime is on a **subscription** (Claude Pro/Max, ChatGPT, Cursor) vs **metered** API key vs **local** (Ollama/llama.cpp), cross-platform (macOS/Windows/Linux), reading only non-secret config (`~/.claude.json` `oauthAccount`, env/config keys — never a keychain secret, never a prompt). Pushed on the heartbeat so the cloud + desk device show **actual cash** big and **API-equivalent** small (a Max-20x user's $7k/day API-equivalent is ~$6.67/day actual). Spec: `docs/BILLING_MODE_DETECTION.md`.
+
 ### Release: trial-bug alerts modal + remaining frontend (2026-06-06)
 - Publishes the alerts editor-modal fix (#17, always-render + client-side gate) plus all trial-bug frontend on main (clusters endpoint, security guards) so the hosted dashboard serves them after the cloud pin.
 
