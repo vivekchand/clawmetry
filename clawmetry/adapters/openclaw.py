@@ -116,6 +116,52 @@ def _model_router_fingerprint() -> dict:
         return {}
 
 
+def _model_router_liveness() -> dict:
+    """Check whether the NemoClaw model-router proxy is currently running.
+
+    Returns ``{}`` when NemoClaw is not installed (fingerprint file absent),
+    so the caller's meta dict is unchanged on plain OpenClaw installs.
+    Otherwise scans for a running ``model-router proxy`` process and returns
+    ``{"modelRouterRunning": True, "modelRouterPort": <port>}`` when healthy,
+    or ``{"modelRouterRunning": False}`` when the proxy is down or not found
+    (allows dashboard to distinguish a crashed proxy from a healthy one).
+
+    Uses ``ps aux`` (no new deps) and a 0.2 s socket-connect probe.
+    Never raises.
+    """
+    venv = os.environ.get("NEMOCLAW_MODEL_ROUTER_VENV") or os.path.expanduser(
+        os.path.join("~", ".nemoclaw", "model-router-venv"))
+    if not os.path.exists(os.path.join(venv, ".nemoclaw-source-fingerprint")):
+        return {}
+
+    import re as _re
+    import socket as _sock
+    import subprocess as _sp
+
+    try:
+        result = _sp.run(
+            ["ps", "aux"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        for line in result.stdout.splitlines():
+            if "model-router" not in line or "--port" not in line:
+                continue
+            m = _re.search(r"--port[=\s]+(\d+)", line)
+            if not m:
+                continue
+            port = int(m.group(1))
+            s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+            s.settimeout(0.2)
+            rc = s.connect_ex(("127.0.0.1", port))
+            s.close()
+            return {"modelRouterRunning": rc == 0, "modelRouterPort": port}
+    except Exception:
+        pass
+    return {"modelRouterRunning": False}
+
+
 # NOTE (#2610, deferred): NemoClaw's skill-catalog version/provenance lives in
 # ``skills/catalog-metadata.json`` (min/tested NemoClaw version, content shas),
 # but that file is a SOURCE-repo build artifact — it is not shipped in the npm
@@ -261,6 +307,10 @@ class OpenClawAdapter(AgentAdapter):
             # OpenClaw, so meta is unchanged there. (#2610 skill-catalog deferred
             # — see note above: no host-readable on-disk location.)
             meta.update(_model_router_fingerprint())
+            # NemoClaw model-router proxy liveness (#2795). Returns {} on plain
+            # OpenClaw (fingerprint absent); otherwise emits modelRouterRunning
+            # + modelRouterPort so a crashed proxy is distinguishable from healthy.
+            meta.update(_model_router_liveness())
             _tc_enabled = _nemoclaw_tool_catalog_state()
             if _tc_enabled is not None:
                 meta["nemoclawToolCatalogEnabled"] = _tc_enabled
