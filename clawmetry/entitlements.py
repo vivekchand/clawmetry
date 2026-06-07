@@ -299,6 +299,11 @@ class Entitlement:
             "free_runtimes": sorted(FREE_RUNTIMES),
             "paid_runtimes": sorted(PAID_RUNTIMES),
             "all_runtimes": sorted(ALL_RUNTIMES),
+            # Derived per-tier quota — the dashboard's data-retention badge and
+            # history-range picker read this off /api/entitlement so the UI can
+            # render "data retained for N days" without a second round trip.
+            # None = unlimited / custom (Enterprise).
+            "retention_days": self.event_retention_days(),
         }
 
 

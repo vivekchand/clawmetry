@@ -49,6 +49,7 @@ def api_entitlement():
                 "enforced": False,
                 "runtimes": ["nemoclaw", "openclaw"],
                 "features": [],
+                "retention_days": 7,
             }
         )
 
