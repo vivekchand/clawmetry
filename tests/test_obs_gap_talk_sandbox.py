@@ -373,3 +373,98 @@ def test_tool_result_string_content_does_not_emit_content_types():
     assert "tool.result_content_types" not in attrs
     assert "tool.result_coercions" not in attrs
     assert attrs["tool.result_text"] == "file1\nfile2\n"
+
+
+# -- #2730 list_events promotes talk lifecycle fields into Event.extra --------
+
+def test_list_events_promotes_talk_lifecycle_extra(monkeypatch):
+    """Talk lifecycle records stored as talkMode/talkTransport/… blobs must be
+    unpacked into Event.extra (mode, transport, provider, brain, duration_ms,
+    byte_length, final) by list_events (issue #2730)."""
+    import importlib
+    import json
+    import clawmetry.local_store as ls
+
+    blob = json.dumps({
+        "talkEventType": "session.end",
+        "talkMode": "voice",
+        "talkTransport": "webrtc",
+        "talkBrain": "gpt-realtime",
+        "talkProvider": "openai",
+        "talkFinal": True,
+        "talkDurationMs": 1500,
+        "talkByteLength": 8192,
+    }).encode("utf-8")
+
+    # (id, event_type, ts, model, token_count, data, agent_id, node_id)
+    mock_row = ("ev-1", "talk.lifecycle", "2026-06-07T00:00:00Z",
+                None, None, blob, "main", "node1")
+
+    class _MockStore:
+        def _fetch(self, sql, params):
+            return [mock_row]
+
+    monkeypatch.setattr(ls, "get_store", lambda **_kw: _MockStore())
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    importlib.reload(importlib.import_module("clawmetry.adapters.openclaw"))
+    from clawmetry.adapters.openclaw import OpenClawAdapter  # noqa: F811
+
+    events = OpenClawAdapter().list_events("sess1")
+    assert len(events) == 1
+    ex = events[0].extra
+    assert ex.get("mode") == "voice"
+    assert ex.get("transport") == "webrtc"
+    assert ex.get("provider") == "openai"
+    assert ex.get("brain") == "gpt-realtime"
+    assert ex.get("final") is True
+    assert ex.get("duration_ms") == 1500
+    assert ex.get("byte_length") == 8192
+
+
+def test_list_events_talk_false_final_is_included(monkeypatch):
+    """talkFinal=False (non-final segment) is meaningful and must appear in
+    extra even though it is falsy (issue #2730)."""
+    import json
+    import clawmetry.local_store as ls
+
+    blob = json.dumps({"talkFinal": False, "talkMode": "voice"}).encode("utf-8")
+    mock_row = ("ev-2", "talk.lifecycle", "2026-06-07T00:00:01Z",
+                None, None, blob, "main", "node1")
+
+    class _MockStore:
+        def _fetch(self, sql, params):
+            return [mock_row]
+
+    monkeypatch.setattr(ls, "get_store", lambda **_kw: _MockStore())
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess1")
+    assert len(events) == 1
+    ex = events[0].extra
+    assert ex.get("final") is False
+    assert ex.get("mode") == "voice"
+
+
+def test_list_events_non_talk_event_unaffected(monkeypatch):
+    """A regular message event must not gain unexpected talk extra fields."""
+    import json
+    import clawmetry.local_store as ls
+
+    blob = json.dumps({"message": {"role": "assistant", "content": []},
+                       "usage": {"input_tokens": 10}}).encode("utf-8")
+    mock_row = ("ev-3", "message", "2026-06-07T00:00:02Z",
+                "claude-3", 10, blob, "main", "node1")
+
+    class _MockStore:
+        def _fetch(self, sql, params):
+            return [mock_row]
+
+    monkeypatch.setattr(ls, "get_store", lambda **_kw: _MockStore())
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess1")
+    assert len(events) == 1
+    ex = events[0].extra
+    for key in ("mode", "transport", "provider", "brain", "duration_ms", "byte_length", "final"):
+        assert key not in ex, f"unexpected talk key '{key}' in non-talk event extra"

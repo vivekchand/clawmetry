@@ -395,6 +395,24 @@ class OpenClawAdapter(AgentAdapter):
                                 _val = obj.get(_field)
                                 if _val:
                                     extra[_field] = _val
+                            # Talk/voice lifecycle fields (issue #2730).
+                            # ingest_talk_lifecycle stores these with the "talk"
+                            # prefix; promote them to unprefixed extra keys so
+                            # callers (Brain feed, event views) can surface them.
+                            for _src, _dst in (
+                                ("talkMode",       "mode"),
+                                ("talkTransport",  "transport"),
+                                ("talkProvider",   "provider"),
+                                ("talkBrain",      "brain"),
+                                ("talkDurationMs", "duration_ms"),
+                                ("talkByteLength", "byte_length"),
+                            ):
+                                _val = obj.get(_src)
+                                if _val:
+                                    extra[_dst] = _val
+                            _final = obj.get("talkFinal")
+                            if _final is not None:
+                                extra["final"] = _final
                             msg = obj.get("message")
                             if isinstance(msg, str):
                                 content_text = msg
