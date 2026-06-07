@@ -1,0 +1,147 @@
+name: C6 daily health check (branch-protection audit)
+
+# Audits whether the 4 required E2E status checks are configured on
+# clawmetry/main (the 2 checks this repo owns -- github.token cannot
+# read protection state on clawmetry-cloud or clawmetry-landing).
+#
+# On failure: posts a reminder comment to the tracking issue (#2146)
+# at most once per calendar day. On success: posts a GREEN confirmation.
+#
+# To close C6 after this workflow goes green on the clawmetry side:
+#   1. Actions > "Apply required E2E status checks (C6 -- one-shot)" >
+#      confirm=APPLY, pat_token=<fine-grained PAT>
+#   2. Or: bash scripts/close-c6.sh
+#   3. Or: Settings > Branches > main > Required status checks
+#
+# Tracking: vivekchand/clawmetry#2146
+
+on:
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  c6-health:
+    name: C6 required-status-checks audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Audit branch protection and notify tracking issue
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PYEOF'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+          from datetime import datetime, timezone
+
+          TOKEN = os.environ["GITHUB_TOKEN"]
+          OWNER = "vivekchand"
+          TRACKING_ISSUE = 2146
+
+          HEADERS = {
+              "Authorization": f"token {TOKEN}",
+              "Accept": "application/vnd.github.v3+json",
+              "User-Agent": "clawmetry-c6-health/1.0",
+          }
+
+          # Only the 2 checks owned by this repo -- github.token is scoped
+          # to vivekchand/clawmetry; reading cloud/landing protection returns 403.
+          LOCAL_CHECKS = [
+              "OSS golden path (wheel + OpenClaw + 9 tabs)",
+              "Cross-repo handoff (C4)",
+          ]
+
+          def api_get(path):
+              req = urllib.request.Request(
+                  f"https://api.github.com{path}", headers=HEADERS
+              )
+              try:
+                  with urllib.request.urlopen(req) as r:
+                      return json.loads(r.read()), None
+              except urllib.error.HTTPError as exc:
+                  return None, exc.code
+
+          def post_comment(body):
+              url = (
+                  f"https://api.github.com/repos/{OWNER}/clawmetry"
+                  f"/issues/{TRACKING_ISSUE}/comments"
+              )
+              data = json.dumps({"body": body}).encode()
+              hdrs = {**HEADERS, "Content-Type": "application/json"}
+              req = urllib.request.Request(
+                  url, data=data, headers=hdrs, method="POST"
+              )
+              with urllib.request.urlopen(req) as r:
+                  return json.loads(r.read())
+
+          # 1. Read branch protection for clawmetry/main.
+          data, err = api_get(
+              f"/repos/{OWNER}/clawmetry/branches/main"
+              "/protection/required_status_checks"
+          )
+          existing = set((data or {}).get("contexts", [])) if not err else set()
+          missing = [c for c in LOCAL_CHECKS if c not in existing]
+
+          today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+          # 2. Dedup: skip if bot already posted today.
+          comments, _ = api_get(
+              f"/repos/{OWNER}/clawmetry/issues/{TRACKING_ISSUE}"
+              "/comments?per_page=20&sort=updated&direction=desc"
+          )
+          for c in comments or []:
+              author = (c.get("user") or {}).get("login", "")
+              posted = (c.get("created_at") or "")[:10]
+              if author == "github-actions[bot]" and posted == today_utc:
+                  print(f"Bot already posted today ({today_utc}). Skipping.")
+                  sys.exit(1 if missing else 0)
+
+          # 3. Compose and post the comment.
+          if missing:
+              checks_block = "".join(f"  - `{c}`\n" for c in missing)
+              body = (
+                  f"**C6 health check {today_utc}:"
+                  f" {len(missing)}/2 required checks not yet configured on clawmetry/main.**\n\n"
+                  f"Missing:\n{checks_block}\n"
+                  "**Close C6 now (browser only, no local setup):**\n"
+                  "1. [Actions > Apply required E2E status checks (C6 -- one-shot)"
+                  " > Run workflow](https://github.com/vivekchand/clawmetry/actions"
+                  "/workflows/apply-required-checks.yml)\n"
+                  "2. `confirm` = `APPLY`, `pat_token` = fine-grained PAT\n"
+                  "   (Administration read+write on clawmetry, clawmetry-cloud,"
+                  " clawmetry-landing)\n"
+                  "3. Click Run workflow\n\n"
+                  "Or locally: `bash scripts/close-c6.sh` (30s, uses existing gh CLI session).\n\n"
+                  "Also verify cloud and landing manually:\n"
+                  "  - https://github.com/vivekchand/clawmetry-cloud/settings/branches\n"
+                  "  - https://github.com/vivekchand/clawmetry-landing/settings/branches\n\n"
+                  "C1/C2/C3/C4/C5/C7 have been green for 7+ days."
+                  " C6 is the sole remaining blocker."
+              )
+          else:
+              body = (
+                  f"**C6 health check {today_utc}:"
+                  " clawmetry required checks confirmed GREEN.**\n\n"
+                  "clawmetry/main has both checks required:\n"
+                  "  - `OSS golden path (wheel + OpenClaw + 9 tabs)`\n"
+                  "  - `Cross-repo handoff (C4)`\n\n"
+                  "Please verify cloud and landing:\n"
+                  "  - https://github.com/vivekchand/clawmetry-cloud/settings/branches"
+                  " (expect: `Cloud golden-path browser E2E`)\n"
+                  "  - https://github.com/vivekchand/clawmetry-landing/settings/branches"
+                  " (expect: `Landing golden path (C3)`)\n\n"
+                  "Once all 3 repos are confirmed, C6 is GREEN and the 7-day"
+                  " countdown can begin."
+              )
+
+          result = post_comment(body)
+          print(f"Posted: {result['html_url']}")
+          sys.exit(1 if missing else 0)
+          PYEOF
