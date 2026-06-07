@@ -1,3 +1,16 @@
+<!-- Desk device launch pill (dismissable, centered) -->
+<div id="cm-device-pill" style="display:none; justify-content:center; align-items:center; padding:8px 16px; background:#0b0d12; border-bottom:1px solid rgba(124,140,255,0.18);">
+  <a href="https://clawmetry.com/device" target="_blank" rel="noopener" style="display:inline-flex; align-items:center; gap:8px; padding:6px 15px; border-radius:999px; background:rgba(124,140,255,0.12); border:1px solid rgba(124,140,255,0.4); color:#a5b4ff; font-size:13px; font-weight:600; text-decoration:none;">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+    New: the ClawMetry desk device, $49 launch &rarr;
+  </a>
+  <button onclick="dismissDevicePill()" title="Dismiss" aria-label="Dismiss" style="background:transparent; border:none; color:#6b7280; cursor:pointer; margin-left:10px; font-size:18px; line-height:1; padding:0 4px;">&times;</button>
+</div>
+<script>
+function dismissDevicePill(){ try{ localStorage.setItem('cm_device_pill_dismissed','1'); }catch(e){} var p=document.getElementById('cm-device-pill'); if(p) p.style.display='none'; }
+(function(){ try{ if(!localStorage.getItem('cm_device_pill_dismissed')){ var p=document.getElementById('cm-device-pill'); if(p) p.style.display='flex'; } }catch(e){} })();
+</script>
+
 <!-- Update Available Banner -->
 <div id="update-banner" style="display:none; padding:10px 16px; background:linear-gradient(90deg,#0f3d0f 0%,#1a1a2e 100%); border-bottom:2px solid #22c55e; color:#86efac; font-size:13px; font-weight:600; align-items:center; gap:10px;">
   <span style="font-size:18px;">🚀</span>
