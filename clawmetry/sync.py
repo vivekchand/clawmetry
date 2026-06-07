@@ -6788,13 +6788,26 @@ def _rows_to_brain_events(rows: list) -> list:
                 # dashboard.py) can show "CHANNEL.IN" / "CHANNEL.OUT"
                 # rather than guessing from a missing role.
                 data.setdefault("type", r.get("event_type"))
+            # Stamp the session id so per-session feeds (the desk device's live
+            # feed + cloud Brain filtering) can attribute each event. Family
+            # runtime payloads (claude_code/codex/…) carry NO sessionId inside
+            # ``data`` -- only the row's top-level session_id column has it, so
+            # the device's per-session filter matched nothing and every session
+            # showed the same node-wide feed. Use the BARE uuid (drop the
+            # ``runtime:`` namespace) so it matches the device-agent session ids
+            # (#1465). Never overwrite a sessionId the payload already carries.
+            _sid = r.get("session_id")
+            if _sid and not data.get("sessionId") and not data.get("session_id"):
+                data = {**data, "sessionId": _sid.rsplit(":", 1)[-1]}
             out.append(data)
         elif isinstance(data, str):
+            _sid = r.get("session_id")
             out.append({
                 **enrich,
                 "type":      r.get("event_type") or "raw",
                 "timestamp": r.get("ts", ""),
                 "detail":    data[:2000],
+                **({"sessionId": _sid.rsplit(":", 1)[-1]} if _sid else {}),
             })
     return out
 
