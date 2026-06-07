@@ -7009,14 +7009,31 @@ def _build_brain_cache_pushes(config: dict) -> list:
         per_session[sid] = per_session.get(sid, 0) + 1
         picked.append(r)
 
-    # Most-recently-active sessions, in recency order (from the newest events).
+    # Most-recently-active sessions, from the typed sessions table (one row per
+    # session, ordered by last activity) -- NOT from the event stream, which a
+    # flooding session dominates: a session the user messaged 15 min ago has long
+    # scrolled off the newest-200 events, so deriving recency from events hid it
+    # and its per-session feed came back empty. The sessions table is the same
+    # source the device-agent session list uses, so every session the user can
+    # TAP on the device is covered here.
     recent_sids: list = []
+    try:
+        for s in store.query_sessions_table(limit=BRAIN_SESSION_FANOUT * 3):
+            sid = s.get("session_id")
+            if sid and sid not in recent_sids:
+                recent_sids.append(sid)
+            if len(recent_sids) >= BRAIN_SESSION_FANOUT:
+                break
+    except Exception:
+        recent_sids = []
+    # Supplement with any session present in the newest events but not yet in the
+    # sessions table (a brand-new session that hasn't been upserted yet).
     for r in nw_rows:
+        if len(recent_sids) >= BRAIN_SESSION_FANOUT:
+            break
         sid = r.get("session_id")
         if sid and sid not in recent_sids:
             recent_sids.append(sid)
-        if len(recent_sids) >= BRAIN_SESSION_FANOUT:
-            break
     # (a) each recent session's newest renderable events (capped per session).
     for sid in recent_sids:
         try:
