@@ -6954,26 +6954,15 @@ def _owner_hash_for_token(api_key: str) -> str:
     return hashlib.sha256((api_key or "").encode("utf-8")).hexdigest()
 
 
-def _build_brain_cache_pushes(config: dict) -> list:
-    """Return the heartbeat `cache_pushes` array — currently a single entry
-    holding the encrypted top-50 brain events for this node.
-
-    Returns an empty list when:
-      - The local store has no events yet (fresh install) — nothing to push.
-      - Encryption key is unset — we never push plaintext.
-      - The local store import fails — degrade silently.
-
-    The blob shape mirrors `routes.brain._try_local_store_brain` so the cloud
-    read path can hand the decrypted dict straight to the existing dashboard
-    JS without translation.
+def _build_brain_events() -> list:
+    """Build the per-session-fair, renderable, sessionId-stamped brain event list
+    — the SINGLE source of truth for the brain blob. Used by BOTH the heartbeat
+    cache push (``_build_brain_cache_pushes``) AND the on-demand q_brain_refresh
+    path (``_dispatch_pending_queries``) so the two writers of the
+    ``brain:*:recent`` key can never diverge: the refresh path used to rebuild it
+    node-wide and overwrite the heartbeat's fair blob, hiding a just-messaged
+    session behind a flooding one. Returns ``[]`` on any failure.
     """
-    enc_key = config.get("encryption_key")
-    if not enc_key:
-        return []
-    api_key = config.get("api_key", "")
-    node_id = config.get("node_id", "")
-    if not (api_key and node_id):
-        return []
     try:
         from clawmetry import local_store
     except Exception:
@@ -6990,8 +6979,7 @@ def _build_brain_cache_pushes(config: dict) -> list:
 
     # Per-session fairness: guarantee each recently-active session its newest
     # renderable events before filling with the freshest node-wide events, so a
-    # flooding session can't crowd out one the user just messaged (the device
-    # "no activity for this session" bug). Dedup by row id; sort newest-first.
+    # flooding session can't crowd out one the user just messaged. Dedup by id.
     seen_ids: set = set()
     picked: list = []
     per_session: dict = {}
@@ -7010,12 +6998,9 @@ def _build_brain_cache_pushes(config: dict) -> list:
         picked.append(r)
 
     # Most-recently-active sessions, from the typed sessions table (one row per
-    # session, ordered by last activity) -- NOT from the event stream, which a
-    # flooding session dominates: a session the user messaged 15 min ago has long
-    # scrolled off the newest-200 events, so deriving recency from events hid it
-    # and its per-session feed came back empty. The sessions table is the same
-    # source the device-agent session list uses, so every session the user can
-    # TAP on the device is covered here.
+    # session, ordered by last activity) -- NOT the event stream, which a
+    # flooding session dominates. Same source the device-agent session list uses,
+    # so every session the user can TAP on the device is covered.
     recent_sids: list = []
     try:
         for s in store.query_sessions_table(limit=BRAIN_SESSION_FANOUT * 3):
@@ -7026,8 +7011,7 @@ def _build_brain_cache_pushes(config: dict) -> list:
                 break
     except Exception:
         recent_sids = []
-    # Supplement with any session present in the newest events but not yet in the
-    # sessions table (a brand-new session that hasn't been upserted yet).
+    # Supplement with any session in the newest events not yet in the table.
     for r in nw_rows:
         if len(recent_sids) >= BRAIN_SESSION_FANOUT:
             break
@@ -7050,11 +7034,34 @@ def _build_brain_cache_pushes(config: dict) -> list:
 
     picked.sort(key=lambda r: r.get("ts") or "", reverse=True)
     picked = picked[:BRAIN_CACHE_LIMIT]
-
     # Same translation as routes/brain.py:_try_local_store_brain (incl. the
-    # hide_clawmetry_session filter + sessionId stamp + size cap) so every read
-    # path (cache hit / relay / JSONL fallback) yields an identical event shape.
-    events = _rows_to_brain_events(picked)[:BRAIN_CACHE_LIMIT]
+    # hide_clawmetry_session filter + sessionId stamp + size cap).
+    return _rows_to_brain_events(picked)[:BRAIN_CACHE_LIMIT]
+
+
+def _build_brain_cache_pushes(config: dict) -> list:
+    """Return the heartbeat `cache_pushes` array — currently a single entry
+    holding the encrypted top-50 brain events for this node.
+
+    Returns an empty list when:
+      - The local store has no events yet (fresh install) — nothing to push.
+      - Encryption key is unset — we never push plaintext.
+      - The local store import fails — degrade silently.
+
+    The blob shape mirrors `routes.brain._try_local_store_brain` so the cloud
+    read path can hand the decrypted dict straight to the existing dashboard
+    JS without translation.
+    """
+    enc_key = config.get("encryption_key")
+    if not enc_key:
+        return []
+    api_key = config.get("api_key", "")
+    node_id = config.get("node_id", "")
+    if not (api_key and node_id):
+        return []
+    events = _build_brain_events()
+    if not events:
+        return []
     payload = {
         "events":  events,
         "count":   len(events),
@@ -8509,32 +8516,31 @@ def _dispatch_pending_queries(config: dict, pending: list) -> None:
             qid = q.get("id")
             cache_key = q.get("cache_key")
             args = q.get("args") or {}
-            result = _local_dispatch(shape, args)
             if not enc_key:
                 log.debug("pending_query %s: no encryption key; skipping", qid)
                 continue
-            # Bug 2026-05-13 (real MOAT fix): when this pending_query targets
-            # the Brain cache key (`brain:*:recent`), the cloud's browser-side
-            # `_cm_decryptBrain` reads `dec.events` from the decrypted blob.
-            # `_local_dispatch('events', ...)` returns the raw shape
-            # `{rows: [...], count, _shape, _via}` though — so the browser
-            # sees `dec.events || []` = empty and shows "No brain activity
-            # events found" even with hundreds of events in DuckDB. Translate
-            # to the dashboard-display shape via `_rows_to_brain_events` so
-            # both this writer and `_build_brain_cache_pushes` produce
-            # identical blobs (one shouldn't silently overwrite the other
-            # with a wrong-shape payload).
-            payload = result
+            # When this pending_query targets the Brain cache key
+            # (`brain:*:recent`), build the blob from the SAME per-session-fair
+            # builder the heartbeat uses (``_build_brain_events``) instead of a
+            # node-wide ``_local_dispatch('events', …)``. Two reasons:
+            #   1. Divergence: the old node-wide rebuild OVERWROTE the heartbeat's
+            #      fair blob, hiding a just-messaged session behind a flooding one
+            #      (device "no activity for this session").
+            #   2. Robustness: it sidesteps the ``_local_dispatch('events')``
+            #      decode that was failing here ("Expecting value: line 1 col 1").
+            # The browser's `_cm_decryptBrain` reads `dec.events`, which this
+            # shape provides directly.
             if shape == "events" and isinstance(cache_key, str) \
                     and cache_key.startswith("brain:"):
-                rows = (result or {}).get("rows") if isinstance(result, dict) else None
-                events = _rows_to_brain_events(rows or [])
+                events = _build_brain_events()
                 payload = {
                     "events":  events,
                     "count":   len(events),
                     "_source": "local_store",
                     "_shape":  "brain_history",
                 }
+            else:
+                payload = _local_dispatch(shape, args)
             blob = encrypt_payload(payload, enc_key)
             _post("/ingest/cache", {
                 "node_id": node_id,
