@@ -1,13 +1,13 @@
 name: C6 daily health check (branch-protection audit)
 
-# Audits whether the 4 required E2E status checks are configured on
-# clawmetry/main (the 2 checks this repo owns -- github.token cannot
-# read protection state on clawmetry-cloud or clawmetry-landing).
+# Audits whether the 2 required E2E status checks owned by this repo are
+# configured on clawmetry/main (github.token cannot read state on
+# clawmetry-cloud or clawmetry-landing -- those must be verified manually).
 #
-# On failure: posts a reminder comment to the tracking issue (#2146)
-# at most once per calendar day. On success: posts a GREEN confirmation.
+# On failure: posts a reminder comment to tracking issue #2146 at most
+# once per calendar day. On success: posts a GREEN confirmation.
 #
-# To close C6 after this workflow goes green on the clawmetry side:
+# To close C6:
 #   1. Actions > "Apply required E2E status checks (C6 -- one-shot)" >
 #      confirm=APPLY, pat_token=<fine-grained PAT>
 #   2. Or: bash scripts/close-c6.sh
@@ -44,6 +44,9 @@ jobs:
           TOKEN = os.environ["GITHUB_TOKEN"]
           OWNER = "vivekchand"
           TRACKING_ISSUE = 2146
+          # Embedded in every comment so dedup only matches OUR comments,
+          # not other github-actions[bot] posts to this issue.
+          MARKER = "<!-- c6-health-check -->"
 
           HEADERS = {
               "Authorization": f"token {TOKEN}",
@@ -52,7 +55,7 @@ jobs:
           }
 
           # Only the 2 checks owned by this repo -- github.token is scoped
-          # to vivekchand/clawmetry; reading cloud/landing protection returns 403.
+          # to vivekchand/clawmetry; reading cloud/landing protection would 403.
           LOCAL_CHECKS = [
               "OSS golden path (wheel + OpenClaw + 9 tabs)",
               "Cross-repo handoff (C4)",
@@ -81,17 +84,25 @@ jobs:
               with urllib.request.urlopen(req) as r:
                   return json.loads(r.read())
 
-          # 1. Read branch protection for clawmetry/main.
-          data, err = api_get(
-              f"/repos/{OWNER}/clawmetry/branches/main"
-              "/protection/required_status_checks"
-          )
-          existing = set((data or {}).get("contexts", [])) if not err else set()
+          # 1. Read branch info via /branches/main.
+          #    For public repos, github.token can read protection.required_status_checks
+          #    here even though /branches/main/protection/required_status_checks 403s.
+          data, err = api_get(f"/repos/{OWNER}/clawmetry/branches/main")
+          if not err and data:
+              prot = (data.get("protection") or {}).get("required_status_checks") or {}
+              existing = set(prot.get("contexts", []))
+          else:
+              # Can't read state (private repo or other error); assume not configured
+              # so the reminder still fires rather than silently skipping.
+              existing = set()
+
           missing = [c for c in LOCAL_CHECKS if c not in existing]
 
           today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-          # 2. Dedup: skip if bot already posted today.
+          # 2. Dedup: skip if THIS health check already posted today.
+          #    Only match comments that contain our MARKER -- avoids false skips
+          #    when other workflows post github-actions[bot] comments to the issue.
           comments, _ = api_get(
               f"/repos/{OWNER}/clawmetry/issues/{TRACKING_ISSUE}"
               "/comments?per_page=20&sort=updated&direction=desc"
@@ -99,14 +110,20 @@ jobs:
           for c in comments or []:
               author = (c.get("user") or {}).get("login", "")
               posted = (c.get("created_at") or "")[:10]
-              if author == "github-actions[bot]" and posted == today_utc:
-                  print(f"Bot already posted today ({today_utc}). Skipping.")
+              body_text = c.get("body", "")
+              if (
+                  author == "github-actions[bot]"
+                  and posted == today_utc
+                  and MARKER in body_text
+              ):
+                  print(f"Health check already posted today ({today_utc}). Skipping.")
                   sys.exit(1 if missing else 0)
 
           # 3. Compose and post the comment.
           if missing:
               checks_block = "".join(f"  - `{c}`\n" for c in missing)
               body = (
+                  f"{MARKER}\n"
                   f"**C6 health check {today_utc}:"
                   f" {len(missing)}/2 required checks not yet configured on clawmetry/main.**\n\n"
                   f"Missing:\n{checks_block}\n"
@@ -127,12 +144,13 @@ jobs:
               )
           else:
               body = (
+                  f"{MARKER}\n"
                   f"**C6 health check {today_utc}:"
                   " clawmetry required checks confirmed GREEN.**\n\n"
                   "clawmetry/main has both checks required:\n"
                   "  - `OSS golden path (wheel + OpenClaw + 9 tabs)`\n"
                   "  - `Cross-repo handoff (C4)`\n\n"
-                  "Please verify cloud and landing:\n"
+                  "Please verify cloud and landing manually:\n"
                   "  - https://github.com/vivekchand/clawmetry-cloud/settings/branches"
                   " (expect: `Cloud golden-path browser E2E`)\n"
                   "  - https://github.com/vivekchand/clawmetry-landing/settings/branches"
