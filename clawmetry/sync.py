@@ -6720,6 +6720,67 @@ def _channel_enrichment_from_row(r: dict) -> dict:
     return out
 
 
+# Cap long strings in a brain-cache event so the E2E blob stays small. The desk
+# device fetches the blob into a FIXED 128 KB buffer; a burst of big tool outputs
+# / full command strings spiked the blob past it -> truncated download -> AES-GCM
+# auth-tag mismatch -> the device showed "feed locked" (and a slow connect). A
+# brain FEED only needs a PREVIEW on both surfaces (the device caps labels at 160
+# chars; the cloud Brain feed shows a short detail) -- full content lives in the
+# transcript view. Shape-preserving + depth-bounded so the cloud's
+# ``transformEvents`` still walks ``message.content[]`` blocks. Raise the cap via
+# CLAWMETRY_BRAIN_FIELD_CAP.
+try:
+    _BRAIN_FIELD_CAP = max(160, int(os.environ.get("CLAWMETRY_BRAIN_FIELD_CAP", "600")))
+except (TypeError, ValueError):
+    _BRAIN_FIELD_CAP = 600
+
+# Hard per-event ceiling. With BRAIN_CACHE_LIMIT=50 events this bounds the whole
+# blob to ~75 KB plaintext (~103 KB base64) -- safely under the device's 128 KB
+# receive buffer even if every event is a giant multi-field tool burst (the case
+# that spiked the blob to 256 KB and caused "feed locked"). Field-level capping
+# alone isn't enough because one event can carry many capped fields.
+try:
+    _BRAIN_EVENT_CAP = max(400, int(os.environ.get("CLAWMETRY_BRAIN_EVENT_CAP", "1500")))
+except (TypeError, ValueError):
+    _BRAIN_EVENT_CAP = 1500
+
+
+def _truncate_brain_payload(obj, depth: int = 0, cap: int | None = None):
+    """Recursively cap long strings (and over-long lists) in a brain event so the
+    serialized blob can't balloon past the device's receive buffer. Preserves
+    keys/structure; only trims leaf strings and very long arrays."""
+    c = cap or _BRAIN_FIELD_CAP
+    if isinstance(obj, str):
+        return obj if len(obj) <= c else (obj[:c] + "…")
+    if depth >= 5:
+        return obj
+    if isinstance(obj, list):
+        return [_truncate_brain_payload(x, depth + 1, cap) for x in obj[:40]]
+    if isinstance(obj, dict):
+        return {k: _truncate_brain_payload(v, depth + 1, cap) for k, v in obj.items()}
+    return obj
+
+
+def _cap_brain_event_size(ev):
+    """Enforce the hard per-event byte ceiling (_BRAIN_EVENT_CAP). Tightens the
+    string cap progressively until the serialized event fits; short essential
+    fields (sessionId/timestamp/type) survive every pass. Guarantees the total
+    blob stays under the device buffer regardless of how big the source event was."""
+    try:
+        if len(json.dumps(ev, separators=(",", ":"))) <= _BRAIN_EVENT_CAP:
+            return ev
+    except (TypeError, ValueError):
+        return ev
+    for limit in (400, 250, 150, 80):
+        ev = _truncate_brain_payload(ev, cap=limit)
+        try:
+            if len(json.dumps(ev, separators=(",", ":"))) <= _BRAIN_EVENT_CAP:
+                break
+        except (TypeError, ValueError):
+            break
+    return ev
+
+
 def _rows_to_brain_events(rows: list) -> list:
     """Return raw OpenClaw event payloads ready for the cloud browser's
     ``transformEvents`` to unwrap.
@@ -6788,6 +6849,9 @@ def _rows_to_brain_events(rows: list) -> list:
                 # dashboard.py) can show "CHANNEL.IN" / "CHANNEL.OUT"
                 # rather than guessing from a missing role.
                 data.setdefault("type", r.get("event_type"))
+            # Bound the per-event size so a burst of big tool outputs can't push
+            # the blob past the device's 128 KB buffer (the "feed locked" cause).
+            data = _truncate_brain_payload(data)
             # Stamp the session id so per-session feeds (the desk device's live
             # feed + cloud Brain filtering) can attribute each event. Family
             # runtime payloads (claude_code/codex/…) carry NO sessionId inside
@@ -6799,14 +6863,14 @@ def _rows_to_brain_events(rows: list) -> list:
             _sid = r.get("session_id")
             if _sid and not data.get("sessionId") and not data.get("session_id"):
                 data = {**data, "sessionId": _sid.rsplit(":", 1)[-1]}
-            out.append(data)
+            out.append(_cap_brain_event_size(data))
         elif isinstance(data, str):
             _sid = r.get("session_id")
             out.append({
                 **enrich,
                 "type":      r.get("event_type") or "raw",
                 "timestamp": r.get("ts", ""),
-                "detail":    data[:2000],
+                "detail":    data[:_BRAIN_FIELD_CAP],
                 **({"sessionId": _sid.rsplit(":", 1)[-1]} if _sid else {}),
             })
     return out
