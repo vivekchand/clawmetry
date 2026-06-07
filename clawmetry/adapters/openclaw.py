@@ -532,21 +532,53 @@ class OpenClawAdapter(AgentAdapter):
                             attrs["tool.result_details"] = details
                             if isinstance(details, dict):
                                 attrs["tool.result_details_keys"] = sorted(details.keys())
-                        # Text content blocks (the JSON-stringified wrapper that
-                        # NemoClaw co-emits, or plain text from native tools)
-                        # collapsed into a single string for quick read.
+                        # Walk the tool_result content array. Text blocks
+                        # collapse into a single string for quick read
+                        # (NemoClaw JSON-stringified wrapper, or plain text
+                        # from native tools). Non-text block types
+                        # (resource_link, resource, audio, image) are
+                        # surfaced by sorted type-list so downstream UI can
+                        # see that MCP returned a non-text payload (#2731).
+                        # Coercion metadata (the harness preserves the
+                        # original block type when it materializes a
+                        # resource_link / resource / audio / malformed-image
+                        # into a text-safe shape) is recorded as
+                        # {from, to} pairs. Accepts the common field-name
+                        # variants seen in the wild.
                         result_content = block.get("content")
                         text_parts: list = []
+                        types_seen: set = set()
+                        coercions: list = []
                         if isinstance(result_content, str):
                             text_parts.append(result_content)
                         elif isinstance(result_content, list):
                             for inner in result_content:
-                                if isinstance(inner, dict) and inner.get("type") == "text":
+                                if not isinstance(inner, dict):
+                                    continue
+                                inner_type = inner.get("type")
+                                if isinstance(inner_type, str) and inner_type:
+                                    types_seen.add(inner_type)
+                                if inner_type == "text":
                                     val = inner.get("text")
                                     if isinstance(val, str):
                                         text_parts.append(val)
+                                coerced_from = (
+                                    inner.get("coerced_from")
+                                    or inner.get("coercedFrom")
+                                    or inner.get("original_type")
+                                    or inner.get("originalType")
+                                )
+                                if isinstance(coerced_from, str) and coerced_from:
+                                    coercions.append({
+                                        "from": coerced_from,
+                                        "to": inner_type if isinstance(inner_type, str) and inner_type else "unknown",
+                                    })
                         if text_parts:
                             attrs["tool.result_text"] = "".join(text_parts)
+                        if types_seen:
+                            attrs["tool.result_content_types"] = sorted(types_seen)
+                        if coercions:
+                            attrs["tool.result_coercions"] = coercions
                         target["attributes"] = attrs
                         # End-time the tool span to whatever the result arrived
                         # at. start_ts ≤ end_ts isn't enforced (assistant emits
