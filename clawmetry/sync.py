@@ -5851,6 +5851,496 @@ def _detect_runtimes_lite() -> list:
     return [{"id": rid, "label": _LITE_RT_LABELS.get(rid, rid), "sessions": n} for rid, n in out.items()]
 
 
+# ── Billing-mode detection (docs/BILLING_MODE_DETECTION.md) ──────────────────
+# Classify each runtime as flat-fee `subscription`, pay-per-token `metered`,
+# self-hosted `local`, or `unknown` — WITHOUT ever reading a secret value or
+# triggering an OS keychain/keyring prompt. See the spec's per-runtime ordered
+# checks + cross-OS path table. Every branch falls through to `unknown`; this
+# code NEVER raises and NEVER reads `key`/`token`/`access`/`refresh` *values*.
+
+# usd_month per detected plan tier. None ⇒ no flat fee we can price (metered,
+# local, unknown, or enterprise/team where the seat price isn't user-visible).
+PLAN_PRICING = {
+    # tier-key                  : (label,            usd_month)
+    "default_claude_pro":         ("Claude Pro",         20.0),
+    "default_claude_max_5x":      ("Claude Max 5x",     100.0),
+    "default_claude_max_20x":     ("Claude Max 20x",    200.0),
+    "default_chatgpt_plus":       ("ChatGPT Plus",       20.0),
+    "default_chatgpt_pro":        ("ChatGPT Pro",       200.0),
+    "default_cursor_pro":         ("Cursor Pro",         20.0),
+    # tiers we recognise but can't put a single user-visible price on:
+    "default_claude_team":        ("Claude Team",        None),
+    "default_claude_enterprise":  ("Claude Enterprise",  None),
+    "default_chatgpt_business":   ("ChatGPT Business",   None),
+    "default_chatgpt_enterprise": ("ChatGPT Enterprise", None),
+    "default_cursor_pro_plus":    ("Cursor Pro+",        None),
+    "default_cursor_business":    ("Cursor Business",    None),
+    "default_gemini_oauth":       ("Gemini (Google)",    None),
+    "default_qwen_oauth":         ("Qwen OAuth",         None),
+    "default_qwen_coding_plan":   ("Qwen Coding Plan",   None),
+    "default_copilot":            ("GitHub Copilot",     None),
+    "default_codex_subscription": ("ChatGPT (Codex)",    None),
+    "default_subscription":       ("Subscription",       None),
+}
+
+
+def _bm(mode, tier_key=None, label=None):
+    """Build the `{mode,label,usd_month}` result. `tier_key` indexes
+    PLAN_PRICING for label+price; `label` overrides when no priced tier."""
+    if tier_key and tier_key in PLAN_PRICING:
+        plabel, usd = PLAN_PRICING[tier_key]
+        return {"mode": mode, "label": label or plabel, "usd_month": usd}
+    return {"mode": mode, "label": label or mode.capitalize(), "usd_month": None}
+
+
+def _bm_home(home) -> Path:
+    try:
+        return Path(home) if home is not None else Path.home()
+    except Exception:
+        return Path(os.path.expanduser("~"))
+
+
+def _bm_env(name) -> str:
+    """Non-empty env var value (presence test only — we read the var NAME we
+    care about, not arbitrary secrets; the value is checked for non-emptiness
+    and discarded)."""
+    try:
+        v = os.environ.get(name)
+        return v.strip() if isinstance(v, str) else ""
+    except Exception:
+        return ""
+
+
+def _bm_read_json(path: Path):
+    try:
+        if path.is_file():
+            with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                return json.load(fh)
+    except Exception:
+        pass
+    return None
+
+
+def _bm_env_has_keyname(names, *extra_files) -> bool:
+    """True if any of `names` is set in the daemon env OR appears as a
+    line-prefix `NAME=` in any of the given .env files. Reads KEY NAMES
+    only — never the value bytes (issue #9 in the spec: daemon env != shell)."""
+    for n in names:
+        if _bm_env(n):
+            return True
+    for f in extra_files:
+        try:
+            p = Path(f)
+            if not p.is_file():
+                continue
+            with open(p, "r", encoding="utf-8", errors="ignore") as fh:
+                for line in fh:
+                    s = line.strip()
+                    if s.startswith("#") or "=" not in s:
+                        continue
+                    key = s.split("=", 1)[0].strip().lstrip("export").strip()
+                    if key in names:
+                        return True
+        except Exception:
+            continue
+    return False
+
+
+def _bm_keychain_item_exists(service: str, account: str | None = None) -> bool:
+    """macOS existence-only probe — `security find-generic-password -s <svc>`
+    with NO `-g`/`-w` so it returns metadata only and never unlocks/prompts.
+    Hard 2s timeout; swallows errSecInteractionNotAllowed (exit 36) on
+    headless/SSH. Returns False on every non-macOS platform / any error."""
+    try:
+        if platform.system() != "Darwin":
+            return False
+        cmd = ["security", "find-generic-password", "-s", service]
+        if account:
+            cmd += ["-a", account]
+        res = subprocess.run(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+        return res.returncode == 0
+    except Exception:
+        return False
+
+
+def _detect_billing_claude_code(home: Path) -> dict:
+    """claude_code per spec §2.1. Precedence: cloud-routing env > API-key env >
+    apiKeyHelper/env-key in settings.json > customApiKeyResponses.approved >
+    oauthAccount subscription marker > token-blob existence > unknown."""
+    cfg_dir = Path(_bm_env("CLAUDE_CONFIG_DIR")) if _bm_env("CLAUDE_CONFIG_DIR") else home
+    # STEP 1 — cloud-provider routing env outranks everything.
+    for v in ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"):
+        if _bm_env(v):
+            return _bm("metered", label="Bedrock/Vertex" if "BEDROCK" in v or "VERTEX" in v else "Cloud-routed")
+    # STEP 2 — explicit API key / auth token env.
+    if _bm_env("ANTHROPIC_AUTH_TOKEN") or _bm_env("ANTHROPIC_API_KEY"):
+        return _bm("metered", label="API key (env)")
+    # STEP 3 — apiKeyHelper / env.ANTHROPIC_* in settings.json (READ KEY ONLY).
+    for sp in (
+        cfg_dir / ".claude" / "settings.json",
+        cfg_dir / ".claude" / "settings.local.json",
+    ):
+        s = _bm_read_json(sp)
+        if isinstance(s, dict):
+            if s.get("apiKeyHelper"):
+                return _bm("metered", label="apiKeyHelper")
+            env_blk = s.get("env") if isinstance(s.get("env"), dict) else {}
+            if env_blk.get("ANTHROPIC_API_KEY") or env_blk.get("ANTHROPIC_AUTH_TOKEN"):
+                return _bm("metered", label="API key (settings)")
+    # STEP 4 — ~/.claude.json (non-secret read).
+    data = _bm_read_json(cfg_dir / ".claude.json")
+    if isinstance(data, dict):
+        approved = data.get("customApiKeyResponses", {})
+        if isinstance(approved, dict):
+            arr = approved.get("approved")
+            if isinstance(arr, list) and len(arr) > 0:
+                return _bm("metered", label="Console API key (approved)")
+        oauth = data.get("oauthAccount")
+        if isinstance(oauth, dict):
+            billing = str(oauth.get("billingType") or "").lower()
+            org_type = str(oauth.get("organizationType") or "").lower()
+            tier_str = str(oauth.get("organizationRateLimitTier") or "").lower()
+            blob = (org_type + " " + tier_str)
+            if billing.endswith("_subscription") or "max" in blob or "pro" in blob or "team" in blob or "enterprise" in blob:
+                if "max" in blob:
+                    tk = "default_claude_max_20x" if "20" in blob else "default_claude_max_5x"
+                elif "team" in blob:
+                    tk = "default_claude_team"
+                elif "enterprise" in blob:
+                    tk = "default_claude_enterprise"
+                elif "pro" in blob or billing.endswith("_subscription"):
+                    tk = "default_claude_pro"
+                else:
+                    tk = "default_subscription"
+                return _bm("subscription", tier_key=tk)
+            # oauthAccount present but looks like a console/api-usage org.
+            return _bm("metered", label="Console org")
+    # STEP 5 — token-blob existence (low confidence; only if no override above).
+    if _bm_keychain_item_exists("Claude Code-credentials") or (cfg_dir / ".claude" / ".credentials.json").exists():
+        return _bm("subscription", tier_key="default_subscription")
+    return _bm("unknown")
+
+
+def _detect_billing_codex(home: Path) -> dict:
+    """codex per spec §2.2."""
+    codex_home = Path(_bm_env("CODEX_HOME")) if _bm_env("CODEX_HOME") else home / ".codex"
+    # STEP 1 — env key wins over file.
+    if _bm_env("OPENAI_API_KEY") or _bm_env("CODEX_API_KEY"):
+        return _bm("metered", label="OpenAI API key (env)")
+    # STEP 2 — auth.json top-level keys only.
+    auth = _bm_read_json(codex_home / "auth.json")
+    if isinstance(auth, dict):
+        if auth.get("OPENAI_API_KEY") or auth.get("personal_access_token") or str(auth.get("auth_mode") or "").lower() == "apikey":
+            return _bm("metered", label="OpenAI API key")
+        if isinstance(auth.get("tokens"), dict):
+            return _bm("subscription", tier_key="default_codex_subscription")
+    elif codex_home.exists():
+        # STEP 3 — keyring-store mode: existence-only probe.
+        if _bm_keychain_item_exists("Codex Auth"):
+            return _bm("subscription", tier_key="default_codex_subscription")
+    return _bm("unknown")
+
+
+def _detect_billing_cursor(home: Path) -> dict:
+    """cursor per spec §2.3 — read-only/immutable SQLite, never decrypt."""
+    if platform.system() == "Darwin":
+        db = home / "Library" / "Application Support" / "Cursor" / "User" / "globalStorage" / "state.vscdb"
+    elif platform.system() == "Windows":
+        appdata = _bm_env("APPDATA") or str(home / "AppData" / "Roaming")
+        db = Path(appdata) / "Cursor" / "User" / "globalStorage" / "state.vscdb"
+    else:
+        db = home / ".config" / "Cursor" / "User" / "globalStorage" / "state.vscdb"
+    try:
+        if not db.is_file():
+            return _bm("unknown")
+        import sqlite3
+        uri = f"file:{db}?mode=ro&immutable=1"
+        conn = sqlite3.connect(uri, uri=True, timeout=2)
+        try:
+            cur = conn.execute(
+                "SELECT key,value FROM ItemTable WHERE key IN "
+                "('cursorAuth/stripeMembershipType','cursorAuth/accessToken',"
+                "'cursorAuth/openAIKey','cursorAuth/claudeKey','cursorAuth/googleKey')"
+            )
+            rows = {k: v for k, v in cur.fetchall()}
+        finally:
+            conn.close()
+    except Exception:
+        return _bm("unknown")
+    # BYO key present (existence/non-empty only — value discarded) → metered.
+    for k in ("cursorAuth/openAIKey", "cursorAuth/claudeKey", "cursorAuth/googleKey"):
+        v = rows.get(k)
+        if isinstance(v, str) and v.strip():
+            return _bm("metered", label="BYO API key")
+    member = str(rows.get("cursorAuth/stripeMembershipType") or "").lower()
+    if member in ("pro", "pro_plus", "business", "team", "enterprise", "free_trial"):
+        tk = {"pro": "default_cursor_pro", "pro_plus": "default_cursor_pro_plus",
+              "business": "default_cursor_business", "team": "default_cursor_business",
+              "enterprise": "default_cursor_business", "free_trial": "default_cursor_pro"}[member]
+        return _bm("subscription", tier_key=tk)
+    if rows.get("cursorAuth/accessToken"):
+        return _bm("subscription", label="Cursor Free")
+    return _bm("unknown")
+
+
+def _detect_billing_gemini(home: Path) -> dict:
+    """gemini per spec §2.4 — dir name '.gemini' on all OSes (no XDG)."""
+    gdir = home / ".gemini"
+    # STEP 1 — metered env (no file reads).
+    if str(_bm_env("GOOGLE_GENAI_USE_VERTEXAI")).lower() == "true" or _bm_env("GOOGLE_APPLICATION_CREDENTIALS"):
+        return _bm("metered", label="Vertex AI")
+    if _bm_env("GEMINI_API_KEY") or _bm_env("GOOGLE_API_KEY"):
+        return _bm("metered", label="Gemini API key (env)")
+    # STEP 2 — settings.json selectedType.
+    s = _bm_read_json(gdir / "settings.json")
+    sel = ""
+    if isinstance(s, dict):
+        try:
+            sel = str(((s.get("security") or {}).get("auth") or {}).get("selectedType") or s.get("selectedAuthType") or "").lower()
+        except Exception:
+            sel = str(s.get("selectedAuthType") or "").lower()
+    if sel in ("oauth-personal", "oauth", "cloud-shell"):
+        return _bm("subscription", tier_key="default_gemini_oauth")
+    if sel in ("gemini-api-key", "api-key"):
+        return _bm("metered", label="Gemini API key")
+    if sel == "vertex-ai":
+        return _bm("metered", label="Vertex AI")
+    # STEP 3 — existence of OAuth creds.
+    if (gdir / "oauth_creds.json").exists() or (gdir / "google_accounts.json").exists():
+        return _bm("subscription", tier_key="default_gemini_oauth")
+    # STEP 4 — .env key-name scan.
+    if _bm_env_has_keyname(("GEMINI_API_KEY", "GOOGLE_API_KEY"), gdir / ".env", home / ".env"):
+        return _bm("metered", label="Gemini API key (.env)")
+    return _bm("unknown")
+
+
+def _detect_billing_qwen(home: Path) -> dict:
+    """qwen_code per spec §2.5 — Coding-Plan trap handled via base-URL."""
+    qdir = home / ".qwen"
+    s = _bm_read_json(qdir / "settings.json")
+    sel = ""
+    base_urls = ""
+    if isinstance(s, dict):
+        try:
+            sel = str(((s.get("security") or {}).get("auth") or {}).get("selectedType") or "").lower()
+        except Exception:
+            sel = ""
+        try:
+            base_urls = json.dumps(s.get("modelProviders") or s).lower()
+        except Exception:
+            base_urls = ""
+    if "coding.dashscope.aliyuncs.com" in base_urls or "coding.dashscope.aliyuncs.com" in str(_bm_env("OPENAI_BASE_URL")).lower():
+        return _bm("subscription", tier_key="default_qwen_coding_plan")
+    if sel == "qwen-oauth":
+        return _bm("subscription", tier_key="default_qwen_oauth")
+    if sel in ("openai", "anthropic", "gemini", "vertex-ai"):
+        return _bm("metered", label="API key")
+    if (qdir / "oauth_creds.json").exists():
+        return _bm("subscription", tier_key="default_qwen_oauth")
+    if _bm_env_has_keyname(
+        ("DASHSCOPE_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY"),
+        qdir / ".env", home / ".env", Path(".env"),
+    ):
+        return _bm("metered", label="API key (.env)")
+    return _bm("unknown")
+
+
+def _detect_billing_aider(home: Path) -> dict:
+    """aider per spec §2.6 — no subscription concept; metered-BYO or local."""
+    # LOCAL override first (model/base-URL pointing at localhost).
+    base = (str(_bm_env("OPENAI_API_BASE")) + " " + str(_bm_env("OLLAMA_API_BASE"))).lower()
+    if "localhost" in base or "127.0.0.1" in base:
+        return _bm("local", label="Local model")
+    # Any *_API_KEY in env → metered.
+    try:
+        for k in os.environ.keys():
+            if k.endswith("_API_KEY") and _bm_env(k):
+                return _bm("metered", label="BYO API key (env)")
+    except Exception:
+        pass
+    # .aider.conf.yml *-api-key: keys (NAME presence only).
+    for cf in (home / ".aider.conf.yml", Path(".aider.conf.yml")):
+        try:
+            if cf.is_file():
+                with open(cf, "r", encoding="utf-8", errors="ignore") as fh:
+                    for line in fh:
+                        ls = line.strip().lower()
+                        if ls.startswith("#"):
+                            continue
+                        if ("api-key" in ls or "api_key" in ls) and ":" in ls:
+                            return _bm("metered", label="BYO API key (conf)")
+                        if ls.startswith("model:") and "ollama/" in ls:
+                            return _bm("local", label="Local model")
+        except Exception:
+            continue
+    if _bm_env_has_keyname(
+        ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY"),
+        home / ".env", Path(".env"), home / ".aider" / ".env",
+    ):
+        return _bm("metered", label="BYO API key (.env)")
+    return _bm("unknown")
+
+
+def _detect_billing_goose(home: Path) -> dict:
+    """goose per spec §2.7 — provider-driven; no single-user subscription tier."""
+    if platform.system() == "Windows":
+        appdata = _bm_env("APPDATA") or str(home / "AppData" / "Roaming")
+        cfg = Path(appdata) / "Block" / "goose" / "config" / "config.yaml"
+    else:
+        cfg = home / ".config" / "goose" / "config.yaml"
+    provider = str(_bm_env("GOOSE_PROVIDER")).lower()
+    if not provider:
+        try:
+            if cfg.is_file():
+                with open(cfg, "r", encoding="utf-8", errors="ignore") as fh:
+                    for line in fh:
+                        ls = line.strip().lower()
+                        if ls.startswith("goose_provider:") or ls.startswith("provider:"):
+                            provider = ls.split(":", 1)[1].strip().strip('"\'')
+                            break
+        except Exception:
+            pass
+    if provider in ("github_copilot", "databricks", "gcp_vertex_ai", "azure_openai"):
+        if provider == "github_copilot" or (home / ".config" / "goose" / "githubcopilot" / "info.json").exists():
+            return _bm("subscription", tier_key="default_copilot")
+        return _bm("metered", label="Cloud-billed (" + provider + ")")
+    if (provider in ("ollama", "lmstudio", "llama_cpp", "llamacpp", "localai",
+                     "vllm", "local") or "localhost" in provider
+            or "127.0.0.1" in provider):
+        return _bm("local", label=provider.capitalize() + " (local)")
+    if provider:
+        return _bm("metered", label=provider.capitalize() + " API key")
+    return _bm("unknown")
+
+
+def _detect_billing_opencode(home: Path) -> dict:
+    """opencode per spec §2.8 — explicit `type` discriminant; read type only."""
+    xdg = _bm_env("XDG_DATA_HOME")
+    data_dir = Path(xdg) / "opencode" if xdg else home / ".local" / "share" / "opencode"
+    auth = _bm_read_json(data_dir / "auth.json")
+    has_oauth = False
+    has_api = False
+    if isinstance(auth, dict):
+        for _pid, entry in auth.items():
+            if not isinstance(entry, dict):
+                continue
+            t = str(entry.get("type") or "").lower()
+            if t == "oauth":
+                has_oauth = True
+            elif t in ("api", "wellknown"):
+                has_api = True
+    # Env API key for any provider overrides at runtime → metered.
+    try:
+        for k in os.environ.keys():
+            if k.endswith("_API_KEY") and _bm_env(k):
+                has_api = True
+                break
+    except Exception:
+        pass
+    if has_oauth and not has_api:
+        return _bm("subscription", tier_key="default_subscription")
+    if has_api:
+        return _bm("metered", label="API key")
+    if has_oauth:
+        return _bm("subscription", tier_key="default_subscription")
+    return _bm("unknown")
+
+
+_BILLING_DETECTORS = {
+    "claude_code": _detect_billing_claude_code,
+    "codex":       _detect_billing_codex,
+    "cursor":      _detect_billing_cursor,
+    "gemini":      _detect_billing_gemini,
+    "qwen_code":   _detect_billing_qwen,
+    "aider":       _detect_billing_aider,
+    "goose":       _detect_billing_goose,
+    "opencode":    _detect_billing_opencode,
+}
+
+
+def detect_billing_mode(runtime: str, home=None) -> dict:
+    """Classify a runtime's billing path → {mode, label, usd_month}.
+
+    mode ∈ subscription|metered|local|unknown. Honors the spec's precedence
+    (cloud-routing env > API-key env/file > subscription marker > token-blob
+    existence > unknown). NEVER reads a secret value, NEVER prompts a keychain,
+    NEVER raises — any failure falls through to `unknown`.
+    """
+    try:
+        h = _bm_home(home)
+        fn = _BILLING_DETECTORS.get((runtime or "").lower())
+        if fn is None:
+            return _bm("unknown")
+        result = fn(h)
+        if isinstance(result, dict) and result.get("mode") in ("subscription", "metered", "local", "unknown"):
+            return result
+        return _bm("unknown")
+    except Exception:
+        return _bm("unknown")
+
+
+# Cache the per-cycle billing roll-up for ~5 min so we don't re-stat / re-probe
+# every heartbeat tick (spec §5.2).
+_BILLING_CACHE: dict = {"at": 0.0, "value": None}
+_BILLING_CACHE_TTL_SEC = 300
+
+
+def _build_billing_payload(config: dict) -> dict | None:
+    """Roll up per-runtime billing modes into the heartbeat `billing` object:
+    { node_id, account_plan, runtimes: {<rt>: {mode,label,usd_month}} }.
+
+    account_plan = claude_code's result when present, else the dominant
+    subscription across detected runtimes (highest usd_month, else any). All
+    best-effort — returns None on any failure so the heartbeat never blocks."""
+    try:
+        now = time.time()
+        if _BILLING_CACHE["value"] is not None and (now - _BILLING_CACHE["at"]) < _BILLING_CACHE_TTL_SEC:
+            cached = dict(_BILLING_CACHE["value"])
+            cached["node_id"] = config.get("node_id")
+            return cached
+        # Only classify runtimes that actually have data on this machine.
+        try:
+            detected = [r["id"] for r in (_detect_runtimes_for_heartbeat() or [])]
+        except Exception:
+            detected = []
+        # Always attempt claude_code (it anchors account_plan) even if 0-session.
+        rt_ids = list(dict.fromkeys(["claude_code"] + detected))
+        runtimes: dict = {}
+        for rid in rt_ids:
+            if rid not in _BILLING_DETECTORS:
+                continue
+            res = detect_billing_mode(rid)
+            # Skip pure unknowns from non-claude runtimes to keep the slice lean.
+            if res.get("mode") == "unknown" and rid != "claude_code":
+                continue
+            runtimes[rid] = res
+        # account_plan: prefer claude_code if it's a real subscription, else the
+        # dominant subscription (highest priced) among detected runtimes.
+        account_plan = None
+        cc = runtimes.get("claude_code")
+        if cc and cc.get("mode") == "subscription":
+            account_plan = cc
+        else:
+            subs = [r for r in runtimes.values() if r.get("mode") == "subscription"]
+            if subs:
+                account_plan = max(subs, key=lambda r: (r.get("usd_month") or 0.0))
+            elif cc:
+                account_plan = cc
+        billing = {
+            "node_id": config.get("node_id"),
+            "account_plan": account_plan,
+            "runtimes": runtimes,
+        }
+        _BILLING_CACHE["at"] = now
+        _BILLING_CACHE["value"] = {k: v for k, v in billing.items() if k != "node_id"}
+        return billing
+    except Exception:
+        return None
+
+
 def _detect_runtimes_for_heartbeat() -> list:
     """Detected runtimes to report to the cloud Fleet. Merges the authoritative
     clawmetry-pro adapter counts (when installed) with the free lite detector,
@@ -5940,6 +6430,17 @@ def send_heartbeat(config: dict) -> bool:
         payload["agent_install"] = _detect_agent_install_for_heartbeat()
     except Exception as _ai_e:
         log.debug("agent_install detection failed (continuing): %s", _ai_e)
+    # Billing-mode roll-up (docs/BILLING_MODE_DETECTION.md): classify each
+    # detected runtime as subscription|metered|local|unknown so cloud/UI/device
+    # can label API-equivalent cost as "covered by your <plan>" vs actual spend.
+    # Non-secret, non-prompting detection. Best-effort — NEVER blocks the
+    # heartbeat (returns None on any failure, and we only attach when truthy).
+    try:
+        _billing = _build_billing_payload(config)
+        if _billing:
+            payload["billing"] = _billing
+    except Exception as _bm_e:
+        log.debug("billing-mode detection failed (continuing): %s", _bm_e)
     # Daemon-collected snapshots (see _collect_security_posture docstring)
     sec = _collect_security_posture()
     if sec is not None:
