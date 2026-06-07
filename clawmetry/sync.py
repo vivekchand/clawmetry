@@ -306,6 +306,21 @@ def _family_session_limit() -> int:
     except (TypeError, ValueError):
         return 50
 
+# Per-session event read depth for family runtimes. The reader adapters return a
+# session's events OLDEST-first, capped at ``limit`` -- so a SMALL cap silently
+# drops the NEWEST events once a session passes it. A real 6,381-event Claude
+# Code session read at the old cap of 2000 froze the live feed ~70h in the past
+# (the device showed "no recent activity" while the agent was mid-turn). The cap
+# must comfortably exceed a long-running session's event count so the freshest
+# activity is always read; a high-water mark (below) keeps the per-cycle ingest
+# bounded to genuinely-new events so the big cap costs nothing on idle sessions.
+# Raise via CLAWMETRY_FAMILY_EVENT_CAP for pathologically long sessions.
+def _family_event_read_cap() -> int:
+    try:
+        return max(2000, int(os.environ.get("CLAWMETRY_FAMILY_EVENT_CAP", "20000")))
+    except (TypeError, ValueError):
+        return 20000
+
 # On-demand backfill (founder 2026-06-03): the default sync is the most-recent
 # 50, but the local DuckDB can hold as much history as the user wants. When the
 # cloud UI requests older sessions (a `runtime_backfill` pending action), we
@@ -9968,6 +9983,17 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 ns_id = f"{runtime}:{s.id}"
                 started = _epoch_to_iso(s.started_at)
                 ended = _epoch_to_iso(s.ended_at)
+                # High-water mark = newest event ts we've already ingested for
+                # this session. Skip sessions that haven't advanced since: the
+                # adapter would re-read the whole file (potentially thousands of
+                # events) only to ingest nothing. Active sessions advance their
+                # ``ended`` (the adapter sets it to the last event ts) every turn,
+                # so they're never wrongly skipped; idle/ended sessions cost ~0.
+                _evt_hw = state.setdefault("family_event_high_water", {})
+                _hw_ts = _evt_hw.get(ns_id)
+                _activity = ended or started
+                if _hw_ts and _activity and _activity <= _hw_ts:
+                    continue
                 metadata = {
                     "runtime": runtime,
                     "displayName": s.display_name or "",
@@ -9988,7 +10014,10 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 metadata.update(_intel)
                 # Pre-fetch the events once (the transcript loop below reuses
                 # them) so we can also derive the per-session tool failure-rate.
-                _events = list(adapter.list_events(s.id, limit=2000))
+                # Read deep enough to reach the NEWEST events (the adapter returns
+                # oldest-first, so a low cap drops the freshest activity); the
+                # high-water filter below keeps the actual ingest to new events.
+                _events = list(adapter.list_events(s.id, limit=_family_event_read_cap()))
                 _thealth = _session_tool_health(_events)
                 metadata.update(_thealth)
                 _idle = _session_idle_gaps(_events)
@@ -10061,6 +10090,11 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                     "compaction_count": _compactions or None,
                 })
                 # Events → transcript (rides the existing _build_transcripts path).
+                # Re-ingest the full event set for sessions that advanced (the
+                # PK upsert makes re-ingest idempotent) so the per-event cost
+                # spread below stays correct -- it apportions the WHOLE session
+                # cost across ALL events, so it must see all of them, not a tail.
+                # The session-level skip above keeps this off idle sessions.
                 rows = []
                 for e in _events:
                     ets = _epoch_to_iso(e.ts)
@@ -10112,8 +10146,18 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                     try:
                         store.ingest_many(rows)
                         total_events += len(rows)
+                        # Advance the high-water mark to this session's newest
+                        # activity so the next cycle skips it until it grows
+                        # again. Only on a clean ingest -- a failure leaves the
+                        # mark behind so we retry the session next cycle.
+                        if _activity:
+                            _evt_hw[ns_id] = _activity
                     except Exception as _ee:
                         log.warning("family event ingest failed (%s): %s", ns_id, _ee)
+                elif _activity:
+                    # No event rows (e.g. an empty/metadata-only session): still
+                    # mark it seen so we don't re-scan it every cycle forever.
+                    _evt_hw[ns_id] = _activity
         except Exception as exc:
             log.warning(
                 "family runtime ingest failed for %s: %s",
@@ -10136,6 +10180,15 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
             )
         except Exception as _pe:
             log.debug("family sessions cloud push failed (continuing): %s", _pe)
+    # Bound the high-water map so a long-lived node that has seen thousands of
+    # sessions doesn't grow sync-state.json without limit. Keep the most-recent
+    # 1000 by watermark (we only ever re-touch the most-recent _family_session_limit
+    # sessions anyway, so evicting older marks is safe — a re-seen old session just
+    # re-ingests once, which the PK dedups).
+    _hw_map = state.get("family_event_high_water")
+    if isinstance(_hw_map, dict) and len(_hw_map) > 1000:
+        _keep = dict(sorted(_hw_map.items(), key=lambda kv: kv[1] or "", reverse=True)[:1000])
+        state["family_event_high_water"] = _keep
     return total_events
 
 
