@@ -6893,6 +6893,57 @@ def _rows_to_brain_events(rows: list) -> list:
 # that stale data doesn't linger after a node is decommissioned.
 BRAIN_CACHE_TTL_SEC = 21600
 BRAIN_CACHE_LIMIT = 50
+# Per-session fairness for the brain blob (the device "no activity for this
+# session" fix): guarantee each of the most-recently-active sessions at least
+# BRAIN_PER_SESSION renderable events, across up to BRAIN_SESSION_FANOUT
+# sessions, before filling the rest with the freshest node-wide events. Without
+# this a single very active session floods the newest-N window and crowds out a
+# session the user just messaged. 8×5=40 guaranteed + 10 fill = BRAIN_CACHE_LIMIT,
+# which (with the per-event size cap) keeps the blob inside the device buffer.
+BRAIN_PER_SESSION = 5
+BRAIN_SESSION_FANOUT = 8
+
+# Event types that are internal plumbing, NOT real activity -- the device parser
+# (summary_parse.c brain_event_to_row) drops them, so including them in the blob
+# just wastes its limited slots (a session whose only in-window events were
+# ``prompt.submitted`` showed "no activity" even though it had real messages).
+_BRAIN_SKIP_TYPES = {
+    "prompt.submitted", "queue-operation", "queue_operation", "compaction",
+    "session.ended", "sessionended", "session_end", "permission-mode",
+    "file-history-snapshot", "ai-title", "last-prompt",
+}
+
+
+def _brain_row_renderable(r: dict) -> bool:
+    """True if the event row would render as a real message / tool event on the
+    device + cloud Brain feed (mirrors ``summary_parse.c brain_event_to_row``).
+    Skips internal plumbing so the blob's limited slots hold real activity."""
+    if not isinstance(r, dict):
+        return False
+    if (r.get("event_type") or "").lower() in _BRAIN_SKIP_TYPES:
+        return False
+    data = r.get("data")
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception:
+            return bool(data.strip())
+    if not isinstance(data, dict):
+        return False
+    if (data.get("type") or "").lower() in _BRAIN_SKIP_TYPES:
+        return False
+    msg = data.get("message") if isinstance(data.get("message"), dict) else None
+    src = msg or data
+    content = src.get("content")
+    if isinstance(content, str) and content.strip():
+        return True
+    if isinstance(content, list) and content:
+        return True
+    if data.get("text"):
+        return True
+    if src.get("tool_calls") or data.get("tool_calls") or data.get("tool_name"):
+        return True
+    return False
 
 
 def _owner_hash_for_token(api_key: str) -> str:
@@ -6929,19 +6980,64 @@ def _build_brain_cache_pushes(config: dict) -> list:
         return []
     try:
         store = local_store.get_store(read_only=True)
-        # Fetch headroom: _rows_to_brain_events drops ClawMetry's own helper
-        # sessions (selfevolve/fix/…), so query extra rows to still land
-        # ~BRAIN_CACHE_LIMIT real events after filtering.
-        rows = store.query_events(limit=BRAIN_CACHE_LIMIT * 3)
+        # Newest node-wide events (headroom: drops helper sessions + non-render
+        # plumbing below, so over-fetch to still land BRAIN_CACHE_LIMIT real ones).
+        nw_rows = store.query_events(limit=BRAIN_CACHE_LIMIT * 4)
     except Exception:
         return []
-    if not rows:
+    if not nw_rows:
         return []
+
+    # Per-session fairness: guarantee each recently-active session its newest
+    # renderable events before filling with the freshest node-wide events, so a
+    # flooding session can't crowd out one the user just messaged (the device
+    # "no activity for this session" bug). Dedup by row id; sort newest-first.
+    seen_ids: set = set()
+    picked: list = []
+    per_session: dict = {}
+
+    def _consider(r, cap=None):
+        rid = r.get("id")
+        sid = r.get("session_id") or ""
+        if not rid or rid in seen_ids:
+            return
+        if cap is not None and per_session.get(sid, 0) >= cap:
+            return
+        if not _brain_row_renderable(r):
+            return
+        seen_ids.add(rid)
+        per_session[sid] = per_session.get(sid, 0) + 1
+        picked.append(r)
+
+    # Most-recently-active sessions, in recency order (from the newest events).
+    recent_sids: list = []
+    for r in nw_rows:
+        sid = r.get("session_id")
+        if sid and sid not in recent_sids:
+            recent_sids.append(sid)
+        if len(recent_sids) >= BRAIN_SESSION_FANOUT:
+            break
+    # (a) each recent session's newest renderable events (capped per session).
+    for sid in recent_sids:
+        try:
+            srows = store.query_events(session_id=sid, limit=BRAIN_PER_SESSION * 6)
+        except Exception:
+            srows = []
+        for r in srows:
+            _consider(r, cap=BRAIN_PER_SESSION)
+    # (b) fill the rest with the freshest node-wide renderable events.
+    for r in nw_rows:
+        if len(picked) >= BRAIN_CACHE_LIMIT:
+            break
+        _consider(r)
+
+    picked.sort(key=lambda r: r.get("ts") or "", reverse=True)
+    picked = picked[:BRAIN_CACHE_LIMIT]
+
     # Same translation as routes/brain.py:_try_local_store_brain (incl. the
-    # hide_clawmetry_session filter) so the browser sees an identical event
-    # shape AND set regardless of which path served the data (cache hit vs.
-    # relay subscribe vs. JSONL fallback).
-    events = _rows_to_brain_events(rows)[:BRAIN_CACHE_LIMIT]
+    # hide_clawmetry_session filter + sessionId stamp + size cap) so every read
+    # path (cache hit / relay / JSONL fallback) yields an identical event shape.
+    events = _rows_to_brain_events(picked)[:BRAIN_CACHE_LIMIT]
     payload = {
         "events":  events,
         "count":   len(events),
