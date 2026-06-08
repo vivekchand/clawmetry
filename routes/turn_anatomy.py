@@ -231,6 +231,11 @@ def _build_turns(rows):
             # Default end = next event's start within the WHOLE session.
             nxt = start_ms[gi + 1] if gi + 1 < len(start_ms) else s_ms
             tokens = int(e.get("token_count") or 0)
+            # cost_usd is daemon-stamped on every event at ingest (same column
+            # the tracing waterfall + tool catalog read). Turn anatomy never
+            # carried it, so the user couldn't see which span was expensive
+            # (#web-accuracy). Read it directly here and roll it up per turn.
+            cost = float(e.get("cost_usd") or 0.0)
             model = e.get("model") or _data(e).get("model") or ""
 
             if kind == "tool_result":
@@ -258,6 +263,7 @@ def _build_turns(rows):
                     "started_ms": s_ms, "ended_ms": nxt,
                     "duration_ms": max(0, nxt - s_ms),
                     "tokens": tokens or None,
+                    "cost": cost or None,
                     "status": "error" if _is_error(e) else "ok",
                 }
                 spans.append(sp)
@@ -292,7 +298,8 @@ def _build_turns(rows):
                          + (" " + model if model else ""),
                 "started_ms": s_ms, "ended_ms": nxt,
                 "duration_ms": max(0, nxt - s_ms),
-                "tokens": tokens or None, "model": model or None,
+                "tokens": tokens or None, "cost": cost or None,
+                "model": model or None,
                 "status": "error" if _is_error(e) else "ok",
             })
 
@@ -307,6 +314,7 @@ def _build_turns(rows):
             (s["label"] for s in spans if s["kind"] == "prompt"), "")
         tool_count = sum(1 for s in spans if s["kind"] == "tool")
         total_tokens = sum(int(s.get("tokens") or 0) for s in spans)
+        total_cost = sum(float(s.get("cost") or 0.0) for s in spans)
         has_error = any(s.get("status") == "error" for s in spans)
         out.append({
             "turn": tn + 1,
@@ -316,6 +324,7 @@ def _build_turns(rows):
             "prompt": prompt_label,
             "tool_count": tool_count,
             "total_tokens": total_tokens,
+            "total_cost": round(total_cost, 6),
             "span_count": len(spans),
             "status": "error" if has_error else "ok",
             "spans": spans,
