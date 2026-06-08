@@ -2635,6 +2635,8 @@ def _derive_waste_summary(sessions: list) -> dict:
     reasoning = round(sum(float(s.get("reasoning_cost_usd") or 0.0) for s in sessions), 4)
     low_cache, failing, compacting, mixed, flagged = [], [], [], [], set()
     reread, reread_usd = [], 0.0
+    compressible, compressible_usd, compressible_tok = [], 0.0, 0
+    cache_expiry, cache_expiry_count = [], 0
     for s in sessions:
         sid = s.get("session_id")
         chp = s.get("cache_hit_pct")
@@ -2644,6 +2646,19 @@ def _derive_waste_summary(sessions: list) -> dict:
         cwc = s.get("cache_write_cost_usd")
         if cwc and float(cwc) > 0.005 and float(cwc) > float(s.get("cache_saved_usd") or 0.0):
             reread.append(sid); reread_usd += float(cwc); flagged.add(sid)
+        # Cache-bust risk: idle gaps crossed the 5-min TTL and re-derived context.
+        cec = s.get("cache_expiry_count")
+        if cec and int(cec) > 0:
+            cache_expiry.append(sid); cache_expiry_count += int(cec); flagged.add(sid)
+        # Compression potential: tool output that is compressible without
+        # changing answers (JSON/logs/diffs). Recoverable, not yet recovered.
+        cpp = s.get("compression_potential_pct")
+        cru = s.get("compression_recoverable_usd")
+        if cpp is not None and float(cpp) >= 50 and (s.get("compressible_tool_tokens") or 0) >= 2000:
+            compressible.append(sid)
+            compressible_usd += float(cru or 0.0)
+            compressible_tok += int(s.get("compressible_tool_tokens") or 0)
+            flagged.add(sid)
         if (s.get("tool_error_pct") or 0) >= 20:
             failing.append(sid); flagged.add(sid)
         if (s.get("compaction_count") or 0) >= 2:
@@ -2661,6 +2676,11 @@ def _derive_waste_summary(sessions: list) -> dict:
         "low_cache_sessions": len(low_cache),
         "reread_tax_sessions": len(reread),
         "reread_tax_usd": round(reread_usd, 4),
+        "cache_expiry_sessions": len(cache_expiry),
+        "cache_expiry_count": cache_expiry_count,
+        "compressible_sessions": len(compressible),
+        "compressible_tokens": compressible_tok,
+        "compressible_usd": round(compressible_usd, 4),
         "tool_failing_sessions": len(failing),
         "compaction_heavy_sessions": len(compacting),
         "model_fallback_sessions": len(mixed),
@@ -3125,7 +3145,7 @@ def _try_local_store_cost_breakdown():
         intel = {}
         for mr in meta_rows:
             md = mr.get("metadata") or {}
-            if isinstance(md, dict) and any(md.get(k) is not None for k in ("reasoningCostUsd", "cacheHitPct", "toolErrorPct", "compactionCount", "cacheExpiryCount")):
+            if isinstance(md, dict) and any(md.get(k) is not None for k in ("reasoningCostUsd", "cacheHitPct", "toolErrorPct", "compactionCount", "cacheExpiryCount", "compressionPotentialPct", "compressionRecoverableUsd")):
                 intel[mr.get("session_id") or ""] = md
         if intel:
             for row in result:
@@ -3142,6 +3162,12 @@ def _try_local_store_cost_breakdown():
                     row["compaction_count"] = md["compactionCount"]
                 if md.get("cacheExpiryCount") is not None:
                     row["cache_expiry_count"] = md["cacheExpiryCount"]
+                if md.get("compressionPotentialPct") is not None:
+                    row["compression_potential_pct"] = md["compressionPotentialPct"]
+                if md.get("compressibleToolTokens") is not None:
+                    row["compressible_tool_tokens"] = md["compressibleToolTokens"]
+                if md.get("compressionRecoverableUsd") is not None:
+                    row["compression_recoverable_usd"] = md["compressionRecoverableUsd"]
     except Exception:
         pass
     # Cache-hit % (for the event-usage runtimes: OpenClaw / Claude Code) + the
