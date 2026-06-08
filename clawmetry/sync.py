@@ -15215,6 +15215,79 @@ def start_event_streamer(config: dict, state: dict, paths: dict) -> threading.Th
     return t
 
 
+_APP_BASE = os.environ.get("CLAWMETRY_APP_BASE", "https://app.clawmetry.com").rstrip("/")
+
+
+def _is_placeholder_email(email) -> bool:
+    """Zero-friction installs land on a throwaway placeholder account
+    (agent+<hash>@clawmetry.auto, renamed .linked after device pairing)."""
+    e = (email or "").strip().lower()
+    return e.endswith("@clawmetry.auto") or e.endswith("@clawmetry.linked")
+
+
+def _cloud_get_json(path: str, timeout: float = 4.0):
+    """Best-effort GET app.clawmetry.com<path> -> dict (or None). Never raises."""
+    try:
+        import urllib.request as _ur
+        with _ur.urlopen(_APP_BASE + path, timeout=timeout) as r:
+            return json.loads(r.read() or b"{}")
+    except Exception:
+        return None
+
+
+def start_claim_watcher(config: dict):
+    """ONE-STEP onboarding (daemon half). A zero-friction install lands on a
+    throwaway placeholder account; the cloud /cloud page claims it onto the
+    user's real (logged-in) account when `connect` opens the browser. While we
+    are on a placeholder, poll every ~5s for that claim; the moment it lands,
+    rewrite config with the real account's key and RE-EXEC -- so every thread
+    (heartbeat, snapshot push, pro auto-provision) restarts on the real account
+    and the node syncs there with NO `clawmetry connect --key`. Stops itself
+    once on a real account.
+
+    Re-exec (not an in-place key swap) because the running threads each captured
+    the old api_key; restarting is the clean way to have them all adopt the new
+    one. On restart, run_daemon's _auto_pro() provisions the pro package for the
+    now-entitled (Trial/Pro) account, so the other runtimes start syncing too."""
+    def _loop():
+        import urllib.parse as _up
+        node_id = (config.get("node_id") or "").strip()
+        token = (config.get("api_key") or "").strip()
+        if not token.startswith("cm_") or not node_id:
+            return
+        # Only watch placeholder accounts; a real account never gets "claimed".
+        acct = _cloud_get_json("/api/cloud/account?token=" + _up.quote(token))
+        if not acct or not _is_placeholder_email(acct.get("email")):
+            return
+        log.info("Placeholder account — watching for a one-step account claim (every 5s)")
+        while True:
+            time.sleep(5)
+            try:
+                res = _cloud_get_json(
+                    "/api/cloud/claim-status?token=%s&node_id=%s"
+                    % (_up.quote(token), _up.quote(node_id)))
+                if not res or not res.get("claimed"):
+                    continue
+                new_key = (res.get("api_key") or "").strip()
+                new_email = (res.get("email") or "").strip()
+                if not new_key.startswith("cm_") or new_key == token:
+                    continue
+                cfg = load_config()
+                cfg["api_key"] = new_key
+                cfg["account_email"] = new_email
+                save_config(cfg)
+                log.info("Node claimed onto %s — adopting the real account and "
+                         "restarting (pro auto-provision runs on restart)", new_email)
+                time.sleep(0.5)
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+            except Exception as e:
+                log.debug("claim-watcher: %s", e)
+
+    th = threading.Thread(target=_loop, daemon=True, name="claim-watcher")
+    th.start()
+    return th
+
+
 def run_daemon() -> None:
     if not _acquire_pid_lock():
         print(
@@ -15291,6 +15364,13 @@ def run_daemon() -> None:
                 log.info("clawmetry-pro: %s", _pro_msg)
     except Exception as _pe:
         log.debug("pro auto-provision (daemon) skipped: %s", _pe)
+    # One-step onboarding: if this node is on a placeholder account, watch for
+    # it being claimed onto the user's real account and adopt it automatically
+    # (no `clawmetry connect --key`). No-op for a real account.
+    try:
+        start_claim_watcher(config)
+    except Exception as _cw:
+        log.debug("claim-watcher start skipped: %s", _cw)
     paths = detect_paths()
     enc = "🔒 E2E encrypted" if config.get("encryption_key") else "⚠️  unencrypted"
     try:
