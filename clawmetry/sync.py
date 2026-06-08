@@ -9528,8 +9528,19 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
         batch: list = []
         total_uploaded = 0
         BATCH_SIZE = 50
-        for fpath, current_mtime in jsonl_files:
-            if last_mtimes.get(fpath.name) == current_mtime:
+        # jsonl_files is sorted mtime-desc. ALWAYS re-process the most-recent
+        # _ALWAYS_RESYNC_RECENT sessions, even when their JSONL mtime is unchanged
+        # — OpenClaw's Claude-CLI JSONL doesn't bump mtime on append AND carries
+        # no usage, so a session's REAL cost/tokens only land via the events
+        # bridge in _flush(). Without this, the bridge never re-reaches Postgres
+        # for an already-synced session and the cloud "Your agents" / device-
+        # summary cost stayed $0 forever (#web-accuracy / audit FIX 7). Bounded
+        # so steady-state cost stays tiny (re-parse a handful of small JSONLs).
+        _ALWAYS_RESYNC_RECENT = int(
+            os.environ.get("CLAWMETRY_RESYNC_RECENT_SESSIONS", "30") or "30")
+        for _idx, (fpath, current_mtime) in enumerate(jsonl_files):
+            if _idx >= _ALWAYS_RESYNC_RECENT and \
+                    last_mtimes.get(fpath.name) == current_mtime:
                 continue
             try:
                 # `<uuid>.jsonl` -> stem is `<uuid>`. For an archived
