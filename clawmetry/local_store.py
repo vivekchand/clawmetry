@@ -3985,6 +3985,170 @@ class LocalStore:
         except Exception:
             return []
 
+    def query_model_rollup(self) -> dict[str, Any]:
+        """Per-runtime and per-(runtime, model) aggregates over the FULL events
+        table — the uncapped source for the cloud Models / runtimeSummary
+        snapshot builders.
+
+        Replaces the old ``query_events(limit=20000)`` scan in
+        ``sync._build_runtime_summary`` / ``_build_model_attribution`` which
+        returned only the 20k most-recent events GLOBALLY. With a high-volume
+        runtime (e.g. claude_code at 100k+ events) that budget was consumed
+        entirely, so smaller runtimes (goose/hermes/opencode/qwen_code) vanished
+        from the snapshot and the big runtime itself was undercounted ~5×
+        (#web-accuracy). This is two SQL ``GROUP BY`` aggregates (index-backed
+        scans, O(events) in DuckDB, tiny output) so EVERY event counts and no
+        runtime is starved.
+
+        ``runtime`` = the session-id prefix before ``:`` when it's a known
+        non-OpenClaw runtime, else ``openclaw`` — mirrors ``_runtime_of_session``
+        (sync.py) and ``_runtime_session_id_clause`` (this module) so the buckets
+        reconcile with the per-runtime event filter by construction.
+
+        Returns::
+
+            {
+              "by_runtime": {rt: {sessions, tokens, cost_usd, events}},
+              "by_runtime_model": [
+                  {runtime, model, turns, tokens, cost_usd, sessions}, ...
+              ],  # model-bearing rows only
+              "switches": [
+                  {runtime, session, from_model, to_model}, ...
+              ],  # capped detail list of mid-session model changes
+            }
+
+        Best-effort: any failure yields empty dicts so the caller falls back to
+        its empty state (cloud renders the no-data card).
+        """
+        try:
+            prefixes = list(_NON_OPENCLAW_RUNTIME_PREFIXES)
+            placeholders = ", ".join(["?"] * len(prefixes))
+            # split_part returns the whole string when there's no ':' separator,
+            # so a bare OpenClaw UUID falls outside the known-prefix set → bucket
+            # 'openclaw' (matches _runtime_of_session). One CASE expression keeps
+            # the bucketing identical across both GROUP BYs.
+            rt_case = (
+                f"CASE WHEN split_part(session_id, ':', 1) IN ({placeholders}) "
+                f"THEN split_part(session_id, ':', 1) ELSE 'openclaw' END"
+            )
+            by_runtime: dict[str, dict[str, Any]] = {}
+            sql_rt = f"""
+                SELECT {rt_case} AS runtime,
+                       COUNT(DISTINCT session_id) AS sessions,
+                       SUM(COALESCE(token_count, 0)) AS tokens,
+                       SUM(COALESCE(cost_usd, 0.0)) AS cost_usd,
+                       COUNT(*) AS events
+                FROM events
+                GROUP BY 1
+            """
+            for r in self._fetch(sql_rt, list(prefixes)):
+                rt = r[0] or "openclaw"
+                by_runtime[rt] = {
+                    "sessions": int(r[1] or 0),
+                    "tokens": int(r[2] or 0),
+                    "cost_usd": float(r[3] or 0.0),
+                    "events": int(r[4] or 0),
+                }
+            by_runtime_model: list[dict[str, Any]] = []
+            sql_rtm = f"""
+                SELECT {rt_case} AS runtime,
+                       model,
+                       COUNT(*) AS turns,
+                       SUM(COALESCE(token_count, 0)) AS tokens,
+                       SUM(COALESCE(cost_usd, 0.0)) AS cost_usd,
+                       COUNT(DISTINCT session_id) AS sessions
+                FROM events
+                WHERE model IS NOT NULL AND model <> ''
+                GROUP BY 1, 2
+            """
+            for r in self._fetch(sql_rtm, list(prefixes)):
+                by_runtime_model.append({
+                    "runtime": r[0] or "openclaw",
+                    "model": r[1] or "",
+                    "turns": int(r[2] or 0),
+                    "tokens": int(r[3] or 0),
+                    "cost_usd": float(r[4] or 0.0),
+                    "sessions": int(r[5] or 0),
+                })
+            # Mid-session model switches (a detail panel on the Models tab). One
+            # LAG window over the model-bearing events surfaces every change
+            # across ALL history; capped so the snapshot stays small (switches
+            # are rare — dozens, not thousands — so the cap rarely bites; we log
+            # when it does rather than silently truncate, FLYWHEEL no-silent-cap).
+            switches: list[dict[str, Any]] = []
+            _SWITCH_CAP = 2000
+            sql_sw = f"""
+                SELECT runtime, session_id, prev_model, model FROM (
+                    SELECT {rt_case} AS runtime, session_id, model,
+                           LAG(model) OVER (
+                               PARTITION BY session_id ORDER BY ts, id
+                           ) AS prev_model
+                    FROM events
+                    WHERE model IS NOT NULL AND model <> ''
+                ) t
+                WHERE prev_model IS NOT NULL AND prev_model <> model
+                LIMIT ?
+            """
+            sw_rows = self._fetch(sql_sw, list(prefixes) + [_SWITCH_CAP + 1])
+            if len(sw_rows) > _SWITCH_CAP:
+                log.warning(
+                    "model-switch rollup truncated: >%d switches observed, "
+                    "surfacing first %d in the snapshot detail list",
+                    _SWITCH_CAP, _SWITCH_CAP,
+                )
+                sw_rows = sw_rows[:_SWITCH_CAP]
+            for r in sw_rows:
+                switches.append({
+                    "runtime": r[0] or "openclaw",
+                    "session": r[1] or "",
+                    "from_model": r[2] or "",
+                    "to_model": r[3] or "",
+                })
+            return {
+                "by_runtime": by_runtime,
+                "by_runtime_model": by_runtime_model,
+                "switches": switches,
+            }
+        except Exception:
+            return {"by_runtime": {}, "by_runtime_model": [], "switches": []}
+
+    def query_event_totals_by_session(
+        self, session_ids: "Iterable[str]",
+    ) -> dict[str, dict[str, Any]]:
+        """Sum ``token_count`` + ``cost_usd`` from the events table for the given
+        session ids → ``{session_id: {tokens, cost_usd}}``.
+
+        The cloud-push path (``sync.sync_session_metadata``) derives a session's
+        ``total_cost``/``total_tokens`` from the JSONL ``message.usage`` fields,
+        but OpenClaw sessions driven by the Claude CLI emit no assistant-usage in
+        the gateway JSONL → it pushed ``cost=0, tokens=0`` to cloud even though
+        the events table (daemon-stamped at ingest) has the real figures
+        ($19.86 / 32,760 for the live OpenClaw session — #web-accuracy). This
+        lets the push bridge to the same source the OSS dashboard already trusts
+        (``query_sessions_table``'s GREATEST(stored, SUM(events)) pattern).
+        Best-effort: any failure yields ``{}`` so the push falls back to the
+        JSONL-derived value.
+        """
+        try:
+            ids = [str(s) for s in session_ids if s]
+            if not ids:
+                return {}
+            placeholders = ", ".join(["?"] * len(ids))
+            sql = f"""
+                SELECT session_id,
+                       SUM(COALESCE(token_count, 0)) AS tokens,
+                       SUM(COALESCE(cost_usd, 0.0))  AS cost_usd
+                FROM events
+                WHERE session_id IN ({placeholders})
+                GROUP BY session_id
+            """
+            out: dict[str, dict[str, Any]] = {}
+            for r in self._fetch(sql, ids):
+                out[r[0]] = {"tokens": int(r[1] or 0), "cost_usd": float(r[2] or 0.0)}
+            return out
+        except Exception:
+            return {}
+
     def query_recent_read_tool_calls(
         self,
         *,

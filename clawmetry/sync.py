@@ -9496,6 +9496,32 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                 _local_ingest_sessions_batch(rows, node_id)
             except Exception as _e:
                 log.warning("local-store sessions ingest failed (cloud sync continues): %s", _e)
+            # Bridge cost/tokens from the events table before pushing to cloud.
+            # The JSONL ``message.usage`` fields above are EMPTY for OpenClaw
+            # sessions driven by the Claude CLI (no assistant-usage in the
+            # gateway transcript), so ``total_cost``/``total_tokens`` were pushed
+            # as 0 even though the events table (daemon-stamped at ingest) has the
+            # real figures — the cloud "Your agents" / Usage views then showed
+            # $0 (#web-accuracy). GREATEST(JSONL-derived, SUM(events)) mirrors
+            # query_sessions_table's bridge: only ever raises a stale-low value,
+            # never lowers a JSONL value that's already correct.
+            try:
+                from clawmetry import local_store as _ls
+                _store = _ls.get_store()
+                if _store is not None:
+                    _ev_totals = _store.query_event_totals_by_session(
+                        [s.get("session_id") for s in rows]
+                    )
+                    for s in rows:
+                        _t = _ev_totals.get(s.get("session_id"))
+                        if not _t:
+                            continue
+                        s["total_tokens"] = max(int(s.get("total_tokens") or 0),
+                                                int(_t.get("tokens") or 0))
+                        s["total_cost"] = max(float(s.get("total_cost") or 0.0),
+                                              float(_t.get("cost_usd") or 0.0))
+            except Exception as _e:
+                log.debug("event-cost bridge skipped (push uses JSONL value): %s", _e)
             _post("/ingest/sessions", {"node_id": node_id, "sessions": rows}, api_key)
             return len(rows)
 
@@ -10790,35 +10816,36 @@ def _build_model_attribution():
     Best-effort: any failure yields {} (cloud falls back to its empty state).
     """
     try:
-        from collections import defaultdict
         from clawmetry import local_store as _ls
 
         store = _ls.get_store()
         if store is None:
             return {}
-        evs = store.query_events(limit=20000)
-        if not evs:
+        # Uncapped SQL rollup over the FULL events table (was a most-recent-20k
+        # event scan that starved every runtime once claude_code passed ~20k
+        # events — #web-accuracy). One GROUP BY, tiny output.
+        rollup = store.query_model_rollup() or {}
+        by_rtm = rollup.get("by_runtime_model") or []
+        if not by_rtm:
             return {}
+        # Global per-model totals = sum across runtimes (a session belongs to
+        # exactly one runtime by session-id prefix, so distinct-session counts
+        # don't double-count when summed).
         model_turns: dict = {}
-        sess_models = defaultdict(list)
-        saw_any = False
-        for ev in sorted(evs, key=lambda e: (e.get("session_id") or "", e.get("ts") or "")):
-            m = (ev.get("model") or "").strip()
+        model_sessions: dict = {}
+        for r in by_rtm:
+            m = (r.get("model") or "").strip()
             if not m:
                 continue
-            saw_any = True
-            model_turns[m] = model_turns.get(m, 0) + 1
-            sid = ev.get("session_id") or ""
-            if sid and (not sess_models[sid] or sess_models[sid][-1] != m):
-                sess_models[sid].append(m)
-        if not saw_any:
+            model_turns[m] = model_turns.get(m, 0) + int(r.get("turns") or 0)
+            model_sessions[m] = model_sessions.get(m, 0) + int(r.get("sessions") or 0)
+        if not model_turns:
             return {}
-        model_sessions: dict = {}
-        switches = []
-        for sid, mlist in sess_models.items():
-            model_sessions[mlist[0]] = model_sessions.get(mlist[0], 0) + 1
-            for prev, nxt in zip(mlist, mlist[1:]):
-                switches.append({"session": sid, "from_model": prev, "to_model": nxt})
+        switches = [
+            {"session": s.get("session", ""), "from_model": s.get("from_model", ""),
+             "to_model": s.get("to_model", "")}
+            for s in (rollup.get("switches") or [])
+        ]
         total_turns = sum(model_turns.values())
         sorted_models = sorted(model_turns.items(), key=lambda x: -x[1])
         primary_model = sorted_models[0][0] if sorted_models else ""
@@ -10874,59 +10901,54 @@ def _build_runtime_summary(limit: int = 20000):
         store = _ls.get_store()
         if store is None:
             return {}
-        evs = store.query_events(limit=int(limit)) or []
+        # Uncapped SQL rollup over the FULL events table. The previous
+        # query_events(limit=20000) scan returned only the 20k most-recent events
+        # GLOBALLY, so a high-volume runtime (claude_code at 100k+ events)
+        # consumed the entire budget — smaller runtimes (goose/hermes/opencode/
+        # qwen_code) dropped out of the snapshot entirely and the big runtime was
+        # undercounted ~5× (#web-accuracy). The ``limit`` kwarg is retained for
+        # signature compatibility but no longer caps the aggregate.
+        rollup = store.query_model_rollup() or {}
+        by_runtime = rollup.get("by_runtime") or {}
+        by_rtm = rollup.get("by_runtime_model") or []
         # NOTE: we no longer early-return on empty events — a node that ONLY ever
         # sent OTLP traces (a pure OpenLLMetry app, no OpenClaw sessions) has no
         # events but DOES have foreign-app spans to surface below.
-        agg: dict = {}
-        sess_models = defaultdict(list)  # (rt, sid) -> ordered model list
-        for ev in sorted(evs, key=lambda e: (e.get("session_id") or "", e.get("ts") or "")):
-            sid = ev.get("session_id") or ""
-            rt = _runtime_of_session(sid)
-            a = agg.setdefault(rt, {"turns": 0, "tokens": 0, "cost": 0.0,
-                                    "models": {}, "sessions": set()})
-            if sid:
-                a["sessions"].add(sid)
-            try:
-                a["tokens"] += int(ev.get("token_count") or 0)
-            except (TypeError, ValueError):
-                pass
-            try:
-                a["cost"] += float(ev.get("cost_usd") or 0.0)
-            except (TypeError, ValueError):
-                pass
-            m = (ev.get("model") or "").strip()
+        rt_models: dict = defaultdict(dict)  # rt -> {model: {turns, sessions}}
+        for r in by_rtm:
+            rt = r.get("runtime") or "openclaw"
+            m = (r.get("model") or "").strip()
             if not m:
                 continue
-            a["turns"] += 1
-            a["models"][m] = a["models"].get(m, 0) + 1
-            key = (rt, sid)
-            if sid and (not sess_models[key] or sess_models[key][-1] != m):
-                sess_models[key].append(m)
-        rt_model_sessions = defaultdict(lambda: defaultdict(int))
-        rt_switches = defaultdict(int)
-        for (rt, _sid), mlist in sess_models.items():
-            if mlist:
-                rt_model_sessions[rt][mlist[0]] += 1
-            rt_switches[rt] += max(0, len(mlist) - 1)
+            rt_models[rt][m] = {
+                "turns": int(r.get("turns") or 0),
+                "sessions": int(r.get("sessions") or 0),
+            }
+        rt_switches: dict = defaultdict(int)
+        for s in (rollup.get("switches") or []):
+            rt_switches[s.get("runtime") or "openclaw"] += 1
         out: dict = {}
-        for rt, a in agg.items():
-            total = sum(a["models"].values())
-            sorted_models = sorted(a["models"].items(), key=lambda x: -x[1])
+        # Union of runtimes seen in the per-runtime totals and the per-model rows
+        # (a runtime with only model-less events still gets a card with 0 turns).
+        for rt in set(by_runtime) | set(rt_models):
+            totals = by_runtime.get(rt) or {}
+            models = rt_models.get(rt) or {}
+            total = sum(mm["turns"] for mm in models.values())
+            sorted_models = sorted(models.items(), key=lambda x: -x[1]["turns"])
             models_out = [{
-                "model": m, "turns": t,
-                "sessions": rt_model_sessions[rt].get(m, 0),
-                "share_pct": round(t / total * 100, 2) if total else 0,
-            } for m, t in sorted_models[:15]]
+                "model": m, "turns": mm["turns"],
+                "sessions": mm["sessions"],
+                "share_pct": round(mm["turns"] / total * 100, 2) if total else 0,
+            } for m, mm in sorted_models[:15]]
             out[rt] = {
-                "sessions": len(a["sessions"]),
-                "turns": a["turns"],
-                "tokens": a["tokens"],
-                "cost_usd": round(a["cost"], 4),
+                "sessions": int(totals.get("sessions") or 0),
+                "turns": total,
+                "tokens": int(totals.get("tokens") or 0),
+                "cost_usd": round(float(totals.get("cost_usd") or 0.0), 4),
                 "primary_model": sorted_models[0][0] if sorted_models else "",
                 "total_turns": total,
                 "models": models_out,
-                "switch_count": rt_switches[rt],
+                "switch_count": rt_switches.get(rt, 0),
             }
         # Fold in foreign OTLP / OpenLLMetry apps (#2822/#2853 follow-up). These
         # derive ``agent_type`` from the resource ``service.name`` and have NO
