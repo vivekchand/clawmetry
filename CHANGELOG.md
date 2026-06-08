@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Release: warn when a machine is on a temporary (unlinked) account (#2910) (2026-06-08)
+- Fixes the recurring "I installed ClawMetry but my dashboard shows 0 nodes" trap. A zero-friction install binds the daemon to a throwaway placeholder account (agent+<hash>@clawmetry.auto, renamed .linked after device pairing) that is invisible from the user's real login, so the node silently never appears under their email. `clawmetry status` printed the placeholder account with no hint anything was wrong.
+- `clawmetry status` now tags the account line ("temporary, not linked") and prints a block with the exact relink command; the zero-friction `clawmetry connect` prints the same warning at install time (skipped for a keyed `--key cm_...` connect, which lands on the real account). To sync a machine to your account, run the `clawmetry connect --key cm_...` command from the "+ Add node" box on app.clawmetry.com/cloud.
+
 ### Release: tamper-evident hash chain ON by default (#2906) (2026-06-08)
 - The Free, always-on tamper-evident hash chain (Security tab integrity card + `clawmetry verify-integrity`) defaulted to OFF (`CLAWMETRY_INTEGRITY=0`), so on a standard install nothing ever stamped and the integrity card showed a perpetual "empty" state (chain_length=0). Default it ON to match the product promise; set `CLAWMETRY_INTEGRITY=0` to disable on an extreme-volume node.
 - The per-flush duplicate check is now a single `IN(...)` lookup instead of a `SELECT` per event (flush batch up to 1000 rows), keeping default-on stamping within the daemon CPU budget. `events.id` is an indexed PRIMARY KEY so the lookups are point ops, not scans.
