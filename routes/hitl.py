@@ -95,6 +95,20 @@ def hitl_flag():
         },
     )
 
+    # Enterprise audit-log producer — record the human-in-the-loop flag/pause.
+    try:
+        from clawmetry import audit as _audit
+        _audit.audit_event(
+            "hitl.pause",
+            actor=operator,
+            target=session_id,
+            result="paused",
+            source="hitl",
+            metadata={"reason": reason},
+        )
+    except Exception:
+        pass
+
     return jsonify({"flagged": True, "session_id": session_id, "operator": operator})
 
 
@@ -144,6 +158,21 @@ def hitl_decide():
         resolver=operator,
         reason=reason,
     )
+
+    # Enterprise audit-log producer — record the resume/decision. An approve
+    # resumes the session; a reject keeps it blocked.
+    try:
+        from clawmetry import audit as _audit
+        _audit.audit_event(
+            "hitl.resume" if decision == "approve" else "hitl.decide",
+            actor=operator,
+            target=session_id,
+            result="resumed" if decision == "approve" else "rejected",
+            source="hitl",
+            metadata={"decision": decision, "reason": reason},
+        )
+    except Exception:
+        pass
 
     return jsonify({
         "decided": True,

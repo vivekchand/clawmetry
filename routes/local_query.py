@@ -563,6 +563,21 @@ _DAEMON_METHODS = frozenset({
     # Issue #1013: Trace 7 — one row per trace_id with aggregate stats.
     # Powers /api/local/traces + the cloud relay query.traces shape.
     "query_traces",
+    # Foreign OTLP / OpenLLMetry apps (#2822 stamps agent_type from
+    # service.name): a single GROUP BY agent_type rollup so the runtime
+    # switcher + Agent Inventory surface a bring-your-own-agent app that only
+    # ever sent OTLP traces. Daemon snapshot-path use; allowlisted so the
+    # local Inventory route can read it through the proxy too.
+    "query_otlp_app_rollup",
+    # OTLP span WRITE-through. The /v1/traces receiver runs in the dashboard
+    # process, which does not own the DuckDB writer; get_store() returns a
+    # _ProxyStore that forwards put_span here so the daemon (the writer) does
+    # the real INSERT. Without this allowlist entry the proxy 400s and the span
+    # silently vanishes, so a "bring your own agent" OTLP app never persists or
+    # appears in the switcher / Inventory. Same write-through-proxy pattern as
+    # set_agent_meta. The handler calls put_span(span=...) by keyword (the proxy
+    # only forwards kwargs).
+    "put_span",
     # Issue #1364 (Tier-1 2026-05-15): /api/fallbacks model/provider
     # transition aggregator. Replaces a JSONL walker that opened up to 100
     # transcript files per request — multi-second on a busy workspace.
@@ -635,6 +650,12 @@ _DAEMON_METHODS = frozenset({
     # Issue #883: external API tracing. Read-only; the daemon owns the writer
     # connection so the proxy is required for multi-process installs.
     "query_external_calls",
+    # Agent Inventory tab: owner/notes labels per runtime. query_ is a read,
+    # set_ is a read-then-write under the daemon's _write_lock (same pattern as
+    # ingest_approval above). Without these the inventory owner read/write
+    # returns None and the proxy 400s (memory feedback_cli_methods_need_daemon_allowlist).
+    "query_agent_meta",
+    "set_agent_meta",
 })
 
 
