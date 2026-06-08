@@ -6852,16 +6852,19 @@ def _rows_to_brain_events(rows: list) -> list:
             # Bound the per-event size so a burst of big tool outputs can't push
             # the blob past the device's 128 KB buffer (the "feed locked" cause).
             data = _truncate_brain_payload(data)
-            # Stamp the session id so per-session feeds (the desk device's live
-            # feed + cloud Brain filtering) can attribute each event. Family
-            # runtime payloads (claude_code/codex/…) carry NO sessionId inside
-            # ``data`` -- only the row's top-level session_id column has it, so
-            # the device's per-session filter matched nothing and every session
-            # showed the same node-wide feed. Use the BARE uuid (drop the
-            # ``runtime:`` namespace) so it matches the device-agent session ids
-            # (#1465). Never overwrite a sessionId the payload already carries.
+            # Stamp the CANONICAL session id from the row's top-level session_id
+            # column (the BARE uuid, dropping the ``runtime:`` namespace) so
+            # per-session feeds (desk device + cloud Brain filtering) attribute
+            # each event to the session the device shows. We OVERWRITE any
+            # ``sessionId`` already inside ``data``: an OpenClaw session that runs
+            # Claude Code under the hood embeds the INNER Claude-CLI sessionId in
+            # its event payload (e.g. data.sessionId=<claude uuid> while the row
+            # belongs to the OpenClaw session) -- trusting that inner id filed the
+            # events under the wrong session, so tapping the OpenClaw session on
+            # the device showed "no activity". The row's session_id is the same
+            # id the device-agent + sessions table use, so it's authoritative.
             _sid = r.get("session_id")
-            if _sid and not data.get("sessionId") and not data.get("session_id"):
+            if _sid:
                 data = {**data, "sessionId": _sid.rsplit(":", 1)[-1]}
             out.append(_cap_brain_event_size(data))
         elif isinstance(data, str):
