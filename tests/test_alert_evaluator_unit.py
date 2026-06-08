@@ -357,3 +357,138 @@ def test_legacy_alert_type_maps_to_count_evaluator():
     events = _events("assistant", [0, 5, 10])
     matches = alert_evaluator.evaluate([rule], events, {})
     assert len(matches) == 1
+
+
+# ── 7. eval_score_below (eval->monitor loop) ─────────────────────────────────
+
+
+def _quality(*, eval_count=0, eval_avg=None, eval_scores=None,
+             classified_total=0, failed_count=0, outcome_counts=None,
+             window_minutes=60):
+    """Build a query_session_quality_window()-shaped dict."""
+    failure_rate = (failed_count / classified_total) if classified_total else None
+    return {
+        "window_minutes":   window_minutes,
+        "eval_count":       eval_count,
+        "eval_avg":         eval_avg,
+        "eval_scores":      eval_scores or [],
+        "outcome_counts":   outcome_counts or {},
+        "classified_total": classified_total,
+        "failed_count":     failed_count,
+        "failure_rate":     failure_rate,
+    }
+
+
+def test_eval_score_below_fires_when_avg_below_threshold():
+    rule = _rule(
+        "r-eval",
+        alert_type="eval_score_below",
+        threshold_value=3,         # fire when avg < 3
+        cooldown_sec=0,
+    )
+    q = _quality(eval_count=4, eval_avg=2.1, eval_scores=[1, 2, 2, 3.4])
+    matches = alert_evaluator.evaluate([rule], [], {}, q)
+    assert len(matches) == 1
+    md = matches[0]["metadata"]
+    assert md["avg_score"] == 2.1
+    assert md["threshold"] == 3.0
+    assert md["session_count"] == 4
+    assert "avg eval score 2.10" in matches[0]["summary"]
+
+
+def test_eval_score_below_no_fire_when_avg_at_or_above_threshold():
+    rule = _rule("r-eval", alert_type="eval_score_below",
+                 threshold_value=3, cooldown_sec=0)
+    q = _quality(eval_count=5, eval_avg=3.0)  # exactly at threshold -> no fire
+    assert alert_evaluator.evaluate([rule], [], {}, q) == []
+    q2 = _quality(eval_count=5, eval_avg=4.2)
+    assert alert_evaluator.evaluate([rule], [], {}, q2) == []
+
+
+def test_eval_score_below_respects_min_sessions():
+    """Below threshold but too few scored sessions -> no fire (single-sample
+    noise guard). Default min_sessions is 3."""
+    rule = _rule("r-eval", alert_type="eval_score_below",
+                 threshold_value=3, cooldown_sec=0)
+    q = _quality(eval_count=2, eval_avg=1.0)  # avg low, but only 2 sessions
+    assert alert_evaluator.evaluate([rule], [], {}, q) == []
+    # Custom min_sessions honoured.
+    rule2 = _rule("r-eval2", alert_type="eval_score_below",
+                  threshold_value=3, min_sessions=2, cooldown_sec=0)
+    assert len(alert_evaluator.evaluate([rule2], [], {}, q)) == 1
+
+
+def test_eval_score_below_no_fire_on_empty_quality():
+    rule = _rule("r-eval", alert_type="eval_score_below",
+                 threshold_value=3, cooldown_sec=0)
+    # No quality slice fetched at all.
+    assert alert_evaluator.evaluate([rule], [], {}, None) == []
+    # Empty store (no scored sessions in window).
+    assert alert_evaluator.evaluate([rule], [], {}, _quality()) == []
+
+
+# ── 8. outcome_failure_rate (eval->monitor loop) ─────────────────────────────
+
+
+def test_outcome_failure_rate_fires_above_threshold():
+    rule = _rule(
+        "r-out",
+        alert_type="outcome_failure_rate",
+        threshold_value=20,        # 20%
+        cooldown_sec=0,
+    )
+    # 10 classified, 3 failed-ish -> 30% > 20% -> fires.
+    q = _quality(classified_total=10, failed_count=3,
+                 outcome_counts={"success": 7, "failed": 2, "cognitive_loop": 1})
+    matches = alert_evaluator.evaluate([rule], [], {}, q)
+    assert len(matches) == 1
+    md = matches[0]["metadata"]
+    assert md["failed_count"] == 3
+    assert md["classified_total"] == 10
+    assert md["failure_rate"] == 0.3
+    assert md["threshold_pct"] == 20.0
+
+
+def test_outcome_failure_rate_no_fire_at_or_below_threshold():
+    rule = _rule("r-out", alert_type="outcome_failure_rate",
+                 threshold_value=30, cooldown_sec=0)
+    # 30% failure exactly equals 30% threshold -> no fire (strict exceed).
+    q = _quality(classified_total=10, failed_count=3)
+    assert alert_evaluator.evaluate([rule], [], {}, q) == []
+
+
+def test_outcome_failure_rate_respects_min_sessions():
+    rule = _rule("r-out", alert_type="outcome_failure_rate",
+                 threshold_value=20, cooldown_sec=0)
+    # 2 classified, both failed = 100% but below the 3-session floor.
+    q = _quality(classified_total=2, failed_count=2)
+    assert alert_evaluator.evaluate([rule], [], {}, q) == []
+
+
+def test_outcome_failure_rate_accepts_fraction_threshold():
+    """A threshold <= 1 is read as a fraction (0.2 == 20%)."""
+    rule = _rule("r-out", alert_type="outcome_failure_rate",
+                 threshold_value=0.2, cooldown_sec=0)
+    q = _quality(classified_total=10, failed_count=3)  # 30% > 20%
+    assert len(alert_evaluator.evaluate([rule], [], {}, q)) == 1
+
+
+def test_outcome_failure_rate_no_fire_on_empty_quality():
+    rule = _rule("r-out", alert_type="outcome_failure_rate",
+                 threshold_value=20, cooldown_sec=0)
+    assert alert_evaluator.evaluate([rule], [], {}, None) == []
+    assert alert_evaluator.evaluate([rule], [], {}, _quality()) == []
+
+
+def test_quality_rules_coexist_with_event_rules():
+    """A quality rule and a count rule evaluated together both work — the
+    quality rule reads ``quality``, the event rule reads ``events``."""
+    qrule = _rule("r-eval", alert_type="eval_score_below",
+                  threshold_value=3, cooldown_sec=0)
+    erule = _rule("r-count", type="count_over_threshold", event_type="error",
+                  threshold=3, window_sec=60, cooldown_sec=0)
+    events = _events("error", [0, 5, 10])
+    q = _quality(eval_count=4, eval_avg=2.0)
+    matches = alert_evaluator.evaluate([qrule, erule], events, {}, q)
+    rids = sorted(m["rule"]["id"] for m in matches)
+    assert rids == ["r-count", "r-eval"]

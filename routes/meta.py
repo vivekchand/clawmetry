@@ -1031,9 +1031,20 @@ def otlp_metrics():
 
     try:
         pb_data = request.get_data()
-        _d._process_otlp_metrics(pb_data)
+        _d._process_otlp_metrics(
+            pb_data,
+            content_encoding=request.headers.get("Content-Encoding"),
+            content_type=request.headers.get("Content-Type"),
+        )
         return "{}", 200, {"Content-Type": "application/json"}
     except Exception as e:
+        try:
+            import logging as _lg
+            _lg.getLogger("clawmetry.dashboard").warning(
+                "OTLP /v1/metrics rejected malformed payload: %s", e
+            )
+        except Exception:
+            pass
         return jsonify({"error": str(e)}), 400
 
 
@@ -1056,9 +1067,20 @@ def otlp_traces():
 
     try:
         pb_data = request.get_data()
-        _d._process_otlp_traces(pb_data)
+        _d._process_otlp_traces(
+            pb_data,
+            content_encoding=request.headers.get("Content-Encoding"),
+            content_type=request.headers.get("Content-Type"),
+        )
         return "{}", 200, {"Content-Type": "application/json"}
     except Exception as e:
+        try:
+            import logging as _lg
+            _lg.getLogger("clawmetry.dashboard").warning(
+                "OTLP /v1/traces rejected malformed payload: %s", e
+            )
+        except Exception:
+            pass
         return jsonify({"error": str(e)}), 400
 
 
@@ -1083,9 +1105,20 @@ def otlp_logs():
 
     try:
         pb_data = request.get_data()
-        _d._process_otlp_logs(pb_data)
+        _d._process_otlp_logs(
+            pb_data,
+            content_encoding=request.headers.get("Content-Encoding"),
+            content_type=request.headers.get("Content-Type"),
+        )
         return "{}", 200, {"Content-Type": "application/json"}
     except Exception as e:
+        try:
+            import logging as _lg
+            _lg.getLogger("clawmetry.dashboard").warning(
+                "OTLP /v1/logs rejected malformed payload: %s", e
+            )
+        except Exception:
+            pass
         return jsonify({"error": str(e)}), 400
 
 

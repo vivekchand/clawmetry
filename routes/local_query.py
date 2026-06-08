@@ -606,6 +606,10 @@ _DAEMON_METHODS = frozenset({
     "query_recent_evals",
     "query_eval_summary",
     "persist_eval_score",
+    # Eval->monitor loop: per-session eval/outcome fields for the two runs in
+    # /api/run-compare's quality rows. Read-only; routed through the daemon
+    # proxy so the dashboard process never opens the writer-locked DuckDB.
+    "query_session_quality",
     "health",
     # Issue #876 — NemoClaw guardrail enforcement events + metrics.
     # Routed through the daemon proxy so /api/nemoclaw/events and

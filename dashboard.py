@@ -164,7 +164,77 @@ except ImportError:
     trace_service_pb2 = None
     logs_service_pb2 = None
 
-__version__ = "0.12.464"
+
+def _otlp_decode(pb_data, proto_msg, content_encoding=None, content_type=None):
+    """Decode an OTLP/HTTP request body into ``proto_msg`` and return it.
+
+    OpenLLMetry / traceloop-sdk and the OTel SDKs can export over three
+    on-the-wire encodings that all map onto the same proto message:
+
+      * ``application/x-protobuf``                 → ``ParseFromString`` (binary);
+      * ``application/json``                       → ``json_format.Parse`` (OTLP/JSON);
+      * any of the above wrapped in ``Content-Encoding: gzip``.
+
+    We normalise here so the downstream ``_process_otlp_*`` mappers stay
+    encoding-agnostic. Raises on malformed input (the caller turns that into a
+    400, never a 500 stacktrace leak)."""
+    ce = (content_encoding or "").lower()
+    if "gzip" in ce:
+        import gzip as _gzip
+        pb_data = _gzip.decompress(pb_data)
+    ct = (content_type or "").lower()
+    if "application/json" in ct or "application/x-ndjson" in ct:
+        from google.protobuf import json_format as _json_format
+        # ignore_unknown_fields: OTLP/JSON producers occasionally add
+        # forward-compat keys; tolerate them rather than 400 the whole batch.
+        _json_format.Parse(
+            pb_data.decode("utf-8") if isinstance(pb_data, (bytes, bytearray)) else pb_data,
+            proto_msg,
+            ignore_unknown_fields=True,
+        )
+    else:
+        proto_msg.ParseFromString(pb_data)
+    return proto_msg
+
+
+def _otlp_service_name_to_agent_type(service_name):
+    """Map an OTLP resource ``service.name`` onto a ClawMetry ``agent_type``.
+
+    OpenLLMetry-instrumented apps ("bring your own agent") set
+    ``service.name`` to their app name (the traceloop-sdk default is
+    ``"unknown_service"`` but most apps override it, e.g.
+    ``"my-langchain-app"``). Without this every foreign span defaulted to
+    ``agent_type="openclaw"`` and mis-bucketed under the OpenClaw runtime
+    filter. We instead:
+
+      * keep ``"openclaw"`` for OpenClaw / ClawMetry-known emitters (so existing
+        OpenClaw OTLP flows are unchanged);
+      * slugify any other name to ``[a-z0-9_]`` (``"my-langchain-app"`` →
+        ``"my_langchain_app"``) so the app shows up as its OWN runtime/agent in
+        the spans + ``/api/v1/*?runtime=`` (agent_type) views;
+      * fall back to ``"custom"`` when ``service.name`` is absent or empty.
+
+    Returns ``None`` to signal "no opinion" (caller keeps its own default) only
+    when the input is not a string."""
+    if service_name is None:
+        return "custom"
+    if not isinstance(service_name, str):
+        return None
+    raw = service_name.strip()
+    if not raw:
+        return "custom"
+    low = raw.lower()
+    # OpenClaw / ClawMetry-known emitters stay 'openclaw' so we don't break the
+    # existing OpenClaw OTLP path or leak it out of the OpenClaw runtime view.
+    if low in ("openclaw", "clawmetry", "clawmetry-sync", "clawmetry_sync",
+               "openclaw-gateway", "openclaw_gateway", "unknown_service"):
+        return "openclaw"
+    import re as _re
+    slug = _re.sub(r"[^a-z0-9_]+", "_", low).strip("_")
+    return slug or "custom"
+
+
+__version__ = "0.12.470"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -2050,10 +2120,14 @@ def _get_dp_attrs(dp):
     return attrs
 
 
-def _process_otlp_metrics(pb_data):
-    """Decode OTLP metrics protobuf and store relevant data."""
-    req = metrics_service_pb2.ExportMetricsServiceRequest()
-    req.ParseFromString(pb_data)
+def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
+    """Decode OTLP metrics protobuf/JSON and store relevant data."""
+    req = _otlp_decode(
+        pb_data,
+        metrics_service_pb2.ExportMetricsServiceRequest(),
+        content_encoding,
+        content_type,
+    )
 
     for resource_metrics in req.resource_metrics:
         resource_attrs = {}
@@ -2188,6 +2262,63 @@ def _process_otlp_metrics(pb_data):
                                     "channel", resource_attrs.get("channel", "")
                                 ),
                                 "type": wtype,
+                            },
+                        )
+                # OTel GenAI metric semconv (OpenLLMetry / OTel SDK auto-instrument
+                # emit these instead of the openclaw.* names). gen_ai.client.
+                # token.usage is a histogram/sum keyed by gen_ai.token.type
+                # (input|output); gen_ai.client.operation.duration is the
+                # request latency. Map them onto the same tiles as the
+                # openclaw.* path so a "bring your own agent" install lights the
+                # token / runs tiles. Unknown metrics stay silently dropped.
+                elif name == "gen_ai.client.token.usage":
+                    for dp in _get_data_points(metric):
+                        attrs = _get_dp_attrs(dp)
+                        ttype = str(attrs.get("gen_ai.token.type", "")).lower()
+                        try:
+                            val = int(_get_dp_value(dp))
+                        except (TypeError, ValueError):
+                            continue
+                        model = attrs.get("gen_ai.request.model") or attrs.get(
+                            "model", resource_attrs.get("model", "")
+                        )
+                        provider = attrs.get("gen_ai.system") or attrs.get(
+                            "gen_ai.provider.name"
+                        ) or attrs.get("provider", resource_attrs.get("provider", ""))
+                        _add_metric(
+                            "tokens",
+                            {
+                                "timestamp": ts,
+                                "input": val if ttype == "input" else 0,
+                                "output": val if ttype == "output" else 0,
+                                "total": val,
+                                "model": model,
+                                "channel": attrs.get(
+                                    "channel", resource_attrs.get("channel", "")
+                                ),
+                                "provider": provider,
+                            },
+                        )
+                elif name == "gen_ai.client.operation.duration":
+                    for dp in _get_data_points(metric):
+                        attrs = _get_dp_attrs(dp)
+                        try:
+                            # semconv unit is seconds; the runs tile stores ms.
+                            dur_ms = float(_get_dp_value(dp)) * 1000.0
+                        except (TypeError, ValueError):
+                            continue
+                        model = attrs.get("gen_ai.request.model") or attrs.get(
+                            "model", resource_attrs.get("model", "")
+                        )
+                        _add_metric(
+                            "runs",
+                            {
+                                "timestamp": ts,
+                                "duration_ms": dur_ms,
+                                "model": model,
+                                "channel": attrs.get(
+                                    "channel", resource_attrs.get("channel", "")
+                                ),
                             },
                         )
 
@@ -2354,8 +2485,17 @@ def _otel_to_row(span, resource_attrs):
     # session/conversation: semconv uses gen_ai.conversation.id.
     session_id = _pick("gen_ai.conversation.id", "session.id", "openclaw.session_id", "session_id")
     agent_id = _pick("gen_ai.agent.id", "agent.id", "openclaw.agent_id", "agent_id") or "main"
-    agent_type = _pick("agent.type", "openclaw.agent_type", "agent_type") or "openclaw"
     service_name = resource_attrs.get("service.name") or attrs.get("service.name")
+    # Runtime identity. An explicit agent.type wins (OpenClaw / clawmetry-pro
+    # adapters set it); otherwise derive it from the OTLP resource service.name
+    # so OpenLLMetry-instrumented foreign apps appear as their OWN agent_type
+    # ("my-langchain-app" -> "my_langchain_app") instead of mis-bucketing under
+    # "openclaw". Absent service.name -> "custom". OpenClaw/clawmetry-known
+    # service names stay "openclaw" so existing OpenClaw OTLP flows are intact.
+    agent_type = _pick("agent.type", "openclaw.agent_type", "agent_type")
+    if not agent_type:
+        derived = _otlp_service_name_to_agent_type(service_name)
+        agent_type = derived or "openclaw"
     node_id = _pick("node.id", "openclaw.node_id", "host.name")
 
     # Span events: array of {time_unix_nano, name, attributes}.
@@ -2382,6 +2522,77 @@ def _otel_to_row(span, resource_attrs):
             "attributes": ln_attrs,
         })
 
+    # input / output messages. The current semconv ships a single
+    # ``gen_ai.input.messages`` / ``gen_ai.output.messages`` value, but
+    # OpenLLMetry / traceloop-sdk emit INDEXED attributes instead:
+    #   gen_ai.prompt.0.role, gen_ai.prompt.0.content, gen_ai.prompt.1.role, ...
+    #   gen_ai.completion.0.role, gen_ai.completion.0.content, plus tool-call
+    #   variants (gen_ai.completion.0.tool_calls.0.name / .arguments).
+    # When the flat keys are absent we assemble an ordered messages list from
+    # the indexed attrs so the same downstream column gets a structured value
+    # (JSON-serialized by _to_blob, the same shape the flat path stores).
+    _MSG_CAP = 200_000  # defensive total-size cap (matches the brain-blob house style)
+
+    def _assemble_indexed(prefix):
+        """Collect gen_ai.<prefix>.<i>.<field> into an ordered [{role, content,
+        ...}] list. Returns None when no indexed attrs exist (caller falls back
+        to the flat keys). Bounded by _MSG_CAP total chars so a pathological
+        span can't blow the row up."""
+        by_index = {}
+        plen = len(prefix) + 1  # "gen_ai.prompt."
+        for k, v in attrs.items():
+            if not k.startswith(prefix + "."):
+                continue
+            rest = k[plen:]
+            dot = rest.find(".")
+            if dot <= 0:
+                continue
+            idx_str, field = rest[:dot], rest[dot + 1:]
+            try:
+                idx = int(idx_str)
+            except ValueError:
+                continue
+            by_index.setdefault(idx, {})[field] = v
+        if not by_index:
+            return None
+        out_msgs = []
+        total = 0
+        for idx in sorted(by_index.keys()):
+            fields = by_index[idx]
+            msg = {}
+            role = fields.get("role")
+            if role is not None:
+                msg["role"] = role
+            content = fields.get("content")
+            if content is not None:
+                msg["content"] = content
+            # Tool-call variants (gen_ai.completion.0.tool_calls.0.name etc.)
+            # and any other indexed sub-fields ride along verbatim so nothing
+            # is silently dropped.
+            for fk, fv in fields.items():
+                if fk in ("role", "content"):
+                    continue
+                msg[fk] = fv
+            if not msg:
+                continue
+            out_msgs.append(msg)
+            try:
+                total += len(str(content or "")) + len(str(role or ""))
+            except Exception:
+                pass
+            if total >= _MSG_CAP:
+                break
+        return out_msgs or None
+
+    input_val = (attrs.get("gen_ai.input.messages") or attrs.get("gen_ai.prompt")
+                 or attrs.get("llm.prompts") or attrs.get("input"))
+    if input_val is None:
+        input_val = _assemble_indexed("gen_ai.prompt")
+    output_val = (attrs.get("gen_ai.output.messages") or attrs.get("gen_ai.completion")
+                  or attrs.get("llm.completions") or attrs.get("output"))
+    if output_val is None:
+        output_val = _assemble_indexed("gen_ai.completion")
+
     return {
         "span_id": _hex(span.span_id),
         "trace_id": _hex(span.trace_id),
@@ -2406,17 +2617,15 @@ def _otel_to_row(span, resource_attrs):
         "token_count": token_count,
         "tokens_input": tokens_input,
         "tokens_output": tokens_output,
-        "input": (attrs.get("gen_ai.input.messages") or attrs.get("gen_ai.prompt")
-                  or attrs.get("llm.prompts") or attrs.get("input")),
-        "output": (attrs.get("gen_ai.output.messages") or attrs.get("gen_ai.completion")
-                   or attrs.get("llm.completions") or attrs.get("output")),
+        "input": input_val,
+        "output": output_val,
         "attributes": attrs,
         "events": events,
         "links": links,
     }
 
 
-def _process_otlp_traces(pb_data):
+def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
     """Decode OTLP traces protobuf and extract relevant span data.
 
     Two-path design (issue #1007): we still feed the in-memory metrics
@@ -2426,8 +2635,12 @@ def _process_otlp_traces(pb_data):
     query historical traces. The DuckDB write is best-effort wrapped in
     try/except — a write failure must NOT break the metrics cache path.
     """
-    req = trace_service_pb2.ExportTraceServiceRequest()
-    req.ParseFromString(pb_data)
+    req = _otlp_decode(
+        pb_data,
+        trace_service_pb2.ExportTraceServiceRequest(),
+        content_encoding,
+        content_type,
+    )
 
     # Resolve the local store lazily so unit tests that monkeypatch the
     # singleton in advance (or run without DuckDB) don't pay the import
@@ -2456,7 +2669,20 @@ def _process_otlp_traces(pb_data):
                 duration_ms = duration_ns / 1_000_000
 
                 span_name = span.name.lower()
-                if "run" in span_name or "completion" in span_name:
+                # Count a "run" for OpenClaw-shaped span names AND for GenAI LLM
+                # spans: OpenLLMetry / traceloop-sdk name them ``openai.chat`` /
+                # ``anthropic.chat`` / ``<vendor>.completion`` and tag the
+                # operation on ``gen_ai.operation.name`` (chat / text_completion
+                # / generate_content). Without this a "bring your own agent"
+                # install records spans but the live Runs tile stays at zero.
+                _genai_op = (attrs.get("gen_ai.operation.name") or "").lower()
+                _is_genai_run = (
+                    _genai_op in ("chat", "text_completion", "generate_content")
+                    or span_name.endswith(".chat")
+                    or span_name.endswith(".completion")
+                    or span_name in ("openai.chat", "anthropic.chat")
+                )
+                if "run" in span_name or "completion" in span_name or _is_genai_run:
                     _add_metric(
                         "runs",
                         {
@@ -2490,7 +2716,8 @@ def _process_otlp_traces(pb_data):
                 # arrives via the /v1/metrics path (openclaw.cost.usd), not span
                 # attrs, so this doesn't double-count. Same shape as /v1/logs
                 # (#2591).
-                _sc = attrs.get("cost_usd") or attrs.get("cost.usd") or attrs.get("cost")
+                _sc = (attrs.get("cost_usd") or attrs.get("cost.usd")
+                       or attrs.get("cost") or attrs.get("gen_ai.usage.cost_usd"))
                 if _sc is not None:
                     try:
                         _add_metric("cost", {
@@ -2501,9 +2728,11 @@ def _process_otlp_traces(pb_data):
                         })
                     except (TypeError, ValueError):
                         pass
-                _si = (attrs.get("input_tokens") or attrs.get("tokens.input")
+                _si = (attrs.get("gen_ai.usage.input_tokens")
+                       or attrs.get("input_tokens") or attrs.get("tokens.input")
                        or attrs.get("prompt_tokens"))
-                _so = (attrs.get("output_tokens") or attrs.get("tokens.output")
+                _so = (attrs.get("gen_ai.usage.output_tokens")
+                       or attrs.get("output_tokens") or attrs.get("tokens.output")
                        or attrs.get("completion_tokens"))
                 if _si is not None or _so is not None:
                     try:
@@ -2534,7 +2763,7 @@ def _process_otlp_traces(pb_data):
                             pass
 
 
-def _process_otlp_logs(pb_data):
+def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
     """Decode OTLP logs protobuf and ingest agent EVENT records (#2596).
 
     Claude Code (and other runtimes) export their per-turn event stream as OTel
@@ -2545,8 +2774,12 @@ def _process_otlp_logs(pb_data):
     /v1/metrics (cost / tokens / runs), so the cost + usage tiles light up.
     Best-effort: a bad record never breaks the batch.
     """
-    req = logs_service_pb2.ExportLogsServiceRequest()
-    req.ParseFromString(pb_data)
+    req = _otlp_decode(
+        pb_data,
+        logs_service_pb2.ExportLogsServiceRequest(),
+        content_encoding,
+        content_type,
+    )
 
     def _f(attrs, *keys):
         for k in keys:
@@ -10127,10 +10360,14 @@ def _get_dp_attrs(dp):
     return attrs
 
 
-def _process_otlp_metrics(pb_data):
-    """Decode OTLP metrics protobuf and store relevant data."""
-    req = metrics_service_pb2.ExportMetricsServiceRequest()
-    req.ParseFromString(pb_data)
+def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
+    """Decode OTLP metrics protobuf/JSON and store relevant data."""
+    req = _otlp_decode(
+        pb_data,
+        metrics_service_pb2.ExportMetricsServiceRequest(),
+        content_encoding,
+        content_type,
+    )
 
     for resource_metrics in req.resource_metrics:
         resource_attrs = {}
@@ -10265,6 +10502,63 @@ def _process_otlp_metrics(pb_data):
                                     "channel", resource_attrs.get("channel", "")
                                 ),
                                 "type": wtype,
+                            },
+                        )
+                # OTel GenAI metric semconv (OpenLLMetry / OTel SDK auto-instrument
+                # emit these instead of the openclaw.* names). gen_ai.client.
+                # token.usage is a histogram/sum keyed by gen_ai.token.type
+                # (input|output); gen_ai.client.operation.duration is the
+                # request latency. Map them onto the same tiles as the
+                # openclaw.* path so a "bring your own agent" install lights the
+                # token / runs tiles. Unknown metrics stay silently dropped.
+                elif name == "gen_ai.client.token.usage":
+                    for dp in _get_data_points(metric):
+                        attrs = _get_dp_attrs(dp)
+                        ttype = str(attrs.get("gen_ai.token.type", "")).lower()
+                        try:
+                            val = int(_get_dp_value(dp))
+                        except (TypeError, ValueError):
+                            continue
+                        model = attrs.get("gen_ai.request.model") or attrs.get(
+                            "model", resource_attrs.get("model", "")
+                        )
+                        provider = attrs.get("gen_ai.system") or attrs.get(
+                            "gen_ai.provider.name"
+                        ) or attrs.get("provider", resource_attrs.get("provider", ""))
+                        _add_metric(
+                            "tokens",
+                            {
+                                "timestamp": ts,
+                                "input": val if ttype == "input" else 0,
+                                "output": val if ttype == "output" else 0,
+                                "total": val,
+                                "model": model,
+                                "channel": attrs.get(
+                                    "channel", resource_attrs.get("channel", "")
+                                ),
+                                "provider": provider,
+                            },
+                        )
+                elif name == "gen_ai.client.operation.duration":
+                    for dp in _get_data_points(metric):
+                        attrs = _get_dp_attrs(dp)
+                        try:
+                            # semconv unit is seconds; the runs tile stores ms.
+                            dur_ms = float(_get_dp_value(dp)) * 1000.0
+                        except (TypeError, ValueError):
+                            continue
+                        model = attrs.get("gen_ai.request.model") or attrs.get(
+                            "model", resource_attrs.get("model", "")
+                        )
+                        _add_metric(
+                            "runs",
+                            {
+                                "timestamp": ts,
+                                "duration_ms": dur_ms,
+                                "model": model,
+                                "channel": attrs.get(
+                                    "channel", resource_attrs.get("channel", "")
+                                ),
                             },
                         )
 
@@ -10431,8 +10725,17 @@ def _otel_to_row(span, resource_attrs):
     # session/conversation: semconv uses gen_ai.conversation.id.
     session_id = _pick("gen_ai.conversation.id", "session.id", "openclaw.session_id", "session_id")
     agent_id = _pick("gen_ai.agent.id", "agent.id", "openclaw.agent_id", "agent_id") or "main"
-    agent_type = _pick("agent.type", "openclaw.agent_type", "agent_type") or "openclaw"
     service_name = resource_attrs.get("service.name") or attrs.get("service.name")
+    # Runtime identity. An explicit agent.type wins (OpenClaw / clawmetry-pro
+    # adapters set it); otherwise derive it from the OTLP resource service.name
+    # so OpenLLMetry-instrumented foreign apps appear as their OWN agent_type
+    # ("my-langchain-app" -> "my_langchain_app") instead of mis-bucketing under
+    # "openclaw". Absent service.name -> "custom". OpenClaw/clawmetry-known
+    # service names stay "openclaw" so existing OpenClaw OTLP flows are intact.
+    agent_type = _pick("agent.type", "openclaw.agent_type", "agent_type")
+    if not agent_type:
+        derived = _otlp_service_name_to_agent_type(service_name)
+        agent_type = derived or "openclaw"
     node_id = _pick("node.id", "openclaw.node_id", "host.name")
 
     # Span events: array of {time_unix_nano, name, attributes}.
@@ -10459,6 +10762,77 @@ def _otel_to_row(span, resource_attrs):
             "attributes": ln_attrs,
         })
 
+    # input / output messages. The current semconv ships a single
+    # ``gen_ai.input.messages`` / ``gen_ai.output.messages`` value, but
+    # OpenLLMetry / traceloop-sdk emit INDEXED attributes instead:
+    #   gen_ai.prompt.0.role, gen_ai.prompt.0.content, gen_ai.prompt.1.role, ...
+    #   gen_ai.completion.0.role, gen_ai.completion.0.content, plus tool-call
+    #   variants (gen_ai.completion.0.tool_calls.0.name / .arguments).
+    # When the flat keys are absent we assemble an ordered messages list from
+    # the indexed attrs so the same downstream column gets a structured value
+    # (JSON-serialized by _to_blob, the same shape the flat path stores).
+    _MSG_CAP = 200_000  # defensive total-size cap (matches the brain-blob house style)
+
+    def _assemble_indexed(prefix):
+        """Collect gen_ai.<prefix>.<i>.<field> into an ordered [{role, content,
+        ...}] list. Returns None when no indexed attrs exist (caller falls back
+        to the flat keys). Bounded by _MSG_CAP total chars so a pathological
+        span can't blow the row up."""
+        by_index = {}
+        plen = len(prefix) + 1  # "gen_ai.prompt."
+        for k, v in attrs.items():
+            if not k.startswith(prefix + "."):
+                continue
+            rest = k[plen:]
+            dot = rest.find(".")
+            if dot <= 0:
+                continue
+            idx_str, field = rest[:dot], rest[dot + 1:]
+            try:
+                idx = int(idx_str)
+            except ValueError:
+                continue
+            by_index.setdefault(idx, {})[field] = v
+        if not by_index:
+            return None
+        out_msgs = []
+        total = 0
+        for idx in sorted(by_index.keys()):
+            fields = by_index[idx]
+            msg = {}
+            role = fields.get("role")
+            if role is not None:
+                msg["role"] = role
+            content = fields.get("content")
+            if content is not None:
+                msg["content"] = content
+            # Tool-call variants (gen_ai.completion.0.tool_calls.0.name etc.)
+            # and any other indexed sub-fields ride along verbatim so nothing
+            # is silently dropped.
+            for fk, fv in fields.items():
+                if fk in ("role", "content"):
+                    continue
+                msg[fk] = fv
+            if not msg:
+                continue
+            out_msgs.append(msg)
+            try:
+                total += len(str(content or "")) + len(str(role or ""))
+            except Exception:
+                pass
+            if total >= _MSG_CAP:
+                break
+        return out_msgs or None
+
+    input_val = (attrs.get("gen_ai.input.messages") or attrs.get("gen_ai.prompt")
+                 or attrs.get("llm.prompts") or attrs.get("input"))
+    if input_val is None:
+        input_val = _assemble_indexed("gen_ai.prompt")
+    output_val = (attrs.get("gen_ai.output.messages") or attrs.get("gen_ai.completion")
+                  or attrs.get("llm.completions") or attrs.get("output"))
+    if output_val is None:
+        output_val = _assemble_indexed("gen_ai.completion")
+
     return {
         "span_id": _hex(span.span_id),
         "trace_id": _hex(span.trace_id),
@@ -10483,17 +10857,15 @@ def _otel_to_row(span, resource_attrs):
         "token_count": token_count,
         "tokens_input": tokens_input,
         "tokens_output": tokens_output,
-        "input": (attrs.get("gen_ai.input.messages") or attrs.get("gen_ai.prompt")
-                  or attrs.get("llm.prompts") or attrs.get("input")),
-        "output": (attrs.get("gen_ai.output.messages") or attrs.get("gen_ai.completion")
-                   or attrs.get("llm.completions") or attrs.get("output")),
+        "input": input_val,
+        "output": output_val,
         "attributes": attrs,
         "events": events,
         "links": links,
     }
 
 
-def _process_otlp_traces(pb_data):
+def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
     """Decode OTLP traces protobuf and extract relevant span data.
 
     Two-path design (issue #1007): we still feed the in-memory metrics
@@ -10503,8 +10875,12 @@ def _process_otlp_traces(pb_data):
     query historical traces. The DuckDB write is best-effort wrapped in
     try/except — a write failure must NOT break the metrics cache path.
     """
-    req = trace_service_pb2.ExportTraceServiceRequest()
-    req.ParseFromString(pb_data)
+    req = _otlp_decode(
+        pb_data,
+        trace_service_pb2.ExportTraceServiceRequest(),
+        content_encoding,
+        content_type,
+    )
 
     # Resolve the local store lazily so unit tests that monkeypatch the
     # singleton in advance (or run without DuckDB) don't pay the import
@@ -10533,7 +10909,20 @@ def _process_otlp_traces(pb_data):
                 duration_ms = duration_ns / 1_000_000
 
                 span_name = span.name.lower()
-                if "run" in span_name or "completion" in span_name:
+                # Count a "run" for OpenClaw-shaped span names AND for GenAI LLM
+                # spans: OpenLLMetry / traceloop-sdk name them ``openai.chat`` /
+                # ``anthropic.chat`` / ``<vendor>.completion`` and tag the
+                # operation on ``gen_ai.operation.name`` (chat / text_completion
+                # / generate_content). Without this a "bring your own agent"
+                # install records spans but the live Runs tile stays at zero.
+                _genai_op = (attrs.get("gen_ai.operation.name") or "").lower()
+                _is_genai_run = (
+                    _genai_op in ("chat", "text_completion", "generate_content")
+                    or span_name.endswith(".chat")
+                    or span_name.endswith(".completion")
+                    or span_name in ("openai.chat", "anthropic.chat")
+                )
+                if "run" in span_name or "completion" in span_name or _is_genai_run:
                     _add_metric(
                         "runs",
                         {
@@ -10567,7 +10956,8 @@ def _process_otlp_traces(pb_data):
                 # arrives via the /v1/metrics path (openclaw.cost.usd), not span
                 # attrs, so this doesn't double-count. Same shape as /v1/logs
                 # (#2591).
-                _sc = attrs.get("cost_usd") or attrs.get("cost.usd") or attrs.get("cost")
+                _sc = (attrs.get("cost_usd") or attrs.get("cost.usd")
+                       or attrs.get("cost") or attrs.get("gen_ai.usage.cost_usd"))
                 if _sc is not None:
                     try:
                         _add_metric("cost", {
@@ -10578,9 +10968,11 @@ def _process_otlp_traces(pb_data):
                         })
                     except (TypeError, ValueError):
                         pass
-                _si = (attrs.get("input_tokens") or attrs.get("tokens.input")
+                _si = (attrs.get("gen_ai.usage.input_tokens")
+                       or attrs.get("input_tokens") or attrs.get("tokens.input")
                        or attrs.get("prompt_tokens"))
-                _so = (attrs.get("output_tokens") or attrs.get("tokens.output")
+                _so = (attrs.get("gen_ai.usage.output_tokens")
+                       or attrs.get("output_tokens") or attrs.get("tokens.output")
                        or attrs.get("completion_tokens"))
                 if _si is not None or _so is not None:
                     try:
@@ -10611,7 +11003,7 @@ def _process_otlp_traces(pb_data):
                             pass
 
 
-def _process_otlp_logs(pb_data):
+def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
     """Decode OTLP logs protobuf and ingest agent EVENT records (#2596).
 
     Claude Code (and other runtimes) export their per-turn event stream as OTel
@@ -10622,8 +11014,12 @@ def _process_otlp_logs(pb_data):
     /v1/metrics (cost / tokens / runs), so the cost + usage tiles light up.
     Best-effort: a bad record never breaks the batch.
     """
-    req = logs_service_pb2.ExportLogsServiceRequest()
-    req.ParseFromString(pb_data)
+    req = _otlp_decode(
+        pb_data,
+        logs_service_pb2.ExportLogsServiceRequest(),
+        content_encoding,
+        content_type,
+    )
 
     def _f(attrs, *keys):
         for k in keys:
