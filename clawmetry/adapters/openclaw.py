@@ -329,6 +329,7 @@ class OpenClawAdapter(AgentAdapter):
                     output_tokens=int(s.get("outputTokens") or 0),
                     cache_read_tokens=int(s.get("cacheReadTokens") or 0),
                     cache_write_tokens=int(s.get("cacheWriteTokens") or 0),
+                    reasoning_tokens=int(s.get("thinkingTokens") or s.get("reasoningTokens") or s.get("thinking_tokens") or s.get("reasoning_tokens") or 0),
                     cost_usd=float(s["costUsd"]) if s.get("costUsd") is not None else None,
                     extra=extra,
                 )
@@ -406,6 +407,7 @@ class OpenClawAdapter(AgentAdapter):
                                     ("outputTokens", "output_tokens", "outputTokens"),
                                     ("cacheReadTokens", "cache_read_input_tokens", "cacheReadInputTokens", "cacheRead"),
                                     ("cacheWriteTokens", "cache_creation_input_tokens", "cacheCreationInputTokens", "cacheWrite"),
+                                    ("reasoningTokens", "thinking_tokens", "thinkingTokens", "thinking_input_tokens", "thinkingInputTokens", "reasoning_tokens", "reasoningTokens"),
                                 ]:
                                     for k in keys:
                                         v = usage.get(k)
@@ -592,6 +594,11 @@ class OpenClawAdapter(AgentAdapter):
                 usage = msg.get("usage") or {}
                 tok_in = int(usage.get("input_tokens") or usage.get("inputTokens") or 0)
                 tok_out = int(usage.get("output_tokens") or usage.get("outputTokens") or 0)
+                tok_think = int(
+                    usage.get("thinking_tokens") or usage.get("thinkingTokens")
+                    or usage.get("thinking_input_tokens") or usage.get("thinkingInputTokens")
+                    or usage.get("reasoning_tokens") or usage.get("reasoningTokens") or 0
+                )
                 llm_sid = _sid("llm", session_id, str(raw_ts))
                 spans.append({
                     "span_id": llm_sid,
@@ -605,7 +612,8 @@ class OpenClawAdapter(AgentAdapter):
                     "model": model or None,
                     "tokens_input": tok_in or None,
                     "tokens_output": tok_out or None,
-                    "token_count": (tok_in + tok_out) or None,
+                    "tokens_reasoning": tok_think or None,
+                    "token_count": (tok_in + tok_out + tok_think) or None,
                 })
                 if isinstance(content, list):
                     for block in content:
