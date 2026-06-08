@@ -2753,7 +2753,16 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                 # retries land as INSERT OR REPLACE without duping.
                 if _store is not None:
                     try:
-                        _store.put_span(_otel_to_row(span, resource_attrs))
+                        # Keyword arg is REQUIRED: in the dashboard process
+                        # get_store() returns a _ProxyStore that forwards to the
+                        # daemon writer, and the proxy only forwards **kwargs
+                        # (positional args are dropped). With a positional span
+                        # the write silently no-ops and OTLP spans never persist
+                        # whenever the daemon owns the writer lock (i.e. every
+                        # real install). put_span is allowlisted in
+                        # routes/local_query._DAEMON_METHODS so the daemon
+                        # executes the real write.
+                        _store.put_span(span=_otel_to_row(span, resource_attrs))
                     except Exception as e:
                         try:
                             import logging as _lg
@@ -10993,7 +11002,16 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                 # retries land as INSERT OR REPLACE without duping.
                 if _store is not None:
                     try:
-                        _store.put_span(_otel_to_row(span, resource_attrs))
+                        # Keyword arg is REQUIRED: in the dashboard process
+                        # get_store() returns a _ProxyStore that forwards to the
+                        # daemon writer, and the proxy only forwards **kwargs
+                        # (positional args are dropped). With a positional span
+                        # the write silently no-ops and OTLP spans never persist
+                        # whenever the daemon owns the writer lock (i.e. every
+                        # real install). put_span is allowlisted in
+                        # routes/local_query._DAEMON_METHODS so the daemon
+                        # executes the real write.
+                        _store.put_span(span=_otel_to_row(span, resource_attrs))
                     except Exception as e:
                         try:
                             import logging as _lg
