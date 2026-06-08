@@ -138,19 +138,19 @@ def test_rollup_includes_every_runtime_with_exact_totals(store):
     assert round(by_rt["claude_code"]["cost_usd"], 2) == 4.00
 
 
-def test_rollup_carries_today_cost_split(store):
-    """by_runtime carries a TODAY slice (events in the current UTC day) distinct
-    from the LIFETIME cost_usd — the dual-column 'Your agents' view."""
+def test_rollup_carries_24h_cost_split(store):
+    """by_runtime carries a rolling LAST-24h slice (events in the trailing 24h)
+    distinct from the LIFETIME cost_usd — the dual-column 'Your agents' view."""
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).timestamp()
-    old = now - 5 * 86400  # 5 days ago → counts toward lifetime, not today
+    old = now - 5 * 86400  # 5 days ago → counts toward lifetime, not the 24h window
     _seed(store, "claude_code:c1", "claude-opus-4-8", now - 60, cost=2.0, eid="t1")
     _seed(store, "claude_code:c1", "claude-opus-4-8", old, cost=8.0, eid="t2")
     _seed_session(store, "claude_code:c1", tokens=100, cost=10.0)
     _wait_flush(store)
     roll = store.query_model_rollup()
     cc = roll["by_runtime"]["claude_code"]
-    assert round(cc["cost_today_usd"], 2) == 2.0, "today = only today's events"
+    assert round(cc["cost_24h_usd"], 2) == 2.0, "24h = only the last 24h of events"
     assert round(cc["cost_usd"], 2) == 10.0, "lifetime = the session total"
 
 

@@ -10956,9 +10956,10 @@ def _build_runtime_summary(limit: int = 20000):
                 "turns": total,
                 "tokens": int(totals.get("tokens") or 0),
                 "cost_usd": round(float(totals.get("cost_usd") or 0.0), 4),
-                # LIFETIME cost_usd above; today's slice for the dual-column UI.
-                "cost_today_usd": round(float(totals.get("cost_today_usd") or 0.0), 4),
-                "tokens_today": int(totals.get("tokens_today") or 0),
+                # LIFETIME cost_usd above; rolling last-24h slice for the
+                # dual-column UI.
+                "cost_24h_usd": round(float(totals.get("cost_24h_usd") or 0.0), 4),
+                "tokens_24h": int(totals.get("tokens_24h") or 0),
                 "primary_model": sorted_models[0][0] if sorted_models else "",
                 "total_turns": total,
                 "models": models_out,
@@ -11163,9 +11164,9 @@ def _build_agent_inventory(
                 "turns": summ.get("turns", 0),
                 "tokens": summ.get("tokens", 0),
                 "costUsd": round(float(summ.get("cost_usd", 0.0) or 0.0), 4),
-                # LIFETIME (costUsd) vs TODAY split for the dual-column roster.
-                "costTodayUsd": round(float(summ.get("cost_today_usd", 0.0) or 0.0), 4),
-                "tokensToday": summ.get("tokens_today", 0),
+                # LIFETIME (costUsd) vs rolling-24h split for the dual-column roster.
+                "cost24hUsd": round(float(summ.get("cost_24h_usd", 0.0) or 0.0), 4),
+                "tokens24h": summ.get("tokens_24h", 0),
                 "primaryModel": summ.get("primary_model", "") or "",
                 # already bounded to 15 in runtime_summary; trim to 5 for size.
                 "models": (summ.get("models") or [])[:5],
