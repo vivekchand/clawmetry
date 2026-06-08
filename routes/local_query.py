@@ -635,6 +635,12 @@ _DAEMON_METHODS = frozenset({
     # Issue #883: external API tracing. Read-only; the daemon owns the writer
     # connection so the proxy is required for multi-process installs.
     "query_external_calls",
+    # Agent Inventory tab: owner/notes labels per runtime. query_ is a read,
+    # set_ is a read-then-write under the daemon's _write_lock (same pattern as
+    # ingest_approval above). Without these the inventory owner read/write
+    # returns None and the proxy 400s (memory feedback_cli_methods_need_daemon_allowlist).
+    "query_agent_meta",
+    "set_agent_meta",
 })
 
 

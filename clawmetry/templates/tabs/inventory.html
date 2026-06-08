@@ -1,0 +1,64 @@
+<!-- AGENT INVENTORY: single-pane control-tower roster of every agent on the
+     node. Newcomer-first: one warm sentence + a 4-tile strip above the fold,
+     then a responsive table (desktop) / cards (mobile). No jargon
+     (span/session/agent_type) above the fold. Rendered by renderInventory()
+     in static/js/app.js. -->
+<div class="page" id="page-inventory">
+  <div class="inv-wrap">
+    <h2 class="inv-heading" data-i18n="inventory.title">Your agents</h2>
+    <p class="inv-story" id="inv-story" data-i18n="inventory.story">
+      A calm, one-glance view of every agent on this machine: what it runs, what it costs, and whether it is alive.
+    </p>
+
+    <!-- 4-tile strip (reuses the Overview hero chrome so it feels native). -->
+    <div class="stats-footer inv-stats" id="inv-stats" style="display:none;">
+      <div class="stats-footer-item">
+        <span class="stats-footer-icon">🟢</span>
+        <div>
+          <div class="stats-footer-label" data-i18n="inventory.tile_alive">Alive</div>
+          <div class="stats-footer-value" id="inv-tile-alive">--</div>
+        </div>
+      </div>
+      <div class="stats-footer-item">
+        <span class="stats-footer-icon">🤖</span>
+        <div>
+          <div class="stats-footer-label" data-i18n="inventory.tile_agents">Agents</div>
+          <div class="stats-footer-value" id="inv-tile-agents">--</div>
+        </div>
+      </div>
+      <div class="stats-footer-item">
+        <span class="stats-footer-icon">💰</span>
+        <div>
+          <div class="stats-footer-label" data-i18n="inventory.tile_today">Today</div>
+          <div class="stats-footer-value" id="inv-tile-today">--</div>
+        </div>
+      </div>
+      <div class="stats-footer-item">
+        <span class="stats-footer-icon">❤️</span>
+        <div>
+          <div class="stats-footer-label" data-i18n="inventory.tile_health">Health</div>
+          <div class="stats-footer-value" id="inv-tile-health">--</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Node-wide header strip: tools + eval. Labeled NODE-WIDE so no row
+         implies a per-agent number it cannot back. -->
+    <div class="inv-nodewide-strip" id="inv-nodewide-strip" style="display:none;">
+      <span class="inv-nodewide-pill" id="inv-node-tools" title="Tools used across all agents on this machine"></span>
+      <span class="inv-nodewide-pill" id="inv-node-eval" title="Quality score across all agents on this machine"></span>
+    </div>
+
+    <!-- Roster: table on desktop, cards on mobile (CSS toggles). -->
+    <div id="inv-roster"></div>
+
+    <!-- Empty state: runtime-neutral. -->
+    <div class="inv-empty" id="inv-empty" style="display:none;">
+      <div class="inv-empty-icon">🤖</div>
+      <div class="inv-empty-title" data-i18n="inventory.empty_title">No agents yet, and that is fine.</div>
+      <div class="inv-empty-body" id="inv-empty-body" data-i18n="inventory.empty_body">
+        ClawMetry watches OpenClaw, NVIDIA NemoClaw, and 10 more runtimes the moment they run. Nothing to configure.
+      </div>
+    </div>
+  </div>
+</div>

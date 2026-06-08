@@ -345,6 +345,19 @@ _DDL = [
         updated_at             VARCHAR
     )
     """,
+    # Agent Inventory: a small per-runtime label store so the user can name who
+    # "owns" each agent on the node (a free-text chip, default "me") and jot a
+    # note. Keyed by the runtime key (== _runtime_of_session prefix; "openclaw"
+    # for the default bucket). Edited only on the LOCAL dashboard; the value
+    # rides the snapshot so cloud renders it read-only. No secrets here.
+    """
+    CREATE TABLE IF NOT EXISTS agent_meta (
+        agent_key   VARCHAR PRIMARY KEY,
+        owner       VARCHAR,
+        notes       VARCHAR,
+        updated_at  VARCHAR
+    )
+    """,
     # Shared by OpenClaw + Hermes (and any future cron-supporting agent).
     """
     CREATE TABLE IF NOT EXISTS crons (
@@ -2199,6 +2212,65 @@ class LocalStore:
                 meta.get("last_test_error"),
                 now_iso,
             ])
+
+    def set_agent_meta(
+        self,
+        agent_key: str,
+        owner: str | None = None,
+        notes: str | None = None,
+    ) -> None:
+        """Upsert one Agent-Inventory label row (owner / notes) for a runtime.
+
+        ``agent_key`` is the runtime key (``_runtime_of_session`` prefix, with
+        ``"openclaw"`` for the default bucket). Partial updates are honored via
+        COALESCE so setting only ``notes`` preserves an existing ``owner`` (and
+        vice versa). An explicit empty string is stored as-is (the client
+        renders an empty owner as "me"); ``None`` means "don't touch this
+        field". Idempotent; mirrors the ``ingest_channel_config`` write-lock
+        idiom. The daemon owns the writer lock, so this goes through the daemon
+        proxy from the dashboard process (see ``set_agent_meta`` in
+        ``routes/local_query._DAEMON_METHODS``)."""
+        if not agent_key:
+            raise ValueError("agent_meta must include 'agent_key'")
+        agent_key = str(agent_key).lower().strip()
+        now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO agent_meta (agent_key, owner, notes, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT (agent_key) DO UPDATE SET
+                    owner      = COALESCE(excluded.owner, agent_meta.owner),
+                    notes      = COALESCE(excluded.notes, agent_meta.notes),
+                    updated_at = excluded.updated_at
+            """, [
+                agent_key,
+                owner,
+                notes,
+                now_iso,
+            ])
+
+    def query_agent_meta(self) -> dict[str, dict[str, Any]]:
+        """Return ``{agent_key: {owner, notes, updated_at}}`` for every labeled
+        runtime. Read-only. Goes through ``self._fetch`` (which already takes
+        the write lock for read+write serialization), so callers MUST NOT wrap
+        this in an outer ``with self._write_lock`` (regular Lock, would deadlock
+        per memory ``feedback_local_store_fetch_takes_writelock``)."""
+        sql = """
+            SELECT agent_key, owner, notes, updated_at
+            FROM agent_meta
+            ORDER BY agent_key ASC
+        """
+        out: dict[str, dict[str, Any]] = {}
+        for r in self._fetch(sql, []):
+            key = r[0]
+            if not key:
+                continue
+            out[str(key)] = {
+                "owner": r[1],
+                "notes": r[2],
+                "updated_at": r[3],
+            }
+        return out
 
     def ingest_cron(self, cron: dict[str, Any]) -> None:
         """Upsert one cron-job row. Required: cron_id.
