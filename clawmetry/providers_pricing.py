@@ -83,6 +83,25 @@ MODEL_OVERRIDES: dict[tuple[str, str], tuple[float, float]] = {
     ("anthropic", "claude-3-opus"): (15.00, 75.00),
     ("anthropic", "claude-sonnet-4"): (3.00, 15.00),
     ("anthropic", "claude-opus-4"): (15.00, 75.00),
+    # Current-generation Anthropic models (verified against LiteLLM
+    # model_prices_and_context_window.json, the source ccusage uses, 2026-06-08).
+    # Opus 4.5+ DROPPED to 1/3 of Opus 4/4.1 ($5/$25 vs $15/$75); without these
+    # entries opus-4-5/6/7/8 matched the bare ``claude-opus-4`` prefix and were
+    # priced 3x too high (the founder's Claude Code showed $103k vs ccusage's
+    # $16k). opus-4-1 stays old-priced — _get_rates picks the LONGEST matching
+    # prefix so "claude-opus-4-8" wins "claude-opus-4-8" over "claude-opus-4".
+    # Cache read/write fall out correctly from the 0.1x/1.25x multipliers
+    # (opus new: read $0.50 = 0.1x$5, write $6.25 = 1.25x$5 — matches LiteLLM).
+    ("anthropic", "claude-opus-4-1"): (15.00, 75.00),
+    ("anthropic", "claude-opus-4-5"): (5.00, 25.00),
+    ("anthropic", "claude-opus-4-6"): (5.00, 25.00),
+    ("anthropic", "claude-opus-4-7"): (5.00, 25.00),
+    ("anthropic", "claude-opus-4-8"): (5.00, 25.00),
+    ("anthropic", "claude-haiku-4"): (1.00, 5.00),
+    # sonnet-4 / 4-5 / 4-6 are all $3/$15 — the bare claude-sonnet-4 prefix
+    # already covers them; listed for clarity/future-proofing.
+    ("anthropic", "claude-sonnet-4-5"): (3.00, 15.00),
+    ("anthropic", "claude-sonnet-4-6"): (3.00, 15.00),
     ("openai", "gpt-4o-mini"): (0.15, 0.60),
     ("openai", "gpt-4o"): (2.50, 10.00),
     ("openai", "gpt-4-turbo"): (10.00, 30.00),
@@ -148,9 +167,19 @@ def _get_rates(provider: str, model: str) -> tuple[float, float]:
         prov_lower = "gemini"
 
     if model:
+        # Longest matching prefix wins, so a specific current-gen key
+        # ("claude-opus-4-8") beats the shorter family key ("claude-opus-4")
+        # regardless of dict order. Plain first-match silently mispriced every
+        # model whose family prefix was inserted first (the opus 4.5+ 3x bug).
+        best_rates = None
+        best_len = -1
         for (prov, prefix), rates in MODEL_OVERRIDES.items():
             if prov == prov_lower and model_lower.startswith(prefix.lower()):
-                return rates
+                if len(prefix) > best_len:
+                    best_len = len(prefix)
+                    best_rates = rates
+        if best_rates is not None:
+            return best_rates
 
     # Fall back to provider baseline
     for info in PROVIDER_MAP.values():
