@@ -7,6 +7,8 @@ take precedence when available.
 """
 from __future__ import annotations
 
+import re
+
 # hostname fragment -> {name, input_price_per_1m, output_price_per_1m}
 PROVIDER_MAP: dict[str, dict] = {
     "api.anthropic.com": {
@@ -197,6 +199,103 @@ def provider_for_model(model: str) -> str:
     if "grok" in m:
         return "xai"
     return ""
+
+
+# #2816 Auto smart routing: default SAME-PROVIDER cheap-task downgrade map.
+# Keyed by a substring found in the source model name -> the cheaper family
+# name to substitute in (kept as a family token so the auto-router can splice it
+# into the original model string, preserving date suffixes where possible). Only
+# downgrades WITHIN a provider (opus->haiku is anthropic-internal; gpt-4o->
+# gpt-4o-mini is openai-internal). Used as the default for AutoRoutingConfig.
+_AUTO_DOWNGRADE_MAP: dict[str, str] = {
+    # Anthropic: heavy reasoning families -> haiku
+    "opus": "haiku",
+    "sonnet": "haiku",
+    "claude-opus-4": "claude-3-5-haiku-latest",
+    "claude-sonnet-4": "claude-3-5-haiku-latest",
+    "claude-3-opus": "claude-3-5-haiku-latest",
+    "claude-3-5-sonnet": "claude-3-5-haiku-latest",
+    # OpenAI: gpt-4o -> gpt-4o-mini, o1 -> o1-mini
+    "gpt-4o": "gpt-4o-mini",
+    "gpt-4-turbo": "gpt-4o-mini",
+    "gpt-4": "gpt-4o-mini",
+    "o1": "o1-mini",
+    # Gemini: pro -> flash
+    "gemini-1.5-pro": "gemini-1.5-flash",
+}
+
+
+def default_auto_downgrade_map() -> dict[str, str]:
+    """Return a copy of the default cheap-task downgrade map (#2816).
+
+    Per-family same-provider substitution table derived from the pricing tables
+    above (heavy families -> their cheap sibling). Callers may override per
+    install via ``AutoRoutingConfig.downgrade_map``.
+    """
+    return dict(_AUTO_DOWNGRADE_MAP)
+
+
+# Real, cheap model ids an auto-downgrade is allowed to resolve TO. A computed
+# candidate (a full-id map target OR a family-spliced name) is only returned if
+# it's in here. This is the safety backstop that prevents two hazards the review
+# flagged: (a) a loose substring key (e.g. "o1") matching a different provider's
+# model and substituting cross-provider; (b) a bare-family splice (the spec's own
+# {"opus":"haiku"} example) synthesizing a NON-EXISTENT id like
+# "claude-haiku-4-X" that the upstream would reject. A user map that targets a
+# model not in this set simply no-ops (safe) rather than forwarding a bad id.
+_KNOWN_DOWNGRADE_TARGETS: frozenset[str] = frozenset({
+    # Anthropic
+    "claude-3-5-haiku-latest", "claude-3-5-haiku-20241022", "claude-3-haiku-20240307",
+    # OpenAI
+    "gpt-4o-mini", "o1-mini", "o3-mini", "gpt-3.5-turbo",
+    # Google
+    "gemini-1.5-flash", "gemini-1.5-flash-8b", "gemini-2.0-flash",
+})
+
+
+def downgrade_model_name(model: str, downgrade_map: dict[str, str] | None = None) -> str:
+    """Return a cheaper SAME-PROVIDER model for ``model`` or '' if none applies.
+
+    Picks the MOST SPECIFIC (longest) matching key in ``downgrade_map`` whose
+    substring is present in the (lower-cased) model name, resolves a candidate
+    (full-id target as-is, or a family token spliced into the source id), then
+    only returns it if it is (1) the SAME provider as the source AND (2) a
+    recognised real model id (``_KNOWN_DOWNGRADE_TARGETS``). Those two guards stop
+    a loose substring key downgrading cross-provider, and a splice synthesizing a
+    non-existent id. Never raises; '' when nothing safe matches.
+    """
+    try:
+        if not model:
+            return ""
+        dmap = downgrade_map if downgrade_map is not None else _AUTO_DOWNGRADE_MAP
+        m = model.lower()
+        src_provider = provider_for_model(m)
+        # Longest key first so "claude-3-5-sonnet" wins over bare "sonnet".
+        for key in sorted(dmap.keys(), key=len, reverse=True):
+            if key not in m:
+                continue
+            target = dmap[key]
+            if not target or target.lower() in m:
+                # Already the cheap target (or empty) — keep looking.
+                continue
+            # Resolve a candidate model id: a full-looking id is used directly;
+            # a bare family token is spliced in place of the matched key.
+            if "-" in target or target.lower().startswith(("gpt", "claude", "gemini", "o1-", "o3-")):
+                candidate = target
+            else:
+                candidate = re.sub(re.escape(key), target, m)
+            cand_l = candidate.lower()
+            if cand_l == m:
+                continue
+            # SAFETY GUARDS: same provider + recognised real model id.
+            if src_provider and provider_for_model(cand_l) != src_provider:
+                continue
+            if cand_l not in _KNOWN_DOWNGRADE_TARGETS:
+                continue
+            return candidate
+        return ""
+    except Exception:
+        return ""
 
 
 def estimate_event_cost_usd(
