@@ -563,6 +563,12 @@ _DAEMON_METHODS = frozenset({
     # Issue #1013: Trace 7 — one row per trace_id with aggregate stats.
     # Powers /api/local/traces + the cloud relay query.traces shape.
     "query_traces",
+    # Foreign OTLP / OpenLLMetry apps (#2822 stamps agent_type from
+    # service.name): a single GROUP BY agent_type rollup so the runtime
+    # switcher + Agent Inventory surface a bring-your-own-agent app that only
+    # ever sent OTLP traces. Daemon snapshot-path use; allowlisted so the
+    # local Inventory route can read it through the proxy too.
+    "query_otlp_app_rollup",
     # Issue #1364 (Tier-1 2026-05-15): /api/fallbacks model/provider
     # transition aggregator. Replaces a JSONL walker that opened up to 100
     # transcript files per request — multi-second on a busy workspace.

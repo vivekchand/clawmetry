@@ -3689,7 +3689,7 @@ async function loadActiveTasks() {
     var now = Date.now();
     var all = (saData.subagents || []);
     // Scope to the selected runtime (sub-agent sessionId prefix = runtime).
-    var _atRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    var _atRt = (typeof _cmRuntimeFilter === 'function') ? _cmClientFilterRt(_cmRuntimeFilter()) : 'all';
     if (_atRt !== 'all') all = all.filter(function(a) { return _cmRuntimeOf(a) === _atRt; });
     var live = all.filter(function(a) { return a.status === 'active' || a.status === 'idle'; });
     var recentFailed = all.filter(function(a) {
@@ -4694,7 +4694,7 @@ function renderBrainStream(events) {
   // Global runtime switcher (header): scope the activity stream to one runtime
   // so Brain stops mixing OpenClaw with Claude Code / Codex / etc. Each event
   // carries `sessionId`, whose prefix is the runtime discriminator.
-  var _brainRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var _brainRt = (typeof _cmRuntimeFilter === 'function') ? _cmClientFilterRt(_cmRuntimeFilter()) : 'all';
   if (_brainRt && _brainRt !== 'all') {
     filtered = filtered.filter(function(ev) { return _cmRuntimeOf(ev) === _brainRt; });
   }
@@ -5470,7 +5470,7 @@ function renderBrainChart(events) {
   if (typeof _brainChannelFilter !== 'undefined' && _brainChannelFilter !== 'all') {
     events = events.filter(function(ev) { return (ev.channel || '') === _brainChannelFilter; });
   }
-  var _bcRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var _bcRt = (typeof _cmRuntimeFilter === 'function') ? _cmClientFilterRt(_cmRuntimeFilter()) : 'all';
   if (_bcRt && _bcRt !== 'all') {
     events = events.filter(function(ev) { return _cmRuntimeOf(ev) === _bcRt; });
   }
@@ -7968,16 +7968,44 @@ var _CM_RT_LABEL = {
   hermes: 'Hermes', claude_code: 'Claude Code', codex: 'Codex', cursor: 'Cursor',
   aider: 'Aider', goose: 'Goose', opencode: 'opencode', qwen_code: 'Qwen Code'
 };
+// The CLOSED session-prefix runtimes (the only keys that can ride a session_id
+// prefix). Foreign OTLP / OpenLLMetry apps are NOT in here — they have no
+// prefix and are filtered by agent_type server-side, so _cmRuntimeOf must never
+// derive them from a prefix (it can't) and never mis-bucket them into openclaw.
+var _CM_RT_PREFIXES = {
+  openclaw: 1, picoclaw: 1, nanoclaw: 1, hermes: 1, claude_code: 1, codex: 1,
+  cursor: 1, aider: 1, goose: 1, opencode: 1, qwen_code: 1
+};
+// Dynamic registry of foreign OTLP/OpenLLMetry apps surfaced by the daemon
+// (runtimeSummary/agentInventory carry `otlp:true` + a `displayName`). These are
+// keyed by agent_type (e.g. 'my_app' from service.name) and scoped SERVER-SIDE
+// via ?runtime=<agent_type>; there is no session-id prefix to match client-side.
+// agentKey -> {label}. Populated by _cmRegisterOtlpRuntime as data arrives.
+var _CM_OTLP_RT = {};
+function _cmRegisterOtlpRuntime(key, label) {
+  if (!key) return;
+  key = String(key);
+  if (_CM_RT_PREFIXES.hasOwnProperty(key.toLowerCase())) return; // never shadow a native runtime
+  _CM_OTLP_RT[key] = { label: label || key };
+  // Surface the label so _cmRuntimeLabel / chips read 'My App (OTel)'.
+  if (!_CM_RT_LABEL.hasOwnProperty(key)) _CM_RT_LABEL[key] = label || key;
+}
+// True iff `rt` is a foreign OTLP app (agent_type filter, not session prefix).
+function _cmIsOtlpRuntime(rt) { return !!(rt && _CM_OTLP_RT.hasOwnProperty(rt)); }
 function _cmRuntimeOf(o) {
   var id = (o && (o.id || o.sessionId || o.session_id || o.key)) || '';
   var i = id.indexOf(':');
   if (i > 0) {
     var p = id.slice(0, i).toLowerCase();
-    if (_CM_RT_LABEL.hasOwnProperty(p) && p !== 'openclaw') return p;
+    if (_CM_RT_PREFIXES.hasOwnProperty(p) && p !== 'openclaw') return p;
   }
-  if (o && o.runtime) {
-    var r = String(o.runtime).toLowerCase();
-    if (_CM_RT_LABEL.hasOwnProperty(r)) return r;
+  // Explicit agent_type / runtime field (OTLP apps + server-tagged rows). An
+  // OTLP app's spans carry agent_type=<its key>; honor it directly so a
+  // selected OTLP runtime matches its own data and nothing else.
+  var r = o && (o.runtime || o.agent_type || o.agentType);
+  if (r) {
+    r = String(r).toLowerCase();
+    if (_CM_RT_PREFIXES.hasOwnProperty(r) || _CM_OTLP_RT.hasOwnProperty(r)) return r;
   }
   return 'openclaw';
 }
@@ -8014,6 +8042,16 @@ function _cmSetRuntimeFilter(v, reload) {
   if (typeof reload === 'function') reload();
 }
 function _cmRuntimeLabel(rt) { return _CM_RT_LABEL[rt] || rt; }
+// Runtime to use for CLIENT-SIDE prefix filtering of a node-wide blob (Brain
+// list/chart, Tracing, model attribution, active tasks, transcripts). A foreign
+// OTLP app has no session-id prefix, so a prefix filter would empty the view —
+// which would contradict the honest "showing all runtimes" scope note we render
+// for it. Collapse OTLP selections to 'all' here so the blob shows unfiltered
+// (the note explains why); the server-side runtime= path (the no-leak contract)
+// is unaffected. Native runtimes pass through unchanged.
+function _cmClientFilterRt(rt) {
+  return _cmIsOtlpRuntime(rt) ? 'all' : rt;
+}
 // Tabs whose data is a cross-runtime AGGREGATE (merged server/snapshot-side):
 // the switcher can't scope them client-side yet, so picking a specific runtime
 // shows an honest "all runtimes" note rather than pretending the numbers are
@@ -8082,10 +8120,19 @@ var _CM_NODE_TABS = ['alerts','notifications','security'];
 var _CM_RT_ALL_TABS = ['flow','brain','models','context','tracing','turn-anatomy',
   'context-economics','approvals','alerts','cost','dives','crons','memory',
   'notifications','security','policy','skills','selfevolve','subagents','nemoclaw'];
+// Foreign OTLP apps only emit spans/traces (events + maybe cost). They get the
+// EVENTS + COST tabs (Brain/Tracing/Models/Context/Turn-anatomy/Cost), plus the
+// roster; OpenClaw-only concepts (Crons/Memory/Skills/Channels/Subagents) do not
+// apply and stay hidden. Honest scope notes still cover any aggregate tab.
+var _CM_OTLP_CAPS = ['EVENTS', 'COST'];
+function _cmCapsForRuntime(rt) {
+  if (_cmIsOtlpRuntime(rt)) return _CM_OTLP_CAPS;
+  return _CM_RT_CAPS[rt];
+}
 function _cmShownTabsForRuntime(rt) {
   var show = {};
   _CM_NODE_TABS.forEach(function (t) { show[t] = 1; });
-  (_CM_RT_CAPS[rt] || []).forEach(function (cap) {
+  (_cmCapsForRuntime(rt) || []).forEach(function (cap) {
     (_CM_CAP_TABS[cap] || []).forEach(function (t) { show[t] = 1; });
   });
   if (rt === 'nemoclaw') show['nemoclaw'] = 1;
@@ -8094,7 +8141,7 @@ function _cmShownTabsForRuntime(rt) {
 function _cmApplyRuntimeTabVisibility() {
   var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
   // 'all' or an unknown/unmapped runtime => show everything (never silently drop).
-  var showAll = !rt || rt === 'all' || !_CM_RT_CAPS[rt];
+  var showAll = !rt || rt === 'all' || !_cmCapsForRuntime(rt);
   var shown = showAll ? null : _cmShownTabsForRuntime(rt);
   _CM_RT_ALL_TABS.forEach(function (tab) {
     var show = showAll || !!shown[tab];
@@ -8116,6 +8163,25 @@ function _cmApplyRuntimeScopeNote(name) {
   var noteId = 'cm-rt-scope-note';
   var existing = page.querySelector('#' + noteId);
   var rt = _cmRuntimeFilter();
+  // Foreign OTLP / OpenLLMetry app selected. These have no session-id prefix, so
+  // the session/event tabs that filter client-side by prefix cannot scope to
+  // them honestly. Rather than silently empty (or worse, show node-wide and call
+  // it the app's data), state plainly that this app is observed via OTLP traces
+  // and its scoped views live where the data actually is (the Inventory roster
+  // row + cost/tokens). The Inventory tab keeps its own roster note below.
+  // 'inventory' has its own roster note; 'dives' (transcripts) has its own
+  // scoped empty-state ("no <app> sessions have a transcript yet"), so skip both
+  // to avoid a conflicting double-note.
+  if (_cmIsOtlpRuntime(rt) && name !== 'inventory' && name !== 'dives') {
+    var _otl = _cmRuntimeLabel(rt);
+    var _otmsg = '<strong>' + escHtml(_otl) + '</strong> is observed via OpenLLMetry / OTLP traces. '
+      + 'This view shows <strong>all runtimes</strong>; its scoped tokens, cost and sessions are on the '
+      + '<strong>Agent Inventory</strong> roster.';
+    var _othtml = '<div id="' + noteId + '" style="display:flex;align-items:center;gap:8px;margin:0 0 14px;padding:9px 13px;border-radius:8px;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.35);font-size:12px;color:var(--text-secondary);line-height:1.4;"><span style="color:#d97706;font-size:13px;flex-shrink:0;">&#9888;</span><span>' + _otmsg + '</span></div>';
+    if (existing) existing.outerHTML = _othtml;
+    else page.insertAdjacentHTML('afterbegin', _othtml);
+    return;
+  }
   // Overview is a MIX: some cards re-scope with the runtime switcher (today's
   // tasks/outcome, the activity strip, the hero token/cost stats) and some stay
   // node-wide (autonomy score, reliability, activity heatmap). A single
@@ -8260,11 +8326,16 @@ function _cmPopulateGlobalRuntime(counts) {
   // Observed runtimes (have local sessions) ∪ locked-but-visible runtimes.
   // _cmLockedRuntimes is empty in grace mode, so this collapses to the
   // previous behaviour (observed-only) by default.
-  var observed = Object.keys(_CM_RT_LABEL).filter(function(k) { return counts[k]; });
+  var observedAll = Object.keys(_CM_RT_LABEL).filter(function(k) { return counts[k]; });
+  // Split native session-prefix runtimes from foreign OTLP apps: the OTLP apps
+  // get their own optgroup and their count is traces, not sessions, so they
+  // must not inflate the "All runtimes · N sessions" total.
+  var observed = observedAll.filter(function(k) { return !_cmIsOtlpRuntime(k); });
+  var otlpApps = observedAll.filter(function(k) { return _cmIsOtlpRuntime(k); });
   var seen = {};
-  observed.forEach(function(k) { seen[k] = 1; });
+  observedAll.forEach(function(k) { seen[k] = 1; });
   var locked = Object.keys(_cmLockedRuntimes).filter(function(k) { return !seen[k]; });
-  var order = observed.concat(locked);
+  var order = observed.concat(otlpApps).concat(locked);
   if (order.length < 2) { wrap.style.display = 'none'; return; }
   var active = _cmRuntimeFilter();
   if (active !== 'all' && !counts[active] && !_cmLockedRuntimes[active]) active = 'all';
@@ -8275,6 +8346,13 @@ function _cmPopulateGlobalRuntime(counts) {
   function _sessLabel(n) { return n + (n === 1 ? ' session' : ' sessions'); }
   function _opt(k) {
     var lbl = _CM_RT_LABEL[k] || k;
+    if (_cmIsOtlpRuntime(k)) {
+      // Foreign OTLP/OpenLLMetry app: count is sessions or traces; keep the
+      // wording neutral ("activity") since a pure-trace app has no sessions.
+      var on = counts[k] || 0;
+      var act = on ? (' · ' + on + (on === 1 ? ' trace' : ' traces')) : '';
+      return '<option value="' + k + '">' + escHtml(lbl) + act + '</option>';
+    }
     if (_cmLockedRuntimes[k]) {
       // A locked (Pro) runtime that is ACTUALLY DETECTED on this machine is the
       // strongest upgrade signal — "you're using it here, upgrade to observe
@@ -8294,6 +8372,14 @@ function _cmPopulateGlobalRuntime(counts) {
   var lockedOther = locked.filter(function(k) { return !_cmRunningRuntimes[k]; });
   var html = '<option value="all">All runtimes · ' + _sessLabel(total) + '</option>';
   observed.forEach(function(k) { html += _opt(k); });
+  // Foreign OpenLLMetry / OTLP apps (bring your own agent): grouped on their own
+  // so a LangChain / CrewAI / OpenAI-Agents app reads as distinct from a native
+  // runtime. Selecting one scopes server-side by agent_type.
+  if (otlpApps.length) {
+    html += '<optgroup label="OpenLLMetry / OTLP apps">';
+    otlpApps.forEach(function(k) { html += _opt(k); });
+    html += '</optgroup>';
+  }
   // Group the detected-but-locked runtimes under their own header so the
   // "running here, needs Pro" distinction is unmistakable in the dropdown.
   if (lockedRunning.length) {
@@ -8362,6 +8448,10 @@ function _invFmtAgo(iso) {
 // Does this runtime declare COST? Cursor / PicoClaw / NanoClaw don't — show an
 // honest "--" with a tooltip, never a misleading $0.
 function _invHasCost(rt) {
+  // Foreign OTLP apps report cost from their spans (when the instrumentation
+  // emits it); treat them as cost-capable so the roster shows their $ instead
+  // of "--".
+  if (_cmIsOtlpRuntime(rt)) return true;
   var caps = _CM_RT_CAPS[rt] || [];
   return caps.indexOf('COST') !== -1;
 }
@@ -8545,6 +8635,13 @@ async function renderInventory() {
   var inv = await _invFetchData();
   var agents = (inv && inv.agents) || [];
 
+  // Register any foreign OTLP/OpenLLMetry app in the roster so _cmIsOtlpRuntime /
+  // _invHasCost / the header dropdown recognise it (the roster is the canonical
+  // source for the app set; the dropdown is fed from the same data on init).
+  agents.forEach(function (a) {
+    if (a && a.otlp && a.agentKey) _cmRegisterOtlpRuntime(a.agentKey, a.displayName || a.agentKey);
+  });
+
   var statsEl = document.getElementById('inv-stats');
   var rosterEl = document.getElementById('inv-roster');
   var emptyEl = document.getElementById('inv-empty');
@@ -8705,6 +8802,39 @@ async function _cmInitGlobalRuntimeSwitcher() {
     });
     _cmPopulateGlobalRuntime(counts);
   } catch (e) { /* non-fatal — the switcher just stays hidden */ }
+  // Surface foreign OTLP / OpenLLMetry apps (no session prefix, so absent from
+  // /api/sessions). The Agent Inventory roster carries them with otlp:true; one
+  // read registers each so the dropdown lists 'My App (OTel)'.
+  try { await _cmLoadOtlpRuntimes(); } catch (e) { /* non-fatal */ }
+}
+
+// Pull the OTLP/custom apps the daemon folded into the inventory roster and
+// register each so the switcher dropdown + labels include it. Local: GET
+// /api/inventory; cloud: the agentInventory snapshot slice (already loaded via
+// __cmSnap by other consumers, so this is cheap / deduped). Each app contributes
+// a session count to the dropdown (or its trace count when it has no sessions).
+async function _cmLoadOtlpRuntimes() {
+  var inv = null;
+  try {
+    if (window.CLOUD_MODE && typeof window.__cmSnap === 'function') {
+      var sp = await window.__cmSnap();
+      inv = sp && sp.agentInventory;
+    } else {
+      inv = await fetch('/api/inventory', { credentials: 'same-origin' })
+        .then(function(r) { return r.json(); }).catch(function() { return null; });
+    }
+  } catch (e) { return; }
+  var agents = (inv && inv.agents) || [];
+  var counts = {};
+  agents.forEach(function(a) {
+    if (!a || !a.otlp || !a.agentKey) return;
+    _cmRegisterOtlpRuntime(a.agentKey, a.displayName || a.agentKey);
+    // Dropdown count: prefer sessions, fall back to traces/spans so a pure-trace
+    // app (sessions=0) still shows a non-zero presence and stays listed.
+    var n = a.sessions || a.traces || a.spans || 1;
+    counts[a.agentKey] = Math.max(counts[a.agentKey] || 0, n);
+  });
+  if (Object.keys(counts).length) _cmPopulateGlobalRuntime(counts);
 }
 
 async function loadSessions() {
@@ -10582,7 +10712,7 @@ async function loadTurnAnatomy() {
   // Runtime scoping — a trace's id IS the session id, whose prefix is the
   // runtime (same derivation the Tracing tab uses). Don't silently merge when
   // a specific runtime is picked; show a scoped empty state instead.
-  var _taRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var _taRt = (typeof _cmRuntimeFilter === 'function') ? _cmClientFilterRt(_cmRuntimeFilter()) : 'all';
   if (_taRt !== 'all') {
     traces = traces.filter(function(t) { return _cmRuntimeOf({ id: t.trace_id }) === _taRt; });
   }
@@ -10779,7 +10909,7 @@ function _renderTraceRows() {
   // Global runtime switcher (header): scope traces to one runtime. Each
   // event-derived trace's `trace_id` IS its session_id, whose prefix is the
   // runtime discriminator (OTLP traces with hex ids fall through to OpenClaw).
-  var _trRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var _trRt = (typeof _cmRuntimeFilter === 'function') ? _cmClientFilterRt(_cmRuntimeFilter()) : 'all';
   if (_trRt && _trRt !== 'all') {
     traces = traces.filter(function(t) { return _cmRuntimeOf({ id: t.trace_id }) === _trRt; });
   }
@@ -15227,7 +15357,7 @@ async function loadMainActivity() {
     // tab (event sessionId prefix = runtime). Previously this Overview panel
     // showed every runtime's events regardless of the switcher, so picking
     // "Qwen Code" still surfaced Claude Code / OpenClaw cron chatter.
-    var _maRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    var _maRt = (typeof _cmRuntimeFilter === 'function') ? _cmClientFilterRt(_cmRuntimeFilter()) : 'all';
     if (_maRt !== 'all') events = events.filter(function(ev) { return _cmRuntimeOf(ev) === _maRt; });
 
     if (!events.length) {
