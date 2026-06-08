@@ -61,11 +61,21 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from clawmetry.providers_pricing import (
+    DEFAULT_MODEL_DOWNGRADE_MAP,
+    estimate_event_cost_usd,
+    provider_for_model,
+    resolve_same_provider_downgrade,
+)
+
 logger = logging.getLogger("clawmetry.proxy")
+
+if TYPE_CHECKING:
+    from flask import Flask
 
 # ── Constants ──────────────────────────────────────────────────────────
 
@@ -92,7 +102,9 @@ MODEL_PRICING = {
     "claude-3-5-sonnet": (3.0, 15.0),
     "claude-3-opus": (15.0, 75.0),
     "claude-3-sonnet": (3.0, 15.0),
+    "claude-3-5-haiku": (0.80, 4.00),
     "claude-3-haiku": (0.25, 1.25),
+    "gpt-4o-mini": (0.15, 0.60),
     "gpt-4o": (2.5, 10.0),
     "gpt-4-turbo": (10.0, 30.0),
     "gpt-4": (30.0, 60.0),
@@ -129,6 +141,17 @@ class VelocityBreakerConfig:
 
 
 @dataclass
+class AutoRoutingConfig:
+    enabled: bool = False
+    max_user_tokens: int = 200
+    max_system_tokens: int = 500
+    require_no_tools: bool = True
+    downgrade_map: Dict[str, str] = field(
+        default_factory=lambda: dict(DEFAULT_MODEL_DOWNGRADE_MAP)
+    )
+
+
+@dataclass
 class RoutingRule:
     """Route requests matching a pattern to a different model."""
 
@@ -144,6 +167,49 @@ class ProviderConfig:
     base_url: str = ""
 
 
+def _parse_bool(value, default: bool = False) -> bool:
+    """Best-effort config/env bool parser that never raises."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if text in {"0", "false", "no", "off", "disabled"}:
+        return False
+    return default
+
+
+def _parse_int(value, default: int) -> int:
+    """Best-effort config/env int parser that never raises."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_downgrade_map(value, default: Dict[str, str]) -> Dict[str, str]:
+    """Parse a configured downgrade map while preserving valid string entries."""
+    if value is None:
+        return dict(default)
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return dict(default)
+    if not isinstance(value, dict):
+        return dict(default)
+    parsed = {}
+    for source, target in value.items():
+        if source is None or target is None:
+            continue
+        parsed[str(source)] = str(target)
+    return parsed
+
+
 @dataclass
 class ProxyConfig:
     enabled: bool = True
@@ -152,6 +218,7 @@ class ProxyConfig:
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     loop_detection: LoopDetectionConfig = field(default_factory=LoopDetectionConfig)
     velocity_breaker: VelocityBreakerConfig = field(default_factory=VelocityBreakerConfig)
+    auto_routing: AutoRoutingConfig = field(default_factory=AutoRoutingConfig)
     routing_rules: List[RoutingRule] = field(default_factory=list)
     providers: Dict[str, ProviderConfig] = field(default_factory=dict)
     log_requests: bool = False
@@ -208,6 +275,21 @@ class ProxyConfig:
                         max_tokens=vb.get("max_tokens", 0),
                     )
 
+                if "auto_routing" in raw:
+                    ar = raw["auto_routing"] if isinstance(raw["auto_routing"], dict) else {}
+                    default_map = DEFAULT_MODEL_DOWNGRADE_MAP
+                    config.auto_routing = AutoRoutingConfig(
+                        enabled=_parse_bool(ar.get("enabled"), False),
+                        max_user_tokens=_parse_int(ar.get("max_user_tokens"), 200),
+                        max_system_tokens=_parse_int(ar.get("max_system_tokens"), 500),
+                        require_no_tools=_parse_bool(
+                            ar.get("require_no_tools"), True
+                        ),
+                        downgrade_map=_parse_downgrade_map(
+                            ar.get("downgrade_map"), default_map
+                        ),
+                    )
+
                 if "routing" in raw and "rules" in raw["routing"]:
                     for r in raw["routing"]["rules"]:
                         config.routing_rules.append(
@@ -237,6 +319,36 @@ class ProxyConfig:
         if os.environ.get("CLAWMETRY_PROXY_MONTHLY_USD"):
             config.budget.monthly_usd = float(os.environ["CLAWMETRY_PROXY_MONTHLY_USD"])
 
+        auto_enabled = (
+            os.environ.get("CLAWMETRY_PROXY_AUTO_ROUTING_ENABLED")
+            or os.environ.get("CLAWMETRY_PROXY_AUTO_ROUTING")
+            or os.environ.get("CLAWMETRY_AUTO_ROUTING_ENABLED")
+        )
+        if auto_enabled is not None:
+            config.auto_routing.enabled = _parse_bool(
+                auto_enabled, config.auto_routing.enabled
+            )
+        if os.environ.get("CLAWMETRY_PROXY_AUTO_ROUTING_MAX_USER_TOKENS"):
+            config.auto_routing.max_user_tokens = _parse_int(
+                os.environ["CLAWMETRY_PROXY_AUTO_ROUTING_MAX_USER_TOKENS"],
+                config.auto_routing.max_user_tokens,
+            )
+        if os.environ.get("CLAWMETRY_PROXY_AUTO_ROUTING_MAX_SYSTEM_TOKENS"):
+            config.auto_routing.max_system_tokens = _parse_int(
+                os.environ["CLAWMETRY_PROXY_AUTO_ROUTING_MAX_SYSTEM_TOKENS"],
+                config.auto_routing.max_system_tokens,
+            )
+        if os.environ.get("CLAWMETRY_PROXY_AUTO_ROUTING_REQUIRE_NO_TOOLS"):
+            config.auto_routing.require_no_tools = _parse_bool(
+                os.environ["CLAWMETRY_PROXY_AUTO_ROUTING_REQUIRE_NO_TOOLS"],
+                config.auto_routing.require_no_tools,
+            )
+        if os.environ.get("CLAWMETRY_PROXY_AUTO_ROUTING_DOWNGRADE_MAP"):
+            config.auto_routing.downgrade_map = _parse_downgrade_map(
+                os.environ["CLAWMETRY_PROXY_AUTO_ROUTING_DOWNGRADE_MAP"],
+                config.auto_routing.downgrade_map,
+            )
+
         return config
 
     def save(self) -> None:
@@ -264,6 +376,13 @@ class ProxyConfig:
                 "enabled": self.velocity_breaker.enabled,
                 "window_seconds": self.velocity_breaker.window_seconds,
                 "max_tokens": self.velocity_breaker.max_tokens,
+            },
+            "auto_routing": {
+                "enabled": self.auto_routing.enabled,
+                "max_user_tokens": self.auto_routing.max_user_tokens,
+                "max_system_tokens": self.auto_routing.max_system_tokens,
+                "require_no_tools": self.auto_routing.require_no_tools,
+                "downgrade_map": dict(self.auto_routing.downgrade_map),
             },
             "routing": {
                 "rules": [
@@ -710,6 +829,202 @@ def detect_provider(path: str, headers: dict, body: dict) -> str:
     return "anthropic"  # Default
 
 
+# ── Auto Routing ───────────────────────────────────────────────────────
+
+
+def _normalise_provider(provider: str) -> str:
+    provider = (provider or "").lower()
+    if provider == "gemini":
+        return "google"
+    return provider
+
+
+def _is_image_block(value) -> bool:
+    if not isinstance(value, dict):
+        return False
+    block_type = str(value.get("type", "")).lower()
+    if "image" in block_type:
+        return True
+    if value.get("image_url") or value.get("image"):
+        return True
+    media_type = str(value.get("media_type", "")).lower()
+    return media_type.startswith("image/")
+
+
+def _contains_image(value) -> bool:
+    if _is_image_block(value):
+        return True
+    if isinstance(value, dict):
+        return any(_contains_image(v) for v in value.values())
+    if isinstance(value, list):
+        return any(_contains_image(v) for v in value)
+    return False
+
+
+def _extract_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return " ".join(_extract_text(item) for item in value).strip()
+    if isinstance(value, dict):
+        if _is_image_block(value):
+            return ""
+        parts = []
+        for key in ("text", "content", "input", "message"):
+            if key in value:
+                text = _extract_text(value.get(key))
+                if text:
+                    parts.append(text)
+        return " ".join(parts).strip()
+    return ""
+
+
+def _estimated_tokens(text: str) -> int:
+    text = text or ""
+    if not text.strip():
+        return 0
+    word_count = len(re.findall(r"\S+", text))
+    char_count = max(1, len(text) // 4)
+    return max(word_count, char_count)
+
+
+def _system_prompt_text(body: dict) -> str:
+    parts = []
+    if "system" in body:
+        text = _extract_text(body.get("system"))
+        if text:
+            parts.append(text)
+    if "instructions" in body:
+        text = _extract_text(body.get("instructions"))
+        if text:
+            parts.append(text)
+
+    messages = body.get("messages", [])
+    if isinstance(messages, list):
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            role = str(message.get("role", "")).lower()
+            if role in {"system", "developer"}:
+                text = _extract_text(message.get("content", ""))
+                if text:
+                    parts.append(text)
+    return " ".join(parts).strip()
+
+
+def _last_user_message_text(body: dict) -> str:
+    messages = body.get("messages", [])
+    if not isinstance(messages, list) or not messages:
+        return ""
+
+    selected = None
+    for message in reversed(messages):
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("role", "")).lower() == "user":
+            selected = message
+            break
+    if selected is None:
+        for message in reversed(messages):
+            if isinstance(message, dict):
+                selected = message
+                break
+    if not selected:
+        return ""
+    return _extract_text(selected.get("content", ""))
+
+
+def _request_has_tool_definitions(body: dict) -> bool:
+    for key in ("tools", "functions", "tool_definitions"):
+        value = body.get(key)
+        if isinstance(value, (list, dict)) and len(value) > 0:
+            return True
+        if value and not isinstance(value, (list, dict)):
+            return True
+    return False
+
+
+@dataclass
+class AutoRoutingDecision:
+    original_model: str
+    target_model: str
+    provider: str
+    estimated_input_tokens: int
+    estimated_savings_usd: float
+    user_tokens: int
+    system_tokens: int
+
+
+class AutoModelRouter:
+    """Heuristic same-provider model downgrader for cheap, simple requests."""
+
+    def __init__(self, config: AutoRoutingConfig):
+        self.config = config
+
+    def route(self, body: dict, provider: str = "") -> Optional[AutoRoutingDecision]:
+        if not self.config.enabled or not isinstance(body, dict):
+            return None
+
+        model = str(body.get("model", "") or "")
+        if not model or model == "unknown":
+            return None
+
+        request_provider = _normalise_provider(provider)
+        model_provider = _normalise_provider(provider_for_model(model))
+        if request_provider and model_provider and request_provider != model_provider:
+            return None
+        effective_provider = model_provider or request_provider
+        if not effective_provider:
+            return None
+
+        if self.config.require_no_tools and _request_has_tool_definitions(body):
+            return None
+        if _contains_image(body):
+            return None
+
+        user_tokens = _estimated_tokens(_last_user_message_text(body))
+        system_tokens = _estimated_tokens(_system_prompt_text(body))
+        if user_tokens > self.config.max_user_tokens:
+            return None
+        if system_tokens > self.config.max_system_tokens:
+            return None
+
+        target_model = resolve_same_provider_downgrade(
+            model,
+            self.config.downgrade_map,
+            provider=effective_provider,
+        )
+        if not target_model or target_model.lower() == model.lower():
+            return None
+
+        estimated_input_tokens = max(1, user_tokens + system_tokens)
+        original_cost = estimate_event_cost_usd(
+            model,
+            input_tokens=estimated_input_tokens,
+            provider=effective_provider,
+        )
+        target_cost = estimate_event_cost_usd(
+            target_model,
+            input_tokens=estimated_input_tokens,
+            provider=effective_provider,
+        )
+        estimated_savings_usd = round(max(0.0, original_cost - target_cost), 8)
+        if estimated_savings_usd <= 0:
+            return None
+
+        return AutoRoutingDecision(
+            original_model=model,
+            target_model=target_model,
+            provider=effective_provider,
+            estimated_input_tokens=estimated_input_tokens,
+            estimated_savings_usd=estimated_savings_usd,
+            user_tokens=user_tokens,
+            system_tokens=system_tokens,
+        )
+
+
 # ── Budget Enforcer ────────────────────────────────────────────────────
 
 
@@ -973,6 +1288,7 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
     budget = BudgetEnforcer(config.budget, db)
     loop_detector = LoopDetector(config.loop_detection, db)
     velocity_breaker = VelocityBreaker(config.velocity_breaker, db)
+    auto_router = AutoModelRouter(config.auto_routing)
     router = ModelRouter(config.routing_rules)
 
     _stats = {
@@ -980,6 +1296,7 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
         "blocked": 0,
         "loops_detected": 0,
         "velocity_blocked": 0,
+        "auto_downgraded": 0,
         "started_at": time.time(),
     }
     _stats_lock = threading.Lock()
@@ -1108,6 +1425,42 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
 
         return headers
 
+    def _record_auto_downgrade(
+        decision: AutoRoutingDecision, session_id: str
+    ) -> None:
+        details = {
+            "original_model": decision.original_model,
+            "target_model": decision.target_model,
+            "provider": decision.provider,
+            "session_id": session_id,
+            "estimated_input_tokens": decision.estimated_input_tokens,
+            "estimated_savings_usd": decision.estimated_savings_usd,
+            "user_tokens": decision.user_tokens,
+            "system_tokens": decision.system_tokens,
+        }
+        db.record_event(
+            "auto_downgraded",
+            f"Auto-downgraded {decision.original_model} -> {decision.target_model}",
+            severity="info",
+            details=details,
+        )
+        try:
+            from clawmetry import local_store as _ls
+            import uuid as _uuid
+
+            _ls.get_store().ingest({
+                "id":         _uuid.uuid4().hex,
+                "node_id":    os.environ.get("CLAWMETRY_NODE_ID") or "local",
+                "agent_id":   "clawmetry-proxy",
+                "agent_type": "openclaw",
+                "event_type": "auto_downgraded",
+                "ts":         datetime.now(timezone.utc).isoformat(),
+                "session_id": session_id,
+                "data":       details,
+            })
+        except Exception as exc:  # noqa: BLE001 - never break proxy forwarding
+            logger.debug("auto_downgraded event skipped: %s", exc)
+
     def _forward_non_streaming(
         upstream_url: str, headers: dict, body_bytes: bytes, provider: str
     ) -> Tuple[bytes, int, dict, StreamUsage]:
@@ -1186,6 +1539,12 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                         "window_seconds": config.velocity_breaker.window_seconds,
                         "max_tokens": config.velocity_breaker.max_tokens,
                     },
+                    "auto_routing": {
+                        "enabled": config.auto_routing.enabled,
+                        "max_user_tokens": config.auto_routing.max_user_tokens,
+                        "max_system_tokens": config.auto_routing.max_system_tokens,
+                        "require_no_tools": config.auto_routing.require_no_tools,
+                    },
                     "routing_rules": len(config.routing_rules),
                 },
             }
@@ -1232,6 +1591,13 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                     "window_seconds": config.loop_detection.window_seconds,
                     "max_similar": config.loop_detection.max_similar,
                 },
+                "auto_routing": {
+                    "enabled": config.auto_routing.enabled,
+                    "max_user_tokens": config.auto_routing.max_user_tokens,
+                    "max_system_tokens": config.auto_routing.max_system_tokens,
+                    "require_no_tools": config.auto_routing.require_no_tools,
+                    "downgrade_map": dict(config.auto_routing.downgrade_map),
+                },
                 "routing_rules": len(config.routing_rules),
             }
         )
@@ -1269,6 +1635,29 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                 config.velocity_breaker.window_seconds = int(vb["window_seconds"])
             if "max_tokens" in vb:
                 config.velocity_breaker.max_tokens = int(vb["max_tokens"])
+
+        if "auto_routing" in data and isinstance(data["auto_routing"], dict):
+            ar = data["auto_routing"]
+            if "enabled" in ar:
+                config.auto_routing.enabled = _parse_bool(
+                    ar["enabled"], config.auto_routing.enabled
+                )
+            if "max_user_tokens" in ar:
+                config.auto_routing.max_user_tokens = _parse_int(
+                    ar["max_user_tokens"], config.auto_routing.max_user_tokens
+                )
+            if "max_system_tokens" in ar:
+                config.auto_routing.max_system_tokens = _parse_int(
+                    ar["max_system_tokens"], config.auto_routing.max_system_tokens
+                )
+            if "require_no_tools" in ar:
+                config.auto_routing.require_no_tools = _parse_bool(
+                    ar["require_no_tools"], config.auto_routing.require_no_tools
+                )
+            if "downgrade_map" in ar:
+                config.auto_routing.downgrade_map = _parse_downgrade_map(
+                    ar["downgrade_map"], config.auto_routing.downgrade_map
+                )
 
         config.save()
         db.record_event(
@@ -1389,12 +1778,15 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
             )
 
         # ── Model routing ──────────────────────────────────────────────
+        auto_decision = auto_router.route(body, provider)
+        routed_by_rule = False
         new_model, new_provider = router.route(model, session_id)
         if new_model:
             original_model = model
             model = new_model
             body["model"] = model
             body_bytes = json.dumps(body).encode()
+            routed_by_rule = True
             db.record_event(
                 "model_routed",
                 f"Routed {original_model} -> {model}",
@@ -1403,6 +1795,15 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
             )
         if new_provider:
             provider = new_provider
+            routed_by_rule = True
+
+        if not routed_by_rule and auto_decision:
+            model = auto_decision.target_model
+            body["model"] = model
+            body_bytes = json.dumps(body).encode()
+            with _stats_lock:
+                _stats["auto_downgraded"] += 1
+            _record_auto_downgrade(auto_decision, session_id)
 
         # ── Forward to upstream ────────────────────────────────────────
         api_key = _get_api_key(provider, req_headers)

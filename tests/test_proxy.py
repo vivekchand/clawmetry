@@ -17,7 +17,6 @@ Tests cover:
 import json
 import os
 import time
-from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -112,6 +111,16 @@ class TestCostCalculation:
         cost = calculate_cost("gpt-4o-2026-01-01", 1000, 500)
         expected = (1000 / 1_000_000 * 2.5) + (500 / 1_000_000 * 10.0)
         assert abs(cost - expected) < 0.0001
+
+    def test_auto_downgrade_targets_use_cheaper_rates(self):
+        from clawmetry.proxy import calculate_cost
+
+        assert calculate_cost("claude-3-5-haiku", 1000, 500) < calculate_cost(
+            "claude-opus-4", 1000, 500
+        )
+        assert calculate_cost("gpt-4o-mini", 1000, 500) < calculate_cost(
+            "gpt-4o", 1000, 500
+        )
 
 
 # ── Request Hashing ────────────────────────────────────────────────────
@@ -659,6 +668,155 @@ class TestModelRouter:
         assert model == "model-a"
 
 
+# ── Auto Model Router ─────────────────────────────────────────────────
+
+
+class TestAutoModelRouter:
+    def test_default_off(self):
+        from clawmetry.proxy import AutoModelRouter, AutoRoutingConfig
+
+        router = AutoModelRouter(AutoRoutingConfig())
+        decision = router.route(
+            {
+                "model": "claude-opus-4",
+                "messages": [{"role": "user", "content": "Hello"}],
+            },
+            provider="anthropic",
+        )
+        assert decision is None
+
+    def test_anthropic_short_prompt_routes_to_haiku(self):
+        from clawmetry.proxy import AutoModelRouter, AutoRoutingConfig
+
+        router = AutoModelRouter(AutoRoutingConfig(enabled=True))
+        decision = router.route(
+            {
+                "model": "claude-opus-4",
+                "messages": [{"role": "user", "content": "Summarize this."}],
+            },
+            provider="anthropic",
+        )
+        assert decision is not None
+        assert decision.target_model == "claude-3-5-haiku"
+        assert decision.estimated_savings_usd > 0
+
+    def test_openai_short_prompt_routes_to_mini(self):
+        from clawmetry.proxy import AutoModelRouter, AutoRoutingConfig
+
+        router = AutoModelRouter(AutoRoutingConfig(enabled=True))
+        decision = router.route(
+            {
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "Ping"}],
+            },
+            provider="openai",
+        )
+        assert decision is not None
+        assert decision.target_model == "gpt-4o-mini"
+        assert decision.provider == "openai"
+
+    def test_cross_provider_downgrade_map_is_rejected(self):
+        from clawmetry.proxy import AutoModelRouter, AutoRoutingConfig
+
+        router = AutoModelRouter(
+            AutoRoutingConfig(
+                enabled=True,
+                downgrade_map={"gpt-4o": "claude-3-5-haiku"},
+            )
+        )
+        decision = router.route(
+            {
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "Ping"}],
+            },
+            provider="openai",
+        )
+        assert decision is None
+
+    def test_provider_prefixed_cross_provider_model_is_rejected(self):
+        from clawmetry.proxy import AutoModelRouter, AutoRoutingConfig
+
+        router = AutoModelRouter(AutoRoutingConfig(enabled=True))
+        decision = router.route(
+            {
+                "model": "openrouter/openai/gpt-4o",
+                "messages": [{"role": "user", "content": "Ping"}],
+            },
+            provider="openai",
+        )
+        assert decision is None
+
+    def test_disqualifies_tool_definitions(self):
+        from clawmetry.proxy import AutoModelRouter, AutoRoutingConfig
+
+        router = AutoModelRouter(AutoRoutingConfig(enabled=True))
+        decision = router.route(
+            {
+                "model": "claude-opus-4",
+                "tools": [{"name": "shell", "input_schema": {"type": "object"}}],
+                "messages": [{"role": "user", "content": "Hello"}],
+            },
+            provider="anthropic",
+        )
+        assert decision is None
+
+    def test_disqualifies_images(self):
+        from clawmetry.proxy import AutoModelRouter, AutoRoutingConfig
+
+        router = AutoModelRouter(AutoRoutingConfig(enabled=True))
+        decision = router.route(
+            {
+                "model": "gpt-4o",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "What is in this image?"},
+                            {"type": "image_url", "image_url": {"url": "data:..."}},
+                        ],
+                    }
+                ],
+            },
+            provider="openai",
+        )
+        assert decision is None
+
+    def test_disqualifies_over_threshold_user_message(self):
+        from clawmetry.proxy import AutoModelRouter, AutoRoutingConfig
+
+        router = AutoModelRouter(
+            AutoRoutingConfig(enabled=True, max_user_tokens=3)
+        )
+        decision = router.route(
+            {
+                "model": "claude-opus-4",
+                "messages": [
+                    {"role": "user", "content": "one two three four five"}
+                ],
+            },
+            provider="anthropic",
+        )
+        assert decision is None
+
+    def test_disqualifies_over_threshold_system_prompt(self):
+        from clawmetry.proxy import AutoModelRouter, AutoRoutingConfig
+
+        router = AutoModelRouter(
+            AutoRoutingConfig(enabled=True, max_system_tokens=3)
+        )
+        decision = router.route(
+            {
+                "model": "gpt-4o",
+                "messages": [
+                    {"role": "system", "content": "one two three four five"},
+                    {"role": "user", "content": "Ping"},
+                ],
+            },
+            provider="openai",
+        )
+        assert decision is None
+
+
 # ── Configuration ──────────────────────────────────────────────────────
 
 
@@ -671,6 +829,7 @@ class TestProxyConfig:
         assert config.host == "127.0.0.1"
         assert config.budget.daily_usd == 0.0
         assert config.loop_detection.enabled is True
+        assert config.auto_routing.enabled is False
 
     def test_save_and_load(self, tmp_path):
         from clawmetry.proxy import ProxyConfig
@@ -695,6 +854,34 @@ class TestProxyConfig:
         assert loaded.budget.daily_usd == 25.0
         assert loaded.budget.action == "warn"
 
+    def test_auto_routing_save_and_load_round_trip(self, tmp_path):
+        from clawmetry.proxy import ProxyConfig, AutoRoutingConfig
+
+        config_file = tmp_path / "proxy.json"
+        config = ProxyConfig(
+            auto_routing=AutoRoutingConfig(
+                enabled=True,
+                max_user_tokens=123,
+                max_system_tokens=456,
+                require_no_tools=False,
+                downgrade_map={"gpt-4o": "gpt-4o-mini"},
+            )
+        )
+        with (
+            patch("clawmetry.proxy.CONFIG_DIR", tmp_path),
+            patch("clawmetry.proxy.PROXY_CONFIG_FILE", config_file),
+        ):
+            config.save()
+            raw = json.loads(config_file.read_text())
+            loaded = ProxyConfig.load()
+
+        assert raw["auto_routing"]["enabled"] is True
+        assert loaded.auto_routing.enabled is True
+        assert loaded.auto_routing.max_user_tokens == 123
+        assert loaded.auto_routing.max_system_tokens == 456
+        assert loaded.auto_routing.require_no_tools is False
+        assert loaded.auto_routing.downgrade_map == {"gpt-4o": "gpt-4o-mini"}
+
     def test_env_override(self, tmp_path):
         from clawmetry.proxy import ProxyConfig
 
@@ -710,11 +897,87 @@ class TestProxyConfig:
         assert config.port == 9999
         assert config.budget.daily_usd == 50.0
 
+    def test_auto_routing_env_override(self, tmp_path):
+        from clawmetry.proxy import ProxyConfig
+
+        config_file = tmp_path / "proxy.json"
+        with (
+            patch("clawmetry.proxy.PROXY_CONFIG_FILE", config_file),
+            patch.dict(
+                os.environ,
+                {
+                    "CLAWMETRY_PROXY_AUTO_ROUTING_ENABLED": "1",
+                    "CLAWMETRY_PROXY_AUTO_ROUTING_MAX_USER_TOKENS": "77",
+                    "CLAWMETRY_PROXY_AUTO_ROUTING_DOWNGRADE_MAP": json.dumps(
+                        {"gpt-4o": "gpt-4o-mini"}
+                    ),
+                },
+            ),
+        ):
+            config = ProxyConfig.load()
+        assert config.auto_routing.enabled is True
+        assert config.auto_routing.max_user_tokens == 77
+        assert config.auto_routing.downgrade_map == {"gpt-4o": "gpt-4o-mini"}
+
 
 # ── Flask App Integration ─────────────────────────────────────────────
 
 
 class TestProxyApp:
+    class _FakeResponse:
+        status = 200
+        headers = {}
+
+        def __init__(self, body):
+            self._body = json.dumps(body).encode()
+
+        def read(self):
+            return self._body
+
+    def _make_client(self, tmp_path, config):
+        import clawmetry.proxy
+        from clawmetry.proxy import create_proxy_app, ProxyDB, ProviderConfig
+
+        config.providers = {
+            "anthropic": ProviderConfig(
+                api_key_env="ANTHROPIC_API_KEY",
+                base_url="https://api.anthropic.com",
+            ),
+            "openai": ProviderConfig(
+                api_key_env="OPENAI_API_KEY",
+                base_url="https://api.openai.com",
+            ),
+        }
+        db_path = tmp_path / "test_proxy_app.db"
+        original_init = ProxyDB.__init__
+
+        def patched_init(self, db_path=None):
+            if db_path is None:
+                db_path = clawmetry.proxy.PROXY_DB_FILE
+            original_init(self, db_path)
+
+        with (
+            patch.object(clawmetry.proxy, "PROXY_DB_FILE", db_path),
+            patch.object(ProxyDB, "__init__", patched_init),
+        ):
+            app = create_proxy_app(config)
+        app.config["TESTING"] = True
+        client = app.test_client()
+        client._db_path = db_path
+        return client
+
+    def _patch_local_store(self, monkeypatch):
+        captured = []
+
+        class _FakeStore:
+            def ingest(self, event):
+                captured.append(event)
+
+        from clawmetry import local_store as _ls
+
+        monkeypatch.setattr(_ls, "get_store", lambda: _FakeStore())
+        return captured
+
     @pytest.fixture
     def client(self, tmp_path):
         import clawmetry.proxy
@@ -814,3 +1077,223 @@ class TestProxyApp:
         status = resp.get_json()
         assert status["budget"]["daily_remaining"] == 0.0
         assert status["budget"]["daily_limit"] == 10.0
+
+    def test_auto_routing_rewrites_anthropic_request_and_emits_event(
+        self, tmp_path, monkeypatch
+    ):
+        from clawmetry.proxy import (
+            AutoRoutingConfig,
+            BudgetConfig,
+            LoopDetectionConfig,
+            ProxyConfig,
+            ProxyDB,
+        )
+
+        config = ProxyConfig(
+            budget=BudgetConfig(),
+            loop_detection=LoopDetectionConfig(enabled=False),
+            auto_routing=AutoRoutingConfig(enabled=True),
+        )
+        client = self._make_client(tmp_path, config)
+        local_events = self._patch_local_store(monkeypatch)
+        captured = {}
+
+        def fake_urlopen(req, timeout=300):
+            captured["body"] = json.loads(req.data.decode())
+            return self._FakeResponse(
+                {
+                    "model": captured["body"]["model"],
+                    "usage": {"input_tokens": 10, "output_tokens": 2},
+                    "stop_reason": "end_turn",
+                }
+            )
+
+        monkeypatch.setattr("clawmetry.proxy.urlopen", fake_urlopen)
+        resp = client.post(
+            "/v1/messages",
+            data=json.dumps(
+                {
+                    "model": "claude-opus-4",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "max_tokens": 16,
+                }
+            ),
+            content_type="application/json",
+            headers={"x-api-key": "sk-ant-test", "x-session-id": "s-auto"},
+        )
+
+        assert resp.status_code == 200
+        assert captured["body"]["model"] == "claude-3-5-haiku"
+
+        db = ProxyDB(db_path=client._db_path)
+        events = db.get_recent_events(event_type="auto_downgraded")
+        assert len(events) == 1
+        details = json.loads(events[0]["details"])
+        assert details["original_model"] == "claude-opus-4"
+        assert details["target_model"] == "claude-3-5-haiku"
+        assert details["estimated_savings_usd"] > 0
+        assert local_events[0]["event_type"] == "auto_downgraded"
+        assert local_events[0]["data"]["estimated_savings_usd"] > 0
+
+    def test_auto_routing_rewrites_openai_request(self, tmp_path, monkeypatch):
+        from clawmetry.proxy import (
+            AutoRoutingConfig,
+            BudgetConfig,
+            LoopDetectionConfig,
+            ProxyConfig,
+            ProxyDB,
+        )
+
+        config = ProxyConfig(
+            budget=BudgetConfig(),
+            loop_detection=LoopDetectionConfig(enabled=False),
+            auto_routing=AutoRoutingConfig(enabled=True),
+        )
+        client = self._make_client(tmp_path, config)
+        self._patch_local_store(monkeypatch)
+        captured = {}
+
+        def fake_urlopen(req, timeout=300):
+            captured["body"] = json.loads(req.data.decode())
+            return self._FakeResponse(
+                {
+                    "model": captured["body"]["model"],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 1},
+                    "choices": [{"finish_reason": "stop"}],
+                }
+            )
+
+        monkeypatch.setattr("clawmetry.proxy.urlopen", fake_urlopen)
+        resp = client.post(
+            "/v1/chat/completions",
+            data=json.dumps(
+                {
+                    "model": "gpt-4o",
+                    "messages": [{"role": "user", "content": "Ping"}],
+                }
+            ),
+            content_type="application/json",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert resp.status_code == 200
+        assert captured["body"]["model"] == "gpt-4o-mini"
+        db = ProxyDB(db_path=client._db_path)
+        events = db.get_recent_events(event_type="auto_downgraded")
+        assert len(events) == 1
+        assert json.loads(events[0]["details"])["provider"] == "openai"
+
+    def test_explicit_routing_rule_takes_precedence_over_auto_routing(
+        self, tmp_path, monkeypatch
+    ):
+        from clawmetry.proxy import (
+            AutoRoutingConfig,
+            BudgetConfig,
+            LoopDetectionConfig,
+            ProxyConfig,
+            ProxyDB,
+            RoutingRule,
+        )
+
+        config = ProxyConfig(
+            budget=BudgetConfig(),
+            loop_detection=LoopDetectionConfig(enabled=False),
+            auto_routing=AutoRoutingConfig(enabled=True),
+            routing_rules=[
+                RoutingRule(
+                    match_model="opus",
+                    target_model="claude-sonnet-4",
+                )
+            ],
+        )
+        client = self._make_client(tmp_path, config)
+        self._patch_local_store(monkeypatch)
+        captured = {}
+
+        def fake_urlopen(req, timeout=300):
+            captured["body"] = json.loads(req.data.decode())
+            return self._FakeResponse(
+                {
+                    "model": captured["body"]["model"],
+                    "usage": {"input_tokens": 5, "output_tokens": 1},
+                    "stop_reason": "end_turn",
+                }
+            )
+
+        monkeypatch.setattr("clawmetry.proxy.urlopen", fake_urlopen)
+        resp = client.post(
+            "/v1/messages",
+            data=json.dumps(
+                {
+                    "model": "claude-opus-4",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                }
+            ),
+            content_type="application/json",
+            headers={"x-api-key": "sk-ant-test"},
+        )
+
+        assert resp.status_code == 200
+        assert captured["body"]["model"] == "claude-sonnet-4"
+        db = ProxyDB(db_path=client._db_path)
+        assert db.get_recent_events(event_type="auto_downgraded") == []
+        assert len(db.get_recent_events(event_type="model_routed")) == 1
+
+    def test_budget_downgrade_takes_precedence_over_auto_routing(
+        self, tmp_path, monkeypatch
+    ):
+        from clawmetry.proxy import (
+            AutoRoutingConfig,
+            BudgetConfig,
+            LoopDetectionConfig,
+            ProxyConfig,
+            ProxyDB,
+        )
+
+        config = ProxyConfig(
+            budget=BudgetConfig(
+                daily_usd=1.0,
+                action="downgrade",
+                downgrade_model="claude-3-haiku-20240307",
+            ),
+            loop_detection=LoopDetectionConfig(enabled=False),
+            auto_routing=AutoRoutingConfig(enabled=True),
+        )
+        client = self._make_client(tmp_path, config)
+        self._patch_local_store(monkeypatch)
+        db = ProxyDB(db_path=client._db_path)
+        db.record_usage(
+            provider="anthropic",
+            model="claude-opus-4",
+            input_tokens=1000,
+            output_tokens=1000,
+            cost_usd=2.0,
+        )
+        captured = {}
+
+        def fake_urlopen(req, timeout=300):
+            captured["body"] = json.loads(req.data.decode())
+            return self._FakeResponse(
+                {
+                    "model": captured["body"]["model"],
+                    "usage": {"input_tokens": 5, "output_tokens": 1},
+                    "stop_reason": "end_turn",
+                }
+            )
+
+        monkeypatch.setattr("clawmetry.proxy.urlopen", fake_urlopen)
+        resp = client.post(
+            "/v1/messages",
+            data=json.dumps(
+                {
+                    "model": "claude-opus-4",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                }
+            ),
+            content_type="application/json",
+            headers={"x-api-key": "sk-ant-test"},
+        )
+
+        assert resp.status_code == 200
+        assert captured["body"]["model"] == "claude-3-haiku-20240307"
+        assert db.get_recent_events(event_type="auto_downgraded") == []

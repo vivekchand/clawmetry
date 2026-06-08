@@ -7,6 +7,8 @@ take precedence when available.
 """
 from __future__ import annotations
 
+from typing import Optional
+
 # hostname fragment -> {name, input_price_per_1m, output_price_per_1m}
 PROVIDER_MAP: dict[str, dict] = {
     "api.anthropic.com": {
@@ -84,6 +86,7 @@ MODEL_OVERRIDES: dict[tuple[str, str], tuple[float, float]] = {
     ("openai", "gpt-4o-mini"): (0.15, 0.60),
     ("openai", "gpt-4o"): (2.50, 10.00),
     ("openai", "gpt-4-turbo"): (10.00, 30.00),
+    ("openai", "gpt-4"): (30.00, 60.00),
     ("openai", "gpt-3.5"): (0.50, 1.50),
     ("openai", "o1-mini"): (3.00, 12.00),
     ("openai", "o1"): (15.00, 60.00),
@@ -96,6 +99,86 @@ MODEL_OVERRIDES: dict[tuple[str, str], tuple[float, float]] = {
     ("mistral", "mistral-large"): (2.00, 6.00),
     ("mistral", "codestral"): (0.20, 0.60),
 }
+
+# Default same-provider downgrades used by the enforcement proxy's opt-in
+# auto-router. Keys are model prefixes; values are cheaper models from the
+# same provider. The resolver below still verifies provider parity and pricing
+# before returning a target, so custom config cannot accidentally jump providers.
+DEFAULT_MODEL_DOWNGRADE_MAP: dict[str, str] = {
+    "claude-opus-4": "claude-3-5-haiku",
+    "claude-3-opus": "claude-3-haiku",
+    "claude-sonnet-4": "claude-3-5-haiku",
+    "claude-3-5-sonnet": "claude-3-5-haiku",
+    "gpt-4o": "gpt-4o-mini",
+    "gpt-4-turbo": "gpt-4o-mini",
+    "gpt-4": "gpt-4o-mini",
+    "o1": "o1-mini",
+}
+
+
+def _strip_provider_prefix(model: str) -> str:
+    """Return the model id without a leading provider prefix."""
+    model_lower = (model or "").lower()
+    if "/" not in model_lower:
+        return model_lower
+    return model_lower.split("/", 1)[1]
+
+
+def resolve_same_provider_downgrade(
+    model: str,
+    downgrade_map: Optional[dict[str, str]] = None,
+    provider: str = "",
+) -> str:
+    """Return a cheaper same-provider target for ``model`` if one is safe.
+
+    This is intentionally conservative: the configured target must resolve to
+    the same provider as the source model, the optional request provider must
+    agree with the model's provider when both are known, and the target's rates
+    must be strictly cheaper than the source rates.
+    """
+    model_lower = (model or "").lower()
+    if not model_lower:
+        return ""
+
+    source_provider = provider_for_model(model_lower)
+    request_provider = (provider or "").lower()
+    if request_provider == "gemini":
+        request_provider = "google"
+    if source_provider and request_provider and source_provider != request_provider:
+        return ""
+    if not source_provider:
+        source_provider = request_provider
+    if not source_provider:
+        return ""
+
+    candidates = downgrade_map or DEFAULT_MODEL_DOWNGRADE_MAP
+    unprefixed_model = _strip_provider_prefix(model_lower)
+
+    for source_prefix, target_model in candidates.items():
+        source_prefix_lower = (source_prefix or "").lower()
+        target_model = target_model or ""
+        target_lower = target_model.lower()
+        if not source_prefix_lower or not target_lower:
+            continue
+        if not (
+            model_lower.startswith(source_prefix_lower)
+            or unprefixed_model.startswith(source_prefix_lower)
+        ):
+            continue
+
+        target_provider = provider_for_model(target_lower)
+        if target_provider == "gemini":
+            target_provider = "google"
+        if target_provider != source_provider:
+            continue
+
+        original_rates = _get_rates(source_provider, model_lower)
+        target_rates = _get_rates(target_provider, target_lower)
+        if sum(target_rates) >= sum(original_rates):
+            continue
+        return target_model
+
+    return ""
 
 
 def estimate_cost_usd(
