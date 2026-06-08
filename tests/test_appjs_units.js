@@ -1103,13 +1103,20 @@ console.log('tool alternatives toggle (issue #1616)');
 // ── Runtime filter: _cmRuntimeOf derivation (session-id prefix = runtime) ──
 console.log('_cmRuntimeOf (runtime from session-id prefix)');
 {
-  // Pull the runtime-label map + the deriver. _cmRuntimeOf references the
-  // module-level _CM_RT_LABEL, so eval both together.
+  // Pull the runtime-label map, the prefix set, the OTLP registry + helpers,
+  // and the deriver. _cmRuntimeOf references _CM_RT_PREFIXES + _CM_OTLP_RT, so
+  // eval them together.
   const labelSrc = src.match(/var _CM_RT_LABEL = \{[\s\S]*?\};/)[0];
+  const prefixSrc = src.match(/var _CM_RT_PREFIXES = \{[\s\S]*?\};/)[0];
+  const otlpSrc = src.match(/var _CM_OTLP_RT = \{\};/)[0];
+  const regFn = extractFunction('_cmRegisterOtlpRuntime');
+  const isOtlpFn = extractFunction('_cmIsOtlpRuntime');
   const fnSrc = extractFunction('_cmRuntimeOf');
   const sandbox = {};
   vm.createContext(sandbox);
-  vm.runInContext(labelSrc + '\n' + fnSrc + '\nthis._f = _cmRuntimeOf;', sandbox);
+  vm.runInContext(labelSrc + '\n' + prefixSrc + '\n' + otlpSrc + '\n'
+    + regFn + '\n' + isOtlpFn + '\n' + fnSrc
+    + '\nthis._f = _cmRuntimeOf; this._reg = _cmRegisterOtlpRuntime; this._isOtlp = _cmIsOtlpRuntime;', sandbox);
   const rt = sandbox._f;
   eq(rt({ id: 'qwen_code:f9f7f80f-c858' }), 'qwen_code', 'qwen_code: prefix → qwen_code');
   eq(rt({ id: 'claude_code:bfb6be7d' }), 'claude_code', 'claude_code: prefix → claude_code');
@@ -1119,6 +1126,27 @@ console.log('_cmRuntimeOf (runtime from session-id prefix)');
   eq(rt({ id: 'clawmetry-selfevolve' }), 'openclaw', 'internal session → openclaw');
   eq(rt({ trace_id: 'qwen_code:x' }), 'openclaw', 'trace_id is NOT read (only id/sessionId/session_id/key)');
   eq(rt({ sessionId: 'goose:20260525_3' }), 'goose', 'sessionId field honoured');
+
+  // ── Foreign OTLP apps (no session prefix; agent_type filter) ──────────────
+  // Before registration, an unknown agent_type does NOT bucket to a phantom
+  // runtime; it stays openclaw (the default) — never mis-bucketed.
+  eq(rt({ session_id: 's1', agent_type: 'my_app' }), 'openclaw',
+     'unregistered OTLP agent_type → openclaw (no phantom)');
+  // Register the OTLP app (as the daemon's inventory/runtimeSummary would), then
+  // the deriver honours its agent_type, and ONLY its own data matches.
+  sandbox._reg('my_app', 'My App (OTel)');
+  truthy(sandbox._isOtlp('my_app'), 'registered app is recognised as OTLP');
+  eq(rt({ agent_type: 'my_app' }), 'my_app', 'registered OTLP app → matches its agent_type');
+  eq(rt({ runtime: 'my_app' }), 'my_app', 'OTLP app via runtime field');
+  // No leak: a native session id never resolves to the OTLP app, and the OTLP
+  // app id never resolves to a native runtime.
+  eq(rt({ id: 'claude_code:abc', agent_type: 'my_app' }), 'claude_code',
+     'native prefix wins over agent_type (no OTLP leak into native)');
+  eq(rt({ id: '625c0ad9-71af', agent_type: 'openclaw' }), 'openclaw',
+     'openclaw stays openclaw');
+  // Registering must never shadow a native runtime key.
+  sandbox._reg('claude_code', 'should-not-apply');
+  truthy(!sandbox._isOtlp('claude_code'), 'register cannot turn a native runtime into OTLP');
 }
 
 // ── Runtime filter: _cmApplyRuntimeScopeNote picks the right scope ─────────
@@ -1144,13 +1172,21 @@ console.log('_cmApplyRuntimeScopeNote (honest note on aggregate / node-wide tabs
     escHtml: function(s) { return String(s); },
     _cmRuntimeFilter: function() { return filterVal; },
     _cmRuntimeLabel: function(rt) { return ({ qwen_code: 'Qwen Code' })[rt] || rt; },
+    // The scope note now short-circuits for OTLP runtimes; this suite tests the
+    // native-runtime branches, so report "not OTLP" for them.
+    _cmIsOtlpRuntime: function() { return false; },
+    // Multi-runtime node so the aggregate-note suppression (single-runtime
+    // installs hide the note) does not fire.
+    _cmGlobalRtCounts: { openclaw: 3, qwen_code: 2 },
   };
   vm.createContext(sandbox);
   vm.runInContext(maps + '\n' + fnSrc + '\nthis._note = _cmApplyRuntimeScopeNote;', sandbox);
 
-  // aggregate tab (usage/Cost) → "all runtimes" note mentioning the runtime
-  thePage = null; sandbox.document.getElementById = function(id) { return id === 'page-usage' ? (thePage = thePage || makePage()) : null; };
-  sandbox._note('usage');
+  // aggregate tab (LLM Context) → "all runtimes" note mentioning the runtime.
+  // (usage/Cost moved to real per-runtime filtering; LLM Context is the
+  // remaining aggregate tab in _CM_RT_AGGREGATE.)
+  thePage = null; sandbox.document.getElementById = function(id) { return id === 'page-context' ? (thePage = thePage || makePage()) : null; };
+  sandbox._note('context');
   truthy(thePage && thePage._html.indexOf('all runtimes') !== -1, 'aggregate tab → "all runtimes" note');
   truthy(thePage._html.indexOf('Qwen Code') !== -1, 'aggregate note names the selected runtime');
 

@@ -1142,6 +1142,7 @@ function switchTab(name) {
   if (leftNav && leftNav.classList.contains('open')) leftNav.classList.remove('open');
   // Stop cron auto-refresh when leaving crons tab
   if (name !== 'crons' && _cronAutoRefreshTimer) { clearInterval(_cronAutoRefreshTimer); _cronAutoRefreshTimer = null; }
+  if (name === 'inventory') { if (typeof renderInventory === 'function') renderInventory(); }
   if (name === 'overview') loadAll();
   if (name === 'overview') { if (typeof _velocityPollTimer !== 'undefined' && _velocityPollTimer) clearInterval(_velocityPollTimer); if (typeof loadTokenVelocity === 'function') _velocityPollTimer = visibilitySetInterval(function() { if (!_cmIsOverviewTab()) return; loadTokenVelocity(); }, 30000); }
   if (name === 'usage') loadUsage();
@@ -2868,6 +2869,8 @@ function _renderWasteSummary() {
     if (Number(w.reasoning_cost_usd) > 0) rows.push(['🧠', '$' + Number(w.reasoning_cost_usd).toFixed(2) + ' on reasoning', '(' + (w.reasoning_pct_of_cost || 0) + '% of spend — billed, no deliverable)']);
     if (Number(w.low_cache_sessions) > 0) rows.push(['⚡', w.low_cache_sessions + ' session' + (w.low_cache_sessions == 1 ? '' : 's'), 'with low cache hit (context re-sent at full price)']);
     if (Number(w.reread_tax_usd) > 0) rows.push(['⏱', '$' + Number(w.reread_tax_usd).toFixed(2) + ' re-read tax', 'rebuilding the prompt cache after its 5-min TTL expired (' + w.reread_tax_sessions + ' session' + (w.reread_tax_sessions == 1 ? '' : 's') + ')']);
+    if (!Number(w.reread_tax_usd) && Number(w.cache_expiry_sessions) > 0) rows.push(['⏱', w.cache_expiry_count + ' cache ' + (w.cache_expiry_count == 1 ? 'expiry' : 'expiries'), 'idle gaps crossed the 5-min cache TTL in ' + w.cache_expiry_sessions + ' session' + (w.cache_expiry_sessions == 1 ? '' : 's') + ' (context re-derived)']);
+    if (Number(w.compressible_sessions) > 0) rows.push(['🗜', (Number(w.compressible_usd) > 0 ? '$' + Number(w.compressible_usd).toFixed(2) + ' recoverable' : '~' + Math.round(Number(w.compressible_tokens)/1000) + 'k tokens'), 'compressible tool output (JSON / logs / diffs) in ' + w.compressible_sessions + ' session' + (w.compressible_sessions == 1 ? '' : 's')]);
     if (Number(w.tool_failing_sessions) > 0) rows.push(['⚠', w.tool_failing_sessions + ' session' + (w.tool_failing_sessions == 1 ? '' : 's'), 'with a tool failing (tokens burned on retries)']);
     if (Number(w.compaction_heavy_sessions) > 0) rows.push(['♻', w.compaction_heavy_sessions + ' session' + (w.compaction_heavy_sessions == 1 ? '' : 's'), 'thrashing context (re-summarised repeatedly)']);
     if (Number(w.model_fallback_sessions) > 0) rows.push(['🔀', w.model_fallback_sessions + ' session' + (w.model_fallback_sessions == 1 ? '' : 's'), 'on a silent model fallback']);
@@ -2890,6 +2893,8 @@ function _renderWasteSummary() {
       _opps.push([Number(w.reread_tax_usd) * 2, '$' + Number(w.reread_tax_usd).toFixed(2) + ' went to rebuilding the prompt cache after its 5-min TTL expired — keep sessions warm (a heartbeat or batched turns) so context is read at ~0.1x instead of re-written at full price.']);
     if (Number(w.compaction_heavy_sessions) > 0)
       _opps.push([Number(w.compaction_heavy_sessions) * 0.8, w.compaction_heavy_sessions + ' session' + (w.compaction_heavy_sessions == 1 ? '' : 's') + ' thrash context with repeated compaction — work in a smaller window.']);
+    if (Number(w.compressible_sessions) > 0)
+      _opps.push([(Number(w.compressible_usd) || 0) * 3 + Number(w.compressible_sessions), (Number(w.compressible_usd) > 0 ? '$' + Number(w.compressible_usd).toFixed(2) + ' of tool output' : '~' + Math.round(Number(w.compressible_tokens)/1000) + 'k tokens of tool output') + ' is compressible without changing answers (bloated JSON / logs / diffs in ' + w.compressible_sessions + ' session' + (w.compressible_sessions == 1 ? '' : 's') + ') — trim or compress large tool results before they hit the model.']);
     _opps.sort(function(a, b){ return b[0] - a[0]; });
     var startHere = _opps.length ? ('<div style="font-size:12px;color:#22c55e;background:rgba(34,197,94,0.08);border-radius:6px;padding:7px 10px;margin-top:10px;"><strong>Start here:</strong> ' + escHtml(_opps[0][1]) + '</div>') : '';
     var html = '<div id="cm-waste-summary" style="background:var(--bg-secondary,#161b22);border:1px solid var(--border-primary,#30363d);border-left:3px solid #E5443A;border-radius:10px;padding:14px 18px;margin:0 0 16px;">'
@@ -3313,6 +3318,71 @@ async function loadMiniWidgets(overview, usage) {
   loadEvalSummary();
   // Phase 3 — regression-replay mini-line under the eval tile.
   loadEvalRegressionSummary();
+  // Named evaluator library — the catalogue of quality / reliability /
+  // efficiency / safety / agent checks ClawMetry runs. Static + cloud-safe.
+  loadEvaluators();
+}
+
+// Named evaluator library. Reads /api/evaluators (static catalogue, cloud-safe)
+// and renders each named evaluator as a card with a category chip, a tier badge,
+// and an honest live / coming-soon state. Newcomer-plain language by design.
+async function loadEvaluators() {
+  var listEl = document.getElementById('evaluators-list');
+  var countEl = document.getElementById('evaluators-count');
+  if (!listEl) return;
+  var data = await fetch('/api/evaluators').then(function(r){return r.json();}).catch(function(){return null;});
+  var evs = (data && data.evaluators) || [];
+  if (!evs.length) {
+    listEl.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">' +
+      t("evaluators.empty", null, "Evaluator library unavailable.") + '</div>';
+    if (countEl) countEl.textContent = '';
+    return;
+  }
+  if (countEl) {
+    var liveN = evs.filter(function(e){ return e.status === 'live'; }).length;
+    countEl.textContent = liveN + ' / ' + evs.length + ' ' +
+      t("evaluators.live_now", null, "live now");
+  }
+  // Category → chip color + plain label.
+  var CAT = {
+    quality:     { c: '#8b5cf6', label: t("evaluators.cat_quality", null, "Quality") },
+    reliability: { c: '#3b82f6', label: t("evaluators.cat_reliability", null, "Reliability") },
+    efficiency:  { c: '#f59e0b', label: t("evaluators.cat_efficiency", null, "Efficiency") },
+    safety:      { c: '#ef4444', label: t("evaluators.cat_safety", null, "Safety") },
+    agent:       { c: '#10b981', label: t("evaluators.cat_agent", null, "Agent") }
+  };
+  var html = '';
+  evs.forEach(function(e) {
+    var cat = CAT[e.category] || { c: 'var(--text-muted)', label: e.category };
+    var statusLabel, statusColor;
+    if (e.status === 'live') {
+      statusLabel = t("evaluators.status_live", null, "Live"); statusColor = '#22c55e';
+    } else if (e.status === 'partial') {
+      statusLabel = t("evaluators.status_partial", null, "Early"); statusColor = '#f59e0b';
+    } else {
+      statusLabel = t("evaluators.status_soon", null, "With Pro"); statusColor = 'var(--text-muted)';
+    }
+    var tierBadge = '';
+    if (e.tier === 'pro') {
+      tierBadge = '<span style="font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;' +
+        'background:rgba(139,92,246,0.14);color:#8b5cf6;border:1px solid rgba(139,92,246,0.35);">PRO</span>';
+    }
+    html += '<div style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:10px;padding:12px 14px;' +
+      (e.locked ? 'opacity:0.78;' : '') + '">';
+    html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">';
+    html += '<span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:' + cat.c + ';">' + escHtml(cat.label) + '</span>';
+    html += '<span style="display:flex;align-items:center;gap:6px;">' + tierBadge +
+      '<span style="font-size:10px;font-weight:600;color:' + statusColor + ';">' + escHtml(statusLabel) + '</span></span>';
+    html += '</div>';
+    html += '<div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:4px;">' + escHtml(e.name) + '</div>';
+    html += '<div style="font-size:11px;color:var(--text-muted);line-height:1.45;">' + escHtml(e.description) + '</div>';
+    if (e.locked) {
+      html += '<div style="margin-top:8px;font-size:11px;"><a href="/upgrade?source=evaluators" style="color:#8b5cf6;font-weight:600;text-decoration:none;">' +
+        t("evaluators.unlock", null, "Unlock with Pro") + ' &rarr;</a></div>';
+    }
+    html += '</div>';
+  });
+  listEl.innerHTML = html;
 }
 
 // Issue #1619 Phase 1 — pull aggregate score for the overview tile.
@@ -3619,7 +3689,7 @@ async function loadActiveTasks() {
     var now = Date.now();
     var all = (saData.subagents || []);
     // Scope to the selected runtime (sub-agent sessionId prefix = runtime).
-    var _atRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    var _atRt = (typeof _cmRuntimeFilter === 'function') ? _cmClientFilterRt(_cmRuntimeFilter()) : 'all';
     if (_atRt !== 'all') all = all.filter(function(a) { return _cmRuntimeOf(a) === _atRt; });
     var live = all.filter(function(a) { return a.status === 'active' || a.status === 'idle'; });
     var recentFailed = all.filter(function(a) {
@@ -4624,7 +4694,7 @@ function renderBrainStream(events) {
   // Global runtime switcher (header): scope the activity stream to one runtime
   // so Brain stops mixing OpenClaw with Claude Code / Codex / etc. Each event
   // carries `sessionId`, whose prefix is the runtime discriminator.
-  var _brainRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var _brainRt = (typeof _cmRuntimeFilter === 'function') ? _cmClientFilterRt(_cmRuntimeFilter()) : 'all';
   if (_brainRt && _brainRt !== 'all') {
     filtered = filtered.filter(function(ev) { return _cmRuntimeOf(ev) === _brainRt; });
   }
@@ -5400,7 +5470,7 @@ function renderBrainChart(events) {
   if (typeof _brainChannelFilter !== 'undefined' && _brainChannelFilter !== 'all') {
     events = events.filter(function(ev) { return (ev.channel || '') === _brainChannelFilter; });
   }
-  var _bcRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var _bcRt = (typeof _cmRuntimeFilter === 'function') ? _cmClientFilterRt(_cmRuntimeFilter()) : 'all';
   if (_bcRt && _bcRt !== 'all') {
     events = events.filter(function(ev) { return _cmRuntimeOf(ev) === _bcRt; });
   }
@@ -7536,6 +7606,11 @@ async function loadSecurityPage(silent) {
     // honest state instead.
     var _tl = document.getElementById('security-threat-list');
     if (_tl) _tl.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:13px;">' + t('app.security_threats_local_only', null, 'Threat detection runs on your local node. Open the local dashboard to scan for misconfigurations.') + '</div>';
+    // Integrity + audit DO ship in the snapshot; a cm-cloud interceptor will
+    // serve them. Until then these render an honest "local node" state rather
+    // than a silent blank (and become live once the interceptor lands).
+    loadSecurityIntegrity();
+    loadSecurityAudit();
     return;
   }
   try {
@@ -7617,9 +7692,115 @@ async function loadSecurityPage(silent) {
     var pel = document.getElementById('policy-events-list');
     if (pel && !silent) pel.innerHTML = '<div style="color:var(--text-muted);padding:12px;font-size:11px;">Policy scan unavailable.</div>';
   }
+  // Tamper-evident integrity + Enterprise audit feed (both node-wide).
+  loadSecurityIntegrity();
+  loadSecurityAudit();
   if (_securityRefreshTimer) clearTimeout(_securityRefreshTimer);
   if (document.getElementById('page-security') && document.getElementById('page-security').classList.contains('active')) {
     _securityRefreshTimer = setTimeout(function() { loadSecurityPage(true); }, 30000);
+  }
+}
+
+// Tamper-evident hash-chain status. Plain-language labels per the FLYWHEEL
+// vision ("Tamper-evident log: 1,240 events, intact"), never "hash chain
+// verified". Node-wide concept — the runtime switcher does not apply.
+async function loadSecurityIntegrity() {
+  var label = document.getElementById('integrity-label');
+  var badge = document.getElementById('integrity-badge');
+  var icon = document.getElementById('integrity-icon');
+  if (!label || !badge) return;
+  function paint(txt, badgeTxt, badgeColor, iconChar) {
+    label.textContent = txt;
+    badge.textContent = badgeTxt;
+    if (badgeColor) { badge.style.color = badgeColor; badge.style.background = 'transparent'; badge.style.border = '1px solid ' + badgeColor; }
+    if (icon && iconChar) icon.innerHTML = iconChar;
+  }
+  try {
+    var d = await fetchJsonWithTimeout('/api/security/integrity', 10000);
+    var n = (d && d.chain_length) || 0;
+    var nStr = n.toLocaleString();
+    if (d && d.ok === true) {
+      paint(t('app.integrity_intact', null, 'Tamper-evident log: ' + nStr + ' events, intact. Every recorded event is chained, so silent edits would show up here.'),
+            t('app.integrity_intact_badge', null, 'Intact'), '#22c55e', '&#128274;');
+    } else if (d && d.ok === false) {
+      paint(t('app.integrity_broken', null, 'Tamper-evident log: a break was detected at event ' + (d.first_break != null ? d.first_break : '?') + '. The activity log may have been altered.'),
+            t('app.integrity_broken_badge', null, 'Tampered'), '#ef4444', '&#9888;');
+    } else if (window.CLOUD_MODE) {
+      // Honest cloud state until the cm-cloud-security interceptor serves the
+      // securityIntegrity snapshot slice (no silent blank).
+      paint(t('app.integrity_local_only', null, 'The tamper-evident log lives on your local node. Open the local dashboard to verify it.'),
+            t('app.integrity_na_badge', null, 'Local node'), '#64748b', '&#128274;');
+    } else {
+      paint(t('app.integrity_empty', null, 'No tamper-evident events recorded yet. Chaining begins as your agents run.'),
+            t('app.integrity_empty_badge', null, 'No data'), '#64748b', '&#128274;');
+    }
+  } catch (e) {
+    paint(t('app.integrity_unavailable', null, 'Could not check the tamper-evident log right now.'),
+          '', '#64748b', '&#128274;');
+  }
+}
+
+// Recent Enterprise audit-log activity (approvals, budgets, pauses). Node-wide.
+async function loadSecurityAudit() {
+  var listEl = document.getElementById('security-audit-list');
+  var countEl = document.getElementById('security-audit-count');
+  if (!listEl) return;
+  try {
+    var d = await fetchJsonWithTimeout('/api/security/audit?limit=25', 10000);
+    var rows = (d && d.entries) || [];
+    if (countEl) countEl.textContent = rows.length ? (rows.length + (rows.length === 1 ? ' event' : ' events')) : '';
+    if (!rows.length) {
+      if (window.CLOUD_MODE) {
+        listEl.innerHTML = '<div style="color:var(--text-muted);padding:12px;">' + t('app.audit_local_only', null, 'Governance activity is recorded on your local node. Open the local dashboard to review it.') + '</div>';
+      } else {
+        listEl.innerHTML = '<div style="color:var(--text-muted);padding:12px;" data-i18n="security.audit_empty">' + t('security.audit_empty', null, 'No recorded activity yet. Approval decisions, budget changes, and pauses appear here.') + '</div>';
+      }
+      return;
+    }
+    // Plain-language label per action prefix; result drives the accent color.
+    var _actLabel = {
+      'approval.decision': 'Approval decision',
+      'hitl.pause': 'Agent paused',
+      'hitl.resume': 'Agent resumed',
+      'hitl.decide': 'Review decision',
+      'budget.config': 'Budget settings changed',
+      'budget.auto_pause': 'Auto-pause threshold changed',
+      'budget.agent_set': 'Per-agent budget set',
+      'budget.agent_delete': 'Per-agent budget removed',
+      'gateway.pause': 'Gateway paused',
+      'gateway.resume': 'Gateway resumed',
+      'alert_rule.create': 'Alert rule created',
+      'alert_rule.update': 'Alert rule updated',
+      'alert_rule.delete': 'Alert rule deleted'
+    };
+    function resultColor(r) {
+      r = String(r || '').toLowerCase();
+      if (r === 'denied' || r === 'deny' || r === 'rejected' || r === 'paused' || r === 'deleted') return '#f59e0b';
+      if (r === 'approved' || r === 'approve' || r === 'resumed') return '#22c55e';
+      return '#64748b';
+    }
+    var html = '';
+    rows.forEach(function(r) {
+      var act = r.event_type || '';
+      var lbl = _actLabel[act] || act;
+      var det = r.details || {};
+      var res = det.result || '';
+      var col = resultColor(res);
+      var when = r.ts ? new Date(r.ts * 1000).toLocaleString() : '';
+      html += '<div style="display:flex;align-items:flex-start;gap:8px;padding:7px 0;border-bottom:1px solid var(--border);">';
+      html += '<span style="width:7px;height:7px;border-radius:50%;background:' + col + ';flex-shrink:0;margin-top:5px;"></span>';
+      html += '<div style="flex:1;min-width:0;">';
+      html += '<span style="font-size:12px;font-weight:600;color:var(--text-primary);">' + escHtml(lbl) + '</span>';
+      if (res) html += ' <span style="font-size:11px;color:' + col + ';">' + escHtml(res) + '</span>';
+      if (r.target) html += ' <code style="font-size:10px;background:var(--bg-primary);padding:1px 4px;border-radius:3px;color:#a78bfa;">' + escHtml(String(r.target).slice(0, 48)) + '</code>';
+      html += '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">';
+      if (r.actor) html += escHtml('by ' + r.actor) + ' · ';
+      html += escHtml(when) + '</div>';
+      html += '</div></div>';
+    });
+    listEl.innerHTML = html;
+  } catch (e) {
+    listEl.innerHTML = '<div style="color:var(--text-muted);padding:12px;font-size:11px;">' + t('app.audit_unavailable', null, 'Activity feed unavailable.') + '</div>';
   }
 }
 
@@ -7787,16 +7968,44 @@ var _CM_RT_LABEL = {
   hermes: 'Hermes', claude_code: 'Claude Code', codex: 'Codex', cursor: 'Cursor',
   aider: 'Aider', goose: 'Goose', opencode: 'opencode', qwen_code: 'Qwen Code'
 };
+// The CLOSED session-prefix runtimes (the only keys that can ride a session_id
+// prefix). Foreign OTLP / OpenLLMetry apps are NOT in here — they have no
+// prefix and are filtered by agent_type server-side, so _cmRuntimeOf must never
+// derive them from a prefix (it can't) and never mis-bucket them into openclaw.
+var _CM_RT_PREFIXES = {
+  openclaw: 1, picoclaw: 1, nanoclaw: 1, hermes: 1, claude_code: 1, codex: 1,
+  cursor: 1, aider: 1, goose: 1, opencode: 1, qwen_code: 1
+};
+// Dynamic registry of foreign OTLP/OpenLLMetry apps surfaced by the daemon
+// (runtimeSummary/agentInventory carry `otlp:true` + a `displayName`). These are
+// keyed by agent_type (e.g. 'my_app' from service.name) and scoped SERVER-SIDE
+// via ?runtime=<agent_type>; there is no session-id prefix to match client-side.
+// agentKey -> {label}. Populated by _cmRegisterOtlpRuntime as data arrives.
+var _CM_OTLP_RT = {};
+function _cmRegisterOtlpRuntime(key, label) {
+  if (!key) return;
+  key = String(key);
+  if (_CM_RT_PREFIXES.hasOwnProperty(key.toLowerCase())) return; // never shadow a native runtime
+  _CM_OTLP_RT[key] = { label: label || key };
+  // Surface the label so _cmRuntimeLabel / chips read 'My App (OTel)'.
+  if (!_CM_RT_LABEL.hasOwnProperty(key)) _CM_RT_LABEL[key] = label || key;
+}
+// True iff `rt` is a foreign OTLP app (agent_type filter, not session prefix).
+function _cmIsOtlpRuntime(rt) { return !!(rt && _CM_OTLP_RT.hasOwnProperty(rt)); }
 function _cmRuntimeOf(o) {
   var id = (o && (o.id || o.sessionId || o.session_id || o.key)) || '';
   var i = id.indexOf(':');
   if (i > 0) {
     var p = id.slice(0, i).toLowerCase();
-    if (_CM_RT_LABEL.hasOwnProperty(p) && p !== 'openclaw') return p;
+    if (_CM_RT_PREFIXES.hasOwnProperty(p) && p !== 'openclaw') return p;
   }
-  if (o && o.runtime) {
-    var r = String(o.runtime).toLowerCase();
-    if (_CM_RT_LABEL.hasOwnProperty(r)) return r;
+  // Explicit agent_type / runtime field (OTLP apps + server-tagged rows). An
+  // OTLP app's spans carry agent_type=<its key>; honor it directly so a
+  // selected OTLP runtime matches its own data and nothing else.
+  var r = o && (o.runtime || o.agent_type || o.agentType);
+  if (r) {
+    r = String(r).toLowerCase();
+    if (_CM_RT_PREFIXES.hasOwnProperty(r) || _CM_OTLP_RT.hasOwnProperty(r)) return r;
   }
   return 'openclaw';
 }
@@ -7833,6 +8042,16 @@ function _cmSetRuntimeFilter(v, reload) {
   if (typeof reload === 'function') reload();
 }
 function _cmRuntimeLabel(rt) { return _CM_RT_LABEL[rt] || rt; }
+// Runtime to use for CLIENT-SIDE prefix filtering of a node-wide blob (Brain
+// list/chart, Tracing, model attribution, active tasks, transcripts). A foreign
+// OTLP app has no session-id prefix, so a prefix filter would empty the view —
+// which would contradict the honest "showing all runtimes" scope note we render
+// for it. Collapse OTLP selections to 'all' here so the blob shows unfiltered
+// (the note explains why); the server-side runtime= path (the no-leak contract)
+// is unaffected. Native runtimes pass through unchanged.
+function _cmClientFilterRt(rt) {
+  return _cmIsOtlpRuntime(rt) ? 'all' : rt;
+}
 // Tabs whose data is a cross-runtime AGGREGATE (merged server/snapshot-side):
 // the switcher can't scope them client-side yet, so picking a specific runtime
 // shows an honest "all runtimes" note rather than pretending the numbers are
@@ -7849,7 +8068,12 @@ var _CM_RT_AGGREGATE = {
 var _CM_RT_NODEWIDE = {
   crons: 1, memory: 1, security: 1, skills: 1, selfevolve: 1, approvals: 1,
   alerts: 1, policy: 1, nemoclaw: 1, notifications: 1, dives: 1,
-  'version-impact': 1, clusters: 1, logs: 1, actions: 1
+  'version-impact': 1, clusters: 1, logs: 1, actions: 1,
+  // Inventory is a ROSTER (node/all-agents view): it never hides rows when a
+  // runtime is selected. Instead it highlights the selected runtime's row and
+  // carries the honest node-wide scope note (FLYWHEEL HARD GATE 2). The DATA
+  // path still honours per-runtime via agentInventoryByRuntime.
+  inventory: 1
 };
 // Per-runtime sidebar tab visibility, DERIVED from each adapter's DECLARED
 // Capability enum — the authoritative contract, not an LLM "analysis" (founder
@@ -7896,10 +8120,19 @@ var _CM_NODE_TABS = ['alerts','notifications','security'];
 var _CM_RT_ALL_TABS = ['flow','brain','models','context','tracing','turn-anatomy',
   'context-economics','approvals','alerts','cost','dives','crons','memory',
   'notifications','security','policy','skills','selfevolve','subagents','nemoclaw'];
+// Foreign OTLP apps only emit spans/traces (events + maybe cost). They get the
+// EVENTS + COST tabs (Brain/Tracing/Models/Context/Turn-anatomy/Cost), plus the
+// roster; OpenClaw-only concepts (Crons/Memory/Skills/Channels/Subagents) do not
+// apply and stay hidden. Honest scope notes still cover any aggregate tab.
+var _CM_OTLP_CAPS = ['EVENTS', 'COST'];
+function _cmCapsForRuntime(rt) {
+  if (_cmIsOtlpRuntime(rt)) return _CM_OTLP_CAPS;
+  return _CM_RT_CAPS[rt];
+}
 function _cmShownTabsForRuntime(rt) {
   var show = {};
   _CM_NODE_TABS.forEach(function (t) { show[t] = 1; });
-  (_CM_RT_CAPS[rt] || []).forEach(function (cap) {
+  (_cmCapsForRuntime(rt) || []).forEach(function (cap) {
     (_CM_CAP_TABS[cap] || []).forEach(function (t) { show[t] = 1; });
   });
   if (rt === 'nemoclaw') show['nemoclaw'] = 1;
@@ -7908,7 +8141,7 @@ function _cmShownTabsForRuntime(rt) {
 function _cmApplyRuntimeTabVisibility() {
   var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
   // 'all' or an unknown/unmapped runtime => show everything (never silently drop).
-  var showAll = !rt || rt === 'all' || !_CM_RT_CAPS[rt];
+  var showAll = !rt || rt === 'all' || !_cmCapsForRuntime(rt);
   var shown = showAll ? null : _cmShownTabsForRuntime(rt);
   _CM_RT_ALL_TABS.forEach(function (tab) {
     var show = showAll || !!shown[tab];
@@ -7930,6 +8163,25 @@ function _cmApplyRuntimeScopeNote(name) {
   var noteId = 'cm-rt-scope-note';
   var existing = page.querySelector('#' + noteId);
   var rt = _cmRuntimeFilter();
+  // Foreign OTLP / OpenLLMetry app selected. These have no session-id prefix, so
+  // the session/event tabs that filter client-side by prefix cannot scope to
+  // them honestly. Rather than silently empty (or worse, show node-wide and call
+  // it the app's data), state plainly that this app is observed via OTLP traces
+  // and its scoped views live where the data actually is (the Inventory roster
+  // row + cost/tokens). The Inventory tab keeps its own roster note below.
+  // 'inventory' has its own roster note; 'dives' (transcripts) has its own
+  // scoped empty-state ("no <app> sessions have a transcript yet"), so skip both
+  // to avoid a conflicting double-note.
+  if (_cmIsOtlpRuntime(rt) && name !== 'inventory' && name !== 'dives') {
+    var _otl = _cmRuntimeLabel(rt);
+    var _otmsg = '<strong>' + escHtml(_otl) + '</strong> is observed via OpenLLMetry / OTLP traces. '
+      + 'This view shows <strong>all runtimes</strong>; its scoped tokens, cost and sessions are on the '
+      + '<strong>Agent Inventory</strong> roster.';
+    var _othtml = '<div id="' + noteId + '" style="display:flex;align-items:center;gap:8px;margin:0 0 14px;padding:9px 13px;border-radius:8px;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.35);font-size:12px;color:var(--text-secondary);line-height:1.4;"><span style="color:#d97706;font-size:13px;flex-shrink:0;">&#9888;</span><span>' + _otmsg + '</span></div>';
+    if (existing) existing.outerHTML = _othtml;
+    else page.insertAdjacentHTML('afterbegin', _othtml);
+    return;
+  }
   // Overview is a MIX: some cards re-scope with the runtime switcher (today's
   // tasks/outcome, the activity strip, the hero token/cost stats) and some stay
   // node-wide (autonomy score, reliability, activity heatmap). A single
@@ -8074,11 +8326,16 @@ function _cmPopulateGlobalRuntime(counts) {
   // Observed runtimes (have local sessions) ∪ locked-but-visible runtimes.
   // _cmLockedRuntimes is empty in grace mode, so this collapses to the
   // previous behaviour (observed-only) by default.
-  var observed = Object.keys(_CM_RT_LABEL).filter(function(k) { return counts[k]; });
+  var observedAll = Object.keys(_CM_RT_LABEL).filter(function(k) { return counts[k]; });
+  // Split native session-prefix runtimes from foreign OTLP apps: the OTLP apps
+  // get their own optgroup and their count is traces, not sessions, so they
+  // must not inflate the "All runtimes · N sessions" total.
+  var observed = observedAll.filter(function(k) { return !_cmIsOtlpRuntime(k); });
+  var otlpApps = observedAll.filter(function(k) { return _cmIsOtlpRuntime(k); });
   var seen = {};
-  observed.forEach(function(k) { seen[k] = 1; });
+  observedAll.forEach(function(k) { seen[k] = 1; });
   var locked = Object.keys(_cmLockedRuntimes).filter(function(k) { return !seen[k]; });
-  var order = observed.concat(locked);
+  var order = observed.concat(otlpApps).concat(locked);
   if (order.length < 2) { wrap.style.display = 'none'; return; }
   var active = _cmRuntimeFilter();
   if (active !== 'all' && !counts[active] && !_cmLockedRuntimes[active]) active = 'all';
@@ -8089,6 +8346,13 @@ function _cmPopulateGlobalRuntime(counts) {
   function _sessLabel(n) { return n + (n === 1 ? ' session' : ' sessions'); }
   function _opt(k) {
     var lbl = _CM_RT_LABEL[k] || k;
+    if (_cmIsOtlpRuntime(k)) {
+      // Foreign OTLP/OpenLLMetry app: count is sessions or traces; keep the
+      // wording neutral ("activity") since a pure-trace app has no sessions.
+      var on = counts[k] || 0;
+      var act = on ? (' · ' + on + (on === 1 ? ' trace' : ' traces')) : '';
+      return '<option value="' + k + '">' + escHtml(lbl) + act + '</option>';
+    }
     if (_cmLockedRuntimes[k]) {
       // A locked (Pro) runtime that is ACTUALLY DETECTED on this machine is the
       // strongest upgrade signal — "you're using it here, upgrade to observe
@@ -8108,6 +8372,14 @@ function _cmPopulateGlobalRuntime(counts) {
   var lockedOther = locked.filter(function(k) { return !_cmRunningRuntimes[k]; });
   var html = '<option value="all">All runtimes · ' + _sessLabel(total) + '</option>';
   observed.forEach(function(k) { html += _opt(k); });
+  // Foreign OpenLLMetry / OTLP apps (bring your own agent): grouped on their own
+  // so a LangChain / CrewAI / OpenAI-Agents app reads as distinct from a native
+  // runtime. Selecting one scopes server-side by agent_type.
+  if (otlpApps.length) {
+    html += '<optgroup label="OpenLLMetry / OTLP apps">';
+    otlpApps.forEach(function(k) { html += _opt(k); });
+    html += '</optgroup>';
+  }
   // Group the detected-but-locked runtimes under their own header so the
   // "running here, needs Pro" distinction is unmistakable in the dropdown.
   if (lockedRunning.length) {
@@ -8146,6 +8418,321 @@ function _cmOnGlobalRuntimeChange(sel) {
   try { if (typeof _applyRuntimeFlowDiagram === 'function') _applyRuntimeFlowDiagram(val); } catch (e) {}
   // Reload the current tab so any runtime-aware view re-filters in place.
   if (typeof switchTab === 'function' && _cmCurrentTab) switchTab(_cmCurrentTab);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Agent Inventory tab — single-pane control-tower roster.
+// Reads the shared snapshot blob's `agentInventory` (cloud) or GET
+// /api/inventory (local). NODE-WIDE roster: a selected runtime highlights its
+// row + shows the honest scope note (via _CM_RT_NODEWIDE + switchTab), never
+// hides rows. The DATA path honours per-runtime via agentInventoryByRuntime.
+// ─────────────────────────────────────────────────────────────────────────
+function _invFmtUsd(n) {
+  var v = Number(n || 0);
+  if (!v) return '$0.00';
+  if (v < 0.01) return '<$0.01';
+  return '$' + v.toFixed(2);
+}
+function _invFmtAgo(iso) {
+  if (!iso) return '';
+  try {
+    var t = Date.parse(iso);
+    if (isNaN(t)) return '';
+    var secs = Math.max(0, (Date.now() - t) / 1000);
+    if (secs < 60) return 'just now';
+    if (secs < 3600) return Math.round(secs / 60) + 'm ago';
+    if (secs < 86400) return (secs / 3600).toFixed(1) + 'h ago';
+    return Math.round(secs / 86400) + 'd ago';
+  } catch (e) { return ''; }
+}
+// Does this runtime declare COST? Cursor / PicoClaw / NanoClaw don't — show an
+// honest "--" with a tooltip, never a misleading $0.
+function _invHasCost(rt) {
+  // Foreign OTLP apps report cost from their spans (when the instrumentation
+  // emits it); treat them as cost-capable so the roster shows their $ instead
+  // of "--".
+  if (_cmIsOtlpRuntime(rt)) return true;
+  var caps = _CM_RT_CAPS[rt] || [];
+  return caps.indexOf('COST') !== -1;
+}
+function _invOwnerLabel(a) {
+  var o = (a && a.owner != null) ? String(a.owner).trim() : '';
+  return o || (typeof t === 'function' ? t('inventory.owner_default', 'me') : 'me');
+}
+function _invDoingNow(a) {
+  if (a && a.running) return { txt: 'Working', cls: 'inv-doing-on' };
+  if (a && a.detected) return { txt: 'Idle', cls: 'inv-doing-idle' };
+  return { txt: 'Quiet', cls: 'inv-doing-quiet' };
+}
+function _invAliveDot(a) {
+  // green = running, amber = detected-not-running, grey = neither.
+  if (a && a.running) return { color: '#22c55e', label: 'Checked in' };
+  if (a && a.detected) return { color: '#f59e0b', label: 'Resting' };
+  return { color: '#6b7280', label: 'Not seen' };
+}
+
+async function _invFetchData() {
+  // Cloud: read the shared snapshot blob (the cm-cloud-inventory interceptor
+  // also serves /api/inventory from it, but reading __cmSnap directly avoids a
+  // duplicate fetch). Local: GET /api/inventory.
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  try {
+    if (window.CLOUD_MODE && typeof window.__cmSnap === 'function') {
+      var sp = await window.__cmSnap();
+      if (sp && sp.agentInventory) return sp.agentInventory;
+    }
+  } catch (e) {}
+  // Local (or cloud cold fall-through): always fetch the node-wide roster so
+  // the roster keeps every row; the runtime filter only HIGHLIGHTS a row here.
+  try {
+    var r = await fetch('/api/inventory', { credentials: 'same-origin' });
+    var j = await r.json();
+    return j || { agents: [], total: 0 };
+  } catch (e) {
+    return { agents: [], total: 0 };
+  }
+}
+
+// An agent is "active/recent" (shown by default) when it's running, did work in
+// the last 24h (cost or tokens), or is the currently-selected runtime. Everything
+// else folds under a "Show N inactive" expander so the roster reads like the
+// device's calm view instead of every runtime ever used here (#web-accuracy).
+function _invIsRecentlyActive(a, rtFilter) {
+  return !!(a.running
+    || (Number(a.cost24hUsd || 0) > 0)
+    || (Number(a.tokens24h || 0) > 0)
+    || (rtFilter !== 'all' && a.agentKey === rtFilter));
+}
+
+function _invRosterRow(a, rtFilter) {
+  var rt = a.agentKey;
+  var label = a.displayName || rt;
+  var doing = _invDoingNow(a);
+  var dot = _invAliveDot(a);
+  var owner = _invOwnerLabel(a);
+  var hasCost = _invHasCost(rt);
+  // LAST 24h (rolling, event-windowed) vs LIFETIME (all the runtime's sessions).
+  // The column used to be labeled "Cost today" but rendered the lifetime total.
+  var naTip = '<span class="inv-na" data-i18n-title="inventory.cost_na_tip" title="This runtime does not report cost yet.">--</span>';
+  var dayCell = hasCost ? _invFmtUsd(a.cost24hUsd) : naTip;
+  var lifeCell = hasCost ? _invFmtUsd(a.costUsd) : naTip;
+  var work = (a.sessions || 0) + ((a.sessions === 1) ? ' conversation' : ' conversations');
+  var model = a.primaryModel || '--';
+  var highlight = (rtFilter !== 'all' && rt === rtFilter) ? ' inv-row-active' : '';
+  var pencil = window.CLOUD_MODE
+    ? ''
+    : '<span class="inv-owner-pencil" title="Rename owner" onclick="event.stopPropagation();_invStartOwnerEdit(this,\'' + escHtml(rt) + '\')">&#9998;</span>';
+  return ''
+    + '<tr class="inv-row' + highlight + '" data-rt="' + escHtml(rt) + '" onclick="_invToggleRow(this,\'' + escHtml(rt) + '\')">'
+    +   '<td class="inv-c-agent"><span class="inv-dot" style="background:' + dot.color + '"></span>' + escHtml(label) + '</td>'
+    +   '<td class="inv-c-owner"><span class="inv-owner-chip" data-rt="' + escHtml(rt) + '"><span class="inv-owner-name">' + escHtml(owner) + '</span>' + pencil + '</span></td>'
+    +   '<td class="inv-c-doing"><span class="inv-doing ' + doing.cls + '">' + doing.txt + '</span></td>'
+    +   '<td class="inv-c-alive"><span class="inv-dot" style="background:' + dot.color + '"></span>'
+    +     '<span class="inv-alive-lbl" title="For OpenClaw and NemoClaw this is a real heartbeat; for other runtimes it means a process is running.">' + dot.label + '</span></td>'
+    +   '<td class="inv-c-cost" title="Cost from the last 24 hours of activity (API-equivalent)">' + dayCell + '</td>'
+    +   '<td class="inv-c-cost inv-c-cost-life" title="All-time cost across this agent\'s tracked sessions (API-equivalent)">' + lifeCell + '</td>'
+    +   '<td class="inv-c-work">' + escHtml(work) + '</td>'
+    +   '<td class="inv-c-model">' + escHtml(model) + '</td>'
+    + '</tr>'
+    + '<tr class="inv-expand-row" id="inv-exp-' + escHtml(rt) + '" style="display:none;"><td colspan="8">'
+    +   _invExpandHtml(a)
+    + '</td></tr>';
+}
+
+function _invRenderRoster(inv) {
+  var agents = (inv && inv.agents) || [];
+  var rtFilter = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var active = [], inactive = [];
+  agents.forEach(function (a) {
+    (_invIsRecentlyActive(a, rtFilter) ? active : inactive).push(a);
+  });
+  // Never end up with an empty roster: if nothing is "active" right now, show
+  // everything rather than an empty table.
+  if (!active.length && inactive.length) { active = inactive; inactive = []; }
+  var rows = active.map(function (a) { return _invRosterRow(a, rtFilter); }).join('');
+  var foldRows = '';
+  if (inactive.length) {
+    foldRows = ''
+      + '<tr class="inv-fold-toggle" onclick="_invToggleInactive(this)">'
+      +   '<td colspan="8"><span class="inv-fold-caret">&#9656;</span> '
+      +     'Show ' + inactive.length + ' inactive agent' + (inactive.length === 1 ? '' : 's')
+      +     ' <span class="inv-fold-hint">(no activity in 24h)</span></td>'
+      + '</tr>'
+      + '<tbody class="inv-fold-body" style="display:none;">'
+      +   inactive.map(function (a) { return _invRosterRow(a, rtFilter); }).join('')
+      + '</tbody>';
+  }
+
+  return ''
+    + '<table class="inv-table">'
+    +   '<thead><tr>'
+    +     '<th data-i18n="inventory.col_agent">Agent</th>'
+    +     '<th data-i18n="inventory.col_owner">Owner</th>'
+    +     '<th data-i18n="inventory.col_doing">Doing now</th>'
+    +     '<th data-i18n="inventory.col_alive">Alive</th>'
+    +     '<th data-i18n="inventory.col_cost_24h">Cost (24h)</th>'
+    +     '<th data-i18n="inventory.col_cost_life">Cost (lifetime)</th>'
+    +     '<th data-i18n="inventory.col_work">Work done</th>'
+    +     '<th data-i18n="inventory.col_model">Main model</th>'
+    +   '</tr></thead>'
+    +   '<tbody>' + rows + '</tbody>'
+    +   foldRows
+    + '</table>';
+}
+
+function _invToggleInactive(el) {
+  try {
+    var body = el.parentNode.querySelector('.inv-fold-body')
+      || (el.nextElementSibling && el.nextElementSibling.classList.contains('inv-fold-body') ? el.nextElementSibling : null);
+    if (!body) return;
+    var open = body.style.display !== 'none';
+    body.style.display = open ? 'none' : '';
+    var caret = el.querySelector('.inv-fold-caret');
+    if (caret) caret.innerHTML = open ? '&#9656;' : '&#9662;';
+  } catch (e) {}
+}
+
+function _invExpandHtml(a) {
+  var rt = a.agentKey;
+  var facts = ''
+    + '<span class="inv-fact">' + (a.turns || 0) + ' turns</span>'
+    + '<span class="inv-fact">' + ((a.tokens || 0).toLocaleString()) + ' tokens</span>'
+    + '<span class="inv-fact">' + (a.switchCount || 0) + ' model switches</span>';
+  var deep = ''
+    + '<button class="inv-deep-btn" onclick="event.stopPropagation();_invDeepLink(\'' + escHtml(rt) + '\',\'brain\')" data-i18n="inventory.expand_brain">See what it is thinking</button>'
+    + '<button class="inv-deep-btn" onclick="event.stopPropagation();_invDeepLink(\'' + escHtml(rt) + '\',\'usage\')" data-i18n="inventory.expand_cost">See what it cost</button>'
+    + '<button class="inv-deep-btn" onclick="event.stopPropagation();_invDeepLink(\'' + escHtml(rt) + '\',\'flow\')" data-i18n="inventory.expand_flow">Watch it live</button>';
+  return '<div class="inv-expand"><div class="inv-facts">' + facts + '</div><div class="inv-deep">' + deep + '</div></div>';
+}
+
+function _invToggleRow(tr, rt) {
+  var exp = document.getElementById('inv-exp-' + rt);
+  if (!exp) return;
+  var open = exp.style.display !== 'none';
+  // Set the runtime switcher to this agent (highlights the row + scope note),
+  // following the same path as picking it in the header dropdown.
+  if (!open && typeof _cmSetRuntimeFilter === 'function') {
+    _cmSetRuntimeFilter(rt);
+    var sel = document.getElementById('cm-global-runtime');
+    if (sel) { sel.value = rt; }
+    try { _cmApplyRuntimeTabVisibility(); } catch (e) {}
+  }
+  exp.style.display = open ? 'none' : '';
+  // Re-render highlight without re-fetching.
+  try { renderInventory(); } catch (e) {}
+}
+
+function _invDeepLink(rt, tab) {
+  // Pre-filter the target tab to this runtime, then switch to it. The newcomer
+  // never types a session id.
+  if (typeof _cmSetRuntimeFilter === 'function') {
+    _cmSetRuntimeFilter(rt);
+    var sel = document.getElementById('cm-global-runtime');
+    if (sel) sel.value = rt;
+    try { _cmApplyRuntimeTabVisibility(); } catch (e) {}
+  }
+  if (typeof switchTab === 'function') switchTab(tab);
+}
+
+function _invStartOwnerEdit(pencilEl, rt) {
+  var chip = pencilEl.closest('.inv-owner-chip');
+  if (!chip) return;
+  var nameEl = chip.querySelector('.inv-owner-name');
+  var current = nameEl ? nameEl.textContent : '';
+  var input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'inv-owner-input';
+  input.value = current;
+  input.maxLength = 60;
+  chip.innerHTML = '';
+  chip.appendChild(input);
+  input.focus();
+  input.select();
+  var done = false;
+  function save() {
+    if (done) return; done = true;
+    var val = input.value.trim();
+    _invSaveOwner(rt, val);
+  }
+  function cancel() {
+    if (done) return; done = true;
+    try { renderInventory(); } catch (e) {}
+  }
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); save(); }
+    else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+  });
+  input.addEventListener('blur', save);
+}
+
+async function _invSaveOwner(rt, owner) {
+  try {
+    await fetch('/api/inventory/' + encodeURIComponent(rt) + '/owner', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ owner: owner })
+    });
+  } catch (e) { /* non-fatal — re-render reflects the stored value */ }
+  try { renderInventory(); } catch (e) {}
+}
+
+async function renderInventory() {
+  var inv = await _invFetchData();
+  var agents = (inv && inv.agents) || [];
+
+  // Register any foreign OTLP/OpenLLMetry app in the roster so _cmIsOtlpRuntime /
+  // _invHasCost / the header dropdown recognise it (the roster is the canonical
+  // source for the app set; the dropdown is fed from the same data on init).
+  agents.forEach(function (a) {
+    if (a && a.otlp && a.agentKey) _cmRegisterOtlpRuntime(a.agentKey, a.displayName || a.agentKey);
+  });
+
+  var statsEl = document.getElementById('inv-stats');
+  var rosterEl = document.getElementById('inv-roster');
+  var emptyEl = document.getElementById('inv-empty');
+  var stripEl = document.getElementById('inv-nodewide-strip');
+  if (!rosterEl) return;
+
+  if (!agents.length) {
+    if (statsEl) statsEl.style.display = 'none';
+    if (stripEl) stripEl.style.display = 'none';
+    rosterEl.innerHTML = '';
+    if (emptyEl) emptyEl.style.display = '';
+    return;
+  }
+  if (emptyEl) emptyEl.style.display = 'none';
+
+  // 4-tile strip.
+  var aliveCount = agents.filter(function (a) { return a.running; }).length;
+  var totalCost = agents.reduce(function (s, a) {
+    return s + (_invHasCost(a.agentKey) ? Number(a.costUsd || 0) : 0);
+  }, 0);
+  var allGood = agents.every(function (a) { return !a.detected || a.running || true; });
+  var setTxt = function (id, v) { var el = document.getElementById(id); if (el) el.textContent = v; };
+  setTxt('inv-tile-alive', aliveCount + ' of ' + agents.length);
+  setTxt('inv-tile-agents', String(agents.length));
+  setTxt('inv-tile-today', _invFmtUsd(totalCost));
+  setTxt('inv-tile-health', allGood ? 'All good' : 'Check');
+  if (statsEl) statsEl.style.display = '';
+
+  // Node-wide strip (tools / eval), labeled honestly.
+  var tg = inv.nodeWideToolGroups || {};
+  var toolTotal = (tg.builtin || 0) + (tg.mcp || 0) + (tg.plugin || 0);
+  var evalSummary = inv.nodeWideEval || {};
+  var evalScore = (evalSummary && (evalSummary.avg_score != null ? evalSummary.avg_score
+                  : (evalSummary.average != null ? evalSummary.average : null)));
+  var toolsEl = document.getElementById('inv-node-tools');
+  var evalEl = document.getElementById('inv-node-eval');
+  if (toolsEl) toolsEl.textContent = 'node tools: ' + toolTotal;
+  if (evalEl) evalEl.textContent = 'node eval: ' + (evalScore != null ? (Math.round(evalScore * 100) / 100) : 'paused');
+  if (stripEl) stripEl.style.display = (toolTotal || evalScore != null) ? '' : 'none';
+
+  rosterEl.innerHTML = _invRenderRoster(inv);
+
+  // Re-apply i18n to the freshly-injected markup + the scope note.
+  try { if (window.i18n && typeof window.i18n.apply === 'function') window.i18n.apply(rosterEl); } catch (e) {}
+  try { _cmApplyRuntimeScopeNote('inventory'); } catch (e) {}
 }
 
 function _cmShowRuntimePaywall(harness, label) {
@@ -8261,6 +8848,39 @@ async function _cmInitGlobalRuntimeSwitcher() {
     });
     _cmPopulateGlobalRuntime(counts);
   } catch (e) { /* non-fatal — the switcher just stays hidden */ }
+  // Surface foreign OTLP / OpenLLMetry apps (no session prefix, so absent from
+  // /api/sessions). The Agent Inventory roster carries them with otlp:true; one
+  // read registers each so the dropdown lists 'My App (OTel)'.
+  try { await _cmLoadOtlpRuntimes(); } catch (e) { /* non-fatal */ }
+}
+
+// Pull the OTLP/custom apps the daemon folded into the inventory roster and
+// register each so the switcher dropdown + labels include it. Local: GET
+// /api/inventory; cloud: the agentInventory snapshot slice (already loaded via
+// __cmSnap by other consumers, so this is cheap / deduped). Each app contributes
+// a session count to the dropdown (or its trace count when it has no sessions).
+async function _cmLoadOtlpRuntimes() {
+  var inv = null;
+  try {
+    if (window.CLOUD_MODE && typeof window.__cmSnap === 'function') {
+      var sp = await window.__cmSnap();
+      inv = sp && sp.agentInventory;
+    } else {
+      inv = await fetch('/api/inventory', { credentials: 'same-origin' })
+        .then(function(r) { return r.json(); }).catch(function() { return null; });
+    }
+  } catch (e) { return; }
+  var agents = (inv && inv.agents) || [];
+  var counts = {};
+  agents.forEach(function(a) {
+    if (!a || !a.otlp || !a.agentKey) return;
+    _cmRegisterOtlpRuntime(a.agentKey, a.displayName || a.agentKey);
+    // Dropdown count: prefer sessions, fall back to traces/spans so a pure-trace
+    // app (sessions=0) still shows a non-zero presence and stays listed.
+    var n = a.sessions || a.traces || a.spans || 1;
+    counts[a.agentKey] = Math.max(counts[a.agentKey] || 0, n);
+  });
+  if (Object.keys(counts).length) _cmPopulateGlobalRuntime(counts);
 }
 
 async function loadSessions() {
@@ -10113,6 +10733,9 @@ var _TA_KIND_ICONS = {
 };
 function _taColor(kind) { return _TA_KIND_COLORS[kind] || '#94a3b8'; }
 function _taIcon(kind) { return _TA_KIND_ICONS[kind] || '•'; }
+// Top-level cost formatter for the turn-anatomy waterfall (the page-scoped
+// fmtCost helpers live inside other functions and aren't in scope here).
+function _taFmtCost(c) { c = Number(c) || 0; return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
 
 window._taSession = null;
 
@@ -10138,7 +10761,7 @@ async function loadTurnAnatomy() {
   // Runtime scoping — a trace's id IS the session id, whose prefix is the
   // runtime (same derivation the Tracing tab uses). Don't silently merge when
   // a specific runtime is picked; show a scoped empty state instead.
-  var _taRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var _taRt = (typeof _cmRuntimeFilter === 'function') ? _cmClientFilterRt(_cmRuntimeFilter()) : 'all';
   if (_taRt !== 'all') {
     traces = traces.filter(function(t) { return _cmRuntimeOf({ id: t.trace_id }) === _taRt; });
   }
@@ -10249,7 +10872,8 @@ function _taRenderTurn(t) {
   var head = '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">'
     + '<span style="font-size:13px;font-weight:700;color:var(--text-primary);">Turn ' + t.turn + '</span>'
     + (isErr ? '<span style="background:rgba(239,68,68,0.15);color:#f87171;border-radius:6px;padding:1px 7px;font-size:10px;font-weight:600;">error</span>' : '')
-    + '<span style="font-size:11px;color:var(--text-muted);">' + _traceFmtDur(t.duration_ms) + ' &middot; ' + (t.tool_count || 0) + ' tool' + (t.tool_count === 1 ? '' : 's') + ' &middot; ' + ((t.total_tokens || 0) / 1000).toFixed(1) + 'K tok</span>'
+    + '<span style="font-size:11px;color:var(--text-muted);">' + _traceFmtDur(t.duration_ms) + ' &middot; ' + (t.tool_count || 0) + ' tool' + (t.tool_count === 1 ? '' : 's') + ' &middot; ' + ((t.total_tokens || 0) / 1000).toFixed(1) + 'K tok'
+       + ((t.total_cost || 0) > 0 ? ' &middot; ' + _taFmtCost(t.total_cost) : '') + '</span>'
     + '</div>';
   var prompt = t.prompt ? '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + escHtml(t.prompt) + '">&#128172; ' + escHtml(t.prompt) + '</div>' : '';
   var bars = '<div style="min-width:560px;">';
@@ -10263,7 +10887,8 @@ function _taRenderTurn(t) {
     var color = _taColor(s.kind);
     var spanErr = s.status === 'error';
     var label = (s.label || s.kind || '');
-    bars += '<div style="display:flex;align-items:center;gap:8px;padding:2px 0;" title="' + escHtml(label) + ' · ' + _traceFmtDur(s.duration_ms) + (spanErr ? ' · error' : '') + '">'
+    var spanCostTip = ((s.cost || 0) > 0 ? ' · ' + _taFmtCost(s.cost) : '') + ((s.tokens || 0) > 0 ? ' · ' + (s.tokens >= 1000 ? (s.tokens / 1000).toFixed(1) + 'K' : s.tokens) + ' tok' : '');
+    bars += '<div style="display:flex;align-items:center;gap:8px;padding:2px 0;" title="' + escHtml(label) + ' · ' + _traceFmtDur(s.duration_ms) + spanCostTip + (spanErr ? ' · error' : '') + '">'
       + '<span style="width:18px;flex-shrink:0;text-align:center;font-size:11px;">' + _taIcon(s.kind) + '</span>'
       + '<span style="width:170px;flex-shrink:0;font-size:11px;color:' + (spanErr ? '#f87171' : 'var(--text-secondary)') + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(label) + (spanErr ? ' &#9888;' : '') + '</span>'
       + '<span style="flex:1;position:relative;height:14px;background:var(--bg-primary);border-radius:3px;">'
@@ -10335,7 +10960,7 @@ function _renderTraceRows() {
   // Global runtime switcher (header): scope traces to one runtime. Each
   // event-derived trace's `trace_id` IS its session_id, whose prefix is the
   // runtime discriminator (OTLP traces with hex ids fall through to OpenClaw).
-  var _trRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var _trRt = (typeof _cmRuntimeFilter === 'function') ? _cmClientFilterRt(_cmRuntimeFilter()) : 'all';
   if (_trRt && _trRt !== 'all') {
     traces = traces.filter(function(t) { return _cmRuntimeOf({ id: t.trace_id }) === _trRt; });
   }
@@ -11905,9 +12530,21 @@ async function loadUsage() {
     // Cost table
     var usageInfoIcon = document.getElementById('usage-cost-info-icon');
     if (usageInfoIcon) {
-      if (data.billingSummary === 'likely_oauth_or_included' || data.billingSummary === 'mixed') {
+      // Cost shown is API-EQUIVALENT (tokens x API rates, same method as
+      // ccusage). It's only an actual cash charge when the account bills
+      // per-token (an API key). For OAuth/subscription plans (e.g. Claude Max
+      // via the Claude CLI) the incremental cost is $0 — the plan covers it.
+      // Surface the caveat for EVERY mode except confidently-metered
+      // ('likely_api_key'), so an "unknown / billing unconfirmed" account no
+      // longer reads as if it owes the displayed dollars (#web-accuracy).
+      var bs = data.billingSummary;
+      if (bs && bs !== 'likely_api_key') {
         usageInfoIcon.style.display = '';
-        usageInfoIcon.title = 'Equivalent if billed from token usage. OAuth/included models may be billed $0 at provider level.';
+        if (bs === 'likely_oauth_or_included' || bs === 'mixed') {
+          usageInfoIcon.title = 'API-equivalent (tokens × API rates). OAuth/included models are typically billed $0 at the provider — your subscription covers them.';
+        } else {
+          usageInfoIcon.title = 'API-equivalent (tokens × API rates). Billing basis unconfirmed — if your account is on a subscription plan (e.g. Claude Max via the Claude CLI), the actual incremental cost is $0.';
+        }
       } else {
         usageInfoIcon.style.display = 'none';
         usageInfoIcon.title = '';
@@ -14783,7 +15420,7 @@ async function loadMainActivity() {
     // tab (event sessionId prefix = runtime). Previously this Overview panel
     // showed every runtime's events regardless of the switcher, so picking
     // "Qwen Code" still surfaced Claude Code / OpenClaw cron chatter.
-    var _maRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    var _maRt = (typeof _cmRuntimeFilter === 'function') ? _cmClientFilterRt(_cmRuntimeFilter()) : 'all';
     if (_maRt !== 'all') events = events.filter(function(ev) { return _cmRuntimeOf(ev) === _maRt; });
 
     if (!events.length) {

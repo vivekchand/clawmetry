@@ -101,10 +101,11 @@ def test_cache_reread_tax_quantified():
         _FakeSession(input=2000, output=500, cache_read=200, cache_write=8000,
                      model="claude-opus-4-8")
     )
-    # opus input $15/1M; writes bill at 1.25x → 8000*15*1.25/1e6 = 0.15
-    assert abs(intel["cacheWriteCostUsd"] - 0.15) < 1e-6
-    # savings on the 200 read tokens: 200*(15 - 1.5)/1e6 = 0.0027
-    assert abs(intel["cacheSavedUsd"] - 0.0027) < 1e-6
+    # opus-4-8 is the new gen: input $5/1M; writes bill at 1.25x →
+    # 8000*5*1.25/1e6 = 0.05 (was $0.15 under the old opus-4 $15/1M rate).
+    assert abs(intel["cacheWriteCostUsd"] - 0.05) < 1e-6
+    # savings on the 200 read tokens: 200*(5 - 0.5)/1e6 = 0.0009
+    assert abs(intel["cacheSavedUsd"] - 0.0009) < 1e-6
     # rebuild cost dwarfs savings → the re-read tax is real here
     assert intel["cacheWriteCostUsd"] > intel["cacheSavedUsd"]
 
