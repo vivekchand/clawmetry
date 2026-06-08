@@ -4079,32 +4079,34 @@ class LocalStore:
                     "sessions": int(r[1] or 0),
                     "tokens": int(r[2] or 0),
                     "cost_usd": float(r[3] or 0.0),
-                    "cost_today_usd": 0.0,
-                    "tokens_today": 0,
+                    "cost_24h_usd": 0.0,
+                    "tokens_24h": 0,
                 }
-            # TODAY's cost/tokens per runtime, from events with ts in the current
-            # UTC day. The cost_usd above is LIFETIME (all the runtime's sessions);
-            # the UI shows both. True per-day cost needs event-level cost+ts (which
-            # the cloud sessions table lacks) — so it's computed here on the daemon
-            # and rides the snapshot. Event cost is correct post-#web-accuracy
-            # re-ingest (deduped + current-gen rates).
-            from datetime import datetime as _dt, timezone as _tz
-            _today = _dt.now(_tz.utc).strftime("%Y-%m-%dT00:00:00")
-            sql_today = f"""
+            # Rolling LAST-24h cost/tokens per runtime, from events in the trailing
+            # 24 hours. (A rolling window, not a calendar "today" — a calendar day
+            # starts at an arbitrary UTC midnight that's confusing across
+            # timezones.) cost_usd above is LIFETIME (all the runtime's sessions);
+            # the UI shows both. True windowed cost needs event-level cost+ts
+            # (which the cloud sessions table lacks) — so it's computed here on the
+            # daemon and rides the snapshot. Event cost is correct post-
+            # #web-accuracy re-ingest (deduped + current-gen rates).
+            from datetime import datetime as _dt, timezone as _tz, timedelta as _tdelta
+            _since_24h = (_dt.now(_tz.utc) - _tdelta(hours=24)).isoformat()
+            sql_24h = f"""
                 SELECT {rt_case} AS runtime,
-                       SUM(COALESCE(cost_usd, 0.0))    AS cost_today,
-                       SUM(COALESCE(token_count, 0))   AS tokens_today
+                       SUM(COALESCE(cost_usd, 0.0))    AS cost_24h,
+                       SUM(COALESCE(token_count, 0))   AS tokens_24h
                 FROM events
                 WHERE ts >= ?
                 GROUP BY 1
             """
-            for r in self._fetch(sql_today, list(prefixes) + [_today]):
+            for r in self._fetch(sql_24h, list(prefixes) + [_since_24h]):
                 rt = r[0] or "openclaw"
                 b = by_runtime.setdefault(rt, {
                     "sessions": 0, "tokens": 0, "cost_usd": 0.0,
-                    "cost_today_usd": 0.0, "tokens_today": 0})
-                b["cost_today_usd"] = float(r[1] or 0.0)
-                b["tokens_today"] = int(r[2] or 0)
+                    "cost_24h_usd": 0.0, "tokens_24h": 0})
+                b["cost_24h_usd"] = float(r[1] or 0.0)
+                b["tokens_24h"] = int(r[2] or 0)
             by_runtime_model: list[dict[str, Any]] = []
             sql_rtm = f"""
                 SELECT {rt_case} AS runtime,

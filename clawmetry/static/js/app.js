@@ -8493,14 +8493,14 @@ async function _invFetchData() {
   }
 }
 
-// An agent is "active/recent" (shown by default) when it's running, did work
-// today (cost or tokens), or is the currently-selected runtime. Everything else
-// folds under a "Show N inactive" expander so the roster reads like the device's
-// calm view instead of every runtime ever used on this machine (#web-accuracy).
+// An agent is "active/recent" (shown by default) when it's running, did work in
+// the last 24h (cost or tokens), or is the currently-selected runtime. Everything
+// else folds under a "Show N inactive" expander so the roster reads like the
+// device's calm view instead of every runtime ever used here (#web-accuracy).
 function _invIsRecentlyActive(a, rtFilter) {
   return !!(a.running
-    || (Number(a.costTodayUsd || 0) > 0)
-    || (Number(a.tokensToday || 0) > 0)
+    || (Number(a.cost24hUsd || 0) > 0)
+    || (Number(a.tokens24h || 0) > 0)
     || (rtFilter !== 'all' && a.agentKey === rtFilter));
 }
 
@@ -8511,10 +8511,10 @@ function _invRosterRow(a, rtFilter) {
   var dot = _invAliveDot(a);
   var owner = _invOwnerLabel(a);
   var hasCost = _invHasCost(rt);
-  // TODAY (event-windowed) vs LIFETIME (all the runtime's sessions). The column
-  // used to be labeled "Cost today" but rendered the lifetime total — fixed.
+  // LAST 24h (rolling, event-windowed) vs LIFETIME (all the runtime's sessions).
+  // The column used to be labeled "Cost today" but rendered the lifetime total.
   var naTip = '<span class="inv-na" data-i18n-title="inventory.cost_na_tip" title="This runtime does not report cost yet.">--</span>';
-  var todayCell = hasCost ? _invFmtUsd(a.costTodayUsd) : naTip;
+  var dayCell = hasCost ? _invFmtUsd(a.cost24hUsd) : naTip;
   var lifeCell = hasCost ? _invFmtUsd(a.costUsd) : naTip;
   var work = (a.sessions || 0) + ((a.sessions === 1) ? ' conversation' : ' conversations');
   var model = a.primaryModel || '--';
@@ -8529,7 +8529,7 @@ function _invRosterRow(a, rtFilter) {
     +   '<td class="inv-c-doing"><span class="inv-doing ' + doing.cls + '">' + doing.txt + '</span></td>'
     +   '<td class="inv-c-alive"><span class="inv-dot" style="background:' + dot.color + '"></span>'
     +     '<span class="inv-alive-lbl" title="For OpenClaw and NemoClaw this is a real heartbeat; for other runtimes it means a process is running.">' + dot.label + '</span></td>'
-    +   '<td class="inv-c-cost" title="Cost from today\'s activity (API-equivalent)">' + todayCell + '</td>'
+    +   '<td class="inv-c-cost" title="Cost from the last 24 hours of activity (API-equivalent)">' + dayCell + '</td>'
     +   '<td class="inv-c-cost inv-c-cost-life" title="All-time cost across this agent\'s tracked sessions (API-equivalent)">' + lifeCell + '</td>'
     +   '<td class="inv-c-work">' + escHtml(work) + '</td>'
     +   '<td class="inv-c-model">' + escHtml(model) + '</td>'
@@ -8556,7 +8556,7 @@ function _invRenderRoster(inv) {
       + '<tr class="inv-fold-toggle" onclick="_invToggleInactive(this)">'
       +   '<td colspan="8"><span class="inv-fold-caret">&#9656;</span> '
       +     'Show ' + inactive.length + ' inactive agent' + (inactive.length === 1 ? '' : 's')
-      +     ' <span class="inv-fold-hint">(no activity today)</span></td>'
+      +     ' <span class="inv-fold-hint">(no activity in 24h)</span></td>'
       + '</tr>'
       + '<tbody class="inv-fold-body" style="display:none;">'
       +   inactive.map(function (a) { return _invRosterRow(a, rtFilter); }).join('')
@@ -8570,7 +8570,7 @@ function _invRenderRoster(inv) {
     +     '<th data-i18n="inventory.col_owner">Owner</th>'
     +     '<th data-i18n="inventory.col_doing">Doing now</th>'
     +     '<th data-i18n="inventory.col_alive">Alive</th>'
-    +     '<th data-i18n="inventory.col_cost_today">Cost today</th>'
+    +     '<th data-i18n="inventory.col_cost_24h">Cost (24h)</th>'
     +     '<th data-i18n="inventory.col_cost_life">Cost (lifetime)</th>'
     +     '<th data-i18n="inventory.col_work">Work done</th>'
     +     '<th data-i18n="inventory.col_model">Main model</th>'
