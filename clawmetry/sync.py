@@ -6405,6 +6405,39 @@ def _detect_runtimes_for_heartbeat() -> list:
     return out
 
 
+def _heartbeat_stuck_payload(now: float | None = None) -> list:
+    """The stuck list to ride the next heartbeat, or ``[]``.
+
+    Reads the module-level ``_LATEST_STUCK`` cache (refreshed by
+    ``_emit_stuck_signals`` each detector tick) and returns its items ONLY when
+    the cache is FRESH (refreshed within ``_STUCK_HEARTBEAT_FRESH_SECONDS``).
+    A stale cache → ``[]`` so a wedged/stopped detector can never pin a banner
+    on the device; the cloud's device_summary also has its own recency gate, so
+    this is belt-and-suspenders. Empty-but-fresh → ``[]`` (self-clear). Each
+    item is kept tiny (capped count, ``message`` truncated). Never raises."""
+    try:
+        ts = float(_LATEST_STUCK.get("ts") or 0.0)
+        if ts <= 0:
+            return []
+        ref = time.time() if now is None else now
+        if (ref - ts) > _STUCK_HEARTBEAT_FRESH_SECONDS:
+            return []
+        items = _LATEST_STUCK.get("items") or []
+        out = []
+        for it in items[:_STUCK_HEARTBEAT_MAX_ITEMS]:
+            if not isinstance(it, dict):
+                continue
+            out.append({
+                "runtime": str(it.get("runtime") or "openclaw"),
+                "tool_calls": int(it.get("tool_calls") or 0),
+                "since_seconds": int(it.get("since_seconds") or 0),
+                "message": str(it.get("message") or "")[:_STUCK_HEARTBEAT_MAX_MSG],
+            })
+        return out
+    except Exception:
+        return []
+
+
 def send_heartbeat(config: dict) -> bool:
     """Send heartbeat to cloud. Returns True on success, False on failure.
 
@@ -6437,6 +6470,19 @@ def send_heartbeat(config: dict) -> bool:
         # accounts without the clawmetry-pro adapters too.
         "detected_runtimes": _detect_runtimes_for_heartbeat(),
     }
+    # Stuck-agent signal (clawmetry-hardware#15). The WiFi desk device fetches
+    # the CLOUD device_summary (built from Postgres), NOT the local dashboard or
+    # the legacy E2E snapshot, so the daemon's loop_signals never reached it.
+    # Ride the cached stuck list on the plaintext, regularly-sent, self-clearing
+    # heartbeat instead. ONLY attach when fresh+non-empty (helper enforces the
+    # 5-min freshness gate) so a stale cache can't pin a banner. Best-effort —
+    # heartbeat MUST still send if this fails.
+    try:
+        _stuck = _heartbeat_stuck_payload()
+        if _stuck:
+            payload["stuck"] = _stuck
+    except Exception as _st_e:
+        log.debug("stuck heartbeat payload build failed (continuing): %s", _st_e)
     # Agent-install self-report (cloud bug fix 2026-05-18). Cloud Run pods
     # can't stat the user's home directory, so the daemon tells cloud what
     # agents exist locally and cloud aggregates across the user's fleet.
@@ -13423,6 +13469,22 @@ STUCK_MIN_SECONDS = int(os.environ.get("CLAWMETRY_STUCK_SECONDS", "180"))
 # How recently a session must have been active to be a candidate. A truly idle
 # session (last active hours ago) is not "stuck right now" — it just stopped.
 STUCK_RECENT_MINUTES = int(os.environ.get("CLAWMETRY_STUCK_RECENT_MINUTES", "15"))
+
+# Latest stuck-detection result, cached so the (plaintext, self-clearing)
+# HEARTBEAT can carry it to the cloud's device_summary — the WiFi desk device
+# fetches the CLOUD summary (built from Postgres), NOT the local dashboard or
+# the legacy E2E snapshot, so loop_signals alone never reached it. ``ts`` is the
+# wall-clock the result was last refreshed; ``items`` is the (possibly empty)
+# top-few stuck list, each already carrying the built banner ``message``. An
+# EMPTY items with a fresh ts means "checked, none stuck" → the device self-
+# clears. The heartbeat treats a STALE ts (>5 min) as "no signal" so a wedged
+# detector can't pin a banner forever.
+_LATEST_STUCK: dict = {"ts": 0.0, "items": []}
+# Heartbeat only trusts a stuck cache refreshed within this window (seconds).
+_STUCK_HEARTBEAT_FRESH_SECONDS = 300
+# Cap how much stuck rides each heartbeat (keep the plaintext payload tiny).
+_STUCK_HEARTBEAT_MAX_ITEMS = 5
+_STUCK_HEARTBEAT_MAX_MSG = 200
 # How many newest events to inspect per candidate session. 120 comfortably
 # covers a streak well past the threshold plus the preceding progress marker.
 _STUCK_EVENT_WINDOW = 120
@@ -13691,7 +13753,35 @@ def _emit_stuck_signals(store, state: dict) -> int:
         stuck = _detect_stuck_sessions(store)
     except Exception as e:  # noqa: BLE001
         log.warning("stuck-detect: detector errored: %s", e)
+        # Detector errored — do NOT touch _LATEST_STUCK here: leaving the old
+        # value is harmless because the heartbeat staleness gate (5 min) will
+        # drop it; clearing it on a transient error would suppress a real,
+        # still-stuck banner mid-incident. (When detection SUCCEEDS with no
+        # stuck below, we DO refresh ts with items=[] to self-clear.)
         return 0
+
+    # Refresh the heartbeat cache every tick the detector RAN — including the
+    # no-stuck case (items=[], fresh ts) so the cloud/device self-clears. Build
+    # the same banner messages the loop_signals path emits, capped tiny for the
+    # plaintext heartbeat. Never let cache bookkeeping take down the loop.
+    try:
+        items = []
+        for st in stuck[:_STUCK_HEARTBEAT_MAX_ITEMS]:
+            n = int(st.get("tool_calls") or 0)
+            mins = max(1, int(st.get("since_seconds") or 0) // 60)
+            rt = str(st.get("runtime") or "openclaw")
+            msg = f"{rt} stuck: {n} tool calls, no progress for {mins}m"
+            items.append({
+                "runtime": rt,
+                "tool_calls": n,
+                "since_seconds": int(st.get("since_seconds") or 0),
+                "message": msg[:_STUCK_HEARTBEAT_MAX_MSG],
+            })
+        _LATEST_STUCK["items"] = items
+        _LATEST_STUCK["ts"] = time.time()
+    except Exception as _ce:  # noqa: BLE001
+        log.debug("stuck-detect: cache refresh failed (continuing): %s", _ce)
+
     if not stuck:
         return 0
 
