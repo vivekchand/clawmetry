@@ -8493,43 +8493,75 @@ async function _invFetchData() {
   }
 }
 
+// An agent is "active/recent" (shown by default) when it's running, did work
+// today (cost or tokens), or is the currently-selected runtime. Everything else
+// folds under a "Show N inactive" expander so the roster reads like the device's
+// calm view instead of every runtime ever used on this machine (#web-accuracy).
+function _invIsRecentlyActive(a, rtFilter) {
+  return !!(a.running
+    || (Number(a.costTodayUsd || 0) > 0)
+    || (Number(a.tokensToday || 0) > 0)
+    || (rtFilter !== 'all' && a.agentKey === rtFilter));
+}
+
+function _invRosterRow(a, rtFilter) {
+  var rt = a.agentKey;
+  var label = a.displayName || rt;
+  var doing = _invDoingNow(a);
+  var dot = _invAliveDot(a);
+  var owner = _invOwnerLabel(a);
+  var hasCost = _invHasCost(rt);
+  // TODAY (event-windowed) vs LIFETIME (all the runtime's sessions). The column
+  // used to be labeled "Cost today" but rendered the lifetime total — fixed.
+  var naTip = '<span class="inv-na" data-i18n-title="inventory.cost_na_tip" title="This runtime does not report cost yet.">--</span>';
+  var todayCell = hasCost ? _invFmtUsd(a.costTodayUsd) : naTip;
+  var lifeCell = hasCost ? _invFmtUsd(a.costUsd) : naTip;
+  var work = (a.sessions || 0) + ((a.sessions === 1) ? ' conversation' : ' conversations');
+  var model = a.primaryModel || '--';
+  var highlight = (rtFilter !== 'all' && rt === rtFilter) ? ' inv-row-active' : '';
+  var pencil = window.CLOUD_MODE
+    ? ''
+    : '<span class="inv-owner-pencil" title="Rename owner" onclick="event.stopPropagation();_invStartOwnerEdit(this,\'' + escHtml(rt) + '\')">&#9998;</span>';
+  return ''
+    + '<tr class="inv-row' + highlight + '" data-rt="' + escHtml(rt) + '" onclick="_invToggleRow(this,\'' + escHtml(rt) + '\')">'
+    +   '<td class="inv-c-agent"><span class="inv-dot" style="background:' + dot.color + '"></span>' + escHtml(label) + '</td>'
+    +   '<td class="inv-c-owner"><span class="inv-owner-chip" data-rt="' + escHtml(rt) + '"><span class="inv-owner-name">' + escHtml(owner) + '</span>' + pencil + '</span></td>'
+    +   '<td class="inv-c-doing"><span class="inv-doing ' + doing.cls + '">' + doing.txt + '</span></td>'
+    +   '<td class="inv-c-alive"><span class="inv-dot" style="background:' + dot.color + '"></span>'
+    +     '<span class="inv-alive-lbl" title="For OpenClaw and NemoClaw this is a real heartbeat; for other runtimes it means a process is running.">' + dot.label + '</span></td>'
+    +   '<td class="inv-c-cost" title="Cost from today\'s activity (API-equivalent)">' + todayCell + '</td>'
+    +   '<td class="inv-c-cost inv-c-cost-life" title="All-time cost across this agent\'s tracked sessions (API-equivalent)">' + lifeCell + '</td>'
+    +   '<td class="inv-c-work">' + escHtml(work) + '</td>'
+    +   '<td class="inv-c-model">' + escHtml(model) + '</td>'
+    + '</tr>'
+    + '<tr class="inv-expand-row" id="inv-exp-' + escHtml(rt) + '" style="display:none;"><td colspan="8">'
+    +   _invExpandHtml(a)
+    + '</td></tr>';
+}
+
 function _invRenderRoster(inv) {
   var agents = (inv && inv.agents) || [];
   var rtFilter = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
-  var rows = agents.map(function (a) {
-    var rt = a.agentKey;
-    var label = a.displayName || rt;
-    var doing = _invDoingNow(a);
-    var dot = _invAliveDot(a);
-    var owner = _invOwnerLabel(a);
-    var costCell;
-    if (_invHasCost(rt)) {
-      costCell = _invFmtUsd(a.costUsd);
-    } else {
-      costCell = '<span class="inv-na" data-i18n-title="inventory.cost_na_tip" title="This runtime does not report cost yet.">--</span>';
-    }
-    var work = (a.sessions || 0) + ((a.sessions === 1) ? ' conversation' : ' conversations');
-    var model = a.primaryModel || '--';
-    var highlight = (rtFilter !== 'all' && rt === rtFilter) ? ' inv-row-active' : '';
-    var pencil = window.CLOUD_MODE
-      ? ''
-      : '<span class="inv-owner-pencil" title="Rename owner" onclick="event.stopPropagation();_invStartOwnerEdit(this,\'' + escHtml(rt) + '\')">&#9998;</span>';
-    var aliveAgo = a.ownerUpdatedAt ? '' : '';
-    return ''
-      + '<tr class="inv-row' + highlight + '" data-rt="' + escHtml(rt) + '" onclick="_invToggleRow(this,\'' + escHtml(rt) + '\')">'
-      +   '<td class="inv-c-agent"><span class="inv-dot" style="background:' + dot.color + '"></span>' + escHtml(label) + '</td>'
-      +   '<td class="inv-c-owner"><span class="inv-owner-chip" data-rt="' + escHtml(rt) + '"><span class="inv-owner-name">' + escHtml(owner) + '</span>' + pencil + '</span></td>'
-      +   '<td class="inv-c-doing"><span class="inv-doing ' + doing.cls + '">' + doing.txt + '</span></td>'
-      +   '<td class="inv-c-alive"><span class="inv-dot" style="background:' + dot.color + '"></span>'
-      +     '<span class="inv-alive-lbl" title="For OpenClaw and NemoClaw this is a real heartbeat; for other runtimes it means a process is running.">' + dot.label + '</span></td>'
-      +   '<td class="inv-c-cost">' + costCell + '</td>'
-      +   '<td class="inv-c-work">' + escHtml(work) + '</td>'
-      +   '<td class="inv-c-model">' + escHtml(model) + '</td>'
+  var active = [], inactive = [];
+  agents.forEach(function (a) {
+    (_invIsRecentlyActive(a, rtFilter) ? active : inactive).push(a);
+  });
+  // Never end up with an empty roster: if nothing is "active" right now, show
+  // everything rather than an empty table.
+  if (!active.length && inactive.length) { active = inactive; inactive = []; }
+  var rows = active.map(function (a) { return _invRosterRow(a, rtFilter); }).join('');
+  var foldRows = '';
+  if (inactive.length) {
+    foldRows = ''
+      + '<tr class="inv-fold-toggle" onclick="_invToggleInactive(this)">'
+      +   '<td colspan="8"><span class="inv-fold-caret">&#9656;</span> '
+      +     'Show ' + inactive.length + ' inactive agent' + (inactive.length === 1 ? '' : 's')
+      +     ' <span class="inv-fold-hint">(no activity today)</span></td>'
       + '</tr>'
-      + '<tr class="inv-expand-row" id="inv-exp-' + escHtml(rt) + '" style="display:none;"><td colspan="7">'
-      +   _invExpandHtml(a)
-      + '</td></tr>';
-  }).join('');
+      + '<tbody class="inv-fold-body" style="display:none;">'
+      +   inactive.map(function (a) { return _invRosterRow(a, rtFilter); }).join('')
+      + '</tbody>';
+  }
 
   return ''
     + '<table class="inv-table">'
@@ -8538,12 +8570,26 @@ function _invRenderRoster(inv) {
     +     '<th data-i18n="inventory.col_owner">Owner</th>'
     +     '<th data-i18n="inventory.col_doing">Doing now</th>'
     +     '<th data-i18n="inventory.col_alive">Alive</th>'
-    +     '<th data-i18n="inventory.col_cost">Cost today</th>'
+    +     '<th data-i18n="inventory.col_cost_today">Cost today</th>'
+    +     '<th data-i18n="inventory.col_cost_life">Cost (lifetime)</th>'
     +     '<th data-i18n="inventory.col_work">Work done</th>'
     +     '<th data-i18n="inventory.col_model">Main model</th>'
     +   '</tr></thead>'
     +   '<tbody>' + rows + '</tbody>'
+    +   foldRows
     + '</table>';
+}
+
+function _invToggleInactive(el) {
+  try {
+    var body = el.parentNode.querySelector('.inv-fold-body')
+      || (el.nextElementSibling && el.nextElementSibling.classList.contains('inv-fold-body') ? el.nextElementSibling : null);
+    if (!body) return;
+    var open = body.style.display !== 'none';
+    body.style.display = open ? 'none' : '';
+    var caret = el.querySelector('.inv-fold-caret');
+    if (caret) caret.innerHTML = open ? '&#9656;' : '&#9662;';
+  } catch (e) {}
 }
 
 function _invExpandHtml(a) {
