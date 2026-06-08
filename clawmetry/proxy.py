@@ -869,6 +869,106 @@ def compute_request_hash(body: dict) -> str:
     return hashlib.sha256(combined.encode()).hexdigest()[:16]
 
 
+# ── Cache-bust detection (Headroom-inspired: #2839 / #2840 / #2841) ─────
+# Per-session last stable-prefix hash, for prefix-drift detection. Best-effort,
+# in-process, bounded; the proxy is a single long-lived process per node.
+_SESSION_PREFIX: dict = {}
+
+_VOLATILE_PATTERNS = {
+    "iso_timestamp": re.compile(r"\d{4}-\d\d-\d\d[ T]\d\d:\d\d(?::\d\d)?"),
+    "uuid": re.compile(
+        r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+        r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"),
+    "jwt": re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{6,}\b"),
+    "long_hex": re.compile(r"\b[0-9a-f]{32,}\b"),   # build / commit hashes
+    "epoch_ms": re.compile(r"\b1[6-9]\d{11}\b"),     # 13-digit epoch ms (2022+)
+}
+
+
+def _sort_json(obj):
+    """Recursively key-sort dicts so logically-identical structures fingerprint
+    the same regardless of key order. Lists keep order (it can be meaningful)."""
+    if isinstance(obj, dict):
+        return {k: _sort_json(obj[k]) for k in sorted(obj.keys())}
+    if isinstance(obj, list):
+        return [_sort_json(x) for x in obj]
+    return obj
+
+
+def normalize_tools(tools) -> str:
+    """Deterministic tool catalog (#2841): sort tools by name + recursively
+    key-sort each schema, so defining the same tools in a different order does
+    not bust the prompt cache or inflate the fingerprint. Returns a JSON string.
+    Never raises."""
+    try:
+        if not isinstance(tools, list):
+            return ""
+        norm = [_sort_json(t) for t in tools if isinstance(t, dict)]
+        norm.sort(key=lambda t: str(t.get("name", "")))
+        return json.dumps(norm, separators=(",", ":"), ensure_ascii=False)
+    except Exception:
+        return ""
+
+
+def scan_volatile_content(text: str) -> dict:
+    """Count volatile tokens in cache-stable content (system prompt / tools) that
+    silently bust the prompt cache every call (#2839 part 2). Returns per-pattern
+    COUNTS only — never the matched values (they may be secrets). Never raises."""
+    out: dict = {}
+    try:
+        if not text:
+            return {}
+        for name, rx in _VOLATILE_PATTERNS.items():
+            n = len(rx.findall(text))
+            if n:
+                out[name] = n
+    except Exception:
+        return {}
+    return out
+
+
+def _system_text(body: dict) -> str:
+    system = body.get("system", "")
+    if isinstance(system, list):
+        system = " ".join(b.get("text", "") for b in system if isinstance(b, dict))
+    return system if isinstance(system, str) else ""
+
+
+def stable_prefix_hash(body: dict) -> str:
+    """Hash the cache-stable prefix (model + normalized tools + full system) so we
+    can detect when a session's prefix DRIFTS turn-to-turn and self-busts its
+    prompt cache (#2840). Tool order is normalized so reordering is not drift."""
+    try:
+        parts = [str(body.get("model", "")), normalize_tools(body.get("tools")),
+                 _system_text(body)]
+        return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+    except Exception:
+        return ""
+
+
+def detect_cache_risk(body: dict) -> dict:
+    """Cache-bust risk for one request: stable-prefix hash (for drift) + a
+    volatile-content scan of system + tools (counts only). cache_risk_score is
+    the total volatile-token count. Pure, best-effort; never raises."""
+    try:
+        sys_txt = _system_text(body)
+        tools_txt = ""
+        tools = body.get("tools")
+        if isinstance(tools, list):
+            try:
+                tools_txt = json.dumps(tools, ensure_ascii=False)
+            except Exception:
+                tools_txt = ""
+        volatile = scan_volatile_content(sys_txt + "\n" + tools_txt)
+        return {
+            "prefix_hash": stable_prefix_hash(body),
+            "cache_risk_score": sum(volatile.values()),
+            "volatile": volatile,
+        }
+    except Exception:
+        return {"prefix_hash": "", "cache_risk_score": 0, "volatile": {}}
+
+
 # ── SSE Stream Parsing ─────────────────────────────────────────────────
 
 
@@ -909,9 +1009,18 @@ def parse_anthropic_sse_chunk(line: str, usage: StreamUsage) -> None:
         usage.model = msg.get("model", usage.model)
 
     elif event_type == "message_delta":
+        # message_delta carries the running/final usage. Take the MAX so multiple
+        # deltas (incl. extended-thinking reasoning streamed across blocks) never
+        # undercount, and pick up cache/input token corrections if present (#2842).
         u = data.get("usage", {})
-        usage.output_tokens = u.get("output_tokens", 0)
-        usage.stop_reason = data.get("delta", {}).get("stop_reason", "")
+        usage.output_tokens = max(usage.output_tokens, int(u.get("output_tokens", 0) or 0))
+        if u.get("input_tokens"):
+            usage.input_tokens = int(u.get("input_tokens") or 0) or usage.input_tokens
+        if u.get("cache_read_input_tokens"):
+            usage.cache_read_tokens = int(u.get("cache_read_input_tokens") or 0) or usage.cache_read_tokens
+        if u.get("cache_creation_input_tokens"):
+            usage.cache_creation_tokens = int(u.get("cache_creation_input_tokens") or 0) or usage.cache_creation_tokens
+        usage.stop_reason = data.get("delta", {}).get("stop_reason", "") or usage.stop_reason
 
 
 def parse_openai_sse_chunk(line: str, usage: StreamUsage) -> None:
@@ -2053,6 +2162,36 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
             logger.warning(f"Cost spiral: {spiral_reason}")
             _arm_backoff_pause(session_id, "cost_spiral", spiral_reason)
             return _error_response(429, "cost_spiral", spiral_reason, provider)
+        # ── Cache-bust risk (Headroom-inspired, #2839/#2840) ───────────
+        # Detect prompts that self-bust the prompt cache: volatile content in the
+        # cache-stable prefix (timestamps/UUIDs/JWTs) and prefix DRIFT turn over
+        # turn. Detection only (never blocks, never stores raw prompt text); the
+        # re-read-tax meter reads the emitted events.
+        try:
+            _risk = detect_cache_risk(body)
+            _ph = _risk.get("prefix_hash") or ""
+            _prev = _SESSION_PREFIX.get(session_id) if session_id else None
+            if session_id and _ph:
+                if len(_SESSION_PREFIX) > 2000:
+                    _SESSION_PREFIX.clear()
+                _SESSION_PREFIX[session_id] = _ph
+            _drift = bool(_prev and _ph and _prev != _ph)
+            if _drift or _risk.get("cache_risk_score", 0) >= 3:
+                db.record_event(
+                    "cache_risk",
+                    ("prompt prefix drifted between turns (self-busting the cache)"
+                     if _drift else "volatile content in the cache-stable prefix"),
+                    severity="info",
+                    details={
+                        "session_id": session_id,
+                        "model": model,
+                        "cache_risk_score": _risk.get("cache_risk_score", 0),
+                        "volatile": _risk.get("volatile", {}),
+                        "prefix_drift": _drift,
+                    },
+                )
+        except Exception as _exc:  # noqa: BLE001 — never break the proxy
+            logger.debug("cache-risk detection skipped: %s", _exc)
 
         # ── Velocity check ─────────────────────────────────────────────
         is_spike, spike_reason = velocity_breaker.check(session_id)
