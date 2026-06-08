@@ -162,3 +162,54 @@ class TestIntegrityEnabled:
         _flush(s)
         result = s.verify_integrity()
         assert result["pre_chain"] >= 1
+
+
+def test_integrity_on_by_default(tmp_path, monkeypatch):
+    """The tamper-evident chain is a Free, always-on feature: with no
+    CLAWMETRY_INTEGRITY env var set it must default ON and stamp new events
+    (regression for the Security integrity card showing a perpetual 'empty'
+    state because the chain was opt-in / off by default)."""
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "events.duckdb"))
+    monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_SECS", "0.05")
+    monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_BATCH", "5")
+    monkeypatch.delenv("CLAWMETRY_INTEGRITY", raising=False)
+    import clawmetry.local_store as ls
+    importlib.reload(ls)
+    assert ls._INTEGRITY_ENABLED is True, "integrity must be ON by default"
+    s = ls.LocalStore()
+    s.start()
+    try:
+        for _ in range(3):
+            s.ingest(_ev(node_id="node-a"))
+        _flush(s)
+        res = s.verify_integrity()
+        assert res["status"] == "valid", res
+        assert res["checked"] >= 3, res
+    finally:
+        s.stop(flush=True)
+
+
+def test_batched_dedup_redelivery_keeps_chain_valid(store_with_integrity):
+    """The batched dedup (one IN(...) lookup per flush instead of a SELECT per
+    event) must behave like the per-event version: a re-delivered, already
+    stamped event is NOT re-stamped, so the chain stays valid and length is
+    unchanged. Exercises a flush batch with both fresh and already-stamped ids."""
+    s = store_with_integrity
+    evs = [_ev(node_id="node-a") for _ in range(8)]
+    for e in evs:
+        s.ingest(e)
+    _flush(s)
+    first = s.verify_integrity()
+    assert first["status"] == "valid", first
+    n1 = first["checked"]
+    # Re-deliver the SAME events (idempotent INSERT OR IGNORE) plus a couple new
+    # ones in one batch: the already-stamped ids must be skipped, not re-stamped.
+    for e in evs:
+        s.ingest(dict(e))
+    for _ in range(2):
+        s.ingest(_ev(node_id="node-a"))
+    _flush(s)
+    second = s.verify_integrity()
+    assert second["status"] == "valid", second
+    # Only the 2 genuinely new events get stamped; re-deliveries are skipped.
+    assert second["checked"] == n1 + 2, (n1, second["checked"])

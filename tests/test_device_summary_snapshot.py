@@ -103,3 +103,48 @@ def test_active_sessions_and_oldest_approval(sync_with_store):
     assert s["approval"]["action"] == "bash"
     assert s["approval"]["runtime"] == "openclaw"
     assert s["health"] == "amber"  # a human is needed
+
+
+def test_session_titles_ride_encrypted_summary_not_uuid(sync_with_store):
+    """The device's runtime-detail recent-session rows must show the session's
+    first-message title (real content), not a raw UUID. That title is content,
+    so it rides the ENCRYPTED deviceSummary (sessionTitles), keyed by the BARE
+    session id, never the plaintext device-agent endpoint."""
+    import time
+    sync, ls = sync_with_store
+    store = ls.get_store()
+    store.ingest_session({
+        "session_id": "claude_code:e149acae-8789-4f61-b365-3b356bf07f88",
+        "agent_type": "claude_code",
+        "status": "ended",
+        "title": "read flywheel.md && ../clawmetry-cloud/flywheel.md",
+        "started_at": "2026-06-08T09:00:00+00:00",
+        "last_active_at": "2026-06-08T11:00:00+00:00",
+    })
+    store.ingest_session({
+        "session_id": "claude_code:e0dbf7e3-2301-4abc-9def-000000000000",
+        "agent_type": "claude_code",
+        "status": "ended",
+        "title": "what does github sponsoring mean??",
+        "started_at": "2026-06-08T08:00:00+00:00",
+        "last_active_at": "2026-06-08T10:00:00+00:00",
+    })
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and store.health()["ring_depth"] != 0:
+        time.sleep(0.02)
+
+    s = sync._build_device_summary({"today": 0}, {"today": 0})
+    titles = s.get("sessionTitles")
+    assert isinstance(titles, dict) and titles, s
+    # keyed by the BARE id (post-':'), value is the human title, never the uuid
+    assert titles.get("e149acae-8789-4f61-b365-3b356bf07f88") == \
+        "read flywheel.md && ../clawmetry-cloud/flywheel.md"
+    assert titles.get("e0dbf7e3-2301-4abc-9def-000000000000") == \
+        "what does github sponsoring mean??"
+    # the prefixed form is NOT a key (firmware looks up the bare device-agent id)
+    assert "claude_code:e149acae-8789-4f61-b365-3b356bf07f88" not in titles
+    # values are never a bare uuid (i.e. content, not an id)
+    import re
+    uuid = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-')
+    for v in titles.values():
+        assert not uuid.match(v), v
