@@ -10687,6 +10687,9 @@ var _TA_KIND_ICONS = {
 };
 function _taColor(kind) { return _TA_KIND_COLORS[kind] || '#94a3b8'; }
 function _taIcon(kind) { return _TA_KIND_ICONS[kind] || '•'; }
+// Top-level cost formatter for the turn-anatomy waterfall (the page-scoped
+// fmtCost helpers live inside other functions and aren't in scope here).
+function _taFmtCost(c) { c = Number(c) || 0; return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
 
 window._taSession = null;
 
@@ -10823,7 +10826,8 @@ function _taRenderTurn(t) {
   var head = '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">'
     + '<span style="font-size:13px;font-weight:700;color:var(--text-primary);">Turn ' + t.turn + '</span>'
     + (isErr ? '<span style="background:rgba(239,68,68,0.15);color:#f87171;border-radius:6px;padding:1px 7px;font-size:10px;font-weight:600;">error</span>' : '')
-    + '<span style="font-size:11px;color:var(--text-muted);">' + _traceFmtDur(t.duration_ms) + ' &middot; ' + (t.tool_count || 0) + ' tool' + (t.tool_count === 1 ? '' : 's') + ' &middot; ' + ((t.total_tokens || 0) / 1000).toFixed(1) + 'K tok</span>'
+    + '<span style="font-size:11px;color:var(--text-muted);">' + _traceFmtDur(t.duration_ms) + ' &middot; ' + (t.tool_count || 0) + ' tool' + (t.tool_count === 1 ? '' : 's') + ' &middot; ' + ((t.total_tokens || 0) / 1000).toFixed(1) + 'K tok'
+       + ((t.total_cost || 0) > 0 ? ' &middot; ' + _taFmtCost(t.total_cost) : '') + '</span>'
     + '</div>';
   var prompt = t.prompt ? '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + escHtml(t.prompt) + '">&#128172; ' + escHtml(t.prompt) + '</div>' : '';
   var bars = '<div style="min-width:560px;">';
@@ -10837,7 +10841,8 @@ function _taRenderTurn(t) {
     var color = _taColor(s.kind);
     var spanErr = s.status === 'error';
     var label = (s.label || s.kind || '');
-    bars += '<div style="display:flex;align-items:center;gap:8px;padding:2px 0;" title="' + escHtml(label) + ' · ' + _traceFmtDur(s.duration_ms) + (spanErr ? ' · error' : '') + '">'
+    var spanCostTip = ((s.cost || 0) > 0 ? ' · ' + _taFmtCost(s.cost) : '') + ((s.tokens || 0) > 0 ? ' · ' + (s.tokens >= 1000 ? (s.tokens / 1000).toFixed(1) + 'K' : s.tokens) + ' tok' : '');
+    bars += '<div style="display:flex;align-items:center;gap:8px;padding:2px 0;" title="' + escHtml(label) + ' · ' + _traceFmtDur(s.duration_ms) + spanCostTip + (spanErr ? ' · error' : '') + '">'
       + '<span style="width:18px;flex-shrink:0;text-align:center;font-size:11px;">' + _taIcon(s.kind) + '</span>'
       + '<span style="width:170px;flex-shrink:0;font-size:11px;color:' + (spanErr ? '#f87171' : 'var(--text-secondary)') + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(label) + (spanErr ? ' &#9888;' : '') + '</span>'
       + '<span style="flex:1;position:relative;height:14px;background:var(--bg-primary);border-radius:3px;">'
@@ -12479,9 +12484,21 @@ async function loadUsage() {
     // Cost table
     var usageInfoIcon = document.getElementById('usage-cost-info-icon');
     if (usageInfoIcon) {
-      if (data.billingSummary === 'likely_oauth_or_included' || data.billingSummary === 'mixed') {
+      // Cost shown is API-EQUIVALENT (tokens x API rates, same method as
+      // ccusage). It's only an actual cash charge when the account bills
+      // per-token (an API key). For OAuth/subscription plans (e.g. Claude Max
+      // via the Claude CLI) the incremental cost is $0 — the plan covers it.
+      // Surface the caveat for EVERY mode except confidently-metered
+      // ('likely_api_key'), so an "unknown / billing unconfirmed" account no
+      // longer reads as if it owes the displayed dollars (#web-accuracy).
+      var bs = data.billingSummary;
+      if (bs && bs !== 'likely_api_key') {
         usageInfoIcon.style.display = '';
-        usageInfoIcon.title = 'Equivalent if billed from token usage. OAuth/included models may be billed $0 at provider level.';
+        if (bs === 'likely_oauth_or_included' || bs === 'mixed') {
+          usageInfoIcon.title = 'API-equivalent (tokens × API rates). OAuth/included models are typically billed $0 at the provider — your subscription covers them.';
+        } else {
+          usageInfoIcon.title = 'API-equivalent (tokens × API rates). Billing basis unconfirmed — if your account is on a subscription plan (e.g. Claude Max via the Claude CLI), the actual incremental cost is $0.';
+        }
       } else {
         usageInfoIcon.style.display = 'none';
         usageInfoIcon.title = '';
