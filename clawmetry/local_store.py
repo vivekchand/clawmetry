@@ -4170,6 +4170,34 @@ class LocalStore:
         except Exception:
             return {"by_runtime": {}, "by_runtime_model": [], "switches": []}
 
+    def query_runtime_last_active(self) -> dict[str, str]:
+        """``{runtime: max_event_ts_iso}`` — the newest INGESTED event per
+        runtime (session-id prefix), the same activity the Brain/Tracing tabs
+        show. Authoritative for the Fleet 'active/idle/stale' status: filesystem
+        mtimes are noisy (a SQLite ``-shm`` bump or a WAL checkpoint reads as
+        "active 0h ago" with no real activity — the founder's goose card, 2026-
+        06-08). One GROUP BY MAX(ts). Best-effort: {} on any failure."""
+        try:
+            prefixes = list(_NON_OPENCLAW_RUNTIME_PREFIXES)
+            placeholders = ", ".join(["?"] * len(prefixes))
+            rt_case = (
+                f"CASE WHEN split_part(session_id, ':', 1) IN ({placeholders}) "
+                f"THEN split_part(session_id, ':', 1) ELSE 'openclaw' END"
+            )
+            sql = f"""
+                SELECT {rt_case} AS runtime, MAX(ts) AS last_ts
+                FROM events
+                GROUP BY 1
+            """
+            out: dict[str, str] = {}
+            for r in self._fetch(sql, list(prefixes)):
+                rt = r[0] or "openclaw"
+                if r[1]:
+                    out[rt] = str(r[1])
+            return out
+        except Exception:
+            return {}
+
     def query_event_totals_by_session(
         self, session_ids: "Iterable[str]",
     ) -> dict[str, dict[str, Any]]:
