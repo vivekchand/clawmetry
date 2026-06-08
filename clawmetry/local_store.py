@@ -41,6 +41,7 @@ import json
 import logging
 import math
 import os
+from clawmetry import ccr as _ccr  # reversible event-payload compression (#2843)
 import threading
 import time
 from collections import deque
@@ -2621,6 +2622,7 @@ class LocalStore:
             raw = d.get("details")
             if raw is not None:
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     try:
                         d["details"] = json.loads(text)
@@ -3358,6 +3360,7 @@ class LocalStore:
                 if raw is None:
                     continue
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     try:
                         d[k] = json.loads(text)
@@ -3672,6 +3675,7 @@ class LocalStore:
                 if raw is None:
                     continue
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     try:
                         d[c] = json.loads(text)
@@ -3875,6 +3879,7 @@ class LocalStore:
             data: dict[str, Any] = {}
             if raw is not None:
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     parsed = json.loads(text) if text else {}
                     if isinstance(parsed, dict):
@@ -3962,6 +3967,7 @@ class LocalStore:
             data: dict[str, Any] = {}
             if raw is not None:
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     parsed = json.loads(text) if text else {}
                     if isinstance(parsed, dict):
@@ -4026,6 +4032,7 @@ class LocalStore:
             data: dict[str, Any] = {}
             if raw is not None:
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     parsed = json.loads(text) if text else {}
                     if isinstance(parsed, dict):
@@ -4445,6 +4452,7 @@ class LocalStore:
         for (eid, data, model) in rows:
             try:
                 if isinstance(data, (bytes, bytearray)):
+                    data = _ccr.maybe_decompress(data)
                     data = bytes(data).decode("utf-8", "replace")
                 obj = json.loads(data) if isinstance(data, str) else data
             except Exception:
@@ -4524,6 +4532,7 @@ class LocalStore:
                 max_id = eid
             try:
                 if isinstance(data, (bytes, bytearray)):
+                    data = _ccr.maybe_decompress(data)
                     data = bytes(data).decode("utf-8", "replace")
                 obj = json.loads(data) if isinstance(data, str) else data
             except Exception:
@@ -5010,6 +5019,7 @@ class LocalStore:
             raw = d.get("raw_blob")
             if raw is not None:
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     try:
                         d["raw_blob"] = json.loads(text)
@@ -5901,6 +5911,7 @@ class LocalStore:
             raw = d.get("condition_json")
             if raw is not None:
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     try:
                         d["condition_json"] = json.loads(text)
@@ -6760,6 +6771,7 @@ class LocalStore:
             meta: dict[str, Any] = {}
             if raw:
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     meta = json.loads(text) if text else {}
                     if not isinstance(meta, dict):
@@ -6807,6 +6819,7 @@ class LocalStore:
             data: dict[str, Any] = {}
             if raw is not None:
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     parsed = json.loads(text) if text else {}
                     if isinstance(parsed, dict):
@@ -6860,6 +6873,7 @@ class LocalStore:
             data: dict[str, Any] = {}
             if raw is not None:
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     parsed = json.loads(text) if text else {}
                     if isinstance(parsed, dict):
@@ -7092,6 +7106,7 @@ class LocalStore:
                 data: dict[str, Any] = {}
                 if raw is not None:
                     try:
+                        raw = _ccr.maybe_decompress(raw)
                         text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                         parsed = json.loads(text) if text else {}
                         if isinstance(parsed, dict):
@@ -7235,6 +7250,7 @@ class LocalStore:
             if raw is None:
                 return {}
             try:
+                raw = _ccr.maybe_decompress(raw)
                 text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                 parsed = json.loads(text) if text else {}
                 return parsed if isinstance(parsed, dict) else {}
@@ -7466,6 +7482,7 @@ class LocalStore:
             data: dict[str, Any] = {}
             if raw is not None:
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     parsed = json.loads(text) if text else {}
                     if isinstance(parsed, dict):
@@ -7591,6 +7608,7 @@ class LocalStore:
             data: dict[str, Any] = {}
             if raw is not None:
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     parsed = json.loads(text) if text else {}
                     if isinstance(parsed, dict):
@@ -7798,6 +7816,7 @@ class LocalStore:
             data: dict[str, Any] = {}
             if raw is not None:
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     parsed = json.loads(text) if text else {}
                     if isinstance(parsed, dict):
@@ -8949,6 +8968,8 @@ def _event_to_row(e: dict[str, Any]) -> tuple:
             data = data.encode("utf-8")
         else:
             data = json.dumps(data, separators=(",", ":")).encode("utf-8")
+            if _ccr.enabled():
+                data = _ccr.compress(data)
     cost, tokens, model = _extract_event_metrics(e)
     return (
         str(e["id"]),
@@ -8974,6 +8995,7 @@ def _row_to_event(row: tuple, cols: list[str]) -> dict[str, Any]:
     raw = out.get("data")
     if raw is not None:
         try:
+            raw = _ccr.maybe_decompress(raw)
             text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
             try:
                 out["data"] = json.loads(text)
@@ -9699,6 +9721,7 @@ def _decode_data_blob_rows(rows: Iterable[tuple], cols: list[str]) -> list[dict[
         raw = d.get("data")
         if raw is not None:
             try:
+                raw = _ccr.maybe_decompress(raw)
                 text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                 try:
                     d["data"] = json.loads(text)
