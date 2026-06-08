@@ -10424,6 +10424,11 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                     "cache_expiry_count": _idle.get("cacheExpiryCount"),
                     "tool_error_pct": _thealth.get("toolErrorPct"),
                     "compaction_count": _compactions or None,
+                    # Compression-potential meter (#2838) carried to the cloud so
+                    # the recoverable-spend roll-up renders from the snapshot too.
+                    "compression_potential_pct": _compress.get("compressionPotentialPct"),
+                    "compressible_tool_tokens": _compress.get("compressibleToolTokens"),
+                    "compression_recoverable_usd": _compress.get("compressionRecoverableUsd"),
                 })
                 # Events → transcript (rides the existing _build_transcripts path).
                 # Re-ingest the full event set for sessions that advanced (the
