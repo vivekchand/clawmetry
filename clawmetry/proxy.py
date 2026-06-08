@@ -78,11 +78,126 @@ PROXY_LOG_FILE = CONFIG_DIR / "proxy.log"
 _HITL_DIR = CONFIG_DIR / "hitl"
 
 
+# Auto-backoff escalation ladder (#2818): minutes of cool-off by repeat count.
+# 1st breach -> 5m, 2nd -> 10m, 3rd -> 20m, 4th+ -> 30m (capped).
+_BACKOFF_LADDER_MINUTES = (5, 10, 20, 30)
+# If a session's previous cool-off lapsed more than this long ago, it behaved
+# well in between, so escalation resets to the bottom rung on its next breach
+# (instead of jumping to the cap forever). Also the age past which an expired
+# pause file is pruned by the maintenance loop so they can't accumulate.
+_BACKOFF_RESET_SECS = 3600        # 1h quiet -> escalation decays to level 0
+_BACKOFF_PRUNE_SECS = 6 * 3600    # expired >6h ago -> file pruned
+
+
 def _is_session_hitl_paused(session_id: str) -> bool:
-    """Return True if an operator has flagged this session for HITL review."""
+    """Return True if a session is paused for HITL review or auto-backoff.
+
+    Two pause shapes are honored:
+
+    1. Legacy operator pause — an empty file ``pause_<session_id>`` (no expiry).
+       Stays paused until the operator deletes it (manual resume).
+    2. Auto-backoff pause (#2818) — a JSON file ``pause_<session_id>.json``
+       carrying ``{until_ts, level}``. The session is paused only until
+       ``until_ts``; once elapsed this returns False (auto-resume). The file is
+       left in place so ``_record_backoff_pause`` can read the escalation
+       ``level`` on the next breach (it decays to 0 after ``_BACKOFF_RESET_SECS``
+       of quiet). Long-expired files are pruned by ``_prune_backoff_pauses`` in
+       the maintenance loop so they can't accumulate.
+
+    Never crashes on bad input — a malformed JSON pause file is treated as a
+    legacy/operator pause (fail safe: stay paused) so a corrupt file can't
+    silently disable enforcement.
+    """
     if not session_id:
         return False
-    return (_HITL_DIR / f"pause_{session_id}").exists()
+
+    # Legacy operator pause file (no expiry) always wins.
+    if (_HITL_DIR / f"pause_{session_id}").exists():
+        return True
+
+    json_path = _HITL_DIR / f"pause_{session_id}.json"
+    if not json_path.exists():
+        return False
+
+    try:
+        meta = json.loads(json_path.read_text())
+        until_ts = float(meta.get("until_ts", 0))
+    except Exception:  # noqa: BLE001 — corrupt file: fail safe, stay paused
+        logger.debug("malformed auto-backoff pause file for %s; treating as paused", session_id)
+        return True
+
+    if time.time() < until_ts:
+        return True
+
+    # Cool-off elapsed: auto-resume. Leave the file so the escalation level is
+    # available to _record_backoff_pause for the NEXT breach (it decays to 0
+    # after _BACKOFF_RESET_SECS of quiet). _prune_backoff_pauses removes
+    # long-expired files in the maintenance loop.
+    return False
+
+
+def _prune_backoff_pauses() -> int:
+    """Delete auto-backoff pause files whose cool-off lapsed more than
+    ``_BACKOFF_PRUNE_SECS`` ago, so one file per ever-tripped session can't
+    accumulate forever. Returns the count removed. Never raises."""
+    removed = 0
+    try:
+        if not _HITL_DIR.exists():
+            return 0
+        now = time.time()
+        for p in _HITL_DIR.glob("pause_*.json"):
+            try:
+                until_ts = float(json.loads(p.read_text()).get("until_ts", 0))
+            except Exception:  # noqa: BLE001 — corrupt file: leave it (fail-safe pause)
+                continue
+            if until_ts and (now - until_ts) > _BACKOFF_PRUNE_SECS:
+                try:
+                    p.unlink()
+                    removed += 1
+                except OSError:
+                    pass
+    except Exception as exc:  # noqa: BLE001 — never break the maintenance loop
+        logger.debug("backoff-pause prune skipped: %s", exc)
+    return removed
+
+
+def _record_backoff_pause(session_id: str) -> Tuple[float, int]:
+    """Set/escalate an auto-backoff pause for a session (#2818).
+
+    Reads any existing ``pause_<session_id>.json`` to find the current
+    escalation ``level``, bumps it, computes the new cool-off from
+    ``_BACKOFF_LADDER_MINUTES``, and writes ``{until_ts, level}``. Returns
+    ``(until_ts, level)``. Never crashes — on any IO/JSON error it falls back to
+    the first ladder rung and logs.
+    """
+    json_path = _HITL_DIR / f"pause_{session_id}.json"
+    prev_level = 0
+    try:
+        if json_path.exists():
+            meta = json.loads(json_path.read_text())
+            prev_level = int(meta.get("level", 0))
+            prev_until = float(meta.get("until_ts", 0))
+            # Escalation DECAY: if the previous cool-off lapsed more than
+            # _BACKOFF_RESET_SECS ago, the agent behaved well in between, so
+            # restart escalation from the bottom rung instead of jumping to the
+            # cap on an isolated later breach.
+            if prev_until and (time.time() - prev_until) > _BACKOFF_RESET_SECS:
+                prev_level = 0
+    except Exception:  # noqa: BLE001 — bad file: restart escalation at level 0
+        prev_level = 0
+
+    level = prev_level + 1
+    idx = min(level - 1, len(_BACKOFF_LADDER_MINUTES) - 1)
+    minutes = _BACKOFF_LADDER_MINUTES[idx]
+    until_ts = time.time() + minutes * 60
+
+    try:
+        _HITL_DIR.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(json.dumps({"until_ts": until_ts, "level": level}))
+    except Exception as exc:  # noqa: BLE001 — never break enforcement on IO error
+        logger.warning("failed to write auto-backoff pause for %s: %s", session_id, exc)
+
+    return until_ts, level
 
 
 # Model pricing per 1M tokens (input, output) — kept in sync with dashboard.py
@@ -129,6 +244,44 @@ class VelocityBreakerConfig:
 
 
 @dataclass
+class RateBreakerConfig:
+    """Content-agnostic rapid-fire request-rate breaker (#2817)."""
+
+    enabled: bool = False
+    window_seconds: int = 60  # rolling window
+    max_requests: int = 20  # requests in window before breach
+
+
+@dataclass
+class CostSpiralConfig:
+    """Dollar-based cost-spiral breaker (#2818)."""
+
+    enabled: bool = False
+    window_seconds: int = 300  # rolling window
+    max_usd: float = 2.0  # $ spent in window before breach
+
+
+@dataclass
+class AutoRoutingConfig:
+    """Heuristic cheap-task auto-downgrade router (#2816).
+
+    When enabled, downgrades a request to a cheaper SAME-PROVIDER model when a
+    request looks cheap/trivial: short user message, no tools, no images, short
+    system prompt. ``downgrade_map`` is a per-family mapping (substring of the
+    source model -> cheaper family name) so e.g. an ``opus`` model routes to
+    ``haiku``. Explicit ``RoutingRule``s and budget action=downgrade still win
+    (this is applied first; manual routing overrides it).
+    """
+
+    enabled: bool = False
+    max_user_tokens: int = 200
+    max_system_tokens: int = 500
+    require_no_tools: bool = True
+    include_heartbeat: bool = True  # also downgrade heartbeat-pattern requests
+    downgrade_map: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
 class RoutingRule:
     """Route requests matching a pattern to a different model."""
 
@@ -152,6 +305,9 @@ class ProxyConfig:
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     loop_detection: LoopDetectionConfig = field(default_factory=LoopDetectionConfig)
     velocity_breaker: VelocityBreakerConfig = field(default_factory=VelocityBreakerConfig)
+    rate_breaker: RateBreakerConfig = field(default_factory=RateBreakerConfig)
+    cost_spiral: CostSpiralConfig = field(default_factory=CostSpiralConfig)
+    auto_routing: AutoRoutingConfig = field(default_factory=AutoRoutingConfig)
     routing_rules: List[RoutingRule] = field(default_factory=list)
     providers: Dict[str, ProviderConfig] = field(default_factory=dict)
     log_requests: bool = False
@@ -208,6 +364,33 @@ class ProxyConfig:
                         max_tokens=vb.get("max_tokens", 0),
                     )
 
+                if "rate_breaker" in raw:
+                    rb = raw["rate_breaker"]
+                    config.rate_breaker = RateBreakerConfig(
+                        enabled=rb.get("enabled", False),
+                        window_seconds=rb.get("window_seconds", 60),
+                        max_requests=rb.get("max_requests", 20),
+                    )
+
+                if "cost_spiral" in raw:
+                    cs = raw["cost_spiral"]
+                    config.cost_spiral = CostSpiralConfig(
+                        enabled=cs.get("enabled", False),
+                        window_seconds=cs.get("window_seconds", 300),
+                        max_usd=cs.get("max_usd", 2.0),
+                    )
+
+                if "auto_routing" in raw:
+                    ar = raw["auto_routing"]
+                    config.auto_routing = AutoRoutingConfig(
+                        enabled=ar.get("enabled", False),
+                        max_user_tokens=ar.get("max_user_tokens", 200),
+                        max_system_tokens=ar.get("max_system_tokens", 500),
+                        require_no_tools=ar.get("require_no_tools", True),
+                        include_heartbeat=ar.get("include_heartbeat", True),
+                        downgrade_map=ar.get("downgrade_map", {}) or {},
+                    )
+
                 if "routing" in raw and "rules" in raw["routing"]:
                     for r in raw["routing"]["rules"]:
                         config.routing_rules.append(
@@ -237,6 +420,23 @@ class ProxyConfig:
         if os.environ.get("CLAWMETRY_PROXY_MONTHLY_USD"):
             config.budget.monthly_usd = float(os.environ["CLAWMETRY_PROXY_MONTHLY_USD"])
 
+        # #2816 auto-route env toggle (opt-in). Defaults OFF.
+        if os.environ.get("CLAWMETRY_PROXY_AUTO_ROUTE"):
+            config.auto_routing.enabled = (
+                os.environ["CLAWMETRY_PROXY_AUTO_ROUTE"].strip().lower()
+                in ("1", "true", "yes", "on")
+            )
+
+        # If the auto-router is on but no explicit downgrade_map was provided,
+        # seed it from the pricing-table-derived defaults so it works out of the
+        # box. Done after env so the env toggle can flip it on with no map.
+        if config.auto_routing.enabled and not config.auto_routing.downgrade_map:
+            try:
+                from clawmetry.providers_pricing import default_auto_downgrade_map
+                config.auto_routing.downgrade_map = default_auto_downgrade_map()
+            except Exception as exc:  # noqa: BLE001 — never crash on config load
+                logger.debug("auto-route default map load skipped: %s", exc)
+
         return config
 
     def save(self) -> None:
@@ -264,6 +464,24 @@ class ProxyConfig:
                 "enabled": self.velocity_breaker.enabled,
                 "window_seconds": self.velocity_breaker.window_seconds,
                 "max_tokens": self.velocity_breaker.max_tokens,
+            },
+            "rate_breaker": {
+                "enabled": self.rate_breaker.enabled,
+                "window_seconds": self.rate_breaker.window_seconds,
+                "max_requests": self.rate_breaker.max_requests,
+            },
+            "cost_spiral": {
+                "enabled": self.cost_spiral.enabled,
+                "window_seconds": self.cost_spiral.window_seconds,
+                "max_usd": self.cost_spiral.max_usd,
+            },
+            "auto_routing": {
+                "enabled": self.auto_routing.enabled,
+                "max_user_tokens": self.auto_routing.max_user_tokens,
+                "max_system_tokens": self.auto_routing.max_system_tokens,
+                "require_no_tools": self.auto_routing.require_no_tools,
+                "include_heartbeat": self.auto_routing.include_heartbeat,
+                "downgrade_map": self.auto_routing.downgrade_map,
             },
             "routing": {
                 "rules": [
@@ -503,6 +721,41 @@ class ProxyDB:
             ).fetchone()
             conn.close()
             return int(row["total"]) if row else 0
+
+    def get_session_window_spending(self, session_id: str, since_ts: float) -> float:
+        """Get total USD spent by one session since a timestamp (#2818).
+
+        Per-session windowed counterpart to ``get_spending`` (which is global).
+        Used by the CostSpiralBreaker so one session's burst can't be masked or
+        amplified by other sessions' spend.
+        """
+        with self._lock:
+            conn = self._connect()
+            row = conn.execute(
+                """SELECT COALESCE(SUM(cost_usd), 0.0) as total
+                   FROM proxy_usage WHERE session_id = ? AND timestamp >= ?""",
+                (session_id, since_ts),
+            ).fetchone()
+            conn.close()
+            return float(row["total"]) if row else 0.0
+
+    def get_recent_request_count(self, session_id: str, window_seconds: int) -> int:
+        """Get the number of requests for a session in the last window_seconds.
+
+        Content-agnostic counterpart to ``get_recent_token_count`` — used by the
+        rapid-fire RateBreaker (#2817). Counts every recorded request row,
+        regardless of token volume or content.
+        """
+        since = time.time() - window_seconds
+        with self._lock:
+            conn = self._connect()
+            row = conn.execute(
+                """SELECT COUNT(*) as cnt
+                   FROM proxy_usage WHERE session_id = ? AND timestamp >= ?""",
+                (session_id, since),
+            ).fetchone()
+            conn.close()
+            return int(row["cnt"]) if row else 0
 
     def prune_old_data(self, retention_days: int | None = None) -> None:
         """Remove data older than the retention period.
@@ -906,6 +1159,134 @@ class VelocityBreaker:
         return False, ""
 
 
+def _emit_duckdb_event(event_type: str, session_id: str, data: dict) -> None:
+    """Best-effort emit an enforcement event into the shared DuckDB store.
+
+    Mirrors the ingest pattern used by LoopDetector / VelocityBreaker so the
+    dashboard + alert pipeline can surface proxy enforcement. Never raises — the
+    proxy typically runs as its own process and the daemon owns DuckDB's writer
+    lock, so this may no-op; that's fine, the SQLite ``proxy_events`` row + log
+    still record it.
+    """
+    try:
+        from clawmetry import local_store as _ls
+        import uuid as _uuid
+        _ls.get_store().ingest({
+            "id":         _uuid.uuid4().hex,
+            "node_id":    os.environ.get("CLAWMETRY_NODE_ID") or "local",
+            "agent_id":   "clawmetry-proxy",
+            "agent_type": "openclaw",
+            "event_type": event_type,
+            "ts":         datetime.now(timezone.utc).isoformat(),
+            "session_id": session_id,
+            "data":       data,
+        })
+    except Exception as exc:  # noqa: BLE001 — never break enforcement
+        logger.debug("%s duckdb event skipped: %s", event_type, exc)
+
+
+# ── Rate Breaker (rapid-fire request count, content-agnostic) ──────────
+
+
+class RateBreaker:
+    """Halts agents firing too many requests per window, regardless of size.
+
+    Content-agnostic counterpart to VelocityBreaker (which counts tokens): this
+    counts raw request volume (#2817). Useful against tight retry loops that
+    each spend little but hammer the upstream.
+    """
+
+    def __init__(self, config: RateBreakerConfig, db: ProxyDB):
+        self.config = config
+        self.db = db
+
+    def check(self, session_id: str) -> Tuple[bool, str]:
+        """Check if this session is firing requests too fast.
+
+        Returns:
+            (is_breach, reason) - True if request-rate limit exceeded
+        """
+        if not self.config.enabled or not self.config.max_requests or not session_id:
+            return False, ""
+
+        try:
+            recent = self.db.get_recent_request_count(
+                session_id, self.config.window_seconds
+            )
+        except Exception as exc:  # noqa: BLE001 — never break enforcement
+            logger.debug("rate breaker count failed: %s", exc)
+            return False, ""
+
+        # >= because the current request is the (recent+1)th; tripping at the
+        # configured ceiling means the 21st request with max_requests=20 blocks
+        # once 20 are already recorded.
+        if recent >= self.config.max_requests:
+            reason = (
+                f"Request rate exceeded: {recent:,} requests from session "
+                f"'{session_id}' in the last {self.config.window_seconds}s "
+                f"(limit: {self.config.max_requests:,})"
+            )
+            _emit_duckdb_event("rate_exceeded", session_id, {
+                "recent_requests": recent,
+                "max_requests":    self.config.max_requests,
+                "window_seconds":  self.config.window_seconds,
+                "reason":          reason,
+            })
+            return True, reason
+
+        return False, ""
+
+
+# ── Cost-Spiral Breaker (dollar burn-rate) ─────────────────────────────
+
+
+class CostSpiralBreaker:
+    """Halts a session whose dollar spend in a rolling window exceeds a cap.
+
+    Where VelocityBreaker watches token count and RateBreaker watches request
+    count, this watches actual USD burn (#2818). On breach the handler also
+    arms an escalating auto-backoff pause for the session.
+    """
+
+    def __init__(self, config: CostSpiralConfig, db: ProxyDB):
+        self.config = config
+        self.db = db
+
+    def check(self, session_id: str) -> Tuple[bool, str]:
+        """Check if this session is spending money too fast.
+
+        Returns:
+            (is_breach, reason) - True if cost-spiral limit exceeded
+        """
+        if not self.config.enabled or self.config.max_usd <= 0 or not session_id:
+            return False, ""
+
+        try:
+            since = time.time() - self.config.window_seconds
+            recent_usd = self.db.get_session_window_spending(
+                session_id, since
+            )
+        except Exception as exc:  # noqa: BLE001 — never break enforcement
+            logger.debug("cost spiral spend lookup failed: %s", exc)
+            return False, ""
+
+        if recent_usd >= self.config.max_usd:
+            reason = (
+                f"Cost spiral detected: ${recent_usd:.2f} spent by session "
+                f"'{session_id}' in the last {self.config.window_seconds}s "
+                f"(limit: ${self.config.max_usd:.2f})"
+            )
+            _emit_duckdb_event("cost_spiral", session_id, {
+                "recent_usd":     round(recent_usd, 4),
+                "max_usd":        self.config.max_usd,
+                "window_seconds": self.config.window_seconds,
+                "reason":         reason,
+            })
+            return True, reason
+
+        return False, ""
+
+
 # ── Model Router ───────────────────────────────────────────────────────
 
 
@@ -937,6 +1318,169 @@ class ModelRouter:
                 )
 
         return None, None
+
+
+# ── Auto Router (heuristic cheap-task downgrade) ───────────────────────
+
+
+def _estimate_tokens(text: str) -> int:
+    """Cheap char/4 token estimate (no tokenizer dependency)."""
+    if not text:
+        return 0
+    return max(0, len(text) // 4)
+
+
+# Heartbeat / keep-alive style prompts that are cheap by nature (#2816).
+_HEARTBEAT_PATTERNS = (
+    "heartbeat",
+    "are you there",
+    "ping",
+    "still working",
+    "continue",
+    "ok?",
+)
+
+
+def _body_user_text(body: dict) -> str:
+    """Extract the last user-message text from an Anthropic/OpenAI body."""
+    messages = body.get("messages") or []
+    if not messages:
+        return ""
+    last = messages[-1] if isinstance(messages[-1], dict) else {}
+    content = last.get("content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            b.get("text", "")
+            for b in content
+            if isinstance(b, dict) and b.get("type") in (None, "text")
+        )
+    return str(content)
+
+
+def _body_system_text(body: dict) -> str:
+    """Extract the system prompt text from an Anthropic/OpenAI body."""
+    system = body.get("system", "")
+    if isinstance(system, list):
+        return " ".join(
+            b.get("text", "") for b in system if isinstance(b, dict)
+        )
+    if isinstance(system, str) and system:
+        return system
+    # OpenAI carries the system prompt as a message with role=system.
+    for m in body.get("messages") or []:
+        if isinstance(m, dict) and m.get("role") == "system":
+            c = m.get("content", "")
+            return c if isinstance(c, str) else str(c)
+    return ""
+
+
+def _body_has_tools(body: dict) -> bool:
+    """True if the request defines tools/functions (Anthropic or OpenAI)."""
+    return bool(body.get("tools") or body.get("functions"))
+
+
+def _body_has_images(body: dict) -> bool:
+    """True if any message carries an image/non-text content block."""
+    for m in body.get("messages") or []:
+        if not isinstance(m, dict):
+            continue
+        content = m.get("content")
+        if isinstance(content, list):
+            for b in content:
+                if not isinstance(b, dict):
+                    continue
+                btype = b.get("type", "")
+                if btype in ("image", "image_url", "input_image") or "image" in btype:
+                    return True
+    return False
+
+
+class AutoRouter:
+    """Heuristic cheap-task auto-downgrade router (#2816).
+
+    Inspects the parsed request body and, when ALL cheap-task conditions hold
+    (short user message, no tools, no images, short system prompt) — or it
+    matches a heartbeat pattern when ``include_heartbeat`` is set — returns a
+    cheaper SAME-PROVIDER model. Applied BEFORE the manual ModelRouter so
+    explicit routing rules still win.
+    """
+
+    def __init__(self, config: AutoRoutingConfig):
+        self.config = config
+
+    def route(self, model: str, body: dict) -> Tuple[Optional[str], str]:
+        """Return (downgraded_model, reason) or (None, '') if not downgraded."""
+        if not self.config.enabled or not model:
+            return None, ""
+
+        try:
+            user_text = _body_user_text(body)
+            user_tokens = _estimate_tokens(user_text)
+            system_tokens = _estimate_tokens(_body_system_text(body))
+            has_tools = _body_has_tools(body)
+            has_images = _body_has_images(body)
+
+            # HARD disqualifiers — NEVER downgrade a request carrying images, or
+            # tools when require_no_tools is set: a weaker model handles them
+            # worse and this would be silent data-loss. Applies to BOTH the
+            # cheap-task AND the heartbeat path, because a short
+            # "continue"/"ok?"/"ping" turn in agent tool-use carries the FULL
+            # tool set (and matches a heartbeat pattern) — without this gate it
+            # would be downgraded mid-tool-loop.
+            blocked = has_images or (has_tools and self.config.require_no_tools)
+
+            is_heartbeat = self.config.include_heartbeat and any(
+                p in user_text.lower() for p in _HEARTBEAT_PATTERNS
+            ) and user_tokens <= self.config.max_user_tokens
+
+            cheap = (
+                user_tokens <= self.config.max_user_tokens
+                and system_tokens <= self.config.max_system_tokens
+                and not has_images
+                and (not has_tools or not self.config.require_no_tools)
+            )
+
+            if blocked or not (cheap or is_heartbeat):
+                return None, ""
+
+            from clawmetry.providers_pricing import downgrade_model_name
+            target = downgrade_model_name(model, self.config.downgrade_map or None)
+            if not target or target.lower() == model.lower():
+                return None, ""
+
+            reason = (
+                f"Auto-downgraded {model} -> {target} "
+                f"(cheap task: user~{user_tokens}tok, sys~{system_tokens}tok, "
+                f"tools={has_tools}, images={has_images}, heartbeat={is_heartbeat})"
+            )
+            return target, reason
+        except Exception as exc:  # noqa: BLE001 — never break the request path
+            logger.debug("auto-route skipped: %s", exc)
+            return None, ""
+
+
+def _estimate_saved_usd(from_model: str, to_model: str, est_input_tokens: int) -> float:
+    """Rough $ saved estimate for an auto-downgrade (input-side only).
+
+    Uses the proxy's MODEL_PRICING input rate delta over the estimated input
+    token count. Best-effort — never raises.
+    """
+    try:
+        def _input_rate(m: str) -> float:
+            ml = m.lower()
+            for key, prices in MODEL_PRICING.items():
+                if key == "default":
+                    continue
+                if key in ml:
+                    return prices[0]
+            return MODEL_PRICING["default"][0]
+
+        delta = max(0.0, _input_rate(from_model) - _input_rate(to_model))
+        return round((est_input_tokens / 1_000_000) * delta, 6)
+    except Exception:
+        return 0.0
 
 
 # ── Proxy Server (Flask) ───────────────────────────────────────────────
@@ -973,6 +1517,9 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
     budget = BudgetEnforcer(config.budget, db)
     loop_detector = LoopDetector(config.loop_detection, db)
     velocity_breaker = VelocityBreaker(config.velocity_breaker, db)
+    rate_breaker = RateBreaker(config.rate_breaker, db)
+    cost_spiral_breaker = CostSpiralBreaker(config.cost_spiral, db)
+    auto_router = AutoRouter(config.auto_routing)
     router = ModelRouter(config.routing_rules)
 
     _stats = {
@@ -980,6 +1527,9 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
         "blocked": 0,
         "loops_detected": 0,
         "velocity_blocked": 0,
+        "rate_blocked": 0,
+        "cost_spiral_blocked": 0,
+        "auto_downgraded": 0,
         "started_at": time.time(),
     }
     _stats_lock = threading.Lock()
@@ -1027,6 +1577,39 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
             for k, v in extra_headers.items():
                 resp.headers[k] = v
         return resp
+
+    def _arm_backoff_pause(session_id: str, trigger: str, reason: str) -> None:
+        """Arm an escalating auto-backoff pause for a session (#2818).
+
+        Called when loop/rate/cost_spiral fires. Writes a HITL-style pause with
+        an escalating expiry (5/10/20/30 min by repeat count) keyed by session,
+        which ``_is_session_hitl_paused`` honors (auto-resume once elapsed).
+        Best-effort — never breaks the request path.
+        """
+        if not session_id:
+            return
+        try:
+            until_ts, level = _record_backoff_pause(session_id)
+            db.record_event(
+                "session_auto_paused",
+                f"Session '{session_id}' auto-paused (level {level}) after {trigger}",
+                severity="warning",
+                details={
+                    "session_id": session_id,
+                    "trigger": trigger,
+                    "level": level,
+                    "until_ts": until_ts,
+                    "reason": reason,
+                },
+            )
+            _emit_duckdb_event("session_auto_paused", session_id, {
+                "trigger": trigger,
+                "level": level,
+                "until_ts": until_ts,
+                "reason": reason,
+            })
+        except Exception as exc:  # noqa: BLE001 — never break enforcement
+            logger.debug("arm backoff pause skipped: %s", exc)
 
     def _budget_abort_response(reason: str, provider: str) -> Response:
         """Structured BUDGET_EXCEEDED abort signal (G3 of #1708).
@@ -1174,6 +1757,9 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                 "requests_blocked": stats["blocked"],
                 "loops_detected": stats["loops_detected"],
                 "velocity_blocked": stats["velocity_blocked"],
+                "rate_blocked": stats.get("rate_blocked", 0),
+                "cost_spiral_blocked": stats.get("cost_spiral_blocked", 0),
+                "auto_downgraded": stats.get("auto_downgraded", 0),
                 "budget": budget.get_status(),
                 "config": {
                     "port": config.port,
@@ -1185,6 +1771,21 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                         "enabled": config.velocity_breaker.enabled,
                         "window_seconds": config.velocity_breaker.window_seconds,
                         "max_tokens": config.velocity_breaker.max_tokens,
+                    },
+                    "rate_breaker": {
+                        "enabled": config.rate_breaker.enabled,
+                        "window_seconds": config.rate_breaker.window_seconds,
+                        "max_requests": config.rate_breaker.max_requests,
+                    },
+                    "cost_spiral": {
+                        "enabled": config.cost_spiral.enabled,
+                        "window_seconds": config.cost_spiral.window_seconds,
+                        "max_usd": config.cost_spiral.max_usd,
+                    },
+                    "auto_routing": {
+                        "enabled": config.auto_routing.enabled,
+                        "max_user_tokens": config.auto_routing.max_user_tokens,
+                        "max_system_tokens": config.auto_routing.max_system_tokens,
                     },
                     "routing_rules": len(config.routing_rules),
                 },
@@ -1270,6 +1871,37 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
             if "max_tokens" in vb:
                 config.velocity_breaker.max_tokens = int(vb["max_tokens"])
 
+        if "rate_breaker" in data:
+            rb = data["rate_breaker"]
+            if "enabled" in rb:
+                config.rate_breaker.enabled = bool(rb["enabled"])
+            if "window_seconds" in rb:
+                config.rate_breaker.window_seconds = int(rb["window_seconds"])
+            if "max_requests" in rb:
+                config.rate_breaker.max_requests = int(rb["max_requests"])
+
+        if "cost_spiral" in data:
+            cs = data["cost_spiral"]
+            if "enabled" in cs:
+                config.cost_spiral.enabled = bool(cs["enabled"])
+            if "window_seconds" in cs:
+                config.cost_spiral.window_seconds = int(cs["window_seconds"])
+            if "max_usd" in cs:
+                config.cost_spiral.max_usd = float(cs["max_usd"])
+
+        if "auto_routing" in data:
+            ar = data["auto_routing"]
+            if "enabled" in ar:
+                config.auto_routing.enabled = bool(ar["enabled"])
+            if "max_user_tokens" in ar:
+                config.auto_routing.max_user_tokens = int(ar["max_user_tokens"])
+            if "max_system_tokens" in ar:
+                config.auto_routing.max_system_tokens = int(ar["max_system_tokens"])
+            if "require_no_tools" in ar:
+                config.auto_routing.require_no_tools = bool(ar["require_no_tools"])
+            if "downgrade_map" in ar and isinstance(ar["downgrade_map"], dict):
+                config.auto_routing.downgrade_map = ar["downgrade_map"]
+
         config.save()
         db.record_event(
             "config_updated",
@@ -1306,6 +1938,42 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
             logger.info(
                 f"Proxy request: {provider} {path} model={model} stream={is_streaming}"
             )
+
+        # ── Auto smart routing (#2816) ─────────────────────────────────
+        # Applied FIRST so cheap-task requests start on a cheaper model. Budget
+        # action=downgrade (below) and explicit ModelRouter rules (later) both
+        # run AFTER this, so they take precedence and override the auto choice.
+        auto_model, auto_reason = auto_router.route(model, body)
+        if auto_model:
+            from_model = model
+            est_input = _estimate_tokens(_body_user_text(body)) + _estimate_tokens(
+                _body_system_text(body)
+            )
+            saved = _estimate_saved_usd(from_model, auto_model, est_input)
+            model = auto_model
+            body["model"] = model
+            body_bytes = json.dumps(body).encode()
+            with _stats_lock:
+                _stats["auto_downgraded"] += 1
+            db.record_event(
+                "auto_downgraded",
+                auto_reason,
+                severity="info",
+                details={
+                    "from_model": from_model,
+                    "to_model": model,
+                    "session_id": session_id,
+                    "estimated_saved_usd": saved,
+                },
+            )
+            _emit_duckdb_event("auto_downgraded", session_id, {
+                "from_model": from_model,
+                "to_model": model,
+                "estimated_saved_usd": saved,
+                "reason": auto_reason,
+            })
+            if config.log_requests:
+                logger.info("Auto-route: %s", auto_reason)
 
         # ── Budget check ───────────────────────────────────────────────
         allowed, reason = budget.check(model, session_id)
@@ -1353,7 +2021,38 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                 },
             )
             logger.warning(f"Loop detected: {loop_reason}")
+            _arm_backoff_pause(session_id, "loop_detected", loop_reason)
             return _error_response(429, "loop_detected", loop_reason, provider)
+
+        # ── Rate breaker (#2817): rapid-fire request count ─────────────
+        is_rate, rate_reason = rate_breaker.check(session_id)
+        if is_rate:
+            with _stats_lock:
+                _stats["rate_blocked"] += 1
+            db.record_event(
+                "rate_exceeded",
+                rate_reason,
+                severity="warning",
+                details={"model": model, "session_id": session_id},
+            )
+            logger.warning(f"Rate exceeded: {rate_reason}")
+            _arm_backoff_pause(session_id, "rate_exceeded", rate_reason)
+            return _error_response(429, "rate_exceeded", rate_reason, provider)
+
+        # ── Cost-spiral breaker (#2818): dollar burn-rate ──────────────
+        is_spiral, spiral_reason = cost_spiral_breaker.check(session_id)
+        if is_spiral:
+            with _stats_lock:
+                _stats["cost_spiral_blocked"] += 1
+            db.record_event(
+                "cost_spiral",
+                spiral_reason,
+                severity="warning",
+                details={"model": model, "session_id": session_id},
+            )
+            logger.warning(f"Cost spiral: {spiral_reason}")
+            _arm_backoff_pause(session_id, "cost_spiral", spiral_reason)
+            return _error_response(429, "cost_spiral", spiral_reason, provider)
 
         # ── Velocity check ─────────────────────────────────────────────
         is_spike, spike_reason = velocity_breaker.check(session_id)
@@ -1369,23 +2068,50 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
             logger.warning(f"Velocity exceeded: {spike_reason}")
             return _error_response(429, "velocity_exceeded", spike_reason, provider)
 
-        # ── HITL pause check ───────────────────────────────────────────
+        # ── HITL / auto-backoff pause check ────────────────────────────
+        # Honors both legacy operator pauses (manual resume) and auto-backoff
+        # pauses (#2818, escalating expiry, auto-resume once elapsed).
         if _is_session_hitl_paused(session_id):
             with _stats_lock:
                 _stats["blocked"] += 1
+            # Surface auto-resume time + retry-after when this is a backoff pause.
+            retry_after = None
+            json_path = _HITL_DIR / f"pause_{session_id}.json"
+            try:
+                if json_path.exists():
+                    until_ts = float(json.loads(json_path.read_text()).get("until_ts", 0))
+                    retry_after = max(0, int(round(until_ts - time.time())))
+            except Exception:  # noqa: BLE001
+                retry_after = None
             db.record_event(
-                "hitl_paused",
-                f"Session '{session_id}' paused for human review",
-                severity="warning",
-                details={"model": model, "session_id": session_id},
-            )
-            logger.warning("HITL: session '%s' blocked pending operator decision", session_id)
-            return _error_response(
-                503,
                 "session_paused",
-                f"Session '{session_id}' is paused for human-in-the-loop review. "
-                "Approve or reject via POST /api/hitl/decide.",
+                f"Session '{session_id}' paused (HITL / auto-backoff)",
+                severity="warning",
+                details={
+                    "model": model,
+                    "session_id": session_id,
+                    "retry_after_seconds": retry_after,
+                },
+            )
+            logger.warning("Session '%s' blocked: paused (retry_after=%s)", session_id, retry_after)
+            msg = (
+                f"Session '{session_id}' is paused. "
+                + (
+                    f"Auto-resumes in ~{retry_after}s."
+                    if retry_after is not None
+                    else "Approve or reject via POST /api/hitl/decide."
+                )
+            )
+            extra_headers = (
+                {"Retry-After": str(retry_after)} if retry_after is not None else None
+            )
+            return _error_response(
+                429,
+                "session_paused",
+                msg,
                 provider,
+                extra={"retry_after_seconds": retry_after},
+                extra_headers=extra_headers,
             )
 
         # ── Model routing ──────────────────────────────────────────────
@@ -1549,6 +2275,14 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                 db.prune_old_data()
             except Exception as e:
                 logger.error(f"Maintenance error: {e}")
+            try:
+                # Prune long-expired auto-backoff pause files so one per
+                # ever-tripped session can't accumulate (#2818).
+                n = _prune_backoff_pauses()
+                if n:
+                    logger.info("pruned %d expired auto-backoff pause file(s)", n)
+            except Exception as e:
+                logger.error(f"Backoff-pause prune error: {e}")
 
     maintenance_thread = threading.Thread(target=_maintenance_loop, daemon=True)
     maintenance_thread.start()
