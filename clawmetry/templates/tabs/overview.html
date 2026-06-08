@@ -70,6 +70,19 @@
     <button onclick="openEvalRubricModal()" title="Set the judge API key and edit the scoring rubric" style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:8px 14px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;">&#9881; <span data-i18n="overview.eval_setup">Judge key &amp; rubric</span></button>
   </div>
 
+  <!-- Named evaluator library. Brands ClawMetry's shipped quality / reliability
+       / efficiency / safety / agent signals as a named catalogue (Traceloop-style),
+       honest about what is live today vs coming with Pro. Cloud-safe: the
+       catalogue is static data /api/evaluators returns with or without a store. -->
+  <div id="evaluators-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:18px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);">
+    <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:4px;">
+      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;">&#128300; <span data-i18n="evaluators.title">Evaluators on your agent</span></div>
+      <div id="evaluators-count" style="font-size:11px;color:var(--text-muted);"></div>
+    </div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;" data-i18n="evaluators.subtitle">Named checks ClawMetry runs to tell you if your agent is doing good work. Each one answers a plain question.</div>
+    <div id="evaluators-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;"></div>
+  </div>
+
   <!-- Per-runtime sparkline of recent runs (#2196 item #4). Severity: red=real
        error, yellow=waste flag, green=clean. Empty when no runtime has data. -->
   <div id="health-timeline-card" style="display:none;background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:14px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);">

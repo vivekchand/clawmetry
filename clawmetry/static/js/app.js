@@ -3318,6 +3318,71 @@ async function loadMiniWidgets(overview, usage) {
   loadEvalSummary();
   // Phase 3 — regression-replay mini-line under the eval tile.
   loadEvalRegressionSummary();
+  // Named evaluator library — the catalogue of quality / reliability /
+  // efficiency / safety / agent checks ClawMetry runs. Static + cloud-safe.
+  loadEvaluators();
+}
+
+// Named evaluator library. Reads /api/evaluators (static catalogue, cloud-safe)
+// and renders each named evaluator as a card with a category chip, a tier badge,
+// and an honest live / coming-soon state. Newcomer-plain language by design.
+async function loadEvaluators() {
+  var listEl = document.getElementById('evaluators-list');
+  var countEl = document.getElementById('evaluators-count');
+  if (!listEl) return;
+  var data = await fetch('/api/evaluators').then(function(r){return r.json();}).catch(function(){return null;});
+  var evs = (data && data.evaluators) || [];
+  if (!evs.length) {
+    listEl.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">' +
+      t("evaluators.empty", null, "Evaluator library unavailable.") + '</div>';
+    if (countEl) countEl.textContent = '';
+    return;
+  }
+  if (countEl) {
+    var liveN = evs.filter(function(e){ return e.status === 'live'; }).length;
+    countEl.textContent = liveN + ' / ' + evs.length + ' ' +
+      t("evaluators.live_now", null, "live now");
+  }
+  // Category → chip color + plain label.
+  var CAT = {
+    quality:     { c: '#8b5cf6', label: t("evaluators.cat_quality", null, "Quality") },
+    reliability: { c: '#3b82f6', label: t("evaluators.cat_reliability", null, "Reliability") },
+    efficiency:  { c: '#f59e0b', label: t("evaluators.cat_efficiency", null, "Efficiency") },
+    safety:      { c: '#ef4444', label: t("evaluators.cat_safety", null, "Safety") },
+    agent:       { c: '#10b981', label: t("evaluators.cat_agent", null, "Agent") }
+  };
+  var html = '';
+  evs.forEach(function(e) {
+    var cat = CAT[e.category] || { c: 'var(--text-muted)', label: e.category };
+    var statusLabel, statusColor;
+    if (e.status === 'live') {
+      statusLabel = t("evaluators.status_live", null, "Live"); statusColor = '#22c55e';
+    } else if (e.status === 'partial') {
+      statusLabel = t("evaluators.status_partial", null, "Early"); statusColor = '#f59e0b';
+    } else {
+      statusLabel = t("evaluators.status_soon", null, "With Pro"); statusColor = 'var(--text-muted)';
+    }
+    var tierBadge = '';
+    if (e.tier === 'pro') {
+      tierBadge = '<span style="font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;' +
+        'background:rgba(139,92,246,0.14);color:#8b5cf6;border:1px solid rgba(139,92,246,0.35);">PRO</span>';
+    }
+    html += '<div style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:10px;padding:12px 14px;' +
+      (e.locked ? 'opacity:0.78;' : '') + '">';
+    html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">';
+    html += '<span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:' + cat.c + ';">' + escHtml(cat.label) + '</span>';
+    html += '<span style="display:flex;align-items:center;gap:6px;">' + tierBadge +
+      '<span style="font-size:10px;font-weight:600;color:' + statusColor + ';">' + escHtml(statusLabel) + '</span></span>';
+    html += '</div>';
+    html += '<div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:4px;">' + escHtml(e.name) + '</div>';
+    html += '<div style="font-size:11px;color:var(--text-muted);line-height:1.45;">' + escHtml(e.description) + '</div>';
+    if (e.locked) {
+      html += '<div style="margin-top:8px;font-size:11px;"><a href="/upgrade?source=evaluators" style="color:#8b5cf6;font-weight:600;text-decoration:none;">' +
+        t("evaluators.unlock", null, "Unlock with Pro") + ' &rarr;</a></div>';
+    }
+    html += '</div>';
+  });
+  listEl.innerHTML = html;
 }
 
 // Issue #1619 Phase 1 — pull aggregate score for the overview tile.

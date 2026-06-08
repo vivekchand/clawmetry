@@ -255,6 +255,15 @@ _DDL = [
         eval_judge_model        VARCHAR,
         eval_scored_at          BIGINT,
         eval_rubric             VARCHAR,
+        -- Content-grounded faithfulness evaluator. The store (OSS) owns the
+        -- column; the COMPUTE lives in clawmetry-pro (claim-by-claim check on
+        -- the user's own key). faithfulness_score is 0-1 (1 = every claim is
+        -- grounded in the session's tool results / context); faithfulness_detail
+        -- is a small JSON blob with the unsupported-claim list. NULL until the
+        -- Pro evaluator runs.
+        faithfulness_score      DOUBLE,
+        faithfulness_detail     VARCHAR,
+        faithfulness_scored_at  BIGINT,
         PRIMARY KEY (agent_type, session_id)
     )
     """,
@@ -960,6 +969,12 @@ _MIGRATIONS_V2 = [
     ("sessions", "eval_judge_model",  "VARCHAR"),
     ("sessions", "eval_scored_at",    "BIGINT"),
     ("sessions", "eval_rubric",       "VARCHAR"),
+    # Content-grounded faithfulness evaluator (compute in clawmetry-pro).
+    # Idempotent column-adds so existing stores pick up the column without a
+    # fresh DB. The DDL above carries the same columns for fresh stores.
+    ("sessions", "faithfulness_score",     "DOUBLE"),
+    ("sessions", "faithfulness_detail",    "VARCHAR"),
+    ("sessions", "faithfulness_scored_at", "BIGINT"),
     # Issue #2200 — hash-chain columns. chain_prev_hash/chain_hash are NULL on
     # existing rows and populated on new events when CLAWMETRY_INTEGRITY=1.
     ("events",   "chain_prev_hash",   "VARCHAR"),
@@ -6302,6 +6317,41 @@ class LocalStore:
             except Exception:
                 log.exception("local store: persist_eval_score failed for %s",
                               session_id)
+
+    def persist_faithfulness_score(
+        self,
+        *,
+        session_id: str,
+        score: float,
+        detail: str = "",
+        scored_at: int,
+    ) -> None:
+        """Persist a content-grounded faithfulness score onto the ``sessions``
+        row. Mirrors ``persist_eval_score`` (same single-writer connection +
+        upsert-in-place semantics).
+
+        The COMPUTE lives in clawmetry-pro (the claim-by-claim verifier); the
+        store column is OSS so a free install can still read a Pro-written value
+        and the catalogue can surface it. ``detail`` is a small JSON string with
+        the unsupported-claim list; ``score`` is 0-1.
+        """
+        with self._write_lock:
+            try:
+                self._conn.execute(
+                    """
+                    UPDATE sessions
+                       SET faithfulness_score     = ?,
+                           faithfulness_detail    = ?,
+                           faithfulness_scored_at = ?
+                     WHERE session_id             = ?
+                    """,
+                    [float(score), detail or "", int(scored_at), session_id],
+                )
+            except Exception:
+                log.exception(
+                    "local store: persist_faithfulness_score failed for %s",
+                    session_id,
+                )
 
     def query_unscored_sessions(
         self,
