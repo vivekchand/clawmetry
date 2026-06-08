@@ -5753,21 +5753,39 @@ def _runtime_data_paths(rid: str) -> list:
     return _M.get(rid, [])
 
 
+# Transient sidecar files whose mtime changes on mere DB OPEN (no real activity):
+# SQLite write-ahead log + shared-memory + rollback journal, and lock files. A
+# read-only open of goose's sessions.db touches ``sessions.db-shm`` → the runtime
+# falsely classified "active 0h ago" while its actual conversations were weeks
+# old (founder 2026-06-08). Excluded so filesystem recency reflects real writes.
+_TRANSIENT_MTIME_SUFFIXES = ("-shm", "-wal", "-journal", ".lock", ".lck", "lock")
+
+
+def _is_transient_mtime_file(name: str) -> bool:
+    n = (name or "").lower()
+    return any(n.endswith(suf) for suf in _TRANSIENT_MTIME_SUFFIXES)
+
+
 def _newest_mtime(paths: list, cap: int = 4000):
     """Newest mtime (epoch float) across the given files/dirs, or None. Bounded
     walk (cap files) so a huge ~/.claude/projects tree can't make the heartbeat
-    expensive. Never raises."""
+    expensive. Skips SQLite sidecar / lock files whose mtime bumps on a mere DB
+    open (they don't indicate real activity). Never raises."""
     newest = 0.0
     seen = 0
     for p in (paths or []):
         try:
             if os.path.isfile(p):
+                if _is_transient_mtime_file(os.path.basename(p)):
+                    continue
                 m = os.path.getmtime(p)
                 if m > newest:
                     newest = m
             elif os.path.isdir(p):
                 for root, _dirs, files in os.walk(p):
                     for f in files:
+                        if _is_transient_mtime_file(f):
+                            continue
                         seen += 1
                         if seen > cap:
                             return newest or None
@@ -6446,12 +6464,42 @@ def _detect_runtimes_for_heartbeat() -> list:
     # source) so the Fleet stops presenting a months-old Cursor history or an
     # OpenClaw sub-agent as a live standalone runtime. Back-compat: consumers
     # that don't read the new keys are unaffected.
+    # Authoritative recency = the newest INGESTED event per runtime (what the
+    # Brain/Tracing tabs show). Overrides the filesystem-mtime classification so
+    # a runtime can't read "active" while its Brain feed is empty (goose's
+    # sessions.db-shm bumped to now with no real activity — founder 2026-06-08).
+    _ev_recency = {}
+    try:
+        from clawmetry import local_store as _ls_rec
+        _store_rec = _ls_rec.get_store()
+        if _store_rec is not None:
+            _ev_recency = _store_rec.query_runtime_last_active() or {}
+    except Exception:
+        _ev_recency = {}
     out = []
     for r in merged.values():
         if int(r.get("sessions") or 0) <= 0:
             continue
         try:
             r.update(_classify_runtime(r["id"]))
+        except Exception:
+            pass
+        # Prefer the events-table recency when this runtime has ingested events:
+        # it reflects real conversation activity, not a DB-open/WAL-checkpoint
+        # mtime. (Filesystem stays the fallback for detected-but-not-yet-ingested
+        # runtimes so on-disk-only detection still works.)
+        try:
+            _iso = _ev_recency.get(r["id"])
+            if _iso:
+                _s = str(_iso).replace("Z", "+00:00")
+                _dtp = datetime.fromisoformat(_s)
+                if _dtp.tzinfo is None:
+                    _dtp = _dtp.replace(tzinfo=timezone.utc)
+                _ep = _dtp.timestamp()
+                r["last_active"] = int(_ep)
+                _age = time.time() - _ep
+                r["status"] = ("active" if _age < _RT_ACTIVE_SECS
+                               else "idle" if _age < _RT_IDLE_SECS else "stale")
         except Exception:
             pass
         out.append(r)
