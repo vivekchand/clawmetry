@@ -43,6 +43,25 @@ import time
 from flask import Blueprint, jsonify, request
 from clawmetry.config import is_local_store_read_enabled
 
+
+def _audit(action, **kwargs):
+    """Best-effort Enterprise audit-log producer. Never raises into the
+    request path (the audit store itself never raises, but the import could)."""
+    try:
+        from clawmetry import audit as _a
+        _a.audit_event(action, **kwargs)
+    except Exception:
+        pass
+
+
+def _actor():
+    """Best-effort actor string for a dashboard-originated state change."""
+    try:
+        return (request.headers.get("X-Cm-User")
+                or request.remote_addr or "dashboard")
+    except Exception:
+        return "dashboard"
+
 bp_budget = Blueprint('budget', __name__)
 
 from clawmetry._gate import gate
@@ -274,9 +293,22 @@ def api_budget_config():
         # warning thresholds + limits, but strip the gated toggle and
         # tell the UI to render the upsell. Free users keep the warning
         # banner; only the hard kill switch is gated.
+        # Capture the prior values of the fields being changed so the audit
+        # entry carries old -> new for each budget knob.
+        try:
+            _old_cfg = dict(_d._get_budget_config() or {})
+        except Exception:
+            _old_cfg = {}
+        _changed = {k: {"old": _old_cfg.get(k), "new": v}
+                    for k, v in updates.items()}
         if updates.get("auto_pause_enabled") and not _d._auto_pause_allowed():
             updates["auto_pause_enabled"] = False
+            _changed["auto_pause_enabled"] = {"old": _old_cfg.get("auto_pause_enabled"),
+                                              "new": False}
             _d._set_budget_config(updates)
+            _audit("budget.config", actor=_actor(), target="budget",
+                   result="updated", source="dashboard",
+                   metadata={"changed": _changed, "auto_pause_pro_required": True})
             return jsonify({
                 "ok": True,
                 "auto_pause_pro_required": True,
@@ -286,6 +318,9 @@ def api_budget_config():
                 ),
             })
         _d._set_budget_config(updates)
+        _audit("budget.config", actor=_actor(), target="budget",
+               result="updated", source="dashboard",
+               metadata={"changed": _changed})
         return jsonify({"ok": True})
     cfg = _d._get_budget_config()
     try:
@@ -323,6 +358,9 @@ def api_budget_auto_pause():
     _d._set_budget_config(
         {"auto_pause_threshold_usd": threshold_val, "auto_pause_action": action}
     )
+    _audit("budget.auto_pause", actor=_actor(), target="budget",
+           result="updated", source="dashboard",
+           metadata={"threshold_usd": threshold_val, "action": action})
     return jsonify({"ok": True, "threshold_usd": threshold_val, "action": action})
 
 
@@ -335,6 +373,9 @@ def api_budget_pause():
     _d._budget_paused_at = time.time()
     _d._budget_paused_reason = "Manually paused from dashboard"
     _d._pause_gateway()
+    _audit("gateway.pause", actor=_actor(), target="gateway",
+           result="paused", source="dashboard",
+           metadata={"reason": "Manually paused from dashboard"})
     return jsonify({"ok": True, "paused": True})
 
 
@@ -344,6 +385,8 @@ def api_budget_resume():
     """Resume the gateway after budget pause."""
     import dashboard as _d
     _d._resume_gateway()
+    _audit("gateway.resume", actor=_actor(), target="gateway",
+           result="resumed", source="dashboard")
     return jsonify({"ok": True, "paused": False})
 
 
@@ -368,6 +411,8 @@ def api_budget_pause_gateway():
     _d._budget_paused = True
     _d._budget_paused_at = time.time()
     _d._budget_paused_reason = reason
+    _audit("gateway.pause", actor=_actor(), target="gateway",
+           result="paused", source="dashboard", metadata={"reason": reason})
     return jsonify({"ok": True, "paused": True, "reason": reason})
 
 
@@ -379,6 +424,8 @@ def api_budget_resume_gateway():
     """
     import dashboard as _d
     _d._resume_gateway()
+    _audit("gateway.resume", actor=_actor(), target="gateway",
+           result="resumed", source="dashboard")
     return jsonify({"ok": True, "paused": False})
 
 
@@ -484,6 +531,9 @@ def api_agent_budget_put(agent_id):
     )
     if not ok:
         return jsonify({"ok": False, "error": "local store unavailable"}), 500
+    _audit("budget.agent_set", actor=_actor(), target=agent_id,
+           result="updated", source="dashboard",
+           metadata={"daily_limit_usd": daily, "monthly_limit_usd": monthly})
     return jsonify({"ok": True, "budget": _d._get_agent_budget_status(agent_id)})
 
 
@@ -495,6 +545,9 @@ def api_agent_budget_delete(agent_id):
     if not agent_id:
         return jsonify({"ok": False, "error": "agent_id required"}), 400
     deleted = _d._delete_agent_budget(agent_id)
+    _audit("budget.agent_delete", actor=_actor(), target=agent_id,
+           result="deleted", source="dashboard",
+           metadata={"deleted": int(deleted)})
     return jsonify({"ok": True, "deleted": int(deleted)})
 
 
@@ -572,6 +625,10 @@ def api_alert_rules():
             )
             db.commit()
             db.close()
+        _audit("alert_rule.create", actor=_actor(), target=rule_id,
+               result="created", source="dashboard",
+               metadata={"type": rtype, "threshold": threshold,
+                         "channels": channels, "enabled": bool(enabled)})
         return jsonify({"ok": True, "id": rule_id})
     # Phase 3 of #1032 — local DuckDB fast path. Opt-in via
     # CLAWMETRY_LOCAL_STORE_READ=1; falls through to the legacy fleet-DB
@@ -615,6 +672,8 @@ def api_alert_rule(rule_id):
             db.execute("DELETE FROM alert_rules WHERE id = ?", (rule_id,))
             db.commit()
             db.close()
+        _audit("alert_rule.delete", actor=_actor(), target=rule_id,
+               result="deleted", source="dashboard")
         return jsonify({"ok": True})
     # PUT
     data = request.get_json(silent=True) or {}
@@ -639,6 +698,11 @@ def api_alert_rule(rule_id):
         db.execute(f"UPDATE alert_rules SET {', '.join(sets)} WHERE id = ?", vals)
         db.commit()
         db.close()
+    _audit("alert_rule.update", actor=_actor(), target=rule_id,
+           result="updated", source="dashboard",
+           metadata={"fields": {k: data[k] for k in data
+                                 if k in ("threshold", "cooldown_min",
+                                          "enabled", "channels")}})
     return jsonify({"ok": True})
 
 

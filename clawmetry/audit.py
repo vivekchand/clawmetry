@@ -104,6 +104,38 @@ def record_audit(
         logger.warning("audit: record failed (%s): %s", event_type, exc)
 
 
+def audit_event(
+    action: str,
+    *,
+    actor: str = "",
+    target: str = "",
+    result: str = "",
+    source: str = "",
+    metadata: dict | None = None,
+) -> None:
+    """Convenience wrapper around :func:`record_audit` with the consistent
+    producer schema (actor / action / target / result / source / metadata).
+
+    Every governance-relevant state change in the dashboard and daemon calls
+    this so the Enterprise audit log is REAL (the producers, not just the
+    pipe). ``action`` becomes the ``event_type``; ``result`` / ``source`` are
+    folded into ``details`` alongside any caller ``metadata``.
+
+    Like :func:`record_audit`, this NEVER raises — a failed audit write must
+    never break the caller's primary action."""
+    try:
+        details: dict[str, Any] = {}
+        if isinstance(metadata, dict):
+            details.update(metadata)
+        if result:
+            details["result"] = result
+        if source:
+            details["source"] = source
+        record_audit(action, actor=actor, target=target, details=details)
+    except Exception as exc:  # pragma: no cover - defensive; record_audit already guards
+        logger.warning("audit: audit_event failed (%s): %s", action, exc)
+
+
 def read_audit_log(
     limit: int = 200,
     event_type: str | None = None,

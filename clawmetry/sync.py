@@ -8665,6 +8665,21 @@ def _apply_approval_decision(q: dict) -> None:
     if n:
         log.info("[approval] %s relayed decision=%s by %s (status flipped)",
                  approval_id, decision, resolver)
+        # Enterprise audit-log producer — record the cloud-relayed approval
+        # decision (who decided, on which approval). Only when a row actually
+        # flipped, so duplicate relays don't double-log. Never raises.
+        try:
+            from clawmetry import audit as _audit
+            _audit.audit_event(
+                "approval.decision",
+                actor=resolver,
+                target=approval_id,
+                result=decision,
+                source="cloud-relay",
+                metadata={"reason": reason} if reason else None,
+            )
+        except Exception:
+            pass
     else:
         # Either unknown id or already decided — both safe to ignore.
         log.debug("[approval] %s relayed decision=%s — no-op (row missing or "
@@ -10945,6 +10960,50 @@ def _build_approvals_audit_snapshot():
         return _approvals_audit_payload(limit=100)
     except Exception:
         return {}
+
+
+def _build_security_integrity_snapshot():
+    """Tamper-evident hash-chain verify slice (mirrors /api/security/integrity).
+
+    Cloud has no local DuckDB, so without this slice the Security tab's
+    Integrity card would render blank on the hosted dashboard. Built on the
+    daemon's OWN store handle (the daemon owns the writer lock; never re-open
+    read_only here — that bricks the writer). Returns the same
+    ``{ok, status, chain_length, pre_chain, first_break}`` shape the route
+    serves. Never raises."""
+    try:
+        from clawmetry import local_store
+        raw = local_store.get_store().verify_integrity()
+    except Exception:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    status = raw.get("status") or "unknown"
+    return {
+        "ok": True if status == "valid" else (False if status == "invalid" else None),
+        "status": status,
+        "chain_length": int(raw.get("checked") or 0),
+        "pre_chain": int(raw.get("pre_chain") or 0),
+        "first_break": raw.get("broken_at"),
+    }
+
+
+def _build_audit_log_snapshot(limit=25):
+    """Recent Enterprise audit-log slice (mirrors /api/security/audit).
+
+    The append-only audit store is SQLite at ``~/.clawmetry/audit.db`` on the
+    local node; cloud can't read it, so it ships here for the Security tab's
+    recent-activity feed on the hosted dashboard. Never raises."""
+    try:
+        from clawmetry import audit as _audit
+        entries = _audit.read_audit_log(limit=limit)
+        return {
+            "entries": entries,
+            "event_types": _audit.event_types(),
+            "count": len(entries),
+        }
+    except Exception:
+        return {"entries": [], "event_types": [], "count": 0}
 
 
 def _build_harness_snapshot():
@@ -13743,6 +13802,13 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "harness": _build_harness_snapshot(),
         "usage": _build_usage_snapshot(),
         "approvalsAudit": _build_approvals_audit_snapshot(),
+        # Security tab: tamper-evident hash-chain verify + Enterprise audit
+        # feed. Both are local-only data (DuckDB chain / SQLite audit.db) so
+        # they ride the snapshot for cloud parity; a follow-up cm-cloud
+        # interceptor serves /api/security/integrity + /api/security/audit
+        # from these slices.
+        "securityIntegrity": _build_security_integrity_snapshot(),
+        "auditLog": _build_audit_log_snapshot(),
         "channels": _build_channel_data(config),
         "toolStats": _build_tool_stats(),
         "externalCalls": _build_external_calls(),

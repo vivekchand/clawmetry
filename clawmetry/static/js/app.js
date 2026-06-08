@@ -7536,6 +7536,11 @@ async function loadSecurityPage(silent) {
     // honest state instead.
     var _tl = document.getElementById('security-threat-list');
     if (_tl) _tl.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:13px;">' + t('app.security_threats_local_only', null, 'Threat detection runs on your local node. Open the local dashboard to scan for misconfigurations.') + '</div>';
+    // Integrity + audit DO ship in the snapshot; a cm-cloud interceptor will
+    // serve them. Until then these render an honest "local node" state rather
+    // than a silent blank (and become live once the interceptor lands).
+    loadSecurityIntegrity();
+    loadSecurityAudit();
     return;
   }
   try {
@@ -7617,9 +7622,115 @@ async function loadSecurityPage(silent) {
     var pel = document.getElementById('policy-events-list');
     if (pel && !silent) pel.innerHTML = '<div style="color:var(--text-muted);padding:12px;font-size:11px;">Policy scan unavailable.</div>';
   }
+  // Tamper-evident integrity + Enterprise audit feed (both node-wide).
+  loadSecurityIntegrity();
+  loadSecurityAudit();
   if (_securityRefreshTimer) clearTimeout(_securityRefreshTimer);
   if (document.getElementById('page-security') && document.getElementById('page-security').classList.contains('active')) {
     _securityRefreshTimer = setTimeout(function() { loadSecurityPage(true); }, 30000);
+  }
+}
+
+// Tamper-evident hash-chain status. Plain-language labels per the FLYWHEEL
+// vision ("Tamper-evident log: 1,240 events, intact"), never "hash chain
+// verified". Node-wide concept — the runtime switcher does not apply.
+async function loadSecurityIntegrity() {
+  var label = document.getElementById('integrity-label');
+  var badge = document.getElementById('integrity-badge');
+  var icon = document.getElementById('integrity-icon');
+  if (!label || !badge) return;
+  function paint(txt, badgeTxt, badgeColor, iconChar) {
+    label.textContent = txt;
+    badge.textContent = badgeTxt;
+    if (badgeColor) { badge.style.color = badgeColor; badge.style.background = 'transparent'; badge.style.border = '1px solid ' + badgeColor; }
+    if (icon && iconChar) icon.innerHTML = iconChar;
+  }
+  try {
+    var d = await fetchJsonWithTimeout('/api/security/integrity', 10000);
+    var n = (d && d.chain_length) || 0;
+    var nStr = n.toLocaleString();
+    if (d && d.ok === true) {
+      paint(t('app.integrity_intact', null, 'Tamper-evident log: ' + nStr + ' events, intact. Every recorded event is chained, so silent edits would show up here.'),
+            t('app.integrity_intact_badge', null, 'Intact'), '#22c55e', '&#128274;');
+    } else if (d && d.ok === false) {
+      paint(t('app.integrity_broken', null, 'Tamper-evident log: a break was detected at event ' + (d.first_break != null ? d.first_break : '?') + '. The activity log may have been altered.'),
+            t('app.integrity_broken_badge', null, 'Tampered'), '#ef4444', '&#9888;');
+    } else if (window.CLOUD_MODE) {
+      // Honest cloud state until the cm-cloud-security interceptor serves the
+      // securityIntegrity snapshot slice (no silent blank).
+      paint(t('app.integrity_local_only', null, 'The tamper-evident log lives on your local node. Open the local dashboard to verify it.'),
+            t('app.integrity_na_badge', null, 'Local node'), '#64748b', '&#128274;');
+    } else {
+      paint(t('app.integrity_empty', null, 'No tamper-evident events recorded yet. Chaining begins as your agents run.'),
+            t('app.integrity_empty_badge', null, 'No data'), '#64748b', '&#128274;');
+    }
+  } catch (e) {
+    paint(t('app.integrity_unavailable', null, 'Could not check the tamper-evident log right now.'),
+          '', '#64748b', '&#128274;');
+  }
+}
+
+// Recent Enterprise audit-log activity (approvals, budgets, pauses). Node-wide.
+async function loadSecurityAudit() {
+  var listEl = document.getElementById('security-audit-list');
+  var countEl = document.getElementById('security-audit-count');
+  if (!listEl) return;
+  try {
+    var d = await fetchJsonWithTimeout('/api/security/audit?limit=25', 10000);
+    var rows = (d && d.entries) || [];
+    if (countEl) countEl.textContent = rows.length ? (rows.length + (rows.length === 1 ? ' event' : ' events')) : '';
+    if (!rows.length) {
+      if (window.CLOUD_MODE) {
+        listEl.innerHTML = '<div style="color:var(--text-muted);padding:12px;">' + t('app.audit_local_only', null, 'Governance activity is recorded on your local node. Open the local dashboard to review it.') + '</div>';
+      } else {
+        listEl.innerHTML = '<div style="color:var(--text-muted);padding:12px;" data-i18n="security.audit_empty">' + t('security.audit_empty', null, 'No recorded activity yet. Approval decisions, budget changes, and pauses appear here.') + '</div>';
+      }
+      return;
+    }
+    // Plain-language label per action prefix; result drives the accent color.
+    var _actLabel = {
+      'approval.decision': 'Approval decision',
+      'hitl.pause': 'Agent paused',
+      'hitl.resume': 'Agent resumed',
+      'hitl.decide': 'Review decision',
+      'budget.config': 'Budget settings changed',
+      'budget.auto_pause': 'Auto-pause threshold changed',
+      'budget.agent_set': 'Per-agent budget set',
+      'budget.agent_delete': 'Per-agent budget removed',
+      'gateway.pause': 'Gateway paused',
+      'gateway.resume': 'Gateway resumed',
+      'alert_rule.create': 'Alert rule created',
+      'alert_rule.update': 'Alert rule updated',
+      'alert_rule.delete': 'Alert rule deleted'
+    };
+    function resultColor(r) {
+      r = String(r || '').toLowerCase();
+      if (r === 'denied' || r === 'deny' || r === 'rejected' || r === 'paused' || r === 'deleted') return '#f59e0b';
+      if (r === 'approved' || r === 'approve' || r === 'resumed') return '#22c55e';
+      return '#64748b';
+    }
+    var html = '';
+    rows.forEach(function(r) {
+      var act = r.event_type || '';
+      var lbl = _actLabel[act] || act;
+      var det = r.details || {};
+      var res = det.result || '';
+      var col = resultColor(res);
+      var when = r.ts ? new Date(r.ts * 1000).toLocaleString() : '';
+      html += '<div style="display:flex;align-items:flex-start;gap:8px;padding:7px 0;border-bottom:1px solid var(--border);">';
+      html += '<span style="width:7px;height:7px;border-radius:50%;background:' + col + ';flex-shrink:0;margin-top:5px;"></span>';
+      html += '<div style="flex:1;min-width:0;">';
+      html += '<span style="font-size:12px;font-weight:600;color:var(--text-primary);">' + escHtml(lbl) + '</span>';
+      if (res) html += ' <span style="font-size:11px;color:' + col + ';">' + escHtml(res) + '</span>';
+      if (r.target) html += ' <code style="font-size:10px;background:var(--bg-primary);padding:1px 4px;border-radius:3px;color:#a78bfa;">' + escHtml(String(r.target).slice(0, 48)) + '</code>';
+      html += '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">';
+      if (r.actor) html += escHtml('by ' + r.actor) + ' · ';
+      html += escHtml(when) + '</div>';
+      html += '</div></div>';
+    });
+    listEl.innerHTML = html;
+  } catch (e) {
+    listEl.innerHTML = '<div style="color:var(--text-muted);padding:12px;font-size:11px;">' + t('app.audit_unavailable', null, 'Activity feed unavailable.') + '</div>';
   }
 }
 
