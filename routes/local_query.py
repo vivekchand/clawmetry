@@ -569,6 +569,15 @@ _DAEMON_METHODS = frozenset({
     # ever sent OTLP traces. Daemon snapshot-path use; allowlisted so the
     # local Inventory route can read it through the proxy too.
     "query_otlp_app_rollup",
+    # OTLP span WRITE-through. The /v1/traces receiver runs in the dashboard
+    # process, which does not own the DuckDB writer; get_store() returns a
+    # _ProxyStore that forwards put_span here so the daemon (the writer) does
+    # the real INSERT. Without this allowlist entry the proxy 400s and the span
+    # silently vanishes, so a "bring your own agent" OTLP app never persists or
+    # appears in the switcher / Inventory. Same write-through-proxy pattern as
+    # set_agent_meta. The handler calls put_span(span=...) by keyword (the proxy
+    # only forwards kwargs).
+    "put_span",
     # Issue #1364 (Tier-1 2026-05-15): /api/fallbacks model/provider
     # transition aggregator. Replaces a JSONL walker that opened up to 100
     # transcript files per request — multi-second on a busy workspace.
