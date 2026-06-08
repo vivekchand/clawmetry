@@ -43,6 +43,63 @@ def _store_via_daemon_or_direct(method_name: str, **kwargs):
         return None
 
 
+@bp_evals.route("/api/evaluators", methods=["GET"])
+def evaluators_catalogue():
+    """The named evaluator library — ClawMetry's shipped quality / reliability /
+    efficiency / safety / agent signals, surfaced as a branded catalogue.
+
+    Cloud-safe and never-raise. The catalogue is static data so it returns the
+    same list whether or not a DuckDB store is reachable (the cloud container
+    has none). When a store is available we attach best-effort live coverage
+    counts; when it is not, ``coverage`` is null and the catalogue still renders
+    — no silent blank.
+
+    Pro entries (faithfulness, agent-efficiency, agent-tool-error-detector) are
+    declared here and carry ``locked: true`` until the clawmetry-pro plugin
+    registers their compute hook, at which point they report ``live``.
+    """
+    try:
+        from clawmetry import evaluators
+    except Exception as e:  # pragma: no cover - defensive
+        return jsonify({"evaluators": [], "error": f"catalogue unavailable: {e}"})
+
+    store = None
+    try:
+        # Best-effort store handle for live coverage. Daemon proxy first (so we
+        # never grab the writer lock), then a read-only open. Both are optional:
+        # on the cloud container there is no store and we return the catalogue
+        # with coverage=null rather than blank.
+        from routes.local_query import local_store_via_daemon  # noqa: F401
+
+        class _DaemonStore:
+            def query_eval_summary(self, **kw):
+                return local_store_via_daemon("query_eval_summary", **kw)
+
+            def query_outcomes(self, **kw):
+                return local_store_via_daemon("query_outcomes", **kw)
+
+        probe = local_store_via_daemon("query_eval_summary", window_hours=24)
+        if probe is not None:
+            store = _DaemonStore()
+    except Exception:
+        store = None
+    if store is None:
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+        except Exception:
+            store = None
+
+    try:
+        payload = evaluators.catalogue_with_coverage(store)
+    except Exception as e:  # pragma: no cover - defensive
+        try:
+            payload = {"evaluators": evaluators.catalogue(), "coverage": None}
+        except Exception:
+            payload = {"evaluators": [], "error": f"catalogue failed: {e}"}
+    return jsonify(payload)
+
+
 @bp_evals.route("/api/evals/recent", methods=["GET"])
 def evals_recent():
     """Recent scored sessions. ``?limit=`` defaults to 50, capped at 200."""

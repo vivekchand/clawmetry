@@ -1636,3 +1636,73 @@
 @media (max-width: 768px) {
   .swimlane-lanes { grid-template-columns: 1fr; }
 }
+
+/* ── Agent Inventory tab ───────────────────────────────────────────────── */
+.inv-wrap { max-width: 1100px; margin: 0 auto; padding: 4px 0 32px; }
+.inv-heading { font-size: 20px; font-weight: 700; color: var(--text-primary); margin: 4px 0 6px; }
+.inv-story { font-size: 14px; color: var(--text-secondary); line-height: 1.6; margin: 0 0 18px; max-width: 640px; }
+.inv-stats { margin: 0 0 16px; }
+.inv-nodewide-strip { display: flex; gap: 10px; flex-wrap: wrap; margin: 0 0 16px; }
+.inv-nodewide-pill {
+  font-size: 11px; color: var(--text-muted); background: var(--bg-secondary);
+  border: 1px solid var(--border-secondary); border-radius: 999px; padding: 4px 12px;
+}
+.inv-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.inv-table thead th {
+  text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--text-muted); font-weight: 600; padding: 8px 12px;
+  border-bottom: 1px solid var(--border-primary);
+}
+.inv-table tbody td { padding: 11px 12px; border-bottom: 1px solid var(--border-secondary); color: var(--text-secondary); vertical-align: middle; }
+.inv-row { cursor: pointer; transition: background 0.12s; }
+.inv-row:hover { background: var(--bg-hover); }
+.inv-row.inv-row-active { background: rgba(59,130,246,0.08); }
+.inv-row.inv-row-active .inv-c-agent { color: var(--text-primary); font-weight: 600; }
+.inv-c-agent { color: var(--text-primary); font-weight: 500; }
+.inv-c-model { color: var(--text-faint); font-size: 12px; }
+.inv-dot { display: inline-block; width: 9px; height: 9px; border-radius: 999px; margin-right: 7px; vertical-align: middle; }
+.inv-na { color: var(--text-faint); cursor: help; }
+.inv-doing { font-size: 11px; padding: 2px 9px; border-radius: 999px; font-weight: 600; }
+.inv-doing-on { background: rgba(34,197,94,0.14); color: #22c55e; }
+.inv-doing-idle { background: rgba(245,158,11,0.14); color: #f59e0b; }
+.inv-doing-quiet { background: var(--bg-secondary); color: var(--text-muted); }
+.inv-alive-lbl { font-size: 12px; cursor: help; }
+/* Owner chip + inline edit (pencil on hover). */
+.inv-owner-chip { display: inline-flex; align-items: center; gap: 6px; }
+.inv-owner-name { color: var(--text-secondary); }
+.inv-owner-pencil { opacity: 0; cursor: pointer; font-size: 12px; color: var(--text-muted); transition: opacity 0.12s; }
+.inv-row:hover .inv-owner-pencil { opacity: 0.75; }
+.inv-owner-pencil:hover { color: var(--text-accent); opacity: 1; }
+.inv-owner-input {
+  font: inherit; font-size: 13px; padding: 2px 6px; width: 110px;
+  border: 1px solid var(--text-accent); border-radius: 5px;
+  background: var(--bg-primary); color: var(--text-primary);
+}
+/* Per-row expand drawer. */
+.inv-expand-row td { background: var(--bg-secondary); padding: 14px 16px; }
+.inv-expand { display: flex; flex-direction: column; gap: 12px; }
+.inv-facts { display: flex; gap: 14px; flex-wrap: wrap; }
+.inv-fact { font-size: 12px; color: var(--text-muted); }
+.inv-deep { display: flex; gap: 8px; flex-wrap: wrap; }
+.inv-deep-btn {
+  font: inherit; font-size: 12px; padding: 6px 12px; border-radius: 6px; cursor: pointer;
+  background: var(--bg-primary); color: var(--text-secondary); border: 1px solid var(--border-primary);
+  transition: all 0.12s;
+}
+.inv-deep-btn:hover { border-color: var(--text-accent); color: var(--text-primary); }
+/* Empty state. */
+.inv-empty { text-align: center; padding: 48px 20px; max-width: 460px; margin: 0 auto; }
+.inv-empty-icon { font-size: 34px; margin-bottom: 12px; opacity: 0.85; }
+.inv-empty-title { font-size: 16px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; }
+.inv-empty-body { font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
+@media (max-width: 768px) {
+  /* Cards on mobile: collapse the table to stacked rows. */
+  .inv-table thead { display: none; }
+  .inv-table, .inv-table tbody, .inv-table tr, .inv-table td { display: block; width: 100%; }
+  .inv-row { border: 1px solid var(--border-secondary); border-radius: 10px; margin-bottom: 10px; padding: 6px 4px; }
+  .inv-table tbody td { border-bottom: none; padding: 5px 12px; }
+  .inv-table tbody td::before {
+    content: attr(data-label); display: inline-block; min-width: 92px;
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted);
+  }
+}

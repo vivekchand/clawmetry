@@ -499,6 +499,27 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
         log.debug("approval decision update failed: %s", _ue)
     result = {"decision": decision, "policy": policy["name"], "killed": killed,
               "approval_id": approval_id}
+    # Enterprise audit-log producer — record the approval outcome (approve /
+    # deny / timeout-default) with who/what/where. Never raises into the
+    # policy path.
+    try:
+        from clawmetry import audit as _audit
+        _audit.audit_event(
+            "approval.decision",
+            actor="cloud",
+            target=tool_name,
+            result=decision,
+            source="approvals",
+            metadata={
+                "approval_id": approval_id,
+                "policy": policy["name"],
+                "session_id": session_id,
+                "killed": killed,
+                "command": cmd_preview,
+            },
+        )
+    except Exception:
+        pass
     log.info(f"[approval] {approval_id} → {decision}, killed={killed}")
     with _in_flight_lock:
         _in_flight[key] = result

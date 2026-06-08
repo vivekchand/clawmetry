@@ -112,6 +112,7 @@ from routes.heartbeat import bp_heartbeat
 from routes.autonomy import bp_autonomy
 from routes.selfconfig import bp_selfconfig
 from routes.agents import bp_agents
+from routes.inventory import bp_inventory
 from routes.assets import bp_assets
 from routes.reasoning import bp_reasoning
 from routes.plugins import bp_plugins
@@ -234,7 +235,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.471"
+__version__ = "0.12.489"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -2752,7 +2753,16 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                 # retries land as INSERT OR REPLACE without duping.
                 if _store is not None:
                     try:
-                        _store.put_span(_otel_to_row(span, resource_attrs))
+                        # Keyword arg is REQUIRED: in the dashboard process
+                        # get_store() returns a _ProxyStore that forwards to the
+                        # daemon writer, and the proxy only forwards **kwargs
+                        # (positional args are dropped). With a positional span
+                        # the write silently no-ops and OTLP spans never persist
+                        # whenever the daemon owns the writer lock (i.e. every
+                        # real install). put_span is allowlisted in
+                        # routes/local_query._DAEMON_METHODS so the daemon
+                        # executes the real write.
+                        _store.put_span(span=_otel_to_row(span, resource_attrs))
                     except Exception as e:
                         try:
                             import logging as _lg
@@ -10992,7 +11002,16 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                 # retries land as INSERT OR REPLACE without duping.
                 if _store is not None:
                     try:
-                        _store.put_span(_otel_to_row(span, resource_attrs))
+                        # Keyword arg is REQUIRED: in the dashboard process
+                        # get_store() returns a _ProxyStore that forwards to the
+                        # daemon writer, and the proxy only forwards **kwargs
+                        # (positional args are dropped). With a positional span
+                        # the write silently no-ops and OTLP spans never persist
+                        # whenever the daemon owns the writer lock (i.e. every
+                        # real install). put_span is allowlisted in
+                        # routes/local_query._DAEMON_METHODS so the daemon
+                        # executes the real write.
+                        _store.put_span(span=_otel_to_row(span, resource_attrs))
                     except Exception as e:
                         try:
                             import logging as _lg
@@ -11460,6 +11479,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_heartbeat)
     app.register_blueprint(bp_selfconfig)
     app.register_blueprint(bp_agents)
+    app.register_blueprint(bp_inventory)
     if not _pro_loaded:
         app.register_blueprint(bp_assets)
     app.register_blueprint(bp_reasoning)
@@ -11939,6 +11959,10 @@ DASHBOARD_HTML = r"""
 <div class="app-shell">
   <aside id="left-nav" role="navigation" aria-label="Primary">
     <div class="left-nav-section">
+      <div class="left-nav-item" data-tab="inventory" onclick="switchTab('inventory')" data-i18n-title="nav.inventory_tooltip" title="Every agent on this machine: what it runs, what it costs, is it alive, who owns it">
+        <span class="left-nav-icon" aria-hidden="true">&#9783;</span>
+        <span class="left-nav-label" data-i18n="nav.inventory">Agents</span>
+      </div>
       <div class="left-nav-item left-nav-item-group active" data-tab="overview" onclick="switchTab('overview')" data-i18n-title="nav.live_trace_tooltip" title="Live view of every running agent">
         <span class="left-nav-icon" aria-hidden="true">&#9679;</span>
         <span class="left-nav-label" data-i18n="nav.live_trace">Live trace</span>
@@ -12050,6 +12074,9 @@ DASHBOARD_HTML = r"""
 
 <!-- OVERVIEW (Split-Screen Hacker Dashboard) -->
 {% include 'tabs/overview.html' %}
+
+<!-- AGENT INVENTORY (single-pane control-tower roster) -->
+{% include 'tabs/inventory.html' %}
 
 <!-- ALERTS (Cloud-Pro feature) -->
 {% include 'tabs/alerts.html' %}

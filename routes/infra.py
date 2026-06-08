@@ -1577,6 +1577,103 @@ def api_security_policy_events():
     return jsonify({"hits": hits[:200], "counts": counts, "scanned_events": len(events)})
 
 
+# ── Tamper-evident integrity + Enterprise audit feed ───────────────────────
+#
+# Two node-wide governance surfaces for the Security tab:
+#   /api/security/integrity  — the SHA-256 hash-chain verify result
+#                              (reuses local_store.verify_integrity; we do
+#                              NOT re-implement the chain walk).
+#   /api/security/audit      — recent Enterprise audit-log rows (mirrors
+#                              /api/audit-log so the Security tab has a
+#                              recent-activity feed now that producers write).
+
+
+def _integrity_status() -> dict:
+    """Walk the tamper-evident hash chain via the existing verifier and return
+    a plain-language status dict ``{ok, status, chain_length, pre_chain,
+    first_break, error}``.
+
+    Reuses ``local_store.verify_integrity`` — never re-implements the chain.
+    Routes through the daemon HTTP proxy first (the daemon owns the DuckDB
+    writer lock; ``verify_integrity`` internally takes ``_fetch``'s write lock,
+    so a direct open from the dashboard process would contend / deadlock), with
+    a single-process direct-read fallback for tests/dev. Never raises."""
+    raw = None
+    try:
+        from routes.local_query import local_store_via_daemon
+        raw = local_store_via_daemon("verify_integrity")
+    except Exception:
+        raw = None
+    if raw is None:
+        # Single-process fallback (tests / dev with no daemon). read_only is
+        # fine: verify_integrity only reads, and _fetch serialises internally.
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            raw = store.verify_integrity()
+        except Exception:
+            raw = None
+    if not isinstance(raw, dict):
+        return {
+            "ok": None,
+            "status": "unknown",
+            "chain_length": 0,
+            "pre_chain": 0,
+            "first_break": None,
+            "error": "verifier unavailable",
+        }
+    status = raw.get("status") or "unknown"
+    return {
+        # ``ok`` is True only when the chain verified, False when broken,
+        # None when there's nothing stamped yet (empty / unknown).
+        "ok": True if status == "valid" else (False if status == "invalid" else None),
+        "status": status,
+        "chain_length": int(raw.get("checked") or 0),
+        "pre_chain": int(raw.get("pre_chain") or 0),
+        "first_break": raw.get("broken_at"),
+        "error": raw.get("error"),
+    }
+
+
+@bp_security.route("/api/security/integrity")
+def api_security_integrity():
+    """Tamper-evident hash-chain verify result for the Security tab.
+
+    Returns ``{ok, status, chain_length, pre_chain, first_break, error}``.
+    This is a node-wide / Free (always-on) integrity check — the same chain
+    the ``clawmetry verify-integrity`` CLI walks. Never 500s."""
+    try:
+        return jsonify(_integrity_status())
+    except Exception as e:  # never break the tab over a verify
+        return jsonify({
+            "ok": None, "status": "unknown", "chain_length": 0,
+            "pre_chain": 0, "first_break": None, "error": str(e),
+        })
+
+
+@bp_security.route("/api/security/audit")
+def api_security_audit():
+    """Recent Enterprise audit-log activity for the Security tab.
+
+    Thin mirror of ``/api/audit-log`` (entitlement-gated there) scoped to a
+    small recent window for the tab's recent-activity feed. Never raises —
+    an empty list paints an honest "nothing recorded yet" state."""
+    try:
+        from clawmetry import audit as _audit
+        try:
+            limit = max(1, min(int(request.args.get("limit", 25) or 25), 200))
+        except Exception:
+            limit = 25
+        entries = _audit.read_audit_log(limit=limit)
+        return jsonify({
+            "entries": entries,
+            "event_types": _audit.event_types(),
+            "count": len(entries),
+        })
+    except Exception:
+        return jsonify({"entries": [], "event_types": [], "count": 0})
+
+
 # ── Config / Cost optimization ─────────────────────────────────────────────
 
 

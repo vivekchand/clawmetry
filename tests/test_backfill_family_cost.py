@@ -54,14 +54,14 @@ def test_backfill_prices_family_event_via_extra(tmp_path, monkeypatch):
             "model": "claude-opus-4-7",
         })
         _wait_flush(store)
-        assert (_cost(store, "claude_code:ev-1") or 0) == 0, "starts uncosted"
-
-        n = store.backfill_event_costs(batch=100)
-        assert n >= 1, "backfill must price the family event"
+        # A family event with the split under data.extra must end up priced —
+        # whether at ingest or via backfill (ingest now prices extra-only events,
+        # so we no longer require an uncosted intermediate state).
+        store.backfill_event_costs(batch=100)
         c = _cost(store, "claude_code:ev-1")
         assert c and c > 0, f"family event must be priced, got {c}"
-        # sanity: 100k in + 20k out Opus is a few dollars, not cents and not absurd
-        assert 0.5 < c < 50, f"cost out of sane range: {c}"
+        # opus-4-7 (new gen, $5/$25): 100k in + 20k out = $1.00 exactly.
+        assert abs(c - 1.0) < 0.01, f"expected ~$1.00 at new-gen opus-4-7 rates, got {c}"
     finally:
         store.stop(flush=True)
 

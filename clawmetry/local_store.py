@@ -41,6 +41,7 @@ import json
 import logging
 import math
 import os
+from clawmetry import ccr as _ccr  # reversible event-payload compression (#2843)
 import threading
 import time
 from collections import deque
@@ -254,6 +255,15 @@ _DDL = [
         eval_judge_model        VARCHAR,
         eval_scored_at          BIGINT,
         eval_rubric             VARCHAR,
+        -- Content-grounded faithfulness evaluator. The store (OSS) owns the
+        -- column; the COMPUTE lives in clawmetry-pro (claim-by-claim check on
+        -- the user's own key). faithfulness_score is 0-1 (1 = every claim is
+        -- grounded in the session's tool results / context); faithfulness_detail
+        -- is a small JSON blob with the unsupported-claim list. NULL until the
+        -- Pro evaluator runs.
+        faithfulness_score      DOUBLE,
+        faithfulness_detail     VARCHAR,
+        faithfulness_scored_at  BIGINT,
         PRIMARY KEY (agent_type, session_id)
     )
     """,
@@ -342,6 +352,19 @@ _DDL = [
         last_test_ok           BOOLEAN,
         last_test_error        VARCHAR,
         updated_at             VARCHAR
+    )
+    """,
+    # Agent Inventory: a small per-runtime label store so the user can name who
+    # "owns" each agent on the node (a free-text chip, default "me") and jot a
+    # note. Keyed by the runtime key (== _runtime_of_session prefix; "openclaw"
+    # for the default bucket). Edited only on the LOCAL dashboard; the value
+    # rides the snapshot so cloud renders it read-only. No secrets here.
+    """
+    CREATE TABLE IF NOT EXISTS agent_meta (
+        agent_key   VARCHAR PRIMARY KEY,
+        owner       VARCHAR,
+        notes       VARCHAR,
+        updated_at  VARCHAR
     )
     """,
     # Shared by OpenClaw + Hermes (and any future cron-supporting agent).
@@ -946,6 +969,12 @@ _MIGRATIONS_V2 = [
     ("sessions", "eval_judge_model",  "VARCHAR"),
     ("sessions", "eval_scored_at",    "BIGINT"),
     ("sessions", "eval_rubric",       "VARCHAR"),
+    # Content-grounded faithfulness evaluator (compute in clawmetry-pro).
+    # Idempotent column-adds so existing stores pick up the column without a
+    # fresh DB. The DDL above carries the same columns for fresh stores.
+    ("sessions", "faithfulness_score",     "DOUBLE"),
+    ("sessions", "faithfulness_detail",    "VARCHAR"),
+    ("sessions", "faithfulness_scored_at", "BIGINT"),
     # Issue #2200 — hash-chain columns. chain_prev_hash/chain_hash are NULL on
     # existing rows and populated on new events when CLAWMETRY_INTEGRITY=1.
     ("events",   "chain_prev_hash",   "VARCHAR"),
@@ -957,7 +986,13 @@ _MIGRATIONS_V2 = [
 # Off by default. Set CLAWMETRY_INTEGRITY=1 to enable stamping new events with
 # a per-node SHA-256 chain. Existing rows keep chain_prev_hash/chain_hash=NULL
 # and are skipped by verify-integrity (reported as "pre-chain" events).
-_INTEGRITY_ENABLED = os.environ.get("CLAWMETRY_INTEGRITY", "0").strip().lower() not in (
+# ON BY DEFAULT (the tamper-evident log is a Free, always-on feature, surfaced
+# in the Security tab + `clawmetry verify-integrity`). Was opt-in ("0") which
+# left the Security integrity card perpetually "empty" and the always-on claim
+# false. Stamping is batched on the flush path and the dedup check is a single
+# query per flush (see _stamp_integrity), so the CPU cost stays within budget;
+# set CLAWMETRY_INTEGRITY=0 to disable on an extreme-volume node.
+_INTEGRITY_ENABLED = os.environ.get("CLAWMETRY_INTEGRITY", "1").strip().lower() not in (
     "0", "false", "no", ""
 )
 
@@ -2199,6 +2234,65 @@ class LocalStore:
                 now_iso,
             ])
 
+    def set_agent_meta(
+        self,
+        agent_key: str,
+        owner: str | None = None,
+        notes: str | None = None,
+    ) -> None:
+        """Upsert one Agent-Inventory label row (owner / notes) for a runtime.
+
+        ``agent_key`` is the runtime key (``_runtime_of_session`` prefix, with
+        ``"openclaw"`` for the default bucket). Partial updates are honored via
+        COALESCE so setting only ``notes`` preserves an existing ``owner`` (and
+        vice versa). An explicit empty string is stored as-is (the client
+        renders an empty owner as "me"); ``None`` means "don't touch this
+        field". Idempotent; mirrors the ``ingest_channel_config`` write-lock
+        idiom. The daemon owns the writer lock, so this goes through the daemon
+        proxy from the dashboard process (see ``set_agent_meta`` in
+        ``routes/local_query._DAEMON_METHODS``)."""
+        if not agent_key:
+            raise ValueError("agent_meta must include 'agent_key'")
+        agent_key = str(agent_key).lower().strip()
+        now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO agent_meta (agent_key, owner, notes, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT (agent_key) DO UPDATE SET
+                    owner      = COALESCE(excluded.owner, agent_meta.owner),
+                    notes      = COALESCE(excluded.notes, agent_meta.notes),
+                    updated_at = excluded.updated_at
+            """, [
+                agent_key,
+                owner,
+                notes,
+                now_iso,
+            ])
+
+    def query_agent_meta(self) -> dict[str, dict[str, Any]]:
+        """Return ``{agent_key: {owner, notes, updated_at}}`` for every labeled
+        runtime. Read-only. Goes through ``self._fetch`` (which already takes
+        the write lock for read+write serialization), so callers MUST NOT wrap
+        this in an outer ``with self._write_lock`` (regular Lock, would deadlock
+        per memory ``feedback_local_store_fetch_takes_writelock``)."""
+        sql = """
+            SELECT agent_key, owner, notes, updated_at
+            FROM agent_meta
+            ORDER BY agent_key ASC
+        """
+        out: dict[str, dict[str, Any]] = {}
+        for r in self._fetch(sql, []):
+            key = r[0]
+            if not key:
+                continue
+            out[str(key)] = {
+                "owner": r[1],
+                "notes": r[2],
+                "updated_at": r[3],
+            }
+        return out
+
     def ingest_cron(self, cron: dict[str, Any]) -> None:
         """Upsert one cron-job row. Required: cron_id.
 
@@ -2621,6 +2715,7 @@ class LocalStore:
             raw = d.get("details")
             if raw is not None:
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     try:
                         d["details"] = json.loads(text)
@@ -3358,6 +3453,7 @@ class LocalStore:
                 if raw is None:
                     continue
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     try:
                         d[k] = json.loads(text)
@@ -3672,6 +3768,7 @@ class LocalStore:
                 if raw is None:
                     continue
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     try:
                         d[c] = json.loads(text)
@@ -3799,6 +3896,351 @@ class LocalStore:
             })
         return out
 
+    def query_otlp_app_rollup(
+        self,
+        *,
+        exclude_agent_types: "Iterable[str] | None" = None,
+        since: float | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """One row per DISTINCT ``agent_type`` in the spans table for foreign
+        OTLP / OpenLLMetry apps (#2822 stamps ``agent_type`` from the resource
+        ``service.name``), so the runtime switcher + Agent Inventory can surface
+        a LangChain / CrewAI / OpenAI-Agents app that only ever sent OTLP traces
+        (it has no session-id prefix, so it appears in NONE of the
+        session-prefix rollups).
+
+        This is a SINGLE ``GROUP BY agent_type`` aggregate (one index-backed
+        scan over ``spans``), meant to run on the daemon's snapshot timer inside
+        the cached rollup path, NEVER per HTTP request (FLYWHEEL 1e CPU budget).
+
+        ``exclude_agent_types`` removes the 12 known session-prefix runtimes
+        (plus ``openclaw``) so we only return the foreign apps. ``since`` bounds
+        to recent activity. Rows are ordered by recent activity desc and capped
+        at ``limit`` (the caller logs when truncated). Each row::
+
+            {agent_type, service_name, sessions, traces, spans, turns,
+             tokens, cost_usd, primary_model, last_ts}
+
+        ``turns`` counts model-bearing spans (a chat/LLM call), mirroring the
+        per-runtime ``turns`` semantics; ``sessions`` counts distinct non-null
+        session ids (often 0 for a pure-trace app, which is honest). Best-effort:
+        any failure (e.g. an old store without the spans table) yields ``[]``.
+        """
+        try:
+            excl = {str(x).lower() for x in (exclude_agent_types or [])}
+            clauses: list[str] = []
+            params: list[Any] = []
+            if since is not None:
+                clauses.append("start_ts >= ?")
+                params.append(float(since))
+            if excl:
+                placeholders = ", ".join(["?"] * len(excl))
+                clauses.append(f"LOWER(agent_type) NOT IN ({placeholders})")
+                params.extend(sorted(excl))
+            # Defensive: never return a NULL/blank bucket as a phantom runtime.
+            clauses.append("agent_type IS NOT NULL AND agent_type <> ''")
+            where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+            sql = f"""
+                SELECT
+                    agent_type,
+                    MAX(service_name)                                  AS service_name,
+                    COUNT(DISTINCT session_id)                         AS sessions,
+                    COUNT(DISTINCT trace_id)                           AS traces,
+                    COUNT(*)                                           AS spans,
+                    SUM(CASE WHEN model IS NOT NULL AND model <> ''
+                             THEN 1 ELSE 0 END)                        AS turns,
+                    SUM(COALESCE(token_count, 0))                      AS tokens,
+                    SUM(COALESCE(cost_usd, 0.0))                       AS cost_usd,
+                    MAX(start_ts)                                      AS last_ts
+                FROM spans
+                {where}
+                GROUP BY agent_type
+                ORDER BY MAX(start_ts) DESC
+                LIMIT ?
+            """
+            params.append(int(limit))
+            cols = [
+                "agent_type", "service_name", "sessions", "traces", "spans",
+                "turns", "tokens", "cost_usd", "last_ts",
+            ]
+            out: list[dict[str, Any]] = []
+            for r in self._fetch(sql, params):
+                d = dict(zip(cols, r))
+                # Per-app primary model (most frequent model on its spans). One
+                # tiny grouped read per app; the app set is already capped at
+                # ``limit`` so this stays bounded.
+                atype = d.get("agent_type")
+                primary = ""
+                try:
+                    mrows = self._fetch(
+                        """
+                        SELECT model, COUNT(*) AS n FROM spans
+                        WHERE agent_type = ? AND model IS NOT NULL AND model <> ''
+                        GROUP BY model ORDER BY n DESC LIMIT 1
+                        """,
+                        [atype],
+                    )
+                    if mrows:
+                        primary = mrows[0][0] or ""
+                except Exception:
+                    primary = ""
+                d["primary_model"] = primary
+                out.append(d)
+            return out
+        except Exception:
+            return []
+
+    def query_model_rollup(self) -> dict[str, Any]:
+        """Per-runtime and per-(runtime, model) aggregates over the FULL events
+        table — the uncapped source for the cloud Models / runtimeSummary
+        snapshot builders.
+
+        Replaces the old ``query_events(limit=20000)`` scan in
+        ``sync._build_runtime_summary`` / ``_build_model_attribution`` which
+        returned only the 20k most-recent events GLOBALLY. With a high-volume
+        runtime (e.g. claude_code at 100k+ events) that budget was consumed
+        entirely, so smaller runtimes (goose/hermes/opencode/qwen_code) vanished
+        from the snapshot and the big runtime itself was undercounted ~5×
+        (#web-accuracy). This is two SQL ``GROUP BY`` aggregates (index-backed
+        scans, O(events) in DuckDB, tiny output) so EVERY event counts and no
+        runtime is starved.
+
+        ``runtime`` = the session-id prefix before ``:`` when it's a known
+        non-OpenClaw runtime, else ``openclaw`` — mirrors ``_runtime_of_session``
+        (sync.py) and ``_runtime_session_id_clause`` (this module) so the buckets
+        reconcile with the per-runtime event filter by construction.
+
+        Returns::
+
+            {
+              "by_runtime": {rt: {sessions, tokens, cost_usd, events}},
+              "by_runtime_model": [
+                  {runtime, model, turns, tokens, cost_usd, sessions}, ...
+              ],  # model-bearing rows only
+              "switches": [
+                  {runtime, session, from_model, to_model}, ...
+              ],  # capped detail list of mid-session model changes
+            }
+
+        Best-effort: any failure yields empty dicts so the caller falls back to
+        its empty state (cloud renders the no-data card).
+        """
+        try:
+            prefixes = list(_NON_OPENCLAW_RUNTIME_PREFIXES)
+            placeholders = ", ".join(["?"] * len(prefixes))
+            # split_part returns the whole string when there's no ':' separator,
+            # so a bare OpenClaw UUID falls outside the known-prefix set → bucket
+            # 'openclaw' (matches _runtime_of_session). One CASE expression keeps
+            # the bucketing identical across both GROUP BYs.
+            rt_case = (
+                f"CASE WHEN split_part(session_id, ':', 1) IN ({placeholders}) "
+                f"THEN split_part(session_id, ':', 1) ELSE 'openclaw' END"
+            )
+            by_runtime: dict[str, dict[str, Any]] = {}
+            # Per-runtime TOTALS use the same GREATEST(stored, SUM(events)) bridge
+            # query_sessions_table uses — NOT a raw events sum. Family adapters
+            # (claude_code, codex, goose, …) stash a session's token total on
+            # ``sessions.total_tokens`` while ``events.token_count`` stays 0, so an
+            # events-only sum under-reported tokens (goose/hermes/opencode/
+            # qwen_code showed ~0, claude_code 105M vs the real 134M).
+            #
+            # FULL OUTER JOIN the sessions table against a per-session events
+            # rollup so EVERY session (in either table) is counted ONCE and gets
+            # GREATEST(row, events) per session, then summed by runtime:
+            #   * family sessions (tokens on the row, events.token_count = 0)
+            #     report the row total;
+            #   * an event-only session with no metadata row yet (transient, or a
+            #     pure-event ingest) still reports its events total — not dropped
+            #     (preserves the OTLP/openclaw no-leak contract).
+            # Joined on session_id (its effective key) so a row and its events
+            # never count as two sessions. Reconciles EXACTLY with
+            # query_sessions_table (the source the OSS dashboard already trusts).
+            sql_rt = f"""
+                WITH ev AS (
+                    SELECT session_id,
+                           SUM(COALESCE(token_count, 0)) AS tok,
+                           SUM(COALESCE(cost_usd, 0.0))  AS cost
+                    FROM events GROUP BY session_id
+                ),
+                combined AS (
+                    SELECT COALESCE(s.session_id, ev.session_id) AS session_id,
+                           GREATEST(COALESCE(s.total_tokens, 0),
+                                    COALESCE(ev.tok, 0))         AS tokens,
+                           GREATEST(COALESCE(s.cost_usd, 0.0),
+                                    COALESCE(ev.cost, 0.0))      AS cost_usd
+                    FROM sessions s
+                    FULL OUTER JOIN ev ON s.session_id = ev.session_id
+                )
+                SELECT {rt_case} AS runtime,
+                       COUNT(*)      AS sessions,
+                       SUM(tokens)   AS tokens,
+                       SUM(cost_usd) AS cost_usd
+                FROM combined
+                GROUP BY 1
+            """
+            for r in self._fetch(sql_rt, list(prefixes)):
+                rt = r[0] or "openclaw"
+                by_runtime[rt] = {
+                    "sessions": int(r[1] or 0),
+                    "tokens": int(r[2] or 0),
+                    "cost_usd": float(r[3] or 0.0),
+                    "cost_24h_usd": 0.0,
+                    "tokens_24h": 0,
+                }
+            # Rolling LAST-24h cost/tokens per runtime, from events in the trailing
+            # 24 hours. (A rolling window, not a calendar "today" — a calendar day
+            # starts at an arbitrary UTC midnight that's confusing across
+            # timezones.) cost_usd above is LIFETIME (all the runtime's sessions);
+            # the UI shows both. True windowed cost needs event-level cost+ts
+            # (which the cloud sessions table lacks) — so it's computed here on the
+            # daemon and rides the snapshot. Event cost is correct post-
+            # #web-accuracy re-ingest (deduped + current-gen rates).
+            from datetime import datetime as _dt, timezone as _tz, timedelta as _tdelta
+            _since_24h = (_dt.now(_tz.utc) - _tdelta(hours=24)).isoformat()
+            sql_24h = f"""
+                SELECT {rt_case} AS runtime,
+                       SUM(COALESCE(cost_usd, 0.0))    AS cost_24h,
+                       SUM(COALESCE(token_count, 0))   AS tokens_24h
+                FROM events
+                WHERE ts >= ?
+                GROUP BY 1
+            """
+            for r in self._fetch(sql_24h, list(prefixes) + [_since_24h]):
+                rt = r[0] or "openclaw"
+                b = by_runtime.setdefault(rt, {
+                    "sessions": 0, "tokens": 0, "cost_usd": 0.0,
+                    "cost_24h_usd": 0.0, "tokens_24h": 0})
+                b["cost_24h_usd"] = float(r[1] or 0.0)
+                b["tokens_24h"] = int(r[2] or 0)
+            by_runtime_model: list[dict[str, Any]] = []
+            sql_rtm = f"""
+                SELECT {rt_case} AS runtime,
+                       model,
+                       COUNT(*) AS turns,
+                       SUM(COALESCE(token_count, 0)) AS tokens,
+                       SUM(COALESCE(cost_usd, 0.0)) AS cost_usd,
+                       COUNT(DISTINCT session_id) AS sessions
+                FROM events
+                WHERE model IS NOT NULL AND model <> ''
+                GROUP BY 1, 2
+            """
+            for r in self._fetch(sql_rtm, list(prefixes)):
+                by_runtime_model.append({
+                    "runtime": r[0] or "openclaw",
+                    "model": r[1] or "",
+                    "turns": int(r[2] or 0),
+                    "tokens": int(r[3] or 0),
+                    "cost_usd": float(r[4] or 0.0),
+                    "sessions": int(r[5] or 0),
+                })
+            # Mid-session model switches (a detail panel on the Models tab). One
+            # LAG window over the model-bearing events surfaces every change
+            # across ALL history; capped so the snapshot stays small (switches
+            # are rare — dozens, not thousands — so the cap rarely bites; we log
+            # when it does rather than silently truncate, FLYWHEEL no-silent-cap).
+            switches: list[dict[str, Any]] = []
+            _SWITCH_CAP = 2000
+            sql_sw = f"""
+                SELECT runtime, session_id, prev_model, model FROM (
+                    SELECT {rt_case} AS runtime, session_id, model,
+                           LAG(model) OVER (
+                               PARTITION BY session_id ORDER BY ts, id
+                           ) AS prev_model
+                    FROM events
+                    WHERE model IS NOT NULL AND model <> ''
+                ) t
+                WHERE prev_model IS NOT NULL AND prev_model <> model
+                LIMIT ?
+            """
+            sw_rows = self._fetch(sql_sw, list(prefixes) + [_SWITCH_CAP + 1])
+            if len(sw_rows) > _SWITCH_CAP:
+                log.warning(
+                    "model-switch rollup truncated: >%d switches observed, "
+                    "surfacing first %d in the snapshot detail list",
+                    _SWITCH_CAP, _SWITCH_CAP,
+                )
+                sw_rows = sw_rows[:_SWITCH_CAP]
+            for r in sw_rows:
+                switches.append({
+                    "runtime": r[0] or "openclaw",
+                    "session": r[1] or "",
+                    "from_model": r[2] or "",
+                    "to_model": r[3] or "",
+                })
+            return {
+                "by_runtime": by_runtime,
+                "by_runtime_model": by_runtime_model,
+                "switches": switches,
+            }
+        except Exception:
+            return {"by_runtime": {}, "by_runtime_model": [], "switches": []}
+
+    def query_runtime_last_active(self) -> dict[str, str]:
+        """``{runtime: max_event_ts_iso}`` — the newest INGESTED event per
+        runtime (session-id prefix), the same activity the Brain/Tracing tabs
+        show. Authoritative for the Fleet 'active/idle/stale' status: filesystem
+        mtimes are noisy (a SQLite ``-shm`` bump or a WAL checkpoint reads as
+        "active 0h ago" with no real activity — the founder's goose card, 2026-
+        06-08). One GROUP BY MAX(ts). Best-effort: {} on any failure."""
+        try:
+            prefixes = list(_NON_OPENCLAW_RUNTIME_PREFIXES)
+            placeholders = ", ".join(["?"] * len(prefixes))
+            rt_case = (
+                f"CASE WHEN split_part(session_id, ':', 1) IN ({placeholders}) "
+                f"THEN split_part(session_id, ':', 1) ELSE 'openclaw' END"
+            )
+            sql = f"""
+                SELECT {rt_case} AS runtime, MAX(ts) AS last_ts
+                FROM events
+                GROUP BY 1
+            """
+            out: dict[str, str] = {}
+            for r in self._fetch(sql, list(prefixes)):
+                rt = r[0] or "openclaw"
+                if r[1]:
+                    out[rt] = str(r[1])
+            return out
+        except Exception:
+            return {}
+
+    def query_event_totals_by_session(
+        self, session_ids: "Iterable[str]",
+    ) -> dict[str, dict[str, Any]]:
+        """Sum ``token_count`` + ``cost_usd`` from the events table for the given
+        session ids → ``{session_id: {tokens, cost_usd}}``.
+
+        The cloud-push path (``sync.sync_session_metadata``) derives a session's
+        ``total_cost``/``total_tokens`` from the JSONL ``message.usage`` fields,
+        but OpenClaw sessions driven by the Claude CLI emit no assistant-usage in
+        the gateway JSONL → it pushed ``cost=0, tokens=0`` to cloud even though
+        the events table (daemon-stamped at ingest) has the real figures
+        ($19.86 / 32,760 for the live OpenClaw session — #web-accuracy). This
+        lets the push bridge to the same source the OSS dashboard already trusts
+        (``query_sessions_table``'s GREATEST(stored, SUM(events)) pattern).
+        Best-effort: any failure yields ``{}`` so the push falls back to the
+        JSONL-derived value.
+        """
+        try:
+            ids = [str(s) for s in session_ids if s]
+            if not ids:
+                return {}
+            placeholders = ", ".join(["?"] * len(ids))
+            sql = f"""
+                SELECT session_id,
+                       SUM(COALESCE(token_count, 0)) AS tokens,
+                       SUM(COALESCE(cost_usd, 0.0))  AS cost_usd
+                FROM events
+                WHERE session_id IN ({placeholders})
+                GROUP BY session_id
+            """
+            out: dict[str, dict[str, Any]] = {}
+            for r in self._fetch(sql, ids):
+                out[r[0]] = {"tokens": int(r[1] or 0), "cost_usd": float(r[2] or 0.0)}
+            return out
+        except Exception:
+            return {}
+
     def query_recent_read_tool_calls(
         self,
         *,
@@ -3875,6 +4317,7 @@ class LocalStore:
             data: dict[str, Any] = {}
             if raw is not None:
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     parsed = json.loads(text) if text else {}
                     if isinstance(parsed, dict):
@@ -3962,6 +4405,7 @@ class LocalStore:
             data: dict[str, Any] = {}
             if raw is not None:
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     parsed = json.loads(text) if text else {}
                     if isinstance(parsed, dict):
@@ -4026,6 +4470,7 @@ class LocalStore:
             data: dict[str, Any] = {}
             if raw is not None:
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     parsed = json.loads(text) if text else {}
                     if isinstance(parsed, dict):
@@ -4288,18 +4733,32 @@ class LocalStore:
             # Sort by id so stamp order within a created_at bucket is deterministic
             # and matches the ORDER BY id ASC used in verify_integrity.
             events.sort(key=lambda e: str(e.get("id") or ""))
+            # Dedup check in ONE query for the whole batch (was a SELECT per
+            # event). INSERT OR IGNORE may have skipped a re-delivered event
+            # that is already stamped; re-stamping it would fork the chain, so
+            # we must skip those. With the flush batch up to 1000 rows, a
+            # per-event lookup is up to 1000 indexed PK queries per flush; this
+            # collapses it to one IN(...) lookup, keeping default-on stamping
+            # within the daemon CPU budget (FLYWHEEL 1e).
+            ids = [str(e.get("id")) for e in events if e.get("id")]
+            already_stamped: dict[str, str] = {}
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                for r in conn.execute(
+                    "SELECT id, chain_hash FROM events "
+                    f"WHERE id IN ({placeholders}) AND chain_hash IS NOT NULL",
+                    ids,
+                ).fetchall():
+                    already_stamped[str(r[0])] = r[1]
             updates: list[tuple[str, str, str]] = []
             for e in events:
                 eid = str(e.get("id") or "")
                 if not eid:
                     continue
                 # Only stamp events that were actually inserted (not duplicates).
-                already = conn.execute(
-                    "SELECT chain_hash FROM events WHERE id = ? AND chain_hash IS NOT NULL",
-                    [eid],
-                ).fetchone()
-                if already:
-                    head = already[0]
+                prev = already_stamped.get(eid)
+                if prev is not None:
+                    head = prev
                     continue
                 new_hash = _integrity_hash(head, e)
                 updates.append((head, new_hash, eid))
@@ -4445,6 +4904,7 @@ class LocalStore:
         for (eid, data, model) in rows:
             try:
                 if isinstance(data, (bytes, bytearray)):
+                    data = _ccr.maybe_decompress(data)
                     data = bytes(data).decode("utf-8", "replace")
                 obj = json.loads(data) if isinstance(data, str) else data
             except Exception:
@@ -4524,6 +4984,7 @@ class LocalStore:
                 max_id = eid
             try:
                 if isinstance(data, (bytes, bytearray)):
+                    data = _ccr.maybe_decompress(data)
                     data = bytes(data).decode("utf-8", "replace")
                 obj = json.loads(data) if isinstance(data, str) else data
             except Exception:
@@ -5010,6 +5471,7 @@ class LocalStore:
             raw = d.get("raw_blob")
             if raw is not None:
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     try:
                         d["raw_blob"] = json.loads(text)
@@ -5901,6 +6363,7 @@ class LocalStore:
             raw = d.get("condition_json")
             if raw is not None:
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     try:
                         d["condition_json"] = json.loads(text)
@@ -6219,6 +6682,41 @@ class LocalStore:
             except Exception:
                 log.exception("local store: persist_eval_score failed for %s",
                               session_id)
+
+    def persist_faithfulness_score(
+        self,
+        *,
+        session_id: str,
+        score: float,
+        detail: str = "",
+        scored_at: int,
+    ) -> None:
+        """Persist a content-grounded faithfulness score onto the ``sessions``
+        row. Mirrors ``persist_eval_score`` (same single-writer connection +
+        upsert-in-place semantics).
+
+        The COMPUTE lives in clawmetry-pro (the claim-by-claim verifier); the
+        store column is OSS so a free install can still read a Pro-written value
+        and the catalogue can surface it. ``detail`` is a small JSON string with
+        the unsupported-claim list; ``score`` is 0-1.
+        """
+        with self._write_lock:
+            try:
+                self._conn.execute(
+                    """
+                    UPDATE sessions
+                       SET faithfulness_score     = ?,
+                           faithfulness_detail    = ?,
+                           faithfulness_scored_at = ?
+                     WHERE session_id             = ?
+                    """,
+                    [float(score), detail or "", int(scored_at), session_id],
+                )
+            except Exception:
+                log.exception(
+                    "local store: persist_faithfulness_score failed for %s",
+                    session_id,
+                )
 
     def query_unscored_sessions(
         self,
@@ -6760,6 +7258,7 @@ class LocalStore:
             meta: dict[str, Any] = {}
             if raw:
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     meta = json.loads(text) if text else {}
                     if not isinstance(meta, dict):
@@ -6807,6 +7306,7 @@ class LocalStore:
             data: dict[str, Any] = {}
             if raw is not None:
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     parsed = json.loads(text) if text else {}
                     if isinstance(parsed, dict):
@@ -6860,6 +7360,7 @@ class LocalStore:
             data: dict[str, Any] = {}
             if raw is not None:
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     parsed = json.loads(text) if text else {}
                     if isinstance(parsed, dict):
@@ -7092,6 +7593,7 @@ class LocalStore:
                 data: dict[str, Any] = {}
                 if raw is not None:
                     try:
+                        raw = _ccr.maybe_decompress(raw)
                         text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                         parsed = json.loads(text) if text else {}
                         if isinstance(parsed, dict):
@@ -7235,6 +7737,7 @@ class LocalStore:
             if raw is None:
                 return {}
             try:
+                raw = _ccr.maybe_decompress(raw)
                 text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                 parsed = json.loads(text) if text else {}
                 return parsed if isinstance(parsed, dict) else {}
@@ -7466,6 +7969,7 @@ class LocalStore:
             data: dict[str, Any] = {}
             if raw is not None:
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     parsed = json.loads(text) if text else {}
                     if isinstance(parsed, dict):
@@ -7591,6 +8095,7 @@ class LocalStore:
             data: dict[str, Any] = {}
             if raw is not None:
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     parsed = json.loads(text) if text else {}
                     if isinstance(parsed, dict):
@@ -7798,6 +8303,7 @@ class LocalStore:
             data: dict[str, Any] = {}
             if raw is not None:
                 try:
+                    raw = _ccr.maybe_decompress(raw)
                     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                     parsed = json.loads(text) if text else {}
                     if isinstance(parsed, dict):
@@ -8949,6 +9455,8 @@ def _event_to_row(e: dict[str, Any]) -> tuple:
             data = data.encode("utf-8")
         else:
             data = json.dumps(data, separators=(",", ":")).encode("utf-8")
+            if _ccr.enabled():
+                data = _ccr.compress(data)
     cost, tokens, model = _extract_event_metrics(e)
     return (
         str(e["id"]),
@@ -8974,6 +9482,7 @@ def _row_to_event(row: tuple, cols: list[str]) -> dict[str, Any]:
     raw = out.get("data")
     if raw is not None:
         try:
+            raw = _ccr.maybe_decompress(raw)
             text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
             try:
                 out["data"] = json.loads(text)
@@ -9699,6 +10208,7 @@ def _decode_data_blob_rows(rows: Iterable[tuple], cols: list[str]) -> list[dict[
         raw = d.get("data")
         if raw is not None:
             try:
+                raw = _ccr.maybe_decompress(raw)
                 text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                 try:
                     d["data"] = json.loads(text)

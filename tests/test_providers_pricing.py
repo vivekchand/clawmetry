@@ -27,11 +27,33 @@ def test_explicit_gemini_provider_still_works():
     assert _get_rates("gemini", "gemini-2.0-flash") == (0.10, 0.40)
 
 
-def test_anthropic_openai_rates_unchanged():
-    assert _get_rates("anthropic", "claude-opus-4-8") == (15.0, 75.0)
+def test_current_gen_anthropic_rates_match_litellm():
+    # Opus 4.5+ is a NEW, cheaper generation: $5/$25, NOT the old opus-4 $15/$75.
+    # (Verified against LiteLLM model_prices — the table ccusage uses — 2026-06-08.
+    # The previous assertion here pinned $15/$75 and codified a 3x over-charge
+    # that made the founder's Claude Code show $103k vs ccusage's $16k.)
+    assert _get_rates("anthropic", "claude-opus-4-5") == (5.0, 25.0)
+    assert _get_rates("anthropic", "claude-opus-4-6") == (5.0, 25.0)
+    assert _get_rates("anthropic", "claude-opus-4-7") == (5.0, 25.0)
+    assert _get_rates("anthropic", "claude-opus-4-8") == (5.0, 25.0)
+    # Old-gen opus stays $15/$75 (longest-prefix must not let 4-8 win on 4/4-1).
+    assert _get_rates("anthropic", "claude-opus-4-20250514") == (15.0, 75.0)
+    assert _get_rates("anthropic", "claude-opus-4-1-20250805") == (15.0, 75.0)
     assert _get_rates("anthropic", "claude-sonnet-4-6") == (3.0, 15.0)
+    assert _get_rates("anthropic", "claude-haiku-4-5") == (1.0, 5.0)
     assert _get_rates("openai", "gpt-4o-mini") == (0.15, 0.60)
     assert _get_rates("openai", "gpt-4o") == (2.50, 10.00)
+
+
+def test_opus_4_8_full_cost_matches_ccusage():
+    # End-to-end cache-aware cost for a real opus-4-8 token split must equal the
+    # LiteLLM/ccusage number (input $5, output $25, cache_write $6.25, read $0.50/M).
+    c = estimate_event_cost_usd(
+        "claude-opus-4-8", input_tokens=5_619_327, output_tokens=18_967_474,
+        cache_read_tokens=5_828_754_946, cache_write_tokens=113_278_937,
+        provider="anthropic",
+    )
+    assert abs(c - 4124.65) < 1.0, f"opus-4-8 cost {c} != ccusage 4124.65"
 
 
 def test_unknown_provider_conservative_default():

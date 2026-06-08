@@ -674,3 +674,67 @@ def test_openllmetry_openai_chat_shape_end_to_end(app):
     sp_body = _spans(c, "?session_id=conv-xyz-789&limit=10")
     assert sp_body["count"] == 1
     assert sp_body["spans"][0]["span_id"] == _hx(0x90)
+
+
+class _RecordingProxy:
+    """Stand-in for the dashboard-process _ProxyStore: records every method
+    call (args + kwargs) and no-ops, mirroring how the real proxy forwards to
+    the daemon. Crucially it lets us assert the OTLP receiver passes the span
+    by KEYWORD (the real proxy drops positional args)."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __getattr__(self, name):
+        def _f(*a, **k):
+            self.calls.append((name, a, k))
+            return None
+        return _f
+
+
+@pytest.mark.skipif(_ts_pb2 is None, reason="opentelemetry-proto not installed")
+def test_otlp_span_write_forwards_through_daemon_proxy(monkeypatch):
+    """Regression (caught live 2026-06-08): when the daemon owns the DuckDB
+    writer, the dashboard's get_store() returns a _ProxyStore that ONLY
+    forwards **kwargs (positional args are dropped). The OTLP /v1/traces
+    receiver therefore MUST call put_span(span=...) by keyword, and put_span
+    MUST be in routes.local_query._DAEMON_METHODS, or every OTLP span silently
+    no-ops and a bring-your-own-agent (OpenLLMetry) app never persists or shows
+    up in the runtime switcher / Agent Inventory. The other tests in this file
+    force single-process (`_daemon_registered` -> False), which is exactly why
+    they missed this; here we force the proxy path."""
+    import importlib
+    import clawmetry.local_store as ls
+    importlib.reload(ls)
+    rec = _RecordingProxy()
+    monkeypatch.setattr(ls, "get_store", lambda *a, **k: rec)
+
+    import dashboard as _d
+    pb = _build_pb(
+        [{
+            "span_id_hex": "1111111111111111",
+            "name": "openai.chat",
+            "start_ts": time.time(),
+            "str_attrs": {"gen_ai.system": "openai", "gen_ai.request.model": "gpt-4o"},
+            "int_attrs": {
+                "gen_ai.usage.input_tokens": 1200,
+                "gen_ai.usage.output_tokens": 350,
+            },
+        }],
+        service_name="my-langchain-app",
+    )
+    _d._process_otlp_traces(pb)
+
+    put_calls = [c for c in rec.calls if c[0] == "put_span"]
+    assert put_calls, "put_span was never called by the OTLP receiver"
+    _name, args, kwargs = put_calls[0]
+    # The real proxy drops positional args; the span MUST ride as a keyword.
+    assert not args, f"positional put_span args are dropped by the proxy: {args!r}"
+    assert "span" in kwargs, "put_span must be called as put_span(span=...)"
+    row = kwargs["span"]
+    # service.name -> per-app agent_type (the bring-your-own-agent identity).
+    assert row.get("agent_type") == "my_langchain_app", row.get("agent_type")
+
+    # And the daemon must accept the write, or the proxy 400s -> silent drop.
+    import routes.local_query as lq
+    assert "put_span" in lq._DAEMON_METHODS

@@ -5753,21 +5753,39 @@ def _runtime_data_paths(rid: str) -> list:
     return _M.get(rid, [])
 
 
+# Transient sidecar files whose mtime changes on mere DB OPEN (no real activity):
+# SQLite write-ahead log + shared-memory + rollback journal, and lock files. A
+# read-only open of goose's sessions.db touches ``sessions.db-shm`` → the runtime
+# falsely classified "active 0h ago" while its actual conversations were weeks
+# old (founder 2026-06-08). Excluded so filesystem recency reflects real writes.
+_TRANSIENT_MTIME_SUFFIXES = ("-shm", "-wal", "-journal", ".lock", ".lck", "lock")
+
+
+def _is_transient_mtime_file(name: str) -> bool:
+    n = (name or "").lower()
+    return any(n.endswith(suf) for suf in _TRANSIENT_MTIME_SUFFIXES)
+
+
 def _newest_mtime(paths: list, cap: int = 4000):
     """Newest mtime (epoch float) across the given files/dirs, or None. Bounded
     walk (cap files) so a huge ~/.claude/projects tree can't make the heartbeat
-    expensive. Never raises."""
+    expensive. Skips SQLite sidecar / lock files whose mtime bumps on a mere DB
+    open (they don't indicate real activity). Never raises."""
     newest = 0.0
     seen = 0
     for p in (paths or []):
         try:
             if os.path.isfile(p):
+                if _is_transient_mtime_file(os.path.basename(p)):
+                    continue
                 m = os.path.getmtime(p)
                 if m > newest:
                     newest = m
             elif os.path.isdir(p):
                 for root, _dirs, files in os.walk(p):
                     for f in files:
+                        if _is_transient_mtime_file(f):
+                            continue
                         seen += 1
                         if seen > cap:
                             return newest or None
@@ -6264,6 +6282,58 @@ def _detect_billing_opencode(home: Path) -> dict:
     return _bm("unknown")
 
 
+def _detect_billing_openclaw(home: Path) -> dict:
+    """Classify OpenClaw's billing from ``~/.openclaw/openclaw.json`` (or
+    ``$OPENCLAW_HOME``). OpenClaw doesn't call models itself — it DELEGATES each
+    model to a runtime (``agents.defaults.models[*].agentRuntime.id``):
+
+      * ``claude-cli`` — the Claude CLI runs the calls, so the billing IS the
+        Claude CLI's: a Max/Pro **subscription** (or **metered** if the CLI is on
+        an API key). We delegate to ``_detect_billing_claude_code`` — which is
+        why a user on Claude Max sees OpenClaw as their plan, not "unconfirmed".
+      * a direct-API runtime — **metered** at the model provider's API rates,
+        read from the model-name prefix (``anthropic/`` / ``openai/`` /
+        ``openrouter/`` / ``google/`` …). This is how OpenClaw configured for a
+        Claude/OpenAI/OpenRouter API key gets billed correctly.
+
+    NEVER reads a secret value, NEVER raises → ``unknown`` on any failure.
+    """
+    oc_home = _bm_env("OPENCLAW_HOME")
+    base = Path(oc_home) if oc_home else (home / ".openclaw")
+    cfg = _bm_read_json(base / "openclaw.json")
+    if not isinstance(cfg, dict):
+        return _bm("unknown")
+    models = (((cfg.get("agents") or {}).get("defaults")) or {}).get("models") or {}
+    if not isinstance(models, dict) or not models:
+        return _bm("unknown")
+    runtime_ids: list[str] = []
+    providers: list[str] = []
+    for mname, mcfg in models.items():
+        rid = ""
+        if isinstance(mcfg, dict):
+            rid = str(((mcfg.get("agentRuntime") or {}).get("id")) or "").lower()
+        runtime_ids.append(rid)
+        providers.append(str(mname or "").split("/")[0].lower())
+    # claude-cli dominant → inherit the Claude CLI's billing (sub or metered).
+    cli = sum(1 for r in runtime_ids if "claude-cli" in r or r == "claude")
+    if cli and cli >= len(runtime_ids) / 2:
+        return _detect_billing_claude_code(home)
+    # Otherwise a direct-API runtime → metered at the dominant provider's rates.
+    prov = max(set(providers), key=providers.count) if providers else ""
+    metered_label = {
+        "anthropic": "Anthropic API",
+        "openai": "OpenAI API",
+        "openrouter": "OpenRouter",
+        "google": "Google API", "gemini": "Google API",
+        "xai": "xAI API", "mistral": "Mistral API", "groq": "Groq API",
+    }.get(prov)
+    if metered_label:
+        return _bm("metered", label=metered_label)
+    if prov in ("ollama", "local", "lmstudio", "llamacpp"):
+        return _bm("local", label="Local model")
+    return _bm("unknown")
+
+
 _BILLING_DETECTORS = {
     "claude_code": _detect_billing_claude_code,
     "codex":       _detect_billing_codex,
@@ -6273,6 +6343,7 @@ _BILLING_DETECTORS = {
     "aider":       _detect_billing_aider,
     "goose":       _detect_billing_goose,
     "opencode":    _detect_billing_opencode,
+    "openclaw":    _detect_billing_openclaw,
 }
 
 
@@ -6322,7 +6393,7 @@ def _build_billing_payload(config: dict) -> dict | None:
         except Exception:
             detected = []
         # Always attempt claude_code (it anchors account_plan) even if 0-session.
-        rt_ids = list(dict.fromkeys(["claude_code"] + detected))
+        rt_ids = list(dict.fromkeys(["claude_code", "openclaw"] + detected))
         runtimes: dict = {}
         for rid in rt_ids:
             if rid not in _BILLING_DETECTORS:
@@ -6393,6 +6464,18 @@ def _detect_runtimes_for_heartbeat() -> list:
     # source) so the Fleet stops presenting a months-old Cursor history or an
     # OpenClaw sub-agent as a live standalone runtime. Back-compat: consumers
     # that don't read the new keys are unaffected.
+    # Authoritative recency = the newest INGESTED event per runtime (what the
+    # Brain/Tracing tabs show). Overrides the filesystem-mtime classification so
+    # a runtime can't read "active" while its Brain feed is empty (goose's
+    # sessions.db-shm bumped to now with no real activity — founder 2026-06-08).
+    _ev_recency = {}
+    try:
+        from clawmetry import local_store as _ls_rec
+        _store_rec = _ls_rec.get_store()
+        if _store_rec is not None:
+            _ev_recency = _store_rec.query_runtime_last_active() or {}
+    except Exception:
+        _ev_recency = {}
     out = []
     for r in merged.values():
         if int(r.get("sessions") or 0) <= 0:
@@ -6401,8 +6484,59 @@ def _detect_runtimes_for_heartbeat() -> list:
             r.update(_classify_runtime(r["id"]))
         except Exception:
             pass
+        # Prefer the events-table recency when this runtime has ingested events:
+        # it reflects real conversation activity, not a DB-open/WAL-checkpoint
+        # mtime. (Filesystem stays the fallback for detected-but-not-yet-ingested
+        # runtimes so on-disk-only detection still works.)
+        try:
+            _iso = _ev_recency.get(r["id"])
+            if _iso:
+                _s = str(_iso).replace("Z", "+00:00")
+                _dtp = datetime.fromisoformat(_s)
+                if _dtp.tzinfo is None:
+                    _dtp = _dtp.replace(tzinfo=timezone.utc)
+                _ep = _dtp.timestamp()
+                r["last_active"] = int(_ep)
+                _age = time.time() - _ep
+                r["status"] = ("active" if _age < _RT_ACTIVE_SECS
+                               else "idle" if _age < _RT_IDLE_SECS else "stale")
+        except Exception:
+            pass
         out.append(r)
     return out
+
+
+def _heartbeat_stuck_payload(now: float | None = None) -> list:
+    """The stuck list to ride the next heartbeat, or ``[]``.
+
+    Reads the module-level ``_LATEST_STUCK`` cache (refreshed by
+    ``_emit_stuck_signals`` each detector tick) and returns its items ONLY when
+    the cache is FRESH (refreshed within ``_STUCK_HEARTBEAT_FRESH_SECONDS``).
+    A stale cache → ``[]`` so a wedged/stopped detector can never pin a banner
+    on the device; the cloud's device_summary also has its own recency gate, so
+    this is belt-and-suspenders. Empty-but-fresh → ``[]`` (self-clear). Each
+    item is kept tiny (capped count, ``message`` truncated). Never raises."""
+    try:
+        ts = float(_LATEST_STUCK.get("ts") or 0.0)
+        if ts <= 0:
+            return []
+        ref = time.time() if now is None else now
+        if (ref - ts) > _STUCK_HEARTBEAT_FRESH_SECONDS:
+            return []
+        items = _LATEST_STUCK.get("items") or []
+        out = []
+        for it in items[:_STUCK_HEARTBEAT_MAX_ITEMS]:
+            if not isinstance(it, dict):
+                continue
+            out.append({
+                "runtime": str(it.get("runtime") or "openclaw"),
+                "tool_calls": int(it.get("tool_calls") or 0),
+                "since_seconds": int(it.get("since_seconds") or 0),
+                "message": str(it.get("message") or "")[:_STUCK_HEARTBEAT_MAX_MSG],
+            })
+        return out
+    except Exception:
+        return []
 
 
 def send_heartbeat(config: dict) -> bool:
@@ -6437,6 +6571,19 @@ def send_heartbeat(config: dict) -> bool:
         # accounts without the clawmetry-pro adapters too.
         "detected_runtimes": _detect_runtimes_for_heartbeat(),
     }
+    # Stuck-agent signal (clawmetry-hardware#15). The WiFi desk device fetches
+    # the CLOUD device_summary (built from Postgres), NOT the local dashboard or
+    # the legacy E2E snapshot, so the daemon's loop_signals never reached it.
+    # Ride the cached stuck list on the plaintext, regularly-sent, self-clearing
+    # heartbeat instead. ONLY attach when fresh+non-empty (helper enforces the
+    # 5-min freshness gate) so a stale cache can't pin a banner. Best-effort —
+    # heartbeat MUST still send if this fails.
+    try:
+        _stuck = _heartbeat_stuck_payload()
+        if _stuck:
+            payload["stuck"] = _stuck
+    except Exception as _st_e:
+        log.debug("stuck heartbeat payload build failed (continuing): %s", _st_e)
     # Agent-install self-report (cloud bug fix 2026-05-18). Cloud Run pods
     # can't stat the user's home directory, so the daemon tells cloud what
     # agents exist locally and cloud aggregates across the user's fleet.
@@ -6852,16 +6999,19 @@ def _rows_to_brain_events(rows: list) -> list:
             # Bound the per-event size so a burst of big tool outputs can't push
             # the blob past the device's 128 KB buffer (the "feed locked" cause).
             data = _truncate_brain_payload(data)
-            # Stamp the session id so per-session feeds (the desk device's live
-            # feed + cloud Brain filtering) can attribute each event. Family
-            # runtime payloads (claude_code/codex/…) carry NO sessionId inside
-            # ``data`` -- only the row's top-level session_id column has it, so
-            # the device's per-session filter matched nothing and every session
-            # showed the same node-wide feed. Use the BARE uuid (drop the
-            # ``runtime:`` namespace) so it matches the device-agent session ids
-            # (#1465). Never overwrite a sessionId the payload already carries.
+            # Stamp the CANONICAL session id from the row's top-level session_id
+            # column (the BARE uuid, dropping the ``runtime:`` namespace) so
+            # per-session feeds (desk device + cloud Brain filtering) attribute
+            # each event to the session the device shows. We OVERWRITE any
+            # ``sessionId`` already inside ``data``: an OpenClaw session that runs
+            # Claude Code under the hood embeds the INNER Claude-CLI sessionId in
+            # its event payload (e.g. data.sessionId=<claude uuid> while the row
+            # belongs to the OpenClaw session) -- trusting that inner id filed the
+            # events under the wrong session, so tapping the OpenClaw session on
+            # the device showed "no activity". The row's session_id is the same
+            # id the device-agent + sessions table use, so it's authoritative.
             _sid = r.get("session_id")
-            if _sid and not data.get("sessionId") and not data.get("session_id"):
+            if _sid:
                 data = {**data, "sessionId": _sid.rsplit(":", 1)[-1]}
             out.append(_cap_brain_event_size(data))
         elif isinstance(data, str):
@@ -8662,6 +8812,21 @@ def _apply_approval_decision(q: dict) -> None:
     if n:
         log.info("[approval] %s relayed decision=%s by %s (status flipped)",
                  approval_id, decision, resolver)
+        # Enterprise audit-log producer — record the cloud-relayed approval
+        # decision (who decided, on which approval). Only when a row actually
+        # flipped, so duplicate relays don't double-log. Never raises.
+        try:
+            from clawmetry import audit as _audit
+            _audit.audit_event(
+                "approval.decision",
+                actor=resolver,
+                target=approval_id,
+                result=decision,
+                source="cloud-relay",
+                metadata={"reason": reason} if reason else None,
+            )
+        except Exception:
+            pass
     else:
         # Either unknown id or already decided — both safe to ignore.
         log.debug("[approval] %s relayed decision=%s — no-op (row missing or "
@@ -9379,14 +9544,51 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                 _local_ingest_sessions_batch(rows, node_id)
             except Exception as _e:
                 log.warning("local-store sessions ingest failed (cloud sync continues): %s", _e)
+            # Bridge cost/tokens from the events table before pushing to cloud.
+            # The JSONL ``message.usage`` fields above are EMPTY for OpenClaw
+            # sessions driven by the Claude CLI (no assistant-usage in the
+            # gateway transcript), so ``total_cost``/``total_tokens`` were pushed
+            # as 0 even though the events table (daemon-stamped at ingest) has the
+            # real figures — the cloud "Your agents" / Usage views then showed
+            # $0 (#web-accuracy). GREATEST(JSONL-derived, SUM(events)) mirrors
+            # query_sessions_table's bridge: only ever raises a stale-low value,
+            # never lowers a JSONL value that's already correct.
+            try:
+                from clawmetry import local_store as _ls
+                _store = _ls.get_store()
+                if _store is not None:
+                    _ev_totals = _store.query_event_totals_by_session(
+                        [s.get("session_id") for s in rows]
+                    )
+                    for s in rows:
+                        _t = _ev_totals.get(s.get("session_id"))
+                        if not _t:
+                            continue
+                        s["total_tokens"] = max(int(s.get("total_tokens") or 0),
+                                                int(_t.get("tokens") or 0))
+                        s["total_cost"] = max(float(s.get("total_cost") or 0.0),
+                                              float(_t.get("cost_usd") or 0.0))
+            except Exception as _e:
+                log.debug("event-cost bridge skipped (push uses JSONL value): %s", _e)
             _post("/ingest/sessions", {"node_id": node_id, "sessions": rows}, api_key)
             return len(rows)
 
         batch: list = []
         total_uploaded = 0
         BATCH_SIZE = 50
-        for fpath, current_mtime in jsonl_files:
-            if last_mtimes.get(fpath.name) == current_mtime:
+        # jsonl_files is sorted mtime-desc. ALWAYS re-process the most-recent
+        # _ALWAYS_RESYNC_RECENT sessions, even when their JSONL mtime is unchanged
+        # — OpenClaw's Claude-CLI JSONL doesn't bump mtime on append AND carries
+        # no usage, so a session's REAL cost/tokens only land via the events
+        # bridge in _flush(). Without this, the bridge never re-reaches Postgres
+        # for an already-synced session and the cloud "Your agents" / device-
+        # summary cost stayed $0 forever (#web-accuracy / audit FIX 7). Bounded
+        # so steady-state cost stays tiny (re-parse a handful of small JSONLs).
+        _ALWAYS_RESYNC_RECENT = int(
+            os.environ.get("CLAWMETRY_RESYNC_RECENT_SESSIONS", "30") or "30")
+        for _idx, (fpath, current_mtime) in enumerate(jsonl_files):
+            if _idx >= _ALWAYS_RESYNC_RECENT and \
+                    last_mtimes.get(fpath.name) == current_mtime:
                 continue
             try:
                 # `<uuid>.jsonl` -> stem is `<uuid>`. For an archived
@@ -10096,6 +10298,106 @@ def _session_tool_health(events) -> dict:
     }
 
 
+# Compression-potential heuristics (Headroom-inspired, #2838). These are the
+# rough share of a content type that is recoverable without changing answers
+# (repeated JSON keys, log boilerplate, diff context). Measurement only; the
+# actual compression is a separate, optional layer we never run here.
+_COMPRESS_RATIO = {"json": 0.85, "log": 0.90, "diff": 0.65, "text": 0.0}
+
+
+def _classify_compressible(text: str) -> str:
+    """Cheap content-type guess for the compression-potential meter. No parsing
+    of secrets, no storage of content — just a label. Never raises."""
+    try:
+        t = (text or "").lstrip()
+        if not t:
+            return "text"
+        if t[0] in "[{":
+            return "json"
+        if t.startswith(("diff --git", "@@ ", "--- ", "+++ ", "Index: ")):
+            return "diff"
+        lines = t.split("\n")
+        if len(lines) >= 8:
+            import re as _re
+            hits = 0
+            for ln in lines[:60]:
+                if _re.search(r"\b(INFO|WARN|WARNING|ERROR|DEBUG|TRACE)\b", ln) or \
+                   _re.match(r"\s*\d{4}-\d\d-\d\d[ T]\d\d:\d\d", ln):
+                    hits += 1
+            if hits >= 3:
+                return "log"
+    except Exception:
+        return "text"
+    return "text"
+
+
+def _session_compression_potential(events, model: str = "", min_chars: int = 400) -> dict:
+    """Estimate how much of this session's TOOL-OUTPUT context is compressible
+    without changing answers (JSON arrays, logs, diffs). The meter for
+    recoverable token waste (Headroom-inspired, #2838): scan tool-result text at
+    ingest, classify by cheap heuristics, and store ONLY aggregate token
+    estimates + a percentage + a $ figure — never the raw content. Compressible
+    tool output re-enters context as INPUT tokens, so the $ uses the input rate.
+    Returns {} when there is no sizeable tool output. Never raises."""
+    try:
+        from clawmetry import error_signal as _es
+    except Exception:
+        _es = None
+    by_type: dict = {}
+    total_tok = 0
+    comp_tok = 0.0
+    try:
+        for e in events or []:
+            et = (getattr(e, "type", "") or "").lower()
+            if "result" not in et and not getattr(e, "tool_name", ""):
+                continue
+            extra = getattr(e, "extra", None)
+            extra = extra if isinstance(extra, dict) else {}
+            txt = ""
+            if _es is not None:
+                try:
+                    txt = _es.extract_tool_result_text(
+                        {"content": getattr(e, "content", ""), "extra": extra}
+                    ) or ""
+                except Exception:
+                    txt = ""
+            if not txt:
+                txt = getattr(e, "content", "") or ""
+            if not isinstance(txt, str) or len(txt) < min_chars:
+                continue
+            ctype = _classify_compressible(txt)
+            tok = max(1, len(txt) // 4)  # rough chars -> tokens
+            total_tok += tok
+            ratio = _COMPRESS_RATIO.get(ctype, 0.0)
+            ct = tok * ratio
+            comp_tok += ct
+            d = by_type.setdefault(ctype, {"tokens": 0, "compressible": 0.0})
+            d["tokens"] += tok
+            d["compressible"] += ct
+    except Exception:
+        return {}
+    if total_tok <= 0 or comp_tok < 1:
+        return {}
+    out: dict = {
+        "toolOutputTokens": total_tok,
+        "compressibleToolTokens": int(round(comp_tok)),
+        "compressionPotentialPct": round(comp_tok / total_tok * 100, 1),
+        "compressionByType": {
+            k: int(round(v["compressible"]))
+            for k, v in by_type.items() if v["compressible"] >= 1
+        },
+    }
+    if model:
+        try:
+            from clawmetry.providers_pricing import estimate_event_cost_usd as _ec
+            _rc = _ec(model, input_tokens=int(round(comp_tok)))
+            if _rc and _rc > 0:
+                out["compressionRecoverableUsd"] = round(float(_rc), 6)
+        except Exception:
+            pass
+    return out
+
+
 def _session_idle_gaps(events, ttl_sec: int = 300) -> dict:
     """Count idle gaps that crossed the prompt-cache TTL. Anthropic's cache
     expires after ~5 minutes, so every consecutive-event gap longer than that
@@ -10234,6 +10536,12 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 metadata.update(_thealth)
                 _idle = _session_idle_gaps(_events)
                 metadata.update(_idle)
+                # Compression-potential meter (#2838): how much tool-output
+                # context is recoverable without changing answers. Aggregates
+                # only; raw content never leaves the daemon.
+                _compress = _session_compression_potential(
+                    _events, model=getattr(s, "model", "") or "")
+                metadata.update(_compress)
                 # Readable title: a raw UUID is unreadable on the dashboard/device.
                 # When the adapter gives no display_name (Claude Code, Codex, ...),
                 # derive a human title from the first real user message.
@@ -10300,6 +10608,11 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                     "cache_expiry_count": _idle.get("cacheExpiryCount"),
                     "tool_error_pct": _thealth.get("toolErrorPct"),
                     "compaction_count": _compactions or None,
+                    # Compression-potential meter (#2838) carried to the cloud so
+                    # the recoverable-spend roll-up renders from the snapshot too.
+                    "compression_potential_pct": _compress.get("compressionPotentialPct"),
+                    "compressible_tool_tokens": _compress.get("compressibleToolTokens"),
+                    "compression_recoverable_usd": _compress.get("compressionRecoverableUsd"),
                 })
                 # Events → transcript (rides the existing _build_transcripts path).
                 # Re-ingest the full event set for sessions that advanced (the
@@ -10562,35 +10875,36 @@ def _build_model_attribution():
     Best-effort: any failure yields {} (cloud falls back to its empty state).
     """
     try:
-        from collections import defaultdict
         from clawmetry import local_store as _ls
 
         store = _ls.get_store()
         if store is None:
             return {}
-        evs = store.query_events(limit=20000)
-        if not evs:
+        # Uncapped SQL rollup over the FULL events table (was a most-recent-20k
+        # event scan that starved every runtime once claude_code passed ~20k
+        # events — #web-accuracy). One GROUP BY, tiny output.
+        rollup = store.query_model_rollup() or {}
+        by_rtm = rollup.get("by_runtime_model") or []
+        if not by_rtm:
             return {}
+        # Global per-model totals = sum across runtimes (a session belongs to
+        # exactly one runtime by session-id prefix, so distinct-session counts
+        # don't double-count when summed).
         model_turns: dict = {}
-        sess_models = defaultdict(list)
-        saw_any = False
-        for ev in sorted(evs, key=lambda e: (e.get("session_id") or "", e.get("ts") or "")):
-            m = (ev.get("model") or "").strip()
+        model_sessions: dict = {}
+        for r in by_rtm:
+            m = (r.get("model") or "").strip()
             if not m:
                 continue
-            saw_any = True
-            model_turns[m] = model_turns.get(m, 0) + 1
-            sid = ev.get("session_id") or ""
-            if sid and (not sess_models[sid] or sess_models[sid][-1] != m):
-                sess_models[sid].append(m)
-        if not saw_any:
+            model_turns[m] = model_turns.get(m, 0) + int(r.get("turns") or 0)
+            model_sessions[m] = model_sessions.get(m, 0) + int(r.get("sessions") or 0)
+        if not model_turns:
             return {}
-        model_sessions: dict = {}
-        switches = []
-        for sid, mlist in sess_models.items():
-            model_sessions[mlist[0]] = model_sessions.get(mlist[0], 0) + 1
-            for prev, nxt in zip(mlist, mlist[1:]):
-                switches.append({"session": sid, "from_model": prev, "to_model": nxt})
+        switches = [
+            {"session": s.get("session", ""), "from_model": s.get("from_model", ""),
+             "to_model": s.get("to_model", "")}
+            for s in (rollup.get("switches") or [])
+        ]
         total_turns = sum(model_turns.values())
         sorted_models = sorted(model_turns.items(), key=lambda x: -x[1])
         primary_model = sorted_models[0][0] if sorted_models else ""
@@ -10646,63 +10960,304 @@ def _build_runtime_summary(limit: int = 20000):
         store = _ls.get_store()
         if store is None:
             return {}
-        evs = store.query_events(limit=int(limit))
-        if not evs:
-            return {}
-        agg: dict = {}
-        sess_models = defaultdict(list)  # (rt, sid) -> ordered model list
-        for ev in sorted(evs, key=lambda e: (e.get("session_id") or "", e.get("ts") or "")):
-            sid = ev.get("session_id") or ""
-            rt = _runtime_of_session(sid)
-            a = agg.setdefault(rt, {"turns": 0, "tokens": 0, "cost": 0.0,
-                                    "models": {}, "sessions": set()})
-            if sid:
-                a["sessions"].add(sid)
-            try:
-                a["tokens"] += int(ev.get("token_count") or 0)
-            except (TypeError, ValueError):
-                pass
-            try:
-                a["cost"] += float(ev.get("cost_usd") or 0.0)
-            except (TypeError, ValueError):
-                pass
-            m = (ev.get("model") or "").strip()
+        # Uncapped SQL rollup over the FULL events table. The previous
+        # query_events(limit=20000) scan returned only the 20k most-recent events
+        # GLOBALLY, so a high-volume runtime (claude_code at 100k+ events)
+        # consumed the entire budget — smaller runtimes (goose/hermes/opencode/
+        # qwen_code) dropped out of the snapshot entirely and the big runtime was
+        # undercounted ~5× (#web-accuracy). The ``limit`` kwarg is retained for
+        # signature compatibility but no longer caps the aggregate.
+        rollup = store.query_model_rollup() or {}
+        by_runtime = rollup.get("by_runtime") or {}
+        by_rtm = rollup.get("by_runtime_model") or []
+        # NOTE: we no longer early-return on empty events — a node that ONLY ever
+        # sent OTLP traces (a pure OpenLLMetry app, no OpenClaw sessions) has no
+        # events but DOES have foreign-app spans to surface below.
+        rt_models: dict = defaultdict(dict)  # rt -> {model: {turns, sessions}}
+        for r in by_rtm:
+            rt = r.get("runtime") or "openclaw"
+            m = (r.get("model") or "").strip()
             if not m:
                 continue
-            a["turns"] += 1
-            a["models"][m] = a["models"].get(m, 0) + 1
-            key = (rt, sid)
-            if sid and (not sess_models[key] or sess_models[key][-1] != m):
-                sess_models[key].append(m)
-        rt_model_sessions = defaultdict(lambda: defaultdict(int))
-        rt_switches = defaultdict(int)
-        for (rt, _sid), mlist in sess_models.items():
-            if mlist:
-                rt_model_sessions[rt][mlist[0]] += 1
-            rt_switches[rt] += max(0, len(mlist) - 1)
+            rt_models[rt][m] = {
+                "turns": int(r.get("turns") or 0),
+                "sessions": int(r.get("sessions") or 0),
+            }
+        rt_switches: dict = defaultdict(int)
+        for s in (rollup.get("switches") or []):
+            rt_switches[s.get("runtime") or "openclaw"] += 1
         out: dict = {}
-        for rt, a in agg.items():
-            total = sum(a["models"].values())
-            sorted_models = sorted(a["models"].items(), key=lambda x: -x[1])
+        # Union of runtimes seen in the per-runtime totals and the per-model rows
+        # (a runtime with only model-less events still gets a card with 0 turns).
+        for rt in set(by_runtime) | set(rt_models):
+            totals = by_runtime.get(rt) or {}
+            models = rt_models.get(rt) or {}
+            total = sum(mm["turns"] for mm in models.values())
+            sorted_models = sorted(models.items(), key=lambda x: -x[1]["turns"])
             models_out = [{
-                "model": m, "turns": t,
-                "sessions": rt_model_sessions[rt].get(m, 0),
-                "share_pct": round(t / total * 100, 2) if total else 0,
-            } for m, t in sorted_models[:15]]
+                "model": m, "turns": mm["turns"],
+                "sessions": mm["sessions"],
+                "share_pct": round(mm["turns"] / total * 100, 2) if total else 0,
+            } for m, mm in sorted_models[:15]]
             out[rt] = {
-                "sessions": len(a["sessions"]),
-                "turns": a["turns"],
-                "tokens": a["tokens"],
-                "cost_usd": round(a["cost"], 4),
+                "sessions": int(totals.get("sessions") or 0),
+                "turns": total,
+                "tokens": int(totals.get("tokens") or 0),
+                "cost_usd": round(float(totals.get("cost_usd") or 0.0), 4),
+                # LIFETIME cost_usd above; rolling last-24h slice for the
+                # dual-column UI.
+                "cost_24h_usd": round(float(totals.get("cost_24h_usd") or 0.0), 4),
+                "tokens_24h": int(totals.get("tokens_24h") or 0),
                 "primary_model": sorted_models[0][0] if sorted_models else "",
                 "total_turns": total,
                 "models": models_out,
-                "switch_count": rt_switches[rt],
+                "switch_count": rt_switches.get(rt, 0),
             }
+        # Fold in foreign OTLP / OpenLLMetry apps (#2822/#2853 follow-up). These
+        # derive ``agent_type`` from the resource ``service.name`` and have NO
+        # session-id prefix, so they appear in NONE of the buckets above. One
+        # cheap GROUP BY agent_type over the spans table (daemon snapshot timer,
+        # NOT per request — FLYWHEEL 1e) surfaces them as first-class runtimes so
+        # the switcher dropdown + the inventory roster can scope to them.
+        try:
+            _merge_otlp_apps_into_summary(out, store)
+        except Exception as _eo:
+            log.debug("otlp app summary merge failed: %s", _eo)
         return out
     except Exception as _e:
         log.debug("runtime summary snapshot build failed: %s", _e)
         return {}
+
+
+# Defensive cap on how many distinct OTLP/custom apps we surface in the shared
+# snapshot (top-N by recent activity). A misconfigured fleet could otherwise emit
+# hundreds of service.names; we keep the snapshot tiny and log when we truncate
+# (no SILENT cap — FLYWHEEL). Override with CLAWMETRY_OTLP_APP_CAP.
+_OTLP_APP_CAP = int(os.environ.get("CLAWMETRY_OTLP_APP_CAP", "50") or "50")
+
+
+def _humanize_service_name(service_name: str, agent_type: str) -> str:
+    """Friendly display label for a foreign OTLP app row.
+
+    ``agent_type`` is the slugified service.name (#2822: lowercased, non-alnum
+    -> '_'); the original ``service.name`` is the better label when present.
+    'custom' (the #2822 fallback when service.name was absent) reads as
+    'Custom (OTel)' so it never looks like a real product name. Otherwise we
+    title-case the slug ('my_app' -> 'My App'). Always tagged '(OTel)' so a
+    bring-your-own-agent app is visibly distinct from a native runtime.
+    """
+    at = (agent_type or "").strip().lower()
+    if at == "custom":
+        return "Custom (OTel)"
+    base = (service_name or "").strip()
+    if not base:
+        base = (agent_type or "").replace("_", " ").replace("-", " ").strip()
+        base = " ".join(w.capitalize() for w in base.split()) or (agent_type or "app")
+    return f"{base} (OTel)"
+
+
+def _merge_otlp_apps_into_summary(out: dict, store) -> None:
+    """Add one ``runtimeSummary`` entry per foreign OTLP/custom app.
+
+    Mutates ``out`` in place. Each entry mirrors the session-prefix runtime
+    shape (so every existing consumer — Models interceptor, inventory builder,
+    Overview headline — reads it verbatim) PLUS:
+      - ``otlp = True`` so the frontend knows this runtime is filtered by
+        ``agent_type`` (no session-id prefix) rather than the prefix path.
+      - ``display_name`` (a humanized service name) so the dropdown/roster reads
+        'My App (OTel)', never the raw slug.
+    Excludes the 12 known session-prefix runtimes + ``openclaw`` so a native
+    runtime can NEVER be re-bucketed here (the pre-#2822 mis-bucket bug).
+    """
+    if store is None:
+        return
+    exclude = set(_RUNTIME_PREFIXES) | {"openclaw", "nemoclaw"}
+    rows = store.query_otlp_app_rollup(
+        exclude_agent_types=exclude, limit=_OTLP_APP_CAP + 1,
+    )
+    if not rows:
+        return
+    if len(rows) > _OTLP_APP_CAP:
+        log.warning(
+            "otlp app rollup truncated: %d apps observed, surfacing top %d by "
+            "recent activity (raise CLAWMETRY_OTLP_APP_CAP)",
+            len(rows), _OTLP_APP_CAP,
+        )
+        rows = rows[:_OTLP_APP_CAP]
+    for r in rows:
+        at = (r.get("agent_type") or "").strip()
+        if not at:
+            continue
+        # Never clobber a real session-prefix runtime that happens to share a key
+        # (belt-and-braces; the query already excludes them).
+        if at.lower() in exclude or at in out:
+            continue
+        primary = r.get("primary_model") or ""
+        out[at] = {
+            "sessions": int(r.get("sessions") or 0),
+            "turns": int(r.get("turns") or 0),
+            "tokens": int(r.get("tokens") or 0),
+            "cost_usd": round(float(r.get("cost_usd") or 0.0), 4),
+            "primary_model": primary,
+            "total_turns": int(r.get("turns") or 0),
+            "models": (
+                [{"model": primary, "turns": int(r.get("turns") or 0),
+                  "sessions": int(r.get("sessions") or 0), "share_pct": 100}]
+                if primary else []
+            ),
+            "switch_count": 0,
+            # Markers the inventory builder + frontend use to treat this as an
+            # OTLP app (agent_type filter, not session-prefix).
+            "otlp": True,
+            "display_name": _humanize_service_name(r.get("service_name") or "", at),
+            "traces": int(r.get("traces") or 0),
+            "spans": int(r.get("spans") or 0),
+        }
+
+
+# Friendly per-runtime label map for the Agent Inventory roster. Mirrors the
+# frontend ``_CM_RT_LABEL`` (app.js) + ``_LITE_RT_LABELS`` so a row reads
+# "Claude Code", never "claude_code". OpenClaw is always present (the default
+# session bucket).
+_INV_RT_LABELS = dict(_LITE_RT_LABELS)
+_INV_RT_LABELS.setdefault("openclaw", "OpenClaw")
+_INV_RT_LABELS.setdefault("nemoclaw", "NVIDIA NemoClaw")
+
+
+def _build_agent_inventory(
+    runtime_summary,
+    outcomes_by_rt,
+    activity_by_rt,
+    tool_groups,
+    eval_summary,
+    detected_runtimes,
+    agent_meta,
+    node_id,
+):
+    """Compose the Agent-Inventory roster from ALREADY-computed rollups.
+
+    Authoritative roster source = ``runtime_summary`` KEYS (each is a
+    ``_runtime_of_session`` prefix; ``openclaw`` is always present as the
+    default bucket). Each key becomes ONE row, enriched with ``detectedRuntimes``
+    (display name / running / workspace) and the local ``agent_meta`` owner
+    label. This is the inverse of joining on detect_all() adapter names, which
+    would orphan OpenClaw (not a family adapter) and any bare-UUID session.
+
+    Returns ``(node_wide, by_runtime)``:
+    - ``node_wide``: ``{nodeId, agents:[...], nodeWideToolGroups, nodeWideEval,
+      total}`` — the whole roster (the cloud serves this when no runtime is
+      selected).
+    - ``by_runtime``: ``{rt: {nodeId, agents:[<single row>], total:1}}`` — one
+      slice per runtime so the cloud interceptor can answer ``?runtime=<rt>``
+      with ONLY that runtime's row (the per-runtime no-leak contract). An absent
+      runtime is simply not a key, so the interceptor returns ZERO for it.
+
+    Foreign OTLP / OpenLLMetry apps (post #2822) derive ``agent_type`` from the
+    resource ``service.name`` with NO session-id prefix. ``_build_runtime_summary``
+    now folds them in (one cheap GROUP BY agent_type on the daemon snapshot timer,
+    NOT a request-path scan — FLYWHEEL 1e), tagged ``otlp=True`` + ``display_name``.
+    They flow through here automatically and get their own roster row, identified
+    by ``agent_type`` (the per-runtime no-leak slice scopes them by agent_type,
+    not session prefix). The 12 session-prefix runtimes are unaffected.
+
+    Best-effort: never raises (any failure yields empty slices).
+    """
+    try:
+        rs = runtime_summary if isinstance(runtime_summary, dict) else {}
+        det = detected_runtimes if isinstance(detected_runtimes, list) else []
+        det_by_name = {d.get("name"): d for d in det if isinstance(d, dict) and d.get("name")}
+        meta = agent_meta if isinstance(agent_meta, dict) else {}
+
+        # OpenClaw is the default bucket: present whenever it has data, even
+        # though _detect_family_runtimes never returns it (family-only).
+        oc_present = "openclaw" in rs
+
+        agents = []
+        for rt, summ in rs.items():
+            if not isinstance(summ, dict):
+                continue
+            d = det_by_name.get(rt) or {}
+            is_otlp = bool(summ.get("otlp"))
+            label = (
+                # OTLP apps carry their own humanized 'My App (OTel)' label;
+                # they have no _INV_RT_LABELS / detected-runtime entry.
+                (summ.get("display_name") if is_otlp else None)
+                or _INV_RT_LABELS.get(rt)
+                or d.get("displayName")
+                or rt
+            )
+            if rt == "openclaw":
+                detected = bool(oc_present)
+            elif is_otlp:
+                # An OTLP app is "detected" iff it has emitted spans (it has, or
+                # it wouldn't be in runtime_summary). It is not a local process
+                # we can heartbeat, so ``running`` stays False, labeled honestly.
+                detected = True
+            else:
+                detected = rt in det_by_name
+            mrow = meta.get(rt) or {}
+            agents.append({
+                "agentKey": rt,
+                "displayName": label,
+                "detected": detected,
+                # Foreign OpenLLMetry/OTLP app (no session-id prefix): the
+                # frontend scopes it by agent_type, not the prefix path, and the
+                # roster labels it as a bring-your-own-agent app.
+                "otlp": is_otlp,
+                # process-presence for family runtimes (only OpenClaw/NemoClaw
+                # emit a real heartbeat); labeled honestly in the UI tooltip.
+                "running": bool(d.get("running", False)),
+                "workspace": d.get("workspace", "") or "",
+                "sessions": summ.get("sessions", 0),
+                "turns": summ.get("turns", 0),
+                "tokens": summ.get("tokens", 0),
+                "costUsd": round(float(summ.get("cost_usd", 0.0) or 0.0), 4),
+                # LIFETIME (costUsd) vs rolling-24h split for the dual-column roster.
+                "cost24hUsd": round(float(summ.get("cost_24h_usd", 0.0) or 0.0), 4),
+                "tokens24h": summ.get("tokens_24h", 0),
+                "primaryModel": summ.get("primary_model", "") or "",
+                # already bounded to 15 in runtime_summary; trim to 5 for size.
+                "models": (summ.get("models") or [])[:5],
+                "switchCount": summ.get("switch_count", 0),
+                "outcome": (outcomes_by_rt or {}).get(rt),
+                "activityToday": (activity_by_rt or {}).get(rt),
+                "owner": mrow.get("owner"),
+                "notes": mrow.get("notes"),
+                "ownerUpdatedAt": mrow.get("updated_at"),
+            })
+
+        # Stable order: openclaw first, then by cost desc, then name.
+        agents.sort(key=lambda a: (
+            0 if a["agentKey"] == "openclaw" else 1,
+            -float(a.get("costUsd") or 0.0),
+            a.get("displayName") or "",
+        ))
+
+        node_wide = {
+            "nodeId": node_id,
+            "agents": agents,
+            # NODE-WIDE (not per-agent): tool provenance counts + eval summary
+            # are cross-runtime (query_eval_summary has no runtime param; the
+            # tool_catalog groups are cross-runtime). They live in the header
+            # strip labeled "node tools" / "node eval", never as a per-row
+            # column that would imply a per-agent number it cannot back.
+            "nodeWideToolGroups": tool_groups if isinstance(tool_groups, dict) else {},
+            "nodeWideEval": eval_summary if isinstance(eval_summary, dict) else {},
+            "total": len(agents),
+        }
+        by_runtime = {}
+        for a in agents:
+            rt = a["agentKey"]
+            by_runtime[rt] = {
+                "nodeId": node_id,
+                "agents": [a],
+                "total": 1,
+            }
+        return node_wide, by_runtime
+    except Exception as _e:
+        log.debug("agent inventory snapshot build failed: %s", _e)
+        return {"nodeId": node_id, "agents": [], "nodeWideToolGroups": {},
+                "nodeWideEval": {}, "total": 0}, {}
 
 
 # #1911: bound the tool deep-dive detail before it rides the shared ~170 KB
@@ -10942,6 +11497,50 @@ def _build_approvals_audit_snapshot():
         return _approvals_audit_payload(limit=100)
     except Exception:
         return {}
+
+
+def _build_security_integrity_snapshot():
+    """Tamper-evident hash-chain verify slice (mirrors /api/security/integrity).
+
+    Cloud has no local DuckDB, so without this slice the Security tab's
+    Integrity card would render blank on the hosted dashboard. Built on the
+    daemon's OWN store handle (the daemon owns the writer lock; never re-open
+    read_only here — that bricks the writer). Returns the same
+    ``{ok, status, chain_length, pre_chain, first_break}`` shape the route
+    serves. Never raises."""
+    try:
+        from clawmetry import local_store
+        raw = local_store.get_store().verify_integrity()
+    except Exception:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    status = raw.get("status") or "unknown"
+    return {
+        "ok": True if status == "valid" else (False if status == "invalid" else None),
+        "status": status,
+        "chain_length": int(raw.get("checked") or 0),
+        "pre_chain": int(raw.get("pre_chain") or 0),
+        "first_break": raw.get("broken_at"),
+    }
+
+
+def _build_audit_log_snapshot(limit=25):
+    """Recent Enterprise audit-log slice (mirrors /api/security/audit).
+
+    The append-only audit store is SQLite at ``~/.clawmetry/audit.db`` on the
+    local node; cloud can't read it, so it ships here for the Security tab's
+    recent-activity feed on the hosted dashboard. Never raises."""
+    try:
+        from clawmetry import audit as _audit
+        entries = _audit.read_audit_log(limit=limit)
+        return {
+            "entries": entries,
+            "event_types": _audit.event_types(),
+            "count": len(entries),
+        }
+    except Exception:
+        return {"entries": [], "event_types": [], "count": 0}
 
 
 def _build_harness_snapshot():
@@ -12987,6 +13586,400 @@ def _seconds_since(ts) -> int:
         return 0
 
 
+# ── Daemon-side STUCK-agent detection (issue clawmetry-hardware#15) ──────────
+# The desk device promises a "<runtime> stuck: N tool calls, no progress"
+# banner. Until now the ONLY stuck/loop signal came from the enforcement PROXY
+# (clawmetry.proxy.LoopDetector.ingest_loop_signal), so anyone NOT running the
+# proxy never saw it. This detector reconstructs the same signal from the event
+# stream the daemon already ingests into DuckDB, so it works for EVERYONE,
+# proxy-independent. It is strictly read-only (it only READS events and WRITES a
+# loop_signals row — it never touches the agent), so it can default ON.
+#
+# Definition of "stuck": a recently-active, non-ended session whose newest
+# events are a long CONSECUTIVE run of tool activity with NO progress marker
+# since the streak began. A progress marker is what a healthy agent emits
+# between tool batches: an assistant message carrying TEXT content (a reply /
+# reasoning, not just tool_use), a user message, or a session end. A normal
+# agent doing real work breaks its tool streak with text replies and hits
+# results, so only a true no-progress streak that is BOTH long (>= threshold
+# tool calls) AND slow (spanning >= min-seconds wall-clock) trips it. Both
+# bounds must hold so a fast burst of tool calls (legitimate parallel work)
+# and a small streak are both excused.
+STUCK_TOOL_THRESHOLD = int(os.environ.get("CLAWMETRY_STUCK_TOOLS", "25"))
+STUCK_MIN_SECONDS = int(os.environ.get("CLAWMETRY_STUCK_SECONDS", "180"))
+# How recently a session must have been active to be a candidate. A truly idle
+# session (last active hours ago) is not "stuck right now" — it just stopped.
+STUCK_RECENT_MINUTES = int(os.environ.get("CLAWMETRY_STUCK_RECENT_MINUTES", "15"))
+
+# Latest stuck-detection result, cached so the (plaintext, self-clearing)
+# HEARTBEAT can carry it to the cloud's device_summary — the WiFi desk device
+# fetches the CLOUD summary (built from Postgres), NOT the local dashboard or
+# the legacy E2E snapshot, so loop_signals alone never reached it. ``ts`` is the
+# wall-clock the result was last refreshed; ``items`` is the (possibly empty)
+# top-few stuck list, each already carrying the built banner ``message``. An
+# EMPTY items with a fresh ts means "checked, none stuck" → the device self-
+# clears. The heartbeat treats a STALE ts (>5 min) as "no signal" so a wedged
+# detector can't pin a banner forever.
+_LATEST_STUCK: dict = {"ts": 0.0, "items": []}
+# Heartbeat only trusts a stuck cache refreshed within this window (seconds).
+_STUCK_HEARTBEAT_FRESH_SECONDS = 300
+# Cap how much stuck rides each heartbeat (keep the plaintext payload tiny).
+_STUCK_HEARTBEAT_MAX_ITEMS = 5
+_STUCK_HEARTBEAT_MAX_MSG = 200
+# How many newest events to inspect per candidate session. 120 comfortably
+# covers a streak well past the threshold plus the preceding progress marker.
+_STUCK_EVENT_WINDOW = 120
+
+# Event types that count as a TOOL action in the streak. Covers every ingest
+# variant (Anthropic-style, OpenClaw v3 dotted, camelCase, hyphenated) so the
+# streak counts the same tool turns the transcript renders. Mirrors
+# local_store._TOOL_CALL_TOPLEVEL_EVENT_TYPES + the result/dotted forms.
+# Top-level tool-CALL events (family adapters emit these directly). Tool RESULT
+# events are deliberately EXCLUDED — a result is not a new invocation, and
+# counting it double-counts each round-trip (~2x inflation).
+_STUCK_TOPLEVEL_TOOL_CALL_TYPES = frozenset({
+    "tool_call", "tool_use", "toolcall", "tool.call", "tool.invoked",
+})
+# Assistant/model turn envelopes that may HOST tool calls inside the message
+# (OpenClaw v3 ``model.completed`` + ``data.toolMetas``; Claude Code ``assistant``
+# + ``message.content`` tool_use blocks). Counted via the canonical
+# ``_iter_tool_invocation_names`` so the streak counts the same tool turns the
+# rest of the app counts — top-level ``tool_call`` is rare on the real runtimes.
+_STUCK_ASSISTANT_EVENT_TYPES = frozenset({
+    "assistant", "message", "model.completed", "subagent:assistant",
+})
+# Event types that are unambiguously a PROGRESS marker on their own (no need to
+# inspect content). A user prompt or a session end breaks any streak.
+_STUCK_PROGRESS_EVENT_TYPES = frozenset({
+    "user", "prompt.submitted",
+    "session.ended", "session.end", "session.completed", "session.stopped",
+})
+
+
+def _stuck_tool_call_count(et: str, data: Any) -> int:
+    """Number of tool CALLS an event represents (0 if none). Handles all three
+    real shapes: a top-level ``tool_call``/``tool_use`` event (1), OpenClaw v3
+    ``model.completed`` with ``data.toolMetas`` (N), and Claude Code ``assistant``
+    with ``message.content`` tool_use blocks (N). Mirrors the app-wide
+    ``_iter_tool_invocation_names`` so the streak counts what everything else
+    counts — and counts CALLS only, never tool_result. Never raises."""
+    if et in _STUCK_TOPLEVEL_TOOL_CALL_TYPES:
+        return 1
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception:
+            return 0
+    if not isinstance(data, dict):
+        return 0
+    try:
+        from clawmetry.local_store import _iter_tool_invocation_names
+        return sum(1 for _ in _iter_tool_invocation_names(et, data))
+    except Exception:
+        return 0
+
+
+def _stuck_event_role(data: Any) -> str:
+    """Best-effort role for an event payload. ``data`` may be a dict, a JSON
+    string, or junk — mirror _row_to_event/_brain_row_renderable defensiveness
+    and never raise. Returns a lowercase role ('assistant'/'user'/'system'/…)
+    or '' when none is discernible."""
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception:
+            return ""
+    if not isinstance(data, dict):
+        return ""
+    role = data.get("role")
+    if not role and isinstance(data.get("message"), dict):
+        role = data["message"].get("role")
+    return str(role or "").strip().lower()
+
+
+def _stuck_assistant_has_text(data: Any) -> bool:
+    """True if an assistant event carries real TEXT content (a reply / visible
+    reasoning), as opposed to a tool-call-only turn. Walks the common content
+    shapes: a plain string, or a list of blocks where a ``text`` block has
+    non-empty text. ``tool_use``/``toolCall`` blocks do NOT count as text —
+    those ARE the streak. Never raises."""
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception:
+            # A non-JSON string body is itself text content.
+            return bool(data.strip())
+    if not isinstance(data, dict):
+        return False
+    msg = data.get("message") if isinstance(data.get("message"), dict) else data
+    content = msg.get("content")
+    if isinstance(content, str):
+        return bool(content.strip())
+    if isinstance(content, list):
+        for blk in content:
+            if not isinstance(blk, dict):
+                # A bare string block counts as text.
+                if isinstance(blk, str) and blk.strip():
+                    return True
+                continue
+            btype = str(blk.get("type") or "").lower()
+            if btype in ("text", "output_text") and str(blk.get("text") or "").strip():
+                return True
+            # Some shapes omit ``type`` but carry ``text`` directly.
+            if not btype and str(blk.get("text") or "").strip():
+                return True
+    # Anthropic SDK also surfaces a top-level ``text`` on some assistant rows.
+    if isinstance(msg.get("text"), str) and msg["text"].strip():
+        return True
+    # OpenClaw v3 ``model.completed`` turns carry the reply under different keys
+    # (a string ``completionText``/``completion`` or a list ``assistantTexts``);
+    # a real text reply there is progress too, so a v3 narration breaks the streak.
+    for k in ("completionText", "completion"):
+        if isinstance(data.get(k), str) and data[k].strip():
+            return True
+    at = data.get("assistantTexts")
+    if isinstance(at, list) and any(isinstance(t, str) and t.strip() for t in at):
+        return True
+    return False
+
+
+def _detect_stuck_sessions(store) -> list[dict]:
+    """Reconstruct the proxy's stuck/loop signal from the DuckDB event stream.
+
+    For each recently-active, NON-ended session, walk its newest events
+    newest->older counting the CONSECUTIVE tool streak since the last progress
+    marker. A streak that is BOTH long (>= STUCK_TOOL_THRESHOLD tool calls) AND
+    slow (>= STUCK_MIN_SECONDS wall-clock span) marks the session STUCK.
+
+    Returns a list of ``{session_id, runtime, tool_calls, since_seconds}``,
+    most-stuck (longest streak) first. Read-only and never raises — any store
+    error logs a warning and yields ``[]`` so the daemon loop is never taken
+    down by detection.
+    """
+    try:
+        from clawmetry import waste_flags as _wf
+    except Exception:
+        _wf = None
+
+    try:
+        sessions = store.query_sessions_table(limit=300) or []
+    except Exception as e:  # noqa: BLE001
+        log.warning("stuck-detect: query_sessions_table failed: %s", e)
+        return []
+
+    out: list[dict] = []
+    for s in sessions:
+        if not isinstance(s, dict):
+            continue
+        # Skip ended sessions outright — a finished agent is not "stuck".
+        if s.get("ended_at"):
+            continue
+        status = str(s.get("status") or "").lower()
+        if status in ("ended", "completed", "stopped", "failed"):
+            continue
+        sid = s.get("session_id") or ""
+        if not sid:
+            continue
+        # Recency gate: only sessions active in the last STUCK_RECENT_MINUTES
+        # are candidates. query_sessions_table is ordered most-recent-active
+        # first, so the first stale row lets us stop scanning the tail.
+        last_active = s.get("last_active_at") or s.get("started_at")
+        idle_s = _seconds_since(last_active)
+        if last_active and idle_s > STUCK_RECENT_MINUTES * 60:
+            break
+
+        try:
+            events = store.query_events(
+                session_id=sid, limit=_STUCK_EVENT_WINDOW,
+            ) or []
+        except Exception as e:  # noqa: BLE001
+            log.warning("stuck-detect: query_events failed for %s: %s", sid, e)
+            continue
+        # query_events returns newest-first (ORDER BY ts DESC). Walk it in that
+        # order, counting the consecutive tool streak until the first progress
+        # marker. ``newest_ts``/``oldest_ts`` bound the streak's wall-clock span.
+        tool_calls = 0
+        newest_ts = None
+        oldest_ts = None
+        for ev in events:
+            if not isinstance(ev, dict):
+                continue
+            et = str(ev.get("event_type") or "").strip().lower()
+            data = ev.get("data")
+            ts = ev.get("ts")
+
+            if et in _STUCK_PROGRESS_EVENT_TYPES:
+                break  # user prompt / session end → progress, streak ends.
+            # An assistant / model.completed turn carrying TEXT is a reply →
+            # progress. A user message is progress regardless of et. A tool-only
+            # assistant/model turn is NOT progress — its hosted tools are counted.
+            role = _stuck_event_role(data)
+            if role == "user":
+                break
+            if et in _STUCK_ASSISTANT_EVENT_TYPES or role == "assistant":
+                if _stuck_assistant_has_text(data):
+                    break  # text reply → progress.
+
+            # Count tool CALLS for this event — top-level tool_call OR tool calls
+            # hosted inside an assistant/model envelope (toolMetas / content
+            # blocks). Counts calls only (never tool_result), so the threshold +
+            # the reported number mean real invocations.
+            n = _stuck_tool_call_count(et, data)
+            if n:
+                tool_calls += n
+                if newest_ts is None:
+                    newest_ts = ts
+                oldest_ts = ts
+            # Any other event (tool_result, heartbeat, model.changed, system, …)
+            # is neither a new tool call nor progress — skip without breaking.
+            continue
+
+        if tool_calls < STUCK_TOOL_THRESHOLD:
+            continue
+        # Wall-clock span of the streak (oldest..newest tool call). _seconds_since
+        # on the OLDEST streak event is the streak duration only if the newest
+        # is ~now; compute the explicit span instead to be precise.
+        span = _stuck_streak_span_seconds(oldest_ts, newest_ts)
+        if span < STUCK_MIN_SECONDS:
+            continue
+        runtime = "openclaw"
+        if _wf is not None:
+            try:
+                runtime = _wf.runtime_from_session_id(sid) or "openclaw"
+            except Exception:
+                runtime = "openclaw"
+        out.append({
+            "session_id": sid,
+            "runtime": runtime,
+            "tool_calls": tool_calls,
+            "since_seconds": span,
+        })
+
+    out.sort(key=lambda r: r.get("tool_calls", 0), reverse=True)
+    return out
+
+
+def _stuck_streak_span_seconds(oldest_ts, newest_ts) -> int:
+    """Wall-clock seconds between the oldest and newest tool-call in a streak.
+    Both are ISO-ish naive local strings (the store's convention). Falls back to
+    'seconds since oldest' when newest is unparseable, and 0 on total failure."""
+    try:
+        from datetime import datetime as _dt
+
+        def _parse(x):
+            s = str(x).strip().replace("Z", "")
+            try:
+                return _dt.fromisoformat(s)
+            except ValueError:
+                return _dt.fromisoformat(s.split(".")[0].split("+")[0])
+
+        if oldest_ts and newest_ts:
+            o, n = _parse(oldest_ts), _parse(newest_ts)
+            return max(0, int((n - o).total_seconds()))
+    except Exception:
+        pass
+    # Fallback: treat the streak as running until now.
+    return _seconds_since(oldest_ts)
+
+
+def _emit_stuck_signals(store, state: dict) -> int:
+    """Run stuck detection and emit each as a loop_signals row so the EXISTING
+    device-alert path (``_build_device_summary`` → ``query_recent_loop_signals``)
+    fires the "<runtime> stuck" banner WITHOUT a new alert source. Dedupes per
+    session within STUCK_REEMIT_SECONDS so we don't re-write every tick; the
+    30-minute ``last_seen`` window in the snapshot auto-clears the banner once a
+    session stops being stuck (we simply stop re-emitting). Returns the count of
+    sessions detected as stuck this tick. Never raises into the daemon loop."""
+    try:
+        stuck = _detect_stuck_sessions(store)
+    except Exception as e:  # noqa: BLE001
+        log.warning("stuck-detect: detector errored: %s", e)
+        # Detector errored — do NOT touch _LATEST_STUCK here: leaving the old
+        # value is harmless because the heartbeat staleness gate (5 min) will
+        # drop it; clearing it on a transient error would suppress a real,
+        # still-stuck banner mid-incident. (When detection SUCCEEDS with no
+        # stuck below, we DO refresh ts with items=[] to self-clear.)
+        return 0
+
+    # Refresh the heartbeat cache every tick the detector RAN — including the
+    # no-stuck case (items=[], fresh ts) so the cloud/device self-clears. Build
+    # the same banner messages the loop_signals path emits, capped tiny for the
+    # plaintext heartbeat. Never let cache bookkeeping take down the loop.
+    try:
+        items = []
+        for st in stuck[:_STUCK_HEARTBEAT_MAX_ITEMS]:
+            n = int(st.get("tool_calls") or 0)
+            mins = max(1, int(st.get("since_seconds") or 0) // 60)
+            rt = str(st.get("runtime") or "openclaw")
+            msg = f"{rt} stuck: {n} tool calls, no progress for {mins}m"
+            items.append({
+                "runtime": rt,
+                "tool_calls": n,
+                "since_seconds": int(st.get("since_seconds") or 0),
+                "message": msg[:_STUCK_HEARTBEAT_MAX_MSG],
+            })
+        _LATEST_STUCK["items"] = items
+        _LATEST_STUCK["ts"] = time.time()
+    except Exception as _ce:  # noqa: BLE001
+        log.debug("stuck-detect: cache refresh failed (continuing): %s", _ce)
+
+    if not stuck:
+        return 0
+
+    memo = state.setdefault("stuck_emit_memo", {})
+    if not isinstance(memo, dict):
+        memo = {}
+        state["stuck_emit_memo"] = memo
+    now = time.time()
+    # Don't re-write a session's signal more than once per re-emit window, but
+    # DO re-emit periodically so ``last_seen`` stays fresh inside the snapshot's
+    # 30-min window while the session remains stuck.
+    reemit = max(30, STUCK_MIN_SECONDS // 2)
+
+    emitted = 0
+    for st in stuck:
+        sid = st["session_id"]
+        last = memo.get(sid)
+        if isinstance(last, (int, float)) and (now - last) < reemit:
+            continue
+        n = int(st["tool_calls"])
+        mins = max(1, st["since_seconds"] // 60)
+        rt = st["runtime"]
+        msg = f"{rt} stuck: {n} tool calls, no progress for {mins}m"
+        try:
+            store.ingest_loop_signal(
+                session_id=sid,
+                # Stable signature per session so a re-emit UPSERTs the same row
+                # (GREATEST bumps repeat_count, refreshes last_seen) instead of
+                # piling up rows — matches the proxy's (session_id, signature) PK.
+                signature="daemon_stuck",
+                repeat_count=n,
+                severity="warning",
+                agent_type=rt,
+                details={
+                    "source": "daemon_stuck_detector",
+                    "message": msg,
+                    "tool_calls": n,
+                    "since_seconds": st["since_seconds"],
+                },
+            )
+            memo[sid] = now
+            emitted += 1
+            log.info("stuck-detect: %s", msg)
+        except Exception as e:  # noqa: BLE001
+            log.warning("stuck-detect: ingest_loop_signal failed for %s: %s",
+                        sid, e)
+            continue
+    # Bound memo growth: drop entries we haven't touched in an hour.
+    try:
+        for k in [k for k, v in memo.items()
+                  if not (isinstance(v, (int, float)) and (now - v) < 3600)]:
+            memo.pop(k, None)
+    except Exception:
+        pass
+    return emitted
+
+
 def _build_device_summary(spending, daily_usage):
     """Compact, all-runtime payload for a WiFi hardware companion.
 
@@ -13081,6 +14074,33 @@ def _build_device_summary(spending, daily_usage):
             ]
         except Exception:
             pass
+        # schema 2: per-session titles for the device's runtime-detail recent
+        # -sessions rows. The title is the session's FIRST USER MESSAGE (real
+        # content, e.g. "read flywheel.md ..."), so it rides the ENCRYPTED
+        # deviceSummary (decrypted on-device) and NEVER the plaintext
+        # device-agent endpoint -- raw content never leaves the daemon in the
+        # clear (the cloud only ever stores an empty display_name for these).
+        # The firmware looks each recent-session row up here by its BARE session
+        # id (post-':' so it matches the device-agent rows) and falls back to a
+        # short id when absent. Keyed by bare id, capped + truncated to keep the
+        # ~8s-polled summary small. ``rows`` is already last_active DESC.
+        try:
+            titles: dict = {}
+            for s in rows:
+                if not isinstance(s, dict):
+                    continue
+                t = (s.get("title") or "").strip()
+                if not t:
+                    continue
+                bare = str(s.get("session_id") or "").rsplit(":", 1)[-1]
+                if bare and bare not in titles:
+                    titles[bare] = t[:56]
+                if len(titles) >= 40:
+                    break
+            if titles:
+                summary["sessionTitles"] = titles
+        except Exception:
+            pass
     except Exception:
         pass
     try:
@@ -13103,17 +14123,32 @@ def _build_device_summary(spending, daily_usage):
         pass
     # Surface a "something is stuck" alert from the daemon's loop-detection
     # signals so the device alert card can fire. It was always null while the
-    # alert source lived only in the dashboard process (#contract-drift).
+    # alert source lived only in the dashboard process (#contract-drift). The
+    # signals come from BOTH the enforcement proxy's LoopDetector AND (issue
+    # clawmetry-hardware#15) the daemon's proxy-independent _emit_stuck_signals,
+    # so the banner now fires for everyone, not just proxy users.
     try:
         from clawmetry import waste_flags as _wf
         sigs = store.query_recent_loop_signals(limit=5, since_minutes=30) or []
         hot = next((s for s in sigs if isinstance(s, dict)
                     and int(s.get("repeat_count") or 0) >= 5), None)
         if hot:
-            rt = (_wf.runtime_from_session_id(hot.get("session_id") or "")
-                  or hot.get("agent_type") or "an agent")
-            n = int(hot.get("repeat_count") or 0)
-            summary["alert"] = {"message": f"{rt} looping, {n} repeats, no progress"}
+            # Prefer the precise message the daemon stuck-detector stashed in
+            # ``details`` ("<rt> stuck: N tool calls, no progress for Mm");
+            # fall back to the generic looping wording for proxy-only signals.
+            det = hot.get("details")
+            if isinstance(det, str):
+                try:
+                    det = json.loads(det)
+                except Exception:
+                    det = None
+            msg = det.get("message") if isinstance(det, dict) else None
+            if not msg:
+                rt = (_wf.runtime_from_session_id(hot.get("session_id") or "")
+                      or hot.get("agent_type") or "an agent")
+                n = int(hot.get("repeat_count") or 0)
+                msg = f"{rt} looping, {n} repeats, no progress"
+            summary["alert"] = {"message": str(msg)[:200]}
     except Exception:
         pass
     # A waiting approval or a stuck/looping agent is what needs a human.
@@ -13692,6 +14727,38 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _e_rtb:
         log.debug("snapshot: per-runtime breakdown failed: %s", _e_rtb)
 
+    # Agent Inventory roster (single-pane control-tower view). Built ENTIRELY
+    # from rollups already computed above (runtime_summary / outcomes / activity
+    # / tool-catalog groups / eval summary / detectedRuntimes) plus ONE cheap
+    # ``query_agent_meta`` read for the owner labels — NO new request-path full
+    # scan (FLYWHEEL 1e CPU budget). ``query_agent_meta`` is called standalone
+    # (NOT inside any lock — _fetch self-locks, memory
+    # feedback_local_store_fetch_takes_writelock).
+    _detected_runtimes = _detect_family_runtimes()
+    _agent_meta = {}
+    _inv_node_id = ""
+    try:
+        from clawmetry import local_store as _ls_am
+        _am_store = _ls_am.get_store()
+        if _am_store is not None:
+            _agent_meta = _am_store.query_agent_meta() or {}
+            try:
+                _inv_node_id = _am_store._node_id()
+            except Exception:
+                _inv_node_id = ""
+    except Exception as _e_am:
+        log.debug("snapshot: agent_meta read failed: %s", _e_am)
+    _inv_node_wide, _inv_by_rt = _build_agent_inventory(
+        _runtime_summary,
+        _outcomes_by_rt,
+        _activity_by_rt,
+        (tool_catalog_slice or {}).get("groups", {}),
+        (evals_slice or {}).get("summary", {}),
+        _detected_runtimes,
+        _agent_meta,
+        _inv_node_id,
+    )
+
     from clawmetry.providers_pricing import provider_for_model as _pfm
     payload = {
         "system": system,
@@ -13730,6 +14797,11 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "activityTodayByRuntime": _activity_by_rt,
         "outcomes": _outcomes_slice_for_snapshot(),
         "outcomesByRuntime": _outcomes_by_rt,
+        # Agent Inventory roster: node-wide roster (one row per runtime) + a
+        # per-runtime slice the cloud cm-cloud-inventory interceptor returns for
+        # ?runtime=<rt> (only that runtime's row — the no-leak contract).
+        "agentInventory": _inv_node_wide,
+        "agentInventoryByRuntime": _inv_by_rt,
         "spending": spending,
         # Compact all-runtime slice a WiFi hardware companion decrypts + renders
         # (the device GETs the snapshot, decrypts with the user's key, reads
@@ -13740,6 +14812,13 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "harness": _build_harness_snapshot(),
         "usage": _build_usage_snapshot(),
         "approvalsAudit": _build_approvals_audit_snapshot(),
+        # Security tab: tamper-evident hash-chain verify + Enterprise audit
+        # feed. Both are local-only data (DuckDB chain / SQLite audit.db) so
+        # they ride the snapshot for cloud parity; a follow-up cm-cloud
+        # interceptor serves /api/security/integrity + /api/security/audit
+        # from these slices.
+        "securityIntegrity": _build_security_integrity_snapshot(),
+        "auditLog": _build_audit_log_snapshot(),
         "channels": _build_channel_data(config),
         "toolStats": _build_tool_stats(),
         "externalCalls": _build_external_calls(),
@@ -13749,7 +14828,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # OpenClaw-family runtimes (PicoClaw, NanoClaw) detected on this host,
         # tiny by design ({name, displayName, sessionCount, workspace}) so the
         # cloud can show a runtime chip without bloating the snapshot.
-        "detectedRuntimes": _detect_family_runtimes(),
+        "detectedRuntimes": _detected_runtimes,
         "machineInfo": _build_machine_info(),
         "channelList": _build_channel_list(config),
         "ollamaInfo": _detect_ollama_for_heartbeat(),
@@ -14739,6 +15818,11 @@ def run_daemon() -> None:
     # ENABLED=0 disables cleanly. 0 = fire on first cycle so a daemon
     # restart scores the backlog without waiting 5 min.
     last_evals_run = 0.0
+    # Stuck-agent detector (issue clawmetry-hardware#15). Proxy-independent;
+    # reads the event stream and emits a loop_signals row that the device-alert
+    # path already reads. 0 = run on first cycle so a stuck agent at daemon
+    # start surfaces immediately.
+    last_stuck_eval = 0.0
 
     while True:
         try:
@@ -14964,6 +16048,34 @@ def run_daemon() -> None:
                     save_state(state)
                 except Exception:
                     pass
+
+            # ── Stuck-agent detector (issue clawmetry-hardware#15) ──
+            # Proxy-independent: reads the event stream from DuckDB, finds
+            # sessions in a long no-progress tool streak, and emits a
+            # loop_signals row so the device's "<runtime> stuck" banner fires
+            # for EVERYONE (not just users running the enforcement proxy).
+            # Strictly read-only w.r.t. the agent, throttled, and best-effort —
+            # a failure logs but never raises into the sync cycle.
+            if os.environ.get("CLAWMETRY_STUCK_DETECT", "1") != "0":
+                now_stuck = time.time()
+                if (now_stuck - last_stuck_eval) >= STUCK_EVAL_INTERVAL_SEC:
+                    try:
+                        from clawmetry import local_store as _ls_stuck
+                        store_for_stuck = _ls_stuck.get_store()
+                        n_stuck = _emit_stuck_signals(store_for_stuck, state)
+                        if n_stuck:
+                            log.info(
+                                f"stuck-detect: {n_stuck} stuck session(s)"
+                            )
+                    except Exception as _se:
+                        log.warning(
+                            f"stuck-detect: tick errored: {_se}"
+                        )
+                    last_stuck_eval = now_stuck
+                    try:
+                        save_state(state)
+                    except Exception:
+                        pass
 
             # ── Eval scheduler (issue #1619 Phase 1) ──
             # Sister of the alerts evaluator. Picks unscored completed
@@ -16029,6 +17141,11 @@ def sync_autonomy(config, state, paths):
 
 
 ALERTS_EVAL_INTERVAL_SEC = 60  # Re-evaluate alerts every 60s (PRD #779)
+
+# Stuck-agent detector cadence (issue clawmetry-hardware#15). 60s keeps the
+# device banner fresh without re-scanning every tight sync tick; env override
+# for tests / tuning.
+STUCK_EVAL_INTERVAL_SEC = int(os.environ.get("CLAWMETRY_STUCK_INTERVAL_SEC", "60"))
 
 # Issue #1619 Phase 1 — LLM-as-judge eval scheduler cadence. 300s (5 min)
 # matches the PRD: every 5 min, pick up to EVAL_BATCH unscored completed
