@@ -10099,6 +10099,106 @@ def _session_tool_health(events) -> dict:
     }
 
 
+# Compression-potential heuristics (Headroom-inspired, #2838). These are the
+# rough share of a content type that is recoverable without changing answers
+# (repeated JSON keys, log boilerplate, diff context). Measurement only; the
+# actual compression is a separate, optional layer we never run here.
+_COMPRESS_RATIO = {"json": 0.85, "log": 0.90, "diff": 0.65, "text": 0.0}
+
+
+def _classify_compressible(text: str) -> str:
+    """Cheap content-type guess for the compression-potential meter. No parsing
+    of secrets, no storage of content — just a label. Never raises."""
+    try:
+        t = (text or "").lstrip()
+        if not t:
+            return "text"
+        if t[0] in "[{":
+            return "json"
+        if t.startswith(("diff --git", "@@ ", "--- ", "+++ ", "Index: ")):
+            return "diff"
+        lines = t.split("\n")
+        if len(lines) >= 8:
+            import re as _re
+            hits = 0
+            for ln in lines[:60]:
+                if _re.search(r"\b(INFO|WARN|WARNING|ERROR|DEBUG|TRACE)\b", ln) or \
+                   _re.match(r"\s*\d{4}-\d\d-\d\d[ T]\d\d:\d\d", ln):
+                    hits += 1
+            if hits >= 3:
+                return "log"
+    except Exception:
+        return "text"
+    return "text"
+
+
+def _session_compression_potential(events, model: str = "", min_chars: int = 400) -> dict:
+    """Estimate how much of this session's TOOL-OUTPUT context is compressible
+    without changing answers (JSON arrays, logs, diffs). The meter for
+    recoverable token waste (Headroom-inspired, #2838): scan tool-result text at
+    ingest, classify by cheap heuristics, and store ONLY aggregate token
+    estimates + a percentage + a $ figure — never the raw content. Compressible
+    tool output re-enters context as INPUT tokens, so the $ uses the input rate.
+    Returns {} when there is no sizeable tool output. Never raises."""
+    try:
+        from clawmetry import error_signal as _es
+    except Exception:
+        _es = None
+    by_type: dict = {}
+    total_tok = 0
+    comp_tok = 0.0
+    try:
+        for e in events or []:
+            et = (getattr(e, "type", "") or "").lower()
+            if "result" not in et and not getattr(e, "tool_name", ""):
+                continue
+            extra = getattr(e, "extra", None)
+            extra = extra if isinstance(extra, dict) else {}
+            txt = ""
+            if _es is not None:
+                try:
+                    txt = _es.extract_tool_result_text(
+                        {"content": getattr(e, "content", ""), "extra": extra}
+                    ) or ""
+                except Exception:
+                    txt = ""
+            if not txt:
+                txt = getattr(e, "content", "") or ""
+            if not isinstance(txt, str) or len(txt) < min_chars:
+                continue
+            ctype = _classify_compressible(txt)
+            tok = max(1, len(txt) // 4)  # rough chars -> tokens
+            total_tok += tok
+            ratio = _COMPRESS_RATIO.get(ctype, 0.0)
+            ct = tok * ratio
+            comp_tok += ct
+            d = by_type.setdefault(ctype, {"tokens": 0, "compressible": 0.0})
+            d["tokens"] += tok
+            d["compressible"] += ct
+    except Exception:
+        return {}
+    if total_tok <= 0 or comp_tok < 1:
+        return {}
+    out: dict = {
+        "toolOutputTokens": total_tok,
+        "compressibleToolTokens": int(round(comp_tok)),
+        "compressionPotentialPct": round(comp_tok / total_tok * 100, 1),
+        "compressionByType": {
+            k: int(round(v["compressible"]))
+            for k, v in by_type.items() if v["compressible"] >= 1
+        },
+    }
+    if model:
+        try:
+            from clawmetry.providers_pricing import estimate_event_cost_usd as _ec
+            _rc = _ec(model, input_tokens=int(round(comp_tok)))
+            if _rc and _rc > 0:
+                out["compressionRecoverableUsd"] = round(float(_rc), 6)
+        except Exception:
+            pass
+    return out
+
+
 def _session_idle_gaps(events, ttl_sec: int = 300) -> dict:
     """Count idle gaps that crossed the prompt-cache TTL. Anthropic's cache
     expires after ~5 minutes, so every consecutive-event gap longer than that
@@ -10237,6 +10337,12 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 metadata.update(_thealth)
                 _idle = _session_idle_gaps(_events)
                 metadata.update(_idle)
+                # Compression-potential meter (#2838): how much tool-output
+                # context is recoverable without changing answers. Aggregates
+                # only; raw content never leaves the daemon.
+                _compress = _session_compression_potential(
+                    _events, model=getattr(s, "model", "") or "")
+                metadata.update(_compress)
                 # Readable title: a raw UUID is unreadable on the dashboard/device.
                 # When the adapter gives no display_name (Claude Code, Codex, ...),
                 # derive a human title from the first real user message.
