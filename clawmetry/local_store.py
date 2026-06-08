@@ -4032,13 +4032,32 @@ class LocalStore:
                 f"THEN split_part(session_id, ':', 1) ELSE 'openclaw' END"
             )
             by_runtime: dict[str, dict[str, Any]] = {}
+            # Per-runtime TOTALS come from the SESSIONS table with the same
+            # GREATEST(stored, SUM(events)) bridge that query_sessions_table uses
+            # — NOT a raw events sum. Family adapters (claude_code, codex, goose,
+            # …) stash a session's token total on ``sessions.total_tokens`` while
+            # ``events.token_count`` stays 0, so an events-only sum under-reported
+            # tokens (goose/hermes/opencode/qwen_code showed ~0, claude_code 105M
+            # vs the real 134M). Sourcing totals from the bridged sessions table
+            # makes the snapshot reconcile EXACTLY with query_sessions_table (the
+            # source the OSS dashboard already trusts). cost_usd reconciles too
+            # (events DO carry cost, but GREATEST is harmless and keeps one path).
             sql_rt = f"""
                 SELECT {rt_case} AS runtime,
-                       COUNT(DISTINCT session_id) AS sessions,
-                       SUM(COALESCE(token_count, 0)) AS tokens,
-                       SUM(COALESCE(cost_usd, 0.0)) AS cost_usd,
-                       COUNT(*) AS events
-                FROM events
+                       COUNT(*) AS sessions,
+                       SUM(GREATEST(
+                           COALESCE(s.total_tokens, 0),
+                           COALESCE((SELECT SUM(e.token_count) FROM events e
+                                      WHERE e.session_id = s.session_id
+                                        AND e.agent_type  = s.agent_type), 0)
+                       )) AS tokens,
+                       SUM(GREATEST(
+                           COALESCE(s.cost_usd, 0.0),
+                           COALESCE((SELECT SUM(e.cost_usd) FROM events e
+                                      WHERE e.session_id = s.session_id
+                                        AND e.agent_type  = s.agent_type), 0.0)
+                       )) AS cost_usd
+                FROM sessions s
                 GROUP BY 1
             """
             for r in self._fetch(sql_rt, list(prefixes)):
@@ -4047,7 +4066,6 @@ class LocalStore:
                     "sessions": int(r[1] or 0),
                     "tokens": int(r[2] or 0),
                     "cost_usd": float(r[3] or 0.0),
-                    "events": int(r[4] or 0),
                 }
             by_runtime_model: list[dict[str, Any]] = []
             sql_rtm = f"""

@@ -71,6 +71,20 @@ def _seed(store, sid, model, ts, *, tokens=100, cost=0.01, eid=None):
     })
 
 
+def _seed_session(store, sid, *, tokens=0, cost=0.0):
+    """Write the sessions-table row that the per-runtime TOTALS read from.
+
+    In production every session is written here (sync_session_metadata / family
+    adapters); family adapters stash the token total on the row while
+    events.token_count stays 0, which is exactly why the rollup totals must come
+    from this table, not the events sum."""
+    store.ingest_session({
+        "session_id": sid, "agent_type": "openclaw", "agent_id": "main",
+        "status": "completed", "total_tokens": tokens, "cost_usd": cost,
+        "last_active_at": _iso(1000.0),
+    })
+
+
 def test_rollup_includes_every_runtime_with_exact_totals(store):
     """No runtime starves; per-runtime token/cost/turn sums are exact."""
     now = time.time()
@@ -89,6 +103,16 @@ def test_rollup_includes_every_runtime_with_exact_totals(store):
     ]
     for j, (sid, m, ts, tok, cost) in enumerate(seeds):
         _seed(store, sid, m, ts, tokens=tok, cost=cost, eid=f"e{j}")
+    # Per-runtime totals come from the sessions table (family adapters keep
+    # the token total there, not on events). Mirror production by writing each
+    # session row with its bridged total. Family runtimes (goose/hermes/…) keep
+    # tokens ONLY on the session row — events.token_count is irrelevant for them.
+    _seed_session(store, "claude_code:c1", tokens=40000, cost=4.00)
+    _seed_session(store, "goose:g1", tokens=26487, cost=0.0)
+    _seed_session(store, "hermes:h1", tokens=8832, cost=0.0)
+    _seed_session(store, "opencode:o1", tokens=22505, cost=0.0)
+    _seed_session(store, "qwen_code:q1", tokens=50643, cost=0.0)
+    _seed_session(store, "682c73e4-aaa", tokens=32760, cost=19.86)
     _wait_flush(store)
 
     roll = store.query_model_rollup()
@@ -98,7 +122,8 @@ def test_rollup_includes_every_runtime_with_exact_totals(store):
     for rt in ("claude_code", "goose", "hermes", "opencode", "qwen_code", "openclaw"):
         assert rt in by_rt, f"runtime {rt} starved out of the rollup: {list(by_rt)}"
 
-    # Exact sums (no cap → no loss).
+    # Exact sums sourced from the bridged sessions table (no cap → no loss; and
+    # family token totals are NOT lost just because events.token_count is 0).
     assert by_rt["goose"]["tokens"] == 26487
     assert by_rt["hermes"]["tokens"] == 8832
     assert by_rt["opencode"]["tokens"] == 22505
@@ -107,7 +132,7 @@ def test_rollup_includes_every_runtime_with_exact_totals(store):
     assert by_rt["openclaw"]["tokens"] == 32760
     assert round(by_rt["openclaw"]["cost_usd"], 2) == 19.86
     assert by_rt["openclaw"]["sessions"] == 1
-    # claude_code: 40 events × 1000 tokens, all one session.
+    # claude_code: one session, totals from its bridged session row.
     assert by_rt["claude_code"]["tokens"] == 40000
     assert by_rt["claude_code"]["sessions"] == 1
     assert round(by_rt["claude_code"]["cost_usd"], 2) == 4.00
@@ -126,19 +151,22 @@ def test_rollup_detects_model_switches(store):
     assert ("claude-sonnet-4-6", "claude-opus-4-8") in pairs
 
 
-def test_model_less_events_count_tokens_not_turns(store):
+def test_model_less_events_do_not_count_as_turns(store):
     now = time.time()
     _seed(store, "goose:g1", "llama3.2", now - 30, tokens=100, eid="m1")
-    # A model-less event (e.g. a tool_result row) still has tokens.
+    # A model-less event (e.g. a tool_result row).
     store.ingest({
         "id": "m2", "node_id": "agent+test", "agent_id": "main",
         "session_id": "goose:g1", "event_type": "tool_result",
         "ts": _iso(now - 20), "data": {}, "cost_usd": 0.0,
         "token_count": 50, "model": None,
     })
+    # Session-level token total (the authoritative source for runtime totals).
+    _seed_session(store, "goose:g1", tokens=150, cost=0.0)
     _wait_flush(store)
     roll = store.query_model_rollup()
-    assert roll["by_runtime"]["goose"]["tokens"] == 150  # both events
+    # Runtime total comes from the bridged session row, not the events sum.
+    assert roll["by_runtime"]["goose"]["tokens"] == 150
     goose_models = [r for r in roll["by_runtime_model"] if r["runtime"] == "goose"]
     # Only the model-bearing event counts as a turn.
     assert sum(r["turns"] for r in goose_models) == 1
