@@ -15278,6 +15278,21 @@ def start_claim_watcher(config: dict):
                 save_config(cfg)
                 log.info("Node claimed onto %s — adopting the real account and "
                          "restarting (pro auto-provision runs on restart)", new_email)
+                # Clean re-exec: the new process image keeps this PID, so
+                # _acquire_pid_lock would see its OWN live PID and abort, and the
+                # DuckDB writer lock would still be held. Stop the store (flush +
+                # release the writer lock) and drop the pid lock first; then the
+                # re-exec'd run_daemon starts cleanly. (launchd KeepAlive is the
+                # backstop if execv ever fails.)
+                try:
+                    from clawmetry import local_store as _ls
+                    _ls.get_store().stop(flush=True)
+                except Exception:
+                    pass
+                try:
+                    _release_pid_lock()
+                except Exception:
+                    pass
                 time.sleep(0.5)
                 os.execv(sys.executable, [sys.executable] + sys.argv)
             except Exception as e:

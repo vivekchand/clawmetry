@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Release: clean claim-watcher re-exec (#2918) (2026-06-09)
+- The one-step onboarding claim-watcher (0.12.491) re-execs to adopt the real account. os.execv keeps the same PID, so _acquire_pid_lock saw its own live PID and the DuckDB writer lock stayed held — the re-exec'd daemon could fail to start (relying on the launchd KeepAlive crash-restart). Now it stops the store (flush + release the writer lock) and releases the pid lock before execv, so the restart is clean.
+
 ### Release: one-step first-node onboarding — daemon adopts the real account automatically (#2915) (2026-06-08)
 - A zero-friction install lands on a throwaway placeholder account (agent+<hash>@clawmetry.auto), invisible from the user's real login. The daemon now watches for that node being claimed onto the user's real account (by the cloud /cloud auto-claim when `clawmetry connect` opens the browser) and adopts it automatically — NO `clawmetry connect --key` step.
 - While on a placeholder, the daemon polls /api/cloud/claim-status every 5s; the moment the node is claimed it rewrites config with the real key and re-execs, so every thread (heartbeat, snapshot push, pro auto-provision) restarts on the real account and the node syncs there directly. Re-exec also runs the existing pro auto-provision, so adopting a Trial/Pro key installs the pro package and the other runtimes (Claude Code, Codex, …) start syncing automatically.
