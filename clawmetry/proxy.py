@@ -874,6 +874,11 @@ def compute_request_hash(body: dict) -> str:
 # in-process, bounded; the proxy is a single long-lived process per node.
 _SESSION_PREFIX: dict = {}
 
+# Per-session raw and normalised tool fingerprints, for tool-order churn
+# detection (#2841). Raw preserves list order; normalised does not.
+_SESSION_TOOLS_NORM: dict = {}
+_SESSION_TOOLS_RAW: dict = {}
+
 _VOLATILE_PATTERNS = {
     "iso_timestamp": re.compile(r"\d{4}-\d\d-\d\d[ T]\d\d:\d\d(?::\d\d)?"),
     "uuid": re.compile(
@@ -906,6 +911,20 @@ def normalize_tools(tools) -> str:
         norm = [_sort_json(t) for t in tools if isinstance(t, dict)]
         norm.sort(key=lambda t: str(t.get("name", "")))
         return json.dumps(norm, separators=(",", ":"), ensure_ascii=False)
+    except Exception:
+        return ""
+
+
+def raw_tools_fp(tools) -> str:
+    """Order-preserving fingerprint for the tools array (#2841). Pair with
+    normalize_tools to detect when a session sends the same tools in a
+    different order across turns. Never raises."""
+    try:
+        if not isinstance(tools, list):
+            return ""
+        return hashlib.sha256(
+            json.dumps(tools, separators=(",", ":"), ensure_ascii=False).encode()
+        ).hexdigest()[:16]
     except Exception:
         return ""
 
@@ -2192,6 +2211,33 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                 )
         except Exception as _exc:  # noqa: BLE001 — never break the proxy
             logger.debug("cache-risk detection skipped: %s", _exc)
+
+        # ── Tool-order churn detection (#2841) ─────────────────────────
+        # Flag when a session's tools array is reordered between turns but the
+        # normalised set is unchanged — caller is sending tools non-deterministically.
+        # Detection only; never blocks. Diagnostic for the Cost-lens.
+        try:
+            if session_id and isinstance(body.get("tools"), list):
+                _tnorm = normalize_tools(body.get("tools"))
+                _traw = raw_tools_fp(body.get("tools"))
+                _prev_norm = _SESSION_TOOLS_NORM.get(session_id)
+                _prev_raw = _SESSION_TOOLS_RAW.get(session_id)
+                if len(_SESSION_TOOLS_NORM) > 2000:
+                    _SESSION_TOOLS_NORM.clear()
+                    _SESSION_TOOLS_RAW.clear()
+                _SESSION_TOOLS_NORM[session_id] = _tnorm
+                _SESSION_TOOLS_RAW[session_id] = _traw
+                if (_prev_norm and _prev_raw and _tnorm and _traw
+                        and _prev_raw != _traw and _prev_norm == _tnorm):
+                    db.record_event(
+                        "tool_order_churn",
+                        "tool array reordered across turns (same tools, different order)"
+                        " — normalising; caller may be building tools non-deterministically",
+                        severity="info",
+                        details={"session_id": session_id, "model": model},
+                    )
+        except Exception as _exc:  # noqa: BLE001 — never break the proxy
+            logger.debug("tool-order churn detection skipped: %s", _exc)
 
         # ── Velocity check ─────────────────────────────────────────────
         is_spike, spike_reason = velocity_breaker.check(session_id)
