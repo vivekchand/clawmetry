@@ -138,6 +138,22 @@ def test_rollup_includes_every_runtime_with_exact_totals(store):
     assert round(by_rt["claude_code"]["cost_usd"], 2) == 4.00
 
 
+def test_rollup_carries_today_cost_split(store):
+    """by_runtime carries a TODAY slice (events in the current UTC day) distinct
+    from the LIFETIME cost_usd — the dual-column 'Your agents' view."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).timestamp()
+    old = now - 5 * 86400  # 5 days ago → counts toward lifetime, not today
+    _seed(store, "claude_code:c1", "claude-opus-4-8", now - 60, cost=2.0, eid="t1")
+    _seed(store, "claude_code:c1", "claude-opus-4-8", old, cost=8.0, eid="t2")
+    _seed_session(store, "claude_code:c1", tokens=100, cost=10.0)
+    _wait_flush(store)
+    roll = store.query_model_rollup()
+    cc = roll["by_runtime"]["claude_code"]
+    assert round(cc["cost_today_usd"], 2) == 2.0, "today = only today's events"
+    assert round(cc["cost_usd"], 2) == 10.0, "lifetime = the session total"
+
+
 def test_rollup_detects_model_switches(store):
     now = time.time()
     _seed(store, "682c73e4-aaa", "claude-opus-4-8", now - 30, eid="s1")
