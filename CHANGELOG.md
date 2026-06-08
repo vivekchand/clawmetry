@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Release: tamper-evident hash chain ON by default (#2906) (2026-06-08)
+- The Free, always-on tamper-evident hash chain (Security tab integrity card + `clawmetry verify-integrity`) defaulted to OFF (`CLAWMETRY_INTEGRITY=0`), so on a standard install nothing ever stamped and the integrity card showed a perpetual "empty" state (chain_length=0). Default it ON to match the product promise; set `CLAWMETRY_INTEGRITY=0` to disable on an extreme-volume node.
+- The per-flush duplicate check is now a single `IN(...)` lookup instead of a `SELECT` per event (flush batch up to 1000 rows), keeping default-on stamping within the daemon CPU budget. `events.id` is an indexed PRIMARY KEY so the lookups are point ops, not scans.
+
 ### Release: OTLP spans now actually persist in production (#2896) (2026-06-08)
 - **Bring-your-own-agent was silently dropped:** the /v1/traces receiver runs in the dashboard process, which does not own the DuckDB writer lock, so get_store() returns a proxy that forwards writes to the daemon but only passes keyword args. put_span was called positionally and was not in the daemon allowlist, so every OTLP span no-opped whenever a daemon runs (every real install): the POST returned 200 but nothing persisted, and a foreign OpenLLMetry/OTLP app never appeared in the runtime switcher or Agent Inventory. The OTLP test suite missed it because it forces single-process, where get_store() is the real writer.
 - **Fix:** allowlist put_span in routes/local_query._DAEMON_METHODS and call put_span(span=...) by keyword so the span forwards through the proxy to the daemon writer (same pattern as set_agent_meta). A new regression test forces the proxy path the suite skipped and asserts the span forwards as a keyword plus put_span is allowlisted.
