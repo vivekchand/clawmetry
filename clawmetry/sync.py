@@ -12990,6 +12990,356 @@ def _seconds_since(ts) -> int:
         return 0
 
 
+# ── Daemon-side STUCK-agent detection (issue clawmetry-hardware#15) ──────────
+# The desk device promises a "<runtime> stuck: N tool calls, no progress"
+# banner. Until now the ONLY stuck/loop signal came from the enforcement PROXY
+# (clawmetry.proxy.LoopDetector.ingest_loop_signal), so anyone NOT running the
+# proxy never saw it. This detector reconstructs the same signal from the event
+# stream the daemon already ingests into DuckDB, so it works for EVERYONE,
+# proxy-independent. It is strictly read-only (it only READS events and WRITES a
+# loop_signals row — it never touches the agent), so it can default ON.
+#
+# Definition of "stuck": a recently-active, non-ended session whose newest
+# events are a long CONSECUTIVE run of tool activity with NO progress marker
+# since the streak began. A progress marker is what a healthy agent emits
+# between tool batches: an assistant message carrying TEXT content (a reply /
+# reasoning, not just tool_use), a user message, or a session end. A normal
+# agent doing real work breaks its tool streak with text replies and hits
+# results, so only a true no-progress streak that is BOTH long (>= threshold
+# tool calls) AND slow (spanning >= min-seconds wall-clock) trips it. Both
+# bounds must hold so a fast burst of tool calls (legitimate parallel work)
+# and a small streak are both excused.
+STUCK_TOOL_THRESHOLD = int(os.environ.get("CLAWMETRY_STUCK_TOOLS", "25"))
+STUCK_MIN_SECONDS = int(os.environ.get("CLAWMETRY_STUCK_SECONDS", "180"))
+# How recently a session must have been active to be a candidate. A truly idle
+# session (last active hours ago) is not "stuck right now" — it just stopped.
+STUCK_RECENT_MINUTES = int(os.environ.get("CLAWMETRY_STUCK_RECENT_MINUTES", "15"))
+# How many newest events to inspect per candidate session. 120 comfortably
+# covers a streak well past the threshold plus the preceding progress marker.
+_STUCK_EVENT_WINDOW = 120
+
+# Event types that count as a TOOL action in the streak. Covers every ingest
+# variant (Anthropic-style, OpenClaw v3 dotted, camelCase, hyphenated) so the
+# streak counts the same tool turns the transcript renders. Mirrors
+# local_store._TOOL_CALL_TOPLEVEL_EVENT_TYPES + the result/dotted forms.
+# Top-level tool-CALL events (family adapters emit these directly). Tool RESULT
+# events are deliberately EXCLUDED — a result is not a new invocation, and
+# counting it double-counts each round-trip (~2x inflation).
+_STUCK_TOPLEVEL_TOOL_CALL_TYPES = frozenset({
+    "tool_call", "tool_use", "toolcall", "tool.call", "tool.invoked",
+})
+# Assistant/model turn envelopes that may HOST tool calls inside the message
+# (OpenClaw v3 ``model.completed`` + ``data.toolMetas``; Claude Code ``assistant``
+# + ``message.content`` tool_use blocks). Counted via the canonical
+# ``_iter_tool_invocation_names`` so the streak counts the same tool turns the
+# rest of the app counts — top-level ``tool_call`` is rare on the real runtimes.
+_STUCK_ASSISTANT_EVENT_TYPES = frozenset({
+    "assistant", "message", "model.completed", "subagent:assistant",
+})
+# Event types that are unambiguously a PROGRESS marker on their own (no need to
+# inspect content). A user prompt or a session end breaks any streak.
+_STUCK_PROGRESS_EVENT_TYPES = frozenset({
+    "user", "prompt.submitted",
+    "session.ended", "session.end", "session.completed", "session.stopped",
+})
+
+
+def _stuck_tool_call_count(et: str, data: Any) -> int:
+    """Number of tool CALLS an event represents (0 if none). Handles all three
+    real shapes: a top-level ``tool_call``/``tool_use`` event (1), OpenClaw v3
+    ``model.completed`` with ``data.toolMetas`` (N), and Claude Code ``assistant``
+    with ``message.content`` tool_use blocks (N). Mirrors the app-wide
+    ``_iter_tool_invocation_names`` so the streak counts what everything else
+    counts — and counts CALLS only, never tool_result. Never raises."""
+    if et in _STUCK_TOPLEVEL_TOOL_CALL_TYPES:
+        return 1
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception:
+            return 0
+    if not isinstance(data, dict):
+        return 0
+    try:
+        from clawmetry.local_store import _iter_tool_invocation_names
+        return sum(1 for _ in _iter_tool_invocation_names(et, data))
+    except Exception:
+        return 0
+
+
+def _stuck_event_role(data: Any) -> str:
+    """Best-effort role for an event payload. ``data`` may be a dict, a JSON
+    string, or junk — mirror _row_to_event/_brain_row_renderable defensiveness
+    and never raise. Returns a lowercase role ('assistant'/'user'/'system'/…)
+    or '' when none is discernible."""
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception:
+            return ""
+    if not isinstance(data, dict):
+        return ""
+    role = data.get("role")
+    if not role and isinstance(data.get("message"), dict):
+        role = data["message"].get("role")
+    return str(role or "").strip().lower()
+
+
+def _stuck_assistant_has_text(data: Any) -> bool:
+    """True if an assistant event carries real TEXT content (a reply / visible
+    reasoning), as opposed to a tool-call-only turn. Walks the common content
+    shapes: a plain string, or a list of blocks where a ``text`` block has
+    non-empty text. ``tool_use``/``toolCall`` blocks do NOT count as text —
+    those ARE the streak. Never raises."""
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception:
+            # A non-JSON string body is itself text content.
+            return bool(data.strip())
+    if not isinstance(data, dict):
+        return False
+    msg = data.get("message") if isinstance(data.get("message"), dict) else data
+    content = msg.get("content")
+    if isinstance(content, str):
+        return bool(content.strip())
+    if isinstance(content, list):
+        for blk in content:
+            if not isinstance(blk, dict):
+                # A bare string block counts as text.
+                if isinstance(blk, str) and blk.strip():
+                    return True
+                continue
+            btype = str(blk.get("type") or "").lower()
+            if btype in ("text", "output_text") and str(blk.get("text") or "").strip():
+                return True
+            # Some shapes omit ``type`` but carry ``text`` directly.
+            if not btype and str(blk.get("text") or "").strip():
+                return True
+    # Anthropic SDK also surfaces a top-level ``text`` on some assistant rows.
+    if isinstance(msg.get("text"), str) and msg["text"].strip():
+        return True
+    # OpenClaw v3 ``model.completed`` turns carry the reply under different keys
+    # (a string ``completionText``/``completion`` or a list ``assistantTexts``);
+    # a real text reply there is progress too, so a v3 narration breaks the streak.
+    for k in ("completionText", "completion"):
+        if isinstance(data.get(k), str) and data[k].strip():
+            return True
+    at = data.get("assistantTexts")
+    if isinstance(at, list) and any(isinstance(t, str) and t.strip() for t in at):
+        return True
+    return False
+
+
+def _detect_stuck_sessions(store) -> list[dict]:
+    """Reconstruct the proxy's stuck/loop signal from the DuckDB event stream.
+
+    For each recently-active, NON-ended session, walk its newest events
+    newest->older counting the CONSECUTIVE tool streak since the last progress
+    marker. A streak that is BOTH long (>= STUCK_TOOL_THRESHOLD tool calls) AND
+    slow (>= STUCK_MIN_SECONDS wall-clock span) marks the session STUCK.
+
+    Returns a list of ``{session_id, runtime, tool_calls, since_seconds}``,
+    most-stuck (longest streak) first. Read-only and never raises — any store
+    error logs a warning and yields ``[]`` so the daemon loop is never taken
+    down by detection.
+    """
+    try:
+        from clawmetry import waste_flags as _wf
+    except Exception:
+        _wf = None
+
+    try:
+        sessions = store.query_sessions_table(limit=300) or []
+    except Exception as e:  # noqa: BLE001
+        log.warning("stuck-detect: query_sessions_table failed: %s", e)
+        return []
+
+    out: list[dict] = []
+    for s in sessions:
+        if not isinstance(s, dict):
+            continue
+        # Skip ended sessions outright — a finished agent is not "stuck".
+        if s.get("ended_at"):
+            continue
+        status = str(s.get("status") or "").lower()
+        if status in ("ended", "completed", "stopped", "failed"):
+            continue
+        sid = s.get("session_id") or ""
+        if not sid:
+            continue
+        # Recency gate: only sessions active in the last STUCK_RECENT_MINUTES
+        # are candidates. query_sessions_table is ordered most-recent-active
+        # first, so the first stale row lets us stop scanning the tail.
+        last_active = s.get("last_active_at") or s.get("started_at")
+        idle_s = _seconds_since(last_active)
+        if last_active and idle_s > STUCK_RECENT_MINUTES * 60:
+            break
+
+        try:
+            events = store.query_events(
+                session_id=sid, limit=_STUCK_EVENT_WINDOW,
+            ) or []
+        except Exception as e:  # noqa: BLE001
+            log.warning("stuck-detect: query_events failed for %s: %s", sid, e)
+            continue
+        # query_events returns newest-first (ORDER BY ts DESC). Walk it in that
+        # order, counting the consecutive tool streak until the first progress
+        # marker. ``newest_ts``/``oldest_ts`` bound the streak's wall-clock span.
+        tool_calls = 0
+        newest_ts = None
+        oldest_ts = None
+        for ev in events:
+            if not isinstance(ev, dict):
+                continue
+            et = str(ev.get("event_type") or "").strip().lower()
+            data = ev.get("data")
+            ts = ev.get("ts")
+
+            if et in _STUCK_PROGRESS_EVENT_TYPES:
+                break  # user prompt / session end → progress, streak ends.
+            # An assistant / model.completed turn carrying TEXT is a reply →
+            # progress. A user message is progress regardless of et. A tool-only
+            # assistant/model turn is NOT progress — its hosted tools are counted.
+            role = _stuck_event_role(data)
+            if role == "user":
+                break
+            if et in _STUCK_ASSISTANT_EVENT_TYPES or role == "assistant":
+                if _stuck_assistant_has_text(data):
+                    break  # text reply → progress.
+
+            # Count tool CALLS for this event — top-level tool_call OR tool calls
+            # hosted inside an assistant/model envelope (toolMetas / content
+            # blocks). Counts calls only (never tool_result), so the threshold +
+            # the reported number mean real invocations.
+            n = _stuck_tool_call_count(et, data)
+            if n:
+                tool_calls += n
+                if newest_ts is None:
+                    newest_ts = ts
+                oldest_ts = ts
+            # Any other event (tool_result, heartbeat, model.changed, system, …)
+            # is neither a new tool call nor progress — skip without breaking.
+            continue
+
+        if tool_calls < STUCK_TOOL_THRESHOLD:
+            continue
+        # Wall-clock span of the streak (oldest..newest tool call). _seconds_since
+        # on the OLDEST streak event is the streak duration only if the newest
+        # is ~now; compute the explicit span instead to be precise.
+        span = _stuck_streak_span_seconds(oldest_ts, newest_ts)
+        if span < STUCK_MIN_SECONDS:
+            continue
+        runtime = "openclaw"
+        if _wf is not None:
+            try:
+                runtime = _wf.runtime_from_session_id(sid) or "openclaw"
+            except Exception:
+                runtime = "openclaw"
+        out.append({
+            "session_id": sid,
+            "runtime": runtime,
+            "tool_calls": tool_calls,
+            "since_seconds": span,
+        })
+
+    out.sort(key=lambda r: r.get("tool_calls", 0), reverse=True)
+    return out
+
+
+def _stuck_streak_span_seconds(oldest_ts, newest_ts) -> int:
+    """Wall-clock seconds between the oldest and newest tool-call in a streak.
+    Both are ISO-ish naive local strings (the store's convention). Falls back to
+    'seconds since oldest' when newest is unparseable, and 0 on total failure."""
+    try:
+        from datetime import datetime as _dt
+
+        def _parse(x):
+            s = str(x).strip().replace("Z", "")
+            try:
+                return _dt.fromisoformat(s)
+            except ValueError:
+                return _dt.fromisoformat(s.split(".")[0].split("+")[0])
+
+        if oldest_ts and newest_ts:
+            o, n = _parse(oldest_ts), _parse(newest_ts)
+            return max(0, int((n - o).total_seconds()))
+    except Exception:
+        pass
+    # Fallback: treat the streak as running until now.
+    return _seconds_since(oldest_ts)
+
+
+def _emit_stuck_signals(store, state: dict) -> int:
+    """Run stuck detection and emit each as a loop_signals row so the EXISTING
+    device-alert path (``_build_device_summary`` → ``query_recent_loop_signals``)
+    fires the "<runtime> stuck" banner WITHOUT a new alert source. Dedupes per
+    session within STUCK_REEMIT_SECONDS so we don't re-write every tick; the
+    30-minute ``last_seen`` window in the snapshot auto-clears the banner once a
+    session stops being stuck (we simply stop re-emitting). Returns the count of
+    sessions detected as stuck this tick. Never raises into the daemon loop."""
+    try:
+        stuck = _detect_stuck_sessions(store)
+    except Exception as e:  # noqa: BLE001
+        log.warning("stuck-detect: detector errored: %s", e)
+        return 0
+    if not stuck:
+        return 0
+
+    memo = state.setdefault("stuck_emit_memo", {})
+    if not isinstance(memo, dict):
+        memo = {}
+        state["stuck_emit_memo"] = memo
+    now = time.time()
+    # Don't re-write a session's signal more than once per re-emit window, but
+    # DO re-emit periodically so ``last_seen`` stays fresh inside the snapshot's
+    # 30-min window while the session remains stuck.
+    reemit = max(30, STUCK_MIN_SECONDS // 2)
+
+    emitted = 0
+    for st in stuck:
+        sid = st["session_id"]
+        last = memo.get(sid)
+        if isinstance(last, (int, float)) and (now - last) < reemit:
+            continue
+        n = int(st["tool_calls"])
+        mins = max(1, st["since_seconds"] // 60)
+        rt = st["runtime"]
+        msg = f"{rt} stuck: {n} tool calls, no progress for {mins}m"
+        try:
+            store.ingest_loop_signal(
+                session_id=sid,
+                # Stable signature per session so a re-emit UPSERTs the same row
+                # (GREATEST bumps repeat_count, refreshes last_seen) instead of
+                # piling up rows — matches the proxy's (session_id, signature) PK.
+                signature="daemon_stuck",
+                repeat_count=n,
+                severity="warning",
+                agent_type=rt,
+                details={
+                    "source": "daemon_stuck_detector",
+                    "message": msg,
+                    "tool_calls": n,
+                    "since_seconds": st["since_seconds"],
+                },
+            )
+            memo[sid] = now
+            emitted += 1
+            log.info("stuck-detect: %s", msg)
+        except Exception as e:  # noqa: BLE001
+            log.warning("stuck-detect: ingest_loop_signal failed for %s: %s",
+                        sid, e)
+            continue
+    # Bound memo growth: drop entries we haven't touched in an hour.
+    try:
+        for k in [k for k, v in memo.items()
+                  if not (isinstance(v, (int, float)) and (now - v) < 3600)]:
+            memo.pop(k, None)
+    except Exception:
+        pass
+    return emitted
+
+
 def _build_device_summary(spending, daily_usage):
     """Compact, all-runtime payload for a WiFi hardware companion.
 
@@ -13106,17 +13456,32 @@ def _build_device_summary(spending, daily_usage):
         pass
     # Surface a "something is stuck" alert from the daemon's loop-detection
     # signals so the device alert card can fire. It was always null while the
-    # alert source lived only in the dashboard process (#contract-drift).
+    # alert source lived only in the dashboard process (#contract-drift). The
+    # signals come from BOTH the enforcement proxy's LoopDetector AND (issue
+    # clawmetry-hardware#15) the daemon's proxy-independent _emit_stuck_signals,
+    # so the banner now fires for everyone, not just proxy users.
     try:
         from clawmetry import waste_flags as _wf
         sigs = store.query_recent_loop_signals(limit=5, since_minutes=30) or []
         hot = next((s for s in sigs if isinstance(s, dict)
                     and int(s.get("repeat_count") or 0) >= 5), None)
         if hot:
-            rt = (_wf.runtime_from_session_id(hot.get("session_id") or "")
-                  or hot.get("agent_type") or "an agent")
-            n = int(hot.get("repeat_count") or 0)
-            summary["alert"] = {"message": f"{rt} looping, {n} repeats, no progress"}
+            # Prefer the precise message the daemon stuck-detector stashed in
+            # ``details`` ("<rt> stuck: N tool calls, no progress for Mm");
+            # fall back to the generic looping wording for proxy-only signals.
+            det = hot.get("details")
+            if isinstance(det, str):
+                try:
+                    det = json.loads(det)
+                except Exception:
+                    det = None
+            msg = det.get("message") if isinstance(det, dict) else None
+            if not msg:
+                rt = (_wf.runtime_from_session_id(hot.get("session_id") or "")
+                      or hot.get("agent_type") or "an agent")
+                n = int(hot.get("repeat_count") or 0)
+                msg = f"{rt} looping, {n} repeats, no progress"
+            summary["alert"] = {"message": str(msg)[:200]}
     except Exception:
         pass
     # A waiting approval or a stuck/looping agent is what needs a human.
@@ -14742,6 +15107,11 @@ def run_daemon() -> None:
     # ENABLED=0 disables cleanly. 0 = fire on first cycle so a daemon
     # restart scores the backlog without waiting 5 min.
     last_evals_run = 0.0
+    # Stuck-agent detector (issue clawmetry-hardware#15). Proxy-independent;
+    # reads the event stream and emits a loop_signals row that the device-alert
+    # path already reads. 0 = run on first cycle so a stuck agent at daemon
+    # start surfaces immediately.
+    last_stuck_eval = 0.0
 
     while True:
         try:
@@ -14967,6 +15337,34 @@ def run_daemon() -> None:
                     save_state(state)
                 except Exception:
                     pass
+
+            # ── Stuck-agent detector (issue clawmetry-hardware#15) ──
+            # Proxy-independent: reads the event stream from DuckDB, finds
+            # sessions in a long no-progress tool streak, and emits a
+            # loop_signals row so the device's "<runtime> stuck" banner fires
+            # for EVERYONE (not just users running the enforcement proxy).
+            # Strictly read-only w.r.t. the agent, throttled, and best-effort —
+            # a failure logs but never raises into the sync cycle.
+            if os.environ.get("CLAWMETRY_STUCK_DETECT", "1") != "0":
+                now_stuck = time.time()
+                if (now_stuck - last_stuck_eval) >= STUCK_EVAL_INTERVAL_SEC:
+                    try:
+                        from clawmetry import local_store as _ls_stuck
+                        store_for_stuck = _ls_stuck.get_store()
+                        n_stuck = _emit_stuck_signals(store_for_stuck, state)
+                        if n_stuck:
+                            log.info(
+                                f"stuck-detect: {n_stuck} stuck session(s)"
+                            )
+                    except Exception as _se:
+                        log.warning(
+                            f"stuck-detect: tick errored: {_se}"
+                        )
+                    last_stuck_eval = now_stuck
+                    try:
+                        save_state(state)
+                    except Exception:
+                        pass
 
             # ── Eval scheduler (issue #1619 Phase 1) ──
             # Sister of the alerts evaluator. Picks unscored completed
@@ -16032,6 +16430,11 @@ def sync_autonomy(config, state, paths):
 
 
 ALERTS_EVAL_INTERVAL_SEC = 60  # Re-evaluate alerts every 60s (PRD #779)
+
+# Stuck-agent detector cadence (issue clawmetry-hardware#15). 60s keeps the
+# device banner fresh without re-scanning every tight sync tick; env override
+# for tests / tuning.
+STUCK_EVAL_INTERVAL_SEC = int(os.environ.get("CLAWMETRY_STUCK_INTERVAL_SEC", "60"))
 
 # Issue #1619 Phase 1 — LLM-as-judge eval scheduler cadence. 300s (5 min)
 # matches the PRD: every 5 min, pick up to EVAL_BATCH unscored completed
