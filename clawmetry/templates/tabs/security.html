@@ -60,6 +60,27 @@
       </div>
       <div id="posture-checks-list" style="display:grid;gap:6px;"></div>
     </div>
+    <!-- Tamper-evident integrity (hash chain) -->
+    <div id="security-integrity-panel" style="
+      background:var(--bg-secondary);
+      border:1px solid var(--border);
+      border-radius:8px;
+      padding:14px 16px;
+      margin-bottom:14px;
+      display:flex;
+      align-items:center;
+      gap:14px;
+      ">
+      <div id="integrity-icon" style="font-size:22px;flex-shrink:0;">🔒</div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:13px;font-weight:700;color:var(--text-primary);" data-i18n="security.integrity_title">Tamper-evident log</div>
+        <div id="integrity-label" style="font-size:11px;color:var(--text-muted);margin-top:2px;" data-i18n="security.integrity_checking">Checking the activity log for tampering...</div>
+      </div>
+      <span id="integrity-badge" style="
+        font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;
+        background:var(--bg-primary);color:var(--text-muted);flex-shrink:0;
+        "></span>
+    </div>
     <!-- Threat Detection -->
     <div style="
       font-size:13px;
@@ -212,6 +233,16 @@
         cursor:pointer;
         " onclick="toggleSecCatalog()">📋 <span data-i18n="security.signature_catalog">Signature Catalog</span> <span id="sec-catalog-arrow" style="font-size:10px;">▶</span></div>
       <div id="sec-catalog" style="display:none;"></div>
+    </div>
+    <!-- Audit log: recent governance activity -->
+    <div style="margin-top:14px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;" id="security-audit-panel">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <span style="font-size:12px;font-weight:700;color:var(--text-primary);">📋 <span data-i18n="security.audit_title">Recent activity</span> <span style="font-size:11px;font-weight:400;color:var(--text-muted);" data-i18n="security.audit_sub">(approvals, budgets, pauses)</span></span>
+        <span id="security-audit-count" style="font-size:11px;color:var(--text-muted);"></span>
+      </div>
+      <div id="security-audit-list" style="max-height:320px;overflow-y:auto;font-size:12px;">
+        <div style="color:var(--text-muted);padding:12px;" data-i18n="security.audit_empty">No recorded activity yet. Approval decisions, budget changes, and pauses appear here.</div>
+      </div>
     </div>
   </div>
 </div><!-- end page-security -->
