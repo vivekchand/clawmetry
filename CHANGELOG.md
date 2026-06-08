@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Release: one-step first-node onboarding — daemon adopts the real account automatically (#2915) (2026-06-08)
+- A zero-friction install lands on a throwaway placeholder account (agent+<hash>@clawmetry.auto), invisible from the user's real login. The daemon now watches for that node being claimed onto the user's real account (by the cloud /cloud auto-claim when `clawmetry connect` opens the browser) and adopts it automatically — NO `clawmetry connect --key` step.
+- While on a placeholder, the daemon polls /api/cloud/claim-status every 5s; the moment the node is claimed it rewrites config with the real key and re-execs, so every thread (heartbeat, snapshot push, pro auto-provision) restarts on the real account and the node syncs there directly. Re-exec also runs the existing pro auto-provision, so adopting a Trial/Pro key installs the pro package and the other runtimes (Claude Code, Codex, …) start syncing automatically.
+
 ### Release: warn when a machine is on a temporary (unlinked) account (#2910) (2026-06-08)
 - Fixes the recurring "I installed ClawMetry but my dashboard shows 0 nodes" trap. A zero-friction install binds the daemon to a throwaway placeholder account (agent+<hash>@clawmetry.auto, renamed .linked after device pairing) that is invisible from the user's real login, so the node silently never appears under their email. `clawmetry status` printed the placeholder account with no hint anything was wrong.
 - `clawmetry status` now tags the account line ("temporary, not linked") and prints a block with the exact relink command; the zero-friction `clawmetry connect` prints the same warning at install time (skipped for a keyed `--key cm_...` connect, which lands on the real account). To sync a machine to your account, run the `clawmetry connect --key cm_...` command from the "+ Add node" box on app.clawmetry.com/cloud.
