@@ -808,6 +808,12 @@ def _cmd_connect(args) -> None:
     print(f"  https://app.clawmetry.com/cloud")
     print()
 
+    # If this was a zero-friction connect (no real key), the node landed on a
+    # temporary placeholder account and will NOT show under the user's real
+    # login. Warn loudly with the exact relink command instead of letting them
+    # discover a silent "0 nodes" later. No-op (+ skipped) for a keyed connect.
+    _warn_if_placeholder_account(api_key)
+
     try:
         import webbrowser
         webbrowser.open(_dashboard_url)
@@ -1575,6 +1581,37 @@ def _status_live() -> None:
         _sys.stdout.flush()
 
 
+def _is_placeholder_account(email) -> bool:
+    """True when the account is a zero-friction PLACEHOLDER (the daemon
+    auto-registered without a real login). Such an account is invisible from
+    the user's real dashboard, so the node silently never shows up under their
+    email -- the recurring 'I installed it but see 0 nodes' trap."""
+    e = (email or "").strip().lower()
+    return e.endswith("@clawmetry.auto") or e.endswith("@clawmetry.linked")
+
+
+def _warn_if_placeholder_account(api_key: str, email=None) -> bool:
+    """If this node is bound to a placeholder account, print a LOUD, actionable
+    warning (it will NOT appear in the user's dashboard until linked). Returns
+    True when it warned. Best-effort: resolves the email itself if not given,
+    never raises, no-ops offline."""
+    try:
+        if email is None:
+            email, _ = _resolve_account_email(api_key)
+        if not _is_placeholder_account(email):
+            return False
+        print()
+        print("  \033[33m⚠  This machine is on a TEMPORARY account, not your ClawMetry login.\033[0m")
+        print("     It will NOT show up at app.clawmetry.com/cloud under your email.")
+        print("     Link it to your account (copy the command from the '+ Add node'")
+        print("     box at app.clawmetry.com/cloud -- it carries YOUR key):")
+        print("        \033[36mclawmetry connect --key cm_xxxxxxxxxxxx\033[0m")
+        print()
+        return True
+    except Exception:
+        return False
+
+
 def _resolve_account_email(api_key: str):
     """Best-effort: ask the cloud which ACCOUNT this node's api_key is linked to,
     so `clawmetry status` can show the email (and plan). This is the fastest way
@@ -1625,7 +1662,8 @@ def _cmd_status(args) -> None:
             _acct_email, _acct_plan = _resolve_account_email(api_key)
             if _acct_email:
                 _plan_suffix = f"  ({_acct_plan})" if _acct_plan else ""
-                print(f"  Account:     {_acct_email}{_plan_suffix}")
+                _acct_note = "  ⚠ temporary, not linked" if _is_placeholder_account(_acct_email) else ""
+                print(f"  Account:     {_acct_email}{_plan_suffix}{_acct_note}")
             print(f"  Node ID:     {cfg.get('node_id', '?')}")
             print(f"  Connected:   {cfg.get('connected_at', '?')[:19]}")
             if enc_key:
@@ -1637,6 +1675,9 @@ def _cmd_status(args) -> None:
                 print("  E2E:         🔒 enabled")
             else:
                 print("  E2E:         ⚠️  disabled (no secret key in config)")
+            # Loud, actionable block when the node is on a placeholder account
+            # (the recurring 'connected but 0 nodes in my dashboard' trap).
+            _warn_if_placeholder_account(api_key, _acct_email)
         except Exception as e:
             print(f"  Config error: {e}")
     else:
