@@ -986,7 +986,13 @@ _MIGRATIONS_V2 = [
 # Off by default. Set CLAWMETRY_INTEGRITY=1 to enable stamping new events with
 # a per-node SHA-256 chain. Existing rows keep chain_prev_hash/chain_hash=NULL
 # and are skipped by verify-integrity (reported as "pre-chain" events).
-_INTEGRITY_ENABLED = os.environ.get("CLAWMETRY_INTEGRITY", "0").strip().lower() not in (
+# ON BY DEFAULT (the tamper-evident log is a Free, always-on feature, surfaced
+# in the Security tab + `clawmetry verify-integrity`). Was opt-in ("0") which
+# left the Security integrity card perpetually "empty" and the always-on claim
+# false. Stamping is batched on the flush path and the dedup check is a single
+# query per flush (see _stamp_integrity), so the CPU cost stays within budget;
+# set CLAWMETRY_INTEGRITY=0 to disable on an extreme-volume node.
+_INTEGRITY_ENABLED = os.environ.get("CLAWMETRY_INTEGRITY", "1").strip().lower() not in (
     "0", "false", "no", ""
 )
 
@@ -4727,18 +4733,32 @@ class LocalStore:
             # Sort by id so stamp order within a created_at bucket is deterministic
             # and matches the ORDER BY id ASC used in verify_integrity.
             events.sort(key=lambda e: str(e.get("id") or ""))
+            # Dedup check in ONE query for the whole batch (was a SELECT per
+            # event). INSERT OR IGNORE may have skipped a re-delivered event
+            # that is already stamped; re-stamping it would fork the chain, so
+            # we must skip those. With the flush batch up to 1000 rows, a
+            # per-event lookup is up to 1000 indexed PK queries per flush; this
+            # collapses it to one IN(...) lookup, keeping default-on stamping
+            # within the daemon CPU budget (FLYWHEEL 1e).
+            ids = [str(e.get("id")) for e in events if e.get("id")]
+            already_stamped: dict[str, str] = {}
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                for r in conn.execute(
+                    "SELECT id, chain_hash FROM events "
+                    f"WHERE id IN ({placeholders}) AND chain_hash IS NOT NULL",
+                    ids,
+                ).fetchall():
+                    already_stamped[str(r[0])] = r[1]
             updates: list[tuple[str, str, str]] = []
             for e in events:
                 eid = str(e.get("id") or "")
                 if not eid:
                     continue
                 # Only stamp events that were actually inserted (not duplicates).
-                already = conn.execute(
-                    "SELECT chain_hash FROM events WHERE id = ? AND chain_hash IS NOT NULL",
-                    [eid],
-                ).fetchone()
-                if already:
-                    head = already[0]
+                prev = already_stamped.get(eid)
+                if prev is not None:
+                    head = prev
                     continue
                 new_hash = _integrity_hash(head, e)
                 updates.append((head, new_hash, eid))

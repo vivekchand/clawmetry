@@ -14074,6 +14074,33 @@ def _build_device_summary(spending, daily_usage):
             ]
         except Exception:
             pass
+        # schema 2: per-session titles for the device's runtime-detail recent
+        # -sessions rows. The title is the session's FIRST USER MESSAGE (real
+        # content, e.g. "read flywheel.md ..."), so it rides the ENCRYPTED
+        # deviceSummary (decrypted on-device) and NEVER the plaintext
+        # device-agent endpoint -- raw content never leaves the daemon in the
+        # clear (the cloud only ever stores an empty display_name for these).
+        # The firmware looks each recent-session row up here by its BARE session
+        # id (post-':' so it matches the device-agent rows) and falls back to a
+        # short id when absent. Keyed by bare id, capped + truncated to keep the
+        # ~8s-polled summary small. ``rows`` is already last_active DESC.
+        try:
+            titles: dict = {}
+            for s in rows:
+                if not isinstance(s, dict):
+                    continue
+                t = (s.get("title") or "").strip()
+                if not t:
+                    continue
+                bare = str(s.get("session_id") or "").rsplit(":", 1)[-1]
+                if bare and bare not in titles:
+                    titles[bare] = t[:56]
+                if len(titles) >= 40:
+                    break
+            if titles:
+                summary["sessionTitles"] = titles
+        except Exception:
+            pass
     except Exception:
         pass
     try:

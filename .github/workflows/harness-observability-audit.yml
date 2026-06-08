@@ -46,7 +46,7 @@ jobs:
       HARNESS_DIR: ${{ github.workspace }}/.harness
     steps:
       - name: Checkout clawmetry (OSS)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - uses: actions/setup-python@v5
         with:
