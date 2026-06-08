@@ -3890,6 +3890,101 @@ class LocalStore:
             })
         return out
 
+    def query_otlp_app_rollup(
+        self,
+        *,
+        exclude_agent_types: "Iterable[str] | None" = None,
+        since: float | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """One row per DISTINCT ``agent_type`` in the spans table for foreign
+        OTLP / OpenLLMetry apps (#2822 stamps ``agent_type`` from the resource
+        ``service.name``), so the runtime switcher + Agent Inventory can surface
+        a LangChain / CrewAI / OpenAI-Agents app that only ever sent OTLP traces
+        (it has no session-id prefix, so it appears in NONE of the
+        session-prefix rollups).
+
+        This is a SINGLE ``GROUP BY agent_type`` aggregate (one index-backed
+        scan over ``spans``), meant to run on the daemon's snapshot timer inside
+        the cached rollup path, NEVER per HTTP request (FLYWHEEL 1e CPU budget).
+
+        ``exclude_agent_types`` removes the 12 known session-prefix runtimes
+        (plus ``openclaw``) so we only return the foreign apps. ``since`` bounds
+        to recent activity. Rows are ordered by recent activity desc and capped
+        at ``limit`` (the caller logs when truncated). Each row::
+
+            {agent_type, service_name, sessions, traces, spans, turns,
+             tokens, cost_usd, primary_model, last_ts}
+
+        ``turns`` counts model-bearing spans (a chat/LLM call), mirroring the
+        per-runtime ``turns`` semantics; ``sessions`` counts distinct non-null
+        session ids (often 0 for a pure-trace app, which is honest). Best-effort:
+        any failure (e.g. an old store without the spans table) yields ``[]``.
+        """
+        try:
+            excl = {str(x).lower() for x in (exclude_agent_types or [])}
+            clauses: list[str] = []
+            params: list[Any] = []
+            if since is not None:
+                clauses.append("start_ts >= ?")
+                params.append(float(since))
+            if excl:
+                placeholders = ", ".join(["?"] * len(excl))
+                clauses.append(f"LOWER(agent_type) NOT IN ({placeholders})")
+                params.extend(sorted(excl))
+            # Defensive: never return a NULL/blank bucket as a phantom runtime.
+            clauses.append("agent_type IS NOT NULL AND agent_type <> ''")
+            where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+            sql = f"""
+                SELECT
+                    agent_type,
+                    MAX(service_name)                                  AS service_name,
+                    COUNT(DISTINCT session_id)                         AS sessions,
+                    COUNT(DISTINCT trace_id)                           AS traces,
+                    COUNT(*)                                           AS spans,
+                    SUM(CASE WHEN model IS NOT NULL AND model <> ''
+                             THEN 1 ELSE 0 END)                        AS turns,
+                    SUM(COALESCE(token_count, 0))                      AS tokens,
+                    SUM(COALESCE(cost_usd, 0.0))                       AS cost_usd,
+                    MAX(start_ts)                                      AS last_ts
+                FROM spans
+                {where}
+                GROUP BY agent_type
+                ORDER BY MAX(start_ts) DESC
+                LIMIT ?
+            """
+            params.append(int(limit))
+            cols = [
+                "agent_type", "service_name", "sessions", "traces", "spans",
+                "turns", "tokens", "cost_usd", "last_ts",
+            ]
+            out: list[dict[str, Any]] = []
+            for r in self._fetch(sql, params):
+                d = dict(zip(cols, r))
+                # Per-app primary model (most frequent model on its spans). One
+                # tiny grouped read per app; the app set is already capped at
+                # ``limit`` so this stays bounded.
+                atype = d.get("agent_type")
+                primary = ""
+                try:
+                    mrows = self._fetch(
+                        """
+                        SELECT model, COUNT(*) AS n FROM spans
+                        WHERE agent_type = ? AND model IS NOT NULL AND model <> ''
+                        GROUP BY model ORDER BY n DESC LIMIT 1
+                        """,
+                        [atype],
+                    )
+                    if mrows:
+                        primary = mrows[0][0] or ""
+                except Exception:
+                    primary = ""
+                d["primary_model"] = primary
+                out.append(d)
+            return out
+        except Exception:
+            return []
+
     def query_recent_read_tool_calls(
         self,
         *,

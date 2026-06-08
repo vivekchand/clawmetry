@@ -10775,9 +10775,10 @@ def _build_runtime_summary(limit: int = 20000):
         store = _ls.get_store()
         if store is None:
             return {}
-        evs = store.query_events(limit=int(limit))
-        if not evs:
-            return {}
+        evs = store.query_events(limit=int(limit)) or []
+        # NOTE: we no longer early-return on empty events — a node that ONLY ever
+        # sent OTLP traces (a pure OpenLLMetry app, no OpenClaw sessions) has no
+        # events but DOES have foreign-app spans to surface below.
         agg: dict = {}
         sess_models = defaultdict(list)  # (rt, sid) -> ordered model list
         for ev in sorted(evs, key=lambda e: (e.get("session_id") or "", e.get("ts") or "")):
@@ -10828,10 +10829,106 @@ def _build_runtime_summary(limit: int = 20000):
                 "models": models_out,
                 "switch_count": rt_switches[rt],
             }
+        # Fold in foreign OTLP / OpenLLMetry apps (#2822/#2853 follow-up). These
+        # derive ``agent_type`` from the resource ``service.name`` and have NO
+        # session-id prefix, so they appear in NONE of the buckets above. One
+        # cheap GROUP BY agent_type over the spans table (daemon snapshot timer,
+        # NOT per request — FLYWHEEL 1e) surfaces them as first-class runtimes so
+        # the switcher dropdown + the inventory roster can scope to them.
+        try:
+            _merge_otlp_apps_into_summary(out, store)
+        except Exception as _eo:
+            log.debug("otlp app summary merge failed: %s", _eo)
         return out
     except Exception as _e:
         log.debug("runtime summary snapshot build failed: %s", _e)
         return {}
+
+
+# Defensive cap on how many distinct OTLP/custom apps we surface in the shared
+# snapshot (top-N by recent activity). A misconfigured fleet could otherwise emit
+# hundreds of service.names; we keep the snapshot tiny and log when we truncate
+# (no SILENT cap — FLYWHEEL). Override with CLAWMETRY_OTLP_APP_CAP.
+_OTLP_APP_CAP = int(os.environ.get("CLAWMETRY_OTLP_APP_CAP", "50") or "50")
+
+
+def _humanize_service_name(service_name: str, agent_type: str) -> str:
+    """Friendly display label for a foreign OTLP app row.
+
+    ``agent_type`` is the slugified service.name (#2822: lowercased, non-alnum
+    -> '_'); the original ``service.name`` is the better label when present.
+    'custom' (the #2822 fallback when service.name was absent) reads as
+    'Custom (OTel)' so it never looks like a real product name. Otherwise we
+    title-case the slug ('my_app' -> 'My App'). Always tagged '(OTel)' so a
+    bring-your-own-agent app is visibly distinct from a native runtime.
+    """
+    at = (agent_type or "").strip().lower()
+    if at == "custom":
+        return "Custom (OTel)"
+    base = (service_name or "").strip()
+    if not base:
+        base = (agent_type or "").replace("_", " ").replace("-", " ").strip()
+        base = " ".join(w.capitalize() for w in base.split()) or (agent_type or "app")
+    return f"{base} (OTel)"
+
+
+def _merge_otlp_apps_into_summary(out: dict, store) -> None:
+    """Add one ``runtimeSummary`` entry per foreign OTLP/custom app.
+
+    Mutates ``out`` in place. Each entry mirrors the session-prefix runtime
+    shape (so every existing consumer — Models interceptor, inventory builder,
+    Overview headline — reads it verbatim) PLUS:
+      - ``otlp = True`` so the frontend knows this runtime is filtered by
+        ``agent_type`` (no session-id prefix) rather than the prefix path.
+      - ``display_name`` (a humanized service name) so the dropdown/roster reads
+        'My App (OTel)', never the raw slug.
+    Excludes the 12 known session-prefix runtimes + ``openclaw`` so a native
+    runtime can NEVER be re-bucketed here (the pre-#2822 mis-bucket bug).
+    """
+    if store is None:
+        return
+    exclude = set(_RUNTIME_PREFIXES) | {"openclaw", "nemoclaw"}
+    rows = store.query_otlp_app_rollup(
+        exclude_agent_types=exclude, limit=_OTLP_APP_CAP + 1,
+    )
+    if not rows:
+        return
+    if len(rows) > _OTLP_APP_CAP:
+        log.warning(
+            "otlp app rollup truncated: %d apps observed, surfacing top %d by "
+            "recent activity (raise CLAWMETRY_OTLP_APP_CAP)",
+            len(rows), _OTLP_APP_CAP,
+        )
+        rows = rows[:_OTLP_APP_CAP]
+    for r in rows:
+        at = (r.get("agent_type") or "").strip()
+        if not at:
+            continue
+        # Never clobber a real session-prefix runtime that happens to share a key
+        # (belt-and-braces; the query already excludes them).
+        if at.lower() in exclude or at in out:
+            continue
+        primary = r.get("primary_model") or ""
+        out[at] = {
+            "sessions": int(r.get("sessions") or 0),
+            "turns": int(r.get("turns") or 0),
+            "tokens": int(r.get("tokens") or 0),
+            "cost_usd": round(float(r.get("cost_usd") or 0.0), 4),
+            "primary_model": primary,
+            "total_turns": int(r.get("turns") or 0),
+            "models": (
+                [{"model": primary, "turns": int(r.get("turns") or 0),
+                  "sessions": int(r.get("sessions") or 0), "share_pct": 100}]
+                if primary else []
+            ),
+            "switch_count": 0,
+            # Markers the inventory builder + frontend use to treat this as an
+            # OTLP app (agent_type filter, not session-prefix).
+            "otlp": True,
+            "display_name": _humanize_service_name(r.get("service_name") or "", at),
+            "traces": int(r.get("traces") or 0),
+            "spans": int(r.get("spans") or 0),
+        }
 
 
 # Friendly per-runtime label map for the Agent Inventory roster. Mirrors the
@@ -10871,12 +10968,13 @@ def _build_agent_inventory(
       with ONLY that runtime's row (the per-runtime no-leak contract). An absent
       runtime is simply not a key, so the interceptor returns ZERO for it.
 
-    NOTE (open question, deferred): foreign OTLP apps (post #2822) derive
-    ``agent_type`` from ``spans.service.name`` with no session-id prefix, so they
-    bucket into ``openclaw`` here and do NOT get their own row. Including them
-    would need a new GROUP-BY-agent_type scan over the spans table (a request /
-    snapshot-path full scan), which the CPU budget (FLYWHEEL 1e) rejects for v1.
-    OTLP-app rows are a follow-up. The 12 session-prefix runtimes are covered.
+    Foreign OTLP / OpenLLMetry apps (post #2822) derive ``agent_type`` from the
+    resource ``service.name`` with NO session-id prefix. ``_build_runtime_summary``
+    now folds them in (one cheap GROUP BY agent_type on the daemon snapshot timer,
+    NOT a request-path scan — FLYWHEEL 1e), tagged ``otlp=True`` + ``display_name``.
+    They flow through here automatically and get their own roster row, identified
+    by ``agent_type`` (the per-runtime no-leak slice scopes them by agent_type,
+    not session prefix). The 12 session-prefix runtimes are unaffected.
 
     Best-effort: never raises (any failure yields empty slices).
     """
@@ -10895,13 +10993,22 @@ def _build_agent_inventory(
             if not isinstance(summ, dict):
                 continue
             d = det_by_name.get(rt) or {}
+            is_otlp = bool(summ.get("otlp"))
             label = (
-                _INV_RT_LABELS.get(rt)
+                # OTLP apps carry their own humanized 'My App (OTel)' label;
+                # they have no _INV_RT_LABELS / detected-runtime entry.
+                (summ.get("display_name") if is_otlp else None)
+                or _INV_RT_LABELS.get(rt)
                 or d.get("displayName")
                 or rt
             )
             if rt == "openclaw":
                 detected = bool(oc_present)
+            elif is_otlp:
+                # An OTLP app is "detected" iff it has emitted spans (it has, or
+                # it wouldn't be in runtime_summary). It is not a local process
+                # we can heartbeat, so ``running`` stays False, labeled honestly.
+                detected = True
             else:
                 detected = rt in det_by_name
             mrow = meta.get(rt) or {}
@@ -10909,6 +11016,10 @@ def _build_agent_inventory(
                 "agentKey": rt,
                 "displayName": label,
                 "detected": detected,
+                # Foreign OpenLLMetry/OTLP app (no session-id prefix): the
+                # frontend scopes it by agent_type, not the prefix path, and the
+                # roster labels it as a bring-your-own-agent app.
+                "otlp": is_otlp,
                 # process-presence for family runtimes (only OpenClaw/NemoClaw
                 # emit a real heartbeat); labeled honestly in the UI tooltip.
                 "running": bool(d.get("running", False)),
