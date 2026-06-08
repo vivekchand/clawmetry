@@ -565,6 +565,12 @@ class ProxyDB:
                     ON proxy_events(event_type, timestamp DESC);
             """)
             conn.commit()
+            # Idempotent column addition for existing DBs (SQLite has no IF NOT EXISTS for ADD COLUMN).
+            try:
+                conn.execute("ALTER TABLE proxy_usage ADD COLUMN reasoning_tokens INTEGER DEFAULT 0")
+                conn.commit()
+            except Exception:
+                pass  # column already exists
             conn.close()
 
     def record_usage(
@@ -580,15 +586,16 @@ class ProxyDB:
         status: str = "ok",
         cache_read_tokens: int = 0,
         cache_creation_tokens: int = 0,
+        reasoning_tokens: int = 0,
     ) -> None:
         with self._lock:
             conn = self._connect()
             conn.execute(
                 """INSERT INTO proxy_usage
                    (timestamp, provider, model, input_tokens, output_tokens,
-                    cache_read_tokens, cache_creation_tokens,
+                    cache_read_tokens, cache_creation_tokens, reasoning_tokens,
                     cost_usd, session_id, request_hash, latency_ms, status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     time.time(),
                     provider,
@@ -597,6 +604,7 @@ class ProxyDB:
                     output_tokens,
                     cache_read_tokens,
                     cache_creation_tokens,
+                    reasoning_tokens,
                     cost_usd,
                     session_id,
                     request_hash,
@@ -999,6 +1007,7 @@ class StreamUsage:
     output_tokens: int = 0
     cache_read_tokens: int = 0
     cache_creation_tokens: int = 0
+    reasoning_tokens: int = 0
     model: str = ""
     stop_reason: str = ""
 
@@ -1033,12 +1042,30 @@ def parse_anthropic_sse_chunk(line: str, usage: StreamUsage) -> None:
         # total below can only raise it, never lose ground (#2842).
         usage.output_tokens = max(usage.output_tokens, int(u.get("output_tokens", 0) or 0))
 
+    elif event_type == "content_block_delta":
+        # thinking_delta / signature_delta mark extended-thinking blocks.
+        # We don't count tokens here — the reconciled total arrives in message_delta.
+        # Handling this event type prevents silent data loss if future API versions
+        # embed per-delta token counts here.
+        delta = data.get("delta", {})
+        _ = delta.get("type")  # consumed; no-op for current API
+
     elif event_type == "message_delta":
         # message_delta carries the running/final usage. Take the MAX so multiple
         # deltas (incl. extended-thinking reasoning streamed across blocks) never
         # undercount, and pick up cache/input token corrections if present (#2842).
         u = data.get("usage", {})
         usage.output_tokens = max(usage.output_tokens, int(u.get("output_tokens", 0) or 0))
+        # Anthropic may report thinking tokens under any of these keys depending on
+        # API version / model family.
+        rt = (
+            u.get("thinking_tokens")
+            or u.get("reasoning_tokens")
+            or u.get("thinking_input_tokens")
+            or 0
+        )
+        if rt:
+            usage.reasoning_tokens = max(usage.reasoning_tokens, int(rt))
         if u.get("input_tokens"):
             usage.input_tokens = int(u.get("input_tokens") or 0) or usage.input_tokens
         if u.get("cache_read_input_tokens"):
@@ -1857,6 +1884,12 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                 usage.output_tokens = u.get("output_tokens", 0)
                 usage.cache_read_tokens = u.get("cache_read_input_tokens", 0)
                 usage.cache_creation_tokens = u.get("cache_creation_input_tokens", 0)
+                usage.reasoning_tokens = int(
+                    u.get("thinking_tokens")
+                    or u.get("reasoning_tokens")
+                    or u.get("thinking_input_tokens")
+                    or 0
+                )
                 usage.model = resp_data.get("model", "")
                 usage.stop_reason = resp_data.get("stop_reason", "")
             elif provider == "openai":
@@ -2408,6 +2441,7 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                     output_tokens=usage.output_tokens,
                     cache_read_tokens=usage.cache_read_tokens,
                     cache_creation_tokens=usage.cache_creation_tokens,
+                    reasoning_tokens=usage.reasoning_tokens,
                     cost_usd=cost,
                     session_id=session_id,
                     request_hash=req_hash,
@@ -2444,6 +2478,7 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                 output_tokens=usage.output_tokens,
                 cache_read_tokens=usage.cache_read_tokens,
                 cache_creation_tokens=usage.cache_creation_tokens,
+                reasoning_tokens=usage.reasoning_tokens,
                 cost_usd=cost,
                 session_id=session_id,
                 request_hash=req_hash,

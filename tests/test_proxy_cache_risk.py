@@ -70,3 +70,63 @@ def test_sse_message_delta_takes_max_output_tokens():
     assert u.output_tokens == 120
     assert u.input_tokens == 100
     assert u.cache_read_tokens == 50
+
+
+def test_sse_extended_thinking_reasoning_tokens_extracted():
+    """Streamed extended-thinking session: reasoning_tokens read from message_delta.usage."""
+    u = StreamUsage()
+    # 1. Message start — input tokens only
+    parse_anthropic_sse_chunk(
+        'data: {"type":"message_start","message":{"usage":{"input_tokens":200},"model":"claude-opus-4-8"}}', u
+    )
+    # 2. Thinking block starts
+    parse_anthropic_sse_chunk(
+        'data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}', u
+    )
+    # 3. Thinking delta — text only, no token count here
+    parse_anthropic_sse_chunk(
+        'data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me think..."}}', u
+    )
+    # 4. Signature delta marks end of thinking block
+    parse_anthropic_sse_chunk(
+        'data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"abc123"}}', u
+    )
+    # 5. Thinking block stops
+    parse_anthropic_sse_chunk('data: {"type":"content_block_stop","index":0}', u)
+    # 6. Final message_delta carries reconciled usage including thinking_tokens
+    parse_anthropic_sse_chunk(
+        'data: {"type":"message_delta","usage":{"output_tokens":350,"thinking_tokens":300},"delta":{"stop_reason":"end_turn"}}', u
+    )
+    assert u.output_tokens == 350
+    assert u.reasoning_tokens == 300
+    assert u.input_tokens == 200
+    assert u.stop_reason == "end_turn"
+
+
+def test_sse_thinking_tokens_alternate_key_names():
+    """reasoning_tokens is read regardless of which key name the API uses."""
+    for key in ("thinking_tokens", "reasoning_tokens", "thinking_input_tokens"):
+        u = StreamUsage()
+        parse_anthropic_sse_chunk(
+            f'data: {{"type":"message_delta","usage":{{"output_tokens":100,"{key}":75}}}}', u
+        )
+        assert u.reasoning_tokens == 75, f"key {key!r} not read"
+
+
+def test_sse_thinking_tokens_max_across_deltas():
+    """Like output_tokens, reasoning_tokens takes the max over multiple message_delta events."""
+    u = StreamUsage()
+    parse_anthropic_sse_chunk('data: {"type":"message_delta","usage":{"output_tokens":50,"thinking_tokens":40}}', u)
+    parse_anthropic_sse_chunk('data: {"type":"message_delta","usage":{"output_tokens":150,"thinking_tokens":120}}', u)
+    parse_anthropic_sse_chunk('data: {"type":"message_delta","usage":{"output_tokens":10,"thinking_tokens":5}}', u)
+    assert u.output_tokens == 150
+    assert u.reasoning_tokens == 120
+
+
+def test_sse_no_thinking_tokens_leaves_zero():
+    """Non-thinking sessions must not populate reasoning_tokens."""
+    u = StreamUsage()
+    parse_anthropic_sse_chunk('data: {"type":"message_start","message":{"usage":{"input_tokens":50},"model":"claude-haiku-4-5"}}', u)
+    parse_anthropic_sse_chunk('data: {"type":"message_delta","usage":{"output_tokens":80},"delta":{"stop_reason":"end_turn"}}', u)
+    assert u.reasoning_tokens == 0
+    assert u.output_tokens == 80
