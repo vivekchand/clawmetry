@@ -6264,6 +6264,58 @@ def _detect_billing_opencode(home: Path) -> dict:
     return _bm("unknown")
 
 
+def _detect_billing_openclaw(home: Path) -> dict:
+    """Classify OpenClaw's billing from ``~/.openclaw/openclaw.json`` (or
+    ``$OPENCLAW_HOME``). OpenClaw doesn't call models itself — it DELEGATES each
+    model to a runtime (``agents.defaults.models[*].agentRuntime.id``):
+
+      * ``claude-cli`` — the Claude CLI runs the calls, so the billing IS the
+        Claude CLI's: a Max/Pro **subscription** (or **metered** if the CLI is on
+        an API key). We delegate to ``_detect_billing_claude_code`` — which is
+        why a user on Claude Max sees OpenClaw as their plan, not "unconfirmed".
+      * a direct-API runtime — **metered** at the model provider's API rates,
+        read from the model-name prefix (``anthropic/`` / ``openai/`` /
+        ``openrouter/`` / ``google/`` …). This is how OpenClaw configured for a
+        Claude/OpenAI/OpenRouter API key gets billed correctly.
+
+    NEVER reads a secret value, NEVER raises → ``unknown`` on any failure.
+    """
+    oc_home = _bm_env("OPENCLAW_HOME")
+    base = Path(oc_home) if oc_home else (home / ".openclaw")
+    cfg = _bm_read_json(base / "openclaw.json")
+    if not isinstance(cfg, dict):
+        return _bm("unknown")
+    models = (((cfg.get("agents") or {}).get("defaults")) or {}).get("models") or {}
+    if not isinstance(models, dict) or not models:
+        return _bm("unknown")
+    runtime_ids: list[str] = []
+    providers: list[str] = []
+    for mname, mcfg in models.items():
+        rid = ""
+        if isinstance(mcfg, dict):
+            rid = str(((mcfg.get("agentRuntime") or {}).get("id")) or "").lower()
+        runtime_ids.append(rid)
+        providers.append(str(mname or "").split("/")[0].lower())
+    # claude-cli dominant → inherit the Claude CLI's billing (sub or metered).
+    cli = sum(1 for r in runtime_ids if "claude-cli" in r or r == "claude")
+    if cli and cli >= len(runtime_ids) / 2:
+        return _detect_billing_claude_code(home)
+    # Otherwise a direct-API runtime → metered at the dominant provider's rates.
+    prov = max(set(providers), key=providers.count) if providers else ""
+    metered_label = {
+        "anthropic": "Anthropic API",
+        "openai": "OpenAI API",
+        "openrouter": "OpenRouter",
+        "google": "Google API", "gemini": "Google API",
+        "xai": "xAI API", "mistral": "Mistral API", "groq": "Groq API",
+    }.get(prov)
+    if metered_label:
+        return _bm("metered", label=metered_label)
+    if prov in ("ollama", "local", "lmstudio", "llamacpp"):
+        return _bm("local", label="Local model")
+    return _bm("unknown")
+
+
 _BILLING_DETECTORS = {
     "claude_code": _detect_billing_claude_code,
     "codex":       _detect_billing_codex,
@@ -6273,6 +6325,7 @@ _BILLING_DETECTORS = {
     "aider":       _detect_billing_aider,
     "goose":       _detect_billing_goose,
     "opencode":    _detect_billing_opencode,
+    "openclaw":    _detect_billing_openclaw,
 }
 
 
@@ -6322,7 +6375,7 @@ def _build_billing_payload(config: dict) -> dict | None:
         except Exception:
             detected = []
         # Always attempt claude_code (it anchors account_plan) even if 0-session.
-        rt_ids = list(dict.fromkeys(["claude_code"] + detected))
+        rt_ids = list(dict.fromkeys(["claude_code", "openclaw"] + detected))
         runtimes: dict = {}
         for rid in rt_ids:
             if rid not in _BILLING_DETECTORS:
