@@ -169,5 +169,184 @@ def test_run_compare_route_end_to_end(tmp_path, monkeypatch):
         store.stop(flush=True)
 
 
+def _set_outcome(store, *, agent_type, session_id, outcome, confidence=0.9):
+    """Test helper: stamp an outcome on a session row. There's no public
+    'set outcome' method (only the classifier writes it); write directly under
+    the store's writer lock the same way reclassify_session_outcome does."""
+    with store._write_lock:
+        store._conn.execute(
+            "UPDATE sessions SET outcome=?, outcome_confidence=?, "
+            "outcome_classified_at=? WHERE agent_type=? AND session_id=?",
+            [outcome, float(confidence), int(time.time() * 1000),
+             agent_type, session_id],
+        )
+
+
+def test_run_compare_quality_rows_end_to_end(tmp_path, monkeypatch):
+    """Two scored + classified sessions -> /api/run-compare carries eval_score
+    with a signed delta (favorable=higher), outcome per side, and an
+    improved/regressed verdict."""
+    ls, store = _store(tmp_path, monkeypatch)
+    try:
+        # One event per side so the sessions exist in the events-derived path.
+        for sid in ("oc-base", "oc-cand"):
+            store.ingest({
+                "id": f"{sid}:1", "node_id": "n", "agent_id": "main",
+                "session_id": sid, "event_type": "tool_call",
+                "ts": "2026-05-28T08:00:00Z", "data": {"name": "Read"},
+                "cost_usd": 0.05, "token_count": 100, "model": None,
+            })
+        # Typed session rows (eval/outcome columns live on the sessions table).
+        store.ingest_session({"session_id": "oc-base", "agent_type": "openclaw"})
+        store.ingest_session({"session_id": "oc-cand", "agent_type": "openclaw"})
+        now_ms = int(time.time() * 1000)
+        store.persist_eval_score(session_id="oc-base", score=2.0,
+                                 reason="weak", judge_model="m", scored_at=now_ms)
+        store.persist_eval_score(session_id="oc-cand", score=4.5,
+                                 reason="strong", judge_model="m", scored_at=now_ms)
+        _set_outcome(store, agent_type="openclaw", session_id="oc-base",
+                     outcome="failed")
+        _set_outcome(store, agent_type="openclaw", session_id="oc-cand",
+                     outcome="success")
+        _wait_flush(store)
+
+        _patch_daemon_proxy(monkeypatch, store)
+        client = _client_with_route()
+        resp = client.get("/api/run-compare?a=oc-base&b=oc-cand")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_json()
+
+        # Per-side quality fields.
+        assert body["a"]["eval_score"] == 2.0
+        assert body["b"]["eval_score"] == 4.5
+        assert body["a"]["eval_reason"] == "weak"
+        assert body["a"]["outcome"] == "failed"
+        assert body["b"]["outcome"] == "success"
+
+        # eval_score delta: higher is better, B improved -> favorable.
+        ed = body["deltas"]["eval_score"]
+        assert ed["a"] == 2.0 and ed["b"] == 4.5
+        assert abs(ed["abs"] - 2.5) < 1e-9
+        assert ed["favorable"] is True
+        assert ed["favorable_lower"] is False
+
+        # Textual outcome verdict: failed -> success is an improvement.
+        assert body["outcome_verdict"] == "improved"
+    finally:
+        store.stop(flush=True)
+
+
+def test_run_compare_quality_null_safe_when_one_side_unscored(tmp_path, monkeypatch):
+    """A session without an eval score / outcome comes back null and the
+    eval_score delta is omitted (additive, backward-compatible)."""
+    ls, store = _store(tmp_path, monkeypatch)
+    try:
+        for sid in ("oc-scored", "oc-bare"):
+            store.ingest({
+                "id": f"{sid}:1", "node_id": "n", "agent_id": "main",
+                "session_id": sid, "event_type": "tool_call",
+                "ts": "2026-05-28T08:00:00Z", "data": {"name": "Read"},
+                "cost_usd": 0.05, "token_count": 100, "model": None,
+            })
+        store.ingest_session({"session_id": "oc-scored", "agent_type": "openclaw"})
+        # oc-bare: no ingest_session, no score, no outcome.
+        store.persist_eval_score(session_id="oc-scored", score=3.5,
+                                 reason="ok", judge_model="m",
+                                 scored_at=int(time.time() * 1000))
+        _wait_flush(store)
+
+        _patch_daemon_proxy(monkeypatch, store)
+        client = _client_with_route()
+        resp = client.get("/api/run-compare?a=oc-scored&b=oc-bare")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_json()
+
+        assert body["a"]["eval_score"] == 3.5
+        assert body["b"]["eval_score"] is None
+        assert body["b"]["outcome"] is None
+        # Delta omitted when either side is null (no /0, no bogus arrow).
+        assert "eval_score" not in body["deltas"]
+        # Verdict null when an outcome is missing.
+        assert body["outcome_verdict"] is None
+        # Legacy keys still present + correct (backward compatible).
+        assert "cost_usd" in body["deltas"]
+    finally:
+        store.stop(flush=True)
+
+
+def test_query_session_quality_window_eval_and_outcome(tmp_path, monkeypatch):
+    """Store-level: the quality window aggregates scored + classified sessions
+    and excludes ongoing/old rows."""
+    ls, store = _store(tmp_path, monkeypatch)
+    try:
+        now_ms = int(time.time() * 1000)
+        old_ms = now_ms - 5 * 60 * 60 * 1000  # 5h ago, outside a 60m window.
+        # Three in-window scored sessions: avg = (1 + 2 + 3) / 3 = 2.0
+        for i, score in enumerate((1.0, 2.0, 3.0)):
+            sid = f"s-{i}"
+            store.ingest_session({"session_id": sid, "agent_type": "openclaw"})
+            store.persist_eval_score(session_id=sid, score=score, reason="r",
+                                     judge_model="m", scored_at=now_ms)
+        # One out-of-window score (5h old) — must NOT count.
+        store.ingest_session({"session_id": "s-old", "agent_type": "openclaw"})
+        store.persist_eval_score(session_id="s-old", score=5.0, reason="r",
+                                 judge_model="m", scored_at=old_ms)
+        # Outcomes: 2 success, 1 failed, 1 tool_call_stuck, 1 ongoing (excluded).
+        for sid, oc in (("o-1", "success"), ("o-2", "success"),
+                        ("o-3", "failed"), ("o-4", "tool_call_stuck"),
+                        ("o-5", "ongoing")):
+            store.ingest_session({"session_id": sid, "agent_type": "openclaw"})
+            _set_outcome(store, agent_type="openclaw", session_id=sid, outcome=oc)
+
+        q = store.query_session_quality_window(window_minutes=60)
+        assert q["eval_count"] == 3
+        assert abs(q["eval_avg"] - 2.0) < 1e-9
+        # 4 classified non-ongoing; 2 failure-ish.
+        assert q["classified_total"] == 4
+        assert q["failed_count"] == 2
+        assert abs(q["failure_rate"] - 0.5) < 1e-9
+        assert q["outcome_counts"].get("success") == 2
+        assert "ongoing" not in q["outcome_counts"]
+    finally:
+        store.stop(flush=True)
+
+
+def test_query_session_quality_window_empty_store(tmp_path, monkeypatch):
+    """Empty store -> zero counts, None averages, no crash."""
+    ls, store = _store(tmp_path, monkeypatch)
+    try:
+        q = store.query_session_quality_window(window_minutes=60)
+        assert q["eval_count"] == 0
+        assert q["eval_avg"] is None
+        assert q["classified_total"] == 0
+        assert q["failure_rate"] is None
+    finally:
+        store.stop(flush=True)
+
+
+def test_query_session_quality_lookup(tmp_path, monkeypatch):
+    """query_session_quality returns per-session eval/outcome, null for
+    unscored, and {} for an empty id list."""
+    ls, store = _store(tmp_path, monkeypatch)
+    try:
+        store.ingest_session({"session_id": "q-1", "agent_type": "openclaw"})
+        store.persist_eval_score(session_id="q-1", score=4.0, reason="good",
+                                 judge_model="m", scored_at=int(time.time() * 1000))
+        _set_outcome(store, agent_type="openclaw", session_id="q-1",
+                     outcome="success")
+        store.ingest_session({"session_id": "q-2", "agent_type": "openclaw"})
+
+        out = store.query_session_quality(session_ids=["q-1", "q-2", "missing"])
+        assert out["q-1"]["eval_score"] == 4.0
+        assert out["q-1"]["eval_reason"] == "good"
+        assert out["q-1"]["outcome"] == "success"
+        assert out["q-2"]["eval_score"] is None
+        assert out["q-2"]["outcome"] is None
+        assert "missing" not in out
+        assert store.query_session_quality(session_ids=[]) == {}
+    finally:
+        store.stop(flush=True)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -86,6 +86,13 @@
     { id: 'example_tool', alert_type: 'error_rate', name: 'Tool failures > 5/hr',
       threshold_value: 5, threshold_unit: '%',
       _exampleChannels: '✉️ Email' },
+    // Eval->monitor loop: fire on production QUALITY, not just cost/errors.
+    { id: 'example_quality', alert_type: 'eval_score_below', name: 'Quality score drops below 3',
+      threshold_value: 3, threshold_unit: '/ 5',
+      _exampleChannels: '✉️ Email · 💬 Slack' },
+    { id: 'example_failures', alert_type: 'outcome_failure_rate', name: 'Failure rate exceeds 20%',
+      threshold_value: 20, threshold_unit: '%',
+      _exampleChannels: '📟 PagerDuty' },
   ];
 
   // ── Tier resolution ───────────────────────────────────────────────────────
@@ -203,6 +210,8 @@
     subagent_depth:   { icon: '🌳', verb: 'Sub-agent depth >' },
     cron_failure:     { icon: '⏰', verb: 'Cron failed >' },
     error_rate:       { icon: '🛠', verb: 'Tool error rate >' },
+    eval_score_below:     { icon: '⭐', verb: 'Quality score drops below' },
+    outcome_failure_rate: { icon: '🚦', verb: 'Failure rate exceeds' },
   };
 
   // On/off slider that matches the Approvals protection-rule toggle. Clicking
@@ -296,6 +305,8 @@
     cron_failure:     'A cron job failed more times than your threshold.',
     error_rate:       'Tool error rate crossed your threshold.',
     subagent_depth:   'Sub-agent nesting depth crossed your threshold.',
+    eval_score_below:     'Average quality score (judged 0-5) of recent sessions dropped below your threshold.',
+    outcome_failure_rate: 'Too many recent sessions ended badly (failed or got stuck) as a share of finished sessions.',
   };
   // Hide alerts older than this from the history view. Stops the list from
   // accumulating forever; the user only cares about recent activity.
@@ -584,6 +595,8 @@
       token_velocity: { unit: 'tokens/min',  placeholder: 10000, label: 'Token velocity exceeds', name: 'Runaway session' },
       cron_failure:   { unit: 'fails',       placeholder: 3,     label: 'Cron has failed in a row at least', name: 'Cron failure streak' },
       error_rate:     { unit: '%',           placeholder: 20,    label: 'Tool failure rate exceeds', name: 'Tool failures' },
+      eval_score_below:     { unit: '/ 5',  placeholder: 3,  label: 'Average quality score drops below', name: 'Quality drop' },
+      outcome_failure_rate: { unit: '%',    placeholder: 20, label: 'Session failure rate exceeds', name: 'Failure rate' },
     };
     const p = presets[t] || { unit: '', placeholder: 0, label: 'Threshold', name: 'Custom alert' };
     const val = r.threshold_value ?? p.placeholder;

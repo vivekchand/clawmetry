@@ -6720,6 +6720,67 @@ def _channel_enrichment_from_row(r: dict) -> dict:
     return out
 
 
+# Cap long strings in a brain-cache event so the E2E blob stays small. The desk
+# device fetches the blob into a FIXED 128 KB buffer; a burst of big tool outputs
+# / full command strings spiked the blob past it -> truncated download -> AES-GCM
+# auth-tag mismatch -> the device showed "feed locked" (and a slow connect). A
+# brain FEED only needs a PREVIEW on both surfaces (the device caps labels at 160
+# chars; the cloud Brain feed shows a short detail) -- full content lives in the
+# transcript view. Shape-preserving + depth-bounded so the cloud's
+# ``transformEvents`` still walks ``message.content[]`` blocks. Raise the cap via
+# CLAWMETRY_BRAIN_FIELD_CAP.
+try:
+    _BRAIN_FIELD_CAP = max(160, int(os.environ.get("CLAWMETRY_BRAIN_FIELD_CAP", "600")))
+except (TypeError, ValueError):
+    _BRAIN_FIELD_CAP = 600
+
+# Hard per-event ceiling. With BRAIN_CACHE_LIMIT=50 events this bounds the whole
+# blob to ~75 KB plaintext (~103 KB base64) -- safely under the device's 128 KB
+# receive buffer even if every event is a giant multi-field tool burst (the case
+# that spiked the blob to 256 KB and caused "feed locked"). Field-level capping
+# alone isn't enough because one event can carry many capped fields.
+try:
+    _BRAIN_EVENT_CAP = max(400, int(os.environ.get("CLAWMETRY_BRAIN_EVENT_CAP", "1500")))
+except (TypeError, ValueError):
+    _BRAIN_EVENT_CAP = 1500
+
+
+def _truncate_brain_payload(obj, depth: int = 0, cap: int | None = None):
+    """Recursively cap long strings (and over-long lists) in a brain event so the
+    serialized blob can't balloon past the device's receive buffer. Preserves
+    keys/structure; only trims leaf strings and very long arrays."""
+    c = cap or _BRAIN_FIELD_CAP
+    if isinstance(obj, str):
+        return obj if len(obj) <= c else (obj[:c] + "…")
+    if depth >= 5:
+        return obj
+    if isinstance(obj, list):
+        return [_truncate_brain_payload(x, depth + 1, cap) for x in obj[:40]]
+    if isinstance(obj, dict):
+        return {k: _truncate_brain_payload(v, depth + 1, cap) for k, v in obj.items()}
+    return obj
+
+
+def _cap_brain_event_size(ev):
+    """Enforce the hard per-event byte ceiling (_BRAIN_EVENT_CAP). Tightens the
+    string cap progressively until the serialized event fits; short essential
+    fields (sessionId/timestamp/type) survive every pass. Guarantees the total
+    blob stays under the device buffer regardless of how big the source event was."""
+    try:
+        if len(json.dumps(ev, separators=(",", ":"))) <= _BRAIN_EVENT_CAP:
+            return ev
+    except (TypeError, ValueError):
+        return ev
+    for limit in (400, 250, 150, 80):
+        ev = _truncate_brain_payload(ev, cap=limit)
+        try:
+            if len(json.dumps(ev, separators=(",", ":"))) <= _BRAIN_EVENT_CAP:
+                break
+        except (TypeError, ValueError):
+            break
+    return ev
+
+
 def _rows_to_brain_events(rows: list) -> list:
     """Return raw OpenClaw event payloads ready for the cloud browser's
     ``transformEvents`` to unwrap.
@@ -6788,13 +6849,29 @@ def _rows_to_brain_events(rows: list) -> list:
                 # dashboard.py) can show "CHANNEL.IN" / "CHANNEL.OUT"
                 # rather than guessing from a missing role.
                 data.setdefault("type", r.get("event_type"))
-            out.append(data)
+            # Bound the per-event size so a burst of big tool outputs can't push
+            # the blob past the device's 128 KB buffer (the "feed locked" cause).
+            data = _truncate_brain_payload(data)
+            # Stamp the session id so per-session feeds (the desk device's live
+            # feed + cloud Brain filtering) can attribute each event. Family
+            # runtime payloads (claude_code/codex/…) carry NO sessionId inside
+            # ``data`` -- only the row's top-level session_id column has it, so
+            # the device's per-session filter matched nothing and every session
+            # showed the same node-wide feed. Use the BARE uuid (drop the
+            # ``runtime:`` namespace) so it matches the device-agent session ids
+            # (#1465). Never overwrite a sessionId the payload already carries.
+            _sid = r.get("session_id")
+            if _sid and not data.get("sessionId") and not data.get("session_id"):
+                data = {**data, "sessionId": _sid.rsplit(":", 1)[-1]}
+            out.append(_cap_brain_event_size(data))
         elif isinstance(data, str):
+            _sid = r.get("session_id")
             out.append({
                 **enrich,
                 "type":      r.get("event_type") or "raw",
                 "timestamp": r.get("ts", ""),
-                "detail":    data[:2000],
+                "detail":    data[:_BRAIN_FIELD_CAP],
+                **({"sessionId": _sid.rsplit(":", 1)[-1]} if _sid else {}),
             })
     return out
 
@@ -6816,6 +6893,57 @@ def _rows_to_brain_events(rows: list) -> list:
 # that stale data doesn't linger after a node is decommissioned.
 BRAIN_CACHE_TTL_SEC = 21600
 BRAIN_CACHE_LIMIT = 50
+# Per-session fairness for the brain blob (the device "no activity for this
+# session" fix): guarantee each of the most-recently-active sessions at least
+# BRAIN_PER_SESSION renderable events, across up to BRAIN_SESSION_FANOUT
+# sessions, before filling the rest with the freshest node-wide events. Without
+# this a single very active session floods the newest-N window and crowds out a
+# session the user just messaged. 8×5=40 guaranteed + 10 fill = BRAIN_CACHE_LIMIT,
+# which (with the per-event size cap) keeps the blob inside the device buffer.
+BRAIN_PER_SESSION = 5
+BRAIN_SESSION_FANOUT = 8
+
+# Event types that are internal plumbing, NOT real activity -- the device parser
+# (summary_parse.c brain_event_to_row) drops them, so including them in the blob
+# just wastes its limited slots (a session whose only in-window events were
+# ``prompt.submitted`` showed "no activity" even though it had real messages).
+_BRAIN_SKIP_TYPES = {
+    "prompt.submitted", "queue-operation", "queue_operation", "compaction",
+    "session.ended", "sessionended", "session_end", "permission-mode",
+    "file-history-snapshot", "ai-title", "last-prompt",
+}
+
+
+def _brain_row_renderable(r: dict) -> bool:
+    """True if the event row would render as a real message / tool event on the
+    device + cloud Brain feed (mirrors ``summary_parse.c brain_event_to_row``).
+    Skips internal plumbing so the blob's limited slots hold real activity."""
+    if not isinstance(r, dict):
+        return False
+    if (r.get("event_type") or "").lower() in _BRAIN_SKIP_TYPES:
+        return False
+    data = r.get("data")
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception:
+            return bool(data.strip())
+    if not isinstance(data, dict):
+        return False
+    if (data.get("type") or "").lower() in _BRAIN_SKIP_TYPES:
+        return False
+    msg = data.get("message") if isinstance(data.get("message"), dict) else None
+    src = msg or data
+    content = src.get("content")
+    if isinstance(content, str) and content.strip():
+        return True
+    if isinstance(content, list) and content:
+        return True
+    if data.get("text"):
+        return True
+    if src.get("tool_calls") or data.get("tool_calls") or data.get("tool_name"):
+        return True
+    return False
 
 
 def _owner_hash_for_token(api_key: str) -> str:
@@ -6824,6 +6952,91 @@ def _owner_hash_for_token(api_key: str) -> str:
     exactly what the cloud derives from the same token on read."""
     import hashlib
     return hashlib.sha256((api_key or "").encode("utf-8")).hexdigest()
+
+
+def _build_brain_events() -> list:
+    """Build the per-session-fair, renderable, sessionId-stamped brain event list
+    — the SINGLE source of truth for the brain blob. Used by BOTH the heartbeat
+    cache push (``_build_brain_cache_pushes``) AND the on-demand q_brain_refresh
+    path (``_dispatch_pending_queries``) so the two writers of the
+    ``brain:*:recent`` key can never diverge: the refresh path used to rebuild it
+    node-wide and overwrite the heartbeat's fair blob, hiding a just-messaged
+    session behind a flooding one. Returns ``[]`` on any failure.
+    """
+    try:
+        from clawmetry import local_store
+    except Exception:
+        return []
+    try:
+        store = local_store.get_store(read_only=True)
+        # Newest node-wide events (headroom: drops helper sessions + non-render
+        # plumbing below, so over-fetch to still land BRAIN_CACHE_LIMIT real ones).
+        nw_rows = store.query_events(limit=BRAIN_CACHE_LIMIT * 4)
+    except Exception:
+        return []
+    if not nw_rows:
+        return []
+
+    # Per-session fairness: guarantee each recently-active session its newest
+    # renderable events before filling with the freshest node-wide events, so a
+    # flooding session can't crowd out one the user just messaged. Dedup by id.
+    seen_ids: set = set()
+    picked: list = []
+    per_session: dict = {}
+
+    def _consider(r, cap=None):
+        rid = r.get("id")
+        sid = r.get("session_id") or ""
+        if not rid or rid in seen_ids:
+            return
+        if cap is not None and per_session.get(sid, 0) >= cap:
+            return
+        if not _brain_row_renderable(r):
+            return
+        seen_ids.add(rid)
+        per_session[sid] = per_session.get(sid, 0) + 1
+        picked.append(r)
+
+    # Most-recently-active sessions, from the typed sessions table (one row per
+    # session, ordered by last activity) -- NOT the event stream, which a
+    # flooding session dominates. Same source the device-agent session list uses,
+    # so every session the user can TAP on the device is covered.
+    recent_sids: list = []
+    try:
+        for s in store.query_sessions_table(limit=BRAIN_SESSION_FANOUT * 3):
+            sid = s.get("session_id")
+            if sid and sid not in recent_sids:
+                recent_sids.append(sid)
+            if len(recent_sids) >= BRAIN_SESSION_FANOUT:
+                break
+    except Exception:
+        recent_sids = []
+    # Supplement with any session in the newest events not yet in the table.
+    for r in nw_rows:
+        if len(recent_sids) >= BRAIN_SESSION_FANOUT:
+            break
+        sid = r.get("session_id")
+        if sid and sid not in recent_sids:
+            recent_sids.append(sid)
+    # (a) each recent session's newest renderable events (capped per session).
+    for sid in recent_sids:
+        try:
+            srows = store.query_events(session_id=sid, limit=BRAIN_PER_SESSION * 6)
+        except Exception:
+            srows = []
+        for r in srows:
+            _consider(r, cap=BRAIN_PER_SESSION)
+    # (b) fill the rest with the freshest node-wide renderable events.
+    for r in nw_rows:
+        if len(picked) >= BRAIN_CACHE_LIMIT:
+            break
+        _consider(r)
+
+    picked.sort(key=lambda r: r.get("ts") or "", reverse=True)
+    picked = picked[:BRAIN_CACHE_LIMIT]
+    # Same translation as routes/brain.py:_try_local_store_brain (incl. the
+    # hide_clawmetry_session filter + sessionId stamp + size cap).
+    return _rows_to_brain_events(picked)[:BRAIN_CACHE_LIMIT]
 
 
 def _build_brain_cache_pushes(config: dict) -> list:
@@ -6846,25 +7059,9 @@ def _build_brain_cache_pushes(config: dict) -> list:
     node_id = config.get("node_id", "")
     if not (api_key and node_id):
         return []
-    try:
-        from clawmetry import local_store
-    except Exception:
+    events = _build_brain_events()
+    if not events:
         return []
-    try:
-        store = local_store.get_store(read_only=True)
-        # Fetch headroom: _rows_to_brain_events drops ClawMetry's own helper
-        # sessions (selfevolve/fix/…), so query extra rows to still land
-        # ~BRAIN_CACHE_LIMIT real events after filtering.
-        rows = store.query_events(limit=BRAIN_CACHE_LIMIT * 3)
-    except Exception:
-        return []
-    if not rows:
-        return []
-    # Same translation as routes/brain.py:_try_local_store_brain (incl. the
-    # hide_clawmetry_session filter) so the browser sees an identical event
-    # shape AND set regardless of which path served the data (cache hit vs.
-    # relay subscribe vs. JSONL fallback).
-    events = _rows_to_brain_events(rows)[:BRAIN_CACHE_LIMIT]
     payload = {
         "events":  events,
         "count":   len(events),
@@ -8319,32 +8516,31 @@ def _dispatch_pending_queries(config: dict, pending: list) -> None:
             qid = q.get("id")
             cache_key = q.get("cache_key")
             args = q.get("args") or {}
-            result = _local_dispatch(shape, args)
             if not enc_key:
                 log.debug("pending_query %s: no encryption key; skipping", qid)
                 continue
-            # Bug 2026-05-13 (real MOAT fix): when this pending_query targets
-            # the Brain cache key (`brain:*:recent`), the cloud's browser-side
-            # `_cm_decryptBrain` reads `dec.events` from the decrypted blob.
-            # `_local_dispatch('events', ...)` returns the raw shape
-            # `{rows: [...], count, _shape, _via}` though — so the browser
-            # sees `dec.events || []` = empty and shows "No brain activity
-            # events found" even with hundreds of events in DuckDB. Translate
-            # to the dashboard-display shape via `_rows_to_brain_events` so
-            # both this writer and `_build_brain_cache_pushes` produce
-            # identical blobs (one shouldn't silently overwrite the other
-            # with a wrong-shape payload).
-            payload = result
+            # When this pending_query targets the Brain cache key
+            # (`brain:*:recent`), build the blob from the SAME per-session-fair
+            # builder the heartbeat uses (``_build_brain_events``) instead of a
+            # node-wide ``_local_dispatch('events', …)``. Two reasons:
+            #   1. Divergence: the old node-wide rebuild OVERWROTE the heartbeat's
+            #      fair blob, hiding a just-messaged session behind a flooding one
+            #      (device "no activity for this session").
+            #   2. Robustness: it sidesteps the ``_local_dispatch('events')``
+            #      decode that was failing here ("Expecting value: line 1 col 1").
+            # The browser's `_cm_decryptBrain` reads `dec.events`, which this
+            # shape provides directly.
             if shape == "events" and isinstance(cache_key, str) \
                     and cache_key.startswith("brain:"):
-                rows = (result or {}).get("rows") if isinstance(result, dict) else None
-                events = _rows_to_brain_events(rows or [])
+                events = _build_brain_events()
                 payload = {
                     "events":  events,
                     "count":   len(events),
                     "_source": "local_store",
                     "_shape":  "brain_history",
                 }
+            else:
+                payload = _local_dispatch(shape, args)
             blob = encrypt_payload(payload, enc_key)
             _post("/ingest/cache", {
                 "node_id": node_id,
@@ -15842,6 +16038,47 @@ def _iso_now_minus(seconds: int) -> str:
     return (datetime.now(timezone.utc) - _td(seconds=seconds)).isoformat()
 
 
+def _alerts_quality_window_minutes(rules: list) -> int:
+    """Return the widest window (minutes) any enabled quality rule needs, or 0
+    when no quality rule (eval_score_below / outcome_failure_rate) is present.
+
+    Lets ``evaluate_alerts`` skip the per-session quality query entirely on
+    the common case where the user only has cost/error rules. Reads the rule
+    body the same way ``alert_evaluator._normalise_rule`` does (``type`` or
+    legacy ``alert_type``)."""
+    try:
+        from clawmetry import alert_evaluator
+    except Exception:
+        return 0
+    quality_types = getattr(alert_evaluator, "QUALITY_RULE_TYPES", frozenset())
+    default_window = getattr(
+        alert_evaluator, "DEFAULT_QUALITY_WINDOW_MINUTES", 60,
+    )
+    widest = 0
+    for raw in (rules or []):
+        try:
+            cond = raw.get("condition_json")
+            if isinstance(cond, str):
+                import json as _json
+                cond = _json.loads(cond)
+            if not isinstance(cond, dict):
+                continue
+            rtype = cond.get("type") or cond.get("alert_type")
+            if rtype not in quality_types:
+                continue
+            wm = cond.get("window_minutes")
+            if wm is None and cond.get("window_sec") is not None:
+                wm = int(cond.get("window_sec")) // 60
+            try:
+                wm = int(wm) if wm is not None else default_window
+            except (TypeError, ValueError):
+                wm = default_window
+            widest = max(widest, max(1, wm))
+        except Exception:
+            continue
+    return widest
+
+
 def evaluate_alerts(config: dict, state: dict) -> int:
     """Local DuckDB evaluation -> cloud dispatch on match (PRD #779 PR-D pt2).
 
@@ -15915,8 +16152,26 @@ def evaluate_alerts(config: dict, state: dict) -> int:
         last_eval_state = {}
         state["alerts_eval_memo"] = last_eval_state
 
+    # Eval->monitor loop: the quality rule types (eval_score_below,
+    # outcome_failure_rate) read the per-session eval-score / outcome slice,
+    # not the event stream. Only pay for that DuckDB query when at least one
+    # such rule is enabled (otherwise it's wasted work every tick).
+    quality = None
     try:
-        matches = alert_evaluator.evaluate(rules, events, last_eval_state)
+        quality_window = _alerts_quality_window_minutes(rules)
+    except Exception:
+        quality_window = 0
+    if quality_window > 0:
+        try:
+            quality = store.query_session_quality_window(
+                window_minutes=quality_window,
+            )
+        except Exception as e:
+            log.warning("alerts: query_session_quality_window failed: %s", e)
+            quality = None
+
+    try:
+        matches = alert_evaluator.evaluate(rules, events, last_eval_state, quality)
     except Exception as e:
         log.warning("alerts: evaluator errored: %s", e)
         state["alerts_last_eval_ts"] = _iso_now()
