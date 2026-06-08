@@ -6902,6 +6902,13 @@ BRAIN_CACHE_LIMIT = 50
 # which (with the per-event size cap) keeps the blob inside the device buffer.
 BRAIN_PER_SESSION = 5
 BRAIN_SESSION_FANOUT = 8
+# How deep to scan per session to find BRAIN_PER_SESSION *renderable* events. Far
+# larger than BRAIN_PER_SESSION because a session can end with a long tail of
+# non-renderable plumbing; the scan must reach past it to the real messages.
+BRAIN_PER_SESSION_SCAN = 200
+# Opt-in fanout debug (CLAWMETRY_BRAIN_DEBUG=1) -- logs per-session pick counts so
+# a "session shows no activity" report can be diagnosed from the daemon log.
+_BRAIN_DEBUG = os.environ.get("CLAWMETRY_BRAIN_DEBUG", "") not in ("", "0", "false")
 
 # Event types that are internal plumbing, NOT real activity -- the device parser
 # (summary_parse.c brain_event_to_row) drops them, so including them in the blob
@@ -7019,13 +7026,22 @@ def _build_brain_events() -> list:
         if sid and sid not in recent_sids:
             recent_sids.append(sid)
     # (a) each recent session's newest renderable events (capped per session).
+    # Fetch GENEROUSLY (not just BRAIN_PER_SESSION) because a session can end with
+    # a burst of non-renderable plumbing (queue-operation/prompt.submitted) -- a
+    # tight limit returns only that tail and the renderable filter then picks
+    # nothing, so the session vanishes from its own feed. A wide window lets the
+    # filter always reach its quota of real messages.
     for sid in recent_sids:
         try:
-            srows = store.query_events(session_id=sid, limit=BRAIN_PER_SESSION * 6)
+            srows = store.query_events(session_id=sid, limit=BRAIN_PER_SESSION_SCAN)
         except Exception:
             srows = []
+        before = len(picked)
         for r in srows:
             _consider(r, cap=BRAIN_PER_SESSION)
+        if _BRAIN_DEBUG:
+            log.info("brain fanout: %s -> %d picked (scanned %d)",
+                     (sid or "")[:24], len(picked) - before, len(srows))
     # (b) fill the rest with the freshest node-wide renderable events.
     for r in nw_rows:
         if len(picked) >= BRAIN_CACHE_LIMIT:
