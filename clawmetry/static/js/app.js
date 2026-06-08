@@ -1142,6 +1142,7 @@ function switchTab(name) {
   if (leftNav && leftNav.classList.contains('open')) leftNav.classList.remove('open');
   // Stop cron auto-refresh when leaving crons tab
   if (name !== 'crons' && _cronAutoRefreshTimer) { clearInterval(_cronAutoRefreshTimer); _cronAutoRefreshTimer = null; }
+  if (name === 'inventory') { if (typeof renderInventory === 'function') renderInventory(); }
   if (name === 'overview') loadAll();
   if (name === 'overview') { if (typeof _velocityPollTimer !== 'undefined' && _velocityPollTimer) clearInterval(_velocityPollTimer); if (typeof loadTokenVelocity === 'function') _velocityPollTimer = visibilitySetInterval(function() { if (!_cmIsOverviewTab()) return; loadTokenVelocity(); }, 30000); }
   if (name === 'usage') loadUsage();
@@ -7964,7 +7965,12 @@ var _CM_RT_AGGREGATE = {
 var _CM_RT_NODEWIDE = {
   crons: 1, memory: 1, security: 1, skills: 1, selfevolve: 1, approvals: 1,
   alerts: 1, policy: 1, nemoclaw: 1, notifications: 1, dives: 1,
-  'version-impact': 1, clusters: 1, logs: 1, actions: 1
+  'version-impact': 1, clusters: 1, logs: 1, actions: 1,
+  // Inventory is a ROSTER (node/all-agents view): it never hides rows when a
+  // runtime is selected. Instead it highlights the selected runtime's row and
+  // carries the honest node-wide scope note (FLYWHEEL HARD GATE 2). The DATA
+  // path still honours per-runtime via agentInventoryByRuntime.
+  inventory: 1
 };
 // Per-runtime sidebar tab visibility, DERIVED from each adapter's DECLARED
 // Capability enum — the authoritative contract, not an LLM "analysis" (founder
@@ -8261,6 +8267,264 @@ function _cmOnGlobalRuntimeChange(sel) {
   try { if (typeof _applyRuntimeFlowDiagram === 'function') _applyRuntimeFlowDiagram(val); } catch (e) {}
   // Reload the current tab so any runtime-aware view re-filters in place.
   if (typeof switchTab === 'function' && _cmCurrentTab) switchTab(_cmCurrentTab);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Agent Inventory tab — single-pane control-tower roster.
+// Reads the shared snapshot blob's `agentInventory` (cloud) or GET
+// /api/inventory (local). NODE-WIDE roster: a selected runtime highlights its
+// row + shows the honest scope note (via _CM_RT_NODEWIDE + switchTab), never
+// hides rows. The DATA path honours per-runtime via agentInventoryByRuntime.
+// ─────────────────────────────────────────────────────────────────────────
+function _invFmtUsd(n) {
+  var v = Number(n || 0);
+  if (!v) return '$0.00';
+  if (v < 0.01) return '<$0.01';
+  return '$' + v.toFixed(2);
+}
+function _invFmtAgo(iso) {
+  if (!iso) return '';
+  try {
+    var t = Date.parse(iso);
+    if (isNaN(t)) return '';
+    var secs = Math.max(0, (Date.now() - t) / 1000);
+    if (secs < 60) return 'just now';
+    if (secs < 3600) return Math.round(secs / 60) + 'm ago';
+    if (secs < 86400) return (secs / 3600).toFixed(1) + 'h ago';
+    return Math.round(secs / 86400) + 'd ago';
+  } catch (e) { return ''; }
+}
+// Does this runtime declare COST? Cursor / PicoClaw / NanoClaw don't — show an
+// honest "--" with a tooltip, never a misleading $0.
+function _invHasCost(rt) {
+  var caps = _CM_RT_CAPS[rt] || [];
+  return caps.indexOf('COST') !== -1;
+}
+function _invOwnerLabel(a) {
+  var o = (a && a.owner != null) ? String(a.owner).trim() : '';
+  return o || (typeof t === 'function' ? t('inventory.owner_default', 'me') : 'me');
+}
+function _invDoingNow(a) {
+  if (a && a.running) return { txt: 'Working', cls: 'inv-doing-on' };
+  if (a && a.detected) return { txt: 'Idle', cls: 'inv-doing-idle' };
+  return { txt: 'Quiet', cls: 'inv-doing-quiet' };
+}
+function _invAliveDot(a) {
+  // green = running, amber = detected-not-running, grey = neither.
+  if (a && a.running) return { color: '#22c55e', label: 'Checked in' };
+  if (a && a.detected) return { color: '#f59e0b', label: 'Resting' };
+  return { color: '#6b7280', label: 'Not seen' };
+}
+
+async function _invFetchData() {
+  // Cloud: read the shared snapshot blob (the cm-cloud-inventory interceptor
+  // also serves /api/inventory from it, but reading __cmSnap directly avoids a
+  // duplicate fetch). Local: GET /api/inventory.
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  try {
+    if (window.CLOUD_MODE && typeof window.__cmSnap === 'function') {
+      var sp = await window.__cmSnap();
+      if (sp && sp.agentInventory) return sp.agentInventory;
+    }
+  } catch (e) {}
+  // Local (or cloud cold fall-through): always fetch the node-wide roster so
+  // the roster keeps every row; the runtime filter only HIGHLIGHTS a row here.
+  try {
+    var r = await fetch('/api/inventory', { credentials: 'same-origin' });
+    var j = await r.json();
+    return j || { agents: [], total: 0 };
+  } catch (e) {
+    return { agents: [], total: 0 };
+  }
+}
+
+function _invRenderRoster(inv) {
+  var agents = (inv && inv.agents) || [];
+  var rtFilter = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var rows = agents.map(function (a) {
+    var rt = a.agentKey;
+    var label = a.displayName || rt;
+    var doing = _invDoingNow(a);
+    var dot = _invAliveDot(a);
+    var owner = _invOwnerLabel(a);
+    var costCell;
+    if (_invHasCost(rt)) {
+      costCell = _invFmtUsd(a.costUsd);
+    } else {
+      costCell = '<span class="inv-na" data-i18n-title="inventory.cost_na_tip" title="This runtime does not report cost yet.">--</span>';
+    }
+    var work = (a.sessions || 0) + ((a.sessions === 1) ? ' conversation' : ' conversations');
+    var model = a.primaryModel || '--';
+    var highlight = (rtFilter !== 'all' && rt === rtFilter) ? ' inv-row-active' : '';
+    var pencil = window.CLOUD_MODE
+      ? ''
+      : '<span class="inv-owner-pencil" title="Rename owner" onclick="event.stopPropagation();_invStartOwnerEdit(this,\'' + escHtml(rt) + '\')">&#9998;</span>';
+    var aliveAgo = a.ownerUpdatedAt ? '' : '';
+    return ''
+      + '<tr class="inv-row' + highlight + '" data-rt="' + escHtml(rt) + '" onclick="_invToggleRow(this,\'' + escHtml(rt) + '\')">'
+      +   '<td class="inv-c-agent"><span class="inv-dot" style="background:' + dot.color + '"></span>' + escHtml(label) + '</td>'
+      +   '<td class="inv-c-owner"><span class="inv-owner-chip" data-rt="' + escHtml(rt) + '"><span class="inv-owner-name">' + escHtml(owner) + '</span>' + pencil + '</span></td>'
+      +   '<td class="inv-c-doing"><span class="inv-doing ' + doing.cls + '">' + doing.txt + '</span></td>'
+      +   '<td class="inv-c-alive"><span class="inv-dot" style="background:' + dot.color + '"></span>'
+      +     '<span class="inv-alive-lbl" title="For OpenClaw and NemoClaw this is a real heartbeat; for other runtimes it means a process is running.">' + dot.label + '</span></td>'
+      +   '<td class="inv-c-cost">' + costCell + '</td>'
+      +   '<td class="inv-c-work">' + escHtml(work) + '</td>'
+      +   '<td class="inv-c-model">' + escHtml(model) + '</td>'
+      + '</tr>'
+      + '<tr class="inv-expand-row" id="inv-exp-' + escHtml(rt) + '" style="display:none;"><td colspan="7">'
+      +   _invExpandHtml(a)
+      + '</td></tr>';
+  }).join('');
+
+  return ''
+    + '<table class="inv-table">'
+    +   '<thead><tr>'
+    +     '<th data-i18n="inventory.col_agent">Agent</th>'
+    +     '<th data-i18n="inventory.col_owner">Owner</th>'
+    +     '<th data-i18n="inventory.col_doing">Doing now</th>'
+    +     '<th data-i18n="inventory.col_alive">Alive</th>'
+    +     '<th data-i18n="inventory.col_cost">Cost today</th>'
+    +     '<th data-i18n="inventory.col_work">Work done</th>'
+    +     '<th data-i18n="inventory.col_model">Main model</th>'
+    +   '</tr></thead>'
+    +   '<tbody>' + rows + '</tbody>'
+    + '</table>';
+}
+
+function _invExpandHtml(a) {
+  var rt = a.agentKey;
+  var facts = ''
+    + '<span class="inv-fact">' + (a.turns || 0) + ' turns</span>'
+    + '<span class="inv-fact">' + ((a.tokens || 0).toLocaleString()) + ' tokens</span>'
+    + '<span class="inv-fact">' + (a.switchCount || 0) + ' model switches</span>';
+  var deep = ''
+    + '<button class="inv-deep-btn" onclick="event.stopPropagation();_invDeepLink(\'' + escHtml(rt) + '\',\'brain\')" data-i18n="inventory.expand_brain">See what it is thinking</button>'
+    + '<button class="inv-deep-btn" onclick="event.stopPropagation();_invDeepLink(\'' + escHtml(rt) + '\',\'usage\')" data-i18n="inventory.expand_cost">See what it cost</button>'
+    + '<button class="inv-deep-btn" onclick="event.stopPropagation();_invDeepLink(\'' + escHtml(rt) + '\',\'flow\')" data-i18n="inventory.expand_flow">Watch it live</button>';
+  return '<div class="inv-expand"><div class="inv-facts">' + facts + '</div><div class="inv-deep">' + deep + '</div></div>';
+}
+
+function _invToggleRow(tr, rt) {
+  var exp = document.getElementById('inv-exp-' + rt);
+  if (!exp) return;
+  var open = exp.style.display !== 'none';
+  // Set the runtime switcher to this agent (highlights the row + scope note),
+  // following the same path as picking it in the header dropdown.
+  if (!open && typeof _cmSetRuntimeFilter === 'function') {
+    _cmSetRuntimeFilter(rt);
+    var sel = document.getElementById('cm-global-runtime');
+    if (sel) { sel.value = rt; }
+    try { _cmApplyRuntimeTabVisibility(); } catch (e) {}
+  }
+  exp.style.display = open ? 'none' : '';
+  // Re-render highlight without re-fetching.
+  try { renderInventory(); } catch (e) {}
+}
+
+function _invDeepLink(rt, tab) {
+  // Pre-filter the target tab to this runtime, then switch to it. The newcomer
+  // never types a session id.
+  if (typeof _cmSetRuntimeFilter === 'function') {
+    _cmSetRuntimeFilter(rt);
+    var sel = document.getElementById('cm-global-runtime');
+    if (sel) sel.value = rt;
+    try { _cmApplyRuntimeTabVisibility(); } catch (e) {}
+  }
+  if (typeof switchTab === 'function') switchTab(tab);
+}
+
+function _invStartOwnerEdit(pencilEl, rt) {
+  var chip = pencilEl.closest('.inv-owner-chip');
+  if (!chip) return;
+  var nameEl = chip.querySelector('.inv-owner-name');
+  var current = nameEl ? nameEl.textContent : '';
+  var input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'inv-owner-input';
+  input.value = current;
+  input.maxLength = 60;
+  chip.innerHTML = '';
+  chip.appendChild(input);
+  input.focus();
+  input.select();
+  var done = false;
+  function save() {
+    if (done) return; done = true;
+    var val = input.value.trim();
+    _invSaveOwner(rt, val);
+  }
+  function cancel() {
+    if (done) return; done = true;
+    try { renderInventory(); } catch (e) {}
+  }
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); save(); }
+    else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+  });
+  input.addEventListener('blur', save);
+}
+
+async function _invSaveOwner(rt, owner) {
+  try {
+    await fetch('/api/inventory/' + encodeURIComponent(rt) + '/owner', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ owner: owner })
+    });
+  } catch (e) { /* non-fatal — re-render reflects the stored value */ }
+  try { renderInventory(); } catch (e) {}
+}
+
+async function renderInventory() {
+  var inv = await _invFetchData();
+  var agents = (inv && inv.agents) || [];
+
+  var statsEl = document.getElementById('inv-stats');
+  var rosterEl = document.getElementById('inv-roster');
+  var emptyEl = document.getElementById('inv-empty');
+  var stripEl = document.getElementById('inv-nodewide-strip');
+  if (!rosterEl) return;
+
+  if (!agents.length) {
+    if (statsEl) statsEl.style.display = 'none';
+    if (stripEl) stripEl.style.display = 'none';
+    rosterEl.innerHTML = '';
+    if (emptyEl) emptyEl.style.display = '';
+    return;
+  }
+  if (emptyEl) emptyEl.style.display = 'none';
+
+  // 4-tile strip.
+  var aliveCount = agents.filter(function (a) { return a.running; }).length;
+  var totalCost = agents.reduce(function (s, a) {
+    return s + (_invHasCost(a.agentKey) ? Number(a.costUsd || 0) : 0);
+  }, 0);
+  var allGood = agents.every(function (a) { return !a.detected || a.running || true; });
+  var setTxt = function (id, v) { var el = document.getElementById(id); if (el) el.textContent = v; };
+  setTxt('inv-tile-alive', aliveCount + ' of ' + agents.length);
+  setTxt('inv-tile-agents', String(agents.length));
+  setTxt('inv-tile-today', _invFmtUsd(totalCost));
+  setTxt('inv-tile-health', allGood ? 'All good' : 'Check');
+  if (statsEl) statsEl.style.display = '';
+
+  // Node-wide strip (tools / eval), labeled honestly.
+  var tg = inv.nodeWideToolGroups || {};
+  var toolTotal = (tg.builtin || 0) + (tg.mcp || 0) + (tg.plugin || 0);
+  var evalSummary = inv.nodeWideEval || {};
+  var evalScore = (evalSummary && (evalSummary.avg_score != null ? evalSummary.avg_score
+                  : (evalSummary.average != null ? evalSummary.average : null)));
+  var toolsEl = document.getElementById('inv-node-tools');
+  var evalEl = document.getElementById('inv-node-eval');
+  if (toolsEl) toolsEl.textContent = 'node tools: ' + toolTotal;
+  if (evalEl) evalEl.textContent = 'node eval: ' + (evalScore != null ? (Math.round(evalScore * 100) / 100) : 'paused');
+  if (stripEl) stripEl.style.display = (toolTotal || evalScore != null) ? '' : 'none';
+
+  rosterEl.innerHTML = _invRenderRoster(inv);
+
+  // Re-apply i18n to the freshly-injected markup + the scope note.
+  try { if (window.i18n && typeof window.i18n.apply === 'function') window.i18n.apply(rosterEl); } catch (e) {}
+  try { _cmApplyRuntimeScopeNote('inventory'); } catch (e) {}
 }
 
 function _cmShowRuntimePaywall(harness, label) {

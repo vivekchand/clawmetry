@@ -10829,6 +10829,134 @@ def _build_runtime_summary(limit: int = 20000):
         return {}
 
 
+# Friendly per-runtime label map for the Agent Inventory roster. Mirrors the
+# frontend ``_CM_RT_LABEL`` (app.js) + ``_LITE_RT_LABELS`` so a row reads
+# "Claude Code", never "claude_code". OpenClaw is always present (the default
+# session bucket).
+_INV_RT_LABELS = dict(_LITE_RT_LABELS)
+_INV_RT_LABELS.setdefault("openclaw", "OpenClaw")
+_INV_RT_LABELS.setdefault("nemoclaw", "NVIDIA NemoClaw")
+
+
+def _build_agent_inventory(
+    runtime_summary,
+    outcomes_by_rt,
+    activity_by_rt,
+    tool_groups,
+    eval_summary,
+    detected_runtimes,
+    agent_meta,
+    node_id,
+):
+    """Compose the Agent-Inventory roster from ALREADY-computed rollups.
+
+    Authoritative roster source = ``runtime_summary`` KEYS (each is a
+    ``_runtime_of_session`` prefix; ``openclaw`` is always present as the
+    default bucket). Each key becomes ONE row, enriched with ``detectedRuntimes``
+    (display name / running / workspace) and the local ``agent_meta`` owner
+    label. This is the inverse of joining on detect_all() adapter names, which
+    would orphan OpenClaw (not a family adapter) and any bare-UUID session.
+
+    Returns ``(node_wide, by_runtime)``:
+    - ``node_wide``: ``{nodeId, agents:[...], nodeWideToolGroups, nodeWideEval,
+      total}`` — the whole roster (the cloud serves this when no runtime is
+      selected).
+    - ``by_runtime``: ``{rt: {nodeId, agents:[<single row>], total:1}}`` — one
+      slice per runtime so the cloud interceptor can answer ``?runtime=<rt>``
+      with ONLY that runtime's row (the per-runtime no-leak contract). An absent
+      runtime is simply not a key, so the interceptor returns ZERO for it.
+
+    NOTE (open question, deferred): foreign OTLP apps (post #2822) derive
+    ``agent_type`` from ``spans.service.name`` with no session-id prefix, so they
+    bucket into ``openclaw`` here and do NOT get their own row. Including them
+    would need a new GROUP-BY-agent_type scan over the spans table (a request /
+    snapshot-path full scan), which the CPU budget (FLYWHEEL 1e) rejects for v1.
+    OTLP-app rows are a follow-up. The 12 session-prefix runtimes are covered.
+
+    Best-effort: never raises (any failure yields empty slices).
+    """
+    try:
+        rs = runtime_summary if isinstance(runtime_summary, dict) else {}
+        det = detected_runtimes if isinstance(detected_runtimes, list) else []
+        det_by_name = {d.get("name"): d for d in det if isinstance(d, dict) and d.get("name")}
+        meta = agent_meta if isinstance(agent_meta, dict) else {}
+
+        # OpenClaw is the default bucket: present whenever it has data, even
+        # though _detect_family_runtimes never returns it (family-only).
+        oc_present = "openclaw" in rs
+
+        agents = []
+        for rt, summ in rs.items():
+            if not isinstance(summ, dict):
+                continue
+            d = det_by_name.get(rt) or {}
+            label = (
+                _INV_RT_LABELS.get(rt)
+                or d.get("displayName")
+                or rt
+            )
+            if rt == "openclaw":
+                detected = bool(oc_present)
+            else:
+                detected = rt in det_by_name
+            mrow = meta.get(rt) or {}
+            agents.append({
+                "agentKey": rt,
+                "displayName": label,
+                "detected": detected,
+                # process-presence for family runtimes (only OpenClaw/NemoClaw
+                # emit a real heartbeat); labeled honestly in the UI tooltip.
+                "running": bool(d.get("running", False)),
+                "workspace": d.get("workspace", "") or "",
+                "sessions": summ.get("sessions", 0),
+                "turns": summ.get("turns", 0),
+                "tokens": summ.get("tokens", 0),
+                "costUsd": round(float(summ.get("cost_usd", 0.0) or 0.0), 4),
+                "primaryModel": summ.get("primary_model", "") or "",
+                # already bounded to 15 in runtime_summary; trim to 5 for size.
+                "models": (summ.get("models") or [])[:5],
+                "switchCount": summ.get("switch_count", 0),
+                "outcome": (outcomes_by_rt or {}).get(rt),
+                "activityToday": (activity_by_rt or {}).get(rt),
+                "owner": mrow.get("owner"),
+                "notes": mrow.get("notes"),
+                "ownerUpdatedAt": mrow.get("updated_at"),
+            })
+
+        # Stable order: openclaw first, then by cost desc, then name.
+        agents.sort(key=lambda a: (
+            0 if a["agentKey"] == "openclaw" else 1,
+            -float(a.get("costUsd") or 0.0),
+            a.get("displayName") or "",
+        ))
+
+        node_wide = {
+            "nodeId": node_id,
+            "agents": agents,
+            # NODE-WIDE (not per-agent): tool provenance counts + eval summary
+            # are cross-runtime (query_eval_summary has no runtime param; the
+            # tool_catalog groups are cross-runtime). They live in the header
+            # strip labeled "node tools" / "node eval", never as a per-row
+            # column that would imply a per-agent number it cannot back.
+            "nodeWideToolGroups": tool_groups if isinstance(tool_groups, dict) else {},
+            "nodeWideEval": eval_summary if isinstance(eval_summary, dict) else {},
+            "total": len(agents),
+        }
+        by_runtime = {}
+        for a in agents:
+            rt = a["agentKey"]
+            by_runtime[rt] = {
+                "nodeId": node_id,
+                "agents": [a],
+                "total": 1,
+            }
+        return node_wide, by_runtime
+    except Exception as _e:
+        log.debug("agent inventory snapshot build failed: %s", _e)
+        return {"nodeId": node_id, "agents": [], "nodeWideToolGroups": {},
+                "nodeWideEval": {}, "total": 0}, {}
+
+
 # #1911: bound the tool deep-dive detail before it rides the shared ~170 KB
 # encrypted snapshot. The local dashboard keeps the full input/output
 # (``_TOOL_DETAIL_CAP`` in routes/sessions.py); the cloud Embodied tab gets a
@@ -13860,6 +13988,38 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _e_rtb:
         log.debug("snapshot: per-runtime breakdown failed: %s", _e_rtb)
 
+    # Agent Inventory roster (single-pane control-tower view). Built ENTIRELY
+    # from rollups already computed above (runtime_summary / outcomes / activity
+    # / tool-catalog groups / eval summary / detectedRuntimes) plus ONE cheap
+    # ``query_agent_meta`` read for the owner labels — NO new request-path full
+    # scan (FLYWHEEL 1e CPU budget). ``query_agent_meta`` is called standalone
+    # (NOT inside any lock — _fetch self-locks, memory
+    # feedback_local_store_fetch_takes_writelock).
+    _detected_runtimes = _detect_family_runtimes()
+    _agent_meta = {}
+    _inv_node_id = ""
+    try:
+        from clawmetry import local_store as _ls_am
+        _am_store = _ls_am.get_store()
+        if _am_store is not None:
+            _agent_meta = _am_store.query_agent_meta() or {}
+            try:
+                _inv_node_id = _am_store._node_id()
+            except Exception:
+                _inv_node_id = ""
+    except Exception as _e_am:
+        log.debug("snapshot: agent_meta read failed: %s", _e_am)
+    _inv_node_wide, _inv_by_rt = _build_agent_inventory(
+        _runtime_summary,
+        _outcomes_by_rt,
+        _activity_by_rt,
+        (tool_catalog_slice or {}).get("groups", {}),
+        (evals_slice or {}).get("summary", {}),
+        _detected_runtimes,
+        _agent_meta,
+        _inv_node_id,
+    )
+
     from clawmetry.providers_pricing import provider_for_model as _pfm
     payload = {
         "system": system,
@@ -13898,6 +14058,11 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "activityTodayByRuntime": _activity_by_rt,
         "outcomes": _outcomes_slice_for_snapshot(),
         "outcomesByRuntime": _outcomes_by_rt,
+        # Agent Inventory roster: node-wide roster (one row per runtime) + a
+        # per-runtime slice the cloud cm-cloud-inventory interceptor returns for
+        # ?runtime=<rt> (only that runtime's row — the no-leak contract).
+        "agentInventory": _inv_node_wide,
+        "agentInventoryByRuntime": _inv_by_rt,
         "spending": spending,
         # Compact all-runtime slice a WiFi hardware companion decrypts + renders
         # (the device GETs the snapshot, decrypts with the user's key, reads
@@ -13924,7 +14089,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # OpenClaw-family runtimes (PicoClaw, NanoClaw) detected on this host,
         # tiny by design ({name, displayName, sessionCount, workspace}) so the
         # cloud can show a runtime chip without bloating the snapshot.
-        "detectedRuntimes": _detect_family_runtimes(),
+        "detectedRuntimes": _detected_runtimes,
         "machineInfo": _build_machine_info(),
         "channelList": _build_channel_list(config),
         "ollamaInfo": _detect_ollama_for_heartbeat(),
