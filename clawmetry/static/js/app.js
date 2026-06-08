@@ -2664,9 +2664,41 @@ function _cmCompareFmt(key, v) {
   if (v == null) return '—';
   if (key === 'cost_usd') return '$' + (v < 0.01 ? v.toFixed(4) : v.toFixed(2));
   if (key === 'cache_hit_rate') return Math.round(v * 100) + '%';
+  if (key === 'eval_score') return Number(v).toFixed(2) + ' / 5';
   if (key === 'max_tool_result_bytes') return v < 1024 ? v + ' B' : v < 1048576 ? (v / 1024).toFixed(1) + ' KB' : (v / 1048576).toFixed(1) + ' MB';
   if (typeof v === 'number' && Math.abs(v) >= 1000) return v.toLocaleString();
   return String(v);
+}
+
+// Outcome label -> plain-language chip (color + words). Mirrors the
+// classifier's vocabulary; failure-ish labels are red, success green.
+function _cmOutcomeChip(outcome) {
+  if (!outcome) return '<span style="color:var(--text-muted);">—</span>';
+  var map = {
+    success:         { label: 'Succeeded',  color: 'var(--ok, #22c55e)' },
+    escalated:       { label: 'Escalated',  color: 'var(--warn, #eab308)' },
+    ongoing:         { label: 'Ongoing',    color: 'var(--text-muted)' },
+    failed:          { label: 'Failed',     color: 'var(--err, #ef4444)' },
+    tool_call_stuck: { label: 'Tool stuck', color: 'var(--err, #ef4444)' },
+    cognitive_loop:  { label: 'Stuck in a loop', color: 'var(--err, #ef4444)' },
+  };
+  var m = map[outcome] || { label: outcome, color: 'var(--text-muted)' };
+  return '<span style="display:inline-block;padding:1px 7px;border-radius:9px;font-size:11px;font-weight:600;'
+       + 'background:color-mix(in srgb, ' + m.color + ' 16%, transparent);color:' + m.color + ';">'
+       + escapeHtmlSafe(m.label) + '</span>';
+}
+
+// Verdict for the outcome row: improved / regressed / same. Plain words.
+function _cmOutcomeVerdict(verdict) {
+  if (!verdict) return '';
+  var map = {
+    improved:  { label: 'better',  color: 'var(--ok, #22c55e)' },
+    regressed: { label: 'worse',   color: 'var(--err, #ef4444)' },
+    same:      { label: 'same',    color: 'var(--text-muted)' },
+  };
+  var m = map[verdict];
+  if (!m) return '';
+  return ' <span style="color:' + m.color + ';font-size:11px;font-weight:600;">' + m.label + '</span>';
 }
 
 function _cmCompareDelta(key, d) {
@@ -2727,6 +2759,28 @@ function renderCompareResult(data) {
          +  '<div style="padding:4px 0;border-top:1px solid var(--border-primary);">' + escapeHtmlSafe(_cmCompareFmt(key, va)) + '</div>'
          +  '<div style="padding:4px 0;border-top:1px solid var(--border-primary);">' + escapeHtmlSafe(_cmCompareFmt(key, vb)) + _cmCompareDelta(key, d) + '</div>';
   });
+
+  // ── Quality rows (eval->monitor loop) ──────────────────────────────────
+  // Only render when at least one side has a quality signal, so older runs
+  // (never scored / classified) don't show two empty dashes.
+  var hasEval = data.a.eval_score != null || data.b.eval_score != null;
+  var hasOutcome = !!(data.a.outcome || data.b.outcome);
+  if (hasEval || hasOutcome) {
+    if (hasEval) {
+      var ed = (data.deltas || {})['eval_score'];
+      html += '<div style="color:var(--text-muted);padding:4px 0;border-top:1px solid var(--border-primary);">'
+            + t("app.compare_quality_score", null, "Quality score") + '</div>'
+            + '<div style="padding:4px 0;border-top:1px solid var(--border-primary);">' + escapeHtmlSafe(_cmCompareFmt('eval_score', data.a.eval_score)) + '</div>'
+            + '<div style="padding:4px 0;border-top:1px solid var(--border-primary);">' + escapeHtmlSafe(_cmCompareFmt('eval_score', data.b.eval_score)) + _cmCompareDelta('eval_score', ed) + '</div>';
+    }
+    if (hasOutcome) {
+      html += '<div style="color:var(--text-muted);padding:4px 0;border-top:1px solid var(--border-primary);">'
+            + t("app.compare_outcome", null, "Outcome") + '</div>'
+            + '<div style="padding:4px 0;border-top:1px solid var(--border-primary);">' + _cmOutcomeChip(data.a.outcome) + '</div>'
+            + '<div style="padding:4px 0;border-top:1px solid var(--border-primary);">' + _cmOutcomeChip(data.b.outcome) + _cmOutcomeVerdict(data.outcome_verdict) + '</div>';
+    }
+  }
+
   html += '</div>';
   body.innerHTML = html;
 }

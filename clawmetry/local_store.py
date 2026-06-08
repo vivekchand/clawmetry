@@ -6305,6 +6305,157 @@ class LocalStore:
                 "eval_scored_at", "eval_rubric"]
         return [dict(zip(cols, r)) for r in rows]
 
+    def query_session_quality_window(
+        self,
+        *,
+        window_minutes: int = 60,
+    ) -> dict[str, Any]:
+        """Quality snapshot over a recent window for the eval->monitor alert
+        loop (``eval_score_below`` + ``outcome_failure_rate`` rule types).
+
+        Closes the loop the LLM-as-judge eval scores (``sessions.eval_score``,
+        stamped by ``clawmetry/eval_runner.py``) and the outcome classifier
+        (``sessions.outcome``, stamped by ``clawmetry/outcome_classifier.py``)
+        opened but never fed into anything actionable. The daemon's alert
+        evaluator reads this slice and fires when production quality drops.
+
+        Two independent windows, both anchored ``now - window_minutes``:
+
+        * ``eval`` — sessions whose ``eval_scored_at`` (epoch ms) falls in the
+          window. Returns the score list + average so a rule can fire when the
+          mean dips below a threshold (with a ``min_sessions`` floor to avoid
+          single-sample noise).
+        * ``outcome`` — sessions whose ``outcome_classified_at`` (epoch ms)
+          falls in the window AND whose ``outcome`` is a terminal label (not
+          ``ongoing``/NULL). Returns the per-label counts + the failure-ish
+          fraction (``failed`` / ``tool_call_stuck`` / ``cognitive_loop``).
+
+        Degrades gracefully: an empty / un-scored / un-classified store returns
+        zero counts (the evaluators then no-fire) rather than raising. The
+        timestamp columns are BIGINT epoch *milliseconds* (see the schema at
+        the top of this file), so the cutoff is computed in ms.
+        """
+        try:
+            window_minutes = max(1, int(window_minutes))
+        except (TypeError, ValueError):
+            window_minutes = 60
+        now_ms = int(time.time() * 1000)
+        cutoff_ms = now_ms - window_minutes * 60 * 1000
+
+        # ── Eval-score window ────────────────────────────────────────────────
+        eval_scores: list[float] = []
+        try:
+            rows = self._fetch(
+                """
+                SELECT eval_score
+                  FROM sessions
+                 WHERE eval_score IS NOT NULL
+                   AND eval_scored_at IS NOT NULL
+                   AND eval_scored_at >= ?
+                """,
+                [cutoff_ms],
+            )
+            for r in rows:
+                if r and r[0] is not None:
+                    try:
+                        eval_scores.append(float(r[0]))
+                    except (TypeError, ValueError):
+                        continue
+        except Exception as e:
+            log.warning("local store: session quality eval window failed: %s", e)
+        eval_count = len(eval_scores)
+        eval_avg = (sum(eval_scores) / eval_count) if eval_count else None
+
+        # ── Outcome window ───────────────────────────────────────────────────
+        # Failure-ish = the outcome classifier's negative terminal labels.
+        # ``ongoing`` and NULL are excluded from the denominator (not yet a
+        # finished session — counting them would dilute the rate).
+        failure_labels = {"failed", "tool_call_stuck", "cognitive_loop"}
+        outcome_counts: dict[str, int] = {}
+        classified_total = 0
+        failed_count = 0
+        try:
+            rows = self._fetch(
+                """
+                SELECT outcome, COUNT(*) AS n
+                  FROM sessions
+                 WHERE outcome IS NOT NULL
+                   AND outcome <> 'ongoing'
+                   AND outcome_classified_at IS NOT NULL
+                   AND outcome_classified_at >= ?
+                 GROUP BY outcome
+                """,
+                [cutoff_ms],
+            )
+            for r in rows:
+                label = (r[0] or "").strip()
+                if not label:
+                    continue
+                n = int(r[1] or 0)
+                outcome_counts[label] = n
+                classified_total += n
+                if label in failure_labels:
+                    failed_count += n
+        except Exception as e:
+            log.warning("local store: session quality outcome window failed: %s", e)
+        failure_rate = (failed_count / classified_total) if classified_total else None
+
+        return {
+            "window_minutes":    window_minutes,
+            "eval_count":        eval_count,
+            "eval_avg":          eval_avg,
+            "eval_scores":       eval_scores,
+            "outcome_counts":    outcome_counts,
+            "classified_total":  classified_total,
+            "failed_count":      failed_count,
+            "failure_rate":      failure_rate,
+        }
+
+    def query_session_quality(
+        self,
+        *,
+        session_ids: list[str] | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        """Per-session eval/outcome fields for the given session ids, keyed by
+        ``session_id``. Powers the quality rows in ``/api/run-compare``.
+
+        Returns ``{}`` when ``session_ids`` is empty. Sessions with no eval
+        score / no outcome simply come back with those fields ``None`` (the
+        run-compare route renders ``null`` so the response stays additive +
+        backward compatible). Never raises — a read error yields ``{}``.
+        """
+        if not session_ids:
+            return {}
+        ids = [str(s) for s in session_ids if s]
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        out: dict[str, dict[str, Any]] = {}
+        try:
+            rows = self._fetch(
+                f"""
+                SELECT session_id, eval_score, eval_reason,
+                       outcome, outcome_confidence
+                  FROM sessions
+                 WHERE session_id IN ({placeholders})
+                """,
+                list(ids),
+            )
+            for r in rows:
+                sid = r[0]
+                if sid is None:
+                    continue
+                out[str(sid)] = {
+                    "eval_score":         (None if r[1] is None else float(r[1])),
+                    "eval_reason":        r[2],
+                    "outcome":            r[3],
+                    "outcome_confidence": (None if r[4] is None else float(r[4])),
+                }
+        except Exception as e:
+            log.warning("local store: query_session_quality failed: %s", e)
+            return {}
+        return out
+
     def query_eval_summary(
         self,
         *,

@@ -76,7 +76,27 @@ _LEGACY_ALERT_TYPE_MAP = {
     "daily_spend":     "count_over_threshold",  # TODO real cost-sum impl
     "session_cost":    "count_over_threshold",  # TODO real per-session impl
     "cron_failure":    "count_over_threshold",  # TODO real cron impl
+    # Eval->monitor loop: the alert builder POSTs these as ``alert_type`` (no
+    # explicit ``type``). They evaluate over the per-session quality slice
+    # (sessions.eval_score / sessions.outcome) the daemon pre-fetches, NOT
+    # the event stream, so they map to themselves and dispatch in
+    # ``_evaluate_one`` below.
+    "eval_score_below":     "eval_score_below",
+    "outcome_failure_rate": "outcome_failure_rate",
 }
+
+# Rule types that read the per-session quality slice (eval scores + outcome
+# labels) instead of the raw event stream. The daemon only bothers to query
+# that slice when at least one such rule is enabled (it is otherwise wasted
+# DuckDB work — see ``sync.py:evaluate_alerts``).
+QUALITY_RULE_TYPES = frozenset({"eval_score_below", "outcome_failure_rate"})
+
+# Default window + min-sample floors for the quality rules, used when the
+# rule body omits them. Tuned so a single low-scoring session can't trip an
+# alert (``min_sessions``) and the window is long enough to gather a few
+# scored/classified sessions on a normal node.
+DEFAULT_QUALITY_WINDOW_MINUTES = 60
+DEFAULT_QUALITY_MIN_SESSIONS = 3
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -86,6 +106,7 @@ def evaluate(
     rules: list[dict[str, Any]] | None,
     events: list[dict[str, Any]] | None,
     last_eval_state: dict[str, Any] | None,
+    quality: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Pure evaluator. Walks ``events`` against ``rules``, returns matches.
 
@@ -101,6 +122,12 @@ def evaluate(
             empty lists are tolerated.
         events: rows from ``local_store.query_events()`` ordered most-recent
             first. ``None`` and empty lists are tolerated.
+        quality: the per-session quality slice from
+            ``local_store.query_session_quality_window()`` — drives the
+            ``eval_score_below`` + ``outcome_failure_rate`` rule types (the
+            eval->monitor loop). ``None`` means the daemon didn't fetch it
+            (no quality rule enabled, or empty store) — those rule types then
+            no-fire instead of crashing.
         last_eval_state: per-rule cooldown bookkeeping. Schema:
             ``{rule_id: {"last_fired_ts": <epoch_seconds>, "last_event_id": <id>}}``.
             Mutated in place. ``None`` raises (callers should pass an empty
@@ -149,7 +176,7 @@ def evaluate(
             continue
 
         try:
-            match = _evaluate_one(rule, events_chrono)
+            match = _evaluate_one(rule, events_chrono, quality)
         except Exception as e:
             log.warning("alerts: rule %s evaluator errored: %s", rid, e)
             continue
@@ -258,6 +285,7 @@ def _coerce_int(value: Any, default: int) -> int:
 def _evaluate_one(
     rule: dict[str, Any],
     events_chrono: list[dict[str, Any]],
+    quality: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Dispatch on ``rule['type']``. Returns the match dict (rule-agnostic
     shape) or ``None`` when the rule didn't fire."""
@@ -268,11 +296,142 @@ def _evaluate_one(
         return _eval_error_rate(rule, events_chrono)
     if rt == "tool_call_pattern":
         return _eval_tool_call_pattern(rule, events_chrono)
+    if rt == "eval_score_below":
+        return _eval_eval_score_below(rule, quality)
+    if rt == "outcome_failure_rate":
+        return _eval_outcome_failure_rate(rule, quality)
     # Unknown type — log once and skip. (PRD says: leave a TODO. Here we
     # explicitly under-fire instead of mis-firing.)
     log.debug("alerts: unsupported rule type %r — skipped (rule_id=%s)",
               rt, rule.get("id"))
     return None
+
+
+def _quality_window_minutes(rule: dict[str, Any]) -> int:
+    """Window for a quality rule in minutes. Prefer an explicit
+    ``window_minutes`` in the condition body; otherwise derive from
+    ``window_sec`` (the shared field other rule types use); else default."""
+    cond = rule.get("condition") or {}
+    wm = cond.get("window_minutes")
+    if wm is not None:
+        return _coerce_int(wm, DEFAULT_QUALITY_WINDOW_MINUTES)
+    # ``window_sec`` is normalised onto the rule already; convert when the
+    # author set it instead of window_minutes.
+    if cond.get("window_sec") is not None:
+        secs = _coerce_int(cond.get("window_sec"), DEFAULT_QUALITY_WINDOW_MINUTES * 60)
+        return max(1, secs // 60)
+    return DEFAULT_QUALITY_WINDOW_MINUTES
+
+
+def _quality_min_sessions(rule: dict[str, Any]) -> int:
+    cond = rule.get("condition") or {}
+    return max(1, _coerce_int(cond.get("min_sessions"), DEFAULT_QUALITY_MIN_SESSIONS))
+
+
+def _quality_pseudo_event(rule_type: str, window_minutes: int) -> dict[str, Any]:
+    """Quality rules fire on a window aggregate, not a single event, but the
+    dispatch payload + dedup memo read ``match['event']['id']``. Synthesise a
+    deterministic id from (type, window, current minute) so the dispatcher
+    has a stable handle and the cooldown / event-id dedup still work."""
+    minute_bucket = int(time.time() // 60)
+    return {
+        "id": f"quality:{rule_type}:{window_minutes}m:{minute_bucket}",
+        "event_type": rule_type,
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "data": {},
+    }
+
+
+def _eval_eval_score_below(
+    rule: dict[str, Any],
+    quality: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Fire when the average ``sessions.eval_score`` over the recent window
+    drops BELOW ``threshold`` (0-5 scale). Requires at least ``min_sessions``
+    scored sessions in the window so a single bad sample can't trip it.
+
+    ``quality`` is ``query_session_quality_window()``'s result. ``None`` or an
+    empty/un-scored store -> no fire (degrade gracefully, never crash)."""
+    if not isinstance(quality, dict):
+        return None
+    threshold = rule.get("threshold")
+    if threshold is None:
+        return None
+    min_sessions = _quality_min_sessions(rule)
+    window_minutes = _quality_window_minutes(rule)
+
+    count = int(quality.get("eval_count") or 0)
+    avg = quality.get("eval_avg")
+    if count < min_sessions or avg is None:
+        return None
+    if avg >= threshold:
+        return None
+
+    return {
+        "event": _quality_pseudo_event("eval_score_below", window_minutes),
+        "summary": (f"rule fired: avg eval score {avg:.2f} over {count} "
+                    f"session(s) in {window_minutes}m "
+                    f"(threshold={threshold:g})"),
+        "metadata": {
+            "avg_score":      round(float(avg), 3),
+            "threshold":      float(threshold),
+            "session_count":  count,
+            "min_sessions":   min_sessions,
+            "window_minutes": window_minutes,
+        },
+    }
+
+
+def _eval_outcome_failure_rate(
+    rule: dict[str, Any],
+    quality: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Fire when failure-ish outcomes (``failed`` / ``tool_call_stuck`` /
+    ``cognitive_loop``) as a fraction of classified non-``ongoing`` sessions
+    in the window EXCEED ``threshold`` percent. Requires at least
+    ``min_sessions`` classified sessions so a single failure can't trip it.
+
+    ``threshold`` here is a percent (0-100) — the alert builder's unit. We
+    accept a fraction in [0,1] too (if the author sent 0.2 meaning 20%)."""
+    if not isinstance(quality, dict):
+        return None
+    threshold = rule.get("threshold")
+    if threshold is None:
+        return None
+    # The builder sends a percent (e.g. 20). A value <= 1 is read as a
+    # fraction (0.2 == 20%); anything larger is a percent and divided by 100.
+    threshold = float(threshold)
+    threshold_frac = threshold if threshold <= 1.0 else threshold / 100.0
+    if threshold_frac <= 0:
+        return None
+    min_sessions = _quality_min_sessions(rule)
+    window_minutes = _quality_window_minutes(rule)
+
+    total = int(quality.get("classified_total") or 0)
+    failed = int(quality.get("failed_count") or 0)
+    if total < min_sessions:
+        return None
+    rate = quality.get("failure_rate")
+    if rate is None:
+        rate = (failed / total) if total else 0.0
+    if rate <= threshold_frac:
+        return None
+
+    return {
+        "event": _quality_pseudo_event("outcome_failure_rate", window_minutes),
+        "summary": (f"rule fired: outcome failure rate {rate:.1%} "
+                    f"({failed}/{total}) in {window_minutes}m "
+                    f"(threshold={threshold_frac:.1%})"),
+        "metadata": {
+            "failure_rate":     round(float(rate), 4),
+            "failed_count":     failed,
+            "classified_total": total,
+            "threshold_pct":    round(threshold_frac * 100, 2),
+            "outcome_counts":   quality.get("outcome_counts") or {},
+            "min_sessions":     min_sessions,
+            "window_minutes":   window_minutes,
+        },
+    }
 
 
 def _eval_count_over_threshold(
@@ -503,4 +662,11 @@ def _parse_iso_ts(ts: str | None) -> float | None:
         return None
 
 
-__all__ = ["evaluate", "DEFAULT_WINDOW_SEC", "DEFAULT_COOLDOWN_SEC"]
+__all__ = [
+    "evaluate",
+    "DEFAULT_WINDOW_SEC",
+    "DEFAULT_COOLDOWN_SEC",
+    "QUALITY_RULE_TYPES",
+    "DEFAULT_QUALITY_WINDOW_MINUTES",
+    "DEFAULT_QUALITY_MIN_SESSIONS",
+]
