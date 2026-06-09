@@ -65,6 +65,11 @@ ClawMetry is **read-only** and **DuckDB-first**:
 - The daemon **owns the DuckDB writer lock**. Build snapshot data on the daemon's **own** store handle (`local_store.get_store()`), never a `read_only=True` re-open — that deadlocks the writer (the `#1771` brick-lock: a cached RO handle blocks every subsequent write; symptom is `cannot open writer — read-only handle already exists`). When you need a read in a separate process, go through the daemon's `/__local_query__/<method>` HTTP proxy (`local_store_via_daemon`), not a direct open.
 - If the agent runtime's **model** is needed (e.g. Self-Evolve), don't try to make ClawMetry call an LLM or get gateway write scope — it's read-only by design and its gateway token is `operator.read` only. Shell out to **`openclaw agent --session-id <stable> --message <prompt> --json`**: OpenClaw runs the turn on its own credentials, the transcript lands on disk → DuckDB, and you parse the result. (`openclaw` is a Node script — under the daemon's launchd PATH `node` isn't found, so pass an augmented `PATH` to the subprocess.)
 
+### Snapshot slices the DESK DEVICE consumes are a 4-repo chain
+
+`sync.py::_build_device_summary` builds the **encrypted** `deviceSummary` the ESP32 device decrypts on-device (e.g. `sessionTitles` — keyed by bare session id, content stays out of the cloud plaintext). A new/changed device slice silently no-ops unless the **firmware also renders it**. Device-facing features span FOUR repos and ALL must ship together:
+`clawmetry-pro` (adapter derives the value, e.g. claude_code ai-title → `Session.title`) → **this repo** (`sync.py` bakes the encrypted slice) → `clawmetry-cloud` (serves the pro wheel daemons auto-provision + relays the snapshot) → `clawmetry-hardware` (firmware decrypts + renders). Verify BOTH ends: decrypt the live snapshot (§3 verify-live) *and* confirm the firmware renders it (flash/OTA). Burned 2026-06-09: a new device slice showed nothing because the firmware PR was unmerged, and the title was wrong because the pro wheel wasn't rolled to the cloud.
+
 ## 1b. Open-core code placement — where does this change go?
 
 ClawMetry is open-core. There are **four repos**, each with a clear remit; agents must pick the right one *before* writing code or the change ships in the wrong tier. Strategy + matrix: `clawmetry-cloud/docs/TIERING_AND_LICENSING.md` (private).
