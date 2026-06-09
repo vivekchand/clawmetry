@@ -1007,6 +1007,12 @@ def parse_anthropic_sse_chunk(line: str, usage: StreamUsage) -> None:
         usage.cache_read_tokens = u.get("cache_read_input_tokens", 0)
         usage.cache_creation_tokens = u.get("cache_creation_input_tokens", 0)
         usage.model = msg.get("model", usage.model)
+        # message_start carries an output_tokens floor (the prefill/initial count).
+        # Seed it so a stream that gets truncated *before* the final message_delta
+        # (client disconnect, upstream error mid-thinking) still records a non-zero
+        # lower bound instead of 0. Use max() so the authoritative message_delta
+        # total below can only raise it, never lose ground (#2842).
+        usage.output_tokens = max(usage.output_tokens, int(u.get("output_tokens", 0) or 0))
 
     elif event_type == "message_delta":
         # message_delta carries the running/final usage. Take the MAX so multiple

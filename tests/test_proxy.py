@@ -209,6 +209,65 @@ class TestSSEParsing:
         assert usage.output_tokens == 150
         assert usage.stop_reason == "end_turn"
 
+    def test_anthropic_streamed_thinking_matches_nonstreamed(self):
+        # A full extended-thinking SSE sequence (thinking + signature deltas, then
+        # text) must accumulate the same output_tokens the equivalent non-streamed
+        # response reports in its final usage. Refs #2842.
+        from clawmetry.proxy import parse_anthropic_sse_chunk, StreamUsage
+
+        usage = StreamUsage()
+        stream = [
+            'data: {"type":"message_start","message":{"model":"claude-opus-4-20260313","usage":{"input_tokens":58,"cache_read_input_tokens":12,"output_tokens":2}}}',
+            'data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}',
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me reason about this"}}',
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"abc123"}}',
+            'data: {"type":"content_block_stop","index":0}',
+            'data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}',
+            'data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Answer."}}',
+            'data: {"type":"content_block_stop","index":1}',
+            # Final message_delta carries the authoritative total (thinking + text).
+            'data: {"type":"message_delta","usage":{"output_tokens":314},"delta":{"stop_reason":"end_turn"}}',
+        ]
+        for line in stream:
+            parse_anthropic_sse_chunk(line, usage)
+
+        # Equivalent non-streamed usage block reports output_tokens=314.
+        nonstreamed_output = 314
+        assert usage.input_tokens == 58
+        assert usage.cache_read_tokens == 12
+        assert usage.output_tokens == nonstreamed_output
+        assert usage.stop_reason == "end_turn"
+
+    def test_anthropic_truncated_stream_keeps_floor(self):
+        # If the stream is cut off before the final message_delta, the output_tokens
+        # floor seeded from message_start must survive (never reset to 0). Refs #2842.
+        from clawmetry.proxy import parse_anthropic_sse_chunk, StreamUsage
+
+        usage = StreamUsage()
+        parse_anthropic_sse_chunk(
+            'data: {"type":"message_start","message":{"model":"m","usage":{"input_tokens":40,"output_tokens":7}}}',
+            usage,
+        )
+        # ... thinking deltas stream, then the connection drops. No message_delta.
+        parse_anthropic_sse_chunk(
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"partial"}}',
+            usage,
+        )
+        assert usage.input_tokens == 40
+        assert usage.output_tokens == 7  # floor preserved, not 0
+
+    def test_anthropic_message_start_output_floor_never_lowers_delta(self):
+        # message_start's floor must not clobber a larger value already accumulated.
+        from clawmetry.proxy import parse_anthropic_sse_chunk, StreamUsage
+
+        usage = StreamUsage()
+        usage.output_tokens = 200
+        parse_anthropic_sse_chunk(
+            'data: {"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":3}}}',
+            usage,
+        )
+        assert usage.output_tokens == 200
+
     def test_anthropic_ignores_non_data(self):
         from clawmetry.proxy import parse_anthropic_sse_chunk, StreamUsage
 
