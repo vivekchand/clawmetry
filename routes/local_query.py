@@ -656,6 +656,10 @@ _DAEMON_METHODS = frozenset({
     # returns None and the proxy 400s (memory feedback_cli_methods_need_daemon_allowlist).
     "query_agent_meta",
     "set_agent_meta",
+    # Issue #2861 — version-aware health regression. Read-only join of
+    # sessions + heartbeats; routed through the daemon proxy so the
+    # dashboard process never opens DuckDB writable.
+    "query_version_health",
 })
 
 
