@@ -15321,6 +15321,21 @@ def run_daemon() -> None:
     # done, instead of starting a second daemon mid-drain.
     _install_shutdown_handlers()
 
+    # Self-update crash-loop guard (firmware-OTA style, see
+    # clawmetry/update_guard.py). If a just-installed wheel boot-loops under
+    # launchd/systemd, the Nth rapid boot rolls back to the previous version
+    # and exits so the supervisor respawns on the known-good build. A healthy
+    # run self-confirms after a few minutes. Runs BEFORE heavy init so a
+    # crash later in startup still counts as a failed boot. Never raises.
+    try:
+        from clawmetry import __version__ as _cm_boot_ver
+        from clawmetry.update_guard import check_boot_and_maybe_rollback as _ug_check
+        _ug_status = _ug_check(_cm_boot_ver)
+        if _ug_status not in ("idle",):
+            log.info("update guard: boot status=%s (v%s)", _ug_status, _cm_boot_ver)
+    except Exception as _ug_e:
+        log.warning("update guard boot check failed: %s", _ug_e)
+
     # Open-core plugin discovery. dashboard.py runs this at import time so the
     # dashboard process picks up entry-point plugins (clawmetry-pro adapters,
     # event handlers, etc.). The sync daemon is a SEPARATE process — started
@@ -15795,18 +15810,19 @@ def run_daemon() -> None:
     except Exception as _e:
         log.warning(f"pro-entitlement watcher failed to start: {_e}")
 
-    # ── Opt-in auto-update worker ────────────────────────────────────────
-    # routes/update_check.py runs a background checker that self-updates ONLY
-    # when the `auto_update` config is on (default OFF → no behaviour change
-    # for anyone who hasn't opted in), via the same vetted pip+restart path as
-    # the manual "Update now". It was started only in the DASHBOARD process —
-    # but a headless / cloud-synced node runs only this daemon, so auto-update
-    # never fired where it's most needed. Start it here too (idempotent: the
-    # module guards against a double-started thread). Never blocks/raises.
+    # ── Auto-update worker (default ON in this daemon) ───────────────────
+    # routes/update_check.py runs a background checker that self-updates via
+    # the same vetted pip+restart path as the manual "Update now".
+    # ``role="daemon"`` marks this as the supervised always-on process: the
+    # ONLY role where the default-on policy acts (the dashboard stays opt-in).
+    # Rails: 48h PyPI staleness window, CLAWMETRY_AUTO_UPDATE=0 kill switch,
+    # boot-loop rollback guard (clawmetry/update_guard.py), and no self-exit
+    # when unsupervised. WHY: the 2026-06-09 fleet audit found 92% of active
+    # nodes months stale — fixes shipped but never arrived. Never blocks/raises.
     try:
         from routes.update_check import start_update_check_thread as _start_uc
-        _start_uc()
-        log.info("update-check thread started (auto-update honours the opt-in flag)")
+        _start_uc(role="daemon")
+        log.info("update-check thread started (auto-update default-on, daemon role)")
     except Exception as _e:
         log.warning(f"update-check thread failed to start: {_e}")
 

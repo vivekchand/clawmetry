@@ -351,7 +351,7 @@ def api_version():
     return {"current": current, "latest": latest, "update_available": update_available}
 
 
-def perform_self_update(reason: str = "manual"):
+def perform_self_update(reason: str = "manual", restart: bool = True):
     """Core self-update: ``pip install -U clawmetry`` then schedule a process
     restart. Returns ``(payload_dict, http_status)``.
 
@@ -359,6 +359,10 @@ def perform_self_update(reason: str = "manual"):
     (``routes/update_check.py``) so both use one vetted upgrade+restart path.
     Safe to call from a worker thread — the restart is scheduled on a Timer
     that exits the process (launchd/systemd respawns it on the new wheel).
+
+    ``restart=False`` installs the new wheel but does NOT exit the process —
+    the auto-updater uses it for an unsupervised daemon (nothing would
+    respawn it); the new version applies on the next start.
     """
     import dashboard as _d
     import subprocess as _sp
@@ -416,6 +420,22 @@ def perform_self_update(reason: str = "manual"):
                 break
     except Exception:
         pass
+
+    # Arm the crash-loop rollback guard BEFORE any restart: if the new wheel
+    # boot-loops, the daemon's next boots detect it and pip-roll back to
+    # ``old_version`` (clawmetry/update_guard.py — firmware-OTA style).
+    try:
+        from clawmetry.update_guard import arm_rollback_guard
+        arm_rollback_guard(old_version, new_version, reason)
+    except Exception:
+        pass
+
+    if not restart:
+        _ulog.info("self-update (%s): upgraded v%s -> v%s; restart deferred "
+                   "(unsupervised process keeps running the old build until "
+                   "its next start)", reason, old_version, new_version)
+        return {"ok": True, "old_version": old_version,
+                "new_version": new_version, "restart_deferred": True}, 200
 
     # Schedule restart after response is sent.
     # CRITICAL: kick the sync daemon FIRST. Otherwise it keeps the OLD wheel in
