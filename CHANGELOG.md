@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Release: daemon auto-provision UPGRADES clawmetry-pro (+ valid wheel filename) (2026-06-09)
+- `auto_provision_pro` returned early whenever pro was importable, so an installed pro NEVER upgraded — rolling a newer wheel to the cloud reached no existing node (the claude_code ai-title fix in pro 0.3.4 sat unused because every daemon kept 0.3.3). Now it re-validates against the server each cycle: downloads the small wheel, reads its METADATA version, and installs (pip --upgrade) only when strictly newer; a download/check failure keeps the current version (never strands a working node).
+- `_download_wheel` saved to a random `mkstemp` name (`clawmetry_pro-ab12.whl`) that pip rejects as "not a valid wheel filename", silently breaking every re-download. Now it preserves the real PEP-427 filename from Content-Disposition in a temp dir.
+
 ### Release: clean claim-watcher re-exec (#2918) (2026-06-09)
 - The one-step onboarding claim-watcher (0.12.491) re-execs to adopt the real account. os.execv keeps the same PID, so _acquire_pid_lock saw its own live PID and the DuckDB writer lock stayed held — the re-exec'd daemon could fail to start (relying on the launchd KeepAlive crash-restart). Now it stops the store (flush + release the writer lock) and releases the pid lock before execv, so the restart is clean.
 
