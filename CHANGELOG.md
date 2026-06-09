@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Fix: openclaw reasoning/thinking tokens now extracted (#2876) (2026-06-10)
+- Anthropic extended-thinking sessions emit a reasoning-token share inside the per-turn `usage` object that input+output alone never account for. The openclaw adapter's usage-extraction only read input/output/cacheRead/cacheWrite, so `Session.reasoning_tokens` was always 0 and per-turn `token_count` was systematically under-reported for reasoning-capable models.
+- New `_reasoning_tokens()` helper reads any known spelling (`reasoning_tokens`, `reasoningTokens`, `thinking_tokens`, `thinkingTokens`, `thinking_input_tokens`, …), coercing to a non-negative int. Wired into `list_events()` (surfaces `reasoningTokens` in `event.extra`), `_build_spans_from_events()` (adds `tokens_reasoning` and folds it into the LLM span's `token_count`), and `list_sessions()` (populates `Session.reasoning_tokens`).
+- Verified: new tests pin the reasoning-token extraction, the helper's key-variant/garbage-input handling, and existing input/output/cache splits stay unchanged.
+
 ### Release: runtime paywall shows the real plan ladder (#2945) (2026-06-09)
 - The "Two ways to observe X" card asked users to start a trial without ever saying what the plans are. The modal now mirrors the live clawmetry.com/pricing ladder: Free $0 forever (OpenClaw + NemoClaw), Starter $9/node/mo (every supported runtime, 7-day free trial, no card), Pro $29/node/mo (alerts, budgets, loop detection, fleet), with a footnote that annual plans include the desk device and that self-hosted uses the same plans with a license key (link to /pricing).
 - Prices live in one `_cmPlanPrices` object so a reprice is a one-line change. Trial CTA and paywall telemetry wiring unchanged; guard tests assert tiers, the self-hosted mention, the pricing link, and the no-em-dash copy rule.

@@ -33,6 +33,41 @@ _NEMOCLAW_CATALOG_TOOLS: frozenset = frozenset({
     "tool_call",
 })
 
+# Reasoning / extended-thinking token key variants (#2876). Anthropic
+# extended-thinking sessions emit a reasoning-token share inside the per-turn
+# usage object under one of several spellings; older code only read
+# input/output/cache keys, so Session.reasoning_tokens was always 0 and per-turn
+# token counts were under-reported for reasoning-capable models.
+_REASONING_TOKEN_KEYS: tuple = (
+    "reasoning_tokens",
+    "reasoningTokens",
+    "thinking_tokens",
+    "thinkingTokens",
+    "thinking_input_tokens",
+    "thinkingInputTokens",
+    "reasoning_output_tokens",
+    "reasoningOutputTokens",
+)
+
+
+def _reasoning_tokens(usage: dict) -> int:
+    """Return the reasoning/thinking token count from a usage dict.
+
+    Accepts any of the known key spellings (snake/camel, thinking/reasoning)
+    and coerces to a non-negative int. Returns 0 when absent or unparsable.
+    """
+    if not isinstance(usage, dict):
+        return 0
+    for k in _REASONING_TOKEN_KEYS:
+        v = usage.get(k)
+        if v is None:
+            continue
+        try:
+            return max(0, int(v))
+        except (TypeError, ValueError):
+            return 0
+    return 0
+
 
 def _d():
     """Late import to avoid circular init with dashboard module."""
@@ -329,6 +364,7 @@ class OpenClawAdapter(AgentAdapter):
                     output_tokens=int(s.get("outputTokens") or 0),
                     cache_read_tokens=int(s.get("cacheReadTokens") or 0),
                     cache_write_tokens=int(s.get("cacheWriteTokens") or 0),
+                    reasoning_tokens=_reasoning_tokens(s),
                     cost_usd=float(s["costUsd"]) if s.get("costUsd") is not None else None,
                     extra=extra,
                 )
@@ -412,6 +448,13 @@ class OpenClawAdapter(AgentAdapter):
                                         if v is not None:
                                             extra[dst] = int(v)
                                             break
+                                # Extended-thinking / reasoning tokens (#2876):
+                                # Anthropic thinking sessions emit a reasoning
+                                # token share that input+output alone omit. Surface
+                                # it so per-turn cost is not under-reported.
+                                _rt = _reasoning_tokens(usage)
+                                if _rt:
+                                    extra["reasoningTokens"] = _rt
                     except Exception:
                         pass
                 events.append(Event(
@@ -592,6 +635,10 @@ class OpenClawAdapter(AgentAdapter):
                 usage = msg.get("usage") or {}
                 tok_in = int(usage.get("input_tokens") or usage.get("inputTokens") or 0)
                 tok_out = int(usage.get("output_tokens") or usage.get("outputTokens") or 0)
+                # Reasoning/thinking tokens (#2876) are billed but not part of
+                # input/output; fold them into token_count so LLM-span cost
+                # totals are not systematically under-reported.
+                tok_reasoning = _reasoning_tokens(usage)
                 llm_sid = _sid("llm", session_id, str(raw_ts))
                 spans.append({
                     "span_id": llm_sid,
@@ -605,7 +652,8 @@ class OpenClawAdapter(AgentAdapter):
                     "model": model or None,
                     "tokens_input": tok_in or None,
                     "tokens_output": tok_out or None,
-                    "token_count": (tok_in + tok_out) or None,
+                    "tokens_reasoning": tok_reasoning or None,
+                    "token_count": (tok_in + tok_out + tok_reasoning) or None,
                 })
                 if isinstance(content, list):
                     for block in content:
