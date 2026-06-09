@@ -1,6 +1,6 @@
 """Proxy cache-bust detection + SSE token-counting tests (#2839/#2840/#2841/#2842)."""
 from clawmetry.proxy import (
-    normalize_tools, scan_volatile_content, stable_prefix_hash,
+    normalize_tools, raw_tools_fp, scan_volatile_content, stable_prefix_hash,
     detect_cache_risk, parse_anthropic_sse_chunk, StreamUsage,
 )
 
@@ -42,6 +42,22 @@ def test_detect_cache_risk_scores_volatile():
     assert r["cache_risk_score"] >= 2
     assert r["prefix_hash"]
     assert "content" not in r  # no raw text
+
+
+def test_tool_order_churn_detection():
+    tools_ab = [{"name": "a", "input_schema": {"type": "object"}}, {"name": "b"}]
+    tools_ba = [{"name": "b"}, {"name": "a", "input_schema": {"type": "object"}}]
+    tools_diff = [{"name": "a"}, {"name": "c"}]
+    # raw fp differs on reorder; normalize_tools doesn't — this combination
+    # is the signal for order-only churn
+    assert raw_tools_fp(tools_ab) != raw_tools_fp(tools_ba)
+    assert normalize_tools(tools_ab) == normalize_tools(tools_ba)
+    # a genuine tool change shows up in both fingerprints
+    assert raw_tools_fp(tools_ab) != raw_tools_fp(tools_diff)
+    assert normalize_tools(tools_ab) != normalize_tools(tools_diff)
+    # edge cases never raise
+    assert isinstance(raw_tools_fp([]), str)  # empty list still hashes cleanly
+    assert raw_tools_fp("bad") == ""  # type: ignore[arg-type]  # non-list → empty
 
 
 def test_sse_message_delta_takes_max_output_tokens():
