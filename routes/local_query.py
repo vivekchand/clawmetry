@@ -47,6 +47,7 @@ _SHAPES = {
     "spans":           "query_spans",             # Issue #1013: full-filter span list
     "traces":          "query_traces",            # Issue #1013: one row per trace_id
     "external_calls":  "query_external_calls",   # Issue #883: external API tracing
+    "search":          "query_search",            # Issue #2860: session full-text search
 }
 
 
@@ -218,6 +219,18 @@ def _coerce_args(shape: str, raw: dict) -> dict:
             "since":      raw.get("since"),
             "until":      raw.get("until"),
             "limit":      _safe_int(raw.get("limit"), default=200, lo=1, hi=2000),
+        }
+    if shape == "search":
+        q = (raw.get("q") or "").strip()
+        if not q:
+            raise ValueError("search shape requires non-empty 'q' parameter")
+        return {
+            "q":      q,
+            "model":  raw.get("model") or None,
+            "status": raw.get("status") or None,
+            "since":  raw.get("since"),
+            "until":  raw.get("until"),
+            "limit":  _safe_int(raw.get("limit"), default=50, lo=1, hi=500),
         }
     raise ValueError(f"unknown shape: {shape}")
 
@@ -405,6 +418,23 @@ def http_external_calls():
     try:
         args = _coerce_args("external_calls", request.args.to_dict())
         return jsonify(_dispatch("external_calls", args))
+    except Exception as e:
+        return jsonify({"error": str(e)[:300]}), 500
+
+
+@bp_local_query.route("/api/local/search", methods=["GET"])
+def http_search():
+    """Search sessions by title / eval-reason text.
+
+    Required: ``q`` (search string). Optional: ``model``, ``status``,
+    ``since`` (ISO), ``until`` (ISO), ``limit`` (int, default 50, max 500).
+    Returns session summary rows matching the query, sorted newest-first.
+    """
+    try:
+        args = _coerce_args("search", request.args.to_dict())
+        return jsonify(_dispatch("search", args))
+    except ValueError as e:
+        return jsonify({"error": str(e)[:300]}), 400
     except Exception as e:
         return jsonify({"error": str(e)[:300]}), 500
 
@@ -656,6 +686,9 @@ _DAEMON_METHODS = frozenset({
     # returns None and the proxy 400s (memory feedback_cli_methods_need_daemon_allowlist).
     "query_agent_meta",
     "set_agent_meta",
+    # Issue #2860: session full-text search. Read-only; routed through the
+    # daemon proxy so the dashboard process never opens DuckDB writable.
+    "query_search",
 })
 
 

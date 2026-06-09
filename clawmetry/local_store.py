@@ -7159,6 +7159,75 @@ class LocalStore:
             return []
         return [dict(zip(cols, r)) for r in rows]
 
+    def query_search(
+        self,
+        *,
+        q: str,
+        model: str | None = None,
+        status: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Search sessions by title and eval_reason text.
+
+        Matches rows where ``sessions.title`` or ``sessions.eval_reason``
+        contains the query string (case-insensitive). Optional ``model``
+        filter restricts to sessions that used a specific model name
+        (sub-selects session_ids from the events table). Returns session
+        summary rows sorted newest-first.
+        """
+        q = (q or "").strip()
+        if not q:
+            return []
+        q_like = f"%{q}%"
+        params: list[Any] = []
+
+        model_join = ""
+        if model:
+            model_join = (
+                "JOIN (SELECT DISTINCT session_id FROM events "
+                "WHERE model ILIKE ? AND session_id IS NOT NULL) em "
+                "ON s.session_id = em.session_id"
+            )
+            params.append(f"%{model}%")
+
+        clauses: list[str] = ["(s.title ILIKE ? OR s.eval_reason ILIKE ?)"]
+        params.extend([q_like, q_like])
+        if status:
+            clauses.append("s.status = ?")
+            params.append(str(status))
+        if since:
+            clauses.append("s.last_active_at >= ?")
+            params.append(since)
+        if until:
+            clauses.append("s.last_active_at <= ?")
+            params.append(until)
+        where = "WHERE " + " AND ".join(clauses)
+        sql = f"""
+            SELECT s.session_id, s.agent_type, s.title,
+                   s.started_at, s.last_active_at, s.status,
+                   s.cost_usd, s.total_tokens,
+                   s.outcome, s.eval_score, s.eval_reason
+            FROM sessions s
+            {model_join}
+            {where}
+            ORDER BY s.last_active_at DESC NULLS LAST
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = [
+            "session_id", "agent_type", "title",
+            "started_at", "last_active_at", "status",
+            "cost_usd", "total_tokens",
+            "outcome", "eval_score", "eval_reason",
+        ]
+        try:
+            return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
+        except Exception as e:
+            log.warning("local store: query_search failed: %s", e)
+            return []
+
     def query_sessions_table(
         self,
         *,
