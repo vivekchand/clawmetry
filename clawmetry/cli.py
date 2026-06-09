@@ -2541,6 +2541,12 @@ def _format_uptime(seconds):
     return f"{seconds / 86400:.1f}d"
 
 
+def _cmd_mcp(args) -> None:
+    """Start the ClawMetry MCP server on stdio (refs #2859)."""
+    from clawmetry.mcp_server import run
+    run()
+
+
 def _cmd_eval(args) -> None:
     """Run a golden eval suite (Phase 2 evals, refs #1619).
 
@@ -3215,6 +3221,12 @@ def main() -> None:
     # update — self-update to latest PyPI version
     sub.add_parser("update", help="Update clawmetry to the latest version")
 
+    # mcp — start MCP server on stdio (issue #2859)
+    sub.add_parser(
+        "mcp",
+        help="Start ClawMetry MCP server (stdio) — lets agents query their own telemetry",
+    )
+
     # uninstall — fully remove clawmetry
     sub.add_parser(
         "uninstall", help="Fully uninstall clawmetry (stop daemons, remove all files)"
@@ -3265,6 +3277,7 @@ def main() -> None:
         "status",
         "proxy",
         "eval",
+        "mcp",
         "update",
         "uninstall",
         "activate",
@@ -3294,6 +3307,8 @@ def main() -> None:
             _cmd_proxy(args)
         elif args.cmd == "eval":
             _cmd_eval(args)
+        elif args.cmd == "mcp":
+            _cmd_mcp(args)
         elif args.cmd == "update":
             _cmd_update()
         elif args.cmd == "uninstall":
