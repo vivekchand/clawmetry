@@ -1,1 +1,1 @@
-placeholder
+"""\nClawMetry Proxy — opt-in enforcement layer between OpenClaw and LLM providers.
