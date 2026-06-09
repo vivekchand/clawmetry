@@ -458,6 +458,7 @@ class OpenClawAdapter(AgentAdapter):
                                     ("outputTokens", "output_tokens", "outputTokens"),
                                     ("cacheReadTokens", "cache_read_input_tokens", "cacheReadInputTokens", "cacheRead"),
                                     ("cacheWriteTokens", "cache_creation_input_tokens", "cacheCreationInputTokens", "cacheWrite"),
+                                    ("totalTokens", "totalTokens", "total_tokens"),
                                 ]:
                                     for k in keys:
                                         v = usage.get(k)
@@ -502,7 +503,7 @@ class OpenClawAdapter(AgentAdapter):
             Capability.CHANNELS,
         }
 
-    # ── Span reconstruction (issue #1010 / Trace 4) ────────────────────────
+    # ── Span reconstruction (issue #1010 / Trace 4) ───────────────────────────────────────
 
     @staticmethod
     def _span_id(*parts: str) -> str:
@@ -655,6 +656,9 @@ class OpenClawAdapter(AgentAdapter):
                 # input/output; fold them into token_count so LLM-span cost
                 # totals are not systematically under-reported.
                 tok_reasoning = _reasoning_tokens(usage)
+                # totalTokens includes reasoning tokens on extended-thinking models;
+                # prefer it when present so spans are not under-counted (#2794).
+                tok_total = int(usage.get("totalTokens") or usage.get("total_tokens") or 0)
                 llm_sid = _sid("llm", session_id, str(raw_ts))
                 spans.append({
                     "span_id": llm_sid,
@@ -669,7 +673,11 @@ class OpenClawAdapter(AgentAdapter):
                     "tokens_input": tok_in or None,
                     "tokens_output": tok_out or None,
                     "tokens_reasoning": tok_reasoning or None,
-                    "token_count": (tok_in + tok_out + tok_reasoning) or None,
+                    # max() is the only safe combination of #2876 and #2794:
+                    # totalTokens (when the SDK emits it) ALREADY includes the
+                    # reasoning share, so summing them would double-count, and
+                    # either alone under-counts when the other key is present.
+                    "token_count": max(tok_total, tok_in + tok_out + tok_reasoning) or None,
                 })
                 if isinstance(content, list):
                     for block in content:
