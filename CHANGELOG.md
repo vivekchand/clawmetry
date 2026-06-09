@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: locked-runtime upgrade affordance renders in grace mode (#2942) (2026-06-09)
+- The conversion surface was dead: grace mode reported every paid runtime as allowed, so the runtime switcher's lock affordance and the two-path upgrade card never rendered for anyone (12 paywall views in 30 days fleet-wide), even though an unentitled account's paid-runtime data is never ingested anyway (the pro adapter only auto-provisions for entitled accounts). "Allowed by grace" was indistinguishable from "silently broken".
+- New grace-independent `Entitlement.entitled_runtime()` plus an `entitled` flag on every `runtime_catalog()` entry; `allowed`/`locked` enforcement semantics are unchanged. The catalog loader now marks paid, unentitled runtimes with the lock affordance even in grace; selecting one opens the existing non-blocking two-path card, and runtimes detected on the machine keep the "running here" label.
+- Hosted guard: the cloud container resolves entitlement as OSS-free, so in CLOUD_MODE the teaser is suppressed for pro/starter/paid plans and active trials (account plan + trial state, re-checked after the async account load). A paying or trialing hosted user never sees it.
+- Verified: 40 entitlement/catalog/route tests green incl. a JS-wiring guard; revert-proof: the new tests fail on the prior build.
+
 ### Release: auto-update ON by default for the supervised sync daemon + crash-loop rollback guard (#2939) (2026-06-09)
 - Why: the 2026-06-09 fleet audit found 92% of active nodes running daemons months behind the pinned cloud wheel (75% at 0.12.0-0.12.299 vs 0.12.493). Auto-update existed but was opt-in, so effectively nobody had it; every shipped fix reached almost nobody and the hosted dashboard rendered blank or stale cards against old snapshots, including for paying users.
 - `auto_update` now defaults ON, acting ONLY in the supervised sync-daemon process (launchd/systemd, role passed by `run_daemon`); the dashboard process keeps the explicit opt-in toggle. Rails: `CLAWMETRY_AUTO_UPDATE=0` hard kill switch, the existing 48h PyPI release-age stability window, and an unsupervised daemon installs the new wheel but defers its restart (never self-kills ingest with nothing to respawn it).
