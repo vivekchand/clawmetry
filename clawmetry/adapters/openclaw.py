@@ -126,24 +126,33 @@ def _model_router_fingerprint() -> dict:
 # starts exporting the catalog to the host (e.g. ~/.nemoclaw/skills/).
 
 
-def _scan_openclaw_selection_runtime() -> tuple[bool, bool]:
+def _scan_openclaw_selection_runtime() -> tuple[bool, bool, bool]:
     """Scan the pinned OpenClaw ``selection-*.js`` once and report whether
-    (a) the NemoClaw compact-catalog patch marker is present, and
-    (b) all three native tool-search symbols are present.
+    (a) the NemoClaw compact-catalog patch marker is present,
+    (b) the three base native tool-search symbols are present, and
+    (c) the two enforcement symbols (visibleAllowedToolNames /
+        replayAllowedToolNames) that distinguish a full-native build from a
+        basic-native one are present (#2877).
 
-    Returns ``(nemoclaw_patched, native_tool_search)``. Never raises.
+    Returns ``(nemoclaw_patched, native_base, native_enforcement)``. Never raises.
     """
     nemoclaw_marker = b"/* nemoclaw compact tool catalog (#2600) */"
-    # Mirror scripts/patch-openclaw-tool-catalog.js NATIVE_TOOL_SEARCH_PATTERNS:
-    # all three symbols must be present before the patch script considers the
-    # dist to already have a native tool-search build (#2732).
-    native_markers = (
+    # Mirror scripts/patch-openclaw-tool-catalog.js NATIVE_TOOL_SEARCH_PATTERNS
+    # entries 1-3: catalog infrastructure symbols (#2732).
+    native_base_markers = (
         b"applyToolSearchCatalog",
         b"buildToolSearchRunPlan",
         b"uncompactedEffectiveTools",
     )
+    # Entries 4-5: enforcement signals added by the harness (#2877). Both must
+    # be present to confirm the build actively enforces visible/replay allow-lists.
+    native_enforcement_markers = (
+        b"visibleAllowedToolNames",
+        b"replayAllowedToolNames",
+    )
     patched = False
-    native = False
+    native_base = False
+    native_enforcement = False
     try:
         home = os.environ.get("OPENCLAW_HOME") or os.path.expanduser("~/.openclaw")
         dist_dirs = [
@@ -170,15 +179,19 @@ def _scan_openclaw_selection_runtime() -> tuple[bool, bool]:
                     continue
                 if not patched and nemoclaw_marker in blob:
                     patched = True
-                if not native and all(m in blob for m in native_markers):
-                    native = True
-                if patched and native:
+                if not native_base and all(m in blob for m in native_base_markers):
+                    native_base = True
+                if native_base and not native_enforcement and all(
+                    m in blob for m in native_enforcement_markers
+                ):
+                    native_enforcement = True
+                if patched and native_base and native_enforcement:
                     break
-            if patched and native:
+            if patched and native_base and native_enforcement:
                 break
     except Exception:
-        return patched, native
-    return patched, native
+        return patched, native_base, native_enforcement
+    return patched, native_base, native_enforcement
 
 
 def _nemoclaw_tool_catalog_state() -> Optional[bool]:
@@ -198,7 +211,7 @@ def _nemoclaw_tool_catalog_state() -> Optional[bool]:
     catalog state that doesn't exist. Never raises.
     """
     env = os.environ.get("NEMOCLAW_TOOL_CATALOG")
-    patched, _native = _scan_openclaw_selection_runtime()
+    patched, _native, _native_enf = _scan_openclaw_selection_runtime()
     if not patched and env is None:
         # No NemoClaw signal at all -> don't claim a catalog state.
         return None
@@ -207,24 +220,27 @@ def _nemoclaw_tool_catalog_state() -> Optional[bool]:
 
 
 def _openclaw_tool_catalog_kind() -> Optional[str]:
-    """Provenance of the active OpenClaw tool-catalog mechanism, if any (#2732).
+    """Provenance of the active OpenClaw tool-catalog mechanism, if any (#2732, #2877).
 
     Returns:
         ``"nemoclaw"`` when the NemoClaw compact-catalog patch is applied
         (matches ``_nemoclaw_tool_catalog_state() is True``).
-        ``"native"`` when the dist ships native ``applyToolSearchCatalog`` /
-        ``buildToolSearchRunPlan`` / ``uncompactedEffectiveTools`` symbols and
-        the NemoClaw patch was skipped — previously indistinguishable from
-        "no catalog at all".
+        ``"native-full"`` when all five NATIVE_TOOL_SEARCH_PATTERNS are present:
+        the three base infrastructure symbols plus ``visibleAllowedToolNames`` /
+        ``replayAllowedToolNames`` (enforcement-active build).
+        ``"native"`` when only the three base infrastructure symbols are present
+        (catalog infrastructure present, enforcement inactive).
         ``None`` when neither signal is present.
 
     The NemoClaw patch wins over native detection: when both fire (e.g. a
     forward-port window) the patched wrapper is what's actually intercepting
     catalog calls. Never raises.
     """
-    patched, native = _scan_openclaw_selection_runtime()
+    patched, native, native_enforcement = _scan_openclaw_selection_runtime()
     if patched:
         return "nemoclaw"
+    if native_enforcement:
+        return "native-full"
     if native:
         return "native"
     return None
