@@ -101,7 +101,7 @@ jobs:
               {
                   "id": "ev-user", "type": "message",
                   "timestamp": ts(550), "workspace": "ws-golden",
-                  "role": "user", "text": "Golden Path E2E",
+                  "role": "user", "content": "Golden Path E2E",
               },
               {
                   "id": "ev-tool", "type": "tool_call",
