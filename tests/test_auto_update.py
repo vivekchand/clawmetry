@@ -1,6 +1,7 @@
-"""Opt-in auto-update: the background update-check worker installs a newer
-release automatically only when the `auto_update` config is on, and never
-re-triggers pip once a restart is already pending.
+"""Auto-update gating: default ON for the supervised sync-daemon role
+(0.12.494+), opt-in for the dashboard role; never re-triggers pip once a
+restart is pending; honours the CLAWMETRY_AUTO_UPDATE kill switch and the
+release-age stability rail.
 
 The upgrade itself goes through the same vetted path as the manual "Update
 now" button (routes.meta.perform_self_update), which is mocked here — these
@@ -16,11 +17,20 @@ def _uc():
     return importlib.reload(uc)
 
 
-def _mock_self_update(monkeypatch, calls, ok=True):
+def _as_daemon(uc, monkeypatch):
+    """Run the checker as the supervised sync daemon (the default-on role)."""
+    monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
+    uc._process_role = "daemon"
+    monkeypatch.setattr(uc, "_daemon_supervised", lambda: True)
+
+
+def _mock_self_update(monkeypatch, calls, ok=True, restarts=None):
     import routes.meta as meta
 
-    def _fake(reason="manual"):
+    def _fake(reason="manual", restart=True):
         calls.append(reason)
+        if restarts is not None:
+            restarts.append(restart)
         return ({"ok": ok, "old_version": "0.12.1", "new_version": "0.12.2"},
                 200 if ok else 500)
 
@@ -29,6 +39,7 @@ def _mock_self_update(monkeypatch, calls, ok=True):
 
 def test_auto_update_off_does_not_upgrade(monkeypatch):
     uc = _uc()
+    _as_daemon(uc, monkeypatch)
     monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": False})
     calls = []
     _mock_self_update(monkeypatch, calls)
@@ -38,6 +49,7 @@ def test_auto_update_off_does_not_upgrade(monkeypatch):
 
 def test_auto_update_on_upgrades_once(monkeypatch):
     uc = _uc()
+    _as_daemon(uc, monkeypatch)
     monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
     calls = []
     _mock_self_update(monkeypatch, calls)
@@ -50,6 +62,7 @@ def test_auto_update_on_upgrades_once(monkeypatch):
 
 def test_auto_update_failure_allows_retry(monkeypatch):
     uc = _uc()
+    _as_daemon(uc, monkeypatch)
     monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
     calls = []
     _mock_self_update(monkeypatch, calls, ok=False)
@@ -74,6 +87,7 @@ def test_auto_update_in_allowed_config_keys(monkeypatch):
 
 def test_auto_update_holds_fresh_release(monkeypatch):
     uc = _uc()
+    _as_daemon(uc, monkeypatch)
     calls = []
     _mock_self_update(monkeypatch, calls)
     monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
@@ -88,11 +102,96 @@ def test_auto_update_holds_fresh_release(monkeypatch):
 
 def test_auto_update_unknown_age_does_not_block(monkeypatch):
     uc = _uc()
+    _as_daemon(uc, monkeypatch)
     calls = []
     _mock_self_update(monkeypatch, calls)
     monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
     uc._maybe_auto_update("0.12.1", "0.12.2", age_hours=None)
     assert calls == ["auto"], "unknown age must not block (back-compat)"
+
+
+# ── Default-on policy + rails (0.12.494) ────────────────────────────────────
+
+
+def test_auto_update_default_is_on(monkeypatch):
+    """REGRESSION GUARD for the 2026-06-09 stale-fleet audit: with no stored
+    config at all, auto_update must default to True. (Fails on the old
+    opt-in default — that default left 92% of active nodes months stale.)"""
+    uc = _uc()
+    # Empty config store: every read falls through to the defaults dict.
+    monkeypatch.setattr(uc, "_get_fleet_db_lock", lambda: __import__("threading").Lock())
+
+    class _EmptyDb:
+        def execute(self, *a, **k):
+            class _R:
+                def fetchall(self):
+                    return []
+
+                def fetchone(self):
+                    return None
+            return _R()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(uc, "_get_fleet_db", lambda: _EmptyDb())
+    assert uc._get_update_check_config()["auto_update"] is True
+
+
+def test_env_kill_switch_blocks_auto_update(monkeypatch):
+    uc = _uc()
+    _as_daemon(uc, monkeypatch)
+    monkeypatch.setenv("CLAWMETRY_AUTO_UPDATE", "0")
+    monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
+    calls = []
+    _mock_self_update(monkeypatch, calls)
+    uc._maybe_auto_update("0.12.1", "0.12.2", age_hours=999)
+    assert calls == [], "CLAWMETRY_AUTO_UPDATE=0 must hard-disable auto-update"
+
+
+def test_dashboard_role_requires_explicit_opt_in(monkeypatch):
+    """The default-on policy is daemon-only: a dashboard process (often a
+    foreground terminal) must not pip-install + exit on the DEFAULT."""
+    uc = _uc()
+    monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
+    assert uc._process_role == "dashboard"  # reload resets the role
+    monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
+    calls = []
+    _mock_self_update(monkeypatch, calls)
+    # Default True but NOT explicitly stored → dashboard must not act.
+    monkeypatch.setattr(uc, "_auto_update_explicitly_set", lambda: False)
+    uc._maybe_auto_update("0.12.1", "0.12.2", age_hours=999)
+    assert calls == [], "dashboard role must ignore the default-on policy"
+    # Explicit user opt-in → dashboard acts (pre-existing behaviour kept).
+    monkeypatch.setattr(uc, "_auto_update_explicitly_set", lambda: True)
+    uc._maybe_auto_update("0.12.1", "0.12.2", age_hours=999)
+    assert calls == ["auto"], "explicit opt-in must still work in the dashboard"
+
+
+def test_unsupervised_daemon_defers_restart(monkeypatch):
+    """A daemon with no launchd/systemd supervisor installs the new wheel but
+    must NOT exit (nothing would respawn it → ingest stops)."""
+    uc = _uc()
+    monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
+    uc._process_role = "daemon"
+    monkeypatch.setattr(uc, "_daemon_supervised", lambda: False)
+    monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
+    calls, restarts = [], []
+    _mock_self_update(monkeypatch, calls, restarts=restarts)
+    uc._maybe_auto_update("0.12.1", "0.12.2", age_hours=999)
+    assert calls == ["auto"]
+    assert restarts == [False], "unsupervised daemon must defer the restart"
+
+
+def test_supervised_daemon_restarts(monkeypatch):
+    uc = _uc()
+    _as_daemon(uc, monkeypatch)
+    monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
+    calls, restarts = [], []
+    _mock_self_update(monkeypatch, calls, restarts=restarts)
+    uc._maybe_auto_update("0.12.1", "0.12.2", age_hours=999)
+    assert calls == ["auto"]
+    assert restarts == [True], "supervised daemon restarts to apply the wheel"
 
 
 def test_entitled_plan_enables_auto_update(monkeypatch):

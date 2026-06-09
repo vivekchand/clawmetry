@@ -12,6 +12,7 @@ Blueprint: bp_update_check
 import json
 import logging
 import os
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -26,7 +27,57 @@ bp_update_check = Blueprint("update_check", __name__)
 _update_check_thread = None
 _update_check_stop_event = threading.Event()
 
+# Which process this checker runs in: "dashboard" (default) or "daemon" (the
+# supervised sync daemon, set via start_update_check_thread(role="daemon")).
+# Default-on auto-update applies ONLY to the daemon role — the always-on,
+# launchd/systemd-supervised process where a restart is safe and invisible.
+# A dashboard process (often a foreground terminal) auto-installs only when
+# the user EXPLICITLY opted in via the settings toggle.
+_process_role = "dashboard"
+
 CHANGELOG_URL = "https://github.com/vivekchand/clawmetry/blob/main/CHANGELOG.md"
+
+
+def _env_auto_update_disabled():
+    """Kill switch: ``CLAWMETRY_AUTO_UPDATE=0`` disables unattended upgrades
+    regardless of the stored config (fleet operators / CI / debugging)."""
+    val = os.environ.get("CLAWMETRY_AUTO_UPDATE", "").strip().lower()
+    return val in ("0", "false", "no", "off")
+
+
+def _auto_update_explicitly_set():
+    """True when an ``auto_update`` row exists in the config table — i.e. a
+    user (or the entitled-plan sync) chose a value, as opposed to the
+    built-in default."""
+    try:
+        with _get_fleet_db_lock():
+            db = _get_fleet_db()
+            row = db.execute(
+                "SELECT value FROM update_check_config WHERE key='auto_update'"
+            ).fetchone()
+            db.close()
+        return row is not None
+    except Exception:
+        return False
+
+
+def _daemon_supervised():
+    """Best-effort: is the sync daemon under a supervisor that respawns it
+    (launchd KeepAlive / systemd Restart=always)? When it is not, exiting to
+    'restart' would just kill the daemon — so the auto-updater installs the
+    new wheel but defers the restart to the next manual start."""
+    try:
+        from pathlib import Path
+        if sys.platform == "darwin":
+            return (Path.home() / "Library" / "LaunchAgents"
+                    / "com.clawmetry.sync.plist").exists()
+        if sys.platform.startswith("linux"):
+            unit = (Path.home() / ".config" / "systemd" / "user"
+                    / "clawmetry-sync.service")
+            return unit.exists() or bool(os.environ.get("INVOCATION_ID"))
+    except Exception:
+        pass
+    return False
 
 
 def _live_current_version() -> str:
@@ -93,10 +144,17 @@ def _get_update_check_config():
         "enabled": True,
         "check_on_startup": True,
         "check_daily": True,
-        # Opt-in: when on, a detected newer release is installed automatically
-        # by the background worker (no click needed). Off by default — auto
-        # pip-install + restart is something the user explicitly turns on.
-        "auto_update": False,
+        # Default ON (since 0.12.494): a detected newer release is installed
+        # automatically by the background worker. Rails: only the supervised
+        # sync-daemon process acts on the default (see _maybe_auto_update),
+        # releases must age CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS (48h) on PyPI
+        # first, CLAWMETRY_AUTO_UPDATE=0 is a hard kill switch, and the boot
+        # guard (clawmetry/update_guard.py) rolls back a crash-looping wheel.
+        # WHY default-on: 92% of active nodes were found running months-stale
+        # daemons (2026-06-09 fleet audit) — every shipped fix reached almost
+        # nobody, and the hosted dashboard rendered blank cards against old
+        # snapshots. An observability sidecar must keep itself current.
+        "auto_update": True,
         "dismissed_version": "",
         "last_check_at": 0,
     }
@@ -245,9 +303,10 @@ def _check_for_update():
     except Exception:
         _age_h = None
 
-    # Auto-update: if the user opted in, install the newer release now (no
-    # click). Runs in the always-on dashboard server process, so it works
-    # with no browser open. Guarded so a pending restart isn't re-triggered.
+    # Auto-update: install the newer release unattended (default-on for the
+    # supervised sync daemon; opt-in for the dashboard process — see
+    # _maybe_auto_update for the full rail set). Guarded so a pending
+    # restart isn't re-triggered.
     if update_available:
         try:
             _maybe_auto_update(current, latest, _age_h)
@@ -280,8 +339,16 @@ def _maybe_auto_update(current, latest, age_hours=None):
     global _auto_update_in_progress
     if _auto_update_in_progress:
         return
+    if _env_auto_update_disabled():
+        log.info("auto-update: disabled via CLAWMETRY_AUTO_UPDATE env")
+        return
     cfg = _get_update_check_config()
     if not cfg.get("auto_update"):
+        return
+    # The default-on policy applies only to the supervised sync daemon. A
+    # dashboard process (frequently a foreground terminal session) must not
+    # pip-install + exit underneath the user unless they explicitly opted in.
+    if _process_role != "daemon" and not _auto_update_explicitly_set():
         return
     try:
         import os as _os
@@ -292,11 +359,19 @@ def _maybe_auto_update(current, latest, age_hours=None):
         log.info("auto-update: holding v%s (released %.1fh ago < %.0fh stability "
                  "window) — will install once it ages in", latest, age_hours, _min_age)
         return
+    # An UNSUPERVISED daemon (no launchd plist / systemd unit — e.g. a manual
+    # `python -m clawmetry.sync` or Windows) still installs the new wheel but
+    # keeps running: exiting would stop ingest with nothing to respawn it.
+    # The new version applies on its next start.
+    restart = True
+    if _process_role == "daemon" and not _daemon_supervised():
+        restart = False
     _auto_update_in_progress = True
-    log.info("auto-update: opted in — upgrading clawmetry v%s -> v%s", current, latest)
+    log.info("auto-update: upgrading clawmetry v%s -> v%s (restart=%s)",
+             current, latest, restart)
     try:
         from routes.meta import perform_self_update
-        payload, _status = perform_self_update(reason="auto")
+        payload, _status = perform_self_update(reason="auto", restart=restart)
         if not (isinstance(payload, dict) and payload.get("ok")):
             log.warning("auto-update: upgrade failed, will retry next check: %s", payload)
             _auto_update_in_progress = False  # allow retry; no restart was scheduled
@@ -332,9 +407,17 @@ def _update_check_worker(stop_event):
         stop_event.wait(3600)
 
 
-def start_update_check_thread():
-    """Start the background update check thread."""
-    global _update_check_thread, _update_check_stop_event
+def start_update_check_thread(role=None):
+    """Start the background update check thread.
+
+    ``role="daemon"`` marks this process as the supervised sync daemon, the
+    only role where default-on auto-update acts (see ``_maybe_auto_update``).
+    The dashboard calls this with no argument and keeps the opt-in behaviour.
+    """
+    global _update_check_thread, _update_check_stop_event, _process_role
+
+    if role:
+        _process_role = str(role)
 
     if _update_check_thread is not None and _update_check_thread.is_alive():
         return
