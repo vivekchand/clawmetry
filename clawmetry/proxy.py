@@ -1,1 +1,1 @@
-"""\nClawMetry Proxy — opt-in enforcement layer between OpenClaw and LLM providers.
+python3 -c "import sys; sys.path.insert(0, '/tmp'); from proxy_content_module import CONTENT; print(CONTENT, end='')" | cat
