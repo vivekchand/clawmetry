@@ -1,5 +1,4 @@
-"""
-OSS all-tabs post-auth gate (E2E criterion C5).
+"""OSS all-tabs post-auth gate (E2E criterion C5).
 
 Verifies that every canonical dashboard tab renders without an auth overlay
 when the gateway token is correctly passed. Acceptance gate for:
@@ -53,9 +52,17 @@ def _overlay_page(_shared_chromium):
     ctx.close()
 
 # Canonical tabs that must load without auth overlay post-login.
-# Matches PR_SCREENSHOT_TABS in .github/workflows/pr-screenshots.yml
-# so the Playwright gate covers the same surface as the visual-diff workflow.
+#
+# These are all tabs that have a template file in clawmetry/templates/tabs/
+# or are served by a dedicated route module (e.g. channels via routes/channels.py).
+# Kept in sync with the filesystem: if a new tab template is added, add the
+# switchTab() identifier here so the post-auth sweep covers it immediately.
+#
+# The test only checks that none of the four auth-blocking overlay IDs are
+# visible -- it does NOT require data to be present. Pro/enterprise gating
+# overlays use distinct IDs and will not cause false failures here.
 CANONICAL_TABS = [
+    # Core dashboard
     "overview",
     "flow",
     "brain",
@@ -65,6 +72,7 @@ CANONICAL_TABS = [
     "security",
     "subagents",
     "transcripts",
+    # Infrastructure / ops
     "logs",
     "skills",
     "models",
@@ -75,6 +83,21 @@ CANONICAL_TABS = [
     "limits",
     "clusters",
     "history",
+    # Tabs added after initial C5 coverage -- verified present in
+    # clawmetry/templates/tabs/ or routes/ as of 2026-06-09.
+    "channels",          # routes/channels.py: 21 chat-channel adapters
+    "dives",             # dives.html / dives.js: session deep-dive feature
+    "harness",           # harness.html: harness observability
+    "inventory",         # inventory.html: tool/resource inventory
+    "nemoclaw",          # nemoclaw.html: NeMo Guardrails governance
+    "policy",            # policy.html: policy management
+    "selfevolve",        # selfevolve.html: self-evolve feature
+    "swimlane",          # swimlane.html: swimlane visualization
+    "tool-catalog",      # tool-catalog.html: tool catalog
+    "tracing",           # tracing.html: OpenTelemetry tracing view
+    "turn-anatomy",      # turn-anatomy.html: turn anatomy analysis
+    "version-impact",    # version-impact.html: version impact view
+    "context-economics", # context-economics.html: context economics
 ]
 
 # Overlay element IDs that signal the auth overlay is blocking the UI.
