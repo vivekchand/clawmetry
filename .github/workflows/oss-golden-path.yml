@@ -99,6 +99,11 @@ jobs:
                   "title": "Golden Path E2E",
               },
               {
+                  "id": "ev-user", "type": "message",
+                  "timestamp": ts(550), "workspace": "ws-golden",
+                  "role": "user", "text": "Golden Path E2E",
+              },
+              {
                   "id": "ev-tool", "type": "tool_call",
                   "timestamp": ts(500), "workspace": "ws-golden",
                   "tool": "Bash", "args": {"cmd": "echo hello"}, "result": "hello",
