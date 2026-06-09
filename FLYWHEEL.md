@@ -159,6 +159,21 @@ Gotchas that have burned us:
 - **Restart BOTH** the dashboard and the sync daemon after an upgrade — the daemon keeps the old wheel in memory otherwise.
 - When you claim "works locally," confirm you're testing **repo HEAD on a known port**, not a stale long-running server.
 
+### Ruthless-verify non-negotiables (family-wide rule, synced across all repos)
+We ship many products and many features now; "it has tests" is not "it is tested." Hold this bar on
+EVERY change:
+- **Every fix ships the guard that catches it, in the SAME PR**, and you prove the guard fails on the
+  un-fixed code (revert → red → restore → green). A fix without a regression test/guard is half-done.
+- **Update tests as fixes/features land** — never "fix and move on." Prefer guards that AUTO-DISCOVER
+  their scope over hand-maintained allowlists, which silently drift (a cloud inline-JS allowlist missed
+  the /pair page → a JS SyntaxError shipped; the firmware had no stack-size guard → three stack-overflow
+  crashes shipped — both now closed with auto/compile-time guards + revert-proofs, 2026-06-09).
+- **Build-clean / green-CI ≠ works.** Verify the real behaviour end-to-end (decrypt the live snapshot;
+  render the tab in a browser; flash + see it on the device). The worst regressions this session all
+  passed their builds and shipped anyway.
+- **Audit the whole class, not the one instance.** Fixing one JS-string escape, one stack frame, one
+  stale title doesn't fix its siblings — grep the class and verify the family.
+
 ## 4. PR → green CI → merge
 
 ```bash
