@@ -245,7 +245,7 @@ def _extract_model_from_body(body_bytes: bytes, url: str) -> str | None:
 
 def _extract_tokens_from_response(body_bytes: bytes, provider: str) -> dict[str, int]:
     """Extract input/output token counts from response body."""
-    result = {"input_tokens": 0, "output_tokens": 0}
+    result = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
     if not body_bytes:
         return result
     try:
@@ -255,6 +255,12 @@ def _extract_tokens_from_response(body_bytes: bytes, provider: str) -> dict[str,
             usage = body.get("usage", {})
             result["input_tokens"] = usage.get("input_tokens", 0)
             result["output_tokens"] = usage.get("output_tokens", 0)
+            result["reasoning_tokens"] = int(
+                usage.get("thinking_tokens")
+                or usage.get("reasoning_tokens")
+                or usage.get("thinking_input_tokens")
+                or 0
+            )
 
         elif provider in ("openai", "openrouter"):
             usage = body.get("usage", {})
@@ -311,6 +317,7 @@ def _build_event(
     latency_ms: float,
     status_code: int,
     library: str,
+    reasoning_tokens: int = 0,
 ) -> dict[str, Any]:
     """Build the event dict to write to JSONL."""
     cost = _estimate_cost(model or "", input_tokens, output_tokens)
@@ -330,6 +337,8 @@ def _build_event(
         event["model"] = model
     if cost is not None:
         event["cost_usd"] = cost
+    if reasoning_tokens:
+        event["reasoning_tokens"] = reasoning_tokens
     src = _get_source()
     if src:
         event["source"] = src
@@ -421,6 +430,7 @@ def _patch_httpx() -> bool:
                 model=final_model,
                 input_tokens=tokens["input_tokens"],
                 output_tokens=tokens["output_tokens"],
+                reasoning_tokens=tokens["reasoning_tokens"],
                 latency_ms=latency_ms,
                 status_code=response.status_code,
                 library="httpx",
@@ -482,6 +492,7 @@ def _patch_httpx() -> bool:
                     model=final_model,
                     input_tokens=tokens["input_tokens"],
                     output_tokens=tokens["output_tokens"],
+                    reasoning_tokens=tokens["reasoning_tokens"],
                     latency_ms=latency_ms,
                     status_code=response.status_code,
                     library="httpx.async",
@@ -568,6 +579,7 @@ def _patch_requests() -> bool:
                 model=final_model,
                 input_tokens=tokens["input_tokens"],
                 output_tokens=tokens["output_tokens"],
+                reasoning_tokens=tokens["reasoning_tokens"],
                 latency_ms=latency_ms,
                 status_code=response.status_code,
                 library="requests",
