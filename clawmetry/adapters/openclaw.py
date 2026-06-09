@@ -406,6 +406,7 @@ class OpenClawAdapter(AgentAdapter):
                                     ("outputTokens", "output_tokens", "outputTokens"),
                                     ("cacheReadTokens", "cache_read_input_tokens", "cacheReadInputTokens", "cacheRead"),
                                     ("cacheWriteTokens", "cache_creation_input_tokens", "cacheCreationInputTokens", "cacheWrite"),
+                                    ("totalTokens", "totalTokens", "total_tokens"),
                                 ]:
                                     for k in keys:
                                         v = usage.get(k)
@@ -592,6 +593,7 @@ class OpenClawAdapter(AgentAdapter):
                 usage = msg.get("usage") or {}
                 tok_in = int(usage.get("input_tokens") or usage.get("inputTokens") or 0)
                 tok_out = int(usage.get("output_tokens") or usage.get("outputTokens") or 0)
+                tok_total = int(usage.get("totalTokens") or usage.get("total_tokens") or 0)
                 llm_sid = _sid("llm", session_id, str(raw_ts))
                 spans.append({
                     "span_id": llm_sid,
@@ -605,7 +607,7 @@ class OpenClawAdapter(AgentAdapter):
                     "model": model or None,
                     "tokens_input": tok_in or None,
                     "tokens_output": tok_out or None,
-                    "token_count": (tok_in + tok_out) or None,
+                    "token_count": (tok_total if tok_total > (tok_in + tok_out) else (tok_in + tok_out)) or None,
                 })
                 if isinstance(content, list):
                     for block in content:
