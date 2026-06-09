@@ -3145,7 +3145,7 @@ def _try_local_store_cost_breakdown():
         intel = {}
         for mr in meta_rows:
             md = mr.get("metadata") or {}
-            if isinstance(md, dict) and any(md.get(k) is not None for k in ("reasoningCostUsd", "cacheHitPct", "toolErrorPct", "compactionCount", "cacheExpiryCount", "compressionPotentialPct", "compressionRecoverableUsd")):
+            if isinstance(md, dict) and any(md.get(k) is not None for k in ("reasoningCostUsd", "cacheHitPct", "toolErrorPct", "compactionCount", "cacheExpiryCount", "compressionPotentialPct", "compressionRecoverableUsd", "cacheWriteCostUsd", "cacheSavedUsd", "maxIdleGapSec")):
                 intel[mr.get("session_id") or ""] = md
         if intel:
             for row in result:
@@ -3168,6 +3168,12 @@ def _try_local_store_cost_breakdown():
                     row["compressible_tool_tokens"] = md["compressibleToolTokens"]
                 if md.get("compressionRecoverableUsd") is not None:
                     row["compression_recoverable_usd"] = md["compressionRecoverableUsd"]
+                if md.get("cacheWriteCostUsd") is not None:
+                    row["cache_write_cost_usd"] = md["cacheWriteCostUsd"]
+                if md.get("cacheSavedUsd") is not None:
+                    row["cache_saved_usd"] = md["cacheSavedUsd"]
+                if md.get("maxIdleGapSec") is not None:
+                    row["max_idle_gap_sec"] = md["maxIdleGapSec"]
     except Exception:
         pass
     # Cache-hit % (for the event-usage runtimes: OpenClaw / Claude Code) + the
