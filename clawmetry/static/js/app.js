@@ -8813,18 +8813,41 @@ function _cmDismissRtPaywall() {
 }
 
 async function _cmLoadRuntimeCatalog() {
-  // Read the entitlement-aware runtime catalog (Phase 5 open-core). In grace
-  // mode (the default) nothing is locked, so _cmLockedRuntimes stays {} and
-  // the switcher behaves exactly as it did before this endpoint existed.
-  // Once enforcement is on, the locked paid runtimes appear in the dropdown
-  // with a 🔒 affordance regardless of session count.
+  // Read the entitlement-aware runtime catalog (Phase 5 open-core).
+  // Two ways a runtime earns the lock affordance in the dropdown:
+  //   1. enforced && locked: the original paywall semantics.
+  //   2. !entitled (grace teaser, cloud#1532): the plan does not include the
+  //      runtime, so even though grace "allows" it, its data is never
+  //      ingested (the pro adapter only provisions for entitled accounts).
+  //      Showing it locked is both the honest state AND the conversion
+  //      surface; picking it opens the non-blocking two-path card.
+  // Cloud guard: the hosted server resolves entitlement as OSS-free, so in
+  // CLOUD_MODE trust the account plan/trial instead. A paying or trialing
+  // hosted user must never see the teaser. Re-checked once after 4s because
+  // window._account loads async.
   try {
     var cat = await fetch('/api/runtimes', { credentials: 'same-origin' }).then(function(r) { return r.json(); });
-    if (!cat || !cat.enforced || !Array.isArray(cat.runtimes)) return;
+    if (!cat || !Array.isArray(cat.runtimes)) return;
+    var teaserOk = true;
+    try {
+      if (window.CLOUD_MODE) {
+        var plan = String(window.CLOUD_PLAN || '').toLowerCase();
+        var acct = window._account || {};
+        teaserOk = !(/pro|starter|paid/.test(plan) || acct.trial_active);
+      }
+    } catch (e) { teaserOk = false; }
     var locked = {};
-    cat.runtimes.forEach(function(r) { if (r && r.locked && r.id) locked[r.id] = 1; });
+    cat.runtimes.forEach(function(r) {
+      if (!r || !r.id) return;
+      if ((cat.enforced && r.locked) ||
+          (teaserOk && r.free === false && r.entitled === false)) locked[r.id] = 1;
+    });
     _cmLockedRuntimes = locked;
-  } catch (e) { /* non-fatal — grace mode keeps the previous behaviour */ }
+    if (window.CLOUD_MODE && !window._cmRtCatalogRecheck) {
+      window._cmRtCatalogRecheck = 1;
+      setTimeout(_cmLoadRuntimeCatalog, 4000);
+    }
+  } catch (e) { /* non-fatal: keeps the previous behaviour */ }
 }
 
 async function _cmInitGlobalRuntimeSwitcher() {
