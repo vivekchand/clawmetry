@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Release: runtime paywall shows the real plan ladder (#2945) (2026-06-09)
+- The "Two ways to observe X" card asked users to start a trial without ever saying what the plans are. The modal now mirrors the live clawmetry.com/pricing ladder: Free $0 forever (OpenClaw + NemoClaw), Starter $9/node/mo (every supported runtime, 7-day free trial, no card), Pro $29/node/mo (alerts, budgets, loop detection, fleet), with a footnote that annual plans include the desk device and that self-hosted uses the same plans with a license key (link to /pricing).
+- Prices live in one `_cmPlanPrices` object so a reprice is a one-line change. Trial CTA and paywall telemetry wiring unchanged; guard tests assert tiers, the self-hosted mention, the pricing link, and the no-em-dash copy rule.
+
 ### Release: locked-runtime upgrade affordance renders in grace mode (#2942) (2026-06-09)
 - The conversion surface was dead: grace mode reported every paid runtime as allowed, so the runtime switcher's lock affordance and the two-path upgrade card never rendered for anyone (12 paywall views in 30 days fleet-wide), even though an unentitled account's paid-runtime data is never ingested anyway (the pro adapter only auto-provisions for entitled accounts). "Allowed by grace" was indistinguishable from "silently broken".
 - New grace-independent `Entitlement.entitled_runtime()` plus an `entitled` flag on every `runtime_catalog()` entry; `allowed`/`locked` enforcement semantics are unchanged. The catalog loader now marks paid, unentitled runtimes with the lock affordance even in grace; selecting one opens the existing non-blocking two-path card, and runtimes detected on the machine keep the "running here" label.
