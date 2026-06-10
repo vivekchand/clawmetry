@@ -6632,10 +6632,10 @@ def send_heartbeat(config: dict) -> bool:
             payload["billing"] = _billing
     except Exception as _bm_e:
         log.debug("billing-mode detection failed (continuing): %s", _bm_e)
-    # Daemon-collected snapshots (see _collect_security_posture docstring)
-    sec = _collect_security_posture()
-    if sec is not None:
-        payload["security_posture"] = sec
+    # security_posture is a SCAN OF THE USER'S MACHINE; it must not ride the
+    # plaintext heartbeat (the cloud stored it in cleartext). It now travels in
+    # the E2E-encrypted system snapshot as `securityPosture` and renders
+    # client-side from the decrypted blob. See sync_system_snapshot().
     # Local-store health (epic #964 phase 1 → rollout gate for phase 2).
     # We need ≥80% of active nodes reporting healthy local stores before
     # slimming cloud retention to 24h. Best-effort; never blocks heartbeat.
@@ -14859,6 +14859,10 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # cloud can show a runtime chip without bloating the snapshot.
         "detectedRuntimes": _detected_runtimes,
         "machineInfo": _build_machine_info(),
+        # Security posture (a scan of the user's machine) rides the ENCRYPTED
+        # snapshot, never the plaintext heartbeat — the cloud stores only this
+        # opaque blob and the Security tab decrypts it client-side.
+        "securityPosture": _collect_security_posture(),
         "channelList": _build_channel_list(config),
         "ollamaInfo": _detect_ollama_for_heartbeat(),
         "firstRun": _build_first_run(),
