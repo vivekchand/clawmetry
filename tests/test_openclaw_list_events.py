@@ -399,3 +399,36 @@ def test_build_spans_prefers_total_tokens_for_reasoning_model():
     assert llm_spans[0]["token_count"] == 162, (
         "token_count must equal totalTokens (162), not tok_in+tok_out (50)"
     )
+
+
+def test_list_events_reasoning_tokens_sdk_camel_key(isolated_store):
+    """The SDK/camel ``reasoningTokens`` spelling is also accepted (#2876)."""
+    import uuid, time as _t
+    isolated_store.ingest({
+        "id": str(uuid.uuid4()),
+        "node_id": "agent+test-node",
+        "agent_id": "main",
+        "agent_type": "openclaw",
+        "session_id": "sess-THINK2",
+        "event_type": "model.completed",
+        "ts": _t.time(),
+        "model": "claude-opus-4-7",
+        "token_count": 90,
+        "data": {
+            "type": "assistant",
+            "message": {
+                "model": "claude-opus-4-7",
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                    "reasoningTokens": 75,
+                },
+            },
+        },
+    })
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess-THINK2")
+    assert len(events) == 1
+    assert events[0].extra.get("reasoningTokens") == 75

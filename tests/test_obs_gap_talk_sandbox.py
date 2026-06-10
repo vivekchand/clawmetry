@@ -151,6 +151,41 @@ def test_catalog_dispatch_span_unwraps_real_tool():
     assert by["tool_search"]["attributes"] == {"nemoclaw.catalog_guardrail": True}
 
 
+def test_llm_span_surfaces_reasoning_tokens():
+    """Extended-thinking turns add reasoning tokens to the llm.call span (#2876).
+
+    The assistant usage carries a thinking/reasoning token count separate from
+    input/output. The llm.call span must expose it via ``tokens_reasoning`` and
+    fold it into ``token_count`` so reasoning cost shows up in the Tracing tab.
+    """
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = [{"type": "message", "timestamp": "2026-06-05T00:00:00Z",
+               "message": {"role": "assistant", "model": "claude-opus-4-7",
+                           "content": [],
+                           "usage": {"input_tokens": 30, "output_tokens": 20,
+                                     "thinking_input_tokens": 120}}}]
+    spans = OpenClawAdapter._build_spans_from_events(events, "s1")
+    llm = next(s for s in spans if s["name"].startswith("llm.call"))
+    assert llm["tokens_input"] == 30
+    assert llm["tokens_output"] == 20
+    assert llm["tokens_reasoning"] == 120
+    # token_count folds in the reasoning share: 30 + 20 + 120.
+    assert llm["token_count"] == 170
+
+
+def test_llm_span_without_reasoning_tokens_omits_field():
+    """Non-thinking turns leave tokens_reasoning None and token_count unchanged."""
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = [{"type": "message", "timestamp": "2026-06-05T00:00:00Z",
+               "message": {"role": "assistant", "model": "claude-opus-4-7",
+                           "content": [],
+                           "usage": {"input_tokens": 30, "output_tokens": 20}}}]
+    spans = OpenClawAdapter._build_spans_from_events(events, "s1")
+    llm = next(s for s in spans if s["name"].startswith("llm.call"))
+    assert llm["tokens_reasoning"] is None
+    assert llm["token_count"] == 50
+
+
 # -- #2733 tool_result details fold-back -------------------------------------
 
 def test_tool_result_details_attach_to_originating_tool_span():
