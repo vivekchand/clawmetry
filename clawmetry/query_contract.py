@@ -180,25 +180,46 @@ QUERY_CONTRACT: dict = {
                 "Non-goal: no per-model data in glance."),
     },
     "runtimes": {
-        "status": STATUS_PLANNED,
+        # Live since #2988 (Query Spine P2): served from the materialized
+        # rollup_runtime_daily table, written incrementally at ingest.
+        "status": STATUS_LIVE,
         "args": {
             "since": _arg(),
             "until": _arg(),
+            "limit": _arg(default=1000, lo=1, hi=10000),
         },
         "trust": TRUST_PLAINTEXT,
-        "backing": "rollup_runtimes",
-        "doc": "Per-runtime activity/cost rollup (claude_code, openclaw, ...).",
+        "backing": "query_rollup_runtime_daily",
+        "doc": "Per-runtime daily activity/cost rollup (claude_code, openclaw, ...).",
     },
     "models": {
-        "status": STATUS_PLANNED,
+        # Live since #2988 (Query Spine P2): served from the materialized
+        # rollup_model_daily table, written incrementally at ingest.
+        "status": STATUS_LIVE,
         "args": {
             "runtime": _arg(),
             "since": _arg(),
             "until": _arg(),
+            "limit": _arg(default=1000, lo=1, hi=10000),
         },
         "trust": TRUST_PLAINTEXT,
-        "backing": "rollup_models",
-        "doc": "Per-model token/cost rollup across runtimes.",
+        "backing": "query_rollup_model_daily",
+        "doc": "Per-model daily token/cost rollup across runtimes.",
+    },
+    "rollup_sessions": {
+        # #2988: per-session materialized rollup (rollup_session table).
+        # Distinct from "sessions" (events-table GROUP BY) and "session"
+        # (planned single-session detail): this is the typed one-row-per-
+        # session summary the daemon maintains at ingest. Carries titles,
+        # so it is e2e-classed like every session/content method.
+        "status": STATUS_LIVE,
+        "args": {
+            "runtime": _arg(),
+            "limit": _arg(default=200, lo=1, hi=2000),
+        },
+        "trust": TRUST_E2E,
+        "backing": "query_rollup_sessions",
+        "doc": "Per-session materialized summary (title, status, totals, stuck flag).",
     },
     "usage": {
         "status": STATUS_PLANNED,
