@@ -750,8 +750,26 @@ def load_config() -> dict:
 
 def save_config(data: dict) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(data, indent=2))
-    CONFIG_FILE.chmod(0o600)
+    # config.json holds the api_key + encryption_key. Create it 0600 ATOMICALLY
+    # (O_CREAT|O_EXCL via a temp file, then os.replace) so there is never a
+    # window where it exists world-readable (write_text + a later chmod left a
+    # brief 0644 gap that another local user could read on a shared host).
+    payload = json.dumps(data, indent=2)
+    tmp = CONFIG_FILE.with_name(CONFIG_FILE.name + f".tmp.{os.getpid()}")
+    try:
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            os.write(fd, payload.encode("utf-8"))
+        finally:
+            os.close(fd)
+        os.replace(str(tmp), str(CONFIG_FILE))
+        CONFIG_FILE.chmod(0o600)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
 
 
 def load_state() -> dict:
@@ -4982,49 +5000,60 @@ def sync_voice_log_events(config: dict, state: dict, paths: dict) -> int:
 
 
 def sync_intercepted_events(config: dict, state: dict, paths: dict) -> int:
-    """Tail ~/.openclaw/clawmetry-intercepted.jsonl and ingest external_api_call
-    rows into the local DuckDB store. Uses a byte-offset cursor in state so
+    """Tail the interceptor's JSONL and ingest external_api_call rows into the
+    local DuckDB store. Reads ClawMetry's own ~/.clawmetry/intercepted.jsonl
+    plus the legacy ~/.openclaw/clawmetry-intercepted.jsonl (older interceptors
+    wrote into the agent workspace). Per-file byte-offset cursor in state so
     only new lines are read each tick. Returns the number of rows ingested."""
-    openclaw_dir = paths.get("openclaw_dir", str(Path.home() / ".openclaw"))
-    fpath = Path(openclaw_dir) / "clawmetry-intercepted.jsonl"
-    if not fpath.exists():
-        return 0
     node_id = config.get("node_id", "")
-    offset_key = "last_intercepted_offset"
-    offset = state.get(offset_key, 0)
+    cm_home = os.environ.get("CLAWMETRY_HOME", str(Path.home() / ".clawmetry"))
+    openclaw_dir = paths.get("openclaw_dir", str(Path.home() / ".openclaw"))
+    # The legacy file keeps its existing offset key so we never re-ingest it.
+    targets = [
+        (Path(cm_home) / "intercepted.jsonl", "last_intercepted_offset_cm"),
+        (Path(openclaw_dir) / "clawmetry-intercepted.jsonl", "last_intercepted_offset"),
+    ]
     ingested = 0
     try:
         from clawmetry import local_store as _ls
         store = _ls.get_store()
-        with open(fpath, "r", errors="replace") as f:
-            f.seek(0, 2)
-            size = f.tell()
-            if offset > size:
-                offset = 0
-            f.seek(offset)
-            for raw in f:
-                raw = raw.strip()
-                if not raw:
-                    continue
-                try:
-                    ev = json.loads(raw)
-                except Exception:
-                    continue
-                _evt = ev.get("type")
-                if _evt in ("external_api_call", "llm_call"):
-                    # llm_call carries cost/tokens/model + provider; normalise
-                    # provider→host so both event types share external_api_calls
-                    # (the out-loop card then shows real per-source $ spend).
-                    if _evt == "llm_call" and not ev.get("host"):
-                        ev["host"] = ev.get("provider") or ""
-                    try:
-                        store.ingest_external_call(ev, node_id)
-                        ingested += 1
-                    except Exception as _ie:
-                        log.debug("ingest_external_call failed: %s", _ie)
-            state[offset_key] = f.tell()
     except Exception as e:
-        log.warning("sync_intercepted_events error: %s", e)
+        log.warning("sync_intercepted_events store error: %s", e)
+        return 0
+    for fpath, offset_key in targets:
+        if not fpath.exists():
+            continue
+        offset = state.get(offset_key, 0)
+        try:
+            with open(fpath, "r", errors="replace") as f:
+                f.seek(0, 2)
+                size = f.tell()
+                if offset > size:
+                    offset = 0
+                f.seek(offset)
+                for raw in f:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        ev = json.loads(raw)
+                    except Exception:
+                        continue
+                    _evt = ev.get("type")
+                    if _evt in ("external_api_call", "llm_call"):
+                        # llm_call carries cost/tokens/model + provider; normalise
+                        # provider→host so both event types share external_api_calls
+                        # (the out-loop card then shows real per-source $ spend).
+                        if _evt == "llm_call" and not ev.get("host"):
+                            ev["host"] = ev.get("provider") or ""
+                        try:
+                            store.ingest_external_call(ev, node_id)
+                            ingested += 1
+                        except Exception as _ie:
+                            log.debug("ingest_external_call failed: %s", _ie)
+                state[offset_key] = f.tell()
+        except Exception as e:
+            log.warning("sync_intercepted_events error (%s): %s", fpath, e)
     return ingested
 
 
