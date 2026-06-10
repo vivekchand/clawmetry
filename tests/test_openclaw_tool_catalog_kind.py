@@ -38,6 +38,12 @@ PARTIAL_NATIVE_BLOB = (
     b"export function applyToolSearchCatalog(){}\n"
     b"export function buildToolSearchRunPlan(){}\n"
 )
+ENFORCEMENT_ONLY_BLOB = (
+    # Enforcement symbols without the catalog infrastructure -> NOT native.
+    # Enforcement only counts when it builds on the native catalog symbols.
+    b"toolSearchRunPlan.visibleAllowedToolNames\n"
+    b"toolSearchRunPlan.replayAllowedToolNames\n"
+)
 
 
 def _make_dist(tmp_path, blob: bytes, filename: str = "selection-abc.js"):
@@ -80,8 +86,46 @@ def test_full_native_enforcement_build_detected(monkeypatch, tmp_path):
     assert oc._openclaw_tool_catalog_kind() == "native-full"
 
 
+def test_full_native_build_scan_returns_enforcement_flag(monkeypatch, tmp_path):
+    # All 5 NATIVE_TOOL_SEARCH_PATTERNS: scan must return native=True, enforcement=True.
+    home = _make_dist(tmp_path, FULL_NATIVE_BLOB)
+    monkeypatch.setenv("OPENCLAW_HOME", str(home))
+    assert oc._openclaw_tool_catalog_kind() == "native-full"
+    _patched, native, enforcement = oc._scan_openclaw_selection_runtime()
+    assert native is True
+    assert enforcement is True
+
+
+def test_basic_native_build_is_not_enforced(monkeypatch, tmp_path):
+    # 3 infrastructure symbols only -> native but enforcement absent.
+    home = _make_dist(tmp_path, NATIVE_BLOB)
+    monkeypatch.setenv("OPENCLAW_HOME", str(home))
+    assert oc._openclaw_tool_catalog_kind() == "native"
+    _patched, native, enforcement = oc._scan_openclaw_selection_runtime()
+    assert native is True
+    assert enforcement is False
+
+
+def test_enforcement_symbols_without_infrastructure_not_native(monkeypatch, tmp_path):
+    # Stray allow-list symbols with no catalog build -> no native signal.
+    home = _make_dist(tmp_path, ENFORCEMENT_ONLY_BLOB)
+    monkeypatch.setenv("OPENCLAW_HOME", str(home))
+    assert oc._openclaw_tool_catalog_kind() is None
+    _patched, native, enforcement = oc._scan_openclaw_selection_runtime()
+    assert native is False
+    assert enforcement is False
+
+
 def test_nemoclaw_patch_wins_over_native(monkeypatch, tmp_path):
     home = _make_dist(tmp_path, PATCH_MARKER + NATIVE_BLOB)
+    monkeypatch.setenv("OPENCLAW_HOME", str(home))
+    assert oc._nemoclaw_tool_catalog_state() is True
+    assert oc._openclaw_tool_catalog_kind() == "nemoclaw"
+
+
+def test_nemoclaw_patch_wins_over_full_native(monkeypatch, tmp_path):
+    # NemoClaw patch still wins even over a full-native (enforcement-active) build.
+    home = _make_dist(tmp_path, PATCH_MARKER + FULL_NATIVE_BLOB)
     monkeypatch.setenv("OPENCLAW_HOME", str(home))
     assert oc._nemoclaw_tool_catalog_state() is True
     assert oc._openclaw_tool_catalog_kind() == "nemoclaw"
