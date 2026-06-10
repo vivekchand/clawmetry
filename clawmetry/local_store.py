@@ -1473,6 +1473,37 @@ def heal_index_corruption() -> int:
         return -1
 
 
+# Shared envelope-dedup CTE. OpenClaw v3 emits BOTH an assistant/message row AND
+# a sibling model.completed row per turn ~100ms apart, both stamped with the same
+# token_count + cost_usd, so a naive SUM over `events` doubles every billable
+# turn. Prepend `WITH ` + this fragment and read FROM deduped: the slim
+# model.completed sibling is dropped only when a richer assistant/message row
+# shares its (session_id, ts-rounded-to-second) bucket. This mirrors the
+# canonical dedup in query_sessions/query_aggregates so all cost surfaces agree.
+_DEDUPED_EVENTS_CTE = """
+  _ranked AS (
+    SELECT session_id, ts, cost_usd, token_count, model, event_type,
+      CASE event_type
+        WHEN 'assistant'       THEN 2
+        WHEN 'message'         THEN 2
+        WHEN 'model.completed' THEN 1
+        ELSE 0
+      END AS _envelope_rank,
+      CAST(EXTRACT(EPOCH FROM CAST(ts AS TIMESTAMP)) AS BIGINT) AS _ts_sec
+    FROM events
+  ),
+  _bucket_max AS (
+    SELECT session_id, _ts_sec, MAX(_envelope_rank) AS _max_rank
+    FROM _ranked GROUP BY session_id, _ts_sec
+  ),
+  deduped AS (
+    SELECT r.* FROM _ranked r
+    JOIN _bucket_max bm USING (session_id, _ts_sec)
+    WHERE NOT (r._envelope_rank = 1 AND bm._max_rank = 2)
+  )
+"""
+
+
 class LocalStore:
     """Thread-safe local event store with a background batched flusher.
 
@@ -4057,11 +4088,12 @@ class LocalStore:
             # never count as two sessions. Reconciles EXACTLY with
             # query_sessions_table (the source the OSS dashboard already trusts).
             sql_rt = f"""
-                WITH ev AS (
+                WITH {_DEDUPED_EVENTS_CTE},
+                ev AS (
                     SELECT session_id,
                            SUM(COALESCE(token_count, 0)) AS tok,
                            SUM(COALESCE(cost_usd, 0.0))  AS cost
-                    FROM events GROUP BY session_id
+                    FROM deduped GROUP BY session_id
                 ),
                 combined AS (
                     SELECT COALESCE(s.session_id, ev.session_id) AS session_id,
@@ -4099,10 +4131,11 @@ class LocalStore:
             from datetime import datetime as _dt, timezone as _tz, timedelta as _tdelta
             _since_24h = (_dt.now(_tz.utc) - _tdelta(hours=24)).isoformat()
             sql_24h = f"""
+                WITH {_DEDUPED_EVENTS_CTE}
                 SELECT {rt_case} AS runtime,
                        SUM(COALESCE(cost_usd, 0.0))    AS cost_24h,
                        SUM(COALESCE(token_count, 0))   AS tokens_24h
-                FROM events
+                FROM deduped
                 WHERE ts >= ?
                 GROUP BY 1
             """
@@ -4115,13 +4148,14 @@ class LocalStore:
                 b["tokens_24h"] = int(r[2] or 0)
             by_runtime_model: list[dict[str, Any]] = []
             sql_rtm = f"""
+                WITH {_DEDUPED_EVENTS_CTE}
                 SELECT {rt_case} AS runtime,
                        model,
                        COUNT(*) AS turns,
                        SUM(COALESCE(token_count, 0)) AS tokens,
                        SUM(COALESCE(cost_usd, 0.0)) AS cost_usd,
                        COUNT(DISTINCT session_id) AS sessions
-                FROM events
+                FROM deduped
                 WHERE model IS NOT NULL AND model <> ''
                 GROUP BY 1, 2
             """
