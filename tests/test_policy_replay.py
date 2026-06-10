@@ -155,6 +155,80 @@ def test_replay_garbage_rows_never_crash():
     assert out["matches"] == 0
 
 
+def _family_tool_call_row(eid: str, sid: str, ts: str, name: str, args: dict) -> dict:
+    """The REAL shape the family adapters (claude_code/codex/cursor/…) ingest:
+    one row per tool call, ``event_type='tool_call'``, OpenAI-style
+    ``tool_calls`` array. Copied from a live store row (2026-06-10)."""
+    return {
+        "id": eid,
+        "session_id": sid,
+        "ts": ts,
+        "event_type": "tool_call",
+        "data": {
+            "_runtime": sid.split(":", 1)[0],
+            "content": "",
+            "role": "assistant",
+            "tool_name": name,
+            "tool_calls": [{"id": f"toolu_{eid}", "name": name, "input": args}],
+        },
+    }
+
+
+def test_replay_matches_family_tool_call_rows():
+    """Family adapters emit event_type='tool_call' rows with a ``tool_calls``
+    array. The extractor + replay must see them — before 2026-06-10 the
+    watcher neither queried nor parsed this shape, so approval policies
+    silently never fired for Claude Code / Codex / Cursor / etc."""
+    rows = [
+        _family_tool_call_row("f1", "claude_code:sess-9", "2026-06-09T00:00:00Z",
+                              "Bash", {"command": "rm -rf /tmp/cache"}),
+        _family_tool_call_row("f2", "codex:sess-3", "2026-06-09T00:00:01Z",
+                              "shell", {"command": "rm -rf ./dist"}),
+        _family_tool_call_row("f3", "claude_code:sess-9", "2026-06-09T00:00:02Z",
+                              "Read", {"file_path": "/etc/hosts"}),
+    ]
+    out = approvals.replay_policy(_RM_POLICY, rows)
+    assert out["matches"] == 2
+    assert out["by_runtime"] == {"claude_code": 1, "codex": 1}
+    assert out["by_tool"] == {"exec": 2}
+
+
+def test_extract_tool_blocks_family_array_edge_cases():
+    base = _family_tool_call_row("f1", "claude_code:s", "2026-06-09T00:00:00Z",
+                                 "Bash", {"command": "ls"})
+    assert approvals._extract_tool_blocks(base) == [("toolu_f1", "Bash", {"command": "ls"})]
+    # name falls back to top-level tool_name
+    row = _family_tool_call_row("f2", "claude_code:s", "t", "Bash", {"command": "ls"})
+    del row["data"]["tool_calls"][0]["name"]
+    assert approvals._extract_tool_blocks(row)[0][1] == "Bash"
+    # non-assistant role is ignored (tool_result echoes must not fire policies)
+    row = _family_tool_call_row("f3", "claude_code:s", "t", "Bash", {"command": "ls"})
+    row["data"]["role"] = "tool"
+    assert approvals._extract_tool_blocks(row) == []
+    # garbage entries in the array are skipped
+    row = _family_tool_call_row("f4", "claude_code:s", "t", "Bash", {"command": "ls"})
+    row["data"]["tool_calls"] = [None, "x", {}, {"name": "Bash", "input": "notadict"}]
+    blocks = approvals._extract_tool_blocks(row)
+    assert blocks == [("", "Bash", {}), ("", "Bash", {})]
+
+
+def test_watcher_queries_tool_call_event_type(monkeypatch):
+    """The watcher's store read must include event_type='tool_call' — the
+    family adapters' rows live ONLY there. Revert-proof: fails on the old
+    ('message', 'assistant')-only query list."""
+    seen: list = []
+
+    class _QStub:
+        def query_events(self, *, event_type=None, since=None, limit=0):
+            seen.append(event_type)
+            return []
+
+    import clawmetry.local_store as _ls
+    monkeypatch.setattr(_ls, "get_store", lambda *a, **k: _QStub())
+    approvals._query_new_events(None, 10)
+    assert set(seen) == {"message", "assistant", "tool_call"}
+
+
 # ── monitor (dry-run) mode ────────────────────────────────────────────────
 
 
@@ -235,15 +309,20 @@ def replay_client(monkeypatch):
              [("exec", {"command": "echo hi"})]),
     ]
 
+    requested_event_types: list = []
+
     def _fake_ls_call(method_name, **kwargs):
         assert method_name == "query_events"
         assert "since" in kwargs and "limit" in kwargs
+        requested_event_types.append(kwargs.get("event_type"))
         return rows
 
     monkeypatch.setattr(rp, "_ls_call", _fake_ls_call)
     app = Flask(__name__)
     app.register_blueprint(rp.bp_policy)
-    return app.test_client()
+    client = app.test_client()
+    client._requested_event_types = requested_event_types
+    return client
 
 
 def test_replay_route_happy_path(replay_client):
@@ -259,6 +338,10 @@ def test_replay_route_happy_path(replay_client):
     assert body["by_runtime"] == {"claude_code": 1}
     assert body["days"] == 7
     assert body["since"]
+    # Replay must scan the SAME event types as the live watcher (shared
+    # _TOOL_EVENT_TYPES constant) — including the family adapters' tool_call.
+    assert set(replay_client._requested_event_types) == {
+        "message", "assistant", "tool_call"}
 
 
 def test_replay_route_rejects_missing_policy(replay_client):
