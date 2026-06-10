@@ -993,7 +993,13 @@ def _post(path: str, payload: dict, api_key: str, timeout: int = 45) -> dict:
     for attempt in range(1, _HTTP_MAX_ATTEMPTS + 1):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                resp_body = json.loads(resp.read())
+                raw = resp.read()
+                # Some endpoints answer 204 / an empty body on success
+                # (e.g. /ingest/cache returns ("", 204) after storing a
+                # process_control or cron result). json.loads("") raises,
+                # which surfaced as a spurious "cache post failed" warning
+                # on every successful post-back. Treat an empty body as {}.
+                resp_body = json.loads(raw) if raw.strip() else {}
             # Cloud heartbeat (and any other endpoint) may attach the user's
             # plan / sync_allowed / trial_days_left / upgrade_url. We mirror
             # those into _TRIAL_STATE so subsequent uploads can self-throttle
