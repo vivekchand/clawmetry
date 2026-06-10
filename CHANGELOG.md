@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: PR-sweep roll-up: MCP server, token accuracy, session search, eval gates (2026-06-10)
+- **`clawmetry mcp` (#2931):** a stdlib-only MCP stdio server with five read-only tools (list_sessions, get_cost_summary, get_session_trace, list_events, get_health) over the daemon's local query endpoint, so agents can query their own telemetry. Verified with a live initialize/tools/call round-trip against a running daemon.
+- **Token accuracy family:** output_tokens floor seeded from message_start with max-only reconciliation (#2905); reasoning/thinking tokens extracted in the openclaw adapter via a shared helper with regression tests (#2948); reasoning_tokens tracked through the proxy SSE parser, SQLite, and interceptor JSONL (#2913); SDK totalTokens preferred in spans, combined with reasoning as max(totalTokens, in+out+reasoning) so nothing double-counts (#2936).
+- **Session search (#2928):** GET /api/local/search over title + eval_reason through the daemon proxy (no writer-lock contention), limit clamped, 8 tests.
+- **Observability + safety:** full-native nemoclaw build detection via enforcement symbols (#2926); per-session tool-order churn detection, info-level and never-blocking (#2923); cache/compression-safety eval suite as a deterministic CI gate (#2930); deterministic/code evaluator library (#2920); C1 golden path gains a content-verification tier and the tab sweeps cover all 32 dashboard tabs (#2922, #2937, #2949).
+
 ### Fix: openclaw reasoning/thinking tokens now extracted (#2876) (2026-06-10)
 - Anthropic extended-thinking sessions emit a reasoning-token share inside the per-turn `usage` object that input+output alone never account for. The openclaw adapter's usage-extraction only read input/output/cacheRead/cacheWrite, so `Session.reasoning_tokens` was always 0 and per-turn `token_count` was systematically under-reported for reasoning-capable models.
 - New `_reasoning_tokens()` helper reads any known spelling (`reasoning_tokens`, `reasoningTokens`, `thinking_tokens`, `thinkingTokens`, `thinking_input_tokens`, …), coercing to a non-negative int. Wired into `list_events()` (surfaces `reasoningTokens` in `event.extra`), `_build_spans_from_events()` (adds `tokens_reasoning` and folds it into the LLM span's `token_count`), and `list_sessions()` (populates `Session.reasoning_tokens`).
