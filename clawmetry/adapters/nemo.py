@@ -88,6 +88,10 @@ import uuid
 from datetime import date
 from typing import Any, Optional
 
+_OLLAMA_CACHE: dict = {}
+_OLLAMA_CACHE_TS: float = 0.0
+_OLLAMA_CACHE_TTL = 30.0
+
 logger = logging.getLogger("clawmetry.adapters.nemo")
 
 
@@ -651,6 +655,49 @@ class NeMoAdapter:
 from .base import AgentAdapter, Capability, DetectResult, Event, Session
 
 
+def _read_nemoclaw_ollama_info() -> dict:
+    """Detect the resolved Ollama host and enumerate available local models.
+
+    Respects OLLAMA_HOST / OLLAMA_API_BASE env overrides. Otherwise tries
+    host.docker.internal (Docker containers) then localhost. Results are
+    cached for 30 s so repeated detect() calls don't add latency.
+    Returns ollamaResolvedHost + ollamaLocalModels; empty dict on failure.
+    """
+    global _OLLAMA_CACHE, _OLLAMA_CACHE_TS  # noqa: PLW0603
+    import json
+    import os
+    import urllib.request
+
+    now = time.monotonic()
+    if now - _OLLAMA_CACHE_TS < _OLLAMA_CACHE_TTL:
+        return _OLLAMA_CACHE
+
+    explicit = os.environ.get("OLLAMA_HOST") or os.environ.get("OLLAMA_API_BASE", "")
+    candidates = [explicit.rstrip("/")] if explicit else [
+        "http://host.docker.internal:11434",
+        "http://localhost:11434",
+    ]
+
+    result: dict = {}
+    for host in candidates:
+        try:
+            req = urllib.request.Request(f"{host}/api/tags", method="GET")
+            with urllib.request.urlopen(req, timeout=0.8) as resp:
+                body = json.loads(resp.read())
+            models = [m.get("name", "") for m in (body.get("models") or [])]
+            result = {
+                "ollamaResolvedHost": host,
+                "ollamaLocalModels": [m for m in models if m],
+            }
+            break
+        except Exception:
+            continue
+
+    _OLLAMA_CACHE = result
+    _OLLAMA_CACHE_TS = now
+    return result
+
+
 def _read_nemoclaw_skill_catalog() -> dict:
     """Read catalog-metadata.json from the nemoclaw skills directory.
 
@@ -710,6 +757,7 @@ class NemoClawAdapter(AgentAdapter):
             logger.debug("nemoclaw detect read failed: %s", exc)
         meta: dict = {"event_count": n}
         meta.update(_read_nemoclaw_skill_catalog())
+        meta.update(_read_nemoclaw_ollama_info())
         return DetectResult(
             name=self.name,
             display_name=self.display_name,
