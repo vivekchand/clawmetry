@@ -18,8 +18,10 @@ Token types
 GITHUB_TOKEN from Actions (prefix ghs_):
   Can read branch protection state but CANNOT write it. The script detects
   this automatically: it verifies current state (read-only, scoped to the
-  current repo only) and exits 0 with actionable instructions. Push-triggered
-  runs are always informational.
+  current repo only) and exits 0 if checks are configured, or exits 1 with
+  a clear actionable message if they are not. Push-triggered runs therefore
+  go RED on main until C6 is closed, creating a visible forcing-function
+  without blocking any PRs (this job is not a required check itself).
   Note: requesting administration:write in the workflow permissions block is
   invalid for GITHUB_TOKEN and causes 0-job workflow failures -- do not add it.
 
@@ -286,13 +288,15 @@ def main() -> None:
     if not token:
         sys.exit(
             "Error: GITHUB_TOKEN is not set.\n"
-            "Quickest path: bash scripts/close-c6.sh (uses gh CLI session)\n"
+            "Quickest path: bash scripts/close-c6.sh\n"
             "Or: GITHUB_TOKEN=ghp_xxx python3 scripts/apply_required_status_checks.py"
         )
 
     # Token type detection:
     #   ghs_ prefix  = GITHUB_TOKEN from Actions (scoped to current repo only).
-    #                  Cannot write branch protection rules. Read-only path.
+    #                  Cannot write branch protection rules. Read-only verify path.
+    #                  Exits 0 if checks are configured; exits 1 with an actionable
+    #                  one-liner if they are not (creating a forcing-function on main).
     #   Anything else = PAT or OAuth token (gho_, ghp_, github_pat_, etc.).
     #                  Full apply when token has admin/owner rights.
     is_pat = not token.startswith("ghs_")
@@ -322,15 +326,23 @@ def main() -> None:
             print(f"    [{repo}] {ctx!r}")
         print()
         print("=== Reading current required status checks (current repo only) ===")
-        if verify_required_checks(local_checks, local_deprecated, token):
+        configured = verify_required_checks(local_checks, local_deprecated, token)
+        if configured:
             print()
-            print("=== C6: checks already correctly configured ===")
-            print("=== (Set by manual Settings UI action or a prior admin run.) ===")
-        else:
-            print()
-            print("INFO: Required checks not yet configured. Run: bash scripts/close-c6.sh")
-        # Always exit 0: push-triggered runs are informational, never blocking.
-        return
+            print("=== C6: checks correctly configured -- nothing to do ===")
+            return
+        # Required checks are missing. Exit 1 so this job goes red on main
+        # on every push until the admin runs close-c6.sh. The job is not a
+        # required-status-check itself so PRs are never blocked -- but the
+        # persistent red check on main creates an undismissable forcing-function.
+        print()
+        print("=== C6 NOT CONFIGURED: required E2E status checks are missing ===")
+        print()
+        print("Action needed (takes ~30 seconds):")
+        print("  bash scripts/close-c6.sh")
+        print()
+        print("This job will turn green the next time main is pushed after you run that command.")
+        sys.exit(1)
 
     # PAT / OAuth path: full apply + verify across all repos.
     checks = _checks_to_apply()
