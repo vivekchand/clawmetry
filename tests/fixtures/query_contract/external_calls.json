@@ -1,0 +1,40 @@
+{
+  "_elapsed_ms": "<volatile>",
+  "_shape": "external_calls",
+  "_via": "<volatile>",
+  "count": 2,
+  "rows": [
+    {
+      "cost_usd": 0.0,
+      "host": "example.com",
+      "id": "7c2f3accb0029052c00782bfdd411b8a",
+      "input_tokens": 0,
+      "latency_ms": 45.5,
+      "library": "httpx",
+      "method": "POST",
+      "model": "",
+      "node_id": "agent+golden",
+      "output_tokens": 0,
+      "source": "interceptor",
+      "status_code": 500,
+      "ts": "2026-01-02T10:00:02Z",
+      "url": "https://example.com/hook"
+    },
+    {
+      "cost_usd": 0.0,
+      "host": "api.github.com",
+      "id": "bf413b940fd52bde287b89e0b7d4f406",
+      "input_tokens": 0,
+      "latency_ms": 120.0,
+      "library": "requests",
+      "method": "GET",
+      "model": "",
+      "node_id": "agent+golden",
+      "output_tokens": 0,
+      "source": "interceptor",
+      "status_code": 200,
+      "ts": "2026-01-02T10:00:01Z",
+      "url": "https://api.github.com/repos/x/y"
+    }
+  ]
+}

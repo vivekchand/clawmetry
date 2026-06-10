@@ -1,0 +1,28 @@
+{
+  "_elapsed_ms": "<volatile>",
+  "_shape": "sessions",
+  "_via": "<volatile>",
+  "count": 2,
+  "rows": [
+    {
+      "agent_id": "worker",
+      "cost_usd": 0.004,
+      "event_count": 1,
+      "message_count": 1,
+      "session_id": "sess-b",
+      "started_at": "2026-01-02T10:00:03Z",
+      "token_count": 40,
+      "updated_at": "<volatile>"
+    },
+    {
+      "agent_id": "main",
+      "cost_usd": 0.006,
+      "event_count": 3,
+      "message_count": 3,
+      "session_id": "sess-a",
+      "started_at": "2026-01-02T10:00:00Z",
+      "token_count": 60,
+      "updated_at": "<volatile>"
+    }
+  ]
+}
