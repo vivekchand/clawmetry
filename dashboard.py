@@ -166,6 +166,28 @@ except ImportError:
     logs_service_pb2 = None
 
 
+# Hard ceiling on a gzip-decompressed OTLP body. A few-KB gzip bomb can expand
+# to many GB and OOM the daemon (never-crash / never-hang). Cap the output and
+# reject anything larger. Override via CLAWMETRY_OTLP_MAX_DECOMPRESSED_MB.
+try:
+    _OTLP_MAX_DECOMPRESSED = int(os.environ.get("CLAWMETRY_OTLP_MAX_DECOMPRESSED_MB", "64")) * 1024 * 1024
+except (TypeError, ValueError):
+    _OTLP_MAX_DECOMPRESSED = 64 * 1024 * 1024
+
+
+def _gunzip_bounded(pb_data, limit=None):
+    """gzip-decompress with a hard output cap. Reads at most ``limit``+1 bytes
+    so a gzip bomb can never inflate into memory. Raises ValueError past the cap."""
+    import gzip as _gzip
+    import io as _io
+    limit = _OTLP_MAX_DECOMPRESSED if limit is None else limit
+    with _gzip.GzipFile(fileobj=_io.BytesIO(pb_data)) as gf:
+        out = gf.read(limit + 1)
+    if len(out) > limit:
+        raise ValueError("gzip body exceeds decompressed size limit")
+    return out
+
+
 def _otlp_decode(pb_data, proto_msg, content_encoding=None, content_type=None):
     """Decode an OTLP/HTTP request body into ``proto_msg`` and return it.
 
@@ -181,8 +203,7 @@ def _otlp_decode(pb_data, proto_msg, content_encoding=None, content_type=None):
     400, never a 500 stacktrace leak)."""
     ce = (content_encoding or "").lower()
     if "gzip" in ce:
-        import gzip as _gzip
-        pb_data = _gzip.decompress(pb_data)
+        pb_data = _gunzip_bounded(pb_data)
     ct = (content_type or "").lower()
     if "application/json" in ct or "application/x-ndjson" in ct:
         from google.protobuf import json_format as _json_format
@@ -8486,6 +8507,16 @@ app = Flask(
     template_folder=os.path.join(os.path.dirname(__file__), 'clawmetry', 'templates'),
 )
 
+# Cap request body size (DoS guard). OTLP/JSON batches and config posts are
+# small; a 32 MB ceiling lets Flask reject oversized bodies (413) before they
+# are read into memory. Override with CLAWMETRY_MAX_REQUEST_MB for large OTLP
+# exporters.
+try:
+    _MAX_REQUEST_MB = int(os.environ.get("CLAWMETRY_MAX_REQUEST_MB", "32"))
+except (TypeError, ValueError):
+    _MAX_REQUEST_MB = 32
+app.config["MAX_CONTENT_LENGTH"] = max(1, _MAX_REQUEST_MB) * 1024 * 1024
+
 # ── Cross-platform helpers ──────────────────────────────────────────────
 import platform as _platform
 
@@ -12655,8 +12686,16 @@ def _check_auth():
         return  # Gateway setup must work before auth is configured
     if request.path.startswith("/api/nodes"):
         return  # Fleet API uses its own X-Fleet-Key authentication
-    if not request.path.startswith("/api/"):
+    # OTLP ingestion (/v1/metrics|traces|logs) accepts UNTRUSTED data that lands
+    # in cost/usage analytics, so it must not be open to the network. Gate it
+    # like /api/*: loopback is trusted (zero-config local exporters keep working),
+    # non-loopback requires the gateway token. Opt out for a trusted LAN with
+    # CLAWMETRY_OTLP_ALLOW_UNAUTH=1.
+    is_otlp = request.path.startswith("/v1/")
+    if not request.path.startswith("/api/") and not is_otlp:
         return  # HTML, static, etc. are fine
+    if is_otlp and str(os.environ.get("CLAWMETRY_OTLP_ALLOW_UNAUTH", "")).strip().lower() in ("1", "true", "yes"):
+        return
     # Trust localhost — the dashboard is a local tool; auth protects remote access only
     remote = request.remote_addr or ""
     if remote in ("127.0.0.1", "::1", "localhost"):
