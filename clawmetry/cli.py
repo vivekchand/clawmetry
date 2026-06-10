@@ -2847,6 +2847,81 @@ def _cmd_license(args) -> None:
         print("  E2E:         🔒 verified offline")
 
 
+def _cmd_tier(args) -> None:
+    """clawmetry tier — print the resolved open-core entitlement.
+
+    Read-only, side-effect free. Useful for scripting (``clawmetry tier --json
+    | jq -r .tier``) and for the "what tier am I on?" diagnostic that's
+    cheaper than the full ``clawmetry status`` block. Never raises — on any
+    resolution error it falls back to the OSS-free shape so a shell wrapper
+    always sees a valid response.
+
+    Output:
+      default — compact human-readable block matching the project style
+      --json  — :func:`Entitlement.to_dict` serialized (indent=2 for piping
+                to jq / direct viewing)
+    """
+    import json as _json
+
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        info = ent.to_dict()
+    except Exception as exc:
+        # The resolver itself never raises, but a broken install (missing dep,
+        # corrupt module) could. Match the never-crash contract — log the
+        # warning to stderr and emit the OSS-free fallback so scripts keep
+        # working.
+        print(f"⚠️  tier resolution failed: {exc}", file=sys.stderr)
+        info = {
+            "tier": "oss",
+            "source": "oss",
+            "node_limit": 1,
+            "expiry": None,
+            "expired": False,
+            "is_paid": False,
+            "grace": True,
+            "enforced": False,
+            "runtimes": ["nemoclaw", "openclaw"],
+            "features": [],
+            "free_runtimes": ["nemoclaw", "openclaw"],
+            "paid_runtimes": [],
+            "all_runtimes": ["nemoclaw", "openclaw"],
+        }
+
+    if getattr(args, "as_json", False):
+        print(_json.dumps(info, indent=2, sort_keys=True))
+        return
+
+    tier = str(info.get("tier", "oss")).lower()
+    source = str(info.get("source", "oss"))
+    grace = bool(info.get("grace", True))
+    runtimes = list(info.get("runtimes") or [])
+    all_runtimes = list(info.get("all_runtimes") or [])
+    locked = [r for r in all_runtimes if r not in set(runtimes)]
+    features = list(info.get("features") or [])
+
+    tier_label = "OSS (free)" if tier == "oss" else tier.replace("_", " ").title()
+    mode = "🟡 grace  (set CLAWMETRY_ENFORCE=1 to enforce)" if grace else "🔒 enforced"
+
+    print("ClawMetry Tier\n" + "─" * 40)
+    print(f"  Tier:        {tier_label}")
+    print(f"  Source:      {source}")
+    print(f"  Mode:        {mode}")
+    expiry = info.get("expiry")
+    if expiry:
+        expired = "expired" if info.get("expired") else "valid"
+        print(f"  Expiry:      {int(expiry)} ({expired})")
+    if info.get("node_limit") and info["node_limit"] != 1:
+        print(f"  Node limit:  {info['node_limit']}")
+    if runtimes:
+        print(f"  Runtimes:    {', '.join(runtimes)}")
+    if locked:
+        print(f"  Locked:      {', '.join(locked)}")
+    print(f"  Features:    {len(features)} unlocked")
+
+
 def _cmd_verify_integrity(args) -> None:
     """clawmetry verify-integrity — walk the hash chain and report validity."""
     from clawmetry.local_store import get_store
@@ -3254,6 +3329,18 @@ def main() -> None:
         help="License key (CLAW1.…) — required for 'activate'",
     )
 
+    # tier — print the resolved open-core entitlement (scriptable)
+    p_tier = sub.add_parser(
+        "tier",
+        help="Print the resolved open-core entitlement (tier, runtimes, features)",
+    )
+    p_tier.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit the full Entitlement.to_dict() as JSON (jq-friendly)",
+    )
+
     # verify-integrity — walk hash chain and report validity (Issue #2200)
     p_verify = sub.add_parser(
         "verify-integrity",
@@ -3282,6 +3369,7 @@ def main() -> None:
         "uninstall",
         "activate",
         "license",
+        "tier",
         "verify-integrity",
         "nemoclaw-daemons",
     )
@@ -3317,6 +3405,8 @@ def main() -> None:
             _cmd_activate(args)
         elif args.cmd == "license":
             _cmd_license(args)
+        elif args.cmd == "tier":
+            _cmd_tier(args)
         elif args.cmd == "verify-integrity":
             _cmd_verify_integrity(args)
         elif args.cmd == "nemoclaw-daemons":
