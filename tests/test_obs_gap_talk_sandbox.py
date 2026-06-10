@@ -373,3 +373,18 @@ def test_tool_result_string_content_does_not_emit_content_types():
     assert "tool.result_content_types" not in attrs
     assert "tool.result_coercions" not in attrs
     assert attrs["tool.result_text"] == "file1\nfile2\n"
+
+
+def test_build_spans_token_count_falls_back_to_input_output():
+    """Non-reasoning runs (no totalTokens key) keep the input+output sum (#2794)."""
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = [
+        {"type": "message", "timestamp": "1700000001",
+         "message": {"role": "assistant", "model": "gpt-4o",
+                     "content": [],
+                     "usage": {"input_tokens": 30, "output_tokens": 20}}},
+    ]
+    spans = OpenClawAdapter._build_spans_from_events(events, "s1")
+    llm_spans = [s for s in spans if s.get("name", "").startswith("llm.call")]
+    assert len(llm_spans) == 1
+    assert llm_spans[0]["token_count"] == 50

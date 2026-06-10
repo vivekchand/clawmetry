@@ -399,3 +399,36 @@ def test_build_spans_prefers_total_tokens_for_reasoning_model():
     assert llm_spans[0]["token_count"] == 162, (
         "token_count must equal totalTokens (162), not tok_in+tok_out (50)"
     )
+
+
+def test_list_events_surfaces_total_tokens_snake_case(isolated_store):
+    """The raw ``total_tokens`` snake_case key is accepted as a fallback (#2794)."""
+    import uuid, time as _t
+    isolated_store.ingest({
+        "id": str(uuid.uuid4()),
+        "node_id": "agent+test-node",
+        "agent_id": "main",
+        "agent_type": "openclaw",
+        "session_id": "sess-RZ2",
+        "event_type": "model.completed",
+        "ts": _t.time(),
+        "model": "claude-opus-4-7",
+        "token_count": 150,
+        "data": {
+            "type": "assistant",
+            "message": {
+                "model": "claude-opus-4-7",
+                "usage": {
+                    "input_tokens": 30,
+                    "output_tokens": 20,
+                    "total_tokens": 175,
+                },
+            },
+        },
+    })
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess-RZ2")
+    assert len(events) == 1
+    assert events[0].extra.get("totalTokens") == 175
