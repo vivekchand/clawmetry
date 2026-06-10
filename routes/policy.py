@@ -219,16 +219,20 @@ def api_policy_replay():
     import time as _time
     since = _time.strftime("%Y-%m-%dT%H:%M:%SZ",
                            _time.gmtime(_time.time() - days * 86400))
-    # Same merged-event_type read as the live watcher
-    # (clawmetry/approvals.py:_query_new_events): adapters ingest assistant
-    # turns under either event_type. replay_policy dedups by row id.
+    # Same merged-event_type read as the live watcher: import the SHARED
+    # list from approvals so replay and enforcement cannot drift (a replay
+    # that scans different event types than the watcher would "predict"
+    # pauses the watcher never fires, or miss ones it does).
+    try:
+        from clawmetry.approvals import replay_policy, _TOOL_EVENT_TYPES
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"approvals engine unavailable: {e}"}), 500
     rows: list[dict] = []
-    for et in ("message", "assistant"):
+    for et in _TOOL_EVENT_TYPES:
         rows.extend(_coerce_rows(
             _ls_call("query_events", event_type=et, since=since, limit=limit)))
 
     try:
-        from clawmetry.approvals import replay_policy
         result = replay_policy(policy, rows)
     except Exception as e:
         result = {"ok": False, "error": f"replay failed: {e}"}

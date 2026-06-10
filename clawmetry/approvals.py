@@ -730,6 +730,17 @@ _STATE_KEY_SEEN = "approvals_seen_ids_at_boundary"
 # (it takes a parsed args dict).
 _TOOL_BLOCK_TYPES = ("toolCall", "tool_use")
 
+# Event types that can carry tool invocations. The watcher
+# (``_query_new_events``) and the replay route (``routes/policy.py``) MUST
+# query the same list or they drift: the family adapters (claude_code,
+# codex, cursor, …) ingest one row PER tool call under
+# ``event_type='tool_call'`` with an OpenAI-style ``data.tool_calls`` array
+# — a type the watcher historically never queried, so approval policies
+# silently never fired for those runtimes (found 2026-06-10 by replaying a
+# policy over the live store: 2,539 tool_call rows in 3 days, 0 visible to
+# the watcher).
+_TOOL_EVENT_TYPES = ("message", "assistant", "tool_call")
+
 
 def _read_persisted_watermark() -> tuple[Optional[str], set[str]]:
     """Read the persisted watermark + boundary-id set from sync-state.json.
@@ -838,6 +849,25 @@ def _extract_tool_blocks(row: dict) -> list[tuple[str, str, dict]]:
             str(data.get("name") or ""),
             data.get("arguments") or data.get("input") or {},
         ))
+    # Case D: family adapters (claude_code / codex / cursor / …) ingest one
+    # row per tool call under ``event_type='tool_call'`` with an OpenAI-style
+    # array: ``data = {_runtime, role: "assistant", tool_name,
+    # tool_calls: [{id, name, input}]}``. Args may be ``input`` /
+    # ``arguments`` / ``args`` depending on the adapter.
+    if not out and isinstance(data.get("tool_calls"), list):
+        if data.get("role") in (None, "assistant"):
+            for blk in data["tool_calls"]:
+                if not isinstance(blk, dict):
+                    continue
+                name = blk.get("name") or data.get("tool_name")
+                if not name:
+                    continue
+                args = blk.get("input") or blk.get("arguments") or blk.get("args") or {}
+                out.append((
+                    str(blk.get("id") or ""),
+                    str(name),
+                    args if isinstance(args, dict) else {},
+                ))
     return out
 
 
@@ -847,9 +877,10 @@ def _query_new_events(since: Optional[str], limit: int) -> list[dict]:
     ``query_events`` accepts only one ``event_type`` filter at a time, but
     different adapters ingest the same conceptual "assistant turn" event
     under different ``event_type`` strings (OpenClaw uses ``"message"``;
-    some Anthropic-shape adapters use ``"assistant"``). Issue both queries
-    and merge. Cost is negligible — both are indexed by
-    ``idx_events_type_ts``.
+    some Anthropic-shape adapters use ``"assistant"``; the family adapters
+    emit one ``"tool_call"`` row per invocation). Issue one query per type
+    in ``_TOOL_EVENT_TYPES`` and merge. Cost is negligible — all are
+    indexed by ``idx_events_type_ts``.
     """
     from clawmetry import local_store
     try:
@@ -861,7 +892,7 @@ def _query_new_events(since: Optional[str], limit: int) -> list[dict]:
         log.debug(f"approvals: local_store unavailable ({e})")
         return []
     rows: list[dict] = []
-    for et in ("message", "assistant"):
+    for et in _TOOL_EVENT_TYPES:
         try:
             rows.extend(store.query_events(event_type=et, since=since, limit=limit))
         except Exception as e:
