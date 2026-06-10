@@ -211,6 +211,22 @@ _TIER_RETENTION_DAYS = {
 # Tiers that unlock the paid runtimes.
 _TIER_PAID_RUNTIMES = _PAID_TIERS
 
+# Ordinal rank of each tier on the pricing ladder. Used by ``tier_rank()`` and
+# ``Entitlement.is_at_least()`` so gating callers can ask "is this install at
+# least Pro?" without re-encoding the ladder shape. Tiers that share a feature
+# set share a rank (Trial / Cloud Pro / self-hosted Pro are all rank 3).
+# Unknown tier names rank as ``-1`` so an unrecognised string never compares
+# equal to a known tier.
+_TIER_RANK = {
+    TIER_OSS: 0,
+    TIER_CLOUD_FREE: 1,
+    TIER_CLOUD_STARTER: 2,
+    TIER_TRIAL: 3,          # Trial grants the full Pro feature set
+    TIER_CLOUD_PRO: 3,
+    TIER_PRO: 3,            # self-hosted Pro mirrors Cloud Pro
+    TIER_ENTERPRISE: 4,
+}
+
 _LICENSE_PATH = os.path.expanduser("~/.clawmetry/license.key")
 _CLOUD_PLAN_CACHE = os.path.expanduser("~/.clawmetry/cloud_plan.json")
 _ENFORCE_ENABLE_VALUES = frozenset({"1", "true", "yes", "on"})
@@ -269,6 +285,24 @@ class Entitlement:
             return False
         return feature in self.features
 
+    def is_at_least(self, min_tier: str) -> bool:
+        """Whether this entitlement is at least ``min_tier`` on the pricing
+        ladder. Grace-INDEPENDENT (a rank comparison is a plan fact, not a
+        gate decision): use ``allows_feature``/``allows_runtime`` for "may
+        this request proceed?" gating, and this for "does the plan itself
+        clear the bar?" telemetry and UI affordances.
+
+        Unknown tier strings rank as ``-1`` on both sides, so
+        ``is_at_least("nonsense")`` returns ``False`` and an entitlement with
+        an unknown tier never satisfies any known minimum. Never raises.
+        """
+        try:
+            target = _TIER_RANK.get((min_tier or "").strip().lower(), -1)
+            mine = _TIER_RANK.get(self.tier, -1)
+            return target >= 0 and mine >= target
+        except Exception:
+            return False
+
     def event_retention_days(self) -> int | None:
         """Days of event history this tier may keep. ``None`` means unlimited
         / custom (Enterprise). The daemon's prune loop in ``clawmetry/sync.py``
@@ -288,6 +322,7 @@ class Entitlement:
         return {
             "tier": self.tier,
             "source": self.source,
+            "rank": _TIER_RANK.get(self.tier, -1),
             "node_limit": self.node_limit,
             "expiry": self.expiry,
             "expired": self.expired,
@@ -408,6 +443,18 @@ def available_runtimes() -> list[str]:
     if ent.grace:
         return sorted(ALL_RUNTIMES)
     return sorted(ent.runtimes)
+
+
+def tier_rank(tier: str) -> int:
+    """Ordinal rank of ``tier`` on the pricing ladder, or ``-1`` for an
+    unknown tier name. Higher = more capable. Lets gating callers ask "is
+    this install at least Pro?" via :meth:`Entitlement.is_at_least` without
+    hardcoding the ladder shape, and lets the UI sort tier rows
+    deterministically without a bespoke comparator. Never raises."""
+    try:
+        return _TIER_RANK.get((tier or "").strip().lower(), -1)
+    except Exception:
+        return -1
 
 
 def runtime_label(runtime: str) -> str:
