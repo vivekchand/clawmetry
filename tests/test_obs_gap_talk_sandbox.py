@@ -373,3 +373,65 @@ def test_tool_result_string_content_does_not_emit_content_types():
     assert "tool.result_content_types" not in attrs
     assert "tool.result_coercions" not in attrs
     assert attrs["tool.result_text"] == "file1\nfile2\n"
+
+
+# -- #2957 voice-log extra fields in list_events() ---------------------------
+
+def _make_fake_ls(rows):
+    """Return a fake local_store-shaped namespace that yields ``rows`` from _fetch."""
+    import types
+
+    class _FakeStore:
+        def _fetch(self, *_args, **_kwargs):
+            return rows
+
+    fake_ls = types.SimpleNamespace(get_store=lambda read_only=False: _FakeStore())
+    return fake_ls
+
+
+def test_list_events_surfaces_voice_log_extra_fields(monkeypatch):
+    """sync_voice_log_events stores mode/transport/provider/duration_ms/size_bytes
+    in the data BLOB. list_events() must unpack all five into Event.extra (#2957)."""
+    import sys
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+
+    blob = json.dumps({
+        "mode": "voice",
+        "transport": "webrtc",
+        "provider": "openai",
+        "duration_ms": 1500,
+        "size_bytes": 8192,
+    })
+    # Row shape: id, event_type, ts, model, token_count, data, agent_id, node_id
+    fake_row = ("row-1", "voice.session.start", "1700000001", None, 0, blob, "main", "node-1")
+    monkeypatch.setitem(sys.modules, "clawmetry.local_store", _make_fake_ls([fake_row]))
+
+    adapter = OpenClawAdapter()
+    events = adapter.list_events("s1")
+    assert len(events) == 1
+    extra = events[0].extra
+    assert extra["mode"] == "voice"
+    assert extra["transport"] == "webrtc"
+    assert extra["provider"] == "openai"
+    assert extra["duration_ms"] == 1500
+    assert extra["size_bytes"] == 8192
+
+
+def test_list_events_voice_fields_absent_for_non_voice_events(monkeypatch):
+    """Non-voice event blobs (no mode/transport keys) must not populate
+    voice extra fields — existing behaviour is unchanged (#2957)."""
+    import sys
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+
+    blob = json.dumps({"channel": "main", "hostname": "box1"})
+    fake_row = ("row-2", "message", "1700000002", "claude-opus-4-8", 100, blob, "main", "node-1")
+    monkeypatch.setitem(sys.modules, "clawmetry.local_store", _make_fake_ls([fake_row]))
+
+    adapter = OpenClawAdapter()
+    events = adapter.list_events("s1")
+    assert len(events) == 1
+    extra = events[0].extra
+    assert extra["channel"] == "main"
+    assert extra["hostname"] == "box1"
+    for field in ("mode", "transport", "provider", "duration_ms", "size_bytes"):
+        assert field not in extra, f"non-voice event must not have extra['{field}']"

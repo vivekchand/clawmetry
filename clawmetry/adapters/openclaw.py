@@ -447,6 +447,14 @@ class OpenClawAdapter(AgentAdapter):
                                 _val = obj.get(_field)
                                 if _val:
                                     extra[_field] = _val
+                            for _field in ("mode", "transport", "provider"):
+                                _val = obj.get(_field)
+                                if _val:
+                                    extra[_field] = _val
+                            for _field in ("duration_ms", "size_bytes"):
+                                _val = obj.get(_field)
+                                if _val is not None:
+                                    extra[_field] = _val
                             msg = obj.get("message")
                             if isinstance(msg, str):
                                 content_text = msg
