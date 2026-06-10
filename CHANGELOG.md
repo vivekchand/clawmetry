@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Release: kill, pause, and resume a runaway agent on the host (#2996) (2026-06-10)
+- New `clawmetry/process_control.py` plus three daemon actions (`kill_session`, `pause_session`, `resume_session`) let an operator stop a runaway agent from the dashboard or the desk device. The cloud relays the command over the existing heartbeat queue; the daemon resolves the session to its real OS process and acts.
+- Per runtime: Claude Code is resolved via its live PID map (`~/.claude/sessions/<pid>.json`), Codex/Goose/opencode/Aider via working-directory plus argv match; OpenClaw and NemoClaw are cancelled through `openclaw tasks cancel`. Cursor is intentionally unsupported (one IDE process holds every session).
+- Stop sends SIGINT to cancel the current turn; kill escalates SIGTERM then SIGKILL across the full descendant set; pause uses SIGSTOP and resume uses SIGCONT, so a paused agent holds its state and continues where it left off. A pid reuse guard re-verifies process start time before any signal, and every action also writes the proxy HITL pause file so a proxied runtime refuses further model calls even if a signal is missed. Every kill, pause, and resume writes an audit row.
+- The action types ship inert: nothing happens until the cloud enqueues a command for a node the requester owns.
+
 ### Fix: approval policies now fire for Claude Code, Codex, Cursor and the other family runtimes (#2984) (2026-06-10)
 - **Approval policies silently never fired for the family runtimes.** Those adapters record each tool call as its own `tool_call` event carrying a `tool_calls` array, but the policy watcher only scanned `message`/`assistant` events and could not parse the array shape, so a rule like "pause on `rm -rf`" matched nothing a Claude Code or Codex agent did. On a real node, a 14-day replay saw 15 tool calls before this fix and 5,015 after (310 matches for a risky-exec rule, all correctly attributed).
 - The watcher and the new replay endpoint now share one event-type list (so the eval can never disagree with enforcement), and the extractor understands the family adapters' `tool_calls` array, including args under `input`, `arguments`, or `args`. Tool-result echoes (non-assistant roles) still never fire policies.
