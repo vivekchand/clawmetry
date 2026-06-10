@@ -279,6 +279,44 @@ class Entitlement:
             return False
         return feature in self.features
 
+    def locked_runtimes(self) -> tuple[str, ...]:
+        """Sorted tuple of PAID runtime ids the install currently can NOT
+        observe — the inverse view of :meth:`allows_runtime` restricted to
+        ``PAID_RUNTIMES``. Mirrors the ``locked`` flag in
+        :func:`runtime_catalog` exactly: a runtime is "locked" iff
+        ``allows_runtime`` returns ``False``.
+
+        In grace mode the gate passes everything, so the result is ``()``;
+        once enforcement is on (``CLAWMETRY_ENFORCE=1``) it returns the paid
+        runtimes the current tier (and non-expired state) does not unlock,
+        giving the UI a one-call source for a "N runtimes locked — upgrade"
+        badge without iterating ``PAID_RUNTIMES`` or re-deriving the gate.
+        Free runtimes are never reported (they can never be locked).
+        Never raises.
+        """
+        try:
+            return tuple(sorted(rt for rt in PAID_RUNTIMES if not self.allows_runtime(rt)))
+        except Exception:  # belt-and-suspenders: a flaky gate read must never crash a render
+            return ()
+
+    def locked_features(self) -> tuple[str, ...]:
+        """Sorted tuple of PAID feature keys the install does NOT unlock —
+        the inverse view of :meth:`allows_feature` restricted to
+        ``PAID_FEATURES ∪ ENTERPRISE_FEATURES``.
+
+        In grace mode every gate passes, so the result is ``()``; once
+        enforcement is on it returns the paid keys the current tier (and
+        non-expired state) does not grant, giving the UI a single source
+        for a paywall summary off ``/api/entitlement`` without re-deriving
+        feature-set membership on the frontend. Free features are never
+        reported (they can never be locked). Never raises.
+        """
+        try:
+            paid_universe = PAID_FEATURES | ENTERPRISE_FEATURES
+            return tuple(sorted(f for f in paid_universe if not self.allows_feature(f)))
+        except Exception:
+            return ()
+
     def event_retention_days(self) -> int | None:
         """Days of event history this tier may keep. ``None`` means unlimited
         / custom (Enterprise). The daemon's prune loop in ``clawmetry/sync.py``
@@ -309,6 +347,8 @@ class Entitlement:
             "free_runtimes": sorted(FREE_RUNTIMES),
             "paid_runtimes": sorted(PAID_RUNTIMES),
             "all_runtimes": sorted(ALL_RUNTIMES),
+            "locked_runtimes": list(self.locked_runtimes()),
+            "locked_features": list(self.locked_features()),
         }
 
 
