@@ -684,6 +684,85 @@ def _read_nemoclaw_skill_catalog() -> dict:
     return {}
 
 
+# Mirrors the host constants exported by the harness
+# (nemoclaw dist/lib/inference/local.js): the local Ollama backend is
+# reached at host.docker.internal when ClawMetry/NemoClaw runs inside a
+# container, otherwise at the loopback address.
+_OLLAMA_HOST_DOCKER_INTERNAL = "http://host.docker.internal:11434"
+_OLLAMA_LOCALHOST = "http://127.0.0.1:11434"
+
+
+def _resolve_ollama_host() -> tuple[str, str]:
+    """Resolve the Ollama base URL and how it was chosen.
+
+    Mirrors the OLLAMA_HOST_DOCKER_INTERNAL vs OLLAMA_LOCALHOST resolution
+    in the harness (dist/lib/inference/local.js):
+
+    * An explicit ``OLLAMA_HOST`` env var always wins (mode ``"explicit"``).
+    * Inside a container (``/.dockerenv`` present or ``OLLAMA_IN_DOCKER``
+      truthy) the docker-internal host is used (mode ``"docker-internal"``).
+    * Otherwise the loopback host is used (mode ``"loopback"``).
+
+    Returns ``(host, mode)``. Never raises.
+    """
+    import os
+
+    explicit = (os.environ.get("OLLAMA_HOST") or "").strip()
+    if explicit:
+        # Bare host:port (no scheme) — normalise to a URL like the harness.
+        if "://" not in explicit:
+            explicit = "http://" + explicit
+        return explicit, "explicit"
+
+    in_docker = False
+    try:
+        in_docker = os.path.exists("/.dockerenv") or bool(
+            (os.environ.get("OLLAMA_IN_DOCKER") or "").strip()
+        )
+    except Exception:
+        in_docker = False
+    if in_docker:
+        return _OLLAMA_HOST_DOCKER_INTERNAL, "docker-internal"
+    return _OLLAMA_LOCALHOST, "loopback"
+
+
+def _read_nemoclaw_ollama_inference() -> dict:
+    """Surface the local Ollama inference host + available model roster.
+
+    Closes obs-gap #2959: the harness resolves the Ollama host and exposes
+    ``getOllamaModelOptions()`` (the local model roster queried from
+    ``/api/tags`` or ``ollama list``), but ClawMetry never surfaced either,
+    so the dashboard could not show which inference host a NemoClaw session
+    used or what models the local backend advertises.
+
+    Queries ``{host}/api/tags`` with a short timeout (mirrors
+    getOllamaModelOptions). The host/mode are always returned; the model
+    roster is only added when the backend answers. Never raises — returns a
+    dict with ``host``/``hostMode`` even when Ollama is unreachable.
+    """
+    import json
+    import urllib.request
+
+    host, mode = _resolve_ollama_host()
+    out: dict = {"ollama_host": host, "ollama_host_mode": mode}
+    try:
+        url = host.rstrip("/") + "/api/tags"
+        with urllib.request.urlopen(url, timeout=0.6) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        models = payload.get("models") if isinstance(payload, dict) else None
+        names: list[str] = []
+        for m in models or []:
+            if isinstance(m, dict):
+                name = m.get("name") or m.get("model")
+                if name:
+                    names.append(str(name))
+        # Stable, de-duplicated roster for predictable dashboard rendering.
+        out["ollama_local_models"] = sorted(set(names))
+    except Exception as exc:
+        logger.debug("nemoclaw ollama model roster query failed (%s): %s", host, exc)
+    return out
+
+
 class NemoClawAdapter(AgentAdapter):
     """Read-side adapter for the NemoClaw Free runtime.
 
@@ -710,6 +789,7 @@ class NemoClawAdapter(AgentAdapter):
             logger.debug("nemoclaw detect read failed: %s", exc)
         meta: dict = {"event_count": n}
         meta.update(_read_nemoclaw_skill_catalog())
+        meta["ollama_inference"] = _read_nemoclaw_ollama_inference()
         return DetectResult(
             name=self.name,
             display_name=self.display_name,
