@@ -399,3 +399,130 @@ def test_build_spans_prefers_total_tokens_for_reasoning_model():
     assert llm_spans[0]["token_count"] == 162, (
         "token_count must equal totalTokens (162), not tok_in+tok_out (50)"
     )
+
+
+def test_list_events_surfaces_talk_lifecycle_fields(isolated_store):
+    """Talk/voice lifecycle fields (#2730) flow into Event.extra.
+
+    ``local_store.ingest_talk_lifecycle`` writes a clean payload of
+    ``{talkEventType, talkMode, talkTransport, talkBrain, talkProvider,
+    talkFinal, talkDurationMs, talkByteLength}`` as the data BLOB on the
+    ``talk.lifecycle`` event row. Pin the new behavior that those fields
+    promote to ``Event.extra.{mode, transport, brain, provider, final,
+    duration_ms, byte_length}`` so dashboards can render voice-session
+    activity without re-decoding the raw daemon log.
+    """
+    isolated_store.ingest_talk_lifecycle(
+        node_id="agent+test-node",
+        session_id="sess-TALK",
+        event_type="session.start",
+        mode="voice",
+        transport="webrtc",
+        brain="gpt-realtime",
+        provider="openai",
+        final=True,
+        duration_ms=1200,
+        byte_length=4096,
+        ts_iso="2026-06-06T22:00:00Z",
+    )
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess-TALK")
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.type == "talk.lifecycle"
+    assert ev.extra.get("mode") == "voice"
+    assert ev.extra.get("transport") == "webrtc"
+    assert ev.extra.get("brain") == "gpt-realtime"
+    assert ev.extra.get("provider") == "openai"
+    assert ev.extra.get("duration_ms") == 1200
+    assert ev.extra.get("byte_length") == 4096
+    assert ev.extra.get("final") is True
+
+
+def test_list_events_talk_lifecycle_omits_empty_fields(isolated_store):
+    """Empty / unset Talk attrs (string "" or None) must NOT pollute Event.extra.
+
+    Lifecycle events like ``session.end`` often only carry an event_type +
+    duration_ms; mode/transport/provider may be blank. Pin that those blanks
+    do not appear as empty strings in extra so downstream renderers can
+    rely on key presence as a "field known" signal.
+    """
+    isolated_store.ingest_talk_lifecycle(
+        node_id="agent+test-node",
+        session_id="sess-TALK-MIN",
+        event_type="session.end",
+        duration_ms=850,
+        ts_iso="2026-06-06T22:01:00Z",
+    )
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess-TALK-MIN")
+    assert len(events) == 1
+    ex = events[0].extra
+    assert ex.get("duration_ms") == 850
+    assert "mode" not in ex
+    assert "transport" not in ex
+    assert "brain" not in ex
+    assert "provider" not in ex
+    assert "final" not in ex
+
+
+def test_list_events_talk_lifecycle_byte_length_zero_still_stamps(isolated_store):
+    """``talkByteLength == 0`` is a real measurement, not "unset" -- stamp it.
+
+    A zero-length audio chunk is a valid lifecycle observation (silent frame
+    or empty turn). The isinstance-based stamping must include 0 so
+    downstream avg/percentile math doesn't undercount empty turns.
+    """
+    isolated_store.ingest_talk_lifecycle(
+        node_id="agent+test-node",
+        session_id="sess-TALK-ZERO",
+        event_type="audio.chunk",
+        byte_length=0,
+        duration_ms=0,
+        ts_iso="2026-06-06T22:02:00Z",
+    )
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess-TALK-ZERO")
+    assert len(events) == 1
+    ex = events[0].extra
+    assert ex.get("byte_length") == 0
+    assert ex.get("duration_ms") == 0
+
+
+def test_list_events_non_talk_events_unchanged_by_talk_extraction(isolated_store):
+    """Non-Talk events keep their pre-existing extra shape (#2730 backwards-compat).
+
+    Seeds a plain model.completed event with no Talk-shaped fields in its
+    data blob and confirms none of the new talk.* keys leak in. Anchors
+    backwards-compat at the test layer.
+    """
+    import uuid as _uuid, time as _t
+    isolated_store.ingest({
+        "id": str(_uuid.uuid4()),
+        "node_id": "agent+test-node",
+        "agent_id": "main",
+        "agent_type": "openclaw",
+        "session_id": "sess-NO-TALK",
+        "event_type": "model.completed",
+        "ts": _t.time(),
+        "model": "claude-opus-4-7",
+        "token_count": 5,
+        "data": {"channel": "gateway", "hostname": "Dhriti-1"},
+    })
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess-NO-TALK")
+    assert len(events) == 1
+    ex = events[0].extra
+    assert ex.get("channel") == "gateway"
+    assert ex.get("hostname") == "Dhriti-1"
+    for k in ("mode", "transport", "brain", "provider",
+              "duration_ms", "byte_length", "final"):
+        assert k not in ex, f"unexpected talk.* key {k} leaked into non-talk event extra"

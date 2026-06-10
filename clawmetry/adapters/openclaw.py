@@ -472,6 +472,33 @@ class OpenClawAdapter(AgentAdapter):
                                 _rt = _reasoning_tokens(usage)
                                 if _rt:
                                     extra["reasoningTokens"] = _rt
+                            # Talk/voice lifecycle (#2730). local_store.ingest_talk_lifecycle
+                            # stores a clean {talkEventType, talkMode, talkTransport,
+                            # talkBrain, talkProvider, talkFinal, talkDurationMs,
+                            # talkByteLength} payload as the data BLOB on the
+                            # ``talk.lifecycle`` event row. Promote those fields to
+                            # Event.extra so dashboards can surface voice mode /
+                            # transport / provider / timing without re-decoding the
+                            # raw daemon log. Stamp only on non-empty values so
+                            # non-Talk events stay byte-identical.
+                            for _src_key, _dst_key in (
+                                ("talkMode", "mode"),
+                                ("talkTransport", "transport"),
+                                ("talkBrain", "brain"),
+                                ("talkProvider", "provider"),
+                            ):
+                                _val = obj.get(_src_key)
+                                if isinstance(_val, str) and _val:
+                                    extra[_dst_key] = _val
+                            for _src_key, _dst_key in (
+                                ("talkDurationMs", "duration_ms"),
+                                ("talkByteLength", "byte_length"),
+                            ):
+                                _val = obj.get(_src_key)
+                                if isinstance(_val, (int, float)):
+                                    extra[_dst_key] = _val
+                            if isinstance(obj.get("talkFinal"), bool):
+                                extra["final"] = obj["talkFinal"]
                     except Exception:
                         pass
                 events.append(Event(
