@@ -39,6 +39,9 @@ test enforces both directions).
 | `events` | live | e2e | `query_events` | `session_id`, `agent_id`, `event_type`, `since`, `until`, `limit` (default 200, range 1..5000) | Raw event rows (tool calls, messages, errors), newest first. |
 | `external_calls` | live | e2e | `query_external_calls` | `session_id`, `since`, `until`, `limit` (default 200, range 1..2000) | External (non-LLM) API calls captured by the interceptor. |
 | `health` | live | plaintext | `health` | (none) | Store health snapshot (engine, size, ring depth, flush age). |
+| `models` | live | plaintext | `query_rollup_model_daily` | `runtime`, `since`, `until`, `limit` (default 1000, range 1..10000) | Per-model daily token/cost rollup across runtimes. |
+| `rollup_sessions` | live | e2e | `query_rollup_sessions` | `runtime`, `limit` (default 200, range 1..2000) | Per-session materialized summary (title, status, totals, stuck flag). |
+| `runtimes` | live | plaintext | `query_rollup_runtime_daily` | `since`, `until`, `limit` (default 1000, range 1..10000) | Per-runtime daily activity/cost rollup (claude_code, openclaw, ...). |
 | `search` | live | e2e | `query_search` | `q` (required), `model`, `status`, `since`, `until`, `limit` (default 50, range 1..500) | Full-text search over session titles and eval reasons. |
 | `sessions` | live | e2e | `query_sessions` | `agent_id`, `since`, `until`, `limit` (default 100, range 1..2000) | One row per session_id with start/end, event count, cost. |
 | `spans` | live | e2e | `query_spans` | `trace_id`, `session_id`, `agent_type`, `since`, `until`, `limit` (default 200, range 1..2000) | OTel span rows with full filters (trace/session/agent/time). |
@@ -47,9 +50,7 @@ test enforces both directions).
 | `approvals` | planned | plaintext | `query_approvals` | `status`, `limit` (default 100, range 1..1000) | Approval queue metadata (ids, states, timestamps; no content). |
 | `brain` | planned | e2e | `query_events` | `session_id`, `since`, `limit` (default 200, range 1..2000) | Reasoning/tool event slice powering the Brain feed. |
 | `glance` | planned | plaintext | `rollup_glance` | (none) | Device-facing top-line counters (sessions, cost, alerts). Non-goal: no per-model data in glance. |
-| `models` | planned | plaintext | `rollup_models` | `runtime`, `since`, `until` | Per-model token/cost rollup across runtimes. |
-| `runtimes` | planned | plaintext | `rollup_runtimes` | `since`, `until` | Per-runtime activity/cost rollup (claude_code, openclaw, ...). |
 | `session` | planned | e2e | `query_sessions_table` | `session_id` (required) | Single-session detail row (title, status, outcome, totals). |
 | `usage` | planned | plaintext | `rollup_usage_daily` | `runtime`, `since`, `until` | Daily token/cost usage series (input/output/cache splits). |
 
-Live methods: 9. Planned methods: 7.
+Live methods: 12. Planned methods: 5.

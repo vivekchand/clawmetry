@@ -42,6 +42,10 @@ DISPATCH_ARGS = {
     "traces": {},
     "external_calls": {},
     "search": {"q": "alpha"},
+    # #2988 (Query Spine P2): materialized-rollup backed methods.
+    "models": {},
+    "runtimes": {},
+    "rollup_sessions": {},
 }
 
 # health() fields that legitimately vary run-to-run / machine-to-machine.

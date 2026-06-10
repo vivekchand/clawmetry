@@ -223,6 +223,24 @@ def _coerce_args(shape: str, raw: dict) -> dict:
             "until":      raw.get("until"),
             "limit":      _safe_int(raw.get("limit"), default=200, lo=1, hi=2000),
         }
+    if shape == "models":
+        return {
+            "runtime": raw.get("runtime"),
+            "since":   raw.get("since"),
+            "until":   raw.get("until"),
+            "limit":   _safe_int(raw.get("limit"), default=1000, lo=1, hi=10000),
+        }
+    if shape == "runtimes":
+        return {
+            "since": raw.get("since"),
+            "until": raw.get("until"),
+            "limit": _safe_int(raw.get("limit"), default=1000, lo=1, hi=10000),
+        }
+    if shape == "rollup_sessions":
+        return {
+            "runtime": raw.get("runtime"),
+            "limit":   _safe_int(raw.get("limit"), default=200, lo=1, hi=2000),
+        }
     if shape == "search":
         q = (raw.get("q") or "").strip()
         if not q:
@@ -692,6 +710,12 @@ _DAEMON_METHODS = frozenset({
     # Issue #2860: session full-text search. Read-only; routed through the
     # daemon proxy so the dashboard process never opens DuckDB writable.
     "query_search",
+    # #2988 (Query Spine P2): materialized rollup reads. The daemon writes
+    # the rollup tables at ingest; these are the read methods backing the
+    # q/1 "models" / "runtimes" / "rollup_sessions" contract shapes.
+    "query_rollup_model_daily",
+    "query_rollup_runtime_daily",
+    "query_rollup_sessions",
 })
 
 

@@ -162,6 +162,8 @@ EXPECTED_TRUST = {
     "approvals": "plaintext",
     "events": "e2e",
     "sessions": "e2e",
+    # #2988: rollup_session carries titles -> content class, never plaintext.
+    "rollup_sessions": "e2e",
     "session": "e2e",
     "transcript": "e2e",
     "brain": "e2e",

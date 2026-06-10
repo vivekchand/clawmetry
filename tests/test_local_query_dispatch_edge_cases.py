@@ -73,7 +73,11 @@ def test_known_shapes_are_exactly_the_allowlist(lq_app):
     lq, _c = lq_app
     assert set(lq._SHAPES) == {"events", "sessions", "aggregates", "health",
                                "transcript", "spans", "traces",
-                               "external_calls", "search"}, (
+                               "external_calls", "search",
+                               # #2988 Query Spine P2: materialized-rollup
+                               # backed shapes (models/runtimes plaintext
+                               # aggregates; rollup_sessions e2e-classed).
+                               "models", "runtimes", "rollup_sessions"}, (
         "the dispatch allowlist changed — review for new query surface before "
         "widening what the relay/cloud can ask the local store to run "
         f"(got {sorted(lq._SHAPES)})"
