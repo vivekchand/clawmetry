@@ -48,11 +48,14 @@ const OUT_DIR = process.env.OUT_DIR || "screenshots";
 // bootstrap JS shows the login overlay and every screenshot is just that.
 const AUTH_TOKEN = process.env.CLAWMETRY_VISUAL_DIFF_TOKEN || "";
 
-// Tabs that actually exist on the OSS dashboard nav (see dashboard.py
-// switchTab() handlers + the .nav-tab buttons). `overview` is the implicit
-// default -- listed first so we get a `root` baseline shot.
+// All canonical tabs in the OSS dashboard nav. Matches CANONICAL_TABS in
+// tests/test_e2e_oss_all_tabs.py and PR_SCREENSHOT_TABS in
+// .github/workflows/pr-screenshots.yml. Keep all three lists in sync:
+// when a new tab template lands under clawmetry/templates/tabs/, add its
+// switchTab() name here, in CANONICAL_TABS, and in PR_SCREENSHOT_TABS.
+// `overview` is the implicit default -- listed first for a `root` baseline.
 const DEFAULT_TABS =
-  "overview,flow,brain,usage,crons,memory,security,subagents,transcripts,logs,skills,models,approvals,alerts,notifications,context,limits,clusters,history";
+  "overview,flow,brain,usage,crons,memory,security,subagents,transcripts,logs,skills,models,approvals,alerts,notifications,context,limits,clusters,history,channels,dives,harness,inventory,nemoclaw,policy,selfevolve,swimlane,tool-catalog,tracing,turn-anatomy,version-impact,context-economics";
 const TABS = (process.env.PR_SCREENSHOT_TABS || DEFAULT_TABS)
   .split(",")
   .map((p) => p.trim())
