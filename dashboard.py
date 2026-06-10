@@ -4428,7 +4428,8 @@ document.addEventListener('click', function(e) {
 });
 </script>
 
-<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="{{ url_for('static', filename='vendor/marked.min.js', v=version) }}"></script>
+<script src="{{ url_for('static', filename='vendor/purify.min.js', v=version) }}"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 </head>
@@ -11866,7 +11867,11 @@ DASHBOARD_HTML = r"""
 <script src="{{ url_for('static', filename='js/nav-dropdown.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/alerts.js', v=version) }}" defer></script>
 <script src="{{ url_for('static', filename='js/dives.js', v=version) }}" defer></script>
-<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<!-- Vendored + pinned (no external CDN, no supply-chain risk): marked renders
+     transcript markdown, DOMPurify sanitizes it before it touches innerHTML.
+     See cmSafeMarkdown() in app.js — never call marked.parse() into the DOM directly. -->
+<script src="{{ url_for('static', filename='vendor/marked.min.js', v=version) }}"></script>
+<script src="{{ url_for('static', filename='vendor/purify.min.js', v=version) }}"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 </head>

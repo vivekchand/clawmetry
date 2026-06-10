@@ -1709,12 +1709,25 @@ function _escapeHtml(s) {
                   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-// Render markdown to HTML if marked is available, otherwise escaped <pre>.
-function _renderMarkdown(text) {
-  if (typeof marked !== 'undefined' && marked.parse) {
-    try { return marked.parse(text || ''); } catch (_) {}
+// Sanitize markdown -> HTML that is safe to assign to innerHTML.
+// marked does NOT sanitize: any raw HTML in the source (agent output, tool
+// args, exec commands, inbound chat-channel messages) passes through verbatim,
+// so its output MUST go through DOMPurify before touching the DOM. This is the
+// ONLY sanctioned path from transcript text to innerHTML — never feed marked
+// output straight into the DOM. Falls back to an escaped <pre> when either lib
+// is missing (so it degrades safe, never to raw HTML).
+function cmSafeMarkdown(text) {
+  var src = text || '';
+  if (typeof marked !== 'undefined' && marked.parse &&
+      typeof DOMPurify !== 'undefined' && DOMPurify.sanitize) {
+    try { return DOMPurify.sanitize(marked.parse(src)); } catch (_) {}
   }
-  return '<pre style="white-space:pre-wrap;font-family:inherit;margin:0;">' + _escapeHtml(text || '') + '</pre>';
+  return '<pre style="white-space:pre-wrap;font-family:inherit;margin:0;">' + _escapeHtml(src) + '</pre>';
+}
+
+// Render markdown to HTML (sanitized) if available, otherwise escaped <pre>.
+function _renderMarkdown(text) {
+  return cmSafeMarkdown(text);
 }
 
 // Tracked file metadata (for history + sensitive flag) — populated from
@@ -20138,7 +20151,7 @@ function renderModalSummary(el) {
     }
   }
   var html = '';
-  var renderMd = (typeof marked !== 'undefined' && marked.parse) ? function(s){ return marked.parse(s); } : escHtml;
+  var renderMd = cmSafeMarkdown;
   html += '<div class="summary-section"><div class="summary-label">Task Description</div>';
   html += '<div class="summary-text md-rendered">' + renderMd(desc || 'No description found') + '</div></div>';
   html += '<div class="summary-section"><div class="summary-label">Final Result / Output</div>';
@@ -20242,7 +20255,7 @@ function renderEvtItem(evt, idx) {
   h += '<span class="evt-summary">' + summary + '</span>';
   h += '<span class="evt-ts">' + escHtml(ts) + '</span>';
   h += '</div>';
-  var bodyHtml = (typeof marked !== 'undefined' && marked.parse) ? marked.parse(body) : escHtml(body);
+  var bodyHtml = cmSafeMarkdown(body);
   var isOpen = _expandedEvts[idx] ? ' open' : '';
   h += '<div class="evt-body md-rendered' + isOpen + '" id="' + bodyId + '">' + bodyHtml + '</div>';
   h += '</div>';
