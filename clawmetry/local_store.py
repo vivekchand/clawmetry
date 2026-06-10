@@ -7322,20 +7322,39 @@ class LocalStore:
         # the list but "0 messages" / "2 messages" in the detail page.
         renderable_in = _sql_in_clause(_RENDERABLE_EVENT_TYPES)
         sql = f"""
+            WITH _ev_ranked AS (
+                SELECT session_id, agent_type, token_count, cost_usd,
+                    CASE event_type
+                        WHEN 'assistant'       THEN 2
+                        WHEN 'message'         THEN 2
+                        WHEN 'model.completed' THEN 1
+                        ELSE 0
+                    END AS _er,
+                    CAST(EXTRACT(EPOCH FROM CAST(ts AS TIMESTAMP)) AS BIGINT) AS _tsec
+                FROM events
+            ),
+            _ev_bmax AS (
+                SELECT session_id, _tsec, MAX(_er) AS _mr
+                FROM _ev_ranked GROUP BY session_id, _tsec
+            ),
+            _ev_agg AS (
+                -- Deduped per (session, agent_type): drop the slim
+                -- model.completed sibling when a richer assistant/message row
+                -- shares its (session, ts-second) bucket, so the events bridge
+                -- below does not double cost/tokens (the same envelope-dedup as
+                -- query_aggregates / query_model_rollup).
+                SELECT r.session_id, r.agent_type,
+                       SUM(r.token_count) AS tok,
+                       SUM(r.cost_usd)    AS cost
+                FROM _ev_ranked r
+                JOIN _ev_bmax bm USING (session_id, _tsec)
+                WHERE NOT (r._er = 1 AND bm._mr = 2)
+                GROUP BY r.session_id, r.agent_type
+            )
             SELECT s.agent_type, s.session_id, s.agent_id, s.title, s.started_at,
                    s.last_active_at, s.ended_at, s.status,
-                   GREATEST(
-                       COALESCE(s.total_tokens, 0),
-                       COALESCE((SELECT SUM(e.token_count) FROM events e
-                                  WHERE e.session_id = s.session_id
-                                    AND e.agent_type  = s.agent_type), 0)
-                   ) AS total_tokens,
-                   GREATEST(
-                       COALESCE(s.cost_usd, 0.0),
-                       COALESCE((SELECT SUM(e.cost_usd) FROM events e
-                                  WHERE e.session_id = s.session_id
-                                    AND e.agent_type  = s.agent_type), 0.0)
-                   ) AS cost_usd,
+                   GREATEST(COALESCE(s.total_tokens, 0), COALESCE(ea.tok, 0))    AS total_tokens,
+                   GREATEST(COALESCE(s.cost_usd, 0.0),   COALESCE(ea.cost, 0.0)) AS cost_usd,
                    GREATEST(
                        COALESCE(s.message_count, 0),
                        (SELECT COUNT(*) FROM events e
@@ -7345,6 +7364,8 @@ class LocalStore:
                    ) AS message_count,
                    s.metadata
             FROM sessions s
+            LEFT JOIN _ev_agg ea
+                   ON ea.session_id = s.session_id AND ea.agent_type = s.agent_type
             {where}
             ORDER BY COALESCE(s.last_active_at, s.started_at) DESC NULLS LAST
             LIMIT ?
