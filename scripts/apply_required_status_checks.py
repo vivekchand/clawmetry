@@ -42,7 +42,7 @@ Primary repo behaviour (clawmetry):
   When using GITHUB_TOKEN (read-only push path), only the current repo's
   checks are verified to avoid cross-repo 403s.
 
-When run locally (GITHUB_REPOSITORY not set), the script applies all 4
+When run locally (GITHUB_REPOSITORY not set), the script applies all 5
 checks and requires a token with cross-repo admin access.
 
 Tracking: vivekchand/clawmetry#2146 (C6)
@@ -59,11 +59,21 @@ OWNER = "vivekchand"
 
 # Each tuple: (repo, exact job name as it appears in the workflow's `name:` field)
 #
-# Job names verified against workflow files 2026-06-01:
+# Job names verified against workflow files 2026-06-01 / updated 2026-06-10:
 #   clawmetry/.github/workflows/oss-golden-path.yml      -> "OSS golden path (wheel + OpenClaw + 9 tabs)"
 #   clawmetry/.github/workflows/cross-repo-handoff.yml   -> "Cross-repo handoff (C4)"
+#   clawmetry/.github/workflows/ci.yml (e2e-critical job) -> "E2E Browser Tests (critical subset)"
 #   clawmetry-cloud/.github/workflows/e2e.yml            -> "Cloud golden-path browser E2E"
 #   clawmetry-landing/.github/workflows/landing-golden-path.yml -> "Landing golden path (C3)"
+#
+# "E2E Browser Tests (critical subset)" (ci.yml / e2e-critical) runs on EVERY PR
+# with no paths filter. It covers:
+#   * tests/test_e2e.py::TestTabsLoad -- basic page-load + tab-nav smoke
+#   * tests/test_e2e_oss_all_tabs.py::TestAllTabsPostAuth -- 32-tab auth-overlay gate
+# Without this as a required check, a PR that introduces an auth overlay on any
+# tab beyond the 9 golden-path tabs can merge unblocked (oss-golden-path.yml only
+# covers 9 tabs). Adding it as required closes the gap between "we run the 32-tab
+# check" and "failing it blocks the merge."
 #
 # visual-diff (pr-screenshots.yml) is intentionally excluded: that workflow has
 # a paths: filter so the job only runs on PRs that touch UI files. Adding it as
@@ -72,6 +82,7 @@ OWNER = "vivekchand"
 REQUIRED_CHECKS: list[tuple[str, str]] = [
     ("clawmetry",         "OSS golden path (wheel + OpenClaw + 9 tabs)"),
     ("clawmetry",         "Cross-repo handoff (C4)"),
+    ("clawmetry",         "E2E Browser Tests (critical subset)"),
     ("clawmetry-cloud",   "Cloud golden-path browser E2E"),
     ("clawmetry-landing", "Landing golden path (C3)"),
 ]
@@ -220,7 +231,7 @@ def _checks_to_apply() -> list[tuple[str, str]]:
     """Return the REQUIRED_CHECKS to apply for the current context (PAT path).
 
     clawmetry is the primary E2E hub. When running from here with a PAT that
-    has Administration (read+write) on all 3 repos, we apply all 4 required
+    has Administration (read+write) on all 3 repos, we apply all 5 required
     checks in a single run -- matching the dry-run preview in
     apply-required-checks.yml which already says 'apply to all 3 repos'.
 

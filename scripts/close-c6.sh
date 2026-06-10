@@ -8,9 +8,10 @@
 #   bash scripts/close-c6.sh
 #
 # What this does:
-#   Adds 4 required status checks to main branch protection across 3 repos:
+#   Adds 5 required status checks to main branch protection across 3 repos:
 #     clawmetry         : OSS golden path (wheel + OpenClaw + 9 tabs)
 #     clawmetry         : Cross-repo handoff (C4)
+#     clawmetry         : E2E Browser Tests (critical subset)
 #     clawmetry-cloud   : Cloud golden-path browser E2E
 #     clawmetry-landing : Landing golden path (C3)
 #
@@ -29,6 +30,7 @@ echo ""
 echo "Target repos and checks:"
 echo "  clawmetry         : OSS golden path (wheel + OpenClaw + 9 tabs)"
 echo "  clawmetry         : Cross-repo handoff (C4)"
+echo "  clawmetry         : E2E Browser Tests (critical subset)"
 echo "  clawmetry-cloud   : Cloud golden-path browser E2E"
 echo "  clawmetry-landing : Landing golden path (C3)"
 echo ""
