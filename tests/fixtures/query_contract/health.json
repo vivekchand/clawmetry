@@ -1,0 +1,21 @@
+{
+  "_elapsed_ms": "<volatile>",
+  "_shape": "health",
+  "_via": "<volatile>",
+  "auto_vacuum_enabled": "<volatile>",
+  "cap_exceeded": "<volatile>",
+  "db_path": "<volatile>",
+  "engine": "duckdb",
+  "event_count": 4,
+  "last_flush_ago_s": "<volatile>",
+  "newest_ts": "2026-01-02T10:00:03Z",
+  "oldest_ts": "2026-01-02T10:00:00Z",
+  "ring_depth": "<volatile>",
+  "ring_dropped_total": "<volatile>",
+  "ring_max": "<volatile>",
+  "schema_version": "<volatile>",
+  "size_bytes": "<volatile>",
+  "size_cap_bytes": "<volatile>",
+  "size_mb": "<volatile>",
+  "sync_dlq_depth": "<volatile>"
+}
