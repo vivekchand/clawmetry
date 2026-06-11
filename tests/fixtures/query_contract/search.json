@@ -1,0 +1,21 @@
+{
+  "_elapsed_ms": "<volatile>",
+  "_shape": "search",
+  "_via": "<volatile>",
+  "count": 1,
+  "rows": [
+    {
+      "agent_type": "openclaw",
+      "cost_usd": 0.006,
+      "eval_reason": null,
+      "eval_score": null,
+      "last_active_at": "2026-01-02T10:00:02Z",
+      "outcome": null,
+      "session_id": "sess-a",
+      "started_at": "2026-01-02T10:00:00Z",
+      "status": "active",
+      "title": "golden alpha refactor",
+      "total_tokens": 60
+    }
+  ]
+}

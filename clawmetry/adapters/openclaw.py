@@ -33,6 +33,41 @@ _NEMOCLAW_CATALOG_TOOLS: frozenset = frozenset({
     "tool_call",
 })
 
+# Reasoning / extended-thinking token key variants (#2876). Anthropic
+# extended-thinking sessions emit a reasoning-token share inside the per-turn
+# usage object under one of several spellings; older code only read
+# input/output/cache keys, so Session.reasoning_tokens was always 0 and per-turn
+# token counts were under-reported for reasoning-capable models.
+_REASONING_TOKEN_KEYS: tuple = (
+    "reasoning_tokens",
+    "reasoningTokens",
+    "thinking_tokens",
+    "thinkingTokens",
+    "thinking_input_tokens",
+    "thinkingInputTokens",
+    "reasoning_output_tokens",
+    "reasoningOutputTokens",
+)
+
+
+def _reasoning_tokens(usage: dict) -> int:
+    """Return the reasoning/thinking token count from a usage dict.
+
+    Accepts any of the known key spellings (snake/camel, thinking/reasoning)
+    and coerces to a non-negative int. Returns 0 when absent or unparsable.
+    """
+    if not isinstance(usage, dict):
+        return 0
+    for k in _REASONING_TOKEN_KEYS:
+        v = usage.get(k)
+        if v is None:
+            continue
+        try:
+            return max(0, int(v))
+        except (TypeError, ValueError):
+            return 0
+    return 0
+
 
 def _d():
     """Late import to avoid circular init with dashboard module."""
@@ -126,24 +161,33 @@ def _model_router_fingerprint() -> dict:
 # starts exporting the catalog to the host (e.g. ~/.nemoclaw/skills/).
 
 
-def _scan_openclaw_selection_runtime() -> tuple[bool, bool]:
+def _scan_openclaw_selection_runtime() -> tuple[bool, bool, bool]:
     """Scan the pinned OpenClaw ``selection-*.js`` once and report whether
-    (a) the NemoClaw compact-catalog patch marker is present, and
-    (b) all three native tool-search symbols are present.
+    (a) the NemoClaw compact-catalog patch marker is present,
+    (b) the three base native tool-search symbols are present, and
+    (c) the two enforcement symbols (visibleAllowedToolNames /
+        replayAllowedToolNames) that distinguish a full-native build from a
+        basic-native one are present (#2877).
 
-    Returns ``(nemoclaw_patched, native_tool_search)``. Never raises.
+    Returns ``(nemoclaw_patched, native_base, native_enforcement)``. Never raises.
     """
     nemoclaw_marker = b"/* nemoclaw compact tool catalog (#2600) */"
-    # Mirror scripts/patch-openclaw-tool-catalog.js NATIVE_TOOL_SEARCH_PATTERNS:
-    # all three symbols must be present before the patch script considers the
-    # dist to already have a native tool-search build (#2732).
-    native_markers = (
+    # Mirror scripts/patch-openclaw-tool-catalog.js NATIVE_TOOL_SEARCH_PATTERNS
+    # entries 1-3: catalog infrastructure symbols (#2732).
+    native_base_markers = (
         b"applyToolSearchCatalog",
         b"buildToolSearchRunPlan",
         b"uncompactedEffectiveTools",
     )
+    # Entries 4-5: enforcement signals added by the harness (#2877). Both must
+    # be present to confirm the build actively enforces visible/replay allow-lists.
+    native_enforcement_markers = (
+        b"visibleAllowedToolNames",
+        b"replayAllowedToolNames",
+    )
     patched = False
-    native = False
+    native_base = False
+    native_enforcement = False
     try:
         home = os.environ.get("OPENCLAW_HOME") or os.path.expanduser("~/.openclaw")
         dist_dirs = [
@@ -170,15 +214,19 @@ def _scan_openclaw_selection_runtime() -> tuple[bool, bool]:
                     continue
                 if not patched and nemoclaw_marker in blob:
                     patched = True
-                if not native and all(m in blob for m in native_markers):
-                    native = True
-                if patched and native:
+                if not native_base and all(m in blob for m in native_base_markers):
+                    native_base = True
+                if native_base and not native_enforcement and all(
+                    m in blob for m in native_enforcement_markers
+                ):
+                    native_enforcement = True
+                if patched and native_base and native_enforcement:
                     break
-            if patched and native:
+            if patched and native_base and native_enforcement:
                 break
     except Exception:
-        return patched, native
-    return patched, native
+        return patched, native_base, native_enforcement
+    return patched, native_base, native_enforcement
 
 
 def _nemoclaw_tool_catalog_state() -> Optional[bool]:
@@ -198,7 +246,7 @@ def _nemoclaw_tool_catalog_state() -> Optional[bool]:
     catalog state that doesn't exist. Never raises.
     """
     env = os.environ.get("NEMOCLAW_TOOL_CATALOG")
-    patched, _native = _scan_openclaw_selection_runtime()
+    patched, _native, _native_enf = _scan_openclaw_selection_runtime()
     if not patched and env is None:
         # No NemoClaw signal at all -> don't claim a catalog state.
         return None
@@ -207,24 +255,27 @@ def _nemoclaw_tool_catalog_state() -> Optional[bool]:
 
 
 def _openclaw_tool_catalog_kind() -> Optional[str]:
-    """Provenance of the active OpenClaw tool-catalog mechanism, if any (#2732).
+    """Provenance of the active OpenClaw tool-catalog mechanism, if any (#2732, #2877).
 
     Returns:
         ``"nemoclaw"`` when the NemoClaw compact-catalog patch is applied
         (matches ``_nemoclaw_tool_catalog_state() is True``).
-        ``"native"`` when the dist ships native ``applyToolSearchCatalog`` /
-        ``buildToolSearchRunPlan`` / ``uncompactedEffectiveTools`` symbols and
-        the NemoClaw patch was skipped — previously indistinguishable from
-        "no catalog at all".
+        ``"native-full"`` when all five NATIVE_TOOL_SEARCH_PATTERNS are present:
+        the three base infrastructure symbols plus ``visibleAllowedToolNames`` /
+        ``replayAllowedToolNames`` (enforcement-active build).
+        ``"native"`` when only the three base infrastructure symbols are present
+        (catalog infrastructure present, enforcement inactive).
         ``None`` when neither signal is present.
 
     The NemoClaw patch wins over native detection: when both fire (e.g. a
     forward-port window) the patched wrapper is what's actually intercepting
     catalog calls. Never raises.
     """
-    patched, native = _scan_openclaw_selection_runtime()
+    patched, native, native_enforcement = _scan_openclaw_selection_runtime()
     if patched:
         return "nemoclaw"
+    if native_enforcement:
+        return "native-full"
     if native:
         return "native"
     return None
@@ -329,6 +380,7 @@ class OpenClawAdapter(AgentAdapter):
                     output_tokens=int(s.get("outputTokens") or 0),
                     cache_read_tokens=int(s.get("cacheReadTokens") or 0),
                     cache_write_tokens=int(s.get("cacheWriteTokens") or 0),
+                    reasoning_tokens=_reasoning_tokens(s),
                     cost_usd=float(s["costUsd"]) if s.get("costUsd") is not None else None,
                     extra=extra,
                 )
@@ -406,12 +458,20 @@ class OpenClawAdapter(AgentAdapter):
                                     ("outputTokens", "output_tokens", "outputTokens"),
                                     ("cacheReadTokens", "cache_read_input_tokens", "cacheReadInputTokens", "cacheRead"),
                                     ("cacheWriteTokens", "cache_creation_input_tokens", "cacheCreationInputTokens", "cacheWrite"),
+                                    ("totalTokens", "totalTokens", "total_tokens"),
                                 ]:
                                     for k in keys:
                                         v = usage.get(k)
                                         if v is not None:
                                             extra[dst] = int(v)
                                             break
+                                # Extended-thinking / reasoning tokens (#2876):
+                                # Anthropic thinking sessions emit a reasoning
+                                # token share that input+output alone omit. Surface
+                                # it so per-turn cost is not under-reported.
+                                _rt = _reasoning_tokens(usage)
+                                if _rt:
+                                    extra["reasoningTokens"] = _rt
                     except Exception:
                         pass
                 events.append(Event(
@@ -443,7 +503,7 @@ class OpenClawAdapter(AgentAdapter):
             Capability.CHANNELS,
         }
 
-    # ── Span reconstruction (issue #1010 / Trace 4) ────────────────────────
+    # ── Span reconstruction (issue #1010 / Trace 4) ───────────────────────────────────────
 
     @staticmethod
     def _span_id(*parts: str) -> str:
@@ -592,6 +652,13 @@ class OpenClawAdapter(AgentAdapter):
                 usage = msg.get("usage") or {}
                 tok_in = int(usage.get("input_tokens") or usage.get("inputTokens") or 0)
                 tok_out = int(usage.get("output_tokens") or usage.get("outputTokens") or 0)
+                # Reasoning/thinking tokens (#2876) are billed but not part of
+                # input/output; fold them into token_count so LLM-span cost
+                # totals are not systematically under-reported.
+                tok_reasoning = _reasoning_tokens(usage)
+                # totalTokens includes reasoning tokens on extended-thinking models;
+                # prefer it when present so spans are not under-counted (#2794).
+                tok_total = int(usage.get("totalTokens") or usage.get("total_tokens") or 0)
                 llm_sid = _sid("llm", session_id, str(raw_ts))
                 spans.append({
                     "span_id": llm_sid,
@@ -605,7 +672,12 @@ class OpenClawAdapter(AgentAdapter):
                     "model": model or None,
                     "tokens_input": tok_in or None,
                     "tokens_output": tok_out or None,
-                    "token_count": (tok_in + tok_out) or None,
+                    "tokens_reasoning": tok_reasoning or None,
+                    # max() is the only safe combination of #2876 and #2794:
+                    # totalTokens (when the SDK emits it) ALREADY includes the
+                    # reasoning share, so summing them would double-count, and
+                    # either alone under-counts when the other key is present.
+                    "token_count": max(tok_total, tok_in + tok_out + tok_reasoning) or None,
                 })
                 if isinstance(content, list):
                     for block in content:

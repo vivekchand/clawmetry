@@ -750,8 +750,26 @@ def load_config() -> dict:
 
 def save_config(data: dict) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(data, indent=2))
-    CONFIG_FILE.chmod(0o600)
+    # config.json holds the api_key + encryption_key. Create it 0600 ATOMICALLY
+    # (O_CREAT|O_EXCL via a temp file, then os.replace) so there is never a
+    # window where it exists world-readable (write_text + a later chmod left a
+    # brief 0644 gap that another local user could read on a shared host).
+    payload = json.dumps(data, indent=2)
+    tmp = CONFIG_FILE.with_name(CONFIG_FILE.name + f".tmp.{os.getpid()}")
+    try:
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            os.write(fd, payload.encode("utf-8"))
+        finally:
+            os.close(fd)
+        os.replace(str(tmp), str(CONFIG_FILE))
+        CONFIG_FILE.chmod(0o600)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
 
 
 def load_state() -> dict:
@@ -975,7 +993,13 @@ def _post(path: str, payload: dict, api_key: str, timeout: int = 45) -> dict:
     for attempt in range(1, _HTTP_MAX_ATTEMPTS + 1):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                resp_body = json.loads(resp.read())
+                raw = resp.read()
+                # Some endpoints answer 204 / an empty body on success
+                # (e.g. /ingest/cache returns ("", 204) after storing a
+                # process_control or cron result). json.loads("") raises,
+                # which surfaced as a spurious "cache post failed" warning
+                # on every successful post-back. Treat an empty body as {}.
+                resp_body = json.loads(raw) if raw.strip() else {}
             # Cloud heartbeat (and any other endpoint) may attach the user's
             # plan / sync_allowed / trial_days_left / upgrade_url. We mirror
             # those into _TRIAL_STATE so subsequent uploads can self-throttle
@@ -4982,49 +5006,60 @@ def sync_voice_log_events(config: dict, state: dict, paths: dict) -> int:
 
 
 def sync_intercepted_events(config: dict, state: dict, paths: dict) -> int:
-    """Tail ~/.openclaw/clawmetry-intercepted.jsonl and ingest external_api_call
-    rows into the local DuckDB store. Uses a byte-offset cursor in state so
+    """Tail the interceptor's JSONL and ingest external_api_call rows into the
+    local DuckDB store. Reads ClawMetry's own ~/.clawmetry/intercepted.jsonl
+    plus the legacy ~/.openclaw/clawmetry-intercepted.jsonl (older interceptors
+    wrote into the agent workspace). Per-file byte-offset cursor in state so
     only new lines are read each tick. Returns the number of rows ingested."""
-    openclaw_dir = paths.get("openclaw_dir", str(Path.home() / ".openclaw"))
-    fpath = Path(openclaw_dir) / "clawmetry-intercepted.jsonl"
-    if not fpath.exists():
-        return 0
     node_id = config.get("node_id", "")
-    offset_key = "last_intercepted_offset"
-    offset = state.get(offset_key, 0)
+    cm_home = os.environ.get("CLAWMETRY_HOME", str(Path.home() / ".clawmetry"))
+    openclaw_dir = paths.get("openclaw_dir", str(Path.home() / ".openclaw"))
+    # The legacy file keeps its existing offset key so we never re-ingest it.
+    targets = [
+        (Path(cm_home) / "intercepted.jsonl", "last_intercepted_offset_cm"),
+        (Path(openclaw_dir) / "clawmetry-intercepted.jsonl", "last_intercepted_offset"),
+    ]
     ingested = 0
     try:
         from clawmetry import local_store as _ls
         store = _ls.get_store()
-        with open(fpath, "r", errors="replace") as f:
-            f.seek(0, 2)
-            size = f.tell()
-            if offset > size:
-                offset = 0
-            f.seek(offset)
-            for raw in f:
-                raw = raw.strip()
-                if not raw:
-                    continue
-                try:
-                    ev = json.loads(raw)
-                except Exception:
-                    continue
-                _evt = ev.get("type")
-                if _evt in ("external_api_call", "llm_call"):
-                    # llm_call carries cost/tokens/model + provider; normalise
-                    # provider→host so both event types share external_api_calls
-                    # (the out-loop card then shows real per-source $ spend).
-                    if _evt == "llm_call" and not ev.get("host"):
-                        ev["host"] = ev.get("provider") or ""
-                    try:
-                        store.ingest_external_call(ev, node_id)
-                        ingested += 1
-                    except Exception as _ie:
-                        log.debug("ingest_external_call failed: %s", _ie)
-            state[offset_key] = f.tell()
     except Exception as e:
-        log.warning("sync_intercepted_events error: %s", e)
+        log.warning("sync_intercepted_events store error: %s", e)
+        return 0
+    for fpath, offset_key in targets:
+        if not fpath.exists():
+            continue
+        offset = state.get(offset_key, 0)
+        try:
+            with open(fpath, "r", errors="replace") as f:
+                f.seek(0, 2)
+                size = f.tell()
+                if offset > size:
+                    offset = 0
+                f.seek(offset)
+                for raw in f:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        ev = json.loads(raw)
+                    except Exception:
+                        continue
+                    _evt = ev.get("type")
+                    if _evt in ("external_api_call", "llm_call"):
+                        # llm_call carries cost/tokens/model + provider; normalise
+                        # provider→host so both event types share external_api_calls
+                        # (the out-loop card then shows real per-source $ spend).
+                        if _evt == "llm_call" and not ev.get("host"):
+                            ev["host"] = ev.get("provider") or ""
+                        try:
+                            store.ingest_external_call(ev, node_id)
+                            ingested += 1
+                        except Exception as _ie:
+                            log.debug("ingest_external_call failed: %s", _ie)
+                state[offset_key] = f.tell()
+        except Exception as e:
+            log.warning("sync_intercepted_events error (%s): %s", fpath, e)
     return ingested
 
 
@@ -6603,10 +6638,10 @@ def send_heartbeat(config: dict) -> bool:
             payload["billing"] = _billing
     except Exception as _bm_e:
         log.debug("billing-mode detection failed (continuing): %s", _bm_e)
-    # Daemon-collected snapshots (see _collect_security_posture docstring)
-    sec = _collect_security_posture()
-    if sec is not None:
-        payload["security_posture"] = sec
+    # security_posture is a SCAN OF THE USER'S MACHINE; it must not ride the
+    # plaintext heartbeat (the cloud stored it in cleartext). It now travels in
+    # the E2E-encrypted system snapshot as `securityPosture` and renders
+    # client-side from the decrypted blob. See sync_system_snapshot().
     # Local-store health (epic #964 phase 1 → rollout gate for phase 2).
     # We need ≥80% of active nodes reporting healthy local stores before
     # slimming cloud retention to 24h. Best-effort; never blocks heartbeat.
@@ -7509,6 +7544,11 @@ _PENDING_ACTIONS = frozenset({
     "cron_fix",
     "dives_query",
     "runtime_backfill",
+    # Process-control (kill/pause/resume a runaway agent on the host). Inert
+    # until the cloud enqueues them; safe to merge daemon-only.
+    "kill_session",
+    "pause_session",
+    "resume_session",
 })
 
 
@@ -7718,6 +7758,237 @@ def _dispatch_pending_action(config: dict, action: dict) -> None:
     if atype == "dives_query":
         _action_dives_query(config, action)
         return
+    if atype in ("kill_session", "pause_session", "resume_session"):
+        _action_process_control(config, action)
+        return
+
+
+# ── Process control: kill / pause / resume a runaway agent on the host ──────
+# The cloud relays {type:"kill_session"|"pause_session"|"resume_session",
+# session_id, runtime, cache_key, mode?}. For family runtimes
+# (claude_code/codex/goose/opencode/aider) we map the session to a host process
+# via clawmetry.process_control and send guarded POSIX signals. For
+# openclaw/nemoclaw we cancel via the `openclaw tasks cancel` CLI (the gateway
+# token is read-only). Belt-and-suspenders: every kill/pause also writes the
+# proxy HITL pause file so any proxied runtime refuses further LLM calls even if
+# the signal missed; resume removes it. Every action records an audit event and
+# posts a structured result back under the action's cache_key.
+
+# A clean per-session pause primitive does not exist for OpenClaw's task
+# scheduler, so pause/resume of an openclaw session is honestly reported
+# unsupported rather than faked.
+_OPENCLAW_RUNTIMES = frozenset({"openclaw", "nemoclaw"})
+
+
+def _hitl_pause_path(session_id: str):
+    """Path to the proxy's legacy operator pause file for a session.
+
+    Mirrors clawmetry/proxy.py: ``~/.clawmetry/hitl/pause_<session_id>`` (no
+    extension) — an empty file that ``_is_session_hitl_paused`` honors with no
+    expiry, so the enforcement proxy refuses further LLM calls for that session
+    until the file is removed.
+    """
+    return Path.home() / ".clawmetry" / "hitl" / f"pause_{session_id}"
+
+
+def _write_hitl_pause(session_id: str) -> bool:
+    """Create the proxy HITL pause file for a session. Best-effort, never raises."""
+    if not session_id:
+        return False
+    try:
+        p = _hitl_pause_path(session_id)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.touch(exist_ok=True)
+        return True
+    except Exception as e:
+        log.debug("hitl pause write skipped for %s: %s", session_id, e)
+        return False
+
+
+def _remove_hitl_pause(session_id: str) -> bool:
+    """Remove the proxy HITL pause file for a session. Best-effort, never raises."""
+    if not session_id:
+        return False
+    try:
+        p = _hitl_pause_path(session_id)
+        if p.exists():
+            p.unlink()
+        # Also clear any auto-backoff json so resume is a clean unpause.
+        pj = p.with_name(p.name + ".json")
+        if pj.exists():
+            pj.unlink()
+        return True
+    except Exception as e:
+        log.debug("hitl pause remove skipped for %s: %s", session_id, e)
+        return False
+
+
+def _openclaw_cancel_task(lookup: str, timeout: int = 30) -> dict:
+    """Cancel an OpenClaw task/run/session via ``openclaw tasks cancel <lookup>``.
+
+    ``lookup`` may be a task id, a run id, OR a session key. Uses OpenClaw's own
+    full-scope creds (the gateway token is operator.read only). ``openclaw`` is a
+    Node script; under the daemon's launchd PATH ``node`` may not be found, so we
+    augment PATH the same way ``run_openclaw_cron`` does. Returns
+    ``{ok, scope_pending, error, raw}``. Never raises.
+    """
+    binp = _resolve_openclaw_bin()
+    if not binp:
+        return {"ok": False, "scope_pending": False,
+                "error": "openclaw CLI not found on this machine", "raw": ""}
+    env = dict(os.environ)
+    node_dirs = [
+        os.path.dirname(binp),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        os.path.expanduser("~/.local/bin"),
+    ]
+    env["PATH"] = os.pathsep.join(node_dirs + [env.get("PATH", "/usr/bin:/bin")])
+    cmd = [binp, "tasks", "cancel", str(lookup)]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout, env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "scope_pending": False,
+                "error": "openclaw tasks cancel timed out", "raw": ""}
+    except Exception as e:
+        return {"ok": False, "scope_pending": False, "error": str(e)[:400], "raw": ""}
+    blob = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    low = blob.lower()
+    scope_pending = (
+        "pairing required" in low
+        or "scope upgrade" in low
+        or "more scopes than currently approved" in low
+    )
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "exit %d" % proc.returncode).strip()
+        if scope_pending:
+            err = ("Cancel needs a one-time gateway approval. On the host run "
+                   "`openclaw devices list` then `openclaw devices approve <id>` "
+                   "(or approve the pairing prompt), then retry.")
+        return {"ok": False, "scope_pending": scope_pending,
+                "error": err[:500], "raw": blob[:1000]}
+    return {"ok": True, "scope_pending": False, "error": "", "raw": blob[:1000]}
+
+
+def _process_control_audit(atype: str, session_id: str, runtime: str,
+                           result: dict, actor: str) -> None:
+    """Record an Enterprise audit event for a kill/pause/resume. Never raises."""
+    try:
+        from clawmetry import audit as _audit
+        _audit.audit_event(
+            "process." + atype,
+            actor=actor or "cloud-relay",
+            target=session_id or "",
+            result=("ok" if result.get("ok") else "failed"),
+            source="cloud-relay",
+            metadata={
+                "runtime": runtime,
+                "detail": result.get("detail") or result.get("error") or "",
+                "pid": result.get("pid"),
+            },
+        )
+    except Exception:
+        pass
+
+
+def _action_process_control(config: dict, action: dict) -> None:
+    """Cloud-relayed kill / pause / resume of a runaway agent on the host.
+
+    Action shape::
+
+        {type:"kill_session"|"pause_session"|"resume_session",
+         session_id, runtime, cache_key, id?, mode?, actor?}
+
+    Runs in a daemon thread so a SIGTERM->SIGKILL grace window never blocks the
+    heartbeat. Writes/removes the proxy HITL pause file as belt-and-suspenders,
+    records an audit event, and POSTs the structured result under ``cache_key``
+    so the cloud can show the user success/failure."""
+    atype = action.get("type")
+    cache_key = action.get("cache_key")
+    enc_key = config.get("encryption_key")
+    api_key = config.get("api_key", "")
+    node_id = config.get("node_id", "")
+    aid = action.get("id")
+    session_id = str(action.get("session_id") or "").strip()
+    runtime = str(action.get("runtime") or "").strip().lower()
+    mode = str(action.get("mode") or "").strip().lower()
+    actor = str(action.get("actor") or "").strip()
+    if not (cache_key and enc_key and api_key and session_id):
+        return
+
+    def _run():
+        result: dict = {"ok": False, "action": atype, "runtime": runtime,
+                        "session_id": session_id}
+        try:
+            import clawmetry.process_control as _pc
+
+            if runtime in _OPENCLAW_RUNTIMES:
+                if atype == "kill_session":
+                    res = _openclaw_cancel_task(session_id)
+                    result.update({
+                        "ok": bool(res.get("ok")),
+                        "detail": "openclaw_task_cancelled" if res.get("ok")
+                        else (res.get("error") or "cancel_failed"),
+                        "scope_pending": bool(res.get("scope_pending")),
+                    })
+                    # Belt-and-suspenders pause file even on kill so a proxied
+                    # OpenClaw refuses further LLM calls if cancel missed.
+                    _write_hitl_pause(session_id)
+                else:
+                    # No clean per-session pause/resume primitive for OpenClaw's
+                    # task scheduler — be honest, don't fake it. We DO still
+                    # flip the proxy HITL pause file so the user's Pause click
+                    # has a real effect on any proxied LLM traffic.
+                    if atype == "pause_session":
+                        wrote = _write_hitl_pause(session_id)
+                        result.update({
+                            "ok": wrote, "unsupported": True,
+                            "detail": "openclaw_pause_unsupported_hitl_only"
+                            if wrote else "openclaw_pause_unsupported",
+                        })
+                    else:  # resume_session
+                        removed = _remove_hitl_pause(session_id)
+                        result.update({
+                            "ok": removed, "unsupported": True,
+                            "detail": "openclaw_resume_unsupported_hitl_only"
+                            if removed else "openclaw_resume_unsupported",
+                        })
+            else:
+                # Family runtimes: real process signals.
+                cwd = str(action.get("cwd") or "").strip()
+                if atype == "kill_session":
+                    res = _pc.kill_session(runtime, session_id, cwd, mode=mode)
+                    _write_hitl_pause(session_id)  # belt-and-suspenders
+                    result.update(res)
+                elif atype == "pause_session":
+                    res = _pc.pause_session(runtime, session_id, cwd)
+                    _write_hitl_pause(session_id)
+                    result.update(res)
+                else:  # resume_session
+                    res = _pc.resume_session(runtime, session_id, cwd)
+                    _remove_hitl_pause(session_id)
+                    result.update(res)
+        except Exception as e:
+            result.update({"ok": False, "detail": ("error: " + str(e))[:300]})
+
+        _process_control_audit(atype, session_id, runtime, result, actor)
+
+        try:
+            blob = encrypt_payload(
+                {**result, "_shape": "process_control"}, enc_key,
+            )
+            _post(
+                "/ingest/cache",
+                {"node_id": node_id, "id": aid, "cache_key": cache_key,
+                 "blob": blob, "shape": "process_control", "ttl": 3600},
+                api_key,
+            )
+        except Exception as e:
+            log.warning("process_control cache post failed: %s", e)
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 def _action_runtime_backfill(config: dict, action: dict) -> None:
@@ -14830,6 +15101,10 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # cloud can show a runtime chip without bloating the snapshot.
         "detectedRuntimes": _detected_runtimes,
         "machineInfo": _build_machine_info(),
+        # Security posture (a scan of the user's machine) rides the ENCRYPTED
+        # snapshot, never the plaintext heartbeat — the cloud stores only this
+        # opaque blob and the Security tab decrypts it client-side.
+        "securityPosture": _collect_security_posture(),
         "channelList": _build_channel_list(config),
         "ollamaInfo": _detect_ollama_for_heartbeat(),
         "firstRun": _build_first_run(),
@@ -15215,6 +15490,94 @@ def start_event_streamer(config: dict, state: dict, paths: dict) -> threading.Th
     return t
 
 
+_APP_BASE = os.environ.get("CLAWMETRY_APP_BASE", "https://app.clawmetry.com").rstrip("/")
+
+
+def _is_placeholder_email(email) -> bool:
+    """Zero-friction installs land on a throwaway placeholder account
+    (agent+<hash>@clawmetry.auto, renamed .linked after device pairing)."""
+    e = (email or "").strip().lower()
+    return e.endswith("@clawmetry.auto") or e.endswith("@clawmetry.linked")
+
+
+def _cloud_get_json(path: str, timeout: float = 4.0):
+    """Best-effort GET app.clawmetry.com<path> -> dict (or None). Never raises."""
+    try:
+        import urllib.request as _ur
+        with _ur.urlopen(_APP_BASE + path, timeout=timeout) as r:
+            return json.loads(r.read() or b"{}")
+    except Exception:
+        return None
+
+
+def start_claim_watcher(config: dict):
+    """ONE-STEP onboarding (daemon half). A zero-friction install lands on a
+    throwaway placeholder account; the cloud /cloud page claims it onto the
+    user's real (logged-in) account when `connect` opens the browser. While we
+    are on a placeholder, poll every ~5s for that claim; the moment it lands,
+    rewrite config with the real account's key and RE-EXEC -- so every thread
+    (heartbeat, snapshot push, pro auto-provision) restarts on the real account
+    and the node syncs there with NO `clawmetry connect --key`. Stops itself
+    once on a real account.
+
+    Re-exec (not an in-place key swap) because the running threads each captured
+    the old api_key; restarting is the clean way to have them all adopt the new
+    one. On restart, run_daemon's _auto_pro() provisions the pro package for the
+    now-entitled (Trial/Pro) account, so the other runtimes start syncing too."""
+    def _loop():
+        import urllib.parse as _up
+        node_id = (config.get("node_id") or "").strip()
+        token = (config.get("api_key") or "").strip()
+        if not token.startswith("cm_") or not node_id:
+            return
+        # Only watch placeholder accounts; a real account never gets "claimed".
+        acct = _cloud_get_json("/api/cloud/account?token=" + _up.quote(token))
+        if not acct or not _is_placeholder_email(acct.get("email")):
+            return
+        log.info("Placeholder account — watching for a one-step account claim (every 5s)")
+        while True:
+            time.sleep(5)
+            try:
+                res = _cloud_get_json(
+                    "/api/cloud/claim-status?token=%s&node_id=%s"
+                    % (_up.quote(token), _up.quote(node_id)))
+                if not res or not res.get("claimed"):
+                    continue
+                new_key = (res.get("api_key") or "").strip()
+                new_email = (res.get("email") or "").strip()
+                if not new_key.startswith("cm_") or new_key == token:
+                    continue
+                cfg = load_config()
+                cfg["api_key"] = new_key
+                cfg["account_email"] = new_email
+                save_config(cfg)
+                log.info("Node claimed onto %s — adopting the real account and "
+                         "restarting (pro auto-provision runs on restart)", new_email)
+                # Clean re-exec: the new process image keeps this PID, so
+                # _acquire_pid_lock would see its OWN live PID and abort, and the
+                # DuckDB writer lock would still be held. Stop the store (flush +
+                # release the writer lock) and drop the pid lock first; then the
+                # re-exec'd run_daemon starts cleanly. (launchd KeepAlive is the
+                # backstop if execv ever fails.)
+                try:
+                    from clawmetry import local_store as _ls
+                    _ls.get_store().stop(flush=True)
+                except Exception:
+                    pass
+                try:
+                    _release_pid_lock()
+                except Exception:
+                    pass
+                time.sleep(0.5)
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+            except Exception as e:
+                log.debug("claim-watcher: %s", e)
+
+    th = threading.Thread(target=_loop, daemon=True, name="claim-watcher")
+    th.start()
+    return th
+
+
 def run_daemon() -> None:
     if not _acquire_pid_lock():
         print(
@@ -15232,6 +15595,21 @@ def run_daemon() -> None:
     # racing supervisor restart sees the lock held until the flush is
     # done, instead of starting a second daemon mid-drain.
     _install_shutdown_handlers()
+
+    # Self-update crash-loop guard (firmware-OTA style, see
+    # clawmetry/update_guard.py). If a just-installed wheel boot-loops under
+    # launchd/systemd, the Nth rapid boot rolls back to the previous version
+    # and exits so the supervisor respawns on the known-good build. A healthy
+    # run self-confirms after a few minutes. Runs BEFORE heavy init so a
+    # crash later in startup still counts as a failed boot. Never raises.
+    try:
+        from clawmetry import __version__ as _cm_boot_ver
+        from clawmetry.update_guard import check_boot_and_maybe_rollback as _ug_check
+        _ug_status = _ug_check(_cm_boot_ver)
+        if _ug_status not in ("idle",):
+            log.info("update guard: boot status=%s (v%s)", _ug_status, _cm_boot_ver)
+    except Exception as _ug_e:
+        log.warning("update guard boot check failed: %s", _ug_e)
 
     # Open-core plugin discovery. dashboard.py runs this at import time so the
     # dashboard process picks up entry-point plugins (clawmetry-pro adapters,
@@ -15291,6 +15669,13 @@ def run_daemon() -> None:
                 log.info("clawmetry-pro: %s", _pro_msg)
     except Exception as _pe:
         log.debug("pro auto-provision (daemon) skipped: %s", _pe)
+    # One-step onboarding: if this node is on a placeholder account, watch for
+    # it being claimed onto the user's real account and adopt it automatically
+    # (no `clawmetry connect --key`). No-op for a real account.
+    try:
+        start_claim_watcher(config)
+    except Exception as _cw:
+        log.debug("claim-watcher start skipped: %s", _cw)
     paths = detect_paths()
     enc = "🔒 E2E encrypted" if config.get("encryption_key") else "⚠️  unencrypted"
     try:
@@ -15700,18 +16085,19 @@ def run_daemon() -> None:
     except Exception as _e:
         log.warning(f"pro-entitlement watcher failed to start: {_e}")
 
-    # ── Opt-in auto-update worker ────────────────────────────────────────
-    # routes/update_check.py runs a background checker that self-updates ONLY
-    # when the `auto_update` config is on (default OFF → no behaviour change
-    # for anyone who hasn't opted in), via the same vetted pip+restart path as
-    # the manual "Update now". It was started only in the DASHBOARD process —
-    # but a headless / cloud-synced node runs only this daemon, so auto-update
-    # never fired where it's most needed. Start it here too (idempotent: the
-    # module guards against a double-started thread). Never blocks/raises.
+    # ── Auto-update worker (default ON in this daemon) ───────────────────
+    # routes/update_check.py runs a background checker that self-updates via
+    # the same vetted pip+restart path as the manual "Update now".
+    # ``role="daemon"`` marks this as the supervised always-on process: the
+    # ONLY role where the default-on policy acts (the dashboard stays opt-in).
+    # Rails: 48h PyPI staleness window, CLAWMETRY_AUTO_UPDATE=0 kill switch,
+    # boot-loop rollback guard (clawmetry/update_guard.py), and no self-exit
+    # when unsupervised. WHY: the 2026-06-09 fleet audit found 92% of active
+    # nodes months stale — fixes shipped but never arrived. Never blocks/raises.
     try:
         from routes.update_check import start_update_check_thread as _start_uc
-        _start_uc()
-        log.info("update-check thread started (auto-update honours the opt-in flag)")
+        _start_uc(role="daemon")
+        log.info("update-check thread started (auto-update default-on, daemon role)")
     except Exception as _e:
         log.warning(f"update-check thread failed to start: {_e}")
 

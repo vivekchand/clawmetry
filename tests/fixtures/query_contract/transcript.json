@@ -1,0 +1,58 @@
+{
+  "_elapsed_ms": "<volatile>",
+  "_shape": "transcript",
+  "_via": "<volatile>",
+  "count": 3,
+  "rows": [
+    {
+      "agent_id": "main",
+      "agent_type": "openclaw",
+      "cost_usd": 0.003,
+      "data": {
+        "seq": 2,
+        "tool": "Bash"
+      },
+      "event_type": "tool_call",
+      "id": "ev-002",
+      "model": "claude-opus-4-7",
+      "node_id": "agent+golden",
+      "session_id": "sess-a",
+      "token_count": 30,
+      "ts": "2026-01-02T10:00:02Z",
+      "workspace_id": null
+    },
+    {
+      "agent_id": "main",
+      "agent_type": "openclaw",
+      "cost_usd": 0.002,
+      "data": {
+        "text": "golden alpha"
+      },
+      "event_type": "message",
+      "id": "ev-001",
+      "model": "claude-opus-4-7",
+      "node_id": "agent+golden",
+      "session_id": "sess-a",
+      "token_count": 20,
+      "ts": "2026-01-02T10:00:01Z",
+      "workspace_id": null
+    },
+    {
+      "agent_id": "main",
+      "agent_type": "openclaw",
+      "cost_usd": 0.001,
+      "data": {
+        "seq": 0,
+        "tool": "Bash"
+      },
+      "event_type": "tool_call",
+      "id": "ev-000",
+      "model": "claude-opus-4-7",
+      "node_id": "agent+golden",
+      "session_id": "sess-a",
+      "token_count": 10,
+      "ts": "2026-01-02T10:00:00Z",
+      "workspace_id": null
+    }
+  ]
+}

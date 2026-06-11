@@ -65,6 +65,11 @@ ClawMetry is **read-only** and **DuckDB-first**:
 - The daemon **owns the DuckDB writer lock**. Build snapshot data on the daemon's **own** store handle (`local_store.get_store()`), never a `read_only=True` re-open — that deadlocks the writer (the `#1771` brick-lock: a cached RO handle blocks every subsequent write; symptom is `cannot open writer — read-only handle already exists`). When you need a read in a separate process, go through the daemon's `/__local_query__/<method>` HTTP proxy (`local_store_via_daemon`), not a direct open.
 - If the agent runtime's **model** is needed (e.g. Self-Evolve), don't try to make ClawMetry call an LLM or get gateway write scope — it's read-only by design and its gateway token is `operator.read` only. Shell out to **`openclaw agent --session-id <stable> --message <prompt> --json`**: OpenClaw runs the turn on its own credentials, the transcript lands on disk → DuckDB, and you parse the result. (`openclaw` is a Node script — under the daemon's launchd PATH `node` isn't found, so pass an augmented `PATH` to the subprocess.)
 
+### Snapshot slices the DESK DEVICE consumes are a 4-repo chain
+
+`sync.py::_build_device_summary` builds the **encrypted** `deviceSummary` the ESP32 device decrypts on-device (e.g. `sessionTitles` — keyed by bare session id, content stays out of the cloud plaintext). A new/changed device slice silently no-ops unless the **firmware also renders it**. Device-facing features span FOUR repos and ALL must ship together:
+`clawmetry-pro` (adapter derives the value, e.g. claude_code ai-title → `Session.title`) → **this repo** (`sync.py` bakes the encrypted slice) → `clawmetry-cloud` (serves the pro wheel daemons auto-provision + relays the snapshot) → `clawmetry-hardware` (firmware decrypts + renders). Verify BOTH ends: decrypt the live snapshot (§3 verify-live) *and* confirm the firmware renders it (flash/OTA). Burned 2026-06-09: a new device slice showed nothing because the firmware PR was unmerged, and the title was wrong because the pro wheel wasn't rolled to the cloud.
+
 ## 1b. Open-core code placement — where does this change go?
 
 ClawMetry is open-core. There are **four repos**, each with a clear remit; agents must pick the right one *before* writing code or the change ships in the wrong tier. Strategy + matrix: `clawmetry-cloud/docs/TIERING_AND_LICENSING.md` (private).
@@ -153,6 +158,21 @@ Gotchas that have burned us:
 - **DuckDB writer-lock contention.** If the daemon logs `ANOTHER PROCESS HOLDS THE DUCKDB WRITER LOCK`, a stray `dashboard.py --port 89xx` dev server grabbed it. Kill the strays, then restart the daemon so it reclaims the writer.
 - **Restart BOTH** the dashboard and the sync daemon after an upgrade — the daemon keeps the old wheel in memory otherwise.
 - When you claim "works locally," confirm you're testing **repo HEAD on a known port**, not a stale long-running server.
+
+### Ruthless-verify non-negotiables (family-wide rule, synced across all repos)
+We ship many products and many features now; "it has tests" is not "it is tested." Hold this bar on
+EVERY change:
+- **Every fix ships the guard that catches it, in the SAME PR**, and you prove the guard fails on the
+  un-fixed code (revert → red → restore → green). A fix without a regression test/guard is half-done.
+- **Update tests as fixes/features land** — never "fix and move on." Prefer guards that AUTO-DISCOVER
+  their scope over hand-maintained allowlists, which silently drift (a cloud inline-JS allowlist missed
+  the /pair page → a JS SyntaxError shipped; the firmware had no stack-size guard → three stack-overflow
+  crashes shipped — both now closed with auto/compile-time guards + revert-proofs, 2026-06-09).
+- **Build-clean / green-CI ≠ works.** Verify the real behaviour end-to-end (decrypt the live snapshot;
+  render the tab in a browser; flash + see it on the device). The worst regressions this session all
+  passed their builds and shipped anyway.
+- **Audit the whole class, not the one instance.** Fixing one JS-string escape, one stack frame, one
+  stale title doesn't fix its siblings — grep the class and verify the family.
 
 ## 4. PR → green CI → merge
 

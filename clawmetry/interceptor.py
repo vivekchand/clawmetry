@@ -57,12 +57,13 @@ _EXCLUDED_HOST_DEFAULTS = frozenset([
 ])
 
 
-# Output file — in OpenClaw dir so ClawMetry sync picks it up
+# Output file — in ClawMetry's OWN data dir (~/.clawmetry), never inside the
+# agent's ~/.openclaw workspace. ClawMetry is read-only w.r.t. the agent: it
+# must not create or modify files under the agent's dir. The sync daemon tails
+# this path (and the legacy ~/.openclaw location for older installs).
 def _get_output_file() -> Path:
-    openclaw_dir = os.environ.get(
-        "CLAWMETRY_OPENCLAW_DIR", str(Path.home() / ".openclaw")
-    )
-    return Path(openclaw_dir) / "clawmetry-intercepted.jsonl"
+    cm_home = os.environ.get("CLAWMETRY_HOME", str(Path.home() / ".clawmetry"))
+    return Path(cm_home) / "intercepted.jsonl"
 
 
 # Write lock for thread-safe JSONL appends
@@ -245,7 +246,7 @@ def _extract_model_from_body(body_bytes: bytes, url: str) -> str | None:
 
 def _extract_tokens_from_response(body_bytes: bytes, provider: str) -> dict[str, int]:
     """Extract input/output token counts from response body."""
-    result = {"input_tokens": 0, "output_tokens": 0}
+    result = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
     if not body_bytes:
         return result
     try:
@@ -255,6 +256,12 @@ def _extract_tokens_from_response(body_bytes: bytes, provider: str) -> dict[str,
             usage = body.get("usage", {})
             result["input_tokens"] = usage.get("input_tokens", 0)
             result["output_tokens"] = usage.get("output_tokens", 0)
+            result["reasoning_tokens"] = int(
+                usage.get("thinking_tokens")
+                or usage.get("reasoning_tokens")
+                or usage.get("thinking_input_tokens")
+                or 0
+            )
 
         elif provider in ("openai", "openrouter"):
             usage = body.get("usage", {})
@@ -311,6 +318,7 @@ def _build_event(
     latency_ms: float,
     status_code: int,
     library: str,
+    reasoning_tokens: int = 0,
 ) -> dict[str, Any]:
     """Build the event dict to write to JSONL."""
     cost = _estimate_cost(model or "", input_tokens, output_tokens)
@@ -330,6 +338,8 @@ def _build_event(
         event["model"] = model
     if cost is not None:
         event["cost_usd"] = cost
+    if reasoning_tokens:
+        event["reasoning_tokens"] = reasoning_tokens
     src = _get_source()
     if src:
         event["source"] = src
@@ -402,12 +412,14 @@ def _patch_httpx() -> bool:
             response = _original_send(self, request, **kwargs)
             latency_ms = (time.monotonic() - t0) * 1000
 
-            # Read response body (handle streaming responses properly)
+            # Only capture the body for NON-streaming calls. For a stream=True
+            # request, reading the body here would consume the caller's stream
+            # before it can iterate (turning token-by-token streaming into a
+            # blocking wait, or raising StreamConsumed). Never touch a stream.
             resp_body = b""
             try:
-                if hasattr(response, "stream") and response.stream:
-                    response.read()
-                resp_body = response.content
+                if not kwargs.get("stream", False):
+                    resp_body = response.content
             except Exception:
                 pass
 
@@ -421,6 +433,7 @@ def _patch_httpx() -> bool:
                 model=final_model,
                 input_tokens=tokens["input_tokens"],
                 output_tokens=tokens["output_tokens"],
+                reasoning_tokens=tokens["reasoning_tokens"],
                 latency_ms=latency_ms,
                 status_code=response.status_code,
                 library="httpx",
@@ -464,11 +477,12 @@ def _patch_httpx() -> bool:
                 response = await _original_async_send(self, request, **kwargs)
                 latency_ms = (time.monotonic() - t0) * 1000
 
+                # Non-streaming only: never consume the caller's stream (see
+                # the sync path for the full rationale).
                 resp_body = b""
                 try:
-                    if hasattr(response, "stream") and response.stream:
-                        await response.read()
-                    resp_body = response.content
+                    if not kwargs.get("stream", False):
+                        resp_body = response.content
                 except Exception:
                     pass
 
@@ -482,6 +496,7 @@ def _patch_httpx() -> bool:
                     model=final_model,
                     input_tokens=tokens["input_tokens"],
                     output_tokens=tokens["output_tokens"],
+                    reasoning_tokens=tokens["reasoning_tokens"],
                     latency_ms=latency_ms,
                     status_code=response.status_code,
                     library="httpx.async",
@@ -552,9 +567,12 @@ def _patch_requests() -> bool:
             response = _original_session_send(self, request, **kwargs)
             latency_ms = (time.monotonic() - t0) * 1000
 
+            # requests' .content consumes a stream=True response, so only read
+            # it for non-streaming calls (never break the caller's stream).
             resp_body = b""
             try:
-                resp_body = response.content
+                if not kwargs.get("stream", False):
+                    resp_body = response.content
             except Exception:
                 pass
 
@@ -568,6 +586,7 @@ def _patch_requests() -> bool:
                 model=final_model,
                 input_tokens=tokens["input_tokens"],
                 output_tokens=tokens["output_tokens"],
+                reasoning_tokens=tokens["reasoning_tokens"],
                 latency_ms=latency_ms,
                 status_code=response.status_code,
                 library="requests",

@@ -47,6 +47,7 @@ import time
 from collections import deque
 from contextlib import contextmanager
 from datetime import datetime
+from datetime import date as _dt_date
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
@@ -115,6 +116,8 @@ def _migrate_legacy_db_path() -> None:
 FLUSH_INTERVAL_SECS = float(os.environ.get("CLAWMETRY_LOCAL_FLUSH_SECS", "2.0"))
 FLUSH_BATCH = int(os.environ.get("CLAWMETRY_LOCAL_FLUSH_BATCH", "1000"))
 RING_MAX = int(os.environ.get("CLAWMETRY_LOCAL_RING_MAX", "10000"))
+# #2988 — events scanned per pass during the one-time rollup backfill.
+ROLLUP_BACKFILL_CHUNK = int(os.environ.get("CLAWMETRY_ROLLUP_BACKFILL_CHUNK", "5000"))
 # Bounded-retry budget for transient DuckDB write failures (lock contention,
 # brief disk hiccups). Default 3 attempts × ≤1s backoff = ≤1.4s wall. After
 # the budget the flush re-raises and the batch stays queued in the ring for
@@ -285,6 +288,51 @@ _DDL = [
         event_count   INTEGER DEFAULT 0,
         error_count   INTEGER DEFAULT 0,
         PRIMARY KEY (agent_type, agent_id, workspace_id, day)
+    )
+    """,
+    # ── Query Spine P2 (#2988): materialized rollups, written incrementally
+    # at ingest by the daemon's own store handle (never a read-only re-open).
+    # Upserts are O(events ingested per flush); a one-time chunked backfill
+    # (backfill_rollups) rebuilds them on upgrade. Day keys are derived from
+    # the event/session timestamp's date part (ts[:10], no tz conversion).
+    # Rows survive event pruning on purpose: they are the durable summary.
+    """
+    CREATE TABLE IF NOT EXISTS rollup_model_daily (
+        day           DATE    NOT NULL,
+        model         VARCHAR NOT NULL,
+        runtime       VARCHAR NOT NULL,
+        tokens_in     BIGINT  DEFAULT 0,
+        tokens_out    BIGINT  DEFAULT 0,
+        cache_read    BIGINT  DEFAULT 0,
+        cache_write   BIGINT  DEFAULT 0,
+        cost_usd      DOUBLE  DEFAULT 0,
+        calls         BIGINT  DEFAULT 0,
+        PRIMARY KEY (day, model, runtime)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS rollup_runtime_daily (
+        day              DATE    NOT NULL,
+        runtime          VARCHAR NOT NULL,
+        tokens           BIGINT  DEFAULT 0,
+        cost_usd         DOUBLE  DEFAULT 0,
+        sessions         BIGINT  DEFAULT 0,
+        active_sessions  BIGINT  DEFAULT 0,
+        PRIMARY KEY (day, runtime)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS rollup_session (
+        session_id     VARCHAR PRIMARY KEY,
+        runtime        VARCHAR,
+        title          VARCHAR,
+        status         VARCHAR,
+        started_at     VARCHAR,
+        last_activity  VARCHAR,
+        tokens         BIGINT  DEFAULT 0,
+        cost_usd       DOUBLE  DEFAULT 0,
+        turns          BIGINT  DEFAULT 0,
+        stuck_flag     BOOLEAN DEFAULT FALSE
     )
     """,
     """
@@ -1473,6 +1521,37 @@ def heal_index_corruption() -> int:
         return -1
 
 
+# Shared envelope-dedup CTE. OpenClaw v3 emits BOTH an assistant/message row AND
+# a sibling model.completed row per turn ~100ms apart, both stamped with the same
+# token_count + cost_usd, so a naive SUM over `events` doubles every billable
+# turn. Prepend `WITH ` + this fragment and read FROM deduped: the slim
+# model.completed sibling is dropped only when a richer assistant/message row
+# shares its (session_id, ts-rounded-to-second) bucket. This mirrors the
+# canonical dedup in query_sessions/query_aggregates so all cost surfaces agree.
+_DEDUPED_EVENTS_CTE = """
+  _ranked AS (
+    SELECT session_id, ts, cost_usd, token_count, model, event_type,
+      CASE event_type
+        WHEN 'assistant'       THEN 2
+        WHEN 'message'         THEN 2
+        WHEN 'model.completed' THEN 1
+        ELSE 0
+      END AS _envelope_rank,
+      CAST(EXTRACT(EPOCH FROM CAST(ts AS TIMESTAMP)) AS BIGINT) AS _ts_sec
+    FROM events
+  ),
+  _bucket_max AS (
+    SELECT session_id, _ts_sec, MAX(_envelope_rank) AS _max_rank
+    FROM _ranked GROUP BY session_id, _ts_sec
+  ),
+  deduped AS (
+    SELECT r.* FROM _ranked r
+    JOIN _bucket_max bm USING (session_id, _ts_sec)
+    WHERE NOT (r._envelope_rank = 1 AND bm._max_rank = 2)
+  )
+"""
+
+
 class LocalStore:
     """Thread-safe local event store with a background batched flusher.
 
@@ -1544,6 +1623,15 @@ class LocalStore:
         if not read_only:
             try:
                 self._migrate()
+                # #2988 — one-time bounded backfill of the materialized
+                # rollup tables on upgrade (no-op once they hold rows).
+                try:
+                    self.backfill_rollups()
+                except Exception:
+                    log.exception(
+                        "local store: rollup backfill failed (continuing; "
+                        "rollups fill incrementally from here)"
+                    )
             except Exception:
                 # Release the file lock so the next boot can open the
                 # db cleanly and retry the migration (#1602). Without
@@ -1793,6 +1881,15 @@ class LocalStore:
             now_ms,
         ]
         with self._write_lock:
+            # #2988 — snapshot the pre-upsert day keys so the rollup session
+            # counts only recompute the (runtime, day) cells that actually
+            # change. Direct conn read (NOT _fetch — it takes _write_lock
+            # internally and would deadlock here).
+            prev = self._conn.execute(
+                "SELECT started_at, last_active_at FROM sessions"
+                " WHERE agent_type = ? AND session_id = ?",
+                [atype, sid],
+            ).fetchone()
             # Upsert: replace if (agent_type, session_id) exists.
             self._conn.execute("""
                 INSERT INTO sessions (
@@ -1815,6 +1912,12 @@ class LocalStore:
                     metadata       = COALESCE(excluded.metadata, sessions.metadata),
                     updated_at     = excluded.updated_at
             """, params)
+            try:
+                self._upsert_session_rollup_locked(session, atype, prev)
+            except Exception:
+                log.exception(
+                    "local store: session rollup upsert failed (non-fatal)"
+                )
 
     def reclassify_session_outcome(
         self,
@@ -4057,11 +4160,12 @@ class LocalStore:
             # never count as two sessions. Reconciles EXACTLY with
             # query_sessions_table (the source the OSS dashboard already trusts).
             sql_rt = f"""
-                WITH ev AS (
+                WITH {_DEDUPED_EVENTS_CTE},
+                ev AS (
                     SELECT session_id,
                            SUM(COALESCE(token_count, 0)) AS tok,
                            SUM(COALESCE(cost_usd, 0.0))  AS cost
-                    FROM events GROUP BY session_id
+                    FROM deduped GROUP BY session_id
                 ),
                 combined AS (
                     SELECT COALESCE(s.session_id, ev.session_id) AS session_id,
@@ -4099,10 +4203,11 @@ class LocalStore:
             from datetime import datetime as _dt, timezone as _tz, timedelta as _tdelta
             _since_24h = (_dt.now(_tz.utc) - _tdelta(hours=24)).isoformat()
             sql_24h = f"""
+                WITH {_DEDUPED_EVENTS_CTE}
                 SELECT {rt_case} AS runtime,
                        SUM(COALESCE(cost_usd, 0.0))    AS cost_24h,
                        SUM(COALESCE(token_count, 0))   AS tokens_24h
-                FROM events
+                FROM deduped
                 WHERE ts >= ?
                 GROUP BY 1
             """
@@ -4115,13 +4220,14 @@ class LocalStore:
                 b["tokens_24h"] = int(r[2] or 0)
             by_runtime_model: list[dict[str, Any]] = []
             sql_rtm = f"""
+                WITH {_DEDUPED_EVENTS_CTE}
                 SELECT {rt_case} AS runtime,
                        model,
                        COUNT(*) AS turns,
                        SUM(COALESCE(token_count, 0)) AS tokens,
                        SUM(COALESCE(cost_usd, 0.0)) AS cost_usd,
                        COUNT(DISTINCT session_id) AS sessions
-                FROM events
+                FROM deduped
                 WHERE model IS NOT NULL AND model <> ''
                 GROUP BY 1, 2
             """
@@ -4557,11 +4663,21 @@ class LocalStore:
             if not self._ring:
                 return 0
             batch = list(self._ring)
-        rows = [_event_to_row(e) for e in batch]
+        usages = [_extract_event_usage(e) for e in batch]
+        rows = [_event_to_row(e, u) for e, u in zip(batch, usages)]
         last_exc: Exception | None = None
         for attempt in range(FLUSH_MAX_ATTEMPTS):
             try:
                 with self._write_lock:
+                    # Rollups (#2988) must count each event exactly once:
+                    # INSERT OR IGNORE silently drops ids already in the
+                    # events table (and in-batch dupes), so only the rows
+                    # that will actually insert may increment the rollups.
+                    # Indexed id lookup — O(batch), never a table scan.
+                    new_idx = self._new_event_indices_locked(batch)
+                    model_d, runtime_d = _rollup_deltas(
+                        (batch[i], usages[i]) for i in new_idx
+                    )
                     with _txn(self._conn):
                         self._conn.executemany(
                             """
@@ -4573,6 +4689,10 @@ class LocalStore:
                             rows,
                         )
                         self._stamp_integrity(batch, self._conn)
+                        # Same transaction: a failed rollup write rolls the
+                        # event insert back too, and the ring (snapshot-then-
+                        # pop) retries the whole batch consistently.
+                        self._apply_rollup_deltas_locked(model_d, runtime_d)
                 last_exc = None
                 break
             except Exception as exc:  # noqa: BLE001 — surface any DuckDB error
@@ -4657,6 +4777,421 @@ class LocalStore:
         if self._read_only:
             return 0
         return self._flush_now()
+
+    # ── materialized rollups (#2988, Query Spine P2) ─────────────────────
+    #
+    # Written ONLY here, on the daemon's own writer handle, inside the same
+    # transaction as the event insert (events) / under the same _write_lock
+    # as the sessions upsert (sessions). Never opened read-only, never
+    # recomputed full-table on the hot path.
+
+    def _new_event_indices_locked(self, batch: list[dict[str, Any]]) -> list[int]:
+        """Indices of batch events that are NOT yet in the events table and
+        not duplicated earlier in the batch — i.e. the rows INSERT OR IGNORE
+        will actually insert. Caller holds ``_write_lock``."""
+        seen: set[str] = set()
+        uniq: list[int] = []
+        for i, e in enumerate(batch):
+            eid = str(e.get("id"))
+            if eid in seen:
+                continue
+            seen.add(eid)
+            uniq.append(i)
+        existing: set[str] = set()
+        ids = [str(batch[i]["id"]) for i in uniq]
+        for off in range(0, len(ids), 500):
+            chunk = ids[off:off + 500]
+            ph = ",".join("?" * len(chunk))
+            cur = self._conn.execute(
+                f"SELECT id FROM events WHERE id IN ({ph})", chunk
+            )
+            existing.update(r[0] for r in cur.fetchall())
+        return [i for i in uniq if str(batch[i]["id"]) not in existing]
+
+    def _apply_rollup_deltas_locked(
+        self,
+        model_deltas: dict[tuple, list],
+        runtime_deltas: dict[tuple, list],
+    ) -> None:
+        """Additive upserts for one ingest batch. O(distinct keys in the
+        batch); caller holds ``_write_lock`` (and usually an open _txn)."""
+        if model_deltas:
+            self._conn.executemany(
+                """
+                INSERT INTO rollup_model_daily
+                  (day, model, runtime, tokens_in, tokens_out,
+                   cache_read, cache_write, cost_usd, calls)
+                VALUES (CAST(? AS DATE),?,?,?,?,?,?,?,?)
+                ON CONFLICT (day, model, runtime) DO UPDATE SET
+                    tokens_in   = rollup_model_daily.tokens_in   + excluded.tokens_in,
+                    tokens_out  = rollup_model_daily.tokens_out  + excluded.tokens_out,
+                    cache_read  = rollup_model_daily.cache_read  + excluded.cache_read,
+                    cache_write = rollup_model_daily.cache_write + excluded.cache_write,
+                    cost_usd    = rollup_model_daily.cost_usd    + excluded.cost_usd,
+                    calls       = rollup_model_daily.calls       + excluded.calls
+                """,
+                [[day, model, runtime, *vals]
+                 for (day, model, runtime), vals in model_deltas.items()],
+            )
+        if runtime_deltas:
+            self._conn.executemany(
+                """
+                INSERT INTO rollup_runtime_daily
+                  (day, runtime, tokens, cost_usd, sessions, active_sessions)
+                VALUES (CAST(? AS DATE),?,?,?,0,0)
+                ON CONFLICT (day, runtime) DO UPDATE SET
+                    tokens   = rollup_runtime_daily.tokens   + excluded.tokens,
+                    cost_usd = rollup_runtime_daily.cost_usd + excluded.cost_usd
+                """,
+                [[day, runtime, *vals]
+                 for (day, runtime), vals in runtime_deltas.items()],
+            )
+
+    def _refresh_runtime_day_session_counts_locked(
+        self, runtime: str, days: Iterable[str],
+    ) -> None:
+        """Recompute the sessions/active_sessions cells of
+        ``rollup_runtime_daily`` for the given (runtime, day) pairs from the
+        sessions table. Bounded: an indexed single-runtime scan per touched
+        day (the sessions table is small — never the events table). Caller
+        holds ``_write_lock``.
+
+        Semantics: ``sessions`` = sessions of the runtime whose effective
+        start (COALESCE(started_at, last_active_at)) date is the day;
+        ``active_sessions`` = sessions whose last activity date is the day.
+        """
+        for day in days:
+            started = self._conn.execute(
+                "SELECT COUNT(*) FROM sessions WHERE agent_type = ? AND "
+                "substr(COALESCE(started_at, last_active_at), 1, 10) = ?",
+                [runtime, day],
+            ).fetchone()[0]
+            active = self._conn.execute(
+                "SELECT COUNT(*) FROM sessions WHERE agent_type = ? AND "
+                "substr(last_active_at, 1, 10) = ?",
+                [runtime, day],
+            ).fetchone()[0]
+            self._conn.execute(
+                """
+                INSERT INTO rollup_runtime_daily
+                  (day, runtime, tokens, cost_usd, sessions, active_sessions)
+                VALUES (CAST(? AS DATE),?,0,0,?,?)
+                ON CONFLICT (day, runtime) DO UPDATE SET
+                    sessions        = excluded.sessions,
+                    active_sessions = excluded.active_sessions
+                """,
+                [day, runtime, int(started), int(active)],
+            )
+
+    def _upsert_session_rollup_locked(
+        self,
+        session: dict[str, Any],
+        atype: str,
+        prev: tuple | None,
+    ) -> None:
+        """Mirror one ``ingest_session`` upsert into ``rollup_session`` and
+        refresh the touched (runtime, day) session counts. Caller holds
+        ``_write_lock``; ``prev`` is the pre-upsert (started_at,
+        last_active_at) row (None for a new session)."""
+        sid = str(session.get("session_id"))
+        started = session.get("started_at")
+        last_active = session.get("last_active_at")
+        stuck = bool(session.get("stuck") or session.get("stuck_flag") or False)
+        self._conn.execute(
+            """
+            INSERT INTO rollup_session
+              (session_id, runtime, title, status, started_at,
+               last_activity, tokens, cost_usd, turns, stuck_flag)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT (session_id) DO UPDATE SET
+                runtime       = excluded.runtime,
+                title         = COALESCE(excluded.title, rollup_session.title),
+                status        = excluded.status,
+                started_at    = COALESCE(rollup_session.started_at, excluded.started_at),
+                last_activity = excluded.last_activity,
+                tokens        = excluded.tokens,
+                cost_usd      = excluded.cost_usd,
+                turns         = excluded.turns,
+                stuck_flag    = excluded.stuck_flag
+            """,
+            [
+                sid, atype, session.get("title"), session.get("status"),
+                started, last_active,
+                int(session.get("total_tokens") or 0),
+                float(session.get("cost_usd") or 0),
+                int(session.get("message_count") or 0),
+                stuck,
+            ],
+        )
+        # Touched-day session counts. ``started_at`` keeps the existing value
+        # on conflict (COALESCE(sessions.started_at, excluded.started_at)),
+        # so the effective start day comes from the pre-upsert row when set.
+        eff_started = (prev[0] if prev and prev[0] else started)
+        new_days = {
+            _event_day(eff_started or last_active),
+            _event_day(last_active),
+        } - {None}
+        if prev is not None:
+            old_days = {
+                _event_day(prev[0] or prev[1]),
+                _event_day(prev[1]),
+            } - {None}
+            days = new_days ^ old_days
+        else:
+            days = new_days
+        if days:
+            self._refresh_runtime_day_session_counts_locked(atype, sorted(days))
+
+    def backfill_rollups(self, *, force: bool = False) -> dict[str, Any]:
+        """One-time, bounded, chunked rebuild of the three rollup tables from
+        the events + sessions tables. Runs at writer start when the rollups
+        are empty but events exist (the upgrade path); ``force=True`` wipes
+        and rebuilds (used by tests / manual repair).
+
+        Chunked keyset scan over events by rowid (memory stays capped at
+        CLAWMETRY_ROLLUP_BACKFILL_CHUNK rows per pass, progress logged).
+        Never called from a request handler.
+        """
+        if self._read_only:
+            return {"skipped": True, "reason": "read_only"}
+        with self._write_lock:
+            have = self._conn.execute(
+                "SELECT (SELECT COUNT(*) FROM rollup_model_daily)"
+                " + (SELECT COUNT(*) FROM rollup_runtime_daily)"
+                " + (SELECT COUNT(*) FROM rollup_session)"
+            ).fetchone()[0]
+            n_events = self._conn.execute(
+                "SELECT COUNT(*) FROM events"
+            ).fetchone()[0]
+            n_sessions = self._conn.execute(
+                "SELECT COUNT(*) FROM sessions"
+            ).fetchone()[0]
+            if have and not force:
+                return {"skipped": True, "reason": "rollups_populated"}
+            if not n_events and not n_sessions:
+                return {"skipped": True, "reason": "store_empty"}
+            log.info(
+                "local store: backfilling rollup tables from %d events / %d "
+                "sessions (one-time, chunk=%d)",
+                n_events, n_sessions, ROLLUP_BACKFILL_CHUNK,
+            )
+            t0 = time.monotonic()
+            with _txn(self._conn):
+                if force:
+                    self._conn.execute("DELETE FROM rollup_model_daily")
+                    self._conn.execute("DELETE FROM rollup_runtime_daily")
+                    self._conn.execute("DELETE FROM rollup_session")
+                # 1. events -> rollup_model_daily + runtime tokens/cost.
+                last_rowid = -1
+                done = 0
+                while True:
+                    cur = self._conn.execute(
+                        """
+                        SELECT rowid, agent_type, ts, data,
+                               cost_usd, token_count, model
+                        FROM events WHERE rowid > ?
+                        ORDER BY rowid LIMIT ?
+                        """,
+                        [last_rowid, ROLLUP_BACKFILL_CHUNK],
+                    )
+                    rows = cur.fetchall()
+                    if not rows:
+                        break
+                    last_rowid = rows[-1][0]
+                    pairs = []
+                    for (_rid, atype, ts, blob, cost, tokens, model) in rows:
+                        data = None
+                        if blob is not None:
+                            try:
+                                raw = _ccr.maybe_decompress(blob)
+                                text = (raw.decode("utf-8")
+                                        if isinstance(raw, (bytes, bytearray))
+                                        else raw)
+                                data = json.loads(text)
+                            except Exception:
+                                data = None
+                        # The STORED cost/token/model columns are the source
+                        # of truth (they were priced once at original ingest);
+                        # top-level keys win inside _extract_event_usage, so
+                        # only the in/out/cache splits are re-read from data.
+                        pseudo = {
+                            "agent_type": atype, "ts": ts,
+                            "cost_usd": cost, "token_count": tokens,
+                            "model": model,
+                            "data": data if isinstance(data, dict) else None,
+                        }
+                        pairs.append((pseudo, _extract_event_usage(pseudo)))
+                    model_d, runtime_d = _rollup_deltas(pairs)
+                    self._apply_rollup_deltas_locked(model_d, runtime_d)
+                    done += len(rows)
+                    log.info(
+                        "local store: rollup backfill %d/%d events",
+                        done, n_events,
+                    )
+                # 2. sessions -> rollup_session (newest row wins when a bare
+                # session_id exists under two agent_types).
+                self._conn.execute(
+                    """
+                    INSERT OR IGNORE INTO rollup_session
+                      (session_id, runtime, title, status, started_at,
+                       last_activity, tokens, cost_usd, turns, stuck_flag)
+                    SELECT session_id, agent_type, title, status, started_at,
+                           last_active_at, COALESCE(total_tokens, 0),
+                           COALESCE(cost_usd, 0), COALESCE(message_count, 0),
+                           FALSE
+                    FROM (
+                        SELECT *, ROW_NUMBER() OVER (
+                            PARTITION BY session_id
+                            ORDER BY updated_at DESC NULLS LAST
+                        ) AS _rn FROM sessions
+                    ) WHERE _rn = 1
+                    """
+                )
+                # 3. sessions -> per-(runtime, day) session counts.
+                day_counts: dict[tuple[str, str], list[int]] = {}
+                for atype, d, n in self._conn.execute(
+                    "SELECT agent_type,"
+                    " substr(COALESCE(started_at, last_active_at), 1, 10), COUNT(*)"
+                    " FROM sessions"
+                    " WHERE COALESCE(started_at, last_active_at) IS NOT NULL"
+                    " GROUP BY 1, 2"
+                ).fetchall():
+                    if _event_day(d):
+                        day_counts.setdefault((str(atype), d), [0, 0])[0] = int(n)
+                for atype, d, n in self._conn.execute(
+                    "SELECT agent_type, substr(last_active_at, 1, 10), COUNT(*)"
+                    " FROM sessions WHERE last_active_at IS NOT NULL"
+                    " GROUP BY 1, 2"
+                ).fetchall():
+                    if _event_day(d):
+                        day_counts.setdefault((str(atype), d), [0, 0])[1] = int(n)
+                if day_counts:
+                    self._conn.executemany(
+                        """
+                        INSERT INTO rollup_runtime_daily
+                          (day, runtime, tokens, cost_usd, sessions, active_sessions)
+                        VALUES (CAST(? AS DATE),?,0,0,?,?)
+                        ON CONFLICT (day, runtime) DO UPDATE SET
+                            sessions        = excluded.sessions,
+                            active_sessions = excluded.active_sessions
+                        """,
+                        [[d, rt, s, a]
+                         for (rt, d), (s, a) in day_counts.items()],
+                    )
+            elapsed = time.monotonic() - t0
+            log.info(
+                "local store: rollup backfill done — %d events, %d sessions "
+                "in %.1fs", n_events, n_sessions, elapsed,
+            )
+            return {
+                "skipped": False, "events": int(n_events),
+                "sessions": int(n_sessions), "elapsed_s": round(elapsed, 2),
+            }
+
+    def query_rollup_model_daily(
+        self,
+        *,
+        runtime: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """Read the per-(day, model, runtime) materialized rollup. ``since``/
+        ``until`` accept ISO timestamps or bare dates (date part is compared;
+        unparseable bounds are ignored rather than raising)."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if runtime:
+            clauses.append("runtime = ?")
+            params.append(str(runtime))
+        if since:
+            clauses.append("(TRY_CAST(substr(?,1,10) AS DATE) IS NULL"
+                           " OR day >= TRY_CAST(substr(?,1,10) AS DATE))")
+            params.extend([str(since), str(since)])
+        if until:
+            clauses.append("(TRY_CAST(substr(?,1,10) AS DATE) IS NULL"
+                           " OR day <= TRY_CAST(substr(?,1,10) AS DATE))")
+            params.extend([str(until), str(until)])
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(int(limit))
+        rows = self._fetch(
+            f"""
+            SELECT CAST(day AS VARCHAR) AS day, model, runtime,
+                   tokens_in, tokens_out, cache_read, cache_write,
+                   ROUND(cost_usd, 8) AS cost_usd, calls
+            FROM rollup_model_daily {where}
+            ORDER BY day DESC, runtime, model
+            LIMIT ?
+            """,
+            params,
+        )
+        cols = ["day", "model", "runtime", "tokens_in", "tokens_out",
+                "cache_read", "cache_write", "cost_usd", "calls"]
+        return [dict(zip(cols, r)) for r in rows]
+
+    def query_rollup_runtime_daily(
+        self,
+        *,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """Read the per-(day, runtime) materialized rollup."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if since:
+            clauses.append("(TRY_CAST(substr(?,1,10) AS DATE) IS NULL"
+                           " OR day >= TRY_CAST(substr(?,1,10) AS DATE))")
+            params.extend([str(since), str(since)])
+        if until:
+            clauses.append("(TRY_CAST(substr(?,1,10) AS DATE) IS NULL"
+                           " OR day <= TRY_CAST(substr(?,1,10) AS DATE))")
+            params.extend([str(until), str(until)])
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(int(limit))
+        rows = self._fetch(
+            f"""
+            SELECT CAST(day AS VARCHAR) AS day, runtime, tokens,
+                   ROUND(cost_usd, 8) AS cost_usd, sessions, active_sessions
+            FROM rollup_runtime_daily {where}
+            ORDER BY day DESC, runtime
+            LIMIT ?
+            """,
+            params,
+        )
+        cols = ["day", "runtime", "tokens", "cost_usd", "sessions",
+                "active_sessions"]
+        return [dict(zip(cols, r)) for r in rows]
+
+    def query_rollup_sessions(
+        self,
+        *,
+        runtime: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Read the per-session materialized rollup, most recently active
+        first."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if runtime:
+            clauses.append("runtime = ?")
+            params.append(str(runtime))
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(int(limit))
+        rows = self._fetch(
+            f"""
+            SELECT session_id, runtime, title, status, started_at,
+                   last_activity, tokens, ROUND(cost_usd, 8) AS cost_usd,
+                   turns, stuck_flag
+            FROM rollup_session {where}
+            ORDER BY COALESCE(last_activity, started_at) DESC NULLS LAST
+            LIMIT ?
+            """,
+            params,
+        )
+        cols = ["session_id", "runtime", "title", "status", "started_at",
+                "last_activity", "tokens", "cost_usd", "turns", "stuck_flag"]
+        return [dict(zip(cols, r)) for r in rows]
 
     # ── queries ─────────────────────────────────────────────────────────
 
@@ -7159,6 +7694,75 @@ class LocalStore:
             return []
         return [dict(zip(cols, r)) for r in rows]
 
+    def query_search(
+        self,
+        *,
+        q: str,
+        model: str | None = None,
+        status: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Search sessions by title and eval_reason text.
+
+        Matches rows where ``sessions.title`` or ``sessions.eval_reason``
+        contains the query string (case-insensitive). Optional ``model``
+        filter restricts to sessions that used a specific model name
+        (sub-selects session_ids from the events table). Returns session
+        summary rows sorted newest-first.
+        """
+        q = (q or "").strip()
+        if not q:
+            return []
+        q_like = f"%{q}%"
+        params: list[Any] = []
+
+        model_join = ""
+        if model:
+            model_join = (
+                "JOIN (SELECT DISTINCT session_id FROM events "
+                "WHERE model ILIKE ? AND session_id IS NOT NULL) em "
+                "ON s.session_id = em.session_id"
+            )
+            params.append(f"%{model}%")
+
+        clauses: list[str] = ["(s.title ILIKE ? OR s.eval_reason ILIKE ?)"]
+        params.extend([q_like, q_like])
+        if status:
+            clauses.append("s.status = ?")
+            params.append(str(status))
+        if since:
+            clauses.append("s.last_active_at >= ?")
+            params.append(since)
+        if until:
+            clauses.append("s.last_active_at <= ?")
+            params.append(until)
+        where = "WHERE " + " AND ".join(clauses)
+        sql = f"""
+            SELECT s.session_id, s.agent_type, s.title,
+                   s.started_at, s.last_active_at, s.status,
+                   s.cost_usd, s.total_tokens,
+                   s.outcome, s.eval_score, s.eval_reason
+            FROM sessions s
+            {model_join}
+            {where}
+            ORDER BY s.last_active_at DESC NULLS LAST
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = [
+            "session_id", "agent_type", "title",
+            "started_at", "last_active_at", "status",
+            "cost_usd", "total_tokens",
+            "outcome", "eval_score", "eval_reason",
+        ]
+        try:
+            return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
+        except Exception as e:
+            log.warning("local store: query_search failed: %s", e)
+            return []
+
     def query_sessions_table(
         self,
         *,
@@ -7219,20 +7823,39 @@ class LocalStore:
         # the list but "0 messages" / "2 messages" in the detail page.
         renderable_in = _sql_in_clause(_RENDERABLE_EVENT_TYPES)
         sql = f"""
+            WITH _ev_ranked AS (
+                SELECT session_id, agent_type, token_count, cost_usd,
+                    CASE event_type
+                        WHEN 'assistant'       THEN 2
+                        WHEN 'message'         THEN 2
+                        WHEN 'model.completed' THEN 1
+                        ELSE 0
+                    END AS _er,
+                    CAST(EXTRACT(EPOCH FROM CAST(ts AS TIMESTAMP)) AS BIGINT) AS _tsec
+                FROM events
+            ),
+            _ev_bmax AS (
+                SELECT session_id, _tsec, MAX(_er) AS _mr
+                FROM _ev_ranked GROUP BY session_id, _tsec
+            ),
+            _ev_agg AS (
+                -- Deduped per (session, agent_type): drop the slim
+                -- model.completed sibling when a richer assistant/message row
+                -- shares its (session, ts-second) bucket, so the events bridge
+                -- below does not double cost/tokens (the same envelope-dedup as
+                -- query_aggregates / query_model_rollup).
+                SELECT r.session_id, r.agent_type,
+                       SUM(r.token_count) AS tok,
+                       SUM(r.cost_usd)    AS cost
+                FROM _ev_ranked r
+                JOIN _ev_bmax bm USING (session_id, _tsec)
+                WHERE NOT (r._er = 1 AND bm._mr = 2)
+                GROUP BY r.session_id, r.agent_type
+            )
             SELECT s.agent_type, s.session_id, s.agent_id, s.title, s.started_at,
                    s.last_active_at, s.ended_at, s.status,
-                   GREATEST(
-                       COALESCE(s.total_tokens, 0),
-                       COALESCE((SELECT SUM(e.token_count) FROM events e
-                                  WHERE e.session_id = s.session_id
-                                    AND e.agent_type  = s.agent_type), 0)
-                   ) AS total_tokens,
-                   GREATEST(
-                       COALESCE(s.cost_usd, 0.0),
-                       COALESCE((SELECT SUM(e.cost_usd) FROM events e
-                                  WHERE e.session_id = s.session_id
-                                    AND e.agent_type  = s.agent_type), 0.0)
-                   ) AS cost_usd,
+                   GREATEST(COALESCE(s.total_tokens, 0), COALESCE(ea.tok, 0))    AS total_tokens,
+                   GREATEST(COALESCE(s.cost_usd, 0.0),   COALESCE(ea.cost, 0.0)) AS cost_usd,
                    GREATEST(
                        COALESCE(s.message_count, 0),
                        (SELECT COUNT(*) FROM events e
@@ -7242,6 +7865,8 @@ class LocalStore:
                    ) AS message_count,
                    s.metadata
             FROM sessions s
+            LEFT JOIN _ev_agg ea
+                   ON ea.session_id = s.session_id AND ea.agent_type = s.agent_type
             {where}
             ORDER BY COALESCE(s.last_active_at, s.started_at) DESC NULLS LAST
             LIMIT ?
@@ -9256,7 +9881,21 @@ _EVENT_COLS = [
 def _extract_event_metrics(
     e: dict[str, Any],
 ) -> tuple[float | None, int | None, str | None]:
-    """Pull (cost_usd, token_count, model) from an event with shape fallbacks.
+    """Back-compat wrapper around :func:`_extract_event_usage` returning the
+    historical ``(cost_usd, token_count, model)`` triple."""
+    u = _extract_event_usage(e)
+    return u["cost"], u["tokens"], u["model"]
+
+
+def _extract_event_usage(e: dict[str, Any]) -> dict[str, Any]:
+    """Pull the full usage breakdown from an event with shape fallbacks.
+
+    Returns ``{"cost", "tokens", "model", "tokens_in", "tokens_out",
+    "cache_read", "cache_write"}`` where ``cost``/``tokens``/``model`` keep
+    the exact semantics the events-table columns have always had (see below)
+    and the four split fields are the per-call input/output/cache token
+    counts (0 when the shape doesn't carry a split). The splits feed the
+    rollup_model_daily materialized table (#2988).
 
     Top-level ``cost_usd`` / ``token_count`` / ``model`` are honoured first —
     that's what the interceptor, claude-cli adapter, sync, and tests already
@@ -9283,9 +9922,17 @@ def _extract_event_metrics(
     model = e.get("model")
     provider = e.get("provider")
 
+    def _out(cr: int = 0, cw: int = 0,
+             ti: int | None = None, to: int | None = None) -> dict[str, Any]:
+        return {
+            "cost": cost, "tokens": tokens, "model": model,
+            "tokens_in": int(ti or 0), "tokens_out": int(to or 0),
+            "cache_read": int(cr or 0), "cache_write": int(cw or 0),
+        }
+
     d = e.get("data") if isinstance(e.get("data"), dict) else None
     if d is None:
-        return cost, tokens, model
+        return _out()
 
     if not model:
         model = d.get("modelId") or d.get("model") or d.get("model_id")
@@ -9441,10 +10088,83 @@ def _extract_event_metrics(
         except Exception:
             pass
 
-    return cost, tokens, model
+    return _out(cache_read, cache_write, tokens_in, tokens_out)
 
 
-def _event_to_row(e: dict[str, Any]) -> tuple:
+def _event_day(ts: Any) -> str | None:
+    """Day key ('YYYY-MM-DD') for a rollup row, derived from the timestamp
+    string's date part — no timezone conversion, matching how the rest of
+    the store buckets days (substr(ts,1,10)). Returns None (event skipped
+    from rollups) when the prefix is not a valid calendar date."""
+    s = str(ts or "")[:10]
+    if len(s) != 10:
+        return None
+    try:
+        _dt_date.fromisoformat(s)
+    except ValueError:
+        return None
+    return s
+
+
+def _rollup_deltas(
+    pairs: Iterable[tuple[dict[str, Any], dict[str, Any]]],
+) -> tuple[dict[tuple, list], dict[tuple, list]]:
+    """Aggregate ``(event, usage)`` pairs (usage from
+    :func:`_extract_event_usage`) into per-key rollup increments.
+
+    Returns ``(model_deltas, runtime_deltas)``:
+
+    * ``model_deltas[(day, model, runtime)]`` ->
+      ``[tokens_in, tokens_out, cache_read, cache_write, cost_usd, calls]``
+      — only events that resolved a model contribute (one "call" each).
+    * ``runtime_deltas[(day, runtime)]`` -> ``[tokens, cost_usd]`` — every
+      event with a valid day contributes its stored token_count/cost_usd
+      (NULL treated as 0), so the runtime series matches a
+      SUM(token_count)/SUM(cost_usd) GROUP BY substr(ts,1,10), agent_type
+      full scan of the events table exactly.
+
+    O(events in the batch); the caller applies the result as
+    INSERT .. ON CONFLICT additive upserts. Pricing is NOT re-derived here:
+    ``usage["cost"]`` is the same value the events row stores, so cost is
+    priced exactly once (at extraction, via the longest-prefix rates in
+    providers_pricing).
+    """
+    model_d: dict[tuple, list] = {}
+    runtime_d: dict[tuple, list] = {}
+    for e, u in pairs:
+        day = _event_day(e.get("ts"))
+        if day is None:
+            continue
+        runtime = str(e.get("agent_type") or "openclaw")
+        tokens = int(u["tokens"] or 0)
+        cost = float(u["cost"] or 0.0)
+        rk = (day, runtime)
+        racc = runtime_d.get(rk)
+        if racc is None:
+            runtime_d[rk] = [tokens, cost]
+        else:
+            racc[0] += tokens
+            racc[1] += cost
+        model = u["model"]
+        if not model:
+            continue
+        mk = (day, str(model), runtime)
+        macc = model_d.get(mk)
+        if macc is None:
+            model_d[mk] = [int(u["tokens_in"]), int(u["tokens_out"]),
+                           int(u["cache_read"]), int(u["cache_write"]),
+                           cost, 1]
+        else:
+            macc[0] += int(u["tokens_in"])
+            macc[1] += int(u["tokens_out"])
+            macc[2] += int(u["cache_read"])
+            macc[3] += int(u["cache_write"])
+            macc[4] += cost
+            macc[5] += 1
+    return model_d, runtime_d
+
+
+def _event_to_row(e: dict[str, Any], usage: dict[str, Any] | None = None) -> tuple:
     """Coerce an event dict into the column tuple for the events table.
     Unknown keys are tolerated and dropped — events come from many sources
     (jsonl parser, gateway, claude-cli adapter) with slightly different
@@ -9457,7 +10177,8 @@ def _event_to_row(e: dict[str, Any]) -> tuple:
             data = json.dumps(data, separators=(",", ":")).encode("utf-8")
             if _ccr.enabled():
                 data = _ccr.compress(data)
-    cost, tokens, model = _extract_event_metrics(e)
+    u = usage if usage is not None else _extract_event_usage(e)
+    cost, tokens, model = u["cost"], u["tokens"], u["model"]
     return (
         str(e["id"]),
         str(e.get("agent_type") or "openclaw"),
