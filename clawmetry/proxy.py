@@ -565,6 +565,12 @@ class ProxyDB:
                     ON proxy_events(event_type, timestamp DESC);
             """)
             conn.commit()
+            # Idempotent column addition for existing DBs (SQLite has no IF NOT EXISTS for ADD COLUMN).
+            try:
+                conn.execute("ALTER TABLE proxy_usage ADD COLUMN reasoning_tokens INTEGER DEFAULT 0")
+                conn.commit()
+            except Exception:
+                pass  # column already exists
             conn.close()
 
     def record_usage(
@@ -580,15 +586,16 @@ class ProxyDB:
         status: str = "ok",
         cache_read_tokens: int = 0,
         cache_creation_tokens: int = 0,
+        reasoning_tokens: int = 0,
     ) -> None:
         with self._lock:
             conn = self._connect()
             conn.execute(
                 """INSERT INTO proxy_usage
                    (timestamp, provider, model, input_tokens, output_tokens,
-                    cache_read_tokens, cache_creation_tokens,
+                    cache_read_tokens, cache_creation_tokens, reasoning_tokens,
                     cost_usd, session_id, request_hash, latency_ms, status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     time.time(),
                     provider,
@@ -597,6 +604,7 @@ class ProxyDB:
                     output_tokens,
                     cache_read_tokens,
                     cache_creation_tokens,
+                    reasoning_tokens,
                     cost_usd,
                     session_id,
                     request_hash,
@@ -874,6 +882,11 @@ def compute_request_hash(body: dict) -> str:
 # in-process, bounded; the proxy is a single long-lived process per node.
 _SESSION_PREFIX: dict = {}
 
+# Per-session raw and normalised tool fingerprints, for tool-order churn
+# detection (#2841). Raw preserves list order; normalised does not.
+_SESSION_TOOLS_NORM: dict = {}
+_SESSION_TOOLS_RAW: dict = {}
+
 _VOLATILE_PATTERNS = {
     "iso_timestamp": re.compile(r"\d{4}-\d\d-\d\d[ T]\d\d:\d\d(?::\d\d)?"),
     "uuid": re.compile(
@@ -906,6 +919,20 @@ def normalize_tools(tools) -> str:
         norm = [_sort_json(t) for t in tools if isinstance(t, dict)]
         norm.sort(key=lambda t: str(t.get("name", "")))
         return json.dumps(norm, separators=(",", ":"), ensure_ascii=False)
+    except Exception:
+        return ""
+
+
+def raw_tools_fp(tools) -> str:
+    """Order-preserving fingerprint for the tools array (#2841). Pair with
+    normalize_tools to detect when a session sends the same tools in a
+    different order across turns. Never raises."""
+    try:
+        if not isinstance(tools, list):
+            return ""
+        return hashlib.sha256(
+            json.dumps(tools, separators=(",", ":"), ensure_ascii=False).encode()
+        ).hexdigest()[:16]
     except Exception:
         return ""
 
@@ -980,6 +1007,7 @@ class StreamUsage:
     output_tokens: int = 0
     cache_read_tokens: int = 0
     cache_creation_tokens: int = 0
+    reasoning_tokens: int = 0
     model: str = ""
     stop_reason: str = ""
 
@@ -1007,6 +1035,20 @@ def parse_anthropic_sse_chunk(line: str, usage: StreamUsage) -> None:
         usage.cache_read_tokens = u.get("cache_read_input_tokens", 0)
         usage.cache_creation_tokens = u.get("cache_creation_input_tokens", 0)
         usage.model = msg.get("model", usage.model)
+        # message_start carries an output_tokens floor (the prefill/initial count).
+        # Seed it so a stream that gets truncated *before* the final message_delta
+        # (client disconnect, upstream error mid-thinking) still records a non-zero
+        # lower bound instead of 0. Use max() so the authoritative message_delta
+        # total below can only raise it, never lose ground (#2842).
+        usage.output_tokens = max(usage.output_tokens, int(u.get("output_tokens", 0) or 0))
+
+    elif event_type == "content_block_delta":
+        # thinking_delta / signature_delta mark extended-thinking blocks.
+        # We don't count tokens here — the reconciled total arrives in message_delta.
+        # Handling this event type prevents silent data loss if future API versions
+        # embed per-delta token counts here.
+        delta = data.get("delta", {})
+        _ = delta.get("type")  # consumed; no-op for current API
 
     elif event_type == "message_delta":
         # message_delta carries the running/final usage. Take the MAX so multiple
@@ -1014,6 +1056,16 @@ def parse_anthropic_sse_chunk(line: str, usage: StreamUsage) -> None:
         # undercount, and pick up cache/input token corrections if present (#2842).
         u = data.get("usage", {})
         usage.output_tokens = max(usage.output_tokens, int(u.get("output_tokens", 0) or 0))
+        # Anthropic may report thinking tokens under any of these keys depending on
+        # API version / model family.
+        rt = (
+            u.get("thinking_tokens")
+            or u.get("reasoning_tokens")
+            or u.get("thinking_input_tokens")
+            or 0
+        )
+        if rt:
+            usage.reasoning_tokens = max(usage.reasoning_tokens, int(rt))
         if u.get("input_tokens"):
             usage.input_tokens = int(u.get("input_tokens") or 0) or usage.input_tokens
         if u.get("cache_read_input_tokens"):
@@ -1832,6 +1884,12 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                 usage.output_tokens = u.get("output_tokens", 0)
                 usage.cache_read_tokens = u.get("cache_read_input_tokens", 0)
                 usage.cache_creation_tokens = u.get("cache_creation_input_tokens", 0)
+                usage.reasoning_tokens = int(
+                    u.get("thinking_tokens")
+                    or u.get("reasoning_tokens")
+                    or u.get("thinking_input_tokens")
+                    or 0
+                )
                 usage.model = resp_data.get("model", "")
                 usage.stop_reason = resp_data.get("stop_reason", "")
             elif provider == "openai":
@@ -2193,6 +2251,33 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
         except Exception as _exc:  # noqa: BLE001 — never break the proxy
             logger.debug("cache-risk detection skipped: %s", _exc)
 
+        # ── Tool-order churn detection (#2841) ─────────────────────────
+        # Flag when a session's tools array is reordered between turns but the
+        # normalised set is unchanged — caller is sending tools non-deterministically.
+        # Detection only; never blocks. Diagnostic for the Cost-lens.
+        try:
+            if session_id and isinstance(body.get("tools"), list):
+                _tnorm = normalize_tools(body.get("tools"))
+                _traw = raw_tools_fp(body.get("tools"))
+                _prev_norm = _SESSION_TOOLS_NORM.get(session_id)
+                _prev_raw = _SESSION_TOOLS_RAW.get(session_id)
+                if len(_SESSION_TOOLS_NORM) > 2000:
+                    _SESSION_TOOLS_NORM.clear()
+                    _SESSION_TOOLS_RAW.clear()
+                _SESSION_TOOLS_NORM[session_id] = _tnorm
+                _SESSION_TOOLS_RAW[session_id] = _traw
+                if (_prev_norm and _prev_raw and _tnorm and _traw
+                        and _prev_raw != _traw and _prev_norm == _tnorm):
+                    db.record_event(
+                        "tool_order_churn",
+                        "tool array reordered across turns (same tools, different order)"
+                        " — normalising; caller may be building tools non-deterministically",
+                        severity="info",
+                        details={"session_id": session_id, "model": model},
+                    )
+        except Exception as _exc:  # noqa: BLE001 — never break the proxy
+            logger.debug("tool-order churn detection skipped: %s", _exc)
+
         # ── Velocity check ─────────────────────────────────────────────
         is_spike, spike_reason = velocity_breaker.check(session_id)
         if is_spike:
@@ -2356,6 +2441,7 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                     output_tokens=usage.output_tokens,
                     cache_read_tokens=usage.cache_read_tokens,
                     cache_creation_tokens=usage.cache_creation_tokens,
+                    reasoning_tokens=usage.reasoning_tokens,
                     cost_usd=cost,
                     session_id=session_id,
                     request_hash=req_hash,
@@ -2392,6 +2478,7 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                 output_tokens=usage.output_tokens,
                 cache_read_tokens=usage.cache_read_tokens,
                 cache_creation_tokens=usage.cache_creation_tokens,
+                reasoning_tokens=usage.reasoning_tokens,
                 cost_usd=cost,
                 session_id=session_id,
                 request_hash=req_hash,

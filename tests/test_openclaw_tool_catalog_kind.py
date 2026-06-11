@@ -1,12 +1,14 @@
 """Regression: distinguish native OpenClaw tool-search builds from plain
 OpenClaw (#2732), without losing the existing NemoClaw-patch detection (#2683).
+Also distinguishes basic-native (3 infrastructure symbols) from full-native
+(all 5 NATIVE_TOOL_SEARCH_PATTERNS including enforcement signals) (#2877).
 
-Before the fix, ``_nemoclaw_tool_catalog_state()`` was the only signal: it
-scanned ``selection-*.js`` only for the NemoClaw patch marker and returned
-``None`` for native-tool-search builds, leaving ``nemoclawToolCatalogEnabled``
-unset and indistinguishable from "no catalog at all". The new
-``_openclaw_tool_catalog_kind()`` helper closes the obs-gap by also returning
-``"native"`` when the dist ships the three tool-search symbols.
+Before the #2732 fix, ``_nemoclaw_tool_catalog_state()`` was the only signal;
+it returned ``None`` for native builds, leaving them indistinguishable from "no
+catalog at all". After #2877, ``_openclaw_tool_catalog_kind()`` returns
+``"native-full"`` for builds that also carry ``visibleAllowedToolNames`` /
+``replayAllowedToolNames`` (enforcement active), and ``"native"`` for builds
+with only the three base infrastructure symbols.
 """
 from __future__ import annotations
 
@@ -17,12 +19,21 @@ import clawmetry.adapters.openclaw as oc
 
 PATCH_MARKER = b"/* nemoclaw compact tool catalog (#2600) */\nexport const x = 1;\n"
 NATIVE_BLOB = (
+    # Three base infrastructure symbols -> basic-native build ("native").
     b"export function applyToolSearchCatalog(){}\n"
     b"export function buildToolSearchRunPlan(){}\n"
     b"export const uncompactedEffectiveTools = [];\n"
 )
+FULL_NATIVE_BLOB = (
+    # All five NATIVE_TOOL_SEARCH_PATTERNS: base + enforcement -> "native-full".
+    b"export function applyToolSearchCatalog(){}\n"
+    b"export function buildToolSearchRunPlan(){}\n"
+    b"export const uncompactedEffectiveTools = [];\n"
+    b"export const visibleAllowedToolNames = [];\n"
+    b"export const replayAllowedToolNames = [];\n"
+)
 PARTIAL_NATIVE_BLOB = (
-    # Only two of three symbols -> NOT a native build per the patch script's
+    # Only two of three base symbols -> NOT a native build per the patch script's
     # NATIVE_TOOL_SEARCH_PATTERNS contract.
     b"export function applyToolSearchCatalog(){}\n"
     b"export function buildToolSearchRunPlan(){}\n"
@@ -60,6 +71,13 @@ def test_native_tool_search_build_detected(monkeypatch, tmp_path):
     assert oc._nemoclaw_tool_catalog_state() is None
     # NEW: native build is no longer indistinguishable from no catalog.
     assert oc._openclaw_tool_catalog_kind() == "native"
+
+
+def test_full_native_enforcement_build_detected(monkeypatch, tmp_path):
+    home = _make_dist(tmp_path, FULL_NATIVE_BLOB)
+    monkeypatch.setenv("OPENCLAW_HOME", str(home))
+    assert oc._nemoclaw_tool_catalog_state() is None
+    assert oc._openclaw_tool_catalog_kind() == "native-full"
 
 
 def test_nemoclaw_patch_wins_over_native(monkeypatch, tmp_path):

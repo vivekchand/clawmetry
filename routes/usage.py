@@ -361,7 +361,7 @@ def _try_local_store_usage(runtime: Optional[str] = None):
         "modelBilling": [],
         "billingSummary": {},
         "sessionCosts": {},
-        "sessions": _ls_top_sessions_by_cost(limit=20),
+        "sessions": _ls_top_sessions_by_cost(limit=20, runtime=runtime),
         "anomalies": [],
         "anomalySessionIds": [],
         "trend": {},
@@ -369,17 +369,27 @@ def _try_local_store_usage(runtime: Optional[str] = None):
     }
 
 
-def _ls_top_sessions_by_cost(limit=20):
+def _ls_top_sessions_by_cost(limit=20, runtime=None):
     """Issue #68 — top-N sessions by total cost. Sources rows from the
     DuckDB ``events`` table aggregated per session, joined back to a
     sample event for the model column. Returns ``[]`` on any failure so
-    the caller can drop the key silently."""
+    the caller can drop the key silently.
+
+    When ``runtime`` is set, scope to that runtime (session-id prefix) so the
+    Cost tab's "Top Sessions" honours the runtime switcher instead of leaking
+    node-wide rows under a specific runtime (per-runtime honesty gate)."""
     try:
         sessions = _ls_call("query_sessions", limit=500)
     except Exception:
         sessions = None
     if not sessions:
         return []
+    if runtime:
+        _rt = str(runtime).lower()
+        sessions = [s for s in sessions
+                    if _runtime_of(s.get("session_id") or "") == _rt]
+        if not sessions:
+            return []
     # Sort by cost desc and take top-N before the model lookup so we
     # avoid scanning events for hundreds of cheap sessions.
     ranked = sorted(
