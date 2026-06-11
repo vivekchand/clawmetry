@@ -256,7 +256,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.498"
+__version__ = "0.12.503"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -1599,10 +1599,56 @@ def _send_telegram_alert(message):
         pass
 
 
+def _url_safe_for_external_request(url):
+    """Return (ok, reason) for an outbound webhook URL.
+
+    SSRF guard: a user-supplied webhook must reach an EXTERNAL service, never
+    the cloud metadata endpoint (169.254.169.254), the local gateway, or any
+    internal host. Rejects non-http(s) schemes and any host that resolves to a
+    loopback / link-local / private / reserved / multicast / unspecified IP.
+    """
+    import ipaddress as _ip
+    import socket as _socket
+    from urllib.parse import urlparse as _urlparse
+    try:
+        p = _urlparse(url)
+    except Exception:
+        return False, "unparseable url"
+    if p.scheme not in ("http", "https"):
+        return False, "scheme must be http or https"
+    host = p.hostname
+    if not host:
+        return False, "missing host"
+    try:
+        port = p.port or (443 if p.scheme == "https" else 80)
+        infos = _socket.getaddrinfo(host, port, proto=_socket.IPPROTO_TCP)
+    except Exception:
+        return False, "dns resolution failed"
+    for info in infos:
+        ip = info[4][0]
+        try:
+            addr = _ip.ip_address(ip)
+        except ValueError:
+            return False, "unparseable resolved ip"
+        if (addr.is_loopback or addr.is_link_local or addr.is_private
+                or addr.is_reserved or addr.is_multicast or addr.is_unspecified):
+            return False, f"blocked internal address {ip}"
+    return True, ""
+
+
 def _send_webhook_alert(url, alert_data, payload_type="generic"):
     """Send alert to a webhook URL (generic JSON, Slack, or Discord)."""
     try:
         import urllib.request as _ur
+
+        # SSRF guard: never POST a user-configured webhook at an internal target.
+        _ok, _reason = _url_safe_for_external_request(url)
+        if not _ok:
+            try:
+                app.logger.warning("webhook alert blocked (%s): %s", _reason, url)
+            except Exception:
+                pass
+            return
 
         if payload_type == "discord":
             content = (
@@ -12683,7 +12729,13 @@ def _check_auth():
     if request.path == "/api/auth/check":
         return  # Auth check endpoint is always accessible
     if request.path == "/api/gw/config":
-        return  # Gateway setup must work before auth is configured
+        # Gateway setup must work before auth is configured, but only from
+        # loopback: this route opens an outbound connection to a caller-supplied
+        # URL, so a non-loopback caller must be authenticated (SSRF guard).
+        _r = request.remote_addr or ""
+        if _r in ("127.0.0.1", "::1", "localhost"):
+            return
+        # else fall through to the standard token check below
     if request.path.startswith("/api/nodes"):
         return  # Fleet API uses its own X-Fleet-Key authentication
     # OTLP ingestion (/v1/metrics|traces|logs) accepts UNTRUSTED data that lands

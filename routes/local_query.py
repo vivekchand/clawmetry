@@ -38,17 +38,20 @@ bp_local_query = Blueprint("local_query", __name__)
 # explicit (not raw SQL pass-through) means the cloud relay can never run
 # arbitrary SELECT against the user's local DuckDB — only what we've
 # whitelisted here.
-_SHAPES = {
-    "events":          "query_events",
-    "sessions":        "query_sessions",
-    "aggregates":      "query_aggregates",
-    "health":          None,                      # special: no args
-    "transcript":      "query_events",            # alias with session_id required
-    "spans":           "query_spans",             # Issue #1013: full-filter span list
-    "traces":          "query_traces",            # Issue #1013: one row per trace_id
-    "external_calls":  "query_external_calls",   # Issue #883: external API tracing
-    "search":          "query_search",            # Issue #2860: session full-text search
-}
+#
+# Issue #2987 (Query Spine P1): the allowlist is now DERIVED from the
+# declared q/1 contract registry in ``clawmetry/query_contract.py`` —
+# one source of truth shared by this module, ``docs/QUERY_CONTRACT.md``
+# (generated), and the drift CI test. Adding a shape means adding a
+# "live" registry entry (with its arg schema + trust class) first; a
+# shape with no registry entry fails ``tests/test_query_contract_drift.py``.
+# The derived dict is byte-identical to the historical literal:
+#   events/sessions/aggregates/transcript/spans/traces/external_calls/
+#   search -> their LocalStore method names, health -> None (special:
+#   ``_dispatch`` calls ``store.health()`` directly).
+from clawmetry.query_contract import live_shapes as _qc_live_shapes
+
+_SHAPES = _qc_live_shapes()
 
 
 def _store():
@@ -219,6 +222,24 @@ def _coerce_args(shape: str, raw: dict) -> dict:
             "since":      raw.get("since"),
             "until":      raw.get("until"),
             "limit":      _safe_int(raw.get("limit"), default=200, lo=1, hi=2000),
+        }
+    if shape == "models":
+        return {
+            "runtime": raw.get("runtime"),
+            "since":   raw.get("since"),
+            "until":   raw.get("until"),
+            "limit":   _safe_int(raw.get("limit"), default=1000, lo=1, hi=10000),
+        }
+    if shape == "runtimes":
+        return {
+            "since": raw.get("since"),
+            "until": raw.get("until"),
+            "limit": _safe_int(raw.get("limit"), default=1000, lo=1, hi=10000),
+        }
+    if shape == "rollup_sessions":
+        return {
+            "runtime": raw.get("runtime"),
+            "limit":   _safe_int(raw.get("limit"), default=200, lo=1, hi=2000),
         }
     if shape == "search":
         q = (raw.get("q") or "").strip()
@@ -689,6 +710,12 @@ _DAEMON_METHODS = frozenset({
     # Issue #2860: session full-text search. Read-only; routed through the
     # daemon proxy so the dashboard process never opens DuckDB writable.
     "query_search",
+    # #2988 (Query Spine P2): materialized rollup reads. The daemon writes
+    # the rollup tables at ingest; these are the read methods backing the
+    # q/1 "models" / "runtimes" / "rollup_sessions" contract shapes.
+    "query_rollup_model_daily",
+    "query_rollup_runtime_daily",
+    "query_rollup_sessions",
 })
 
 
