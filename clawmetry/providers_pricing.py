@@ -167,6 +167,19 @@ def _get_rates(provider: str, model: str) -> tuple[float, float]:
         prov_lower = "gemini"
 
     if model:
+        # Strip a leading provider namespace so OpenRouter ids
+        # ("anthropic/claude-opus-4-1") and Bedrock ids
+        # ("us.anthropic.claude-opus-4-1") match the bare-name overrides instead
+        # of falling to the provider baseline (a ~5x undercount on namespaced
+        # Claude/GPT, the bulk of real spend).
+        match_model = model_lower
+        if "/" in match_model:
+            match_model = match_model.split("/", 1)[1]
+        for _vendor in ("anthropic.", "amazon.", "meta.", "mistral.", "cohere.", "google."):
+            _idx = match_model.find(_vendor)
+            if _idx != -1:
+                match_model = match_model[_idx + len(_vendor):]
+                break
         # Longest matching prefix wins, so a specific current-gen key
         # ("claude-opus-4-8") beats the shorter family key ("claude-opus-4")
         # regardless of dict order. Plain first-match silently mispriced every
@@ -174,7 +187,7 @@ def _get_rates(provider: str, model: str) -> tuple[float, float]:
         best_rates = None
         best_len = -1
         for (prov, prefix), rates in MODEL_OVERRIDES.items():
-            if prov == prov_lower and model_lower.startswith(prefix.lower()):
+            if prov == prov_lower and match_model.startswith(prefix.lower()):
                 if len(prefix) > best_len:
                     best_len = len(prefix)
                     best_rates = rates
@@ -192,8 +205,14 @@ def _get_rates(provider: str, model: str) -> tuple[float, float]:
 # #2049: self-hosted / local model name hints. Routed to the "local" provider
 # so _get_rates returns 0 (the user pays for hardware, not per token) instead
 # of the conservative unknown-provider default.
+# Self-hosted model name hints -> "local" provider (zero per-token cost). Only
+# families that are overwhelmingly run locally (via ollama/lmstudio/etc.). NOT
+# mistral/mixtral/qwen/deepseek: those have hosted paid APIs, so a bare name is
+# routed to its provider (mistral) or the conservative non-zero default
+# (qwen/deepseek) rather than silently priced at $0. A genuinely local instance
+# should carry an explicit local prefix (e.g. "ollama/qwen2.5") to be free.
 _LOCAL_MODEL_HINTS = (
-    "llama", "qwen", "mistral", "mixtral", "deepseek", "phi", "gemma", "codellama",
+    "llama", "phi", "gemma", "codellama",
 )
 
 # Anthropic prompt-cache multipliers, relative to the input rate:
@@ -227,6 +246,11 @@ def provider_for_model(model: str) -> str:
         return "google"
     if "grok" in m:
         return "xai"
+    # Mistral's hosted family (mistral-large/small/medium, mixtral, codestral)
+    # has real per-token rates in the pricing table; route it instead of
+    # treating it as free/local.
+    if "mistral" in m or "mixtral" in m or "codestral" in m:
+        return "mistral"
     return ""
 
 
