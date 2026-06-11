@@ -10880,9 +10880,15 @@ def _iter_tool_invocation_names(event_type: str | None, data: dict) -> Iterable[
 
     et = (event_type or "").lower()
 
-    # Shape 1: top-level tool.call / toolCall / tool_use event.
-    if et in ("tool.call", "toolcall", "tool_use"):
-        name = data.get("name") or data.get("tool")
+    # Shape 1: top-level tool.call / toolCall / tool_use / tool_call event.
+    # Family adapters (claude_code et al via clawmetry_pro) emit
+    # ``tool_call`` with the name under ``tool_name`` -- without it every
+    # family tool invocation counted as zero (device runtime_tools empty,
+    # /api/plugins blind to family runtimes; found via the device camera
+    # loop, 2026-06-11).
+    if et in ("tool.call", "toolcall", "tool_use", "tool_call"):
+        name = (data.get("name") or data.get("tool")
+                or data.get("tool_name"))
         if isinstance(name, str) and name:
             yield name
         return
