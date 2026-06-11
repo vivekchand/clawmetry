@@ -6539,6 +6539,61 @@ def _heartbeat_stuck_payload(now: float | None = None) -> list:
         return []
 
 
+def _runtime_tools_payload(store):
+    """Per-runtime tool usage for the device drill-down: tool NAMES +
+    counts (24h) + a last-action ago. Aggregates only -- no arguments, no
+    content. Shared by the heartbeat (plaintext, the desk device's REAL
+    path -- it reads the CLOUD-built device_summary, same discovery as the
+    stuck signal) and the legacy encrypted deviceSummary slice."""
+    from clawmetry import waste_flags as _wf
+    import collections as _c
+    out = []
+    _now = datetime.now(timezone.utc)
+    since_24h = (_now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
+    rows = store.query_sessions_table(limit=300) or []
+    recent_rts = set()
+    for s in rows:
+        if not isinstance(s, dict):
+            continue
+        _upd = str(s.get("last_active_at") or s.get("updated_at") or "")
+        name = (_wf.runtime_from_session_id(s.get("session_id") or "")
+                or "openclaw")
+        if s.get("status") == "active" or _upd >= since_24h:
+            recent_rts.add(name)
+    for name in sorted(recent_rts):
+        try:
+            inv = store.query_tool_call_invocations(
+                since=since_24h, runtime=name, limit=5000) or []
+            if not inv:
+                continue
+            counts = _c.Counter((r.get("name") or "?") for r in inv)
+            entry = {
+                "name": name,
+                "tools_today": [
+                    {"name": n[:24], "count": c}
+                    for n, c in counts.most_common(4)
+                ],
+            }
+            newest = max(inv, key=lambda r: r.get("ts") or "")
+            ago = 0
+            try:
+                _ts = datetime.fromisoformat(
+                    str(newest.get("ts")).replace("Z", "+00:00"))
+                if _ts.tzinfo is None:
+                    _ts = _ts.replace(tzinfo=timezone.utc)
+                ago = max(0, int((_now - _ts).total_seconds()))
+            except Exception:
+                pass
+            entry["last_action"] = {
+                "tool": (newest.get("name") or "?")[:24],
+                "ago_seconds": ago,
+            }
+            out.append(entry)
+        except Exception:
+            continue
+    return out[:8]
+
+
 def send_heartbeat(config: dict) -> bool:
     """Send heartbeat to cloud. Returns True on success, False on failure.
 
@@ -6584,6 +6639,17 @@ def send_heartbeat(config: dict) -> bool:
             payload["stuck"] = _stuck
     except Exception as _st_e:
         log.debug("stuck heartbeat payload build failed (continuing): %s", _st_e)
+    # Per-runtime tool usage for the device drill-down -- same ride as
+    # `stuck`: plaintext aggregates on the heartbeat, recency-gated by the
+    # cloud at read time. Best-effort, never blocks the heartbeat.
+    try:
+        from clawmetry import local_store as _ls_rtt
+        _rtt = _runtime_tools_payload(_ls_rtt.get_store())
+        if _rtt:
+            payload["runtime_tools"] = _rtt
+    except Exception as _rtt_e:
+        log.debug("runtime_tools payload build failed (continuing): %s",
+                  _rtt_e)
     # Agent-install self-report (cloud bug fix 2026-05-18). Cloud Run pods
     # can't stat the user's home directory, so the daemon tells cloud what
     # agents exist locally and cloud aggregates across the user's fleet.
@@ -14366,67 +14432,13 @@ def _build_device_summary(spending, daily_usage):
             ]
         except Exception:
             pass
-        # schema 2 (additive): per-runtime TOOLS + LAST ACTION for the
-        # device's drill-down -- closes the clawmetry.com/device promise
-        # "the tools it is using, and what it just did" (founder
-        # 2026-06-11). Tool NAMES + a timestamp only (no arguments, no
-        # content), riding the ENCRYPTED deviceSummary -- the cloud sees
-        # nothing. Built for every runtime SEEN in the last 24h (family
-        # adapters mark sessions 'ended' mid-conversation, so the
-        # active-only ``runtimes`` array above misses them); shipped as
-        # its own additive ``runtime_tools`` key. Bounded reads; any
-        # failure degrades to the key absent.
+        # schema 2 (additive): per-runtime tools for the LEGACY encrypted
+        # slice path (the live device path is the heartbeat -> cloud
+        # device_summary; see _runtime_tools_payload).
         try:
-            from datetime import timedelta as _td
-            _now = datetime.now(timezone.utc)
-            since_24h = (_now - _td(hours=24)).strftime(
-                "%Y-%m-%dT%H:%M:%S")
-            recent_rts = set()
-            for s in rows:
-                if not isinstance(s, dict):
-                    continue
-                _upd = str(s.get("last_active_at")
-                           or s.get("updated_at") or "")
-                name = (_wf.runtime_from_session_id(
-                    s.get("session_id") or "") or "openclaw")
-                if s.get("status") == "active" or _upd >= since_24h:
-                    recent_rts.add(name)
-            rt_tools = []
-            import collections as _c
-            for name in sorted(recent_rts):
-                try:
-                    inv = store.query_tool_call_invocations(
-                        since=since_24h, runtime=name, limit=5000) or []
-                    if not inv:
-                        continue
-                    counts = _c.Counter(
-                        (r.get("name") or "?") for r in inv)
-                    entry = {
-                        "name": name,
-                        "tools_today": [
-                            {"name": n[:24], "count": c}
-                            for n, c in counts.most_common(4)
-                        ],
-                    }
-                    newest = max(inv, key=lambda r: r.get("ts") or "")
-                    ago = 0
-                    try:
-                        _ts = datetime.fromisoformat(
-                            str(newest.get("ts")).replace("Z", "+00:00"))
-                        if _ts.tzinfo is None:
-                            _ts = _ts.replace(tzinfo=timezone.utc)
-                        ago = max(0, int((_now - _ts).total_seconds()))
-                    except Exception:
-                        pass
-                    entry["last_action"] = {
-                        "tool": (newest.get("name") or "?")[:24],
-                        "ago_seconds": ago,
-                    }
-                    rt_tools.append(entry)
-                except Exception:
-                    continue
-            if rt_tools:
-                summary["runtime_tools"] = rt_tools[:8]
+            _rtt = _runtime_tools_payload(store)
+            if _rtt:
+                summary["runtime_tools"] = _rtt
         except Exception:
             pass
         # schema 2: per-session titles for the device's runtime-detail recent
