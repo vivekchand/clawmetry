@@ -156,6 +156,9 @@ jobs:
             tests/test_no_direct_get_store_in_routes.py \
             tests/test_moat_bug_class_v3_event_shape_gate.py \
             tests/test_local_query_api.py \
+            tests/test_local_query_dispatch_edge_cases.py \
+            tests/test_query_contract_drift.py \
+            tests/test_query_contract_goldens.py \
             tests/test_local_store_concurrent_flush_1590.py \
             tests/test_moat_perf_benchmark.py \
             tests/test_runtime_detection_snapshot.py \
