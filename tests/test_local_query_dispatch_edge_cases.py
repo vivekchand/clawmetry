@@ -64,9 +64,20 @@ def test_unknown_shape_rejected_not_dispatched(lq_app):
 
 
 def test_known_shapes_are_exactly_the_allowlist(lq_app):
+    # Deliberately an EXPLICIT pin (not derived from the q/1 registry in
+    # clawmetry/query_contract.py) so widening the relay-reachable query
+    # surface always requires a reviewed two-place change. Registry/doc/
+    # coercion cross-checks live in tests/test_query_contract_drift.py
+    # (#2987). Was stale at 7 shapes (external_calls #883 + search #2860
+    # landed without updating it; this file is not in the CI gate list).
     lq, _c = lq_app
     assert set(lq._SHAPES) == {"events", "sessions", "aggregates", "health",
-                               "transcript", "spans", "traces"}, (
+                               "transcript", "spans", "traces",
+                               "external_calls", "search",
+                               # #2988 Query Spine P2: materialized-rollup
+                               # backed shapes (models/runtimes plaintext
+                               # aggregates; rollup_sessions e2e-classed).
+                               "models", "runtimes", "rollup_sessions"}, (
         "the dispatch allowlist changed — review for new query surface before "
         "widening what the relay/cloud can ask the local store to run "
         f"(got {sorted(lq._SHAPES)})"
