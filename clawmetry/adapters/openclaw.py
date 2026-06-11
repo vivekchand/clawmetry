@@ -434,8 +434,10 @@ class OpenClawAdapter(AgentAdapter):
                 # r[5] = data BLOB — decode and surface per-type token split
                 # (input/output/cache_read/cache_write) so callers can measure
                 # per-turn cache efficiency without re-reading the raw file.
-                # Also extract channel/hostname from gateway log record top-level
-                # fields when present (no dedicated DB columns for these).
+                # Also extract channel/hostname/level from gateway log record
+                # top-level fields when present (no dedicated DB columns for
+                # these). 'level' (info/warn/error/debug) lets callers filter or
+                # bucket log events by severity (#3013).
                 raw_data = r[5]
                 if raw_data is not None:
                     try:
@@ -443,7 +445,7 @@ class OpenClawAdapter(AgentAdapter):
                             raw_data = bytes(raw_data).decode("utf-8", "replace")
                         obj = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
                         if isinstance(obj, dict):
-                            for _field in ("channel", "hostname"):
+                            for _field in ("channel", "hostname", "level"):
                                 _val = obj.get(_field)
                                 if _val:
                                     extra[_field] = _val
