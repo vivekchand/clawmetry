@@ -84,12 +84,14 @@ jobs:
             echo "  Using pat_token input -- will apply to all 3 repos:"
             echo "  clawmetry         : OSS golden path (wheel + OpenClaw + 9 tabs)"
             echo "  clawmetry         : Cross-repo handoff (C4)"
+            echo "  clawmetry         : E2E Browser Tests (critical subset)"
             echo "  clawmetry-cloud   : Cloud golden-path browser E2E"
             echo "  clawmetry-landing : Landing golden path (C3)"
           else
             echo "  Using E2E_ADMIN_PAT secret -- will apply to all 3 repos:"
             echo "  clawmetry         : OSS golden path (wheel + OpenClaw + 9 tabs)"
             echo "  clawmetry         : Cross-repo handoff (C4)"
+            echo "  clawmetry         : E2E Browser Tests (critical subset)"
             echo "  clawmetry-cloud   : Cloud golden-path browser E2E"
             echo "  clawmetry-landing : Landing golden path (C3)"
           fi

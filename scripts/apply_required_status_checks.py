@@ -59,10 +59,11 @@ OWNER = "vivekchand"
 
 # Each tuple: (repo, exact job name as it appears in the workflow's `name:` field)
 #
-# Job names verified against workflow files 2026-06-01:
-#   clawmetry/.github/workflows/oss-golden-path.yml      -> "OSS golden path (wheel + OpenClaw + 9 tabs)"
-#   clawmetry/.github/workflows/cross-repo-handoff.yml   -> "Cross-repo handoff (C4)"
-#   clawmetry-cloud/.github/workflows/e2e.yml            -> "Cloud golden-path browser E2E"
+# Job names verified against workflow files 2026-06-11:
+#   clawmetry/.github/workflows/oss-golden-path.yml        -> "OSS golden path (wheel + OpenClaw + 9 tabs)"
+#   clawmetry/.github/workflows/cross-repo-handoff.yml     -> "Cross-repo handoff (C4)"
+#   clawmetry/.github/workflows/ci.yml (e2e-critical job)  -> "E2E Browser Tests (critical subset)"
+#   clawmetry-cloud/.github/workflows/e2e.yml              -> "Cloud golden-path browser E2E"
 #   clawmetry-landing/.github/workflows/landing-golden-path.yml -> "Landing golden path (C3)"
 #
 # visual-diff (pr-screenshots.yml) is intentionally excluded: that workflow has
@@ -72,6 +73,7 @@ OWNER = "vivekchand"
 REQUIRED_CHECKS: list[tuple[str, str]] = [
     ("clawmetry",         "OSS golden path (wheel + OpenClaw + 9 tabs)"),
     ("clawmetry",         "Cross-repo handoff (C4)"),
+    ("clawmetry",         "E2E Browser Tests (critical subset)"),
     ("clawmetry-cloud",   "Cloud golden-path browser E2E"),
     ("clawmetry-landing", "Landing golden path (C3)"),
 ]
@@ -326,11 +328,13 @@ def main() -> None:
             print()
             print("=== C6: checks already correctly configured ===")
             print("=== (Set by manual Settings UI action or a prior admin run.) ===")
-        else:
-            print()
-            print("INFO: Required checks not yet configured. Run: bash scripts/close-c6.sh")
-        # Always exit 0: push-triggered runs are informational, never blocking.
-        return
+            return
+        print()
+        print("ERROR: Required checks not yet configured.")
+        print("  Run:  bash scripts/close-c6.sh")
+        print("  Or:   Actions > 'Apply required E2E status checks (C6 -- one-shot)'")
+        print("        confirm=APPLY  pat_token=<fine-grained PAT, Administration read+write>")
+        sys.exit(1)
 
     # PAT / OAuth path: full apply + verify across all repos.
     checks = _checks_to_apply()
