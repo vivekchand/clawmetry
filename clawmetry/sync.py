@@ -10649,6 +10649,58 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 except Exception as _se:
                     log.warning("family session upsert failed (%s): %s", ns_id, _se)
                     continue
+                # Agent fan-out: a family adapter may emit a session with
+                # ``parent_id`` set (e.g. the Claude Code adapter surfaces each
+                # spawned sub-agent transcript under its parent session). Record
+                # it in the ``subagents`` table so it lands in the snapshot
+                # ``subagents[]`` slice (read back via ``query_subagents``) and
+                # the Command River renders the real per-session fan-out instead
+                # of "1 agent". The child's transcript events were ALSO ingested
+                # above (under ``ns_id``) so its tokens/cost reconcile from the
+                # events table on read. parent_session_id carries the runtime
+                # prefix so it matches the parent's session row id; the cloud
+                # filter normalises both bare + prefixed forms.
+                if getattr(s, "parent_id", None):
+                    try:
+                        _sa_extra = s.extra if isinstance(s.extra, dict) else {}
+                        store.ingest_subagent({
+                            "subagent_id": ns_id,
+                            "agent_type": "openclaw",
+                            "parent_session_id": f"{runtime}:{s.parent_id}",
+                            "spawned_at": started,
+                            # Open (running) children leave ended_at None so the
+                            # river draws the stream to NOW; finished children
+                            # carry their last event ts.
+                            "ended_at": ended,
+                            "task": _ftitle,
+                            "status": (s.cost_status or
+                                       ("failed" if s.end_reason == "error"
+                                        else "completed")),
+                            "cost_usd": float(s.cost_usd or 0.0),
+                            "token_count": int(s.total_tokens or 0),
+                            # data-blob fields the /api/subagents shaper reads.
+                            "model": s.model or "",
+                            "label": _ftitle,
+                            "displayName": _ftitle,
+                            "depth": int(_sa_extra.get("depth") or 1),
+                            "error": (_sa_extra.get("description")
+                                      if s.end_reason == "error" else ""),
+                            "runtime": runtime,
+                        })
+                    except Exception as _sae:
+                        log.debug("family subagent ingest failed (%s): %s", ns_id, _sae)
+                # Sub-agent children stop here: they ride the snapshot
+                # ``subagents[]`` slice (river lanes), not the top-level
+                # Sessions list (local: excluded in ``query_sessions_table``;
+                # cloud: not pushed below). Their tokens/cost are carried on the
+                # subagent row itself (cache-aware, from the adapter), so we skip
+                # the per-event re-ingest + cloud session push entirely — a big
+                # CPU saving for a session that fanned out to hundreds of agents.
+                # Mark the watermark so we don't re-scan an unchanged child.
+                if getattr(s, "parent_id", None):
+                    if _activity:
+                        _evt_hw[ns_id] = _activity
+                    continue
                 # Carry the same row to cloud so the cloud Sessions list shows it.
                 cloud_session_rows.append({
                     "agent_type": "openclaw",
