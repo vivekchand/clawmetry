@@ -9,6 +9,7 @@ Covers:
   the harness getSandboxInferenceConfig switch (compatible-anthropic-endpoint
   with the default api routes to the MANAGED 'inference' provider).
 - #2608 _model_router_fingerprint — parse git:<sha> from the fingerprint file.
+- #3013 list_events extracts gateway log record 'level' field into Event.extra.
 """
 import json
 import os
@@ -123,6 +124,62 @@ def test_model_router_fingerprint_parses_git_sha(tmp_path, monkeypatch):
 def test_model_router_fingerprint_absent_returns_empty(tmp_path, monkeypatch):
     monkeypatch.setenv("NEMOCLAW_MODEL_ROUTER_VENV", str(tmp_path / "nope"))
     assert _model_router_fingerprint() == {}
+
+
+# -- #3013 list_events extracts log record 'level' field --------------------
+
+def _make_store_mock(fake_rows):
+    """Return a (mock_ls, _MockStore) that can be injected into sys.modules."""
+    import sys, types, clawmetry as _pkg
+
+    class _MockStore:
+        def _fetch(self, *a, **kw):
+            return fake_rows
+
+    mock_ls = types.SimpleNamespace(get_store=lambda read_only=False: _MockStore())
+    return mock_ls
+
+
+def test_list_events_extracts_log_level(monkeypatch):
+    """Gateway log records carry a top-level 'level' field; list_events must
+    surface it in Event.extra so callers can filter by severity."""
+    import sys, json as _json, types, clawmetry as _pkg
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+
+    data_blob = _json.dumps({
+        "level": "error",
+        "channel": "gateway",
+        "hostname": "host1",
+        "message": "something went wrong",
+    })
+    # Row shape: (id, event_type, ts, model, token_count, data, agent_id, node_id)
+    fake_row = ("evt1", "log", "1000.0", None, 0, data_blob, "agent1", "node1")
+    mock_ls = _make_store_mock([fake_row])
+    monkeypatch.setitem(sys.modules, "clawmetry.local_store", mock_ls)
+    monkeypatch.setattr(_pkg, "local_store", mock_ls, raising=False)
+
+    events = OpenClawAdapter().list_events("sess1")
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.extra.get("level") == "error"
+    assert ev.extra.get("channel") == "gateway"
+    assert ev.extra.get("hostname") == "host1"
+
+
+def test_list_events_omits_absent_level(monkeypatch):
+    """When 'level' is missing from the blob, extra must not contain the key."""
+    import sys, json as _json, types, clawmetry as _pkg
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+
+    data_blob = _json.dumps({"channel": "main", "message": "ok"})
+    fake_row = ("evt2", "log", "2000.0", None, 0, data_blob, None, None)
+    mock_ls = _make_store_mock([fake_row])
+    monkeypatch.setitem(sys.modules, "clawmetry.local_store", mock_ls)
+    monkeypatch.setattr(_pkg, "local_store", mock_ls, raising=False)
+
+    events = OpenClawAdapter().list_events("sess2")
+    assert len(events) == 1
+    assert "level" not in events[0].extra
 
 
 # -- #2682 nemoclaw catalog dispatch span unwrap -----------------------------
