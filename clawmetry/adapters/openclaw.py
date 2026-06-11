@@ -475,6 +475,21 @@ class OpenClawAdapter(AgentAdapter):
                                 _val = obj.get(_field)
                                 if _val is not None:
                                     extra[_field] = _val
+                            # First-event latency + slow-reply diagnostic (#3016):
+                            # harness-emitted fields surface into Event.extra so
+                            # callers can filter/bucket without re-reading raw JSONL.
+                            _fe = (
+                                obj.get("firstEventLatencyMs")
+                                or obj.get("first_event_latency_ms")
+                            )
+                            if _fe is not None:
+                                try:
+                                    extra["firstEventLatencyMs"] = float(_fe)
+                                except (TypeError, ValueError):
+                                    pass
+                            _slow = obj.get("slowReply") or obj.get("slow_reply")
+                            if _slow:
+                                extra["slowReply"] = True
                             msg = obj.get("message")
                             if isinstance(msg, str):
                                 content_text = msg
@@ -567,6 +582,10 @@ class OpenClawAdapter(AgentAdapter):
         # are emitted; consumed when a later user tool_result block references
         # the same id (#2733).
         tool_span_by_id: dict = {}
+        # First-event latency tracking (#3016): capture session start time so
+        # we can record the wall-clock delta to the first assistant reply.
+        _session_start_ts: float | None = None
+        _first_assistant_done: bool = False
 
         for obj in events:
             if not isinstance(obj, dict):
@@ -579,6 +598,7 @@ class OpenClawAdapter(AgentAdapter):
                 ts = now
 
             if t == "session" and obj.get("version") is not None:
+                _session_start_ts = ts
                 spans.append({
                     "span_id": session_span_id,
                     "trace_id": trace_id,
@@ -690,6 +710,28 @@ class OpenClawAdapter(AgentAdapter):
                 # prefer it when present so spans are not under-counted (#2794).
                 tok_total = int(usage.get("totalTokens") or usage.get("total_tokens") or 0)
                 llm_sid = _sid("llm", session_id, str(raw_ts))
+                # First-event latency + slow-reply diagnostic (#3016): record
+                # on the FIRST assistant span only — subsequent turns are not
+                # the "initial reply delay" the harness tracks.
+                llm_attrs: dict = {}
+                if not _first_assistant_done:
+                    _first_assistant_done = True
+                    if _session_start_ts is not None and ts > _session_start_ts:
+                        llm_attrs["llm.first_event_latency_s"] = round(
+                            ts - _session_start_ts, 3
+                        )
+                    _fe_ms = (
+                        obj.get("firstEventLatencyMs")
+                        or obj.get("first_event_latency_ms")
+                    )
+                    if _fe_ms is not None:
+                        try:
+                            llm_attrs["llm.first_event_latency_ms"] = float(_fe_ms)
+                        except (TypeError, ValueError):
+                            pass
+                    _slow = obj.get("slowReply") or obj.get("slow_reply")
+                    if _slow:
+                        llm_attrs["llm.slow_reply"] = True
                 spans.append({
                     "span_id": llm_sid,
                     "trace_id": trace_id,
@@ -708,6 +750,7 @@ class OpenClawAdapter(AgentAdapter):
                     # reasoning share, so summing them would double-count, and
                     # either alone under-counts when the other key is present.
                     "token_count": max(tok_total, tok_in + tok_out + tok_reasoning) or None,
+                    "attributes": llm_attrs or None,
                 })
                 if isinstance(content, list):
                     for block in content:
