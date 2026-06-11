@@ -14366,6 +14366,51 @@ def _build_device_summary(spending, daily_usage):
             ]
         except Exception:
             pass
+        # schema 2 (additive): per-runtime TOOLS + LAST ACTION for the
+        # device's drill-down -- closes the clawmetry.com/device promise
+        # "the tools it is using, and what it just did" (founder
+        # 2026-06-11). Tool NAMES + a timestamp only (no arguments, no
+        # content), and they still ride the ENCRYPTED deviceSummary, so
+        # the cloud sees nothing. One bounded DuckDB read per active
+        # runtime; any failure degrades to fields absent.
+        try:
+            since_24h = (
+                datetime.now(timezone.utc) - timedelta(hours=24)
+            ).strftime("%Y-%m-%dT%H:%M:%S")
+            for entry in summary["runtimes"]:
+                try:
+                    inv = store.query_tool_call_invocations(
+                        since=since_24h, runtime=entry["name"],
+                        limit=5000) or []
+                    if not inv:
+                        continue
+                    import collections as _c
+                    counts = _c.Counter(
+                        (r.get("name") or "?") for r in inv)
+                    entry["tools_today"] = [
+                        {"name": n[:24], "count": c}
+                        for n, c in counts.most_common(4)
+                    ]
+                    newest = max(inv, key=lambda r: r.get("ts") or "")
+                    ago = 0
+                    try:
+                        _ts = datetime.fromisoformat(
+                            str(newest.get("ts")).replace("Z", "+00:00"))
+                        if _ts.tzinfo is None:
+                            _ts = _ts.replace(tzinfo=timezone.utc)
+                        ago = max(0, int(
+                            (datetime.now(timezone.utc) - _ts)
+                            .total_seconds()))
+                    except Exception:
+                        pass
+                    entry["last_action"] = {
+                        "tool": (newest.get("name") or "?")[:24],
+                        "ago_seconds": ago,
+                    }
+                except Exception:
+                    continue
+        except Exception:
+            pass
         # schema 2: per-session titles for the device's runtime-detail recent
         # -sessions rows. The title is the session's FIRST USER MESSAGE (real
         # content, e.g. "read flywheel.md ..."), so it rides the ENCRYPTED
