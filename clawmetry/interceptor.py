@@ -57,12 +57,13 @@ _EXCLUDED_HOST_DEFAULTS = frozenset([
 ])
 
 
-# Output file — in OpenClaw dir so ClawMetry sync picks it up
+# Output file — in ClawMetry's OWN data dir (~/.clawmetry), never inside the
+# agent's ~/.openclaw workspace. ClawMetry is read-only w.r.t. the agent: it
+# must not create or modify files under the agent's dir. The sync daemon tails
+# this path (and the legacy ~/.openclaw location for older installs).
 def _get_output_file() -> Path:
-    openclaw_dir = os.environ.get(
-        "CLAWMETRY_OPENCLAW_DIR", str(Path.home() / ".openclaw")
-    )
-    return Path(openclaw_dir) / "clawmetry-intercepted.jsonl"
+    cm_home = os.environ.get("CLAWMETRY_HOME", str(Path.home() / ".clawmetry"))
+    return Path(cm_home) / "intercepted.jsonl"
 
 
 # Write lock for thread-safe JSONL appends
@@ -411,12 +412,14 @@ def _patch_httpx() -> bool:
             response = _original_send(self, request, **kwargs)
             latency_ms = (time.monotonic() - t0) * 1000
 
-            # Read response body (handle streaming responses properly)
+            # Only capture the body for NON-streaming calls. For a stream=True
+            # request, reading the body here would consume the caller's stream
+            # before it can iterate (turning token-by-token streaming into a
+            # blocking wait, or raising StreamConsumed). Never touch a stream.
             resp_body = b""
             try:
-                if hasattr(response, "stream") and response.stream:
-                    response.read()
-                resp_body = response.content
+                if not kwargs.get("stream", False):
+                    resp_body = response.content
             except Exception:
                 pass
 
@@ -474,11 +477,12 @@ def _patch_httpx() -> bool:
                 response = await _original_async_send(self, request, **kwargs)
                 latency_ms = (time.monotonic() - t0) * 1000
 
+                # Non-streaming only: never consume the caller's stream (see
+                # the sync path for the full rationale).
                 resp_body = b""
                 try:
-                    if hasattr(response, "stream") and response.stream:
-                        await response.read()
-                    resp_body = response.content
+                    if not kwargs.get("stream", False):
+                        resp_body = response.content
                 except Exception:
                     pass
 
@@ -563,9 +567,12 @@ def _patch_requests() -> bool:
             response = _original_session_send(self, request, **kwargs)
             latency_ms = (time.monotonic() - t0) * 1000
 
+            # requests' .content consumes a stream=True response, so only read
+            # it for non-streaming calls (never break the caller's stream).
             resp_body = b""
             try:
-                resp_body = response.content
+                if not kwargs.get("stream", False):
+                    resp_body = response.content
             except Exception:
                 pass
 
