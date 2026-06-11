@@ -166,6 +166,28 @@ except ImportError:
     logs_service_pb2 = None
 
 
+# Hard ceiling on a gzip-decompressed OTLP body. A few-KB gzip bomb can expand
+# to many GB and OOM the daemon (never-crash / never-hang). Cap the output and
+# reject anything larger. Override via CLAWMETRY_OTLP_MAX_DECOMPRESSED_MB.
+try:
+    _OTLP_MAX_DECOMPRESSED = int(os.environ.get("CLAWMETRY_OTLP_MAX_DECOMPRESSED_MB", "64")) * 1024 * 1024
+except (TypeError, ValueError):
+    _OTLP_MAX_DECOMPRESSED = 64 * 1024 * 1024
+
+
+def _gunzip_bounded(pb_data, limit=None):
+    """gzip-decompress with a hard output cap. Reads at most ``limit``+1 bytes
+    so a gzip bomb can never inflate into memory. Raises ValueError past the cap."""
+    import gzip as _gzip
+    import io as _io
+    limit = _OTLP_MAX_DECOMPRESSED if limit is None else limit
+    with _gzip.GzipFile(fileobj=_io.BytesIO(pb_data)) as gf:
+        out = gf.read(limit + 1)
+    if len(out) > limit:
+        raise ValueError("gzip body exceeds decompressed size limit")
+    return out
+
+
 def _otlp_decode(pb_data, proto_msg, content_encoding=None, content_type=None):
     """Decode an OTLP/HTTP request body into ``proto_msg`` and return it.
 
@@ -181,8 +203,7 @@ def _otlp_decode(pb_data, proto_msg, content_encoding=None, content_type=None):
     400, never a 500 stacktrace leak)."""
     ce = (content_encoding or "").lower()
     if "gzip" in ce:
-        import gzip as _gzip
-        pb_data = _gzip.decompress(pb_data)
+        pb_data = _gunzip_bounded(pb_data)
     ct = (content_type or "").lower()
     if "application/json" in ct or "application/x-ndjson" in ct:
         from google.protobuf import json_format as _json_format
@@ -235,7 +256,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.489"
+__version__ = "0.12.503"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -1578,10 +1599,56 @@ def _send_telegram_alert(message):
         pass
 
 
+def _url_safe_for_external_request(url):
+    """Return (ok, reason) for an outbound webhook URL.
+
+    SSRF guard: a user-supplied webhook must reach an EXTERNAL service, never
+    the cloud metadata endpoint (169.254.169.254), the local gateway, or any
+    internal host. Rejects non-http(s) schemes and any host that resolves to a
+    loopback / link-local / private / reserved / multicast / unspecified IP.
+    """
+    import ipaddress as _ip
+    import socket as _socket
+    from urllib.parse import urlparse as _urlparse
+    try:
+        p = _urlparse(url)
+    except Exception:
+        return False, "unparseable url"
+    if p.scheme not in ("http", "https"):
+        return False, "scheme must be http or https"
+    host = p.hostname
+    if not host:
+        return False, "missing host"
+    try:
+        port = p.port or (443 if p.scheme == "https" else 80)
+        infos = _socket.getaddrinfo(host, port, proto=_socket.IPPROTO_TCP)
+    except Exception:
+        return False, "dns resolution failed"
+    for info in infos:
+        ip = info[4][0]
+        try:
+            addr = _ip.ip_address(ip)
+        except ValueError:
+            return False, "unparseable resolved ip"
+        if (addr.is_loopback or addr.is_link_local or addr.is_private
+                or addr.is_reserved or addr.is_multicast or addr.is_unspecified):
+            return False, f"blocked internal address {ip}"
+    return True, ""
+
+
 def _send_webhook_alert(url, alert_data, payload_type="generic"):
     """Send alert to a webhook URL (generic JSON, Slack, or Discord)."""
     try:
         import urllib.request as _ur
+
+        # SSRF guard: never POST a user-configured webhook at an internal target.
+        _ok, _reason = _url_safe_for_external_request(url)
+        if not _ok:
+            try:
+                app.logger.warning("webhook alert blocked (%s): %s", _reason, url)
+            except Exception:
+                pass
+            return
 
         if payload_type == "discord":
             content = (
@@ -4428,7 +4495,8 @@ document.addEventListener('click', function(e) {
 });
 </script>
 
-<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="{{ url_for('static', filename='vendor/marked.min.js', v=version) }}"></script>
+<script src="{{ url_for('static', filename='vendor/purify.min.js', v=version) }}"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 </head>
@@ -8485,6 +8553,16 @@ app = Flask(
     template_folder=os.path.join(os.path.dirname(__file__), 'clawmetry', 'templates'),
 )
 
+# Cap request body size (DoS guard). OTLP/JSON batches and config posts are
+# small; a 32 MB ceiling lets Flask reject oversized bodies (413) before they
+# are read into memory. Override with CLAWMETRY_MAX_REQUEST_MB for large OTLP
+# exporters.
+try:
+    _MAX_REQUEST_MB = int(os.environ.get("CLAWMETRY_MAX_REQUEST_MB", "32"))
+except (TypeError, ValueError):
+    _MAX_REQUEST_MB = 32
+app.config["MAX_CONTENT_LENGTH"] = max(1, _MAX_REQUEST_MB) * 1024 * 1024
+
 # ── Cross-platform helpers ──────────────────────────────────────────────
 import platform as _platform
 
@@ -11866,7 +11944,11 @@ DASHBOARD_HTML = r"""
 <script src="{{ url_for('static', filename='js/nav-dropdown.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/alerts.js', v=version) }}" defer></script>
 <script src="{{ url_for('static', filename='js/dives.js', v=version) }}" defer></script>
-<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<!-- Vendored + pinned (no external CDN, no supply-chain risk): marked renders
+     transcript markdown, DOMPurify sanitizes it before it touches innerHTML.
+     See cmSafeMarkdown() in app.js — never call marked.parse() into the DOM directly. -->
+<script src="{{ url_for('static', filename='vendor/marked.min.js', v=version) }}"></script>
+<script src="{{ url_for('static', filename='vendor/purify.min.js', v=version) }}"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 </head>
@@ -12647,11 +12729,25 @@ def _check_auth():
     if request.path == "/api/auth/check":
         return  # Auth check endpoint is always accessible
     if request.path == "/api/gw/config":
-        return  # Gateway setup must work before auth is configured
+        # Gateway setup must work before auth is configured, but only from
+        # loopback: this route opens an outbound connection to a caller-supplied
+        # URL, so a non-loopback caller must be authenticated (SSRF guard).
+        _r = request.remote_addr or ""
+        if _r in ("127.0.0.1", "::1", "localhost"):
+            return
+        # else fall through to the standard token check below
     if request.path.startswith("/api/nodes"):
         return  # Fleet API uses its own X-Fleet-Key authentication
-    if not request.path.startswith("/api/"):
+    # OTLP ingestion (/v1/metrics|traces|logs) accepts UNTRUSTED data that lands
+    # in cost/usage analytics, so it must not be open to the network. Gate it
+    # like /api/*: loopback is trusted (zero-config local exporters keep working),
+    # non-loopback requires the gateway token. Opt out for a trusted LAN with
+    # CLAWMETRY_OTLP_ALLOW_UNAUTH=1.
+    is_otlp = request.path.startswith("/v1/")
+    if not request.path.startswith("/api/") and not is_otlp:
         return  # HTML, static, etc. are fine
+    if is_otlp and str(os.environ.get("CLAWMETRY_OTLP_ALLOW_UNAUTH", "")).strip().lower() in ("1", "true", "yes"):
+        return
     # Trust localhost — the dashboard is a local tool; auth protects remote access only
     remote = request.remote_addr or ""
     if remote in ("127.0.0.1", "::1", "localhost"):

@@ -252,6 +252,16 @@ class Entitlement:
         allowed; otherwise free runtimes plus whatever the tier grants."""
         if self.grace:
             return True
+        return self.entitled_runtime(runtime)
+
+    def entitled_runtime(self, runtime: str) -> bool:
+        """Grace-INDEPENDENT: does the plan itself grant ``runtime``? This
+        drives the teaser UI (#1532): a paid runtime the plan does not
+        include renders a locked upgrade affordance even in grace mode,
+        because without the pro package its data cannot be observed anyway
+        (the adapter only auto-provisions for entitled accounts) — "allowed
+        by grace" was indistinguishable from "working" and the conversion
+        surface never rendered (12 paywall views in 30 days fleet-wide)."""
         rt = (runtime or "").lower()
         if rt in FREE_RUNTIMES:
             return True
@@ -453,6 +463,7 @@ def runtime_catalog() -> list[dict]:
                 "free": True,
                 "allowed": True,
                 "locked": False,
+                "entitled": True,
             }
         )
     for rt in sorted(PAID_RUNTIMES):
@@ -464,6 +475,10 @@ def runtime_catalog() -> list[dict]:
                 "free": False,
                 "allowed": allowed,
                 "locked": not allowed,
+                # Grace-independent plan fact (#1532): lets the UI render the
+                # teaser/upgrade affordance in grace mode without changing
+                # what `allowed`/`locked` mean for enforcement.
+                "entitled": ent.entitled_runtime(rt),
             }
         )
     return out
