@@ -6545,6 +6545,7 @@ def _runtime_tools_payload(store):
     content. Shared by the heartbeat (plaintext, the desk device's REAL
     path -- it reads the CLOUD-built device_summary, same discovery as the
     stuck signal) and the legacy encrypted deviceSummary slice."""
+    from datetime import timedelta
     from clawmetry import waste_flags as _wf
     import collections as _c
     out = []
