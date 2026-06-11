@@ -107,4 +107,5 @@ jobs:
         if: github.event_name == 'push' || github.event.inputs.confirm == 'APPLY'
         env:
           GITHUB_TOKEN: ${{ inputs.pat_token || secrets.E2E_ADMIN_PAT || github.token }}
+          CONFIRM_INPUT: ${{ inputs.confirm || '' }}
         run: python3 scripts/apply_required_status_checks.py
