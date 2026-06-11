@@ -148,11 +148,14 @@ def _approvals_audit_payload(status=None, limit=100):
         return str(args)[:160]
 
     decisions = []
-    pending = approved = denied = 0
+    pending = approved = denied = simulated = 0
     for r in rows:
         st = (r.get("status") or "pending")
         dec = (r.get("decision") or "")
-        if st == "pending":
+        if st == "simulated":
+            # Monitor-mode (dry-run) policies record what WOULD have paused.
+            simulated += 1
+        elif st == "pending":
             pending += 1
         elif st in ("approved", "allow", "allowed") or dec in ("approve", "allow"):
             approved += 1
@@ -177,5 +180,62 @@ def _approvals_audit_payload(status=None, limit=100):
         "pending": pending,
         "approved": approved,
         "denied": denied,
+        "simulated": simulated,
     }
     return {"decisions": decisions, "summary": summary, "_source": "local_store"}
+
+
+@bp_policy.route("/api/policy/replay", methods=["POST"])
+def api_policy_replay():
+    """Replay a CANDIDATE approval policy over recent tool-call history.
+
+    The "eval before you enable" loop: before saving a rule, see what it
+    would have paused over the last N days, across every runtime. Nothing is
+    created, blocked, or sent to the cloud; this is a pure read.
+
+    Body: ``{policy: {...}, days: int (default 14, max 30),
+             limit: int (default 5000, max 10000)}``
+    ``policy`` uses the same shape as ``~/.clawmetry/policies.yml`` rows or
+    cloud-builder rows (``tool`` / ``match.command_regex`` / ...).
+
+    Returns the ``clawmetry.approvals.replay_policy`` payload plus
+    ``days`` + ``since``. Invalid input returns 400 with ``{ok: False}``;
+    an empty store returns an honest all-zeros payload, never a 500.
+    """
+    body = request.get_json(silent=True) or {}
+    policy = body.get("policy")
+    if not isinstance(policy, dict) or not policy:
+        return jsonify({"ok": False,
+                        "error": "body must include a 'policy' object"}), 400
+    try:
+        days = max(1, min(30, int(body.get("days", 14))))
+    except (TypeError, ValueError):
+        days = 14
+    try:
+        limit = max(100, min(10000, int(body.get("limit", 5000))))
+    except (TypeError, ValueError):
+        limit = 5000
+
+    import time as _time
+    since = _time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                           _time.gmtime(_time.time() - days * 86400))
+    # Same merged-event_type read as the live watcher: import the SHARED
+    # list from approvals so replay and enforcement cannot drift (a replay
+    # that scans different event types than the watcher would "predict"
+    # pauses the watcher never fires, or miss ones it does).
+    try:
+        from clawmetry.approvals import replay_policy, _TOOL_EVENT_TYPES
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"approvals engine unavailable: {e}"}), 500
+    rows: list[dict] = []
+    for et in _TOOL_EVENT_TYPES:
+        rows.extend(_coerce_rows(
+            _ls_call("query_events", event_type=et, since=since, limit=limit)))
+
+    try:
+        result = replay_policy(policy, rows)
+    except Exception as e:
+        result = {"ok": False, "error": f"replay failed: {e}"}
+    result["days"] = days
+    result["since"] = since
+    return jsonify(result), (200 if result.get("ok") else 400)
