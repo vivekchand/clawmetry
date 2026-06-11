@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Restore per-runtime Cost 7d/30d windows + context-econ session_chips dropped by a stale-rebase merge (#3004, #3029) (2026-06-11)
+- **Why:** the trajectory-detectors PR (#3020) was cut from a base predating the byRuntime slices PR (#3008), and its squash-merge silently dropped #3008's per-runtime snapshot hunks in `clawmetry/sync.py` while keeping the detector code. The published detectors wheel (0.12.506) therefore lacks `tokens_7d` and `session_chips`, so the cloud Cost week/month cards and Context-economics gauge fell back to lifetime/empty under a single-runtime filter.
+- **What:** restored the dropped hunks, additively and without touching the detector code: the rolling 7d/30d per-runtime token+cost windows on `runtimeSummary[rt]` (`tokens_7d` / `cost_7d_usd` / `tokens_30d` / `cost_30d_usd`), the `dailyUsage.byRuntime` 14-day series, and the per-runtime `utilization` + `session_chips` under `contextEconomics.byRuntime[rt]`. Ships alongside the detectors, which stay intact.
+- **Verified:** the existing `tests/test_byruntime_slices.py` guard (which survived the merge) was proven RED on the clobbered code (4 failed) and GREEN after the restore (4 passed), so a future clobber fails CI. The published wheel is grepped for both `clawmetry/detectors.py` and the `tokens_7d` + `session_chips` markers in `clawmetry/sync.py` before the cloud repins.
+
 ### Recut: publish the trajectory detectors to an installable version (2026-06-11)
 - **Why:** the detector code (#3020) and its release entry (#3021) are on main, but the prior release run computed 0.12.505 while a concurrent byRuntime release had already uploaded a 0.12.505 wheel (without detectors) seconds earlier, so PyPI rejected the detectors wheel as a duplicate filename. 0.12.505 on PyPI therefore does not contain `clawmetry/detectors.py`. This recut bumps `dashboard.py` so `max(PyPI, dashboard.py) + 1` lands on the next free version and publishes the detectors for real.
 - **What:** version bump only; no code change. The published wheel is grepped for `clawmetry/detectors.py` and the `_emit_detector_incidents` daemon wiring before this is considered done.
