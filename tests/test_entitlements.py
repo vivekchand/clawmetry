@@ -249,3 +249,60 @@ def test_paid_runtimes_allowed_on_paid_tiers_enforced(ent, monkeypatch, tmp_path
             assert en.allows_runtime(rt) is True, f"{tier}/{rt}"
         for rt in ent.FREE_RUNTIMES:
             assert en.allows_runtime(rt) is True, f"{tier}/{rt}"
+
+
+# ── grace teaser (#1532: entitled is grace-INDEPENDENT) ─────────────────────
+
+
+def test_entitled_runtime_is_grace_independent(ent):
+    """REGRESSION GUARD for the dead conversion surface: in grace mode
+    allows_runtime says True for everything, which the UI read as 'working'
+    so the upgrade affordance never rendered (12 paywall views in 30 days
+    fleet-wide). `entitled_runtime` must report the PLAN fact regardless of
+    grace."""
+    en = ent.get_entitlement(force=True)
+    assert en.grace is True
+    # Grace allows...
+    assert en.allows_runtime("claude_code") is True
+    # ...but the OSS-free plan does NOT entitle paid runtimes.
+    for rt in ent.PAID_RUNTIMES:
+        assert en.entitled_runtime(rt) is False, rt
+    for rt in ent.FREE_RUNTIMES:
+        assert en.entitled_runtime(rt) is True, rt
+
+
+def test_runtime_catalog_carries_entitled_in_grace(ent):
+    cat = {r["id"]: r for r in ent.runtime_catalog()}
+    for rt in ent.PAID_RUNTIMES:
+        assert cat[rt]["entitled"] is False, rt
+        # Enforcement semantics unchanged: grace still does not LOCK.
+        assert cat[rt]["locked"] is False, rt
+        assert cat[rt]["allowed"] is True, rt
+    for rt in ent.FREE_RUNTIMES:
+        assert cat[rt]["entitled"] is True, rt
+
+
+def test_entitled_tier_entitles_its_runtimes(ent):
+    en = ent.Entitlement(tier="pro", runtimes=set(ent.ALL_RUNTIMES),
+                         features=set(), grace=True, source="test")
+    assert en.entitled_runtime("claude_code") is True
+    assert en.entitled_runtime("cursor") is True
+
+
+def test_appjs_teaser_wiring():
+    """The catalog loader must use `entitled` (grace teaser) and must NOT
+    early-return when enforcement is off, while guarding hosted paying/trial
+    accounts via CLOUD_PLAN/_account. Mirrors the two-renderer-mirror rule:
+    server flag + JS consumer must move together."""
+    import os
+    appjs = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         "clawmetry", "static", "js", "app.js")
+    src = open(appjs).read()
+    i = src.find("async function _cmLoadRuntimeCatalog")
+    assert i != -1
+    block = src[i:i + 2500]
+    assert "entitled === false" in block, "loader must consume the entitled flag"
+    assert "!cat.enforced" not in block, "loader must not bail out in grace mode"
+    assert "CLOUD_PLAN" in block and "_account" in block, (
+        "hosted paying/trial guard missing"
+    )

@@ -207,6 +207,32 @@ def _write_pro_marker(extra: dict) -> None:
         logger.debug("license: pro marker write skipped: %s", exc)
 
 
+def _ver_tuple(v) -> tuple:
+    """Parse a version string into a comparable int tuple ('0.3.4' -> (0,3,4))."""
+    try:
+        return tuple(int(x) for x in str(v).split("+")[0].split(".")[:4])
+    except Exception:
+        return (0,)
+
+
+def _wheel_file_version(wheel_path: str) -> str | None:
+    """Read the version from a wheel's dist-info/METADATA (reliable regardless
+    of the on-disk filename). Used to decide whether the server's wheel is newer
+    than what's installed. Never raises."""
+    try:
+        import zipfile
+
+        with zipfile.ZipFile(wheel_path) as z:
+            for n in z.namelist():
+                if n.endswith(".dist-info/METADATA"):
+                    for line in z.read(n).decode("utf-8", "replace").splitlines():
+                        if line.startswith("Version:"):
+                            return line.split(":", 1)[1].strip()
+    except Exception:
+        return None
+    return None
+
+
 def _download_wheel(url: str, headers: dict | None = None) -> str | None:
     """Download the clawmetry-pro wheel from ``url`` (HTTPS only) to a temp file
     and return its path, or None on failure. Security: refuses any non-HTTPS URL
@@ -224,10 +250,22 @@ def _download_wheel(url: str, headers: dict | None = None) -> str | None:
         with urllib.request.urlopen(req, timeout=60) as resp:
             # 2xx only; redirects are followed by urlopen, 402/403/503 raise HTTPError.
             data = resp.read()
+            cdisp = resp.headers.get("Content-Disposition", "") or ""
         if not data:
             return None
-        fd, path = tempfile.mkstemp(prefix="clawmetry_pro-", suffix=".whl")
-        with os.fdopen(fd, "wb") as fh:
+        # Keep the REAL PEP-427 wheel filename (NAME-VER-PY-ABI-PLAT.whl) from
+        # Content-Disposition, in a temp DIR. A random mkstemp name like
+        # `clawmetry_pro-ab12.whl` is rejected by pip as "not a valid wheel
+        # filename" -- which silently broke EVERY wheel re-download/upgrade.
+        import re as _re
+
+        m = _re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+\.whl)"?', cdisp)
+        fname = os.path.basename(m.group(1)) if m else "clawmetry_pro-0-py3-none-any.whl"
+        if not fname.endswith(".whl") or "/" in fname or "\\" in fname:
+            fname = "clawmetry_pro-0-py3-none-any.whl"
+        d = tempfile.mkdtemp(prefix="cmpro-")
+        path = os.path.join(d, fname)
+        with open(path, "wb") as fh:
             fh.write(data)
         return path
     except Exception as exc:
@@ -383,16 +421,29 @@ def _provision_pro_wheel(download_url: str, *, headers: dict | None = None,
     # Make a prior fallback-dir install importable before the idempotency check,
     # so we don't re-download when pro is already present in the HOME fallback.
     ensure_pro_on_path()
-    # Idempotent: if pro is already importable, don't re-download. A version
-    # bump still re-installs because the marker is rewritten on every success
-    # and the server serves the current wheel.
+    # Re-validate against the server EVERY time: download the (small ~140KB)
+    # wheel and install it ONLY when it is strictly newer than what's installed.
+    # The old code returned here whenever pro was importable, so an installed
+    # pro NEVER upgraded -- rolling a new wheel to the cloud reached nobody (the
+    # claude_code ai-title fix in 0.3.4 sat unused because every node kept the
+    # installed 0.3.3). Keeping the current version on a download/check failure
+    # means a transient outage never strands a working node.
     already = _pro_installed_version()
-    if already:
-        _write_pro_marker({"node_id": node_id, "source": "already_present"})
-        return f"clawmetry-pro {already} already installed"
     wheel = _download_wheel(download_url, headers=headers)
     if not wheel:
+        if already:
+            return f"clawmetry-pro {already} already installed (server check failed; kept)"
         return "clawmetry-pro wheel unavailable (will retry on next connect)"
+    if already:
+        avail = _wheel_file_version(wheel)
+        if avail and _ver_tuple(avail) <= _ver_tuple(already):
+            try:
+                os.unlink(wheel)
+            except Exception:
+                pass
+            _write_pro_marker({"node_id": node_id, "source": "already_current"})
+            return f"clawmetry-pro {already} already installed (latest is {avail})"
+        # else: a newer wheel is available -> fall through and install it.
     ok, detail = _pip_install_wheel(wheel)
     try:
         os.unlink(wheel)

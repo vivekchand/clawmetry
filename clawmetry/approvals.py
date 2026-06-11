@@ -311,6 +311,86 @@ def match_policy(policies: list[dict], tool_name: str, args: dict):
     return None
 
 
+def replay_policy(policy: dict, rows: list[dict], max_samples: int = 20) -> dict:
+    """Replay a CANDIDATE policy over historical tool-call events and report
+    what it WOULD have paused — without creating approvals, blocking anything,
+    or touching the cloud (the "eval before you enable" loop, CrabTrap-style).
+
+    ``policy`` is a raw policy dict (same shape as ``policies.yml`` / the
+    cloud builder rows — ``_compile_policy`` handles both). ``rows`` are
+    events-table rows in ``query_events`` shape. Pure function: no store
+    access and no network, so callers fetch rows however they like (route
+    handlers go through the daemon proxy) and pass them in.
+
+    Returns ``{ok, policy, scanned_events, scanned_tool_calls, matches,
+    by_runtime, by_tool, samples}`` or ``{ok: False, error}`` on a bad policy.
+    """
+    compiled = _compile_policy(policy)
+    if compiled is None:
+        return {"ok": False, "error": "invalid policy (bad regex or shape)"}
+    try:
+        from clawmetry.sync import _runtime_of_session as _rt_of
+    except Exception:  # pure-OSS edge: attribution degrades, replay still works
+        def _rt_of(sid: str) -> str:
+            return "openclaw"
+    scanned_events = 0
+    scanned_tool_calls = 0
+    matches = 0
+    by_runtime: dict[str, int] = {}
+    by_tool: dict[str, int] = {}
+    samples: list[dict] = []
+    seen_rows: set = set()
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        rid = row.get("id")
+        if rid is not None:
+            # The caller merges per-event_type queries; dedup row ids so an
+            # event present in both result sets counts once.
+            if rid in seen_rows:
+                continue
+            seen_rows.add(rid)
+        data = row.get("data")
+        if isinstance(data, str):
+            # Cross-process transports may serialise the data column.
+            try:
+                row = dict(row, data=json.loads(data))
+            except Exception:
+                pass
+        scanned_events += 1
+        sid = row.get("session_id") or ""
+        for _tcid, tool_name, args in _extract_tool_blocks(row):
+            if not tool_name:
+                continue
+            args = args if isinstance(args, dict) else {}
+            scanned_tool_calls += 1
+            if match_policy([compiled], tool_name, args) is None:
+                continue
+            matches += 1
+            rt = _rt_of(sid)
+            by_runtime[rt] = by_runtime.get(rt, 0) + 1
+            canon = _canonical_tool(tool_name)
+            by_tool[canon] = by_tool.get(canon, 0) + 1
+            if len(samples) < max_samples:
+                samples.append({
+                    "ts": row.get("ts"),
+                    "session_id": sid,
+                    "runtime": rt,
+                    "tool": tool_name,
+                    "command": _extract_command(tool_name, args)[:160],
+                })
+    return {
+        "ok": True,
+        "policy": compiled["name"],
+        "scanned_events": scanned_events,
+        "scanned_tool_calls": scanned_tool_calls,
+        "matches": matches,
+        "by_runtime": by_runtime,
+        "by_tool": by_tool,
+        "samples": samples,
+    }
+
+
 # ── Cloud round-trip ──────────────────────────────────────────────────────
 
 
@@ -422,7 +502,9 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
     a cloud-mediated approval.
 
     Blocks for up to policy.timeout seconds while waiting for the decision.
-    Returns: {decision: approved|denied|timeout|no_policy|error,
+    A policy with ``action: monitor`` never blocks: it records a
+    ``simulated`` approval row (dry-run) and returns immediately.
+    Returns: {decision: approved|denied|timeout|monitored|no_policy|error,
               policy: <name or None>, killed: bool}
     """
     if policies is None:
@@ -444,6 +526,52 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
              f"cmd={cmd_preview!r} session={session_id}")
 
     approval_id = uuid.uuid4().hex
+
+    if (policy.get("action") or "") == "monitor":
+        # Dry-run mode: record what WOULD have paused so the audit feed shows
+        # it, but never block the agent, never round-trip the cloud, never
+        # kill. Lets a user trial a rule live before flipping it to
+        # require_approval.
+        try:
+            import hashlib as _hl
+            from clawmetry import local_store as _lsm
+            _lsm.get_store().ingest_approval({
+                "id": approval_id,
+                "owner_hash": _hl.sha256((api_key or "").encode()).hexdigest(),
+                "requestor_session_id": session_id,
+                "action": f"{tool_name}: {cmd_preview}",
+                "args": args,
+                "status": "simulated",
+                "decision_reason": (f"monitor mode: policy '{policy['name']}' "
+                                    "would have paused this"),
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            })
+        except Exception as _me:
+            log.debug("monitor-mode approval persist failed: %s", _me)
+        try:
+            from clawmetry import audit as _audit
+            _audit.audit_event(
+                "approval.simulated",
+                actor="policy",
+                target=tool_name,
+                result="monitored",
+                source="approvals",
+                metadata={
+                    "approval_id": approval_id,
+                    "policy": policy["name"],
+                    "session_id": session_id,
+                    "command": cmd_preview,
+                },
+            )
+        except Exception:
+            pass
+        result = {"decision": "monitored", "policy": policy["name"],
+                  "killed": False, "approval_id": approval_id}
+        log.info(f"[approval] {approval_id} → monitored (dry-run, not blocked)")
+        with _in_flight_lock:
+            _in_flight[key] = result
+        return result
+
     req = {
         "id": approval_id,
         "node_id": node_id,
@@ -602,6 +730,17 @@ _STATE_KEY_SEEN = "approvals_seen_ids_at_boundary"
 # (it takes a parsed args dict).
 _TOOL_BLOCK_TYPES = ("toolCall", "tool_use")
 
+# Event types that can carry tool invocations. The watcher
+# (``_query_new_events``) and the replay route (``routes/policy.py``) MUST
+# query the same list or they drift: the family adapters (claude_code,
+# codex, cursor, …) ingest one row PER tool call under
+# ``event_type='tool_call'`` with an OpenAI-style ``data.tool_calls`` array
+# — a type the watcher historically never queried, so approval policies
+# silently never fired for those runtimes (found 2026-06-10 by replaying a
+# policy over the live store: 2,539 tool_call rows in 3 days, 0 visible to
+# the watcher).
+_TOOL_EVENT_TYPES = ("message", "assistant", "tool_call")
+
 
 def _read_persisted_watermark() -> tuple[Optional[str], set[str]]:
     """Read the persisted watermark + boundary-id set from sync-state.json.
@@ -710,6 +849,25 @@ def _extract_tool_blocks(row: dict) -> list[tuple[str, str, dict]]:
             str(data.get("name") or ""),
             data.get("arguments") or data.get("input") or {},
         ))
+    # Case D: family adapters (claude_code / codex / cursor / …) ingest one
+    # row per tool call under ``event_type='tool_call'`` with an OpenAI-style
+    # array: ``data = {_runtime, role: "assistant", tool_name,
+    # tool_calls: [{id, name, input}]}``. Args may be ``input`` /
+    # ``arguments`` / ``args`` depending on the adapter.
+    if not out and isinstance(data.get("tool_calls"), list):
+        if data.get("role") in (None, "assistant"):
+            for blk in data["tool_calls"]:
+                if not isinstance(blk, dict):
+                    continue
+                name = blk.get("name") or data.get("tool_name")
+                if not name:
+                    continue
+                args = blk.get("input") or blk.get("arguments") or blk.get("args") or {}
+                out.append((
+                    str(blk.get("id") or ""),
+                    str(name),
+                    args if isinstance(args, dict) else {},
+                ))
     return out
 
 
@@ -719,9 +877,10 @@ def _query_new_events(since: Optional[str], limit: int) -> list[dict]:
     ``query_events`` accepts only one ``event_type`` filter at a time, but
     different adapters ingest the same conceptual "assistant turn" event
     under different ``event_type`` strings (OpenClaw uses ``"message"``;
-    some Anthropic-shape adapters use ``"assistant"``). Issue both queries
-    and merge. Cost is negligible — both are indexed by
-    ``idx_events_type_ts``.
+    some Anthropic-shape adapters use ``"assistant"``; the family adapters
+    emit one ``"tool_call"`` row per invocation). Issue one query per type
+    in ``_TOOL_EVENT_TYPES`` and merge. Cost is negligible — all are
+    indexed by ``idx_events_type_ts``.
     """
     from clawmetry import local_store
     try:
@@ -733,7 +892,7 @@ def _query_new_events(since: Optional[str], limit: int) -> list[dict]:
         log.debug(f"approvals: local_store unavailable ({e})")
         return []
     rows: list[dict] = []
-    for et in ("message", "assistant"):
+    for et in _TOOL_EVENT_TYPES:
         try:
             rows.extend(store.query_events(event_type=et, since=since, limit=limit))
         except Exception as e:

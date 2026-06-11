@@ -1709,12 +1709,25 @@ function _escapeHtml(s) {
                   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-// Render markdown to HTML if marked is available, otherwise escaped <pre>.
-function _renderMarkdown(text) {
-  if (typeof marked !== 'undefined' && marked.parse) {
-    try { return marked.parse(text || ''); } catch (_) {}
+// Sanitize markdown -> HTML that is safe to assign to innerHTML.
+// marked does NOT sanitize: any raw HTML in the source (agent output, tool
+// args, exec commands, inbound chat-channel messages) passes through verbatim,
+// so its output MUST go through DOMPurify before touching the DOM. This is the
+// ONLY sanctioned path from transcript text to innerHTML — never feed marked
+// output straight into the DOM. Falls back to an escaped <pre> when either lib
+// is missing (so it degrades safe, never to raw HTML).
+function cmSafeMarkdown(text) {
+  var src = text || '';
+  if (typeof marked !== 'undefined' && marked.parse &&
+      typeof DOMPurify !== 'undefined' && DOMPurify.sanitize) {
+    try { return DOMPurify.sanitize(marked.parse(src)); } catch (_) {}
   }
-  return '<pre style="white-space:pre-wrap;font-family:inherit;margin:0;">' + _escapeHtml(text || '') + '</pre>';
+  return '<pre style="white-space:pre-wrap;font-family:inherit;margin:0;">' + _escapeHtml(src) + '</pre>';
+}
+
+// Render markdown to HTML (sanitized) if available, otherwise escaped <pre>.
+function _renderMarkdown(text) {
+  return cmSafeMarkdown(text);
 }
 
 // Tracked file metadata (for history + sensitive flag) — populated from
@@ -8757,34 +8770,46 @@ function _cmShowRuntimePaywall(harness, label) {
   var upgradeUrl = 'https://app.clawmetry.com/upgrade?source=runtime-switcher&harness='
     + encodeURIComponent(harness);
 
-  overlay.innerHTML = '<div style="max-width:420px;width:100%;padding:24px;'
+  // The plan ladder, mirroring the LIVE clawmetry.com/pricing page
+  // (verified 2026-06-09: Free $0 / Starter $9 / Pro $29 / self-hosted via
+  // license key / Enterprise; annual includes the desk device). Prices live
+  // in this ONE object so a reprice is a one-line change here plus the
+  // pricing page. Plain words for someone who has never compared plans.
+  var _cmPlanPrices = { starter: '$9', starterYr: '$90', pro: '$29', proYr: '$290' };
+  function _tierRow(accent, name, price, desc) {
+    return '<div style="margin-bottom:10px;padding:11px 14px;border:1px solid ' + accent + ';'
+      + 'border-radius:8px;font-size:13px;color:var(--text-secondary,#cbd5e1);line-height:1.5;">'
+      + '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px;">'
+      + '<strong style="color:var(--text-primary,#e2e8f0);">' + name + '</strong>'
+      + '<span style="color:var(--text-primary,#e2e8f0);font-weight:600;">' + price + '</span></div>'
+      + desc + '</div>';
+  }
+  overlay.innerHTML = '<div style="max-width:460px;width:100%;padding:24px;'
     + 'background:var(--bg-primary,#1a1a2e);border:1px solid var(--border-color,rgba(255,255,255,.15));'
     + 'border-radius:12px;">'
     + '<div style="font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:#a78bfa;'
-    + 'margin-bottom:8px;font-weight:600;">Cloud Pro</div>'
-    + '<h2 style="margin:0 0 10px;font-size:20px;font-weight:500;color:var(--text-primary,#e2e8f0);">'
-    + 'Two ways to observe ' + escHtml(label) + '</h2>'
-    // Path 1 — free, forever (OpenClaw + NemoClaw). Reassure before asking.
-    + '<div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:12px;padding:12px 14px;'
-    + 'border:1px solid rgba(118,185,0,.28);border-radius:8px;background:rgba(118,185,0,.05);">'
-    + '<span style="color:#76b900;font-size:15px;line-height:1.45;">&#10003;</span>'
-    + '<div style="font-size:13px;color:var(--text-secondary,#cbd5e1);line-height:1.5;">'
-    + '<strong style="color:var(--text-primary,#e2e8f0);">Free, forever</strong> &mdash; OpenClaw and NemoClaw '
-    + 'are fully observable at no cost. No trial needed.</div></div>'
-    // Path 2 — no-card trial to audit the selected paid runtime.
-    + '<div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:18px;padding:12px 14px;'
-    + 'border:1px solid rgba(124,92,255,.32);border-radius:8px;background:rgba(124,92,255,.07);">'
-    + '<span style="color:#a78bfa;font-size:15px;line-height:1.45;">&#9889;</span>'
-    + '<div style="font-size:13px;color:var(--text-secondary,#cbd5e1);line-height:1.5;">'
-    + '<strong style="color:var(--text-primary,#e2e8f0);">Audit ' + escHtml(label) + '</strong> &mdash; and '
-    + 'every other agent runtime ClawMetry supports. Start a free 7-day Pro trial, no credit card.</div></div>'
+    + 'margin-bottom:8px;font-weight:600;">Plans</div>'
+    + '<h2 style="margin:0 0 12px;font-size:20px;font-weight:500;color:var(--text-primary,#e2e8f0);">'
+    + 'See ' + escHtml(label) + ' working, in one place</h2>'
+    + _tierRow('rgba(118,185,0,.28)', 'Free', '$0 forever',
+        'OpenClaw and NemoClaw on 1 machine, fully observable. You keep this no matter what.')
+    + _tierRow('rgba(124,92,255,.45)', 'Starter', _cmPlanPrices.starter + '/node/mo',
+        escHtml(label) + ' plus every runtime ClawMetry supports (Claude Code, Codex, Cursor and 7 more) '
+        + 'on one dashboard. Starts with a 7-day free trial, no credit card.')
+    + _tierRow('rgba(255,255,255,.14)', 'Pro', _cmPlanPrices.pro + '/node/mo',
+        'Everything in Starter, plus alerts, budgets, loop detection and fleet views for production teams.')
+    + '<div style="font-size:11.5px;color:var(--text-muted,#94a3b8);line-height:1.55;margin:2px 2px 16px;">'
+    + 'Annual plans (' + _cmPlanPrices.starterYr + ' / ' + _cmPlanPrices.proYr + ' per node) include the '
+    + '$149 desk device, free. Prefer your own infra? Self-hosted uses the same plans with a license key: '
+    + '<a href="https://clawmetry.com/pricing" target="_blank" rel="noopener noreferrer" '
+    + 'style="color:#a78bfa;">see all plans</a>.</div>'
     + '<div style="display:flex;gap:8px;justify-content:flex-end;">'
     + '<button type="button" id="_cmRtPaywallCancel" style="padding:8px 16px;'
     + 'border:1px solid var(--border-color,rgba(255,255,255,.2));border-radius:6px;'
     + 'background:transparent;color:var(--text-secondary,#cbd5e1);cursor:pointer;font-size:13px;">Not now</button>'
     + '<a href="' + upgradeUrl + '" target="_blank" rel="noopener noreferrer" id="_cmRtPaywallCTA"'
     + ' style="padding:8px 16px;background:#7c3aed;color:#fff;border-radius:6px;'
-    + 'text-decoration:none;font-size:13px;font-weight:500;">Start free trial</a>'
+    + 'text-decoration:none;font-size:13px;font-weight:500;">Start 7-day free trial</a>'
     + '</div></div>';
 
   document.body.appendChild(overlay);
@@ -8813,18 +8838,41 @@ function _cmDismissRtPaywall() {
 }
 
 async function _cmLoadRuntimeCatalog() {
-  // Read the entitlement-aware runtime catalog (Phase 5 open-core). In grace
-  // mode (the default) nothing is locked, so _cmLockedRuntimes stays {} and
-  // the switcher behaves exactly as it did before this endpoint existed.
-  // Once enforcement is on, the locked paid runtimes appear in the dropdown
-  // with a 🔒 affordance regardless of session count.
+  // Read the entitlement-aware runtime catalog (Phase 5 open-core).
+  // Two ways a runtime earns the lock affordance in the dropdown:
+  //   1. enforced && locked: the original paywall semantics.
+  //   2. !entitled (grace teaser, cloud#1532): the plan does not include the
+  //      runtime, so even though grace "allows" it, its data is never
+  //      ingested (the pro adapter only provisions for entitled accounts).
+  //      Showing it locked is both the honest state AND the conversion
+  //      surface; picking it opens the non-blocking two-path card.
+  // Cloud guard: the hosted server resolves entitlement as OSS-free, so in
+  // CLOUD_MODE trust the account plan/trial instead. A paying or trialing
+  // hosted user must never see the teaser. Re-checked once after 4s because
+  // window._account loads async.
   try {
     var cat = await fetch('/api/runtimes', { credentials: 'same-origin' }).then(function(r) { return r.json(); });
-    if (!cat || !cat.enforced || !Array.isArray(cat.runtimes)) return;
+    if (!cat || !Array.isArray(cat.runtimes)) return;
+    var teaserOk = true;
+    try {
+      if (window.CLOUD_MODE) {
+        var plan = String(window.CLOUD_PLAN || '').toLowerCase();
+        var acct = window._account || {};
+        teaserOk = !(/pro|starter|paid/.test(plan) || acct.trial_active);
+      }
+    } catch (e) { teaserOk = false; }
     var locked = {};
-    cat.runtimes.forEach(function(r) { if (r && r.locked && r.id) locked[r.id] = 1; });
+    cat.runtimes.forEach(function(r) {
+      if (!r || !r.id) return;
+      if ((cat.enforced && r.locked) ||
+          (teaserOk && r.free === false && r.entitled === false)) locked[r.id] = 1;
+    });
     _cmLockedRuntimes = locked;
-  } catch (e) { /* non-fatal — grace mode keeps the previous behaviour */ }
+    if (window.CLOUD_MODE && !window._cmRtCatalogRecheck) {
+      window._cmRtCatalogRecheck = 1;
+      setTimeout(_cmLoadRuntimeCatalog, 4000);
+    }
+  } catch (e) { /* non-fatal: keeps the previous behaviour */ }
 }
 
 async function _cmInitGlobalRuntimeSwitcher() {
@@ -20103,7 +20151,7 @@ function renderModalSummary(el) {
     }
   }
   var html = '';
-  var renderMd = (typeof marked !== 'undefined' && marked.parse) ? function(s){ return marked.parse(s); } : escHtml;
+  var renderMd = cmSafeMarkdown;
   html += '<div class="summary-section"><div class="summary-label">Task Description</div>';
   html += '<div class="summary-text md-rendered">' + renderMd(desc || 'No description found') + '</div></div>';
   html += '<div class="summary-section"><div class="summary-label">Final Result / Output</div>';
@@ -20207,7 +20255,7 @@ function renderEvtItem(evt, idx) {
   h += '<span class="evt-summary">' + summary + '</span>';
   h += '<span class="evt-ts">' + escHtml(ts) + '</span>';
   h += '</div>';
-  var bodyHtml = (typeof marked !== 'undefined' && marked.parse) ? marked.parse(body) : escHtml(body);
+  var bodyHtml = cmSafeMarkdown(body);
   var isOpen = _expandedEvts[idx] ? ' open' : '';
   h += '<div class="evt-body md-rendered' + isOpen + '" id="' + bodyId + '">' + bodyHtml + '</div>';
   h += '</div>';
