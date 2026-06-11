@@ -993,7 +993,13 @@ def _post(path: str, payload: dict, api_key: str, timeout: int = 45) -> dict:
     for attempt in range(1, _HTTP_MAX_ATTEMPTS + 1):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                resp_body = json.loads(resp.read())
+                raw = resp.read()
+                # Some endpoints answer 204 / an empty body on success
+                # (e.g. /ingest/cache returns ("", 204) after storing a
+                # process_control or cron result). json.loads("") raises,
+                # which surfaced as a spurious "cache post failed" warning
+                # on every successful post-back. Treat an empty body as {}.
+                resp_body = json.loads(raw) if raw.strip() else {}
             # Cloud heartbeat (and any other endpoint) may attach the user's
             # plan / sync_allowed / trial_days_left / upgrade_url. We mirror
             # those into _TRIAL_STATE so subsequent uploads can self-throttle
@@ -7538,6 +7544,11 @@ _PENDING_ACTIONS = frozenset({
     "cron_fix",
     "dives_query",
     "runtime_backfill",
+    # Process-control (kill/pause/resume a runaway agent on the host). Inert
+    # until the cloud enqueues them; safe to merge daemon-only.
+    "kill_session",
+    "pause_session",
+    "resume_session",
 })
 
 
@@ -7747,6 +7758,237 @@ def _dispatch_pending_action(config: dict, action: dict) -> None:
     if atype == "dives_query":
         _action_dives_query(config, action)
         return
+    if atype in ("kill_session", "pause_session", "resume_session"):
+        _action_process_control(config, action)
+        return
+
+
+# ── Process control: kill / pause / resume a runaway agent on the host ──────
+# The cloud relays {type:"kill_session"|"pause_session"|"resume_session",
+# session_id, runtime, cache_key, mode?}. For family runtimes
+# (claude_code/codex/goose/opencode/aider) we map the session to a host process
+# via clawmetry.process_control and send guarded POSIX signals. For
+# openclaw/nemoclaw we cancel via the `openclaw tasks cancel` CLI (the gateway
+# token is read-only). Belt-and-suspenders: every kill/pause also writes the
+# proxy HITL pause file so any proxied runtime refuses further LLM calls even if
+# the signal missed; resume removes it. Every action records an audit event and
+# posts a structured result back under the action's cache_key.
+
+# A clean per-session pause primitive does not exist for OpenClaw's task
+# scheduler, so pause/resume of an openclaw session is honestly reported
+# unsupported rather than faked.
+_OPENCLAW_RUNTIMES = frozenset({"openclaw", "nemoclaw"})
+
+
+def _hitl_pause_path(session_id: str):
+    """Path to the proxy's legacy operator pause file for a session.
+
+    Mirrors clawmetry/proxy.py: ``~/.clawmetry/hitl/pause_<session_id>`` (no
+    extension) — an empty file that ``_is_session_hitl_paused`` honors with no
+    expiry, so the enforcement proxy refuses further LLM calls for that session
+    until the file is removed.
+    """
+    return Path.home() / ".clawmetry" / "hitl" / f"pause_{session_id}"
+
+
+def _write_hitl_pause(session_id: str) -> bool:
+    """Create the proxy HITL pause file for a session. Best-effort, never raises."""
+    if not session_id:
+        return False
+    try:
+        p = _hitl_pause_path(session_id)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.touch(exist_ok=True)
+        return True
+    except Exception as e:
+        log.debug("hitl pause write skipped for %s: %s", session_id, e)
+        return False
+
+
+def _remove_hitl_pause(session_id: str) -> bool:
+    """Remove the proxy HITL pause file for a session. Best-effort, never raises."""
+    if not session_id:
+        return False
+    try:
+        p = _hitl_pause_path(session_id)
+        if p.exists():
+            p.unlink()
+        # Also clear any auto-backoff json so resume is a clean unpause.
+        pj = p.with_name(p.name + ".json")
+        if pj.exists():
+            pj.unlink()
+        return True
+    except Exception as e:
+        log.debug("hitl pause remove skipped for %s: %s", session_id, e)
+        return False
+
+
+def _openclaw_cancel_task(lookup: str, timeout: int = 30) -> dict:
+    """Cancel an OpenClaw task/run/session via ``openclaw tasks cancel <lookup>``.
+
+    ``lookup`` may be a task id, a run id, OR a session key. Uses OpenClaw's own
+    full-scope creds (the gateway token is operator.read only). ``openclaw`` is a
+    Node script; under the daemon's launchd PATH ``node`` may not be found, so we
+    augment PATH the same way ``run_openclaw_cron`` does. Returns
+    ``{ok, scope_pending, error, raw}``. Never raises.
+    """
+    binp = _resolve_openclaw_bin()
+    if not binp:
+        return {"ok": False, "scope_pending": False,
+                "error": "openclaw CLI not found on this machine", "raw": ""}
+    env = dict(os.environ)
+    node_dirs = [
+        os.path.dirname(binp),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        os.path.expanduser("~/.local/bin"),
+    ]
+    env["PATH"] = os.pathsep.join(node_dirs + [env.get("PATH", "/usr/bin:/bin")])
+    cmd = [binp, "tasks", "cancel", str(lookup)]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout, env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "scope_pending": False,
+                "error": "openclaw tasks cancel timed out", "raw": ""}
+    except Exception as e:
+        return {"ok": False, "scope_pending": False, "error": str(e)[:400], "raw": ""}
+    blob = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    low = blob.lower()
+    scope_pending = (
+        "pairing required" in low
+        or "scope upgrade" in low
+        or "more scopes than currently approved" in low
+    )
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "exit %d" % proc.returncode).strip()
+        if scope_pending:
+            err = ("Cancel needs a one-time gateway approval. On the host run "
+                   "`openclaw devices list` then `openclaw devices approve <id>` "
+                   "(or approve the pairing prompt), then retry.")
+        return {"ok": False, "scope_pending": scope_pending,
+                "error": err[:500], "raw": blob[:1000]}
+    return {"ok": True, "scope_pending": False, "error": "", "raw": blob[:1000]}
+
+
+def _process_control_audit(atype: str, session_id: str, runtime: str,
+                           result: dict, actor: str) -> None:
+    """Record an Enterprise audit event for a kill/pause/resume. Never raises."""
+    try:
+        from clawmetry import audit as _audit
+        _audit.audit_event(
+            "process." + atype,
+            actor=actor or "cloud-relay",
+            target=session_id or "",
+            result=("ok" if result.get("ok") else "failed"),
+            source="cloud-relay",
+            metadata={
+                "runtime": runtime,
+                "detail": result.get("detail") or result.get("error") or "",
+                "pid": result.get("pid"),
+            },
+        )
+    except Exception:
+        pass
+
+
+def _action_process_control(config: dict, action: dict) -> None:
+    """Cloud-relayed kill / pause / resume of a runaway agent on the host.
+
+    Action shape::
+
+        {type:"kill_session"|"pause_session"|"resume_session",
+         session_id, runtime, cache_key, id?, mode?, actor?}
+
+    Runs in a daemon thread so a SIGTERM->SIGKILL grace window never blocks the
+    heartbeat. Writes/removes the proxy HITL pause file as belt-and-suspenders,
+    records an audit event, and POSTs the structured result under ``cache_key``
+    so the cloud can show the user success/failure."""
+    atype = action.get("type")
+    cache_key = action.get("cache_key")
+    enc_key = config.get("encryption_key")
+    api_key = config.get("api_key", "")
+    node_id = config.get("node_id", "")
+    aid = action.get("id")
+    session_id = str(action.get("session_id") or "").strip()
+    runtime = str(action.get("runtime") or "").strip().lower()
+    mode = str(action.get("mode") or "").strip().lower()
+    actor = str(action.get("actor") or "").strip()
+    if not (cache_key and enc_key and api_key and session_id):
+        return
+
+    def _run():
+        result: dict = {"ok": False, "action": atype, "runtime": runtime,
+                        "session_id": session_id}
+        try:
+            import clawmetry.process_control as _pc
+
+            if runtime in _OPENCLAW_RUNTIMES:
+                if atype == "kill_session":
+                    res = _openclaw_cancel_task(session_id)
+                    result.update({
+                        "ok": bool(res.get("ok")),
+                        "detail": "openclaw_task_cancelled" if res.get("ok")
+                        else (res.get("error") or "cancel_failed"),
+                        "scope_pending": bool(res.get("scope_pending")),
+                    })
+                    # Belt-and-suspenders pause file even on kill so a proxied
+                    # OpenClaw refuses further LLM calls if cancel missed.
+                    _write_hitl_pause(session_id)
+                else:
+                    # No clean per-session pause/resume primitive for OpenClaw's
+                    # task scheduler — be honest, don't fake it. We DO still
+                    # flip the proxy HITL pause file so the user's Pause click
+                    # has a real effect on any proxied LLM traffic.
+                    if atype == "pause_session":
+                        wrote = _write_hitl_pause(session_id)
+                        result.update({
+                            "ok": wrote, "unsupported": True,
+                            "detail": "openclaw_pause_unsupported_hitl_only"
+                            if wrote else "openclaw_pause_unsupported",
+                        })
+                    else:  # resume_session
+                        removed = _remove_hitl_pause(session_id)
+                        result.update({
+                            "ok": removed, "unsupported": True,
+                            "detail": "openclaw_resume_unsupported_hitl_only"
+                            if removed else "openclaw_resume_unsupported",
+                        })
+            else:
+                # Family runtimes: real process signals.
+                cwd = str(action.get("cwd") or "").strip()
+                if atype == "kill_session":
+                    res = _pc.kill_session(runtime, session_id, cwd, mode=mode)
+                    _write_hitl_pause(session_id)  # belt-and-suspenders
+                    result.update(res)
+                elif atype == "pause_session":
+                    res = _pc.pause_session(runtime, session_id, cwd)
+                    _write_hitl_pause(session_id)
+                    result.update(res)
+                else:  # resume_session
+                    res = _pc.resume_session(runtime, session_id, cwd)
+                    _remove_hitl_pause(session_id)
+                    result.update(res)
+        except Exception as e:
+            result.update({"ok": False, "detail": ("error: " + str(e))[:300]})
+
+        _process_control_audit(atype, session_id, runtime, result, actor)
+
+        try:
+            blob = encrypt_payload(
+                {**result, "_shape": "process_control"}, enc_key,
+            )
+            _post(
+                "/ingest/cache",
+                {"node_id": node_id, "id": aid, "cache_key": cache_key,
+                 "blob": blob, "shape": "process_control", "ttl": 3600},
+                api_key,
+            )
+        except Exception as e:
+            log.warning("process_control cache post failed: %s", e)
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 def _action_runtime_backfill(config: dict, action: dict) -> None:
