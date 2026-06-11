@@ -9338,6 +9338,21 @@ def _fire_alert(rule_id, alert_type, message, channels=None, severity="warning")
         elif ch == "webhook":
             pass  # legacy: webhook dispatch now handled below via _dispatch_alert
 
+    # LLM-narrated enrichment (issue #1412, Feature C).  Replaces the raw
+    # threshold string with a 1-3 sentence human explanation when the LLM is
+    # available and the event hasn't been coalesced.  Falls back silently.
+    try:
+        from clawmetry import narrator as _narrator
+        _narrated = _narrator.narrate(
+            alert_type or "threshold",
+            {"message": message, "rule_id": rule_id, "alert_type": alert_type,
+             "severity": severity},
+        )
+        if _narrated:
+            message = _narrated
+    except Exception:
+        pass
+
     # Always dispatch to configured alert channels (Slack / Discord / generic webhook)
     _dispatch_alert(
         title=f"ClawMetry Alert [{alert_type}]",
