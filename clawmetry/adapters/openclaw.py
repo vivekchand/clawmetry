@@ -525,6 +525,7 @@ class OpenClawAdapter(AgentAdapter):
           structured ``details`` payload + ``is_error`` flag + text content back
           onto the tool span identified by ``tool_use_id`` (#2733).
         - ``subagent_spawn``           → agent.spawn span (INTERNAL, link to child trace)
+        - ``commentary``/``progress``  → annotation span (INTERNAL, child of root, #3015)
 
         Span IDs are deterministic SHA-256 prefixes so re-ingesting is idempotent.
         """
@@ -745,6 +746,35 @@ class OpenClawAdapter(AgentAdapter):
                     "agent_type": "openclaw",
                     "links": [{"trace_id": child_trace, "span_id": "0" * 16}] if child_trace else None,
                     "attributes": {"subagent_id": sub_id} if sub_id else None,
+                })
+
+            elif t in ("commentary", "progress"):
+                # CLI commentary / inter-tool progress events emitted by the
+                # harness as distinct JSONL types (#3015). Create an INTERNAL
+                # annotation span so these are visible in the trace tree.
+                text = (
+                    obj.get("message")
+                    or obj.get("content")
+                    or obj.get("text")
+                    or ""
+                )
+                ann_attrs: dict = {}
+                if text:
+                    ann_attrs["commentary.text"] = str(text)[:2048]
+                if t == "progress":
+                    step = obj.get("step") or obj.get("progress")
+                    if step is not None:
+                        ann_attrs["progress.step"] = step
+                spans.append({
+                    "span_id": _sid(t, session_id, str(raw_ts)),
+                    "trace_id": trace_id,
+                    "parent_span_id": session_span_id,
+                    "name": t,
+                    "kind": "INTERNAL",
+                    "start_ts": ts,
+                    "session_id": session_id,
+                    "agent_type": "openclaw",
+                    "attributes": ann_attrs or None,
                 })
 
         return spans
