@@ -373,6 +373,53 @@ def test_list_events_surfaces_total_tokens_for_reasoning_model(isolated_store):
     assert ex.get("totalTokens") == 162, "totalTokens must appear in extra for reasoning-model events"
 
 
+def test_list_events_voice_lifecycle_fields_in_extra(isolated_store):
+    """Voice/talk/managed-room lifecycle log records land all five structured
+    fields in Event.extra (#3014).
+
+    Gateway JSONL log records for Talk/voice/room activity carry mode,
+    transport, provider (strings) and duration_ms, size_bytes (numbers)
+    alongside channel/hostname. list_events() was previously extracting
+    only channel and hostname; the five voice-lifecycle fields were silently
+    dropped. Pin the corrected extraction.
+    """
+    import uuid, time as _t
+    isolated_store.ingest({
+        "id": str(uuid.uuid4()),
+        "node_id": "agent+test-node",
+        "agent_id": "main",
+        "agent_type": "openclaw",
+        "session_id": "sess-VOICE",
+        "event_type": "log",
+        "ts": _t.time(),
+        "data": {
+            "channel": "voice",
+            "hostname": "host-1",
+            "mode": "realtime",
+            "transport": "webrtc",
+            "provider": "deepgram",
+            "duration_ms": 4200,
+            "size_bytes": 87040,
+            "message": "voice session ended",
+        },
+    })
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess-VOICE")
+    assert len(events) == 1
+    ex = events[0].extra
+    # string fields
+    assert ex.get("channel") == "voice"
+    assert ex.get("hostname") == "host-1"
+    assert ex.get("mode") == "realtime"
+    assert ex.get("transport") == "webrtc"
+    assert ex.get("provider") == "deepgram"
+    # numeric fields — 0 would survive too, so use is not None check in prod
+    assert ex.get("duration_ms") == 4200
+    assert ex.get("size_bytes") == 87040
+
+
 def test_build_spans_prefers_total_tokens_for_reasoning_model():
     """_build_spans_from_events must use totalTokens as token_count when it
     exceeds tok_in+tok_out — the extra comes from reasoning. Fixes #2794."""

@@ -443,10 +443,14 @@ class OpenClawAdapter(AgentAdapter):
                             raw_data = bytes(raw_data).decode("utf-8", "replace")
                         obj = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
                         if isinstance(obj, dict):
-                            for _field in ("channel", "hostname"):
+                            for _field in ("channel", "hostname", "mode", "transport", "provider"):
                                 _val = obj.get(_field)
                                 if _val:
                                     extra[_field] = _val
+                            for _num_field in ("duration_ms", "size_bytes"):
+                                _v = obj.get(_num_field)
+                                if _v is not None:
+                                    extra[_num_field] = _v
                             msg = obj.get("message")
                             if isinstance(msg, str):
                                 content_text = msg
