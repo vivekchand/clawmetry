@@ -14366,6 +14366,69 @@ def _build_device_summary(spending, daily_usage):
             ]
         except Exception:
             pass
+        # schema 2 (additive): per-runtime TOOLS + LAST ACTION for the
+        # device's drill-down -- closes the clawmetry.com/device promise
+        # "the tools it is using, and what it just did" (founder
+        # 2026-06-11). Tool NAMES + a timestamp only (no arguments, no
+        # content), riding the ENCRYPTED deviceSummary -- the cloud sees
+        # nothing. Built for every runtime SEEN in the last 24h (family
+        # adapters mark sessions 'ended' mid-conversation, so the
+        # active-only ``runtimes`` array above misses them); shipped as
+        # its own additive ``runtime_tools`` key. Bounded reads; any
+        # failure degrades to the key absent.
+        try:
+            from datetime import timedelta as _td
+            _now = datetime.now(timezone.utc)
+            since_24h = (_now - _td(hours=24)).strftime(
+                "%Y-%m-%dT%H:%M:%S")
+            recent_rts = set()
+            for s in rows:
+                if not isinstance(s, dict):
+                    continue
+                _upd = str(s.get("last_active_at")
+                           or s.get("updated_at") or "")
+                name = (_wf.runtime_from_session_id(
+                    s.get("session_id") or "") or "openclaw")
+                if s.get("status") == "active" or _upd >= since_24h:
+                    recent_rts.add(name)
+            rt_tools = []
+            import collections as _c
+            for name in sorted(recent_rts):
+                try:
+                    inv = store.query_tool_call_invocations(
+                        since=since_24h, runtime=name, limit=5000) or []
+                    if not inv:
+                        continue
+                    counts = _c.Counter(
+                        (r.get("name") or "?") for r in inv)
+                    entry = {
+                        "name": name,
+                        "tools_today": [
+                            {"name": n[:24], "count": c}
+                            for n, c in counts.most_common(4)
+                        ],
+                    }
+                    newest = max(inv, key=lambda r: r.get("ts") or "")
+                    ago = 0
+                    try:
+                        _ts = datetime.fromisoformat(
+                            str(newest.get("ts")).replace("Z", "+00:00"))
+                        if _ts.tzinfo is None:
+                            _ts = _ts.replace(tzinfo=timezone.utc)
+                        ago = max(0, int((_now - _ts).total_seconds()))
+                    except Exception:
+                        pass
+                    entry["last_action"] = {
+                        "tool": (newest.get("name") or "?")[:24],
+                        "ago_seconds": ago,
+                    }
+                    rt_tools.append(entry)
+                except Exception:
+                    continue
+            if rt_tools:
+                summary["runtime_tools"] = rt_tools[:8]
+        except Exception:
+            pass
         # schema 2: per-session titles for the device's runtime-detail recent
         # -sessions rows. The title is the session's FIRST USER MESSAGE (real
         # content, e.g. "read flywheel.md ..."), so it rides the ENCRYPTED
