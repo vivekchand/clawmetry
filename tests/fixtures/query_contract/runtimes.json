@@ -1,0 +1,16 @@
+{
+  "_elapsed_ms": "<volatile>",
+  "_shape": "runtimes",
+  "_via": "<volatile>",
+  "count": 1,
+  "rows": [
+    {
+      "active_sessions": 2,
+      "cost_usd": 0.01,
+      "day": "2026-01-02",
+      "runtime": "openclaw",
+      "sessions": 2,
+      "tokens": 100
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "_elapsed_ms": "<volatile>",
+  "_shape": "models",
+  "_via": "<volatile>",
+  "count": 2,
+  "rows": [
+    {
+      "cache_read": 0,
+      "cache_write": 0,
+      "calls": 1,
+      "cost_usd": 0.004,
+      "day": "2026-01-02",
+      "model": "claude-haiku-4-5",
+      "runtime": "openclaw",
+      "tokens_in": 0,
+      "tokens_out": 0
+    },
+    {
+      "cache_read": 0,
+      "cache_write": 0,
+      "calls": 3,
+      "cost_usd": 0.006,
+      "day": "2026-01-02",
+      "model": "claude-opus-4-7",
+      "runtime": "openclaw",
+      "tokens_in": 0,
+      "tokens_out": 0
+    }
+  ]
+}
