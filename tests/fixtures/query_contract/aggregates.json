@@ -1,0 +1,22 @@
+{
+  "_elapsed_ms": "<volatile>",
+  "_shape": "aggregates",
+  "_via": "<volatile>",
+  "count": 2,
+  "rows": [
+    {
+      "agent_id": "main",
+      "cost_usd": 0.006,
+      "day": "2026-01-02",
+      "event_count": 3,
+      "token_count": 60
+    },
+    {
+      "agent_id": "worker",
+      "cost_usd": 0.004,
+      "day": "2026-01-02",
+      "event_count": 1,
+      "token_count": 40
+    }
+  ]
+}

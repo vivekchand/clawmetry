@@ -1,0 +1,32 @@
+{
+  "_elapsed_ms": "<volatile>",
+  "_shape": "rollup_sessions",
+  "_via": "<volatile>",
+  "count": 2,
+  "rows": [
+    {
+      "cost_usd": 0.004,
+      "last_activity": "2026-01-02T10:00:03Z",
+      "runtime": "openclaw",
+      "session_id": "sess-b",
+      "started_at": "2026-01-02T10:00:03Z",
+      "status": "ended",
+      "stuck_flag": false,
+      "title": "beta cleanup",
+      "tokens": 40,
+      "turns": 1
+    },
+    {
+      "cost_usd": 0.006,
+      "last_activity": "2026-01-02T10:00:02Z",
+      "runtime": "openclaw",
+      "session_id": "sess-a",
+      "started_at": "2026-01-02T10:00:00Z",
+      "status": "active",
+      "stuck_flag": false,
+      "title": "golden alpha refactor",
+      "tokens": 60,
+      "turns": 3
+    }
+  ]
+}
