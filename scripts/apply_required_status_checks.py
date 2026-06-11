@@ -59,9 +59,10 @@ OWNER = "vivekchand"
 
 # Each tuple: (repo, exact job name as it appears in the workflow's `name:` field)
 #
-# Job names verified against workflow files 2026-06-01:
+# Job names verified against workflow files 2026-06-11:
 #   clawmetry/.github/workflows/oss-golden-path.yml      -> "OSS golden path (wheel + OpenClaw + 9 tabs)"
 #   clawmetry/.github/workflows/cross-repo-handoff.yml   -> "Cross-repo handoff (C4)"
+#   clawmetry/.github/workflows/ci.yml (moat-keystone)   -> "MOAT Keystone (13-endpoint bar)"
 #   clawmetry-cloud/.github/workflows/e2e.yml            -> "Cloud golden-path browser E2E"
 #   clawmetry-landing/.github/workflows/landing-golden-path.yml -> "Landing golden path (C3)"
 #
@@ -72,6 +73,9 @@ OWNER = "vivekchand"
 REQUIRED_CHECKS: list[tuple[str, str]] = [
     ("clawmetry",         "OSS golden path (wheel + OpenClaw + 9 tabs)"),
     ("clawmetry",         "Cross-repo handoff (C4)"),
+    # docs/MOAT_BAR.md Section 5, AC#1: keystone_e2e --no-drive blocks merge.
+    # ci.yml `moat-keystone` job runs on every PR; job name must match exactly.
+    ("clawmetry",         "MOAT Keystone (13-endpoint bar)"),
     ("clawmetry-cloud",   "Cloud golden-path browser E2E"),
     ("clawmetry-landing", "Landing golden path (C3)"),
 ]
