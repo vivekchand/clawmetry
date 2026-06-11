@@ -460,6 +460,21 @@ class OpenClawAdapter(AgentAdapter):
                                 _val = obj.get(_field)
                                 if _val:
                                     extra[_key] = _val
+                            # Talk / realtime-voice / managed-room lifecycle
+                            # fields (#2957). sync.py stores these top-level in
+                            # the data blob for voice events (sync.py ~L4960);
+                            # surface them so callers see voice/Talk metadata.
+                            # String fields skip empties; numeric fields use an
+                            # explicit None check so a legitimate 0 (e.g. a
+                            # zero-byte payload) is preserved rather than dropped.
+                            for _field in ("mode", "transport", "provider"):
+                                _val = obj.get(_field)
+                                if _val:
+                                    extra[_field] = _val
+                            for _field in ("duration_ms", "size_bytes"):
+                                _val = obj.get(_field)
+                                if _val is not None:
+                                    extra[_field] = _val
                             msg = obj.get("message")
                             if isinstance(msg, str):
                                 content_text = msg
