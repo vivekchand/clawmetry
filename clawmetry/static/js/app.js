@@ -12656,6 +12656,8 @@ async function loadUsage() {
     loadCacheAnalytics();
     // Load cost forecast (issue #1413)
     loadCostForecast();
+    // Load per-agent / per-team cost attribution (issue #3000)
+    loadUsageByTeam();
     // Load spend optimization recommendations (issue #1415)
     loadSpendOptimization();
     // NeMo daily-cap banner (issue #1170) — only visible when a free-tier
@@ -13015,6 +13017,41 @@ function renderSpendOptimization(data) {
 }
 
 // ===== Cost Forecast (issue #1413) =====
+// ── Per-agent / per-team cost attribution (issue #3000) ──────────────────────
+async function loadUsageByTeam() {
+  var title = document.getElementById('usage-by-team-title');
+  var card = document.getElementById('usage-by-team-card');
+  var el = document.getElementById('usage-by-team-content');
+  if (!card || !el) return;
+  try {
+    var d = await fetch('/api/usage/by-team?window=7').then(function(r){return r.json();});
+    var teams = (d && d.teams) || [];
+    if (!teams.length) return;
+    var totalCost = teams.reduce(function(s, t) { return s + (t.cost_usd || 0); }, 0);
+    var rows = teams.map(function(t) {
+      var pct = totalCost > 0 ? Math.round((t.cost_usd / totalCost) * 100) : 0;
+      var rts = (t.runtimes || []).join(', ');
+      return '<tr>'
+        + '<td style="padding:4px 8px;font-weight:500;">' + (t.label || '—') + '</td>'
+        + '<td style="padding:4px 8px;text-align:right;">$' + (t.cost_usd || 0).toFixed(4) + '</td>'
+        + '<td style="padding:4px 8px;text-align:right;color:var(--text-muted);">' + pct + '%</td>'
+        + '<td style="padding:4px 8px;text-align:right;color:var(--text-muted);">' + (t.sessions || 0) + ' sessions</td>'
+        + '<td style="padding:4px 8px;font-size:11px;color:var(--text-muted);">' + rts + '</td>'
+        + '</tr>';
+    }).join('');
+    el.innerHTML = '<table style="width:100%;border-collapse:collapse;">'
+      + '<thead><tr style="font-size:11px;color:var(--text-muted);">'
+      + '<th style="padding:2px 8px;text-align:left;">Team / Agent</th>'
+      + '<th style="padding:2px 8px;text-align:right;">Cost (7d)</th>'
+      + '<th style="padding:2px 8px;text-align:right;">Share</th>'
+      + '<th style="padding:2px 8px;text-align:right;">Sessions</th>'
+      + '<th style="padding:2px 8px;text-align:left;">Runtimes</th>'
+      + '</tr></thead><tbody>' + rows + '</tbody></table>';
+    title.style.display = '';
+    card.style.display = '';
+  } catch(e) { /* non-fatal */ }
+}
+
 async function loadCostForecast() {
   var title = document.getElementById('cost-forecast-title');
   var card = document.getElementById('cost-forecast-card');

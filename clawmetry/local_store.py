@@ -335,6 +335,18 @@ _DDL = [
         stuck_flag     BOOLEAN DEFAULT FALSE
     )
     """,
+    # Issue #3000 — per-agent / per-team cost attribution. User-editable mapping
+    # from a runtime (or future: node / cwd_prefix) to a friendly team label.
+    # key_type='runtime' + key_value='claude_code' + team_label='Eng Team' maps
+    # all claude_code sessions to "Eng Team" in /api/usage/by-team.
+    """
+    CREATE TABLE IF NOT EXISTS team_mapping (
+        key_type   VARCHAR NOT NULL,
+        key_value  VARCHAR NOT NULL,
+        team_label VARCHAR NOT NULL,
+        PRIMARY KEY (key_type, key_value)
+    )
+    """,
     """
     CREATE TABLE IF NOT EXISTS memory_blobs (
         agent_type    VARCHAR NOT NULL,
@@ -5192,6 +5204,78 @@ class LocalStore:
         cols = ["session_id", "runtime", "title", "status", "started_at",
                 "last_activity", "tokens", "cost_usd", "turns", "stuck_flag"]
         return [dict(zip(cols, r)) for r in rows]
+
+    # ── team mapping (issue #3000) ────────────────────────────────────────
+
+    def query_usage_by_team(self, *, window_days: int = 7) -> list[dict[str, Any]]:
+        """Roll up cost/tokens/sessions from rollup_session grouped by team label.
+
+        Sessions whose runtime has no entry in team_mapping fall back to the
+        raw runtime name as the label. Returns rows sorted by cost descending.
+        """
+        import time as _time
+        cutoff_ms = int((_time.time() - window_days * 86400) * 1000)
+        cutoff_iso = str(cutoff_ms)
+        rows = self._fetch(
+            """
+            SELECT
+                COALESCE(tm.team_label, rs.runtime, 'unknown') AS label,
+                rs.runtime,
+                ROUND(SUM(rs.cost_usd), 6) AS cost_usd,
+                SUM(rs.tokens) AS tokens,
+                COUNT(*) AS sessions
+            FROM rollup_session rs
+            LEFT JOIN team_mapping tm
+                ON tm.key_type = 'runtime' AND tm.key_value = rs.runtime
+            WHERE COALESCE(rs.last_activity, rs.started_at) >= ?
+            GROUP BY 1, 2
+            ORDER BY cost_usd DESC
+            """,
+            [cutoff_iso],
+        )
+        out: dict[str, dict] = {}
+        for label, runtime, cost, tokens, sessions in rows:
+            if label not in out:
+                out[label] = {"label": label, "cost_usd": 0.0,
+                               "tokens": 0, "sessions": 0, "runtimes": []}
+            out[label]["cost_usd"] = round(out[label]["cost_usd"] + (cost or 0), 6)
+            out[label]["tokens"] += int(tokens or 0)
+            out[label]["sessions"] += int(sessions or 0)
+            if runtime and runtime not in out[label]["runtimes"]:
+                out[label]["runtimes"].append(runtime)
+        return sorted(out.values(), key=lambda r: r["cost_usd"], reverse=True)
+
+    def list_team_mappings(self) -> list[dict[str, Any]]:
+        """Return all rows from team_mapping."""
+        rows = self._fetch(
+            "SELECT key_type, key_value, team_label FROM team_mapping ORDER BY key_type, key_value",
+            [],
+        )
+        return [{"key_type": r[0], "key_value": r[1], "team_label": r[2]} for r in rows]
+
+    def upsert_team_mapping(self, key_type: str, key_value: str, team_label: str) -> None:
+        """Insert or replace a team_mapping row."""
+        with self._write_lock:
+            self._conn.execute(
+                "INSERT INTO team_mapping (key_type, key_value, team_label)"
+                " VALUES (?, ?, ?)"
+                " ON CONFLICT (key_type, key_value) DO UPDATE SET team_label = excluded.team_label",
+                [str(key_type), str(key_value), str(team_label)],
+            )
+
+    def delete_team_mapping(self, key_type: str, key_value: str) -> int:
+        """Delete a team_mapping row. Returns 1 if deleted, 0 if not found."""
+        with self._write_lock:
+            n = self._conn.execute(
+                "SELECT COUNT(*) FROM team_mapping WHERE key_type = ? AND key_value = ?",
+                [str(key_type), str(key_value)],
+            ).fetchone()[0]
+            if n:
+                self._conn.execute(
+                    "DELETE FROM team_mapping WHERE key_type = ? AND key_value = ?",
+                    [str(key_type), str(key_value)],
+                )
+            return n
 
     # ── queries ─────────────────────────────────────────────────────────
 
