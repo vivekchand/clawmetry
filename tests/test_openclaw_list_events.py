@@ -194,9 +194,10 @@ def test_list_events_populates_content_from_log_message_text(isolated_store):
     assert len(events) == 1
     e = events[0]
     assert e.content == "tool dispatched: bash exit=0"
-    # channel/hostname still come through extra.
+    # channel/hostname/level still come through extra (#3013).
     assert e.extra.get("channel") == "gateway"
     assert e.extra.get("hostname") == "Dhriti-1"
+    assert e.extra.get("level") == "info"
 
 
 def test_list_events_dict_message_does_not_set_content(isolated_store):
