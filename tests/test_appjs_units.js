@@ -1237,6 +1237,91 @@ console.log('renderBrainChart + renderBrainStream apply the runtime filter');
          'renderBrainChart honours the channel pill (mirrors the list)');
 }
 
+// ── Issue #3004 — Flow "Active Tools" backfill honours the runtime filter ─
+//
+// _backfillFlowFromBrain consumes node-wide /api/brain-history events to seed
+// the Flow tab's Active Tools row. Under a single-runtime switcher it must NOT
+// light up from OTHER runtimes' brain events. This test both (a) statically
+// guards the filter is present, and (b) actually runs the function with a
+// stubbed fetch returning a mix of claude_code + openclaw events and asserts
+// only the selected runtime's tool lights up flowStats.activeTools.
+console.log('_backfillFlowFromBrain scopes Active Tools by runtime (#3004)');
+{
+  const backfill = extractFunction('_backfillFlowFromBrain');
+  // (a) Static leak guard: the same client filter the Brain tab uses.
+  truthy(/_cmRuntimeFilter\s*\(/.test(backfill),
+         '_backfillFlowFromBrain calls _cmRuntimeFilter()');
+  truthy(/_cmClientFilterRt\s*\(/.test(backfill),
+         '_backfillFlowFromBrain collapses OTLP via _cmClientFilterRt()');
+  truthy(/_cmRuntimeOf\(\s*ev\s*\)/.test(backfill),
+         '_backfillFlowFromBrain filters events by _cmRuntimeOf(ev)');
+
+  // (b) Behavioural: run the real function under a stubbed environment.
+  // Two recent tool events, one per runtime (session-id prefix). With the
+  // switcher pinned to claude_code, only its tool must be marked active.
+  const now = new Date();
+  const recentIso = new Date(now.getTime() - 60 * 1000).toISOString(); // 1 min ago
+  const events = [
+    { id: 'claude_code:s1', type: 'EXEC', time: recentIso, tool: 'bash' },
+    { id: 'openclaw:s2',    type: 'READ', time: recentIso, tool: 'read' },
+  ];
+
+  function runBackfill(selectedRuntime) {
+    const activeTools = {};
+    const sandbox = {
+      Date: Date,
+      setTimeout: function() {},   // never expire within the test
+      console: console,
+      // brain-type → flow-tool: map EXEC→exec, READ→read so both events count.
+      _brainTypeToFlowTool: function(t) {
+        if (t === 'EXEC') return 'exec';
+        if (t === 'READ') return 'read';
+        return null;
+      },
+      // The two client-filter helpers + the prefix resolver, mirroring app.js.
+      _cmRuntimeFilter: function() { return selectedRuntime; },
+      _cmClientFilterRt: function(rt) { return rt; }, // no OTLP in this test
+      _cmRuntimeOf: function(o) {
+        const id = (o && (o.id || o.sessionId || o.session_id || o.key)) || '';
+        const i = id.indexOf(':');
+        return i > 0 ? id.slice(0, i).toLowerCase() : 'openclaw';
+      },
+      flowStats: { activeTools: activeTools },
+      updateFlowStats: function() {},
+      fetch: function() {
+        return Promise.resolve({ json: function() {
+          return Promise.resolve({ events: events });
+        } });
+      },
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(backfill + '\n_backfillFlowFromBrain();', sandbox);
+    return new Promise(function(resolve) {
+      setImmediate(function() { setImmediate(function() {
+        resolve(activeTools);
+      }); });
+    });
+  }
+
+  (async function() {
+    const ccOnly = await runBackfill('claude_code');
+    truthy(ccOnly['exec'] === true,
+           'claude_code selected → its EXEC tool lights up');
+    truthy(ccOnly['read'] === undefined,
+           'claude_code selected → openclaw READ tool does NOT light up (#3004)');
+
+    const all = await runBackfill('all');
+    truthy(all['exec'] === true && all['read'] === true,
+           'all runtimes selected → both tools light up (no filter)');
+
+    const ocOnly = await runBackfill('openclaw');
+    truthy(ocOnly['read'] === true,
+           'openclaw selected → its READ tool lights up');
+    truthy(ocOnly['exec'] === undefined,
+           'openclaw selected → claude_code EXEC tool does NOT light up');
+  })();
+}
+
 // Auth-bootstrap scenarios above are async — wait for the microtask /
 // macrotask queue to drain before printing the summary. (The previous
 // synchronous test blocks all completed in-tick, so no wait was needed

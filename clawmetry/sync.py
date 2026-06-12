@@ -750,26 +750,8 @@ def load_config() -> dict:
 
 def save_config(data: dict) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    # config.json holds the api_key + encryption_key. Create it 0600 ATOMICALLY
-    # (O_CREAT|O_EXCL via a temp file, then os.replace) so there is never a
-    # window where it exists world-readable (write_text + a later chmod left a
-    # brief 0644 gap that another local user could read on a shared host).
-    payload = json.dumps(data, indent=2)
-    tmp = CONFIG_FILE.with_name(CONFIG_FILE.name + f".tmp.{os.getpid()}")
-    try:
-        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            os.write(fd, payload.encode("utf-8"))
-        finally:
-            os.close(fd)
-        os.replace(str(tmp), str(CONFIG_FILE))
-        CONFIG_FILE.chmod(0o600)
-    finally:
-        try:
-            if tmp.exists():
-                tmp.unlink()
-        except OSError:
-            pass
+    CONFIG_FILE.write_text(json.dumps(data, indent=2))
+    CONFIG_FILE.chmod(0o600)
 
 
 def load_state() -> dict:
@@ -993,13 +975,7 @@ def _post(path: str, payload: dict, api_key: str, timeout: int = 45) -> dict:
     for attempt in range(1, _HTTP_MAX_ATTEMPTS + 1):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                raw = resp.read()
-                # Some endpoints answer 204 / an empty body on success
-                # (e.g. /ingest/cache returns ("", 204) after storing a
-                # process_control or cron result). json.loads("") raises,
-                # which surfaced as a spurious "cache post failed" warning
-                # on every successful post-back. Treat an empty body as {}.
-                resp_body = json.loads(raw) if raw.strip() else {}
+                resp_body = json.loads(resp.read())
             # Cloud heartbeat (and any other endpoint) may attach the user's
             # plan / sync_allowed / trial_days_left / upgrade_url. We mirror
             # those into _TRIAL_STATE so subsequent uploads can self-throttle
@@ -5006,60 +4982,49 @@ def sync_voice_log_events(config: dict, state: dict, paths: dict) -> int:
 
 
 def sync_intercepted_events(config: dict, state: dict, paths: dict) -> int:
-    """Tail the interceptor's JSONL and ingest external_api_call rows into the
-    local DuckDB store. Reads ClawMetry's own ~/.clawmetry/intercepted.jsonl
-    plus the legacy ~/.openclaw/clawmetry-intercepted.jsonl (older interceptors
-    wrote into the agent workspace). Per-file byte-offset cursor in state so
+    """Tail ~/.openclaw/clawmetry-intercepted.jsonl and ingest external_api_call
+    rows into the local DuckDB store. Uses a byte-offset cursor in state so
     only new lines are read each tick. Returns the number of rows ingested."""
-    node_id = config.get("node_id", "")
-    cm_home = os.environ.get("CLAWMETRY_HOME", str(Path.home() / ".clawmetry"))
     openclaw_dir = paths.get("openclaw_dir", str(Path.home() / ".openclaw"))
-    # The legacy file keeps its existing offset key so we never re-ingest it.
-    targets = [
-        (Path(cm_home) / "intercepted.jsonl", "last_intercepted_offset_cm"),
-        (Path(openclaw_dir) / "clawmetry-intercepted.jsonl", "last_intercepted_offset"),
-    ]
+    fpath = Path(openclaw_dir) / "clawmetry-intercepted.jsonl"
+    if not fpath.exists():
+        return 0
+    node_id = config.get("node_id", "")
+    offset_key = "last_intercepted_offset"
+    offset = state.get(offset_key, 0)
     ingested = 0
     try:
         from clawmetry import local_store as _ls
         store = _ls.get_store()
-    except Exception as e:
-        log.warning("sync_intercepted_events store error: %s", e)
-        return 0
-    for fpath, offset_key in targets:
-        if not fpath.exists():
-            continue
-        offset = state.get(offset_key, 0)
-        try:
-            with open(fpath, "r", errors="replace") as f:
-                f.seek(0, 2)
-                size = f.tell()
-                if offset > size:
-                    offset = 0
-                f.seek(offset)
-                for raw in f:
-                    raw = raw.strip()
-                    if not raw:
-                        continue
+        with open(fpath, "r", errors="replace") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            if offset > size:
+                offset = 0
+            f.seek(offset)
+            for raw in f:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    ev = json.loads(raw)
+                except Exception:
+                    continue
+                _evt = ev.get("type")
+                if _evt in ("external_api_call", "llm_call"):
+                    # llm_call carries cost/tokens/model + provider; normalise
+                    # provider→host so both event types share external_api_calls
+                    # (the out-loop card then shows real per-source $ spend).
+                    if _evt == "llm_call" and not ev.get("host"):
+                        ev["host"] = ev.get("provider") or ""
                     try:
-                        ev = json.loads(raw)
-                    except Exception:
-                        continue
-                    _evt = ev.get("type")
-                    if _evt in ("external_api_call", "llm_call"):
-                        # llm_call carries cost/tokens/model + provider; normalise
-                        # provider→host so both event types share external_api_calls
-                        # (the out-loop card then shows real per-source $ spend).
-                        if _evt == "llm_call" and not ev.get("host"):
-                            ev["host"] = ev.get("provider") or ""
-                        try:
-                            store.ingest_external_call(ev, node_id)
-                            ingested += 1
-                        except Exception as _ie:
-                            log.debug("ingest_external_call failed: %s", _ie)
-                state[offset_key] = f.tell()
-        except Exception as e:
-            log.warning("sync_intercepted_events error (%s): %s", fpath, e)
+                        store.ingest_external_call(ev, node_id)
+                        ingested += 1
+                    except Exception as _ie:
+                        log.debug("ingest_external_call failed: %s", _ie)
+            state[offset_key] = f.tell()
+    except Exception as e:
+        log.warning("sync_intercepted_events error: %s", e)
     return ingested
 
 
@@ -6574,6 +6539,177 @@ def _heartbeat_stuck_payload(now: float | None = None) -> list:
         return []
 
 
+def _runtime_tools_payload(store):
+    """Per-runtime tool usage for the device drill-down: tool NAMES +
+    counts (24h) + a last-action ago. Aggregates only -- no arguments, no
+    content. Shared by the heartbeat (plaintext, the desk device's REAL
+    path -- it reads the CLOUD-built device_summary, same discovery as the
+    stuck signal) and the legacy encrypted deviceSummary slice."""
+    from datetime import timedelta
+    from clawmetry import waste_flags as _wf
+    import collections as _c
+    out = []
+    _now = datetime.now(timezone.utc)
+    since_24h = (_now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
+    rows = store.query_sessions_table(limit=300) or []
+    recent_rts = set()
+    for s in rows:
+        if not isinstance(s, dict):
+            continue
+        _upd = str(s.get("last_active_at") or s.get("updated_at") or "")
+        name = (_wf.runtime_from_session_id(s.get("session_id") or "")
+                or "openclaw")
+        if s.get("status") == "active" or _upd >= since_24h:
+            recent_rts.add(name)
+    for name in sorted(recent_rts):
+        try:
+            inv = store.query_tool_call_invocations(
+                since=since_24h, runtime=name, limit=5000) or []
+            if not inv:
+                continue
+            counts = _c.Counter((r.get("name") or "?") for r in inv)
+            entry = {
+                "name": name,
+                "tools_today": [
+                    {"name": n[:24], "count": c}
+                    for n, c in counts.most_common(4)
+                ],
+            }
+            newest = max(inv, key=lambda r: r.get("ts") or "")
+            ago = 0
+            try:
+                _ts = datetime.fromisoformat(
+                    str(newest.get("ts")).replace("Z", "+00:00"))
+                if _ts.tzinfo is None:
+                    _ts = _ts.replace(tzinfo=timezone.utc)
+                ago = max(0, int((_now - _ts).total_seconds()))
+            except Exception:
+                pass
+            entry["last_action"] = {
+                "tool": (newest.get("name") or "?")[:24],
+                "ago_seconds": ago,
+            }
+            out.append(entry)
+        except Exception:
+            continue
+    return out[:8]
+
+
+# ── Claude subscription limit meter (inspired by Clawdmeter, 2026-06-12) ──
+# A 1-token Haiku probe authenticated with the node's EXISTING Claude Code
+# OAuth token returns the OFFICIAL unified rate-limit headers -- the same
+# numbers behind Claude Code's /usage: 5h-window and 7d-window utilization
+# + reset times. Percentages and timestamps only (aggregates, no content)
+# -> rides the plaintext heartbeat like `stuck` / `runtime_tools`.
+# Hardening lessons from Clawdmeter's issue tracker baked in: tolerate
+# header renames (#42), never use a non-subscription token silently (#44),
+# and degrade to absent for enterprise/API-key accounts (#41).
+_LIMITS_CACHE: dict = {"at": 0.0, "payload": None}
+_LIMITS_TTL_S = 300          # probe at most every 5 min (1 token each)
+_LIMITS_TIMEOUT_S = 8
+
+
+def _read_claude_oauth_token():
+    """The node's Claude Code OAuth access token, or None. macOS keeps it
+    in the Keychain; Linux/Windows in ~/.claude/.credentials.json. Only a
+    subscription OAuth token (sk-ant-oat...) is returned -- an API key
+    would silently probe the WRONG account (Clawdmeter #44)."""
+    blob = None
+    try:
+        import subprocess as _sp
+        out = _sp.run(
+            ["security", "find-generic-password", "-s",
+             "Claude Code-credentials", "-w"],
+            capture_output=True, text=True, timeout=10)
+        blob = out.stdout.strip() or None
+    except Exception:
+        blob = None
+    if not blob:
+        try:
+            p = Path.home() / ".claude" / ".credentials.json"
+            if p.exists():
+                blob = p.read_text()
+        except Exception:
+            blob = None
+    if not blob:
+        return None
+    try:
+        d = json.loads(blob)
+        tok = ((d.get("claudeAiOauth") or {}).get("accessToken")
+               or d.get("accessToken"))
+        if isinstance(tok, str) and tok.startswith("sk-ant-oat"):
+            return tok
+    except Exception:
+        pass
+    return None
+
+
+def _probe_claude_limits():
+    """One 1-token Haiku call -> unified limit headers. Returns the
+    heartbeat payload dict or None (no creds / no headers / any error)."""
+    token = _read_claude_oauth_token()
+    if not token:
+        return None
+    try:
+        import urllib.request as _ur
+        req = _ur.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=json.dumps({
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "hi"}],
+            }).encode(),
+            headers={
+                "anthropic-version": "2023-06-01",
+                "anthropic-beta": "oauth-2025-04-20",
+                "Content-Type": "application/json",
+                "User-Agent": "claude-code/2.1.5",
+                "Authorization": "Bearer " + token,
+            })
+        try:
+            resp = _ur.urlopen(req, timeout=_LIMITS_TIMEOUT_S)
+            hs = {k.lower(): v for k, v in dict(resp.headers).items()}
+        except Exception as e:
+            # Rate-limited (429) STILL carries the headers -- that's the
+            # most important moment to read them.
+            hs = {k.lower(): v for k, v in dict(
+                getattr(e, "headers", None) or {}).items()}
+        def _pct(name):
+            try:
+                return int(round(float(hs[name]) * 100))
+            except Exception:
+                return None
+        def _epoch(name):
+            try:
+                return int(hs[name])
+            except Exception:
+                return None
+        out = {
+            "fiveh_pct": _pct("anthropic-ratelimit-unified-5h-utilization"),
+            "fiveh_reset": _epoch("anthropic-ratelimit-unified-5h-reset"),
+            "sevend_pct": _pct("anthropic-ratelimit-unified-7d-utilization"),
+            "sevend_reset": _epoch("anthropic-ratelimit-unified-7d-reset"),
+            "status": hs.get("anthropic-ratelimit-unified-status") or "",
+        }
+        if out["fiveh_pct"] is None and out["sevend_pct"] is None:
+            return None  # enterprise / API-key / renamed headers -> absent
+        return out
+    except Exception:
+        return None
+
+
+def _heartbeat_limits_payload():
+    """TTL-cached limits for the heartbeat. The probe costs one Haiku
+    token and ~1s -- pay it at most once per _LIMITS_TTL_S; every
+    heartbeat in between rides the cache."""
+    now = time.time()
+    if now - _LIMITS_CACHE["at"] < _LIMITS_TTL_S:
+        return _LIMITS_CACHE["payload"]
+    _LIMITS_CACHE["at"] = now
+    _LIMITS_CACHE["payload"] = _probe_claude_limits()
+    return _LIMITS_CACHE["payload"]
+
+
 def send_heartbeat(config: dict) -> bool:
     """Send heartbeat to cloud. Returns True on success, False on failure.
 
@@ -6619,6 +6755,25 @@ def send_heartbeat(config: dict) -> bool:
             payload["stuck"] = _stuck
     except Exception as _st_e:
         log.debug("stuck heartbeat payload build failed (continuing): %s", _st_e)
+    # Per-runtime tool usage for the device drill-down -- same ride as
+    # `stuck`: plaintext aggregates on the heartbeat, recency-gated by the
+    # cloud at read time. Best-effort, never blocks the heartbeat.
+    try:
+        from clawmetry import local_store as _ls_rtt
+        _rtt = _runtime_tools_payload(_ls_rtt.get_store())
+        if _rtt:
+            payload["runtime_tools"] = _rtt
+    except Exception as _rtt_e:
+        log.debug("runtime_tools payload build failed (continuing): %s",
+                  _rtt_e)
+    # Official Claude subscription limit meter (5h/7d windows) -- see
+    # _probe_claude_limits. Absent for API-key/enterprise accounts.
+    try:
+        _lim = _heartbeat_limits_payload()
+        if _lim:
+            payload["limits"] = _lim
+    except Exception as _lim_e:
+        log.debug("limits payload build failed (continuing): %s", _lim_e)
     # Agent-install self-report (cloud bug fix 2026-05-18). Cloud Run pods
     # can't stat the user's home directory, so the daemon tells cloud what
     # agents exist locally and cloud aggregates across the user's fleet.
@@ -6638,10 +6793,10 @@ def send_heartbeat(config: dict) -> bool:
             payload["billing"] = _billing
     except Exception as _bm_e:
         log.debug("billing-mode detection failed (continuing): %s", _bm_e)
-    # security_posture is a SCAN OF THE USER'S MACHINE; it must not ride the
-    # plaintext heartbeat (the cloud stored it in cleartext). It now travels in
-    # the E2E-encrypted system snapshot as `securityPosture` and renders
-    # client-side from the decrypted blob. See sync_system_snapshot().
+    # Daemon-collected snapshots (see _collect_security_posture docstring)
+    sec = _collect_security_posture()
+    if sec is not None:
+        payload["security_posture"] = sec
     # Local-store health (epic #964 phase 1 → rollout gate for phase 2).
     # We need ≥80% of active nodes reporting healthy local stores before
     # slimming cloud retention to 24h. Best-effort; never blocks heartbeat.
@@ -7544,11 +7699,6 @@ _PENDING_ACTIONS = frozenset({
     "cron_fix",
     "dives_query",
     "runtime_backfill",
-    # Process-control (kill/pause/resume a runaway agent on the host). Inert
-    # until the cloud enqueues them; safe to merge daemon-only.
-    "kill_session",
-    "pause_session",
-    "resume_session",
 })
 
 
@@ -7758,237 +7908,6 @@ def _dispatch_pending_action(config: dict, action: dict) -> None:
     if atype == "dives_query":
         _action_dives_query(config, action)
         return
-    if atype in ("kill_session", "pause_session", "resume_session"):
-        _action_process_control(config, action)
-        return
-
-
-# ── Process control: kill / pause / resume a runaway agent on the host ──────
-# The cloud relays {type:"kill_session"|"pause_session"|"resume_session",
-# session_id, runtime, cache_key, mode?}. For family runtimes
-# (claude_code/codex/goose/opencode/aider) we map the session to a host process
-# via clawmetry.process_control and send guarded POSIX signals. For
-# openclaw/nemoclaw we cancel via the `openclaw tasks cancel` CLI (the gateway
-# token is read-only). Belt-and-suspenders: every kill/pause also writes the
-# proxy HITL pause file so any proxied runtime refuses further LLM calls even if
-# the signal missed; resume removes it. Every action records an audit event and
-# posts a structured result back under the action's cache_key.
-
-# A clean per-session pause primitive does not exist for OpenClaw's task
-# scheduler, so pause/resume of an openclaw session is honestly reported
-# unsupported rather than faked.
-_OPENCLAW_RUNTIMES = frozenset({"openclaw", "nemoclaw"})
-
-
-def _hitl_pause_path(session_id: str):
-    """Path to the proxy's legacy operator pause file for a session.
-
-    Mirrors clawmetry/proxy.py: ``~/.clawmetry/hitl/pause_<session_id>`` (no
-    extension) — an empty file that ``_is_session_hitl_paused`` honors with no
-    expiry, so the enforcement proxy refuses further LLM calls for that session
-    until the file is removed.
-    """
-    return Path.home() / ".clawmetry" / "hitl" / f"pause_{session_id}"
-
-
-def _write_hitl_pause(session_id: str) -> bool:
-    """Create the proxy HITL pause file for a session. Best-effort, never raises."""
-    if not session_id:
-        return False
-    try:
-        p = _hitl_pause_path(session_id)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.touch(exist_ok=True)
-        return True
-    except Exception as e:
-        log.debug("hitl pause write skipped for %s: %s", session_id, e)
-        return False
-
-
-def _remove_hitl_pause(session_id: str) -> bool:
-    """Remove the proxy HITL pause file for a session. Best-effort, never raises."""
-    if not session_id:
-        return False
-    try:
-        p = _hitl_pause_path(session_id)
-        if p.exists():
-            p.unlink()
-        # Also clear any auto-backoff json so resume is a clean unpause.
-        pj = p.with_name(p.name + ".json")
-        if pj.exists():
-            pj.unlink()
-        return True
-    except Exception as e:
-        log.debug("hitl pause remove skipped for %s: %s", session_id, e)
-        return False
-
-
-def _openclaw_cancel_task(lookup: str, timeout: int = 30) -> dict:
-    """Cancel an OpenClaw task/run/session via ``openclaw tasks cancel <lookup>``.
-
-    ``lookup`` may be a task id, a run id, OR a session key. Uses OpenClaw's own
-    full-scope creds (the gateway token is operator.read only). ``openclaw`` is a
-    Node script; under the daemon's launchd PATH ``node`` may not be found, so we
-    augment PATH the same way ``run_openclaw_cron`` does. Returns
-    ``{ok, scope_pending, error, raw}``. Never raises.
-    """
-    binp = _resolve_openclaw_bin()
-    if not binp:
-        return {"ok": False, "scope_pending": False,
-                "error": "openclaw CLI not found on this machine", "raw": ""}
-    env = dict(os.environ)
-    node_dirs = [
-        os.path.dirname(binp),
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        os.path.expanduser("~/.local/bin"),
-    ]
-    env["PATH"] = os.pathsep.join(node_dirs + [env.get("PATH", "/usr/bin:/bin")])
-    cmd = [binp, "tasks", "cancel", str(lookup)]
-    try:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout, env=env,
-        )
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "scope_pending": False,
-                "error": "openclaw tasks cancel timed out", "raw": ""}
-    except Exception as e:
-        return {"ok": False, "scope_pending": False, "error": str(e)[:400], "raw": ""}
-    blob = (proc.stdout or "") + "\n" + (proc.stderr or "")
-    low = blob.lower()
-    scope_pending = (
-        "pairing required" in low
-        or "scope upgrade" in low
-        or "more scopes than currently approved" in low
-    )
-    if proc.returncode != 0:
-        err = (proc.stderr or proc.stdout or "exit %d" % proc.returncode).strip()
-        if scope_pending:
-            err = ("Cancel needs a one-time gateway approval. On the host run "
-                   "`openclaw devices list` then `openclaw devices approve <id>` "
-                   "(or approve the pairing prompt), then retry.")
-        return {"ok": False, "scope_pending": scope_pending,
-                "error": err[:500], "raw": blob[:1000]}
-    return {"ok": True, "scope_pending": False, "error": "", "raw": blob[:1000]}
-
-
-def _process_control_audit(atype: str, session_id: str, runtime: str,
-                           result: dict, actor: str) -> None:
-    """Record an Enterprise audit event for a kill/pause/resume. Never raises."""
-    try:
-        from clawmetry import audit as _audit
-        _audit.audit_event(
-            "process." + atype,
-            actor=actor or "cloud-relay",
-            target=session_id or "",
-            result=("ok" if result.get("ok") else "failed"),
-            source="cloud-relay",
-            metadata={
-                "runtime": runtime,
-                "detail": result.get("detail") or result.get("error") or "",
-                "pid": result.get("pid"),
-            },
-        )
-    except Exception:
-        pass
-
-
-def _action_process_control(config: dict, action: dict) -> None:
-    """Cloud-relayed kill / pause / resume of a runaway agent on the host.
-
-    Action shape::
-
-        {type:"kill_session"|"pause_session"|"resume_session",
-         session_id, runtime, cache_key, id?, mode?, actor?}
-
-    Runs in a daemon thread so a SIGTERM->SIGKILL grace window never blocks the
-    heartbeat. Writes/removes the proxy HITL pause file as belt-and-suspenders,
-    records an audit event, and POSTs the structured result under ``cache_key``
-    so the cloud can show the user success/failure."""
-    atype = action.get("type")
-    cache_key = action.get("cache_key")
-    enc_key = config.get("encryption_key")
-    api_key = config.get("api_key", "")
-    node_id = config.get("node_id", "")
-    aid = action.get("id")
-    session_id = str(action.get("session_id") or "").strip()
-    runtime = str(action.get("runtime") or "").strip().lower()
-    mode = str(action.get("mode") or "").strip().lower()
-    actor = str(action.get("actor") or "").strip()
-    if not (cache_key and enc_key and api_key and session_id):
-        return
-
-    def _run():
-        result: dict = {"ok": False, "action": atype, "runtime": runtime,
-                        "session_id": session_id}
-        try:
-            import clawmetry.process_control as _pc
-
-            if runtime in _OPENCLAW_RUNTIMES:
-                if atype == "kill_session":
-                    res = _openclaw_cancel_task(session_id)
-                    result.update({
-                        "ok": bool(res.get("ok")),
-                        "detail": "openclaw_task_cancelled" if res.get("ok")
-                        else (res.get("error") or "cancel_failed"),
-                        "scope_pending": bool(res.get("scope_pending")),
-                    })
-                    # Belt-and-suspenders pause file even on kill so a proxied
-                    # OpenClaw refuses further LLM calls if cancel missed.
-                    _write_hitl_pause(session_id)
-                else:
-                    # No clean per-session pause/resume primitive for OpenClaw's
-                    # task scheduler — be honest, don't fake it. We DO still
-                    # flip the proxy HITL pause file so the user's Pause click
-                    # has a real effect on any proxied LLM traffic.
-                    if atype == "pause_session":
-                        wrote = _write_hitl_pause(session_id)
-                        result.update({
-                            "ok": wrote, "unsupported": True,
-                            "detail": "openclaw_pause_unsupported_hitl_only"
-                            if wrote else "openclaw_pause_unsupported",
-                        })
-                    else:  # resume_session
-                        removed = _remove_hitl_pause(session_id)
-                        result.update({
-                            "ok": removed, "unsupported": True,
-                            "detail": "openclaw_resume_unsupported_hitl_only"
-                            if removed else "openclaw_resume_unsupported",
-                        })
-            else:
-                # Family runtimes: real process signals.
-                cwd = str(action.get("cwd") or "").strip()
-                if atype == "kill_session":
-                    res = _pc.kill_session(runtime, session_id, cwd, mode=mode)
-                    _write_hitl_pause(session_id)  # belt-and-suspenders
-                    result.update(res)
-                elif atype == "pause_session":
-                    res = _pc.pause_session(runtime, session_id, cwd)
-                    _write_hitl_pause(session_id)
-                    result.update(res)
-                else:  # resume_session
-                    res = _pc.resume_session(runtime, session_id, cwd)
-                    _remove_hitl_pause(session_id)
-                    result.update(res)
-        except Exception as e:
-            result.update({"ok": False, "detail": ("error: " + str(e))[:300]})
-
-        _process_control_audit(atype, session_id, runtime, result, actor)
-
-        try:
-            blob = encrypt_payload(
-                {**result, "_shape": "process_control"}, enc_key,
-            )
-            _post(
-                "/ingest/cache",
-                {"node_id": node_id, "id": aid, "cache_key": cache_key,
-                 "blob": blob, "shape": "process_control", "ttl": 3600},
-                api_key,
-            )
-        except Exception as e:
-            log.warning("process_control cache post failed: %s", e)
-
-    threading.Thread(target=_run, daemon=True).start()
 
 
 def _action_runtime_backfill(config: dict, action: dict) -> None:
@@ -10853,6 +10772,58 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 except Exception as _se:
                     log.warning("family session upsert failed (%s): %s", ns_id, _se)
                     continue
+                # Agent fan-out: a family adapter may emit a session with
+                # ``parent_id`` set (e.g. the Claude Code adapter surfaces each
+                # spawned sub-agent transcript under its parent session). Record
+                # it in the ``subagents`` table so it lands in the snapshot
+                # ``subagents[]`` slice (read back via ``query_subagents``) and
+                # the Command River renders the real per-session fan-out instead
+                # of "1 agent". The child's transcript events were ALSO ingested
+                # above (under ``ns_id``) so its tokens/cost reconcile from the
+                # events table on read. parent_session_id carries the runtime
+                # prefix so it matches the parent's session row id; the cloud
+                # filter normalises both bare + prefixed forms.
+                if getattr(s, "parent_id", None):
+                    try:
+                        _sa_extra = s.extra if isinstance(s.extra, dict) else {}
+                        store.ingest_subagent({
+                            "subagent_id": ns_id,
+                            "agent_type": "openclaw",
+                            "parent_session_id": f"{runtime}:{s.parent_id}",
+                            "spawned_at": started,
+                            # Open (running) children leave ended_at None so the
+                            # river draws the stream to NOW; finished children
+                            # carry their last event ts.
+                            "ended_at": ended,
+                            "task": _ftitle,
+                            "status": (s.cost_status or
+                                       ("failed" if s.end_reason == "error"
+                                        else "completed")),
+                            "cost_usd": float(s.cost_usd or 0.0),
+                            "token_count": int(s.total_tokens or 0),
+                            # data-blob fields the /api/subagents shaper reads.
+                            "model": s.model or "",
+                            "label": _ftitle,
+                            "displayName": _ftitle,
+                            "depth": int(_sa_extra.get("depth") or 1),
+                            "error": (_sa_extra.get("description")
+                                      if s.end_reason == "error" else ""),
+                            "runtime": runtime,
+                        })
+                    except Exception as _sae:
+                        log.debug("family subagent ingest failed (%s): %s", ns_id, _sae)
+                # Sub-agent children stop here: they ride the snapshot
+                # ``subagents[]`` slice (river lanes), not the top-level
+                # Sessions list (local: excluded in ``query_sessions_table``;
+                # cloud: not pushed below). Their tokens/cost are carried on the
+                # subagent row itself (cache-aware, from the adapter), so we skip
+                # the per-event re-ingest + cloud session push entirely — a big
+                # CPU saving for a session that fanned out to hundreds of agents.
+                # Mark the watermark so we don't re-scan an unchanged child.
+                if getattr(s, "parent_id", None):
+                    if _activity:
+                        _evt_hw[ns_id] = _activity
+                    continue
                 # Carry the same row to cloud so the cloud Sessions list shows it.
                 cloud_session_rows.append({
                     "agent_type": "openclaw",
@@ -11257,10 +11228,45 @@ def _build_runtime_summary(limit: int = 20000):
         rt_switches: dict = defaultdict(int)
         for s in (rollup.get("switches") or []):
             rt_switches[s.get("runtime") or "openclaw"] += 1
+        # Per-runtime rolling 7-day + 30-day token/cost windows (#3004) so the
+        # cloud Cost cards can show REAL week/month per-runtime numbers instead
+        # of standing in lifetime. Sourced from the materialized
+        # ``rollup_runtime_daily`` table (#2988): one cheap read, no event scan
+        # (FLYWHEEL 1e). Naming mirrors the existing ``tokens_24h`` /
+        # ``cost_24h_usd`` rolling fields. ``rt -> {tokens_7d, cost_7d,
+        # tokens_30d, cost_30d}``.
+        rt_windows: dict = {}
+        try:
+            from datetime import datetime as _dt, timedelta as _td
+            _now = _dt.now()
+            _d7 = (_now - _td(days=6)).strftime("%Y-%m-%d")
+            _d30 = (_now - _td(days=29)).strftime("%Y-%m-%d")
+            for r in (store.query_rollup_runtime_daily(
+                since=_d30, limit=10000,
+            ) or []):
+                d = str(r.get("day") or "")[:10]
+                if not d:
+                    continue
+                rt = (r.get("runtime") or "").strip() or "openclaw"
+                w = rt_windows.setdefault(rt, {
+                    "tokens_7d": 0, "cost_7d": 0.0,
+                    "tokens_30d": 0, "cost_30d": 0.0,
+                })
+                tk = int(r.get("tokens") or 0)
+                ct = float(r.get("cost_usd") or 0.0)
+                w["tokens_30d"] += tk
+                w["cost_30d"] += ct
+                if d >= _d7:
+                    w["tokens_7d"] += tk
+                    w["cost_7d"] += ct
+        except Exception as _e_w:
+            log.debug("runtime summary 7d/30d window build failed: %s", _e_w)
+            rt_windows = {}
         out: dict = {}
-        # Union of runtimes seen in the per-runtime totals and the per-model rows
-        # (a runtime with only model-less events still gets a card with 0 turns).
-        for rt in set(by_runtime) | set(rt_models):
+        # Union of runtimes seen in the per-runtime totals, the per-model rows,
+        # and the rolling-window rollup (a runtime with only model-less events,
+        # or one present only in rollup_runtime_daily, still gets a card).
+        for rt in set(by_runtime) | set(rt_models) | set(rt_windows):
             totals = by_runtime.get(rt) or {}
             models = rt_models.get(rt) or {}
             total = sum(mm["turns"] for mm in models.values())
@@ -11270,6 +11276,7 @@ def _build_runtime_summary(limit: int = 20000):
                 "sessions": mm["sessions"],
                 "share_pct": round(mm["turns"] / total * 100, 2) if total else 0,
             } for m, mm in sorted_models[:15]]
+            _w = rt_windows.get(rt) or {}
             out[rt] = {
                 "sessions": int(totals.get("sessions") or 0),
                 "turns": total,
@@ -11279,6 +11286,12 @@ def _build_runtime_summary(limit: int = 20000):
                 # dual-column UI.
                 "cost_24h_usd": round(float(totals.get("cost_24h_usd") or 0.0), 4),
                 "tokens_24h": int(totals.get("tokens_24h") or 0),
+                # Rolling 7-day + 30-day windows (#3004) for the cloud Cost
+                # week/month cards; sourced from rollup_runtime_daily.
+                "tokens_7d": int(_w.get("tokens_7d") or 0),
+                "cost_7d_usd": round(float(_w.get("cost_7d") or 0.0), 4),
+                "tokens_30d": int(_w.get("tokens_30d") or 0),
+                "cost_30d_usd": round(float(_w.get("cost_30d") or 0.0), 4),
                 "primary_model": sorted_models[0][0] if sorted_models else "",
                 "total_turns": total,
                 "models": models_out,
@@ -12701,6 +12714,50 @@ def _build_daily_usage(days=14):
         tstr = now.strftime("%Y-%m-%d")
         wk = (now - timedelta(days=now.weekday())).strftime("%Y-%m-%d")
         mo = now.strftime("%Y-%m-01")
+        # Per-runtime daily series (#3004) so the cloud Cost 14-day chart can
+        # render purely from the encrypted snapshot when scoped to a runtime,
+        # instead of falling back to the scoped server path. Sourced from the
+        # materialized ``rollup_runtime_daily`` table (#2988) -> cheap read, no
+        # full event scan (FLYWHEEL 1e). Additive: node-wide ``days``/``today``/
+        # ``week``/``month`` above are unchanged. Shape per runtime is a list of
+        # ``{day, tokens, cost_usd}`` over the same ``days``-day window, oldest
+        # first, with a zero-filled point for every day so the chart axis lines
+        # up across runtimes. Empty {} when the rollup is unavailable.
+        by_runtime: dict = {}
+        try:
+            window = [
+                (now - timedelta(days=i)).strftime("%Y-%m-%d")
+                for i in range(days - 1, -1, -1)
+            ]
+            window_set = set(window)
+            since = window[0]
+            # rt -> {day: {"tokens": int, "cost_usd": float}}
+            rt_days: dict = {}
+            for r in (store.query_rollup_runtime_daily(
+                since=since, limit=10000,
+            ) or []):
+                d = str(r.get("day") or "")[:10]
+                if not d or d not in window_set:
+                    continue
+                rt = (r.get("runtime") or "").strip() or "openclaw"
+                slot = rt_days.setdefault(rt, {})
+                cell = slot.setdefault(d, {"tokens": 0, "cost_usd": 0.0})
+                cell["tokens"] += int(r.get("tokens") or 0)
+                cell["cost_usd"] += float(r.get("cost_usd") or 0.0)
+            for rt, slot in rt_days.items():
+                by_runtime[rt] = [
+                    {
+                        "day": d,
+                        "tokens": int(slot.get(d, {}).get("tokens", 0)),
+                        "cost_usd": round(
+                            float(slot.get(d, {}).get("cost_usd", 0.0)), 6
+                        ),
+                    }
+                    for d in window
+                ]
+        except Exception as _e_rt:
+            log.debug("daily usage byRuntime build failed: %s", _e_rt)
+            by_runtime = {}
         return {
             "days": out_days,
             "today": int(daily_tok.get(tstr, 0)),
@@ -12709,6 +12766,7 @@ def _build_daily_usage(days=14):
             "todayCost": round(float(daily_cost.get(tstr, 0.0)), 6),
             "weekCost": round(sum(v for k, v in daily_cost.items() if k >= wk), 6),
             "monthCost": round(sum(v for k, v in daily_cost.items() if k >= mo), 6),
+            "byRuntime": by_runtime,
         }
     except Exception as _e:
         log.debug("daily usage snapshot build failed: %s", _e)
@@ -13386,35 +13444,77 @@ def _build_tool_catalog_slice(limit: int = 5000, top: int = 60) -> dict:
     return out
 
 
-def _context_econ_by_runtime(compactions, overflow_sessions, base_summary):
+def _session_chips_from_utilization(utilization):
+    """Distinct-session chips from a utilization series, most-recent first, each
+    ``{session_id, peak_pct, ts}``. Mirrors the route builder in
+    ``routes/context_economics.py`` so the snapshot ships the same shape the
+    cloud Context-economics interceptor expects."""
+    chips: dict = {}
+    for u in (utilization or []):
+        sid = str((u or {}).get("session_id") or "")
+        if not sid:
+            continue
+        entry = chips.setdefault(sid, {"session_id": sid, "peak_pct": 0.0, "ts": ""})
+        try:
+            entry["peak_pct"] = max(entry["peak_pct"], float(u.get("pct") or 0))
+        except (TypeError, ValueError):
+            pass
+        ts = str(u.get("ts") or "")
+        if ts > entry["ts"]:
+            entry["ts"] = ts
+    return sorted(chips.values(), key=lambda c: c["ts"], reverse=True)
+
+
+def _context_econ_by_runtime(compactions, overflow_sessions, base_summary,
+                             utilization=None):
     """Group context-economics compactions + overflow sessions per runtime
     (session_id prefix) for the Context-economics runtime filter. Returns
-    ``{runtime: {compactions, overflow_sessions, summary}}``; a runtime that
-    never compacted is absent (the cloud interceptor then serves an empty
-    slice). ``peak_pct``/``utilization_points`` inherit the node-wide value —
-    utilization points are not per-session, so they aren't split."""
+    ``{runtime: {compactions, overflow_sessions, summary, utilization,
+    session_chips}}``; a runtime that never compacted AND has no utilization
+    readings is absent (the cloud interceptor then serves an empty slice).
+
+    The per-turn ``utilization`` series and the derived ``session_chips`` ARE
+    bucketed per runtime (#3004) by each point's ``session_id`` prefix, so the
+    cloud context-window gauge + session picker can scope to the selected
+    runtime instead of returning empty. ``peak_pct`` is recomputed from the
+    runtime's own utilization points (falling back to the node-wide value when
+    a runtime has compactions but no readings); the node-wide slice is
+    unchanged."""
+    # Bucket utilization points by runtime first so a runtime with readings but
+    # no compactions still gets a slice (its gauge + chips populate).
+    util_by_rt: dict = {}
+    for u in (utilization or []):
+        rt = _runtime_of_session((u or {}).get("session_id") or "")
+        util_by_rt.setdefault(rt, []).append(u)
     by: dict = {}
     for c in (compactions or []):
         rt = _runtime_of_session((c or {}).get("session_id") or "")
         by.setdefault(rt, []).append(c)
     base = base_summary or {}
     out: dict = {}
-    for rt, comps in by.items():
+    for rt in set(by) | set(util_by_rt):
+        comps = by.get(rt, [])
+        rt_util = util_by_rt.get(rt, [])
         ovn = sum(1 for c in comps if c.get("trigger") == "overflow")
         rt_ovf = [s for s in (overflow_sessions or [])
                   if _runtime_of_session(
                       (s.get("session_id") if isinstance(s, dict) else s) or "") == rt]
+        rt_chips = _session_chips_from_utilization(rt_util)
+        rt_peak = max((float(u.get("pct") or 0) for u in rt_util),
+                      default=base.get("peak_pct", 0))
         out[rt] = {
             "compactions": comps,
             "overflow_sessions": rt_ovf,
+            "utilization": rt_util,
+            "session_chips": rt_chips,
             "summary": {
                 "compaction_count": len(comps),
                 "overflow_count": ovn,
                 "proactive_count": len(comps) - ovn,
                 "total_reclaimed": sum(int(c.get("reclaimed") or 0) for c in comps),
-                "peak_pct": base.get("peak_pct", 0),
+                "peak_pct": round(float(rt_peak), 2),
                 "overflow_sessions": len(rt_ovf),
-                "utilization_points": base.get("utilization_points", 0),
+                "utilization_points": len(rt_util),
             },
         }
     return out
@@ -14251,6 +14351,169 @@ def _emit_stuck_signals(store, state: dict) -> int:
     return emitted
 
 
+# ── Daemon-side trajectory detectors (issue #2999) ──────────────────────────
+# The stuck detector above catches ONE failure class (long no-progress tool
+# streak). ``clawmetry.detectors`` adds the rest of the honest landing-page
+# promise — circular loops, no-progress-with-no-writes, repeated tool failures,
+# and the NARROW "agent continued after a failed command" discrepancy — as small
+# judge-free heuristics over the SAME DuckDB trajectories (the artifact-reading
+# moat; works for ALL runtimes, proxy-independent). It rides the EXACT same
+# surfacing as the stuck detector: a ``loop_signals`` row (so the device alert
+# fires) + a fold into ``_LATEST_STUCK`` (the plaintext, self-clearing heartbeat
+# slice -> cloud device_summary.alert), so it lands on the device + cloud with
+# ZERO cloud/firmware changes. Detection only — never a kill; the incident text
+# tells the human they can Stop/Pause from the dashboard or device.
+DETECT_EVAL_INTERVAL_SEC = int(os.environ.get("CLAWMETRY_DETECT_INTERVAL", "60"))
+# loop_signals' device-alert gate is repeat_count>=5 (see _build_device_summary).
+# Map detector severity to a count that clears that gate so an incident actually
+# surfaces; the count is illustrative (it is the alert's "how loud", not a tool
+# tally for the discrepancy/failure kinds).
+_DETECT_SEVERITY_COUNT = {"warning": 8, "info": 5}
+
+
+def _candidate_active_sessions(store) -> list[dict]:
+    """Recently-active, non-ended sessions — the same candidate set the stuck
+    detector walks. Read-only, never raises (returns [] on any store error)."""
+    try:
+        sessions = store.query_sessions_table(limit=300) or []
+    except Exception as e:  # noqa: BLE001
+        log.warning("detectors: query_sessions_table failed: %s", e)
+        return []
+    out: list[dict] = []
+    for s in sessions:
+        if not isinstance(s, dict):
+            continue
+        if s.get("ended_at"):
+            continue
+        status = str(s.get("status") or "").lower()
+        if status in ("ended", "completed", "stopped", "failed"):
+            continue
+        if not (s.get("session_id") or ""):
+            continue
+        last_active = s.get("last_active_at") or s.get("started_at")
+        if last_active and _seconds_since(last_active) > STUCK_RECENT_MINUTES * 60:
+            break  # ordered most-recent-active first -> tail is all stale
+        out.append(s)
+    return out
+
+
+def _emit_detector_incidents(store, state: dict) -> int:
+    """Run ``clawmetry.detectors`` over each active session, emit each incident
+    as a ``loop_signals`` row (reusing the stuck detector's device-alert path)
+    and fold the highest-severity incident per session into ``_LATEST_STUCK``
+    so the plaintext heartbeat carries it to cloud/device. Deduped per
+    (session, kind) within a re-emit window; self-clears when the behavior stops
+    (we simply stop re-emitting and the 30-min loop_signals window ages out).
+    Never raises into the daemon loop. Returns the number of incidents emitted.
+    """
+    try:
+        from clawmetry import detectors as _det
+    except Exception as e:  # noqa: BLE001
+        log.warning("detectors: import failed: %s", e)
+        return 0
+
+    candidates = _candidate_active_sessions(store)
+    if not candidates:
+        return 0
+
+    memo = state.setdefault("detector_emit_memo", {})
+    if not isinstance(memo, dict):
+        memo = {}
+        state["detector_emit_memo"] = memo
+    now = time.time()
+    reemit = max(30, STUCK_MIN_SECONDS // 2)
+
+    heartbeat_items: list[dict] = []
+    emitted = 0
+    for s in candidates:
+        sid = s.get("session_id") or ""
+        try:
+            events = store.query_events(
+                session_id=sid, limit=_det.DETECT_EVENT_WINDOW,
+            ) or []
+        except Exception as e:  # noqa: BLE001
+            log.warning("detectors: query_events failed for %s: %s", sid, e)
+            continue
+        try:
+            incidents = _det.run_all(events, sid) or []
+        except Exception as e:  # noqa: BLE001
+            log.warning("detectors: run_all errored for %s: %s", sid, e)
+            continue
+        if not incidents:
+            continue
+
+        # Fold the highest-severity incident (run_all sorts warning-first) into
+        # the heartbeat slice so the device alert shows the loudest one.
+        top = incidents[0]
+        heartbeat_items.append({
+            "runtime": str(top.get("runtime") or "openclaw"),
+            "kind": top.get("kind"),
+            "tool_calls": int((top.get("evidence") or {}).get("total_tool_calls")
+                              or (top.get("evidence") or {}).get("tool_calls") or 0),
+            "since_seconds": 0,
+            "message": str(top.get("title") or "")[:_STUCK_HEARTBEAT_MAX_MSG],
+        })
+
+        for inc in incidents:
+            kind = inc.get("kind")
+            memo_key = f"{sid}::{kind}"
+            last = memo.get(memo_key)
+            if isinstance(last, (int, float)) and (now - last) < reemit:
+                continue
+            sev = str(inc.get("severity") or "warning")
+            count = _DETECT_SEVERITY_COUNT.get(sev, 5)
+            try:
+                store.ingest_loop_signal(
+                    session_id=sid,
+                    # Stable per-kind signature so a re-emit UPSERTs the same row
+                    # (matches the (session_id, signature) PK) instead of piling
+                    # up; distinct from the stuck detector's "daemon_stuck".
+                    signature=f"daemon_detect_{kind}",
+                    repeat_count=count,
+                    severity="warning" if sev == "warning" else "info",
+                    agent_type=str(inc.get("runtime") or "openclaw"),
+                    details={
+                        "source": "daemon_detector",
+                        "kind": kind,
+                        "message": inc.get("title"),
+                        "detail": inc.get("detail"),
+                        "evidence": inc.get("evidence"),
+                        "first_bad_step": inc.get("first_bad_step"),
+                    },
+                )
+                memo[memo_key] = now
+                emitted += 1
+                log.info("detectors: %s", inc.get("title"))
+            except Exception as e:  # noqa: BLE001
+                log.warning("detectors: ingest_loop_signal failed for %s: %s",
+                            sid, e)
+                continue
+
+    # Fold detector incidents into the heartbeat slice WITHOUT clobbering a
+    # fresh stuck-detector result: only append (the stuck detector owns the
+    # self-clear refresh). When the stuck cache is stale, replace it.
+    try:
+        if heartbeat_items:
+            if (now - float(_LATEST_STUCK.get("ts") or 0)) < _STUCK_HEARTBEAT_FRESH_SECONDS:
+                existing = list(_LATEST_STUCK.get("items") or [])
+                existing.extend(heartbeat_items)
+                _LATEST_STUCK["items"] = existing[:_STUCK_HEARTBEAT_MAX_ITEMS]
+            else:
+                _LATEST_STUCK["items"] = heartbeat_items[:_STUCK_HEARTBEAT_MAX_ITEMS]
+            _LATEST_STUCK["ts"] = now
+    except Exception as _ce:  # noqa: BLE001
+        log.debug("detectors: heartbeat fold failed (continuing): %s", _ce)
+
+    # Bound memo growth: drop entries not touched in an hour.
+    try:
+        for k in [k for k, v in memo.items()
+                  if not (isinstance(v, (int, float)) and (now - v) < 3600)]:
+            memo.pop(k, None)
+    except Exception:
+        pass
+    return emitted
+
+
 def _build_device_summary(spending, daily_usage):
     """Compact, all-runtime payload for a WiFi hardware companion.
 
@@ -14343,6 +14606,15 @@ def _build_device_summary(spending, daily_usage):
                     key=lambda kv: (-kv[1]["cost"], kv[0]),
                 )
             ]
+        except Exception:
+            pass
+        # schema 2 (additive): per-runtime tools for the LEGACY encrypted
+        # slice path (the live device path is the heartbeat -> cloud
+        # device_summary; see _runtime_tools_payload).
+        try:
+            _rtt = _runtime_tools_payload(store)
+            if _rtt:
+                summary["runtime_tools"] = _rtt
         except Exception:
             pass
         # schema 2: per-session titles for the device's runtime-detail recent
@@ -14958,6 +15230,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
                 context_economics_slice["compactions"],
                 context_economics_slice["overflow_sessions"],
                 context_economics_slice["summary"],
+                utilization=_ce_util,
             )
     except Exception as _e_ce:
         log.debug("snapshot: context_economics slice failed: %s", _e_ce)
@@ -15101,10 +15374,6 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # cloud can show a runtime chip without bloating the snapshot.
         "detectedRuntimes": _detected_runtimes,
         "machineInfo": _build_machine_info(),
-        # Security posture (a scan of the user's machine) rides the ENCRYPTED
-        # snapshot, never the plaintext heartbeat — the cloud stores only this
-        # opaque blob and the Security tab decrypts it client-side.
-        "securityPosture": _collect_security_posture(),
         "channelList": _build_channel_list(config),
         "ollamaInfo": _detect_ollama_for_heartbeat(),
         "firstRun": _build_first_run(),
@@ -15596,21 +15865,6 @@ def run_daemon() -> None:
     # done, instead of starting a second daemon mid-drain.
     _install_shutdown_handlers()
 
-    # Self-update crash-loop guard (firmware-OTA style, see
-    # clawmetry/update_guard.py). If a just-installed wheel boot-loops under
-    # launchd/systemd, the Nth rapid boot rolls back to the previous version
-    # and exits so the supervisor respawns on the known-good build. A healthy
-    # run self-confirms after a few minutes. Runs BEFORE heavy init so a
-    # crash later in startup still counts as a failed boot. Never raises.
-    try:
-        from clawmetry import __version__ as _cm_boot_ver
-        from clawmetry.update_guard import check_boot_and_maybe_rollback as _ug_check
-        _ug_status = _ug_check(_cm_boot_ver)
-        if _ug_status not in ("idle",):
-            log.info("update guard: boot status=%s (v%s)", _ug_status, _cm_boot_ver)
-    except Exception as _ug_e:
-        log.warning("update guard boot check failed: %s", _ug_e)
-
     # Open-core plugin discovery. dashboard.py runs this at import time so the
     # dashboard process picks up entry-point plugins (clawmetry-pro adapters,
     # event handlers, etc.). The sync daemon is a SEPARATE process — started
@@ -16085,19 +16339,18 @@ def run_daemon() -> None:
     except Exception as _e:
         log.warning(f"pro-entitlement watcher failed to start: {_e}")
 
-    # ── Auto-update worker (default ON in this daemon) ───────────────────
-    # routes/update_check.py runs a background checker that self-updates via
-    # the same vetted pip+restart path as the manual "Update now".
-    # ``role="daemon"`` marks this as the supervised always-on process: the
-    # ONLY role where the default-on policy acts (the dashboard stays opt-in).
-    # Rails: 48h PyPI staleness window, CLAWMETRY_AUTO_UPDATE=0 kill switch,
-    # boot-loop rollback guard (clawmetry/update_guard.py), and no self-exit
-    # when unsupervised. WHY: the 2026-06-09 fleet audit found 92% of active
-    # nodes months stale — fixes shipped but never arrived. Never blocks/raises.
+    # ── Opt-in auto-update worker ────────────────────────────────────────
+    # routes/update_check.py runs a background checker that self-updates ONLY
+    # when the `auto_update` config is on (default OFF → no behaviour change
+    # for anyone who hasn't opted in), via the same vetted pip+restart path as
+    # the manual "Update now". It was started only in the DASHBOARD process —
+    # but a headless / cloud-synced node runs only this daemon, so auto-update
+    # never fired where it's most needed. Start it here too (idempotent: the
+    # module guards against a double-started thread). Never blocks/raises.
     try:
         from routes.update_check import start_update_check_thread as _start_uc
-        _start_uc(role="daemon")
-        log.info("update-check thread started (auto-update default-on, daemon role)")
+        _start_uc()
+        log.info("update-check thread started (auto-update honours the opt-in flag)")
     except Exception as _e:
         log.warning(f"update-check thread failed to start: {_e}")
 
@@ -16209,6 +16462,7 @@ def run_daemon() -> None:
     # path already reads. 0 = run on first cycle so a stuck agent at daemon
     # start surfaces immediately.
     last_stuck_eval = 0.0
+    last_detect_eval = 0.0
 
     while True:
         try:
@@ -16458,6 +16712,36 @@ def run_daemon() -> None:
                             f"stuck-detect: tick errored: {_se}"
                         )
                     last_stuck_eval = now_stuck
+                    try:
+                        save_state(state)
+                    except Exception:
+                        pass
+
+            # ── Trajectory detectors (issue #2999) ──
+            # Sibling of the stuck detector: loops / no-progress / repeated tool
+            # failure / action-discrepancy over the SAME DuckDB trajectories,
+            # surfaced via the SAME loop_signals -> device_summary.alert path.
+            # Detection only, read-only, proxy-independent, all runtimes. Shares
+            # the stuck detector's on/off env (CLAWMETRY_STUCK_DETECT) plus its
+            # own opt-out (CLAWMETRY_DETECTORS=0). Best-effort; never raises into
+            # the sync cycle.
+            if (os.environ.get("CLAWMETRY_STUCK_DETECT", "1") != "0"
+                    and os.environ.get("CLAWMETRY_DETECTORS", "1") != "0"):
+                now_detect = time.time()
+                if (now_detect - last_detect_eval) >= DETECT_EVAL_INTERVAL_SEC:
+                    try:
+                        from clawmetry import local_store as _ls_det
+                        store_for_det = _ls_det.get_store()
+                        n_det = _emit_detector_incidents(store_for_det, state)
+                        if n_det:
+                            log.info(
+                                f"detectors: {n_det} incident(s) emitted"
+                            )
+                    except Exception as _de:
+                        log.warning(
+                            f"detectors: tick errored: {_de}"
+                        )
+                    last_detect_eval = now_detect
                     try:
                         save_state(state)
                     except Exception:
