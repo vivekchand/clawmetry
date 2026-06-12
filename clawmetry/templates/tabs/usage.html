@@ -1,6 +1,6 @@
 <div class="page" id="page-usage">
   <div id="usage-node-scope-banner" style="background:var(--bg-secondary,#f1f5f9);border:1px solid var(--border-primary,#e2e8f0);border-left:3px solid #3b82f6;padding:10px 14px;border-radius:4px;margin-bottom:12px;font-size:13px;color:var(--text-secondary,#64748b);">
-    ℹ️ <strong>Local node only.</strong> These figures reflect only this node's DuckDB. See the <a href="#" onclick="showTab('fleet');return false" style="color:#3b82f6;text-decoration:none;">Fleet</a> tab for cross-node totals.
+    ℹ️ <span data-i18n="usage.local_scope_note">Numbers below are for this computer only.</span> <a id="usage-fleet-note" href="#" onclick="showTab('fleet');return false" style="color:#3b82f6;text-decoration:none;display:none;" data-i18n="usage.fleet_note">See Fleet for all machines.</a>
   </div>
   <div class="refresh-bar">
     <button class="refresh-btn" onclick="loadUsage()">↻ <span data-i18n="common.refresh">Refresh</span></button>
@@ -38,8 +38,10 @@
        `efficiency` snapshot slice on cloud). Hidden until the slice answers; honest
        collecting/empty states are rendered by JS, never a silent blank. -->
   <div class="card" id="efficiency-card" style="display:none;margin-bottom:16px;"></div>
-  <div class="section-title">📊 <span data-i18n="usage.token_usage_14d">Token Usage (14 days)</span></div>
-  <div class="card">
+  <!-- QW4: title + card hidden together by app.js when the 14-day series is empty,
+       so an empty chart never renders under populated totals. -->
+  <div class="section-title" id="usage-chart-title">📊 <span data-i18n="usage.token_usage_14d">Token Usage (14 days)</span></div>
+  <div class="card" id="usage-chart-card">
     <div class="usage-chart" id="usage-chart" data-i18n="app.loading">Loading...</div>
   </div>
   <div class="section-title">💰 <span data-i18n="usage.cost_breakdown">Cost Breakdown</span> <span id="usage-cost-info-icon" class="tooltip-info-icon" style="display:none;">i</span></div>

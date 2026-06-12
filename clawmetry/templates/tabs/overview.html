@@ -60,14 +60,15 @@
        one is set (transcripts are redacted before they go to the judge). -->
   <div id="eval-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:18px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;">
     <div>
-      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px;">✅ <span data-i18n="overview.eval_quality">Session quality (LLM judge)</span></div>
+      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px;"><span id="eval-title-check" style="display:none;">✅ </span><span data-i18n="overview.eval_quality">Session quality</span></div>
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
         <span id="eval-avg-score" style="font-size:26px;font-weight:800;line-height:1.1;color:var(--text-muted);">--</span>
         <span id="eval-coverage" style="font-size:12px;color:var(--text-muted);"></span>
       </div>
       <div id="eval-regression-line" style="font-size:12px;color:var(--text-muted);margin-top:6px;"></div>
     </div>
-    <button onclick="openEvalRubricModal()" title="Set the judge API key and edit the scoring rubric" style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:8px 14px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;">&#9881; <span data-i18n="overview.eval_setup">Judge key &amp; rubric</span></button>
+    <!-- QW7: setup lives behind a small gear icon; the title keeps the old label. -->
+    <button onclick="openEvalRubricModal()" title="Judge key &amp; rubric" data-i18n-title="overview.eval_setup" aria-label="Judge key &amp; rubric" style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:6px 10px;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap;">&#9881;</button>
   </div>
 
   <!-- Named evaluator library. Brands ClawMetry's shipped quality / reliability
@@ -146,7 +147,8 @@
       <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;" data-i18n="overview.cadence">Cadence</div>
       <div id="overview-hb-cadence" style="font-size:14px;font-weight:600;color:var(--text-primary);">30m</div>
     </div>
-    <div style="display:flex;flex-direction:column;gap:2px;min-width:140px;">
+    <!-- QW8: whole cell hidden when ok_ratio is null instead of rendering dashes. -->
+    <div id="overview-hb-ok-ratio-cell" style="display:none;flex-direction:column;gap:2px;min-width:140px;">
       <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;" data-i18n="overview.ok_ratio">OK ratio</div>
       <div id="overview-hb-ok-ratio" style="font-size:14px;font-weight:600;color:var(--text-primary);">--</div>
     </div>
@@ -173,7 +175,7 @@
     <div class="stats-footer-item">
       <span class="stats-footer-icon">💰</span>
       <div>
-        <div class="stats-footer-label"><span data-i18n="overview.spending">Spending</span> <span id="cost-info-icon" class="tooltip-info-icon" style="display:none;">i</span></div>
+        <div class="stats-footer-label"><span data-i18n="overview.spending">Cost today</span> <span id="cost-info-icon" class="tooltip-info-icon" style="display:none;">i</span></div>
         <div class="stats-footer-value" id="cost-today">$0.00</div>
         <div class="stats-footer-sub" id="cost-billing-badge" style="margin-top:2px;display:none;"></div>
       </div>
@@ -182,7 +184,9 @@
         <div class="stats-footer-sub"><span data-i18n="overview.month_abbr">mo:</span> <span id="cost-month">--</span></div>
       </div>
       <span id="cost-trend" style="display:none;" data-i18n="overview.cost_estimated_note">Estimated from usage, may be $0 billed with OAuth auth</span>
-      <div style="margin-left:14px;min-width:160px;">
+      <!-- QW8: Burn / Proj/mo stay hidden until a filler writes a real value
+           (nothing in the live frontend fills them today); never render dashes. -->
+      <div id="budget-burn-proj-wrap" style="display:none;margin-left:14px;min-width:160px;">
         <div class="stats-footer-sub"><span data-i18n="overview.burn">Burn:</span> <span id="budget-burn-rate">--</span></div>
         <div class="stats-footer-sub"><span data-i18n="overview.proj_month">Proj/mo:</span> <span id="budget-projected-month">--</span></div>
       </div>
@@ -609,12 +613,13 @@
         var cad = document.getElementById('overview-hb-cadence');
         if(cad){ cad.textContent = fmtCadence(hb.expected_cadence_seconds); }
         var ok = document.getElementById('overview-hb-ok-ratio');
-        if(ok){
-          if(hb.ok_ratio == null){
-            ok.textContent = '--';
-          } else {
-            ok.textContent = Math.round(hb.ok_ratio * 100) + '% (last ' + (hb.sample_size || 0) + ')';
-          }
+        var okCell = document.getElementById('overview-hb-ok-ratio-cell');
+        // QW8: hide the whole OK-ratio cell when there is no value, never dashes.
+        if(hb.ok_ratio == null){
+          if(okCell){ okCell.style.display = 'none'; }
+        } else {
+          if(okCell){ okCell.style.display = 'flex'; }
+          if(ok){ ok.textContent = Math.round(hb.ok_ratio * 100) + '% (last ' + (hb.sample_size || 0) + ')'; }
         }
       };
 
