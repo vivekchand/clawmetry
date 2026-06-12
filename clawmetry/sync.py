@@ -10783,6 +10783,7 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 # events table on read. parent_session_id carries the runtime
                 # prefix so it matches the parent's session row id; the cloud
                 # filter normalises both bare + prefixed forms.
+                _subagent_ingested = False
                 if getattr(s, "parent_id", None):
                     try:
                         _sa_extra = s.extra if isinstance(s.extra, dict) else {}
@@ -10810,7 +10811,13 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                                       if s.end_reason == "error" else ""),
                             "runtime": runtime,
                         })
+                        _subagent_ingested = True
                     except Exception as _sae:
+                        # Write failed (e.g. a transient DuckDB writer-lock /
+                        # WAL-conflict window). Leave _subagent_ingested False so
+                        # we DON'T advance the watermark below — otherwise this
+                        # child is permanently skipped and its lane never appears
+                        # in the Command River even after the store recovers.
                         log.debug("family subagent ingest failed (%s): %s", ns_id, _sae)
                 # Sub-agent children stop here: they ride the snapshot
                 # ``subagents[]`` slice (river lanes), not the top-level
@@ -10819,9 +10826,11 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 # subagent row itself (cache-aware, from the adapter), so we skip
                 # the per-event re-ingest + cloud session push entirely — a big
                 # CPU saving for a session that fanned out to hundreds of agents.
-                # Mark the watermark so we don't re-scan an unchanged child.
+                # Mark the watermark ONLY when the subagent row actually landed,
+                # so a failed write is retried next pass (self-healing) instead of
+                # being stranded behind an advanced high-water mark.
                 if getattr(s, "parent_id", None):
-                    if _activity:
+                    if _activity and _subagent_ingested:
                         _evt_hw[ns_id] = _activity
                     continue
                 # Carry the same row to cloud so the cloud Sessions list shows it.
