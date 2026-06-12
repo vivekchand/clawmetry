@@ -1,4 +1,4 @@
-<!-- i18n-src:56ff57310588 -->
+<!-- i18n-src:48548997be76 -->
 > 日本語 translation of [README](../../../README.md), auto-generated from the English source. English is canonical; open a PR against `README.md` for content changes.
 
 # 🦞 ClawMetry
@@ -11,62 +11,70 @@
 
 <a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=light&period=daily&t=1771491508782" alt="ClawMetry - #5 Product of the Day on Product Hunt" width="250" height="54" /></a>
 
-**エージェントの思考を可視化する。** [OpenClaw](https://github.com/openclaw/openclaw) AI エージェントのためのリアルタイム可観測性。
+**エージェントの思考を可視化。** **12種類のAIエージェントランタイム**にリアルタイムオブザーバビリティを提供します: [OpenClaw](https://github.com/openclaw/openclaw)、[NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw)、Claude Code、OpenAI Codexほか8種類。エージェントフリート全体を一つのダッシュボードで管理できます。
 
 > 🌐 **他の言語で読む:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [more →](docs/i18n/)
 
-コマンド一つ。設定不要。すべてを自動検出します。
+コマンド一つ。設定不要。すべて自動検出。
 
 ```bash
 pip install clawmetry && clawmetry
 ```
 
-**http://localhost:8900** で開いて、それで完了です。
+**http://localhost:8900** が開けば完了です。
 
 ![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
 
-## できること
+## 12種類のエージェントランタイムに対応
 
-- **Flow** — チャネル、ブレイン、ツールを通してメッセージが行き交う様子をリアルタイムで示すアニメーション図
+ClawMetry はもともとOpenClaw向けのオブザーバビリティツールとして始まりましたが、現在はマシン上の各ランタイムを自動検出し、**エージェントフリート全体**を一つのダッシュボードで計測できます。
+
+🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw**
+
+OpenClaw と NemoClaw はオープンソース版で無料利用できます。その他のランタイムは ClawMetry Cloud またはセルフホスト型 Pro ライセンスで有効になります。ヘッダーからランタイムを切り替えると、コスト・トークン・ツール・トレースなどすべてのタブがそのランタイム向けに絞り込まれます。
+
+## 主な機能
+
+- **Flow** — チャンネル、ブレイン、ツールをメッセージが流れる様子をライブアニメーションで表示
 - **Overview** — ヘルスチェック、アクティビティヒートマップ、セッション数、モデル情報
-- **Usage** — 日次/週次/月次の内訳によるトークンとコストの追跡
-- **Sessions** — モデル、トークン、最終アクティビティを含むアクティブなエージェントセッション
-- **Crons** — ステータス、次回実行、所要時間を含むスケジュール済みジョブ
-- **Logs** — 色分けされたリアルタイムのログストリーミング
-- **Memory** — SOUL.md、MEMORY.md、AGENTS.md、デイリーノートの閲覧
-- **Transcripts** — セッション履歴を読むためのチャットバブル UI
-- **Alerts** — 予算上限、エラー率トリガー、エージェントオフライン検出。Slack、Discord、PagerDuty、Telegram、Email へルーティング
-- **Approvals** — 破壊的な削除、強制プッシュ、DB の変更、sudo、パッケージのインストール、ネットワーク呼び出しをワンクリックの承認の背後でゲート
+- **Usage** — 日別・週別・月別のトークンとコストのトラッキング
+- **Sessions** — モデル・トークン・最終アクティビティを含むアクティブエージェントセッション一覧
+- **Crons** — ステータス・次回実行時刻・実行時間を含むスケジュールジョブ
+- **Logs** — カラーコードによるリアルタイムログストリーミング
+- **Memory** — SOUL.md・MEMORY.md・AGENTS.md・日次メモの閲覧
+- **Transcripts** — チャットバブルUIでセッション履歴を閲覧
+- **Alerts** — 予算上限・エラー率トリガー・エージェントオフライン検知、Slack・Discord・PagerDuty・Telegram・メールへの通知
+- **Approvals** — 破壊的な削除・強制プッシュ・DB変更・sudo・パッケージインストール・ネットワーク呼び出しをワンクリック承認で保護
 
 ## スクリーンショット
 
-### 🧠 Brain — エージェントイベントのライブストリーム
+### 🧠 Brain — ライブエージェントイベントストリーム
 ![Brain tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png)
 
-### 📊 Overview — トークン使用量とセッション概要
+### 📊 Overview — トークン使用量とセッションサマリー
 ![Overview tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png)
 
-### ⚡ Flow — リアルタイムのツール呼び出しフィード
+### ⚡ Flow — リアルタイムツールコールフィード
 ![Flow tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/flow.png)
 
 ### 💰 Tokens — モデルとセッション別のコスト内訳
 ![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png)
 
-### 🧬 Memory — ワークスペースのファイルブラウザ
+### 🧬 Memory — ワークスペースファイルブラウザ
 ![Memory tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/memory.png)
 
-### 🔐 Security — 状態と監査ログ
+### 🔐 Security — セキュリティポスチャと監査ログ
 ![Security tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/security.png)
 
-### 🚨 Alerts — 予算上限、エラー率トリガー、Slack / Discord / PagerDuty / Email への Webhook
+### 🚨 Alerts — 予算上限・エラー率トリガー・Slack / Discord / PagerDuty / メールへのWebhook
 ![Alerts tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/alerts.png)
 
-### ✋ Approvals — リスクのあるツール呼び出しを手動承認の背後でゲート。ポリシーに裏付けられた保護ルール
+### ✋ Approvals — リスクのあるツール呼び出しを手動承認で保護。ポリシーによる保護ルール
 ![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png)
 
 ## インストール
 
-**ワンライナー (推奨):**
+**ワンライナー（推奨）:**
 ```bash
 curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash
 ```
@@ -85,60 +93,78 @@ cd clawmetry && pip install flask && python3 dashboard.py
 
 ## v2 フロントエンド開発
 
-v2 React アプリは `frontend/` にあり、v2 を有効にして Flask
-サーバーを起動すると `/v2` で配信されます。
+v2 React アプリは `frontend/` に配置されており、v2 を有効にして Flask サーバーを起動すると `/v2` で提供されます。
 
-開発時はターミナルを 2 つ使います:
+開発中は2つのターミナルを使用します。
 
 ```bash
-# Terminal 1: Flask API/server on :8900
+# ターミナル1: Flask API/サーバー（:8900）
 CLAWMETRY_V2=1 python3 dashboard.py
 ```
 
 ```bash
-# Terminal 2: Vite dev server on :5173
+# ターミナル2: Vite 開発サーバー（:5173）
 cd frontend
 nvm use
 npm ci
 npm run dev
 ```
 
-`http://localhost:5173/v2/` を開きます。Vite が `/api` リクエストを
-`http://localhost:8900` にプロキシするため、React アプリは追加の CORS 設定なしで
-ローカルの Flask サーバーと通信できます。
+`http://localhost:5173/v2/` を開いてください。Vite は `/api` リクエストを `http://localhost:8900` にプロキシするため、React アプリは追加の CORS 設定なしにローカルの Flask サーバーと通信できます。
 
-Python パッケージに同梱されるバンドルをビルドするには:
+Python パッケージに同梱するバンドルをビルドするには:
 
 ```bash
 cd frontend
 npm run build
 ```
 
-本番用バンドルは `clawmetry/static/v2/dist/` に書き出されます。
+本番バンドルは `clawmetry/static/v2/dist/` に出力されます。
 
-## ランタイム / エージェントの互換性
+## ランタイム / エージェント互換性
 
-ClawMetry は OpenClaw だけでなく、多くの AI エージェントランタイムを観測します。OpenClaw 以外の各ランタイムには、そのネイティブなセッション形式を ClawMetry の統一されたシェイプに変換する専用のリーダーアダプターが付属します。デーモンはそれらを同じ DuckDB ストアとクラウドスナップショットに取り込み、ランタイムでタグ付けします。複数のランタイムが存在する場合、Session リプレイタブに **ランタイムスイッチャー** が表示されます。完全なマトリックスとランタイム追加のガイドは [`docs/compatibility.md`](docs/compatibility.md) を、OpenClaw ファミリーの入門は [`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md) を参照してください。
+ClawMetry は OpenClaw だけでなく、多くの AI エージェントランタイムを監視します。OpenClaw 以外の各ランタイムには専用のリーダーアダプターが付属しており、そのランタイム固有のセッション形式を ClawMetry の統一されたデータ形式に変換します。デーモンはそれらを同じ DuckDB ストアとクラウドスナップショットにランタイムタグ付きで取り込み、セッションリプレイタブには複数のランタイムが存在する場合に**ランタイム切り替え**が表示されます。完全な互換性マトリクスとランタイム追加ガイドは [`docs/compatibility.md`](docs/compatibility.md) を、OpenClaw ファミリーの概要は [`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md) をご覧ください。
 
 | ランタイム / エージェント | ステータス | 備考 |
 |---|---|---|
-| **OpenClaw** | Native | リファレンスランタイム、自動検出 |
-| **PicoClaw** | Beta アダプター | フラットな `providers.Message` JSONL (`~/.picoclaw/workspace/sessions`)。トランスクリプト、モデル、ツール呼び出し。 |
-| **NanoClaw** | Beta アダプター | セッションごとの SQLite (`data/v2-sessions`)。トランスクリプトとメッセージ数。 |
-| **Hermes** | Beta アダプター | SQLite `~/.hermes/state.db`。トランスクリプト、モデル、トークン/コスト。 |
-| **Claude Code** | Beta アダプター | JSONL `~/.claude/projects/.../<id>.jsonl`。トランスクリプト、モデル、ツール呼び出しと思考、トークン使用量。 |
-| **Codex** | Beta アダプター | ロールアウト JSONL `~/.codex/sessions/...`。トランスクリプト、モデル、ツール呼び出し、トークン使用量。 |
-| **Cursor** | Beta アダプター | SQLite `state.vscdb`。チャット/コンポーザーのトランスクリプト、モデル。 |
-| **Aider** | Beta アダプター | プロジェクトごとの `.aider.chat.history.md`。トランスクリプト、モデル、トークン数。 |
-| **Goose** | Beta アダプター | SQLite `~/.local/share/goose`。トランスクリプト、モデル、ツール呼び出し、トークン合計。 |
+| **OpenClaw** | ネイティブ | リファレンスランタイム、自動検出 |
+| **PicoClaw** | ベータアダプター | フラットな `providers.Message` JSONL (`~/.picoclaw/workspace/sessions`)。トランスクリプト、モデル、ツール呼び出し。 |
+| **NanoClaw** | ベータアダプター | セッションごとの SQLite (`data/v2-sessions`)。トランスクリプトとメッセージ数。 |
+| **Hermes** | ベータアダプター | SQLite `~/.hermes/state.db`。トランスクリプト、モデル、トークン/コスト。 |
+| **Claude Code** | ベータアダプター | JSONL `~/.claude/projects/.../<id>.jsonl`。トランスクリプト、モデル、ツール呼び出し+思考、トークン使用量。 |
+| **Codex** | ベータアダプター | ロールアウト JSONL `~/.codex/sessions/...`。トランスクリプト、モデル、ツール呼び出し、トークン使用量。 |
+| **Cursor** | ベータアダプター | SQLite `state.vscdb`。チャット/コンポーザートランスクリプト、モデル。 |
+| **Aider** | ベータアダプター | プロジェクトごとの `.aider.chat.history.md`。トランスクリプト、モデル、トークン数。 |
+| **Goose** | ベータアダプター | SQLite `~/.local/share/goose`。トランスクリプト、モデル、ツール呼び出し、トークン合計。 |
+| **opencode** | ベータアダプター | SQLite `~/.local/share/opencode`。トランスクリプト、モデル、ツール呼び出し、トークン+コスト。 |
+| **Qwen Code** | ベータアダプター | JSONL `~/.qwen/projects/.../chats`。トランスクリプト、モデル、ツール呼び出し、トークン使用量。 |
 
-「Beta アダプター」とは、ClawMetry がそのランタイムの実際のオンディスク形式に対するリーダーを同梱しており、それぞれが実機の実インストールに対して構築・検証されている (`tests/fixtures/runtimes/<rt>/` を参照) ことを意味します。アダプターは読み取り専用で、それぞれそのランタイムが実際に保存する内容について正直です (例: PicoClaw/NanoClaw/Cursor はトークンコストをディスクに書き込みません)。1 つのノードで複数のランタイムが動作している場合、ランタイムスイッチャーがセッションビューを 1 つに絞り込み、すっきりとした詳細分析を可能にします。
+「ベータアダプター」とは、ClawMetry がそのランタイムの実際のディスク上フォーマット向けのリーダーを提供していることを意味し、それぞれ実際のマシン上の実際のインストールに対してビルド・検証されています（`tests/fixtures/runtimes/<rt>/` 参照）。アダプターは読み取り専用です。各アダプターはランタイムが実際にディスクに保存する内容について正直です（例: PicoClaw/NanoClaw/Cursor はトークンコストをディスクに書き込まない）。複数のランタイムが1つのノードで動作している場合、ランタイム切り替えによってセッションビューを1つに絞り込み、詳細な分析が可能です。
 
-## OpenTelemetry — ベンダー中立、トレースをどこへでも送信
+## 任意の SDK エージェントを追跡する — アウトループコスト帰属
 
-ClawMetry は **GenAI セマンティック規約** を使って **OpenTelemetry** を双方向で話すため、エージェントのトレースが 1 つのツールにロックインされることはありません。
+上記のランタイムはすべてセッションをディスクに書き込みます。OpenAI Agents SDK・LangChain・Vercel AI SDK・LlamaIndex・E2B・あるいは単純な `httpx` ループで構築した**本番エージェント**はディスクに書き込みません。ClawMetry のゼロコンフィグインターセプターは、`httpx`/`requests` をモンキーパッチすることで、そのエージェントの LLM 呼び出し（コスト、トークン、レイテンシ、エラー）を取得します。
 
-すべてのセッション (LLM 呼び出し、ツール、サブエージェント、トークン、コスト) を OTLP/HTTP の GenAI スパンとして、任意のコレクター (Datadog、Grafana、Honeycomb、または自前の OTel Collector) に **エクスポート** します:
+```python
+import clawmetry.track            # activate the interceptor
+clawmetry.track.set_source("support-agent")   # name this product
+
+# ...your agent runs as normal; every LLM call is now tracked + attributed.
+```
+
+`set_source()`（または `CLAWMETRY_SOURCE=support-agent` 環境変数）は各呼び出しに**名前付きソース**タグを付与するため、実行している各プロダクトが、ダッシュボードの Overview にある **🔌 Out-loop sources** カードにコスト帰属可能な独立した行として表示されます。エージェントごとの呼び出し数・プロバイダー・レイテンシ・エラー率が確認できます。ソースを設定しない場合でも呼び出しは記録されますが、カードは非表示のままです。
+
+```bash
+CLAWMETRY_SOURCE=billing-agent python my_agent.py
+```
+
+これはランタイムアダプターが使用するのと同じデータレイヤー（DuckDB → クラウドスナップショット）を使用するため、アウトループソースも他のすべてと同様にエンドツーエンド暗号化でクラウドダッシュボードに同期されます。
+
+## OpenTelemetry — ベンダー中立、トレースをどこにでも送信
+
+ClawMetry は **GenAI セマンティック規約**を使用した **OpenTelemetry** を双方向でサポートしているため、エージェントトレースが特定のツールに縛られることはありません。
+
+すべてのセッション（LLM 呼び出し、ツール、サブエージェント、トークン、コスト）を OTLP/HTTP GenAI スパンとして任意のコレクター（Datadog、Grafana、Honeycomb、または独自の OTel Collector）に**エクスポート**します。
 
 ```bash
 clawmetry --otel-export http://localhost:4318/v1/traces
@@ -146,22 +172,22 @@ clawmetry --otel-export http://localhost:4318/v1/traces
 CLAWMETRY_OTEL_EXPORT_ENDPOINT=http://localhost:4318/v1/traces clawmetry
 ```
 
-認証ヘッダーとポーリング間隔はオプションの環境変数です:
+認証ヘッダーとポーリング間隔はオプションの環境変数で設定できます。
 
 ```bash
 CLAWMETRY_OTEL_EXPORT_HEADERS='{"X-API-Key":"…"}'   # extra HTTP headers
 CLAWMETRY_OTEL_EXPORT_INTERVAL=60                    # seconds (default 60)
 ```
 
-**取り込み** — 組み込みの OTLP レシーバーは、他のあらゆるものからのトレースとメトリクスを `/v1/traces` と `/v1/metrics` で受け付けます (protobuf の取り込みには `pip install clawmetry[otel]`)。
+**インジェスト** — 組み込みの OTLP レシーバーは `/v1/traces` および `/v1/metrics` で他のあらゆるソースからのトレースとメトリクスを受け付けます（プロトバッファインジェストには `pip install clawmetry[otel]` が必要）。
 
-設定不要でローカルファーストの ClawMetry ダッシュボードと、チームがすでに運用している任意のバックエンドへのデータ、その両方が手に入ります。ロックインもなく、インストールすべき 2 つ目のエージェントもありません。
+ゼロコンフィグでローカルファーストの ClawMetry ダッシュボード**と**チームがすでに使用しているバックエンドの両方にデータを送ることができます。ロックインなし、追加エージェントのインストール不要。
 
 ## 設定
 
-ほとんどの人は設定を必要としません。ClawMetry はワークスペース、ログ、セッション、cron を自動検出します。
+ほとんどのユーザーは設定不要です。ClawMetry はワークスペース、ログ、セッション、cron を自動検出します。
 
-カスタマイズが必要な場合は:
+カスタマイズが必要な場合:
 
 ```bash
 clawmetry --port 9000              # Custom port (default: 8900)
@@ -172,40 +198,40 @@ clawmetry --name "Alice"           # Your name in Flow visualization
 
 すべてのオプション: `clawmetry --help`
 
-## サポートされているチャネル
+## 対応チャンネル
 
-ClawMetry は、あなたが設定したすべての OpenClaw チャネルのライブアクティビティを表示します。`openclaw.json` で実際にセットアップされているチャネルのみが Flow 図に表示され、未設定のものは自動的に非表示になります。
+ClawMetry は設定済みのすべての OpenClaw チャンネルのライブアクティビティを表示します。Flow ダイアグラムには `openclaw.json` で実際に設定されているチャンネルのみが表示され、未設定のものは自動的に非表示になります。
 
-Flow 内の任意のチャネルノードをクリックすると、受信/送信メッセージ数を含むライブのチャットバブルビューが表示されます。
+Flow 内の任意のチャンネルノードをクリックすると、送受信メッセージ数を含むライブチャットバブルビューが表示されます。
 
-| チャネル | ステータス | ライブポップアップ | 備考 |
+| チャンネル | ステータス | ライブポップアップ | 備考 |
 |---------|--------|------------|-------|
-| 📱 **Telegram** | ✅ Full | ✅ | メッセージ、統計、10 秒ごとの更新 |
-| 💬 **iMessage** | ✅ Full | ✅ | `~/Library/Messages/chat.db` を直接読み取り |
-| 💚 **WhatsApp** | ✅ Full | ✅ | WhatsApp Web (Baileys) 経由 |
-| 🔵 **Signal** | ✅ Full | ✅ | signal-cli 経由 |
-| 🟣 **Discord** | ✅ Full | ✅ | ギルド + チャネル検出 |
-| 🟪 **Slack** | ✅ Full | ✅ | ワークスペース + チャネル検出 |
-| 🌐 **Webchat** | ✅ Full | ✅ | 組み込みの Web UI セッション |
-| 📡 **IRC** | ✅ Full | ✅ | ターミナル風のバブル UI |
-| 🍏 **BlueBubbles** | ✅ Full | ✅ | BlueBubbles REST API 経由の iMessage |
-| 🔵 **Google Chat** | ✅ Full | ✅ | Chat API Webhook 経由 |
-| 🟣 **MS Teams** | ✅ Full | ✅ | Teams ボットプラグイン経由 |
-| 🔷 **Mattermost** | ✅ Full | ✅ | セルフホストのチームチャット |
-| 🟩 **Matrix** | ✅ Full | ✅ | 分散型、E2EE サポート |
-| 🟢 **LINE** | ✅ Full | ✅ | LINE Messaging API |
-| ⚡ **Nostr** | ✅ Full | ✅ | 分散型 NIP-04 DM |
-| 🟣 **Twitch** | ✅ Full | ✅ | IRC 接続経由のチャット |
-| 🔷 **Feishu/Lark** | ✅ Full | ✅ | WebSocket イベントサブスクリプション |
-| 🔵 **Zalo** | ✅ Full | ✅ | Zalo Bot API |
+| 📱 **Telegram** | ✅ 完全対応 | ✅ | メッセージ、統計、10秒更新 |
+| 💬 **iMessage** | ✅ 完全対応 | ✅ | `~/Library/Messages/chat.db` を直接読み取り |
+| 💚 **WhatsApp** | ✅ 完全対応 | ✅ | WhatsApp Web (Baileys) 経由 |
+| 🔵 **Signal** | ✅ 完全対応 | ✅ | signal-cli 経由 |
+| 🟣 **Discord** | ✅ 完全対応 | ✅ | ギルドとチャンネルの自動検出 |
+| 🟪 **Slack** | ✅ 完全対応 | ✅ | ワークスペースとチャンネルの自動検出 |
+| 🌐 **Webchat** | ✅ 完全対応 | ✅ | 組み込みウェブUIセッション |
+| 📡 **IRC** | ✅ 完全対応 | ✅ | ターミナル風バブルUI |
+| 🍏 **BlueBubbles** | ✅ 完全対応 | ✅ | BlueBubbles REST API 経由の iMessage |
+| 🔵 **Google Chat** | ✅ 完全対応 | ✅ | Chat API Webhook 経由 |
+| 🟣 **MS Teams** | ✅ 完全対応 | ✅ | Teams ボットプラグイン経由 |
+| 🔷 **Mattermost** | ✅ 完全対応 | ✅ | セルフホスト型チームチャット |
+| 🟩 **Matrix** | ✅ 完全対応 | ✅ | 分散型、E2EE サポート |
+| 🟢 **LINE** | ✅ 完全対応 | ✅ | LINE Messaging API |
+| ⚡ **Nostr** | ✅ 完全対応 | ✅ | 分散型 NIP-04 DM |
+| 🟣 **Twitch** | ✅ 完全対応 | ✅ | IRC 接続経由のチャット |
+| 🔷 **Feishu/Lark** | ✅ 完全対応 | ✅ | WebSocket イベントサブスクリプション |
+| 🔵 **Zalo** | ✅ 完全対応 | ✅ | Zalo Bot API |
 
-> **自動検出:** ClawMetry は `~/.openclaw/openclaw.json` を読み取り、実際に設定したチャネルのみをレンダリングします。手動セットアップは不要です。
+> **自動検出:** ClawMetry は `~/.openclaw/openclaw.json` を読み取り、実際に設定されているチャンネルのみをレンダリングします。手動設定は不要です。
 
-## Docker デプロイ
+## Docker デプロイメント
 
-ClawMetry をコンテナで実行したいですか? 問題ありません! 🐳
+ClawMetry をコンテナで実行したい場合も問題ありません！ 🐳
 
-**Docker でのクイックスタート:**
+**Docker クイックスタート:**
 
 ```bash
 # Build the image
@@ -214,7 +240,7 @@ docker build -t clawmetry .
 # Run with default settings
 docker run -p 8900:8900 clawmetry
 
-# Or with your OpenClaw workspace mounted
+# Or mount your agent's data dir (shown: OpenClaw's ~/.openclaw)
 docker run -p 8900:8900 \
   -v ~/.openclaw:/root/.openclaw \
   -v /tmp/moltbot:/tmp/moltbot \
@@ -236,33 +262,33 @@ services:
     restart: unless-stopped
 ```
 
-> **注:** Docker で実行する際は、ClawMetry がセットアップを自動検出できるよう、OpenClaw のワークスペースとログディレクトリを必ずマウントしてください。
+> **注意:** Docker で実行する場合は、ClawMetry がセットアップを自動検出できるよう、エージェントのデータディレクトリとログディレクトリ（例: `~/.openclaw`、`~/.claude`、`~/.codex`）をマウントしてください。
 
-## 必要要件
+## 動作要件
 
-- Python 3.8+
-- Flask (pip で自動的にインストールされます)
-- 同じマシン上で動作している OpenClaw (または Docker 用のマウントされたボリューム)
+- Python 3.8 以上
+- Flask（pip 経由で自動インストール）
+- 同一マシン上の AI エージェントランタイム: OpenClaw、NVIDIA NemoClaw、Claude Code、Codex、Cursor、Goose、Hermes、opencode、Qwen Code、Aider、NanoClaw、または PicoClaw（Docker の場合はマウントされたボリューム）
 - Linux または macOS
 
 ## NemoClaw / OpenShell サポート
 
-ClawMetry は [NemoClaw](https://github.com/NVIDIA/NemoClaw) を自動検出します。これは、サンドボックス化された OpenShell コンテナ内でエージェントを実行する、OpenClaw 向けの NVIDIA のエンタープライズセキュリティラッパーです。
+ClawMetry は [NemoClaw](https://github.com/NVIDIA/NemoClaw) を自動検出します。NemoClaw は NVIDIA のエンタープライズセキュリティラッパーで、サンドボックス化された OpenShell コンテナ内でエージェントを実行します。
 
-ほとんどの場合、追加の設定は不要です。同期デーモンは、セッションファイルがホスト上の `~/.openclaw/` にあっても、OpenShell コンテナ内にあっても、自動的に検出します。
+ほとんどの場合、追加設定は不要です。sync デーモンはセッションファイルがホスト上の `~/.openclaw/` にあっても、OpenShell コンテナ内にあっても自動的に検出します。
 
 ### 仕組み
 
-ClawMetry は 2 つの方法で NemoClaw を検出します:
+ClawMetry は2つの方法で NemoClaw を検出します。
 
-1. **バイナリ検出** — `nemoclaw` CLI の有無を確認し、`nemoclaw status` を実行してサンドボックス情報を取得します
-2. **コンテナ検出** — 実行中の Docker コンテナを `openshell`、`nemoclaw`、または `ghcr.io/nvidia/` イメージについてスキャンし、ボリュームマウントまたは `docker cp` 経由でセッションを読み取ります
+1. **バイナリ検出** — `nemoclaw` CLI を確認し、`nemoclaw status` を実行してサンドボックス情報を取得
+2. **コンテナ検出** — `openshell`、`nemoclaw`、または `ghcr.io/nvidia/` イメージの実行中の Docker コンテナをスキャンし、ボリュームマウントまたは `docker cp` でセッションを読み取る
 
-NemoClaw コンテナから同期されたセッションファイルは、クラウドダッシュボードで `runtime=nemoclaw` と `container_id` のメタデータでタグ付けされるため、標準の OpenClaw セッションと一目で区別できます。
+NemoClaw コンテナから同期されたセッションファイルはクラウドダッシュボードで `runtime=nemoclaw` と `container_id` メタデータのタグが付けられ、標準的な OpenClaw セッションと一目で区別できます。
 
-### 推奨セットアップ: ホスト上で同期デーモンを実行
+### 推奨セットアップ: ホスト上での sync デーモン実行
 
-最良の体験のためには、ClawMetry の同期デーモンを (サンドボックス内ではなく) **ホストマシン** で実行してください。これにより NemoClaw のネットワークポリシー制限を回避できます。
+最良のエクスペリエンスのために、sync デーモンはサンドボックス内ではなく**ホストマシン上**で実行することをお勧めします。これにより NemoClaw のネットワークポリシー制限を回避できます。
 
 ```bash
 # On the host (outside the sandbox)
@@ -271,20 +297,20 @@ clawmetry connect
 clawmetry sync
 ```
 
-同期デーモンは、実行中の任意の OpenShell コンテナ内のセッションを自動的に見つけます。
+sync デーモンは実行中の OpenShell コンテナ内のセッションを自動的に検出します。
 
-### オプション: 明示的なサンドボックス名
+### オプション: 明示的なサンドボックス名の指定
 
-自動検出がうまくいかない場合は、ClawMetry を正しいサンドボックスに向けてください:
+自動検出がうまくいかない場合は、適切なサンドボックスを ClawMetry に指定します。
 
 ```bash
 export NEMOCLAW_SANDBOX=my-sandbox-name
 clawmetry sync
 ```
 
-### サンドボックス内で実行する (上級者向け)
+### サンドボックス内での実行（上級者向け）
 
-どうしても同期デーモンを OpenShell サンドボックス **内** で実行する必要がある場合は、ClawMetry の取り込み API に到達できるよう、次の egress ルールを NemoClaw のネットワークポリシーに追加してください:
+OpenShell サンドボックス**内**で sync デーモンを実行する必要がある場合は、ClawMetry のインジェスト API に到達できるよう、NemoClaw ネットワークポリシーに以下のエグレスルールを追加してください。
 
 ```yaml
 # nemoclaw-policy.yaml
@@ -295,7 +321,7 @@ network:
       protocol: https
 ```
 
-次のコマンドで適用します:
+以下のコマンドで適用します。
 
 ```bash
 nemoclaw policy apply --file nemoclaw-policy.yaml
@@ -305,17 +331,17 @@ nemoclaw policy apply --file nemoclaw-policy.yaml
 
 | エンドポイント | ポート | プロトコル | 必須 |
 |---|---|---|---|
-| `ingest.clawmetry.com` | 443 | HTTPS | はい (同期デーモン → クラウド) |
-| `localhost:8900` | 8900 | HTTP | はい (ローカルダッシュボード UI) |
-| Docker socket (`/var/run/docker.sock`) | — | Unix socket | コンテナセッションの検出用 |
+| `ingest.clawmetry.com` | 443 | HTTPS | 必須（sync デーモン → クラウド） |
+| `localhost:8900` | 8900 | HTTP | 必須（ローカルダッシュボード UI） |
+| Docker ソケット (`/var/run/docker.sock`) | — | Unix ソケット | コンテナセッション検出に必要 |
 
-同期デーモンは `ingest.clawmetry.com` への外向きの HTTPS 呼び出しのみを行います。インバウンドポートは不要です。
+sync デーモンは `ingest.clawmetry.com` への HTTPS アウトバウンド呼び出しのみを行います。インバウンドポートは不要です。
 
 ---
 
-## クラウドデプロイ
+## クラウドデプロイメント
 
-SSH トンネル、リバースプロキシ、Docker については **[Cloud Testing Guide](https://github.com/vivekchand/clawmetry/blob/main/docs/CLOUD_TESTING.md)** を参照してください。
+SSH トンネル、リバースプロキシ、Docker については **[クラウドテストガイド](https://github.com/vivekchand/clawmetry/blob/main/docs/CLOUD_TESTING.md)** をご覧ください。
 
 ## テスト
 
@@ -325,30 +351,22 @@ SSH トンネル、リバースプロキシ、Docker については **[Cloud Te
 
 ## テレメトリ
 
-ClawMetry は、新しいマシンで初めて `clawmetry` CLI を実行したときに、
-`https://app.clawmetry.com/api/install` へ匿名の「初回実行」ping を
-1 回だけ送信します。これはインストール数のカウント (OSS プロジェクトで
-私たちが持つ唯一のマーケティング指標) と、ユーザーがどのエージェント
-フレームワークをインストールしているかを把握するために使います。
+ClawMetry は新しいマシンで初めて `clawmetry` CLI を実行した際に、`https://app.clawmetry.com/api/install` へ匿名の「初回実行」pingを1回送信します。これはインストール数のカウント（OSS プロジェクトで持っている唯一のマーケティング指標）と、ユーザーがインストールしているエージェントフレームワークの把握に使用されます。
 
-**インストールごとに POST はちょうど 1 回**で、次の内容を含みます:
+**1回のインストールにつき1回の POST のみ**、以下の内容を含みます。
 
-| フィールド | 例 | 理由 |
+| フィールド | 例 | 目的 |
 |---|---|---|
-| `install_id` | `~/.clawmetry/install_id` に保存されるランダムな UUID | 重複排除用。あなたのメールや api_key とは結び付きません |
-| `version` | `0.12.167` | どのバージョンが世に出回っているか |
-| `os` / `os_version` | `Darwin` / `25.3.0` | プラットフォームサポートの優先順位 |
-| `python` | `3.11.15` | Python バージョンのサポートマトリックス |
-| `agent` | `openclaw` / `nemoclaw` / `hermes` / `none` | 次にどのエージェントと統合すべきか |
-| `is_ci` / `ci_provider` | `true` / `github_actions` | 人間によるインストールと CI のノイズを分ける |
+| `install_id` | `~/.clawmetry/install_id` に保存されたランダム UUID | 重複排除。メールや api_key とは紐付けられない |
+| `version` | `0.12.167` | 実際に使われているバージョンの把握 |
+| `os` / `os_version` | `Darwin` / `25.3.0` | プラットフォームサポートの優先度 |
+| `python` | `3.11.15` | Python バージョンサポートマトリクス |
+| `agent` | `openclaw` / `nemoclaw` / `hermes` / `none` | 次に統合すべきエージェントの把握 |
+| `is_ci` / `ci_provider` | `true` / `github_actions` | 人間によるインストールと CI のノイズを区別 |
 
-**送信しないもの**: IP (クラウドはサーバー側でリクエストから国コードを
-導出し、その後 IP を破棄します)、ホスト名、ユーザー名、ワークスペース
-パス、ファイルの内容、あなたの api_key、メール、その他あらゆる PII や
-ワークスペース固有の情報。ワイヤー上のペイロードは
-[`clawmetry/telemetry.py`](clawmetry/telemetry.py) で監査できます。
+**送信しないもの**: IP（クラウドはリクエストからサーバー側で国コードを導出した後、IP を破棄します）、ホスト名、ユーザー名、ワークスペースパス、ファイル内容、api_key、メールアドレス、個人情報またはワークスペース固有の情報。送信ペイロードは [`clawmetry/telemetry.py`](clawmetry/telemetry.py) で監査可能です。
 
-**オプトアウト** (次のいずれか 1 つで永続的に無効化されます):
+**オプトアウト**（いずれか1つで永続的に無効化されます）:
 
 ```bash
 export CLAWMETRY_NO_TELEMETRY=1                # per-shell
@@ -356,11 +374,9 @@ export DO_NOT_TRACK=1                          # W3C cross-tool standard
 touch ~/.clawmetry/notelemetry                 # persistent file marker
 ```
 
-ここでのネットワーク障害が `clawmetry` の実行をブロックすることは
-決してありません。この ping は 3 秒タイムアウトのデーモンスレッド上で
-撃ちっぱなしで実行されます。
+ここでのネットワーク障害が `clawmetry` の実行をブロックすることはありません。ping は3秒のタイムアウトを持つデーモンスレッドでファイアアンドフォーゲット方式で実行されます。
 
-## Star History
+## スター履歴
 
 <a href="https://www.star-history.com/?repos=vivekchand%2Fclawmetry&type=date&legend=top-left">
  <picture>
@@ -377,6 +393,6 @@ MIT
 ---
 
 <p align="center">
-  <strong>🦞 See your agent think</strong><br>
+  <strong>🦞 エージェントの思考を可視化</strong><br>
   <sub>Built by <a href="https://github.com/vivekchand">@vivekchand</a> · <a href="https://clawmetry.com">clawmetry.com</a> · Part of the <a href="https://github.com/openclaw/openclaw">OpenClaw</a> ecosystem</sub>
 </p>

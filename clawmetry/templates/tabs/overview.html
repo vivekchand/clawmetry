@@ -5,6 +5,36 @@
        triage) get relocated into a collapsed "Advanced" disclosure below. -->
   <div id="overview-hero" style="display:none;margin:0 0 16px;border-radius:18px;padding:26px 30px;background:radial-gradient(120% 140% at 0% 0%, rgba(59,130,246,0.10), transparent 55%), linear-gradient(180deg, var(--bg-secondary), var(--bg-primary));border:1px solid var(--border-primary);box-shadow:0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 30px rgba(0,0,0,0.25);"></div>
 
+  <!-- Today's task outcomes (succeeded / failed / abandoned). JS: app.js
+       loadOutcomeTile() -> /api/outcomes, called from the overview load path.
+       Revived from the dead DASHBOARD_HTML block (UI-coverage audit 2026-06-06). -->
+  <div id="outcome-card" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:10px;padding:14px 18px;margin-bottom:10px;box-shadow:var(--card-shadow);cursor:pointer;" onclick="toggleOutcomeDrilldown()" title="Click for details">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+      <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;">
+        <span style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.2px;">Today</span>
+        <span id="outcome-tile-summary" style="font-size:14px;color:var(--text-primary);">Loading task outcomes...</span>
+      </div>
+      <span id="outcome-tile-chevron" style="font-size:11px;color:var(--text-muted);">show details</span>
+    </div>
+    <div id="outcome-drilldown" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border-secondary);font-size:12px;">
+      <div id="outcome-drilldown-body" style="color:var(--text-muted);">Loading...</div>
+    </div>
+  </div>
+
+  <!-- Today's activity counters. JS: app.js loadActivityToday() -> /api/activity-today
+       (cloud: cm-cloud-activity serves it from the snapshot's activityToday slice).
+       Surfaces signals that were captured but never shown (UI-coverage audit 2026-06-06). -->
+  <div id="activity-today-strip" style="display:none;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:10px;padding:10px 16px;margin-bottom:10px;box-shadow:var(--card-shadow);">
+    <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;">
+      <span style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.2px;">Today</span>
+      <span style="font-size:13px;color:var(--text-secondary);">&#128296; <b id="at-tool-calls" style="color:var(--text-primary);">0</b> tool calls</span>
+      <span style="font-size:13px;color:var(--text-secondary);">&#9889; <b id="at-exec-calls" style="color:var(--text-primary);">0</b> exec</span>
+      <span style="font-size:13px;color:var(--text-secondary);">&#127760; <b id="at-browser-actions" style="color:var(--text-primary);">0</b> browser</span>
+      <span style="font-size:13px;color:var(--text-secondary);">&#128172; <b id="at-messages" style="color:var(--text-primary);">0</b> messages</span>
+      <span style="font-size:13px;color:var(--text-secondary);">&#128295; <b id="at-unique-tools" style="color:var(--text-primary);">0</b> unique tools</span>
+    </div>
+  </div>
+
   <!-- How independently your agent runs -->
   <div id="autonomy-card" data-i18n-title="overview.autonomy_tooltip" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:18px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start;" title="How often you need to step in. Higher means more independent.">
     <div>
@@ -23,6 +53,34 @@
       </svg>
       <div id="autonomy-samples" style="font-size:10px;color:var(--text-muted);margin-top:4px;text-align:right;"></div>
     </div>
+  </div>
+
+  <!-- Eval quality (LLM-as-judge). Score tile + a button to set the judge API
+       key / rubric. The judge needs your own LLM key; scoring is paused until
+       one is set (transcripts are redacted before they go to the judge). -->
+  <div id="eval-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:18px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;">
+    <div>
+      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px;">✅ <span data-i18n="overview.eval_quality">Session quality (LLM judge)</span></div>
+      <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
+        <span id="eval-avg-score" style="font-size:26px;font-weight:800;line-height:1.1;color:var(--text-muted);">--</span>
+        <span id="eval-coverage" style="font-size:12px;color:var(--text-muted);"></span>
+      </div>
+      <div id="eval-regression-line" style="font-size:12px;color:var(--text-muted);margin-top:6px;"></div>
+    </div>
+    <button onclick="openEvalRubricModal()" title="Set the judge API key and edit the scoring rubric" style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:8px 14px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;">&#9881; <span data-i18n="overview.eval_setup">Judge key &amp; rubric</span></button>
+  </div>
+
+  <!-- Named evaluator library. Brands ClawMetry's shipped quality / reliability
+       / efficiency / safety / agent signals as a named catalogue (Traceloop-style),
+       honest about what is live today vs coming with Pro. Cloud-safe: the
+       catalogue is static data /api/evaluators returns with or without a store. -->
+  <div id="evaluators-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:18px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);">
+    <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:4px;">
+      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;">&#128300; <span data-i18n="evaluators.title">Evaluators on your agent</span></div>
+      <div id="evaluators-count" style="font-size:11px;color:var(--text-muted);"></div>
+    </div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;" data-i18n="evaluators.subtitle">Named checks ClawMetry runs to tell you if your agent is doing good work. Each one answers a plain question.</div>
+    <div id="evaluators-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;"></div>
   </div>
 
   <!-- Per-runtime sparkline of recent runs (#2196 item #4). Severity: red=real

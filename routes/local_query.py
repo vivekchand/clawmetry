@@ -38,16 +38,20 @@ bp_local_query = Blueprint("local_query", __name__)
 # explicit (not raw SQL pass-through) means the cloud relay can never run
 # arbitrary SELECT against the user's local DuckDB — only what we've
 # whitelisted here.
-_SHAPES = {
-    "events":          "query_events",
-    "sessions":        "query_sessions",
-    "aggregates":      "query_aggregates",
-    "health":          None,                      # special: no args
-    "transcript":      "query_events",            # alias with session_id required
-    "spans":           "query_spans",             # Issue #1013: full-filter span list
-    "traces":          "query_traces",            # Issue #1013: one row per trace_id
-    "external_calls":  "query_external_calls",   # Issue #883: external API tracing
-}
+#
+# Issue #2987 (Query Spine P1): the allowlist is now DERIVED from the
+# declared q/1 contract registry in ``clawmetry/query_contract.py`` —
+# one source of truth shared by this module, ``docs/QUERY_CONTRACT.md``
+# (generated), and the drift CI test. Adding a shape means adding a
+# "live" registry entry (with its arg schema + trust class) first; a
+# shape with no registry entry fails ``tests/test_query_contract_drift.py``.
+# The derived dict is byte-identical to the historical literal:
+#   events/sessions/aggregates/transcript/spans/traces/external_calls/
+#   search -> their LocalStore method names, health -> None (special:
+#   ``_dispatch`` calls ``store.health()`` directly).
+from clawmetry.query_contract import live_shapes as _qc_live_shapes
+
+_SHAPES = _qc_live_shapes()
 
 
 def _store():
@@ -218,6 +222,36 @@ def _coerce_args(shape: str, raw: dict) -> dict:
             "since":      raw.get("since"),
             "until":      raw.get("until"),
             "limit":      _safe_int(raw.get("limit"), default=200, lo=1, hi=2000),
+        }
+    if shape == "models":
+        return {
+            "runtime": raw.get("runtime"),
+            "since":   raw.get("since"),
+            "until":   raw.get("until"),
+            "limit":   _safe_int(raw.get("limit"), default=1000, lo=1, hi=10000),
+        }
+    if shape == "runtimes":
+        return {
+            "since": raw.get("since"),
+            "until": raw.get("until"),
+            "limit": _safe_int(raw.get("limit"), default=1000, lo=1, hi=10000),
+        }
+    if shape == "rollup_sessions":
+        return {
+            "runtime": raw.get("runtime"),
+            "limit":   _safe_int(raw.get("limit"), default=200, lo=1, hi=2000),
+        }
+    if shape == "search":
+        q = (raw.get("q") or "").strip()
+        if not q:
+            raise ValueError("search shape requires non-empty 'q' parameter")
+        return {
+            "q":      q,
+            "model":  raw.get("model") or None,
+            "status": raw.get("status") or None,
+            "since":  raw.get("since"),
+            "until":  raw.get("until"),
+            "limit":  _safe_int(raw.get("limit"), default=50, lo=1, hi=500),
         }
     raise ValueError(f"unknown shape: {shape}")
 
@@ -409,6 +443,23 @@ def http_external_calls():
         return jsonify({"error": str(e)[:300]}), 500
 
 
+@bp_local_query.route("/api/local/search", methods=["GET"])
+def http_search():
+    """Search sessions by title / eval-reason text.
+
+    Required: ``q`` (search string). Optional: ``model``, ``status``,
+    ``since`` (ISO), ``until`` (ISO), ``limit`` (int, default 50, max 500).
+    Returns session summary rows matching the query, sorted newest-first.
+    """
+    try:
+        args = _coerce_args("search", request.args.to_dict())
+        return jsonify(_dispatch("search", args))
+    except ValueError as e:
+        return jsonify({"error": str(e)[:300]}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)[:300]}), 500
+
+
 @bp_local_query.route("/api/local/query", methods=["POST"])
 def http_query():
     """Generic shape-dispatched endpoint. Mirrors the WS relay frame format,
@@ -563,6 +614,21 @@ _DAEMON_METHODS = frozenset({
     # Issue #1013: Trace 7 — one row per trace_id with aggregate stats.
     # Powers /api/local/traces + the cloud relay query.traces shape.
     "query_traces",
+    # Foreign OTLP / OpenLLMetry apps (#2822 stamps agent_type from
+    # service.name): a single GROUP BY agent_type rollup so the runtime
+    # switcher + Agent Inventory surface a bring-your-own-agent app that only
+    # ever sent OTLP traces. Daemon snapshot-path use; allowlisted so the
+    # local Inventory route can read it through the proxy too.
+    "query_otlp_app_rollup",
+    # OTLP span WRITE-through. The /v1/traces receiver runs in the dashboard
+    # process, which does not own the DuckDB writer; get_store() returns a
+    # _ProxyStore that forwards put_span here so the daemon (the writer) does
+    # the real INSERT. Without this allowlist entry the proxy 400s and the span
+    # silently vanishes, so a "bring your own agent" OTLP app never persists or
+    # appears in the switcher / Inventory. Same write-through-proxy pattern as
+    # set_agent_meta. The handler calls put_span(span=...) by keyword (the proxy
+    # only forwards kwargs).
+    "put_span",
     # Issue #1364 (Tier-1 2026-05-15): /api/fallbacks model/provider
     # transition aggregator. Replaces a JSONL walker that opened up to 100
     # transcript files per request — multi-second on a busy workspace.
@@ -606,6 +672,10 @@ _DAEMON_METHODS = frozenset({
     "query_recent_evals",
     "query_eval_summary",
     "persist_eval_score",
+    # Eval->monitor loop: per-session eval/outcome fields for the two runs in
+    # /api/run-compare's quality rows. Read-only; routed through the daemon
+    # proxy so the dashboard process never opens the writer-locked DuckDB.
+    "query_session_quality",
     "health",
     # Issue #876 — NemoClaw guardrail enforcement events + metrics.
     # Routed through the daemon proxy so /api/nemoclaw/events and
@@ -631,6 +701,21 @@ _DAEMON_METHODS = frozenset({
     # Issue #883: external API tracing. Read-only; the daemon owns the writer
     # connection so the proxy is required for multi-process installs.
     "query_external_calls",
+    # Agent Inventory tab: owner/notes labels per runtime. query_ is a read,
+    # set_ is a read-then-write under the daemon's _write_lock (same pattern as
+    # ingest_approval above). Without these the inventory owner read/write
+    # returns None and the proxy 400s (memory feedback_cli_methods_need_daemon_allowlist).
+    "query_agent_meta",
+    "set_agent_meta",
+    # Issue #2860: session full-text search. Read-only; routed through the
+    # daemon proxy so the dashboard process never opens DuckDB writable.
+    "query_search",
+    # #2988 (Query Spine P2): materialized rollup reads. The daemon writes
+    # the rollup tables at ingest; these are the read methods backing the
+    # q/1 "models" / "runtimes" / "rollup_sessions" contract shapes.
+    "query_rollup_model_daily",
+    "query_rollup_runtime_daily",
+    "query_rollup_sessions",
 })
 
 

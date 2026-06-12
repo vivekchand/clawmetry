@@ -29,9 +29,10 @@
  *
  * Exits 0 on clean run (with or without pixel diffs).
  * Exits 2 if either server is unreachable before screenshots start.
- * Exits 3 if any auth gap is detected: HTTP non-200 response, auth overlay
- *   still visible after token injection, OR pre-flight /api/auth/check
- *   rejection (token mismatch caught before screenshot loop starts).
+ * Exits 3 if any auth gap is detected: visible auth overlays on any tab,
+ *   HTTP non-200 response, OR pre-flight /api/auth/check rejection.
+ *   Unlike the previous behaviour, exit 3 only fires AFTER all screenshots
+ *   are taken so the PR comment always has diagnostic images.
  */
 import { chromium } from "playwright";
 import pixelmatch from "pixelmatch";
@@ -85,10 +86,12 @@ async function reachable(url) {
  * Pre-flight: call /api/auth/check with the token and return an error string
  * if the token is rejected, or null if auth is accepted.
  *
- * Must run BEFORE the browser loop so a token mismatch fails fast instead
- * of producing a wall of identical login-overlay screenshots with exit 0.
- * (The overlay sets ok=false in shoot() but HTTP status is still 200, so
- * the old authGaps check never fired -- the script exited 0 silently.)
+ * This is called before the screenshot loop to provide an early diagnostic
+ * message. A failure no longer aborts the run -- we continue screenshotting
+ * so the PR comment always has images (showing the overlay) rather than
+ * "Bot run failed before producing screenshots". The error is collected into
+ * preflightFailed[] and merged into authGaps at the end so the workflow
+ * still exits 3 to signal the auth problem.
  */
 async function preflightAuth(url, token) {
   if (!token) return null; // no token configured -- auth is optional on this instance
@@ -265,26 +268,34 @@ async function main() {
     }
   }
 
-  // Pre-flight: verify the gateway token is accepted by both servers BEFORE
-  // starting the screenshot loop. Previously, a token mismatch would silently
-  // produce a wall of identical login-overlay PNGs and exit 0 (because
-  // HTTP 200 is still returned by the SPA root even with the overlay up, so
-  // the old status-only authGaps check never fired). Fail early and loudly.
+  // Pre-flight: verify the gateway token is accepted by both servers.
+  // We do NOT exit early on failure. Instead we log a warning and continue
+  // to screenshot all tabs so the PR comment always has diagnostic images
+  // (an overlay screenshot is far more useful than "no screenshots" for
+  // debugging why the token is wrong). The preflightFailed entries are
+  // merged into authGaps at the end so the workflow still exits 3 and the
+  // PR comment surfaces the auth problem clearly.
+  //
+  // Root cause of the original bug (reported 2026-05-17): the old code did
+  // `process.exit(3)` here, meaning ZERO screenshots were ever taken when
+  // the token was misconfigured. The comment just said "Bot run failed".
+  const preflightFailed = [];
   if (AUTH_TOKEN) {
-    const preflightErrors = [];
     for (const [label, url] of [["BASE", BASE_URL], ["HEAD", HEAD_URL]]) {
       const err = await preflightAuth(url, AUTH_TOKEN);
-      if (err) preflightErrors.push(`${label}: ${err}`);
+      if (err) preflightFailed.push(`${label} preflight: ${err}`);
     }
-    if (preflightErrors.length > 0) {
-      console.error(
-        "\nPre-flight auth check FAILED. The gateway token is not accepted.\n" +
-        "Every screenshot would just be the login overlay -- aborting early.\n" +
-        preflightErrors.map((s) => "  " + s).join("\n") + "\n"
+    if (preflightFailed.length > 0) {
+      console.warn(
+        "\n[preflight] Auth check FAILED -- screenshotting anyway for diagnostics.\n" +
+        "Every tab may show the login overlay. The overlay screenshots are captured\n" +
+        "in the manifest and will appear in the PR comment as auth-gap failures.\n" +
+        "Fix: OPENCLAW_GATEWAY_TOKEN on each server must match CLAWMETRY_VISUAL_DIFF_TOKEN.\n" +
+        preflightFailed.map((s) => "  " + s).join("\n") + "\n"
       );
-      process.exit(3);
+    } else {
+      console.log("[preflight] auth OK on BASE and HEAD");
     }
-    console.log("[preflight] auth OK on BASE and HEAD");
   }
 
   const browser = await chromium.launch();
@@ -349,14 +360,18 @@ async function main() {
   );
   console.log(`Wrote ${manifest.length} comparisons to ${OUT_DIR}/`);
 
-  if (authGaps.length > 0) {
+  // Merge pre-flight failures with per-tab auth gaps for the final exit.
+  // Pre-flight failures are listed first so the diagnostic message leads
+  // with the root cause (token mismatch) rather than the symptoms (overlays).
+  const allGaps = [...preflightFailed, ...authGaps];
+  if (allGaps.length > 0) {
     console.error(
-      "\nAuth gap: one or more tabs had a non-200 response or a visible auth overlay.\n" +
-        "The gateway token was not accepted. Captured PNGs are likely login overlays,\n" +
-        "not real tab content. Fix the boot config:\n" +
-        "OPENCLAW_GATEWAY_TOKEN + CLAWMETRY_VISUAL_DIFF_TOKEN must match."
+      "\nAuth gap: pre-flight check failed or overlays visible on one or more tabs.\n" +
+        "Screenshots were captured for diagnostics; the gateway token was not accepted.\n" +
+        "Fix: OPENCLAW_GATEWAY_TOKEN + CLAWMETRY_VISUAL_DIFF_TOKEN must match.\n" +
+        "See the PR comment for overlay screenshots and the manifest for per-tab status."
     );
-    for (const gap of authGaps) console.error("  - " + gap);
+    for (const gap of allGaps) console.error("  - " + gap);
     process.exit(3);
   }
 }

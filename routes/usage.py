@@ -361,7 +361,7 @@ def _try_local_store_usage(runtime: Optional[str] = None):
         "modelBilling": [],
         "billingSummary": {},
         "sessionCosts": {},
-        "sessions": _ls_top_sessions_by_cost(limit=20),
+        "sessions": _ls_top_sessions_by_cost(limit=20, runtime=runtime),
         "anomalies": [],
         "anomalySessionIds": [],
         "trend": {},
@@ -369,17 +369,27 @@ def _try_local_store_usage(runtime: Optional[str] = None):
     }
 
 
-def _ls_top_sessions_by_cost(limit=20):
+def _ls_top_sessions_by_cost(limit=20, runtime=None):
     """Issue #68 — top-N sessions by total cost. Sources rows from the
     DuckDB ``events`` table aggregated per session, joined back to a
     sample event for the model column. Returns ``[]`` on any failure so
-    the caller can drop the key silently."""
+    the caller can drop the key silently.
+
+    When ``runtime`` is set, scope to that runtime (session-id prefix) so the
+    Cost tab's "Top Sessions" honours the runtime switcher instead of leaking
+    node-wide rows under a specific runtime (per-runtime honesty gate)."""
     try:
         sessions = _ls_call("query_sessions", limit=500)
     except Exception:
         sessions = None
     if not sessions:
         return []
+    if runtime:
+        _rt = str(runtime).lower()
+        sessions = [s for s in sessions
+                    if _runtime_of(s.get("session_id") or "") == _rt]
+        if not sessions:
+            return []
     # Sort by cost desc and take top-N before the model lookup so we
     # avoid scanning events for hundreds of cheap sessions.
     ranked = sorted(
@@ -2816,6 +2826,34 @@ def api_usage_export():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+_ACTIVITY_TODAY_CACHE: dict = {}   # runtime-key -> {"ts": float, "data": dict}
+_ACTIVITY_TODAY_TTL = 30.0
+
+
+@bp_usage.route('/api/activity-today')
+def api_activity_today():
+    """Today's activity counters (tool calls / exec / browser / messages /
+    unique tools) for the Overview activity strip. ``?runtime=`` scopes to one
+    runtime (session_id prefix); omitted/"all" = node-wide. Mirrors the daemon
+    ``activityToday`` snapshot slice (cloud serves it via cm-cloud-activity).
+    DuckDB-backed via ``clawmetry.sync._collect_activity_counters_today``;
+    cached 30s per runtime; never 500s (empty dict on any error)."""
+    runtime = (request.args.get("runtime") or "all").lower()
+    rt_arg = None if runtime in ("", "all") else runtime
+    now = time.time()
+    c = _ACTIVITY_TODAY_CACHE.get(runtime)
+    if c is not None and c["data"] is not None and (now - c["ts"]) < _ACTIVITY_TODAY_TTL:
+        return jsonify(c["data"])
+    out = {}
+    try:
+        from clawmetry.sync import _collect_activity_counters_today
+        out = _collect_activity_counters_today(runtime=rt_arg) or {}
+    except Exception:
+        out = {}
+    _ACTIVITY_TODAY_CACHE[runtime] = {"data": out, "ts": now}
+    return jsonify(out)
 
 
 @bp_usage.route('/api/runtime-summary')

@@ -28,6 +28,68 @@
 
 ClawMetry is a **read-only observer** that sits alongside your OpenClaw gateway. It never modifies your agents or their data. It reads what OpenClaw already writes to disk and connects to the gateway's WebSocket API for real-time updates.
 
+## Architecture diagrams (C4 model)
+
+Two views of the open-source app. (Mermaid renders on GitHub.) The optional ClawMetry Cloud is shown as a single opaque box: the daemon only ever sends it an end-to-end-encrypted snapshot, which your browser decrypts locally.
+
+### C1: System context
+
+```mermaid
+C4Context
+title C1: ClawMetry (open source) system context
+
+Person(dev, "Developer / Operator", "Runs AI agents; wants to see what they do and what they cost")
+System(clawmetry, "ClawMetry", "Local-first, real-time observability for 12 agent runtimes. Reads what your agents already write; never modifies them.")
+
+System_Ext(runtimes, "AI Agent Runtimes", "OpenClaw + NVIDIA NemoClaw (free in OSS) and, with the optional Pro plugin, Claude Code, Codex, Cursor, Goose, Hermes, Aider, NanoClaw, opencode, PicoClaw, Qwen Code")
+System_Ext(gateway, "OpenClaw Gateway", "WebSocket control plane (JSON-RPC, :18789) for live data + cron RPC")
+System_Ext(llm, "LLM Provider APIs", "Anthropic / OpenAI / Google / OpenRouter ... (the spend ClawMetry meters)")
+System_Ext(cloud, "ClawMetry Cloud (optional)", "Receives an E2E-encrypted snapshot for remote viewing; decrypted in your browser")
+
+Rel(dev, clawmetry, "Installs (pip), watches the local dashboard :8900")
+Rel(clawmetry, runtimes, "Observes (read-only): session files, gateway, OTLP")
+Rel(clawmetry, gateway, "Taps live events + cron RPC", "WebSocket :18789")
+Rel(clawmetry, llm, "Meters cost (interceptor) / optional enforcement proxy")
+Rel(clawmetry, cloud, "Optional: pushes E2E-encrypted snapshot", "HTTPS")
+```
+
+### C2: Containers (open source)
+
+```mermaid
+C4Container
+title C2: ClawMetry (open source) containers
+
+Person(dev, "Developer / Operator", "")
+System_Ext(runtimes, "AI Agent Runtimes", "session files / OTLP")
+System_Ext(gateway, "OpenClaw Gateway", "WS :18789")
+System_Ext(llm, "LLM Provider APIs", "")
+System_Ext(cloud, "ClawMetry Cloud (optional)", "E2E snapshot target; browser decrypts")
+
+System_Boundary(machine, "Your machine") {
+    Container(cli, "clawmetry CLI", "Python (cli.py)", "Entry point: clawmetry / connect / sync / status")
+    Container(daemon, "Sync Daemon", "Python (sync.py)", "Ingests filesystem + gateway + OTLP into DuckDB; owns the writer lock; builds the E2E-encrypted snapshot")
+    ContainerDb(duck, "Local Store", "DuckDB (local_store.py)", "Single data layer; capped threads + TTL-cached rollups (light CPU)")
+    Container(lqs, "Local Query Server", "Python (local_server.py)", "Localhost /__local_query__/* so the dashboard reads DuckDB without the writer lock")
+    Container(dash, "Dashboard", "Flask + waitress :8900", "UI + REST API; per-feature route blueprints; embedded frontend (static/ + templates/)")
+    Container(proxy, "Enforcement Proxy", "Python :4100 (proxy.py)", "Optional: budget limits, loop detection, model routing")
+    Container(intercept, "Cost Interceptor", "Python (interceptor.py)", "Zero-config httpx/requests patch for LLM token/cost")
+    Container(pro, "Pro Adapters", "Optional plugin (clawmetry-pro)", "Closed-source; adds the paid runtime adapters via the clawmetry.extensions entry point")
+}
+
+Rel(dev, cli, "runs")
+Rel(cli, daemon, "starts")
+Rel(cli, dash, "starts")
+Rel(runtimes, daemon, "session files / logs", "filesystem")
+Rel(gateway, daemon, "live events + crons", "WS :18789")
+Rel(daemon, duck, "writes (writer lock)")
+Rel(pro, daemon, "adds runtime adapters")
+Rel(dash, lqs, "reads", "HTTP localhost")
+Rel(lqs, duck, "reads")
+Rel(intercept, llm, "observes calls")
+Rel(proxy, llm, "gates / routes calls")
+Rel(daemon, cloud, "E2E snapshot push", "HTTPS")
+```
+
 ## Claude Code as a Second Data Source
 
 ClawMetry also supports **Claude Code** (`~/.claude/projects/`) as a data source via a dedicated dashboard (`dashboard_claudecode.py`). Claude Code stores session transcripts as JSONL files with a similar schema to OpenClaw sessions.

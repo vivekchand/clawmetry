@@ -808,6 +808,12 @@ def _cmd_connect(args) -> None:
     print(f"  https://app.clawmetry.com/cloud")
     print()
 
+    # If this was a zero-friction connect (no real key), the node landed on a
+    # temporary placeholder account and will NOT show under the user's real
+    # login. Warn loudly with the exact relink command instead of letting them
+    # discover a silent "0 nodes" later. No-op (+ skipped) for a keyed connect.
+    _warn_if_placeholder_account(api_key)
+
     try:
         import webbrowser
         webbrowser.open(_dashboard_url)
@@ -1575,6 +1581,61 @@ def _status_live() -> None:
         _sys.stdout.flush()
 
 
+def _is_placeholder_account(email) -> bool:
+    """True when the account is a zero-friction PLACEHOLDER (the daemon
+    auto-registered without a real login). Such an account is invisible from
+    the user's real dashboard, so the node silently never shows up under their
+    email -- the recurring 'I installed it but see 0 nodes' trap."""
+    e = (email or "").strip().lower()
+    return e.endswith("@clawmetry.auto") or e.endswith("@clawmetry.linked")
+
+
+def _warn_if_placeholder_account(api_key: str, email=None) -> bool:
+    """If this node is bound to a placeholder account, print a LOUD, actionable
+    warning (it will NOT appear in the user's dashboard until linked). Returns
+    True when it warned. Best-effort: resolves the email itself if not given,
+    never raises, no-ops offline."""
+    try:
+        if email is None:
+            email, _ = _resolve_account_email(api_key)
+        if not _is_placeholder_account(email):
+            return False
+        print()
+        print("  \033[33m⚠  This machine is on a TEMPORARY account, not your ClawMetry login.\033[0m")
+        print("     It will NOT show up at app.clawmetry.com/cloud under your email.")
+        print("     Link it to your account (copy the command from the '+ Add node'")
+        print("     box at app.clawmetry.com/cloud -- it carries YOUR key):")
+        print("        \033[36mclawmetry connect --key cm_xxxxxxxxxxxx\033[0m")
+        print()
+        return True
+    except Exception:
+        return False
+
+
+def _resolve_account_email(api_key: str):
+    """Best-effort: ask the cloud which ACCOUNT this node's api_key is linked to,
+    so `clawmetry status` can show the email (and plan). This is the fastest way
+    to catch the "my node is on the wrong account" trap. Short timeout + never
+    raises, so status stays fast and works offline (returns (None, None) then)."""
+    try:
+        if not api_key or not str(api_key).startswith("cm_"):
+            return None, None
+        import json as _json
+        import os as _os
+        import urllib.parse as _up
+        import urllib.request as _ur
+
+        base = _os.environ.get("CLAWMETRY_APP_BASE", "https://app.clawmetry.com").rstrip("/")
+        url = base + "/api/cloud/account?token=" + _up.quote(api_key)
+        with _ur.urlopen(url, timeout=2.5) as resp:
+            data = _json.loads(resp.read() or b"{}")
+        email = (data.get("email") or "").strip()
+        plan = (data.get("plan") or "").strip()
+        return (email or None), (plan or None)
+    except Exception:
+        return None, None
+
+
 def _cmd_status(args) -> None:
     """clawmetry status — show local + cloud sync status."""
     if getattr(args, "live", False):
@@ -1598,6 +1659,11 @@ def _cmd_status(args) -> None:
             )
             print("  Cloud sync:  ✅  Connected")
             print(f"  API key:     {masked_api}")
+            _acct_email, _acct_plan = _resolve_account_email(api_key)
+            if _acct_email:
+                _plan_suffix = f"  ({_acct_plan})" if _acct_plan else ""
+                _acct_note = "  ⚠ temporary, not linked" if _is_placeholder_account(_acct_email) else ""
+                print(f"  Account:     {_acct_email}{_plan_suffix}{_acct_note}")
             print(f"  Node ID:     {cfg.get('node_id', '?')}")
             print(f"  Connected:   {cfg.get('connected_at', '?')[:19]}")
             if enc_key:
@@ -1609,6 +1675,9 @@ def _cmd_status(args) -> None:
                 print("  E2E:         🔒 enabled")
             else:
                 print("  E2E:         ⚠️  disabled (no secret key in config)")
+            # Loud, actionable block when the node is on a placeholder account
+            # (the recurring 'connected but 0 nodes in my dashboard' trap).
+            _warn_if_placeholder_account(api_key, _acct_email)
         except Exception as e:
             print(f"  Config error: {e}")
     else:
@@ -1820,6 +1889,10 @@ def _print_nemoclaw_nodes(args) -> None:
             )
             print("  Cloud sync:  ✅  Connected")
             print(f"  API key:     {masked_api}")
+            _acct_email, _acct_plan = _resolve_account_email(api_key)
+            if _acct_email:
+                _plan_suffix = f"  ({_acct_plan})" if _acct_plan else ""
+                print(f"  Account:     {_acct_email}{_plan_suffix}")
             print(f"  Node ID:     {node_id}")
             if enc_key:
                 if getattr(args, "show_key", False):
@@ -2466,6 +2539,12 @@ def _format_uptime(seconds):
     if seconds < 86400:
         return f"{seconds / 3600:.1f}h"
     return f"{seconds / 86400:.1f}d"
+
+
+def _cmd_mcp(args) -> None:
+    """Start the ClawMetry MCP server on stdio (refs #2859)."""
+    from clawmetry.mcp_server import run
+    run()
 
 
 def _cmd_eval(args) -> None:
@@ -3142,6 +3221,12 @@ def main() -> None:
     # update — self-update to latest PyPI version
     sub.add_parser("update", help="Update clawmetry to the latest version")
 
+    # mcp — start MCP server on stdio (issue #2859)
+    sub.add_parser(
+        "mcp",
+        help="Start ClawMetry MCP server (stdio) — lets agents query their own telemetry",
+    )
+
     # uninstall — fully remove clawmetry
     sub.add_parser(
         "uninstall", help="Fully uninstall clawmetry (stop daemons, remove all files)"
@@ -3192,6 +3277,7 @@ def main() -> None:
         "status",
         "proxy",
         "eval",
+        "mcp",
         "update",
         "uninstall",
         "activate",
@@ -3221,6 +3307,8 @@ def main() -> None:
             _cmd_proxy(args)
         elif args.cmd == "eval":
             _cmd_eval(args)
+        elif args.cmd == "mcp":
+            _cmd_mcp(args)
         elif args.cmd == "update":
             _cmd_update()
         elif args.cmd == "uninstall":

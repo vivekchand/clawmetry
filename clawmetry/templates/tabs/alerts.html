@@ -69,8 +69,11 @@
    composer. The {% if is_pro %} branch keeps the editor entirely out of
    the page for non-Pro users; alerts.js still calls alertsOpenPaywall()
    on the + New alert rule button so the upsell flow is unchanged. #}
-{% if is_pro %}
-<!-- ── Rule editor modal (Pro-tier only) ────────────────────────────────── -->
+<!-- ── Rule editor modal ─────────────────────────────────────────────────── -->
+<!-- Always rendered; access is gated client-side in alertsHandleNewRule (free ->
+     openPaywall, trial/pro -> openEditor). Trial-bug #17: the old {% raw %}{% if is_pro %}{% endraw %}
+     gate dropped the modal for trial users whose server-side plan lookup mismatched
+     the JS tier, so "+ New alert rule" silently did nothing. -->
 <div class="alerts-modal-overlay" id="alerts-editor-modal" style="display:none;" onclick="alertsCloseEditor(event)">
   <div class="alerts-editor-card" onclick="event.stopPropagation()">
     <div class="alerts-editor-head">
@@ -87,6 +90,8 @@
         <button data-type="token_velocity" onclick="alertsPickType('token_velocity')">⚡ <span data-i18n="alerts.type_velocity">Velocity</span></button>
         <button data-type="cron_failure" onclick="alertsPickType('cron_failure')">⏱ <span data-i18n="alerts.type_cron">Cron</span></button>
         <button data-type="error_rate" onclick="alertsPickType('error_rate')">🛠 <span data-i18n="alerts.type_tool_fails">Tool fails</span></button>
+        <button data-type="eval_score_below" onclick="alertsPickType('eval_score_below')">⭐ <span data-i18n="alerts.type_quality">Quality</span></button>
+        <button data-type="outcome_failure_rate" onclick="alertsPickType('outcome_failure_rate')">🚦 <span data-i18n="alerts.type_failures">Failures</span></button>
       </div>
       <div class="alerts-editor-form" id="alerts-editor-form">
         <!-- populated by alertsRenderTypeForm() -->
@@ -123,4 +128,3 @@
     </div>
   </div>
 </div>
-{% endif %}

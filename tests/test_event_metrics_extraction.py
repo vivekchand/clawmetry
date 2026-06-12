@@ -42,10 +42,11 @@ def test_openclaw_shape_extracts_model_and_tokens():
     assert model == "claude-opus-4-7"
     assert tokens == 1234
     # Cost is derived from input/output split + provider + model via pricing
-    # table. anthropic/claude-opus-4 → (15.00, 75.00) per 1M tokens.
-    # = 1000/1M * 15 + 234/1M * 75 = 0.015 + 0.01755 = 0.03255
+    # table. opus-4-7 is the new gen → (5.00, 25.00) per 1M tokens (verified
+    # against LiteLLM/ccusage; was wrongly $15/$75 before the 2026-06-08 fix).
+    # = 1000/1M * 5 + 234/1M * 25 = 0.005 + 0.00585 = 0.01085
     assert cost is not None
-    assert abs(cost - 0.03255) < 1e-6
+    assert abs(cost - 0.01085) < 1e-6
 
 
 def test_openclaw_total_only_leaves_cost_none():

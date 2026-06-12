@@ -33,6 +33,41 @@ _NEMOCLAW_CATALOG_TOOLS: frozenset = frozenset({
     "tool_call",
 })
 
+# Reasoning / extended-thinking token key variants (#2876). Anthropic
+# extended-thinking sessions emit a reasoning-token share inside the per-turn
+# usage object under one of several spellings; older code only read
+# input/output/cache keys, so Session.reasoning_tokens was always 0 and per-turn
+# token counts were under-reported for reasoning-capable models.
+_REASONING_TOKEN_KEYS: tuple = (
+    "reasoning_tokens",
+    "reasoningTokens",
+    "thinking_tokens",
+    "thinkingTokens",
+    "thinking_input_tokens",
+    "thinkingInputTokens",
+    "reasoning_output_tokens",
+    "reasoningOutputTokens",
+)
+
+
+def _reasoning_tokens(usage: dict) -> int:
+    """Return the reasoning/thinking token count from a usage dict.
+
+    Accepts any of the known key spellings (snake/camel, thinking/reasoning)
+    and coerces to a non-negative int. Returns 0 when absent or unparsable.
+    """
+    if not isinstance(usage, dict):
+        return 0
+    for k in _REASONING_TOKEN_KEYS:
+        v = usage.get(k)
+        if v is None:
+            continue
+        try:
+            return max(0, int(v))
+        except (TypeError, ValueError):
+            return 0
+    return 0
+
 
 def _d():
     """Late import to avoid circular init with dashboard module."""
@@ -87,6 +122,165 @@ def _real_install(sessions_dir: str) -> bool:
                for m in ("SOUL.md", "AGENTS.md", "MEMORY.md"))
 
 
+def _model_router_fingerprint() -> dict:
+    """Read the NemoClaw model-router source fingerprint (``git:<sha>``)
+    written by harness onboarding to ``<venv>/.nemoclaw-source-fingerprint``
+    (model-router.ts writeModelRouterInstalledFingerprint). Surfaces the
+    install-provenance / version-drift signal on DetectResult.meta (#2608).
+
+    Read-only and never raises. Returns ``{}`` when the file/venv is absent
+    (plain OpenClaw or old NemoClaw installs), so the meta dict is unchanged.
+    """
+    venv = os.environ.get("NEMOCLAW_MODEL_ROUTER_VENV") or os.path.expanduser(
+        os.path.join("~", ".nemoclaw", "model-router-venv"))
+    fp_path = os.path.join(venv, ".nemoclaw-source-fingerprint")
+    try:
+        with open(fp_path, encoding="utf-8") as fh:
+            raw = (fh.read() or "").strip()
+        if not raw:
+            return {}
+        out = {"modelRouterFingerprint": raw}
+        # raw looks like "git:<40hex>" / "gitlink:<40hex>" / "files:<hex>"
+        if ":" in raw:
+            kind, _, val = raw.partition(":")
+            out["modelRouterFingerprintKind"] = kind
+            if kind in ("git", "gitlink") and val:
+                out["modelRouterSourceSha"] = val[:12]
+        return out
+    except (OSError, ValueError):
+        return {}
+
+
+# NOTE (#2610, deferred): NemoClaw's skill-catalog version/provenance lives in
+# ``skills/catalog-metadata.json`` (min/tested NemoClaw version, content shas),
+# but that file is a SOURCE-repo build artifact — it is not shipped in the npm
+# ``files`` list and no install/Docker step copies it to any host-readable path,
+# and the NemoClaw skills bundle lives inside the sandbox container, not the host
+# ``~/.openclaw`` ClawMetry reads. So there is no reliable on-disk location to
+# read it from today. Deferred rather than ship a dead read; revisit if NemoClaw
+# starts exporting the catalog to the host (e.g. ~/.nemoclaw/skills/).
+
+
+def _scan_openclaw_selection_runtime() -> tuple[bool, bool, bool]:
+    """Scan the pinned OpenClaw ``selection-*.js`` once and report whether
+    (a) the NemoClaw compact-catalog patch marker is present,
+    (b) the three base native tool-search symbols are present, and
+    (c) the two enforcement symbols (visibleAllowedToolNames /
+        replayAllowedToolNames) that distinguish a full-native build from a
+        basic-native one are present (#2877).
+
+    Returns ``(nemoclaw_patched, native_base, native_enforcement)``. Never raises.
+    """
+    nemoclaw_marker = b"/* nemoclaw compact tool catalog (#2600) */"
+    # Mirror scripts/patch-openclaw-tool-catalog.js NATIVE_TOOL_SEARCH_PATTERNS
+    # entries 1-3: catalog infrastructure symbols (#2732).
+    native_base_markers = (
+        b"applyToolSearchCatalog",
+        b"buildToolSearchRunPlan",
+        b"uncompactedEffectiveTools",
+    )
+    # Entries 4-5: enforcement signals added by the harness (#2877). Both must
+    # be present to confirm the build actively enforces visible/replay allow-lists.
+    native_enforcement_markers = (
+        b"visibleAllowedToolNames",
+        b"replayAllowedToolNames",
+    )
+    patched = False
+    native_base = False
+    native_enforcement = False
+    try:
+        home = os.environ.get("OPENCLAW_HOME") or os.path.expanduser("~/.openclaw")
+        dist_dirs = [
+            os.path.join(home, "node_modules", "openclaw", "dist"),
+            "/usr/local/lib/node_modules/openclaw/dist",
+        ]
+        for dist in dist_dirs:
+            if not os.path.isdir(dist):
+                continue
+            try:
+                names = os.listdir(dist)
+            except OSError:
+                continue
+            for n in names:
+                if not (n.startswith("selection-") and n.endswith(".js")):
+                    continue
+                fp = os.path.join(dist, n)
+                try:
+                    with open(fp, "rb") as fh:
+                        # Patch marker + native symbols sit early in the
+                        # rewritten module; cap the read.
+                        blob = fh.read(2_000_000)
+                except OSError:
+                    continue
+                if not patched and nemoclaw_marker in blob:
+                    patched = True
+                if not native_base and all(m in blob for m in native_base_markers):
+                    native_base = True
+                if native_base and not native_enforcement and all(
+                    m in blob for m in native_enforcement_markers
+                ):
+                    native_enforcement = True
+                if patched and native_base and native_enforcement:
+                    break
+            if patched and native_base and native_enforcement:
+                break
+    except Exception:
+        return patched, native_base, native_enforcement
+    return patched, native_base, native_enforcement
+
+
+def _nemoclaw_tool_catalog_state() -> Optional[bool]:
+    """Whether the NemoClaw compact tool-catalog wrapper is active for this
+    runtime (#2683).
+
+    The harness patch (scripts/patch-openclaw-tool-catalog.js) injects
+    ``NEMOCLAW_TOOL_CATALOG !== "0"`` into every agent turn, after rewriting
+    the pinned OpenClaw ``selection-*.js`` and stamping the marker
+    ``/* nemoclaw compact tool catalog (#2600) */``. We surface a defensive
+    session-level boolean so the dashboard can tell a guardrail-wrapped
+    session from one where the catalog was disabled.
+
+    Returns ``True``/``False`` ONLY when there is positive NemoClaw signal
+    (the patch marker is present in the openclaw dist, or the env var is
+    explicitly set); returns ``None`` on plain OpenClaw so we never assert a
+    catalog state that doesn't exist. Never raises.
+    """
+    env = os.environ.get("NEMOCLAW_TOOL_CATALOG")
+    patched, _native, _native_enf = _scan_openclaw_selection_runtime()
+    if not patched and env is None:
+        # No NemoClaw signal at all -> don't claim a catalog state.
+        return None
+    # Mirror the harness gate exactly: enabled unless explicitly "0".
+    return env != "0"
+
+
+def _openclaw_tool_catalog_kind() -> Optional[str]:
+    """Provenance of the active OpenClaw tool-catalog mechanism, if any (#2732, #2877).
+
+    Returns:
+        ``"nemoclaw"`` when the NemoClaw compact-catalog patch is applied
+        (matches ``_nemoclaw_tool_catalog_state() is True``).
+        ``"native-full"`` when all five NATIVE_TOOL_SEARCH_PATTERNS are present:
+        the three base infrastructure symbols plus ``visibleAllowedToolNames`` /
+        ``replayAllowedToolNames`` (enforcement-active build).
+        ``"native"`` when only the three base infrastructure symbols are present
+        (catalog infrastructure present, enforcement inactive).
+        ``None`` when neither signal is present.
+
+    The NemoClaw patch wins over native detection: when both fire (e.g. a
+    forward-port window) the patched wrapper is what's actually intercepting
+    catalog calls. Never raises.
+    """
+    patched, native, native_enforcement = _scan_openclaw_selection_runtime()
+    if patched:
+        return "nemoclaw"
+    if native_enforcement:
+        return "native-full"
+    if native:
+        return "native"
+    return None
+
+
 class OpenClawAdapter(AgentAdapter):
     name = "openclaw"
     display_name = "OpenClaw"
@@ -110,6 +304,23 @@ class OpenClawAdapter(AgentAdapter):
             # workspace dir) is NOT a signal — ClawMetry creates it, which
             # false-positived OpenClaw on uninstalled machines.
             detected = bool(sessions) or running or _real_install(sessions_dir)
+            meta = {
+                "gatewayUrl": gateway_url,
+                "sessionsDir": sessions_dir,
+            }
+            # NemoClaw install-provenance signal (#2608). Returns {} on plain
+            # OpenClaw, so meta is unchanged there. (#2610 skill-catalog deferred
+            # — see note above: no host-readable on-disk location.)
+            meta.update(_model_router_fingerprint())
+            _tc_enabled = _nemoclaw_tool_catalog_state()
+            if _tc_enabled is not None:
+                meta["nemoclawToolCatalogEnabled"] = _tc_enabled
+            # Provenance — distinguish NemoClaw patch from native OpenClaw
+            # tool-search builds where the patch is a no-op (#2732). Stamped
+            # in addition to the back-compat boolean above.
+            _tc_kind = _openclaw_tool_catalog_kind()
+            if _tc_kind is not None:
+                meta["openclawToolCatalogKind"] = _tc_kind
             return DetectResult(
                 name=self.name,
                 display_name=self.display_name,
@@ -118,10 +329,7 @@ class OpenClawAdapter(AgentAdapter):
                 workspace=workspace or default_home,
                 session_count=len(sessions),
                 capabilities=[c.value for c in self.capabilities()],
-                meta={
-                    "gatewayUrl": gateway_url,
-                    "sessionsDir": sessions_dir,
-                },
+                meta=meta,
             )
         except Exception as exc:
             logger.warning(f"OpenClaw detect() raised: {exc}")
@@ -138,10 +346,27 @@ class OpenClawAdapter(AgentAdapter):
         except Exception as exc:
             logger.warning(f"OpenClaw list_sessions() failed: {exc}")
             return []
+        # Runtime-level NemoClaw tool-catalog state (#2683): whether the
+        # compact tool-catalog wrapper is active for this install. None on
+        # plain OpenClaw (no NemoClaw signal) — we don't stamp a state then.
+        _tc_enabled = _nemoclaw_tool_catalog_state()
+        # Catalog provenance (#2732): "nemoclaw" or "native" when either
+        # signal is present, so native-tool-search OpenClaw builds are no
+        # longer indistinguishable from "no catalog at all".
+        _tc_kind = _openclaw_tool_catalog_kind()
         out: List[Session] = []
         for s in raw[:limit]:
             updated_ms = s.get("updatedAt") or 0
             started_at = (updated_ms / 1000.0) if updated_ms else 0.0
+            extra = {
+                "kind": s.get("kind") or "direct",
+                "contextTokens": s.get("contextTokens"),
+                "agentId": s.get("agent") or "main",
+            }
+            if _tc_enabled is not None:
+                extra["nemoclawToolCatalogEnabled"] = _tc_enabled
+            if _tc_kind is not None:
+                extra["openclawToolCatalogKind"] = _tc_kind
             out.append(
                 Session(
                     agent=self.name,
@@ -155,12 +380,9 @@ class OpenClawAdapter(AgentAdapter):
                     output_tokens=int(s.get("outputTokens") or 0),
                     cache_read_tokens=int(s.get("cacheReadTokens") or 0),
                     cache_write_tokens=int(s.get("cacheWriteTokens") or 0),
+                    reasoning_tokens=_reasoning_tokens(s),
                     cost_usd=float(s["costUsd"]) if s.get("costUsd") is not None else None,
-                    extra={
-                        "kind": s.get("kind") or "direct",
-                        "contextTokens": s.get("contextTokens"),
-                        "agentId": s.get("agent") or "main",
-                    },
+                    extra=extra,
                 )
             )
         return out
@@ -187,7 +409,7 @@ class OpenClawAdapter(AgentAdapter):
             from clawmetry import local_store as _ls
             store = _ls.get_store(read_only=True)
             rows = store._fetch(
-                "SELECT id, event_type, ts, model, token_count, data "
+                "SELECT id, event_type, ts, model, token_count, data, agent_id, node_id "
                 "FROM events WHERE agent_type = ? AND session_id = ? "
                 "ORDER BY ts ASC LIMIT ?",
                 ["openclaw", str(session_id), int(limit)],
@@ -200,11 +422,20 @@ class OpenClawAdapter(AgentAdapter):
                 except (TypeError, ValueError):
                     ts_f = 0.0
                 extra: dict = {}
+                content_text = ""
                 if r[3]:
                     extra["model"] = r[3]
+                # r[6] = agent_id, r[7] = node_id — surface structured log
+                # context fields so callers can correlate events by agent and node.
+                if r[6]:
+                    extra["agent_id"] = r[6]
+                if r[7]:
+                    extra["node_id"] = r[7]
                 # r[5] = data BLOB — decode and surface per-type token split
                 # (input/output/cache_read/cache_write) so callers can measure
                 # per-turn cache efficiency without re-reading the raw file.
+                # Also extract channel/hostname from gateway log record top-level
+                # fields when present (no dedicated DB columns for these).
                 raw_data = r[5]
                 if raw_data is not None:
                     try:
@@ -212,21 +443,35 @@ class OpenClawAdapter(AgentAdapter):
                             raw_data = bytes(raw_data).decode("utf-8", "replace")
                         obj = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
                         if isinstance(obj, dict):
+                            for _field in ("channel", "hostname"):
+                                _val = obj.get(_field)
+                                if _val:
+                                    extra[_field] = _val
                             msg = obj.get("message")
+                            if isinstance(msg, str):
+                                content_text = msg
                             src = msg if isinstance(msg, dict) else obj
                             usage = src.get("usage") if isinstance(src.get("usage"), dict) else {}
                             if usage:
                                 for dst, *keys in [
                                     ("inputTokens", "input_tokens", "inputTokens"),
                                     ("outputTokens", "output_tokens", "outputTokens"),
-                                    ("cacheReadTokens", "cache_read_input_tokens", "cacheReadInputTokens"),
-                                    ("cacheWriteTokens", "cache_creation_input_tokens", "cacheCreationInputTokens"),
+                                    ("cacheReadTokens", "cache_read_input_tokens", "cacheReadInputTokens", "cacheRead"),
+                                    ("cacheWriteTokens", "cache_creation_input_tokens", "cacheCreationInputTokens", "cacheWrite"),
+                                    ("totalTokens", "totalTokens", "total_tokens"),
                                 ]:
                                     for k in keys:
                                         v = usage.get(k)
                                         if v is not None:
                                             extra[dst] = int(v)
                                             break
+                                # Extended-thinking / reasoning tokens (#2876):
+                                # Anthropic thinking sessions emit a reasoning
+                                # token share that input+output alone omit. Surface
+                                # it so per-turn cost is not under-reported.
+                                _rt = _reasoning_tokens(usage)
+                                if _rt:
+                                    extra["reasoningTokens"] = _rt
                     except Exception:
                         pass
                 events.append(Event(
@@ -235,6 +480,7 @@ class OpenClawAdapter(AgentAdapter):
                     id=str(r[0]),
                     type=str(r[1] or "event"),
                     ts=ts_f,
+                    content=content_text,
                     tokens=int(r[4] or 0),
                     extra=extra,
                 ))
@@ -257,7 +503,7 @@ class OpenClawAdapter(AgentAdapter):
             Capability.CHANNELS,
         }
 
-    # ── Span reconstruction (issue #1010 / Trace 4) ────────────────────────
+    # ── Span reconstruction (issue #1010 / Trace 4) ───────────────────────────────────────
 
     @staticmethod
     def _span_id(*parts: str) -> str:
@@ -272,10 +518,13 @@ class OpenClawAdapter(AgentAdapter):
         """Map raw JSONL objects to OTel-shaped span dicts.
 
         Mapping per issue #1010:
-        - ``session`` (version set)   → root span (INTERNAL)
+        - ``session`` (version set)    → root span (INTERNAL)
         - ``message`` (role=assistant) → llm.call span (CLIENT, child of root)
-          - each tool_use block       → tool.<name> span (CLIENT, child of llm)
-        - ``subagent_spawn``          → agent.spawn span (INTERNAL, link to child trace)
+          - each tool_use block        → tool.<name> span (CLIENT, child of llm)
+        - ``message`` (role=user)      → matched tool_result blocks fold their
+          structured ``details`` payload + ``is_error`` flag + text content back
+          onto the tool span identified by ``tool_use_id`` (#2733).
+        - ``subagent_spawn``           → agent.spawn span (INTERNAL, link to child trace)
 
         Span IDs are deterministic SHA-256 prefixes so re-ingesting is idempotent.
         """
@@ -284,6 +533,10 @@ class OpenClawAdapter(AgentAdapter):
         session_span_id = _sid("session", session_id)
         now = _time.time()
         spans: list = []
+        # tool_use_id → tool span dict, populated as assistant tool_use blocks
+        # are emitted; consumed when a later user tool_result block references
+        # the same id (#2733).
+        tool_span_by_id: dict = {}
 
         for obj in events:
             if not isinstance(obj, dict):
@@ -309,12 +562,103 @@ class OpenClawAdapter(AgentAdapter):
 
             elif t == "message" and isinstance(obj.get("message"), dict):
                 msg = obj["message"]
-                if msg.get("role") != "assistant":
+                role = msg.get("role")
+                content = msg.get("content") or []
+                if role == "user":
+                    # Tool results live in user-role messages. Fold the
+                    # structured details payload + is_error flag + text content
+                    # back onto the originating tool span (#2733). Orphan
+                    # tool_results (no matching tool_use_id) are skipped.
+                    if not isinstance(content, list):
+                        continue
+                    for block in content:
+                        if not isinstance(block, dict) or block.get("type") != "tool_result":
+                            continue
+                        tu_id = block.get("tool_use_id") or block.get("toolUseId") or ""
+                        target = tool_span_by_id.get(tu_id)
+                        if target is None:
+                            continue
+                        attrs = target.get("attributes") or {}
+                        attrs["tool.result_present"] = True
+                        if "is_error" in block:
+                            attrs["tool.result_is_error"] = bool(block.get("is_error"))
+                        # NemoClaw nemoClawBuildToolResult helper attaches a
+                        # top-level structured ``details`` dict on the result
+                        # (catalog hits, schemas, dispatch output). Surface it
+                        # so downstream Tracing/Event.extra can render the real
+                        # payload instead of just the stringified text wrapper.
+                        details = block.get("details")
+                        if details is not None:
+                            attrs["tool.result_details"] = details
+                            if isinstance(details, dict):
+                                attrs["tool.result_details_keys"] = sorted(details.keys())
+                        # Walk the tool_result content array. Text blocks
+                        # collapse into a single string for quick read
+                        # (NemoClaw JSON-stringified wrapper, or plain text
+                        # from native tools). Non-text block types
+                        # (resource_link, resource, audio, image) are
+                        # surfaced by sorted type-list so downstream UI can
+                        # see that MCP returned a non-text payload (#2731).
+                        # Coercion metadata (the harness preserves the
+                        # original block type when it materializes a
+                        # resource_link / resource / audio / malformed-image
+                        # into a text-safe shape) is recorded as
+                        # {from, to} pairs. Accepts the common field-name
+                        # variants seen in the wild.
+                        result_content = block.get("content")
+                        text_parts: list = []
+                        types_seen: set = set()
+                        coercions: list = []
+                        if isinstance(result_content, str):
+                            text_parts.append(result_content)
+                        elif isinstance(result_content, list):
+                            for inner in result_content:
+                                if not isinstance(inner, dict):
+                                    continue
+                                inner_type = inner.get("type")
+                                if isinstance(inner_type, str) and inner_type:
+                                    types_seen.add(inner_type)
+                                if inner_type == "text":
+                                    val = inner.get("text")
+                                    if isinstance(val, str):
+                                        text_parts.append(val)
+                                coerced_from = (
+                                    inner.get("coerced_from")
+                                    or inner.get("coercedFrom")
+                                    or inner.get("original_type")
+                                    or inner.get("originalType")
+                                )
+                                if isinstance(coerced_from, str) and coerced_from:
+                                    coercions.append({
+                                        "from": coerced_from,
+                                        "to": inner_type if isinstance(inner_type, str) and inner_type else "unknown",
+                                    })
+                        if text_parts:
+                            attrs["tool.result_text"] = "".join(text_parts)
+                        if types_seen:
+                            attrs["tool.result_content_types"] = sorted(types_seen)
+                        if coercions:
+                            attrs["tool.result_coercions"] = coercions
+                        target["attributes"] = attrs
+                        # End-time the tool span to whatever the result arrived
+                        # at. start_ts ≤ end_ts isn't enforced (assistant emits
+                        # tool_use and user tool_result share clock); but the
+                        # signal is still useful for duration heuristics.
+                        target["end_ts"] = ts
+                    continue
+                if role != "assistant":
                     continue
                 model = msg.get("model") or ""
                 usage = msg.get("usage") or {}
                 tok_in = int(usage.get("input_tokens") or usage.get("inputTokens") or 0)
                 tok_out = int(usage.get("output_tokens") or usage.get("outputTokens") or 0)
+                # Reasoning/thinking tokens (#2876) are billed but not part of
+                # input/output; fold them into token_count so LLM-span cost
+                # totals are not systematically under-reported.
+                tok_reasoning = _reasoning_tokens(usage)
+                # totalTokens includes reasoning tokens on extended-thinking models;
+                # prefer it when present so spans are not under-counted (#2794).
+                tok_total = int(usage.get("totalTokens") or usage.get("total_tokens") or 0)
                 llm_sid = _sid("llm", session_id, str(raw_ts))
                 spans.append({
                     "span_id": llm_sid,
@@ -328,15 +672,45 @@ class OpenClawAdapter(AgentAdapter):
                     "model": model or None,
                     "tokens_input": tok_in or None,
                     "tokens_output": tok_out or None,
-                    "token_count": (tok_in + tok_out) or None,
+                    "tokens_reasoning": tok_reasoning or None,
+                    # max() is the only safe combination of #2876 and #2794:
+                    # totalTokens (when the SDK emits it) ALREADY includes the
+                    # reasoning share, so summing them would double-count, and
+                    # either alone under-counts when the other key is present.
+                    "token_count": max(tok_total, tok_in + tok_out + tok_reasoning) or None,
                 })
-                content = msg.get("content") or []
                 if isinstance(content, list):
                     for block in content:
                         if not isinstance(block, dict) or block.get("type") != "tool_use":
                             continue
-                        tool_name = block.get("name") or "tool"
+                        orig_name = block.get("name") or "tool"
+                        tool_name = orig_name
                         tool_id = block.get("id") or ""
+                        blk_input = block.get("input")
+                        # NemoClaw compact tool-catalog dispatch (#2682): the
+                        # injected meta-tool is named "tool_call" and carries the
+                        # REAL dispatched tool in input.name (the wrapper
+                        # dispatches via catalog.get(name)). Unwrap it so the
+                        # Tracing tab shows the real tool, not a generic
+                        # "tool_call" span. Falls back to the literal name on
+                        # old/missing data so it never crashes.
+                        attrs: dict = {}
+                        if tool_name == "tool_call" and isinstance(blk_input, dict):
+                            real = blk_input.get("name")
+                            if isinstance(real, str) and real.strip():
+                                real = real.strip()
+                                attrs.update({
+                                    "nemoclaw.catalog_dispatch": True,
+                                    "nemoclaw.meta_tool": "tool_call",
+                                    "nemoclaw.dispatched_tool": real,
+                                })
+                                tool_name = real
+                        # Catalog meta-tools (tool_search/tool_describe/tool_call)
+                        # are guardrail dispatches, not real agent actions — tag
+                        # by the ORIGINAL name (tool_name may now be the unwrapped
+                        # real tool).
+                        if orig_name in _NEMOCLAW_CATALOG_TOOLS:
+                            attrs["nemoclaw.catalog_guardrail"] = True
                         tool_span: dict = {
                             "span_id": _sid("tool", session_id, str(raw_ts), tool_id, tool_name),
                             "trace_id": trace_id,
@@ -347,11 +721,13 @@ class OpenClawAdapter(AgentAdapter):
                             "session_id": session_id,
                             "agent_type": "openclaw",
                             "tool_name": tool_name,
-                            "input": block.get("input"),
+                            "input": blk_input,
+                            "attributes": attrs or None,
                         }
-                        if tool_name in _NEMOCLAW_CATALOG_TOOLS:
-                            tool_span["attributes"] = {"nemoclaw.catalog_guardrail": True}
+
                         spans.append(tool_span)
+                        if tool_id:
+                            tool_span_by_id[tool_id] = tool_span
 
             elif t in ("subagent_spawn", "agent_spawn"):
                 sub_id = (

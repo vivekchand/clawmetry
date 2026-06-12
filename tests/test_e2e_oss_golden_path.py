@@ -1,7 +1,7 @@
 """
 OSS golden path E2E gate (criterion C1).
 
-Verifies three tiers of correctness after a full wheel-install + OpenClaw boot:
+Verifies four tiers of correctness after a full wheel-install + OpenClaw boot:
 
   1. /api/auth/check returns {valid: true} -- token plumbing is correct.
   2. /api/sessions returns >= 1 session -- the synthetic JSONL was ingested
@@ -9,6 +9,8 @@ Verifies three tiers of correctness after a full wheel-install + OpenClaw boot:
      path works end-to-end from an installed wheel).
   3. All 9 C1 canonical tabs navigate without any auth-blocking overlay --
      sessions, brain, tokens, crons, flow, memory, security, health.
+  4. Sessions tab DOM contains the seeded session title "Golden Path E2E" --
+     proves the full render pipeline from JSONL seed to DOM is intact.
 
 C1 definition (tracking issue #1646):
   "install ClawMetry from a wheel + spin up real OpenClaw + send a message +
@@ -89,10 +91,11 @@ def _api(path: str) -> dict:
 class TestOSSGoldenPath:
     """Full OSS golden path: wheel-installed dashboard + synced OpenClaw data + 9 tabs.
 
-    All three test groups must pass together for criterion C1 to be green:
-      * auth group -- token plumbing
-      * data group -- JSONL ingestion via sync thread
-      * tab group  -- Playwright overlay sweep
+    All four test groups must pass together for criterion C1 to be green:
+      * auth group  -- token plumbing
+      * data group  -- JSONL ingestion via sync thread
+      * tab group   -- Playwright overlay sweep
+      * render group -- DOM content verification (seeded session title present)
     """
 
     # ---- auth group --------------------------------------------------------
@@ -145,6 +148,61 @@ class TestOSSGoldenPath:
         page = ctx.new_page()
         yield page
         ctx.close()
+
+    # ---- render group ------------------------------------------------------
+
+    def test_sessions_tab_renders_seeded_session(self, _golden_page):
+        """Sessions tab DOM must contain the seeded session title after data loads.
+
+        Tier 4 of the C1 gate: proves the full end-to-end render pipeline from
+        JSONL seed to DuckDB ingest to API response to DOM render is working.
+        The previous three tiers prove:
+          - /api/auth/check accepts the token
+          - /api/sessions has >= 1 session in DuckDB
+          - No auth overlay blocks the Sessions tab
+        This tier proves the session title "Golden Path E2E" actually appears
+        in the rendered DOM after loadTranscripts() completes.
+
+        A broken render pipeline that shows an empty tab with no overlay
+        would pass tiers 1-3 but fail here.
+        """
+        page = _golden_page
+        page.goto(BASE_URL + "/", wait_until="domcontentloaded", timeout=15000)
+
+        # Switch to the transcripts (Sessions) tab; this triggers loadTranscripts()
+        # which fetches /api/sessions and renders the list into #transcript-list.
+        page.evaluate(
+            "typeof window.switchTab === 'function' && "
+            "window.switchTab('transcripts')"
+        )
+
+        # Wait up to 8s for the seeded session title to appear in the live DOM.
+        # Playwright polls after each mutation so this catches the render as
+        # soon as loadTranscripts() populates #transcript-list.
+        found = False
+        try:
+            page.wait_for_selector("text=Golden Path E2E", timeout=8000)
+            found = True
+        except Exception:
+            pass
+
+        if not found:
+            # Secondary check: scan full page HTML in case the text is present
+            # but not matched by the selector (e.g. inside a partially-hidden
+            # container or an attribute value).
+            found = "Golden Path E2E" in page.content()
+
+        assert found, (
+            "Sessions tab did not render the seeded session title 'Golden Path E2E' "
+            "within 8s of tab switch. Possible root causes:\n"
+            "  (1) JSONL ingest is broken: the session never reached DuckDB\n"
+            "      (check test_sessions_seeded_in_duckdb for prior failure);\n"
+            "  (2) loadTranscripts() is not populating #transcript-list\n"
+            "      (check /api/sessions response in the CI dashboard log);\n"
+            "  (3) The 'session_start' event title field is not rendered in the UI\n"
+            "      (check routes/sessions.py and the #transcript-list DOM content).\n"
+            f"  BASE_URL={BASE_URL!r}"
+        )
 
     @pytest.mark.parametrize("tab", C1_TABS)
     def test_c1_tab_no_auth_overlay(self, _golden_page, tab):

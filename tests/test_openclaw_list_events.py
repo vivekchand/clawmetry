@@ -159,3 +159,243 @@ def test_list_events_surfaces_cache_token_split(isolated_store):
     assert ex.get("outputTokens") == 20
     assert ex.get("cacheReadTokens") == 80
     assert ex.get("cacheWriteTokens") == 10
+
+
+def test_list_events_populates_content_from_log_message_text(isolated_store):
+    """Log records with a string ``message`` populate Event.content (#2700).
+
+    OpenClaw gateway log records (per docs/logging.md) put the flattened
+    log text in a top-level string ``message`` field for full-text search.
+    Previously list_events read obj["message"] only to choose a usage
+    source (dict vs. string branch) and discarded the string, so log
+    events came back with empty content. Pin the new behavior so the
+    unified event stream stays searchable.
+    """
+    import uuid, time as _t
+    isolated_store.ingest({
+        "id": str(uuid.uuid4()),
+        "node_id": "agent+test-node",
+        "agent_id": "main",
+        "agent_type": "openclaw",
+        "session_id": "sess-LOG",
+        "event_type": "log",
+        "ts": _t.time(),
+        "data": {
+            "channel": "gateway",
+            "hostname": "Dhriti-1",
+            "level": "info",
+            "message": "tool dispatched: bash exit=0",
+        },
+    })
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess-LOG")
+    assert len(events) == 1
+    e = events[0]
+    assert e.content == "tool dispatched: bash exit=0"
+    # channel/hostname still come through extra.
+    assert e.extra.get("channel") == "gateway"
+    assert e.extra.get("hostname") == "Dhriti-1"
+
+
+def test_list_events_dict_message_does_not_set_content(isolated_store):
+    """Sanity guard: when ``message`` is a dict (assistant turn shape),
+    Event.content stays empty — only string ``message`` values are
+    treated as flattened log text. Keeps the dict branch — which is
+    the usage source — unchanged.
+    """
+    import uuid, time as _t
+    isolated_store.ingest({
+        "id": str(uuid.uuid4()),
+        "node_id": "agent+test-node",
+        "agent_id": "main",
+        "agent_type": "openclaw",
+        "session_id": "sess-DICT",
+        "event_type": "model.completed",
+        "ts": _t.time(),
+        "data": {
+            "type": "assistant",
+            "message": {
+                "model": "claude-opus-4-7",
+                "usage": {"input_tokens": 1, "output_tokens": 2},
+            },
+        },
+    })
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess-DICT")
+    assert len(events) == 1
+    assert events[0].content == ""
+
+
+def test_list_events_surfaces_reasoning_tokens(isolated_store):
+    """Extended-thinking / reasoning tokens land in event.extra (#2876).
+
+    Anthropic extended-thinking sessions emit a reasoning-token share in
+    the per-turn usage object that input+output alone omit. list_events()
+    must surface it as ``reasoningTokens`` so per-turn cost is not
+    under-reported for reasoning-capable models.
+    """
+    import uuid, time as _t
+    isolated_store.ingest({
+        "id": str(uuid.uuid4()),
+        "node_id": "agent+test-node",
+        "agent_id": "main",
+        "agent_type": "openclaw",
+        "session_id": "sess-THINK",
+        "event_type": "model.completed",
+        "ts": _t.time(),
+        "model": "claude-opus-4-7",
+        "token_count": 150,
+        "data": {
+            "type": "assistant",
+            "message": {
+                "model": "claude-opus-4-7",
+                "usage": {
+                    "input_tokens": 30,
+                    "output_tokens": 20,
+                    "thinking_input_tokens": 64,
+                },
+            },
+        },
+    })
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess-THINK")
+    assert len(events) == 1
+    ex = events[0].extra
+    assert ex.get("inputTokens") == 30
+    assert ex.get("outputTokens") == 20
+    assert ex.get("reasoningTokens") == 64
+
+
+def test_reasoning_tokens_helper_key_variants():
+    """_reasoning_tokens accepts the known key spellings and is robust to
+    missing/garbage values (#2876)."""
+    from clawmetry.adapters.openclaw import _reasoning_tokens
+    assert _reasoning_tokens({"reasoning_tokens": 12}) == 12
+    assert _reasoning_tokens({"reasoningTokens": 7}) == 7
+    assert _reasoning_tokens({"thinking_tokens": 5}) == 5
+    assert _reasoning_tokens({"thinking_input_tokens": 9}) == 9
+    assert _reasoning_tokens({"reasoning_output_tokens": 3}) == 3
+    # absent / non-dict / unparsable → 0
+    assert _reasoning_tokens({"input_tokens": 10}) == 0
+    assert _reasoning_tokens({}) == 0
+    assert _reasoning_tokens(None) == 0  # type: ignore[arg-type]
+    assert _reasoning_tokens({"reasoning_tokens": "nope"}) == 0
+    # negative coerced to non-negative floor
+    assert _reasoning_tokens({"reasoning_tokens": -4}) == 0
+
+
+def test_list_events_surfaces_cache_token_split_sdk_keys(isolated_store):
+    """SDK-normalized cacheRead/cacheWrite usage keys are read by list_events.
+
+    The OpenClaw plugin SDK completeSimple() returns Usage with the
+    normalized keys ``cacheRead`` / ``cacheWrite`` (instead of the raw
+    Anthropic-style ``cache_read_input_tokens`` /
+    ``cache_creation_input_tokens``). Sessions recorded via that SDK
+    path should still surface the per-turn cache split through
+    Event.extra. Regression for #2699.
+    """
+    import uuid, time as _t
+    isolated_store.ingest({
+        "id": str(uuid.uuid4()),
+        "node_id": "agent+test-node",
+        "agent_id": "main",
+        "agent_type": "openclaw",
+        "session_id": "sess-SDK",
+        "event_type": "model.completed",
+        "ts": _t.time(),
+        "model": "claude-opus-4-7",
+        "token_count": 150,
+        "data": {
+            "type": "assistant",
+            "message": {
+                "model": "claude-opus-4-7",
+                "usage": {
+                    "input_tokens": 30,
+                    "output_tokens": 20,
+                    "cacheRead": 80,
+                    "cacheWrite": 10,
+                },
+            },
+        },
+    })
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess-SDK")
+    assert len(events) == 1
+    ex = events[0].extra
+    assert ex.get("inputTokens") == 30
+    assert ex.get("outputTokens") == 20
+    assert ex.get("cacheReadTokens") == 80
+    assert ex.get("cacheWriteTokens") == 10
+
+
+def test_list_events_surfaces_total_tokens_for_reasoning_model(isolated_store):
+    """totalTokens from usage lands in event.extra so callers can derive the
+    reasoning share (totalTokens - inputTokens - outputTokens). Fixes #2794."""
+    import uuid, time as _t
+    isolated_store.ingest({
+        "id": str(uuid.uuid4()),
+        "node_id": "agent+test-node",
+        "agent_id": "main",
+        "agent_type": "openclaw",
+        "session_id": "sess-TOTAL",
+        "event_type": "model.completed",
+        "ts": _t.time(),
+        "model": "claude-opus-4-7",
+        "token_count": 162,
+        "data": {
+            "type": "assistant",
+            "message": {
+                "model": "claude-opus-4-7",
+                "usage": {
+                    "input_tokens": 30,
+                    "output_tokens": 20,
+                    "totalTokens": 162,
+                },
+            },
+        },
+    })
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess-TOTAL")
+    assert len(events) == 1
+    ex = events[0].extra
+    assert ex.get("inputTokens") == 30
+    assert ex.get("outputTokens") == 20
+    assert ex.get("totalTokens") == 162, "totalTokens must appear in extra for reasoning-model events"
+
+
+def test_build_spans_prefers_total_tokens_for_reasoning_model():
+    """_build_spans_from_events must use totalTokens as token_count when it
+    exceeds tok_in+tok_out — the extra comes from reasoning. Fixes #2794."""
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = [
+        {
+            "type": "message",
+            "timestamp": "1700000001",
+            "message": {
+                "role": "assistant",
+                "model": "claude-opus-4-7",
+                "usage": {
+                    "input_tokens": 30,
+                    "output_tokens": 20,
+                    "totalTokens": 162,  # 112 reasoning tokens on top
+                },
+                "content": [],
+            },
+        },
+    ]
+    spans = OpenClawAdapter._build_spans_from_events(events, "sess-span-r")
+    llm_spans = [s for s in spans if s.get("name", "").startswith("llm.call")]
+    assert len(llm_spans) == 1
+    assert llm_spans[0]["token_count"] == 162, (
+        "token_count must equal totalTokens (162), not tok_in+tok_out (50)"
+    )

@@ -47,6 +47,16 @@ _DEFAULT_CLOUD_BASE = "https://ingest.clawmetry.com"
 # activate are idempotent (don't re-download an already-current wheel).
 _PRO_MARKER_PATH = os.path.expanduser("~/.clawmetry/pro_installed.json")
 
+# User-writable fallback for the clawmetry-pro install. The provisioner normally
+# extracts the wheel into the interpreter's site-packages, but a SYSTEM-WIDE
+# install (e.g. /opt/clawmetry owned by root) is NOT writable by a non-root
+# daemon (systemd --user). Installing there fails with PermissionError and the
+# paid runtimes silently never load. When site-packages is read-only we install
+# into this HOME-owned dir instead and put it on sys.path. Always writable by the
+# daemon user, no sudo/chown needed. (Founder hit this on a root-owned /opt
+# install with a --user systemd daemon, 2026-06-05.)
+_PRO_FALLBACK_DIR = os.path.expanduser("~/.clawmetry/pro-packages")
+
 # Ed25519 PUBLIC verification key. The matching PRIVATE key lives only on the
 # license server (clawmetry-cloud, never shipped). Rotating the server key
 # means bumping this constant + an OSS release.
@@ -197,6 +207,32 @@ def _write_pro_marker(extra: dict) -> None:
         logger.debug("license: pro marker write skipped: %s", exc)
 
 
+def _ver_tuple(v) -> tuple:
+    """Parse a version string into a comparable int tuple ('0.3.4' -> (0,3,4))."""
+    try:
+        return tuple(int(x) for x in str(v).split("+")[0].split(".")[:4])
+    except Exception:
+        return (0,)
+
+
+def _wheel_file_version(wheel_path: str) -> str | None:
+    """Read the version from a wheel's dist-info/METADATA (reliable regardless
+    of the on-disk filename). Used to decide whether the server's wheel is newer
+    than what's installed. Never raises."""
+    try:
+        import zipfile
+
+        with zipfile.ZipFile(wheel_path) as z:
+            for n in z.namelist():
+                if n.endswith(".dist-info/METADATA"):
+                    for line in z.read(n).decode("utf-8", "replace").splitlines():
+                        if line.startswith("Version:"):
+                            return line.split(":", 1)[1].strip()
+    except Exception:
+        return None
+    return None
+
+
 def _download_wheel(url: str, headers: dict | None = None) -> str | None:
     """Download the clawmetry-pro wheel from ``url`` (HTTPS only) to a temp file
     and return its path, or None on failure. Security: refuses any non-HTTPS URL
@@ -214,10 +250,22 @@ def _download_wheel(url: str, headers: dict | None = None) -> str | None:
         with urllib.request.urlopen(req, timeout=60) as resp:
             # 2xx only; redirects are followed by urlopen, 402/403/503 raise HTTPError.
             data = resp.read()
+            cdisp = resp.headers.get("Content-Disposition", "") or ""
         if not data:
             return None
-        fd, path = tempfile.mkstemp(prefix="clawmetry_pro-", suffix=".whl")
-        with os.fdopen(fd, "wb") as fh:
+        # Keep the REAL PEP-427 wheel filename (NAME-VER-PY-ABI-PLAT.whl) from
+        # Content-Disposition, in a temp DIR. A random mkstemp name like
+        # `clawmetry_pro-ab12.whl` is rejected by pip as "not a valid wheel
+        # filename" -- which silently broke EVERY wheel re-download/upgrade.
+        import re as _re
+
+        m = _re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+\.whl)"?', cdisp)
+        fname = os.path.basename(m.group(1)) if m else "clawmetry_pro-0-py3-none-any.whl"
+        if not fname.endswith(".whl") or "/" in fname or "\\" in fname:
+            fname = "clawmetry_pro-0-py3-none-any.whl"
+        d = tempfile.mkdtemp(prefix="cmpro-")
+        path = os.path.join(d, fname)
+        with open(path, "wb") as fh:
             fh.write(data)
         return path
     except Exception as exc:
@@ -240,24 +288,74 @@ def _pip_run(args: list) -> tuple[bool, str]:
     return False, (tail[-1] if tail else f"pip exited {proc.returncode}")
 
 
-def _unzip_wheel_into_site(wheel_path: str) -> tuple[bool, str]:
-    """pip-less fallback: a wheel is a zip of pure-Python packages, so for a
-    ``--no-deps`` pure-Python wheel (clawmetry-pro) we can simply extract it into
-    this interpreter's site-packages and it becomes importable. This is the path
-    that rescues a daemon venv created WITHOUT pip (``~/.clawmetry/bin/python3``
-    on some installs has no pip / no ensurepip), where ``python -m pip`` fails
-    with ``No module named pip``. Never raises."""
+def _site_packages_target() -> tuple[str, bool]:
+    """Return (interpreter site-packages dir, is_writable_by_us)."""
     try:
         import sysconfig
+        target = sysconfig.get_path("purelib") or sysconfig.get_path("platlib") or ""
+        writable = bool(target) and os.path.isdir(target) and os.access(target, os.W_OK)
+        return target, writable
+    except Exception:
+        return "", False
+
+
+def ensure_pro_on_path() -> None:
+    """Put the user-writable fallback dir on ``sys.path`` if it exists, so a
+    clawmetry-pro installed there (because site-packages was read-only) is
+    importable. Idempotent, never raises. Call this at daemon/dashboard startup
+    BEFORE plugin discovery, and before each provision attempt so an already-
+    fallback-installed pro is detected as present."""
+    try:
+        import sys
+        d = _PRO_FALLBACK_DIR
+        if os.path.isdir(d) and d not in sys.path:
+            sys.path.insert(0, d)
+            try:
+                import importlib
+                importlib.invalidate_caches()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _unzip_wheel_into_site(wheel_path: str) -> tuple[bool, str]:
+    """pip-less fallback: a wheel is a zip of pure-Python packages, so for a
+    ``--no-deps`` pure-Python wheel (clawmetry-pro) we can simply extract it and
+    it becomes importable. Rescues a daemon venv created WITHOUT pip
+    (``~/.clawmetry/bin/python3`` with no pip/ensurepip) AND a read-only
+    interpreter site-packages (root-owned ``/opt`` install run by a non-root
+    --user daemon): when site-packages is not writable we extract into the
+    HOME-owned ``_PRO_FALLBACK_DIR`` and add it to ``sys.path`` so the adapters
+    still load with no sudo/chown. Never raises."""
+    try:
+        import sys
         import zipfile
 
-        target = sysconfig.get_path("purelib") or sysconfig.get_path("platlib")
+        target, writable = _site_packages_target()
+        if not writable:
+            # Interpreter site-packages is read-only (e.g. root-owned /opt
+            # install, non-root daemon). Use the HOME-owned fallback dir.
+            target = _PRO_FALLBACK_DIR
+            try:
+                os.makedirs(target, exist_ok=True)
+            except Exception as _me:
+                return False, f"no writable install target ({target!r}): {_me}"
         if not target or not os.path.isdir(target):
-            return False, f"no writable site-packages ({target!r})"
+            return False, f"no writable install target ({target!r})"
         with zipfile.ZipFile(wheel_path) as zf:
-            # Skip RECORD-only metadata noise; extract packages + dist-info so the
-            # import system (and _pro_installed_version's importlib.metadata) work.
+            # Extract packages + dist-info so the import system (and
+            # _pro_installed_version's importlib.metadata) work.
             zf.extractall(target)
+        if target == _PRO_FALLBACK_DIR:
+            if target not in sys.path:
+                sys.path.insert(0, target)
+            try:
+                import importlib
+                importlib.invalidate_caches()
+            except Exception:
+                pass
+            return True, f"installed (unzip -> fallback {target})"
         return True, "installed (unzip)"
     except Exception as exc:
         return False, f"unzip install failed: {exc}"
@@ -275,6 +373,14 @@ def _pip_install_wheel(wheel_path: str) -> tuple[bool, str]:
     site-packages. Never raises."""
     import subprocess
     import sys
+
+    # If the interpreter's site-packages is READ-ONLY (root-owned /opt install
+    # run by a non-root daemon), pip can't write it either -> go straight to the
+    # HOME-owned fallback unzip. This is the path that makes a system-wide
+    # install work for a --user daemon without sudo/chown.
+    _, _writable = _site_packages_target()
+    if not _writable:
+        return _unzip_wheel_into_site(wheel_path)
 
     args = ["install", "--upgrade", "--no-deps",
             "--disable-pip-version-check", wheel_path]
@@ -312,16 +418,32 @@ def _provision_pro_wheel(download_url: str, *, headers: dict | None = None,
     Returns a human status string. NEVER raises and NEVER blocks the caller —
     on any failure it logs a warning and returns a message; the node keeps
     running on the free runtimes."""
-    # Idempotent: if pro is already importable, don't re-download. A version
-    # bump still re-installs because the marker is rewritten on every success
-    # and the server serves the current wheel.
+    # Make a prior fallback-dir install importable before the idempotency check,
+    # so we don't re-download when pro is already present in the HOME fallback.
+    ensure_pro_on_path()
+    # Re-validate against the server EVERY time: download the (small ~140KB)
+    # wheel and install it ONLY when it is strictly newer than what's installed.
+    # The old code returned here whenever pro was importable, so an installed
+    # pro NEVER upgraded -- rolling a new wheel to the cloud reached nobody (the
+    # claude_code ai-title fix in 0.3.4 sat unused because every node kept the
+    # installed 0.3.3). Keeping the current version on a download/check failure
+    # means a transient outage never strands a working node.
     already = _pro_installed_version()
-    if already:
-        _write_pro_marker({"node_id": node_id, "source": "already_present"})
-        return f"clawmetry-pro {already} already installed"
     wheel = _download_wheel(download_url, headers=headers)
     if not wheel:
+        if already:
+            return f"clawmetry-pro {already} already installed (server check failed; kept)"
         return "clawmetry-pro wheel unavailable (will retry on next connect)"
+    if already:
+        avail = _wheel_file_version(wheel)
+        if avail and _ver_tuple(avail) <= _ver_tuple(already):
+            try:
+                os.unlink(wheel)
+            except Exception:
+                pass
+            _write_pro_marker({"node_id": node_id, "source": "already_current"})
+            return f"clawmetry-pro {already} already installed (latest is {avail})"
+        # else: a newer wheel is available -> fall through and install it.
     ok, detail = _pip_install_wheel(wheel)
     try:
         os.unlink(wheel)

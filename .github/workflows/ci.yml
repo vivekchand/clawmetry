@@ -156,6 +156,9 @@ jobs:
             tests/test_no_direct_get_store_in_routes.py \
             tests/test_moat_bug_class_v3_event_shape_gate.py \
             tests/test_local_query_api.py \
+            tests/test_local_query_dispatch_edge_cases.py \
+            tests/test_query_contract_drift.py \
+            tests/test_query_contract_goldens.py \
             tests/test_local_store_concurrent_flush_1590.py \
             tests/test_moat_perf_benchmark.py \
             tests/test_runtime_detection_snapshot.py \
@@ -163,6 +166,30 @@ jobs:
             tests/test_phase4_adapter_move.py \
             tests/test_openclaw_detection_real.py \
             -q
+
+  # ── Compression / cache-safety eval (Tier-1, deterministic) ──────────────
+  # Issue #2844 (epic #2837): port Headroom's eval rigor so we can claim
+  # "compression-safe" with proof. This Tier-1 gate is pure-Python and spends
+  # ZERO API budget — it proves CCR payload compression is byte-for-byte
+  # lossless (needle-retention / UUID-retrieval / anomaly-preservation) and
+  # that the cache-risk + compression-potential metrics persist only aggregates,
+  # never the raw secrets they scan. Higher LLM-judge tiers (Tier-2/3) are
+  # gated behind an API key and run out-of-band, not on the PR budget.
+  compression-safety:
+    name: Compression Safety Eval (Tier-1)
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install flask waitress cryptography duckdb pytest requests psutil
+      - name: Run compression/cache-safety eval suite
+        run: python3 -m pytest tests/test_compression_safety_eval.py -q
 
   # ── MOAT keystone (DuckDB-first invariant, 13-endpoint bar) ──────────────
   # Implements `docs/MOAT_BAR.md` Section 5 acceptance criterion #1:

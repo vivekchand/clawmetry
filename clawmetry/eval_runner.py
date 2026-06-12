@@ -432,6 +432,13 @@ class EvalRunner:
     def _build_prompt(self, rubric: dict[str, Any], transcript: str) -> str:
         """Compose the final judge prompt: rubric instructions + transcript."""
         instructions = str(rubric.get("prompt") or DEFAULT_RUBRIC["prompt"])
+        # PRIVACY: the transcript is about to leave the machine for a THIRD-PARTY
+        # judge LLM (Anthropic/OpenAI). Everything else in ClawMetry is E2E
+        # encrypted so even our own cloud cannot read it; the judge is the one
+        # place raw session text goes out. Redact secrets + PII first. Done
+        # BEFORE the length cap so a secret near the truncation boundary is still
+        # scrubbed.
+        transcript = _redact_for_judge(transcript)
         # Cap transcript length so a 100K-token session doesn't run the
         # judge bill into the ground. The first/last ~4K chars carry the
         # signal we need (intent + outcome) without the toolchain noise.
@@ -512,6 +519,31 @@ class EvalRunner:
         rubric = load_rubric(self.rubric_name)
         judge_model = str(rubric.get("judge_model") or DEFAULT_RUBRIC["judge_model"])
         scored_at = int(time.time() * 1000)
+
+        # Judge-key guard. Evals are default-on, but the judge calls a real LLM
+        # (Anthropic/OpenAI) that needs an API key in the env. With no key,
+        # return a quiet SKIP (not a per-session WARNING) so we (a) never spam
+        # sync.log every scheduler tick when the feature simply isn't configured,
+        # and (b) never spend silently. The user opts in implicitly by setting
+        # ANTHROPIC_API_KEY / OPENAI_API_KEY. Logged once per process.
+        if not _judge_key_present(judge_model):
+            global _NO_KEY_LOGGED
+            if not _NO_KEY_LOGGED:
+                log.info(
+                    "evals: no judge API key in env (set ANTHROPIC_API_KEY or "
+                    "OPENAI_API_KEY to enable session scoring) — skipping until then"
+                )
+                _NO_KEY_LOGGED = True
+            return EvalResult(
+                session_id=session_id,
+                score=None,
+                reason=None,
+                judge_model=judge_model,
+                rubric_name=self.rubric_name,
+                scored_at=scored_at,
+                skipped=True,
+                skip_reason="no judge API key configured",
+            )
 
         transcript, total_tokens = self._collect_transcript(session_id)
 
@@ -607,6 +639,153 @@ class EvalRunner:
 # ── Judge LLM call ─────────────────────────────────────────────────────────────
 
 
+# Logged once per process when evals are on but no judge key is configured, so
+# we don't repeat the notice on every scheduler tick.
+_NO_KEY_LOGGED = False
+
+# Email PII pattern, redacted before the transcript goes to the third-party
+# judge LLM (the secret redactor in clawmetry/redaction.py handles keys/tokens).
+_JUDGE_EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")
+
+
+def _redact_for_judge(text: str) -> str:
+    """Scrub secrets + PII from a transcript before it leaves the machine for
+    the third-party judge LLM. Reuses the ingest secret redactor (API keys,
+    tokens, Bearer, private keys) and adds email PII. Respects the global
+    CLAWMETRY_REDACT opt-out (so a user who explicitly disables redaction owns
+    that). Never raises; never returns None."""
+    if not text:
+        return text
+    try:
+        from clawmetry import redaction as _redaction
+        if _redaction._disabled():
+            return text
+        text = _redaction.redact_text(text)
+        text = _JUDGE_EMAIL_RE.sub("[REDACTED:email]", text)
+    except Exception:
+        # Never lose the transcript on a redaction bug, but also never send raw
+        # if we cannot confirm redaction ran: on import/other failure, drop a
+        # conservative best-effort email scrub at minimum.
+        try:
+            text = _JUDGE_EMAIL_RE.sub("[REDACTED:email]", text)
+        except Exception:
+            pass
+    return text
+
+
+# Local judge-key store, so the dashboard can enable evals by saving a key (no
+# need to set an env var + restart the daemon). Lives ONLY on disk (chmod 600),
+# never in the cloud snapshot — it's a real LLM API key. Read fresh per call so
+# a key saved from the UI takes effect on the next scheduler tick without a
+# daemon restart.
+_EVAL_KEYS_PATH = os.path.expanduser("~/.clawmetry/eval_keys.json")
+_JUDGE_PROVIDERS = ("anthropic", "openai")
+
+
+def _provider_for_model(model: str) -> str:
+    m = (model or "").lower()
+    return "openai" if m.startswith(("gpt-", "o1-", "o3-", "o4-")) else "anthropic"
+
+
+def _stored_judge_key(provider: str) -> str:
+    """Read the UI-saved key for ``provider`` from the local key store. Never
+    raises; returns '' when absent."""
+    try:
+        import json as _json
+        with open(_EVAL_KEYS_PATH, encoding="utf-8") as fh:
+            data = _json.load(fh)
+        return str((data or {}).get(provider, "") or "").strip()
+    except Exception:
+        return ""
+
+
+def _judge_api_key(model: str) -> str:
+    """The API key to use for this judge model: env var first (operator intent
+    / CI), then the UI-saved local key. Empty string when neither is set."""
+    provider = _provider_for_model(model)
+    env_name = "OPENAI_API_KEY" if provider == "openai" else "ANTHROPIC_API_KEY"
+    return os.environ.get(env_name, "").strip() or _stored_judge_key(provider)
+
+
+def save_judge_key(provider: str, api_key: str) -> None:
+    """Persist a judge API key locally (chmod 600). Used by the dashboard so a
+    user can enable evals without setting an env var. ``api_key=""`` clears it."""
+    import json as _json
+    provider = (provider or "").strip().lower()
+    if provider not in _JUDGE_PROVIDERS:
+        raise ValueError(f"unknown provider {provider!r} (expected one of {_JUDGE_PROVIDERS})")
+    os.makedirs(os.path.dirname(_EVAL_KEYS_PATH), exist_ok=True)
+    data = {}
+    try:
+        with open(_EVAL_KEYS_PATH, encoding="utf-8") as fh:
+            data = _json.load(fh) or {}
+    except Exception:
+        data = {}
+    key = (api_key or "").strip()
+    if key:
+        data[provider] = key
+    else:
+        data.pop(provider, None)
+    # Write 0600 so the key is not world-readable.
+    fd = os.open(_EVAL_KEYS_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        _json.dump(data, fh)
+    try:
+        os.chmod(_EVAL_KEYS_PATH, 0o600)
+    except Exception:
+        pass
+
+
+def judge_keys_present() -> dict:
+    """Presence map for the UI — NEVER returns the key values themselves. Each
+    provider is True if a key is available via env OR the local store."""
+    out = {}
+    for prov in _JUDGE_PROVIDERS:
+        env_name = "OPENAI_API_KEY" if prov == "openai" else "ANTHROPIC_API_KEY"
+        out[prov] = bool(os.environ.get(env_name, "").strip() or _stored_judge_key(prov))
+    return out
+
+
+def _judge_key_present(model: str) -> bool:
+    """True if an API key for this judge model's provider is available (env or
+    the UI-saved local store)."""
+    return bool(_judge_api_key(model))
+
+
+def _judge_http_post_json(url: str, payload: dict, headers: dict, timeout: float) -> dict:
+    """POST JSON to ``url`` and return the parsed response dict.
+
+    Prefers ``httpx`` when installed (so ``clawmetry/interceptor.py`` cost
+    tracking picks up eval spend), but FALLS BACK to the stdlib ``urllib`` when
+    httpx is absent. httpx is NOT a clawmetry dependency (deps stay minimal:
+    flask + waitress + cryptography), so on the daemon's own venv the judge used
+    to die with ``No module named 'httpx'`` and no session ever got scored.
+    Raises on HTTP / network / JSON error; the caller catches and degrades."""
+    try:
+        import httpx  # noqa: F401
+        _have_httpx = True
+    except Exception:
+        _have_httpx = False
+    if _have_httpx:
+        import httpx
+        with httpx.Client(timeout=timeout) as client:
+            r = client.post(url, json=payload, headers=headers)
+            r.raise_for_status()
+            return r.json()
+    # stdlib fallback (always available). urlopen raises HTTPError on 4xx/5xx,
+    # mirroring httpx's raise_for_status so the caller's error handling is uniform.
+    import json as _json
+    import urllib.request as _ur
+
+    body = _json.dumps(payload).encode("utf-8")
+    req = _ur.Request(
+        url, data=body, method="POST",
+        headers={**(headers or {}), "Content-Type": "application/json"},
+    )
+    with _ur.urlopen(req, timeout=timeout) as resp:
+        return _json.loads(resp.read() or b"{}")
+
+
 def _call_judge(model: str, prompt: str, *, timeout: float = 30.0) -> str:
     """Call the Anthropic Messages API with the user's existing API key.
 
@@ -623,11 +802,9 @@ def _call_judge(model: str, prompt: str, *, timeout: float = 30.0) -> str:
     Anything else falls back to Anthropic — Phase 1 is Haiku-by-default,
     so the long tail of providers can wait for Phase 2.
     """
-    import httpx
-
     model_lower = model.lower()
     if model_lower.startswith(("gpt-", "o1-", "o3-", "o4-")):
-        api_key = os.environ.get("OPENAI_API_KEY", "")
+        api_key = _judge_api_key(model)  # env var, else UI-saved local key
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY not set")
         url = "https://api.openai.com/v1/chat/completions"
@@ -641,17 +818,14 @@ def _call_judge(model: str, prompt: str, *, timeout: float = 30.0) -> str:
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
-        with httpx.Client(timeout=timeout) as client:
-            r = client.post(url, json=payload, headers=headers)
-            r.raise_for_status()
-            data = r.json()
+        data = _judge_http_post_json(url, payload, headers, timeout)
         choices = data.get("choices") or []
         if not choices:
             return ""
         return choices[0].get("message", {}).get("content", "") or ""
 
     # Default: Anthropic (Claude Haiku/Sonnet/Opus).
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    api_key = _judge_api_key(model)  # env var, else UI-saved local key
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY not set")
     url = "https://api.anthropic.com/v1/messages"
@@ -665,10 +839,7 @@ def _call_judge(model: str, prompt: str, *, timeout: float = 30.0) -> str:
         "anthropic-version": "2023-06-01",
         "Content-Type": "application/json",
     }
-    with httpx.Client(timeout=timeout) as client:
-        r = client.post(url, json=payload, headers=headers)
-        r.raise_for_status()
-        data = r.json()
+    data = _judge_http_post_json(url, payload, headers, timeout)
     blocks = data.get("content") or []
     parts: list[str] = []
     for blk in blocks:

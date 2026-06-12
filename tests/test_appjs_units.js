@@ -1103,13 +1103,20 @@ console.log('tool alternatives toggle (issue #1616)');
 // ── Runtime filter: _cmRuntimeOf derivation (session-id prefix = runtime) ──
 console.log('_cmRuntimeOf (runtime from session-id prefix)');
 {
-  // Pull the runtime-label map + the deriver. _cmRuntimeOf references the
-  // module-level _CM_RT_LABEL, so eval both together.
+  // Pull the runtime-label map, the prefix set, the OTLP registry + helpers,
+  // and the deriver. _cmRuntimeOf references _CM_RT_PREFIXES + _CM_OTLP_RT, so
+  // eval them together.
   const labelSrc = src.match(/var _CM_RT_LABEL = \{[\s\S]*?\};/)[0];
+  const prefixSrc = src.match(/var _CM_RT_PREFIXES = \{[\s\S]*?\};/)[0];
+  const otlpSrc = src.match(/var _CM_OTLP_RT = \{\};/)[0];
+  const regFn = extractFunction('_cmRegisterOtlpRuntime');
+  const isOtlpFn = extractFunction('_cmIsOtlpRuntime');
   const fnSrc = extractFunction('_cmRuntimeOf');
   const sandbox = {};
   vm.createContext(sandbox);
-  vm.runInContext(labelSrc + '\n' + fnSrc + '\nthis._f = _cmRuntimeOf;', sandbox);
+  vm.runInContext(labelSrc + '\n' + prefixSrc + '\n' + otlpSrc + '\n'
+    + regFn + '\n' + isOtlpFn + '\n' + fnSrc
+    + '\nthis._f = _cmRuntimeOf; this._reg = _cmRegisterOtlpRuntime; this._isOtlp = _cmIsOtlpRuntime;', sandbox);
   const rt = sandbox._f;
   eq(rt({ id: 'qwen_code:f9f7f80f-c858' }), 'qwen_code', 'qwen_code: prefix → qwen_code');
   eq(rt({ id: 'claude_code:bfb6be7d' }), 'claude_code', 'claude_code: prefix → claude_code');
@@ -1119,6 +1126,27 @@ console.log('_cmRuntimeOf (runtime from session-id prefix)');
   eq(rt({ id: 'clawmetry-selfevolve' }), 'openclaw', 'internal session → openclaw');
   eq(rt({ trace_id: 'qwen_code:x' }), 'openclaw', 'trace_id is NOT read (only id/sessionId/session_id/key)');
   eq(rt({ sessionId: 'goose:20260525_3' }), 'goose', 'sessionId field honoured');
+
+  // ── Foreign OTLP apps (no session prefix; agent_type filter) ──────────────
+  // Before registration, an unknown agent_type does NOT bucket to a phantom
+  // runtime; it stays openclaw (the default) — never mis-bucketed.
+  eq(rt({ session_id: 's1', agent_type: 'my_app' }), 'openclaw',
+     'unregistered OTLP agent_type → openclaw (no phantom)');
+  // Register the OTLP app (as the daemon's inventory/runtimeSummary would), then
+  // the deriver honours its agent_type, and ONLY its own data matches.
+  sandbox._reg('my_app', 'My App (OTel)');
+  truthy(sandbox._isOtlp('my_app'), 'registered app is recognised as OTLP');
+  eq(rt({ agent_type: 'my_app' }), 'my_app', 'registered OTLP app → matches its agent_type');
+  eq(rt({ runtime: 'my_app' }), 'my_app', 'OTLP app via runtime field');
+  // No leak: a native session id never resolves to the OTLP app, and the OTLP
+  // app id never resolves to a native runtime.
+  eq(rt({ id: 'claude_code:abc', agent_type: 'my_app' }), 'claude_code',
+     'native prefix wins over agent_type (no OTLP leak into native)');
+  eq(rt({ id: '625c0ad9-71af', agent_type: 'openclaw' }), 'openclaw',
+     'openclaw stays openclaw');
+  // Registering must never shadow a native runtime key.
+  sandbox._reg('claude_code', 'should-not-apply');
+  truthy(!sandbox._isOtlp('claude_code'), 'register cannot turn a native runtime into OTLP');
 }
 
 // ── Runtime filter: _cmApplyRuntimeScopeNote picks the right scope ─────────
@@ -1144,13 +1172,21 @@ console.log('_cmApplyRuntimeScopeNote (honest note on aggregate / node-wide tabs
     escHtml: function(s) { return String(s); },
     _cmRuntimeFilter: function() { return filterVal; },
     _cmRuntimeLabel: function(rt) { return ({ qwen_code: 'Qwen Code' })[rt] || rt; },
+    // The scope note now short-circuits for OTLP runtimes; this suite tests the
+    // native-runtime branches, so report "not OTLP" for them.
+    _cmIsOtlpRuntime: function() { return false; },
+    // Multi-runtime node so the aggregate-note suppression (single-runtime
+    // installs hide the note) does not fire.
+    _cmGlobalRtCounts: { openclaw: 3, qwen_code: 2 },
   };
   vm.createContext(sandbox);
   vm.runInContext(maps + '\n' + fnSrc + '\nthis._note = _cmApplyRuntimeScopeNote;', sandbox);
 
-  // aggregate tab (usage/Cost) → "all runtimes" note mentioning the runtime
-  thePage = null; sandbox.document.getElementById = function(id) { return id === 'page-usage' ? (thePage = thePage || makePage()) : null; };
-  sandbox._note('usage');
+  // aggregate tab (LLM Context) → "all runtimes" note mentioning the runtime.
+  // (usage/Cost moved to real per-runtime filtering; LLM Context is the
+  // remaining aggregate tab in _CM_RT_AGGREGATE.)
+  thePage = null; sandbox.document.getElementById = function(id) { return id === 'page-context' ? (thePage = thePage || makePage()) : null; };
+  sandbox._note('context');
   truthy(thePage && thePage._html.indexOf('all runtimes') !== -1, 'aggregate tab → "all runtimes" note');
   truthy(thePage._html.indexOf('Qwen Code') !== -1, 'aggregate note names the selected runtime');
 
@@ -1199,6 +1235,91 @@ console.log('renderBrainChart + renderBrainStream apply the runtime filter');
   // disagree when a channel pill is active.
   truthy(/_brainChannelFilter/.test(chart),
          'renderBrainChart honours the channel pill (mirrors the list)');
+}
+
+// ── Issue #3004 — Flow "Active Tools" backfill honours the runtime filter ─
+//
+// _backfillFlowFromBrain consumes node-wide /api/brain-history events to seed
+// the Flow tab's Active Tools row. Under a single-runtime switcher it must NOT
+// light up from OTHER runtimes' brain events. This test both (a) statically
+// guards the filter is present, and (b) actually runs the function with a
+// stubbed fetch returning a mix of claude_code + openclaw events and asserts
+// only the selected runtime's tool lights up flowStats.activeTools.
+console.log('_backfillFlowFromBrain scopes Active Tools by runtime (#3004)');
+{
+  const backfill = extractFunction('_backfillFlowFromBrain');
+  // (a) Static leak guard: the same client filter the Brain tab uses.
+  truthy(/_cmRuntimeFilter\s*\(/.test(backfill),
+         '_backfillFlowFromBrain calls _cmRuntimeFilter()');
+  truthy(/_cmClientFilterRt\s*\(/.test(backfill),
+         '_backfillFlowFromBrain collapses OTLP via _cmClientFilterRt()');
+  truthy(/_cmRuntimeOf\(\s*ev\s*\)/.test(backfill),
+         '_backfillFlowFromBrain filters events by _cmRuntimeOf(ev)');
+
+  // (b) Behavioural: run the real function under a stubbed environment.
+  // Two recent tool events, one per runtime (session-id prefix). With the
+  // switcher pinned to claude_code, only its tool must be marked active.
+  const now = new Date();
+  const recentIso = new Date(now.getTime() - 60 * 1000).toISOString(); // 1 min ago
+  const events = [
+    { id: 'claude_code:s1', type: 'EXEC', time: recentIso, tool: 'bash' },
+    { id: 'openclaw:s2',    type: 'READ', time: recentIso, tool: 'read' },
+  ];
+
+  function runBackfill(selectedRuntime) {
+    const activeTools = {};
+    const sandbox = {
+      Date: Date,
+      setTimeout: function() {},   // never expire within the test
+      console: console,
+      // brain-type → flow-tool: map EXEC→exec, READ→read so both events count.
+      _brainTypeToFlowTool: function(t) {
+        if (t === 'EXEC') return 'exec';
+        if (t === 'READ') return 'read';
+        return null;
+      },
+      // The two client-filter helpers + the prefix resolver, mirroring app.js.
+      _cmRuntimeFilter: function() { return selectedRuntime; },
+      _cmClientFilterRt: function(rt) { return rt; }, // no OTLP in this test
+      _cmRuntimeOf: function(o) {
+        const id = (o && (o.id || o.sessionId || o.session_id || o.key)) || '';
+        const i = id.indexOf(':');
+        return i > 0 ? id.slice(0, i).toLowerCase() : 'openclaw';
+      },
+      flowStats: { activeTools: activeTools },
+      updateFlowStats: function() {},
+      fetch: function() {
+        return Promise.resolve({ json: function() {
+          return Promise.resolve({ events: events });
+        } });
+      },
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(backfill + '\n_backfillFlowFromBrain();', sandbox);
+    return new Promise(function(resolve) {
+      setImmediate(function() { setImmediate(function() {
+        resolve(activeTools);
+      }); });
+    });
+  }
+
+  (async function() {
+    const ccOnly = await runBackfill('claude_code');
+    truthy(ccOnly['exec'] === true,
+           'claude_code selected → its EXEC tool lights up');
+    truthy(ccOnly['read'] === undefined,
+           'claude_code selected → openclaw READ tool does NOT light up (#3004)');
+
+    const all = await runBackfill('all');
+    truthy(all['exec'] === true && all['read'] === true,
+           'all runtimes selected → both tools light up (no filter)');
+
+    const ocOnly = await runBackfill('openclaw');
+    truthy(ocOnly['read'] === true,
+           'openclaw selected → its READ tool lights up');
+    truthy(ocOnly['exec'] === undefined,
+           'openclaw selected → claude_code EXEC tool does NOT light up');
+  })();
 }
 
 // Auth-bootstrap scenarios above are async — wait for the microtask /

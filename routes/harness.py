@@ -79,6 +79,14 @@ def http_harness_data():
         }
     """
     runtime = (request.args.get("runtime") or "openclaw").strip().lower()
+    return jsonify(_harness_data_for(runtime))
+
+
+def _harness_data_for(runtime):
+    """Compute the per-runtime harness data blob, shared by the HTTP route and
+    the cloud snapshot builder (trial-bug #10: the Harness tab was blank on the
+    hosted dashboard). Never raises; returns the dict."""
+    runtime = (runtime or "openclaw").strip().lower()
     blob = {"runtime": runtime, "summary": {"sessions": 0, "cost_usd": 0.0, "tokens": 0},
             "sessions": [], "extra": {}}
     try:
@@ -87,7 +95,7 @@ def http_harness_data():
         rows = body.get("rows") or body.get("sessions") or []
     except Exception as exc:
         logger.warning("harness data dispatch failed: %s", exc)
-        return jsonify(blob)
+        return blob
 
     mine = [r for r in rows if _runtime_match(r.get("session_id", ""), runtime)]
     total_cost = sum(_num(r.get("cost_usd")) for r in mine)
@@ -123,7 +131,7 @@ def http_harness_data():
     blob["sessions"] = sessions
     if models:
         blob["extra"]["models"] = models
-    return jsonify(blob)
+    return blob
 
 
 def _harvest_event_extra(runtime: str):
