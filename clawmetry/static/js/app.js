@@ -16605,6 +16605,14 @@ function _backfillFlowFromBrain() {
   // never empty after a page reload, even if /api/flow-events has been quiet.
   fetch('/api/brain-history?limit=40').then(function(r){return r.json();}).then(function(d) {
     var events = (d && d.events) || [];
+    // Scope Active Tools to the selected runtime (#3004): brain-history is
+    // node-wide, so without this filter a single-runtime switcher still lit up
+    // from other runtimes' tool events. Same client-side prefix filter the
+    // Brain tab's native renderers use (_cmRuntimeOf on the session-id prefix).
+    var _r = (typeof _cmRuntimeFilter === 'function') ? _cmClientFilterRt(_cmRuntimeFilter()) : 'all';
+    if (_r !== 'all') {
+      events = events.filter(function(ev) { return _cmRuntimeOf(ev) === _r; });
+    }
     var now = Date.now();
     var seen = 0;
     // events are most-recent-first; scan up to 8 tool-typed events.
