@@ -509,6 +509,20 @@ class OpenClawAdapter(AgentAdapter):
                             _final = obj.get("talkFinal")
                             if _final is not None:
                                 extra["final"] = _final
+                            # Normalized TTFR keys (#3054): also write ttfr_ms /
+                            # slow_reply so callers that read the normalized form
+                            # don't need to know the original key spellings.
+                            for _lf in ("latency_ms", "ttfr_ms", "firstEventLatencyMs", "first_event_latency_ms"):
+                                _lv = obj.get(_lf)
+                                if _lv is not None:
+                                    try:
+                                        extra["ttfr_ms"] = float(_lv)
+                                    except (TypeError, ValueError):
+                                        pass
+                                    break
+                            _sr = obj.get("slow_reply") or obj.get("slowReply") or obj.get("is_slow")
+                            if _sr:
+                                extra["slow_reply"] = True
                             msg = obj.get("message")
                             if isinstance(msg, str):
                                 content_text = msg
@@ -876,6 +890,38 @@ class OpenClawAdapter(AgentAdapter):
                     "session_id": session_id,
                     "agent_type": "openclaw",
                     "attributes": comment_attrs,
+                })
+
+            elif t == "first_assistant_event":
+                latency_ms = (
+                    obj.get("latency_ms")
+                    or obj.get("ttfr_ms")
+                    or obj.get("firstEventLatencyMs")
+                    or obj.get("first_event_latency_ms")
+                )
+                slow_reply = bool(
+                    obj.get("slow_reply")
+                    or obj.get("slowReply")
+                    or obj.get("is_slow")
+                )
+                fa_attrs: dict = {}
+                if latency_ms is not None:
+                    try:
+                        fa_attrs["ttfr.latency_ms"] = float(latency_ms)
+                    except (TypeError, ValueError):
+                        pass
+                if slow_reply:
+                    fa_attrs["ttfr.slow_reply"] = True
+                spans.append({
+                    "span_id": _sid("ttfr", session_id, str(raw_ts)),
+                    "trace_id": trace_id,
+                    "parent_span_id": session_span_id,
+                    "name": "first_response",
+                    "kind": "INTERNAL",
+                    "start_ts": ts,
+                    "session_id": session_id,
+                    "agent_type": "openclaw",
+                    "attributes": fa_attrs or None,
                 })
 
         return spans
