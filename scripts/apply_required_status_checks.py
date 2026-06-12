@@ -174,6 +174,64 @@ def remove_required_check(repo: str, context: str, token: str) -> None:
     print(f"  [{repo}] removed deprecated check ({len(updated)} remaining): {context!r}")
 
 
+def _get_branch_protection_contexts(repo: str, token: str) -> set[str] | None:
+    """Read required status check contexts via the public branch endpoint.
+
+    Uses GET /repos/{owner}/{repo}/branches/main which is accessible with
+    GITHUB_TOKEN on public repos (unlike
+    /branches/main/protection/required_status_checks which requires admin).
+
+    Returns the set of configured context strings, or None if the branch
+    endpoint is unreachable or returns no protection data.
+    """
+    path = f"/repos/{OWNER}/{repo}/branches/main"
+    try:
+        data = _api("GET", path, token=token)
+    except RuntimeError as exc:
+        print(f"  [{repo}] WARN: could not read branch info: {exc}")
+        return None
+    protection = data.get("protection") or {}
+    rsc = protection.get("required_status_checks") or {}
+    return set(rsc.get("contexts", []))
+
+
+def verify_required_checks_readonly(
+    checks: list[tuple[str, str]],
+    deprecated: list[tuple[str, str]],
+    token: str,
+) -> bool:
+    """Read-only variant of verify_required_checks using the branch endpoint.
+
+    Called from the GITHUB_TOKEN (read-only) code path. Uses
+    GET /repos/{owner}/{repo}/branches/main which returns protection info
+    for public repos without requiring admin credentials.
+
+    Returns True if all required checks are present and no deprecated checks
+    remain. Returns False (but does not exit) if any discrepancy is found,
+    so the calling code can print actionable instructions.
+    """
+    repos = dict.fromkeys([r for r, _ in checks + deprecated])
+    ok = True
+    for repo in repos:
+        actual = _get_branch_protection_contexts(repo, token)
+        if actual is None:
+            print(f"  [{repo}] UNKNOWN: branch endpoint did not return protection info")
+            continue
+        required = {ctx for r, ctx in checks if r == repo}
+        blocked = {ctx for r, ctx in deprecated if r == repo}
+        missing = required - actual
+        stale = blocked & actual
+        if missing:
+            print(f"  [{repo}] FAIL: check not yet required: {sorted(missing)}")
+            ok = False
+        if stale:
+            print(f"  [{repo}] FAIL: deprecated check still present: {sorted(stale)}")
+            ok = False
+        if not missing and not stale:
+            print(f"  [{repo}] OK: {sorted(actual)}")
+    return ok
+
+
 def verify_required_checks(
     checks: list[tuple[str, str]],
     deprecated: list[tuple[str, str]],
@@ -322,13 +380,13 @@ def main() -> None:
             print(f"    [{repo}] {ctx!r}")
         print()
         print("=== Reading current required status checks (current repo only) ===")
-        if verify_required_checks(local_checks, local_deprecated, token):
+        if verify_required_checks_readonly(local_checks, local_deprecated, token):
             print()
             print("=== C6: checks already correctly configured ===")
             print("=== (Set by manual Settings UI action or a prior admin run.) ===")
         else:
             print()
-            print("INFO: Required checks not yet configured. Run: bash scripts/close-c6.sh")
+            print("INFO: Required checks not yet configured on this repo. Run: bash scripts/close-c6.sh")
         # Always exit 0: push-triggered runs are informational, never blocking.
         return
 
