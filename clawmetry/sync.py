@@ -6539,6 +6539,177 @@ def _heartbeat_stuck_payload(now: float | None = None) -> list:
         return []
 
 
+def _runtime_tools_payload(store):
+    """Per-runtime tool usage for the device drill-down: tool NAMES +
+    counts (24h) + a last-action ago. Aggregates only -- no arguments, no
+    content. Shared by the heartbeat (plaintext, the desk device's REAL
+    path -- it reads the CLOUD-built device_summary, same discovery as the
+    stuck signal) and the legacy encrypted deviceSummary slice."""
+    from datetime import timedelta
+    from clawmetry import waste_flags as _wf
+    import collections as _c
+    out = []
+    _now = datetime.now(timezone.utc)
+    since_24h = (_now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
+    rows = store.query_sessions_table(limit=300) or []
+    recent_rts = set()
+    for s in rows:
+        if not isinstance(s, dict):
+            continue
+        _upd = str(s.get("last_active_at") or s.get("updated_at") or "")
+        name = (_wf.runtime_from_session_id(s.get("session_id") or "")
+                or "openclaw")
+        if s.get("status") == "active" or _upd >= since_24h:
+            recent_rts.add(name)
+    for name in sorted(recent_rts):
+        try:
+            inv = store.query_tool_call_invocations(
+                since=since_24h, runtime=name, limit=5000) or []
+            if not inv:
+                continue
+            counts = _c.Counter((r.get("name") or "?") for r in inv)
+            entry = {
+                "name": name,
+                "tools_today": [
+                    {"name": n[:24], "count": c}
+                    for n, c in counts.most_common(4)
+                ],
+            }
+            newest = max(inv, key=lambda r: r.get("ts") or "")
+            ago = 0
+            try:
+                _ts = datetime.fromisoformat(
+                    str(newest.get("ts")).replace("Z", "+00:00"))
+                if _ts.tzinfo is None:
+                    _ts = _ts.replace(tzinfo=timezone.utc)
+                ago = max(0, int((_now - _ts).total_seconds()))
+            except Exception:
+                pass
+            entry["last_action"] = {
+                "tool": (newest.get("name") or "?")[:24],
+                "ago_seconds": ago,
+            }
+            out.append(entry)
+        except Exception:
+            continue
+    return out[:8]
+
+
+# ── Claude subscription limit meter (inspired by Clawdmeter, 2026-06-12) ──
+# A 1-token Haiku probe authenticated with the node's EXISTING Claude Code
+# OAuth token returns the OFFICIAL unified rate-limit headers -- the same
+# numbers behind Claude Code's /usage: 5h-window and 7d-window utilization
+# + reset times. Percentages and timestamps only (aggregates, no content)
+# -> rides the plaintext heartbeat like `stuck` / `runtime_tools`.
+# Hardening lessons from Clawdmeter's issue tracker baked in: tolerate
+# header renames (#42), never use a non-subscription token silently (#44),
+# and degrade to absent for enterprise/API-key accounts (#41).
+_LIMITS_CACHE: dict = {"at": 0.0, "payload": None}
+_LIMITS_TTL_S = 300          # probe at most every 5 min (1 token each)
+_LIMITS_TIMEOUT_S = 8
+
+
+def _read_claude_oauth_token():
+    """The node's Claude Code OAuth access token, or None. macOS keeps it
+    in the Keychain; Linux/Windows in ~/.claude/.credentials.json. Only a
+    subscription OAuth token (sk-ant-oat...) is returned -- an API key
+    would silently probe the WRONG account (Clawdmeter #44)."""
+    blob = None
+    try:
+        import subprocess as _sp
+        out = _sp.run(
+            ["security", "find-generic-password", "-s",
+             "Claude Code-credentials", "-w"],
+            capture_output=True, text=True, timeout=10)
+        blob = out.stdout.strip() or None
+    except Exception:
+        blob = None
+    if not blob:
+        try:
+            p = Path.home() / ".claude" / ".credentials.json"
+            if p.exists():
+                blob = p.read_text()
+        except Exception:
+            blob = None
+    if not blob:
+        return None
+    try:
+        d = json.loads(blob)
+        tok = ((d.get("claudeAiOauth") or {}).get("accessToken")
+               or d.get("accessToken"))
+        if isinstance(tok, str) and tok.startswith("sk-ant-oat"):
+            return tok
+    except Exception:
+        pass
+    return None
+
+
+def _probe_claude_limits():
+    """One 1-token Haiku call -> unified limit headers. Returns the
+    heartbeat payload dict or None (no creds / no headers / any error)."""
+    token = _read_claude_oauth_token()
+    if not token:
+        return None
+    try:
+        import urllib.request as _ur
+        req = _ur.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=json.dumps({
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "hi"}],
+            }).encode(),
+            headers={
+                "anthropic-version": "2023-06-01",
+                "anthropic-beta": "oauth-2025-04-20",
+                "Content-Type": "application/json",
+                "User-Agent": "claude-code/2.1.5",
+                "Authorization": "Bearer " + token,
+            })
+        try:
+            resp = _ur.urlopen(req, timeout=_LIMITS_TIMEOUT_S)
+            hs = {k.lower(): v for k, v in dict(resp.headers).items()}
+        except Exception as e:
+            # Rate-limited (429) STILL carries the headers -- that's the
+            # most important moment to read them.
+            hs = {k.lower(): v for k, v in dict(
+                getattr(e, "headers", None) or {}).items()}
+        def _pct(name):
+            try:
+                return int(round(float(hs[name]) * 100))
+            except Exception:
+                return None
+        def _epoch(name):
+            try:
+                return int(hs[name])
+            except Exception:
+                return None
+        out = {
+            "fiveh_pct": _pct("anthropic-ratelimit-unified-5h-utilization"),
+            "fiveh_reset": _epoch("anthropic-ratelimit-unified-5h-reset"),
+            "sevend_pct": _pct("anthropic-ratelimit-unified-7d-utilization"),
+            "sevend_reset": _epoch("anthropic-ratelimit-unified-7d-reset"),
+            "status": hs.get("anthropic-ratelimit-unified-status") or "",
+        }
+        if out["fiveh_pct"] is None and out["sevend_pct"] is None:
+            return None  # enterprise / API-key / renamed headers -> absent
+        return out
+    except Exception:
+        return None
+
+
+def _heartbeat_limits_payload():
+    """TTL-cached limits for the heartbeat. The probe costs one Haiku
+    token and ~1s -- pay it at most once per _LIMITS_TTL_S; every
+    heartbeat in between rides the cache."""
+    now = time.time()
+    if now - _LIMITS_CACHE["at"] < _LIMITS_TTL_S:
+        return _LIMITS_CACHE["payload"]
+    _LIMITS_CACHE["at"] = now
+    _LIMITS_CACHE["payload"] = _probe_claude_limits()
+    return _LIMITS_CACHE["payload"]
+
+
 def send_heartbeat(config: dict) -> bool:
     """Send heartbeat to cloud. Returns True on success, False on failure.
 
@@ -6584,6 +6755,25 @@ def send_heartbeat(config: dict) -> bool:
             payload["stuck"] = _stuck
     except Exception as _st_e:
         log.debug("stuck heartbeat payload build failed (continuing): %s", _st_e)
+    # Per-runtime tool usage for the device drill-down -- same ride as
+    # `stuck`: plaintext aggregates on the heartbeat, recency-gated by the
+    # cloud at read time. Best-effort, never blocks the heartbeat.
+    try:
+        from clawmetry import local_store as _ls_rtt
+        _rtt = _runtime_tools_payload(_ls_rtt.get_store())
+        if _rtt:
+            payload["runtime_tools"] = _rtt
+    except Exception as _rtt_e:
+        log.debug("runtime_tools payload build failed (continuing): %s",
+                  _rtt_e)
+    # Official Claude subscription limit meter (5h/7d windows) -- see
+    # _probe_claude_limits. Absent for API-key/enterprise accounts.
+    try:
+        _lim = _heartbeat_limits_payload()
+        if _lim:
+            payload["limits"] = _lim
+    except Exception as _lim_e:
+        log.debug("limits payload build failed (continuing): %s", _lim_e)
     # Agent-install self-report (cloud bug fix 2026-05-18). Cloud Run pods
     # can't stat the user's home directory, so the daemon tells cloud what
     # agents exist locally and cloud aggregates across the user's fleet.
@@ -10582,6 +10772,58 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 except Exception as _se:
                     log.warning("family session upsert failed (%s): %s", ns_id, _se)
                     continue
+                # Agent fan-out: a family adapter may emit a session with
+                # ``parent_id`` set (e.g. the Claude Code adapter surfaces each
+                # spawned sub-agent transcript under its parent session). Record
+                # it in the ``subagents`` table so it lands in the snapshot
+                # ``subagents[]`` slice (read back via ``query_subagents``) and
+                # the Command River renders the real per-session fan-out instead
+                # of "1 agent". The child's transcript events were ALSO ingested
+                # above (under ``ns_id``) so its tokens/cost reconcile from the
+                # events table on read. parent_session_id carries the runtime
+                # prefix so it matches the parent's session row id; the cloud
+                # filter normalises both bare + prefixed forms.
+                if getattr(s, "parent_id", None):
+                    try:
+                        _sa_extra = s.extra if isinstance(s.extra, dict) else {}
+                        store.ingest_subagent({
+                            "subagent_id": ns_id,
+                            "agent_type": "openclaw",
+                            "parent_session_id": f"{runtime}:{s.parent_id}",
+                            "spawned_at": started,
+                            # Open (running) children leave ended_at None so the
+                            # river draws the stream to NOW; finished children
+                            # carry their last event ts.
+                            "ended_at": ended,
+                            "task": _ftitle,
+                            "status": (s.cost_status or
+                                       ("failed" if s.end_reason == "error"
+                                        else "completed")),
+                            "cost_usd": float(s.cost_usd or 0.0),
+                            "token_count": int(s.total_tokens or 0),
+                            # data-blob fields the /api/subagents shaper reads.
+                            "model": s.model or "",
+                            "label": _ftitle,
+                            "displayName": _ftitle,
+                            "depth": int(_sa_extra.get("depth") or 1),
+                            "error": (_sa_extra.get("description")
+                                      if s.end_reason == "error" else ""),
+                            "runtime": runtime,
+                        })
+                    except Exception as _sae:
+                        log.debug("family subagent ingest failed (%s): %s", ns_id, _sae)
+                # Sub-agent children stop here: they ride the snapshot
+                # ``subagents[]`` slice (river lanes), not the top-level
+                # Sessions list (local: excluded in ``query_sessions_table``;
+                # cloud: not pushed below). Their tokens/cost are carried on the
+                # subagent row itself (cache-aware, from the adapter), so we skip
+                # the per-event re-ingest + cloud session push entirely — a big
+                # CPU saving for a session that fanned out to hundreds of agents.
+                # Mark the watermark so we don't re-scan an unchanged child.
+                if getattr(s, "parent_id", None):
+                    if _activity:
+                        _evt_hw[ns_id] = _activity
+                    continue
                 # Carry the same row to cloud so the cloud Sessions list shows it.
                 cloud_session_rows.append({
                     "agent_type": "openclaw",
@@ -10986,10 +11228,45 @@ def _build_runtime_summary(limit: int = 20000):
         rt_switches: dict = defaultdict(int)
         for s in (rollup.get("switches") or []):
             rt_switches[s.get("runtime") or "openclaw"] += 1
+        # Per-runtime rolling 7-day + 30-day token/cost windows (#3004) so the
+        # cloud Cost cards can show REAL week/month per-runtime numbers instead
+        # of standing in lifetime. Sourced from the materialized
+        # ``rollup_runtime_daily`` table (#2988): one cheap read, no event scan
+        # (FLYWHEEL 1e). Naming mirrors the existing ``tokens_24h`` /
+        # ``cost_24h_usd`` rolling fields. ``rt -> {tokens_7d, cost_7d,
+        # tokens_30d, cost_30d}``.
+        rt_windows: dict = {}
+        try:
+            from datetime import datetime as _dt, timedelta as _td
+            _now = _dt.now()
+            _d7 = (_now - _td(days=6)).strftime("%Y-%m-%d")
+            _d30 = (_now - _td(days=29)).strftime("%Y-%m-%d")
+            for r in (store.query_rollup_runtime_daily(
+                since=_d30, limit=10000,
+            ) or []):
+                d = str(r.get("day") or "")[:10]
+                if not d:
+                    continue
+                rt = (r.get("runtime") or "").strip() or "openclaw"
+                w = rt_windows.setdefault(rt, {
+                    "tokens_7d": 0, "cost_7d": 0.0,
+                    "tokens_30d": 0, "cost_30d": 0.0,
+                })
+                tk = int(r.get("tokens") or 0)
+                ct = float(r.get("cost_usd") or 0.0)
+                w["tokens_30d"] += tk
+                w["cost_30d"] += ct
+                if d >= _d7:
+                    w["tokens_7d"] += tk
+                    w["cost_7d"] += ct
+        except Exception as _e_w:
+            log.debug("runtime summary 7d/30d window build failed: %s", _e_w)
+            rt_windows = {}
         out: dict = {}
-        # Union of runtimes seen in the per-runtime totals and the per-model rows
-        # (a runtime with only model-less events still gets a card with 0 turns).
-        for rt in set(by_runtime) | set(rt_models):
+        # Union of runtimes seen in the per-runtime totals, the per-model rows,
+        # and the rolling-window rollup (a runtime with only model-less events,
+        # or one present only in rollup_runtime_daily, still gets a card).
+        for rt in set(by_runtime) | set(rt_models) | set(rt_windows):
             totals = by_runtime.get(rt) or {}
             models = rt_models.get(rt) or {}
             total = sum(mm["turns"] for mm in models.values())
@@ -10999,6 +11276,7 @@ def _build_runtime_summary(limit: int = 20000):
                 "sessions": mm["sessions"],
                 "share_pct": round(mm["turns"] / total * 100, 2) if total else 0,
             } for m, mm in sorted_models[:15]]
+            _w = rt_windows.get(rt) or {}
             out[rt] = {
                 "sessions": int(totals.get("sessions") or 0),
                 "turns": total,
@@ -11008,6 +11286,12 @@ def _build_runtime_summary(limit: int = 20000):
                 # dual-column UI.
                 "cost_24h_usd": round(float(totals.get("cost_24h_usd") or 0.0), 4),
                 "tokens_24h": int(totals.get("tokens_24h") or 0),
+                # Rolling 7-day + 30-day windows (#3004) for the cloud Cost
+                # week/month cards; sourced from rollup_runtime_daily.
+                "tokens_7d": int(_w.get("tokens_7d") or 0),
+                "cost_7d_usd": round(float(_w.get("cost_7d") or 0.0), 4),
+                "tokens_30d": int(_w.get("tokens_30d") or 0),
+                "cost_30d_usd": round(float(_w.get("cost_30d") or 0.0), 4),
                 "primary_model": sorted_models[0][0] if sorted_models else "",
                 "total_turns": total,
                 "models": models_out,
@@ -12430,6 +12714,50 @@ def _build_daily_usage(days=14):
         tstr = now.strftime("%Y-%m-%d")
         wk = (now - timedelta(days=now.weekday())).strftime("%Y-%m-%d")
         mo = now.strftime("%Y-%m-01")
+        # Per-runtime daily series (#3004) so the cloud Cost 14-day chart can
+        # render purely from the encrypted snapshot when scoped to a runtime,
+        # instead of falling back to the scoped server path. Sourced from the
+        # materialized ``rollup_runtime_daily`` table (#2988) -> cheap read, no
+        # full event scan (FLYWHEEL 1e). Additive: node-wide ``days``/``today``/
+        # ``week``/``month`` above are unchanged. Shape per runtime is a list of
+        # ``{day, tokens, cost_usd}`` over the same ``days``-day window, oldest
+        # first, with a zero-filled point for every day so the chart axis lines
+        # up across runtimes. Empty {} when the rollup is unavailable.
+        by_runtime: dict = {}
+        try:
+            window = [
+                (now - timedelta(days=i)).strftime("%Y-%m-%d")
+                for i in range(days - 1, -1, -1)
+            ]
+            window_set = set(window)
+            since = window[0]
+            # rt -> {day: {"tokens": int, "cost_usd": float}}
+            rt_days: dict = {}
+            for r in (store.query_rollup_runtime_daily(
+                since=since, limit=10000,
+            ) or []):
+                d = str(r.get("day") or "")[:10]
+                if not d or d not in window_set:
+                    continue
+                rt = (r.get("runtime") or "").strip() or "openclaw"
+                slot = rt_days.setdefault(rt, {})
+                cell = slot.setdefault(d, {"tokens": 0, "cost_usd": 0.0})
+                cell["tokens"] += int(r.get("tokens") or 0)
+                cell["cost_usd"] += float(r.get("cost_usd") or 0.0)
+            for rt, slot in rt_days.items():
+                by_runtime[rt] = [
+                    {
+                        "day": d,
+                        "tokens": int(slot.get(d, {}).get("tokens", 0)),
+                        "cost_usd": round(
+                            float(slot.get(d, {}).get("cost_usd", 0.0)), 6
+                        ),
+                    }
+                    for d in window
+                ]
+        except Exception as _e_rt:
+            log.debug("daily usage byRuntime build failed: %s", _e_rt)
+            by_runtime = {}
         return {
             "days": out_days,
             "today": int(daily_tok.get(tstr, 0)),
@@ -12438,6 +12766,7 @@ def _build_daily_usage(days=14):
             "todayCost": round(float(daily_cost.get(tstr, 0.0)), 6),
             "weekCost": round(sum(v for k, v in daily_cost.items() if k >= wk), 6),
             "monthCost": round(sum(v for k, v in daily_cost.items() if k >= mo), 6),
+            "byRuntime": by_runtime,
         }
     except Exception as _e:
         log.debug("daily usage snapshot build failed: %s", _e)
@@ -13115,35 +13444,77 @@ def _build_tool_catalog_slice(limit: int = 5000, top: int = 60) -> dict:
     return out
 
 
-def _context_econ_by_runtime(compactions, overflow_sessions, base_summary):
+def _session_chips_from_utilization(utilization):
+    """Distinct-session chips from a utilization series, most-recent first, each
+    ``{session_id, peak_pct, ts}``. Mirrors the route builder in
+    ``routes/context_economics.py`` so the snapshot ships the same shape the
+    cloud Context-economics interceptor expects."""
+    chips: dict = {}
+    for u in (utilization or []):
+        sid = str((u or {}).get("session_id") or "")
+        if not sid:
+            continue
+        entry = chips.setdefault(sid, {"session_id": sid, "peak_pct": 0.0, "ts": ""})
+        try:
+            entry["peak_pct"] = max(entry["peak_pct"], float(u.get("pct") or 0))
+        except (TypeError, ValueError):
+            pass
+        ts = str(u.get("ts") or "")
+        if ts > entry["ts"]:
+            entry["ts"] = ts
+    return sorted(chips.values(), key=lambda c: c["ts"], reverse=True)
+
+
+def _context_econ_by_runtime(compactions, overflow_sessions, base_summary,
+                             utilization=None):
     """Group context-economics compactions + overflow sessions per runtime
     (session_id prefix) for the Context-economics runtime filter. Returns
-    ``{runtime: {compactions, overflow_sessions, summary}}``; a runtime that
-    never compacted is absent (the cloud interceptor then serves an empty
-    slice). ``peak_pct``/``utilization_points`` inherit the node-wide value —
-    utilization points are not per-session, so they aren't split."""
+    ``{runtime: {compactions, overflow_sessions, summary, utilization,
+    session_chips}}``; a runtime that never compacted AND has no utilization
+    readings is absent (the cloud interceptor then serves an empty slice).
+
+    The per-turn ``utilization`` series and the derived ``session_chips`` ARE
+    bucketed per runtime (#3004) by each point's ``session_id`` prefix, so the
+    cloud context-window gauge + session picker can scope to the selected
+    runtime instead of returning empty. ``peak_pct`` is recomputed from the
+    runtime's own utilization points (falling back to the node-wide value when
+    a runtime has compactions but no readings); the node-wide slice is
+    unchanged."""
+    # Bucket utilization points by runtime first so a runtime with readings but
+    # no compactions still gets a slice (its gauge + chips populate).
+    util_by_rt: dict = {}
+    for u in (utilization or []):
+        rt = _runtime_of_session((u or {}).get("session_id") or "")
+        util_by_rt.setdefault(rt, []).append(u)
     by: dict = {}
     for c in (compactions or []):
         rt = _runtime_of_session((c or {}).get("session_id") or "")
         by.setdefault(rt, []).append(c)
     base = base_summary or {}
     out: dict = {}
-    for rt, comps in by.items():
+    for rt in set(by) | set(util_by_rt):
+        comps = by.get(rt, [])
+        rt_util = util_by_rt.get(rt, [])
         ovn = sum(1 for c in comps if c.get("trigger") == "overflow")
         rt_ovf = [s for s in (overflow_sessions or [])
                   if _runtime_of_session(
                       (s.get("session_id") if isinstance(s, dict) else s) or "") == rt]
+        rt_chips = _session_chips_from_utilization(rt_util)
+        rt_peak = max((float(u.get("pct") or 0) for u in rt_util),
+                      default=base.get("peak_pct", 0))
         out[rt] = {
             "compactions": comps,
             "overflow_sessions": rt_ovf,
+            "utilization": rt_util,
+            "session_chips": rt_chips,
             "summary": {
                 "compaction_count": len(comps),
                 "overflow_count": ovn,
                 "proactive_count": len(comps) - ovn,
                 "total_reclaimed": sum(int(c.get("reclaimed") or 0) for c in comps),
-                "peak_pct": base.get("peak_pct", 0),
+                "peak_pct": round(float(rt_peak), 2),
                 "overflow_sessions": len(rt_ovf),
-                "utilization_points": base.get("utilization_points", 0),
+                "utilization_points": len(rt_util),
             },
         }
     return out
@@ -14237,6 +14608,15 @@ def _build_device_summary(spending, daily_usage):
             ]
         except Exception:
             pass
+        # schema 2 (additive): per-runtime tools for the LEGACY encrypted
+        # slice path (the live device path is the heartbeat -> cloud
+        # device_summary; see _runtime_tools_payload).
+        try:
+            _rtt = _runtime_tools_payload(store)
+            if _rtt:
+                summary["runtime_tools"] = _rtt
+        except Exception:
+            pass
         # schema 2: per-session titles for the device's runtime-detail recent
         # -sessions rows. The title is the session's FIRST USER MESSAGE (real
         # content, e.g. "read flywheel.md ..."), so it rides the ENCRYPTED
@@ -14850,6 +15230,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
                 context_economics_slice["compactions"],
                 context_economics_slice["overflow_sessions"],
                 context_economics_slice["summary"],
+                utilization=_ce_util,
             )
     except Exception as _e_ce:
         log.debug("snapshot: context_economics slice failed: %s", _e_ce)
