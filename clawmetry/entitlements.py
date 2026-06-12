@@ -410,6 +410,81 @@ def invalidate() -> None:
         _cache.update(ent=None, ts=0.0, enforce=None)
 
 
+def resolution_diagnostic() -> dict:
+    """Snapshot of the *inputs* that determine entitlement resolution.
+
+    Where :func:`get_entitlement` (and ``/api/entitlement``) report the
+    resolved *outputs* (tier, runtimes, features, expiry), this helper
+    reports the *inputs* the resolver consulted to produce them:
+
+    * presence (not contents) of ``~/.clawmetry/license.key``
+    * presence (not contents) of ``~/.clawmetry/cloud_plan.json``
+    * the raw ``CLAWMETRY_ENFORCE`` env value + the boolean it resolves to
+    * cache liveness (age vs TTL, hit/miss for the next call)
+
+    Existing operator-triage flow for "why does this install think it's on
+    tier X?" required reading dashboard logs, ``ls``-ing ``~/.clawmetry``,
+    and ``echo``-ing the env var by hand. This rolls those checks into one
+    blob the dashboard / CLI / a tail-only operator can read uniformly.
+
+    Side-effect-free; never reads file contents; never raises (a failed
+    ``os.stat`` becomes ``present=False`` with the error string). No secrets
+    are surfaced — only paths, sizes, and the resolver's view of them.
+    """
+    out: dict = {
+        "license_path": _LICENSE_PATH,
+        "license_present": False,
+        "license_size_bytes": 0,
+        "cloud_plan_path": _CLOUD_PLAN_CACHE,
+        "cloud_plan_present": False,
+        "cloud_plan_size_bytes": 0,
+        "enforce_env": os.environ.get("CLAWMETRY_ENFORCE"),
+        "is_enforced": False,
+        "cache_age_seconds": None,
+        "cache_ttl_seconds": _CACHE_TTL_SECS,
+        "cache_hit_next_call": False,
+        "cache_cached_tier": None,
+    }
+    try:
+        out["is_enforced"] = is_enforced()
+    except Exception as exc:  # pragma: no cover - is_enforced is a string check
+        logger.warning("resolution_diagnostic: is_enforced failed: %s", exc)
+    try:
+        st = os.stat(_LICENSE_PATH)
+        out["license_present"] = True
+        out["license_size_bytes"] = int(st.st_size)
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        out["license_error"] = str(exc)
+    try:
+        st = os.stat(_CLOUD_PLAN_CACHE)
+        out["cloud_plan_present"] = True
+        out["cloud_plan_size_bytes"] = int(st.st_size)
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        out["cloud_plan_error"] = str(exc)
+    try:
+        with _lock:
+            ts = float(_cache.get("ts") or 0.0)
+            cached_ent = _cache.get("ent")
+            cached_enforce = _cache.get("enforce")
+        if ts > 0.0:
+            age = max(0.0, time.time() - ts)
+            out["cache_age_seconds"] = round(age, 3)
+            out["cache_hit_next_call"] = (
+                cached_ent is not None
+                and cached_enforce == out["is_enforced"]
+                and age < _CACHE_TTL_SECS
+            )
+            if cached_ent is not None:
+                out["cache_cached_tier"] = getattr(cached_ent, "tier", None)
+    except Exception as exc:
+        out["cache_error"] = str(exc)
+    return out
+
+
 def available_runtimes() -> list[str]:
     """Runtimes the UI should expose. In grace mode that's every known
     runtime (so nothing disappears before enforcement); once enforced it's the
