@@ -2781,7 +2781,7 @@ def _cmd_activate(args) -> None:
     """clawmetry activate <KEY> — install a self-hosted Pro/Enterprise license."""
     from clawmetry import license as _lic
 
-    ok, msg = _lic.activate(args.key, node_id=_lic._node_id())
+    ok, msg = _lic.activate(args.key, node_id=_lic._node_id(), actor="cli")
     if ok:
         print(f"✅  {msg}")
         print("    Run `clawmetry license` to see status. Restart the daemon to load Pro features.")
@@ -2801,7 +2801,7 @@ def _cmd_license(args) -> None:
             print("❌  Usage: clawmetry license activate <KEY>")
             sys.exit(1)
         from clawmetry import license as _lic
-        ok, msg = _lic.activate(key.strip(), node_id=_lic._node_id())
+        ok, msg = _lic.activate(key.strip(), node_id=_lic._node_id(), actor="cli")
         if ok:
             print(f"✅  {msg}")
             print("    Run `clawmetry license status` to verify. Restart the daemon to load Pro features.")
@@ -2811,15 +2811,12 @@ def _cmd_license(args) -> None:
             sys.exit(1)
 
     elif action == "deactivate":
-        import os
         from clawmetry import license as _lic
-        try:
-            from clawmetry import entitlements as _ent
-            _ent.invalidate()
-        except Exception:
-            pass
-        if os.path.isfile(_lic.LICENSE_PATH):
-            os.remove(_lic.LICENSE_PATH)
+        ok, removed = _lic.deactivate(actor="cli")
+        if not ok:
+            print("❌  Could not remove the license file. Check filesystem permissions.")
+            sys.exit(1)
+        if removed:
             print("✅  License removed. ClawMetry will revert to OSS tier on next restart.")
         else:
             print("ℹ️  No license key installed — nothing to deactivate.")

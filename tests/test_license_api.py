@@ -168,3 +168,61 @@ def test_deactivate_idempotent_when_no_license(app):
     data = resp.get_json()
     assert data["ok"] is True
     assert data["removed"] is False
+
+
+# ── /api/license audit producers ──────────────────────────────────────────────
+
+
+def test_activate_route_records_audit(app, monkeypatch, tmp_path):
+    """A successful POST /api/license/activate records a license.activate
+    audit entry tagged with the requesting actor (X-Actor header)."""
+    import clawmetry.audit as A
+
+    monkeypatch.setenv("CLAWMETRY_AUDIT_DB", str(tmp_path / "audit.db"))
+    A._initialised.clear()
+
+    tok = app.lic._encode_token(_payload("pro", nodes=4), app.priv)
+    with app.app.test_client() as c:
+        resp = c.post(
+            "/api/license/activate",
+            data=json.dumps({"key": tok}),
+            content_type="application/json",
+            headers={"X-Actor": "bob@example.com"},
+        )
+    assert resp.status_code == 200
+
+    rows = A.read_audit_log(limit=10, event_type="license.activate")
+    assert len(rows) == 1
+    assert rows[0]["actor"] == "bob@example.com"
+    assert rows[0]["details"]["result"] == "activated"
+    assert rows[0]["details"]["tier"] == "pro"
+    assert rows[0]["details"]["nodes"] == 4
+
+
+def test_deactivate_route_records_audit(app, monkeypatch, tmp_path):
+    """A successful POST /api/license/deactivate records a license.deactivate
+    audit entry. Pins behavior parity with the inline-removal path it
+    replaced — the route used to bypass audit entirely."""
+    import clawmetry.audit as A
+
+    monkeypatch.setenv("CLAWMETRY_AUDIT_DB", str(tmp_path / "audit.db"))
+    A._initialised.clear()
+
+    tok = app.lic._encode_token(_payload("pro", nodes=9), app.priv)
+    app.lic.activate(tok)
+
+    with app.app.test_client() as c:
+        resp = c.post(
+            "/api/license/deactivate",
+            headers={"X-Actor": "carol@example.com"},
+        )
+    assert resp.status_code == 200
+    assert resp.get_json()["removed"] is True
+
+    rows = A.read_audit_log(limit=10, event_type="license.deactivate")
+    assert len(rows) == 1
+    assert rows[0]["actor"] == "carol@example.com"
+    assert rows[0]["details"]["result"] == "removed"
+    # Prior tier surfaces so the operator can see WHICH key was removed.
+    assert rows[0]["details"]["tier"] == "pro"
+    assert rows[0]["details"]["nodes"] == 9
