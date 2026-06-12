@@ -19,6 +19,7 @@ Owns the 12 routes registered on bp_usage:
   GET  /api/token-velocity                — runaway-loop detection
   GET  /api/usage/cache-trends            — prompt-cache hit-rate analytics
   GET  /api/skills/fidelity              — dead-skill detector + body/linked-file stats
+  GET  /api/efficiency                    — efficiency grade + measured savings
 
 Module-level helpers (``_usage_cache``, ``_compute_transcript_analytics``,
 ``_detect_and_store_anomalies``, ``_get_anomaly_db``, ``SESSIONS_DIR`` etc.)
@@ -4218,3 +4219,53 @@ def api_usage_optimization_recommendations():
         "window_days":                   30,
         "note": "Enable clawmetry connect to see recommendations.",
     })
+
+
+@bp_usage.route("/api/efficiency")
+def api_efficiency():
+    """Efficiency grade + measured savings (feat/efficiency-grade).
+
+    Node-wide grade/score/metrics + ranked savings actions computed by
+    ``clawmetry.efficiency.build_efficiency_slice`` over the trailing-window
+    ``rollup_model_daily`` aggregates (``query_efficiency_rollup``, read via
+    the daemon proxy — the daemon owns the DuckDB writer lock).
+
+    ``?runtime=<id>`` returns ONLY that runtime's slice (server-side honesty:
+    an absent runtime gets an honest ``insufficient_data`` shape, never a
+    node-wide number relabelled). ``?days=`` clamps to 7..90 (default 30).
+    Never 500s — any failure yields the honest empty shape.
+    """
+    try:
+        days = int(request.args.get("days") or 30)
+    except (TypeError, ValueError):
+        days = 30
+    days = max(7, min(90, days))
+    runtime = (request.args.get("runtime") or "").strip().lower()
+    try:
+        from clawmetry.efficiency import build_efficiency_slice
+        rows = _ls_call("query_efficiency_rollup", days=days) or []
+        out = build_efficiency_slice(rows, days=days)
+    except Exception:
+        out = {"schema": 1, "window_days": days, "grade": None, "score": None,
+               "insufficient_data": True, "metrics": {},
+               "cache_saved_monthly_usd": 0.0,
+               "projected_monthly_cost_usd": 0.0,
+               "actions": [], "byRuntime": {}}
+    if runtime and runtime != "all":
+        entry = (out.get("byRuntime") or {}).get(runtime)
+        if entry is None:
+            # Per-runtime honesty: no data for this runtime -> an honest
+            # empty/insufficient shape, NEVER the node-wide numbers.
+            try:
+                from clawmetry.efficiency import build_efficiency_slice
+                entry = build_efficiency_slice([], days=days)
+                entry.pop("byRuntime", None)
+            except Exception:
+                entry = {"schema": 1, "window_days": days, "grade": None,
+                         "score": None, "insufficient_data": True,
+                         "metrics": {}, "cache_saved_monthly_usd": 0.0,
+                         "projected_monthly_cost_usd": 0.0, "actions": []}
+        entry = dict(entry)
+        entry["runtime"] = runtime
+        return jsonify(entry)
+    return jsonify(out)
