@@ -6539,6 +6539,177 @@ def _heartbeat_stuck_payload(now: float | None = None) -> list:
         return []
 
 
+def _runtime_tools_payload(store):
+    """Per-runtime tool usage for the device drill-down: tool NAMES +
+    counts (24h) + a last-action ago. Aggregates only -- no arguments, no
+    content. Shared by the heartbeat (plaintext, the desk device's REAL
+    path -- it reads the CLOUD-built device_summary, same discovery as the
+    stuck signal) and the legacy encrypted deviceSummary slice."""
+    from datetime import timedelta
+    from clawmetry import waste_flags as _wf
+    import collections as _c
+    out = []
+    _now = datetime.now(timezone.utc)
+    since_24h = (_now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
+    rows = store.query_sessions_table(limit=300) or []
+    recent_rts = set()
+    for s in rows:
+        if not isinstance(s, dict):
+            continue
+        _upd = str(s.get("last_active_at") or s.get("updated_at") or "")
+        name = (_wf.runtime_from_session_id(s.get("session_id") or "")
+                or "openclaw")
+        if s.get("status") == "active" or _upd >= since_24h:
+            recent_rts.add(name)
+    for name in sorted(recent_rts):
+        try:
+            inv = store.query_tool_call_invocations(
+                since=since_24h, runtime=name, limit=5000) or []
+            if not inv:
+                continue
+            counts = _c.Counter((r.get("name") or "?") for r in inv)
+            entry = {
+                "name": name,
+                "tools_today": [
+                    {"name": n[:24], "count": c}
+                    for n, c in counts.most_common(4)
+                ],
+            }
+            newest = max(inv, key=lambda r: r.get("ts") or "")
+            ago = 0
+            try:
+                _ts = datetime.fromisoformat(
+                    str(newest.get("ts")).replace("Z", "+00:00"))
+                if _ts.tzinfo is None:
+                    _ts = _ts.replace(tzinfo=timezone.utc)
+                ago = max(0, int((_now - _ts).total_seconds()))
+            except Exception:
+                pass
+            entry["last_action"] = {
+                "tool": (newest.get("name") or "?")[:24],
+                "ago_seconds": ago,
+            }
+            out.append(entry)
+        except Exception:
+            continue
+    return out[:8]
+
+
+# ── Claude subscription limit meter (inspired by Clawdmeter, 2026-06-12) ──
+# A 1-token Haiku probe authenticated with the node's EXISTING Claude Code
+# OAuth token returns the OFFICIAL unified rate-limit headers -- the same
+# numbers behind Claude Code's /usage: 5h-window and 7d-window utilization
+# + reset times. Percentages and timestamps only (aggregates, no content)
+# -> rides the plaintext heartbeat like `stuck` / `runtime_tools`.
+# Hardening lessons from Clawdmeter's issue tracker baked in: tolerate
+# header renames (#42), never use a non-subscription token silently (#44),
+# and degrade to absent for enterprise/API-key accounts (#41).
+_LIMITS_CACHE: dict = {"at": 0.0, "payload": None}
+_LIMITS_TTL_S = 300          # probe at most every 5 min (1 token each)
+_LIMITS_TIMEOUT_S = 8
+
+
+def _read_claude_oauth_token():
+    """The node's Claude Code OAuth access token, or None. macOS keeps it
+    in the Keychain; Linux/Windows in ~/.claude/.credentials.json. Only a
+    subscription OAuth token (sk-ant-oat...) is returned -- an API key
+    would silently probe the WRONG account (Clawdmeter #44)."""
+    blob = None
+    try:
+        import subprocess as _sp
+        out = _sp.run(
+            ["security", "find-generic-password", "-s",
+             "Claude Code-credentials", "-w"],
+            capture_output=True, text=True, timeout=10)
+        blob = out.stdout.strip() or None
+    except Exception:
+        blob = None
+    if not blob:
+        try:
+            p = Path.home() / ".claude" / ".credentials.json"
+            if p.exists():
+                blob = p.read_text()
+        except Exception:
+            blob = None
+    if not blob:
+        return None
+    try:
+        d = json.loads(blob)
+        tok = ((d.get("claudeAiOauth") or {}).get("accessToken")
+               or d.get("accessToken"))
+        if isinstance(tok, str) and tok.startswith("sk-ant-oat"):
+            return tok
+    except Exception:
+        pass
+    return None
+
+
+def _probe_claude_limits():
+    """One 1-token Haiku call -> unified limit headers. Returns the
+    heartbeat payload dict or None (no creds / no headers / any error)."""
+    token = _read_claude_oauth_token()
+    if not token:
+        return None
+    try:
+        import urllib.request as _ur
+        req = _ur.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=json.dumps({
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "hi"}],
+            }).encode(),
+            headers={
+                "anthropic-version": "2023-06-01",
+                "anthropic-beta": "oauth-2025-04-20",
+                "Content-Type": "application/json",
+                "User-Agent": "claude-code/2.1.5",
+                "Authorization": "Bearer " + token,
+            })
+        try:
+            resp = _ur.urlopen(req, timeout=_LIMITS_TIMEOUT_S)
+            hs = {k.lower(): v for k, v in dict(resp.headers).items()}
+        except Exception as e:
+            # Rate-limited (429) STILL carries the headers -- that's the
+            # most important moment to read them.
+            hs = {k.lower(): v for k, v in dict(
+                getattr(e, "headers", None) or {}).items()}
+        def _pct(name):
+            try:
+                return int(round(float(hs[name]) * 100))
+            except Exception:
+                return None
+        def _epoch(name):
+            try:
+                return int(hs[name])
+            except Exception:
+                return None
+        out = {
+            "fiveh_pct": _pct("anthropic-ratelimit-unified-5h-utilization"),
+            "fiveh_reset": _epoch("anthropic-ratelimit-unified-5h-reset"),
+            "sevend_pct": _pct("anthropic-ratelimit-unified-7d-utilization"),
+            "sevend_reset": _epoch("anthropic-ratelimit-unified-7d-reset"),
+            "status": hs.get("anthropic-ratelimit-unified-status") or "",
+        }
+        if out["fiveh_pct"] is None and out["sevend_pct"] is None:
+            return None  # enterprise / API-key / renamed headers -> absent
+        return out
+    except Exception:
+        return None
+
+
+def _heartbeat_limits_payload():
+    """TTL-cached limits for the heartbeat. The probe costs one Haiku
+    token and ~1s -- pay it at most once per _LIMITS_TTL_S; every
+    heartbeat in between rides the cache."""
+    now = time.time()
+    if now - _LIMITS_CACHE["at"] < _LIMITS_TTL_S:
+        return _LIMITS_CACHE["payload"]
+    _LIMITS_CACHE["at"] = now
+    _LIMITS_CACHE["payload"] = _probe_claude_limits()
+    return _LIMITS_CACHE["payload"]
+
+
 def send_heartbeat(config: dict) -> bool:
     """Send heartbeat to cloud. Returns True on success, False on failure.
 
@@ -6584,6 +6755,25 @@ def send_heartbeat(config: dict) -> bool:
             payload["stuck"] = _stuck
     except Exception as _st_e:
         log.debug("stuck heartbeat payload build failed (continuing): %s", _st_e)
+    # Per-runtime tool usage for the device drill-down -- same ride as
+    # `stuck`: plaintext aggregates on the heartbeat, recency-gated by the
+    # cloud at read time. Best-effort, never blocks the heartbeat.
+    try:
+        from clawmetry import local_store as _ls_rtt
+        _rtt = _runtime_tools_payload(_ls_rtt.get_store())
+        if _rtt:
+            payload["runtime_tools"] = _rtt
+    except Exception as _rtt_e:
+        log.debug("runtime_tools payload build failed (continuing): %s",
+                  _rtt_e)
+    # Official Claude subscription limit meter (5h/7d windows) -- see
+    # _probe_claude_limits. Absent for API-key/enterprise accounts.
+    try:
+        _lim = _heartbeat_limits_payload()
+        if _lim:
+            payload["limits"] = _lim
+    except Exception as _lim_e:
+        log.debug("limits payload build failed (continuing): %s", _lim_e)
     # Agent-install self-report (cloud bug fix 2026-05-18). Cloud Run pods
     # can't stat the user's home directory, so the daemon tells cloud what
     # agents exist locally and cloud aggregates across the user's fleet.
@@ -10582,6 +10772,58 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 except Exception as _se:
                     log.warning("family session upsert failed (%s): %s", ns_id, _se)
                     continue
+                # Agent fan-out: a family adapter may emit a session with
+                # ``parent_id`` set (e.g. the Claude Code adapter surfaces each
+                # spawned sub-agent transcript under its parent session). Record
+                # it in the ``subagents`` table so it lands in the snapshot
+                # ``subagents[]`` slice (read back via ``query_subagents``) and
+                # the Command River renders the real per-session fan-out instead
+                # of "1 agent". The child's transcript events were ALSO ingested
+                # above (under ``ns_id``) so its tokens/cost reconcile from the
+                # events table on read. parent_session_id carries the runtime
+                # prefix so it matches the parent's session row id; the cloud
+                # filter normalises both bare + prefixed forms.
+                if getattr(s, "parent_id", None):
+                    try:
+                        _sa_extra = s.extra if isinstance(s.extra, dict) else {}
+                        store.ingest_subagent({
+                            "subagent_id": ns_id,
+                            "agent_type": "openclaw",
+                            "parent_session_id": f"{runtime}:{s.parent_id}",
+                            "spawned_at": started,
+                            # Open (running) children leave ended_at None so the
+                            # river draws the stream to NOW; finished children
+                            # carry their last event ts.
+                            "ended_at": ended,
+                            "task": _ftitle,
+                            "status": (s.cost_status or
+                                       ("failed" if s.end_reason == "error"
+                                        else "completed")),
+                            "cost_usd": float(s.cost_usd or 0.0),
+                            "token_count": int(s.total_tokens or 0),
+                            # data-blob fields the /api/subagents shaper reads.
+                            "model": s.model or "",
+                            "label": _ftitle,
+                            "displayName": _ftitle,
+                            "depth": int(_sa_extra.get("depth") or 1),
+                            "error": (_sa_extra.get("description")
+                                      if s.end_reason == "error" else ""),
+                            "runtime": runtime,
+                        })
+                    except Exception as _sae:
+                        log.debug("family subagent ingest failed (%s): %s", ns_id, _sae)
+                # Sub-agent children stop here: they ride the snapshot
+                # ``subagents[]`` slice (river lanes), not the top-level
+                # Sessions list (local: excluded in ``query_sessions_table``;
+                # cloud: not pushed below). Their tokens/cost are carried on the
+                # subagent row itself (cache-aware, from the adapter), so we skip
+                # the per-event re-ingest + cloud session push entirely — a big
+                # CPU saving for a session that fanned out to hundreds of agents.
+                # Mark the watermark so we don't re-scan an unchanged child.
+                if getattr(s, "parent_id", None):
+                    if _activity:
+                        _evt_hw[ns_id] = _activity
+                    continue
                 # Carry the same row to cloud so the cloud Sessions list shows it.
                 cloud_session_rows.append({
                     "agent_type": "openclaw",
@@ -14366,67 +14608,13 @@ def _build_device_summary(spending, daily_usage):
             ]
         except Exception:
             pass
-        # schema 2 (additive): per-runtime TOOLS + LAST ACTION for the
-        # device's drill-down -- closes the clawmetry.com/device promise
-        # "the tools it is using, and what it just did" (founder
-        # 2026-06-11). Tool NAMES + a timestamp only (no arguments, no
-        # content), riding the ENCRYPTED deviceSummary -- the cloud sees
-        # nothing. Built for every runtime SEEN in the last 24h (family
-        # adapters mark sessions 'ended' mid-conversation, so the
-        # active-only ``runtimes`` array above misses them); shipped as
-        # its own additive ``runtime_tools`` key. Bounded reads; any
-        # failure degrades to the key absent.
+        # schema 2 (additive): per-runtime tools for the LEGACY encrypted
+        # slice path (the live device path is the heartbeat -> cloud
+        # device_summary; see _runtime_tools_payload).
         try:
-            from datetime import timedelta as _td
-            _now = datetime.now(timezone.utc)
-            since_24h = (_now - _td(hours=24)).strftime(
-                "%Y-%m-%dT%H:%M:%S")
-            recent_rts = set()
-            for s in rows:
-                if not isinstance(s, dict):
-                    continue
-                _upd = str(s.get("last_active_at")
-                           or s.get("updated_at") or "")
-                name = (_wf.runtime_from_session_id(
-                    s.get("session_id") or "") or "openclaw")
-                if s.get("status") == "active" or _upd >= since_24h:
-                    recent_rts.add(name)
-            rt_tools = []
-            import collections as _c
-            for name in sorted(recent_rts):
-                try:
-                    inv = store.query_tool_call_invocations(
-                        since=since_24h, runtime=name, limit=5000) or []
-                    if not inv:
-                        continue
-                    counts = _c.Counter(
-                        (r.get("name") or "?") for r in inv)
-                    entry = {
-                        "name": name,
-                        "tools_today": [
-                            {"name": n[:24], "count": c}
-                            for n, c in counts.most_common(4)
-                        ],
-                    }
-                    newest = max(inv, key=lambda r: r.get("ts") or "")
-                    ago = 0
-                    try:
-                        _ts = datetime.fromisoformat(
-                            str(newest.get("ts")).replace("Z", "+00:00"))
-                        if _ts.tzinfo is None:
-                            _ts = _ts.replace(tzinfo=timezone.utc)
-                        ago = max(0, int((_now - _ts).total_seconds()))
-                    except Exception:
-                        pass
-                    entry["last_action"] = {
-                        "tool": (newest.get("name") or "?")[:24],
-                        "ago_seconds": ago,
-                    }
-                    rt_tools.append(entry)
-                except Exception:
-                    continue
-            if rt_tools:
-                summary["runtime_tools"] = rt_tools[:8]
+            _rtt = _runtime_tools_payload(store)
+            if _rtt:
+                summary["runtime_tools"] = _rtt
         except Exception:
             pass
         # schema 2: per-session titles for the device's runtime-detail recent

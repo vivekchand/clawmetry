@@ -7879,6 +7879,21 @@ class LocalStore:
         if agent_type:
             clauses.append("s.agent_type = ?")
             params.append(str(agent_type))
+        # Exclude sub-agent child sessions from the top-level list. Family
+        # adapters (e.g. Claude Code) ingest each spawned sub-agent's
+        # transcript as its OWN session row so its events reconcile cost in
+        # the ``subagents`` rollup — but it is a CHILD of its parent session,
+        # not a top-level conversation, so it must not clutter the sessions
+        # list. A child is exactly a sessions row whose id is also a
+        # ``subagents.subagent_id`` carrying a ``parent_session_id``. (OpenClaw
+        # sub-agent rows have no matching sessions row, so this is a no-op for
+        # them.)
+        clauses.append(
+            "s.session_id NOT IN ("
+            "SELECT subagent_id FROM subagents "
+            "WHERE parent_session_id IS NOT NULL AND parent_session_id != ''"
+            ")"
+        )
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         # ``sessions.message_count`` is only populated by the typed-session
         # ingest path (sync.py + claude_code adapter). The OpenClaw events
