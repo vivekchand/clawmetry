@@ -33,6 +33,11 @@
       <div class="card-sub" id="trend-prediction"></div>
     </div>
   </div>
+  <!-- Efficiency grade + Savings ideas (design spec: .claude/ux_audit/DESIGN_SPEC.md §1b/§5).
+       Filled by app.js renderEfficiencyCard() from /api/efficiency (the daemon-computed
+       `efficiency` snapshot slice on cloud). Hidden until the slice answers; honest
+       collecting/empty states are rendered by JS, never a silent blank. -->
+  <div class="card" id="efficiency-card" style="display:none;margin-bottom:16px;"></div>
   <div class="section-title">📊 <span data-i18n="usage.token_usage_14d">Token Usage (14 days)</span></div>
   <div class="card">
     <div class="usage-chart" id="usage-chart" data-i18n="app.loading">Loading...</div>

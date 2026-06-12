@@ -5129,6 +5129,66 @@ class LocalStore:
                 "cache_read", "cache_write", "cost_usd", "calls"]
         return [dict(zip(cols, r)) for r in rows]
 
+    def query_efficiency_rollup(self, days: int = 30) -> list[dict[str, Any]]:
+        """Per-(runtime, model) aggregates over the trailing ``days`` window of
+        the materialized ``rollup_model_daily`` table — the input shape for
+        ``clawmetry.efficiency.build_efficiency_slice`` (efficiency grade +
+        measured savings).
+
+        Every row carries the SAME ``days_with_data`` value: the count of
+        distinct days in the window with any rollup data, used for honest
+        monthly scaling (30 / days_with_data) instead of assuming a full
+        month of history.
+
+        Two cheap index-backed aggregates over the small rollup table — no
+        event scan (FLYWHEEL 1e CPU budget). Best-effort: any failure yields
+        ``[]`` so the caller renders its empty / insufficient-data state.
+        """
+        try:
+            try:
+                days_i = max(1, min(365, int(days)))
+            except (TypeError, ValueError):
+                days_i = 30
+            # NOTE: _fetch self-locks (_write_lock) — never wrap in another lock.
+            rows = self._fetch(
+                """
+                SELECT runtime, model,
+                       SUM(tokens_in)   AS tokens_in,
+                       SUM(tokens_out)  AS tokens_out,
+                       SUM(cache_read)  AS cache_read,
+                       SUM(cache_write) AS cache_write,
+                       SUM(cost_usd)    AS cost_usd,
+                       SUM(calls)       AS calls
+                FROM rollup_model_daily
+                WHERE day >= current_date - INTERVAL (?) DAY
+                GROUP BY runtime, model
+                ORDER BY SUM(cost_usd) DESC
+                """,
+                [days_i],
+            )
+            dcount = self._fetch(
+                "SELECT COUNT(DISTINCT day) FROM rollup_model_daily "
+                "WHERE day >= current_date - INTERVAL (?) DAY",
+                [days_i],
+            )
+            days_with_data = int(dcount[0][0] or 0) if dcount else 0
+            out: list[dict[str, Any]] = []
+            for r in rows:
+                out.append({
+                    "runtime": r[0] or "openclaw",
+                    "model": r[1] or "",
+                    "tokens_in": int(r[2] or 0),
+                    "tokens_out": int(r[3] or 0),
+                    "cache_read": int(r[4] or 0),
+                    "cache_write": int(r[5] or 0),
+                    "cost_usd": float(r[6] or 0.0),
+                    "calls": int(r[7] or 0),
+                    "days_with_data": days_with_data,
+                })
+            return out
+        except Exception:
+            return []
+
     def query_rollup_runtime_daily(
         self,
         *,

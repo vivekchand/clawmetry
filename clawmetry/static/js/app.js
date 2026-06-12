@@ -3023,6 +3023,22 @@ function _renderOverviewHero() {
   // "0 sessions today" reads as gone. For all-runtimes it stays the live "today".
   if (sessions != null) stats.push('💬 <strong style="color:var(--text-primary);">' + sessions + (sessions === 1 ? ' session' : ' sessions') + '</strong>' + (_scope ? '' : ' today'));
   stats.push('💸 <strong style="color:var(--text-primary);">' + escHtml(cost) + '</strong>' + (free ? ' <span style="color:#22c55e;">free on your plan</span>' : ''));
+  // Efficiency chip (design spec §1a): grade next to cost answers "what did it
+  // cost me, and is that reasonable?" in one read. Renders only when the
+  // daemon slice is fresh for the CURRENT runtime filter and passes the trust
+  // gate (_cmEffUsable) — otherwise nothing, never a placeholder grade. When
+  // the cache is cold/stale, kick ONE load and repaint on arrival (the flag
+  // prevents a render loop: a fresh cache never re-enters the else-branch).
+  try {
+    var _effC = window._cmEff || {}, _effRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    if (_effC.rt === _effRt && _effC.data !== undefined && (Date.now() - _effC.ts) < 60000) {
+      var _effChip = _cmEffChipHtml(_effC.data);
+      if (_effChip) stats.push(_effChip);
+    } else if (!window._cmEffHeroWait) {
+      window._cmEffHeroWait = true;
+      _cmLoadEfficiency(function () { window._cmEffHeroWait = false; try { _renderOverviewHero(); } catch (e) {} });
+    }
+  } catch (_e) {}
   stats.push('🧠 running <strong style="color:var(--text-primary);">' + escHtml(model) + '</strong>');
   // Live throughput (⚡ tok/s) from the today-token delta between renders —
   // matches `clawmetry status --live`. Shown only while the agent is producing.
@@ -12517,8 +12533,183 @@ async function loadHeatmap(days) {
   }
 }
 
+// ===== Efficiency grade + savings ideas =====
+// Design spec: .claude/ux_audit/DESIGN_SPEC.md (§1a chip, §1b card, §5 addendum).
+// One shared fetch feeds BOTH the overview hero chip and the Cost-tab card
+// (perf budget: never two pollers for one blob) — 60s TTL + in-flight dedup,
+// keyed by the runtime filter so a scoped read is never satisfied with
+// node-wide data (FLYWHEEL §1c). Every number comes precomputed from the
+// daemon's `efficiency` slice (/api/efficiency locally, the snapshot slice on
+// cloud); nothing is derived client-side from runtimeSummary, which carries
+// no cache fields.
+window._cmEff = { data: undefined, rt: null, ts: 0, cbs: null };
+function _cmLoadEfficiency(cb) {
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var c = window._cmEff;
+  if (c.rt === rt && c.data !== undefined && (Date.now() - c.ts) < 60000) { if (cb) cb(c.data); return; }
+  if (c.cbs && c.rt === rt) { if (cb) c.cbs.push(cb); return; }
+  c.cbs = cb ? [cb] : []; c.rt = rt; c.data = undefined;
+  var url = '/api/efficiency' + (rt && rt !== 'all' ? '?runtime=' + encodeURIComponent(rt) : '');
+  fetch(url).then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) { c.data = j; c.ts = Date.now(); var cbs = c.cbs || []; c.cbs = null; cbs.forEach(function (f) { try { f(j); } catch (e) {} }); })
+    .catch(function () { c.data = null; c.ts = Date.now(); var cbs = c.cbs || []; c.cbs = null; cbs.forEach(function (f) { try { f(null); } catch (e) {} }); });
+}
+var _CM_EFF_COLORS = { A: '#22c55e', B: '#4ade80', C: '#f59e0b', D: '#ef4444', F: '#dc2626' };
+function _cmEffTotalSavings(eff) {
+  var s = 0; ((eff && eff.actions) || []).forEach(function (a) { s += Number(a.savings_monthly_usd) || 0; });
+  return s;
+}
+// Trust gate (spec §1a): a grade renders ONLY from a present, sufficient slice
+// with a nonzero projected cost. Otherwise nothing — never a placeholder grade.
+function _cmEffUsable(eff) {
+  return !!(eff && !eff.insufficient_data && eff.grade && Number(eff.projected_monthly_cost_usd) > 0);
+}
+function _cmEffScopeLine(rt) {
+  return (rt && rt !== 'all')
+    ? _cmRuntimeLabel(rt) + ' ' + t('efficiency.scope_only', null, 'only') + '.'
+    : t('efficiency.scope_all', null, 'All agents on this machine.');
+}
+function _cmEffBadgeHtml(grade, px) {
+  var col = _CM_EFF_COLORS[grade] || 'var(--text-muted)';
+  var solid = grade === 'F';
+  return '<span style="display:inline-block;min-width:' + Math.round(px * 1.3) + 'px;text-align:center;padding:1px 6px;border-radius:6px;font-weight:700;font-size:' + px + 'px;line-height:1.4;'
+    + (solid ? 'background:' + col + ';color:#fff;' : 'border:1.5px solid ' + col + ';color:' + col + ';')
+    + '">' + grade + '</span>';
+}
+function _cmEffChipHtml(eff) {
+  if (!_cmEffUsable(eff)) return '';
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var tip = t('efficiency.tooltip', null, 'A to F score of how much of your spend does useful work: how often your agent reuses what it already read, how much history each reply carries, and whether saved work pays for itself.')
+    + ' ' + _cmEffScopeLine(rt);
+  var save = Math.round(_cmEffTotalSavings(eff));
+  return '<a href="#" title="' + escHtml(tip) + '" '
+    + 'onclick="switchTab(\'usage\');setTimeout(function(){var el=document.getElementById(\'efficiency-card\');if(el&&el.scrollIntoView)el.scrollIntoView({behavior:\'smooth\'});},400);return false;" '
+    + 'style="text-decoration:none;color:var(--text-secondary);">'
+    + '🎯 ' + t('efficiency.label', null, 'Efficiency') + ' ' + _cmEffBadgeHtml(eff.grade, 13)
+    + (save >= 1 ? ' · ' + t('efficiency.chip_save', null, 'save about') + ' $' + save + '/mo' : '')
+    + '</a>';
+}
+function _cmEffFmtTokens(n) {
+  n = Number(n) || 0;
+  if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (n >= 1000) return Math.round(n / 1000) + 'K';
+  return String(Math.round(n));
+}
+// Maps a slice action id -> icon + i18n stem. Copy lives in en.json
+// (efficiency.idea_*); the backend ships numbers only, never copy.
+var _CM_EFF_IDEAS = {
+  model_downgrade: { icon: '🔁', stem: 'model', evidenceTab: 'models' },
+  context_trim: { icon: '✂️', stem: 'ctx', evidenceTab: 'context-economics' },
+  cache_warm: { icon: '♻️', stem: 'reread', evidenceTab: 'context-economics' },
+};
+function _cmEffIdeaRowHtml(a) {
+  var m = _CM_EFF_IDEAS[a.id];
+  if (!m) return '';
+  var d = a.data || {};
+  var vars = {
+    model: a.model || d.model || 'your main model',
+    n: (d.calls != null ? d.calls : 'several'),
+    target: d.target_model || 'a smaller model',
+  };
+  var save = Math.max(1, Math.round(Number(a.savings_monthly_usd) || 0));
+  var title = t('efficiency.idea_' + m.stem + '_title', null, '');
+  var finding = t('efficiency.idea_' + m.stem + '_finding', vars, '');
+  var how = t('efficiency.idea_' + m.stem + '_how', vars, '');
+  return '<div style="display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-top:1px solid var(--border-primary,#1f2937);">'
+    + '<span style="flex-shrink:0;font-size:15px;">' + m.icon + '</span>'
+    + '<div style="flex:1;min-width:0;">'
+      + '<div style="font-size:14px;font-weight:600;color:var(--text-primary);">' + escHtml(title) + '</div>'
+      + '<div style="font-size:12px;color:var(--text-secondary);margin-top:2px;">' + escHtml(finding) + '</div>'
+      + '<details style="margin-top:4px;"><summary style="cursor:pointer;font-size:12px;color:#3b82f6;">' + escHtml(t('efficiency.how', null, 'How')) + '</summary>'
+        + '<div style="font-size:12px;color:var(--text-secondary);padding:6px 0 0 2px;">' + escHtml(how)
+        + ' <a href="#" onclick="switchTab(\'' + m.evidenceTab + '\');return false;" style="color:#3b82f6;text-decoration:none;">' + escHtml(t('efficiency.evidence', null, 'See the evidence')) + ' →</a></div>'
+      + '</details>'
+    + '</div>'
+    + '<div style="flex-shrink:0;font-size:13px;font-weight:700;color:#22c55e;white-space:nowrap;">' + escHtml(t('efficiency.save_mo', { amt: '$' + save }, 'save about $' + save + '/mo')) + '</div>'
+    + '</div>';
+}
+function renderEfficiencyCard() {
+  var card = document.getElementById('efficiency-card');
+  if (!card) return;
+  _cmLoadEfficiency(function (eff) {
+    try { _renderEfficiencyCardInner(card, eff); }
+    catch (e) { card.style.display = 'none'; }
+  });
+}
+function _renderEfficiencyCardInner(card, eff) {
+  // Endpoint missing/errored (old server, transient): stay hidden — the
+  // cloud interceptor owns the "update your daemon" state (spec §5).
+  if (!eff) { card.style.display = 'none'; return; }
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  if (eff.stale_daemon) {
+    // Cloud-only: the node's daemon predates the efficiency slice. An update
+    // prompt, NOT the "collecting" promise — time alone will never fix a
+    // version gap (design spec §5, verifier finding).
+    card.style.display = '';
+    card.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px;">⬆️ '
+      + escHtml(t('efficiency.update_daemon', null, 'Update ClawMetry on this machine to see your efficiency grade.')) + '</div>';
+    return;
+  }
+  if (eff.insufficient_data || !eff.grade) {
+    card.style.display = '';
+    card.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px;">⏳ '
+      + escHtml(t('efficiency.collecting', null, 'Collecting efficiency data. Your grade appears after about a day of activity.')) + '</div>';
+    return;
+  }
+  if (!(Number(eff.projected_monthly_cost_usd) > 0)) {
+    // Trust gate, honest version: an explained pause, never a silent gap.
+    card.style.display = '';
+    card.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px;">'
+      + escHtml(t('efficiency.paused', null, 'Efficiency grade paused: cost numbers on this machine do not agree yet.')) + '</div>';
+    return;
+  }
+  var met = eff.metrics || {};
+  var hit = Math.round(Number(met.cache_hit_rate_pct) || 0);
+  var ctx = _cmEffFmtTokens(met.avg_context_tokens);
+  var sentence = t('efficiency.grade_sentence', { hit: hit, ctx: ctx },
+    'Your agent reuses ' + hit + '% of what it reads and carries about ' + ctx + ' tokens of history into each reply.');
+  var tip = t('efficiency.tooltip', null, 'A to F score of how much of your spend does useful work: how often your agent reuses what it already read, how much history each reply carries, and whether saved work pays for itself.');
+  var rows = (eff.actions || []).map(_cmEffIdeaRowHtml).filter(Boolean);
+  var total = Math.round(_cmEffTotalSavings(eff));
+  var saved = Math.round(Number(eff.cache_saved_monthly_usd) || 0);
+  var right;
+  if (rows.length) {
+    right = '<div style="font-size:14px;font-weight:600;color:var(--text-primary);">' + escHtml(t('efficiency.savings_ideas', null, 'Savings ideas')) + '</div>'
+      + '<div style="font-size:12px;color:var(--text-muted);margin:2px 0 4px;">' + escHtml(t('efficiency.subtitle', null, 'Things you can do to spend less. ClawMetry only suggests; it never changes your agent.')) + '</div>'
+      + rows.join('')
+      + (rows.length >= 2 && total >= 1
+        ? '<div style="border-top:1px solid var(--border-primary,#1f2937);padding-top:8px;font-size:12px;color:var(--text-secondary);">'
+          + escHtml(t('efficiency.footer_total', null, 'Estimated savings: about')) + ' <strong style="color:#22c55e;">$' + total + '/mo</strong></div>'
+        : '');
+  } else {
+    right = '<div style="font-size:14px;font-weight:600;color:var(--text-primary);">' + escHtml(t('efficiency.savings_ideas', null, 'Savings ideas')) + '</div>'
+      + '<div style="font-size:13px;color:var(--text-secondary);margin-top:8px;">' + escHtml(t('efficiency.empty_efficient', null, 'No savings ideas right now. Your agent is spending efficiently. We keep checking.')) + '</div>';
+  }
+  if (saved >= 1) {
+    right += '<div style="font-size:12px;color:var(--text-muted);margin-top:8px;">✨ '
+      + escHtml(t('efficiency.already_saved', { amt: '$' + saved }, 'Reusing work already saved you about $' + saved + '/mo.')) + '</div>';
+  }
+  card.style.display = '';
+  card.innerHTML = '<div style="display:flex;gap:24px;flex-wrap:wrap;padding:16px;">'
+    + '<div style="flex:0 0 200px;min-width:180px;">'
+      + '<div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">'
+        + escHtml(t('efficiency.label', null, 'Efficiency'))
+        + ' <span class="tooltip-info-icon" title="' + escHtml(tip) + '" style="cursor:help;">i</span></div>'
+      + '<div style="margin:8px 0 6px;">' + _cmEffBadgeHtml(eff.grade, 44) + '</div>'
+      + '<div style="font-size:12px;color:var(--text-secondary);line-height:1.5;">' + escHtml(sentence) + '</div>'
+      + '<div style="font-size:11px;color:var(--text-muted);margin-top:6px;">' + escHtml(_cmEffScopeLine(rt)) + '</div>'
+    + '</div>'
+    + '<div style="flex:1;min-width:260px;">' + right + '</div>'
+    + '</div>';
+}
+
 // ===== Usage / Token Tracking =====
 async function loadUsage() {
+  // Efficiency grade + savings ideas card (design spec §1b). Fired BEFORE the
+  // main try block: it has its own error handling and must paint its honest
+  // state even when an unrelated usage loader throws below (on nodes where
+  // /api/usage fails, the tail of the try block never runs).
+  try { renderEfficiencyCard(); } catch (_eEff) {}
   try {
     // Append the global runtime filter so Cost/Tokens scopes to the selected
     // runtime (server-side, via query_aggregates' runtime= param). Numbers

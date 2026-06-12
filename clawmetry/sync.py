@@ -15422,6 +15422,23 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "resolvedErrors": _build_resolved_errors(),
     }
 
+    # Efficiency grade + measured savings (node-wide + byRuntime), so the
+    # hosted dashboard can serve /api/efficiency from the encrypted snapshot.
+    # Built on the daemon's OWN store handle (same pattern as the
+    # runtimeSummary builder — never a read_only re-open, which deadlocks the
+    # writer). Best-effort: on any failure log a debug warning and OMIT the
+    # key (cloud falls back to its honest empty state).
+    try:
+        from clawmetry import local_store as _ls_eff
+        from clawmetry.efficiency import build_efficiency_slice as _build_eff
+        _eff_store = _ls_eff.get_store()
+        if _eff_store is not None:
+            payload["efficiency"] = _build_eff(
+                _eff_store.query_efficiency_rollup(days=30) or [], days=30
+            )
+    except Exception as _e_eff:
+        log.debug("snapshot: efficiency slice failed: %s", _e_eff)
+
     # ── NemoClaw / sandbox enrichment ────────────────────────────────────────
     # Detect NemoClaw and add optional sandbox metadata to the snapshot.
     # The cloud stores this as generic key-value metadata — no NemoClaw-

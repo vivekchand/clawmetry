@@ -716,6 +716,11 @@ _DAEMON_METHODS = frozenset({
     "query_rollup_model_daily",
     "query_rollup_runtime_daily",
     "query_rollup_sessions",
+    # Efficiency grade + measured savings (feat/efficiency-grade): trailing-
+    # window per-(runtime, model) aggregate over rollup_model_daily, read by
+    # routes/usage.py:/api/efficiency through the daemon proxy (read-only;
+    # the daemon owns the writer lock).
+    "query_efficiency_rollup",
 })
 
 
