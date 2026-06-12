@@ -143,9 +143,22 @@ jobs:
       - name: Bump patch version
         id: bump
         run: |
-          # Always bump from latest PyPI version — never from dashboard.py which
-          # can be stale when multiple [RELEASE] PRs merge in quick succession
-          OLD=$(curl -s https://pypi.org/pypi/clawmetry/json | python3 -c "import json,sys; print(json.load(sys.stdin)['info']['version'])")
+          # Bump from the HIGHER of PyPI-latest and dashboard.py's __version__.
+          # Normally PyPI leads and dashboard.py can be stale (two [RELEASE] PRs
+          # merging fast), so PyPI-latest+1 is right. But a PyPI version number
+          # can be BURNED: once a version is uploaded then deleted, PyPI refuses
+          # that exact filename forever, so PyPI-latest+1 would target the burned
+          # number on every retry and never publish. The escape hatch is to
+          # advance dashboard.py past the burned version; taking the max of the
+          # two skips the hole. (Burned 0.12.504 on 2026-06-11: published then
+          # deleted, leaving PyPI-latest 0.12.503 with 0.12.504 permanently
+          # unusable; dashboard.py was reconciled to 0.12.504 so max()+1 = 0.12.505.)
+          PYPI=$(curl -s https://pypi.org/pypi/clawmetry/json | python3 -c "import json,sys; print(json.load(sys.stdin)['info']['version'])")
+          DASH=$(python3 -c "import re; print(re.search(r'__version__ = \"([^\"]+)\"', open('dashboard.py').read()).group(1))")
+          OLD=$(python3 -c "
+          def k(v): return tuple(int(x) for x in v.split('.'))
+          print(max('$PYPI', '$DASH', key=k))
+          ")
           MAJOR=$(echo $OLD | cut -d. -f1)
           MINOR=$(echo $OLD | cut -d. -f2)
           PATCH=$(echo $OLD | cut -d. -f3)
@@ -153,7 +166,7 @@ jobs:
           sed -i "s/__version__ = \".*\"/__version__ = \"$NEW\"/" dashboard.py
           echo "old=$OLD" >> $GITHUB_OUTPUT
           echo "new=$NEW" >> $GITHUB_OUTPUT
-          echo "Bumped $OLD → $NEW"
+          echo "Bumped $OLD → $NEW (pypi=$PYPI dashboard=$DASH)"
 
       # Rebuild the v2 React bundle from source so the wheel never ships a
       # stale committed clawmetry/static/v2/dist/. publish.yml already does
@@ -322,8 +335,13 @@ jobs:
           # Seen in run 25677216433 (2026-05-11): JSON visible at attempt 1,
           # pip install failed 4s later because /simple/ hadn't propagated,
           # which aborted the workflow before the version-bump PR step.
+          # Poll up to ~300s: the simple index CDN can lag several minutes, and
+          # this step failing after upload succeeded leaves the release in a
+          # half-done state (version published, but the bump PR + tag skipped),
+          # which has recurred (kill-engine 0.12.503, byRuntime 0.12.504). The
+          # upload already succeeded by here; this only confirms propagation.
           INSTALL_OK=0
-          for i in 1 2 3 4 5 6 7 8 9; do
+          for i in $(seq 1 30); do
             if /tmp/postpub-venv/bin/pip install --quiet --no-cache-dir "clawmetry==$NEW" 2>/dev/null; then
               echo "▸ PyPI install of $NEW succeeded (attempt $i)"
               INSTALL_OK=1
@@ -332,7 +350,7 @@ jobs:
             sleep 10
           done
           if [ "$INSTALL_OK" != "1" ]; then
-            echo "❌ PyPI install of $NEW failed after 90s of retries"
+            echo "❌ PyPI install of $NEW failed after 300s of retries"
             echo ""
             echo "TO YANK $NEW (mark unavailable to new installs while keeping it in history):"
             echo "  https://pypi.org/manage/project/clawmetry/release/$NEW/  → 'Yank'"
