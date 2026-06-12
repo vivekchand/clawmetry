@@ -12641,6 +12641,15 @@ function _renderEfficiencyCardInner(card, eff) {
   // cloud interceptor owns the "update your daemon" state (spec §5).
   if (!eff) { card.style.display = 'none'; return; }
   var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  if (eff.stale_daemon) {
+    // Cloud-only: the node's daemon predates the efficiency slice. An update
+    // prompt, NOT the "collecting" promise — time alone will never fix a
+    // version gap (design spec §5, verifier finding).
+    card.style.display = '';
+    card.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px;">⬆️ '
+      + escHtml(t('efficiency.update_daemon', null, 'Update ClawMetry on this machine to see your efficiency grade.')) + '</div>';
+    return;
+  }
   if (eff.insufficient_data || !eff.grade) {
     card.style.display = '';
     card.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px;">⏳ '

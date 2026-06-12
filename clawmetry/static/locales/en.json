@@ -959,5 +959,6 @@
   "efficiency.already_saved": "Reusing work already saved you about {amt}/mo.",
   "efficiency.save_mo": "save about {amt}/mo",
   "efficiency.paused": "Efficiency grade paused: cost numbers on this machine do not agree yet.",
-  "efficiency.evidence": "See the evidence"
+  "efficiency.evidence": "See the evidence",
+  "efficiency.update_daemon": "Update ClawMetry on this machine to see your efficiency grade."
 }
