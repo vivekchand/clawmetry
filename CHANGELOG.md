@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Efficiency grade + savings hint on the desk device summary (#3073) (2026-06-12)
+- **Why:** the efficiency grade shipped to the web (0.12.515) but the desk device glance had no way to show it; the device is exactly the surface where one letter + one dollar figure beats a dashboard.
+- **What:** deviceSummary.efficiency = {grade, save_monthly_usd}, computed once per snapshot cycle and shared with the top-level efficiency slice (CPU budget), omitted entirely when data is thin so the firmware never renders a fake grade.
+- **Verified:** 37 tests green incl. new present/omitted/garbage-coercion cases; also fixed the stale schema==1 assertion (deviceSummary is schema 2).
+
 ### Design-critique quick wins: honest empty states + plain words across Overview, Cost, Skills (#3070) (2026-06-12)
 - **Why:** a 26-screen design-critique workflow flagged visible trust-breakers on the trial path: a red jargon banner ("no OTLP data for 5601 minutes"), token-first cost cards with an approx sign, an empty 14-day chart under populated totals, a permanently-dashed stat band, a green "ALL GOOD" verdict above a never-used skill, and a Fleet pointer shown to single-machine users.
 - **What:** banner copy humanized ("One of our data feeds from your agent stopped about 4 days ago...") and suppressed while the live feed is active (2-minute window); Cost cards lead with dollars ("about $55.42") and demote tokens; the 14-day chart section hides until it has data; Session quality gets a plain title, an honest empty state, and a gear for the rubric; Burn/Proj/OK-ratio cells hide when null and SPENDING becomes "Cost today"; the Skills verdict is computed from the rows; the local-only strip drops the Fleet link unless more than one node exists. 19 new i18n keys.
