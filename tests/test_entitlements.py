@@ -139,10 +139,46 @@ def test_corrupt_cloud_plan_falls_back_to_oss(ent, tmp_path):
 
 def test_to_dict_shape(ent):
     d = ent.get_entitlement(force=True).to_dict()
-    for key in ("tier", "source", "grace", "enforced", "runtimes", "features", "all_runtimes"):
+    for key in ("tier", "source", "grace", "enforced", "retention_days",
+                "runtimes", "features", "all_runtimes"):
         assert key in d
     assert d["enforced"] == (not d["grace"])
     assert isinstance(d["runtimes"], list)
+
+
+def test_to_dict_retention_days_oss_is_seven(ent):
+    """OSS-free surfaces the 7-day retention cap so the UI can render it."""
+    d = ent.get_entitlement(force=True).to_dict()
+    assert d["retention_days"] == 7
+
+
+@pytest.mark.parametrize(
+    "plan,expected",
+    [
+        ("cloud_free", 7),
+        ("cloud_starter", 30),
+        ("trial", 30),
+        ("cloud_pro", 90),
+        ("pro", 90),
+        ("enterprise", None),
+    ],
+)
+def test_to_dict_retention_days_matches_tier(ent, monkeypatch, tmp_path, plan, expected):
+    """Every tier surfaces its retention cap through ``to_dict()`` — and
+    Enterprise's "unlimited / custom" reads as ``None`` (JSON ``null``) so the
+    UI can render the special-case copy instead of a number.
+
+    Mirrors the per-tier values in ``_TIER_RETENTION_DAYS`` (see also
+    ``tests/test_entitlements_catalogue.py``). Pinning this here means a
+    silent retention-cap change in the table now breaks the API contract too,
+    not just the method.
+    """
+    cache = tmp_path / ".clawmetry" / "cloud_plan.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"plan": plan, "node_limit": 1, "expiry": None}))
+    d = ent.get_entitlement(force=True).to_dict()
+    assert d["tier"] == plan
+    assert d["retention_days"] == expected
 
 
 # ── runtime_catalog (Phase 5: locked-but-visible foundation) ────────────────

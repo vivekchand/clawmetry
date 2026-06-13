@@ -295,6 +295,12 @@ class Entitlement:
         return _TIER_RETENTION_DAYS.get(self.tier, 7)
 
     def to_dict(self) -> dict:
+        # ``retention_days`` mirrors :meth:`event_retention_days` so the
+        # dashboard can render a tier-aware "we are keeping N days of history"
+        # banner (and an Enterprise "unlimited / custom" pill when ``None``)
+        # without re-deriving the per-tier table client-side. The daemon's
+        # prune loop in ``clawmetry/sync.py`` still reads the method directly;
+        # this is just the read-only API surface.
         return {
             "tier": self.tier,
             "source": self.source,
@@ -304,6 +310,7 @@ class Entitlement:
             "is_paid": self.is_paid,
             "grace": self.grace,
             "enforced": not self.grace,
+            "retention_days": self.event_retention_days(),
             "runtimes": sorted(self.runtimes),
             "features": sorted(self.features),
             "free_runtimes": sorted(FREE_RUNTIMES),

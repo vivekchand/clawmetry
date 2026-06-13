@@ -47,6 +47,7 @@ def api_entitlement():
                 "is_paid": False,
                 "grace": True,
                 "enforced": False,
+                "retention_days": 7,
                 "runtimes": ["nemoclaw", "openclaw"],
                 "features": [],
             }
