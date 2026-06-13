@@ -10783,6 +10783,7 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 # events table on read. parent_session_id carries the runtime
                 # prefix so it matches the parent's session row id; the cloud
                 # filter normalises both bare + prefixed forms.
+                _subagent_ingested = False
                 if getattr(s, "parent_id", None):
                     try:
                         _sa_extra = s.extra if isinstance(s.extra, dict) else {}
@@ -10810,7 +10811,13 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                                       if s.end_reason == "error" else ""),
                             "runtime": runtime,
                         })
+                        _subagent_ingested = True
                     except Exception as _sae:
+                        # Write failed (e.g. a transient DuckDB writer-lock /
+                        # WAL-conflict window). Leave _subagent_ingested False so
+                        # we DON'T advance the watermark below — otherwise this
+                        # child is permanently skipped and its lane never appears
+                        # in the Command River even after the store recovers.
                         log.debug("family subagent ingest failed (%s): %s", ns_id, _sae)
                 # Sub-agent children stop here: they ride the snapshot
                 # ``subagents[]`` slice (river lanes), not the top-level
@@ -10819,9 +10826,11 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 # subagent row itself (cache-aware, from the adapter), so we skip
                 # the per-event re-ingest + cloud session push entirely — a big
                 # CPU saving for a session that fanned out to hundreds of agents.
-                # Mark the watermark so we don't re-scan an unchanged child.
+                # Mark the watermark ONLY when the subagent row actually landed,
+                # so a failed write is retried next pass (self-healing) instead of
+                # being stranded behind an advanced high-water mark.
                 if getattr(s, "parent_id", None):
-                    if _activity:
+                    if _activity and _subagent_ingested:
                         _evt_hw[ns_id] = _activity
                     continue
                 # Carry the same row to cloud so the cloud Sessions list shows it.
@@ -14514,7 +14523,7 @@ def _emit_detector_incidents(store, state: dict) -> int:
     return emitted
 
 
-def _build_device_summary(spending, daily_usage):
+def _build_device_summary(spending, daily_usage, efficiency=None):
     """Compact, all-runtime payload for a WiFi hardware companion.
 
     Mirrors ``routes/device.py``'s ``/api/device/snapshot`` but built on the
@@ -14692,6 +14701,27 @@ def _build_device_summary(spending, daily_usage):
                 n = int(hot.get("repeat_count") or 0)
                 msg = f"{rt} looping, {n} repeats, no progress"
             summary["alert"] = {"message": str(msg)[:200]}
+    except Exception:
+        pass
+    # Efficiency grade + monthly savings hint (schema 2, additive). One letter
+    # plus one dollar figure for the glance hero sub-line; the full ranked plan
+    # lives on the web Cost tab. `efficiency` is the slice sync_system_snapshot
+    # already computed this cycle (shared, never recomputed here — CPU budget).
+    # Omitted entirely (older firmware tolerates unknown/missing fields) rather
+    # than faked when the window is thin or the engine failed.
+    try:
+        if (isinstance(efficiency, dict) and efficiency.get("grade")
+                and not efficiency.get("insufficient_data")):
+            _save = 0.0
+            for _a in (efficiency.get("actions") or []):
+                try:
+                    _save += float(_a.get("savings_monthly_usd") or 0.0)
+                except (TypeError, ValueError):
+                    pass
+            summary["efficiency"] = {
+                "grade": str(efficiency["grade"])[:1],
+                "save_monthly_usd": round(_save, 2),
+            }
     except Exception:
         pass
     # A waiting approval or a stuck/looping agent is what needs a human.
@@ -15303,6 +15333,23 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         _inv_node_id,
     )
 
+    # Efficiency grade + measured savings, computed ONCE per cycle on the
+    # daemon's OWN store handle (never a read_only re-open — FLYWHEEL §1) and
+    # shared by BOTH the top-level `efficiency` snapshot slice (hosted Cost
+    # tab) and `deviceSummary.efficiency` (the desk-device glance sub-line).
+    # Best-effort: None on any failure, both consumers omit honestly.
+    _eff_slice = None
+    try:
+        from clawmetry import local_store as _ls_eff
+        from clawmetry.efficiency import build_efficiency_slice as _build_eff
+        _eff_store = _ls_eff.get_store()
+        if _eff_store is not None:
+            _eff_slice = _build_eff(
+                _eff_store.query_efficiency_rollup(days=30) or [], days=30
+            )
+    except Exception as _e_eff:
+        log.debug("snapshot: efficiency slice failed: %s", _e_eff)
+
     from clawmetry.providers_pricing import provider_for_model as _pfm
     payload = {
         "system": system,
@@ -15350,7 +15397,8 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # Compact all-runtime slice a WiFi hardware companion decrypts + renders
         # (the device GETs the snapshot, decrypts with the user's key, reads
         # this). Cloud stays blind; E2E preserved.
-        "deviceSummary": _build_device_summary(spending, _du),
+        "deviceSummary": _build_device_summary(spending, _du,
+                                               efficiency=_eff_slice),
         "cronJobs": _build_cron_jobs(paths),
         "cronHealthSummary": _build_cron_health_summary_snapshot(),
         "harness": _build_harness_snapshot(),
@@ -15412,6 +15460,15 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # error counts. Map keyed by event_id; empty == nothing resolved.
         "resolvedErrors": _build_resolved_errors(),
     }
+
+    # Efficiency grade + measured savings (node-wide + byRuntime), so the
+    # hosted dashboard can serve /api/efficiency from the encrypted snapshot.
+    # Computed ONCE per cycle (above, before the payload dict) and shared with
+    # the deviceSummary builder — the CPU budget forbids running the rollup
+    # aggregate twice per push. Best-effort: omitted on failure (cloud falls
+    # back to its honest empty state).
+    if _eff_slice is not None:
+        payload["efficiency"] = _eff_slice
 
     # ── NemoClaw / sandbox enrichment ────────────────────────────────────────
     # Detect NemoClaw and add optional sandbox metadata to the snapshot.

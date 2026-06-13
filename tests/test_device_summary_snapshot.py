@@ -45,7 +45,9 @@ def test_shape_and_cost_tokens_passthrough(sync_with_store):
     s = sync._build_device_summary({"today": 4.2}, {"today": 1000})
     for k in _keys():
         assert k in s, f"missing key: {k}"
-    assert s["schema"] == 1
+    # schema 2 = the additive per-runtime `runtimes` array (sync.py docstring);
+    # every schema-1 field is preserved, asserted by _keys() above.
+    assert s["schema"] == 2
     assert s["cost_today_usd"] == 4.2
     assert s["tokens_today"] == 1000
     assert s["active_sessions"] == 0
@@ -148,3 +150,29 @@ def test_session_titles_ride_encrypted_summary_not_uuid(sync_with_store):
     uuid = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-')
     for v in titles.values():
         assert not uuid.match(v), v
+
+
+def test_efficiency_subslice_present_when_graded(sync_with_store):
+    """A valid efficiency slice yields a one-letter grade + summed monthly
+    savings on deviceSummary; the device renders it as the glance sub-line."""
+    sync, _ls = sync_with_store
+    eff = {
+        "grade": "B", "score": 78, "insufficient_data": False,
+        "actions": [
+            {"id": "model_downgrade", "savings_monthly_usd": 14.2},
+            {"id": "context_trim", "savings_monthly_usd": 9.1},
+            {"id": "cache_warm", "savings_monthly_usd": "garbage"},  # coerced to 0
+        ],
+    }
+    s = sync._build_device_summary({"today": 1.0}, {"today": 10}, efficiency=eff)
+    assert s["efficiency"] == {"grade": "B", "save_monthly_usd": 23.3}
+
+
+def test_efficiency_subslice_omitted_when_thin_or_absent(sync_with_store):
+    """insufficient_data / missing grade / no slice -> the key is OMITTED
+    (older firmware tolerates unknown fields; a fake grade is never sent)."""
+    sync, _ls = sync_with_store
+    thin = {"grade": None, "insufficient_data": True, "actions": []}
+    for eff in (None, thin, {"grade": "A", "insufficient_data": True}, "junk", 42):
+        s = sync._build_device_summary({"today": 1.0}, {"today": 10}, efficiency=eff)
+        assert "efficiency" not in s, f"leaked for {eff!r}"

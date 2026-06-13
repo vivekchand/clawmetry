@@ -193,3 +193,57 @@ def test_children_excluded_from_sessions_list(sync_with_isolated_store):
     # Children do NOT.
     assert f"{_RUNTIME}:{_PARENT_UUID}::agent-a1111111" not in ids
     assert f"{_RUNTIME}:{_PARENT_UUID}::agent-a3333333" not in ids
+
+
+def test_failed_subagent_write_is_retried_not_watermarked(sync_with_isolated_store):
+    """A transient ``ingest_subagent`` failure must NOT advance the per-session
+    high-water mark, so the very next pass retries the write and the child still
+    reaches the ``subagents`` table (self-healing).
+
+    This is the daemon-routing GAP that left the Command River showing 0 lanes
+    for a real Claude Code session: the family loop ran and the child's
+    ``ingest_subagent`` raised inside a transient DuckDB WAL-conflict window, but
+    the watermark advanced anyway, so the child was permanently skipped on every
+    later pass even after the store recovered.
+
+    Revert-proof: with the OLD code (watermark set unconditionally, regardless of
+    ``_subagent_ingested``), the second pass is short-circuited by the advanced
+    high-water mark, the child is never re-attempted, and the final
+    ``query_subagents`` returns 0 — RED. The fix gates the watermark on a
+    successful write, so the retry lands it — GREEN.
+    """
+    sync, ls = sync_with_isolated_store
+    config = {"node_id": "test-node", "api_key": "test-key"}
+    state: dict = {}
+
+    real_ingest = ls.LocalStore.ingest_subagent
+    calls = {"n": 0}
+
+    def flaky_ingest(self, sa):
+        # Fail every child write on the FIRST family pass only; succeed after.
+        if calls["n"] == 0 and str(sa.get("subagent_id", "")).count("::agent-"):
+            calls["n"] += 1
+            raise RuntimeError("transient WAL conflict (simulated)")
+        return real_ingest(self, sa)
+
+    with patch.object(sync, "_sync_allowed", return_value=True), \
+         patch.object(sync, "_post", return_value={}), \
+         patch.object(sync, "_family_adapter_classes",
+                      return_value=[_FakeFanoutAdapter]), \
+         patch.object(sync, "_openclaw_spawned_claude_ids", return_value=set()), \
+         patch.object(ls.LocalStore, "ingest_subagent", flaky_ingest):
+        # Pass 1: child writes raise; watermark MUST NOT advance for them.
+        sync.sync_family_runtimes(config, state, {})
+        # Pass 2: same SAME state dict — if the watermark wrongly advanced in
+        # pass 1, this pass skips the child before ever calling ingest again.
+        sync.sync_family_runtimes(config, state, {})
+
+    store = ls.get_store()
+    _wait_for_flush(store)
+    rows = store.query_subagents(parent_session_id=f"{_RUNTIME}:{_PARENT_UUID}",
+                                 limit=100)
+    ids = {r["subagent_id"] for r in rows}
+    # Both children land after the retry; with the bug present this set is empty.
+    assert f"{_RUNTIME}:{_PARENT_UUID}::agent-a1111111" in ids
+    assert f"{_RUNTIME}:{_PARENT_UUID}::agent-a3333333" in ids
+    assert len(rows) == 2
