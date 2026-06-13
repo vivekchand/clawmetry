@@ -256,6 +256,56 @@ def _should_show_update_banner(config, latest_check):
     return True
 
 
+def _autoupdate_min_age_hours() -> float:
+    """Stability window (hours) a release must survive on PyPI before the
+    daemon will silently install it. Env override:
+    ``CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS`` (default 48)."""
+    try:
+        return float(os.environ.get("CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS", "48") or 48)
+    except Exception:
+        return 48.0
+
+
+def _newest_aged_in_version(releases, current, min_age_hours):
+    """Newest published version greater than ``current`` whose files have all
+    been on PyPI at least ``min_age_hours`` (the stability window). Returns the
+    version string, or None if nothing newer has aged in yet.
+
+    The unattended auto-updater installs THIS, not the absolute latest. During
+    an active release run (many publishes less than the window apart) the
+    absolute latest is always too fresh; gating on it alone meant a node never
+    saw an installable target and stayed stuck on an old build indefinitely.
+    Targeting the newest aged-in release keeps the fleet at
+    latest-minus-window instead of frozen. (Burned 2026-06-13: a 2-day release
+    spree left every version under 48h old, so daemons never auto-updated.)
+    """
+    from datetime import datetime as _dt, timezone as _tz
+    _now = _dt.now(_tz.utc)
+    best = None
+    for ver, files in (releases or {}).items():
+        if not _version_gt(ver, current):
+            continue
+        if best is not None and not _version_gt(ver, best):
+            continue  # already have a newer candidate; skip the age cost
+        times = [
+            f.get("upload_time_iso_8601") or f.get("upload_time")
+            for f in (files or [])
+            if f.get("upload_time_iso_8601") or f.get("upload_time")
+        ]
+        if not times:
+            continue
+        try:
+            t0 = min(_dt.fromisoformat(str(t).replace("Z", "+00:00")) for t in times)
+            if t0.tzinfo is None:
+                t0 = t0.replace(tzinfo=_tz.utc)
+        except Exception:
+            continue
+        if (_now - t0).total_seconds() / 3600.0 < min_age_hours:
+            continue
+        best = ver
+    return best
+
+
 def _check_for_update():
     """Check PyPI for the latest version and record the result."""
     import dashboard as _d
@@ -281,35 +331,20 @@ def _check_for_update():
 
     _record_update_check(current, latest, update_available, CHANGELOG_URL)
 
-    # Age (hours) of the latest release, for the auto-update staleness rail.
-    # NEVER blocks the banner — only the silent upgrade waits for the release
-    # to have survived a stability window before installing it unattended.
-    _age_h = None
-    try:
-        _files = (data.get("releases", {}) or {}).get(latest) or []
-        _times = [
-            f.get("upload_time_iso_8601") or f.get("upload_time")
-            for f in _files
-            if f.get("upload_time_iso_8601") or f.get("upload_time")
-        ]
-        if _times:
-            from datetime import datetime as _dt, timezone as _tz
-            _t0 = min(
-                _dt.fromisoformat(str(t).replace("Z", "+00:00")) for t in _times
-            )
-            if _t0.tzinfo is None:
-                _t0 = _t0.replace(tzinfo=_tz.utc)
-            _age_h = (_dt.now(_tz.utc) - _t0).total_seconds() / 3600.0
-    except Exception:
-        _age_h = None
-
-    # Auto-update: install the newer release unattended (default-on for the
-    # supervised sync daemon; opt-in for the dashboard process — see
-    # _maybe_auto_update for the full rail set). Guarded so a pending
-    # restart isn't re-triggered.
+    # Auto-update target: the NEWEST published version above `current` that has
+    # aged past the stability window (see _newest_aged_in_version). NOT the
+    # absolute `latest` — during an active release run the absolute latest is
+    # perpetually too fresh, so gating the silent install on it alone strands
+    # every node on an ancient build forever. The banner still advertises the
+    # absolute `latest` (above); only the unattended install targets the aged
+    # release, keeping the fleet at latest-minus-stability-window.
     if update_available:
         try:
-            _maybe_auto_update(current, latest, _age_h)
+            _target = _newest_aged_in_version(
+                data.get("releases", {}), current, _autoupdate_min_age_hours()
+            )
+            if _target and _version_gt(_target, current):
+                _maybe_auto_update(current, _target, latest)
         except Exception as exc:
             log.warning("auto-update trigger failed: %s", exc)
 
@@ -327,14 +362,16 @@ def _check_for_update():
 _auto_update_in_progress = False
 
 
-def _maybe_auto_update(current, latest, age_hours=None):
-    """Install a newer release automatically when ``auto_update`` is enabled.
+def _maybe_auto_update(current, target, latest=None):
+    """Install ``target`` (the newest aged-in release, chosen by
+    ``_newest_aged_in_version``) automatically when ``auto_update`` is enabled.
 
-    Staleness rail: unattended upgrades wait until the release has been on PyPI
-    for at least ``CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS`` (default 48h), so a node
-    never auto-installs a brand-new (possibly broken) release the instant it
-    publishes. The update banner is unaffected — only the silent upgrade waits.
-    ``age_hours=None`` (age unknown) does not block, preserving prior behaviour.
+    The stability-window rail is applied during target SELECTION, not here, so
+    by the time we are called ``target`` is already known to have survived the
+    window. ``target`` is a specific version (e.g. installing 0.12.510 even
+    when 0.12.518 is the absolute ``latest`` but still too fresh), so the fleet
+    keeps moving forward during active releases instead of freezing on an old
+    build.
     """
     global _auto_update_in_progress
     if _auto_update_in_progress:
@@ -350,14 +387,7 @@ def _maybe_auto_update(current, latest, age_hours=None):
     # pip-install + exit underneath the user unless they explicitly opted in.
     if _process_role != "daemon" and not _auto_update_explicitly_set():
         return
-    try:
-        import os as _os
-        _min_age = float(_os.environ.get("CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS", "48") or 48)
-    except Exception:
-        _min_age = 48.0
-    if age_hours is not None and age_hours < _min_age:
-        log.info("auto-update: holding v%s (released %.1fh ago < %.0fh stability "
-                 "window) — will install once it ages in", latest, age_hours, _min_age)
+    if not target or not _version_gt(target, current):
         return
     # An UNSUPERVISED daemon (no launchd plist / systemd unit — e.g. a manual
     # `python -m clawmetry.sync` or Windows) still installs the new wheel but
@@ -367,11 +397,12 @@ def _maybe_auto_update(current, latest, age_hours=None):
     if _process_role == "daemon" and not _daemon_supervised():
         restart = False
     _auto_update_in_progress = True
-    log.info("auto-update: upgrading clawmetry v%s -> v%s (restart=%s)",
-             current, latest, restart)
+    log.info("auto-update: upgrading clawmetry v%s -> v%s (latest available v%s, "
+             "restart=%s)", current, target, latest or target, restart)
     try:
         from routes.meta import perform_self_update
-        payload, _status = perform_self_update(reason="auto", restart=restart)
+        payload, _status = perform_self_update(
+            reason="auto", restart=restart, target_version=target)
         if not (isinstance(payload, dict) and payload.get("ok")):
             log.warning("auto-update: upgrade failed, will retry next check: %s", payload)
             _auto_update_in_progress = False  # allow retry; no restart was scheduled

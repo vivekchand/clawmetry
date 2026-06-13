@@ -351,7 +351,8 @@ def api_version():
     return {"current": current, "latest": latest, "update_available": update_available}
 
 
-def perform_self_update(reason: str = "manual", restart: bool = True):
+def perform_self_update(reason: str = "manual", restart: bool = True,
+                        target_version=None):
     """Core self-update: ``pip install -U clawmetry`` then schedule a process
     restart. Returns ``(payload_dict, http_status)``.
 
@@ -363,6 +364,11 @@ def perform_self_update(reason: str = "manual", restart: bool = True):
     ``restart=False`` installs the new wheel but does NOT exit the process —
     the auto-updater uses it for an unsupervised daemon (nothing would
     respawn it); the new version applies on the next start.
+
+    ``target_version`` pins the install to a specific version (e.g.
+    ``clawmetry==0.12.510``). The auto-updater passes the newest aged-in
+    release here so it never jumps to a too-fresh absolute latest; a manual
+    update leaves it None and takes the absolute latest.
     """
     import dashboard as _d
     import subprocess as _sp
@@ -371,7 +377,8 @@ def perform_self_update(reason: str = "manual", restart: bool = True):
 
     _ulog = _log.getLogger(__name__)
     old_version = _d.__version__
-    _ulog.info("self-update (%s): pip install -U clawmetry from v%s", reason, old_version)
+    _pip_spec = ("clawmetry==" + str(target_version)) if target_version else "clawmetry"
+    _ulog.info("self-update (%s): pip install -U %s from v%s", reason, _pip_spec, old_version)
     py = sys.executable
     # Bootstrap pip via the stdlib's ensurepip first. The daemon's venv at
     # ~/.clawmetry/bin/python3 is provisioned WITHOUT pip by uv-style
@@ -394,7 +401,7 @@ def perform_self_update(reason: str = "manual", restart: bool = True):
             # --no-cache-dir dodges the uv-cache-stale-after-[RELEASE] race
             # (see feedback_uv_cache_stale_after_release.md): a fresh PyPI
             # publish is sometimes shadowed by uv's "already at latest" cache.
-            [py, "-m", "pip", "install", "--upgrade", "--no-cache-dir", "clawmetry"],
+            [py, "-m", "pip", "install", "--upgrade", "--no-cache-dir", _pip_spec],
             timeout=180, capture_output=True, text=True,
         )
         if proc.returncode != 0:
