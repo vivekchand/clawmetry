@@ -136,22 +136,28 @@ def test_nemoclaw_capabilities():
 
 
 def test_nemoclaw_detect_surfaces_skill_catalog_meta(isolated_store, tmp_path, monkeypatch):
-    """detect() merges skill catalog version fields into meta when catalog-metadata.json exists."""
+    """detect() merges skill catalog version/provenance fields into meta."""
     import json as _json
     from pathlib import Path
 
     catalog_dir = tmp_path / ".nemoclaw" / "skills"
     catalog_dir.mkdir(parents=True)
-    catalog_path = catalog_dir / "catalog-metadata.json"
-    catalog_path.write_text(_json.dumps({
+    (catalog_dir / "catalog-metadata.json").write_text(_json.dumps({
         "metadata": {
             "minNemoClawVersion": "1.2.0",
             "testedNemoClawVersion": "1.4.1",
+            "schemaVersion": "2",
             "sourceCommit": "deadbeef",
         },
         "exportContentSha256": "abc123",
         "sourceContentSha256": "def456",
+        "skills": [
+            {"name": "web-search"},
+            "file-editor",
+            {"name": "code-runner"},
+        ],
     }))
+    monkeypatch.setenv("HOME", str(tmp_path))
 
     _seed_nemoclaw_event(isolated_store)
     _wait_flush(isolated_store)
@@ -160,9 +166,11 @@ def test_nemoclaw_detect_surfaces_skill_catalog_meta(isolated_store, tmp_path, m
     res = NemoClawAdapter().detect()
     assert res.meta["skill_catalog_min_version"] == "1.2.0"
     assert res.meta["skill_catalog_tested_version"] == "1.4.1"
+    assert res.meta["skill_catalog_schema_version"] == "2"
     assert res.meta["skill_catalog_source_commit"] == "deadbeef"
     assert res.meta["skill_catalog_export_sha256"] == "abc123"
     assert res.meta["skill_catalog_source_sha256"] == "def456"
+    assert res.meta["skill_catalog_skill_names"] == ["web-search", "file-editor", "code-runner"]
 
 
 def test_nemoclaw_detect_no_catalog_meta_when_file_absent(isolated_store):
@@ -173,6 +181,25 @@ def test_nemoclaw_detect_no_catalog_meta_when_file_absent(isolated_store):
     from clawmetry.adapters.nemo import NemoClawAdapter
     res = NemoClawAdapter().detect()
     assert "skill_catalog_min_version" not in res.meta
+    assert "skill_catalog_skill_names" not in res.meta
+
+
+def test_nemoclaw_extract_skill_names_tolerates_mixed_shapes():
+    """_extract_skill_names handles string entries, dict entries, and unknown shapes."""
+    from clawmetry.adapters.nemo import _extract_skill_names
+
+    raw = {
+        "skills": [
+            "plain-string",
+            {"name": "named-skill"},
+            {"id": "id-skill"},
+            {"skillName": "skillname-skill"},
+            {"unrecognized_key": "ignored"},
+            42,
+        ]
+    }
+    result = _extract_skill_names(raw)
+    assert result == ["plain-string", "named-skill", "id-skill", "skillname-skill"]
 
 
 # ── isolation: doesn't pick up non-nemo runtimes ────────────────────────────

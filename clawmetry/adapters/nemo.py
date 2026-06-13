@@ -651,6 +651,23 @@ class NeMoAdapter:
 from .base import AgentAdapter, Capability, DetectResult, Event, Session
 
 
+def _extract_skill_names(raw: dict) -> list:
+    """Extract published skill names from catalog-metadata.json.
+
+    Accepts each skills entry as a bare string or an object with a ``name``
+    (or ``id`` / ``skillName``) key. Unknown shapes are skipped silently.
+    """
+    names = []
+    for entry in raw.get("skills", []):
+        if isinstance(entry, str):
+            names.append(entry)
+        elif isinstance(entry, dict):
+            name = entry.get("name") or entry.get("id") or entry.get("skillName", "")
+            if name:
+                names.append(name)
+    return names
+
+
 def _read_nemoclaw_skill_catalog() -> dict:
     """Read catalog-metadata.json from the nemoclaw skills directory.
 
@@ -675,9 +692,11 @@ def _read_nemoclaw_skill_catalog() -> dict:
             return {
                 "skill_catalog_min_version": meta.get("minNemoClawVersion", ""),
                 "skill_catalog_tested_version": meta.get("testedNemoClawVersion", ""),
+                "skill_catalog_schema_version": meta.get("schemaVersion", ""),
                 "skill_catalog_export_sha256": raw.get("exportContentSha256", ""),
                 "skill_catalog_source_commit": raw.get("sourceCommit", meta.get("sourceCommit", "")),
                 "skill_catalog_source_sha256": raw.get("sourceContentSha256", meta.get("sourceContentSha256", "")),
+                "skill_catalog_skill_names": _extract_skill_names(raw),
             }
         except Exception as exc:
             logger.debug("nemoclaw skill catalog read failed (%s): %s", path, exc)
