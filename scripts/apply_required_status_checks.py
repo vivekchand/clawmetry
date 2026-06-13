@@ -36,14 +36,14 @@ any non-ghs_ token:
 
 Primary repo behaviour (clawmetry):
   When GITHUB_REPOSITORY=vivekchand/clawmetry and using a PAT, the script
-  applies ALL 5 required checks across all 3 repos in one run. This means
+  applies ALL 6 required checks across all 3 repos in one run. This means
   you only need to trigger the apply-required-checks.yml workflow ONCE -- on
   the clawmetry repo -- to close C6 everywhere.
 
   When using GITHUB_TOKEN (read-only push path), only the current repo's
   checks are verified to avoid cross-repo 403s.
 
-When run locally (GITHUB_REPOSITORY not set), the script applies all 5
+When run locally (GITHUB_REPOSITORY not set), the script applies all 6
 checks and requires a token with cross-repo admin access.
 
 Tracking: vivekchand/clawmetry#2146 (C6)
@@ -64,6 +64,7 @@ OWNER = "vivekchand"
 #   clawmetry/.github/workflows/oss-golden-path.yml      -> "OSS golden path (wheel + OpenClaw + 9 tabs)"
 #   clawmetry/.github/workflows/cross-repo-handoff.yml   -> "Cross-repo handoff (C4)"
 #   clawmetry/.github/workflows/ci.yml (moat-keystone)   -> "MOAT Keystone (13-endpoint bar)"
+#   clawmetry/.github/workflows/ci.yml (e2e-critical)    -> "E2E Browser Tests (critical subset)"
 #   clawmetry-cloud/.github/workflows/e2e.yml            -> "Cloud golden-path browser E2E"
 #   clawmetry-landing/.github/workflows/landing-golden-path.yml -> "Landing golden path (C3)"
 #
@@ -77,6 +78,9 @@ REQUIRED_CHECKS: list[tuple[str, str]] = [
     # docs/MOAT_BAR.md Section 5, AC#1: keystone_e2e --no-drive blocks merge.
     # ci.yml `moat-keystone` job runs on every PR; job name must match exactly.
     ("clawmetry",         "MOAT Keystone (13-endpoint bar)"),
+    # ci.yml `e2e-critical` job: 32-tab auth-overlay sweep (C5 gate).
+    # Without this, a PR breaking tabs 10-32 fails CI but remains mergeable.
+    ("clawmetry",         "E2E Browser Tests (critical subset)"),
     ("clawmetry-cloud",   "Cloud golden-path browser E2E"),
     ("clawmetry-landing", "Landing golden path (C3)"),
 ]
@@ -283,7 +287,7 @@ def _checks_to_apply() -> list[tuple[str, str]]:
     """Return the REQUIRED_CHECKS to apply for the current context (PAT path).
 
     clawmetry is the primary E2E hub. When running from here with a PAT that
-    has Administration (read+write) on all 3 repos, we apply all 5 required
+    has Administration (read+write) on all 3 repos, we apply all 6 required
     checks in a single run -- matching the dry-run preview in
     apply-required-checks.yml which already says 'apply to all 3 repos'.
 
