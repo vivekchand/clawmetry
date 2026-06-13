@@ -4494,6 +4494,16 @@ window.toggleBrainFilterExpanded = function() {
 function _brainChipHtml(s) {
   var isActive = _brainFilter === s.id;
   var icon = s.icon || (s.id === 'main' ? '🧠' : '🤖');
+  // Per-source runtime mascot, keyed off the source's runtime (explicit
+  // runtime/agent_type field or the session-id prefix). The "main" aggregate
+  // chip keeps the 🧠 glyph; a source whose runtime resolves to a known mascot
+  // shows the pixel logo instead of the generic 🤖.
+  if (s.id !== 'main' && typeof _cmRuntimeOf === 'function' && typeof window.cmRuntimeIcon === 'function') {
+    var _brt = _cmRuntimeOf({ id: s.id, runtime: s.runtime, agent_type: s.agent_type });
+    if (typeof window.cmRuntimeKnown === 'function' && window.cmRuntimeKnown(_brt)) {
+      icon = window.cmRuntimeIcon(_brt, 14, { title: _cmRuntimeLabel(_brt) });
+    }
+  }
   // Add 🧠 badge if this source has any THINK events (reasoning sessions)
   var hasReasoning = (_brainAllEvents || []).some(function(ev) {
     return ev.source === s.id && ev.type === 'THINK';
@@ -8326,9 +8336,13 @@ function _cmRenderRuntimeSwitcher(counts, anchor, reload) {
     var bg = on ? 'var(--bg-accent,#E5443A)' : 'var(--bg-secondary,#161b22)';
     var fg = on ? '#fff' : 'var(--text-secondary,#9ca3af)';
     var bd = on ? 'var(--bg-accent,#E5443A)' : 'var(--border-primary,#30363d)';
+    // Runtime pixel-logo (chip variant) before the label, keyed off the runtime
+    // id. The "All" chip (val==='all') carries no mascot.
+    var ic = (val !== 'all' && typeof window.cmRuntimeIcon === 'function')
+      ? window.cmRuntimeIcon(val, 15, { chip: true, cls: 'cm-rt-btn-ic' }) + ' ' : '';
     return '<button class="cm-rt-btn" data-rt="' + val + '" style="cursor:pointer;padding:4px 12px;border-radius:14px;' +
-      'font-size:12px;font-weight:600;background:' + bg + ';color:' + fg + ';border:1px solid ' + bd + ';">' +
-      escHtml(label) + (n != null ? (' <span style="opacity:.65;">' + n + '</span>') : '') + '</button>';
+      'font-size:12px;font-weight:600;display:inline-flex;align-items:center;gap:4px;background:' + bg + ';color:' + fg + ';border:1px solid ' + bd + ';">' +
+      ic + escHtml(label) + (n != null ? (' <span style="opacity:.65;">' + n + '</span>') : '') + '</button>';
   }
   var html = '<span style="font-size:11px;color:var(--text-muted);font-weight:600;margin-right:2px;">Runtime</span>';
   html += chip('all', 'All', total, active === 'all');
@@ -9070,7 +9084,13 @@ async function loadSessions() {
     var sparkId = 'session-burn-' + Math.random().toString(36).slice(2);
     html += '<div class="session-item" style="border-left:3px solid var(--bg-accent);padding-left:16px;">';
     html += '<div class="session-name" style="display:flex;justify-content:space-between;align-items:center;gap:8px;">';
-    html += '<span>🖥️ ' + escHtml(s.displayName || s.key) + ' <span style="font-size:11px;color:var(--text-muted);font-weight:400;">Main Session</span>';
+    // Per-session runtime mascot, keyed off the session's runtime (session-id
+    // prefix / agent_type). Falls back to the desktop emoji if the helper or
+    // sprite has not loaded yet.
+    var _srt = (typeof _cmRuntimeOf === 'function') ? _cmRuntimeOf(s) : 'openclaw';
+    var _sic = (typeof window.cmRuntimeIcon === 'function')
+      ? window.cmRuntimeIcon(_srt, 18, { title: _cmRuntimeLabel(_srt), cls: 'cm-session-rt-ic' }) : '🖥️';
+    html += '<span data-cm-runtime="' + escHtml(_srt) + '">' + _sic + ' ' + escHtml(s.displayName || s.key) + ' <span style="font-size:11px;color:var(--text-muted);font-weight:400;">Main Session</span>';
     if (anomaly) {
       html += '<span class="session-anomaly" title="Cost anomaly: $' + Number(anomaly.cost_usd || 0).toFixed(4) + ' (' + Number(anomaly.ratio || 0).toFixed(2) + 'x rolling avg)">&#9888;&#65039;</span>';
     }
@@ -21515,7 +21535,8 @@ setTimeout(checkUpdateStatus, 5000);
     order.forEach(function (k) {
       var isLocked = _locked(k), active = k === cur;
       var right = isLocked ? '🔒 Upgrade' : ((counts[k] || 0) + (counts[k] === 1 ? ' session' : ' sessions'));
-      html += '<div data-rt="' + k + '" data-locked="' + (isLocked ? '1' : '') + '" class="cm-rtc-item" style="padding:7px 10px;border-radius:7px;cursor:pointer;display:flex;justify-content:space-between;gap:10px;' + (active ? 'background:var(--bg-accent,#7c5cff);color:#fff;' : 'color:var(--text-primary,#e6edf3);') + '"><span>' + (isLocked ? '🔒 ' : '') + _esc(_label(k)) + '</span><span style="opacity:.7;font-size:11px;white-space:nowrap;">' + _esc(right) + '</span></div>';
+      var _mic = (typeof window.cmRuntimeIcon === 'function') ? window.cmRuntimeIcon(k, 16, { chip: true }) + ' ' : '';
+      html += '<div data-rt="' + k + '" data-locked="' + (isLocked ? '1' : '') + '" class="cm-rtc-item" style="padding:7px 10px;border-radius:7px;cursor:pointer;display:flex;justify-content:space-between;gap:10px;' + (active ? 'background:var(--bg-accent,#7c5cff);color:#fff;' : 'color:var(--text-primary,#e6edf3);') + '"><span style="display:inline-flex;align-items:center;gap:6px;">' + (isLocked ? '🔒 ' : '') + _mic + _esc(_label(k)) + '</span><span style="opacity:.7;font-size:11px;white-space:nowrap;">' + _esc(right) + '</span></div>';
     });
     m.innerHTML = html;
     document.body.appendChild(m);
