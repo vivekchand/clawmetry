@@ -12249,6 +12249,7 @@ DASHBOARD_HTML = r"""
 </div> <!-- end app-shell -->
 {% endif %}
 <script src="{{ url_for('static', filename='js/i18n.js', v=version) }}"></script>
+<script src="{{ url_for('static', filename='js/runtime-logos.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/app.js', v=version) }}"></script>
 </div> <!-- end zoom-wrapper -->
 

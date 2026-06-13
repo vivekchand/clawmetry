@@ -1,0 +1,50 @@
+{
+  "openclaw": {
+    "label": "OpenClaw",
+    "brand": "#ff5a3c"
+  },
+  "nemoclaw": {
+    "label": "NemoClaw",
+    "brand": "#76b900"
+  },
+  "picoclaw": {
+    "label": "PicoClaw",
+    "brand": "#2bd4c4"
+  },
+  "nanoclaw": {
+    "label": "NanoClaw",
+    "brand": "#9d6bff"
+  },
+  "claude_code": {
+    "label": "Claude Code",
+    "brand": "#d97757"
+  },
+  "codex": {
+    "label": "Codex",
+    "brand": "#cfd3da"
+  },
+  "cursor": {
+    "label": "Cursor",
+    "brand": "#8a8f99"
+  },
+  "aider": {
+    "label": "Aider",
+    "brand": "#1bd96a"
+  },
+  "goose": {
+    "label": "Goose",
+    "brand": "#e8e2d6"
+  },
+  "hermes": {
+    "label": "Hermes",
+    "brand": "#f4b41a"
+  },
+  "opencode": {
+    "label": "opencode",
+    "brand": "#f59e0b"
+  },
+  "qwen_code": {
+    "label": "Qwen Code",
+    "brand": "#6d5cff"
+  }
+}
