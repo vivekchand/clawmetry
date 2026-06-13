@@ -3719,6 +3719,63 @@ def api_usage_cache_trends():
     })
 
 
+# ── Cache-bust risk summary (#2839) ─────────────────────────────────────
+
+
+@bp_usage.route("/api/usage/cache-risk")
+def api_usage_cache_risk():
+    """Cache-bust risk summary — idle-gap expiries and re-write tax (#2839).
+
+    Reads per-session metadata from the sessions table to surface how many
+    sessions' prompt caches expired between turns and the cost of rebuilding
+    them, vs. the savings from cache hits.
+
+    Returns:
+      {
+        sessions_with_expiry:     int,
+        total_expiry_count:       int,
+        rewrite_cost_usd:         float,
+        sessions_with_reread_tax: int,
+        reread_tax_usd:           float,
+        cache_saved_usd:          float,
+      }
+    Never 500s — any failure yields zeroed-out fields.
+    """
+    out = {
+        "sessions_with_expiry": 0,
+        "total_expiry_count": 0,
+        "rewrite_cost_usd": 0.0,
+        "sessions_with_reread_tax": 0,
+        "reread_tax_usd": 0.0,
+        "cache_saved_usd": 0.0,
+    }
+    try:
+        meta_rows = _ls_call("query_sessions_table", limit=2000) or []
+        for mr in meta_rows:
+            md = mr.get("metadata") or {}
+            if not isinstance(md, dict):
+                continue
+            exp = md.get("cacheExpiryCount")
+            if exp and int(exp) > 0:
+                out["sessions_with_expiry"] += 1
+                out["total_expiry_count"] += int(exp)
+            cwc = float(md.get("cacheWriteCostUsd") or 0.0)
+            csv_ = float(md.get("cacheSavedUsd") or 0.0)
+            if cwc > 0.0:
+                out["rewrite_cost_usd"] += cwc
+                if cwc > 0.005 and cwc > csv_:
+                    out["sessions_with_reread_tax"] += 1
+                    out["reread_tax_usd"] += cwc
+            if csv_ > 0.0:
+                out["cache_saved_usd"] += csv_
+    except Exception:
+        pass
+    out["rewrite_cost_usd"] = round(out["rewrite_cost_usd"], 4)
+    out["reread_tax_usd"] = round(out["reread_tax_usd"], 4)
+    out["cache_saved_usd"] = round(out["cache_saved_usd"], 4)
+    return jsonify(out)
+
+
 # ── Skills fidelity telemetry (GH #687) ─────────────────────────────────
 
 
