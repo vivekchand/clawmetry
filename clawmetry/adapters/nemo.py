@@ -91,7 +91,7 @@ from typing import Any, Optional
 logger = logging.getLogger("clawmetry.adapters.nemo")
 
 
-# ── Free-tier daily ingest cap (issue #1170) ───────────────────────────
+# ── Free-tier daily ingest cap (issue #1170) ───────────────────────────────
 #
 # NeMo Agent Toolkit users are the highest-value paid-conversion segment
 # we observe (enterprise GPU buyers). Shipping the adapter under OSS gave
@@ -630,7 +630,7 @@ class NeMoAdapter:
         return row
 
 
-# ── NemoClaw RUNTIME read-side AgentAdapter ────────────────────────────────
+# ── NemoClaw RUNTIME read-side AgentAdapter ─────────────────────────────────────────
 #
 # NemoClaw is a Free runtime alongside OpenClaw (FREE_RUNTIMES in
 # clawmetry/entitlements.py contains {"openclaw", "nemoclaw"}). It is the
@@ -652,11 +652,6 @@ from .base import AgentAdapter, Capability, DetectResult, Event, Session
 
 
 def _extract_skill_names(raw: dict) -> list:
-    """Extract published skill names from catalog-metadata.json.
-
-    Accepts each skills entry as a bare string or an object with a ``name``
-    (or ``id`` / ``skillName``) key. Unknown shapes are skipped silently.
-    """
     names = []
     for entry in raw.get("skills", []):
         if isinstance(entry, str):
