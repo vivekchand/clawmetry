@@ -14523,6 +14523,154 @@ def _emit_detector_incidents(store, state: dict) -> int:
     return emitted
 
 
+# ── Per-session loops slice (Command River Phase-2) ─────────────────────────
+# The desk device's deviceSummary.alert (and the heartbeat `stuck` payload)
+# carries the loudest single incident's *banner text* but STRIPS the
+# session_id, so the cloud Command River cannot bind a red "whirlpool" + the
+# Kill/Pause alarm to the EXACT looping sub-agent lane. This slice fixes that:
+# a small, bounded, plaintext `loops[]` array where every entry CARRIES the
+# canonical session_id the river keys lanes on. It is sourced for free from
+# the loop_signals rows the detector/stuck pass already wrote (no recompute,
+# no extra DuckDB scan beyond one indexed read) and is self-clearing: a
+# session that stops looping simply ages out of the 30-min loop_signals window
+# and drops from the slice (mirrors the device alert's self-clear).
+#
+# Trust class: this is the SAME exposure as the already-shipped
+# deviceSummary.alert — aggregate metadata (session id + a short plain-words
+# title + counts). Titles are the detector's plain-words summary (e.g.
+# "codex looping: 6x identical Bash calls"); the per-session encrypted brain
+# feed carries the real content. Honesty: only rows a detector GENUINELY
+# wrote appear here — never synthesized.
+_LOOPS_SLICE_MAX = int(os.environ.get("CLAWMETRY_LOOPS_SLICE_MAX", "12"))
+# loop_signals signatures whose details.kind we trust as a real loop/stuck
+# incident. Detector rows are "daemon_detect_<kind>"; the no-progress stuck
+# detector writes "daemon_stuck"; the proxy LoopDetector writes a request-hash
+# signature (a genuine loop too). We surface all of them.
+_LOOPS_KIND_BY_SIGNATURE = {
+    "daemon_stuck": "stuck_loop",
+    "daemon_detect_stuck_loop": "stuck_loop",
+    "daemon_detect_no_progress": "no_progress",
+    "daemon_detect_repeated_tool_failure": "repeated_tool_failure",
+    "daemon_detect_action_discrepancy": "action_discrepancy",
+}
+_LOOPS_VALID_KINDS = frozenset(_LOOPS_KIND_BY_SIGNATURE.values())
+
+
+def _build_loops_slice(store):
+    """Build the bounded, plaintext ``loops[]`` snapshot slice from the loop
+    signals the detector/stuck pass already wrote.
+
+    Each entry carries the CANONICAL ``session_id`` (exactly the id the
+    detector ran on, which is the id ``query_sessions_table`` reports and the
+    same form the river's ``subagents[].parent`` ids take) so the cloud
+    Command River can bind a whirlpool + Kill/Pause alarm to the exact lane.
+
+    Shape per entry::
+
+        {
+          "session_id":       str,   # canonical bare-or-prefixed id
+          "kind":             "stuck_loop"|"no_progress"|
+                              "repeated_tool_failure"|"action_discrepancy",
+          "title":            str,   # plain-words incident text (device-equiv)
+          "count":            int,   # loop repeat / tool-call / failure count
+          "first_bad_step_ts": str|None,  # ISO ts the loop began (first_seen)
+          "since":            str|None,    # alias of first_bad_step_ts
+          "severity":         "warning"|"info",
+          "runtime":          str,
+        }
+
+    Sourced from ``query_recent_loop_signals`` (one indexed read, 30-min
+    self-clearing window) — NO recompute. Returns a list capped at
+    ``_LOOPS_SLICE_MAX``, newest-loop first, deduped per session (highest
+    repeat_count wins). Never raises — returns ``[]`` on any error so the
+    river falls back to its honest no-whirlpool default.
+    """
+    try:
+        sigs = store.query_recent_loop_signals(limit=50, since_minutes=30) or []
+    except Exception as e:  # noqa: BLE001
+        log.debug("loops-slice: query_recent_loop_signals failed: %s", e)
+        return []
+
+    out: list[dict] = []
+    seen: dict[str, int] = {}  # session_id -> index in `out` (dedupe)
+    for s in sigs:
+        if not isinstance(s, dict):
+            continue
+        sid = str(s.get("session_id") or "").strip()
+        if not sid:
+            continue  # CRITICAL: a loop with no session id cannot bind a lane.
+        signature = str(s.get("signature") or "")
+        det = s.get("details")
+        if isinstance(det, str):
+            try:
+                det = json.loads(det)
+            except Exception:
+                det = None
+        det = det if isinstance(det, dict) else {}
+
+        # Resolve the kind: trust details.kind when it names a known detector
+        # class, else map by signature, else (proxy request-hash signature)
+        # fall back to the generic loop class. Skip anything we can't classify
+        # as a real loop/stuck incident — never synthesize.
+        kind = str(det.get("kind") or "").strip()
+        if kind not in _LOOPS_VALID_KINDS:
+            kind = _LOOPS_KIND_BY_SIGNATURE.get(signature, "")
+        if not kind:
+            # Proxy LoopDetector rows carry a request-hash signature (not in the
+            # map) but are a genuine loop — classify as stuck_loop.
+            kind = "stuck_loop" if signature else ""
+        if kind not in _LOOPS_VALID_KINDS:
+            continue
+
+        try:
+            count = int(s.get("repeat_count") or 0)
+        except (TypeError, ValueError):
+            count = 0
+
+        # Title: prefer the detector's plain-words message (device-equivalent
+        # exposure); else a generic kind+count line (keeps content out when we
+        # are unsure — honesty invariant #3).
+        title = str(det.get("message") or "").strip()
+        runtime = str(s.get("agent_type") or det.get("runtime") or "").strip()
+        if not title:
+            rt = runtime or "an agent"
+            if kind == "no_progress":
+                title = f"{rt}: {count} tool calls, not advancing"
+            elif kind == "repeated_tool_failure":
+                title = f"{rt}: a tool failed {count} times"
+            elif kind == "action_discrepancy":
+                title = f"{rt} continued after a failed command"
+            else:
+                title = f"{rt} looping, {count} repeats, no progress"
+        title = title[:160]
+
+        first_seen = s.get("first_seen")
+        first_bad = first_seen if isinstance(first_seen, str) and first_seen else None
+
+        entry = {
+            "session_id": sid,
+            "kind": kind,
+            "title": title,
+            "count": count,
+            "first_bad_step_ts": first_bad,
+            "since": first_bad,
+            "severity": str(s.get("severity") or "warning"),
+            "runtime": runtime or "openclaw",
+        }
+
+        prev = seen.get(sid)
+        if prev is not None:
+            # One whirlpool per session: keep the loudest (highest count).
+            if count > int(out[prev].get("count") or 0):
+                out[prev] = entry
+            continue
+        seen[sid] = len(out)
+        out.append(entry)
+        if len(out) >= _LOOPS_SLICE_MAX:
+            break
+    return out
+
+
 def _build_device_summary(spending, daily_usage, efficiency=None):
     """Compact, all-runtime payload for a WiFi hardware companion.
 
@@ -15350,6 +15498,21 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _e_eff:
         log.debug("snapshot: efficiency slice failed: %s", _e_eff)
 
+    # Per-session loops slice (Command River Phase-2). Built on the daemon's
+    # OWN store handle (never a read_only re-open — FLYWHEEL §1) from the
+    # loop_signals rows the detector/stuck pass already wrote (no recompute).
+    # Carries the canonical session_id so the cloud can bind a whirlpool +
+    # Kill/Pause alarm to the exact looping lane. Self-clearing (30-min
+    # window). Empty list == honestly nothing looping right now.
+    _loops_slice: list = []
+    try:
+        from clawmetry import local_store as _ls_loops
+        _loops_store = _ls_loops.get_store()
+        if _loops_store is not None:
+            _loops_slice = _build_loops_slice(_loops_store)
+    except Exception as _e_loops:
+        log.debug("snapshot: loops slice failed: %s", _e_loops)
+
     from clawmetry.providers_pricing import provider_for_model as _pfm
     payload = {
         "system": system,
@@ -15368,6 +15531,12 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "memorySize": sum(f.get("size", 0) for f in _mem_files),
         "memoryFiles": _mem_files,
         "subagents": subagents_list,
+        # Command River Phase-2: per-session loop/stuck incidents, each
+        # carrying the canonical session_id so the cloud binds a red whirlpool
+        # + Kill/Pause alarm to the EXACT looping lane (the deviceSummary.alert
+        # path strips the id). Self-clearing 30-min window; empty == nothing
+        # looping. Sourced from the detector pass's loop_signals (no recompute).
+        "loops": _loops_slice,
         "subagentCounts": {
             "active": active_count,
             "idle": len([s for s in subagents_list if s["status"] == "idle"]),
