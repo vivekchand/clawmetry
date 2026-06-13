@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Auto-update now installs the newest aged-in release instead of the absolute latest (#3093) (2026-06-13)
+- **Why:** the daemon auto-update gated the unattended install on the absolute latest version's age against a 48h stability window. During an active release run (many publishes less than 48h apart) the latest is always too fresh, so the daemon held every check and never updated, leaving nodes stuck on an old build. This matched the fleet audit where almost no active node was current and every shipped fix reached nobody.
+- **What:** the auto-updater now selects the newest version above the current build that has aged past the stability window and installs that specific version (pinned), so the fleet tracks latest-minus-window and keeps moving forward during active development. The update banner still advertises the absolute latest; only the silent install targets the aged release. The window stays 48h, overridable via `CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS`.
+- **Verified:** new selection tests (newest aged-in chosen over a too-fresh latest; none when all too fresh; lower window installs more), revert-proven, 26 tests green on Python 3.9.
+
 ### Efficiency grade + savings hint on the desk device summary (#3073) (2026-06-12)
 - **Why:** the efficiency grade shipped to the web (0.12.515) but the desk device glance had no way to show it; the device is exactly the surface where one letter + one dollar figure beats a dashboard.
 - **What:** deviceSummary.efficiency = {grade, save_monthly_usd}, computed once per snapshot cycle and shared with the top-level efficiency slice (CPU budget), omitted entirely when data is thin so the firmware never renders a fake grade.
