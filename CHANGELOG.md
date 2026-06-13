@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Release: publish the per-session loops[] snapshot slice to PyPI (2026-06-13)
+- Ships the daemon `loops[]` slice (each entry carries the canonical session_id for an active loop or stuck incident) so the cloud Command River can bind the red whirlpool and the Kill/Pause alarm to the exact looping agent. Carries the feature merged in #3100.
+
 ### Per-session loops slice so the Command River whirlpool binds the exact looping agent (2026-06-13)
 - **Why:** the cloud Brain "Command River" draws a red whirlpool plus a Kill/Pause alarm on the looping lane, but the only loop signal it had was `deviceSummary.alert`, whose heartbeat path strips the session_id. So the whirlpool could only bind when the alert text happened to name a session in view; there was no precise per-agent loop signal to bind the alarm to the exact sub-agent.
 - **What:** the daemon snapshot now carries a top-level `loops` array. Each entry is one currently-active loop or stuck incident the detectors already flagged, carrying the canonical `session_id` the river keys lanes on, plus `kind` (stuck_loop / no_progress / repeated_tool_failure / action_discrepancy), a plain-words `title`, `count`, `first_bad_step_ts`, `since`, `severity`, and `runtime`. It is sourced for free from the loop_signals rows the existing detector pass writes (one indexed 30-minute read, no recompute, CPU-cheap) and is self-clearing: a session that stops looping ages out of the window and drops from the slice. Only rows a detector genuinely wrote appear, never synthesized; titles stay to the detector's plain-words summary (the same exposure as the already-shipped device alert), so detail stays in the per-session encrypted brain feed.
