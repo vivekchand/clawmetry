@@ -29,6 +29,13 @@ logger = logging.getLogger("clawmetry.extensions")
 _registry: Dict[str, List[Callable]] = {}
 _lock = threading.Lock()
 _loaded = False
+# Names of plugin entry points that successfully loaded, in load order.
+# A diagnostic-only mirror used by :func:`loaded_plugins` and
+# ``GET /api/extensions`` so operators can confirm clawmetry-pro is actually
+# wired in without scraping ``pip list``. A plugin that raised during load
+# is intentionally NOT recorded here — matches the warning-and-continue
+# posture of ``load_plugins`` itself.
+_loaded_plugins: List[str] = []
 
 
 def register(event: str, handler: Callable[[Dict[str, Any]], None]) -> None:
@@ -109,6 +116,10 @@ def load_plugins(app=None) -> None:
     if _loaded:
         return
     _loaded = True
+    # Reset the diagnostic mirror so a test that flips ``_loaded`` back to
+    # False and re-runs the loader doesn't see stale names from the prior pass.
+    with _lock:
+        _loaded_plugins.clear()
 
     try:
         eps = _select_entry_points("clawmetry.extensions")
@@ -133,6 +144,12 @@ def load_plugins(app=None) -> None:
                 fn(app)
             else:
                 fn()
+            # Record AFTER a successful invocation so a plugin that raised
+            # is reported as not-loaded by ``loaded_plugins`` / /api/extensions.
+            name = getattr(ep, "name", "") or ""
+            if name:
+                with _lock:
+                    _loaded_plugins.append(name)
             logger.info(f"Loaded ClawMetry extension plugin: {ep.name!r}")
         except Exception as exc:
             logger.warning(f"Failed to load extension plugin {ep.name!r}: {exc}")
@@ -148,3 +165,18 @@ def handler_count(event: str) -> int:
     """Return number of handlers registered for an event."""
     with _lock:
         return len(_registry.get(event, []))
+
+
+def loaded_plugins() -> List[str]:
+    """Names of entry-point plugins that loaded successfully in this process.
+
+    The ``clawmetry-pro`` wheel ships as a ``clawmetry.extensions`` entry point;
+    this helper lets ``clawmetry status``, ``GET /api/extensions``, and the
+    dashboard's diagnostic surface answer "is the paid package actually wired
+    in?" without scraping ``pip list`` or importing the package. Returns a
+    SHALLOW COPY so callers can't mutate the registry. Names appear in load
+    order; entries that raised during load are excluded — matching the
+    warning-and-continue posture of :func:`load_plugins`. Never raises.
+    """
+    with _lock:
+        return list(_loaded_plugins)
