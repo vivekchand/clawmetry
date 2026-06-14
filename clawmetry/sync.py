@@ -2239,6 +2239,104 @@ def sync_sessions(config: dict, state: dict, paths: dict) -> int:
     return total
 
 
+def sync_sandbox_sessions_openshell(config: dict, state: dict) -> int:
+    """Ingest sessions from inside NemoClaw sandbox containers via openshell exec.
+
+    Complements ``sync_sessions`` which only reads the host filesystem. Each
+    NemoClaw sandbox hosts its own OpenClaw workspace at ``/sandbox/.openclaw``;
+    sessions there are invisible to the host path scan but accessible via
+    ``openshell sandbox exec``. Closes #3116.
+    """
+    if not _sync_allowed():
+        return 0
+    openshell_bin = _find_openshell_bin()
+    if not openshell_bin:
+        return 0
+
+    try:
+        sb_out = subprocess.run(
+            [openshell_bin, "sandbox", "list", "--json"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if sb_out.returncode != 0:
+            return 0
+        sandboxes = json.loads(sb_out.stdout)
+    except Exception as _e:
+        log.debug("sandbox-session sync: list failed: %s", _e)
+        return 0
+
+    if not isinstance(sandboxes, list):
+        return 0
+
+    api_key = config.get("api_key", "")
+    enc_key = config.get("encryption_key")
+    node_id = config.get("node_id", "")
+    cursors: dict = state.setdefault("sandbox_session_cursors", {})
+    total = 0
+
+    for sb in sandboxes:
+        if not isinstance(sb, dict):
+            continue
+        sb_name = sb.get("name", "")
+        if not sb_name:
+            continue
+
+        sessions_path = "/sandbox/.openclaw/agents/main/sessions"
+        try:
+            ls_out = subprocess.run(
+                [openshell_bin, "sandbox", "exec", "--name", sb_name, "--",
+                 "sh", "-c", f"ls {sessions_path}/ 2>/dev/null"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if ls_out.returncode != 0:
+                continue
+            fnames = [
+                f.strip() for f in ls_out.stdout.splitlines()
+                if f.strip().endswith(".jsonl")
+                and ".trajectory." not in f
+                and ".checkpoint." not in f
+                and ".deleted." not in f
+            ]
+        except Exception as _le:
+            log.debug("sandbox-session sync: ls failed for %s: %s", sb_name, _le)
+            continue
+
+        for fname in fnames:
+            cursor_key = f"{sb_name}/{fname}"
+            last_line = cursors.get(cursor_key, 0)
+            try:
+                cat_out = subprocess.run(
+                    [openshell_bin, "sandbox", "exec", "--name", sb_name, "--",
+                     "cat", f"{sessions_path}/{fname}"],
+                    capture_output=True, text=True, timeout=30,
+                )
+                if cat_out.returncode != 0:
+                    continue
+                all_lines = cat_out.stdout.splitlines()
+                batch: list[dict] = []
+                for raw in all_lines[last_line:]:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        obj = json.loads(raw)
+                    except Exception:
+                        continue
+                    if isinstance(obj, dict):
+                        batch.append(obj)
+                if batch:
+                    _flush_session_batch(batch, fname, api_key, enc_key, node_id, None)
+                    total += len(batch)
+                cursors[cursor_key] = len(all_lines)
+            except Exception as _ce:
+                log.debug(
+                    "sandbox-session sync: read failed for %s/%s: %s",
+                    sb_name, fname, _ce,
+                )
+
+    return total
+
+
 def _flush_session_batch(
     batch: list,
     fname: str,
@@ -17203,6 +17301,12 @@ def run_daemon() -> None:
 
             ev = sync_sessions(config, state, paths)
             ev += sync_claude_cli_sessions(config, state, paths)
+            # NemoClaw sandbox-internal sessions (#3116) — openshell exec path.
+            # No-op when openshell is absent or no sandbox has openclaw sessions.
+            try:
+                ev += sync_sandbox_sessions_openshell(config, state)
+            except Exception as _sb_e:
+                log.debug("sandbox-session sync failed (non-fatal): %s", _sb_e)
             # OpenClaw-family runtimes (PicoClaw/NanoClaw) sessions -> DuckDB +
             # cloud, throttled. Cheap no-op when neither runtime is present
             # (detect() short-circuits), so the gate is just to bound the
