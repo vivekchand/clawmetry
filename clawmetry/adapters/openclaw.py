@@ -443,10 +443,21 @@ class OpenClawAdapter(AgentAdapter):
                             raw_data = bytes(raw_data).decode("utf-8", "replace")
                         obj = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
                         if isinstance(obj, dict):
-                            for _field in ("channel", "hostname"):
+                            # Surface gateway log-record top-level structured
+                            # fields. channel/hostname keep their names; the
+                            # severity level is exposed as ``log_level`` and the
+                            # originating subsystem as ``subsystem`` so callers
+                            # can filter or alert on log severity and origin
+                            # (closes #3055 / #3013).
+                            for _field, _key in (
+                                ("channel", "channel"),
+                                ("hostname", "hostname"),
+                                ("level", "log_level"),
+                                ("subsystem", "subsystem"),
+                            ):
                                 _val = obj.get(_field)
                                 if _val:
-                                    extra[_field] = _val
+                                    extra[_key] = _val
                             msg = obj.get("message")
                             if isinstance(msg, str):
                                 content_text = msg

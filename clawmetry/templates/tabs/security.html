@@ -218,6 +218,16 @@
         <div style="color:var(--text-muted);padding:12px;" data-i18n="security.scanning">Scanning...</div>
       </div>
     </div>
+    <!-- API Key Scan -->
+    <div style="margin-top:14px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;" id="credential-scan-panel">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+        <span style="font-size:12px;font-weight:700;color:var(--text-primary);">🔑 API Key Scan</span>
+        <span id="credential-scan-badge" style="font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;background:var(--bg-primary);color:var(--text-muted);">scanning...</span>
+      </div>
+      <div id="credential-scan-list" style="max-height:260px;overflow-y:auto;font-size:12px;">
+        <div style="color:var(--text-muted);padding:12px;">Scanning session events for leaked API keys...</div>
+      </div>
+    </div>
     <div style="
       margin-top:14px;
       background:var(--bg-secondary);

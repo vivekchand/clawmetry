@@ -273,21 +273,6 @@
 .ab *::-webkit-scrollbar { display: none; }
 .ab * { scrollbar-width: none; }
 
-/* animation tokens */
-@keyframes cm-blink { 0%,80%,100%{opacity:1} 40%{opacity:.2} }
-@keyframes cm-sweep { 0%{transform:rotate(0)} 100%{transform:rotate(360deg)} }
-@keyframes cm-pulse { 0%,100%{opacity:.4;transform:scale(1)} 50%{opacity:1;transform:scale(1.05)} }
-@keyframes cm-trail { 0%{stroke-dashoffset:200} 100%{stroke-dashoffset:0} }
-
-.cm-blink { animation: cm-blink 1.4s infinite; }
-.cm-pulse { animation: cm-pulse 1.8s ease-in-out infinite; } 
-
-.cm-ecg path {
-  stroke-dasharray: 200;
-  stroke-dashoffset: 200;
-  animation: cm-trail 1.4s linear infinite;
-}
-
 /* metaphor frame variants — wraps the featured dashboard */
 .metaphor-hood {
   background:

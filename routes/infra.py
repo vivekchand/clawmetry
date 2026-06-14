@@ -1674,6 +1674,56 @@ def api_security_audit():
         return jsonify({"entries": [], "event_types": [], "count": 0})
 
 
+_LEAK_PATTERN_LABELS = {
+    "POL-LEAK-001": "aws",
+    "POL-LEAK-002": "anthropic",
+    "POL-LEAK-003": "openai",
+    "POL-LEAK-004": "github",
+    "POL-LEAK-005": "generic",
+}
+
+
+@bp_security.route("/api/security/credential-scan")
+def api_security_credential_scan():
+    """Scan recent session events for raw API keys (OpenAI, Anthropic, AWS, GitHub, generic).
+
+    Returns {leaks, count} where each leak has {type, file, line, pattern, redacted}.
+    Never returns the raw matched value. Reads from DuckDB via brain history —
+    works in both local and cloud deployments.
+    """
+    import dashboard as _d
+    from routes.brain import api_brain_history
+    try:
+        brain_resp = api_brain_history()
+        brain_data = brain_resp.get_json()
+        events = brain_data.get("events", [])
+    except Exception:
+        events = []
+
+    leaks = []
+    for idx, ev in enumerate(events):
+        detail = ev.get("detail") or ""
+        if len(detail) < 8:
+            continue
+        for sig in _d._POLICY_SIGNATURES:
+            if sig.get("type") != "LEAK":
+                continue
+            m = sig["_compiled"].search(detail)
+            if m:
+                raw = m.group(0)
+                redacted = (raw[:3] + "..." + raw[-4:]) if len(raw) > 8 else "***"
+                leaks.append({
+                    "type":     "api_key_leak",
+                    "file":     ev.get("source", ""),
+                    "line":     idx,
+                    "pattern":  _LEAK_PATTERN_LABELS.get(sig["id"], "unknown"),
+                    "redacted": redacted,
+                })
+                break  # one match per event
+
+    return jsonify({"leaks": leaks[:200], "count": len(leaks)})
+
+
 # ── Config / Cost optimization ─────────────────────────────────────────────
 
 

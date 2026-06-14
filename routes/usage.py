@@ -16,6 +16,10 @@ Owns the 12 routes registered on bp_usage:
   GET  /api/usage/export                  — CSV export of usage
   GET  /api/model-attribution             — per-model turn/session split
   GET  /api/skill-attribution             — per-skill cost attribution
+  GET  /api/usage/by-team                 — per-agent / per-team cost attribution
+  GET  /api/usage/team-mappings           — list runtime→team label mappings
+  POST /api/usage/team-mappings           — create/update a mapping
+  DELETE /api/usage/team-mappings/<k>/<v> — delete a mapping
   GET  /api/token-velocity                — runaway-loop detection
   GET  /api/usage/cache-trends            — prompt-cache hit-rate analytics
   GET  /api/skills/fidelity              — dead-skill detector + body/linked-file stats
@@ -3183,6 +3187,96 @@ def api_skill_attribution():
         'note': note,
         'clawhub': {'enabled': False, 'url': None},
     })
+
+
+# ── Per-agent / per-team cost attribution (issue #3000) ──────────────────────
+
+def _ls_call_team(method: str, **kwargs):
+    """Thin wrapper: daemon HTTP proxy first, direct DuckDB fallback."""
+    try:
+        from routes.local_query import local_store_via_daemon
+        result = local_store_via_daemon(method, **kwargs)
+        if result is not None:
+            return result
+    except Exception:
+        pass
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store(read_only=True)
+        return getattr(store, method)(**kwargs)
+    except Exception:
+        return None
+
+
+@bp_usage.route('/api/usage/by-team')
+def api_usage_by_team():
+    """Per-team / per-agent cost attribution over the rollup_session table.
+
+    Groups sessions by runtime, applying any user-defined team_mapping entries
+    (key_type='runtime') so 'claude_code' can be labelled 'Eng Team' etc.
+    Falls back to raw runtime names when no mapping exists.
+
+    Query params:
+      window  — int, number of days to look back (default 7)
+
+    Returns:
+      {
+        "teams": [{"label": str, "cost_usd": float, "tokens": int,
+                   "sessions": int, "runtimes": [str]}],
+        "window_days": int
+      }
+    """
+    try:
+        window_days = max(1, min(int(request.args.get('window', 7)), 365))
+    except (TypeError, ValueError):
+        window_days = 7
+
+    rows = _ls_call_team('query_usage_by_team', window_days=window_days)
+    if rows is None:
+        rows = []
+    return jsonify({'teams': rows, 'window_days': window_days})
+
+
+@bp_usage.route('/api/usage/team-mappings', methods=['GET'])
+def api_usage_team_mappings_list():
+    """List all team_mapping rows."""
+    rows = _ls_call_team('list_team_mappings')
+    return jsonify({'mappings': rows or []})
+
+
+@bp_usage.route('/api/usage/team-mappings', methods=['POST'])
+def api_usage_team_mappings_upsert():
+    """Create or update a team mapping.
+
+    Body: {"key_type": "runtime", "key_value": "claude_code", "team_label": "Eng Team"}
+    """
+    body = request.get_json(silent=True) or {}
+    key_type = str(body.get('key_type', '')).strip()
+    key_value = str(body.get('key_value', '')).strip()
+    team_label = str(body.get('team_label', '')).strip()
+    if not key_type or not key_value or not team_label:
+        return jsonify({'error': 'key_type, key_value, and team_label are required'}), 400
+    if key_type not in ('runtime', 'node'):
+        return jsonify({'error': "key_type must be 'runtime' or 'node'"}), 400
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+        store.upsert_team_mapping(key_type, key_value, team_label)
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+    return jsonify({'ok': True})
+
+
+@bp_usage.route('/api/usage/team-mappings/<key_type>/<key_value>', methods=['DELETE'])
+def api_usage_team_mappings_delete(key_type: str, key_value: str):
+    """Delete a team mapping by key_type + key_value."""
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+        deleted = store.delete_team_mapping(key_type, key_value)
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+    return jsonify({'ok': True, 'deleted': deleted})
 
 
 @bp_usage.route('/api/token-velocity')
