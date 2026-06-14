@@ -6,8 +6,11 @@ runtimes/features to surface (and, once enforcement is live, which to render
 locked behind an upgrade CTA). Backed by :mod:`clawmetry.entitlements`, which
 is the single source of truth — handlers never re-derive tier logic here.
 
-  GET /api/entitlement — the current Entitlement as JSON.
-  GET /api/runtimes    — the full runtime catalog with locked/free flags.
+  GET /api/entitlement            — the current Entitlement as JSON.
+  GET /api/entitlement/diagnostic — the *inputs* the resolver consulted
+                                     (license/cloud-plan presence, enforce env,
+                                     cache liveness) for operator triage.
+  GET /api/runtimes               — the full runtime catalog with locked/free flags.
 
 Side-effect-free and never-raise, so it is safe to classify ``oss-passthrough``
 on the cloud side: when no license/cloud plan is present it returns a graceful
@@ -47,6 +50,43 @@ def api_entitlement():
                 "enforced": False,
                 "runtimes": ["nemoclaw", "openclaw"],
                 "features": [],
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/diagnostic")
+def api_entitlement_diagnostic():
+    """Return the *inputs* the entitlement resolver consulted.
+
+    Where ``/api/entitlement`` reports the resolved outputs, this endpoint
+    reports the inputs — license/cloud-plan path presence (not contents), the
+    raw ``CLAWMETRY_ENFORCE`` env var and the boolean it resolves to, and the
+    cache liveness for the next call. Lets operators answer "why does this
+    install think it's on tier X?" without shelling into the host.
+
+    Side-effect-free, never reads file contents, never raises: on any
+    diagnostic-collection failure the route returns a minimal safe shape so a
+    dashboard panel can always render something.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        return jsonify(_ent.resolution_diagnostic())
+    except Exception as exc:  # never crash the dashboard over a diagnostic read
+        logger.warning("api_entitlement_diagnostic: falling back to minimal: %s", exc)
+        return jsonify(
+            {
+                "license_path": None,
+                "license_present": False,
+                "cloud_plan_path": None,
+                "cloud_plan_present": False,
+                "enforce_env": os.environ.get("CLAWMETRY_ENFORCE"),
+                "is_enforced": False,
+                "cache_age_seconds": None,
+                "cache_ttl_seconds": None,
+                "cache_hit_next_call": False,
+                "cache_cached_tier": None,
+                "error": str(exc),
             }
         )
 
