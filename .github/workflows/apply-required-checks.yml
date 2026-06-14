@@ -15,14 +15,15 @@ name: Apply required E2E status checks (C6 -- one-shot)
 #                      The token is masked via ::add-mask:: before use.
 #
 #   push to main -- self-healing: re-verifies checks on every merge.
-#     GITHUB_TOKEN path: read-only verify + print instructions (no write).
+#     GITHUB_TOKEN path: read-only verify + exit 1 if not configured
+#                        (red badge = forcing signal), exit 0 when done.
 #     E2E_ADMIN_PAT set: applies and verifies branch protection.
 #
 # TOKEN PATHS (priority order):
 #   1. inputs.pat_token  -- PAT typed into the Run workflow dialog
 #   2. secrets.E2E_ADMIN_PAT -- pre-stored repo secret
-#   3. github.token (ghs_) -- read-only fallback; prints instructions,
-#                              never blocks (always exits 0)
+#   3. github.token (ghs_) -- read-only fallback; exits 1 until C6 is
+#                              closed, then self-heals to exit 0 (green).
 #
 # NOTE: administration:write is intentionally absent from permissions.
 #   It is NOT a valid GITHUB_TOKEN permission in Actions; requesting it
@@ -84,6 +85,7 @@ jobs:
             echo "  Using pat_token input -- will apply to all 3 repos:"
             echo "  clawmetry         : OSS golden path (wheel + OpenClaw + 9 tabs)"
             echo "  clawmetry         : Cross-repo handoff (C4)"
+            echo "  clawmetry         : MOAT Keystone (13-endpoint bar)"
             echo "  clawmetry         : E2E Browser Tests (critical subset)"
             echo "  clawmetry-cloud   : Cloud golden-path browser E2E"
             echo "  clawmetry-landing : Landing golden path (C3)"
@@ -91,6 +93,7 @@ jobs:
             echo "  Using E2E_ADMIN_PAT secret -- will apply to all 3 repos:"
             echo "  clawmetry         : OSS golden path (wheel + OpenClaw + 9 tabs)"
             echo "  clawmetry         : Cross-repo handoff (C4)"
+            echo "  clawmetry         : MOAT Keystone (13-endpoint bar)"
             echo "  clawmetry         : E2E Browser Tests (critical subset)"
             echo "  clawmetry-cloud   : Cloud golden-path browser E2E"
             echo "  clawmetry-landing : Landing golden path (C3)"
@@ -109,4 +112,5 @@ jobs:
         if: github.event_name == 'push' || github.event.inputs.confirm == 'APPLY'
         env:
           GITHUB_TOKEN: ${{ inputs.pat_token || secrets.E2E_ADMIN_PAT || github.token }}
+          CONFIRM_INPUT: ${{ inputs.confirm || '' }}
         run: python3 scripts/apply_required_status_checks.py
