@@ -465,6 +465,17 @@ class OpenClawAdapter(AgentAdapter):
                 extra["nemoclawToolCatalogEnabled"] = _tc_enabled
             if _tc_kind is not None:
                 extra["openclawToolCatalogKind"] = _tc_kind
+            tok_total = int(s.get("totalTokens") or 0)
+            tok_in = int(s.get("inputTokens") or 0)
+            tok_out = int(s.get("outputTokens") or 0)
+            tok_cr = int(s.get("cacheReadTokens") or 0)
+            tok_cw = int(s.get("cacheWriteTokens") or 0)
+            # #2794: prefer explicit reasoning field; fall back to totalTokens
+            # residual so reasoning_tokens is never silently zero for
+            # extended-thinking sessions that don't emit a separate key.
+            tok_reasoning: Optional[int] = s.get("reasoningTokens") or s.get("reasoning_tokens")
+            if tok_reasoning is None and tok_total:
+                tok_reasoning = max(0, tok_total - (tok_in + tok_out + tok_cr + tok_cw))
             out.append(
                 Session(
                     agent=self.name,
@@ -473,12 +484,12 @@ class OpenClawAdapter(AgentAdapter):
                     model=s.get("model") or "",
                     source=s.get("channel") or "",
                     started_at=started_at,
-                    total_tokens=int(s.get("totalTokens") or 0),
-                    input_tokens=int(s.get("inputTokens") or 0),
-                    output_tokens=int(s.get("outputTokens") or 0),
-                    cache_read_tokens=int(s.get("cacheReadTokens") or 0),
-                    cache_write_tokens=int(s.get("cacheWriteTokens") or 0),
-                    reasoning_tokens=_reasoning_tokens(s),
+                    total_tokens=tok_total,
+                    input_tokens=tok_in,
+                    output_tokens=tok_out,
+                    cache_read_tokens=tok_cr,
+                    cache_write_tokens=tok_cw,
+                    reasoning_tokens=int(tok_reasoning or 0),
                     cost_usd=float(s["costUsd"]) if s.get("costUsd") is not None else None,
                     end_reason=s.get("endReason") or s.get("end_reason") or "",
                     parent_id=s.get("parentId") or None,
@@ -639,15 +650,33 @@ class OpenClawAdapter(AgentAdapter):
                                         if v is not None:
                                             extra[dst] = int(v)
                                             break
-                                # Extended-thinking / reasoning tokens (#2876):
-                                # Anthropic thinking sessions emit a reasoning
-                                # token share that input+output alone omit. Surface
-                                # it so per-turn cost is not under-reported.
+                                # Extended-thinking / reasoning tokens: prefer
+                                # an explicit key (e.g. thinking_input_tokens);
+                                # fall back to totalTokens residual for sessions
+                                # that report totalTokens without a separate key.
                                 _rt = _reasoning_tokens(usage)
                                 if _rt:
                                     extra["reasoningTokens"] = _rt
+                                else:
+                                    _tt = extra.get("totalTokens")
+                                    if _tt is not None:
+                                        _split = (
+                                            extra.get("inputTokens", 0)
+                                            + extra.get("outputTokens", 0)
+                                            + extra.get("cacheReadTokens", 0)
+                                            + extra.get("cacheWriteTokens", 0)
+                                        )
+                                        _res = max(0, int(_tt) - _split)
+                                        if _res:
+                                            extra["reasoningTokens"] = _res
                     except Exception:
                         pass
+                # #2794: DB token_count derives from input+output and under-counts
+                # reasoning turns; prefer totalTokens from the blob when larger.
+                _ev_tokens = int(r[4] or 0)
+                _tt = extra.get("totalTokens")
+                if _tt is not None and int(_tt) > _ev_tokens:
+                    _ev_tokens = int(_tt)
                 events.append(Event(
                     agent=self.name,
                     session_id=str(session_id),
@@ -655,7 +684,7 @@ class OpenClawAdapter(AgentAdapter):
                     type=str(r[1] or "event"),
                     ts=ts_f,
                     content=content_text,
-                    tokens=int(r[4] or 0),
+                    tokens=_ev_tokens,
                     extra=extra,
                 ))
         except Exception as exc:
