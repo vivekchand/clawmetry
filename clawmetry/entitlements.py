@@ -111,6 +111,27 @@ RUNTIME_LABELS = {
     "nanoclaw": "NanoClaw",
 }
 
+# Common alternative spellings that callers (custom ingest, OTLP service.name,
+# CLI flags) sometimes use. Mapped to the canonical snake_case identifier so the
+# gate and the labels lookup don't reject a runtime over a stray hyphen. The
+# canonical id is always the value; only the keys differ.
+RUNTIME_ALIASES = {
+    "claude-code": "claude_code",
+    "claudecode": "claude_code",
+    "qwen-code": "qwen_code",
+    "qwencode": "qwen_code",
+    "open-code": "opencode",
+    "open_code": "opencode",
+    "open-claw": "openclaw",
+    "open_claw": "openclaw",
+    "nemo-claw": "nemoclaw",
+    "nemo_claw": "nemoclaw",
+    "pico-claw": "picoclaw",
+    "pico_claw": "picoclaw",
+    "nano-claw": "nanoclaw",
+    "nano_claw": "nanoclaw",
+}
+
 # Display labels for every known feature. Mirrors the runtime label map and is
 # the source of truth the dashboard reads via ``/api/features`` so the locked-
 # but-visible affordance on paid features renders human-readable copy. Adding a
@@ -174,6 +195,7 @@ FEATURE_LABELS = {
 _ALIAS_FEATURES = frozenset(
     {"custom_alerts", "alert_webhooks", "anomaly_detection", "cost_optimizer"}
 )
+
 
 # ── Feature catalogue ───────────────────────────────────────────────────────
 # Core observability — always free. Keys are stable identifiers the route /
@@ -664,10 +686,34 @@ def available_runtimes() -> list[str]:
     return sorted(ent.runtimes)
 
 
+def canonical_runtime(runtime: str) -> str:
+    """Normalize a runtime identifier to its canonical snake_case key.
+
+    Accepts the common alternative spellings (hyphenated, no-separator, mixed
+    case) callers sometimes pass — OTLP ``service.name``, custom ingest, CLI
+    flags — and resolves them to the id used in :data:`ALL_RUNTIMES`. Unknown
+    identifiers are returned lower-cased unchanged so plugin runtimes still
+    pass through. Empty / non-string inputs return an empty string.
+
+    Never raises.
+    """
+    try:
+        rt = (runtime or "").strip().lower()
+    except Exception:
+        return ""
+    if not rt:
+        return ""
+    if rt in ALL_RUNTIMES:
+        return rt
+    return RUNTIME_ALIASES.get(rt, rt)
+
+
 def runtime_label(runtime: str) -> str:
-    """Human-readable label for ``runtime``. Falls back to the id when unknown
-    so unknown plugin runtimes still render with *something*."""
-    rt = (runtime or "").strip().lower()
+    """Human-readable label for ``runtime``. Aliases (``claude-code``,
+    ``qwencode``, …) resolve to the canonical id first so they render with the
+    same label as the snake_case form. Falls back to the (canonicalised) id
+    when unknown so unknown plugin runtimes still render with *something*."""
+    rt = canonical_runtime(runtime)
     return RUNTIME_LABELS.get(rt, rt)
 
 

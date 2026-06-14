@@ -325,6 +325,71 @@ def test_entitled_tier_entitles_its_runtimes(ent):
     assert en.entitled_runtime("cursor") is True
 
 
+# ── canonical_runtime + RUNTIME_ALIASES ─────────────────────────────────────
+
+
+def test_canonical_runtime_passthrough_for_known_ids(ent):
+    for rt in ent.ALL_RUNTIMES:
+        assert ent.canonical_runtime(rt) == rt
+
+
+def test_canonical_runtime_resolves_aliases(ent):
+    cases = {
+        "claude-code": "claude_code",
+        "claudecode": "claude_code",
+        "qwen-code": "qwen_code",
+        "qwencode": "qwen_code",
+        "open-code": "opencode",
+        "open_code": "opencode",
+        "open-claw": "openclaw",
+        "open_claw": "openclaw",
+        "nemo-claw": "nemoclaw",
+        "nemo_claw": "nemoclaw",
+        "pico-claw": "picoclaw",
+        "pico_claw": "picoclaw",
+        "nano-claw": "nanoclaw",
+        "nano_claw": "nanoclaw",
+    }
+    for alias, canonical in cases.items():
+        assert ent.canonical_runtime(alias) == canonical, alias
+
+
+def test_canonical_runtime_is_case_insensitive(ent):
+    assert ent.canonical_runtime("CLAUDE-CODE") == "claude_code"
+    assert ent.canonical_runtime("  Claude-Code  ") == "claude_code"
+    assert ent.canonical_runtime("OpenClaw") == "openclaw"
+
+
+def test_canonical_runtime_unknown_passes_through_lowercased(ent):
+    assert ent.canonical_runtime("brand_new_plugin_runtime") == "brand_new_plugin_runtime"
+    assert ent.canonical_runtime("BRAND_NEW") == "brand_new"
+
+
+def test_canonical_runtime_empty_and_none_safe(ent):
+    assert ent.canonical_runtime("") == ""
+    assert ent.canonical_runtime(None) == ""
+    assert ent.canonical_runtime("   ") == ""
+
+
+def test_runtime_label_resolves_via_aliases(ent):
+    # Aliases now hit the same label as the canonical id, so UI strings stay
+    # consistent regardless of which form the caller passed in.
+    assert ent.runtime_label("claude-code") == "Claude Code"
+    assert ent.runtime_label("CLAUDECODE") == "Claude Code"
+    assert ent.runtime_label("qwen-code") == "Qwen Code"
+    assert ent.runtime_label("open-claw") == "OpenClaw"
+
+
+def test_runtime_aliases_all_resolve_to_known_runtimes(ent):
+    # Every alias value must be a canonical runtime — otherwise the alias is
+    # mapping to nothing the gate or label lookup understands.
+    for alias, canonical in ent.RUNTIME_ALIASES.items():
+        assert canonical in ent.ALL_RUNTIMES, alias
+        # The alias key itself must NOT already be a canonical id (an alias
+        # for itself is dead weight).
+        assert alias not in ent.ALL_RUNTIMES, alias
+
+
 def test_appjs_teaser_wiring():
     """The catalog loader must use `entitled` (grace teaser) and must NOT
     early-return when enforcement is off, while guarding hosted paying/trial
