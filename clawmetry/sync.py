@@ -5622,74 +5622,16 @@ def _pick_heartbeat_interval(resp_json: dict | None) -> int:
 
 
 def _build_node_meta() -> dict:
-    """Plaintext machine metadata for the cloud Flow Machine modal (cloud#956).
+    """Routing-safe node metadata for the PLAINTEXT heartbeat.
 
-    Mirrors the fields cloud's /ingest/heartbeat extracts from body.node_meta:
-    os, arch, ram_gb, cpu_count, local_ips. The encrypted snapshot already
-    carries the richer machineInfo blob; this duplicates the trust-safe subset
-    so the keyless fallback in cm-cloud-machine fires with real data instead
-    of an empty {hostname, platform} shell.
-
-    Best-effort: any subcomponent failure yields an empty value rather than
-    raising — the heartbeat MUST keep flowing even on weird platforms.
+    The machine fingerprint (os, arch, ram_gb, cpu_count, local_ips) used to
+    live here and the cloud stored it in cleartext. It now rides the
+    E2E-encrypted snapshot (machineInfo, see _build_machine_info); only
+    routing/entitlement fields the cloud legitimately needs in cleartext stay
+    here. Best-effort: failures yield an empty value rather than raising — the
+    heartbeat MUST keep flowing even on weird platforms.
     """
-    import platform as _pm
-    import socket as _sk
-    meta = {
-        "os": "",
-        "arch": "",
-        "ram_gb": "",
-        "cpu_count": "",
-        "local_ips": [],
-    }
-    try:
-        meta["os"] = _pm.system()
-    except Exception:
-        pass
-    try:
-        meta["arch"] = _pm.machine()
-    except Exception:
-        pass
-    try:
-        import multiprocessing as _mp
-        meta["cpu_count"] = str(_mp.cpu_count())
-    except Exception:
-        pass
-    try:
-        # /proc/meminfo on Linux, sysctl on Mac. Skip silently when neither.
-        if _pm.system() == "Linux":
-            with open("/proc/meminfo") as _mf:
-                for _line in _mf:
-                    if _line.startswith("MemTotal:"):
-                        _kb = int(_line.split()[1])
-                        meta["ram_gb"] = str(round(_kb / 1024 / 1024, 1))
-                        break
-        elif _pm.system() == "Darwin":
-            import subprocess as _sp
-            _out = _sp.check_output(["sysctl", "-n", "hw.memsize"], timeout=2)
-            meta["ram_gb"] = str(round(int(_out.strip()) / 1024 / 1024 / 1024, 1))
-    except Exception:
-        pass
-    try:
-        # All non-loopback IPv4 addresses on the host. Bounded list, no PII.
-        _ips = set()
-        try:
-            for _info in _sk.getaddrinfo(_sk.gethostname(), None, _sk.AF_INET):
-                _ip = _info[4][0]
-                if _ip and not _ip.startswith("127."):
-                    _ips.add(_ip)
-        except Exception:
-            pass
-        try:
-            _s = _sk.socket(_sk.AF_INET, _sk.SOCK_DGRAM)
-            _s.connect(("8.8.8.8", 80))
-            _ips.add(_s.getsockname()[0])
-            _s.close()
-        except Exception:
-            pass
-        meta["local_ips"] = sorted(_ips)[:8]
-    except Exception:
-        pass
+    meta: dict = {}
     # Pro-adapter + auto-update status so the cloud Fleet can show whether an
     # entitled node is actually running clawmetry-pro (the paid runtime
     # adapters) and keeping itself current — turning the "I'm on Pro but Claude
@@ -6793,10 +6735,11 @@ def send_heartbeat(config: dict) -> bool:
             payload["billing"] = _billing
     except Exception as _bm_e:
         log.debug("billing-mode detection failed (continuing): %s", _bm_e)
-    # Daemon-collected snapshots (see _collect_security_posture docstring)
-    sec = _collect_security_posture()
-    if sec is not None:
-        payload["security_posture"] = sec
+    # security_posture is a SCAN OF THE USER'S MACHINE; it must not ride the
+    # plaintext heartbeat. It travels in the E2E-encrypted system snapshot as
+    # `securityPosture` and renders client-side. See sync_system_snapshot().
+    # (Re-applied after a stale-rebase merge clobbered it; guard:
+    #  tests/test_security_posture_encrypted.py.)
     # Local-store health (epic #964 phase 1 → rollout gate for phase 2).
     # We need ≥80% of active nodes reporting healthy local stores before
     # slimming cloud retention to 24h. Best-effort; never blocks heartbeat.
@@ -10255,6 +10198,36 @@ def _build_machine_info():
             )
         # Kernel
         items.append({"label": "Kernel", "value": platform.release(), "status": "ok"})
+        # RAM + all local IPs. These moved here from the plaintext heartbeat's
+        # node_meta: the machine fingerprint is now E2E-encrypted in the snapshot
+        # and never sent in cleartext. The "Local IPs" label contains "IP" so the
+        # cloud Network-modal interceptor picks it up too.
+        try:
+            _ramgb = ""
+            if platform.system() == "Linux":
+                with open("/proc/meminfo") as _mf:
+                    for _line in _mf:
+                        if _line.startswith("MemTotal:"):
+                            _ramgb = str(round(int(_line.split()[1]) / 1024 / 1024, 1))
+                            break
+            elif platform.system() == "Darwin":
+                _mem = subprocess.check_output(["sysctl", "-n", "hw.memsize"], timeout=2)
+                _ramgb = str(round(int(_mem.strip()) / 1024 / 1024 / 1024, 1))
+            if _ramgb:
+                items.append({"label": "RAM", "value": _ramgb + " GB", "status": "ok"})
+        except Exception:
+            pass
+        try:
+            _ips = set()
+            for _info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+                _ip = _info[4][0]
+                if _ip and not _ip.startswith("127."):
+                    _ips.add(_ip)
+            if _ips:
+                items.append({"label": "Local IPs",
+                              "value": ", ".join(sorted(_ips)[:8]), "status": "ok"})
+        except Exception:
+            pass
         return {"items": items}
     except Exception as e:
         log.warning(f"Machine info error: {e}")
@@ -15591,6 +15564,10 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # cloud can show a runtime chip without bloating the snapshot.
         "detectedRuntimes": _detected_runtimes,
         "machineInfo": _build_machine_info(),
+        # Security posture (a scan of the user's machine) rides the ENCRYPTED
+        # snapshot, never the plaintext heartbeat — the cloud stores only this
+        # opaque blob and the Security tab decrypts it client-side.
+        "securityPosture": _collect_security_posture(),
         "channelList": _build_channel_list(config),
         "ollamaInfo": _detect_ollama_for_heartbeat(),
         "firstRun": _build_first_run(),
