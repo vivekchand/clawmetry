@@ -383,6 +383,7 @@ class OpenClawAdapter(AgentAdapter):
                     reasoning_tokens=_reasoning_tokens(s),
                     cost_usd=float(s["costUsd"]) if s.get("costUsd") is not None else None,
                     end_reason=s.get("endReason") or s.get("end_reason") or "",
+                    parent_id=s.get("parentId") or None,
                     extra=extra,
                 )
             )

@@ -16481,6 +16481,7 @@ def _get_sessions():
                     ),
                     "kind": s.get("kind", "direct"),
                     "agent": s.get("agentId", "main"),
+                    "parentId": s.get("parentId") or s.get("spawnedBy") or s.get("parentKey") or None,
                 }
             )
         _sessions_cache["data"] = sessions
