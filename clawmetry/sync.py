@@ -3045,7 +3045,7 @@ def _local_ingest_sessions_batch(rows: list, node_id: str) -> None:
         meta_extras = {
             k: v for k, v in s.items()
             if k in ("channel", "chat_type", "subject", "recent_model",
-                     "session_key")
+                     "session_key", "end_reason")
             and v
         }
         store.ingest_session({
@@ -9792,6 +9792,7 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                 total_tokens = 0
                 total_cost = 0.0
                 label = ""
+                end_reason = ""
                 # Aggregate model usage across the session — a single session
                 # can span several models (model_change mid-conversation, or
                 # an orchestrator that routes to different backends). Previously
@@ -9834,8 +9835,12 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                         etype = ev.get("type", "")
                         if etype == "model_change" and ev.get("modelId"):
                             last_seen_model = ev["modelId"]
-                        elif etype == "session" and ev.get("label"):
-                            label = ev["label"]
+                        elif etype == "session":
+                            if ev.get("label"):
+                                label = ev["label"]
+                            _er = ev.get("endReason") or ev.get("end_reason")
+                            if _er:
+                                end_reason = _er
                         elif etype == "message":
                             msg = ev.get("message", {})
                             msg_model = msg.get("model", "") or last_seen_model
@@ -9875,6 +9880,7 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                         "channel": _sm.get("provider", ""),
                         "chat_type": _sm.get("chatType", ""),
                         "status": "completed",
+                        "end_reason": end_reason,
                         "model": model,
                         "recent_model": last_seen_model or model,
                         "total_tokens": total_tokens,

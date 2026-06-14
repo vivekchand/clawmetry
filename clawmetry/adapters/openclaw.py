@@ -382,6 +382,7 @@ class OpenClawAdapter(AgentAdapter):
                     cache_write_tokens=int(s.get("cacheWriteTokens") or 0),
                     reasoning_tokens=_reasoning_tokens(s),
                     cost_usd=float(s["costUsd"]) if s.get("costUsd") is not None else None,
+                    end_reason=s.get("endReason") or s.get("end_reason") or "",
                     extra=extra,
                 )
             )
