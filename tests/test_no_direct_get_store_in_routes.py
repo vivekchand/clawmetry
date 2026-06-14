@@ -151,3 +151,67 @@ def test_lint_regex_actually_matches_known_bad_shapes():
         assert not _GETSTORE_RW_RE.search(s), (
             f"lint must NOT flag good shape: {s!r}"
         )
+
+
+# ── Issue #1679 criterion 5 — coverage floor guards ──────────────────────────
+
+# Baselines snapshotted 2026-06-14 against main.  Update only when a route
+# AND its wrapper are intentionally removed together (both constants must move
+# in the same commit), or when a new keystone probe is retired alongside its
+# route.  Increasing either constant is always safe; decreasing requires the
+# corresponding deletion to be present in the same diff.
+_TRY_LOCAL_STORE_FLOOR = 84  # def _try_local_store_* in routes/*.py
+_KEYSTONE_PROBE_FLOOR = 13   # def check_* in scripts/accuracy_harness/keystone_e2e.py
+
+_TRY_LOCAL_STORE_DEF_RE = re.compile(r"^def _try_local_store_", re.MULTILINE)
+_KEYSTONE_CHECK_DEF_RE = re.compile(r"^def check_", re.MULTILINE)
+_KEYSTONE_PATH = (
+    pathlib.Path(__file__).resolve().parents[1]
+    / "scripts" / "accuracy_harness" / "keystone_e2e.py"
+)
+
+
+def test_try_local_store_coverage_floor():
+    """_try_local_store_* wrappers in routes/ must not drop below baseline.
+
+    Issue #1679 criterion 5: every data-bearing route should expose its store
+    access through a named ``_try_local_store_*`` function so the pattern
+    stays auditable and testable.  Deleting a wrapper without removing the
+    route it serves silently breaks the safe read path.
+
+    To legitimately lower this floor: remove the route, its wrapper, and
+    decrease ``_TRY_LOCAL_STORE_FLOOR`` in the same commit.
+    """
+    count = sum(
+        len(_TRY_LOCAL_STORE_DEF_RE.findall(p.read_text()))
+        for p in sorted(_ROUTES_DIR.glob("*.py"))
+    )
+    assert count >= _TRY_LOCAL_STORE_FLOOR, (
+        f"_try_local_store_* wrapper count dropped to {count} "
+        f"(floor={_TRY_LOCAL_STORE_FLOOR}, issue #1679 criterion 5). "
+        "Either restore the deleted wrapper or lower _TRY_LOCAL_STORE_FLOOR "
+        "alongside the corresponding route removal."
+    )
+
+
+def test_keystone_probe_floor():
+    """keystone_e2e.py check_* probes must not drop below baseline.
+
+    Issue #1679 criterion 5: probes guard against silent-zero regressions on
+    the dashboard endpoints users load on every page view.  Deleting a probe
+    without retiring the route it covers blinds the MOAT to that endpoint.
+
+    To legitimately lower this floor: retire the route, remove the probe, and
+    decrease ``_KEYSTONE_PROBE_FLOOR`` in the same commit.
+    """
+    assert _KEYSTONE_PATH.exists(), (
+        f"keystone_e2e.py not found at {_KEYSTONE_PATH} — "
+        "has the scripts/accuracy_harness/ directory been moved?"
+    )
+    count = len(_KEYSTONE_CHECK_DEF_RE.findall(_KEYSTONE_PATH.read_text()))
+    assert count >= _KEYSTONE_PROBE_FLOOR, (
+        f"keystone_e2e.py check_* probe count dropped to {count} "
+        f"(floor={_KEYSTONE_PROBE_FLOOR}, issue #1679 criterion 5). "
+        "Either restore the deleted probe or lower _KEYSTONE_PROBE_FLOOR "
+        "alongside the corresponding route retirement."
+    )
