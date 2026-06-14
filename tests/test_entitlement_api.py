@@ -41,11 +41,53 @@ def test_api_entitlement_shape_grace(client):
     assert resp.status_code == 200
     d = resp.get_json()
     for key in ("tier", "source", "grace", "enforced", "is_paid",
-                "runtimes", "features", "all_runtimes"):
+                "retention_days", "runtimes", "features", "all_runtimes"):
         assert key in d, key
     assert isinstance(d["runtimes"], list)
     assert isinstance(d["features"], list)
     assert isinstance(d["all_runtimes"], list)
+
+
+@pytest.mark.parametrize(
+    "plan,expected",
+    [
+        ("cloud_starter", 30),
+        ("cloud_pro", 90),
+        ("enterprise", None),
+    ],
+)
+def test_api_entitlement_retention_days_matches_tier(monkeypatch, tmp_path, plan, expected):
+    """``/api/entitlement`` carries the per-tier retention cap so the
+    dashboard can render "we are keeping N days" without re-deriving the
+    table client-side. Enterprise comes back as JSON ``null`` (= unlimited /
+    custom). Pinned alongside the in-process ``to_dict`` test so an accidental
+    desync between the method, the dict, and the HTTP shape fails loudly."""
+    monkeypatch.delenv("CLAWMETRY_ENFORCE", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    import clawmetry.entitlements as e
+    importlib.reload(e)
+    e.invalidate()
+
+    cache = tmp_path / ".clawmetry" / "cloud_plan.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"plan": plan, "node_limit": 1, "expiry": None}))
+
+    from routes.entitlement import bp_entitlement
+    app = Flask(__name__)
+    app.register_blueprint(bp_entitlement)
+    d = app.test_client().get("/api/entitlement").get_json()
+
+    assert d["tier"] == plan
+    assert d["retention_days"] == expected
+
+
+def test_api_entitlement_retention_days_oss_default(client):
+    """OSS-free surfaces ``retention_days == 7`` — the same value the
+    never-raise fallback hard-codes, so a resolver failure can't silently
+    flip the surfaced cap."""
+    c, _ = client
+    d = c.get("/api/entitlement").get_json()
+    assert d["retention_days"] == 7
 
 
 def test_api_entitlement_grace_defaults(client):
