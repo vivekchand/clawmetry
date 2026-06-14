@@ -754,6 +754,97 @@ def _read_model_router_model_list() -> dict:
     return {}
 
 
+def _read_nemoclaw_sandbox_lifecycle() -> dict:
+    """Query openshell for sandbox name, phase, and policy (issue #3117).
+
+    Tries ``openshell sandbox list --json`` first; falls back to plain-text
+    parsing of ``openshell sandbox list``.  For each sandbox, attempts
+    ``openshell sandbox get <name>`` (text) to extract the Policy field when
+    it is not already present in the JSON output.  Returns
+    ``{"sandboxes": [{name, phase, policy}, …]}`` or ``{}`` on any failure;
+    never raises.
+    """
+    import os as _os
+    import shutil as _shutil
+    import subprocess as _sub
+    import json as _j
+
+    openshell_bin: str | None = None
+    for _name in ("openshell", "openshell-cli"):
+        _p = _shutil.which(_name)
+        if _p:
+            openshell_bin = _p
+            break
+    if not openshell_bin:
+        for _c in ("/usr/local/bin/openshell", "/opt/openshell/bin/openshell", "/usr/bin/openshell"):
+            if _os.path.isfile(_c):
+                openshell_bin = _c
+                break
+    if not openshell_bin:
+        return {}
+
+    sandboxes: list[dict] = []
+    _json_succeeded = False
+
+    # Try JSON first (structured, preferred)
+    try:
+        out = _sub.check_output(
+            [openshell_bin, "sandbox", "list", "--json"],
+            stderr=_sub.DEVNULL,
+            timeout=10,
+        ).decode()
+        raw = _j.loads(out)
+        _json_succeeded = True
+        for sb in (raw if isinstance(raw, list) else []):
+            sandboxes.append({
+                "name": sb.get("name", ""),
+                "phase": sb.get("phase", sb.get("status", "Unknown")),
+                "policy": sb.get("policy", ""),
+            })
+    except Exception:
+        pass
+
+    # Fall back to text: "<name> <phase>" per line (only when JSON unavailable)
+    if not _json_succeeded:
+        try:
+            out = _sub.check_output(
+                [openshell_bin, "sandbox", "list"],
+                stderr=_sub.DEVNULL,
+                timeout=10,
+            ).decode()
+            for line in out.splitlines():
+                parts = line.split(None, 1)
+                if parts:
+                    sandboxes.append({
+                        "name": parts[0],
+                        "phase": parts[1].strip() if len(parts) > 1 else "Unknown",
+                        "policy": "",
+                    })
+        except Exception:
+            pass
+
+    # Enrich each sandbox with policy via `openshell sandbox get <name>`
+    for sb in sandboxes:
+        if sb.get("policy") or not sb.get("name"):
+            continue
+        try:
+            get_out = _sub.check_output(
+                [openshell_bin, "sandbox", "get", sb["name"]],
+                stderr=_sub.DEVNULL,
+                timeout=5,
+            ).decode()
+            for line in get_out.splitlines():
+                if line.startswith("Policy:"):
+                    sb["policy"] = line[len("Policy:"):].strip()
+                    break
+        except Exception:
+            pass
+
+    if not sandboxes:
+        return {}
+    return {"sandboxes": sandboxes}
+
+
 class NemoClawAdapter(AgentAdapter):
     """Read-side adapter for the NemoClaw Free runtime.
 
@@ -781,6 +872,7 @@ class NemoClawAdapter(AgentAdapter):
         meta: dict = {"event_count": n}
         meta.update(_read_nemoclaw_skill_catalog())
         meta.update(_read_model_router_model_list())
+        meta.update(_read_nemoclaw_sandbox_lifecycle())
         return DetectResult(
             name=self.name,
             display_name=self.display_name,
