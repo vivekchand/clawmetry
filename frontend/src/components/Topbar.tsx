@@ -13,6 +13,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLocation } from "react-router-dom";
 import { getNavItemBySlug } from "./nav";
+import { EncryptedBadge } from "./EncryptedBadge";
 
 interface RouteMeta {
   title: string;
@@ -156,6 +157,9 @@ export function Topbar() {
 
         {/* Language picker — loads _meta.json, calls i18n.changeLanguage() */}
         <LanguagePicker />
+
+        {/* E2E badge — cloud sync is AES-256-GCM encrypted */}
+        <EncryptedBadge />
 
         {/* Default LIVE pill — per-tab overrides land in week 2+ */}
         <span

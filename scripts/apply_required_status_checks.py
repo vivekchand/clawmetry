@@ -19,7 +19,8 @@ GITHUB_TOKEN from Actions (prefix ghs_):
   Can read branch protection state but CANNOT write it. The script detects
   this automatically: it verifies current state (read-only, scoped to the
   current repo only) and exits 0 with actionable instructions. Push-triggered
-  runs are always informational.
+  runs are informational: exit 0 when C6 is correctly configured, exit 1
+  when checks are not yet configured (red job = forcing signal).
   Note: requesting administration:write in the workflow permissions block is
   invalid for GITHUB_TOKEN and causes 0-job workflow failures -- do not add it.
 
@@ -35,14 +36,14 @@ any non-ghs_ token:
 
 Primary repo behaviour (clawmetry):
   When GITHUB_REPOSITORY=vivekchand/clawmetry and using a PAT, the script
-  applies ALL 4 required checks across all 3 repos in one run. This means
+  applies ALL 6 required checks across all 3 repos in one run. This means
   you only need to trigger the apply-required-checks.yml workflow ONCE -- on
   the clawmetry repo -- to close C6 everywhere.
 
   When using GITHUB_TOKEN (read-only push path), only the current repo's
   checks are verified to avoid cross-repo 403s.
 
-When run locally (GITHUB_REPOSITORY not set), the script applies all 4
+When run locally (GITHUB_REPOSITORY not set), the script applies all 6
 checks and requires a token with cross-repo admin access.
 
 Tracking: vivekchand/clawmetry#2146 (C6)
@@ -63,6 +64,7 @@ OWNER = "vivekchand"
 #   clawmetry/.github/workflows/oss-golden-path.yml      -> "OSS golden path (wheel + OpenClaw + 9 tabs)"
 #   clawmetry/.github/workflows/cross-repo-handoff.yml   -> "Cross-repo handoff (C4)"
 #   clawmetry/.github/workflows/ci.yml (moat-keystone)   -> "MOAT Keystone (13-endpoint bar)"
+#   clawmetry/.github/workflows/ci.yml (e2e-critical)    -> "E2E Browser Tests (critical subset)"
 #   clawmetry-cloud/.github/workflows/e2e.yml            -> "Cloud golden-path browser E2E"
 #   clawmetry-landing/.github/workflows/landing-golden-path.yml -> "Landing golden path (C3)"
 #
@@ -76,6 +78,9 @@ REQUIRED_CHECKS: list[tuple[str, str]] = [
     # docs/MOAT_BAR.md Section 5, AC#1: keystone_e2e --no-drive blocks merge.
     # ci.yml `moat-keystone` job runs on every PR; job name must match exactly.
     ("clawmetry",         "MOAT Keystone (13-endpoint bar)"),
+    # ci.yml `e2e-critical` job: 32-tab auth-overlay sweep (C5 gate).
+    # Without this, a PR breaking tabs 10-32 fails CI but remains mergeable.
+    ("clawmetry",         "E2E Browser Tests (critical subset)"),
     ("clawmetry-cloud",   "Cloud golden-path browser E2E"),
     ("clawmetry-landing", "Landing golden path (C3)"),
 ]
@@ -178,6 +183,64 @@ def remove_required_check(repo: str, context: str, token: str) -> None:
     print(f"  [{repo}] removed deprecated check ({len(updated)} remaining): {context!r}")
 
 
+def _get_branch_protection_contexts(repo: str, token: str) -> set[str] | None:
+    """Read required status check contexts via the public branch endpoint.
+
+    Uses GET /repos/{owner}/{repo}/branches/main which is accessible with
+    GITHUB_TOKEN on public repos (unlike
+    /branches/main/protection/required_status_checks which requires admin).
+
+    Returns the set of configured context strings, or None if the branch
+    endpoint is unreachable or returns no protection data.
+    """
+    path = f"/repos/{OWNER}/{repo}/branches/main"
+    try:
+        data = _api("GET", path, token=token)
+    except RuntimeError as exc:
+        print(f"  [{repo}] WARN: could not read branch info: {exc}")
+        return None
+    protection = data.get("protection") or {}
+    rsc = protection.get("required_status_checks") or {}
+    return set(rsc.get("contexts", []))
+
+
+def verify_required_checks_readonly(
+    checks: list[tuple[str, str]],
+    deprecated: list[tuple[str, str]],
+    token: str,
+) -> bool:
+    """Read-only variant of verify_required_checks using the branch endpoint.
+
+    Called from the GITHUB_TOKEN (read-only) code path. Uses
+    GET /repos/{owner}/{repo}/branches/main which returns protection info
+    for public repos without requiring admin credentials.
+
+    Returns True if all required checks are present and no deprecated checks
+    remain. Returns False (but does not exit) if any discrepancy is found,
+    so the calling code can decide how to exit.
+    """
+    repos = dict.fromkeys([r for r, _ in checks + deprecated])
+    ok = True
+    for repo in repos:
+        actual = _get_branch_protection_contexts(repo, token)
+        if actual is None:
+            print(f"  [{repo}] UNKNOWN: branch endpoint did not return protection info")
+            continue
+        required = {ctx for r, ctx in checks if r == repo}
+        blocked = {ctx for r, ctx in deprecated if r == repo}
+        missing = required - actual
+        stale = blocked & actual
+        if missing:
+            print(f"  [{repo}] FAIL: check not yet required: {sorted(missing)}")
+            ok = False
+        if stale:
+            print(f"  [{repo}] FAIL: deprecated check still present: {sorted(stale)}")
+            ok = False
+        if not missing and not stale:
+            print(f"  [{repo}] OK: {sorted(actual)}")
+    return ok
+
+
 def verify_required_checks(
     checks: list[tuple[str, str]],
     deprecated: list[tuple[str, str]],
@@ -224,7 +287,7 @@ def _checks_to_apply() -> list[tuple[str, str]]:
     """Return the REQUIRED_CHECKS to apply for the current context (PAT path).
 
     clawmetry is the primary E2E hub. When running from here with a PAT that
-    has Administration (read+write) on all 3 repos, we apply all 4 required
+    has Administration (read+write) on all 3 repos, we apply all 6 required
     checks in a single run -- matching the dry-run preview in
     apply-required-checks.yml which already says 'apply to all 3 repos'.
 
@@ -302,6 +365,17 @@ def main() -> None:
     is_pat = not token.startswith("ghs_")
 
     if not is_pat:
+        # Fail clearly when confirm=APPLY was typed but only GITHUB_TOKEN is available.
+        # Without this check the workflow exits 0 silently, which looks like success.
+        confirm_input = os.environ.get("CONFIRM_INPUT", "").strip()
+        if confirm_input.upper() == "APPLY":
+            sys.exit(
+                "ERROR: confirm=APPLY requires an admin token -- GITHUB_TOKEN cannot write branch protection.\n"
+                "  Fix: re-run the workflow and paste a fine-grained PAT into the 'pat_token' field.\n"
+                "  PAT permissions: Administration (read+write) on clawmetry, clawmetry-cloud, clawmetry-landing.\n"
+                "  Alternative: bash scripts/close-c6.sh (uses your gh CLI session, ~30 sec).\n"
+                "  Tracking: vivekchand/clawmetry#2146 (C6)"
+            )
         # Read-only path: GITHUB_TOKEN cannot write branch protection.
         # Scope verification to the current repo only to avoid cross-repo 403s.
         local_checks, local_deprecated = _readonly_scope()
@@ -326,15 +400,17 @@ def main() -> None:
             print(f"    [{repo}] {ctx!r}")
         print()
         print("=== Reading current required status checks (current repo only) ===")
-        if verify_required_checks(local_checks, local_deprecated, token):
+        c6_ok = verify_required_checks_readonly(local_checks, local_deprecated, token)
+        if c6_ok:
             print()
             print("=== C6: checks already correctly configured ===")
             print("=== (Set by manual Settings UI action or a prior admin run.) ===")
-        else:
-            print()
-            print("INFO: Required checks not yet configured. Run: bash scripts/close-c6.sh")
-        # Always exit 0: push-triggered runs are informational, never blocking.
-        return
+            return  # exit 0: C6 is done, self-heals to green after admin action
+        print()
+        print("Action needed (takes ~30 seconds):")
+        print("  bash scripts/close-c6.sh")
+        print("  (Or: Actions > 'Apply required E2E status checks (C6 -- one-shot)' > Run workflow)")
+        sys.exit(1)  # red job on every main push until admin closes C6
 
     # PAT / OAuth path: full apply + verify across all repos.
     checks = _checks_to_apply()

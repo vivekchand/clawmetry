@@ -91,7 +91,7 @@ from typing import Any, Optional
 logger = logging.getLogger("clawmetry.adapters.nemo")
 
 
-# ── Free-tier daily ingest cap (issue #1170) ───────────────────────────
+# ── Free-tier daily ingest cap (issue #1170) ───────────────────────────────
 #
 # NeMo Agent Toolkit users are the highest-value paid-conversion segment
 # we observe (enterprise GPU buyers). Shipping the adapter under OSS gave
@@ -630,7 +630,7 @@ class NeMoAdapter:
         return row
 
 
-# ── NemoClaw RUNTIME read-side AgentAdapter ────────────────────────────────
+# ── NemoClaw RUNTIME read-side AgentAdapter ─────────────────────────────────────────
 #
 # NemoClaw is a Free runtime alongside OpenClaw (FREE_RUNTIMES in
 # clawmetry/entitlements.py contains {"openclaw", "nemoclaw"}). It is the
@@ -649,6 +649,18 @@ class NeMoAdapter:
 # canonical runtime id per /api/runtimes + FREE_RUNTIMES is ``nemoclaw``;
 # this rename aligns /api/agents with the rest of the runtime catalogue.
 from .base import AgentAdapter, Capability, DetectResult, Event, Session
+
+
+def _extract_skill_names(raw: dict) -> list:
+    names = []
+    for entry in raw.get("skills", []):
+        if isinstance(entry, str):
+            names.append(entry)
+        elif isinstance(entry, dict):
+            name = entry.get("name") or entry.get("id") or entry.get("skillName", "")
+            if name:
+                names.append(name)
+    return names
 
 
 def _read_nemoclaw_skill_catalog() -> dict:
@@ -675,12 +687,70 @@ def _read_nemoclaw_skill_catalog() -> dict:
             return {
                 "skill_catalog_min_version": meta.get("minNemoClawVersion", ""),
                 "skill_catalog_tested_version": meta.get("testedNemoClawVersion", ""),
+                "skill_catalog_schema_version": meta.get("schemaVersion", ""),
                 "skill_catalog_export_sha256": raw.get("exportContentSha256", ""),
                 "skill_catalog_source_commit": raw.get("sourceCommit", meta.get("sourceCommit", "")),
                 "skill_catalog_source_sha256": raw.get("sourceContentSha256", meta.get("sourceContentSha256", "")),
+                "skill_catalog_skill_names": _extract_skill_names(raw),
             }
         except Exception as exc:
             logger.debug("nemoclaw skill catalog read failed (%s): %s", path, exc)
+    return {}
+
+
+def _read_model_router_model_list() -> dict:
+    """Read the proxy-config YAML written by ``model-router proxy-config --output <path>``.
+
+    Tries several candidate locations in priority order, then falls back to
+    a ``model_name:`` line-regex when PyYAML is not installed. Returns a dict
+    with ``modelRouterModelList`` (list of model-name strings) and
+    ``modelRouterModelCount`` (int) when any config file is found; empty dict
+    otherwise — never raises.
+    """
+    import os
+    import re
+    from pathlib import Path
+
+    home = Path.home()
+    venv = os.environ.get("NEMOCLAW_MODEL_ROUTER_VENV") or str(
+        home / ".nemoclaw" / "model-router-venv"
+    )
+    # Explicit env-var override (harness or user can set this)
+    env_path = os.environ.get("NEMOCLAW_MODEL_ROUTER_CONFIG", "")
+    candidates = [
+        Path(env_path) if env_path else None,
+        home / ".nemoclaw" / "model-router-config.yaml",
+        home / ".nemoclaw" / "proxy-config.yaml",
+        Path(venv) / "proxy-config.yaml",
+    ]
+
+    for path in candidates:
+        if path is None or not path.exists():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception as exc:
+            logger.debug("nemoclaw model-router config read failed (%s): %s", path, exc)
+            continue
+        try:
+            try:
+                import yaml  # type: ignore[import]
+                data = yaml.safe_load(text) or {}
+                names = [
+                    str(entry.get("model_name", ""))
+                    for entry in data.get("model_list", [])
+                    if isinstance(entry, dict) and entry.get("model_name")
+                ]
+            except ImportError:
+                # PyYAML not installed — regex fallback over raw text
+                names = re.findall(r"model_name:\s*(.+?)(?:\s|$)", text)
+            if names:
+                return {
+                    "modelRouterModelList": names,
+                    "modelRouterModelCount": len(names),
+                }
+        except Exception as exc:
+            logger.debug("nemoclaw model-router config parse failed (%s): %s", path, exc)
     return {}
 
 
@@ -710,6 +780,7 @@ class NemoClawAdapter(AgentAdapter):
             logger.debug("nemoclaw detect read failed: %s", exc)
         meta: dict = {"event_count": n}
         meta.update(_read_nemoclaw_skill_catalog())
+        meta.update(_read_model_router_model_list())
         return DetectResult(
             name=self.name,
             display_name=self.display_name,

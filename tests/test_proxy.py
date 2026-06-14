@@ -873,3 +873,76 @@ class TestProxyApp:
         status = resp.get_json()
         assert status["budget"]["daily_remaining"] == 0.0
         assert status["budget"]["daily_limit"] == 10.0
+
+
+class TestProxyDisabledPassthrough:
+    """ProxyConfig.enabled=False must turn the proxy into a pure pass-through.
+
+    Regression for clawmetry-cloud#1577: the top-level ``enabled`` flag was a
+    dead no-op — every breaker checked its own ``enabled`` but the master
+    switch was never consulted in ``proxy_request``, so a "disabled" proxy
+    still ran full budget/loop/model-rewrite enforcement. These tests pin the
+    contract: when disabled, an over-budget request is forwarded (and fails
+    only at the upstream API-key step) instead of being budget-blocked.
+    """
+
+    def _build_client(self, tmp_path, enabled, monkeypatch):
+        import clawmetry.proxy
+        from clawmetry.proxy import create_proxy_app, ProxyConfig, BudgetConfig, ProxyDB
+
+        # No upstream key, so a forwarded request stops at the 401 auth step
+        # without ever touching the network.
+        for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+            monkeypatch.delenv(var, raising=False)
+
+        config = ProxyConfig(
+            port=14199,
+            enabled=enabled,
+            budget=BudgetConfig(daily_usd=10.0, monthly_usd=100.0, action="block"),
+        )
+        db_path = tmp_path / f"passthrough_{enabled}.db"
+
+        original_init = ProxyDB.__init__
+
+        def patched_init(self, db_path=None):
+            original_init(self, db_path or clawmetry.proxy.PROXY_DB_FILE)
+
+        with (
+            patch.object(clawmetry.proxy, "PROXY_DB_FILE", db_path),
+            patch.object(ProxyDB, "__init__", patched_init),
+        ):
+            app = create_proxy_app(config)
+        app.config["TESTING"] = True
+
+        # Blow the daily budget so enforcement *would* block if it ran.
+        ProxyDB(db_path=db_path).record_usage(
+            provider="anthropic",
+            model="claude-3-5-sonnet-20241022",
+            input_tokens=1000,
+            output_tokens=500,
+            cost_usd=15.0,
+        )
+        return app.test_client()
+
+    def _post(self, client):
+        return client.post(
+            "/v1/messages",
+            data=json.dumps({"model": "claude-3-5-sonnet-20241022", "stream": False}),
+            content_type="application/json",
+            headers={"x-session-id": "sess-passthrough"},
+        )
+
+    def test_enabled_budget_blocks(self, tmp_path, monkeypatch):
+        """Sanity guard: with enforcement ON, the over-budget request is blocked."""
+        client = self._build_client(tmp_path, enabled=True, monkeypatch=monkeypatch)
+        resp = self._post(client)
+        assert resp.status_code == 429
+        assert resp.get_json()["error"]["type"] == "budget_exceeded"
+
+    def test_disabled_bypasses_enforcement(self, tmp_path, monkeypatch):
+        """With enforcement OFF, the same request is forwarded, not budget-blocked."""
+        client = self._build_client(tmp_path, enabled=False, monkeypatch=monkeypatch)
+        resp = self._post(client)
+        # Reaches the forward step; fails only because no upstream key is set.
+        assert resp.status_code == 401
+        assert resp.get_json()["error"]["type"] == "authentication_error"
