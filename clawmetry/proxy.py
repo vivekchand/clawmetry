@@ -2106,253 +2106,260 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                 f"Proxy request: {provider} {path} model={model} stream={is_streaming}"
             )
 
-        # ── Auto smart routing (#2816) ─────────────────────────────────
-        # Applied FIRST so cheap-task requests start on a cheaper model. Budget
-        # action=downgrade (below) and explicit ModelRouter rules (later) both
-        # run AFTER this, so they take precedence and override the auto choice.
-        auto_model, auto_reason = auto_router.route(model, body)
-        if auto_model:
-            from_model = model
-            est_input = _estimate_tokens(_body_user_text(body)) + _estimate_tokens(
-                _body_system_text(body)
-            )
-            saved = _estimate_saved_usd(from_model, auto_model, est_input)
-            model = auto_model
-            body["model"] = model
-            body_bytes = json.dumps(body).encode()
-            with _stats_lock:
-                _stats["auto_downgraded"] += 1
-            db.record_event(
-                "auto_downgraded",
-                auto_reason,
-                severity="info",
-                details={
+        # ── Master enable switch (clawmetry-cloud#1577) ───────────────
+        # When the proxy is disabled, act as a pure pass-through: skip every
+        # breaker, detector, and model-rewrite below and forward the request
+        # upstream unchanged. Each breaker has its own `enabled` flag, but the
+        # top-level ProxyConfig.enabled was never consulted here, so flipping
+        # it off left full enforcement running — a dead no-op until now.
+        if config.enabled:
+            # ── Auto smart routing (#2816) ─────────────────────────────────
+            # Applied FIRST so cheap-task requests start on a cheaper model. Budget
+            # action=downgrade (below) and explicit ModelRouter rules (later) both
+            # run AFTER this, so they take precedence and override the auto choice.
+            auto_model, auto_reason = auto_router.route(model, body)
+            if auto_model:
+                from_model = model
+                est_input = _estimate_tokens(_body_user_text(body)) + _estimate_tokens(
+                    _body_system_text(body)
+                )
+                saved = _estimate_saved_usd(from_model, auto_model, est_input)
+                model = auto_model
+                body["model"] = model
+                body_bytes = json.dumps(body).encode()
+                with _stats_lock:
+                    _stats["auto_downgraded"] += 1
+                db.record_event(
+                    "auto_downgraded",
+                    auto_reason,
+                    severity="info",
+                    details={
+                        "from_model": from_model,
+                        "to_model": model,
+                        "session_id": session_id,
+                        "estimated_saved_usd": saved,
+                    },
+                )
+                _emit_duckdb_event("auto_downgraded", session_id, {
                     "from_model": from_model,
                     "to_model": model,
-                    "session_id": session_id,
                     "estimated_saved_usd": saved,
-                },
-            )
-            _emit_duckdb_event("auto_downgraded", session_id, {
-                "from_model": from_model,
-                "to_model": model,
-                "estimated_saved_usd": saved,
-                "reason": auto_reason,
-            })
-            if config.log_requests:
-                logger.info("Auto-route: %s", auto_reason)
+                    "reason": auto_reason,
+                })
+                if config.log_requests:
+                    logger.info("Auto-route: %s", auto_reason)
 
-        # ── Budget check ───────────────────────────────────────────────
-        allowed, reason = budget.check(model, session_id)
-        if not allowed:
-            with _stats_lock:
-                _stats["blocked"] += 1
-            db.record_event(
-                "budget_blocked",
-                reason,
-                severity="warning",
-                details={"model": model, "session_id": session_id},
-            )
-            logger.warning(f"Budget blocked: {reason}")
+            # ── Budget check ───────────────────────────────────────────────
+            allowed, reason = budget.check(model, session_id)
+            if not allowed:
+                with _stats_lock:
+                    _stats["blocked"] += 1
+                db.record_event(
+                    "budget_blocked",
+                    reason,
+                    severity="warning",
+                    details={"model": model, "session_id": session_id},
+                )
+                logger.warning(f"Budget blocked: {reason}")
 
-            if config.budget.action == "downgrade":
+                if config.budget.action == "downgrade":
+                    original_model = model
+                    model = config.budget.downgrade_model
+                    body["model"] = model
+                    body_bytes = json.dumps(body).encode()
+                    db.record_event(
+                        "model_downgraded",
+                        f"Downgraded {original_model} -> {model} (budget)",
+                        severity="info",
+                        details={"original": original_model, "downgraded_to": model},
+                    )
+                elif config.budget.action == "warn":
+                    pass  # Allow through with warning
+                else:
+                    return _budget_abort_response(reason, provider)
+
+            # ── Loop detection ─────────────────────────────────────────────
+            req_hash = compute_request_hash(body)
+            is_loop, loop_reason = loop_detector.check(session_id, req_hash)
+            if is_loop:
+                with _stats_lock:
+                    _stats["loops_detected"] += 1
+                db.record_event(
+                    "loop_detected",
+                    loop_reason,
+                    severity="warning",
+                    details={
+                        "model": model,
+                        "session_id": session_id,
+                        "request_hash": req_hash,
+                    },
+                )
+                logger.warning(f"Loop detected: {loop_reason}")
+                _arm_backoff_pause(session_id, "loop_detected", loop_reason)
+                return _error_response(429, "loop_detected", loop_reason, provider)
+
+            # ── Rate breaker (#2817): rapid-fire request count ─────────────
+            is_rate, rate_reason = rate_breaker.check(session_id)
+            if is_rate:
+                with _stats_lock:
+                    _stats["rate_blocked"] += 1
+                db.record_event(
+                    "rate_exceeded",
+                    rate_reason,
+                    severity="warning",
+                    details={"model": model, "session_id": session_id},
+                )
+                logger.warning(f"Rate exceeded: {rate_reason}")
+                _arm_backoff_pause(session_id, "rate_exceeded", rate_reason)
+                return _error_response(429, "rate_exceeded", rate_reason, provider)
+
+            # ── Cost-spiral breaker (#2818): dollar burn-rate ──────────────
+            is_spiral, spiral_reason = cost_spiral_breaker.check(session_id)
+            if is_spiral:
+                with _stats_lock:
+                    _stats["cost_spiral_blocked"] += 1
+                db.record_event(
+                    "cost_spiral",
+                    spiral_reason,
+                    severity="warning",
+                    details={"model": model, "session_id": session_id},
+                )
+                logger.warning(f"Cost spiral: {spiral_reason}")
+                _arm_backoff_pause(session_id, "cost_spiral", spiral_reason)
+                return _error_response(429, "cost_spiral", spiral_reason, provider)
+            # ── Cache-bust risk (Headroom-inspired, #2839/#2840) ───────────
+            # Detect prompts that self-bust the prompt cache: volatile content in the
+            # cache-stable prefix (timestamps/UUIDs/JWTs) and prefix DRIFT turn over
+            # turn. Detection only (never blocks, never stores raw prompt text); the
+            # re-read-tax meter reads the emitted events.
+            try:
+                _risk = detect_cache_risk(body)
+                _ph = _risk.get("prefix_hash") or ""
+                _prev = _SESSION_PREFIX.get(session_id) if session_id else None
+                if session_id and _ph:
+                    if len(_SESSION_PREFIX) > 2000:
+                        _SESSION_PREFIX.clear()
+                    _SESSION_PREFIX[session_id] = _ph
+                _drift = bool(_prev and _ph and _prev != _ph)
+                if _drift or _risk.get("cache_risk_score", 0) >= 3:
+                    db.record_event(
+                        "cache_risk",
+                        ("prompt prefix drifted between turns (self-busting the cache)"
+                         if _drift else "volatile content in the cache-stable prefix"),
+                        severity="info",
+                        details={
+                            "session_id": session_id,
+                            "model": model,
+                            "cache_risk_score": _risk.get("cache_risk_score", 0),
+                            "volatile": _risk.get("volatile", {}),
+                            "prefix_drift": _drift,
+                        },
+                    )
+            except Exception as _exc:  # noqa: BLE001 — never break the proxy
+                logger.debug("cache-risk detection skipped: %s", _exc)
+
+            # ── Tool-order churn detection (#2841) ─────────────────────────
+            # Flag when a session's tools array is reordered between turns but the
+            # normalised set is unchanged — caller is sending tools non-deterministically.
+            # Detection only; never blocks. Diagnostic for the Cost-lens.
+            try:
+                if session_id and isinstance(body.get("tools"), list):
+                    _tnorm = normalize_tools(body.get("tools"))
+                    _traw = raw_tools_fp(body.get("tools"))
+                    _prev_norm = _SESSION_TOOLS_NORM.get(session_id)
+                    _prev_raw = _SESSION_TOOLS_RAW.get(session_id)
+                    if len(_SESSION_TOOLS_NORM) > 2000:
+                        _SESSION_TOOLS_NORM.clear()
+                        _SESSION_TOOLS_RAW.clear()
+                    _SESSION_TOOLS_NORM[session_id] = _tnorm
+                    _SESSION_TOOLS_RAW[session_id] = _traw
+                    if (_prev_norm and _prev_raw and _tnorm and _traw
+                            and _prev_raw != _traw and _prev_norm == _tnorm):
+                        db.record_event(
+                            "tool_order_churn",
+                            "tool array reordered across turns (same tools, different order)"
+                            " — normalising; caller may be building tools non-deterministically",
+                            severity="info",
+                            details={"session_id": session_id, "model": model},
+                        )
+            except Exception as _exc:  # noqa: BLE001 — never break the proxy
+                logger.debug("tool-order churn detection skipped: %s", _exc)
+
+            # ── Velocity check ─────────────────────────────────────────────
+            is_spike, spike_reason = velocity_breaker.check(session_id)
+            if is_spike:
+                with _stats_lock:
+                    _stats["velocity_blocked"] += 1
+                db.record_event(
+                    "velocity_exceeded",
+                    spike_reason,
+                    severity="warning",
+                    details={"model": model, "session_id": session_id},
+                )
+                logger.warning(f"Velocity exceeded: {spike_reason}")
+                return _error_response(429, "velocity_exceeded", spike_reason, provider)
+
+            # ── HITL / auto-backoff pause check ────────────────────────────
+            # Honors both legacy operator pauses (manual resume) and auto-backoff
+            # pauses (#2818, escalating expiry, auto-resume once elapsed).
+            if _is_session_hitl_paused(session_id):
+                with _stats_lock:
+                    _stats["blocked"] += 1
+                # Surface auto-resume time + retry-after when this is a backoff pause.
+                retry_after = None
+                json_path = _HITL_DIR / f"pause_{session_id}.json"
+                try:
+                    if json_path.exists():
+                        until_ts = float(json.loads(json_path.read_text()).get("until_ts", 0))
+                        retry_after = max(0, int(round(until_ts - time.time())))
+                except Exception:  # noqa: BLE001
+                    retry_after = None
+                db.record_event(
+                    "session_paused",
+                    f"Session '{session_id}' paused (HITL / auto-backoff)",
+                    severity="warning",
+                    details={
+                        "model": model,
+                        "session_id": session_id,
+                        "retry_after_seconds": retry_after,
+                    },
+                )
+                logger.warning("Session '%s' blocked: paused (retry_after=%s)", session_id, retry_after)
+                msg = (
+                    f"Session '{session_id}' is paused. "
+                    + (
+                        f"Auto-resumes in ~{retry_after}s."
+                        if retry_after is not None
+                        else "Approve or reject via POST /api/hitl/decide."
+                    )
+                )
+                extra_headers = (
+                    {"Retry-After": str(retry_after)} if retry_after is not None else None
+                )
+                return _error_response(
+                    429,
+                    "session_paused",
+                    msg,
+                    provider,
+                    extra={"retry_after_seconds": retry_after},
+                    extra_headers=extra_headers,
+                )
+
+            # ── Model routing ──────────────────────────────────────────────
+            new_model, new_provider = router.route(model, session_id)
+            if new_model:
                 original_model = model
-                model = config.budget.downgrade_model
+                model = new_model
                 body["model"] = model
                 body_bytes = json.dumps(body).encode()
                 db.record_event(
-                    "model_downgraded",
-                    f"Downgraded {original_model} -> {model} (budget)",
+                    "model_routed",
+                    f"Routed {original_model} -> {model}",
                     severity="info",
-                    details={"original": original_model, "downgraded_to": model},
+                    details={"original": original_model, "routed_to": model},
                 )
-            elif config.budget.action == "warn":
-                pass  # Allow through with warning
-            else:
-                return _budget_abort_response(reason, provider)
-
-        # ── Loop detection ─────────────────────────────────────────────
-        req_hash = compute_request_hash(body)
-        is_loop, loop_reason = loop_detector.check(session_id, req_hash)
-        if is_loop:
-            with _stats_lock:
-                _stats["loops_detected"] += 1
-            db.record_event(
-                "loop_detected",
-                loop_reason,
-                severity="warning",
-                details={
-                    "model": model,
-                    "session_id": session_id,
-                    "request_hash": req_hash,
-                },
-            )
-            logger.warning(f"Loop detected: {loop_reason}")
-            _arm_backoff_pause(session_id, "loop_detected", loop_reason)
-            return _error_response(429, "loop_detected", loop_reason, provider)
-
-        # ── Rate breaker (#2817): rapid-fire request count ─────────────
-        is_rate, rate_reason = rate_breaker.check(session_id)
-        if is_rate:
-            with _stats_lock:
-                _stats["rate_blocked"] += 1
-            db.record_event(
-                "rate_exceeded",
-                rate_reason,
-                severity="warning",
-                details={"model": model, "session_id": session_id},
-            )
-            logger.warning(f"Rate exceeded: {rate_reason}")
-            _arm_backoff_pause(session_id, "rate_exceeded", rate_reason)
-            return _error_response(429, "rate_exceeded", rate_reason, provider)
-
-        # ── Cost-spiral breaker (#2818): dollar burn-rate ──────────────
-        is_spiral, spiral_reason = cost_spiral_breaker.check(session_id)
-        if is_spiral:
-            with _stats_lock:
-                _stats["cost_spiral_blocked"] += 1
-            db.record_event(
-                "cost_spiral",
-                spiral_reason,
-                severity="warning",
-                details={"model": model, "session_id": session_id},
-            )
-            logger.warning(f"Cost spiral: {spiral_reason}")
-            _arm_backoff_pause(session_id, "cost_spiral", spiral_reason)
-            return _error_response(429, "cost_spiral", spiral_reason, provider)
-        # ── Cache-bust risk (Headroom-inspired, #2839/#2840) ───────────
-        # Detect prompts that self-bust the prompt cache: volatile content in the
-        # cache-stable prefix (timestamps/UUIDs/JWTs) and prefix DRIFT turn over
-        # turn. Detection only (never blocks, never stores raw prompt text); the
-        # re-read-tax meter reads the emitted events.
-        try:
-            _risk = detect_cache_risk(body)
-            _ph = _risk.get("prefix_hash") or ""
-            _prev = _SESSION_PREFIX.get(session_id) if session_id else None
-            if session_id and _ph:
-                if len(_SESSION_PREFIX) > 2000:
-                    _SESSION_PREFIX.clear()
-                _SESSION_PREFIX[session_id] = _ph
-            _drift = bool(_prev and _ph and _prev != _ph)
-            if _drift or _risk.get("cache_risk_score", 0) >= 3:
-                db.record_event(
-                    "cache_risk",
-                    ("prompt prefix drifted between turns (self-busting the cache)"
-                     if _drift else "volatile content in the cache-stable prefix"),
-                    severity="info",
-                    details={
-                        "session_id": session_id,
-                        "model": model,
-                        "cache_risk_score": _risk.get("cache_risk_score", 0),
-                        "volatile": _risk.get("volatile", {}),
-                        "prefix_drift": _drift,
-                    },
-                )
-        except Exception as _exc:  # noqa: BLE001 — never break the proxy
-            logger.debug("cache-risk detection skipped: %s", _exc)
-
-        # ── Tool-order churn detection (#2841) ─────────────────────────
-        # Flag when a session's tools array is reordered between turns but the
-        # normalised set is unchanged — caller is sending tools non-deterministically.
-        # Detection only; never blocks. Diagnostic for the Cost-lens.
-        try:
-            if session_id and isinstance(body.get("tools"), list):
-                _tnorm = normalize_tools(body.get("tools"))
-                _traw = raw_tools_fp(body.get("tools"))
-                _prev_norm = _SESSION_TOOLS_NORM.get(session_id)
-                _prev_raw = _SESSION_TOOLS_RAW.get(session_id)
-                if len(_SESSION_TOOLS_NORM) > 2000:
-                    _SESSION_TOOLS_NORM.clear()
-                    _SESSION_TOOLS_RAW.clear()
-                _SESSION_TOOLS_NORM[session_id] = _tnorm
-                _SESSION_TOOLS_RAW[session_id] = _traw
-                if (_prev_norm and _prev_raw and _tnorm and _traw
-                        and _prev_raw != _traw and _prev_norm == _tnorm):
-                    db.record_event(
-                        "tool_order_churn",
-                        "tool array reordered across turns (same tools, different order)"
-                        " — normalising; caller may be building tools non-deterministically",
-                        severity="info",
-                        details={"session_id": session_id, "model": model},
-                    )
-        except Exception as _exc:  # noqa: BLE001 — never break the proxy
-            logger.debug("tool-order churn detection skipped: %s", _exc)
-
-        # ── Velocity check ─────────────────────────────────────────────
-        is_spike, spike_reason = velocity_breaker.check(session_id)
-        if is_spike:
-            with _stats_lock:
-                _stats["velocity_blocked"] += 1
-            db.record_event(
-                "velocity_exceeded",
-                spike_reason,
-                severity="warning",
-                details={"model": model, "session_id": session_id},
-            )
-            logger.warning(f"Velocity exceeded: {spike_reason}")
-            return _error_response(429, "velocity_exceeded", spike_reason, provider)
-
-        # ── HITL / auto-backoff pause check ────────────────────────────
-        # Honors both legacy operator pauses (manual resume) and auto-backoff
-        # pauses (#2818, escalating expiry, auto-resume once elapsed).
-        if _is_session_hitl_paused(session_id):
-            with _stats_lock:
-                _stats["blocked"] += 1
-            # Surface auto-resume time + retry-after when this is a backoff pause.
-            retry_after = None
-            json_path = _HITL_DIR / f"pause_{session_id}.json"
-            try:
-                if json_path.exists():
-                    until_ts = float(json.loads(json_path.read_text()).get("until_ts", 0))
-                    retry_after = max(0, int(round(until_ts - time.time())))
-            except Exception:  # noqa: BLE001
-                retry_after = None
-            db.record_event(
-                "session_paused",
-                f"Session '{session_id}' paused (HITL / auto-backoff)",
-                severity="warning",
-                details={
-                    "model": model,
-                    "session_id": session_id,
-                    "retry_after_seconds": retry_after,
-                },
-            )
-            logger.warning("Session '%s' blocked: paused (retry_after=%s)", session_id, retry_after)
-            msg = (
-                f"Session '{session_id}' is paused. "
-                + (
-                    f"Auto-resumes in ~{retry_after}s."
-                    if retry_after is not None
-                    else "Approve or reject via POST /api/hitl/decide."
-                )
-            )
-            extra_headers = (
-                {"Retry-After": str(retry_after)} if retry_after is not None else None
-            )
-            return _error_response(
-                429,
-                "session_paused",
-                msg,
-                provider,
-                extra={"retry_after_seconds": retry_after},
-                extra_headers=extra_headers,
-            )
-
-        # ── Model routing ──────────────────────────────────────────────
-        new_model, new_provider = router.route(model, session_id)
-        if new_model:
-            original_model = model
-            model = new_model
-            body["model"] = model
-            body_bytes = json.dumps(body).encode()
-            db.record_event(
-                "model_routed",
-                f"Routed {original_model} -> {model}",
-                severity="info",
-                details={"original": original_model, "routed_to": model},
-            )
-        if new_provider:
-            provider = new_provider
+            if new_provider:
+                provider = new_provider
 
         # ── Forward to upstream ────────────────────────────────────────
         api_key = _get_api_key(provider, req_headers)
