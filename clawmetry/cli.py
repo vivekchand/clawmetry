@@ -708,28 +708,29 @@ def _cmd_connect(args) -> None:
             print(f"❌  {e}")
             sys.exit(1)
 
-    from clawmetry.sync import generate_encryption_key
+    from clawmetry.sync import generate_encryption_key, _derive_key_for_storage
 
-    # Always prompt for encryption key — be transparent
-    # Store the raw passphrase as-is; normalization happens at encrypt/decrypt time
-    # Use --enc-key if provided (non-interactive sandbox/automated use)
+    # Always prompt for encryption key — be transparent.
+    # A typed passphrase is run through a strong salted KDF (scrypt) and we store
+    # the DERIVED key, never the raw passphrase. A pasted real key is kept as-is.
+    # Use --enc-key if provided (non-interactive sandbox/automated use).
     _enc_key_arg = getattr(args, "enc_key", None) or ""
 
     print()
     print("🔐 Encryption key protects your data end-to-end.")
     if _enc_key_arg:
-        enc_key = _enc_key_arg
+        enc_key = _derive_key_for_storage(_enc_key_arg)
         print("  Using provided encryption key.")
     elif _saved_enc_key:
         masked = _saved_enc_key[:6] + "…" + _saved_enc_key[-4:]
         print(f"  Existing key: {masked}")
         custom_key = _input("  Press Enter to keep it, or type a new one: ").strip()
-        enc_key = custom_key if custom_key else _saved_enc_key
+        enc_key = _derive_key_for_storage(custom_key) if custom_key else _saved_enc_key
     else:
         custom_key = _input(
             "  Enter a custom secret key (or press Enter to auto-generate): "
         ).strip()
-        enc_key = custom_key if custom_key else generate_encryption_key()
+        enc_key = _derive_key_for_storage(custom_key) if custom_key else generate_encryption_key()
 
     config = {
         "api_key": api_key,

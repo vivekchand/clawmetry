@@ -553,6 +553,38 @@ def _normalize_encryption_key(key_str: str) -> str:
     return base64.urlsafe_b64encode(derived).decode().rstrip("=")
 
 
+def _derive_key_for_storage(key_str: str) -> str:
+    """Turn a user-supplied custom secret into the 32-byte key we PERSIST.
+
+    A value that is already a valid 16/24/32-byte base64url key is kept as-is.
+    A human passphrase is run through scrypt with a random salt (NOT the old
+    unsalted single-pass SHA-256) so a weak passphrase can't be brute-forced
+    with a global rainbow table and the same passphrase on two machines yields
+    different keys. We store the DERIVED key (the user backs it up / pastes it
+    via ``--show-key``), so the salt is ephemeral and the passphrase never
+    persists.
+
+    Existing installs that stored a raw passphrase are unaffected: their config
+    is still read through ``_normalize_encryption_key`` (legacy SHA-256) on every
+    use, so their already-encrypted cloud data keeps decrypting.
+    """
+    import os as _os_d
+    try:
+        raw = base64.urlsafe_b64decode((key_str or "") + "==")
+        if len(raw) in (16, 24, 32):
+            return key_str  # already a real key — keep it
+    except Exception:
+        pass
+    # Passphrase -> strong salted KDF. Use cryptography's Scrypt (already a core
+    # dep) rather than hashlib.scrypt, which is missing on Pythons built against
+    # LibreSSL (some macOS builds). N=2**15 keeps offline brute-force of a weak
+    # passphrase expensive; the random salt kills rainbow tables.
+    from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+    salt = _os_d.urandom(16)
+    dk = Scrypt(salt=salt, length=32, n=2 ** 15, r=8, p=1).derive(key_str.encode())
+    return base64.urlsafe_b64encode(dk).decode().rstrip("=")
+
+
 def _get_aesgcm(key_b64: str):
     """Return an AESGCM cipher from a base64url key (auto-derives if passphrase)."""
     try:
