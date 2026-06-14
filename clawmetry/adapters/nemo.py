@@ -684,6 +684,62 @@ def _read_nemoclaw_skill_catalog() -> dict:
     return {}
 
 
+def _read_model_router_model_list() -> dict:
+    """Read the proxy-config YAML written by ``model-router proxy-config --output <path>``.
+
+    Tries several candidate locations in priority order, then falls back to
+    a ``model_name:`` line-regex when PyYAML is not installed. Returns a dict
+    with ``modelRouterModelList`` (list of model-name strings) and
+    ``modelRouterModelCount`` (int) when any config file is found; empty dict
+    otherwise — never raises.
+    """
+    import os
+    import re
+    from pathlib import Path
+
+    home = Path.home()
+    venv = os.environ.get("NEMOCLAW_MODEL_ROUTER_VENV") or str(
+        home / ".nemoclaw" / "model-router-venv"
+    )
+    # Explicit env-var override (harness or user can set this)
+    env_path = os.environ.get("NEMOCLAW_MODEL_ROUTER_CONFIG", "")
+    candidates = [
+        Path(env_path) if env_path else None,
+        home / ".nemoclaw" / "model-router-config.yaml",
+        home / ".nemoclaw" / "proxy-config.yaml",
+        Path(venv) / "proxy-config.yaml",
+    ]
+
+    for path in candidates:
+        if path is None or not path.exists():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception as exc:
+            logger.debug("nemoclaw model-router config read failed (%s): %s", path, exc)
+            continue
+        try:
+            try:
+                import yaml  # type: ignore[import]
+                data = yaml.safe_load(text) or {}
+                names = [
+                    str(entry.get("model_name", ""))
+                    for entry in data.get("model_list", [])
+                    if isinstance(entry, dict) and entry.get("model_name")
+                ]
+            except ImportError:
+                # PyYAML not installed — regex fallback over raw text
+                names = re.findall(r"model_name:\s*(.+?)(?:\s|$)", text)
+            if names:
+                return {
+                    "modelRouterModelList": names,
+                    "modelRouterModelCount": len(names),
+                }
+        except Exception as exc:
+            logger.debug("nemoclaw model-router config parse failed (%s): %s", path, exc)
+    return {}
+
+
 class NemoClawAdapter(AgentAdapter):
     """Read-side adapter for the NemoClaw Free runtime.
 
@@ -710,6 +766,7 @@ class NemoClawAdapter(AgentAdapter):
             logger.debug("nemoclaw detect read failed: %s", exc)
         meta: dict = {"event_count": n}
         meta.update(_read_nemoclaw_skill_catalog())
+        meta.update(_read_model_router_model_list())
         return DetectResult(
             name=self.name,
             display_name=self.display_name,
