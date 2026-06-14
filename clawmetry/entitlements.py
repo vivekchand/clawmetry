@@ -163,6 +163,18 @@ FEATURE_LABELS = {
     "custom_data_residency": "Custom data residency",
 }
 
+# Backwards-compat alias keys living inside ``PRO_ONLY_FEATURES`` that older
+# callers may still import. They satisfy ``allows_feature(...)`` for the
+# canonical feature they alias, but the user-facing catalog (and so the
+# upgrade copy) should hide them — listing them alongside the canonical
+# keys advertises feature names that aren't on /pricing anymore. The catalog
+# row carries ``alias=True`` so the UI can filter them out without
+# hard-coding the four ids on the frontend (a duplicate that would drift the
+# next time we shuffle the PRO_ONLY set).
+_ALIAS_FEATURES = frozenset(
+    {"custom_alerts", "alert_webhooks", "anomaly_detection", "cost_optimizer"}
+)
+
 # ── Feature catalogue ───────────────────────────────────────────────────────
 # Core observability — always free. Keys are stable identifiers the route /
 # UI layer checks via Entitlement.allows_feature(...).
@@ -572,6 +584,7 @@ def feature_catalog() -> list[dict]:
                 "allowed": allowed,
                 "locked": (not is_free) and (not allowed),
                 "entitled": entitled,
+                "alias": fid in _ALIAS_FEATURES,
             }
         )
     return out

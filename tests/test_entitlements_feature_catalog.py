@@ -182,6 +182,37 @@ def test_enforce_cloud_pro_unlocks_paid_but_not_enterprise(ent, monkeypatch, tmp
         assert by_id[fid]["entitled"] is False, fid
 
 
+# ── alias flag (backwards-compat PRO_ONLY keys) ──────────────────────────────
+
+
+def test_catalog_alias_flag_marks_backcompat_pro_keys(ent):
+    """The four backwards-compat keys living inside PRO_ONLY_FEATURES carry
+    ``alias=True`` so the UI can hide them from the user-facing feature list
+    without hard-coding the ids on the frontend (where they'd drift the next
+    time the PRO_ONLY set shuffles)."""
+    by_id = {row["id"]: row for row in ent.feature_catalog()}
+    for fid in ("custom_alerts", "alert_webhooks", "anomaly_detection", "cost_optimizer"):
+        assert by_id[fid]["alias"] is True, fid
+
+
+def test_catalog_alias_flag_false_for_canonical_keys(ent):
+    """Canonical features — every tier bucket — must not be flagged as
+    aliases. Guards against an accidental membership change in
+    ``_ALIAS_FEATURES`` silently hiding a real feature from the catalog."""
+    by_id = {row["id"]: row for row in ent.feature_catalog()}
+    for fid in ent.FREE_FEATURES | ent.STARTER_FEATURES | ent.ENTERPRISE_FEATURES:
+        assert by_id[fid]["alias"] is False, fid
+    for fid in ("self_evolve", "otel_export", "custom_webhooks", "tool_policy"):
+        assert by_id[fid]["alias"] is False, fid
+
+
+def test_catalog_alias_keys_live_inside_pro_only(ent):
+    """Every alias key must exist in PRO_ONLY_FEATURES — otherwise the flag
+    advertises a row that ``allows_feature`` won't actually unlock."""
+    import clawmetry.entitlements as e
+    assert e._ALIAS_FEATURES.issubset(e.PRO_ONLY_FEATURES)
+
+
 def test_enforce_enterprise_unlocks_everything_paid(ent, monkeypatch, tmp_path):
     monkeypatch.setenv("CLAWMETRY_ENFORCE", "1")
     cache = tmp_path / ".clawmetry" / "cloud_plan.json"
