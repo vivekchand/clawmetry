@@ -335,6 +335,18 @@ _DDL = [
         stuck_flag     BOOLEAN DEFAULT FALSE
     )
     """,
+    # Issue #3000 — per-agent / per-team cost attribution. User-editable mapping
+    # from a runtime (or future: node / cwd_prefix) to a friendly team label.
+    # key_type='runtime' + key_value='claude_code' + team_label='Eng Team' maps
+    # all claude_code sessions to "Eng Team" in /api/usage/by-team.
+    """
+    CREATE TABLE IF NOT EXISTS team_mapping (
+        key_type   VARCHAR NOT NULL,
+        key_value  VARCHAR NOT NULL,
+        team_label VARCHAR NOT NULL,
+        PRIMARY KEY (key_type, key_value)
+    )
+    """,
     """
     CREATE TABLE IF NOT EXISTS memory_blobs (
         agent_type    VARCHAR NOT NULL,
@@ -5129,6 +5141,66 @@ class LocalStore:
                 "cache_read", "cache_write", "cost_usd", "calls"]
         return [dict(zip(cols, r)) for r in rows]
 
+    def query_efficiency_rollup(self, days: int = 30) -> list[dict[str, Any]]:
+        """Per-(runtime, model) aggregates over the trailing ``days`` window of
+        the materialized ``rollup_model_daily`` table — the input shape for
+        ``clawmetry.efficiency.build_efficiency_slice`` (efficiency grade +
+        measured savings).
+
+        Every row carries the SAME ``days_with_data`` value: the count of
+        distinct days in the window with any rollup data, used for honest
+        monthly scaling (30 / days_with_data) instead of assuming a full
+        month of history.
+
+        Two cheap index-backed aggregates over the small rollup table — no
+        event scan (FLYWHEEL 1e CPU budget). Best-effort: any failure yields
+        ``[]`` so the caller renders its empty / insufficient-data state.
+        """
+        try:
+            try:
+                days_i = max(1, min(365, int(days)))
+            except (TypeError, ValueError):
+                days_i = 30
+            # NOTE: _fetch self-locks (_write_lock) — never wrap in another lock.
+            rows = self._fetch(
+                """
+                SELECT runtime, model,
+                       SUM(tokens_in)   AS tokens_in,
+                       SUM(tokens_out)  AS tokens_out,
+                       SUM(cache_read)  AS cache_read,
+                       SUM(cache_write) AS cache_write,
+                       SUM(cost_usd)    AS cost_usd,
+                       SUM(calls)       AS calls
+                FROM rollup_model_daily
+                WHERE day >= current_date - INTERVAL (?) DAY
+                GROUP BY runtime, model
+                ORDER BY SUM(cost_usd) DESC
+                """,
+                [days_i],
+            )
+            dcount = self._fetch(
+                "SELECT COUNT(DISTINCT day) FROM rollup_model_daily "
+                "WHERE day >= current_date - INTERVAL (?) DAY",
+                [days_i],
+            )
+            days_with_data = int(dcount[0][0] or 0) if dcount else 0
+            out: list[dict[str, Any]] = []
+            for r in rows:
+                out.append({
+                    "runtime": r[0] or "openclaw",
+                    "model": r[1] or "",
+                    "tokens_in": int(r[2] or 0),
+                    "tokens_out": int(r[3] or 0),
+                    "cache_read": int(r[4] or 0),
+                    "cache_write": int(r[5] or 0),
+                    "cost_usd": float(r[6] or 0.0),
+                    "calls": int(r[7] or 0),
+                    "days_with_data": days_with_data,
+                })
+            return out
+        except Exception:
+            return []
+
     def query_rollup_runtime_daily(
         self,
         *,
@@ -5192,6 +5264,78 @@ class LocalStore:
         cols = ["session_id", "runtime", "title", "status", "started_at",
                 "last_activity", "tokens", "cost_usd", "turns", "stuck_flag"]
         return [dict(zip(cols, r)) for r in rows]
+
+    # ── team mapping (issue #3000) ────────────────────────────────────────
+
+    def query_usage_by_team(self, *, window_days: int = 7) -> list[dict[str, Any]]:
+        """Roll up cost/tokens/sessions from rollup_session grouped by team label.
+
+        Sessions whose runtime has no entry in team_mapping fall back to the
+        raw runtime name as the label. Returns rows sorted by cost descending.
+        """
+        import time as _time
+        cutoff_ms = int((_time.time() - window_days * 86400) * 1000)
+        cutoff_iso = str(cutoff_ms)
+        rows = self._fetch(
+            """
+            SELECT
+                COALESCE(tm.team_label, rs.runtime, 'unknown') AS label,
+                rs.runtime,
+                ROUND(SUM(rs.cost_usd), 6) AS cost_usd,
+                SUM(rs.tokens) AS tokens,
+                COUNT(*) AS sessions
+            FROM rollup_session rs
+            LEFT JOIN team_mapping tm
+                ON tm.key_type = 'runtime' AND tm.key_value = rs.runtime
+            WHERE COALESCE(rs.last_activity, rs.started_at) >= ?
+            GROUP BY 1, 2
+            ORDER BY cost_usd DESC
+            """,
+            [cutoff_iso],
+        )
+        out: dict[str, dict] = {}
+        for label, runtime, cost, tokens, sessions in rows:
+            if label not in out:
+                out[label] = {"label": label, "cost_usd": 0.0,
+                               "tokens": 0, "sessions": 0, "runtimes": []}
+            out[label]["cost_usd"] = round(out[label]["cost_usd"] + (cost or 0), 6)
+            out[label]["tokens"] += int(tokens or 0)
+            out[label]["sessions"] += int(sessions or 0)
+            if runtime and runtime not in out[label]["runtimes"]:
+                out[label]["runtimes"].append(runtime)
+        return sorted(out.values(), key=lambda r: r["cost_usd"], reverse=True)
+
+    def list_team_mappings(self) -> list[dict[str, Any]]:
+        """Return all rows from team_mapping."""
+        rows = self._fetch(
+            "SELECT key_type, key_value, team_label FROM team_mapping ORDER BY key_type, key_value",
+            [],
+        )
+        return [{"key_type": r[0], "key_value": r[1], "team_label": r[2]} for r in rows]
+
+    def upsert_team_mapping(self, key_type: str, key_value: str, team_label: str) -> None:
+        """Insert or replace a team_mapping row."""
+        with self._write_lock:
+            self._conn.execute(
+                "INSERT INTO team_mapping (key_type, key_value, team_label)"
+                " VALUES (?, ?, ?)"
+                " ON CONFLICT (key_type, key_value) DO UPDATE SET team_label = excluded.team_label",
+                [str(key_type), str(key_value), str(team_label)],
+            )
+
+    def delete_team_mapping(self, key_type: str, key_value: str) -> int:
+        """Delete a team_mapping row. Returns 1 if deleted, 0 if not found."""
+        with self._write_lock:
+            n = self._conn.execute(
+                "SELECT COUNT(*) FROM team_mapping WHERE key_type = ? AND key_value = ?",
+                [str(key_type), str(key_value)],
+            ).fetchone()[0]
+            if n:
+                self._conn.execute(
+                    "DELETE FROM team_mapping WHERE key_type = ? AND key_value = ?",
+                    [str(key_type), str(key_value)],
+                )
+            return n
 
     # ── queries ─────────────────────────────────────────────────────────
 

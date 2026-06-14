@@ -27,7 +27,7 @@ def _as_daemon(uc, monkeypatch):
 def _mock_self_update(monkeypatch, calls, ok=True, restarts=None):
     import routes.meta as meta
 
-    def _fake(reason="manual", restart=True):
+    def _fake(reason="manual", restart=True, target_version=None):
         calls.append(reason)
         if restarts is not None:
             restarts.append(restart)
@@ -85,29 +85,37 @@ def test_auto_update_in_allowed_config_keys(monkeypatch):
     assert captured == {"auto_update": True}, "auto_update must pass the allow-list, bogus keys filtered"
 
 
-def test_auto_update_holds_fresh_release(monkeypatch):
+def test_auto_update_installs_given_target(monkeypatch):
+    """The stability-window rail now lives in target SELECTION
+    (_newest_aged_in_version, covered in test_autoupdate_newest_aged.py). Once a
+    concrete aged-in ``target`` reaches _maybe_auto_update, it installs it and
+    passes it through to perform_self_update as ``target_version``."""
+    uc = _uc()
+    _as_daemon(uc, monkeypatch)
+    monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
+    import routes.meta as meta
+    seen = {}
+
+    def _fake(reason="manual", restart=True, target_version=None):
+        seen["reason"] = reason
+        seen["target"] = target_version
+        return ({"ok": True}, 200)
+
+    monkeypatch.setattr(meta, "perform_self_update", _fake)
+    uc._maybe_auto_update("0.12.1", "0.12.10", latest="0.12.18")
+    assert seen == {"reason": "auto", "target": "0.12.10"}, \
+        "must install the chosen aged-in target, pinned via target_version"
+
+
+def test_auto_update_ignores_target_not_newer(monkeypatch):
+    """A target equal to or older than current is a no-op (defensive)."""
     uc = _uc()
     _as_daemon(uc, monkeypatch)
     calls = []
     _mock_self_update(monkeypatch, calls)
     monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
-    monkeypatch.setenv("CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS", "48")
-    # 2h-old release → held (too fresh)
-    uc._maybe_auto_update("0.12.1", "0.12.2", age_hours=2.0)
-    assert calls == [], "must hold a release younger than the stability window"
-    # 72h-old release → installs
-    uc._maybe_auto_update("0.12.1", "0.12.2", age_hours=72.0)
-    assert calls == ["auto"], "must install once the release has aged in"
-
-
-def test_auto_update_unknown_age_does_not_block(monkeypatch):
-    uc = _uc()
-    _as_daemon(uc, monkeypatch)
-    calls = []
-    _mock_self_update(monkeypatch, calls)
-    monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
-    uc._maybe_auto_update("0.12.1", "0.12.2", age_hours=None)
-    assert calls == ["auto"], "unknown age must not block (back-compat)"
+    uc._maybe_auto_update("0.12.10", "0.12.10")
+    assert calls == [], "must not upgrade to the same (or an older) version"
 
 
 # ── Default-on policy + rails (0.12.494) ────────────────────────────────────
@@ -145,7 +153,7 @@ def test_env_kill_switch_blocks_auto_update(monkeypatch):
     monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
     calls = []
     _mock_self_update(monkeypatch, calls)
-    uc._maybe_auto_update("0.12.1", "0.12.2", age_hours=999)
+    uc._maybe_auto_update("0.12.1", "0.12.2")
     assert calls == [], "CLAWMETRY_AUTO_UPDATE=0 must hard-disable auto-update"
 
 
@@ -160,11 +168,11 @@ def test_dashboard_role_requires_explicit_opt_in(monkeypatch):
     _mock_self_update(monkeypatch, calls)
     # Default True but NOT explicitly stored → dashboard must not act.
     monkeypatch.setattr(uc, "_auto_update_explicitly_set", lambda: False)
-    uc._maybe_auto_update("0.12.1", "0.12.2", age_hours=999)
+    uc._maybe_auto_update("0.12.1", "0.12.2")
     assert calls == [], "dashboard role must ignore the default-on policy"
     # Explicit user opt-in → dashboard acts (pre-existing behaviour kept).
     monkeypatch.setattr(uc, "_auto_update_explicitly_set", lambda: True)
-    uc._maybe_auto_update("0.12.1", "0.12.2", age_hours=999)
+    uc._maybe_auto_update("0.12.1", "0.12.2")
     assert calls == ["auto"], "explicit opt-in must still work in the dashboard"
 
 
@@ -178,7 +186,7 @@ def test_unsupervised_daemon_defers_restart(monkeypatch):
     monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
     calls, restarts = [], []
     _mock_self_update(monkeypatch, calls, restarts=restarts)
-    uc._maybe_auto_update("0.12.1", "0.12.2", age_hours=999)
+    uc._maybe_auto_update("0.12.1", "0.12.2")
     assert calls == ["auto"]
     assert restarts == [False], "unsupervised daemon must defer the restart"
 
@@ -189,7 +197,7 @@ def test_supervised_daemon_restarts(monkeypatch):
     monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
     calls, restarts = [], []
     _mock_self_update(monkeypatch, calls, restarts=restarts)
-    uc._maybe_auto_update("0.12.1", "0.12.2", age_hours=999)
+    uc._maybe_auto_update("0.12.1", "0.12.2")
     assert calls == ["auto"]
     assert restarts == [True], "supervised daemon restarts to apply the wheel"
 

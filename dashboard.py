@@ -256,7 +256,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.513"
+__version__ = "0.12.524"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -12249,6 +12249,7 @@ DASHBOARD_HTML = r"""
 </div> <!-- end app-shell -->
 {% endif %}
 <script src="{{ url_for('static', filename='js/i18n.js', v=version) }}"></script>
+<script src="{{ url_for('static', filename='js/runtime-logos.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/app.js', v=version) }}"></script>
 </div> <!-- end zoom-wrapper -->
 

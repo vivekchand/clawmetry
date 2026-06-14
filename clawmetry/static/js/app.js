@@ -326,6 +326,30 @@ async function loadAlertHistory() {
   }
 }
 
+// QW5 — plain-words duration for the "data feed stopped" banner.
+function _cmHumanizeMinutes(mins) {
+  mins = Math.max(1, Math.round(mins));
+  if (mins < 60) return mins === 1 ? t('app.one_minute', null, '1 minute') : t('app.n_minutes', { n: mins }, mins + ' minutes');
+  var hours = Math.round(mins / 60);
+  if (hours < 48) return hours === 1 ? t('app.one_hour', null, '1 hour') : t('app.n_hours', { n: hours }, hours + ' hours');
+  var days = Math.round(mins / 1440);
+  return days === 1 ? t('app.one_day', null, '1 day') : t('app.n_days', { n: days }, days + ' days');
+}
+
+// QW5 — rewrite the server's agent_down message into plain words. The server
+// copy ("Agent appears down: no OTLP data for N minutes") carries jargon and a
+// raw minute count; users get a humanized duration and an honest scope note.
+function _cmAgentDownBannerCopy(orig) {
+  try {
+    var m = /(\d+)\s*minute/.exec(orig || '');
+    if (m) {
+      var dur = _cmHumanizeMinutes(parseInt(m[1], 10));
+      return t('alerts.feed_stopped', { duration: dur }, 'One of our data feeds from your agent stopped about ' + dur + ' ago. You’re still seeing live activity, but some charts may lag.');
+    }
+  } catch (e) {}
+  return t('alerts.feed_stopped_unknown', null, 'One of our data feeds from your agent stopped. You’re still seeing live activity, but some charts may lag.');
+}
+
 async function checkActiveAlerts() {
   try {
     var data = await fetch('/api/alerts/active').then(function(r){return r.json();});
@@ -338,14 +362,22 @@ async function checkActiveAlerts() {
     if (bellBadge) { bellBadge.textContent = countLabel; bellBadge.style.display = count > 0 ? '' : 'none'; }
     if (tabBadge)  { tabBadge.textContent  = countLabel; tabBadge.style.display  = count > 0 ? '' : 'none'; }
     var banner = document.getElementById('alert-banner');
-    if(count === 0) {
+    // QW5: when the live feed delivered an event in the last 2 minutes, the
+    // "feed stopped" alert contradicts what the user can see — suppress it
+    // from the banner (it stays in the bell/alert history).
+    var _liveMs = (typeof window._cmLastLiveEventMs === 'number') ? window._cmLastLiveEventMs : 0;
+    var _liveRecent = _liveMs > 0 && (Date.now() - _liveMs) < 120000;
+    var bannerAlerts = _liveRecent
+      ? alerts.filter(function(a) { return a && a.type !== 'agent_down'; })
+      : alerts;
+    if(bannerAlerts.length === 0) {
       if (banner) banner.style.display = 'none';
       return;
     }
     // Show most recent alert
-    var latest = alerts[0];
+    var latest = bannerAlerts[0];
     var msgEl = document.getElementById('alert-banner-msg');
-    msgEl.textContent = latest.message;
+    msgEl.textContent = latest.type === 'agent_down' ? _cmAgentDownBannerCopy(latest.message) : latest.message;
     // Stuck-session deep-link: dashboard.py:_check_stuck_sessions emits
     // rule_id = `stuck_session_<full-session-id>`. Surface an "Open session →"
     // button on the banner so users go from "what's wrong" to "look at it"
@@ -2239,13 +2271,23 @@ async function loadSkills() {
         + '</div>';
     }
 
+    // QW9: the verdict comes from the rows. Green "all good" only when every
+    // installed skill has at least one use; never-used skills get a neutral
+    // gray verdict instead of a contradictory green check.
+    var unusedCount = skills.filter(function(s) { return s && s.status === 'unused'; }).length;
+    var verdictCard = '';
+    if (dead === 0 && stuck === 0 && installed > 0) {
+      verdictCard = unusedCount > 0
+        ? card(t('skills.never_used_title', null, 'Never used yet'), unusedCount, '#94a3b8',
+               t('skills.never_used_verdict', { n: unusedCount }, unusedCount + ' skill(s) installed, never used yet.'))
+        : card(t('skills.all_good', null, 'All good'), '\u2713', '#22c55e',
+               t('skills.all_good_sub', null, 'every skill is being used'));
+    }
     summaryEl.innerHTML =
       card('Installed', installed, 'var(--text-primary)') +
       (dead   > 0 ? card('Safe to remove', dead,  '#ef4444', 'never used') : '') +
       (stuck  > 0 ? card('Not working',    stuck, '#f59e0b', 'broken or misdescribed') : '') +
-      (dead === 0 && stuck === 0 && installed > 0
-        ? card('All good', '\u2713', '#22c55e', 'every skill is being used')
-        : '');
+      verdictCard;
 
     if (skills.length === 0) {
       listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">' + t("app.nothing_installed_yet_skills", null, "Nothing installed yet. Skills let your agent handle specific tasks \u2014 add some to get started.") + '</div>';
@@ -3023,6 +3065,22 @@ function _renderOverviewHero() {
   // "0 sessions today" reads as gone. For all-runtimes it stays the live "today".
   if (sessions != null) stats.push('💬 <strong style="color:var(--text-primary);">' + sessions + (sessions === 1 ? ' session' : ' sessions') + '</strong>' + (_scope ? '' : ' today'));
   stats.push('💸 <strong style="color:var(--text-primary);">' + escHtml(cost) + '</strong>' + (free ? ' <span style="color:#22c55e;">free on your plan</span>' : ''));
+  // Efficiency chip (design spec §1a): grade next to cost answers "what did it
+  // cost me, and is that reasonable?" in one read. Renders only when the
+  // daemon slice is fresh for the CURRENT runtime filter and passes the trust
+  // gate (_cmEffUsable) — otherwise nothing, never a placeholder grade. When
+  // the cache is cold/stale, kick ONE load and repaint on arrival (the flag
+  // prevents a render loop: a fresh cache never re-enters the else-branch).
+  try {
+    var _effC = window._cmEff || {}, _effRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    if (_effC.rt === _effRt && _effC.data !== undefined && (Date.now() - _effC.ts) < 60000) {
+      var _effChip = _cmEffChipHtml(_effC.data);
+      if (_effChip) stats.push(_effChip);
+    } else if (!window._cmEffHeroWait) {
+      window._cmEffHeroWait = true;
+      _cmLoadEfficiency(function () { window._cmEffHeroWait = false; try { _renderOverviewHero(); } catch (e) {} });
+    }
+  } catch (_e) {}
   stats.push('🧠 running <strong style="color:var(--text-primary);">' + escHtml(model) + '</strong>');
   // Live throughput (⚡ tok/s) from the today-token delta between renders —
   // matches `clawmetry status --live`. Shown only while the agent is producing.
@@ -3404,26 +3462,33 @@ async function loadEvaluators() {
 async function loadEvalSummary() {
   var avgEl = document.getElementById('eval-avg-score');
   var covEl = document.getElementById('eval-coverage');
+  var checkEl = document.getElementById('eval-title-check');
+  // QW7: the green check only appears when there is an actual score.
+  function setTitleCheck(show) { if (checkEl) checkEl.style.display = show ? '' : 'none'; }
   if (!avgEl) return;
   try {
     var data = await fetch('/api/evals/summary?window=24h').then(function(r){return r.json();}).catch(function(){return null;});
     if (!data || typeof data.scored !== 'number') {
+      setTitleCheck(false);
       avgEl.textContent = '--';
       if (covEl) covEl.textContent = '';
       return;
     }
     if (data.scored === 0) {
-      avgEl.textContent = '--';
+      setTitleCheck(false);
+      avgEl.textContent = '';
       avgEl.style.color = 'var(--text-muted)';
-      if (covEl) covEl.textContent = t("app.no_scored_sessions_yet", null, "no scored sessions yet");
+      if (covEl) covEl.textContent = t("overview.eval_empty", null, "No sessions judged yet today. The judge runs automatically after each session.");
       return;
     }
+    setTitleCheck(true);
     var avg = Number(data.avg_score || 0);
     avgEl.textContent = avg.toFixed(1) + ' / 5';
     // Color band: 4+ green, 3-4 yellow, <3 red. Matches the per-session pill.
     avgEl.style.color = avg >= 4 ? '#22c55e' : avg >= 3 ? '#f59e0b' : '#ef4444';
     if (covEl) covEl.textContent = data.scored + ' / ' + data.total + ' scored';
   } catch (e) {
+    setTitleCheck(false);
     avgEl.textContent = '--';
     if (covEl) covEl.textContent = '';
   }
@@ -4429,6 +4494,16 @@ window.toggleBrainFilterExpanded = function() {
 function _brainChipHtml(s) {
   var isActive = _brainFilter === s.id;
   var icon = s.icon || (s.id === 'main' ? '🧠' : '🤖');
+  // Per-source runtime mascot, keyed off the source's runtime (explicit
+  // runtime/agent_type field or the session-id prefix). The "main" aggregate
+  // chip keeps the 🧠 glyph; a source whose runtime resolves to a known mascot
+  // shows the pixel logo instead of the generic 🤖.
+  if (s.id !== 'main' && typeof _cmRuntimeOf === 'function' && typeof window.cmRuntimeIcon === 'function') {
+    var _brt = _cmRuntimeOf({ id: s.id, runtime: s.runtime, agent_type: s.agent_type });
+    if (typeof window.cmRuntimeKnown === 'function' && window.cmRuntimeKnown(_brt)) {
+      icon = window.cmRuntimeIcon(_brt, 14, { title: _cmRuntimeLabel(_brt) });
+    }
+  }
   // Add 🧠 badge if this source has any THINK events (reasoning sessions)
   var hasReasoning = (_brainAllEvents || []).some(function(ev) {
     return ev.source === s.id && ev.type === 'THINK';
@@ -6047,6 +6122,9 @@ function _startBrainSSE() {
       try {
         var ev = JSON.parse(e.data);
         if (!ev || !ev.time) return;
+        // QW5: stamp the last live-feed event so the red "feed stopped" banner
+        // can suppress itself while live activity is clearly flowing.
+        window._cmLastLiveEventMs = Date.now();
         // Prepend to events array
         _brainAllEvents.unshift(ev);
         // Cap at 500 events
@@ -7708,6 +7786,47 @@ async function loadSecurityPage(silent) {
   // Tamper-evident integrity + Enterprise audit feed (both node-wide).
   loadSecurityIntegrity();
   loadSecurityAudit();
+  try {
+    var cd = await fetchJsonWithTimeout('/api/security/credential-scan', 10000);
+    var badgeEl = document.getElementById('credential-scan-badge');
+    var scanListEl = document.getElementById('credential-scan-list');
+    var leaks = cd.leaks || [];
+    var leakCount = cd.count || 0;
+    if (badgeEl) {
+      if (leakCount > 0) {
+        badgeEl.textContent = leakCount + ' leak' + (leakCount === 1 ? '' : 's');
+        badgeEl.style.background = '#dc2626';
+        badgeEl.style.color = '#fff';
+      } else {
+        badgeEl.textContent = 'Clean';
+        badgeEl.style.background = 'rgba(34,197,94,0.15)';
+        badgeEl.style.color = '#86efac';
+      }
+    }
+    if (scanListEl) {
+      if (!leaks.length) {
+        scanListEl.innerHTML = '<div style="color:#86efac;padding:10px;font-size:11px;">&#10003; No API key leaks detected in recent session events.</div>';
+      } else {
+        var _patternLabel = {openai:'OpenAI',anthropic:'Anthropic',aws:'AWS',github:'GitHub',generic:'Generic'};
+        var chtml = '';
+        leaks.slice(0, 30).forEach(function(lk) {
+          var pLabel = _patternLabel[lk.pattern] || lk.pattern;
+          chtml += '<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);">';
+          chtml += '<span style="font-size:13px;flex-shrink:0;">&#128273;</span>';
+          chtml += '<div style="flex:1;min-width:0;">';
+          chtml += '<span style="font-size:11px;font-weight:600;color:#dc2626;">api_key_leak</span>';
+          chtml += ' <span style="font-size:10px;padding:1px 6px;border-radius:10px;background:rgba(220,38,38,0.12);color:#fca5a5;">' + escHtml(pLabel) + '</span>';
+          if (lk.redacted) chtml += ' <code style="font-size:10px;background:var(--bg-primary);padding:1px 4px;border-radius:3px;color:#a78bfa;">' + escHtml(lk.redacted) + '</code>';
+          chtml += '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">event #' + lk.line + (lk.file ? ' · session ' + escHtml(String(lk.file).slice(0, 24)) : '') + '</div>';
+          chtml += '</div></div>';
+        });
+        scanListEl.innerHTML = chtml;
+      }
+    }
+  } catch(e) {
+    var csl = document.getElementById('credential-scan-list');
+    if (csl && !silent) csl.innerHTML = '<div style="color:var(--text-muted);padding:12px;font-size:11px;">Credential scan unavailable.</div>';
+  }
   if (_securityRefreshTimer) clearTimeout(_securityRefreshTimer);
   if (document.getElementById('page-security') && document.getElementById('page-security').classList.contains('active')) {
     _securityRefreshTimer = setTimeout(function() { loadSecurityPage(true); }, 30000);
@@ -8258,9 +8377,13 @@ function _cmRenderRuntimeSwitcher(counts, anchor, reload) {
     var bg = on ? 'var(--bg-accent,#E5443A)' : 'var(--bg-secondary,#161b22)';
     var fg = on ? '#fff' : 'var(--text-secondary,#9ca3af)';
     var bd = on ? 'var(--bg-accent,#E5443A)' : 'var(--border-primary,#30363d)';
+    // Runtime pixel-logo (chip variant) before the label, keyed off the runtime
+    // id. The "All" chip (val==='all') carries no mascot.
+    var ic = (val !== 'all' && typeof window.cmRuntimeIcon === 'function')
+      ? window.cmRuntimeIcon(val, 15, { chip: true, cls: 'cm-rt-btn-ic' }) + ' ' : '';
     return '<button class="cm-rt-btn" data-rt="' + val + '" style="cursor:pointer;padding:4px 12px;border-radius:14px;' +
-      'font-size:12px;font-weight:600;background:' + bg + ';color:' + fg + ';border:1px solid ' + bd + ';">' +
-      escHtml(label) + (n != null ? (' <span style="opacity:.65;">' + n + '</span>') : '') + '</button>';
+      'font-size:12px;font-weight:600;display:inline-flex;align-items:center;gap:4px;background:' + bg + ';color:' + fg + ';border:1px solid ' + bd + ';">' +
+      ic + escHtml(label) + (n != null ? (' <span style="opacity:.65;">' + n + '</span>') : '') + '</button>';
   }
   var html = '<span style="font-size:11px;color:var(--text-muted);font-weight:600;margin-right:2px;">Runtime</span>';
   html += chip('all', 'All', total, active === 'all');
@@ -9002,7 +9125,13 @@ async function loadSessions() {
     var sparkId = 'session-burn-' + Math.random().toString(36).slice(2);
     html += '<div class="session-item" style="border-left:3px solid var(--bg-accent);padding-left:16px;">';
     html += '<div class="session-name" style="display:flex;justify-content:space-between;align-items:center;gap:8px;">';
-    html += '<span>🖥️ ' + escHtml(s.displayName || s.key) + ' <span style="font-size:11px;color:var(--text-muted);font-weight:400;">Main Session</span>';
+    // Per-session runtime mascot, keyed off the session's runtime (session-id
+    // prefix / agent_type). Falls back to the desktop emoji if the helper or
+    // sprite has not loaded yet.
+    var _srt = (typeof _cmRuntimeOf === 'function') ? _cmRuntimeOf(s) : 'openclaw';
+    var _sic = (typeof window.cmRuntimeIcon === 'function')
+      ? window.cmRuntimeIcon(_srt, 18, { title: _cmRuntimeLabel(_srt), cls: 'cm-session-rt-ic' }) : '🖥️';
+    html += '<span data-cm-runtime="' + escHtml(_srt) + '">' + _sic + ' ' + escHtml(s.displayName || s.key) + ' <span style="font-size:11px;color:var(--text-muted);font-weight:400;">Main Session</span>';
     if (anomaly) {
       html += '<span class="session-anomaly" title="Cost anomaly: $' + Number(anomaly.cost_usd || 0).toFixed(4) + ' (' + Number(anomaly.ratio || 0).toFixed(2) + 'x rolling avg)">&#9888;&#65039;</span>';
     }
@@ -12517,8 +12646,206 @@ async function loadHeatmap(days) {
   }
 }
 
+// ===== Efficiency grade + savings ideas =====
+// Design spec: .claude/ux_audit/DESIGN_SPEC.md (§1a chip, §1b card, §5 addendum).
+// One shared fetch feeds BOTH the overview hero chip and the Cost-tab card
+// (perf budget: never two pollers for one blob) — 60s TTL + in-flight dedup,
+// keyed by the runtime filter so a scoped read is never satisfied with
+// node-wide data (FLYWHEEL §1c). Every number comes precomputed from the
+// daemon's `efficiency` slice (/api/efficiency locally, the snapshot slice on
+// cloud); nothing is derived client-side from runtimeSummary, which carries
+// no cache fields.
+window._cmEff = { data: undefined, rt: null, ts: 0, cbs: null };
+function _cmLoadEfficiency(cb) {
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var c = window._cmEff;
+  if (c.rt === rt && c.data !== undefined && (Date.now() - c.ts) < 60000) { if (cb) cb(c.data); return; }
+  if (c.cbs && c.rt === rt) { if (cb) c.cbs.push(cb); return; }
+  c.cbs = cb ? [cb] : []; c.rt = rt; c.data = undefined;
+  var url = '/api/efficiency' + (rt && rt !== 'all' ? '?runtime=' + encodeURIComponent(rt) : '');
+  fetch(url).then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) { c.data = j; c.ts = Date.now(); var cbs = c.cbs || []; c.cbs = null; cbs.forEach(function (f) { try { f(j); } catch (e) {} }); })
+    .catch(function () { c.data = null; c.ts = Date.now(); var cbs = c.cbs || []; c.cbs = null; cbs.forEach(function (f) { try { f(null); } catch (e) {} }); });
+}
+var _CM_EFF_COLORS = { A: '#22c55e', B: '#4ade80', C: '#f59e0b', D: '#ef4444', F: '#dc2626' };
+function _cmEffTotalSavings(eff) {
+  var s = 0; ((eff && eff.actions) || []).forEach(function (a) { s += Number(a.savings_monthly_usd) || 0; });
+  return s;
+}
+// Trust gate (spec §1a): a grade renders ONLY from a present, sufficient slice
+// with a nonzero projected cost. Otherwise nothing — never a placeholder grade.
+function _cmEffUsable(eff) {
+  return !!(eff && !eff.insufficient_data && eff.grade && Number(eff.projected_monthly_cost_usd) > 0);
+}
+function _cmEffScopeLine(rt) {
+  return (rt && rt !== 'all')
+    ? _cmRuntimeLabel(rt) + ' ' + t('efficiency.scope_only', null, 'only') + '.'
+    : t('efficiency.scope_all', null, 'All agents on this machine.');
+}
+function _cmEffBadgeHtml(grade, px) {
+  var col = _CM_EFF_COLORS[grade] || 'var(--text-muted)';
+  var solid = grade === 'F';
+  return '<span style="display:inline-block;min-width:' + Math.round(px * 1.3) + 'px;text-align:center;padding:1px 6px;border-radius:6px;font-weight:700;font-size:' + px + 'px;line-height:1.4;'
+    + (solid ? 'background:' + col + ';color:#fff;' : 'border:1.5px solid ' + col + ';color:' + col + ';')
+    + '">' + grade + '</span>';
+}
+function _cmEffChipHtml(eff) {
+  if (!_cmEffUsable(eff)) return '';
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var tip = t('efficiency.tooltip', null, 'A to F score of how much of your spend does useful work: how often your agent reuses what it already read, how much history each reply carries, and whether saved work pays for itself.')
+    + ' ' + _cmEffScopeLine(rt);
+  var save = Math.round(_cmEffTotalSavings(eff));
+  return '<a href="#" title="' + escHtml(tip) + '" '
+    + 'onclick="switchTab(\'usage\');setTimeout(function(){var el=document.getElementById(\'efficiency-card\');if(el&&el.scrollIntoView)el.scrollIntoView({behavior:\'smooth\'});},400);return false;" '
+    + 'style="text-decoration:none;color:var(--text-secondary);">'
+    + '🎯 ' + t('efficiency.label', null, 'Efficiency') + ' ' + _cmEffBadgeHtml(eff.grade, 13)
+    + (save >= 1 ? ' · ' + t('efficiency.chip_save', null, 'save about') + ' $' + save + '/mo' : '')
+    + '</a>';
+}
+function _cmEffFmtTokens(n) {
+  n = Number(n) || 0;
+  if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (n >= 1000) return Math.round(n / 1000) + 'K';
+  return String(Math.round(n));
+}
+// Maps a slice action id -> icon + i18n stem. Copy lives in en.json
+// (efficiency.idea_*); the backend ships numbers only, never copy.
+var _CM_EFF_IDEAS = {
+  model_downgrade: { icon: '🔁', stem: 'model', evidenceTab: 'models' },
+  context_trim: { icon: '✂️', stem: 'ctx', evidenceTab: 'context-economics' },
+  cache_warm: { icon: '♻️', stem: 'reread', evidenceTab: 'context-economics' },
+};
+function _cmEffIdeaRowHtml(a) {
+  var m = _CM_EFF_IDEAS[a.id];
+  if (!m) return '';
+  var d = a.data || {};
+  var vars = {
+    model: a.model || d.model || 'your main model',
+    n: (d.calls != null ? d.calls : 'several'),
+    target: d.target_model || 'a smaller model',
+  };
+  var save = Math.max(1, Math.round(Number(a.savings_monthly_usd) || 0));
+  var title = t('efficiency.idea_' + m.stem + '_title', null, '');
+  var finding = t('efficiency.idea_' + m.stem + '_finding', vars, '');
+  var how = t('efficiency.idea_' + m.stem + '_how', vars, '');
+  return '<div style="display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-top:1px solid var(--border-primary,#1f2937);">'
+    + '<span style="flex-shrink:0;font-size:15px;">' + m.icon + '</span>'
+    + '<div style="flex:1;min-width:0;">'
+      + '<div style="font-size:14px;font-weight:600;color:var(--text-primary);">' + escHtml(title) + '</div>'
+      + '<div style="font-size:12px;color:var(--text-secondary);margin-top:2px;">' + escHtml(finding) + '</div>'
+      + '<details style="margin-top:4px;"><summary style="cursor:pointer;font-size:12px;color:#3b82f6;">' + escHtml(t('efficiency.how', null, 'How')) + '</summary>'
+        + '<div style="font-size:12px;color:var(--text-secondary);padding:6px 0 0 2px;">' + escHtml(how)
+        + ' <a href="#" onclick="switchTab(\'' + m.evidenceTab + '\');return false;" style="color:#3b82f6;text-decoration:none;">' + escHtml(t('efficiency.evidence', null, 'See the evidence')) + ' →</a></div>'
+      + '</details>'
+    + '</div>'
+    + '<div style="flex-shrink:0;font-size:13px;font-weight:700;color:#22c55e;white-space:nowrap;">' + escHtml(t('efficiency.save_mo', { amt: '$' + save }, 'save about $' + save + '/mo')) + '</div>'
+    + '</div>';
+}
+function renderEfficiencyCard() {
+  var card = document.getElementById('efficiency-card');
+  if (!card) return;
+  _cmLoadEfficiency(function (eff) {
+    try { _renderEfficiencyCardInner(card, eff); }
+    catch (e) { card.style.display = 'none'; }
+  });
+}
+function _renderEfficiencyCardInner(card, eff) {
+  // Endpoint missing/errored (old server, transient): stay hidden — the
+  // cloud interceptor owns the "update your daemon" state (spec §5).
+  if (!eff) { card.style.display = 'none'; return; }
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  if (eff.stale_daemon) {
+    // Cloud-only: the node's daemon predates the efficiency slice. An update
+    // prompt, NOT the "collecting" promise — time alone will never fix a
+    // version gap (design spec §5, verifier finding).
+    card.style.display = '';
+    card.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px;">⬆️ '
+      + escHtml(t('efficiency.update_daemon', null, 'Update ClawMetry on this machine to see your efficiency grade.')) + '</div>';
+    return;
+  }
+  if (eff.insufficient_data || !eff.grade) {
+    card.style.display = '';
+    card.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px;">⏳ '
+      + escHtml(t('efficiency.collecting', null, 'Collecting efficiency data. Your grade appears after about a day of activity.')) + '</div>';
+    return;
+  }
+  if (!(Number(eff.projected_monthly_cost_usd) > 0)) {
+    // Trust gate, honest version: an explained pause, never a silent gap.
+    card.style.display = '';
+    card.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px;">'
+      + escHtml(t('efficiency.paused', null, 'Efficiency grade paused: cost numbers on this machine do not agree yet.')) + '</div>';
+    return;
+  }
+  var met = eff.metrics || {};
+  var hit = Math.round(Number(met.cache_hit_rate_pct) || 0);
+  var ctx = _cmEffFmtTokens(met.avg_context_tokens);
+  var sentence = t('efficiency.grade_sentence', { hit: hit, ctx: ctx },
+    'Your agent reuses ' + hit + '% of what it reads and carries about ' + ctx + ' tokens of history into each reply.');
+  var tip = t('efficiency.tooltip', null, 'A to F score of how much of your spend does useful work: how often your agent reuses what it already read, how much history each reply carries, and whether saved work pays for itself.');
+  var rows = (eff.actions || []).map(_cmEffIdeaRowHtml).filter(Boolean);
+  var total = Math.round(_cmEffTotalSavings(eff));
+  var saved = Math.round(Number(eff.cache_saved_monthly_usd) || 0);
+  var right;
+  if (rows.length) {
+    right = '<div style="font-size:14px;font-weight:600;color:var(--text-primary);">' + escHtml(t('efficiency.savings_ideas', null, 'Savings ideas')) + '</div>'
+      + '<div style="font-size:12px;color:var(--text-muted);margin:2px 0 4px;">' + escHtml(t('efficiency.subtitle', null, 'Things you can do to spend less. ClawMetry only suggests; it never changes your agent.')) + '</div>'
+      + rows.join('')
+      + (rows.length >= 2 && total >= 1
+        ? '<div style="border-top:1px solid var(--border-primary,#1f2937);padding-top:8px;font-size:12px;color:var(--text-secondary);">'
+          + escHtml(t('efficiency.footer_total', null, 'Estimated savings: about')) + ' <strong style="color:#22c55e;">$' + total + '/mo</strong></div>'
+        : '');
+  } else {
+    right = '<div style="font-size:14px;font-weight:600;color:var(--text-primary);">' + escHtml(t('efficiency.savings_ideas', null, 'Savings ideas')) + '</div>'
+      + '<div style="font-size:13px;color:var(--text-secondary);margin-top:8px;">' + escHtml(t('efficiency.empty_efficient', null, 'No savings ideas right now. Your agent is spending efficiently. We keep checking.')) + '</div>';
+  }
+  if (saved >= 1) {
+    right += '<div style="font-size:12px;color:var(--text-muted);margin-top:8px;">✨ '
+      + escHtml(t('efficiency.already_saved', { amt: '$' + saved }, 'Reusing work already saved you about $' + saved + '/mo.')) + '</div>';
+  }
+  card.style.display = '';
+  card.innerHTML = '<div style="display:flex;gap:24px;flex-wrap:wrap;padding:16px;">'
+    + '<div style="flex:0 0 200px;min-width:180px;">'
+      + '<div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">'
+        + escHtml(t('efficiency.label', null, 'Efficiency'))
+        + ' <span class="tooltip-info-icon" title="' + escHtml(tip) + '" style="cursor:help;">i</span></div>'
+      + '<div style="margin:8px 0 6px;">' + _cmEffBadgeHtml(eff.grade, 44) + '</div>'
+      + '<div style="font-size:12px;color:var(--text-secondary);line-height:1.5;">' + escHtml(sentence) + '</div>'
+      + '<div style="font-size:11px;color:var(--text-muted);margin-top:6px;">' + escHtml(_cmEffScopeLine(rt)) + '</div>'
+    + '</div>'
+    + '<div style="flex:1;min-width:260px;">' + right + '</div>'
+    + '</div>';
+}
+
 // ===== Usage / Token Tracking =====
+
+// QW4: the "Token Usage (14 days)" title + card hide together when the series
+// is empty, so an empty chart box never renders under populated totals.
+function _setUsageChartSectionVisible(show) {
+  var title = document.getElementById('usage-chart-title');
+  var card = document.getElementById('usage-chart-card');
+  if (title) title.style.display = show ? '' : 'none';
+  if (card) card.style.display = show ? '' : 'none';
+}
+
+// QW10: the "See Fleet for all machines." link only makes sense when this
+// account knows about more than one machine. Cheap client-side check via the
+// nodes list; on any failure the link just stays hidden.
+function _cmUpdateUsageFleetNote() {
+  var el = document.getElementById('usage-fleet-note');
+  if (!el) return;
+  fetch('/api/nodes').then(function(r) { return r.json(); }).then(function(d) {
+    var n = (d && Array.isArray(d.nodes)) ? d.nodes.length : 0;
+    el.style.display = n > 1 ? '' : 'none';
+  }).catch(function() {});
+}
+
 async function loadUsage() {
+  // Efficiency grade + savings ideas card (design spec §1b). Fired BEFORE the
+  // main try block: it has its own error handling and must paint its honest
+  // state even when an unrelated usage loader throws below (on nodes where
+  // /api/usage fails, the tail of the try block never runs).
+  try { renderEfficiencyCard(); } catch (_eEff) {}
+  try { _cmUpdateUsageFleetNote(); } catch (_eFleet) {}
   try {
     // Append the global runtime filter so Cost/Tokens scopes to the selected
     // runtime (server-side, via query_aggregates' runtime= param). Numbers
@@ -12533,25 +12860,35 @@ async function loadUsage() {
     // Issue #1804: show outage banner when ingest is offline (503 envelope).
     if (_uResp.s === 503 && data && data.error === 'local_store ingest is offline') {
       var _uChart = document.getElementById('usage-chart');
+      _setUsageChartSectionVisible(true); // the outage notice lives in the chart slot
       if (_uChart) _uChart.innerHTML = '<div style="background:#fff7ed;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:6px;"><strong>' + t("app.ingest_temporarily_offline", null, "Ingest temporarily offline.") + '</strong> Token usage data unavailable; the local_store writer is not responding.</div>';
       return;
     }
     function fmtTokens(n) { return n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(0) + 'K' : String(n); }
     function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
-    document.getElementById('usage-today').textContent = fmtTokens(data.today);
-    document.getElementById('usage-today-cost').textContent = '≈ ' + fmtCost(data.todayCost);
-    document.getElementById('usage-week').textContent = fmtTokens(data.week);
-    document.getElementById('usage-week-cost').textContent = '≈ ' + fmtCost(data.weekCost);
-    document.getElementById('usage-month').textContent = fmtTokens(data.month);
-    document.getElementById('usage-month-cost').textContent = '≈ ' + fmtCost(data.monthCost);
+    // QW3: dollars are the headline (card-value), tokens the sub-line; the
+    // estimation marker is the word "about", never the ≈ glyph.
+    function setUsageCard(valId, cost, tokens) {
+      var v = document.getElementById(valId);
+      var s = document.getElementById(valId + '-cost');
+      var costStr = fmtCost(cost || 0);
+      var tokStr = fmtTokens(tokens || 0);
+      if (v) v.textContent = t('usage.cost_about', { cost: costStr }, 'about ' + costStr);
+      if (s) s.textContent = t('usage.tokens_sub', { tokens: tokStr }, tokStr + ' tokens');
+    }
+    setUsageCard('usage-today', data.todayCost, data.today);
+    setUsageCard('usage-week', data.weekCost, data.week);
+    setUsageCard('usage-month', data.monthCost, data.month);
     // Runtime-scoped empty state: when a specific runtime is selected but has
     // no cost data in any window, surface a clear note rather than showing all zeros.
     var _uEmptyEl = document.getElementById('usage-runtime-empty-note');
     if (_uRt && _uRt !== 'all' && !data.today && !data.week && !data.month) {
       var _uRtLabel = _cmRuntimeLabel(_uRt);
       var _uEmptyHtml = '<div id="usage-runtime-empty-note" style="margin:8px 0 12px;padding:9px 13px;border-radius:8px;background:rgba(99,102,241,0.07);border:1px solid rgba(99,102,241,0.25);font-size:12px;color:var(--text-secondary);">No cost data recorded for <strong>' + escHtml(_uRtLabel) + '</strong> yet.</div>';
-      var _uChart = document.getElementById('usage-chart');
-      if (!_uEmptyEl && _uChart) _uChart.insertAdjacentHTML('beforebegin', _uEmptyHtml);
+      // Anchor on the section title (not the chart div) so the note stays
+      // visible when QW4 hides the empty chart section below it.
+      var _uAnchor = document.getElementById('usage-chart-title') || document.getElementById('usage-chart');
+      if (!_uEmptyEl && _uAnchor) _uAnchor.insertAdjacentHTML('beforebegin', _uEmptyHtml);
     } else {
       if (_uEmptyEl) _uEmptyEl.remove();
     }
@@ -12561,16 +12898,22 @@ async function loadUsage() {
     
     // Display trend analysis
     displayTrendAnalysis(data.trend || {}, data);
-    // Bar chart
-    var maxTokens = Math.max.apply(null, data.days.map(function(d){return d.tokens;})) || 1;
-    var chartHtml = '';
-    data.days.forEach(function(d) {
-      var pct = Math.max(1, (d.tokens / maxTokens) * 100);
-      var label = d.date.substring(5);
-      var val = d.tokens >= 1000 ? (d.tokens/1000).toFixed(0) + 'K' : d.tokens;
-      chartHtml += '<div class="usage-bar-wrap"><div class="usage-bar" style="height:' + pct + '%"><div class="usage-bar-value">' + (d.tokens > 0 ? val : '') + '</div></div><div class="usage-bar-label">' + label + '</div></div>';
-    });
-    document.getElementById('usage-chart').innerHTML = chartHtml;
+    // Bar chart — QW4: with no data at all, hide the whole section (title +
+    // card) instead of an empty box; render as before when data exists.
+    var _uDays = Array.isArray(data.days) ? data.days : [];
+    var _uHasChartData = _uDays.some(function(d) { return d && d.tokens > 0; });
+    _setUsageChartSectionVisible(_uHasChartData);
+    if (_uHasChartData) {
+      var maxTokens = Math.max.apply(null, _uDays.map(function(d){return d.tokens;})) || 1;
+      var chartHtml = '';
+      _uDays.forEach(function(d) {
+        var pct = Math.max(1, (d.tokens / maxTokens) * 100);
+        var label = d.date.substring(5);
+        var val = d.tokens >= 1000 ? (d.tokens/1000).toFixed(0) + 'K' : d.tokens;
+        chartHtml += '<div class="usage-bar-wrap"><div class="usage-bar" style="height:' + pct + '%"><div class="usage-bar-value">' + (d.tokens > 0 ? val : '') + '</div></div><div class="usage-bar-label">' + label + '</div></div>';
+      });
+      document.getElementById('usage-chart').innerHTML = chartHtml;
+    }
     // Issue #1448 surface 2 — OSS / Cloud-Free callers get clamped to 24h
     // of history; render the upgrade CTA above the chart so users see why
     // the chart is mostly empty.
@@ -12656,13 +12999,20 @@ async function loadUsage() {
     loadCacheAnalytics();
     // Load cost forecast (issue #1413)
     loadCostForecast();
+    // Load per-agent / per-team cost attribution (issue #3000)
+    loadUsageByTeam();
     // Load spend optimization recommendations (issue #1415)
     loadSpendOptimization();
     // NeMo daily-cap banner (issue #1170) — only visible when a free-tier
     // user has tripped the 1000-events/day ceiling.
     _refreshNemoCapBanner('usage-chart');
   } catch(e) {
-    document.getElementById('usage-chart').innerHTML = '<span style="color:#555">' + t("app.no_usage_data_available", null, "No usage data available") + '</span>';
+    // QW4: never render "No usage data available" in an empty box — hide the
+    // section instead (but leave it alone if a populated chart already painted).
+    try {
+      var _ucErr = document.getElementById('usage-chart');
+      if (_ucErr && !_ucErr.querySelector('.usage-bar')) _setUsageChartSectionVisible(false);
+    } catch (_e2) {}
   }
 }
 
@@ -13015,6 +13365,41 @@ function renderSpendOptimization(data) {
 }
 
 // ===== Cost Forecast (issue #1413) =====
+// ── Per-agent / per-team cost attribution (issue #3000) ──────────────────────
+async function loadUsageByTeam() {
+  var title = document.getElementById('usage-by-team-title');
+  var card = document.getElementById('usage-by-team-card');
+  var el = document.getElementById('usage-by-team-content');
+  if (!card || !el) return;
+  try {
+    var d = await fetch('/api/usage/by-team?window=7').then(function(r){return r.json();});
+    var teams = (d && d.teams) || [];
+    if (!teams.length) return;
+    var totalCost = teams.reduce(function(s, t) { return s + (t.cost_usd || 0); }, 0);
+    var rows = teams.map(function(t) {
+      var pct = totalCost > 0 ? Math.round((t.cost_usd / totalCost) * 100) : 0;
+      var rts = (t.runtimes || []).join(', ');
+      return '<tr>'
+        + '<td style="padding:4px 8px;font-weight:500;">' + (t.label || '—') + '</td>'
+        + '<td style="padding:4px 8px;text-align:right;">$' + (t.cost_usd || 0).toFixed(4) + '</td>'
+        + '<td style="padding:4px 8px;text-align:right;color:var(--text-muted);">' + pct + '%</td>'
+        + '<td style="padding:4px 8px;text-align:right;color:var(--text-muted);">' + (t.sessions || 0) + ' sessions</td>'
+        + '<td style="padding:4px 8px;font-size:11px;color:var(--text-muted);">' + rts + '</td>'
+        + '</tr>';
+    }).join('');
+    el.innerHTML = '<table style="width:100%;border-collapse:collapse;">'
+      + '<thead><tr style="font-size:11px;color:var(--text-muted);">'
+      + '<th style="padding:2px 8px;text-align:left;">Team / Agent</th>'
+      + '<th style="padding:2px 8px;text-align:right;">Cost (7d)</th>'
+      + '<th style="padding:2px 8px;text-align:right;">Share</th>'
+      + '<th style="padding:2px 8px;text-align:right;">Sessions</th>'
+      + '<th style="padding:2px 8px;text-align:left;">Runtimes</th>'
+      + '</tr></thead><tbody>' + rows + '</tbody></table>';
+    title.style.display = '';
+    card.style.display = '';
+  } catch(e) { /* non-fatal */ }
+}
+
 async function loadCostForecast() {
   var title = document.getElementById('cost-forecast-title');
   var card = document.getElementById('cost-forecast-card');
@@ -21228,7 +21613,8 @@ setTimeout(checkUpdateStatus, 5000);
     order.forEach(function (k) {
       var isLocked = _locked(k), active = k === cur;
       var right = isLocked ? '🔒 Upgrade' : ((counts[k] || 0) + (counts[k] === 1 ? ' session' : ' sessions'));
-      html += '<div data-rt="' + k + '" data-locked="' + (isLocked ? '1' : '') + '" class="cm-rtc-item" style="padding:7px 10px;border-radius:7px;cursor:pointer;display:flex;justify-content:space-between;gap:10px;' + (active ? 'background:var(--bg-accent,#7c5cff);color:#fff;' : 'color:var(--text-primary,#e6edf3);') + '"><span>' + (isLocked ? '🔒 ' : '') + _esc(_label(k)) + '</span><span style="opacity:.7;font-size:11px;white-space:nowrap;">' + _esc(right) + '</span></div>';
+      var _mic = (typeof window.cmRuntimeIcon === 'function') ? window.cmRuntimeIcon(k, 16, { chip: true }) + ' ' : '';
+      html += '<div data-rt="' + k + '" data-locked="' + (isLocked ? '1' : '') + '" class="cm-rtc-item" style="padding:7px 10px;border-radius:7px;cursor:pointer;display:flex;justify-content:space-between;gap:10px;' + (active ? 'background:var(--bg-accent,#7c5cff);color:#fff;' : 'color:var(--text-primary,#e6edf3);') + '"><span style="display:inline-flex;align-items:center;gap:6px;">' + (isLocked ? '🔒 ' : '') + _mic + _esc(_label(k)) + '</span><span style="opacity:.7;font-size:11px;white-space:nowrap;">' + _esc(right) + '</span></div>';
     });
     m.innerHTML = html;
     document.body.appendChild(m);

@@ -1322,6 +1322,55 @@ console.log('_backfillFlowFromBrain scopes Active Tools by runtime (#3004)');
   })();
 }
 
+// ── Runtime pixel-logo helper (runtime-logos.js) ───────────────────────
+// cmRuntimeIcon(id,...) must return a <use href="#rt-<id>"> for a known id and
+// fall back to #rt-generic for an unknown id, never throwing. Evaluate the
+// actual shipped IIFE in a stubbed window/document sandbox.
+console.log('\ncmRuntimeIcon (runtime pixel logos, runtime-logos.js)');
+{
+  const RL_JS = path.join(__dirname, '..', 'clawmetry', 'static', 'js', 'runtime-logos.js');
+  const rlSrc = fs.readFileSync(RL_JS, 'utf8');
+  const win = {};
+  const sandbox = {
+    window: win,
+    document: {
+      readyState: 'complete',
+      getElementById: function () { return null; },
+      createElement: function () { return { style: {}, setAttribute: function () {}, set innerHTML(v) { this._h = v; }, get innerHTML() { return this._h; }, get firstChild() { return null; }, appendChild: function () {} }; },
+      addEventListener: function () {},
+      currentScript: null,
+      body: { appendChild: function () {} },
+      documentElement: { appendChild: function () {} }
+    },
+    fetch: function () { return Promise.resolve({ ok: false, text: function () { return Promise.resolve(''); } }); },
+    Number: Number, String: String, Math: Math, Object: Object, Promise: Promise
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(rlSrc, sandbox);
+
+  truthy(typeof win.cmRuntimeIcon === 'function', 'cmRuntimeIcon is defined');
+
+  const known = win.cmRuntimeIcon('claude_code', 16);
+  truthy(/href="#rt-claude_code"/.test(known), 'known id (claude_code) -> #rt-claude_code use');
+  truthy(/<svg/.test(known) && /<\/svg>/.test(known), 'known id returns a complete <svg>');
+
+  const chip = win.cmRuntimeIcon('openclaw', 18, { chip: true });
+  truthy(/href="#rt-openclaw-chip"/.test(chip), 'chip variant -> #rt-openclaw-chip use');
+
+  const unknown = win.cmRuntimeIcon('totally_made_up_runtime', 16);
+  truthy(/href="#rt-generic"/.test(unknown), 'unknown id -> #rt-generic fallback');
+
+  // Never throws on junk / empty / undefined input.
+  let threw = false;
+  try { win.cmRuntimeIcon(undefined); win.cmRuntimeIcon(''); win.cmRuntimeIcon(null, 0); } catch (e) { threw = true; }
+  truthy(!threw, 'cmRuntimeIcon never throws on undefined/empty/null');
+  truthy(/href="#rt-generic"/.test(win.cmRuntimeIcon(undefined)), 'undefined id -> #rt-generic');
+
+  truthy(win.cmRuntimeBrand('claude_code') === '#d97757', 'cmRuntimeBrand(claude_code) -> manifest hex');
+  truthy(win.cmRuntimeBrand('nope') === '#8b97ad', 'cmRuntimeBrand(unknown) -> neutral fallback hue');
+  truthy(win.cmRuntimeKnown('codex') === true && win.cmRuntimeKnown('nope') === false, 'cmRuntimeKnown known/unknown');
+}
+
 // Auth-bootstrap scenarios above are async — wait for the microtask /
 // macrotask queue to drain before printing the summary. (The previous
 // synchronous test blocks all completed in-tick, so no wait was needed

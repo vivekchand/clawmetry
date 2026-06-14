@@ -553,6 +553,38 @@ def _normalize_encryption_key(key_str: str) -> str:
     return base64.urlsafe_b64encode(derived).decode().rstrip("=")
 
 
+def _derive_key_for_storage(key_str: str) -> str:
+    """Turn a user-supplied custom secret into the 32-byte key we PERSIST.
+
+    A value that is already a valid 16/24/32-byte base64url key is kept as-is.
+    A human passphrase is run through scrypt with a random salt (NOT the old
+    unsalted single-pass SHA-256) so a weak passphrase can't be brute-forced
+    with a global rainbow table and the same passphrase on two machines yields
+    different keys. We store the DERIVED key (the user backs it up / pastes it
+    via ``--show-key``), so the salt is ephemeral and the passphrase never
+    persists.
+
+    Existing installs that stored a raw passphrase are unaffected: their config
+    is still read through ``_normalize_encryption_key`` (legacy SHA-256) on every
+    use, so their already-encrypted cloud data keeps decrypting.
+    """
+    import os as _os_d
+    try:
+        raw = base64.urlsafe_b64decode((key_str or "") + "==")
+        if len(raw) in (16, 24, 32):
+            return key_str  # already a real key — keep it
+    except Exception:
+        pass
+    # Passphrase -> strong salted KDF. Use cryptography's Scrypt (already a core
+    # dep) rather than hashlib.scrypt, which is missing on Pythons built against
+    # LibreSSL (some macOS builds). N=2**15 keeps offline brute-force of a weak
+    # passphrase expensive; the random salt kills rainbow tables.
+    from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+    salt = _os_d.urandom(16)
+    dk = Scrypt(salt=salt, length=32, n=2 ** 15, r=8, p=1).derive(key_str.encode())
+    return base64.urlsafe_b64encode(dk).decode().rstrip("=")
+
+
 def _get_aesgcm(key_b64: str):
     """Return an AESGCM cipher from a base64url key (auto-derives if passphrase)."""
     try:
@@ -975,7 +1007,12 @@ def _post(path: str, payload: dict, api_key: str, timeout: int = 45) -> dict:
     for attempt in range(1, _HTTP_MAX_ATTEMPTS + 1):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                resp_body = json.loads(resp.read())
+                # /ingest/cache (and other write endpoints) may answer 204/200
+                # with an EMPTY body meaning "stored, nothing to return". Don't
+                # let json.loads("") raise a spurious "cache post failed" — an
+                # empty/whitespace body is a successful no-content {}.
+                raw = resp.read()
+                resp_body = json.loads(raw) if (raw and raw.strip()) else {}
             # Cloud heartbeat (and any other endpoint) may attach the user's
             # plan / sync_allowed / trial_days_left / upgrade_url. We mirror
             # those into _TRIAL_STATE so subsequent uploads can self-throttle
@@ -5622,74 +5659,16 @@ def _pick_heartbeat_interval(resp_json: dict | None) -> int:
 
 
 def _build_node_meta() -> dict:
-    """Plaintext machine metadata for the cloud Flow Machine modal (cloud#956).
+    """Routing-safe node metadata for the PLAINTEXT heartbeat.
 
-    Mirrors the fields cloud's /ingest/heartbeat extracts from body.node_meta:
-    os, arch, ram_gb, cpu_count, local_ips. The encrypted snapshot already
-    carries the richer machineInfo blob; this duplicates the trust-safe subset
-    so the keyless fallback in cm-cloud-machine fires with real data instead
-    of an empty {hostname, platform} shell.
-
-    Best-effort: any subcomponent failure yields an empty value rather than
-    raising — the heartbeat MUST keep flowing even on weird platforms.
+    The machine fingerprint (os, arch, ram_gb, cpu_count, local_ips) used to
+    live here and the cloud stored it in cleartext. It now rides the
+    E2E-encrypted snapshot (machineInfo, see _build_machine_info); only
+    routing/entitlement fields the cloud legitimately needs in cleartext stay
+    here. Best-effort: failures yield an empty value rather than raising — the
+    heartbeat MUST keep flowing even on weird platforms.
     """
-    import platform as _pm
-    import socket as _sk
-    meta = {
-        "os": "",
-        "arch": "",
-        "ram_gb": "",
-        "cpu_count": "",
-        "local_ips": [],
-    }
-    try:
-        meta["os"] = _pm.system()
-    except Exception:
-        pass
-    try:
-        meta["arch"] = _pm.machine()
-    except Exception:
-        pass
-    try:
-        import multiprocessing as _mp
-        meta["cpu_count"] = str(_mp.cpu_count())
-    except Exception:
-        pass
-    try:
-        # /proc/meminfo on Linux, sysctl on Mac. Skip silently when neither.
-        if _pm.system() == "Linux":
-            with open("/proc/meminfo") as _mf:
-                for _line in _mf:
-                    if _line.startswith("MemTotal:"):
-                        _kb = int(_line.split()[1])
-                        meta["ram_gb"] = str(round(_kb / 1024 / 1024, 1))
-                        break
-        elif _pm.system() == "Darwin":
-            import subprocess as _sp
-            _out = _sp.check_output(["sysctl", "-n", "hw.memsize"], timeout=2)
-            meta["ram_gb"] = str(round(int(_out.strip()) / 1024 / 1024 / 1024, 1))
-    except Exception:
-        pass
-    try:
-        # All non-loopback IPv4 addresses on the host. Bounded list, no PII.
-        _ips = set()
-        try:
-            for _info in _sk.getaddrinfo(_sk.gethostname(), None, _sk.AF_INET):
-                _ip = _info[4][0]
-                if _ip and not _ip.startswith("127."):
-                    _ips.add(_ip)
-        except Exception:
-            pass
-        try:
-            _s = _sk.socket(_sk.AF_INET, _sk.SOCK_DGRAM)
-            _s.connect(("8.8.8.8", 80))
-            _ips.add(_s.getsockname()[0])
-            _s.close()
-        except Exception:
-            pass
-        meta["local_ips"] = sorted(_ips)[:8]
-    except Exception:
-        pass
+    meta: dict = {}
     # Pro-adapter + auto-update status so the cloud Fleet can show whether an
     # entitled node is actually running clawmetry-pro (the paid runtime
     # adapters) and keeping itself current — turning the "I'm on Pro but Claude
@@ -6793,10 +6772,11 @@ def send_heartbeat(config: dict) -> bool:
             payload["billing"] = _billing
     except Exception as _bm_e:
         log.debug("billing-mode detection failed (continuing): %s", _bm_e)
-    # Daemon-collected snapshots (see _collect_security_posture docstring)
-    sec = _collect_security_posture()
-    if sec is not None:
-        payload["security_posture"] = sec
+    # security_posture is a SCAN OF THE USER'S MACHINE; it must not ride the
+    # plaintext heartbeat. It travels in the E2E-encrypted system snapshot as
+    # `securityPosture` and renders client-side. See sync_system_snapshot().
+    # (Re-applied after a stale-rebase merge clobbered it; guard:
+    #  tests/test_security_posture_encrypted.py.)
     # Local-store health (epic #964 phase 1 → rollout gate for phase 2).
     # We need ≥80% of active nodes reporting healthy local stores before
     # slimming cloud retention to 24h. Best-effort; never blocks heartbeat.
@@ -6899,6 +6879,14 @@ def send_heartbeat(config: dict) -> bool:
             payload.setdefault("cache_pushes", []).extend(cron_pushes)
     except Exception as _cl_e:
         log.debug("crons cache_push build failed (continuing): %s", _cl_e)
+    # Query Spine P4 (#2990): per-method q/1 cache entries alongside the
+    # monolith snapshot. Gated by CLAWMETRY_QUERY_CACHE_PUSH (default off).
+    try:
+        q1_pushes = _build_q1_cache_pushes(config)
+        if q1_pushes:
+            payload.setdefault("cache_pushes", []).extend(q1_pushes)
+    except Exception as _q1_e:
+        log.debug("q1 cache_push build failed (continuing): %s", _q1_e)
     # Local-first: persist this heartbeat to local DuckDB so the dashboard
     # has a per-node liveness history even when offline. Best-effort.
     try:
@@ -6941,7 +6929,13 @@ def send_heartbeat(config: dict) -> bool:
 # Allowlist mirrors routes.local_query._SHAPES. Duplicated here so the
 # daemon stays safe when `routes/` isn't on sys.path (some installs run the
 # sync daemon without the dashboard module loaded).
-_PENDING_SHAPES = {"events", "sessions", "aggregates", "health", "transcript"}
+_PENDING_SHAPES = {
+    "events", "sessions", "aggregates", "health", "transcript",
+    # Added in P4 (#2990): new live shapes from P2 materialized rollups.
+    "runtimes", "models", "rollup_sessions",
+    # Added in P3 (#2989): rollup-backed span/trace shapes.
+    "spans", "traces", "external_calls", "search",
+}
 
 
 def _canonical_args_hash(args: dict) -> str:
@@ -7699,6 +7693,11 @@ _PENDING_ACTIONS = frozenset({
     "cron_fix",
     "dives_query",
     "runtime_backfill",
+    # Runaway-agent control (engine in clawmetry/process_control.py). Relayed
+    # from the web dashboard AND the desk device via the cloud action queue.
+    "kill_session",
+    "pause_session",
+    "resume_session",
 })
 
 
@@ -7908,6 +7907,165 @@ def _dispatch_pending_action(config: dict, action: dict) -> None:
     if atype == "dives_query":
         _action_dives_query(config, action)
         return
+    if atype in ("kill_session", "pause_session", "resume_session"):
+        _action_process_control(config, action)
+        return
+
+
+def _action_process_control(config: dict, action: dict) -> None:
+    """Cloud/device-relayed kill / pause / resume of a runaway agent session.
+
+    The actual per-runtime work (pid resolution + pid-reuse guard + signals)
+    lives in ``clawmetry/process_control.py``; this is the daemon dispatch glue
+    that the cloud one-tap Stop/Pause/Resume UI and the desk device both reach
+    through the ``_PENDING_ACTIONS`` heartbeat queue. The E2E-encrypted result
+    is posted to ``/ingest/cache`` under the action's ``cache_key`` so the
+    browser and the device can poll + decrypt the outcome.
+
+    Wire shape (queued cloud-side by /api/cloud/session/{kill,pause,resume} or
+    by the device's on-glass Stop/Pause/Resume tap):
+
+        {type:"kill_session"|"pause_session"|"resume_session", session_id,
+         runtime, cwd?, mode?("stop"|"kill"), cache_key, id}
+
+    Runs in a daemon thread so a slow OpenClaw CLI cancel never blocks the
+    heartbeat batch. Never raises."""
+    if not action.get("cache_key"):
+        return  # no cache_key -> nowhere to report; drop (cloud always sets one)
+    threading.Thread(target=_run_process_control, args=(config, action),
+                     name="cm-proc-ctl", daemon=True).start()
+
+
+def _hitl_set_pause(session_id: str, paused: bool) -> None:
+    """Belt-and-suspenders enforcement: create/remove the proxy HITL pause file
+    ``~/.clawmetry/hitl/pause_<session_id>``. When the optional enforcement
+    proxy is in the loop, its ``_is_session_hitl_paused`` refuses all further
+    LLM calls for that session while the file exists, so a Pause/Kill click has
+    a real effect even when the signal path can't resolve a host pid (and Resume
+    clears it). Never raises."""
+    if not session_id:
+        return
+    try:
+        d = Path.home() / ".clawmetry" / "hitl"
+        d.mkdir(parents=True, exist_ok=True)
+        f = d / ("pause_%s" % session_id)
+        if paused:
+            f.write_text("")  # empty marker; existence is the signal
+        elif f.exists():
+            f.unlink()
+    except Exception as e:
+        log.debug("hitl pause file set failed for %s: %s", session_id, e)
+
+
+def _openclaw_cancel_task(lookup, timeout: int = 30) -> dict:
+    """Cancel a running OpenClaw task/session via the CLI with OpenClaw's OWN
+    credentials. The gateway token ClawMetry holds is ``operator.read`` only, so
+    mutating a run goes through ``openclaw tasks cancel <lookup>`` (same escape
+    hatch as ``run_openclaw_cron``). Returns
+    ``{ok, scope_pending, error, raw}``; classifies a pairing/scope rejection as
+    ``scope_pending`` so the caller can show an actionable approval hint."""
+    binp = _resolve_openclaw_bin()
+    if not binp:
+        return {"ok": False, "scope_pending": False,
+                "error": "openclaw CLI not found on this machine", "raw": ""}
+    env = dict(os.environ)
+    env["PATH"] = os.pathsep.join([
+        os.path.dirname(binp), "/opt/homebrew/bin", "/usr/local/bin",
+        os.path.expanduser("~/.local/bin"), env.get("PATH", "/usr/bin:/bin")])
+    cmd = [binp, "tasks", "cancel", str(lookup)]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=timeout, env=env)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "scope_pending": False,
+                "error": "openclaw tasks cancel timed out", "raw": ""}
+    except Exception as e:
+        return {"ok": False, "scope_pending": False, "error": str(e)[:400], "raw": ""}
+    blob = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    low = blob.lower()
+    scope_pending = ("pairing required" in low or "scope upgrade" in low
+                     or "more scopes than currently approved" in low)
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "exit %d" % proc.returncode).strip()
+        if scope_pending:
+            err = ("Stopping an OpenClaw run needs a one-time gateway approval. "
+                   "On the host run `openclaw devices list` then "
+                   "`openclaw devices approve <id>`, then retry.")
+        return {"ok": False, "scope_pending": scope_pending,
+                "error": err[:500], "raw": blob[:1000]}
+    return {"ok": True, "scope_pending": False, "error": "", "raw": blob[:1000]}
+
+
+def _run_process_control(config: dict, action: dict) -> None:
+    """Worker body for _action_process_control (runs in a daemon thread)."""
+    import clawmetry.process_control as _pc
+    atype = action.get("type")
+    runtime = str(action.get("runtime") or "").strip()
+    session_id = str(action.get("session_id") or "").strip()
+    cwd = str(action.get("cwd") or "").strip()
+    result = {"ok": False, "error": "no-op", "runtime": runtime, "action": atype}
+    try:
+        if atype == "kill_session":
+            _hitl_set_pause(session_id, True)
+            if runtime == "openclaw":
+                cr = _openclaw_cancel_task(session_id)
+                result = {"ok": bool(cr.get("ok")), "action": "cancel",
+                          "runtime": "openclaw", "session_id": session_id,
+                          "scope_pending": bool(cr.get("scope_pending")),
+                          "detail": (cr.get("error") or "task cancel requested")}
+            else:
+                mode = str(action.get("mode") or "")
+                result = _pc.kill_session(runtime, session_id, cwd, mode=mode)
+        elif atype == "pause_session":
+            _hitl_set_pause(session_id, True)
+            if runtime == "openclaw":
+                result = {"ok": False, "action": "pause", "runtime": "openclaw",
+                          "session_id": session_id, "detail": "unsupported_no_primitive",
+                          "note": ("OpenClaw has no pause primitive; the HITL pause "
+                                   "file is set so the proxy refuses further LLM "
+                                   "calls for this session")}
+            else:
+                result = _pc.pause_session(runtime, session_id, cwd)
+        elif atype == "resume_session":
+            _hitl_set_pause(session_id, False)
+            if runtime == "openclaw":
+                result = {"ok": False, "action": "resume", "runtime": "openclaw",
+                          "session_id": session_id, "detail": "unsupported_no_primitive",
+                          "note": "OpenClaw has no resume primitive; HITL pause file cleared"}
+            else:
+                result = _pc.resume_session(runtime, session_id, cwd)
+        else:
+            return
+    except Exception as e:  # never raise from the worker thread
+        result = {"ok": False, "error": str(e)[:300], "runtime": runtime,
+                  "action": atype, "session_id": session_id}
+    _post_process_control_result(config, action, result)
+
+
+def _post_process_control_result(config: dict, action: dict, result: dict) -> None:
+    """E2E-encrypt the kill/pause/resume outcome and POST it to /ingest/cache
+    under the action's cache_key so the web dashboard and device can poll it."""
+    cache_key = action.get("cache_key")
+    enc_key = config.get("encryption_key")
+    api_key = config.get("api_key", "")
+    node_id = config.get("node_id", "")
+    if not (cache_key and enc_key and api_key):
+        return
+    try:
+        blob = encrypt_payload(
+            {"result": result, "session_id": action.get("session_id"),
+             "runtime": action.get("runtime"), "type": action.get("type"),
+             "_shape": "process_control"},
+            enc_key,
+        )
+        _post(
+            "/ingest/cache",
+            {"node_id": node_id, "id": action.get("id"), "cache_key": cache_key,
+             "blob": blob, "shape": "process_control", "ttl": 600},
+            api_key,
+        )
+    except Exception as e:
+        log.warning("process_control cache post failed: %s", e)
 
 
 def _action_runtime_backfill(config: dict, action: dict) -> None:
@@ -8822,6 +8980,89 @@ def _build_cron_runs_cache_pushes(config: dict) -> list:
             "ttl_s": CRON_RUNS_CACHE_TTL_SEC,
             "blob":  blob,
         })
+    return pushes
+
+
+# ── Query Spine P4 (#2990): per-method q/1 proactive cache push ───────────────
+# Pushes each no-required-arg live q/1 shape as its own keyed cache entry
+# alongside the monolith snapshot. Plaintext-classed shapes are stored as
+# base64url-encoded JSON (no encryption needed); e2e-classed shapes use
+# AES-256-GCM (only when enc_key is present). Gated by
+# CLAWMETRY_QUERY_CACHE_PUSH env var — default off for the first release.
+Q1_PUSH_CACHE_TTL_SEC = 300   # 5 min — aggregate rollups update every ~60s
+_Q1_PUSH_DEBOUNCE_SEC = 60    # at most one push per shape per heartbeat window
+_Q1_LAST_PUSH: dict = {}      # {shape: float} last-push unix timestamp
+
+
+def _build_q1_cache_pushes(config: dict) -> list:
+    """Return cache_push entries for all no-required-arg live q/1 shapes.
+
+    Plaintext-classed methods (aggregates, health, runtimes, models) are stored
+    as base64url JSON — the cloud can read them without a decryption key.
+    E2e-classed methods (rollup_sessions) are AES-256-GCM encrypted and are
+    skipped when no encryption key is configured.
+
+    The CI guard in ``tests/test_sync_q1_cache_pushes.py`` asserts that no
+    e2e-classed method is ever pushed without an encryption key (enforcing the
+    trust-class contract declared in ``clawmetry/query_contract.py``).
+    """
+    if not os.environ.get("CLAWMETRY_QUERY_CACHE_PUSH", "").lower() in (
+        "1", "true", "yes"
+    ):
+        return []
+    api_key = config.get("api_key", "")
+    node_id = config.get("node_id", "")
+    if not (api_key and node_id):
+        return []
+    enc_key = config.get("encryption_key")
+
+    try:
+        from routes.local_query import _dispatch as _local_dispatch  # type: ignore
+    except Exception:
+        _local_dispatch = _local_dispatch_fallback  # type: ignore
+
+    try:
+        from clawmetry.query_contract import (  # type: ignore
+            QUERY_CONTRACT, TRUST_E2E, STATUS_LIVE,
+        )
+    except ImportError:
+        return []
+
+    owner_hash = _owner_hash_for_token(api_key)
+    pushes: list = []
+    now = time.time()
+
+    for shape, spec in QUERY_CONTRACT.items():
+        if spec["status"] != STATUS_LIVE:
+            continue
+        # Skip methods with any required arg — we can't pre-push those without
+        # iterating all entities (transcripts, spans, etc.). They are served
+        # on-demand via _dispatch_pending_queries.
+        if any(v.get("required") for v in spec.get("args", {}).values()):
+            continue
+        # Per-method debounce: skip if we pushed this shape recently.
+        if now - _Q1_LAST_PUSH.get(shape, 0) < _Q1_PUSH_DEBOUNCE_SEC:
+            continue
+        is_e2e = spec["trust"] == TRUST_E2E
+        if is_e2e and not enc_key:
+            continue  # hard guard: never push e2e content without encryption
+        try:
+            payload = _local_dispatch(shape, {})
+            if is_e2e:
+                blob = encrypt_payload(payload, enc_key)
+            else:
+                blob = base64.urlsafe_b64encode(
+                    json.dumps(payload, default=str).encode()
+                ).rstrip(b"=").decode()
+            pushes.append({
+                "key":   f"q1:{shape}:{owner_hash}:{node_id}",
+                "ttl_s": Q1_PUSH_CACHE_TTL_SEC,
+                "blob":  blob,
+            })
+            _Q1_LAST_PUSH[shape] = now
+        except Exception as _e:
+            log.debug("q1 cache push failed for shape=%s: %s", shape, _e)
+
     return pushes
 
 
@@ -10255,6 +10496,36 @@ def _build_machine_info():
             )
         # Kernel
         items.append({"label": "Kernel", "value": platform.release(), "status": "ok"})
+        # RAM + all local IPs. These moved here from the plaintext heartbeat's
+        # node_meta: the machine fingerprint is now E2E-encrypted in the snapshot
+        # and never sent in cleartext. The "Local IPs" label contains "IP" so the
+        # cloud Network-modal interceptor picks it up too.
+        try:
+            _ramgb = ""
+            if platform.system() == "Linux":
+                with open("/proc/meminfo") as _mf:
+                    for _line in _mf:
+                        if _line.startswith("MemTotal:"):
+                            _ramgb = str(round(int(_line.split()[1]) / 1024 / 1024, 1))
+                            break
+            elif platform.system() == "Darwin":
+                _mem = subprocess.check_output(["sysctl", "-n", "hw.memsize"], timeout=2)
+                _ramgb = str(round(int(_mem.strip()) / 1024 / 1024 / 1024, 1))
+            if _ramgb:
+                items.append({"label": "RAM", "value": _ramgb + " GB", "status": "ok"})
+        except Exception:
+            pass
+        try:
+            _ips = set()
+            for _info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+                _ip = _info[4][0]
+                if _ip and not _ip.startswith("127."):
+                    _ips.add(_ip)
+            if _ips:
+                items.append({"label": "Local IPs",
+                              "value": ", ".join(sorted(_ips)[:8]), "status": "ok"})
+        except Exception:
+            pass
         return {"items": items}
     except Exception as e:
         log.warning(f"Machine info error: {e}")
@@ -10783,6 +11054,7 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 # events table on read. parent_session_id carries the runtime
                 # prefix so it matches the parent's session row id; the cloud
                 # filter normalises both bare + prefixed forms.
+                _subagent_ingested = False
                 if getattr(s, "parent_id", None):
                     try:
                         _sa_extra = s.extra if isinstance(s.extra, dict) else {}
@@ -10810,7 +11082,13 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                                       if s.end_reason == "error" else ""),
                             "runtime": runtime,
                         })
+                        _subagent_ingested = True
                     except Exception as _sae:
+                        # Write failed (e.g. a transient DuckDB writer-lock /
+                        # WAL-conflict window). Leave _subagent_ingested False so
+                        # we DON'T advance the watermark below — otherwise this
+                        # child is permanently skipped and its lane never appears
+                        # in the Command River even after the store recovers.
                         log.debug("family subagent ingest failed (%s): %s", ns_id, _sae)
                 # Sub-agent children stop here: they ride the snapshot
                 # ``subagents[]`` slice (river lanes), not the top-level
@@ -10819,9 +11097,11 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 # subagent row itself (cache-aware, from the adapter), so we skip
                 # the per-event re-ingest + cloud session push entirely — a big
                 # CPU saving for a session that fanned out to hundreds of agents.
-                # Mark the watermark so we don't re-scan an unchanged child.
+                # Mark the watermark ONLY when the subagent row actually landed,
+                # so a failed write is retried next pass (self-healing) instead of
+                # being stranded behind an advanced high-water mark.
                 if getattr(s, "parent_id", None):
-                    if _activity:
+                    if _activity and _subagent_ingested:
                         _evt_hw[ns_id] = _activity
                     continue
                 # Carry the same row to cloud so the cloud Sessions list shows it.
@@ -14000,6 +14280,10 @@ _STUCK_HEARTBEAT_MAX_MSG = 200
 # How many newest events to inspect per candidate session. 120 comfortably
 # covers a streak well past the threshold plus the preceding progress marker.
 _STUCK_EVENT_WINDOW = 120
+# ── n-gram circular-loop detector constants ───────────────────────────────
+NGRAM_MIN_TOOL_CALLS = int(os.environ.get("CLAWMETRY_NGRAM_MIN_TOOLS", "6"))
+NGRAM_MIN_REPEATS    = int(os.environ.get("CLAWMETRY_NGRAM_MIN_REPEATS", "3"))
+_NGRAM_EVENT_WINDOW  = 80  # newest-first events to inspect per session
 
 # Event types that count as a TOOL action in the streak. Covers every ingest
 # variant (Anthropic-style, OpenClaw v3 dotted, camelCase, hyphenated) so the
@@ -14253,6 +14537,158 @@ def _stuck_streak_span_seconds(oldest_ts, newest_ts) -> int:
     return _seconds_since(oldest_ts)
 
 
+def _extract_tool_signatures(et: str, data: Any) -> list[tuple[str, str]]:
+    """(tool_name, input_fingerprint) pairs for one event.
+
+    Fingerprint is a short prefix of sorted-JSON input — stable key for
+    identical-call detection without expensive hashing. Returns [] for
+    non-tool events. Handles all three on-wire shapes. Never raises."""
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception:
+            return []
+    if not isinstance(data, dict):
+        return []
+    et_l = et.lower()
+
+    def _fp(inp: Any) -> str:
+        try:
+            return json.dumps(inp, sort_keys=True, default=str)[:80]
+        except Exception:
+            return repr(inp)[:80]
+
+    # Shape 1: top-level tool_call / tool_use / tool.call
+    if et_l in _STUCK_TOPLEVEL_TOOL_CALL_TYPES:
+        name = data.get("name") or data.get("tool") or ""
+        return [(str(name), _fp(data.get("input") or data.get("params") or {}))] if name else []
+
+    # Shape 2: toolMetas projection (OpenClaw v3 model.completed)
+    metas = data.get("toolMetas")
+    if isinstance(metas, list):
+        return [
+            (str(m.get("name") or m.get("tool")), _fp(m.get("input") or {}))
+            for m in metas
+            if isinstance(m, dict) and (m.get("name") or m.get("tool"))
+        ]
+
+    # Shape 3: message.content tool blocks (Claude Code assistant events)
+    msg = data.get("message")
+    if isinstance(msg, dict):
+        blks = msg.get("content") or []
+        if isinstance(blks, list):
+            return [
+                (str(b.get("name") or b.get("tool")), _fp(b.get("input") or {}))
+                for b in blks
+                if isinstance(b, dict)
+                and b.get("type") in ("toolCall", "tool_use")
+                and (b.get("name") or b.get("tool"))
+            ]
+    return []
+
+
+def _ngram_runtime(sid: str) -> str:
+    """Best-effort runtime string for a session_id. Never raises."""
+    try:
+        from clawmetry import waste_flags as _wf
+        return _wf.runtime_from_session_id(sid) or "openclaw"
+    except Exception:
+        return "openclaw"
+
+
+def _detect_ngram_loop_sessions(store) -> list[dict]:
+    """Detect circular tool-call patterns via unigram / bigram repetition.
+
+    Walks each recently-active session's tool-call sequence (oldest→newest),
+    flagging when a single (tool, input) pair repeats >= NGRAM_MIN_REPEATS
+    times (unigram) or a two-call sequence repeats >= NGRAM_MIN_REPEATS times
+    (bigram). Returns [{session_id, runtime, loop_pattern, repeat_count,
+    tool_calls, since_seconds}] most-repeated first. Read-only; never raises.
+    Complements _detect_stuck_sessions (which only measures streak length) by
+    catching low-volume circular loops that stay under STUCK_TOOL_THRESHOLD."""
+    try:
+        sessions = store.query_sessions_table(limit=300) or []
+    except Exception as e:  # noqa: BLE001
+        log.warning("ngram-detect: sessions query failed: %s", e)
+        return []
+
+    out: list[dict] = []
+    for s in sessions:
+        if not isinstance(s, dict):
+            continue
+        if s.get("ended_at"):
+            continue
+        status = str(s.get("status") or "").lower()
+        if status in ("ended", "completed", "stopped", "failed"):
+            continue
+        sid = s.get("session_id") or ""
+        if not sid:
+            continue
+        last_active = s.get("last_active_at") or s.get("started_at")
+        if last_active and _seconds_since(last_active) > STUCK_RECENT_MINUTES * 60:
+            break
+        try:
+            events = store.query_events(session_id=sid, limit=_NGRAM_EVENT_WINDOW) or []
+        except Exception as e:  # noqa: BLE001
+            log.debug("ngram-detect: events(%s) failed: %s", sid, e)
+            continue
+
+        # query_events returns newest-first; reverse to get oldest-first for
+        # chronological sequence analysis.
+        sigs: list[tuple[str, str]] = []
+        ts_first = None
+        ts_last = None
+        for ev in reversed(events):
+            if not isinstance(ev, dict):
+                continue
+            pairs = _extract_tool_signatures(
+                str(ev.get("event_type") or "").strip().lower(), ev.get("data")
+            )
+            if pairs:
+                sigs.extend(pairs)
+                ts = ev.get("ts")
+                if ts_first is None:
+                    ts_first = ts
+                ts_last = ts
+
+        if len(sigs) < NGRAM_MIN_TOOL_CALLS:
+            continue
+
+        from collections import Counter
+        span = _stuck_streak_span_seconds(ts_first, ts_last)
+        rt = _ngram_runtime(sid)
+
+        # Unigram check: same (tool, input) pair repeated
+        ug = Counter(sigs).most_common(1)
+        if ug and ug[0][1] >= NGRAM_MIN_REPEATS:
+            out.append({
+                "session_id": sid,
+                "runtime": rt,
+                "loop_pattern": f"{ug[0][0][0]}(…) ×{ug[0][1]}",
+                "repeat_count": ug[0][1],
+                "tool_calls": len(sigs),
+                "since_seconds": span,
+            })
+            continue
+
+        # Bigram check: same two-call sequence repeated
+        if len(sigs) >= 4:
+            bg = Counter(zip(sigs, sigs[1:])).most_common(1)
+            if bg and bg[0][1] >= NGRAM_MIN_REPEATS:
+                n1, n2 = bg[0][0][0][0], bg[0][0][1][0]
+                out.append({
+                    "session_id": sid,
+                    "runtime": rt,
+                    "loop_pattern": f"{n1}→{n2} ×{bg[0][1]}",
+                    "repeat_count": bg[0][1],
+                    "tool_calls": len(sigs),
+                    "since_seconds": span,
+                })
+
+    out.sort(key=lambda r: r.get("repeat_count", 0), reverse=True)
+    return out
+
+
 def _emit_stuck_signals(store, state: dict) -> int:
     """Run stuck detection and emit each as a loop_signals row so the EXISTING
     device-alert path (``_build_device_summary`` → ``query_recent_loop_signals``)
@@ -14293,9 +14729,6 @@ def _emit_stuck_signals(store, state: dict) -> int:
         _LATEST_STUCK["ts"] = time.time()
     except Exception as _ce:  # noqa: BLE001
         log.debug("stuck-detect: cache refresh failed (continuing): %s", _ce)
-
-    if not stuck:
-        return 0
 
     memo = state.setdefault("stuck_emit_memo", {})
     if not isinstance(memo, dict):
@@ -14341,6 +14774,43 @@ def _emit_stuck_signals(store, state: dict) -> int:
             log.warning("stuck-detect: ingest_loop_signal failed for %s: %s",
                         sid, e)
             continue
+    # ── n-gram circular-loop detector ────────────────────────────────────
+    try:
+        ngram = _detect_ngram_loop_sessions(store)
+    except Exception as _ne:  # noqa: BLE001
+        log.warning("ngram-detect: detector errored: %s", _ne)
+        ngram = []
+    for nl in ngram:
+        sid = nl["session_id"]
+        k = f"{sid}|ngram"
+        last = memo.get(k)
+        if isinstance(last, (int, float)) and (now - last) < reemit:
+            continue
+        rt = nl["runtime"]
+        pattern = nl.get("loop_pattern", "?")
+        n_calls = nl.get("tool_calls", 0)
+        msg = f"{rt}: circular loop — {pattern} ({n_calls} calls)"
+        try:
+            store.ingest_loop_signal(
+                session_id=sid,
+                signature="daemon_ngram_loop",
+                repeat_count=nl.get("repeat_count", 0),
+                severity="warning",
+                agent_type=rt,
+                details={
+                    "source": "daemon_ngram_detector",
+                    "message": msg,
+                    "loop_pattern": pattern,
+                    "tool_calls": n_calls,
+                    "since_seconds": nl.get("since_seconds", 0),
+                },
+            )
+            memo[k] = now
+            emitted += 1
+            log.info("ngram-detect: %s", msg)
+        except Exception as _ee:  # noqa: BLE001
+            log.warning("ngram-detect: ingest failed for %s: %s", sid, _ee)
+
     # Bound memo growth: drop entries we haven't touched in an hour.
     try:
         for k in [k for k, v in memo.items()
@@ -14514,7 +14984,155 @@ def _emit_detector_incidents(store, state: dict) -> int:
     return emitted
 
 
-def _build_device_summary(spending, daily_usage):
+# ── Per-session loops slice (Command River Phase-2) ─────────────────────────
+# The desk device's deviceSummary.alert (and the heartbeat `stuck` payload)
+# carries the loudest single incident's *banner text* but STRIPS the
+# session_id, so the cloud Command River cannot bind a red "whirlpool" + the
+# Kill/Pause alarm to the EXACT looping sub-agent lane. This slice fixes that:
+# a small, bounded, plaintext `loops[]` array where every entry CARRIES the
+# canonical session_id the river keys lanes on. It is sourced for free from
+# the loop_signals rows the detector/stuck pass already wrote (no recompute,
+# no extra DuckDB scan beyond one indexed read) and is self-clearing: a
+# session that stops looping simply ages out of the 30-min loop_signals window
+# and drops from the slice (mirrors the device alert's self-clear).
+#
+# Trust class: this is the SAME exposure as the already-shipped
+# deviceSummary.alert — aggregate metadata (session id + a short plain-words
+# title + counts). Titles are the detector's plain-words summary (e.g.
+# "codex looping: 6x identical Bash calls"); the per-session encrypted brain
+# feed carries the real content. Honesty: only rows a detector GENUINELY
+# wrote appear here — never synthesized.
+_LOOPS_SLICE_MAX = int(os.environ.get("CLAWMETRY_LOOPS_SLICE_MAX", "12"))
+# loop_signals signatures whose details.kind we trust as a real loop/stuck
+# incident. Detector rows are "daemon_detect_<kind>"; the no-progress stuck
+# detector writes "daemon_stuck"; the proxy LoopDetector writes a request-hash
+# signature (a genuine loop too). We surface all of them.
+_LOOPS_KIND_BY_SIGNATURE = {
+    "daemon_stuck": "stuck_loop",
+    "daemon_detect_stuck_loop": "stuck_loop",
+    "daemon_detect_no_progress": "no_progress",
+    "daemon_detect_repeated_tool_failure": "repeated_tool_failure",
+    "daemon_detect_action_discrepancy": "action_discrepancy",
+}
+_LOOPS_VALID_KINDS = frozenset(_LOOPS_KIND_BY_SIGNATURE.values())
+
+
+def _build_loops_slice(store):
+    """Build the bounded, plaintext ``loops[]`` snapshot slice from the loop
+    signals the detector/stuck pass already wrote.
+
+    Each entry carries the CANONICAL ``session_id`` (exactly the id the
+    detector ran on, which is the id ``query_sessions_table`` reports and the
+    same form the river's ``subagents[].parent`` ids take) so the cloud
+    Command River can bind a whirlpool + Kill/Pause alarm to the exact lane.
+
+    Shape per entry::
+
+        {
+          "session_id":       str,   # canonical bare-or-prefixed id
+          "kind":             "stuck_loop"|"no_progress"|
+                              "repeated_tool_failure"|"action_discrepancy",
+          "title":            str,   # plain-words incident text (device-equiv)
+          "count":            int,   # loop repeat / tool-call / failure count
+          "first_bad_step_ts": str|None,  # ISO ts the loop began (first_seen)
+          "since":            str|None,    # alias of first_bad_step_ts
+          "severity":         "warning"|"info",
+          "runtime":          str,
+        }
+
+    Sourced from ``query_recent_loop_signals`` (one indexed read, 30-min
+    self-clearing window) — NO recompute. Returns a list capped at
+    ``_LOOPS_SLICE_MAX``, newest-loop first, deduped per session (highest
+    repeat_count wins). Never raises — returns ``[]`` on any error so the
+    river falls back to its honest no-whirlpool default.
+    """
+    try:
+        sigs = store.query_recent_loop_signals(limit=50, since_minutes=30) or []
+    except Exception as e:  # noqa: BLE001
+        log.debug("loops-slice: query_recent_loop_signals failed: %s", e)
+        return []
+
+    out: list[dict] = []
+    seen: dict[str, int] = {}  # session_id -> index in `out` (dedupe)
+    for s in sigs:
+        if not isinstance(s, dict):
+            continue
+        sid = str(s.get("session_id") or "").strip()
+        if not sid:
+            continue  # CRITICAL: a loop with no session id cannot bind a lane.
+        signature = str(s.get("signature") or "")
+        det = s.get("details")
+        if isinstance(det, str):
+            try:
+                det = json.loads(det)
+            except Exception:
+                det = None
+        det = det if isinstance(det, dict) else {}
+
+        # Resolve the kind: trust details.kind when it names a known detector
+        # class, else map by signature, else (proxy request-hash signature)
+        # fall back to the generic loop class. Skip anything we can't classify
+        # as a real loop/stuck incident — never synthesize.
+        kind = str(det.get("kind") or "").strip()
+        if kind not in _LOOPS_VALID_KINDS:
+            kind = _LOOPS_KIND_BY_SIGNATURE.get(signature, "")
+        if not kind:
+            # Proxy LoopDetector rows carry a request-hash signature (not in the
+            # map) but are a genuine loop — classify as stuck_loop.
+            kind = "stuck_loop" if signature else ""
+        if kind not in _LOOPS_VALID_KINDS:
+            continue
+
+        try:
+            count = int(s.get("repeat_count") or 0)
+        except (TypeError, ValueError):
+            count = 0
+
+        # Title: prefer the detector's plain-words message (device-equivalent
+        # exposure); else a generic kind+count line (keeps content out when we
+        # are unsure — honesty invariant #3).
+        title = str(det.get("message") or "").strip()
+        runtime = str(s.get("agent_type") or det.get("runtime") or "").strip()
+        if not title:
+            rt = runtime or "an agent"
+            if kind == "no_progress":
+                title = f"{rt}: {count} tool calls, not advancing"
+            elif kind == "repeated_tool_failure":
+                title = f"{rt}: a tool failed {count} times"
+            elif kind == "action_discrepancy":
+                title = f"{rt} continued after a failed command"
+            else:
+                title = f"{rt} looping, {count} repeats, no progress"
+        title = title[:160]
+
+        first_seen = s.get("first_seen")
+        first_bad = first_seen if isinstance(first_seen, str) and first_seen else None
+
+        entry = {
+            "session_id": sid,
+            "kind": kind,
+            "title": title,
+            "count": count,
+            "first_bad_step_ts": first_bad,
+            "since": first_bad,
+            "severity": str(s.get("severity") or "warning"),
+            "runtime": runtime or "openclaw",
+        }
+
+        prev = seen.get(sid)
+        if prev is not None:
+            # One whirlpool per session: keep the loudest (highest count).
+            if count > int(out[prev].get("count") or 0):
+                out[prev] = entry
+            continue
+        seen[sid] = len(out)
+        out.append(entry)
+        if len(out) >= _LOOPS_SLICE_MAX:
+            break
+    return out
+
+
+def _build_device_summary(spending, daily_usage, efficiency=None):
     """Compact, all-runtime payload for a WiFi hardware companion.
 
     Mirrors ``routes/device.py``'s ``/api/device/snapshot`` but built on the
@@ -14692,6 +15310,27 @@ def _build_device_summary(spending, daily_usage):
                 n = int(hot.get("repeat_count") or 0)
                 msg = f"{rt} looping, {n} repeats, no progress"
             summary["alert"] = {"message": str(msg)[:200]}
+    except Exception:
+        pass
+    # Efficiency grade + monthly savings hint (schema 2, additive). One letter
+    # plus one dollar figure for the glance hero sub-line; the full ranked plan
+    # lives on the web Cost tab. `efficiency` is the slice sync_system_snapshot
+    # already computed this cycle (shared, never recomputed here — CPU budget).
+    # Omitted entirely (older firmware tolerates unknown/missing fields) rather
+    # than faked when the window is thin or the engine failed.
+    try:
+        if (isinstance(efficiency, dict) and efficiency.get("grade")
+                and not efficiency.get("insufficient_data")):
+            _save = 0.0
+            for _a in (efficiency.get("actions") or []):
+                try:
+                    _save += float(_a.get("savings_monthly_usd") or 0.0)
+                except (TypeError, ValueError):
+                    pass
+            summary["efficiency"] = {
+                "grade": str(efficiency["grade"])[:1],
+                "save_monthly_usd": round(_save, 2),
+            }
     except Exception:
         pass
     # A waiting approval or a stuck/looping agent is what needs a human.
@@ -15303,6 +15942,38 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         _inv_node_id,
     )
 
+    # Efficiency grade + measured savings, computed ONCE per cycle on the
+    # daemon's OWN store handle (never a read_only re-open — FLYWHEEL §1) and
+    # shared by BOTH the top-level `efficiency` snapshot slice (hosted Cost
+    # tab) and `deviceSummary.efficiency` (the desk-device glance sub-line).
+    # Best-effort: None on any failure, both consumers omit honestly.
+    _eff_slice = None
+    try:
+        from clawmetry import local_store as _ls_eff
+        from clawmetry.efficiency import build_efficiency_slice as _build_eff
+        _eff_store = _ls_eff.get_store()
+        if _eff_store is not None:
+            _eff_slice = _build_eff(
+                _eff_store.query_efficiency_rollup(days=30) or [], days=30
+            )
+    except Exception as _e_eff:
+        log.debug("snapshot: efficiency slice failed: %s", _e_eff)
+
+    # Per-session loops slice (Command River Phase-2). Built on the daemon's
+    # OWN store handle (never a read_only re-open — FLYWHEEL §1) from the
+    # loop_signals rows the detector/stuck pass already wrote (no recompute).
+    # Carries the canonical session_id so the cloud can bind a whirlpool +
+    # Kill/Pause alarm to the exact looping lane. Self-clearing (30-min
+    # window). Empty list == honestly nothing looping right now.
+    _loops_slice: list = []
+    try:
+        from clawmetry import local_store as _ls_loops
+        _loops_store = _ls_loops.get_store()
+        if _loops_store is not None:
+            _loops_slice = _build_loops_slice(_loops_store)
+    except Exception as _e_loops:
+        log.debug("snapshot: loops slice failed: %s", _e_loops)
+
     from clawmetry.providers_pricing import provider_for_model as _pfm
     payload = {
         "system": system,
@@ -15321,6 +15992,12 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "memorySize": sum(f.get("size", 0) for f in _mem_files),
         "memoryFiles": _mem_files,
         "subagents": subagents_list,
+        # Command River Phase-2: per-session loop/stuck incidents, each
+        # carrying the canonical session_id so the cloud binds a red whirlpool
+        # + Kill/Pause alarm to the EXACT looping lane (the deviceSummary.alert
+        # path strips the id). Self-clearing 30-min window; empty == nothing
+        # looping. Sourced from the detector pass's loop_signals (no recompute).
+        "loops": _loops_slice,
         "subagentCounts": {
             "active": active_count,
             "idle": len([s for s in subagents_list if s["status"] == "idle"]),
@@ -15350,7 +16027,8 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # Compact all-runtime slice a WiFi hardware companion decrypts + renders
         # (the device GETs the snapshot, decrypts with the user's key, reads
         # this). Cloud stays blind; E2E preserved.
-        "deviceSummary": _build_device_summary(spending, _du),
+        "deviceSummary": _build_device_summary(spending, _du,
+                                               efficiency=_eff_slice),
         "cronJobs": _build_cron_jobs(paths),
         "cronHealthSummary": _build_cron_health_summary_snapshot(),
         "harness": _build_harness_snapshot(),
@@ -15374,6 +16052,10 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # cloud can show a runtime chip without bloating the snapshot.
         "detectedRuntimes": _detected_runtimes,
         "machineInfo": _build_machine_info(),
+        # Security posture (a scan of the user's machine) rides the ENCRYPTED
+        # snapshot, never the plaintext heartbeat — the cloud stores only this
+        # opaque blob and the Security tab decrypts it client-side.
+        "securityPosture": _collect_security_posture(),
         "channelList": _build_channel_list(config),
         "ollamaInfo": _detect_ollama_for_heartbeat(),
         "firstRun": _build_first_run(),
@@ -15412,6 +16094,15 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # error counts. Map keyed by event_id; empty == nothing resolved.
         "resolvedErrors": _build_resolved_errors(),
     }
+
+    # Efficiency grade + measured savings (node-wide + byRuntime), so the
+    # hosted dashboard can serve /api/efficiency from the encrypted snapshot.
+    # Computed ONCE per cycle (above, before the payload dict) and shared with
+    # the deviceSummary builder — the CPU budget forbids running the rollup
+    # aggregate twice per push. Best-effort: omitted on failure (cloud falls
+    # back to its honest empty state).
+    if _eff_slice is not None:
+        payload["efficiency"] = _eff_slice
 
     # ── NemoClaw / sandbox enrichment ────────────────────────────────────────
     # Detect NemoClaw and add optional sandbox metadata to the snapshot.

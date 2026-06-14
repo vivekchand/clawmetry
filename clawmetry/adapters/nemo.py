@@ -91,7 +91,7 @@ from typing import Any, Optional
 logger = logging.getLogger("clawmetry.adapters.nemo")
 
 
-# ── Free-tier daily ingest cap (issue #1170) ───────────────────────────
+# ── Free-tier daily ingest cap (issue #1170) ───────────────────────────────
 #
 # NeMo Agent Toolkit users are the highest-value paid-conversion segment
 # we observe (enterprise GPU buyers). Shipping the adapter under OSS gave
@@ -630,7 +630,7 @@ class NeMoAdapter:
         return row
 
 
-# ── NemoClaw RUNTIME read-side AgentAdapter ────────────────────────────────
+# ── NemoClaw RUNTIME read-side AgentAdapter ─────────────────────────────────────────
 #
 # NemoClaw is a Free runtime alongside OpenClaw (FREE_RUNTIMES in
 # clawmetry/entitlements.py contains {"openclaw", "nemoclaw"}). It is the
@@ -649,6 +649,18 @@ class NeMoAdapter:
 # canonical runtime id per /api/runtimes + FREE_RUNTIMES is ``nemoclaw``;
 # this rename aligns /api/agents with the rest of the runtime catalogue.
 from .base import AgentAdapter, Capability, DetectResult, Event, Session
+
+
+def _extract_skill_names(raw: dict) -> list:
+    names = []
+    for entry in raw.get("skills", []):
+        if isinstance(entry, str):
+            names.append(entry)
+        elif isinstance(entry, dict):
+            name = entry.get("name") or entry.get("id") or entry.get("skillName", "")
+            if name:
+                names.append(name)
+    return names
 
 
 def _read_nemoclaw_skill_catalog() -> dict:
@@ -675,9 +687,11 @@ def _read_nemoclaw_skill_catalog() -> dict:
             return {
                 "skill_catalog_min_version": meta.get("minNemoClawVersion", ""),
                 "skill_catalog_tested_version": meta.get("testedNemoClawVersion", ""),
+                "skill_catalog_schema_version": meta.get("schemaVersion", ""),
                 "skill_catalog_export_sha256": raw.get("exportContentSha256", ""),
                 "skill_catalog_source_commit": raw.get("sourceCommit", meta.get("sourceCommit", "")),
                 "skill_catalog_source_sha256": raw.get("sourceContentSha256", meta.get("sourceContentSha256", "")),
+                "skill_catalog_skill_names": _extract_skill_names(raw),
             }
         except Exception as exc:
             logger.debug("nemoclaw skill catalog read failed (%s): %s", path, exc)
