@@ -11743,40 +11743,6 @@ def detect_config(args=None):
             "env_optout": bool(os.environ.get("CLAWMETRY_NO_CLOUD", "").strip()),
         })
 
-    # Local SQLite event store (epic #964 / phase 1) — proves the daemon is
-    # writing through to ~/.clawmetry/events.db. The dashboard's main read
-    # paths are migrating to this store progressively; in the meantime this
-    # endpoint exposes the store's own metrics so we can verify the
-    # write-through is working in prod and start the cutover safely.
-    @app.route("/api/local-store/health", endpoint="local_store_health")
-    def _local_store_health():
-        from flask import jsonify as _jsonify
-        try:
-            from clawmetry import local_store
-            # read_only=True: this health endpoint runs in the dashboard
-            # process, which must NEVER open the DuckDB writer (it would steal
-            # the lock from the sync daemon during a restart window and blank
-            # every snapshot read). health() is a read; RO is sufficient.
-            return _jsonify(local_store.get_store(read_only=True).health())
-        except Exception as _e:
-            return _jsonify({"error": str(_e)[:300]}), 503
-
-    @app.route("/api/local-store/events", endpoint="local_store_events")
-    def _local_store_events():
-        from flask import jsonify as _jsonify, request as _req
-        try:
-            from clawmetry import local_store
-            store = local_store.get_store()
-            rows = store.query_events(
-                session_id=_req.args.get("session_id"),
-                event_type=_req.args.get("event_type"),
-                since=_req.args.get("since"),
-                until=_req.args.get("until"),
-                limit=int(_req.args.get("limit", "200")),
-            )
-            return _jsonify({"events": rows, "count": len(rows)})
-        except Exception as _e:
-            return _jsonify({"error": str(_e)[:300]}), 500
     # ────────────────────────────────────────────────────────────────────────
 
 
