@@ -8,9 +8,11 @@
 #   bash scripts/close-c6.sh
 #
 # What this does:
-#   Adds 4 required status checks to main branch protection across 3 repos:
+#   Adds 6 required status checks to main branch protection across 3 repos:
 #     clawmetry         : OSS golden path (wheel + OpenClaw + 9 tabs)
 #     clawmetry         : Cross-repo handoff (C4)
+#     clawmetry         : MOAT Keystone (13-endpoint bar)
+#     clawmetry         : E2E Browser Tests (critical subset)
 #     clawmetry-cloud   : Cloud golden-path browser E2E
 #     clawmetry-landing : Landing golden path (C3)
 #
@@ -29,6 +31,8 @@ echo ""
 echo "Target repos and checks:"
 echo "  clawmetry         : OSS golden path (wheel + OpenClaw + 9 tabs)"
 echo "  clawmetry         : Cross-repo handoff (C4)"
+echo "  clawmetry         : MOAT Keystone (13-endpoint bar)"
+echo "  clawmetry         : E2E Browser Tests (critical subset)"
 echo "  clawmetry-cloud   : Cloud golden-path browser E2E"
 echo "  clawmetry-landing : Landing golden path (C3)"
 echo ""
@@ -55,7 +59,7 @@ echo "Got token from gh CLI."
 echo ""
 
 # Unset GITHUB_REPOSITORY so apply_required_status_checks.py applies
-# all 4 checks across all 3 repos (not just the current repo).
+# all 6 checks across all 3 repos (not just the current repo).
 unset GITHUB_REPOSITORY 2>/dev/null || true
 
 GITHUB_TOKEN="${TOKEN}" python3 "${SCRIPT_DIR}/apply_required_status_checks.py"

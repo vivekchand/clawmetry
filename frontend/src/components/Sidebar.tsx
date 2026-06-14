@@ -13,6 +13,7 @@ import { NavLink } from "react-router-dom";
 import { Clawbert, ClawMark } from "../mascot";
 import { NAV_ITEMS, SECTION_LABELS, type NavItem, type NavSection } from "./nav";
 import type { Theme } from "../hooks/useTheme";
+import { EncryptedBadge } from "./EncryptedBadge";
 
 interface SidebarProps {
   theme: Theme;
@@ -85,6 +86,7 @@ export function Sidebar({ theme, setTheme }: SidebarProps) {
           >
             default · local
           </span>
+          <EncryptedBadge />
           <span style={{ color: "var(--ink-4)", fontSize: 10 }}>▾</span>
         </div>
       </div>

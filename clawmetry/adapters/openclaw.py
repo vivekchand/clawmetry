@@ -443,10 +443,21 @@ class OpenClawAdapter(AgentAdapter):
                             raw_data = bytes(raw_data).decode("utf-8", "replace")
                         obj = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
                         if isinstance(obj, dict):
-                            for _field in ("channel", "hostname"):
+                            # Surface gateway log-record top-level structured
+                            # fields. channel/hostname keep their names; the
+                            # severity level is exposed as ``log_level`` and the
+                            # originating subsystem as ``subsystem`` so callers
+                            # can filter or alert on log severity and origin
+                            # (closes #3055 / #3013).
+                            for _field, _key in (
+                                ("channel", "channel"),
+                                ("hostname", "hostname"),
+                                ("level", "log_level"),
+                                ("subsystem", "subsystem"),
+                            ):
                                 _val = obj.get(_field)
                                 if _val:
-                                    extra[_field] = _val
+                                    extra[_key] = _val
                             msg = obj.get("message")
                             if isinstance(msg, str):
                                 content_text = msg
@@ -525,6 +536,8 @@ class OpenClawAdapter(AgentAdapter):
           structured ``details`` payload + ``is_error`` flag + text content back
           onto the tool span identified by ``tool_use_id`` (#2733).
         - ``subagent_spawn``           → agent.spawn span (INTERNAL, link to child trace)
+        - ``commentary`` / ``progress`` → commentary/progress span (INTERNAL,
+          child of root) preserving the narration text + subtype (#3015).
 
         Span IDs are deterministic SHA-256 prefixes so re-ingesting is idempotent.
         """
@@ -745,6 +758,45 @@ class OpenClawAdapter(AgentAdapter):
                     "agent_type": "openclaw",
                     "links": [{"trace_id": child_trace, "span_id": "0" * 16}] if child_trace else None,
                     "attributes": {"subagent_id": sub_id} if sub_id else None,
+                })
+
+            elif t in ("commentary", "progress"):
+                # The Claude CLI emits inter-tool commentary and long-running
+                # progress updates as distinct JSONL event types (#89834,
+                # #90883). These fell through every branch above, so the span
+                # builder dropped them and their payload was silently discarded
+                # (#3015). Emit a lightweight INTERNAL span under the session
+                # root so the Tracing tab shows the narration/progress timeline
+                # and downstream Event.extra can render the original payload.
+                data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
+                comment_attrs: dict = {"event.kind": t}
+                # The text lives under a handful of field-name variants
+                # depending on which CLI path emitted it; surface the first
+                # non-empty one as a quick-read string.
+                text = (
+                    obj.get("text") or obj.get("content") or obj.get("body")
+                    or data.get("text") or data.get("content") or data.get("message")
+                )
+                if isinstance(text, str) and text.strip():
+                    comment_attrs["commentary.text"] = text
+                # A subtype/label distinguishes streams (e.g. "tool_progress"
+                # vs "thinking" commentary); keep it when present.
+                subtype = (
+                    obj.get("subtype") or obj.get("label")
+                    or data.get("subtype") or data.get("label")
+                )
+                if isinstance(subtype, str) and subtype.strip():
+                    comment_attrs["commentary.subtype"] = subtype.strip()
+                spans.append({
+                    "span_id": _sid(t, session_id, str(raw_ts)),
+                    "trace_id": trace_id,
+                    "parent_span_id": session_span_id,
+                    "name": t,
+                    "kind": "INTERNAL",
+                    "start_ts": ts,
+                    "session_id": session_id,
+                    "agent_type": "openclaw",
+                    "attributes": comment_attrs,
                 })
 
         return spans

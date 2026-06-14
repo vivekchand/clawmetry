@@ -199,6 +199,46 @@ def test_list_events_populates_content_from_log_message_text(isolated_store):
     assert e.extra.get("hostname") == "Dhriti-1"
 
 
+def test_list_events_surfaces_log_level_and_subsystem(isolated_store):
+    """Gateway log severity + subsystem land in event.extra (#3055 / #3013).
+
+    OpenClaw gateway JSONL log records carry top-level ``level``
+    (info/warn/error/debug) and ``subsystem`` fields that the CLI and
+    Control UI parse to render structured log output. list_events already
+    surfaced channel/hostname but silently dropped level/subsystem, so
+    callers could not filter or alert on log severity or origin. Pin the
+    new behavior: ``level`` -> ``log_level`` and ``subsystem`` pass through.
+    """
+    import uuid, time as _t
+    isolated_store.ingest({
+        "id": str(uuid.uuid4()),
+        "node_id": "agent+test-node",
+        "agent_id": "main",
+        "agent_type": "openclaw",
+        "session_id": "sess-LVL",
+        "event_type": "log",
+        "ts": _t.time(),
+        "data": {
+            "channel": "gateway",
+            "hostname": "Dhriti-1",
+            "level": "warn",
+            "subsystem": "scheduler",
+            "message": "cron job overran budget",
+        },
+    })
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess-LVL")
+    assert len(events) == 1
+    ex = events[0].extra
+    assert ex.get("log_level") == "warn"
+    assert ex.get("subsystem") == "scheduler"
+    # existing channel/hostname extraction is unchanged.
+    assert ex.get("channel") == "gateway"
+    assert ex.get("hostname") == "Dhriti-1"
+
+
 def test_list_events_dict_message_does_not_set_content(isolated_store):
     """Sanity guard: when ``message`` is a dict (assistant turn shape),
     Event.content stays empty — only string ``message`` values are

@@ -6977,6 +6977,14 @@ def send_heartbeat(config: dict) -> bool:
             payload.setdefault("cache_pushes", []).extend(cron_pushes)
     except Exception as _cl_e:
         log.debug("crons cache_push build failed (continuing): %s", _cl_e)
+    # Query Spine P4 (#2990): per-method q/1 cache entries alongside the
+    # monolith snapshot. Gated by CLAWMETRY_QUERY_CACHE_PUSH (default off).
+    try:
+        q1_pushes = _build_q1_cache_pushes(config)
+        if q1_pushes:
+            payload.setdefault("cache_pushes", []).extend(q1_pushes)
+    except Exception as _q1_e:
+        log.debug("q1 cache_push build failed (continuing): %s", _q1_e)
     # Local-first: persist this heartbeat to local DuckDB so the dashboard
     # has a per-node liveness history even when offline. Best-effort.
     try:
@@ -7019,7 +7027,13 @@ def send_heartbeat(config: dict) -> bool:
 # Allowlist mirrors routes.local_query._SHAPES. Duplicated here so the
 # daemon stays safe when `routes/` isn't on sys.path (some installs run the
 # sync daemon without the dashboard module loaded).
-_PENDING_SHAPES = {"events", "sessions", "aggregates", "health", "transcript"}
+_PENDING_SHAPES = {
+    "events", "sessions", "aggregates", "health", "transcript",
+    # Added in P4 (#2990): new live shapes from P2 materialized rollups.
+    "runtimes", "models", "rollup_sessions",
+    # Added in P3 (#2989): rollup-backed span/trace shapes.
+    "spans", "traces", "external_calls", "search",
+}
 
 
 def _canonical_args_hash(args: dict) -> str:
@@ -9064,6 +9078,89 @@ def _build_cron_runs_cache_pushes(config: dict) -> list:
             "ttl_s": CRON_RUNS_CACHE_TTL_SEC,
             "blob":  blob,
         })
+    return pushes
+
+
+# ── Query Spine P4 (#2990): per-method q/1 proactive cache push ───────────────
+# Pushes each no-required-arg live q/1 shape as its own keyed cache entry
+# alongside the monolith snapshot. Plaintext-classed shapes are stored as
+# base64url-encoded JSON (no encryption needed); e2e-classed shapes use
+# AES-256-GCM (only when enc_key is present). Gated by
+# CLAWMETRY_QUERY_CACHE_PUSH env var — default off for the first release.
+Q1_PUSH_CACHE_TTL_SEC = 300   # 5 min — aggregate rollups update every ~60s
+_Q1_PUSH_DEBOUNCE_SEC = 60    # at most one push per shape per heartbeat window
+_Q1_LAST_PUSH: dict = {}      # {shape: float} last-push unix timestamp
+
+
+def _build_q1_cache_pushes(config: dict) -> list:
+    """Return cache_push entries for all no-required-arg live q/1 shapes.
+
+    Plaintext-classed methods (aggregates, health, runtimes, models) are stored
+    as base64url JSON — the cloud can read them without a decryption key.
+    E2e-classed methods (rollup_sessions) are AES-256-GCM encrypted and are
+    skipped when no encryption key is configured.
+
+    The CI guard in ``tests/test_sync_q1_cache_pushes.py`` asserts that no
+    e2e-classed method is ever pushed without an encryption key (enforcing the
+    trust-class contract declared in ``clawmetry/query_contract.py``).
+    """
+    if not os.environ.get("CLAWMETRY_QUERY_CACHE_PUSH", "").lower() in (
+        "1", "true", "yes"
+    ):
+        return []
+    api_key = config.get("api_key", "")
+    node_id = config.get("node_id", "")
+    if not (api_key and node_id):
+        return []
+    enc_key = config.get("encryption_key")
+
+    try:
+        from routes.local_query import _dispatch as _local_dispatch  # type: ignore
+    except Exception:
+        _local_dispatch = _local_dispatch_fallback  # type: ignore
+
+    try:
+        from clawmetry.query_contract import (  # type: ignore
+            QUERY_CONTRACT, TRUST_E2E, STATUS_LIVE,
+        )
+    except ImportError:
+        return []
+
+    owner_hash = _owner_hash_for_token(api_key)
+    pushes: list = []
+    now = time.time()
+
+    for shape, spec in QUERY_CONTRACT.items():
+        if spec["status"] != STATUS_LIVE:
+            continue
+        # Skip methods with any required arg — we can't pre-push those without
+        # iterating all entities (transcripts, spans, etc.). They are served
+        # on-demand via _dispatch_pending_queries.
+        if any(v.get("required") for v in spec.get("args", {}).values()):
+            continue
+        # Per-method debounce: skip if we pushed this shape recently.
+        if now - _Q1_LAST_PUSH.get(shape, 0) < _Q1_PUSH_DEBOUNCE_SEC:
+            continue
+        is_e2e = spec["trust"] == TRUST_E2E
+        if is_e2e and not enc_key:
+            continue  # hard guard: never push e2e content without encryption
+        try:
+            payload = _local_dispatch(shape, {})
+            if is_e2e:
+                blob = encrypt_payload(payload, enc_key)
+            else:
+                blob = base64.urlsafe_b64encode(
+                    json.dumps(payload, default=str).encode()
+                ).rstrip(b"=").decode()
+            pushes.append({
+                "key":   f"q1:{shape}:{owner_hash}:{node_id}",
+                "ttl_s": Q1_PUSH_CACHE_TTL_SEC,
+                "blob":  blob,
+            })
+            _Q1_LAST_PUSH[shape] = now
+        except Exception as _e:
+            log.debug("q1 cache push failed for shape=%s: %s", shape, _e)
+
     return pushes
 
 
@@ -14281,6 +14378,10 @@ _STUCK_HEARTBEAT_MAX_MSG = 200
 # How many newest events to inspect per candidate session. 120 comfortably
 # covers a streak well past the threshold plus the preceding progress marker.
 _STUCK_EVENT_WINDOW = 120
+# ── n-gram circular-loop detector constants ───────────────────────────────
+NGRAM_MIN_TOOL_CALLS = int(os.environ.get("CLAWMETRY_NGRAM_MIN_TOOLS", "6"))
+NGRAM_MIN_REPEATS    = int(os.environ.get("CLAWMETRY_NGRAM_MIN_REPEATS", "3"))
+_NGRAM_EVENT_WINDOW  = 80  # newest-first events to inspect per session
 
 # Event types that count as a TOOL action in the streak. Covers every ingest
 # variant (Anthropic-style, OpenClaw v3 dotted, camelCase, hyphenated) so the
@@ -14534,6 +14635,158 @@ def _stuck_streak_span_seconds(oldest_ts, newest_ts) -> int:
     return _seconds_since(oldest_ts)
 
 
+def _extract_tool_signatures(et: str, data: Any) -> list[tuple[str, str]]:
+    """(tool_name, input_fingerprint) pairs for one event.
+
+    Fingerprint is a short prefix of sorted-JSON input — stable key for
+    identical-call detection without expensive hashing. Returns [] for
+    non-tool events. Handles all three on-wire shapes. Never raises."""
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception:
+            return []
+    if not isinstance(data, dict):
+        return []
+    et_l = et.lower()
+
+    def _fp(inp: Any) -> str:
+        try:
+            return json.dumps(inp, sort_keys=True, default=str)[:80]
+        except Exception:
+            return repr(inp)[:80]
+
+    # Shape 1: top-level tool_call / tool_use / tool.call
+    if et_l in _STUCK_TOPLEVEL_TOOL_CALL_TYPES:
+        name = data.get("name") or data.get("tool") or ""
+        return [(str(name), _fp(data.get("input") or data.get("params") or {}))] if name else []
+
+    # Shape 2: toolMetas projection (OpenClaw v3 model.completed)
+    metas = data.get("toolMetas")
+    if isinstance(metas, list):
+        return [
+            (str(m.get("name") or m.get("tool")), _fp(m.get("input") or {}))
+            for m in metas
+            if isinstance(m, dict) and (m.get("name") or m.get("tool"))
+        ]
+
+    # Shape 3: message.content tool blocks (Claude Code assistant events)
+    msg = data.get("message")
+    if isinstance(msg, dict):
+        blks = msg.get("content") or []
+        if isinstance(blks, list):
+            return [
+                (str(b.get("name") or b.get("tool")), _fp(b.get("input") or {}))
+                for b in blks
+                if isinstance(b, dict)
+                and b.get("type") in ("toolCall", "tool_use")
+                and (b.get("name") or b.get("tool"))
+            ]
+    return []
+
+
+def _ngram_runtime(sid: str) -> str:
+    """Best-effort runtime string for a session_id. Never raises."""
+    try:
+        from clawmetry import waste_flags as _wf
+        return _wf.runtime_from_session_id(sid) or "openclaw"
+    except Exception:
+        return "openclaw"
+
+
+def _detect_ngram_loop_sessions(store) -> list[dict]:
+    """Detect circular tool-call patterns via unigram / bigram repetition.
+
+    Walks each recently-active session's tool-call sequence (oldest→newest),
+    flagging when a single (tool, input) pair repeats >= NGRAM_MIN_REPEATS
+    times (unigram) or a two-call sequence repeats >= NGRAM_MIN_REPEATS times
+    (bigram). Returns [{session_id, runtime, loop_pattern, repeat_count,
+    tool_calls, since_seconds}] most-repeated first. Read-only; never raises.
+    Complements _detect_stuck_sessions (which only measures streak length) by
+    catching low-volume circular loops that stay under STUCK_TOOL_THRESHOLD."""
+    try:
+        sessions = store.query_sessions_table(limit=300) or []
+    except Exception as e:  # noqa: BLE001
+        log.warning("ngram-detect: sessions query failed: %s", e)
+        return []
+
+    out: list[dict] = []
+    for s in sessions:
+        if not isinstance(s, dict):
+            continue
+        if s.get("ended_at"):
+            continue
+        status = str(s.get("status") or "").lower()
+        if status in ("ended", "completed", "stopped", "failed"):
+            continue
+        sid = s.get("session_id") or ""
+        if not sid:
+            continue
+        last_active = s.get("last_active_at") or s.get("started_at")
+        if last_active and _seconds_since(last_active) > STUCK_RECENT_MINUTES * 60:
+            break
+        try:
+            events = store.query_events(session_id=sid, limit=_NGRAM_EVENT_WINDOW) or []
+        except Exception as e:  # noqa: BLE001
+            log.debug("ngram-detect: events(%s) failed: %s", sid, e)
+            continue
+
+        # query_events returns newest-first; reverse to get oldest-first for
+        # chronological sequence analysis.
+        sigs: list[tuple[str, str]] = []
+        ts_first = None
+        ts_last = None
+        for ev in reversed(events):
+            if not isinstance(ev, dict):
+                continue
+            pairs = _extract_tool_signatures(
+                str(ev.get("event_type") or "").strip().lower(), ev.get("data")
+            )
+            if pairs:
+                sigs.extend(pairs)
+                ts = ev.get("ts")
+                if ts_first is None:
+                    ts_first = ts
+                ts_last = ts
+
+        if len(sigs) < NGRAM_MIN_TOOL_CALLS:
+            continue
+
+        from collections import Counter
+        span = _stuck_streak_span_seconds(ts_first, ts_last)
+        rt = _ngram_runtime(sid)
+
+        # Unigram check: same (tool, input) pair repeated
+        ug = Counter(sigs).most_common(1)
+        if ug and ug[0][1] >= NGRAM_MIN_REPEATS:
+            out.append({
+                "session_id": sid,
+                "runtime": rt,
+                "loop_pattern": f"{ug[0][0][0]}(…) ×{ug[0][1]}",
+                "repeat_count": ug[0][1],
+                "tool_calls": len(sigs),
+                "since_seconds": span,
+            })
+            continue
+
+        # Bigram check: same two-call sequence repeated
+        if len(sigs) >= 4:
+            bg = Counter(zip(sigs, sigs[1:])).most_common(1)
+            if bg and bg[0][1] >= NGRAM_MIN_REPEATS:
+                n1, n2 = bg[0][0][0][0], bg[0][0][1][0]
+                out.append({
+                    "session_id": sid,
+                    "runtime": rt,
+                    "loop_pattern": f"{n1}→{n2} ×{bg[0][1]}",
+                    "repeat_count": bg[0][1],
+                    "tool_calls": len(sigs),
+                    "since_seconds": span,
+                })
+
+    out.sort(key=lambda r: r.get("repeat_count", 0), reverse=True)
+    return out
+
+
 def _emit_stuck_signals(store, state: dict) -> int:
     """Run stuck detection and emit each as a loop_signals row so the EXISTING
     device-alert path (``_build_device_summary`` → ``query_recent_loop_signals``)
@@ -14574,9 +14827,6 @@ def _emit_stuck_signals(store, state: dict) -> int:
         _LATEST_STUCK["ts"] = time.time()
     except Exception as _ce:  # noqa: BLE001
         log.debug("stuck-detect: cache refresh failed (continuing): %s", _ce)
-
-    if not stuck:
-        return 0
 
     memo = state.setdefault("stuck_emit_memo", {})
     if not isinstance(memo, dict):
@@ -14622,6 +14872,43 @@ def _emit_stuck_signals(store, state: dict) -> int:
             log.warning("stuck-detect: ingest_loop_signal failed for %s: %s",
                         sid, e)
             continue
+    # ── n-gram circular-loop detector ────────────────────────────────────
+    try:
+        ngram = _detect_ngram_loop_sessions(store)
+    except Exception as _ne:  # noqa: BLE001
+        log.warning("ngram-detect: detector errored: %s", _ne)
+        ngram = []
+    for nl in ngram:
+        sid = nl["session_id"]
+        k = f"{sid}|ngram"
+        last = memo.get(k)
+        if isinstance(last, (int, float)) and (now - last) < reemit:
+            continue
+        rt = nl["runtime"]
+        pattern = nl.get("loop_pattern", "?")
+        n_calls = nl.get("tool_calls", 0)
+        msg = f"{rt}: circular loop — {pattern} ({n_calls} calls)"
+        try:
+            store.ingest_loop_signal(
+                session_id=sid,
+                signature="daemon_ngram_loop",
+                repeat_count=nl.get("repeat_count", 0),
+                severity="warning",
+                agent_type=rt,
+                details={
+                    "source": "daemon_ngram_detector",
+                    "message": msg,
+                    "loop_pattern": pattern,
+                    "tool_calls": n_calls,
+                    "since_seconds": nl.get("since_seconds", 0),
+                },
+            )
+            memo[k] = now
+            emitted += 1
+            log.info("ngram-detect: %s", msg)
+        except Exception as _ee:  # noqa: BLE001
+            log.warning("ngram-detect: ingest failed for %s: %s", sid, _ee)
+
     # Bound memo growth: drop entries we haven't touched in an hour.
     try:
         for k in [k for k, v in memo.items()
