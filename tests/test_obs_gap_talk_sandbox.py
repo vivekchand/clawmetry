@@ -12,6 +12,8 @@ Covers:
 """
 import json
 import os
+import sys
+import types
 
 import pytest
 
@@ -123,6 +125,94 @@ def test_model_router_fingerprint_parses_git_sha(tmp_path, monkeypatch):
 def test_model_router_fingerprint_absent_returns_empty(tmp_path, monkeypatch):
     monkeypatch.setenv("NEMOCLAW_MODEL_ROUTER_VENV", str(tmp_path / "nope"))
     assert _model_router_fingerprint() == {}
+
+
+# -- #2795 model-router proxy liveness ---------------------------------------
+
+def test_model_router_port_parsed_from_cmdline(monkeypatch):
+    # No need to spawn a real process — feed a fake /proc-style cmdline scan.
+    import clawmetry.adapters.openclaw as oc
+
+    class _FakeProc:
+        def __init__(self, cmd):
+            self.info = {"cmdline": cmd}
+
+    fake = [
+        _FakeProc(["node", "server.js"]),
+        _FakeProc(["model-router", "proxy", "--port", "48123"]),
+    ]
+    fake_psutil = types.SimpleNamespace(process_iter=lambda fields: fake)
+    monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+    assert oc._discover_model_router_port() == 48123
+
+
+def test_model_router_port_supports_equals_form(monkeypatch):
+    import clawmetry.adapters.openclaw as oc
+
+    class _FakeProc:
+        def __init__(self, cmd):
+            self.info = {"cmdline": cmd}
+
+    fake = [_FakeProc(["model-router", "proxy", "--port=44550"])]
+    fake_psutil = types.SimpleNamespace(process_iter=lambda fields: fake)
+    monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+    assert oc._discover_model_router_port() == 44550
+
+
+def test_model_router_live_running_when_health_ok(monkeypatch):
+    import clawmetry.adapters.openclaw as oc
+    monkeypatch.setattr(oc, "_discover_model_router_port", lambda: 49000)
+    monkeypatch.setattr(oc, "_model_router_health_ok", lambda port: True)
+    out = oc._model_router_live()
+    assert out == {"modelRouterPort": 49000, "modelRouterRunning": True}
+
+
+def test_model_router_live_crashed_router_is_distinguishable(monkeypatch):
+    # Process discoverable (port known) but /health and TCP both fail → a
+    # crashed/wedged router reads as NOT running, the whole point of #2795.
+    import clawmetry.adapters.openclaw as oc
+    monkeypatch.setattr(oc, "_discover_model_router_port", lambda: 49001)
+    monkeypatch.setattr(oc, "_model_router_health_ok", lambda port: False)
+    out = oc._model_router_live()
+    assert out == {"modelRouterPort": 49001, "modelRouterRunning": False}
+
+
+def test_model_router_live_absent_returns_not_running(monkeypatch):
+    import clawmetry.adapters.openclaw as oc
+    monkeypatch.setattr(oc, "_discover_model_router_port", lambda: None)
+    assert oc._model_router_live() == {"modelRouterRunning": False}
+
+
+def test_model_router_health_ok_probes_real_localhost_server():
+    # Spin up a tiny HTTP server that answers 200 on /health and assert the
+    # probe (and its TCP fallback) report it as up.
+    import http.server
+    import threading
+    from clawmetry.adapters.openclaw import _model_router_health_ok
+
+    class _H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            code = 200 if self.path == "/health" else 404
+            self.send_response(code)
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), _H)
+    port = srv.server_address[1]
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    try:
+        assert _model_router_health_ok(port) is True
+    finally:
+        srv.shutdown()
+
+
+def test_model_router_health_ok_false_when_nothing_listening():
+    from clawmetry.adapters.openclaw import _model_router_health_ok
+    # Port 0 is never a live listener; probe must fail closed, not raise.
+    assert _model_router_health_ok(0) is False
 
 
 # -- #2682 nemoclaw catalog dispatch span unwrap -----------------------------

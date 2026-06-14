@@ -151,6 +151,98 @@ def _model_router_fingerprint() -> dict:
         return {}
 
 
+def _discover_model_router_port() -> Optional[int]:
+    """Find the ``--port`` of a running ``model-router proxy`` process.
+
+    Harness onboarding starts the proxy via ``model-router proxy --port <n>``
+    (port ``44000 + pid % 10000``), so the port is not derivable without the
+    pid — we read it back off the live process command line. psutil with a
+    ``/proc`` fallback, mirroring ``clawmetry.cli``. Returns ``None`` when no
+    such process is running. Read-only, never raises.
+    """
+    def _port_from_cmd(cmd: str) -> Optional[int]:
+        if "model-router" not in cmd or "proxy" not in cmd:
+            return None
+        toks = cmd.split()
+        for i, t in enumerate(toks):
+            if t == "--port" and i + 1 < len(toks) and toks[i + 1].isdigit():
+                return int(toks[i + 1])
+            if t.startswith("--port=") and t.split("=", 1)[1].isdigit():
+                return int(t.split("=", 1)[1])
+        return None
+
+    try:
+        import psutil  # type: ignore
+        for p in psutil.process_iter(["cmdline"]):
+            try:
+                port = _port_from_cmd(" ".join(p.info.get("cmdline") or []))
+                if port is not None:
+                    return port
+            except Exception:
+                pass
+        return None
+    except ImportError:
+        pass
+    try:
+        for pid_str in os.listdir("/proc"):
+            if not pid_str.isdigit():
+                continue
+            try:
+                with open(f"/proc/{pid_str}/cmdline") as fh:
+                    cmd = fh.read().replace("\x00", " ")
+                port = _port_from_cmd(cmd)
+                if port is not None:
+                    return port
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return None
+
+
+def _model_router_health_ok(port: int) -> bool:
+    """True if the model-router ``/health`` endpoint answers 2xx on localhost.
+
+    Falls back to a raw TCP connect (port accepting connections) when the HTTP
+    probe errors, so a wedged-but-listening router still reads as up. Short
+    timeouts keep detect() fast. Never raises.
+    """
+    try:
+        import urllib.request as _u
+        req = _u.Request(f"http://127.0.0.1:{port}/health", method="GET")
+        with _u.urlopen(req, timeout=0.3) as resp:  # nosec B310 - localhost only
+            status = getattr(resp, "status", None) or resp.getcode()
+            return 200 <= int(status) < 300
+    except Exception:
+        pass
+    try:
+        import socket as _sock
+        s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+        s.settimeout(0.2)
+        rc = s.connect_ex(("127.0.0.1", port))
+        s.close()
+        return rc == 0
+    except Exception:
+        return False
+
+
+def _model_router_live() -> dict:
+    """Runtime-liveness signal for the NemoClaw model-router proxy (#2795).
+
+    ``_model_router_fingerprint`` only proves the router was *installed*;
+    without a runtime probe a crashed router is indistinguishable from a
+    healthy one. This discovers the live proxy and polls its ``/health``
+    endpoint, surfacing the distinct liveness signal on ``DetectResult.meta``.
+
+    Returns ``{"modelRouterRunning": bool}`` (plus ``modelRouterPort`` when the
+    listening port is discoverable). Read-only, best-effort, never raises.
+    """
+    port = _discover_model_router_port()
+    if port is None:
+        return {"modelRouterRunning": False}
+    return {"modelRouterPort": port, "modelRouterRunning": _model_router_health_ok(port)}
+
+
 # NOTE (#2610, deferred): NemoClaw's skill-catalog version/provenance lives in
 # ``skills/catalog-metadata.json`` (min/tested NemoClaw version, content shas),
 # but that file is a SOURCE-repo build artifact — it is not shipped in the npm
@@ -312,6 +404,12 @@ class OpenClawAdapter(AgentAdapter):
             # OpenClaw, so meta is unchanged there. (#2610 skill-catalog deferred
             # — see note above: no host-readable on-disk location.)
             meta.update(_model_router_fingerprint())
+            # Runtime liveness (#2795). The fingerprint above only proves the
+            # router was INSTALLED; probe /health so a crashed router is no
+            # longer indistinguishable from a healthy one. Only meaningful when
+            # a model-router install is actually present.
+            if "modelRouterFingerprint" in meta:
+                meta.update(_model_router_live())
             _tc_enabled = _nemoclaw_tool_catalog_state()
             if _tc_enabled is not None:
                 meta["nemoclawToolCatalogEnabled"] = _tc_enabled
