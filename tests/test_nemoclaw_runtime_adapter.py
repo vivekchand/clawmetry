@@ -198,6 +198,70 @@ def test_nemoclaw_extract_skill_names_tolerates_mixed_shapes():
 # ── isolation: doesn't pick up non-nemo runtimes ───────────────────────────────────────
 
 
+# ── model-router model_list (issue #3118) ───────────────────────────────────
+
+
+def test_nemoclaw_detect_surfaces_model_router_model_list(isolated_store, tmp_path, monkeypatch):
+    """detect() merges modelRouterModelList when a proxy-config YAML exists."""
+    config_path = tmp_path / ".nemoclaw" / "model-router-config.yaml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        "model_list:\n  - model_name: gpt-4o\n  - model_name: claude-3-haiku\n"
+    )
+    monkeypatch.setenv("NEMOCLAW_MODEL_ROUTER_CONFIG", str(config_path))
+
+    _seed_nemoclaw_event(isolated_store)
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.nemo import NemoClawAdapter
+    res = NemoClawAdapter().detect()
+    assert res.meta["modelRouterModelList"] == ["gpt-4o", "claude-3-haiku"]
+    assert res.meta["modelRouterModelCount"] == 2
+
+
+def test_nemoclaw_detect_no_model_list_when_config_absent(isolated_store, tmp_path, monkeypatch):
+    """detect() emits no modelRouter* keys when no proxy-config file exists."""
+    monkeypatch.setenv("NEMOCLAW_MODEL_ROUTER_CONFIG", "")
+    # Point HOME at an empty tmp dir so no candidate path can accidentally resolve
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    _seed_nemoclaw_event(isolated_store)
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.nemo import NemoClawAdapter
+    res = NemoClawAdapter().detect()
+    assert "modelRouterModelList" not in res.meta
+    assert "modelRouterModelCount" not in res.meta
+
+
+def test_nemoclaw_model_list_regex_fallback(tmp_path, monkeypatch):
+    """_read_model_router_model_list() regex path extracts model names from raw YAML text."""
+    import re
+
+    config_text = (
+        "model_list:\n"
+        "  - model_name: llama-3-70b\n"
+        "    provider: ollama\n"
+        "  - model_name: mistral-7b\n"
+    )
+    # Verify the regex pattern that the helper uses produces the expected names
+    names = re.findall(r"model_name:\s*(.+?)(?:\s|$)", config_text)
+    assert names == ["llama-3-70b", "mistral-7b"]
+
+    # Also verify the helper returns the same result end-to-end via config file
+    config_path = tmp_path / "proxy-config.yaml"
+    config_path.write_text(config_text)
+    monkeypatch.setenv("NEMOCLAW_MODEL_ROUTER_CONFIG", str(config_path))
+
+    from clawmetry.adapters.nemo import _read_model_router_model_list
+    result = _read_model_router_model_list()
+    assert result.get("modelRouterModelList") == ["llama-3-70b", "mistral-7b"]
+    assert result.get("modelRouterModelCount") == 2
+
+
+# ── isolation: doesn't pick up non-nemo runtimes ────────────────────────────
+
+
 def test_nemoclaw_ignores_non_nemo_events(isolated_store):
     """A claude_code event seeded into the same store must NOT make NeMo
     detect True. agent_type is the discriminator."""
