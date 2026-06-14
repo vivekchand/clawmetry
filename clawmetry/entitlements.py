@@ -368,12 +368,69 @@ def _read_cloud_plan() -> Entitlement | None:
 _lock = threading.Lock()
 _cache: dict = {"ent": None, "ts": 0.0, "enforce": None}
 
+# Memo of the tier we last announced on the extension bus. Drives
+# :func:`_maybe_emit_change` so ``entitlement.changed`` fires on a genuine
+# transition (OSS -> cloud_pro after the daemon writes a plan cache, pro ->
+# oss after ``clawmetry license deactivate``) and stays quiet on the every-
+# minute cache refresh that resolves to the same tier. Lock-guarded so two
+# concurrent fresh resolves never double-emit the initial tier.
+_last_emitted_tier: str | None = None
+
+
+def _maybe_emit_change(ent: Entitlement) -> None:
+    """Emit ``entitlement.changed`` to the extension bus on a tier transition.
+
+    The first successful resolution emits with ``previous_tier=None`` so a
+    listener registered before startup hears the initial tier exactly once.
+    Subsequent resolutions to the same tier are no-ops, so the every-minute
+    cache refresh does not spam the bus. Best-effort end-to-end: a missing
+    ``clawmetry.extensions`` import or a misbehaving listener is logged at
+    debug and swallowed — the resolver must never crash a request path.
+
+    Payload::
+
+        {"previous_tier": "<old>"|None, "tier": "<new>",
+         "source": "license"|"cloud"|"oss", "is_paid": bool, "grace": bool}
+    """
+    global _last_emitted_tier
+    try:
+        with _lock:
+            if _last_emitted_tier == ent.tier:
+                return
+            previous = _last_emitted_tier
+            _last_emitted_tier = ent.tier
+        try:
+            from clawmetry import extensions as _ext
+        except Exception:
+            return
+        try:
+            _ext.emit(
+                "entitlement.changed",
+                {
+                    "previous_tier": previous,
+                    "tier": ent.tier,
+                    "source": ent.source,
+                    "is_paid": ent.is_paid,
+                    "grace": ent.grace,
+                },
+            )
+        except Exception as exc:
+            logger.debug("entitlements: emit failed: %s", exc)
+    except Exception as exc:
+        logger.debug("entitlements: change-emit skipped: %s", exc)
+
 
 def get_entitlement(force: bool = False) -> Entitlement:
     """Resolve (and cache) the current entitlement. Cheap by design — the
     FLYWHEEL performance budget forbids a per-request network call, so the
     result is cached for ``_CACHE_TTL_SECS``. The cache also busts when the
-    enforce flag flips. Never raises: any failure returns OSS-free."""
+    enforce flag flips. Never raises: any failure returns OSS-free.
+
+    On every fresh resolution (cache miss) the resolved entitlement is fed
+    through :func:`_maybe_emit_change`, which fires ``entitlement.changed``
+    on the extension bus iff the tier changed since the previous emit. Cache
+    hits skip the emit so the bus stays quiet on steady-state reads.
+    """
     try:
         enforce = is_enforced()
         with _lock:
@@ -388,6 +445,7 @@ def get_entitlement(force: bool = False) -> Entitlement:
         ent = _read_local_license() or _read_cloud_plan() or _oss_free()
         with _lock:
             _cache.update(ent=ent, ts=time.time(), enforce=enforce)
+        _maybe_emit_change(ent)
         return ent
     except Exception as exc:
         logger.warning("entitlements: resolution failed, defaulting to OSS free: %s", exc)
