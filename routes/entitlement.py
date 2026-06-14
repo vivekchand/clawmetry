@@ -18,8 +18,6 @@ from __future__ import annotations
 
 import logging
 
-import os
-
 from flask import Blueprint, jsonify, request
 
 logger = logging.getLogger("clawmetry.routes.entitlement")
@@ -152,6 +150,23 @@ def api_paywall_event():
     return "", 204
 
 
+def _route_actor() -> str:
+    """Best-effort actor identity for the audit log. Routes don't have a
+    full auth surface yet; the dashboard sends an ``X-Actor`` header when
+    available, falling back to ``X-Forwarded-For`` then the remote address.
+    Empty string is fine — the audit reader UI shows ``system`` for
+    blank actors."""
+    try:
+        for h in ("X-Actor", "X-Forwarded-For"):
+            v = request.headers.get(h, "") or ""
+            v = v.split(",")[0].strip()
+            if v:
+                return v[:128]
+        return (request.remote_addr or "")[:128]
+    except Exception:
+        return ""
+
+
 @bp_entitlement.route("/api/license/activate", methods=["POST"])
 def api_license_activate():
     """Activate a self-hosted Pro/Enterprise license key.
@@ -166,7 +181,7 @@ def api_license_activate():
             return jsonify({"ok": False, "error": "key is required"}), 400
         from clawmetry import license as _lic
 
-        ok, msg = _lic.activate(key)
+        ok, msg = _lic.activate(key, actor=_route_actor())
         status_code = 200 if ok else 400
         return jsonify({"ok": ok, "message": msg}), status_code
     except Exception as exc:
@@ -184,16 +199,9 @@ def api_license_deactivate():
     try:
         from clawmetry import license as _lic
 
-        removed = False
-        if os.path.isfile(_lic.LICENSE_PATH):
-            os.remove(_lic.LICENSE_PATH)
-            removed = True
-        try:
-            from clawmetry import entitlements as _ent
-
-            _ent.invalidate()
-        except Exception:
-            pass
+        ok, removed = _lic.deactivate(actor=_route_actor())
+        if not ok:
+            return jsonify({"ok": False, "removed": False, "error": "remove_failed"}), 500
         return jsonify({"ok": True, "removed": removed})
     except Exception as exc:
         logger.warning("api_license_deactivate: error: %s", exc)

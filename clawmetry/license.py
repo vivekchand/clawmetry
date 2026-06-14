@@ -628,16 +628,65 @@ def auto_provision_pro(api_key: str, node_id: str | None = None) -> tuple[bool, 
         return False, ""
 
 
-def activate(key: str, node_id: str | None = None) -> tuple[bool, str]:
+def _audit_license_event(
+    action: str,
+    *,
+    result: str,
+    actor: str = "",
+    payload: dict | None = None,
+    detail: str = "",
+) -> None:
+    """Record a license state-change to the Enterprise audit log.
+
+    Never raises — a failed audit write must never block the activate /
+    deactivate path. The raw license key is NEVER recorded; only the
+    non-secret claims (tier, nodes, sub, exp) and the outcome are kept."""
+    try:
+        from clawmetry import audit as _audit
+
+        meta: dict = {}
+        if isinstance(payload, dict):
+            for k in ("tier", "nodes", "exp"):
+                if k in payload:
+                    meta[k] = payload[k]
+        if detail:
+            meta["detail"] = detail[:256]
+        target = ""
+        if isinstance(payload, dict):
+            target = str(payload.get("sub", "") or "")
+        _audit.audit_event(
+            action,
+            actor=actor or "",
+            target=target,
+            result=result,
+            source="license",
+            metadata=meta,
+        )
+    except Exception:
+        pass
+
+
+def activate(key: str, node_id: str | None = None, actor: str = "") -> tuple[bool, str]:
     """Verify ``key`` offline, persist it, and (best-effort) register the node
-    + install clawmetry-pro. Returns (ok, message). Never raises."""
+    + install clawmetry-pro. Returns (ok, message). Never raises.
+
+    ``actor`` is an optional human/system identifier folded into the audit
+    log entry; routes pass the X-Actor header (or remote address). Defaults
+    to empty (the CLI path)."""
     payload = verify_token(key)
     if payload is None:
+        _audit_license_event(
+            "license.activate", result="invalid_key", actor=actor,
+            detail="signature failed or key unparseable",
+        )
         return False, "Invalid or unrecognized license key."
     import time as _t
 
     exp = payload.get("exp")
     if isinstance(exp, (int, float)) and _t.time() > exp:
+        _audit_license_event(
+            "license.activate", result="expired_key", actor=actor, payload=payload,
+        )
         return False, "This license key has expired."
     try:
         lic_dir = os.path.dirname(LICENSE_PATH)
@@ -653,6 +702,10 @@ def activate(key: str, node_id: str | None = None) -> tuple[bool, str]:
             pass
         _secure_write(LICENSE_PATH, key.strip() + "\n")
     except Exception as exc:
+        _audit_license_event(
+            "license.activate", result="write_error", actor=actor, payload=payload,
+            detail=str(exc),
+        )
         return False, f"Could not write license file: {exc}"
     # Refresh the entitlement cache so the new license takes effect immediately.
     try:
@@ -664,7 +717,49 @@ def activate(key: str, node_id: str | None = None) -> tuple[bool, str]:
     install_status = _download_and_install_pro(payload)
     tier = str(payload.get("tier", "pro")).lower()
     nodes = payload.get("nodes", 1)
+    _audit_license_event(
+        "license.activate", result="activated", actor=actor, payload=payload,
+    )
     return True, f"Activated {tier} license for {nodes} node(s). {install_status}"
+
+
+def deactivate(actor: str = "") -> tuple[bool, bool]:
+    """Remove the on-disk license file and invalidate the entitlement cache.
+
+    Returns ``(ok, removed)`` — ``removed`` is False when no key was
+    installed (idempotent). Records a ``license.deactivate`` audit entry
+    with the prior tier/sub when the key parsed; never raises."""
+    prior_payload: dict | None = None
+    try:
+        if os.path.isfile(LICENSE_PATH):
+            with open(LICENSE_PATH, "r", encoding="utf-8") as fh:
+                prior_payload = verify_token(fh.read().strip())
+    except Exception:
+        prior_payload = None
+    removed = False
+    try:
+        if os.path.isfile(LICENSE_PATH):
+            os.remove(LICENSE_PATH)
+            removed = True
+    except Exception as exc:
+        _audit_license_event(
+            "license.deactivate", result="remove_error", actor=actor,
+            payload=prior_payload, detail=str(exc),
+        )
+        return False, False
+    try:
+        from clawmetry import entitlements as _ent
+
+        _ent.invalidate()
+    except Exception:
+        pass
+    _audit_license_event(
+        "license.deactivate",
+        result="removed" if removed else "noop",
+        actor=actor,
+        payload=prior_payload,
+    )
+    return True, removed
 
 
 def current_license_info() -> dict | None:
