@@ -490,6 +490,25 @@ class OpenClawAdapter(AgentAdapter):
                             _slow = obj.get("slowReply") or obj.get("slow_reply")
                             if _slow:
                                 extra["slowReply"] = True
+                            # Talk/voice/managed-room lifecycle fields stored by
+                            # ingest_talk_lifecycle() under camelCase keys; map to
+                            # unprefixed names so callers don't need to know the
+                            # storage key.  talkFinal uses is-not-None because
+                            # False is a meaningful value (non-final segment).
+                            for _ekey, _bkey in (
+                                ("mode",        "talkMode"),
+                                ("transport",   "talkTransport"),
+                                ("provider",    "talkProvider"),
+                                ("brain",       "talkBrain"),
+                                ("duration_ms", "talkDurationMs"),
+                                ("byte_length", "talkByteLength"),
+                            ):
+                                _val = obj.get(_bkey)
+                                if _val is not None:
+                                    extra[_ekey] = _val
+                            _final = obj.get("talkFinal")
+                            if _final is not None:
+                                extra["final"] = _final
                             msg = obj.get("message")
                             if isinstance(msg, str):
                                 content_text = msg
