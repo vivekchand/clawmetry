@@ -239,6 +239,47 @@ def test_list_events_surfaces_log_level_and_subsystem(isolated_store):
     assert ex.get("hostname") == "Dhriti-1"
 
 
+def test_list_events_surfaces_voice_lifecycle_fields(isolated_store):
+    """Talk/realtime-voice/managed-room lifecycle fields come through extra (#2957).
+
+    sync.py stores ``mode``, ``transport``, ``provider``, ``duration_ms`` and
+    ``size_bytes`` top-level in the voice event's data blob (sync.py ~L4960).
+    Previously list_events unpacked only ``channel``/``hostname``, so these
+    five fields were present in DuckDB but never reached Event.extra. Pin the
+    new behavior, including that a zero ``size_bytes`` is preserved (numeric
+    fields use a None check, not truthiness).
+    """
+    import uuid, time as _t
+    isolated_store.ingest({
+        "id": str(uuid.uuid4()),
+        "node_id": "agent+test-node",
+        "agent_id": "main",
+        "agent_type": "openclaw",
+        "session_id": "sess-VOICE",
+        "event_type": "voice.session",
+        "ts": _t.time(),
+        "data": {
+            "mode": "realtime",
+            "transport": "webrtc",
+            "provider": "openai",
+            "duration_ms": 1234,
+            "size_bytes": 0,
+        },
+    })
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess-VOICE")
+    assert len(events) == 1
+    e = events[0]
+    assert e.extra.get("mode") == "realtime"
+    assert e.extra.get("transport") == "webrtc"
+    assert e.extra.get("provider") == "openai"
+    assert e.extra.get("duration_ms") == 1234
+    # A legitimate 0 (zero-byte payload) must survive, not be dropped.
+    assert e.extra.get("size_bytes") == 0
+
+
 def test_list_events_dict_message_does_not_set_content(isolated_store):
     """Sanity guard: when ``message`` is a dict (assistant turn shape),
     Event.content stays empty — only string ``message`` values are
