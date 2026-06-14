@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Privacy: machine details are now end-to-end encrypted (2026-06-14)
+- **Your machine's details no longer leave your machine in cleartext (#3124).** The security-posture scan and the machine fingerprint (OS, CPU architecture, core count, RAM, and local network IP addresses) used to ride the plaintext heartbeat, where the cloud stored them unencrypted. They now travel inside the end-to-end-encrypted system snapshot (the `machineInfo` and `securityPosture` slices) and are decrypted only in your browser; the cloud keeps an opaque blob it cannot read. The Machine, Network, and Security views render this client-side from the decrypted snapshot. The plaintext heartbeat keeps only routing fields. (Re-applies the security-posture move that a stale-rebase merge had silently reverted, with a guard test. Paired cloud change stops persisting the data and purged existing rows.)
+
 ### Release: publish the per-session loops[] snapshot slice to PyPI (2026-06-13)
 - Ships the daemon `loops[]` slice (each entry carries the canonical session_id for an active loop or stuck incident) so the cloud Command River can bind the red whirlpool and the Kill/Pause alarm to the exact looping agent. Carries the feature merged in #3100.
 
