@@ -111,6 +111,70 @@ RUNTIME_LABELS = {
     "nanoclaw": "NanoClaw",
 }
 
+# Display labels for every known feature. Mirrors the runtime label map and is
+# the source of truth the dashboard reads via ``/api/features`` so the locked-
+# but-visible affordance on paid features renders human-readable copy. Adding a
+# feature to one of the ``*_FEATURES`` sets without a label here is safe — the
+# helper falls back to the id — but a missing label trips the catalogue
+# conformance test in ``tests/test_entitlements_feature_catalog.py``.
+FEATURE_LABELS = {
+    # Free / core observability
+    "sessions": "Sessions",
+    "transcripts": "Transcripts",
+    "usage": "Usage",
+    "brain": "Brain",
+    "flow": "Flow",
+    "tracing": "Tracing",
+    "health": "Health",
+    "logs": "Logs",
+    "crons": "Crons",
+    "channels": "Channels",
+    "nemo_governance": "NeMo Governance",
+    "overview": "Overview",
+    # Starter
+    "multi_runtime": "Multi-runtime",
+    "fleet": "Multi-node fleet",
+    "cloud_sync": "Cloud sync",
+    "all_channels": "All channels",
+    "approval_queue": "Approval queue",
+    "budget_limits": "Budget limits",
+    "per_runtime_health_timeline": "Per-runtime health timeline",
+    # Pro-only
+    "per_run_waste_flags": "Per-run waste flags",
+    "per_run_compare": "Per-run compare",
+    "error_triage": "Error triage",
+    "self_evolve": "Self-Evolve",
+    "asset_registry": "Asset registry",
+    "eval_suite": "Eval suite",
+    "tool_policy": "Tool policy",
+    "otel_export": "OTel export",
+    "custom_webhooks": "Custom webhooks",
+    "custom_runtime_ingest": "Custom runtime ingest",
+    "custom_alerts": "Custom alerts",
+    "alert_webhooks": "Alert webhooks",
+    "anomaly_detection": "Anomaly detection",
+    "cost_optimizer": "Cost optimizer",
+    # Enterprise
+    "siem_export": "SIEM export",
+    "sso": "SSO",
+    "audit_logs": "Audit logs",
+    "rbac": "RBAC",
+    "air_gapped_license": "Air-gapped license",
+    "custom_data_residency": "Custom data residency",
+}
+
+# Backwards-compat alias keys living inside ``PRO_ONLY_FEATURES`` that older
+# callers may still import. They satisfy ``allows_feature(...)`` for the
+# canonical feature they alias, but the user-facing catalog (and so the
+# upgrade copy) should hide them — listing them alongside the canonical
+# keys advertises feature names that aren't on /pricing anymore. The catalog
+# row carries ``alias=True`` so the UI can filter them out without
+# hard-coding the four ids on the frontend (a duplicate that would drift the
+# next time we shuffle the PRO_ONLY set).
+_ALIAS_FEATURES = frozenset(
+    {"custom_alerts", "alert_webhooks", "anomaly_detection", "cost_optimizer"}
+)
+
 # ── Feature catalogue ───────────────────────────────────────────────────────
 # Core observability — always free. Keys are stable identifiers the route /
 # UI layer checks via Entitlement.allows_feature(...).
@@ -540,6 +604,105 @@ def runtime_label(runtime: str) -> str:
     so unknown plugin runtimes still render with *something*."""
     rt = (runtime or "").strip().lower()
     return RUNTIME_LABELS.get(rt, rt)
+
+
+def feature_label(feature: str) -> str:
+    """Human-readable label for ``feature``. Falls back to the id when unknown
+    so plugin/extension features still render with *something*."""
+    fid = (feature or "").strip().lower()
+    return FEATURE_LABELS.get(fid, fid)
+
+
+# Ordered tier ladder used to resolve "minimum tier that unlocks X" — the lower
+# the index the cheaper the tier. Free first, then Starter, Pro, Enterprise.
+_FEATURE_TIER_ORDER = (
+    (TIER_OSS, FREE_FEATURES),
+    (TIER_CLOUD_STARTER, STARTER_FEATURES),
+    (TIER_CLOUD_PRO, PRO_ONLY_FEATURES),
+    (TIER_ENTERPRISE, ENTERPRISE_FEATURES),
+)
+
+
+def feature_tier(feature: str) -> str:
+    """The lowest tier code that unlocks ``feature``. Returns ``TIER_OSS`` for
+    free features (and unknown ids — same fallback as the runtime helper, so an
+    extension feature never appears mysteriously locked). Used by the UI to
+    label the upgrade CTA ("Requires Starter", "Requires Pro", "Requires
+    Enterprise") without hard-coding the bucket on the frontend."""
+    fid = (feature or "").strip().lower()
+    for tier, bucket in _FEATURE_TIER_ORDER:
+        if fid in bucket:
+            return tier
+    return TIER_OSS
+
+
+# Stable ordering rank used to sort the catalogue: free first, then by tier.
+_FEATURE_TIER_RANK = {
+    TIER_OSS: 0,
+    TIER_CLOUD_STARTER: 1,
+    TIER_CLOUD_PRO: 2,
+    TIER_ENTERPRISE: 3,
+}
+
+
+def feature_catalog() -> list[dict]:
+    """The full feature catalog with the entitlement-derived availability for
+    each entry. Single source of truth the UI uses to render *every* known
+    feature — including paid ones the local install does not have — so the
+    locked-but-visible upgrade affordance has data to render against and the
+    upgrade CTA knows which tier to advertise.
+
+    Each entry::
+
+        {
+          "id":       "<feature>",         # canonical key
+          "label":    "<Display Name>",    # falls back to id
+          "tier":     "oss" | "cloud_starter" | "cloud_pro" | "enterprise",
+          "free":     True | False,        # FREE_FEATURES membership
+          "allowed":  True | False,        # entitlement allows using it
+          "locked":   True | False,        # paid + not allowed (UI shows the lock)
+          "entitled": True | False,        # grace-INDEPENDENT plan fact
+        }
+
+    Ordering: free first, then by tier rank (Starter -> Pro -> Enterprise), then
+    alphabetical inside each bucket — stable so the UI list is deterministic.
+
+    Never raises; on any resolution error every paid feature is reported as
+    ``locked=False`` (grace) to match the OSS-free fallback in
+    :func:`get_entitlement`.
+    """
+    try:
+        ent = get_entitlement()
+    except Exception as exc:  # never crash a catalog read
+        logger.warning("entitlements: feature_catalog falling back to grace: %s", exc)
+        ent = _oss_free()
+    out: list[dict] = []
+    for fid in sorted(ALL_FEATURES, key=lambda f: (_FEATURE_TIER_RANK.get(feature_tier(f), 9), f)):
+        tier = feature_tier(fid)
+        is_free = fid in FREE_FEATURES
+        allowed = ent.allows_feature(fid)
+        # Grace-independent plan fact — does the resolved tier itself grant
+        # this feature, ignoring grace bypass? Free features are always
+        # entitled; expired plans don't entitle paid features.
+        if is_free:
+            entitled = True
+        elif ent.expired:
+            entitled = False
+        else:
+            entitled = fid in ent.features
+        out.append(
+            {
+                "id": fid,
+                "label": feature_label(fid),
+                "tier": tier,
+                "free": is_free,
+                "allowed": allowed,
+                "locked": (not is_free) and (not allowed),
+                "entitled": entitled,
+                "alias": fid in _ALIAS_FEATURES,
+            }
+        )
+    return out
 
 
 def runtime_catalog() -> list[dict]:

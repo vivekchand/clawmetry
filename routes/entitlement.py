@@ -151,6 +151,49 @@ def api_runtimes():
         )
 
 
+@bp_entitlement.route("/api/features")
+def api_features():
+    """Return the full feature catalog with per-feature ``free``/``allowed``/
+    ``locked`` flags + the minimum tier that unlocks each one, so the dashboard
+    can render *every* known feature in the upgrade surface — including paid
+    ones the local install does not have — and overlay a lock affordance + an
+    accurate "Requires <Tier>" CTA once enforcement is on.
+
+    Shape::
+
+        {
+          "features": [
+            {"id": "sessions",  "label": "Sessions",
+             "tier": "oss",          "free": true,  "allowed": true,
+             "locked": false, "entitled": true},
+            {"id": "self_evolve", "label": "Self-Evolve",
+             "tier": "cloud_pro",    "free": false, "allowed": true,
+             "locked": false, "entitled": false},
+            ...
+          ],
+          "grace":    true | false,   # mirrors /api/entitlement.grace
+          "enforced": true | false
+        }
+
+    Side-effect-free and never-raise: any resolution error falls back to a
+    grace OSS-free shape so the UI still has something safe to render.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "features": _ent.feature_catalog(),
+                "grace": ent.grace,
+                "enforced": not ent.grace,
+            }
+        )
+    except Exception as exc:  # never crash the dashboard over a gate read
+        logger.warning("api_features: falling back to OSS-free: %s", exc)
+        return jsonify({"features": [], "grace": True, "enforced": False})
+
+
 @bp_entitlement.route("/api/license/status")
 def api_license_status():
     """Return the current self-hosted license info as JSON.
