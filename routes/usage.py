@@ -3876,6 +3876,61 @@ def api_usage_cache_trends():
     })
 
 
+# ── Cache Risk: per-session idle-gap re-write tax (issue #2839 Part 1) ──
+
+
+@bp_usage.route("/api/usage/cache-risk")
+def api_usage_cache_risk():
+    """Fleet roll-up of the prompt-cache re-read tax.
+
+    For every session where `cacheExpiryCount > 0` or `cacheWriteCostUsd > 0`,
+    aggregate:
+      - total_expiry_count   — sum of idle gaps that crossed the 5-min TTL
+      - total_write_cost_usd — total $ paid to rebuild the prompt cache
+      - total_saved_usd      — $ actually saved via cache reads in those sessions
+      - affected_sessions    — count of sessions that tripped at least one expiry
+      - max_idle_gap_sec     — worst single idle gap across all affected sessions
+
+    Data comes entirely from metadata already stored in DuckDB by the sync
+    daemon — no JSONL scanning, no proxy required.
+    """
+    try:
+        from routes.sessions import _try_local_store_cost_breakdown
+        cb = _try_local_store_cost_breakdown() or {}
+    except Exception:
+        cb = {}
+
+    sessions = cb.get("sessions") or []
+    total_expiries = 0
+    total_write_cost = 0.0
+    total_saved = 0.0
+    affected = 0
+    max_idle_gap = 0.0
+
+    for s in sessions:
+        expiries = int(s.get("cache_expiry_count") or 0)
+        wc = float(s.get("cache_write_cost_usd") or 0.0)
+        sv = float(s.get("cache_saved_usd") or 0.0)
+        gap = float(s.get("max_idle_gap_sec") or 0.0)
+        if expiries > 0 or wc > 0:
+            affected += 1
+            total_expiries += expiries
+            total_write_cost += wc
+            total_saved += sv
+            if gap > max_idle_gap:
+                max_idle_gap = gap
+
+    return jsonify({
+        "affected_sessions": affected,
+        "total_sessions": len(sessions),
+        "total_expiry_count": total_expiries,
+        "total_write_cost_usd": round(total_write_cost, 4),
+        "total_saved_usd": round(total_saved, 4),
+        "max_idle_gap_sec": round(max_idle_gap, 1),
+        "_source": "local_store" if cb.get("_source") else "none",
+    })
+
+
 # ── Skills fidelity telemetry (GH #687) ─────────────────────────────────
 
 

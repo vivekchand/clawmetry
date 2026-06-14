@@ -12997,6 +12997,8 @@ async function loadUsage() {
     loadHeatmap();
     // Load prompt cache analytics (GH #979)
     loadCacheAnalytics();
+    // Load cache re-read tax card (issue #2839)
+    loadCacheRisk();
     // Load cost forecast (issue #1413)
     loadCostForecast();
     // Load per-agent / per-team cost attribution (issue #3000)
@@ -13128,6 +13130,49 @@ function renderTopSessionsByCost(rows) {
   });
   html += '</tbody>';
   el.innerHTML = html;
+}
+
+async function loadCacheRisk() {
+  // Issue #2839 Part 1 — surface the prompt-cache re-read tax on the Usage tab.
+  // Data: sum of idle-gap expiries + cache-write cost across all sessions in DuckDB.
+  try {
+    var d = await fetch('/api/usage/cache-risk').then(function(r) { return r.json(); });
+    var title = document.getElementById('cache-risk-title');
+    var card = document.getElementById('cache-risk-card');
+    if (!title || !card) return;
+    var expiries = Number(d.total_expiry_count) || 0;
+    var writeCost = Number(d.total_write_cost_usd) || 0;
+    var savedUsd = Number(d.total_saved_usd) || 0;
+    var affected = Number(d.affected_sessions) || 0;
+    var maxGap = Number(d.max_idle_gap_sec) || 0;
+    if (!expiries && !writeCost) return;
+    title.style.display = '';
+    card.style.display = '';
+    var gapMin = maxGap > 0 ? Math.round(maxGap / 60) : 0;
+    var netTax = writeCost - savedUsd;
+    var html = '<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start;">'
+      + '<div style="min-width:160px;">'
+      + '<div style="font-size:28px;font-weight:700;color:' + (netTax > 0.01 ? '#ef4444' : '#f59e0b') + ';">'
+      + (writeCost > 0 ? '$' + writeCost.toFixed(3) : expiries + '') + '</div>'
+      + '<div style="font-size:12px;color:var(--text-muted);margin-top:2px;">'
+      + (writeCost > 0 ? 'paid to rebuild the cache' : 'cache expiries') + '</div>'
+      + '</div>'
+      + '<div style="flex:1;min-width:220px;font-size:13px;color:var(--text-secondary);">'
+      + '<div style="margin-bottom:6px;">'
+      + '<strong>' + expiries + ' cache ' + (expiries === 1 ? 'expiry' : 'expiries') + '</strong>'
+      + (affected > 0 ? ' across <strong>' + affected + ' session' + (affected === 1 ? '' : 's') + '</strong>' : '')
+      + ' — idle gaps crossed the 5-min cache TTL so context was re-derived from scratch.</div>';
+    if (writeCost > 0 && savedUsd > 0) {
+      html += '<div style="margin-bottom:6px;">Paid <strong>$' + writeCost.toFixed(3) + '</strong> to rebuild; only saved <strong>$' + savedUsd.toFixed(3) + '</strong> on reads'
+        + (netTax > 0 ? ' — <strong style="color:#ef4444;">$' + netTax.toFixed(3) + ' net re-read tax</strong>' : '') + '.</div>';
+    }
+    if (gapMin > 0) {
+      html += '<div style="color:var(--text-muted);font-size:12px;">Longest idle gap: ' + (gapMin >= 60 ? Math.round(gapMin/60) + 'h ' + (gapMin % 60) + 'm' : gapMin + ' min') + '</div>';
+    }
+    html += '<div style="margin-top:8px;font-size:12px;color:var(--text-muted);">Keep sessions warm — batch turns within the 5-min TTL so context is read at ~0.1× instead of re-written at full price.</div>'
+      + '</div></div>';
+    document.getElementById('cache-risk-content').innerHTML = html;
+  } catch(e) {}
 }
 
 async function loadCacheAnalytics() {

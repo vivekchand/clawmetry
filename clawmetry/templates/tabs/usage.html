@@ -56,6 +56,11 @@
   <div class="card" id="cache-perf-card" style="display:none;">
     <div id="cache-perf-content" style="min-height:48px;color:var(--text-muted);"></div>
   </div>
+  <!-- Cache Risk card (issue #2839) — re-read tax from idle-gap expiries -->
+  <div class="section-title" id="cache-risk-title" style="display:none;">⏱ Cache Re-read Tax <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">idle-gap expiries · prompt-cache rebuild cost</span></div>
+  <div class="card" id="cache-risk-card" style="display:none;">
+    <div id="cache-risk-content" style="min-height:48px;color:var(--text-muted);"></div>
+  </div>
   <!-- Issue #68 — top sessions by cost (per-session breakdown) -->
   <div class="section-title">🏆 <span data-i18n="usage.top_sessions_by_cost">Top Sessions by Cost</span> <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;" data-i18n="usage.top_sessions_hint">which session burned the budget · top 20</span></div>
   <div class="card"><table class="usage-table" id="usage-top-sessions-table"><tbody><tr><td colspan="6" style="color:#666;" data-i18n="app.loading">Loading...</td></tr></tbody></table></div>
