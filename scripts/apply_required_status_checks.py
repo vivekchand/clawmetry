@@ -365,6 +365,17 @@ def main() -> None:
     is_pat = not token.startswith("ghs_")
 
     if not is_pat:
+        # Fail clearly when confirm=APPLY was typed but only GITHUB_TOKEN is available.
+        # Without this check the workflow exits 0 silently, which looks like success.
+        confirm_input = os.environ.get("CONFIRM_INPUT", "").strip()
+        if confirm_input.upper() == "APPLY":
+            sys.exit(
+                "ERROR: confirm=APPLY requires an admin token -- GITHUB_TOKEN cannot write branch protection.\n"
+                "  Fix: re-run the workflow and paste a fine-grained PAT into the 'pat_token' field.\n"
+                "  PAT permissions: Administration (read+write) on clawmetry, clawmetry-cloud, clawmetry-landing.\n"
+                "  Alternative: bash scripts/close-c6.sh (uses your gh CLI session, ~30 sec).\n"
+                "  Tracking: vivekchand/clawmetry#2146 (C6)"
+            )
         # Read-only path: GITHUB_TOKEN cannot write branch protection.
         # Scope verification to the current repo only to avoid cross-repo 403s.
         local_checks, local_deprecated = _readonly_scope()
