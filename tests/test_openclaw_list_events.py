@@ -194,10 +194,90 @@ def test_list_events_populates_content_from_log_message_text(isolated_store):
     assert len(events) == 1
     e = events[0]
     assert e.content == "tool dispatched: bash exit=0"
-    # channel/hostname/level still come through extra (#3013).
+    # channel/hostname still come through extra.
     assert e.extra.get("channel") == "gateway"
     assert e.extra.get("hostname") == "Dhriti-1"
-    assert e.extra.get("level") == "info"
+
+
+def test_list_events_surfaces_log_level_and_subsystem(isolated_store):
+    """Gateway log severity + subsystem land in event.extra (#3055 / #3013).
+
+    OpenClaw gateway JSONL log records carry top-level ``level``
+    (info/warn/error/debug) and ``subsystem`` fields that the CLI and
+    Control UI parse to render structured log output. list_events already
+    surfaced channel/hostname but silently dropped level/subsystem, so
+    callers could not filter or alert on log severity or origin. Pin the
+    new behavior: ``level`` -> ``log_level`` and ``subsystem`` pass through.
+    """
+    import uuid, time as _t
+    isolated_store.ingest({
+        "id": str(uuid.uuid4()),
+        "node_id": "agent+test-node",
+        "agent_id": "main",
+        "agent_type": "openclaw",
+        "session_id": "sess-LVL",
+        "event_type": "log",
+        "ts": _t.time(),
+        "data": {
+            "channel": "gateway",
+            "hostname": "Dhriti-1",
+            "level": "warn",
+            "subsystem": "scheduler",
+            "message": "cron job overran budget",
+        },
+    })
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess-LVL")
+    assert len(events) == 1
+    ex = events[0].extra
+    assert ex.get("log_level") == "warn"
+    assert ex.get("subsystem") == "scheduler"
+    # existing channel/hostname extraction is unchanged.
+    assert ex.get("channel") == "gateway"
+    assert ex.get("hostname") == "Dhriti-1"
+
+
+def test_list_events_surfaces_voice_lifecycle_fields(isolated_store):
+    """Talk/realtime-voice/managed-room lifecycle fields come through extra (#2957).
+
+    sync.py stores ``mode``, ``transport``, ``provider``, ``duration_ms`` and
+    ``size_bytes`` top-level in the voice event's data blob (sync.py ~L4960).
+    Previously list_events unpacked only ``channel``/``hostname``, so these
+    five fields were present in DuckDB but never reached Event.extra. Pin the
+    new behavior, including that a zero ``size_bytes`` is preserved (numeric
+    fields use a None check, not truthiness).
+    """
+    import uuid, time as _t
+    isolated_store.ingest({
+        "id": str(uuid.uuid4()),
+        "node_id": "agent+test-node",
+        "agent_id": "main",
+        "agent_type": "openclaw",
+        "session_id": "sess-VOICE",
+        "event_type": "voice.session",
+        "ts": _t.time(),
+        "data": {
+            "mode": "realtime",
+            "transport": "webrtc",
+            "provider": "openai",
+            "duration_ms": 1234,
+            "size_bytes": 0,
+        },
+    })
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess-VOICE")
+    assert len(events) == 1
+    e = events[0]
+    assert e.extra.get("mode") == "realtime"
+    assert e.extra.get("transport") == "webrtc"
+    assert e.extra.get("provider") == "openai"
+    assert e.extra.get("duration_ms") == 1234
+    # A legitimate 0 (zero-byte payload) must survive, not be dropped.
+    assert e.extra.get("size_bytes") == 0
 
 
 def test_list_events_dict_message_does_not_set_content(isolated_store):
@@ -400,3 +480,64 @@ def test_build_spans_prefers_total_tokens_for_reasoning_model():
     assert llm_spans[0]["token_count"] == 162, (
         "token_count must equal totalTokens (162), not tok_in+tok_out (50)"
     )
+
+
+def test_first_event_latency_computed_from_session_timestamp():
+    """_build_spans_from_events records llm.first_event_latency_s on the first
+    assistant span when a session event precedes it. Fixes #3016."""
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = [
+        {"type": "session", "version": "1.0", "timestamp": "1700000000"},
+        {
+            "type": "message",
+            "timestamp": "1700000005",
+            "message": {"role": "assistant", "model": "claude-haiku-4-5", "usage": {}, "content": []},
+        },
+        {
+            "type": "message",
+            "timestamp": "1700000010",
+            "message": {"role": "assistant", "model": "claude-haiku-4-5", "usage": {}, "content": []},
+        },
+    ]
+    spans = OpenClawAdapter._build_spans_from_events(events, "sess-latency-1")
+    llm_spans = [s for s in spans if s.get("name", "").startswith("llm.call")]
+    assert len(llm_spans) == 2
+    attrs_first = llm_spans[0].get("attributes") or {}
+    attrs_second = llm_spans[1].get("attributes") or {}
+    assert attrs_first.get("llm.first_event_latency_s") == 5.0, (
+        "first llm span must record 5s delta from session start"
+    )
+    assert "llm.first_event_latency_s" not in attrs_second, (
+        "second llm span must NOT record first-event latency"
+    )
+
+
+def test_first_event_latency_from_harness_field():
+    """Harness-emitted firstEventLatencyMs and slowReply are captured on the
+    first llm.call span (#3016)."""
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = [
+        {
+            "type": "message",
+            "timestamp": "1700000000",
+            "firstEventLatencyMs": 1234.5,
+            "slowReply": True,
+            "message": {"role": "assistant", "model": "claude-opus-4-8", "usage": {}, "content": []},
+        },
+        {
+            "type": "message",
+            "timestamp": "1700000010",
+            "firstEventLatencyMs": 999.0,
+            "slowReply": True,
+            "message": {"role": "assistant", "model": "claude-opus-4-8", "usage": {}, "content": []},
+        },
+    ]
+    spans = OpenClawAdapter._build_spans_from_events(events, "sess-latency-2")
+    llm_spans = [s for s in spans if s.get("name", "").startswith("llm.call")]
+    assert len(llm_spans) == 2
+    attrs_first = llm_spans[0].get("attributes") or {}
+    attrs_second = llm_spans[1].get("attributes") or {}
+    assert attrs_first.get("llm.first_event_latency_ms") == 1234.5
+    assert attrs_first.get("llm.slow_reply") is True
+    assert "llm.first_event_latency_ms" not in attrs_second
+    assert "llm.slow_reply" not in attrs_second

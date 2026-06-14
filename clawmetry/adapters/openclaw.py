@@ -382,6 +382,8 @@ class OpenClawAdapter(AgentAdapter):
                     cache_write_tokens=int(s.get("cacheWriteTokens") or 0),
                     reasoning_tokens=_reasoning_tokens(s),
                     cost_usd=float(s["costUsd"]) if s.get("costUsd") is not None else None,
+                    end_reason=s.get("endReason") or s.get("end_reason") or "",
+                    parent_id=s.get("parentId") or None,
                     extra=extra,
                 )
             )
@@ -434,10 +436,8 @@ class OpenClawAdapter(AgentAdapter):
                 # r[5] = data BLOB — decode and surface per-type token split
                 # (input/output/cache_read/cache_write) so callers can measure
                 # per-turn cache efficiency without re-reading the raw file.
-                # Also extract channel/hostname/level from gateway log record
-                # top-level fields when present (no dedicated DB columns for
-                # these). 'level' (info/warn/error/debug) lets callers filter or
-                # bucket log events by severity — see #3013.
+                # Also extract channel/hostname from gateway log record top-level
+                # fields when present (no dedicated DB columns for these).
                 raw_data = r[5]
                 if raw_data is not None:
                     try:
@@ -445,10 +445,84 @@ class OpenClawAdapter(AgentAdapter):
                             raw_data = bytes(raw_data).decode("utf-8", "replace")
                         obj = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
                         if isinstance(obj, dict):
-                            for _field in ("channel", "hostname", "level"):
+                            # Surface gateway log-record top-level structured
+                            # fields. channel/hostname keep their names; the
+                            # severity level is exposed as ``log_level`` and the
+                            # originating subsystem as ``subsystem`` so callers
+                            # can filter or alert on log severity and origin
+                            # (closes #3055 / #3013).
+                            for _field, _key in (
+                                ("channel", "channel"),
+                                ("hostname", "hostname"),
+                                ("level", "log_level"),
+                                ("subsystem", "subsystem"),
+                            ):
+                                _val = obj.get(_field)
+                                if _val:
+                                    extra[_key] = _val
+                            # Talk / realtime-voice / managed-room lifecycle
+                            # fields (#2957). sync.py stores these top-level in
+                            # the data blob for voice events (sync.py ~L4960);
+                            # surface them so callers see voice/Talk metadata.
+                            # String fields skip empties; numeric fields use an
+                            # explicit None check so a legitimate 0 (e.g. a
+                            # zero-byte payload) is preserved rather than dropped.
+                            for _field in ("mode", "transport", "provider"):
                                 _val = obj.get(_field)
                                 if _val:
                                     extra[_field] = _val
+                            for _field in ("duration_ms", "size_bytes"):
+                                _val = obj.get(_field)
+                                if _val is not None:
+                                    extra[_field] = _val
+                            # First-event latency + slow-reply diagnostic (#3016):
+                            # harness-emitted fields surface into Event.extra so
+                            # callers can filter/bucket without re-reading raw JSONL.
+                            _fe = (
+                                obj.get("firstEventLatencyMs")
+                                or obj.get("first_event_latency_ms")
+                            )
+                            if _fe is not None:
+                                try:
+                                    extra["firstEventLatencyMs"] = float(_fe)
+                                except (TypeError, ValueError):
+                                    pass
+                            _slow = obj.get("slowReply") or obj.get("slow_reply")
+                            if _slow:
+                                extra["slowReply"] = True
+                            # Talk/voice/managed-room lifecycle fields stored by
+                            # ingest_talk_lifecycle() under camelCase keys; map to
+                            # unprefixed names so callers don't need to know the
+                            # storage key.  talkFinal uses is-not-None because
+                            # False is a meaningful value (non-final segment).
+                            for _ekey, _bkey in (
+                                ("mode",        "talkMode"),
+                                ("transport",   "talkTransport"),
+                                ("provider",    "talkProvider"),
+                                ("brain",       "talkBrain"),
+                                ("duration_ms", "talkDurationMs"),
+                                ("byte_length", "talkByteLength"),
+                            ):
+                                _val = obj.get(_bkey)
+                                if _val is not None:
+                                    extra[_ekey] = _val
+                            _final = obj.get("talkFinal")
+                            if _final is not None:
+                                extra["final"] = _final
+                            # Normalized TTFR keys (#3054): also write ttfr_ms /
+                            # slow_reply so callers that read the normalized form
+                            # don't need to know the original key spellings.
+                            for _lf in ("latency_ms", "ttfr_ms", "firstEventLatencyMs", "first_event_latency_ms"):
+                                _lv = obj.get(_lf)
+                                if _lv is not None:
+                                    try:
+                                        extra["ttfr_ms"] = float(_lv)
+                                    except (TypeError, ValueError):
+                                        pass
+                                    break
+                            _sr = obj.get("slow_reply") or obj.get("slowReply") or obj.get("is_slow")
+                            if _sr:
+                                extra["slow_reply"] = True
                             msg = obj.get("message")
                             if isinstance(msg, str):
                                 content_text = msg
@@ -527,6 +601,8 @@ class OpenClawAdapter(AgentAdapter):
           structured ``details`` payload + ``is_error`` flag + text content back
           onto the tool span identified by ``tool_use_id`` (#2733).
         - ``subagent_spawn``           → agent.spawn span (INTERNAL, link to child trace)
+        - ``commentary`` / ``progress`` → commentary/progress span (INTERNAL,
+          child of root) preserving the narration text + subtype (#3015).
 
         Span IDs are deterministic SHA-256 prefixes so re-ingesting is idempotent.
         """
@@ -539,6 +615,10 @@ class OpenClawAdapter(AgentAdapter):
         # are emitted; consumed when a later user tool_result block references
         # the same id (#2733).
         tool_span_by_id: dict = {}
+        # First-event latency tracking (#3016): capture session start time so
+        # we can record the wall-clock delta to the first assistant reply.
+        _session_start_ts: float | None = None
+        _first_assistant_done: bool = False
 
         for obj in events:
             if not isinstance(obj, dict):
@@ -551,6 +631,7 @@ class OpenClawAdapter(AgentAdapter):
                 ts = now
 
             if t == "session" and obj.get("version") is not None:
+                _session_start_ts = ts
                 spans.append({
                     "span_id": session_span_id,
                     "trace_id": trace_id,
@@ -662,6 +743,28 @@ class OpenClawAdapter(AgentAdapter):
                 # prefer it when present so spans are not under-counted (#2794).
                 tok_total = int(usage.get("totalTokens") or usage.get("total_tokens") or 0)
                 llm_sid = _sid("llm", session_id, str(raw_ts))
+                # First-event latency + slow-reply diagnostic (#3016): record
+                # on the FIRST assistant span only — subsequent turns are not
+                # the "initial reply delay" the harness tracks.
+                llm_attrs: dict = {}
+                if not _first_assistant_done:
+                    _first_assistant_done = True
+                    if _session_start_ts is not None and ts > _session_start_ts:
+                        llm_attrs["llm.first_event_latency_s"] = round(
+                            ts - _session_start_ts, 3
+                        )
+                    _fe_ms = (
+                        obj.get("firstEventLatencyMs")
+                        or obj.get("first_event_latency_ms")
+                    )
+                    if _fe_ms is not None:
+                        try:
+                            llm_attrs["llm.first_event_latency_ms"] = float(_fe_ms)
+                        except (TypeError, ValueError):
+                            pass
+                    _slow = obj.get("slowReply") or obj.get("slow_reply")
+                    if _slow:
+                        llm_attrs["llm.slow_reply"] = True
                 spans.append({
                     "span_id": llm_sid,
                     "trace_id": trace_id,
@@ -680,6 +783,7 @@ class OpenClawAdapter(AgentAdapter):
                     # reasoning share, so summing them would double-count, and
                     # either alone under-counts when the other key is present.
                     "token_count": max(tok_total, tok_in + tok_out + tok_reasoning) or None,
+                    "attributes": llm_attrs or None,
                 })
                 if isinstance(content, list):
                     for block in content:
@@ -747,6 +851,77 @@ class OpenClawAdapter(AgentAdapter):
                     "agent_type": "openclaw",
                     "links": [{"trace_id": child_trace, "span_id": "0" * 16}] if child_trace else None,
                     "attributes": {"subagent_id": sub_id} if sub_id else None,
+                })
+
+            elif t in ("commentary", "progress"):
+                # The Claude CLI emits inter-tool commentary and long-running
+                # progress updates as distinct JSONL event types (#89834,
+                # #90883). These fell through every branch above, so the span
+                # builder dropped them and their payload was silently discarded
+                # (#3015). Emit a lightweight INTERNAL span under the session
+                # root so the Tracing tab shows the narration/progress timeline
+                # and downstream Event.extra can render the original payload.
+                data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
+                comment_attrs: dict = {"event.kind": t}
+                # The text lives under a handful of field-name variants
+                # depending on which CLI path emitted it; surface the first
+                # non-empty one as a quick-read string.
+                text = (
+                    obj.get("text") or obj.get("content") or obj.get("body")
+                    or data.get("text") or data.get("content") or data.get("message")
+                )
+                if isinstance(text, str) and text.strip():
+                    comment_attrs["commentary.text"] = text
+                # A subtype/label distinguishes streams (e.g. "tool_progress"
+                # vs "thinking" commentary); keep it when present.
+                subtype = (
+                    obj.get("subtype") or obj.get("label")
+                    or data.get("subtype") or data.get("label")
+                )
+                if isinstance(subtype, str) and subtype.strip():
+                    comment_attrs["commentary.subtype"] = subtype.strip()
+                spans.append({
+                    "span_id": _sid(t, session_id, str(raw_ts)),
+                    "trace_id": trace_id,
+                    "parent_span_id": session_span_id,
+                    "name": t,
+                    "kind": "INTERNAL",
+                    "start_ts": ts,
+                    "session_id": session_id,
+                    "agent_type": "openclaw",
+                    "attributes": comment_attrs,
+                })
+
+            elif t == "first_assistant_event":
+                latency_ms = (
+                    obj.get("latency_ms")
+                    or obj.get("ttfr_ms")
+                    or obj.get("firstEventLatencyMs")
+                    or obj.get("first_event_latency_ms")
+                )
+                slow_reply = bool(
+                    obj.get("slow_reply")
+                    or obj.get("slowReply")
+                    or obj.get("is_slow")
+                )
+                fa_attrs: dict = {}
+                if latency_ms is not None:
+                    try:
+                        fa_attrs["ttfr.latency_ms"] = float(latency_ms)
+                    except (TypeError, ValueError):
+                        pass
+                if slow_reply:
+                    fa_attrs["ttfr.slow_reply"] = True
+                spans.append({
+                    "span_id": _sid("ttfr", session_id, str(raw_ts)),
+                    "trace_id": trace_id,
+                    "parent_span_id": session_span_id,
+                    "name": "first_response",
+                    "kind": "INTERNAL",
+                    "start_ts": ts,
+                    "session_id": session_id,
+                    "agent_type": "openclaw",
+                    "attributes": fa_attrs or None,
                 })
 
         return spans
