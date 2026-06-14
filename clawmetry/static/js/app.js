@@ -7786,6 +7786,47 @@ async function loadSecurityPage(silent) {
   // Tamper-evident integrity + Enterprise audit feed (both node-wide).
   loadSecurityIntegrity();
   loadSecurityAudit();
+  try {
+    var cd = await fetchJsonWithTimeout('/api/security/credential-scan', 10000);
+    var badgeEl = document.getElementById('credential-scan-badge');
+    var scanListEl = document.getElementById('credential-scan-list');
+    var leaks = cd.leaks || [];
+    var leakCount = cd.count || 0;
+    if (badgeEl) {
+      if (leakCount > 0) {
+        badgeEl.textContent = leakCount + ' leak' + (leakCount === 1 ? '' : 's');
+        badgeEl.style.background = '#dc2626';
+        badgeEl.style.color = '#fff';
+      } else {
+        badgeEl.textContent = 'Clean';
+        badgeEl.style.background = 'rgba(34,197,94,0.15)';
+        badgeEl.style.color = '#86efac';
+      }
+    }
+    if (scanListEl) {
+      if (!leaks.length) {
+        scanListEl.innerHTML = '<div style="color:#86efac;padding:10px;font-size:11px;">&#10003; No API key leaks detected in recent session events.</div>';
+      } else {
+        var _patternLabel = {openai:'OpenAI',anthropic:'Anthropic',aws:'AWS',github:'GitHub',generic:'Generic'};
+        var chtml = '';
+        leaks.slice(0, 30).forEach(function(lk) {
+          var pLabel = _patternLabel[lk.pattern] || lk.pattern;
+          chtml += '<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);">';
+          chtml += '<span style="font-size:13px;flex-shrink:0;">&#128273;</span>';
+          chtml += '<div style="flex:1;min-width:0;">';
+          chtml += '<span style="font-size:11px;font-weight:600;color:#dc2626;">api_key_leak</span>';
+          chtml += ' <span style="font-size:10px;padding:1px 6px;border-radius:10px;background:rgba(220,38,38,0.12);color:#fca5a5;">' + escHtml(pLabel) + '</span>';
+          if (lk.redacted) chtml += ' <code style="font-size:10px;background:var(--bg-primary);padding:1px 4px;border-radius:3px;color:#a78bfa;">' + escHtml(lk.redacted) + '</code>';
+          chtml += '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">event #' + lk.line + (lk.file ? ' · session ' + escHtml(String(lk.file).slice(0, 24)) : '') + '</div>';
+          chtml += '</div></div>';
+        });
+        scanListEl.innerHTML = chtml;
+      }
+    }
+  } catch(e) {
+    var csl = document.getElementById('credential-scan-list');
+    if (csl && !silent) csl.innerHTML = '<div style="color:var(--text-muted);padding:12px;font-size:11px;">Credential scan unavailable.</div>';
+  }
   if (_securityRefreshTimer) clearTimeout(_securityRefreshTimer);
   if (document.getElementById('page-security') && document.getElementById('page-security').classList.contains('active')) {
     _securityRefreshTimer = setTimeout(function() { loadSecurityPage(true); }, 30000);
