@@ -19,8 +19,9 @@ GITHUB_TOKEN from Actions (prefix ghs_):
   Can read branch protection state but CANNOT write it. The script detects
   this automatically: it verifies current state (read-only, scoped to the
   current repo only) and exits 0 with actionable instructions. Push-triggered
-  runs are informational: exit 0 when C6 is correctly configured, exit 1
-  when checks are not yet configured (red job = forcing signal).
+  runs are always informational (exit 0): closing C6 is an explicit admin
+  action via scripts/close-c6.sh, never a red-main gate. A perpetually-red
+  main from an unconfigured-but-optional C6 hides real failures.
   Note: requesting administration:write in the workflow permissions block is
   invalid for GITHUB_TOKEN and causes 0-job workflow failures -- do not add it.
 
@@ -407,10 +408,14 @@ def main() -> None:
             print("=== (Set by manual Settings UI action or a prior admin run.) ===")
             return  # exit 0: C6 is done, self-heals to green after admin action
         print()
-        print("Action needed (takes ~30 seconds):")
+        print("Action needed (takes ~30 seconds) to make these checks required on main:")
         print("  bash scripts/close-c6.sh")
         print("  (Or: Actions > 'Apply required E2E status checks (C6 -- one-shot)' > Run workflow)")
-        sys.exit(1)  # red job on every main push until admin closes C6
+        # Push-triggered runs are informational only and must NEVER block main.
+        # Closing C6 (configuring branch protection) is an explicit admin action
+        # via the instructions above, not a gate that reds every merge. A
+        # perpetually-red main hides real failures, so exit 0 here.
+        return  # exit 0 on push; C6 stays actionable, just non-blocking
 
     # PAT / OAuth path: full apply + verify across all repos.
     checks = _checks_to_apply()
