@@ -997,6 +997,67 @@ def _try_local_store_model_attribution(runtime=None):
     }
 
 
+def _try_rollup_usage_by_model(runtime=None):
+    """P3 (query-spine #2989): read /api/usage/by-model from rollup_model_daily.
+
+    Reads the per-(day, model, runtime) materialized table written at ingest by
+    the daemon (P2, #2988) and sums across days to produce per-model totals.
+    Returns the same shape as _try_local_store_usage_by_model so the endpoint
+    needs no change.  Falls back to None when the rollup is empty (fresh install
+    before the first ingest cycle) so the caller can fall through to the legacy
+    event-scan path.
+    """
+    rows = _ls_call("query_rollup_model_daily", runtime=runtime or None)
+    if not rows:
+        return None
+
+    model_stats: dict = {}
+    for r in rows:
+        m = (r.get("model") or "").strip()
+        if not m:
+            continue
+        if m not in model_stats:
+            model_stats[m] = {"tokens_in": 0, "tokens_out": 0,
+                              "cost_usd": 0.0, "calls": 0}
+        model_stats[m]["tokens_in"] += int(r.get("tokens_in") or 0)
+        model_stats[m]["tokens_out"] += int(r.get("tokens_out") or 0)
+        model_stats[m]["cost_usd"] += float(r.get("cost_usd") or 0.0)
+        model_stats[m]["calls"] += int(r.get("calls") or 0)
+
+    if not model_stats:
+        return None
+
+    try:
+        import dashboard as _d
+        provider_fn = getattr(_d, "_provider_from_model", None)
+    except Exception:
+        provider_fn = None
+
+    total_cost = sum(s["cost_usd"] for s in model_stats.values()) or 1.0
+    result_rows = []
+    for m, st in model_stats.items():
+        calls = st["calls"]
+        cost = st["cost_usd"]
+        tokens = st["tokens_in"] + st["tokens_out"]
+        provider = ""
+        if provider_fn:
+            try:
+                provider = provider_fn(m) or ""
+            except Exception:
+                pass
+        result_rows.append({
+            "model": m,
+            "provider": provider,
+            "total_tokens": tokens,
+            "cost_usd": round(cost, 6),
+            "call_count": calls,
+            "cost_per_call": round(cost / calls, 8) if calls else 0.0,
+            "pct_of_total_cost": round(cost / total_cost * 100.0, 2),
+        })
+    result_rows.sort(key=lambda r: r["cost_usd"], reverse=True)
+    return {"models": result_rows, "_source": "rollup"}
+
+
 def _try_local_store_usage_by_model(runtime=None):
     """Fast path for /api/usage/by-model (GH #588). Groups events by model
     name, accumulates cost_usd and token_count with sibling-dedup, and
@@ -3037,7 +3098,9 @@ def api_usage_by_model():
     """
     runtime = (request.args.get("runtime") or "").strip() or None
     if is_local_store_read_enabled():
-        fast = _try_local_store_usage_by_model(runtime=runtime)
+        fast = _try_rollup_usage_by_model(runtime=runtime)
+        if fast is None:
+            fast = _try_local_store_usage_by_model(runtime=runtime)
         if fast is not None:
             return jsonify(fast)
     # Cost data lives exclusively in DuckDB; return empty-but-valid fallback.
