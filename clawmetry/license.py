@@ -69,6 +69,53 @@ _TOKEN_PREFIX = "CLAW1"
 LICENSE_PATH = os.path.expanduser("~/.clawmetry/license.key")
 _CONFIG_PATH = os.path.expanduser("~/.clawmetry/config.json")
 
+# The license key is a bearer secret — anyone holding the file can present it as
+# valid to the offline verifier — so on POSIX it must not be group/world
+# readable. The bits we tolerate on the file (0o600) and parent dir (0o700).
+_LICENSE_FILE_MODE = 0o600
+_LICENSE_DIR_MODE = 0o700
+_POSIX_GROUP_OTHER_BITS = 0o077  # any of these set on the file = unsafe
+
+
+def _secure_write(path: str, content: str) -> None:
+    """Write ``content`` to ``path`` with 0o600 mode on POSIX.
+
+    Uses ``os.open`` with the mode arg so the file is created with the right
+    bits even when the user's umask would otherwise widen them (default umask
+    022 leaves a fresh file world-readable as 0o644 — bad for a key file).
+    Also chmods after write so an existing file written under the old code
+    path gets tightened on the next ``activate``. On Windows ``os.chmod``
+    only toggles read-only and ``os.open`` ignores POSIX mode, so this is a
+    safe no-op there — Windows' default ACLs already restrict the file to
+    the owning user.
+    """
+    data = content.encode("utf-8")
+    flags = os.O_CREAT | os.O_TRUNC | os.O_WRONLY
+    fd = os.open(path, flags, _LICENSE_FILE_MODE)
+    try:
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+    try:
+        os.chmod(path, _LICENSE_FILE_MODE)
+    except OSError:
+        # Windows / weird filesystem: best-effort, never fail activation.
+        pass
+
+
+def _file_permissions_safe(path: str) -> bool:
+    """True if ``path`` has no group/world bits set (POSIX) or doesn't exist.
+    Always True on Windows (POSIX mode bits don't apply). Never raises."""
+    try:
+        if os.name != "posix":
+            return True
+        if not os.path.isfile(path):
+            return True
+        mode = os.stat(path).st_mode & 0o777
+        return (mode & _POSIX_GROUP_OTHER_BITS) == 0
+    except Exception:
+        return True
+
 
 def _b64u_encode(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
@@ -139,12 +186,29 @@ def parse_license(token: str):
         return None
 
 
+_warned_perms_for: set[str] = set()
+
+
 def load_license(path: str = LICENSE_PATH):
     """Load + verify the on-disk license, returning an Entitlement or None.
     This is the hook :mod:`clawmetry.entitlements` calls."""
     try:
         if not os.path.isfile(path):
             return None
+        # Surface (once per path) a warning if the key file is group/world
+        # readable — older activate() runs wrote it with the default umask
+        # (0o644 on most Linux). Re-running ``clawmetry activate`` tightens it.
+        if not _file_permissions_safe(path) and path not in _warned_perms_for:
+            _warned_perms_for.add(path)
+            try:
+                mode = os.stat(path).st_mode & 0o777
+                logger.warning(
+                    "license: %s has loose permissions (%o); "
+                    "re-run `clawmetry activate <KEY>` to rewrite it 0600",
+                    path, mode,
+                )
+            except Exception:
+                pass
         with open(path, "r", encoding="utf-8") as fh:
             token = fh.read().strip()
         return parse_license(token)
@@ -576,9 +640,18 @@ def activate(key: str, node_id: str | None = None) -> tuple[bool, str]:
     if isinstance(exp, (int, float)) and _t.time() > exp:
         return False, "This license key has expired."
     try:
-        os.makedirs(os.path.dirname(LICENSE_PATH), exist_ok=True)
-        with open(LICENSE_PATH, "w", encoding="utf-8") as fh:
-            fh.write(key.strip() + "\n")
+        lic_dir = os.path.dirname(LICENSE_PATH)
+        os.makedirs(lic_dir, exist_ok=True)
+        # Tighten the parent dir too — a 0o755 dir leaks the key's existence /
+        # listing even if the file itself is 0o600. Best-effort; some shared
+        # setups (e.g. NFS home dirs) refuse chmod and that must not block
+        # activation.
+        try:
+            if os.name == "posix":
+                os.chmod(lic_dir, _LICENSE_DIR_MODE)
+        except OSError:
+            pass
+        _secure_write(LICENSE_PATH, key.strip() + "\n")
     except Exception as exc:
         return False, f"Could not write license file: {exc}"
     # Refresh the entitlement cache so the new license takes effect immediately.
@@ -612,6 +685,16 @@ def current_license_info() -> dict | None:
         if isinstance(exp, (int, float)):
             days_left = int((exp - _t.time()) // 86400)
             expired = _t.time() > exp
+        # On POSIX, surface whether the on-disk key file is locked down.
+        # ``permissions_safe`` is True on Windows (mode bits don't apply) and
+        # True when no group/world bits are set on the file. The UI can use
+        # this to surface a "tighten file permissions" affordance without
+        # parsing octal modes itself.
+        perms_safe = _file_permissions_safe(LICENSE_PATH)
+        try:
+            mode = os.stat(LICENSE_PATH).st_mode & 0o777 if os.name == "posix" else None
+        except Exception:
+            mode = None
         return {
             "valid": not expired,
             "status": "expired" if expired else "active",
@@ -620,6 +703,8 @@ def current_license_info() -> dict | None:
             "sub": payload.get("sub", ""),
             "exp": exp,
             "days_left": days_left,
+            "permissions_safe": perms_safe,
+            "file_mode": (f"{mode:04o}" if mode is not None else None),
         }
     except Exception as exc:
         logger.warning("license: info read failed: %s", exc)
