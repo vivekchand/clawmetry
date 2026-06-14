@@ -6879,6 +6879,14 @@ def send_heartbeat(config: dict) -> bool:
             payload.setdefault("cache_pushes", []).extend(cron_pushes)
     except Exception as _cl_e:
         log.debug("crons cache_push build failed (continuing): %s", _cl_e)
+    # Query Spine P4 (#2990): per-method q/1 cache entries alongside the
+    # monolith snapshot. Gated by CLAWMETRY_QUERY_CACHE_PUSH (default off).
+    try:
+        q1_pushes = _build_q1_cache_pushes(config)
+        if q1_pushes:
+            payload.setdefault("cache_pushes", []).extend(q1_pushes)
+    except Exception as _q1_e:
+        log.debug("q1 cache_push build failed (continuing): %s", _q1_e)
     # Local-first: persist this heartbeat to local DuckDB so the dashboard
     # has a per-node liveness history even when offline. Best-effort.
     try:
@@ -6921,7 +6929,13 @@ def send_heartbeat(config: dict) -> bool:
 # Allowlist mirrors routes.local_query._SHAPES. Duplicated here so the
 # daemon stays safe when `routes/` isn't on sys.path (some installs run the
 # sync daemon without the dashboard module loaded).
-_PENDING_SHAPES = {"events", "sessions", "aggregates", "health", "transcript"}
+_PENDING_SHAPES = {
+    "events", "sessions", "aggregates", "health", "transcript",
+    # Added in P4 (#2990): new live shapes from P2 materialized rollups.
+    "runtimes", "models", "rollup_sessions",
+    # Added in P3 (#2989): rollup-backed span/trace shapes.
+    "spans", "traces", "external_calls", "search",
+}
 
 
 def _canonical_args_hash(args: dict) -> str:
@@ -8966,6 +8980,89 @@ def _build_cron_runs_cache_pushes(config: dict) -> list:
             "ttl_s": CRON_RUNS_CACHE_TTL_SEC,
             "blob":  blob,
         })
+    return pushes
+
+
+# ── Query Spine P4 (#2990): per-method q/1 proactive cache push ───────────────
+# Pushes each no-required-arg live q/1 shape as its own keyed cache entry
+# alongside the monolith snapshot. Plaintext-classed shapes are stored as
+# base64url-encoded JSON (no encryption needed); e2e-classed shapes use
+# AES-256-GCM (only when enc_key is present). Gated by
+# CLAWMETRY_QUERY_CACHE_PUSH env var — default off for the first release.
+Q1_PUSH_CACHE_TTL_SEC = 300   # 5 min — aggregate rollups update every ~60s
+_Q1_PUSH_DEBOUNCE_SEC = 60    # at most one push per shape per heartbeat window
+_Q1_LAST_PUSH: dict = {}      # {shape: float} last-push unix timestamp
+
+
+def _build_q1_cache_pushes(config: dict) -> list:
+    """Return cache_push entries for all no-required-arg live q/1 shapes.
+
+    Plaintext-classed methods (aggregates, health, runtimes, models) are stored
+    as base64url JSON — the cloud can read them without a decryption key.
+    E2e-classed methods (rollup_sessions) are AES-256-GCM encrypted and are
+    skipped when no encryption key is configured.
+
+    The CI guard in ``tests/test_sync_q1_cache_pushes.py`` asserts that no
+    e2e-classed method is ever pushed without an encryption key (enforcing the
+    trust-class contract declared in ``clawmetry/query_contract.py``).
+    """
+    if not os.environ.get("CLAWMETRY_QUERY_CACHE_PUSH", "").lower() in (
+        "1", "true", "yes"
+    ):
+        return []
+    api_key = config.get("api_key", "")
+    node_id = config.get("node_id", "")
+    if not (api_key and node_id):
+        return []
+    enc_key = config.get("encryption_key")
+
+    try:
+        from routes.local_query import _dispatch as _local_dispatch  # type: ignore
+    except Exception:
+        _local_dispatch = _local_dispatch_fallback  # type: ignore
+
+    try:
+        from clawmetry.query_contract import (  # type: ignore
+            QUERY_CONTRACT, TRUST_E2E, STATUS_LIVE,
+        )
+    except ImportError:
+        return []
+
+    owner_hash = _owner_hash_for_token(api_key)
+    pushes: list = []
+    now = time.time()
+
+    for shape, spec in QUERY_CONTRACT.items():
+        if spec["status"] != STATUS_LIVE:
+            continue
+        # Skip methods with any required arg — we can't pre-push those without
+        # iterating all entities (transcripts, spans, etc.). They are served
+        # on-demand via _dispatch_pending_queries.
+        if any(v.get("required") for v in spec.get("args", {}).values()):
+            continue
+        # Per-method debounce: skip if we pushed this shape recently.
+        if now - _Q1_LAST_PUSH.get(shape, 0) < _Q1_PUSH_DEBOUNCE_SEC:
+            continue
+        is_e2e = spec["trust"] == TRUST_E2E
+        if is_e2e and not enc_key:
+            continue  # hard guard: never push e2e content without encryption
+        try:
+            payload = _local_dispatch(shape, {})
+            if is_e2e:
+                blob = encrypt_payload(payload, enc_key)
+            else:
+                blob = base64.urlsafe_b64encode(
+                    json.dumps(payload, default=str).encode()
+                ).rstrip(b"=").decode()
+            pushes.append({
+                "key":   f"q1:{shape}:{owner_hash}:{node_id}",
+                "ttl_s": Q1_PUSH_CACHE_TTL_SEC,
+                "blob":  blob,
+            })
+            _Q1_LAST_PUSH[shape] = now
+        except Exception as _e:
+            log.debug("q1 cache push failed for shape=%s: %s", shape, _e)
+
     return pushes
 
 
