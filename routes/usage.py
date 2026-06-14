@@ -4269,3 +4269,53 @@ def api_efficiency():
         entry["runtime"] = runtime
         return jsonify(entry)
     return jsonify(out)
+
+
+def _agg_compression(rows: list) -> dict:
+    """Aggregate compression-potential metrics across session rows.
+
+    Rows are the dicts returned by ``query_sessions_table`` with ``metadata``
+    already decoded.  Only sessions with >=50% compression potential AND
+    >=2 000 compressible tokens count as high-potential (mirrors the threshold
+    used by ``_derive_waste_summary`` in routes/sessions.py).
+    """
+    total = 0
+    high = 0
+    total_tok = 0
+    total_usd = 0.0
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        md = row.get("metadata") or {}
+        if not isinstance(md, dict):
+            continue
+        total += 1
+        cpp = md.get("compressionPotentialPct")
+        ctok = md.get("compressibleToolTokens") or 0
+        cru = md.get("compressionRecoverableUsd")
+        if cpp is not None and float(cpp) >= 50 and int(ctok) >= 2000:
+            high += 1
+            total_tok += int(ctok)
+            total_usd += float(cru or 0.0)
+    return {
+        "session_count": total,
+        "compressible_sessions": high,
+        "total_compressible_tokens": total_tok,
+        "total_recoverable_usd": round(total_usd, 4),
+    }
+
+
+@bp_usage.route("/api/usage/compression")
+def api_usage_compression():
+    """Aggregate compression-potential metrics across all sessions (EPIC #2837).
+
+    Returns:
+      {
+        session_count:             int   -- total sessions with metadata
+        compressible_sessions:     int   -- sessions with >=50% potential + >=2K tokens
+        total_compressible_tokens: int   -- sum of compressible tokens for those sessions
+        total_recoverable_usd:     float -- sum of recoverable spend for those sessions
+      }
+    """
+    rows = _ls_call("query_sessions_table", limit=2000) or []
+    return jsonify(_agg_compression(rows))

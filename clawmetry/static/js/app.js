@@ -12956,6 +12956,8 @@ async function loadUsage() {
     loadHeatmap();
     // Load prompt cache analytics (GH #979)
     loadCacheAnalytics();
+    // Load compression potential card (EPIC #2837)
+    loadCompressionPotential();
     // Load cost forecast (issue #1413)
     loadCostForecast();
     // Load spend optimization recommendations (issue #1415)
@@ -13152,6 +13154,43 @@ async function loadCacheAnalytics() {
     document.getElementById('cache-perf-content').innerHTML = html;
   } catch(e) {
     // Cache panel is optional — skip silently on error
+  }
+}
+
+async function loadCompressionPotential() {
+  try {
+    var d = await fetch('/api/usage/compression').then(function(r) { return r.json(); });
+    var title = document.getElementById('compression-potential-title');
+    var card = document.getElementById('compression-potential-card');
+    if (!title || !card) return;
+    var compSessions = d.compressible_sessions || 0;
+    if (compSessions === 0) return;
+    title.style.display = '';
+    card.style.display = '';
+
+    function fmtToks(n) { return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(0)+'K' : String(n||0); }
+    function fmtCost(c) { return c >= 0.01 ? '$'+c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
+
+    var recoverUsd = d.total_recoverable_usd || 0;
+    var compTok = d.total_compressible_tokens || 0;
+    var totalSess = d.session_count || 0;
+    var pct = totalSess > 0 ? Math.round(compSessions / totalSess * 100) : 0;
+    var recColor = recoverUsd >= 0.10 ? '#f59e0b' : '#64748b';
+
+    var html = '<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;">'
+      + '<div style="min-width:120px;text-align:center;">'
+      + '<div style="font-size:32px;font-weight:700;color:'+recColor+';">'+fmtCost(recoverUsd)+'</div>'
+      + '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">recoverable spend</div>'
+      + '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">'+compSessions+' of '+totalSess+' sessions ('+pct+'%)</div>'
+      + '</div>'
+      + '<div style="flex:1;min-width:180px;">'
+      + '<div style="font-size:13px;margin-bottom:8px;">🗜️ '+fmtToks(compTok)+' compressible tokens across '+compSessions+' session'+(compSessions!==1?'s':'')+' (&ge;50% tool output)</div>'
+      + '<div style="font-size:12px;color:var(--text-muted);">JSON, diffs, and logs in tool results can be compressed without changing answers — recoverable without modifying prompts.</div>'
+      + '</div></div>';
+
+    document.getElementById('compression-potential-content').innerHTML = html;
+  } catch(e) {
+    // Compression panel is optional — skip silently on error
   }
 }
 

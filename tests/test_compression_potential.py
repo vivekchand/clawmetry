@@ -53,6 +53,42 @@ def test_detector_never_raises_on_garbage():
     assert S._session_compression_potential([object()]) == {}
 
 
+def test_aggregate_compression():
+    from routes.usage import _agg_compression
+    rows = [
+        {"metadata": {"compressionPotentialPct": 85.0, "compressibleToolTokens": 5000,
+                      "compressionRecoverableUsd": 0.05}},
+        {"metadata": {"compressionPotentialPct": 10.0, "compressibleToolTokens": 100}},
+        {"metadata": {}},
+        {"metadata": None},
+        "not-a-dict",
+    ]
+    agg = _agg_compression(rows)
+    assert agg["session_count"] == 4  # None metadata coerces to {} and still counts
+    assert agg["compressible_sessions"] == 1
+    assert agg["total_compressible_tokens"] == 5000
+    assert round(agg["total_recoverable_usd"], 2) == 0.05
+
+
+def test_aggregate_compression_empty():
+    from routes.usage import _agg_compression
+    assert _agg_compression([]) == {
+        "session_count": 0, "compressible_sessions": 0,
+        "total_compressible_tokens": 0, "total_recoverable_usd": 0.0,
+    }
+
+
+def test_aggregate_compression_below_threshold():
+    from routes.usage import _agg_compression
+    rows = [
+        {"metadata": {"compressionPotentialPct": 85.0, "compressibleToolTokens": 100}},
+        {"metadata": {"compressionPotentialPct": 40.0, "compressibleToolTokens": 5000}},
+    ]
+    agg = _agg_compression(rows)
+    assert agg["compressible_sessions"] == 0
+    assert agg["total_recoverable_usd"] == 0.0
+
+
 def test_waste_summary_rolls_up_compression_and_cache_expiry():
     sessions = [
         {"session_id": "a", "cost_usd": 1.0,
