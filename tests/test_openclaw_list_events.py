@@ -480,3 +480,64 @@ def test_build_spans_prefers_total_tokens_for_reasoning_model():
     assert llm_spans[0]["token_count"] == 162, (
         "token_count must equal totalTokens (162), not tok_in+tok_out (50)"
     )
+
+
+def test_first_event_latency_computed_from_session_timestamp():
+    """_build_spans_from_events records llm.first_event_latency_s on the first
+    assistant span when a session event precedes it. Fixes #3016."""
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = [
+        {"type": "session", "version": "1.0", "timestamp": "1700000000"},
+        {
+            "type": "message",
+            "timestamp": "1700000005",
+            "message": {"role": "assistant", "model": "claude-haiku-4-5", "usage": {}, "content": []},
+        },
+        {
+            "type": "message",
+            "timestamp": "1700000010",
+            "message": {"role": "assistant", "model": "claude-haiku-4-5", "usage": {}, "content": []},
+        },
+    ]
+    spans = OpenClawAdapter._build_spans_from_events(events, "sess-latency-1")
+    llm_spans = [s for s in spans if s.get("name", "").startswith("llm.call")]
+    assert len(llm_spans) == 2
+    attrs_first = llm_spans[0].get("attributes") or {}
+    attrs_second = llm_spans[1].get("attributes") or {}
+    assert attrs_first.get("llm.first_event_latency_s") == 5.0, (
+        "first llm span must record 5s delta from session start"
+    )
+    assert "llm.first_event_latency_s" not in attrs_second, (
+        "second llm span must NOT record first-event latency"
+    )
+
+
+def test_first_event_latency_from_harness_field():
+    """Harness-emitted firstEventLatencyMs and slowReply are captured on the
+    first llm.call span (#3016)."""
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = [
+        {
+            "type": "message",
+            "timestamp": "1700000000",
+            "firstEventLatencyMs": 1234.5,
+            "slowReply": True,
+            "message": {"role": "assistant", "model": "claude-opus-4-8", "usage": {}, "content": []},
+        },
+        {
+            "type": "message",
+            "timestamp": "1700000010",
+            "firstEventLatencyMs": 999.0,
+            "slowReply": True,
+            "message": {"role": "assistant", "model": "claude-opus-4-8", "usage": {}, "content": []},
+        },
+    ]
+    spans = OpenClawAdapter._build_spans_from_events(events, "sess-latency-2")
+    llm_spans = [s for s in spans if s.get("name", "").startswith("llm.call")]
+    assert len(llm_spans) == 2
+    attrs_first = llm_spans[0].get("attributes") or {}
+    attrs_second = llm_spans[1].get("attributes") or {}
+    assert attrs_first.get("llm.first_event_latency_ms") == 1234.5
+    assert attrs_first.get("llm.slow_reply") is True
+    assert "llm.first_event_latency_ms" not in attrs_second
+    assert "llm.slow_reply" not in attrs_second
