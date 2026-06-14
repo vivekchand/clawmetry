@@ -373,3 +373,59 @@ def test_tool_result_string_content_does_not_emit_content_types():
     assert "tool.result_content_types" not in attrs
     assert "tool.result_coercions" not in attrs
     assert attrs["tool.result_text"] == "file1\nfile2\n"
+
+
+# -- #3113 session parent_id mapping ----------------------------------------
+
+def test_list_sessions_maps_parent_id(monkeypatch):
+    """list_sessions() must populate Session.parent_id from the parentId key
+    returned by _get_sessions() (which in turn passes it through from the
+    gateway sessions.list RPC response)."""
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    import clawmetry.adapters.openclaw as _oc_mod
+
+    fake_sessions = [
+        {
+            "sessionId": "child-session-abc",
+            "displayName": "child session",
+            "model": "claude-opus-4-8",
+            "channel": "direct",
+            "updatedAt": 1_700_000_000_000,
+            "totalTokens": 100,
+            "inputTokens": 60,
+            "outputTokens": 40,
+            "cacheReadTokens": 0,
+            "cacheWriteTokens": 0,
+            "costUsd": 0.001,
+            "parentId": "parent-session-xyz",
+        },
+        {
+            "sessionId": "root-session-def",
+            "displayName": "root session",
+            "model": "claude-opus-4-8",
+            "channel": "direct",
+            "updatedAt": 1_700_000_000_000,
+            "totalTokens": 200,
+            "inputTokens": 120,
+            "outputTokens": 80,
+            "cacheReadTokens": 0,
+            "cacheWriteTokens": 0,
+            "costUsd": 0.002,
+            # no parentId — root session
+        },
+    ]
+
+    import dashboard as _dash
+    monkeypatch.setattr(_dash, "_get_sessions", lambda: fake_sessions)
+
+    adapter = OpenClawAdapter()
+    sessions = adapter.list_sessions()
+
+    child = next(s for s in sessions if s.id == "child-session-abc")
+    root = next(s for s in sessions if s.id == "root-session-def")
+
+    assert child.parent_id == "parent-session-xyz", (
+        "child session must carry parent_id from gateway parentId field"
+    )
+    assert root.parent_id is None, "root session without parentId must have parent_id=None"
+    assert child.to_dict()["parentId"] == "parent-session-xyz"
