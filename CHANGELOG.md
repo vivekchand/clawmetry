@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Security: stronger protection for custom encryption passphrases (2026-06-14)
+- **A typed custom secret is now run through a strong, salted key derivation (#3127).** Previously a custom passphrase was stored as-is and turned into the encryption key with a single, unsalted hash, so a weak passphrase could be brute-forced offline and the same passphrase produced the same key for everyone. ClawMetry now derives the key with scrypt and a random salt at setup and stores only the derived key (you back it up and paste it as before, via `clawmetry status --show-key`); the passphrase itself is never saved. Existing installs are unaffected and keep decrypting their data. If you auto-generate your key (the default), nothing changes.
+
 ### Privacy: machine details are now end-to-end encrypted (2026-06-14)
 - **Your machine's details no longer leave your machine in cleartext (#3124).** The security-posture scan and the machine fingerprint (OS, CPU architecture, core count, RAM, and local network IP addresses) used to ride the plaintext heartbeat, where the cloud stored them unencrypted. They now travel inside the end-to-end-encrypted system snapshot (the `machineInfo` and `securityPosture` slices) and are decrypted only in your browser; the cloud keeps an opaque blob it cannot read. The Machine, Network, and Security views render this client-side from the decrypted snapshot. The plaintext heartbeat keeps only routing fields. (Re-applies the security-posture move that a stale-rebase merge had silently reverted, with a guard test. Paired cloud change stops persisting the data and purged existing rows.)
 
