@@ -429,3 +429,87 @@ def test_list_sessions_maps_parent_id(monkeypatch):
     )
     assert root.parent_id is None, "root session without parentId must have parent_id=None"
     assert child.to_dict()["parentId"] == "parent-session-xyz"
+
+
+# -- #3115 list_events() talk/voice blob extraction -------------------------
+
+def test_list_events_surfaces_talk_lifecycle_fields():
+    """list_events() must surface talkMode/talkTransport/etc. from the stored
+    DuckDB blob into Event.extra (gap filed as #3115).  We exercise the
+    blob-decoding path directly by patching the DuckDB query to return a
+    synthetic row with a talk.lifecycle data blob."""
+    import unittest.mock as mock
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+
+    talk_blob = json.dumps({
+        "talkEventType": "session.start",
+        "talkMode":      "voice",
+        "talkTransport": "webrtc",
+        "talkProvider":  "openai",
+        "talkBrain":     "gpt-realtime",
+        "talkDurationMs": 1500,
+        "talkByteLength": 8192,
+        "talkFinal":     True,
+    }).encode("utf-8")
+
+    fake_row = (
+        "ev-1",           # id
+        "talk.lifecycle", # type
+        "2026-06-14T00:00:00Z",  # ts
+        None,             # model
+        0,                # token_count
+        talk_blob,        # data
+        None,             # agent_id
+        None,             # node_id
+    )
+
+    adapter = OpenClawAdapter.__new__(OpenClawAdapter)
+    adapter.name = "openclaw"
+
+    mock_store = mock.MagicMock()
+    mock_store._fetch.return_value = [fake_row]
+    mock_ls = mock.MagicMock()
+    mock_ls.get_store.return_value = mock_store
+    with mock.patch.dict("sys.modules", {"clawmetry.local_store": mock_ls}):
+        events = adapter.list_events("session-abc")
+
+    assert len(events) == 1
+    ex = events[0].extra
+    assert ex.get("mode") == "voice"
+    assert ex.get("transport") == "webrtc"
+    assert ex.get("provider") == "openai"
+    assert ex.get("brain") == "gpt-realtime"
+    assert ex.get("duration_ms") == 1500
+    assert ex.get("byte_length") == 8192
+    assert ex.get("final") is True
+
+
+def test_list_events_talk_final_false_is_surfaced():
+    """talkFinal=False must not be dropped by a falsy guard (#3115)."""
+    import unittest.mock as mock
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+
+    talk_blob = json.dumps({
+        "talkEventType": "segment",
+        "talkMode": "voice",
+        "talkFinal": False,
+    }).encode("utf-8")
+
+    fake_row = (
+        "ev-2", "talk.lifecycle", "2026-06-14T00:01:00Z",
+        None, 0, talk_blob, None, None,
+    )
+
+    adapter = OpenClawAdapter.__new__(OpenClawAdapter)
+    adapter.name = "openclaw"
+
+    mock_store = mock.MagicMock()
+    mock_store._fetch.return_value = [fake_row]
+    mock_ls = mock.MagicMock()
+    mock_ls.get_store.return_value = mock_store
+    with mock.patch.dict("sys.modules", {"clawmetry.local_store": mock_ls}):
+        events = adapter.list_events("session-abc")
+
+    assert len(events) == 1
+    assert events[0].extra.get("final") is False
+    assert events[0].extra.get("mode") == "voice"
