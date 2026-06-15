@@ -151,6 +151,73 @@ def _model_router_fingerprint() -> dict:
         return {}
 
 
+def _sandbox_inference_configs() -> list:
+    """Read per-sandbox inference config from ~/.nemoclaw/sandboxes.json.
+
+    Mirrors getSandboxInferenceConfig() (nemoclaw/src/lib/inference/config.ts)
+    to surface providerKey / primaryModelRef / inferenceBaseUrl / inferenceApi /
+    inferenceCompat on DetectResult.meta (gap #2796). The identical derivation
+    lives in sync._read_nemoclaw_sandbox_routing (#2684); this helper makes it
+    available in the adapter layer without importing the heavy sync module.
+    Never raises -- returns [] on plain OpenClaw (no sandboxes.json).
+    """
+    home = os.environ.get("HOME") or os.path.expanduser("~")
+    reg = os.path.join(home, ".nemoclaw", "sandboxes.json")
+    out: list = []
+    try:
+        with open(reg, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:
+        return out
+    if not isinstance(data, dict):
+        return out
+    default_sb = data.get("defaultSandbox")
+    sandboxes = data.get("sandboxes")
+    if not isinstance(sandboxes, dict):
+        return out
+    _MANAGED = "inference"
+    _MANAGED_URL = "https://inference.local/v1"
+    for name, entry in sandboxes.items():
+        try:
+            if not isinstance(entry, dict):
+                continue
+            provider = entry.get("provider") or ""
+            model = entry.get("model") or ""
+            api = entry.get("preferredInferenceApi") or "openai-completions"
+            base_url = _MANAGED_URL
+            if provider == "openai-api":
+                provider_key = "openai"
+                primary = f"openai/{model}" if model else ""
+                compat = "openai"
+            elif provider == "anthropic-prod" or (
+                provider == "compatible-anthropic-endpoint"
+                and api != "openai-completions"
+            ):
+                provider_key = "anthropic"
+                primary = f"anthropic/{model}" if model else ""
+                base_url = "https://inference.local"
+                api = "anthropic-messages"
+                compat = "anthropic"
+            else:
+                provider_key = _MANAGED
+                primary = f"{_MANAGED}/{model}" if model else ""
+                compat = "openai"
+            out.append({
+                "sandbox": name,
+                "isDefault": bool(default_sb and name == default_sb),
+                "provider": provider,
+                "model": model,
+                "providerKey": provider_key,
+                "primaryModelRef": primary,
+                "inferenceBaseUrl": base_url,
+                "inferenceApi": api,
+                "inferenceCompat": compat,
+            })
+        except Exception:
+            continue
+    return out
+
+
 def _discover_model_router_port() -> Optional[int]:
     """Find the ``--port`` of a running ``model-router proxy`` process.
 
@@ -419,6 +486,11 @@ class OpenClawAdapter(AgentAdapter):
             _tc_kind = _openclaw_tool_catalog_kind()
             if _tc_kind is not None:
                 meta["openclawToolCatalogKind"] = _tc_kind
+            # Per-sandbox inference config (#2796): providerKey/primaryModelRef/
+            # inferenceBaseUrl/inferenceApi/inferenceCompat from sandboxes.json.
+            _sb_configs = _sandbox_inference_configs()
+            if _sb_configs:
+                meta["sandboxInferenceConfigs"] = _sb_configs
             return DetectResult(
                 name=self.name,
                 display_name=self.display_name,
