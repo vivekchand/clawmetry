@@ -211,6 +211,34 @@ def api_license_status():
         return jsonify({"error": str(exc)}), 500
 
 
+@bp_entitlement.route("/api/license/pubkey")
+def api_license_pubkey():
+    """Return the embedded Ed25519 license-verification key + its SHA-256
+    fingerprint, so operators can confirm the OSS install carries the genuine
+    trust anchor (the same one published at https://clawmetry.com/security).
+
+    Read-only, no auth, no license required — the public key is, by
+    construction, public. Never raises: on a parse failure the body still
+    includes ``valid: false`` so callers always get a stable shape.
+    """
+    try:
+        from clawmetry import license as _lic
+
+        return jsonify(_lic.pubkey_info())
+    except Exception as exc:  # never crash the dashboard over a key read
+        logger.warning("api_license_pubkey: error: %s", exc)
+        return jsonify(
+            {
+                "algorithm": "ed25519",
+                "format": "SubjectPublicKeyInfo (DER, SHA-256)",
+                "fingerprint_sha256": None,
+                "fingerprint_short": None,
+                "pem": "",
+                "valid": False,
+            }
+        )
+
+
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
 def api_paywall_event():
     """Accept a client-side paywall telemetry ping (fire-and-forget).
