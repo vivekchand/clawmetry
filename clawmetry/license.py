@@ -813,6 +813,49 @@ def deactivate(actor: str = "") -> tuple[bool, bool]:
     return True, removed
 
 
+def inspect_key(key: str) -> dict | None:
+    """Verify ``key`` OFFLINE and return what it would unlock — without writing
+    anything to disk. The dry-run counterpart of :func:`activate`.
+
+    Use cases:
+      * Support: "paste your key, let's see what tier/exp it carries" without
+        having the customer mutate their install.
+      * Pre-flight from the CLI / dashboard before clicking *Activate*.
+      * Air-gap: validate a key on a staging box before transporting it.
+
+    Returns a dict with the same shape as :func:`current_license_info` (so the
+    UI can render the two the same way), or ``None`` if the signature is bogus
+    or the token is malformed. An EXPIRED but otherwise-valid token returns a
+    dict with ``valid=False`` + ``status="expired"`` so the caller can still
+    show what the (now-stale) key was for. Never raises, never touches disk."""
+    import time as _t
+
+    try:
+        payload = verify_token(key)
+        if payload is None:
+            return None
+        exp = payload.get("exp")
+        days_left = None
+        expired = False
+        if isinstance(exp, (int, float)):
+            days_left = int((exp - _t.time()) // 86400)
+            expired = _t.time() > exp
+        tier_in = str(payload.get("tier", "pro")).strip().lower()
+        tier = "enterprise" if tier_in == "enterprise" else "pro"
+        return {
+            "valid": not expired,
+            "status": "expired" if expired else "active",
+            "tier": tier,
+            "nodes": int(payload.get("nodes", 1) or 1),
+            "sub": str(payload.get("sub", "")),
+            "exp": exp,
+            "days_left": days_left,
+        }
+    except Exception as exc:  # never raise from a dry-run inspector
+        logger.warning("license: inspect_key failed: %s", exc)
+        return None
+
+
 def current_license_info() -> dict | None:
     """Human-readable summary of the installed license, or None if there is no
     valid one. Never raises."""
