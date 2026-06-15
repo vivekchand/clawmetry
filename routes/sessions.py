@@ -7069,6 +7069,185 @@ def api_run_compare():
     })
 
 
+# ── Run-vs-run flow diff (#3001) ─────────────────────────────────────────────
+# Compare the execution graphs of two sessions: find the first step where they
+# diverge, compute the downstream blast radius, and return a plain-English
+# narrative so users can quickly pinpoint what changed between two runs of the
+# same task.
+
+
+def _build_step_sequence(session_id):
+    """Return ordered [{step, name, ts}] for a session's execution graph.
+
+    Queries DuckDB via the daemon proxy (cloud-safe; direct file reads return
+    empty in cloud containers per CLAUDE.md). Returns [] on miss.
+
+    Step types emitted:
+      "tool"  — a tool_use / toolCall block inside an assistant message turn
+      "spawn" — a subagent_spawn event
+
+    Pure text-only assistant turns are skipped; they don't contribute to the
+    structural diff that matters for root-cause analysis.
+    """
+    rows = _ls_call("query_events", session_id=session_id, limit=10000) or []
+    # query_events returns DESC; reverse so we walk oldest-first.
+    rows = list(reversed(rows))
+    steps = []
+    for ev in rows:
+        etype = ev.get("event_type", "")
+        data = ev.get("data") or {}
+        ts = ev.get("ts") or ""
+        if etype in ("tool_call", "tool.call"):
+            # v3: standalone tool-call event row.
+            tool_name = (
+                data.get("tool") or data.get("tool_name")
+                or data.get("name") or ""
+            )
+            if tool_name:
+                steps.append({"step": "tool", "name": tool_name, "ts": ts})
+        elif etype == "model.completed":
+            # v3 assistant turn: tools in toolMetas[] or message.content[].
+            tool_metas = []
+            inner = data.get("data") if isinstance(data.get("data"), dict) else {}
+            for src in (data.get("toolMetas"), inner.get("toolMetas")):
+                if isinstance(src, list):
+                    tool_metas.extend(src)
+            for envelope in (data.get("message"), inner.get("message")):
+                if isinstance(envelope, dict):
+                    blk_content = envelope.get("content")
+                    if isinstance(blk_content, list):
+                        for blk in blk_content:
+                            if isinstance(blk, dict) and blk.get("type") == "tool_use":
+                                tool_metas.append({"name": blk.get("name") or "tool"})
+            seen = set()
+            for meta in tool_metas:
+                if not isinstance(meta, dict):
+                    continue
+                name = meta.get("name") or "tool"
+                tid = meta.get("id") or name
+                if tid not in seen:
+                    seen.add(tid)
+                    steps.append({"step": "tool", "name": name, "ts": ts})
+        elif etype == "message":  # v3-shape-gate: allow (reason: handles legacy+v3 in same fn)
+            # Pre-v3 legacy: toolCall blocks nested inside message.content[].
+            msg = data.get("message") or {}
+            if msg.get("role") != "assistant":
+                continue
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") in ("tool_use", "toolCall"):
+                    steps.append({
+                        "step": "tool",
+                        "name": block.get("name") or "",
+                        "ts": ts,
+                    })
+        elif etype == "subagent_spawn":
+            spawn_name = (
+                data.get("agent_type")
+                or data.get("subagent_type")
+                or data.get("type")
+                or "subagent"
+            )
+            steps.append({"step": "spawn", "name": spawn_name, "ts": ts})
+    return steps
+
+
+def _diff_step_sequences(seq_a, seq_b):
+    """Diff two step sequences; return divergence dict or None if identical.
+
+    Uses stdlib difflib.SequenceMatcher on (step, name) tuples so paraphrased
+    inputs that call the same tool still match structurally.
+    """
+    import difflib
+
+    keys_a = [(s["step"], s["name"]) for s in seq_a]
+    keys_b = [(s["step"], s["name"]) for s in seq_b]
+    if keys_a == keys_b:
+        return None
+
+    sm = difflib.SequenceMatcher(None, keys_a, keys_b, autojunk=False)
+    opcodes = sm.get_opcodes()
+
+    first_div = next(
+        ((i1, j1) for tag, i1, _i2, j1, _j2 in opcodes if tag != "equal"),
+        None,
+    )
+    if first_div is None:
+        return None
+
+    fi, fj = first_div
+    step_a = seq_a[fi] if fi < len(seq_a) else None
+    step_b = seq_b[fj] if fj < len(seq_b) else None
+    blast = sum(
+        abs(i2 - i1) + abs(j2 - j1)
+        for tag, i1, i2, j1, j2 in opcodes
+        if tag != "equal"
+    )
+
+    def _label(s):
+        return f"{s['step']}:{s['name']}" if s else "end-of-trace"
+
+    narrative = (
+        f"First diverged at step {fi + 1}: "
+        f"target called {_label(step_a)} but baseline called {_label(step_b)}. "
+        f"{blast} later step(s) differed."
+    )
+    return {
+        "first_divergent_index": fi,
+        "step_target": step_a,
+        "step_baseline": step_b,
+        "blast_radius": blast,
+        "narrative": narrative,
+        "diff_ops": [
+            {"tag": tag, "i1": i1, "i2": i2, "j1": j1, "j2": j2}
+            for tag, i1, i2, j1, j2 in opcodes
+        ],
+    }
+
+
+@bp_sessions.route("/api/sessions/<session_id>/compare")
+def api_session_compare(session_id):
+    """Run-vs-run flow diff for two sessions (issue #3001).
+
+    Compares the execution graph of ``session_id`` (target) against a
+    ``baseline`` run: returns both step sequences and highlights the first
+    divergent step with a blast-radius count and plain-English narrative.
+
+    Query params:
+    - ``baseline`` (required) — session id of the reference run
+
+    Response keys:
+    - ``session_id``, ``baseline_id``
+    - ``target_steps``, ``baseline_steps`` — [{step, name, ts}, ...]
+    - ``divergence`` — {first_divergent_index, step_target, step_baseline,
+      blast_radius, narrative, diff_ops} or null when structurally identical
+    """
+    baseline_id = (request.args.get("baseline") or "").strip()
+    if not baseline_id:
+        return jsonify({"error": "missing 'baseline' query parameter"}), 400
+    for sid in (session_id, baseline_id):
+        if not sid or any(c in sid for c in ("/", "\\", "..")):
+            return jsonify({"error": "invalid session id"}), 400
+    if session_id == baseline_id:
+        return jsonify({"error": "target and baseline must be different"}), 400
+
+    target_steps = _build_step_sequence(session_id)
+    baseline_steps = _build_step_sequence(baseline_id)
+    divergence = _diff_step_sequences(target_steps, baseline_steps)
+
+    return jsonify({
+        "session_id": session_id,
+        "baseline_id": baseline_id,
+        "target_steps": target_steps,
+        "baseline_steps": baseline_steps,
+        "divergence": divergence,
+    })
+
+
 # ── Error triage: mark known/expected errors as resolved (#2196 item #5) ─────
 # Persists the resolved-set in DuckDB (the source-tool kept it in localStorage,
 # which would not survive our E2E-encrypted cloud model). Each entry is keyed
