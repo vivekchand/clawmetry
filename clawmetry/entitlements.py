@@ -111,6 +111,22 @@ RUNTIME_LABELS = {
     "nanoclaw": "NanoClaw",
 }
 
+# Display labels for every known tier id. The dashboard, the CLI, and any
+# operator-facing surface should call :func:`tier_label` instead of hard-coding
+# these strings so the vocabulary stays consistent (and translatable later).
+# An unknown tier id is rendered title-cased with underscores swapped for
+# spaces, so a future tier added before this map is updated still renders
+# *something* sensible.
+TIER_LABELS = {
+    TIER_OSS: "OSS",
+    TIER_CLOUD_FREE: "Free",
+    TIER_TRIAL: "Trial",
+    TIER_CLOUD_STARTER: "Starter",
+    TIER_CLOUD_PRO: "Pro",
+    TIER_PRO: "Self-hosted Pro",
+    TIER_ENTERPRISE: "Enterprise",
+}
+
 # ── Feature catalogue ───────────────────────────────────────────────────────
 # Core observability — always free. Keys are stable identifiers the route /
 # UI layer checks via Entitlement.allows_feature(...).
@@ -211,10 +227,38 @@ _TIER_RETENTION_DAYS = {
 # Tiers that unlock the paid runtimes.
 _TIER_PAID_RUNTIMES = _PAID_TIERS
 
+# Canonical ordering of the *purchasable* plans, lowest -> highest. Used by
+# :func:`tier_rank` and the ``min_tier_for_*`` helpers so the UI can render
+# locked rows as "Available in Starter" / "Available in Pro" without each
+# caller re-deriving the order. Trial is excluded: it is a time-limited
+# promotional grant of Pro, not a plan a customer can pick from a price page.
+_PURCHASABLE_TIERS = (
+    TIER_OSS,
+    TIER_CLOUD_FREE,
+    TIER_CLOUD_STARTER,
+    TIER_CLOUD_PRO,
+    TIER_PRO,
+    TIER_ENTERPRISE,
+)
+
+# rank: oss/cloud_free = 0, starter = 1, pro/cloud_pro = 2, enterprise = 3.
+# Self-hosted Pro and cloud Pro share rank 2 because they unlock the same
+# feature set. Unknown tiers return -1 from :func:`tier_rank`.
+_TIER_RANK = {
+    TIER_OSS: 0,
+    TIER_CLOUD_FREE: 0,
+    TIER_CLOUD_STARTER: 1,
+    TIER_TRIAL: 2,        # trial unlocks the Pro feature set
+    TIER_CLOUD_PRO: 2,
+    TIER_PRO: 2,
+    TIER_ENTERPRISE: 3,
+}
+
 _LICENSE_PATH = os.path.expanduser("~/.clawmetry/license.key")
 _CLOUD_PLAN_CACHE = os.path.expanduser("~/.clawmetry/cloud_plan.json")
 _ENFORCE_ENABLE_VALUES = frozenset({"1", "true", "yes", "on"})
 _CACHE_TTL_SECS = 60.0
+_ENFORCE_AT_ENV = "CLAWMETRY_ENFORCE_AT"
 
 
 def is_enforced() -> bool:
@@ -224,6 +268,40 @@ def is_enforced() -> bool:
         os.environ.get("CLAWMETRY_ENFORCE", "").strip().lower()
         in _ENFORCE_ENABLE_VALUES
     )
+
+
+def enforce_at_epoch() -> float | None:
+    """Resolve the announced enforce-at moment from ``CLAWMETRY_ENFORCE_AT``.
+
+    Accepts three formats -- the first parse that wins is used::
+
+        CLAWMETRY_ENFORCE_AT=2026-07-01            # ISO date (UTC midnight)
+        CLAWMETRY_ENFORCE_AT=2026-07-01T12:00:00Z  # ISO datetime
+        CLAWMETRY_ENFORCE_AT=1782950400            # epoch seconds
+
+    Unset / empty / unparseable returns ``None`` (logged at warning). Used by
+    :meth:`Entitlement.grace_remaining_days` and :meth:`Entitlement.to_dict` so
+    the dashboard can render a countdown banner ("Enforcement begins in N
+    days") without re-implementing the parse rules on the frontend. Never
+    raises."""
+    raw = os.environ.get(_ENFORCE_AT_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        pass
+    try:
+        from datetime import datetime, timezone
+
+        s = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except Exception as exc:
+        logger.warning("entitlements: bad CLAWMETRY_ENFORCE_AT %r: %s", raw, exc)
+        return None
 
 
 @dataclass(frozen=True)
@@ -279,6 +357,123 @@ class Entitlement:
             return False
         return feature in self.features
 
+    def min_tier_for(self, key: str) -> str | None:
+        """Return the minimum *purchasable* tier id that would unlock ``key``.
+
+        ``key`` may be a feature id (e.g. ``"otel_export"``) or a runtime id
+        (e.g. ``"claude_code"``). For a free key returns :data:`TIER_OSS`; for
+        an unknown key returns ``None``. Convenience wrapper over the
+        module-level :func:`min_tier_for_feature` / :func:`min_tier_for_runtime`
+        so callers that already have an ``Entitlement`` don't need to import
+        both. Never raises.
+        """
+        k = (key or "").strip().lower()
+        if not k:
+            return None
+        if k in ALL_FEATURES:
+            return min_tier_for_feature(k)
+        if k in ALL_RUNTIMES:
+            return min_tier_for_runtime(k)
+        return None
+
+    def upgrade_diff(self, target_tier: str) -> dict:
+        """Features + runtimes ``target_tier`` would unlock on top of this
+        entitlement. Drives the upgrade CTA on a locked row: hovering "Upgrade
+        to Pro" needs to know which feature/runtime keys would light up so the
+        UI can list them without round-tripping the whole feature catalog.
+
+        Returns ``{"target": "<tier>", "added_features": [...sorted...],
+        "added_runtimes": [...sorted...]}``. An unknown or empty target tier,
+        or a target that would not add anything (already on the same/higher
+        tier), returns empty lists. Free features/runtimes are always present
+        on every tier, so they never appear in ``added_*``. Never raises."""
+        try:
+            tt = (target_tier or "").strip().lower()
+            target_paid_feats = _TIER_FEATURES.get(tt)
+            if target_paid_feats is None:
+                return {"target": tt, "added_features": [], "added_runtimes": []}
+            target_feats = FREE_FEATURES | target_paid_feats
+            if tt == TIER_ENTERPRISE:
+                target_feats = target_feats | ENTERPRISE_FEATURES
+            target_runtimes = (
+                FREE_RUNTIMES | PAID_RUNTIMES
+                if tt in _TIER_PAID_RUNTIMES
+                else FREE_RUNTIMES
+            )
+            return {
+                "target": tt,
+                "added_features": sorted(target_feats - self.features),
+                "added_runtimes": sorted(target_runtimes - self.runtimes),
+            }
+        except Exception as exc:
+            logger.warning("entitlements: upgrade_diff failed: %s", exc)
+            return {
+                "target": target_tier or "",
+                "added_features": [],
+                "added_runtimes": [],
+            }
+
+    def grace_remaining_days(self) -> int | None:
+        """Days remaining in the grace period, or ``None`` when no enforce-at
+        date is announced (``CLAWMETRY_ENFORCE_AT`` unset). Clamps to ``0``
+        once the announced moment has passed, so the UI never shows a
+        negative countdown. Drives the dashboard countdown banner without
+        re-parsing the env var on every render."""
+        at = enforce_at_epoch()
+        if at is None:
+            return None
+        remaining = (at - time.time()) / 86400.0
+        return int(remaining) if remaining > 0 else 0
+
+    def lock_reason(self, item: str, *, kind: str | None = None) -> str | None:
+        """Return a human-readable explanation of why ``item`` is locked, or
+        ``None`` when it is allowed (including grace mode).
+
+        ``item`` may be a runtime or feature key; ``kind`` can be ``"runtime"``
+        or ``"feature"`` to disambiguate. When omitted, both known sets are
+        tried in order. An unknown ``item`` (not in any catalogue) always
+        returns ``None``. In grace mode always returns ``None``. Never raises.
+        """
+        try:
+            k = (item or "").strip().lower()
+            if not k or len(k) > 256:
+                return None
+            if self.grace:
+                return None
+            inferred_kind = kind
+            if inferred_kind is None:
+                if k in ALL_RUNTIMES:
+                    inferred_kind = "runtime"
+                elif k in ALL_FEATURES:
+                    inferred_kind = "feature"
+                else:
+                    return None
+            if inferred_kind == "runtime":
+                if k not in ALL_RUNTIMES:
+                    return None
+                if k in FREE_RUNTIMES:
+                    return None
+                if self.expired:
+                    return f"License expired; '{k}' runtime requires a valid subscription."
+                if self.allows_runtime(k):
+                    return None
+                return f"Paid runtime '{k}' requires Starter or above."
+            if inferred_kind == "feature":
+                if k not in ALL_FEATURES:
+                    return None
+                if k in FREE_FEATURES:
+                    return None
+                if self.expired:
+                    return f"License expired; '{k}' feature requires a valid subscription."
+                if self.allows_feature(k):
+                    return None
+                req = min_tier_for_feature(k)
+                lbl = tier_label(req) if req else "Paid"
+                return f"'{k}' feature requires {lbl} or above."
+            return None
+        except Exception:
+            return None
+
     def event_retention_days(self) -> int | None:
         """Days of event history this tier may keep. ``None`` means unlimited
         / custom (Enterprise). The daemon's prune loop in ``clawmetry/sync.py``
@@ -295,8 +490,22 @@ class Entitlement:
         return _TIER_RETENTION_DAYS.get(self.tier, 7)
 
     def to_dict(self) -> dict:
+        enforce_at = enforce_at_epoch()
+        enforce_at_iso: str | None = None
+        if enforce_at is not None:
+            try:
+                from datetime import datetime, timezone
+
+                enforce_at_iso = (
+                    datetime.fromtimestamp(enforce_at, tz=timezone.utc)
+                    .isoformat()
+                    .replace("+00:00", "Z")
+                )
+            except Exception:
+                enforce_at_iso = None
         return {
             "tier": self.tier,
+            "tier_label": tier_label(self.tier),
             "source": self.source,
             "node_limit": self.node_limit,
             "expiry": self.expiry,
@@ -304,6 +513,9 @@ class Entitlement:
             "is_paid": self.is_paid,
             "grace": self.grace,
             "enforced": not self.grace,
+            "enforce_at": enforce_at,
+            "enforce_at_iso": enforce_at_iso,
+            "days_until_enforce": self.grace_remaining_days(),
             "runtimes": sorted(self.runtimes),
             "features": sorted(self.features),
             "free_runtimes": sorted(FREE_RUNTIMES),
@@ -410,6 +622,21 @@ def invalidate() -> None:
         _cache.update(ent=None, ts=0.0, enforce=None)
 
 
+def upgrade_diff(target_tier: str) -> dict:
+    """Module-level convenience: resolve the current entitlement and return
+    what ``target_tier`` would add. Equivalent to
+    ``get_entitlement().upgrade_diff(target_tier)``. Never raises."""
+    try:
+        return get_entitlement().upgrade_diff(target_tier)
+    except Exception as exc:
+        logger.warning("entitlements: upgrade_diff (module) failed: %s", exc)
+        return {
+            "target": target_tier or "",
+            "added_features": [],
+            "added_runtimes": [],
+        }
+
+
 def available_runtimes() -> list[str]:
     """Runtimes the UI should expose. In grace mode that's every known
     runtime (so nothing disappears before enforcement); once enforced it's the
@@ -425,6 +652,99 @@ def runtime_label(runtime: str) -> str:
     so unknown plugin runtimes still render with *something*."""
     rt = (runtime or "").strip().lower()
     return RUNTIME_LABELS.get(rt, rt)
+
+
+def runtime_tier(runtime: str) -> str:
+    """Minimum tier-ladder identifier that unlocks observing ``runtime``.
+
+    Returns ``"free"`` for :data:`FREE_RUNTIMES` and ``"starter"`` for every
+    paid runtime (all paid runtimes unlock together via the Starter
+    ``multi_runtime`` grant). Unknown / empty / non-string ids default to
+    ``"starter"`` (errs on the locked side). Never raises.
+    """
+    try:
+        rt = (runtime or "").strip().lower()
+    except (AttributeError, TypeError):
+        return "starter"
+    return "free" if rt in FREE_RUNTIMES else "starter"
+
+
+def tier_label(tier: str) -> str:
+    """Human-readable label for ``tier``. Mirrors :func:`runtime_label` so the
+    dashboard / CLI never hard-code tier strings.
+
+    An unknown tier id (a future tier or a typo on the wire) is rendered
+    title-cased with underscores turned into spaces so the UI still has
+    *something* to render. The empty / falsy id falls back to the OSS label.
+    """
+    t = (tier or "").strip().lower()
+    if not t:
+        return TIER_LABELS[TIER_OSS]
+    label = TIER_LABELS.get(t)
+    if label is not None:
+        return label
+    return t.replace("_", " ").title()
+
+
+def tier_rank(tier: str) -> int:
+    """Comparable rank for ``tier`` (higher = unlocks more). Returns ``-1`` for
+    unknown tiers so callers can do ``tier_rank(a) > tier_rank(b)`` without a
+    KeyError. See :data:`_TIER_RANK` for the canonical numbering."""
+    return _TIER_RANK.get((tier or "").strip().lower(), -1)
+
+
+def min_tier_for_feature(feature: str) -> str | None:
+    """Return the cheapest *purchasable* tier id that grants ``feature``.
+
+    Resolution:
+      * ``feature in FREE_FEATURES`` -> :data:`TIER_OSS`
+      * else walks :data:`_PURCHASABLE_TIERS` in rank order and returns the
+        first tier whose grant includes ``feature``
+      * unknown ``feature`` -> ``None``
+
+    :data:`TIER_TRIAL` is intentionally excluded: it is a promotional grant,
+    not a plan a customer can select from a price page. Never raises.
+    """
+    f = (feature or "").strip().lower()
+    if not f:
+        return None
+    if f in FREE_FEATURES:
+        return TIER_OSS
+    for tier in _PURCHASABLE_TIERS:
+        if tier in (TIER_OSS, TIER_CLOUD_FREE):
+            continue
+        if f in _TIER_FEATURES.get(tier, frozenset()):
+            return tier
+    return None
+
+
+def min_tier_for_runtime(runtime: str) -> str | None:
+    """Return the cheapest *purchasable* tier id that grants ``runtime``.
+
+    Free runtimes resolve to :data:`TIER_OSS`. Any runtime in
+    :data:`PAID_RUNTIMES` resolves to :data:`TIER_CLOUD_STARTER` -- every
+    paid tier grants all paid runtimes. Unknown runtimes return ``None``.
+    Never raises.
+    """
+    rt = (runtime or "").strip().lower()
+    if not rt:
+        return None
+    if rt in FREE_RUNTIMES:
+        return TIER_OSS
+    if rt in PAID_RUNTIMES:
+        return TIER_CLOUD_STARTER
+    return None
+
+
+def lock_reason(item: str, *, kind: str | None = None) -> str | None:
+    """Module-level convenience: resolve the current entitlement and return
+    why ``item`` is locked, or ``None`` when allowed (or on any error).
+    Equivalent to ``get_entitlement().lock_reason(item, kind=kind)``. Never
+    raises."""
+    try:
+        return get_entitlement().lock_reason(item, kind=kind)
+    except Exception:
+        return None
 
 
 def runtime_catalog() -> list[dict]:
@@ -464,6 +784,7 @@ def runtime_catalog() -> list[dict]:
                 "allowed": True,
                 "locked": False,
                 "entitled": True,
+                "tier": "free",
             }
         )
     for rt in sorted(PAID_RUNTIMES):
@@ -479,6 +800,7 @@ def runtime_catalog() -> list[dict]:
                 # teaser/upgrade affordance in grace mode without changing
                 # what `allowed`/`locked` mean for enforcement.
                 "entitled": ent.entitled_runtime(rt),
+                "tier": "starter",
             }
         )
     return out

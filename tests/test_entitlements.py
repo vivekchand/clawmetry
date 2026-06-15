@@ -289,6 +289,230 @@ def test_entitled_tier_entitles_its_runtimes(ent):
     assert en.entitled_runtime("cursor") is True
 
 
+# ── tier_label() ─────────────────────────────────────────────────────────────
+
+
+def test_tier_label_known_tiers(ent):
+    assert ent.tier_label(ent.TIER_OSS) == "OSS"
+    assert ent.tier_label(ent.TIER_CLOUD_FREE) == "Free"
+    assert ent.tier_label(ent.TIER_TRIAL) == "Trial"
+    assert ent.tier_label(ent.TIER_CLOUD_STARTER) == "Starter"
+    assert ent.tier_label(ent.TIER_CLOUD_PRO) == "Pro"
+    assert ent.tier_label(ent.TIER_PRO) == "Self-hosted Pro"
+    assert ent.tier_label(ent.TIER_ENTERPRISE) == "Enterprise"
+
+
+def test_tier_label_covers_every_known_tier_id(ent):
+    known = {
+        ent.TIER_OSS, ent.TIER_CLOUD_FREE, ent.TIER_TRIAL,
+        ent.TIER_CLOUD_STARTER, ent.TIER_CLOUD_PRO, ent.TIER_PRO,
+        ent.TIER_ENTERPRISE,
+    }
+    missing = known - set(ent.TIER_LABELS.keys())
+    assert not missing, f"TIER_LABELS missing rows for: {sorted(missing)}"
+
+
+def test_tier_label_unknown_titlecased(ent):
+    assert ent.tier_label("cloud_team") == "Cloud Team"
+    assert ent.tier_label("FOO_BAR") == "Foo Bar"
+
+
+def test_tier_label_empty_and_none_safe(ent):
+    assert ent.tier_label("") == "OSS"
+    assert ent.tier_label("   ") == "OSS"
+    assert ent.tier_label(None) == "OSS"  # type: ignore[arg-type]
+
+
+def test_tier_label_normalises_case_and_whitespace(ent):
+    assert ent.tier_label("  CLOUD_PRO  ") == "Pro"
+    assert ent.tier_label("Enterprise") == "Enterprise"
+
+
+def test_to_dict_surfaces_tier_label(ent):
+    en = ent.get_entitlement(force=True)
+    payload = en.to_dict()
+    assert payload["tier"] == ent.TIER_OSS
+    assert payload["tier_label"] == "OSS"
+
+
+def test_to_dict_tier_label_for_paid_tier(ent):
+    pro = ent._build(ent.TIER_CLOUD_PRO, "cloud", node_limit=2, expiry=None)
+    payload = pro.to_dict()
+    assert payload["tier"] == ent.TIER_CLOUD_PRO
+    assert payload["tier_label"] == "Pro"
+
+
+# ── upgrade_diff ────────────────────────────────────────────────────────────
+
+
+def test_upgrade_diff_oss_to_starter_adds_starter_features_and_paid_runtimes(ent):
+    en = ent.get_entitlement(force=True)
+    assert en.tier == ent.TIER_OSS
+    diff = en.upgrade_diff(ent.TIER_CLOUD_STARTER)
+    assert diff["target"] == ent.TIER_CLOUD_STARTER
+    assert set(diff["added_features"]) == set(ent.STARTER_FEATURES)
+    assert set(ent.FREE_FEATURES).isdisjoint(diff["added_features"])
+    assert set(diff["added_runtimes"]) == set(ent.PAID_RUNTIMES)
+    assert diff["added_features"] == sorted(diff["added_features"])
+    assert diff["added_runtimes"] == sorted(diff["added_runtimes"])
+
+
+def test_upgrade_diff_oss_to_pro_adds_all_paid_features(ent):
+    en = ent.get_entitlement(force=True)
+    diff = en.upgrade_diff(ent.TIER_CLOUD_PRO)
+    assert set(diff["added_features"]) == set(ent.PAID_FEATURES)
+    assert set(diff["added_runtimes"]) == set(ent.PAID_RUNTIMES)
+
+
+def test_upgrade_diff_oss_to_enterprise_adds_enterprise_features(ent):
+    en = ent.get_entitlement(force=True)
+    diff = en.upgrade_diff(ent.TIER_ENTERPRISE)
+    expected = set(ent.PAID_FEATURES) | set(ent.ENTERPRISE_FEATURES)
+    assert set(diff["added_features"]) == expected
+    assert set(diff["added_runtimes"]) == set(ent.PAID_RUNTIMES)
+
+
+def test_upgrade_diff_starter_to_pro_adds_only_pro_only_features(ent, tmp_path):
+    cache = tmp_path / ".clawmetry" / "cloud_plan.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"plan": ent.TIER_CLOUD_STARTER, "node_limit": 1,
+                                 "expiry": None}))
+    en = ent.get_entitlement(force=True)
+    assert en.tier == ent.TIER_CLOUD_STARTER
+    diff = en.upgrade_diff(ent.TIER_CLOUD_PRO)
+    assert set(diff["added_features"]) == set(ent.PRO_ONLY_FEATURES)
+    assert diff["added_runtimes"] == []
+
+
+def test_upgrade_diff_pro_to_enterprise_adds_only_enterprise_features(ent, tmp_path):
+    cache = tmp_path / ".clawmetry" / "cloud_plan.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"plan": ent.TIER_CLOUD_PRO, "node_limit": 1,
+                                 "expiry": None}))
+    en = ent.get_entitlement(force=True)
+    assert en.tier == ent.TIER_CLOUD_PRO
+    diff = en.upgrade_diff(ent.TIER_ENTERPRISE)
+    assert set(diff["added_features"]) == set(ent.ENTERPRISE_FEATURES)
+    assert diff["added_runtimes"] == []
+
+
+def test_upgrade_diff_same_tier_is_empty(ent, tmp_path):
+    cache = tmp_path / ".clawmetry" / "cloud_plan.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"plan": ent.TIER_CLOUD_PRO, "node_limit": 1,
+                                 "expiry": None}))
+    en = ent.get_entitlement(force=True)
+    diff = en.upgrade_diff(ent.TIER_CLOUD_PRO)
+    assert diff["added_features"] == []
+    assert diff["added_runtimes"] == []
+
+
+def test_upgrade_diff_unknown_target_returns_empty(ent):
+    en = ent.get_entitlement(force=True)
+    diff = en.upgrade_diff("totally-made-up-tier")
+    assert diff["added_features"] == []
+    assert diff["added_runtimes"] == []
+    assert diff["target"] == "totally-made-up-tier"
+
+
+def test_upgrade_diff_empty_and_none_targets_are_safe(ent):
+    en = ent.get_entitlement(force=True)
+    for bad in ("", None, "   "):
+        diff = en.upgrade_diff(bad)
+        assert diff["added_features"] == []
+        assert diff["added_runtimes"] == []
+
+
+def test_upgrade_diff_module_helper_resolves_current(ent):
+    direct = ent.get_entitlement(force=True).upgrade_diff(ent.TIER_CLOUD_PRO)
+    via_module = ent.upgrade_diff(ent.TIER_CLOUD_PRO)
+    assert direct == via_module
+
+
+def test_upgrade_diff_case_insensitive_target(ent):
+    en = ent.get_entitlement(force=True)
+    a = en.upgrade_diff(ent.TIER_CLOUD_PRO)
+    b = en.upgrade_diff(ent.TIER_CLOUD_PRO.upper())
+    c = en.upgrade_diff("  " + ent.TIER_CLOUD_PRO + "  ")
+    assert a["added_features"] == b["added_features"] == c["added_features"]
+    assert a["added_runtimes"] == b["added_runtimes"] == c["added_runtimes"]
+
+
+# ── CLAWMETRY_ENFORCE_AT (grace countdown) ────────────────────────────────────
+
+
+def test_enforce_at_unset_is_none(ent, monkeypatch):
+    monkeypatch.delenv("CLAWMETRY_ENFORCE_AT", raising=False)
+    assert ent.enforce_at_epoch() is None
+    en = ent.get_entitlement(force=True)
+    assert en.grace_remaining_days() is None
+    d = en.to_dict()
+    assert d["enforce_at"] is None
+    assert d["enforce_at_iso"] is None
+    assert d["days_until_enforce"] is None
+
+
+def test_enforce_at_iso_date_future(ent, monkeypatch):
+    future = time.time() + 30 * 86400
+    from datetime import datetime, timezone
+    iso = datetime.fromtimestamp(future, tz=timezone.utc).date().isoformat()
+    monkeypatch.setenv("CLAWMETRY_ENFORCE_AT", iso)
+    at = ent.enforce_at_epoch()
+    assert at is not None
+    en = ent.get_entitlement(force=True)
+    days = en.grace_remaining_days()
+    assert days is not None and 25 <= days <= 31
+    d = en.to_dict()
+    assert d["enforce_at"] == pytest.approx(at)
+    assert d["enforce_at_iso"] is not None and d["enforce_at_iso"].endswith("Z")
+    assert d["days_until_enforce"] == days
+
+
+def test_enforce_at_epoch_seconds_accepted(ent, monkeypatch):
+    future = time.time() + 7 * 86400
+    monkeypatch.setenv("CLAWMETRY_ENFORCE_AT", str(int(future)))
+    en = ent.get_entitlement(force=True)
+    assert en.grace_remaining_days() in (6, 7)
+    assert en.to_dict()["enforce_at"] == pytest.approx(float(int(future)))
+
+
+def test_enforce_at_iso_datetime_z_suffix(ent, monkeypatch):
+    monkeypatch.setenv("CLAWMETRY_ENFORCE_AT", "2099-01-01T00:00:00Z")
+    en = ent.get_entitlement(force=True)
+    d = en.to_dict()
+    assert d["enforce_at"] is not None
+    assert d["enforce_at_iso"] == "2099-01-01T00:00:00Z"
+    assert d["days_until_enforce"] is not None and d["days_until_enforce"] > 0
+
+
+def test_enforce_at_past_clamps_to_zero(ent, monkeypatch):
+    monkeypatch.setenv("CLAWMETRY_ENFORCE_AT", "2000-01-01")
+    en = ent.get_entitlement(force=True)
+    assert en.grace_remaining_days() == 0
+    d = en.to_dict()
+    assert d["days_until_enforce"] == 0
+    assert d["enforce_at"] is not None
+
+
+def test_enforce_at_malformed_is_graceful(ent, monkeypatch):
+    monkeypatch.setenv("CLAWMETRY_ENFORCE_AT", "not-a-date")
+    assert ent.enforce_at_epoch() is None
+    en = ent.get_entitlement(force=True)
+    d = en.to_dict()
+    assert d["enforce_at"] is None
+    assert d["enforce_at_iso"] is None
+    assert d["days_until_enforce"] is None
+
+
+def test_enforce_at_independent_of_enforce_flag(ent, monkeypatch):
+    """Setting the countdown env var must NOT flip grace -> enforce."""
+    monkeypatch.setenv("CLAWMETRY_ENFORCE_AT", "2099-01-01")
+    monkeypatch.delenv("CLAWMETRY_ENFORCE", raising=False)
+    en = ent.get_entitlement(force=True)
+    assert en.grace is True
+    assert en.allows_runtime("claude_code") is True
+
+
 def test_appjs_teaser_wiring():
     """The catalog loader must use `entitled` (grace teaser) and must NOT
     early-return when enforcement is off, while guarding hosted paying/trial
