@@ -132,6 +132,57 @@ def _load_public_key():
     return load_pem_public_key(_PUBLIC_KEY_PEM)
 
 
+def pubkey_fingerprint() -> str | None:
+    """SHA-256 hex digest of the embedded Ed25519 verification key.
+
+    The fingerprint is computed over the key's DER-encoded SubjectPublicKeyInfo
+    bytes, so it is independent of PEM whitespace/line-ending noise and stable
+    across reformatting. An operator can compare it against the canonical
+    fingerprint published at ``https://clawmetry.com/security`` to confirm their
+    OSS install carries the genuine trust anchor — i.e. that nobody has swapped
+    ``_PUBLIC_KEY_PEM`` for an attacker-controlled key that would let them mint
+    "valid" Pro/Enterprise license tokens against this node.
+
+    Returns the hex string (lowercase, 64 chars) or ``None`` if the embedded
+    PEM cannot be parsed (would indicate a tampered or corrupt install).
+    Never raises.
+    """
+    try:
+        import hashlib
+        from cryptography.hazmat.primitives import serialization
+
+        der = _load_public_key().public_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        return hashlib.sha256(der).hexdigest()
+    except Exception as exc:
+        logger.warning("license: pubkey fingerprint failed: %s", exc)
+        return None
+
+
+def pubkey_info() -> dict:
+    """Operator-facing description of the embedded license verification key.
+
+    Used by the ``/api/license/pubkey`` route and the ``clawmetry license
+    fingerprint`` CLI subcommand. Never raises — on parse failure the
+    fingerprint field is ``None`` and ``valid`` is ``False``."""
+    fp = pubkey_fingerprint()
+    pem_text = ""
+    try:
+        pem_text = _PUBLIC_KEY_PEM.decode("ascii").strip()
+    except Exception:
+        pem_text = ""
+    return {
+        "algorithm": "ed25519",
+        "format": "SubjectPublicKeyInfo (DER, SHA-256)",
+        "fingerprint_sha256": fp,
+        "fingerprint_short": fp[:16] if fp else None,
+        "pem": pem_text,
+        "valid": fp is not None,
+    }
+
+
 def _encode_token(payload: dict, private_key) -> str:
     """Mint a license token. Needs the Ed25519 PRIVATE key — used by the
     license server and tests, never with a key shipped in this package."""
@@ -798,6 +849,10 @@ def current_license_info() -> dict | None:
             "sub": payload.get("sub", ""),
             "exp": exp,
             "days_left": days_left,
+            # Trust-anchor identity: a Pro/Enterprise license is only as
+            # trustworthy as the embedded public key that signed it, so we
+            # surface its fingerprint here for operator audits.
+            "pubkey_fingerprint_sha256": pubkey_fingerprint(),
             "permissions_safe": perms_safe,
             "file_mode": (f"{mode:04o}" if mode is not None else None),
         }
