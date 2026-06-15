@@ -6,11 +6,15 @@ runtimes/features to surface (and, once enforcement is live, which to render
 locked behind an upgrade CTA). Backed by :mod:`clawmetry.entitlements`, which
 is the single source of truth — handlers never re-derive tier logic here.
 
-  GET /api/entitlement            — the current Entitlement as JSON.
-  GET /api/entitlement/diagnostic — the *inputs* the resolver consulted
+  GET  /api/entitlement          — the current Entitlement as JSON.
+  GET  /api/entitlement/diagnostic — the *inputs* the resolver consulted
                                      (license/cloud-plan presence, enforce env,
                                      cache liveness) for operator triage.
-  GET /api/runtimes               — the full runtime catalog with locked/free flags.
+  GET  /api/entitlement/upgrade-diff — features + runtimes a target tier
+                                       would unlock on top of the current
+                                       entitlement (drives the upgrade CTA).
+  GET  /api/runtimes             — the full runtime catalog with locked/free
+                                   flags.
 
 Side-effect-free and never-raise, so it is safe to classify ``oss-passthrough``
 on the cloud side: when no license/cloud plan is present it returns a graceful
@@ -137,6 +141,7 @@ def api_runtimes():
                         "free": True,
                         "allowed": True,
                         "locked": False,
+                        "tier": "free",
                     },
                     {
                         "id": "openclaw",
@@ -144,6 +149,7 @@ def api_runtimes():
                         "free": True,
                         "allowed": True,
                         "locked": False,
+                        "tier": "free",
                     },
                 ],
                 "grace": True,
@@ -209,6 +215,34 @@ def api_license_status():
     except Exception as exc:
         logger.warning("api_license_status: error: %s", exc)
         return jsonify({"error": str(exc)}), 500
+
+
+@bp_entitlement.route("/api/license/pubkey")
+def api_license_pubkey():
+    """Return the embedded Ed25519 license-verification key + its SHA-256
+    fingerprint, so operators can confirm the OSS install carries the genuine
+    trust anchor (the same one published at https://clawmetry.com/security).
+
+    Read-only, no auth, no license required — the public key is, by
+    construction, public. Never raises: on a parse failure the body still
+    includes ``valid: false`` so callers always get a stable shape.
+    """
+    try:
+        from clawmetry import license as _lic
+
+        return jsonify(_lic.pubkey_info())
+    except Exception as exc:  # never crash the dashboard over a key read
+        logger.warning("api_license_pubkey: error: %s", exc)
+        return jsonify(
+            {
+                "algorithm": "ed25519",
+                "format": "SubjectPublicKeyInfo (DER, SHA-256)",
+                "fingerprint_sha256": None,
+                "fingerprint_short": None,
+                "pem": "",
+                "valid": False,
+            }
+        )
 
 
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
