@@ -606,6 +606,44 @@ class Entitlement:
             return min_tier_for_runtime(k)
         return None
 
+    def next_purchasable_tier(self) -> str | None:
+        """The cheapest *purchasable* tier id with a strictly higher rank than
+        this entitlement's tier — the natural target for the dashboard's primary
+        "Upgrade to ___" CTA button.
+
+        Walks :data:`_PURCHASABLE_TIERS` (which intentionally excludes
+        :data:`TIER_TRIAL` — trial is a promotional grant, not pickable from a
+        price page) and returns the first tier whose :func:`tier_rank` is
+        strictly greater than the current rank, so:
+
+        * ``oss`` / ``cloud_free`` (rank 0) -> ``cloud_starter``
+        * ``cloud_starter`` (rank 1)        -> ``cloud_pro``
+        * ``cloud_pro`` (rank 2)            -> ``enterprise``
+        * ``pro`` (rank 2, self-hosted)     -> ``enterprise``
+        * ``trial`` (rank 2)                -> ``enterprise``
+        * ``enterprise`` (rank 3)           -> ``None`` (already at the top)
+
+        Unknown tiers are treated as rank ``0`` (the OSS bucket), so a
+        misconfigured plan still drives the operator at ``cloud_starter`` --
+        the upgrade ladder's bottom rung -- rather than returning ``None`` and
+        rendering no CTA at all. Never raises.
+
+        Companion to :meth:`upgrade_diff`: ``ent.upgrade_diff(ent.next_purchasable_tier())``
+        is the one-call "what would I get by clicking the CTA?" payload.
+        """
+        try:
+            # Unknown tiers (rank -1) clamp to 0 so the lookup still produces a
+            # useful CTA target (cloud_starter) instead of advertising "oss" as
+            # an "upgrade".
+            current_rank = max(0, tier_rank(self.tier))
+            for candidate in _PURCHASABLE_TIERS:
+                if tier_rank(candidate) > current_rank:
+                    return candidate
+            return None
+        except Exception as exc:
+            logger.warning("entitlements: next_purchasable_tier failed: %s", exc)
+            return None
+
     def upgrade_diff(self, target_tier: str) -> dict:
         """Features + runtimes ``target_tier`` would unlock on top of this
         entitlement. Returns ``{"target": "<tier>", "added_features": [...sorted...],
@@ -895,6 +933,16 @@ class Entitlement:
             "all_runtimes": sorted(ALL_RUNTIMES),
             "locked_runtimes": list(self.locked_runtimes()),
             "locked_features": list(self.locked_features()),
+            # Next purchasable tier above this entitlement -- the dashboard's
+            # primary "Upgrade to ___" CTA target. ``None`` once the install is
+            # already on Enterprise. ``next_tier_label`` mirrors the labelling
+            # the UI shows alongside the tier id.
+            "next_tier": self.next_purchasable_tier(),
+            "next_tier_label": (
+                tier_label(self.next_purchasable_tier())
+                if self.next_purchasable_tier() is not None
+                else None
+            ),
         }
 
 
@@ -1226,6 +1274,18 @@ def tier_rank(tier: str) -> int:
     """Comparable rank for ``tier`` (higher = unlocks more). Returns ``-1`` for
     unknown tiers. See :data:`_TIER_RANK` for the canonical numbering."""
     return _TIER_RANK.get((tier or "").strip().lower(), -1)
+
+
+def next_purchasable_tier() -> str | None:
+    """Module-level convenience: resolve the current entitlement and return the
+    next purchasable tier above it -- the dashboard's "Upgrade to ___" CTA
+    target. See :meth:`Entitlement.next_purchasable_tier` for semantics. Never
+    raises; any resolution error returns ``None``."""
+    try:
+        return get_entitlement().next_purchasable_tier()
+    except Exception as exc:
+        logger.warning("entitlements: next_purchasable_tier (module) failed: %s", exc)
+        return None
 
 
 def min_tier_for_feature(feature: str) -> str | None:
