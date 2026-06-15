@@ -111,21 +111,6 @@ RUNTIME_LABELS = {
     "nanoclaw": "NanoClaw",
 }
 
-# Display labels for every tier identifier. Mirrors the runtime/feature label
-# pattern so the dashboard never has to hardcode a tier display name -- the
-# upgrade-ladder UI reads :func:`tier_catalog` and trusts these. Falls back to
-# the tier id when a label is missing so an unknown tier still renders with
-# *something*. Plain tier names only -- no pricing strings live in this file.
-TIER_LABELS = {
-    TIER_OSS: "OSS",
-    TIER_CLOUD_FREE: "Free",
-    TIER_TRIAL: "Trial",
-    TIER_CLOUD_STARTER: "Starter",
-    TIER_CLOUD_PRO: "Pro",
-    TIER_PRO: "Pro (Self-hosted)",
-    TIER_ENTERPRISE: "Enterprise",
-}
-
 # Stable display order for the upgrade ladder: cheapest to most capable. The
 # self-hosted Pro tier sits next to cloud Pro because it grants the same paid
 # feature set. The UI iterates :func:`tier_catalog` in this order.
@@ -1445,14 +1430,6 @@ def runtime_catalog() -> list[dict]:
             }
         )
     return out
-
-
-def tier_label(tier: str) -> str:
-    """Human-readable label for ``tier``. Falls back to the id when unknown so
-    an unrecognised tier (e.g. a future plan code) still renders with
-    *something*."""
-    t = (tier or "").strip().lower()
-    return TIER_LABELS.get(t, t)
 
 
 def tier_catalog() -> list[dict]:
