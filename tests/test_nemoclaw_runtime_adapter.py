@@ -277,3 +277,90 @@ def test_nemoclaw_ignores_non_nemo_events(isolated_store):
     _wait_flush(isolated_store)
     from clawmetry.adapters.nemo import NemoClawAdapter
     assert NemoClawAdapter().detect().detected is False
+
+# ── obs-gap #2959: Ollama inference host + local model roster ────────────────
+
+
+def test_resolve_ollama_host_loopback(monkeypatch):
+    """No OLLAMA_HOST and not in docker → loopback host."""
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    monkeypatch.delenv("OLLAMA_IN_DOCKER", raising=False)
+    monkeypatch.setattr("os.path.exists", lambda p: False)
+    from clawmetry.adapters.nemo import _resolve_ollama_host, _OLLAMA_LOCALHOST
+    host, mode = _resolve_ollama_host()
+    assert host == _OLLAMA_LOCALHOST
+    assert mode == "loopback"
+
+
+def test_resolve_ollama_host_docker(monkeypatch):
+    """Inside a container (/.dockerenv present) → docker-internal host."""
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    monkeypatch.setattr("os.path.exists", lambda p: p == "/.dockerenv")
+    from clawmetry.adapters.nemo import _resolve_ollama_host, _OLLAMA_HOST_DOCKER_INTERNAL
+    host, mode = _resolve_ollama_host()
+    assert host == _OLLAMA_HOST_DOCKER_INTERNAL
+    assert mode == "docker-internal"
+
+
+def test_resolve_ollama_host_explicit_normalises_scheme(monkeypatch):
+    """An explicit OLLAMA_HOST wins and a bare host:port gets an http:// scheme."""
+    monkeypatch.setenv("OLLAMA_HOST", "ollama.internal:11434")
+    from clawmetry.adapters.nemo import _resolve_ollama_host
+    host, mode = _resolve_ollama_host()
+    assert host == "http://ollama.internal:11434"
+    assert mode == "explicit"
+
+
+def test_ollama_inference_roster_parsed(monkeypatch):
+    """When /api/tags answers, the model roster is sorted + de-duplicated."""
+    import io
+    import json as _json
+
+    class _FakeResp:
+        def __init__(self, body):
+            self._b = body.encode("utf-8")
+        def read(self):
+            return self._b
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    payload = {"models": [{"name": "llama3:8b"}, {"name": "qwen2:7b"}, {"name": "llama3:8b"}]}
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda url, timeout=0: _FakeResp(_json.dumps(payload)),
+    )
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    monkeypatch.setattr("os.path.exists", lambda p: False)
+    from clawmetry.adapters.nemo import _read_nemoclaw_ollama_inference
+    info = _read_nemoclaw_ollama_inference()
+    assert info["ollama_host_mode"] == "loopback"
+    assert info["ollama_local_models"] == ["llama3:8b", "qwen2:7b"]
+
+
+def test_ollama_inference_unreachable_still_returns_host(monkeypatch):
+    """When Ollama is unreachable, host/mode are still surfaced, no roster key."""
+    def _boom(url, timeout=0):
+        raise OSError("connection refused")
+    monkeypatch.setattr("urllib.request.urlopen", _boom)
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    monkeypatch.setattr("os.path.exists", lambda p: False)
+    from clawmetry.adapters.nemo import _read_nemoclaw_ollama_inference
+    info = _read_nemoclaw_ollama_inference()
+    assert "ollama_host" in info and "ollama_host_mode" in info
+    assert "ollama_local_models" not in info
+
+
+def test_detect_meta_includes_ollama_inference(isolated_store, monkeypatch):
+    """detect().meta carries ollama_inference with host + mode (gap #2959)."""
+    def _boom(url, timeout=0):
+        raise OSError("connection refused")
+    monkeypatch.setattr("urllib.request.urlopen", _boom)
+    _seed_nemoclaw_event(isolated_store)
+    _wait_flush(isolated_store)
+    from clawmetry.adapters.nemo import NemoClawAdapter
+    meta = NemoClawAdapter().detect().meta
+    assert "ollama_inference" in meta
+    assert "ollama_host" in meta["ollama_inference"]
+    assert "ollama_host_mode" in meta["ollama_inference"]
