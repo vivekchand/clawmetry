@@ -297,6 +297,22 @@ _TIER_RETENTION_DAYS = {
 # Tiers that unlock the paid runtimes.
 _TIER_PAID_RUNTIMES = _PAID_TIERS
 
+# Ordinal rank of each tier on the pricing ladder. Used by ``tier_rank()`` and
+# ``Entitlement.is_at_least()`` so gating callers can ask "is this install at
+# least Pro?" without re-encoding the ladder shape. Tiers that share a feature
+# set share a rank (Trial / Cloud Pro / self-hosted Pro are all rank 3).
+# Unknown tier names rank as ``-1`` so an unrecognised string never compares
+# equal to a known tier.
+_TIER_RANK = {
+    TIER_OSS: 0,
+    TIER_CLOUD_FREE: 1,
+    TIER_CLOUD_STARTER: 2,
+    TIER_TRIAL: 3,          # Trial grants the full Pro feature set
+    TIER_CLOUD_PRO: 3,
+    TIER_PRO: 3,            # self-hosted Pro mirrors Cloud Pro
+    TIER_ENTERPRISE: 4,
+}
+
 _LICENSE_PATH = os.path.expanduser("~/.clawmetry/license.key")
 _CLOUD_PLAN_CACHE = os.path.expanduser("~/.clawmetry/cloud_plan.json")
 _ENFORCE_ENABLE_VALUES = frozenset({"1", "true", "yes", "on"})
@@ -365,6 +381,66 @@ class Entitlement:
             return False
         return feature in self.features
 
+
+    def lock_reason(self, item: str, kind: str = "auto") -> str | None:
+        """Return a human-readable reason why ``item`` is locked, or ``None``
+        if it is unlocked (or in grace mode -- grace never locks anything).
+
+        ``kind`` selects the namespace to search:
+          * ``"auto"``    -- try runtime first, then feature (default)
+          * ``"runtime"`` -- only the runtime catalogue
+          * ``"feature"`` -- only the feature catalogue
+
+        Empty / falsy / unknown input returns ``None`` (never raises, never
+        claims something is locked when we do not know what it is). Never raises.
+        """
+        try:
+            iid = (item or "").strip().lower()
+            if not iid or len(iid) > 256:
+                return None
+            if self.grace:
+                return None
+
+            k = (kind or "auto").strip().lower()
+
+            if k in ("auto", "runtime"):
+                if iid in FREE_RUNTIMES:
+                    return None
+                if iid in PAID_RUNTIMES:
+                    if self.expired:
+                        return "Paid runtime %s requires a valid (non-expired) plan" % iid
+                    if not self.allows_runtime(iid):
+                        return "Paid runtime %s requires a paid plan" % iid
+                    return None
+                if k == "runtime":
+                    return None
+
+            if k in ("auto", "feature"):
+                if iid in FREE_FEATURES:
+                    return None
+                unlock_tier = None
+                if iid in ENTERPRISE_FEATURES:
+                    unlock_tier = TIER_ENTERPRISE
+                elif iid in PRO_ONLY_FEATURES:
+                    unlock_tier = TIER_CLOUD_PRO
+                elif iid in STARTER_FEATURES:
+                    unlock_tier = TIER_CLOUD_STARTER
+                if unlock_tier is None:
+                    return None
+                if self.expired:
+                    return "Feature %s requires a valid (non-expired) plan" % iid
+                if not self.allows_feature(iid):
+                    label = tier_label(unlock_tier)
+                    if unlock_tier == TIER_ENTERPRISE:
+                        return "Feature %s requires %s" % (iid, label)
+                    return "Feature %s requires %s or above" % (iid, label)
+                return None
+
+            return None
+        except Exception as exc:
+            logger.debug("entitlements: lock_reason failed for %r: %s", item, exc)
+            return None
+
     def locked_runtimes(self) -> tuple[str, ...]:
         """Sorted tuple of PAID runtime ids the install currently can NOT
         observe — the inverse view of :meth:`allows_runtime` restricted to
@@ -402,6 +478,24 @@ class Entitlement:
             return tuple(sorted(f for f in paid_universe if not self.allows_feature(f)))
         except Exception:
             return ()
+
+    def is_at_least(self, min_tier: str) -> bool:
+        """Whether this entitlement is at least ``min_tier`` on the pricing
+        ladder. Grace-INDEPENDENT (a rank comparison is a plan fact, not a
+        gate decision): use ``allows_feature``/``allows_runtime`` for "may
+        this request proceed?" gating, and this for "does the plan itself
+        clear the bar?" telemetry and UI affordances.
+
+        Unknown tier strings rank as ``-1`` on both sides, so
+        ``is_at_least("nonsense")`` returns ``False`` and an entitlement with
+        an unknown tier never satisfies any known minimum. Never raises.
+        """
+        try:
+            target = _TIER_RANK.get((min_tier or "").strip().lower(), -1)
+            mine = _TIER_RANK.get(self.tier, -1)
+            return target >= 0 and mine >= target
+        except Exception:
+            return False
 
     def event_retention_days(self) -> int | None:
         """Days of event history this tier may keep. ``None`` means unlimited
@@ -465,6 +559,7 @@ class Entitlement:
         return {
             "tier": self.tier,
             "source": self.source,
+            "rank": _TIER_RANK.get(self.tier, -1),
             "node_limit": self.node_limit,
             "expiry": self.expiry,
             "expired": self.expired,
@@ -728,6 +823,17 @@ def resolution_diagnostic() -> dict:
     return out
 
 
+def lock_reason(item: str, kind: str = "auto") -> str | None:
+    """Module-level convenience: resolve the current entitlement and return
+    the lock reason for ``item``. Equivalent to
+    ``get_entitlement().lock_reason(item, kind)``. Never raises."""
+    try:
+        return get_entitlement().lock_reason(item, kind)
+    except Exception as exc:
+        logger.warning("entitlements: lock_reason (module) failed: %s", exc)
+        return None
+
+
 def available_runtimes() -> list[str]:
     """Runtimes the UI should expose. In grace mode that's every known
     runtime (so nothing disappears before enforcement); once enforced it's the
@@ -758,6 +864,18 @@ def canonical_runtime(runtime: str) -> str:
     if rt in ALL_RUNTIMES:
         return rt
     return RUNTIME_ALIASES.get(rt, rt)
+
+
+def tier_rank(tier: str) -> int:
+    """Ordinal rank of ``tier`` on the pricing ladder, or ``-1`` for an
+    unknown tier name. Higher = more capable. Lets gating callers ask "is
+    this install at least Pro?" via :meth:`Entitlement.is_at_least` without
+    hardcoding the ladder shape, and lets the UI sort tier rows
+    deterministically without a bespoke comparator. Never raises."""
+    try:
+        return _TIER_RANK.get((tier or "").strip().lower(), -1)
+    except Exception:
+        return -1
 
 
 def runtime_label(runtime: str) -> str:
