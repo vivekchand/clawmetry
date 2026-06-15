@@ -8284,6 +8284,7 @@ function _cmApplyRuntimeTabVisibility() {
       try { switchTab('overview'); } catch (e) {}
     }
   });
+  try { _cmRefreshHarnessNav(); } catch (e) {}
 }
 // Insert/update/remove the runtime-scope note at the top of a tab's page.
 // Called from switchTab. Only shows when a specific (non-'all') runtime is
@@ -8554,6 +8555,7 @@ function _cmOnGlobalRuntimeChange(sel) {
   try { if (typeof _applyRuntimeFlowDiagram === 'function') _applyRuntimeFlowDiagram(val); } catch (e) {}
   // Reload the current tab so any runtime-aware view re-filters in place.
   if (typeof switchTab === 'function' && _cmCurrentTab) switchTab(_cmCurrentTab);
+  try { _cmRefreshHarnessNav(); } catch (e) {}
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -15272,6 +15274,26 @@ function renderToolCatalog() {
 var _cmHarnessTemplates = null;   // {runtime: template}, fetched once
 var _cmHarnessData = null;
 
+// Show the Harness nav iff a specific runtime is selected AND it has a template.
+function _cmRefreshHarnessNav() {
+  var nav = document.getElementById('left-nav-harness');
+  if (!nav) return;
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  if (!rt || rt === 'all') { nav.style.display = 'none'; return; }
+  nav.style.display = (_cmHarnessTemplates && _cmHarnessTemplates[rt]) ? '' : 'none';
+}
+
+// Eagerly fetch templates at page-init so the nav can appear without waiting
+// for the user to visit the Harness tab.
+async function _cmInitHarnessNav() {
+  if (_cmHarnessTemplates) { _cmRefreshHarnessNav(); return; }
+  try {
+    var t = await fetch('/api/harness/templates').then(function (r) { return r.json(); });
+    _cmHarnessTemplates = (t && t.templates) || {};
+  } catch (e) { /* non-fatal -- nav stays hidden */ }
+  _cmRefreshHarnessNav();
+}
+
 async function loadHarness() {
   var el = document.getElementById('harness-container');
   if (!el) return;
@@ -15281,6 +15303,7 @@ async function loadHarness() {
     if (!_cmHarnessTemplates) {
       var t = await fetch('/api/harness/templates').then(function (r) { return r.json(); });
       _cmHarnessTemplates = (t && t.templates) || {};
+      _cmRefreshHarnessNav();
     }
     var tmpl = _cmHarnessTemplates[rt];
     if (!tmpl) { el.innerHTML = _cmHarnessNoTemplate(rt); return; }
@@ -20155,6 +20178,9 @@ function closeCompModal() {
 }
 document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeCompModal(); });
 document.addEventListener('DOMContentLoaded', initCompClickHandlers);
+// Eagerly resolve harness template availability so the nav item appears
+// (or stays hidden) at first paint rather than waiting for the tab visit.
+document.addEventListener('DOMContentLoaded', function () { setTimeout(_cmInitHarnessNav, 300); });
 
 // Pre-fetch tool data so modals open instantly
 function _prefetchToolData() {
