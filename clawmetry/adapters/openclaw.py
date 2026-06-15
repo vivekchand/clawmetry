@@ -591,8 +591,12 @@ class OpenClawAdapter(AgentAdapter):
                     cache_write_tokens=tok_cw,
                     reasoning_tokens=int(tok_reasoning or 0),
                     cost_usd=float(s["costUsd"]) if s.get("costUsd") is not None else None,
+                    ended_at=float(s["endedAt"]) / 1000.0 if s.get("endedAt") else None,
                     end_reason=s.get("endReason") or s.get("end_reason") or "",
                     parent_id=s.get("parentId") or None,
+                    message_count=int(s.get("messageCount") or 0),
+                    title=s.get("title") or "",
+                    cost_status=s.get("costStatus") or "",
                     extra=extra,
                 )
             )
