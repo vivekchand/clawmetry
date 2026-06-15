@@ -34,6 +34,8 @@ Module-level helpers (``_history_db``, ``AgentReliabilityScorer``,
 ``import dashboard as _d``. Pure mechanical move — zero behaviour change.
 """
 
+from __future__ import annotations
+
 import hashlib
 import json
 import os
@@ -3318,3 +3320,138 @@ def api_handler_latency():
     stats = latency_tracker.get_stats(top_n=top_n, slow_threshold_ms=slow_ms)
     stats["_source"] = "in_memory"
     return jsonify(stats)
+
+
+# ---------------------------------------------------------------------------
+# Issue #2861 -- version-aware health regression detection
+# ---------------------------------------------------------------------------
+
+_REGRESSION_THRESHOLD_PCT = 30.0
+_REGRESSION_MIN_SESSIONS = 3
+
+
+def _compute_version_regression(versions: list[dict]) -> dict:
+    """Flag degradation between the two most-recent OpenClaw versions.
+
+    Compares versions[0] (current) with versions[1] (previous) on cost,
+    error_rate, and avg_tokens.  Emits a banner string when any metric
+    worsens by more than _REGRESSION_THRESHOLD_PCT percent, provided both
+    versions have at least _REGRESSION_MIN_SESSIONS sessions so sparse
+    data doesn't trigger false positives.
+    """
+    regression: dict = {"detected": False}
+    if len(versions) >= 2:
+        current = versions[0]
+        baseline = versions[1]
+        if (current["session_count"] >= _REGRESSION_MIN_SESSIONS
+                and baseline["session_count"] >= _REGRESSION_MIN_SESSIONS):
+            for metric, label in [
+                ("avg_cost_usd", "Cost"),
+                ("error_rate", "Error rate"),
+                ("avg_tokens", "Token usage"),
+            ]:
+                base_val = float(baseline.get(metric) or 0)
+                curr_val = float(current.get(metric) or 0)
+                if base_val > 0:
+                    change_pct = (curr_val - base_val) / base_val * 100.0
+                    if change_pct > _REGRESSION_THRESHOLD_PCT:
+                        try:
+                            from datetime import datetime as _dt
+                            ago_days = (
+                                _dt.utcnow()
+                                - _dt.fromisoformat(
+                                    (current.get("first_seen") or "")[:10]
+                                )
+                            ).days
+                            ago_str = (
+                                f" -- {ago_days} day{'s' if ago_days != 1 else ''} ago"
+                            )
+                        except Exception:
+                            ago_str = ""
+                        regression = {
+                            "detected": True,
+                            "current_version": current["version"],
+                            "baseline_version": baseline["version"],
+                            "metric": label.lower(),
+                            "change_pct": round(change_pct, 1),
+                            "banner": (
+                                f"{label} +{round(change_pct)}% since upgrade to "
+                                f"{current['version']}{ago_str}"
+                            ),
+                        }
+                        break
+    return regression
+
+
+def _try_local_store_version_health(window_days: int) -> dict | None:
+    """Daemon-proxy first, then direct read-only store fallback."""
+    try:
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_version_health", window_days=window_days)
+        if rows is not None:
+            return {
+                "versions": rows,
+                "regression": _compute_version_regression(rows),
+                "_source": "duckdb",
+            }
+    except Exception:
+        pass
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store(read_only=True)
+        rows = store.query_version_health(window_days=window_days)
+        return {
+            "versions": rows,
+            "regression": _compute_version_regression(rows),
+            "_source": "duckdb",
+        }
+    except Exception:
+        return None
+
+
+@bp_health.route("/api/version-health")
+def api_version_health():
+    """Per-OpenClaw-version session metric rollup with regression flags.
+
+    Joins sessions with heartbeats to assign each session the OpenClaw
+    version active at session start, then groups by version and checks
+    whether the current version shows >30% degradation vs the previous on
+    cost / error-rate / token usage.
+
+    Query params (all optional):
+      window_days  -- lookback window in days (default 90, clamp 7..365)
+
+    Response shape:
+      {
+        "versions": [
+          { "version": str, "session_count": int,
+            "avg_cost_usd": float, "avg_tokens": float,
+            "avg_messages": float, "error_rate": float,
+            "first_seen": str, "last_seen": str }
+        ],
+        "regression": {
+          "detected": bool,
+          "current_version": str,   # only when detected=true
+          "baseline_version": str,
+          "metric": str,
+          "change_pct": float,
+          "banner": str
+        },
+        "_source": "duckdb" | "unavailable"
+      }
+    """
+    try:
+        window_days = max(7, min(365, int(request.args.get("window_days", 90))))
+    except (TypeError, ValueError):
+        window_days = 90
+
+    if is_local_store_read_enabled():
+        fast = _try_local_store_version_health(window_days)
+        if fast is not None:
+            return jsonify(fast)
+
+    return jsonify({
+        "versions": [],
+        "regression": {"detected": False},
+        "_source": "unavailable",
+    })

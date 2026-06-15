@@ -721,6 +721,10 @@ _DAEMON_METHODS = frozenset({
     # routes/usage.py:/api/efficiency through the daemon proxy (read-only;
     # the daemon owns the writer lock).
     "query_efficiency_rollup",
+    # Issue #2861 -- version-aware health regression. Read-only join of
+    # sessions + heartbeats; routed through the daemon proxy so the
+    # dashboard process never opens DuckDB writable.
+    "query_version_health",
 })
 
 
