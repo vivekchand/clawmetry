@@ -826,6 +826,11 @@ class Entitlement:
             "tier_label": tier_label(self.tier),
             "source": self.source,
             "node_limit": self.node_limit,
+            # Channel-adapter cap. Goes through the method so grace mode reads
+            # ``None`` (unlimited) end-to-end -- the dashboard's "X of N adapters"
+            # badge then matches the gate the channels route will eventually use.
+            # Free / OSS = 3 once enforced; every paid tier is ``None``.
+            "channel_limit": self.channel_limit(),
             "expiry": self.expiry,
             "expired": self.expired,
             "days_until_expiry": self.days_until_expiry(),
