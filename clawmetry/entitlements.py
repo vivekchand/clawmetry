@@ -338,6 +338,23 @@ _TIER_RETENTION_DAYS = {
     TIER_ENTERPRISE: None,
 }
 
+# Per-tier maximum number of distinct channel adapters the install may surface
+# in the dashboard (Telegram, Signal, Slack, ...). ``None`` = unlimited. This is
+# the wire side of the ``all_channels`` Starter feature: Free taps cap at 3 so
+# the unlock has teeth, and every paid tier gets the full set of 21 adapters.
+# The channels route consults :meth:`Entitlement.allows_channel_count` (still
+# grace-gated) to enforce this without scattering tier checks into ``routes/``.
+_FREE_CHANNEL_LIMIT = 3
+_TIER_CHANNEL_LIMIT = {
+    TIER_OSS: _FREE_CHANNEL_LIMIT,
+    TIER_CLOUD_FREE: _FREE_CHANNEL_LIMIT,
+    TIER_TRIAL: None,
+    TIER_CLOUD_STARTER: None,
+    TIER_CLOUD_PRO: None,
+    TIER_PRO: None,
+    TIER_ENTERPRISE: None,
+}
+
 # Tiers that unlock the paid runtimes.
 _TIER_PAID_RUNTIMES = _PAID_TIERS
 
@@ -729,6 +746,60 @@ class Entitlement:
         if days is None:  # caller asked for unlimited; only Enterprise grants it
             return False
         return days <= cap
+
+    def channel_limit(self) -> int | None:
+        """Maximum distinct channel adapters this tier may surface in the UI.
+        ``None`` means unlimited (every paid tier). Free / OSS caps at 3 so
+        the ``all_channels`` Starter unlock has teeth.
+
+        Grace mode (default) returns ``None`` so wiring this into the
+        channels route changes no current behaviour before the enforce
+        phase -- same posture as :meth:`event_retention_days` etc.
+
+        Per-tier values (see ``_TIER_CHANNEL_LIMIT``):
+            Free / OSS:                3
+            Starter / Trial / Pro:  None  (all 21 adapters)
+            Enterprise:             None
+        """
+        if self.grace:
+            return None
+        return _TIER_CHANNEL_LIMIT.get(self.tier, _FREE_CHANNEL_LIMIT)
+
+    def allows_channel_count(self, current: int) -> bool:
+        """Whether ``current`` configured channel adapters still fit under
+        this entitlement's channel cap. Symmetric with
+        :meth:`allows_runtime` / :meth:`allows_feature` /
+        :meth:`allows_node_count` / :meth:`allows_retention_window` --
+        same never-crash contract so channels code can wire it in without
+        scattering tier checks.
+
+        Semantics (mirrors :meth:`allows_node_count`):
+
+        * Grace mode -- always ``True`` (the rollout invariant).
+        * ``current <= 0`` -- always ``True``. A zero/negative count is
+          either "not measured yet" or a fleet-table miss; either way it
+          should never be the thing that blocks a request.
+        * Expired entitlement -- collapses to :data:`_FREE_CHANNEL_LIMIT`,
+          matching how :meth:`allows_runtime` falls back to free runtimes
+          on expiry.
+        * ``channel_limit() is None`` -- unlimited tier, always ``True``.
+        * Otherwise -- ``current <= channel_limit()``.
+
+        Non-int ``current`` is swallowed and returns ``True`` so a flaky
+        config read never blocks a request path.
+        """
+        if self.grace:
+            return True
+        try:
+            n = int(current)
+        except (TypeError, ValueError):
+            return True
+        if n <= 0:
+            return True
+        if self.expired:
+            return n <= _FREE_CHANNEL_LIMIT
+        lim = self.channel_limit()
+        return lim is None or n <= lim
 
     def to_dict(self) -> dict:
         # ``retention_days`` mirrors :meth:`event_retention_days` so the
