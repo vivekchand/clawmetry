@@ -24,6 +24,16 @@ have been returning by hand for months, so existing front-ends that already
 handle 402 continue to work. ``required_tier`` is included so the UI can
 route users to the *correct* upgrade CTA (Starter vs Pro vs Enterprise)
 instead of a generic one.
+
+Runtime gating
+--------------
+Some routes are scoped to a single runtime (e.g. the Claude Code dashboard)
+or accept a runtime in a path/body parameter (e.g. the runtime ingest API).
+For those, use :func:`gate_runtime` as a decorator when the runtime is known
+at import time, or :func:`require_runtime` inline when it comes from the
+request. Both share the same defensive contract as :func:`gate`: grace mode
++ free runtimes (``openclaw``, ``nemoclaw``) always pass through; any error
+inside the entitlement lookup is swallowed and the request proceeds.
 """
 from __future__ import annotations
 
@@ -85,6 +95,74 @@ def gate(feature_key: str) -> Callable:
                 # The audit chain still records the call; the worst that
                 # happens is a paid feature briefly runs on a Free tier.
                 pass
+            return fn(*args, **kwargs)
+        return wrapper
+    return deco
+
+
+def require_runtime(runtime: str):
+    """Inline gate for runtime-scoped routes that pick the runtime out of a
+    path or body parameter at request time.
+
+    Returns a Flask 402 ``upgrade_required`` response tuple when the install
+    is not entitled to ``runtime``; returns ``None`` (let the request through)
+    in grace mode, for free runtimes, or for any tier that already unlocks
+    ``runtime``. Defensive: any error inside the entitlement read swallows
+    to ``None`` so a flaky lookup never blocks a request that would otherwise
+    succeed.
+
+    Typical usage::
+
+        from clawmetry._gate import require_runtime
+
+        @bp.route("/api/runtimes/<rt>/sessions")
+        def list_sessions(rt: str):
+            blocked = require_runtime(rt)
+            if blocked is not None:
+                return blocked
+            ...
+    """
+    try:
+        from flask import jsonify
+        from clawmetry import entitlements as _ent
+
+        rt = (runtime or "").strip().lower()
+        en = _ent.get_entitlement()
+        if en.allows_runtime(rt):
+            return None
+        return jsonify({
+            "error": "upgrade_required",
+            "runtime": rt,
+            "tier": en.tier,
+            "hint": (
+                "This runtime ships in the closed-source clawmetry-pro "
+                "package. Install it with a license key or use Cloud Pro at "
+                "clawmetry.com/pricing."
+            ),
+        }), 402
+    except Exception:
+        # A flaky entitlement read must never block the request path.
+        return None
+
+
+def gate_runtime(runtime_key: str) -> Callable:
+    """Decorator factory: gate a Flask view on a specific runtime being
+    entitled.
+
+    Use when the runtime is known at decoration time (a route that only
+    serves Claude Code data, say). For runtime-from-request routes, prefer
+    :func:`require_runtime` inline so the gated value can vary per call.
+
+    Mirrors :func:`gate` semantically: grace mode + free runtimes pass
+    through; any entitlement-lookup error is swallowed and the request
+    proceeds (the audit chain still records the call).
+    """
+    def deco(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            blocked = require_runtime(runtime_key)
+            if blocked is not None:
+                return blocked
             return fn(*args, **kwargs)
         return wrapper
     return deco
