@@ -125,6 +125,41 @@ def test_model_router_fingerprint_absent_returns_empty(tmp_path, monkeypatch):
     assert _model_router_fingerprint() == {}
 
 
+# -- #2960 model-router proxy-config model_list -----------------------------
+
+def test_model_router_proxy_config_models_reads_static_file(tmp_path, monkeypatch):
+    venv = tmp_path / "mrv"
+    venv.mkdir()
+    (venv / "proxy-config.yaml").write_text(
+        "model_list:\n  - model_name: claude-opus-4\n  - model_name: gpt-4o\n"
+    )
+    monkeypatch.setenv("NEMOCLAW_MODEL_ROUTER_VENV", str(venv))
+    from clawmetry.adapters.openclaw import _model_router_proxy_config_models
+    out = _model_router_proxy_config_models()
+    assert out == {"modelRouterProxyModels": ["claude-opus-4", "gpt-4o"]}
+
+
+def test_model_router_proxy_config_models_absent_returns_empty(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEMOCLAW_MODEL_ROUTER_VENV", str(tmp_path / "nope"))
+    from clawmetry.adapters.openclaw import _model_router_proxy_config_models
+    assert _model_router_proxy_config_models() == {}
+
+
+def test_parse_proxy_config_model_list_litellm_format():
+    from clawmetry.adapters.openclaw import _parse_proxy_config_model_list
+    yaml_content = (
+        "model_list:\n"
+        "  - model_name: claude-opus-4\n"
+        "    litellm_params:\n"
+        "      model: anthropic/claude-opus-4\n"
+        "  - model_name: gpt-4o\n"
+        "    litellm_params:\n"
+        "      model: openai/gpt-4o\n"
+    )
+    result = _parse_proxy_config_model_list(yaml_content)
+    assert result == ["claude-opus-4", "gpt-4o"]
+
+
 # -- #2682 nemoclaw catalog dispatch span unwrap -----------------------------
 
 def test_catalog_dispatch_span_unwraps_real_tool():

@@ -151,6 +151,105 @@ def _model_router_fingerprint() -> dict:
         return {}
 
 
+def _parse_proxy_config_model_list(content: str) -> Optional[List[str]]:
+    """Extract model names from a LiteLLM-style proxy-config YAML (#2960).
+
+    Tries ``yaml.safe_load`` first (PyYAML, optional dep); falls back to a
+    line-by-line scan for ``model_name:`` keys so no new hard dependency is
+    needed.  Returns ``None`` on parse failure so callers can omit the field.
+    Never raises.
+    """
+    try:
+        import yaml as _yaml  # type: ignore[import]
+        data = _yaml.safe_load(content)
+        items = data.get("model_list", []) if isinstance(data, dict) else []
+        return [
+            m["model_name"]
+            for m in items
+            if isinstance(m, dict) and "model_name" in m
+        ]
+    except ImportError:
+        pass
+    except Exception:
+        return None
+
+    # Fallback: line scan for ``model_name: <value>`` in a model_list block
+    in_list = False
+    names: List[str] = []
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped == "model_list:":
+            in_list = True
+            continue
+        if in_list:
+            if stripped.startswith("- model_name:"):
+                _, _, name = stripped.partition(":")
+                names.append(name.strip().strip("\"'"))
+            elif stripped and not stripped.startswith("-") and not stripped.startswith(" "):
+                in_list = False
+    return names or None
+
+
+def _model_router_proxy_config_models() -> dict:
+    """Read the NeMoClaw model-router proxy-config model roster (#2960).
+
+    The harness writes a proxy-config YAML during onboarding
+    (test/onboard-model-router.test.ts). Checks ``<venv>/proxy-config.yaml``
+    first; falls back to running ``model-router proxy-config --output <tmp>``
+    if the binary is on PATH.
+
+    Returns ``{"modelRouterProxyModels": ["name", ...]}`` or ``{}`` on any
+    failure (file absent, binary missing, parse error).  Never raises.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+
+    venv = os.environ.get("NEMOCLAW_MODEL_ROUTER_VENV") or os.path.expanduser(
+        os.path.join("~", ".nemoclaw", "model-router-venv"))
+
+    # Fast path: static file written by harness onboarding
+    static_path = os.path.join(venv, "proxy-config.yaml")
+    content: Optional[str] = None
+    if os.path.isfile(static_path):
+        try:
+            with open(static_path, encoding="utf-8") as fh:
+                content = fh.read()
+        except OSError:
+            pass
+
+    # Slow path: generate via model-router CLI
+    if content is None:
+        mr_bin_venv = os.path.join(venv, "bin", "model-router")
+        mr_bin: Optional[str] = (
+            mr_bin_venv if os.path.isfile(mr_bin_venv) else shutil.which("model-router")
+        )
+        if not mr_bin:
+            return {}
+        tmp_path: Optional[str] = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".yaml", delete=False) as tmp:
+                tmp_path = tmp.name
+            subprocess.check_call(
+                [mr_bin, "proxy-config", "--output", tmp_path],
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+            with open(tmp_path, encoding="utf-8") as fh:
+                content = fh.read()
+        except Exception:
+            return {}
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+    models = _parse_proxy_config_model_list(content)
+    return {"modelRouterProxyModels": models} if models is not None else {}
+
+
 # NOTE (#2610, deferred): NemoClaw's skill-catalog version/provenance lives in
 # ``skills/catalog-metadata.json`` (min/tested NemoClaw version, content shas),
 # but that file is a SOURCE-repo build artifact — it is not shipped in the npm
@@ -312,6 +411,7 @@ class OpenClawAdapter(AgentAdapter):
             # OpenClaw, so meta is unchanged there. (#2610 skill-catalog deferred
             # — see note above: no host-readable on-disk location.)
             meta.update(_model_router_fingerprint())
+            meta.update(_model_router_proxy_config_models())
             _tc_enabled = _nemoclaw_tool_catalog_state()
             if _tc_enabled is not None:
                 meta["nemoclawToolCatalogEnabled"] = _tc_enabled
