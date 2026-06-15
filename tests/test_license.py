@@ -152,6 +152,73 @@ def test_activate_expired_key(lic):
     assert "expired" in msg.lower()
 
 
+def test_inspect_key_valid_returns_summary(lic):
+    """inspect_key returns the unlock summary for a valid key WITHOUT writing."""
+    import os
+
+    tok = lic.L._encode_token(_payload("pro", nodes=11), lic.priv)
+    info = lic.L.inspect_key(tok)
+    assert info is not None
+    assert info["valid"] is True
+    assert info["status"] == "active"
+    assert info["tier"] == "pro"
+    assert info["nodes"] == 11
+    assert info["days_left"] is not None and info["days_left"] > 300
+    # critical contract: dry-run never touches disk
+    assert not os.path.isfile(lic.L.LICENSE_PATH)
+
+
+def test_inspect_key_enterprise_tier(lic):
+    tok = lic.L._encode_token(_payload("enterprise", nodes=99), lic.priv)
+    info = lic.L.inspect_key(tok)
+    assert info is not None and info["tier"] == "enterprise"
+    assert info["nodes"] == 99
+
+
+def test_inspect_key_invalid_returns_none(lic):
+    """Bogus / forged tokens return None — no partial info leaked."""
+    import os
+
+    other_priv, _ = _keypair()
+    forged = lic.L._encode_token(_payload(), other_priv)
+    assert lic.L.inspect_key(forged) is None
+    assert lic.L.inspect_key("CLAW1.garbage.garbage") is None
+    assert lic.L.inspect_key("") is None
+    assert not os.path.isfile(lic.L.LICENSE_PATH)
+
+
+def test_inspect_key_expired_marks_invalid_but_returns_payload(lic):
+    """Expired-but-parseable keys come back with valid=False + status='expired'
+    so support can still confirm what the (now-stale) key was for."""
+    tok = lic.L._encode_token(_payload("pro", nodes=4, exp_delta=-7200), lic.priv)
+    info = lic.L.inspect_key(tok)
+    assert info is not None
+    assert info["valid"] is False
+    assert info["status"] == "expired"
+    assert info["tier"] == "pro"
+    assert info["nodes"] == 4
+    assert info["days_left"] is not None and info["days_left"] <= 0
+
+
+def test_inspect_key_never_touches_disk_or_cache(lic, monkeypatch):
+    """Hardens the no-side-effects contract: a verify must NOT invalidate the
+    entitlement cache (activate does that; verify must not)."""
+    import os
+
+    import clawmetry.entitlements as e
+
+    monkeypatch.setattr(e, "_LICENSE_PATH", lic.L.LICENSE_PATH)
+    called = {"invalidate": 0}
+    real_invalidate = e.invalidate
+    monkeypatch.setattr(
+        e, "invalidate", lambda: called.__setitem__("invalidate", called["invalidate"] + 1) or real_invalidate()
+    )
+    tok = lic.L._encode_token(_payload(), lic.priv)
+    lic.L.inspect_key(tok)
+    assert not os.path.isfile(lic.L.LICENSE_PATH)
+    assert called["invalidate"] == 0
+
+
 def test_current_license_info(lic):
     tok = lic.L._encode_token(_payload("pro", nodes=3), lic.priv)
     lic.L.activate(tok)

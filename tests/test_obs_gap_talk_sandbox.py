@@ -9,6 +9,9 @@ Covers:
   the harness getSandboxInferenceConfig switch (compatible-anthropic-endpoint
   with the default api routes to the MANAGED 'inference' provider).
 - #2608 _model_router_fingerprint — parse git:<sha> from the fingerprint file.
+- #2796 _sandbox_inference_configs -- providerKey/primaryModelRef/inferenceBaseUrl/
+  inferenceApi/inferenceCompat surfaced on DetectResult.meta for all NemoClaw
+  sandboxes (mirrors getSandboxInferenceConfig from nemoclaw/src/lib/inference/config.ts).
 """
 import json
 import os
@@ -18,7 +21,7 @@ import types
 import pytest
 
 from clawmetry.sync import parse_talk_lifecycle_line, _read_nemoclaw_sandbox_routing
-from clawmetry.adapters.openclaw import _model_router_fingerprint
+from clawmetry.adapters.openclaw import _model_router_fingerprint, _sandbox_inference_configs
 
 
 # -- #2604 talk parser -------------------------------------------------------
@@ -213,6 +216,41 @@ def test_model_router_health_ok_false_when_nothing_listening():
     from clawmetry.adapters.openclaw import _model_router_health_ok
     # Port 0 is never a live listener; probe must fail closed, not raise.
     assert _model_router_health_ok(0) is False
+
+
+# -- #2960 model-router proxy-config model_list -----------------------------
+
+def test_model_router_proxy_config_models_reads_static_file(tmp_path, monkeypatch):
+    venv = tmp_path / "mrv"
+    venv.mkdir()
+    (venv / "proxy-config.yaml").write_text(
+        "model_list:\n  - model_name: claude-opus-4\n  - model_name: gpt-4o\n"
+    )
+    monkeypatch.setenv("NEMOCLAW_MODEL_ROUTER_VENV", str(venv))
+    from clawmetry.adapters.openclaw import _model_router_proxy_config_models
+    out = _model_router_proxy_config_models()
+    assert out == {"modelRouterProxyModels": ["claude-opus-4", "gpt-4o"]}
+
+
+def test_model_router_proxy_config_models_absent_returns_empty(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEMOCLAW_MODEL_ROUTER_VENV", str(tmp_path / "nope"))
+    from clawmetry.adapters.openclaw import _model_router_proxy_config_models
+    assert _model_router_proxy_config_models() == {}
+
+
+def test_parse_proxy_config_model_list_litellm_format():
+    from clawmetry.adapters.openclaw import _parse_proxy_config_model_list
+    yaml_content = (
+        "model_list:\n"
+        "  - model_name: claude-opus-4\n"
+        "    litellm_params:\n"
+        "      model: anthropic/claude-opus-4\n"
+        "  - model_name: gpt-4o\n"
+        "    litellm_params:\n"
+        "      model: openai/gpt-4o\n"
+    )
+    result = _parse_proxy_config_model_list(yaml_content)
+    assert result == ["claude-opus-4", "gpt-4o"]
 
 
 # -- #2682 nemoclaw catalog dispatch span unwrap -----------------------------
@@ -603,3 +641,70 @@ def test_list_events_talk_final_false_is_surfaced():
     assert len(events) == 1
     assert events[0].extra.get("final") is False
     assert events[0].extra.get("mode") == "voice"
+
+
+# -- #2796 _sandbox_inference_configs ----------------------------------------
+
+def test_sandbox_inference_configs_empty_when_no_file(tmp_path, monkeypatch):
+    """No sandboxes.json -> empty list, no effect on plain OpenClaw installs."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert _sandbox_inference_configs() == []
+
+
+def test_sandbox_inference_configs_anthropic_prod(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cfg = {
+        "defaultSandbox": "main",
+        "sandboxes": {
+            "main": {"provider": "anthropic-prod", "model": "claude-opus-4-5"},
+        },
+    }
+    (tmp_path / ".nemoclaw").mkdir()
+    (tmp_path / ".nemoclaw" / "sandboxes.json").write_text(json.dumps(cfg))
+    result = _sandbox_inference_configs()
+    assert len(result) == 1
+    r = result[0]
+    assert r["providerKey"] == "anthropic"
+    assert r["primaryModelRef"] == "anthropic/claude-opus-4-5"
+    assert r["inferenceApi"] == "anthropic-messages"
+    assert r["inferenceCompat"] == "anthropic"
+    assert r["isDefault"] is True
+
+
+def test_sandbox_inference_configs_openai_api(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cfg = {
+        "defaultSandbox": None,
+        "sandboxes": {
+            "coding": {"provider": "openai-api", "model": "gpt-4o"},
+        },
+    }
+    (tmp_path / ".nemoclaw").mkdir()
+    (tmp_path / ".nemoclaw" / "sandboxes.json").write_text(json.dumps(cfg))
+    result = _sandbox_inference_configs()
+    assert len(result) == 1
+    r = result[0]
+    assert r["providerKey"] == "openai"
+    assert r["primaryModelRef"] == "openai/gpt-4o"
+    assert r["inferenceCompat"] == "openai"
+    assert r["isDefault"] is False
+
+
+def test_sandbox_inference_configs_managed_default(tmp_path, monkeypatch):
+    """compatible-anthropic-endpoint + default api -> MANAGED inference provider."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cfg = {
+        "defaultSandbox": "dev",
+        "sandboxes": {
+            "dev": {"provider": "compatible-anthropic-endpoint", "model": "llama3"},
+        },
+    }
+    (tmp_path / ".nemoclaw").mkdir()
+    (tmp_path / ".nemoclaw" / "sandboxes.json").write_text(json.dumps(cfg))
+    result = _sandbox_inference_configs()
+    assert len(result) == 1
+    r = result[0]
+    assert r["providerKey"] == "inference"
+    assert r["inferenceApi"] == "openai-completions"
+    assert r["inferenceCompat"] == "openai"
+    assert r["isDefault"] is True
