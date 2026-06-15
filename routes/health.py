@@ -1327,6 +1327,9 @@ def api_system_health():
             "security": _d._detect_security_metadata(),
             "service_status": service_status,
             "daemon": daemon_health,
+            "daemon_error_rate_per_min": round(
+                daemon_health.get("errors_last_5min", 0) / 5.0, 2
+            ),
             "gateway": gateway_health,
             # Issue #1310 follow-up — per-provider channel ingest summary
             # so operators see whether the gateway WS tap is actually
