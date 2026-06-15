@@ -10033,6 +10033,45 @@ class LocalStore:
                 ev.get("model") or "",
             ])
 
+    def ingest_dive_run(
+        self,
+        *,
+        question: str = "",
+        sql: str = "",
+        chart_type: str = "",
+        row_count: int = 0,
+        latency_ms: int = 0,
+        had_error: bool = False,
+    ) -> None:
+        """Log one Dives query execution for prompt improvement (issue #999, DIVES-6).
+
+        Writes to the events table with event_type='dive_run'. The run_id is
+        derived from the question + sql + current time, making re-delivery of
+        the same RPC call within a sub-second window a safe no-op.
+        """
+        import hashlib as _hashlib
+        import json as _json
+        import time as _time
+        ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        run_id = "dive_" + _hashlib.sha256(
+            f"{question[:100]}{sql[:100]}{_time.time()}".encode()
+        ).hexdigest()[:24]
+        data = _json.dumps({
+            "question":   question[:200],
+            "sql":        sql[:500],
+            "chart_type": chart_type,
+            "row_count":  row_count,
+            "latency_ms": latency_ms,
+            "had_error":  had_error,
+        }).encode()
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO events
+                    (id, agent_type, node_id, agent_id, event_type, ts, data, created_at)
+                VALUES (?, 'clawmetry', 'local', 'dives', 'dive_run', ?, ?, ?)
+                ON CONFLICT (id) DO NOTHING
+            """, [run_id, ts, data, int(_time.time())])
+
     def query_external_calls(
         self,
         *,

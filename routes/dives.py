@@ -268,6 +268,20 @@ def api_dives_query():
     rows, sql_error = _execute(sql, store)
     ms = int((time.monotonic() - t0) * 1000)
 
+    try:
+        from routes.local_query import local_store_via_daemon
+        local_store_via_daemon(
+            "ingest_dive_run",
+            question=question,
+            sql=sql,
+            chart_type=spec.get("chart_type", ""),
+            row_count=len(rows),
+            latency_ms=ms,
+            had_error=bool(sql_error),
+        )
+    except Exception:
+        pass
+
     chart_spec = {
         "chart_type":  spec.get("chart_type", "table"),
         "x":           spec.get("x"),
