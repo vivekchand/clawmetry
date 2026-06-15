@@ -111,6 +111,34 @@ RUNTIME_LABELS = {
     "nanoclaw": "NanoClaw",
 }
 
+# Display labels for every tier identifier. Mirrors the runtime/feature label
+# pattern so the dashboard never has to hardcode a tier display name -- the
+# upgrade-ladder UI reads :func:`tier_catalog` and trusts these. Falls back to
+# the tier id when a label is missing so an unknown tier still renders with
+# *something*. Plain tier names only -- no pricing strings live in this file.
+TIER_LABELS = {
+    TIER_OSS: "OSS",
+    TIER_CLOUD_FREE: "Free",
+    TIER_TRIAL: "Trial",
+    TIER_CLOUD_STARTER: "Starter",
+    TIER_CLOUD_PRO: "Pro",
+    TIER_PRO: "Pro (Self-hosted)",
+    TIER_ENTERPRISE: "Enterprise",
+}
+
+# Stable display order for the upgrade ladder: cheapest to most capable. The
+# self-hosted Pro tier sits next to cloud Pro because it grants the same paid
+# feature set. The UI iterates :func:`tier_catalog` in this order.
+_TIER_ORDER = (
+    TIER_OSS,
+    TIER_CLOUD_FREE,
+    TIER_TRIAL,
+    TIER_CLOUD_STARTER,
+    TIER_CLOUD_PRO,
+    TIER_PRO,
+    TIER_ENTERPRISE,
+)
+
 # Common alternative spellings that callers (custom ingest, OTLP service.name,
 # CLI flags) sometimes use. Mapped to the canonical snake_case identifier so the
 # gate and the labels lookup don't reject a runtime over a stray hyphen. The
@@ -1162,6 +1190,67 @@ def runtime_catalog() -> list[dict]:
                 # teaser/upgrade affordance in grace mode without changing
                 # what `allowed`/`locked` mean for enforcement.
                 "entitled": ent.entitled_runtime(rt),
+            }
+        )
+    return out
+
+
+def tier_label(tier: str) -> str:
+    """Human-readable label for ``tier``. Falls back to the id when unknown so
+    an unrecognised tier (e.g. a future plan code) still renders with
+    *something*."""
+    t = (tier or "").strip().lower()
+    return TIER_LABELS.get(t, t)
+
+
+def tier_catalog() -> list[dict]:
+    """The full tier ladder with the per-tier feature/runtime/retention
+    metadata the dashboard needs to render an upgrade affordance.
+
+    Mirrors :func:`runtime_catalog` (and the in-flight ``feature_catalog``) so
+    every catalogue the UI consumes has the same shape and ordering contract.
+    Returned in :data:`_TIER_ORDER` (cheapest to most capable) so the upgrade
+    ladder is deterministic across reloads.
+
+    Each entry::
+
+        {
+          "id":               "<tier>",        # canonical key (TIER_*)
+          "label":            "<Display>",     # falls back to id
+          "is_paid":          True | False,    # is in _PAID_TIERS
+          "is_current":       True | False,    # matches the resolved tier
+          "rank":             0..n,            # position in the ladder
+          "unlocks_paid_runtimes": True|False, # tier grants paid runtimes
+          "retention_days":   int | None,      # event retention cap (None = unlimited)
+          "features":         [...],           # paid feature keys this tier grants
+                                               # (free features are always included
+                                               # on top -- they're not listed here so
+                                               # the upgrade copy stays scoped to the
+                                               # paid delta)
+        }
+
+    Never raises; on any resolution error the ``is_current`` flag falls back to
+    the OSS tier so the UI still has a safe row highlighted.
+    """
+    try:
+        ent = get_entitlement()
+        current = ent.tier
+    except Exception as exc:  # never crash a catalog read
+        logger.warning("entitlements: tier_catalog falling back to OSS-free: %s", exc)
+        current = TIER_OSS
+    out: list[dict] = []
+    for rank, tier in enumerate(_TIER_ORDER):
+        paid_feats = _TIER_FEATURES.get(tier, frozenset())
+        out.append(
+            {
+                "id": tier,
+                "label": tier_label(tier),
+                "is_paid": tier in _PAID_TIERS,
+                "is_current": tier == current,
+                "rank": rank,
+                "unlocks_paid_runtimes": tier in _TIER_PAID_RUNTIMES,
+                "retention_days": _TIER_RETENTION_DAYS.get(tier, 7),
+                "features": sorted(paid_feats),
             }
         )
     return out
