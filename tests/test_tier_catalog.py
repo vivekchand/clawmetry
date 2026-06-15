@@ -3,8 +3,9 @@
 Pins:
 
 * :data:`TIER_LABELS` covers every tier id ``Entitlement.tier`` can take.
-* :func:`tier_label` returns the label for known ids and the raw id for unknown
-  ones (never-crash contract).
+* :func:`tier_label` returns the label for known ids, title-cases unknown ids
+  (so a future plan code still renders with *something*), and falls back to the
+  OSS label for empty / ``None`` input (never-crash contract).
 * :func:`tier_catalog` returns one row per tier in the published ladder order,
   marks exactly one row ``is_current``, never raises, and is internally
   consistent with the per-tier feature / runtime / retention maps.
@@ -47,17 +48,24 @@ def test_tier_label_known_tier_ids_return_their_label(ent):
     assert ent.tier_label(ent.TIER_TRIAL) == "Trial"
     assert ent.tier_label(ent.TIER_CLOUD_STARTER) == "Starter"
     assert ent.tier_label(ent.TIER_CLOUD_PRO) == "Pro"
-    assert ent.tier_label(ent.TIER_PRO) == "Pro (Self-hosted)"
+    assert ent.tier_label(ent.TIER_PRO) == "Self-hosted Pro"
     assert ent.tier_label(ent.TIER_ENTERPRISE) == "Enterprise"
 
 
-def test_tier_label_unknown_tier_falls_back_to_id(ent):
-    assert ent.tier_label("not_a_real_tier") == "not_a_real_tier"
+def test_tier_label_unknown_tier_title_cases(ent):
+    # A future plan code added to ``Entitlement.tier`` but not yet in
+    # TIER_LABELS still renders human-readable instead of leaking the raw
+    # snake_case id into the UI.
+    assert ent.tier_label("not_a_real_tier") == "Not A Real Tier"
 
 
 def test_tier_label_handles_empty_and_none(ent):
-    assert ent.tier_label("") == ""
-    assert ent.tier_label(None) == ""
+    # Empty / None fall back to the OSS label so the dashboard's
+    # "current tier" pill never renders as a blank string while the
+    # entitlement is still resolving.
+    oss_label = ent.TIER_LABELS[ent.TIER_OSS]
+    assert ent.tier_label("") == oss_label
+    assert ent.tier_label(None) == oss_label
 
 
 def test_tier_label_is_case_insensitive(ent):
