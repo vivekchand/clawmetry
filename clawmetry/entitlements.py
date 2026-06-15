@@ -365,6 +365,76 @@ class Entitlement:
             return False
         return feature in self.features
 
+    def lock_reason(self, item: str, kind: str = "auto") -> str | None:
+        """Human-readable explanation of why ``item`` is locked, or ``None``
+        when it is allowed.
+
+        Centralises the reasoning currently re-derived inline by the ``@gate``
+        decorator's ``hint`` field, the runtime/feature catalog ``locked``
+        flags, and the CLI diagnostics so every surface tells the user the
+        same story for the same item.
+
+        Returns ``None`` (i.e. *not* locked) when:
+          * the install is in grace mode (nothing is enforced yet),
+          * ``item`` is a free runtime or free feature,
+          * the resolved tier already grants ``item``,
+          * ``item`` is unknown to both catalogs (errs on the un-locked side
+            so unknown plugin keys cannot be falsely advertised as locked).
+
+        ``kind`` is ``"runtime"``, ``"feature"``, or ``"auto"`` (default — try
+        runtime first, then feature). Never raises; any internal error falls
+        back to ``None`` to honour the never-crash contract.
+        """
+        try:
+            if self.grace:
+                return None
+            key = (item or "").strip().lower()
+            if not key:
+                return None
+            k = (kind or "auto").strip().lower()
+
+            looks_runtime = k == "runtime" or (k == "auto" and key in ALL_RUNTIMES)
+            looks_feature = k == "feature" or (k == "auto" and key in ALL_FEATURES)
+
+            if looks_runtime:
+                if key in FREE_RUNTIMES or key not in PAID_RUNTIMES:
+                    return None
+                if not self.expired and key in self.runtimes:
+                    return None
+                if self.expired:
+                    return f"License expired — renew to unlock runtime '{key}'"
+                return (
+                    f"Paid runtime — upgrade to a paid tier to unlock '{key}'"
+                )
+
+            if looks_feature:
+                if key in FREE_FEATURES:
+                    return None
+                if key not in ALL_FEATURES:
+                    return None
+                if not self.expired and key in self.features:
+                    return None
+                if self.expired:
+                    return f"License expired — renew to unlock feature '{key}'"
+                if key in STARTER_FEATURES:
+                    return (
+                        f"Starter-tier feature — upgrade to Starter or higher "
+                        f"to unlock '{key}'"
+                    )
+                if key in PRO_ONLY_FEATURES:
+                    return f"Pro-tier feature — upgrade to Pro to unlock '{key}'"
+                if key in ENTERPRISE_FEATURES:
+                    return (
+                        f"Enterprise-tier feature — contact sales to unlock "
+                        f"'{key}'"
+                    )
+                return f"Paid feature — upgrade to unlock '{key}'"
+
+            return None
+        except Exception as exc:  # never crash a UI tooltip / 402 body
+            logger.warning("entitlements: lock_reason failed: %s", exc)
+            return None
+
     def locked_runtimes(self) -> tuple[str, ...]:
         """Sorted tuple of PAID runtime ids the install currently can NOT
         observe — the inverse view of :meth:`allows_runtime` restricted to
@@ -599,6 +669,20 @@ def invalidate() -> None:
     """Drop the cached entitlement (call after activating/removing a license)."""
     with _lock:
         _cache.update(ent=None, ts=0.0, enforce=None)
+
+
+def lock_reason(item: str, kind: str = "auto") -> str | None:
+    """Module-level convenience: resolve the current entitlement and call
+    :meth:`Entitlement.lock_reason` on it.
+
+    Lets callers ask "why is X locked?" without first having to grab an
+    :class:`Entitlement` reference. Honours the same never-raise contract as
+    the instance method — any internal failure returns ``None``."""
+    try:
+        return get_entitlement().lock_reason(item, kind=kind)
+    except Exception as exc:
+        logger.warning("entitlements: lock_reason resolution failed: %s", exc)
+        return None
 
 
 def resolution_diagnostic() -> dict:
