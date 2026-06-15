@@ -365,6 +365,72 @@ class Entitlement:
             return False
         return feature in self.features
 
+
+    def lock_reason(self, item: str, kind: str = "auto") -> str | None:
+        """Return a human-readable reason why ``item`` is locked, or ``None``
+        if it is unlocked (or in grace mode -- grace never locks anything).
+
+        ``kind`` selects the namespace to search:
+          * ``"auto"``    -- try runtime first, then feature (default)
+          * ``"runtime"`` -- only the runtime catalogue
+          * ``"feature"`` -- only the feature catalogue
+
+        Empty / falsy / unknown input returns ``None`` (never raises, never
+        claims something is locked when we do not know what it is). Never raises.
+        """
+        _TIER_DISPLAY = {
+            TIER_CLOUD_STARTER: "Starter",
+            TIER_CLOUD_PRO: "Pro",
+            TIER_PRO: "Pro",
+            TIER_ENTERPRISE: "Enterprise",
+        }
+        try:
+            iid = (item or "").strip().lower()
+            if not iid or len(iid) > 256:
+                return None
+            if self.grace:
+                return None
+
+            k = (kind or "auto").strip().lower()
+
+            if k in ("auto", "runtime"):
+                if iid in FREE_RUNTIMES:
+                    return None
+                if iid in PAID_RUNTIMES:
+                    if self.expired:
+                        return "Paid runtime %s requires a valid (non-expired) plan" % iid
+                    if not self.allows_runtime(iid):
+                        return "Paid runtime %s requires a paid plan" % iid
+                    return None
+                if k == "runtime":
+                    return None
+
+            if k in ("auto", "feature"):
+                if iid in FREE_FEATURES:
+                    return None
+                unlock_tier = None
+                if iid in ENTERPRISE_FEATURES:
+                    unlock_tier = TIER_ENTERPRISE
+                elif iid in PRO_ONLY_FEATURES:
+                    unlock_tier = TIER_CLOUD_PRO
+                elif iid in STARTER_FEATURES:
+                    unlock_tier = TIER_CLOUD_STARTER
+                if unlock_tier is None:
+                    return None
+                if self.expired:
+                    return "Feature %s requires a valid (non-expired) plan" % iid
+                if not self.allows_feature(iid):
+                    label = _TIER_DISPLAY.get(unlock_tier, unlock_tier)
+                    if unlock_tier == TIER_ENTERPRISE:
+                        return "Feature %s requires %s" % (iid, label)
+                    return "Feature %s requires %s or above" % (iid, label)
+                return None
+
+            return None
+        except Exception as exc:
+            logger.debug("entitlements: lock_reason failed for %r: %s", item, exc)
+            return None
+
     def locked_runtimes(self) -> tuple[str, ...]:
         """Sorted tuple of PAID runtime ids the install currently can NOT
         observe — the inverse view of :meth:`allows_runtime` restricted to
@@ -674,6 +740,17 @@ def resolution_diagnostic() -> dict:
     except Exception as exc:
         out["cache_error"] = str(exc)
     return out
+
+
+def lock_reason(item: str, kind: str = "auto") -> str | None:
+    """Module-level convenience: resolve the current entitlement and return
+    the lock reason for ``item``. Equivalent to
+    ``get_entitlement().lock_reason(item, kind)``. Never raises."""
+    try:
+        return get_entitlement().lock_reason(item, kind)
+    except Exception as exc:
+        logger.warning("entitlements: lock_reason (module) failed: %s", exc)
+        return None
 
 
 def available_runtimes() -> list[str]:
