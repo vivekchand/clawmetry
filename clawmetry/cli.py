@@ -2822,6 +2822,26 @@ def _cmd_license(args) -> None:
         else:
             print("ℹ️  No license key installed — nothing to deactivate.")
 
+    elif action == "fingerprint":
+        from clawmetry import license as _lic
+        info = _lic.pubkey_info()
+        fp = info.get("fingerprint_sha256")
+        print("ClawMetry License Public Key\n" + "─" * 40)
+        print(f"  Algorithm:   {info.get('algorithm', 'ed25519')}")
+        print(f"  Format:      {info.get('format', '')}")
+        if not fp:
+            print("  Fingerprint: ⚠️  unavailable (embedded key failed to parse)")
+            print("               This may indicate a corrupted or tampered install.")
+            sys.exit(1)
+        # Group the hex into 8-byte pairs for readability, mirroring SSH style.
+        grouped = ":".join(fp[i : i + 4] for i in range(0, len(fp), 4))
+        print(f"  SHA-256:     {fp}")
+        print(f"  Grouped:     {grouped}")
+        print(f"  Short:       {info.get('fingerprint_short')}")
+        print("\n  Compare this fingerprint against the canonical value")
+        print("  published at https://clawmetry.com/security to confirm your")
+        print("  install carries the genuine license-verification key.")
+
     else:
         from clawmetry import license as _lic
         info = _lic.current_license_info()
@@ -2843,6 +2863,9 @@ def _cmd_license(args) -> None:
         if info.get("days_left") is not None:
             print(f"  Expires:     in {info['days_left']} day(s)")
         print("  E2E:         🔒 verified offline")
+        fp = info.get("pubkey_fingerprint_sha256")
+        if fp:
+            print(f"  Trust key:   sha256:{fp[:16]}…  (clawmetry license fingerprint)")
 
 
 def _cmd_tier(args) -> None:
@@ -3317,8 +3340,8 @@ def main() -> None:
         "license_action",
         nargs="?",
         default="status",
-        choices=["status", "activate", "deactivate"],
-        help="status (default) | activate <KEY> | deactivate",
+        choices=["status", "activate", "deactivate", "fingerprint"],
+        help="status (default) | activate <KEY> | deactivate | fingerprint",
     )
     p_license.add_argument(
         "license_key",
