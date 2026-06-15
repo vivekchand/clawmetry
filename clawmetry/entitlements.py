@@ -438,6 +438,40 @@ class Entitlement:
     def expired(self) -> bool:
         return self.expiry is not None and time.time() > self.expiry
 
+    def days_until_expiry(self) -> int | None:
+        """Full days remaining until ``expiry`` (epoch seconds).
+
+        ``None`` means perpetual (OSS / Enterprise air-gapped / Free cloud) and
+        the UI should hide any countdown affordance. An already-expired
+        entitlement collapses to ``0`` rather than going negative so banner
+        copy ("expires in 0 days") stays sensible without extra clamping at the
+        callsite. A non-numeric or otherwise broken ``expiry`` value falls back
+        to ``None`` -- never raises."""
+        try:
+            if self.expiry is None:
+                return None
+            remaining = float(self.expiry) - time.time()
+            if remaining <= 0:
+                return 0
+            return int(remaining // 86400)
+        except (TypeError, ValueError):
+            return None
+
+    def expires_within(self, days: int) -> bool:
+        """``True`` when the entitlement has a finite expiry that falls within
+        ``days`` days (inclusive). Perpetual entitlements (``expiry is None``)
+        always return ``False`` so a Free OSS install never trips trial-style
+        "renew soon" banners. ``days`` is clamped at ``0`` -- negative thresholds
+        degrade to "already expired only" rather than raising."""
+        remaining = self.days_until_expiry()
+        if remaining is None:
+            return False
+        try:
+            threshold = max(0, int(days))
+        except (TypeError, ValueError):
+            return False
+        return remaining <= threshold
+
     def allows_runtime(self, runtime: str) -> bool:
         """Whether ``runtime`` may be observed. In grace mode everything is
         allowed; otherwise free runtimes plus whatever the tier grants."""
@@ -690,6 +724,7 @@ class Entitlement:
             "node_limit": self.node_limit,
             "expiry": self.expiry,
             "expired": self.expired,
+            "days_until_expiry": self.days_until_expiry(),
             "is_paid": self.is_paid,
             "grace": self.grace,
             "enforced": not self.grace,
