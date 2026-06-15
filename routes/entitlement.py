@@ -301,6 +301,38 @@ def api_license_activate():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+@bp_entitlement.route("/api/license/verify", methods=["POST"])
+def api_license_verify():
+    """Verify a license key OFFLINE without persisting it (dry-run).
+
+    Body: ``{"key": "CLAW1.…"}``. Returns the same shape as
+    ``/api/license/status`` plus a ``"dry_run": true`` marker, so the UI can
+    show "this is what activating this key would unlock" before the user
+    commits. Always 200 on a malformed/forged key (the body carries
+    ``valid=false``) — only a missing ``key`` field is a 400. The server never
+    writes the key to disk, never touches the entitlement cache, and never
+    raises.
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+        key = str(body.get("key", "")).strip()
+        if not key:
+            return jsonify({"ok": False, "error": "key is required"}), 400
+        from clawmetry import license as _lic
+
+        info = _lic.inspect_key(key)
+        if info is None:
+            return jsonify(
+                {"valid": False, "status": "invalid", "dry_run": True}
+            )
+        info = dict(info)
+        info["dry_run"] = True
+        return jsonify(info)
+    except Exception as exc:
+        logger.warning("api_license_verify: error: %s", exc)
+        return jsonify({"valid": False, "status": "invalid", "dry_run": True})
+
+
 @bp_entitlement.route("/api/license/deactivate", methods=["POST"])
 def api_license_deactivate():
     """Remove the installed license key and revert to OSS tier.
