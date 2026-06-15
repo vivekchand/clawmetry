@@ -816,6 +816,31 @@ def feature_catalog() -> list[dict]:
     return out
 
 
+def runtime_tier(runtime: str) -> str:
+    """Minimum tier-ladder identifier that unlocks observing ``runtime``.
+
+    Returns a short tier string (``"free"`` / ``"starter"``) — the same
+    vocabulary the in-flight ``feature_tier()`` uses — so the UI can render
+    Runtime + Feature rows against a single tier identifier.
+
+    * ``FREE_RUNTIMES`` (``openclaw``, ``nemoclaw``)  → ``"free"``.
+    * ``PAID_RUNTIMES`` (Claude Code, Codex, Cursor, …) → ``"starter"``. All
+      paid runtimes unlock together via the Starter ``multi_runtime`` grant
+      — there is no per-runtime split inside the paid tiers today.
+    * Unknown / empty / non-string ids → ``"starter"`` so an unknown runtime
+      errs on the locked side instead of silently granting access (matches
+      ``feature_tier()``'s unknown-id policy).
+
+    Pure catalogue lookup — does NOT call ``get_entitlement()`` and is the
+    same answer in grace and enforce. Never raises.
+    """
+    try:
+        rt = (runtime or "").strip().lower()
+    except (AttributeError, TypeError):
+        return "starter"
+    return "free" if rt in FREE_RUNTIMES else "starter"
+
+
 def runtime_catalog() -> list[dict]:
     """The full runtime catalog with the entitlement-derived availability for
     each entry. Single source of truth the UI uses to render *every* known
@@ -849,6 +874,7 @@ def runtime_catalog() -> list[dict]:
             {
                 "id": rt,
                 "label": runtime_label(rt),
+                "tier": "free",
                 "free": True,
                 "allowed": True,
                 "locked": False,
@@ -861,6 +887,7 @@ def runtime_catalog() -> list[dict]:
             {
                 "id": rt,
                 "label": runtime_label(rt),
+                "tier": "starter",
                 "free": False,
                 "allowed": allowed,
                 "locked": not allowed,
