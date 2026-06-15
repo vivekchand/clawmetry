@@ -365,6 +365,46 @@ class Entitlement:
             return False
         return feature in self.features
 
+    def allows_node_count(self, current: int) -> bool:
+        """Whether ``current`` registered nodes still fit under this
+        entitlement's node cap. Completes the gating triad alongside
+        :meth:`allows_runtime` and :meth:`allows_feature` so fleet code can
+        check node-limit overflow with the same never-crash contract.
+
+        Semantics -- chosen to match the existing helpers:
+
+        * Grace mode (default) -- always ``True``. Wiring this into a fleet
+          path therefore changes no behaviour before the enforce phase.
+        * ``current <= 0`` -- always ``True``. A node count that hasn't been
+          measured yet (zero/negative) should never be the thing that blocks
+          a request.
+        * Expired entitlement -- collapses to a single node (the OSS-free
+          default), mirroring how :meth:`allows_runtime` falls back to free
+          runtimes on expiry.
+        * ``node_limit <= 0`` -- treated as unlimited. The license payload
+          uses ``0`` (or omits ``nodes``) for Enterprise/unlimited grants;
+          honoring that keeps the wire format unchanged.
+        * Otherwise -- ``current <= node_limit``.
+
+        Non-int ``current`` (e.g. a stray ``None`` from a fleet table read)
+        is swallowed and returns ``True`` so a flaky read never blocks a
+        request -- same posture as :func:`_gate.gate` on a flaky entitlement
+        resolution.
+        """
+        if self.grace:
+            return True
+        try:
+            n = int(current)
+        except (TypeError, ValueError):
+            return True
+        if n <= 0:
+            return True
+        if self.expired:
+            return n <= 1
+        if self.node_limit is None or int(self.node_limit) <= 0:
+            return True
+        return n <= int(self.node_limit)
+
     def locked_runtimes(self) -> tuple[str, ...]:
         """Sorted tuple of PAID runtime ids the install currently can NOT
         observe — the inverse view of :meth:`allows_runtime` restricted to
