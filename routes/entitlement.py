@@ -41,6 +41,7 @@ def api_entitlement():
         return jsonify(
             {
                 "tier": "oss",
+                "tier_label": "OSS",
                 "source": "oss",
                 "node_limit": 1,
                 "expiry": None,

@@ -48,6 +48,15 @@ def test_api_entitlement_shape_grace(client):
     assert isinstance(d["all_runtimes"], list)
 
 
+def test_api_entitlement_carries_tier_label(client):
+    """The payload includes a human-readable label alongside the tier id so
+    the dashboard's tier badge can render without a duplicate JS map."""
+    c, _ = client
+    d = c.get("/api/entitlement").get_json()
+    assert d["tier"] == "oss"
+    assert d["tier_label"] == "OSS"
+
+
 @pytest.mark.parametrize(
     "plan,expected",
     [
