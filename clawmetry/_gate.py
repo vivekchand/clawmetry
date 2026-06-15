@@ -21,12 +21,39 @@ Example::
 
 The error shape matches what ``routes/audit.py`` and ``routes/otel_export.py``
 have been returning by hand for months, so existing front-ends that already
-handle 402 continue to work.
+handle 402 continue to work. ``required_tier`` is included so the UI can
+route users to the *correct* upgrade CTA (Starter vs Pro vs Enterprise)
+instead of a generic one.
 """
 from __future__ import annotations
 
 from functools import wraps
 from typing import Callable
+
+
+def _required_tier(feature_key: str) -> str | None:
+    """Minimum tier identifier that unlocks ``feature_key``.
+
+    Returns a tier id from :mod:`clawmetry.entitlements` (e.g.
+    ``"cloud_starter"``, ``"cloud_pro"``, ``"enterprise"``) or ``None`` for
+    free features and unknown keys. Used to enrich the 402 body so the UI
+    can render the right upgrade CTA without re-deriving tier logic in JS.
+    Never raises: any lookup error returns ``None``.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        if feature_key in _ent.FREE_FEATURES:
+            return None
+        if feature_key in _ent.STARTER_FEATURES:
+            return _ent.TIER_CLOUD_STARTER
+        if feature_key in _ent.PRO_ONLY_FEATURES:
+            return _ent.TIER_CLOUD_PRO
+        if feature_key in _ent.ENTERPRISE_FEATURES:
+            return _ent.TIER_ENTERPRISE
+    except Exception:
+        return None
+    return None
 
 
 def gate(feature_key: str) -> Callable:
@@ -47,6 +74,7 @@ def gate(feature_key: str) -> Callable:
                         "error": "upgrade_required",
                         "feature": feature_key,
                         "tier": en.tier,
+                        "required_tier": _required_tier(feature_key),
                         "hint": (
                             "This is a paid feature on clawmetry.com/pricing. "
                             "Upgrade or set CLAWMETRY_ENFORCE=0 to disable enforcement."

@@ -132,6 +132,57 @@ def _load_public_key():
     return load_pem_public_key(_PUBLIC_KEY_PEM)
 
 
+def pubkey_fingerprint() -> str | None:
+    """SHA-256 hex digest of the embedded Ed25519 verification key.
+
+    The fingerprint is computed over the key's DER-encoded SubjectPublicKeyInfo
+    bytes, so it is independent of PEM whitespace/line-ending noise and stable
+    across reformatting. An operator can compare it against the canonical
+    fingerprint published at ``https://clawmetry.com/security`` to confirm their
+    OSS install carries the genuine trust anchor — i.e. that nobody has swapped
+    ``_PUBLIC_KEY_PEM`` for an attacker-controlled key that would let them mint
+    "valid" Pro/Enterprise license tokens against this node.
+
+    Returns the hex string (lowercase, 64 chars) or ``None`` if the embedded
+    PEM cannot be parsed (would indicate a tampered or corrupt install).
+    Never raises.
+    """
+    try:
+        import hashlib
+        from cryptography.hazmat.primitives import serialization
+
+        der = _load_public_key().public_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        return hashlib.sha256(der).hexdigest()
+    except Exception as exc:
+        logger.warning("license: pubkey fingerprint failed: %s", exc)
+        return None
+
+
+def pubkey_info() -> dict:
+    """Operator-facing description of the embedded license verification key.
+
+    Used by the ``/api/license/pubkey`` route and the ``clawmetry license
+    fingerprint`` CLI subcommand. Never raises — on parse failure the
+    fingerprint field is ``None`` and ``valid`` is ``False``."""
+    fp = pubkey_fingerprint()
+    pem_text = ""
+    try:
+        pem_text = _PUBLIC_KEY_PEM.decode("ascii").strip()
+    except Exception:
+        pem_text = ""
+    return {
+        "algorithm": "ed25519",
+        "format": "SubjectPublicKeyInfo (DER, SHA-256)",
+        "fingerprint_sha256": fp,
+        "fingerprint_short": fp[:16] if fp else None,
+        "pem": pem_text,
+        "valid": fp is not None,
+    }
+
+
 def _encode_token(payload: dict, private_key) -> str:
     """Mint a license token. Needs the Ed25519 PRIVATE key — used by the
     license server and tests, never with a key shipped in this package."""
@@ -762,6 +813,49 @@ def deactivate(actor: str = "") -> tuple[bool, bool]:
     return True, removed
 
 
+def inspect_key(key: str) -> dict | None:
+    """Verify ``key`` OFFLINE and return what it would unlock — without writing
+    anything to disk. The dry-run counterpart of :func:`activate`.
+
+    Use cases:
+      * Support: "paste your key, let's see what tier/exp it carries" without
+        having the customer mutate their install.
+      * Pre-flight from the CLI / dashboard before clicking *Activate*.
+      * Air-gap: validate a key on a staging box before transporting it.
+
+    Returns a dict with the same shape as :func:`current_license_info` (so the
+    UI can render the two the same way), or ``None`` if the signature is bogus
+    or the token is malformed. An EXPIRED but otherwise-valid token returns a
+    dict with ``valid=False`` + ``status="expired"`` so the caller can still
+    show what the (now-stale) key was for. Never raises, never touches disk."""
+    import time as _t
+
+    try:
+        payload = verify_token(key)
+        if payload is None:
+            return None
+        exp = payload.get("exp")
+        days_left = None
+        expired = False
+        if isinstance(exp, (int, float)):
+            days_left = int((exp - _t.time()) // 86400)
+            expired = _t.time() > exp
+        tier_in = str(payload.get("tier", "pro")).strip().lower()
+        tier = "enterprise" if tier_in == "enterprise" else "pro"
+        return {
+            "valid": not expired,
+            "status": "expired" if expired else "active",
+            "tier": tier,
+            "nodes": int(payload.get("nodes", 1) or 1),
+            "sub": str(payload.get("sub", "")),
+            "exp": exp,
+            "days_left": days_left,
+        }
+    except Exception as exc:  # never raise from a dry-run inspector
+        logger.warning("license: inspect_key failed: %s", exc)
+        return None
+
+
 def current_license_info() -> dict | None:
     """Human-readable summary of the installed license, or None if there is no
     valid one. Never raises."""
@@ -798,6 +892,10 @@ def current_license_info() -> dict | None:
             "sub": payload.get("sub", ""),
             "exp": exp,
             "days_left": days_left,
+            # Trust-anchor identity: a Pro/Enterprise license is only as
+            # trustworthy as the embedded public key that signed it, so we
+            # surface its fingerprint here for operator audits.
+            "pubkey_fingerprint_sha256": pubkey_fingerprint(),
             "permissions_safe": perms_safe,
             "file_mode": (f"{mode:04o}" if mode is not None else None),
         }
