@@ -2975,6 +2975,88 @@ def _cmd_tier(args) -> None:
     print(f"  Features:    {len(features)} unlocked")
 
 
+def _cmd_runtimes(args) -> None:
+    """clawmetry runtimes — list every observable runtime and which are unlocked.
+
+    Sibling of :func:`_cmd_tier`: that one answers "what tier am I on?", this
+    one answers "which runtimes is this install cleared to observe?". Reads
+    :func:`clawmetry.entitlements.runtime_catalog` -- the same source the
+    dashboard's ``GET /api/runtimes`` consumes -- so the CLI and the UI cannot
+    drift.
+
+    Never raises. A poisoned catalog read surfaces the error inline (a warning
+    row in the human table, or an ``error`` key on the JSON payload with
+    ``runtimes=[]``) so a wrapper script always sees a parseable response.
+    Matches the never-crash contract documented on :func:`get_entitlement`.
+
+    Output:
+      default -- compact table (id, label, tier, status)
+      --json  -- ``{tier, grace, enforced, runtimes: [...], error?: str}``
+    """
+    import json as _json
+
+    from clawmetry import entitlements as _ent
+
+    try:
+        ent = _ent.get_entitlement()
+        tier = ent.tier
+        grace = bool(ent.grace)
+        enforced = _ent.is_enforced()
+    except Exception as exc:
+        # Mirror _cmd_tier's never-crash fallback: a broken install still gets
+        # a parseable shape, with the failure surfaced to stderr so it isn't
+        # silently lost in a pipeline.
+        print(f"⚠️  entitlement resolution failed: {exc}", file=sys.stderr)
+        tier, grace, enforced = "oss", True, False
+
+    rows: list[dict] = []
+    catalog_error: str | None = None
+    try:
+        rows = list(_ent.runtime_catalog())
+    except Exception as exc:
+        catalog_error = str(exc)
+
+    if getattr(args, "as_json", False):
+        payload: dict = {
+            "tier": tier,
+            "grace": grace,
+            "enforced": enforced,
+            "runtimes": rows,
+        }
+        if catalog_error:
+            payload["error"] = catalog_error
+        print(_json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    mode_line = "off (grace)" if not enforced else "on"
+    print("ClawMetry Runtimes\n" + "─" * 40)
+    print(f"  Tier:        {tier}")
+    print(f"  Enforcement: {mode_line}")
+    if catalog_error:
+        print(f"  ⚠️  catalog error: {catalog_error}")
+        return
+
+    any_locked = False
+    print()
+    print(f"  {'ID':<14} {'Label':<14} {'Tier':<6} Status")
+    print("  " + "─" * 50)
+    for row in rows:
+        rid = str(row.get("id", ""))
+        label = str(row.get("label", rid))
+        is_free = bool(row.get("free", False))
+        locked = bool(row.get("locked", False))
+        if locked:
+            status = "🔒 locked"
+            any_locked = True
+        else:
+            status = "✅ available"
+        tier_tag = "free" if is_free else "paid"
+        print(f"  {rid:<14} {label:<14} {tier_tag:<6} {status}")
+    if any_locked:
+        print()
+        print("  Upgrade: clawmetry license activate <KEY>")
+
+
 def _cmd_verify_integrity(args) -> None:
     """clawmetry verify-integrity — walk the hash chain and report validity."""
     from clawmetry.local_store import get_store
@@ -3394,6 +3476,18 @@ def main() -> None:
         help="Emit the full Entitlement.to_dict() as JSON (jq-friendly)",
     )
 
+    # runtimes — list every observable runtime and which are unlocked (PR #3005)
+    p_runtimes = sub.add_parser(
+        "runtimes",
+        help="List every observable runtime and which this install can unlock",
+    )
+    p_runtimes.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit {tier, grace, enforced, runtimes:[...]} JSON (jq-friendly)",
+    )
+
     # verify-integrity — walk hash chain and report validity (Issue #2200)
     p_verify = sub.add_parser(
         "verify-integrity",
@@ -3423,6 +3517,7 @@ def main() -> None:
         "activate",
         "license",
         "tier",
+        "runtimes",
         "verify-integrity",
         "nemoclaw-daemons",
     )
@@ -3460,6 +3555,8 @@ def main() -> None:
             _cmd_license(args)
         elif args.cmd == "tier":
             _cmd_tier(args)
+        elif args.cmd == "runtimes":
+            _cmd_runtimes(args)
         elif args.cmd == "verify-integrity":
             _cmd_verify_integrity(args)
         elif args.cmd == "nemoclaw-daemons":
