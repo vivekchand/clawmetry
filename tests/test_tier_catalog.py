@@ -151,6 +151,50 @@ def test_tier_catalog_features_are_paid_only_no_free_leakage(ent):
         assert set(row["features"]).isdisjoint(ent.FREE_FEATURES)
 
 
+def test_tier_catalog_channel_limit_matches_published_caps(ent):
+    """Free / OSS caps at 3 (the ``all_channels`` Starter unlock has teeth);
+    every paid tier is unlimited (``None``). Mirrors
+    ``_TIER_CHANNEL_LIMIT`` so the UI gets the same value the route gate
+    will eventually enforce."""
+    rows_by_id = {row["id"]: row for row in ent.tier_catalog()}
+    assert rows_by_id[ent.TIER_OSS]["channel_limit"] == 3
+    assert rows_by_id[ent.TIER_CLOUD_FREE]["channel_limit"] == 3
+    assert rows_by_id[ent.TIER_TRIAL]["channel_limit"] is None
+    assert rows_by_id[ent.TIER_CLOUD_STARTER]["channel_limit"] is None
+    assert rows_by_id[ent.TIER_CLOUD_PRO]["channel_limit"] is None
+    assert rows_by_id[ent.TIER_PRO]["channel_limit"] is None
+    assert rows_by_id[ent.TIER_ENTERPRISE]["channel_limit"] is None
+
+
+def test_tier_catalog_runtimes_are_paid_only_no_free_leakage(ent):
+    """Symmetric with ``features``: each row lists only the paid runtimes the
+    tier grants -- free runtimes are implicit-everywhere and never repeated
+    on the upgrade-ladder rows."""
+    for row in ent.tier_catalog():
+        assert set(row["runtimes"]).isdisjoint(ent.FREE_RUNTIMES), row["id"]
+        assert set(row["runtimes"]).issubset(ent.PAID_RUNTIMES), row["id"]
+
+
+def test_tier_catalog_paid_tiers_unlock_all_paid_runtimes(ent):
+    """Open-core invariant: every paid tier unlocks the full paid-runtime
+    bundle (all paid runtimes ship together via the Starter ``multi_runtime``
+    grant). Pins this against the ``unlocks_paid_runtimes`` flag so the two
+    columns can never drift."""
+    expected = sorted(ent.PAID_RUNTIMES)
+    for row in ent.tier_catalog():
+        if row["unlocks_paid_runtimes"]:
+            assert row["runtimes"] == expected, row["id"]
+        else:
+            assert row["runtimes"] == [], row["id"]
+
+
+def test_tier_catalog_runtimes_are_sorted(ent):
+    """Stable display order: paid runtimes are returned sorted so the UI
+    list is deterministic across reloads (same contract as ``features``)."""
+    for row in ent.tier_catalog():
+        assert row["runtimes"] == sorted(row["runtimes"]), row["id"]
+
+
 def test_tier_catalog_marks_active_paid_tier_when_license_resolves(ent, monkeypatch, tmp_path):
     """A cloud-plan cache file lights up the matching tier as current."""
     monkeypatch.setenv("CLAWMETRY_ENFORCE", "1")

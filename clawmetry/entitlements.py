@@ -1474,11 +1474,17 @@ def tier_catalog() -> list[dict]:
           "rank":             0..n,            # position in the ladder
           "unlocks_paid_runtimes": True|False, # tier grants paid runtimes
           "retention_days":   int | None,      # event retention cap (None = unlimited)
+          "channel_limit":    int | None,      # channel-adapter cap (None = unlimited)
           "features":         [...],           # paid feature keys this tier grants
                                                # (free features are always included
                                                # on top -- they're not listed here so
                                                # the upgrade copy stays scoped to the
                                                # paid delta)
+          "runtimes":         [...],           # paid runtime keys this tier grants
+                                               # (free runtimes are always included on
+                                               # top -- same scoping rule as features:
+                                               # the upgrade copy lists only the paid
+                                               # delta. Empty for free tiers.)
         }
 
     Never raises; on any resolution error the ``is_current`` flag falls back to
@@ -1491,8 +1497,10 @@ def tier_catalog() -> list[dict]:
         logger.warning("entitlements: tier_catalog falling back to OSS-free: %s", exc)
         current = TIER_OSS
     out: list[dict] = []
+    paid_runtimes_sorted = sorted(PAID_RUNTIMES)
     for rank, tier in enumerate(_TIER_ORDER):
         paid_feats = _TIER_FEATURES.get(tier, frozenset())
+        unlocks_paid = tier in _TIER_PAID_RUNTIMES
         out.append(
             {
                 "id": tier,
@@ -1500,9 +1508,11 @@ def tier_catalog() -> list[dict]:
                 "is_paid": tier in _PAID_TIERS,
                 "is_current": tier == current,
                 "rank": rank,
-                "unlocks_paid_runtimes": tier in _TIER_PAID_RUNTIMES,
+                "unlocks_paid_runtimes": unlocks_paid,
                 "retention_days": _TIER_RETENTION_DAYS.get(tier, 7),
+                "channel_limit": _TIER_CHANNEL_LIMIT.get(tier, _FREE_CHANNEL_LIMIT),
                 "features": sorted(paid_feats),
+                "runtimes": list(paid_runtimes_sorted) if unlocks_paid else [],
             }
         )
     return out
