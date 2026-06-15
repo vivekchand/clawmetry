@@ -391,6 +391,12 @@ _ENFORCE_ENABLE_VALUES = frozenset({"1", "true", "yes", "on"})
 _CACHE_TTL_SECS = 60.0
 _ENFORCE_AT_ENV = "CLAWMETRY_ENFORCE_AT"
 
+# Env var that lets an operator voluntarily SHRINK retention below the tier
+# cap. Read by :meth:`Entitlement.effective_retention_days`. Documented in
+# ``CLAUDE.md`` and surfaced in ``resolution_diagnostic()`` so an operator can
+# answer "why is this install only keeping N days?" without re-reading code.
+_RETENTION_OVERRIDE_ENV = "CLAWMETRY_RETENTION_DAYS"
+
 
 def is_enforced() -> bool:
     """True when the paywall is live. Default OFF (grace) until the enforce
@@ -702,9 +708,9 @@ class Entitlement:
     def event_retention_days(self) -> int | None:
         """Days of event history this tier may keep. ``None`` means unlimited
         / custom (Enterprise). The daemon's prune loop in ``clawmetry/sync.py``
-        reads this; if a customer override is set in env (``CLAWMETRY_RETENTION_DAYS``),
-        the daemon prefers the env value when it's <= the tier cap (so users
-        can voluntarily shrink, never silently expand).
+        reads this via :meth:`effective_retention_days`, which folds in the
+        optional ``CLAWMETRY_RETENTION_DAYS`` env override (shrink-only —
+        users can voluntarily reduce, never silently expand).
 
         Per-tier values (see ``_TIER_RETENTION_DAYS``):
             Free / OSS:       7
@@ -713,6 +719,61 @@ class Entitlement:
             Enterprise:      None  (custom)
         """
         return _TIER_RETENTION_DAYS.get(self.tier, 7)
+
+    def effective_retention_days(self, env_override: object = None) -> int | None:
+        """Effective retention after the optional ``CLAWMETRY_RETENTION_DAYS``
+        env override is folded in.
+
+        The env override only ever SHRINKS retention -- it can never extend
+        beyond the tier cap returned by :meth:`event_retention_days`. So for
+        an OSS install (cap=7) a ``CLAWMETRY_RETENTION_DAYS=3`` shrinks to 3,
+        but ``CLAWMETRY_RETENTION_DAYS=30`` is clamped back to 7. An
+        Enterprise install (cap=None / unlimited) honours the override
+        verbatim.
+
+        ``env_override`` is taken from the argument when provided, else read
+        from the environment. Invalid or empty values are ignored (logged at
+        debug) and the tier cap is returned unchanged -- never raise: a flaky
+        env read must not be able to crash the prune loop.
+
+        The daemon's retention-prune worker in ``clawmetry/sync.py`` calls
+        this so the env-override semantics live in exactly one place and the
+        diagnostic / dashboard read the same number the prune loop acts on.
+        """
+        try:
+            cap = self.event_retention_days()
+            raw = env_override
+            if raw is None:
+                raw = os.environ.get(_RETENTION_OVERRIDE_ENV, "")
+            try:
+                raw_str = str(raw).strip()
+            except Exception:
+                return cap
+            if not raw_str:
+                return cap
+            try:
+                ev = int(raw_str)
+            except (TypeError, ValueError):
+                logger.debug(
+                    "entitlements: ignoring non-integer %s=%r",
+                    _RETENTION_OVERRIDE_ENV, raw_str,
+                )
+                return cap
+            if ev < 1:
+                logger.debug(
+                    "entitlements: ignoring non-positive %s=%d",
+                    _RETENTION_OVERRIDE_ENV, ev,
+                )
+                return cap
+            if cap is None:
+                return ev
+            return min(ev, cap)
+        except Exception as exc:
+            logger.debug("entitlements: effective_retention_days fallback: %s", exc)
+            try:
+                return self.event_retention_days()
+            except Exception:
+                return None
 
     def allows_retention_window(self, days: int | None) -> bool:
         """Whether the install may query / keep a retention window of ``days``
@@ -841,6 +902,7 @@ class Entitlement:
             "enforce_at_iso": enforce_at_iso,
             "days_until_enforce": self.grace_remaining_days(),
             "retention_days": self.event_retention_days(),
+            "effective_retention_days": self.effective_retention_days(),
             "runtimes": sorted(self.runtimes),
             "features": sorted(self.features),
             "free_runtimes": sorted(FREE_RUNTIMES),
@@ -1055,6 +1117,12 @@ def resolution_diagnostic() -> dict:
         "cache_ttl_seconds": _CACHE_TTL_SECS,
         "cache_hit_next_call": False,
         "cache_cached_tier": None,
+        # Retention env override the prune loop reads. Same key the operator
+        # would ``echo $CLAWMETRY_RETENTION_DAYS`` to inspect; we report it
+        # here so "why is this install only keeping N days?" answers in one
+        # GET. The numeric effective value is on /api/entitlement.
+        "retention_override_env_name": _RETENTION_OVERRIDE_ENV,
+        "retention_override_env_value": os.environ.get(_RETENTION_OVERRIDE_ENV),
     }
     try:
         out["is_enforced"] = is_enforced()

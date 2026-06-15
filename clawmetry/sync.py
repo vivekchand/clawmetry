@@ -17180,16 +17180,12 @@ def run_daemon() -> None:
                     from clawmetry import entitlements as _ent
                     from clawmetry import local_store as _ls
 
-                    days = _ent.get_entitlement().event_retention_days()
-                    # Env override (shrink only — Entitlement.event_retention_days
-                    # is the ceiling).
-                    env_days = os.environ.get("CLAWMETRY_RETENTION_DAYS", "").strip()
-                    if env_days:
-                        try:
-                            ev = max(1, int(env_days))
-                            days = min(ev, days) if days is not None else ev
-                        except ValueError:
-                            pass
+                    # effective_retention_days() folds in the
+                    # CLAWMETRY_RETENTION_DAYS env override (shrink-only —
+                    # never extends past the tier cap). Single source of truth
+                    # so /api/entitlement and the prune loop report the same
+                    # number.
+                    days = _ent.get_entitlement().effective_retention_days()
                     if days is None or days <= 0:
                         # Enterprise / unlimited — nothing to do.
                         log.debug("retention prune: tier=unlimited, skip")
