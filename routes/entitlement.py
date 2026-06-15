@@ -6,14 +6,21 @@ runtimes/features to surface (and, once enforcement is live, which to render
 locked behind an upgrade CTA). Backed by :mod:`clawmetry.entitlements`, which
 is the single source of truth — handlers never re-derive tier logic here.
 
-  GET /api/entitlement            — the current Entitlement as JSON.
-  GET /api/entitlement/diagnostic — the *inputs* the resolver consulted
+  GET  /api/entitlement          — the current Entitlement as JSON.
+  GET  /api/entitlement/diagnostic — the *inputs* the resolver consulted
                                      (license/cloud-plan presence, enforce env,
                                      cache liveness) for operator triage.
-  GET /api/runtimes               — the full runtime catalog with locked/free flags.
+  POST /api/entitlement/refresh  — drop the cache and return the freshly
+                                   re-resolved Entitlement (used after a
+                                   license is dropped in or the daemon
+                                   writes a new cloud_plan.json, so the UI
+                                   does not have to wait for the 60 s TTL).
+  GET  /api/runtimes             — the full runtime catalog with locked/free
+                                   flags.
 
-Side-effect-free and never-raise, so it is safe to classify ``oss-passthrough``
-on the cloud side: when no license/cloud plan is present it returns a graceful
+Side-effect-free and never-raise (refresh's only side effect is busting the
+in-process cache), so it is safe to classify ``oss-passthrough`` on the cloud
+side: when no license/cloud plan is present every endpoint returns a graceful
 OSS-free shape, never a 4xx.
 """
 
@@ -49,6 +56,46 @@ def api_entitlement():
                 "grace": True,
                 "enforced": False,
                 "retention_days": 7,
+                "runtimes": ["nemoclaw", "openclaw"],
+                "features": [],
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/refresh", methods=["POST"])
+def api_entitlement_refresh():
+    """Force-drop the in-process entitlement cache and re-resolve.
+
+    The resolver caches for 60 s (see ``_CACHE_TTL_SECS`` in
+    ``clawmetry.entitlements``), which is the right default for per-request
+    reads but the wrong default right after the operator just dropped a
+    license file into ``~/.clawmetry/license.key`` or the daemon just wrote a
+    fresh ``cloud_plan.json``. ``/api/license/activate`` already busts the
+    cache internally; this endpoint covers the manual / out-of-band install
+    path the activate route doesn't see.
+
+    Returns the freshly resolved Entitlement (same shape as ``/api/entitlement``)
+    so the caller can render the new state in one round-trip. Falls back to the
+    grace OSS-free shape on any error — refresh is idempotent and must never
+    take the dashboard down.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        _ent.invalidate()
+        return jsonify(_ent.get_entitlement(force=True).to_dict())
+    except Exception as exc:  # never crash the dashboard over a cache bust
+        logger.warning("api_entitlement_refresh: falling back to OSS-free: %s", exc)
+        return jsonify(
+            {
+                "tier": "oss",
+                "source": "oss",
+                "node_limit": 1,
+                "expiry": None,
+                "expired": False,
+                "is_paid": False,
+                "grace": True,
+                "enforced": False,
                 "runtimes": ["nemoclaw", "openclaw"],
                 "features": [],
             }

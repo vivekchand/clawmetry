@@ -136,6 +136,67 @@ def test_api_entitlement_enforced_oss_grace_false(monkeypatch, tmp_path):
     assert d["grace"] == (not d["enforced"])
 
 
+# ── refresh endpoint ──────────────────────────────────────────────────────────
+
+
+def test_api_entitlement_refresh_grace_shape(client):
+    """POST /api/entitlement/refresh returns the same shape as GET when no
+    license/cloud plan is present, and never raises on a clean HOME."""
+    c, _ = client
+    resp = c.post("/api/entitlement/refresh")
+    assert resp.status_code == 200
+    d = resp.get_json()
+    for key in ("tier", "source", "grace", "enforced", "is_paid",
+                "runtimes", "features"):
+        assert key in d, key
+    assert d["tier"] == "oss"
+    assert d["grace"] is True
+    assert d["enforced"] is False
+    assert d["grace"] == (not d["enforced"])
+
+
+def test_api_entitlement_refresh_busts_cache(monkeypatch, tmp_path):
+    """Refresh must pick up a cloud_plan.json that was written *after* the
+    first GET populated the cache, without waiting for the 60 s TTL."""
+    monkeypatch.delenv("CLAWMETRY_ENFORCE", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    import clawmetry.entitlements as e
+    importlib.reload(e)
+    e.invalidate()
+
+    from routes.entitlement import bp_entitlement
+    app = Flask(__name__)
+    app.register_blueprint(bp_entitlement)
+    client_ = app.test_client()
+
+    first = client_.get("/api/entitlement").get_json()
+    assert first["tier"] == "oss"
+    assert first["source"] == "oss"
+
+    cache = tmp_path / ".clawmetry" / "cloud_plan.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"plan": "cloud_pro", "node_limit": 5,
+                                 "expiry": None}))
+
+    # GET still returns the cached OSS result — TTL hasn't elapsed.
+    stale = client_.get("/api/entitlement").get_json()
+    assert stale["tier"] == "oss"
+
+    refreshed = client_.post("/api/entitlement/refresh").get_json()
+    assert refreshed["tier"] == "cloud_pro"
+    assert refreshed["source"] == "cloud"
+    assert refreshed["is_paid"] is True
+
+
+def test_api_entitlement_refresh_idempotent(client):
+    """Repeated refresh calls return identical shapes — refresh must be safe
+    to spam from a dashboard timer / connect-flow retry loop."""
+    c, _ = client
+    a = c.post("/api/entitlement/refresh").get_json()
+    b = c.post("/api/entitlement/refresh").get_json()
+    assert a == b
+
+
 # ── paid tiers ────────────────────────────────────────────────────────────────
 
 
