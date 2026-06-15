@@ -301,6 +301,7 @@ _LICENSE_PATH = os.path.expanduser("~/.clawmetry/license.key")
 _CLOUD_PLAN_CACHE = os.path.expanduser("~/.clawmetry/cloud_plan.json")
 _ENFORCE_ENABLE_VALUES = frozenset({"1", "true", "yes", "on"})
 _CACHE_TTL_SECS = 60.0
+_ENFORCE_AT_ENV = "CLAWMETRY_ENFORCE_AT"
 
 
 def is_enforced() -> bool:
@@ -310,6 +311,40 @@ def is_enforced() -> bool:
         os.environ.get("CLAWMETRY_ENFORCE", "").strip().lower()
         in _ENFORCE_ENABLE_VALUES
     )
+
+
+def enforce_at_epoch() -> float | None:
+    """Resolve the announced enforce-at moment from ``CLAWMETRY_ENFORCE_AT``.
+
+    Accepts three formats — the first parse that wins is used::
+
+        CLAWMETRY_ENFORCE_AT=2026-07-01            # ISO date (UTC midnight)
+        CLAWMETRY_ENFORCE_AT=2026-07-01T12:00:00Z  # ISO datetime
+        CLAWMETRY_ENFORCE_AT=1782950400            # epoch seconds
+
+    Unset / empty / unparseable returns ``None`` (logged at warning). Used by
+    :meth:`Entitlement.grace_remaining_days` and :meth:`Entitlement.to_dict` so
+    the dashboard can render a countdown banner ("Enforcement begins in N
+    days") without re-implementing the parse rules on the frontend. Never
+    raises."""
+    raw = os.environ.get(_ENFORCE_AT_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        pass
+    try:
+        from datetime import datetime, timezone
+
+        s = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except Exception as exc:
+        logger.warning("entitlements: bad CLAWMETRY_ENFORCE_AT %r: %s", raw, exc)
+        return None
 
 
 @dataclass(frozen=True)
@@ -403,6 +438,18 @@ class Entitlement:
         except Exception:
             return ()
 
+    def grace_remaining_days(self) -> int | None:
+        """Days remaining in the grace period, or ``None`` when no enforce-at
+        date is announced (``CLAWMETRY_ENFORCE_AT`` unset). Clamps to ``0``
+        once the announced moment has passed, so the UI never shows a
+        negative countdown. Drives the dashboard countdown banner without
+        re-parsing the env var on every render."""
+        at = enforce_at_epoch()
+        if at is None:
+            return None
+        remaining = (at - time.time()) / 86400.0
+        return int(remaining) if remaining > 0 else 0
+
     def event_retention_days(self) -> int | None:
         """Days of event history this tier may keep. ``None`` means unlimited
         / custom (Enterprise). The daemon's prune loop in ``clawmetry/sync.py``
@@ -425,6 +472,19 @@ class Entitlement:
         # without re-deriving the per-tier table client-side. The daemon's
         # prune loop in ``clawmetry/sync.py`` still reads the method directly;
         # this is just the read-only API surface.
+        enforce_at = enforce_at_epoch()
+        enforce_at_iso: str | None = None
+        if enforce_at is not None:
+            try:
+                from datetime import datetime, timezone
+
+                enforce_at_iso = (
+                    datetime.fromtimestamp(enforce_at, tz=timezone.utc)
+                    .isoformat()
+                    .replace("+00:00", "Z")
+                )
+            except Exception:
+                enforce_at_iso = None
         return {
             "tier": self.tier,
             "source": self.source,
@@ -434,6 +494,9 @@ class Entitlement:
             "is_paid": self.is_paid,
             "grace": self.grace,
             "enforced": not self.grace,
+            "enforce_at": enforce_at,
+            "enforce_at_iso": enforce_at_iso,
+            "days_until_enforce": self.grace_remaining_days(),
             "retention_days": self.event_retention_days(),
             "runtimes": sorted(self.runtimes),
             "features": sorted(self.features),

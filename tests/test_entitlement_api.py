@@ -136,6 +136,40 @@ def test_api_entitlement_enforced_oss_grace_false(monkeypatch, tmp_path):
     assert d["grace"] == (not d["enforced"])
 
 
+# -- grace countdown (CLAWMETRY_ENFORCE_AT) -------------------------
+
+
+def test_api_entitlement_enforce_at_keys_unset(client):
+    """Always present on /api/entitlement so frontend can read them without
+    a feature-detect; unset means all three are null."""
+    c, _ = client
+    d = c.get("/api/entitlement").get_json()
+    for key in ("enforce_at", "enforce_at_iso", "days_until_enforce"):
+        assert key in d, key
+        assert d[key] is None
+
+
+def test_api_entitlement_enforce_at_surfaced(monkeypatch, tmp_path):
+    monkeypatch.delenv("CLAWMETRY_ENFORCE", raising=False)
+    monkeypatch.setenv("CLAWMETRY_ENFORCE_AT", "2099-01-01T00:00:00Z")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    import clawmetry.entitlements as e
+    importlib.reload(e)
+    e.invalidate()
+
+    from routes.entitlement import bp_entitlement
+    app = Flask(__name__)
+    app.register_blueprint(bp_entitlement)
+    d = app.test_client().get("/api/entitlement").get_json()
+    assert d["enforce_at"] is not None
+    assert d["enforce_at_iso"] == "2099-01-01T00:00:00Z"
+    assert isinstance(d["days_until_enforce"], int)
+    assert d["days_until_enforce"] > 0
+    # Setting the countdown does NOT turn enforcement on.
+    assert d["grace"] is True
+    assert d["enforced"] is False
+
+
 # ── paid tiers ────────────────────────────────────────────────────────────────
 
 

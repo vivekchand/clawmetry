@@ -325,6 +325,84 @@ def test_entitled_tier_entitles_its_runtimes(ent):
     assert en.entitled_runtime("cursor") is True
 
 
+# -- CLAWMETRY_ENFORCE_AT (grace countdown) -------------------------
+
+
+def test_enforce_at_unset_is_none(ent, monkeypatch):
+    monkeypatch.delenv("CLAWMETRY_ENFORCE_AT", raising=False)
+    assert ent.enforce_at_epoch() is None
+    en = ent.get_entitlement(force=True)
+    assert en.grace_remaining_days() is None
+    d = en.to_dict()
+    assert d["enforce_at"] is None
+    assert d["enforce_at_iso"] is None
+    assert d["days_until_enforce"] is None
+
+
+def test_enforce_at_iso_date_future(ent, monkeypatch):
+    # ~30 days out
+    future = time.time() + 30 * 86400
+    from datetime import datetime, timezone
+    iso = datetime.fromtimestamp(future, tz=timezone.utc).date().isoformat()
+    monkeypatch.setenv("CLAWMETRY_ENFORCE_AT", iso)
+    at = ent.enforce_at_epoch()
+    assert at is not None
+    en = ent.get_entitlement(force=True)
+    days = en.grace_remaining_days()
+    assert days is not None and 25 <= days <= 31  # tolerate UTC midnight rounding
+    d = en.to_dict()
+    assert d["enforce_at"] == pytest.approx(at)
+    assert d["enforce_at_iso"] is not None and d["enforce_at_iso"].endswith("Z")
+    assert d["days_until_enforce"] == days
+
+
+def test_enforce_at_epoch_seconds_accepted(ent, monkeypatch):
+    future = time.time() + 7 * 86400
+    monkeypatch.setenv("CLAWMETRY_ENFORCE_AT", str(int(future)))
+    en = ent.get_entitlement(force=True)
+    assert en.grace_remaining_days() in (6, 7)
+    assert en.to_dict()["enforce_at"] == pytest.approx(float(int(future)))
+
+
+def test_enforce_at_iso_datetime_z_suffix(ent, monkeypatch):
+    monkeypatch.setenv("CLAWMETRY_ENFORCE_AT", "2099-01-01T00:00:00Z")
+    en = ent.get_entitlement(force=True)
+    d = en.to_dict()
+    assert d["enforce_at"] is not None
+    assert d["enforce_at_iso"] == "2099-01-01T00:00:00Z"
+    assert d["days_until_enforce"] is not None and d["days_until_enforce"] > 0
+
+
+def test_enforce_at_past_clamps_to_zero(ent, monkeypatch):
+    monkeypatch.setenv("CLAWMETRY_ENFORCE_AT", "2000-01-01")
+    en = ent.get_entitlement(force=True)
+    # Past moment: countdown is 0, never negative.
+    assert en.grace_remaining_days() == 0
+    d = en.to_dict()
+    assert d["days_until_enforce"] == 0
+    assert d["enforce_at"] is not None
+
+
+def test_enforce_at_malformed_is_graceful(ent, monkeypatch):
+    monkeypatch.setenv("CLAWMETRY_ENFORCE_AT", "not-a-date")
+    assert ent.enforce_at_epoch() is None
+    en = ent.get_entitlement(force=True)
+    d = en.to_dict()
+    assert d["enforce_at"] is None
+    assert d["enforce_at_iso"] is None
+    assert d["days_until_enforce"] is None
+
+
+def test_enforce_at_independent_of_enforce_flag(ent, monkeypatch):
+    """Setting the countdown env var must NOT flip grace -> enforce. Only
+    CLAWMETRY_ENFORCE does that."""
+    monkeypatch.setenv("CLAWMETRY_ENFORCE_AT", "2099-01-01")
+    monkeypatch.delenv("CLAWMETRY_ENFORCE", raising=False)
+    en = ent.get_entitlement(force=True)
+    assert en.grace is True
+    assert en.allows_runtime("claude_code") is True
+
+
 # ── canonical_runtime + RUNTIME_ALIASES ─────────────────────────────────────
 
 
