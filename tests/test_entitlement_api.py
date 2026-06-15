@@ -165,3 +165,80 @@ def test_api_entitlement_paid_tier_grants_all_runtimes(monkeypatch, tmp_path, ti
     # All paid runtimes must be present.
     for rt in e.PAID_RUNTIMES:
         assert rt in d["runtimes"], f"{tier}: {rt} missing from runtimes"
+
+
+# ── /api/entitlement/upgrade-diff ────────────────────────────────────────────
+
+
+def test_api_upgrade_diff_oss_to_cloud_pro(client):
+    c, _ = client
+    resp = c.get("/api/entitlement/upgrade-diff?target=cloud_pro")
+    assert resp.status_code == 200
+    d = resp.get_json()
+    assert d["target"] == "cloud_pro"
+    import clawmetry.entitlements as e
+    assert set(d["added_features"]) == set(e.PAID_FEATURES)
+    assert set(d["added_runtimes"]) == set(e.PAID_RUNTIMES)
+    # Sorted contract — the UI relies on stable order.
+    assert d["added_features"] == sorted(d["added_features"])
+    assert d["added_runtimes"] == sorted(d["added_runtimes"])
+
+
+def test_api_upgrade_diff_unknown_target_is_empty_not_500(client):
+    c, _ = client
+    resp = c.get("/api/entitlement/upgrade-diff?target=nope")
+    assert resp.status_code == 200
+    d = resp.get_json()
+    assert d["target"] == "nope"
+    assert d["added_features"] == []
+    assert d["added_runtimes"] == []
+
+
+def test_api_upgrade_diff_missing_target_is_empty(client):
+    c, _ = client
+    resp = c.get("/api/entitlement/upgrade-diff")
+    assert resp.status_code == 200
+    d = resp.get_json()
+    assert d["added_features"] == []
+    assert d["added_runtimes"] == []
+
+
+def test_api_upgrade_diff_case_insensitive(client):
+    c, _ = client
+    a = c.get("/api/entitlement/upgrade-diff?target=cloud_pro").get_json()
+    b = c.get("/api/entitlement/upgrade-diff?target=CLOUD_PRO").get_json()
+    assert a["added_features"] == b["added_features"]
+    assert a["added_runtimes"] == b["added_runtimes"]
+
+
+@pytest.mark.parametrize("tier,expected_runtime_diff", [
+    ("cloud_starter", "paid"),    # OSS → Starter unlocks paid runtimes
+    ("cloud_pro", "paid"),         # OSS → Pro unlocks paid runtimes
+    ("enterprise", "paid"),        # OSS → Enterprise unlocks paid runtimes
+])
+def test_api_upgrade_diff_paid_tiers_all_unlock_paid_runtimes(client, tier, expected_runtime_diff):
+    c, _ = client
+    d = c.get(f"/api/entitlement/upgrade-diff?target={tier}").get_json()
+    import clawmetry.entitlements as e
+    assert set(d["added_runtimes"]) == set(e.PAID_RUNTIMES)
+
+
+def test_api_upgrade_diff_starter_subscriber_to_pro(monkeypatch, tmp_path):
+    """A Starter subscriber asking for Pro should only see PRO_ONLY features."""
+    monkeypatch.delenv("CLAWMETRY_ENFORCE", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    import clawmetry.entitlements as e
+    importlib.reload(e)
+    e.invalidate()
+
+    cache = tmp_path / ".clawmetry" / "cloud_plan.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"plan": "cloud_starter", "node_limit": 1, "expiry": None}))
+
+    from routes.entitlement import bp_entitlement
+    app = Flask(__name__)
+    app.register_blueprint(bp_entitlement)
+    d = app.test_client().get("/api/entitlement/upgrade-diff?target=cloud_pro").get_json()
+
+    assert set(d["added_features"]) == set(e.PRO_ONLY_FEATURES)
+    assert d["added_runtimes"] == []  # already on Starter, paid runtimes unlocked

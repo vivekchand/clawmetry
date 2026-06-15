@@ -195,6 +195,34 @@ def api_features():
         return jsonify({"features": [], "grace": True, "enforced": False})
 
 
+@bp_entitlement.route("/api/entitlement/upgrade-diff")
+def api_entitlement_upgrade_diff():
+    """Return the features + runtimes ``?target=<tier>`` would unlock on top of
+    the current entitlement. Drives the upgrade CTA shown on locked rows so the
+    UI can list exactly what the user would gain without re-deriving tier logic
+    client-side.
+
+    Shape::
+
+        {"target": "<tier>", "added_features": [...], "added_runtimes": [...]}
+
+    Unknown / missing ``target`` returns empty lists; never raises."""
+    try:
+        target = (request.args.get("target") or "").strip().lower()
+        from clawmetry import entitlements as _ent
+
+        return jsonify(_ent.upgrade_diff(target))
+    except Exception as exc:  # never crash the dashboard over a gate read
+        logger.warning("api_entitlement_upgrade_diff: error: %s", exc)
+        return jsonify(
+            {
+                "target": (request.args.get("target") or "").strip().lower(),
+                "added_features": [],
+                "added_runtimes": [],
+            }
+        )
+
+
 @bp_entitlement.route("/api/license/status")
 def api_license_status():
     """Return the current self-hosted license info as JSON.

@@ -325,6 +325,121 @@ def test_entitled_tier_entitles_its_runtimes(ent):
     assert en.entitled_runtime("cursor") is True
 
 
+# ── upgrade_diff (upgrade CTA driver) ───────────────────────────────────────
+
+
+def test_upgrade_diff_oss_to_starter_adds_starter_features_and_paid_runtimes(ent):
+    """OSS → Starter unlocks exactly STARTER_FEATURES on top of FREE_FEATURES,
+    and the paid runtime catalogue."""
+    en = ent.get_entitlement(force=True)
+    assert en.tier == ent.TIER_OSS
+    diff = en.upgrade_diff(ent.TIER_CLOUD_STARTER)
+    assert diff["target"] == ent.TIER_CLOUD_STARTER
+    # Free features are already on every tier — never in the diff.
+    assert set(diff["added_features"]) == set(ent.STARTER_FEATURES)
+    assert set(ent.FREE_FEATURES).isdisjoint(diff["added_features"])
+    assert set(diff["added_runtimes"]) == set(ent.PAID_RUNTIMES)
+    # Sorted output is a stable contract for the UI.
+    assert diff["added_features"] == sorted(diff["added_features"])
+    assert diff["added_runtimes"] == sorted(diff["added_runtimes"])
+
+
+def test_upgrade_diff_oss_to_pro_adds_all_paid_features(ent):
+    en = ent.get_entitlement(force=True)
+    diff = en.upgrade_diff(ent.TIER_CLOUD_PRO)
+    assert set(diff["added_features"]) == set(ent.PAID_FEATURES)
+    assert set(diff["added_runtimes"]) == set(ent.PAID_RUNTIMES)
+
+
+def test_upgrade_diff_oss_to_enterprise_adds_enterprise_features(ent):
+    en = ent.get_entitlement(force=True)
+    diff = en.upgrade_diff(ent.TIER_ENTERPRISE)
+    expected = set(ent.PAID_FEATURES) | set(ent.ENTERPRISE_FEATURES)
+    assert set(diff["added_features"]) == expected
+    assert set(diff["added_runtimes"]) == set(ent.PAID_RUNTIMES)
+
+
+def test_upgrade_diff_starter_to_pro_adds_only_pro_only_features(ent, tmp_path):
+    """A Starter subscriber upgrading to Pro should see ONLY the PRO_ONLY
+    features in the diff — paid runtimes are already unlocked at Starter."""
+    cache = tmp_path / ".clawmetry" / "cloud_plan.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"plan": ent.TIER_CLOUD_STARTER, "node_limit": 1, "expiry": None}))
+    en = ent.get_entitlement(force=True)
+    assert en.tier == ent.TIER_CLOUD_STARTER
+    diff = en.upgrade_diff(ent.TIER_CLOUD_PRO)
+    assert set(diff["added_features"]) == set(ent.PRO_ONLY_FEATURES)
+    assert diff["added_runtimes"] == []   # Starter already has all paid runtimes
+
+
+def test_upgrade_diff_pro_to_enterprise_adds_only_enterprise_features(ent, tmp_path):
+    cache = tmp_path / ".clawmetry" / "cloud_plan.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"plan": ent.TIER_CLOUD_PRO, "node_limit": 1, "expiry": None}))
+    en = ent.get_entitlement(force=True)
+    assert en.tier == ent.TIER_CLOUD_PRO
+    diff = en.upgrade_diff(ent.TIER_ENTERPRISE)
+    assert set(diff["added_features"]) == set(ent.ENTERPRISE_FEATURES)
+    assert diff["added_runtimes"] == []
+
+
+def test_upgrade_diff_same_tier_is_empty(ent, tmp_path):
+    cache = tmp_path / ".clawmetry" / "cloud_plan.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"plan": ent.TIER_CLOUD_PRO, "node_limit": 1, "expiry": None}))
+    en = ent.get_entitlement(force=True)
+    diff = en.upgrade_diff(ent.TIER_CLOUD_PRO)
+    assert diff["added_features"] == []
+    assert diff["added_runtimes"] == []
+
+
+def test_upgrade_diff_downgrade_target_is_empty(ent, tmp_path):
+    """A Pro subscriber 'upgrading' to OSS gains nothing — the diff direction
+    is target-MINUS-current, never the reverse, so this stays empty (and the UI
+    never renders a nonsensical 'downgrade to unlock' CTA)."""
+    cache = tmp_path / ".clawmetry" / "cloud_plan.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"plan": ent.TIER_CLOUD_PRO, "node_limit": 1, "expiry": None}))
+    en = ent.get_entitlement(force=True)
+    diff = en.upgrade_diff(ent.TIER_OSS)
+    assert diff["added_features"] == []
+    assert diff["added_runtimes"] == []
+
+
+def test_upgrade_diff_unknown_target_returns_empty(ent):
+    en = ent.get_entitlement(force=True)
+    diff = en.upgrade_diff("totally-made-up-tier")
+    assert diff["added_features"] == []
+    assert diff["added_runtimes"] == []
+    # Target echoed back so the UI can render "Unknown tier" safely.
+    assert diff["target"] == "totally-made-up-tier"
+
+
+def test_upgrade_diff_empty_and_none_targets_are_safe(ent):
+    en = ent.get_entitlement(force=True)
+    for bad in ("", None, "   "):
+        diff = en.upgrade_diff(bad)
+        assert diff["added_features"] == []
+        assert diff["added_runtimes"] == []
+
+
+def test_upgrade_diff_module_helper_resolves_current(ent):
+    """The module-level ``upgrade_diff`` is a thin wrapper around
+    ``get_entitlement().upgrade_diff`` — same shape, no surprises."""
+    direct = ent.get_entitlement(force=True).upgrade_diff(ent.TIER_CLOUD_PRO)
+    via_module = ent.upgrade_diff(ent.TIER_CLOUD_PRO)
+    assert direct == via_module
+
+
+def test_upgrade_diff_case_insensitive_target(ent):
+    en = ent.get_entitlement(force=True)
+    a = en.upgrade_diff(ent.TIER_CLOUD_PRO)
+    b = en.upgrade_diff(ent.TIER_CLOUD_PRO.upper())
+    c = en.upgrade_diff("  " + ent.TIER_CLOUD_PRO + "  ")
+    assert a["added_features"] == b["added_features"] == c["added_features"]
+    assert a["added_runtimes"] == b["added_runtimes"] == c["added_runtimes"]
+
+
 # ── canonical_runtime + RUNTIME_ALIASES ─────────────────────────────────────
 
 

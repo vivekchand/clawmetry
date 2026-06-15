@@ -418,6 +418,43 @@ class Entitlement:
         """
         return _TIER_RETENTION_DAYS.get(self.tier, 7)
 
+    def upgrade_diff(self, target_tier: str) -> dict:
+        """Features + runtimes ``target_tier`` would unlock on top of this
+        entitlement. Drives the upgrade CTA on a locked row: hovering "Upgrade
+        to Pro" needs to know which feature/runtime keys would light up so the
+        UI can list them without round-tripping the whole feature catalog.
+
+        Returns ``{"target": "<tier>", "added_features": [...sorted...],
+        "added_runtimes": [...sorted...]}``. An unknown or empty target tier,
+        or a target that would not add anything (already on the same/higher
+        tier), returns empty lists. Free features/runtimes are always present
+        on every tier, so they never appear in ``added_*``. Never raises."""
+        try:
+            tt = (target_tier or "").strip().lower()
+            target_paid_feats = _TIER_FEATURES.get(tt)
+            if target_paid_feats is None:
+                return {"target": tt, "added_features": [], "added_runtimes": []}
+            target_feats = FREE_FEATURES | target_paid_feats
+            if tt == TIER_ENTERPRISE:
+                target_feats = target_feats | ENTERPRISE_FEATURES
+            target_runtimes = (
+                FREE_RUNTIMES | PAID_RUNTIMES
+                if tt in _TIER_PAID_RUNTIMES
+                else FREE_RUNTIMES
+            )
+            return {
+                "target": tt,
+                "added_features": sorted(target_feats - self.features),
+                "added_runtimes": sorted(target_runtimes - self.runtimes),
+            }
+        except Exception as exc:
+            logger.warning("entitlements: upgrade_diff failed: %s", exc)
+            return {
+                "target": target_tier or "",
+                "added_features": [],
+                "added_runtimes": [],
+            }
+
     def to_dict(self) -> dict:
         # ``retention_days`` mirrors :meth:`event_retention_days` so the
         # dashboard can render a tier-aware "we are keeping N days of history"
@@ -599,6 +636,21 @@ def invalidate() -> None:
     """Drop the cached entitlement (call after activating/removing a license)."""
     with _lock:
         _cache.update(ent=None, ts=0.0, enforce=None)
+
+
+def upgrade_diff(target_tier: str) -> dict:
+    """Module-level convenience: resolve the current entitlement and return
+    what ``target_tier`` would add. Equivalent to
+    ``get_entitlement().upgrade_diff(target_tier)``. Never raises."""
+    try:
+        return get_entitlement().upgrade_diff(target_tier)
+    except Exception as exc:
+        logger.warning("entitlements: upgrade_diff (module) failed: %s", exc)
+        return {
+            "target": target_tier or "",
+            "added_features": [],
+            "added_runtimes": [],
+        }
 
 
 def resolution_diagnostic() -> dict:
