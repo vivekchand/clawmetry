@@ -698,6 +698,70 @@ def _read_nemoclaw_skill_catalog() -> dict:
     return {}
 
 
+_OLLAMA_HOST_DOCKER_INTERNAL = "http://host.docker.internal:11434"
+_OLLAMA_LOCALHOST = "http://127.0.0.1:11434"
+
+
+def _resolve_ollama_host() -> tuple:
+    """Resolve the Ollama base URL and how it was chosen.
+
+    Priority order:
+    1. ``OLLAMA_HOST`` env var (with http:// prefix added if missing)
+    2. Docker internal host when running inside a container
+    3. Loopback (127.0.0.1)
+
+    Returns (url, mode) where mode is "explicit", "docker-internal", or
+    "loopback".  Never raises.
+    """
+    import os
+
+    explicit = (os.environ.get("OLLAMA_HOST") or "").strip()
+    if explicit:
+        if "://" not in explicit:
+            explicit = "http://" + explicit
+        return explicit, "explicit"
+    in_docker = False
+    try:
+        in_docker = os.path.exists("/.dockerenv") or bool(
+            (os.environ.get("OLLAMA_IN_DOCKER") or "").strip()
+        )
+    except Exception:
+        in_docker = False
+    if in_docker:
+        return _OLLAMA_HOST_DOCKER_INTERNAL, "docker-internal"
+    return _OLLAMA_LOCALHOST, "loopback"
+
+
+def _read_nemoclaw_ollama_inference() -> dict:
+    """Surface the local Ollama inference host + available model roster.
+
+    Hits ``<host>/api/tags`` (Ollama's list-models endpoint) with a tight
+    0.6 s timeout so the adapter stays fast when Ollama is absent.  Returns a
+    dict with ``ollama_host``, ``ollama_host_mode``, and (when reachable)
+    ``ollama_local_models`` (sorted list of model-name strings).  Never raises.
+    """
+    import json
+    import urllib.request
+
+    host, mode = _resolve_ollama_host()
+    out: dict = {"ollama_host": host, "ollama_host_mode": mode}
+    try:
+        url = host.rstrip("/") + "/api/tags"
+        with urllib.request.urlopen(url, timeout=0.6) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        models = payload.get("models") if isinstance(payload, dict) else None
+        names: list = []
+        for m in models or []:
+            if isinstance(m, dict):
+                name = m.get("name") or m.get("model")
+                if name:
+                    names.append(str(name))
+        out["ollama_local_models"] = sorted(set(names))
+    except Exception as exc:
+        logger.debug("nemoclaw ollama model roster query failed (%s): %s", host, exc)
+    return out
+
+
 def _read_model_router_model_list() -> dict:
     """Read the proxy-config YAML written by ``model-router proxy-config --output <path>``.
 
@@ -873,6 +937,7 @@ class NemoClawAdapter(AgentAdapter):
         meta.update(_read_nemoclaw_skill_catalog())
         meta.update(_read_model_router_model_list())
         meta.update(_read_nemoclaw_sandbox_lifecycle())
+        meta["ollama_inference"] = _read_nemoclaw_ollama_inference()
         return DetectResult(
             name=self.name,
             display_name=self.display_name,

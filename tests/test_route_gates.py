@@ -58,6 +58,76 @@ def test_gate_decorator_blocks_in_enforce_mode(enforce):
         assert body["feature"] == "self_evolve"
         assert "tier" in body
         assert "hint" in body
+        # required_tier lets the UI route to the right upgrade CTA.
+        assert body["required_tier"] == enforce.TIER_CLOUD_PRO
+
+
+# ── required_tier mapping ────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "feature_key,expected_tier_attr",
+    [
+        ("multi_runtime", "TIER_CLOUD_STARTER"),       # Starter feature
+        ("budget_limits", "TIER_CLOUD_STARTER"),       # Starter feature
+        ("self_evolve", "TIER_CLOUD_PRO"),             # Pro-only feature
+        ("otel_export", "TIER_CLOUD_PRO"),             # Pro-only (moved off Enterprise)
+        ("siem_export", "TIER_ENTERPRISE"),            # Enterprise-only feature
+        ("sso", "TIER_ENTERPRISE"),                    # Enterprise-only feature
+    ],
+)
+def test_gate_required_tier_routes_to_correct_upgrade(
+    enforce, feature_key, expected_tier_attr
+):
+    """The 402 response carries ``required_tier`` so the UI can render the
+    right upgrade CTA (Starter vs Pro vs Enterprise) without re-deriving
+    tier logic in JavaScript."""
+    from clawmetry._gate import gate
+
+    app = Flask(__name__)
+
+    @app.route("/test")
+    @gate(feature_key)
+    def view():
+        return {"ok": True}
+
+    with app.test_client() as c:
+        r = c.get("/test")
+        assert r.status_code == 402
+        body = r.get_json()
+        assert body["required_tier"] == getattr(enforce, expected_tier_attr)
+
+
+def test_gate_required_tier_is_none_for_free_feature(enforce):
+    """Free features never produce a 402, but if a caller asks the helper
+    directly for one it returns None (no upgrade required)."""
+    from clawmetry._gate import _required_tier
+
+    assert _required_tier("sessions") is None
+    assert _required_tier("usage") is None
+
+
+def test_gate_required_tier_is_none_for_unknown_feature(enforce):
+    """Unknown / typo'd feature keys resolve to ``None`` rather than raising.
+    Keeps the 402 path graceful when a route uses a key not yet in the
+    catalogue (e.g. a clawmetry-pro plugin's private feature)."""
+    from clawmetry._gate import _required_tier
+
+    assert _required_tier("totally_unknown_feature_xyz") is None
+
+
+def test_gate_required_tier_swallows_entitlement_lookup_errors(monkeypatch):
+    """If a catalogue read itself raises the helper returns ``None`` rather
+    than propagating — the 402 body still serializes and the request path
+    stays defensive."""
+    from clawmetry import _gate
+
+    class _Boom:
+        def __contains__(self, _key):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr("clawmetry.entitlements.FREE_FEATURES", _Boom())
+    assert _gate._required_tier("self_evolve") is None
 
 
 def test_gate_decorator_passes_in_grace_mode(grace):

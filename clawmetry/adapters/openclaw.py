@@ -151,6 +151,73 @@ def _model_router_fingerprint() -> dict:
         return {}
 
 
+def _sandbox_inference_configs() -> list:
+    """Read per-sandbox inference config from ~/.nemoclaw/sandboxes.json.
+
+    Mirrors getSandboxInferenceConfig() (nemoclaw/src/lib/inference/config.ts)
+    to surface providerKey / primaryModelRef / inferenceBaseUrl / inferenceApi /
+    inferenceCompat on DetectResult.meta (gap #2796). The identical derivation
+    lives in sync._read_nemoclaw_sandbox_routing (#2684); this helper makes it
+    available in the adapter layer without importing the heavy sync module.
+    Never raises -- returns [] on plain OpenClaw (no sandboxes.json).
+    """
+    home = os.environ.get("HOME") or os.path.expanduser("~")
+    reg = os.path.join(home, ".nemoclaw", "sandboxes.json")
+    out: list = []
+    try:
+        with open(reg, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:
+        return out
+    if not isinstance(data, dict):
+        return out
+    default_sb = data.get("defaultSandbox")
+    sandboxes = data.get("sandboxes")
+    if not isinstance(sandboxes, dict):
+        return out
+    _MANAGED = "inference"
+    _MANAGED_URL = "https://inference.local/v1"
+    for name, entry in sandboxes.items():
+        try:
+            if not isinstance(entry, dict):
+                continue
+            provider = entry.get("provider") or ""
+            model = entry.get("model") or ""
+            api = entry.get("preferredInferenceApi") or "openai-completions"
+            base_url = _MANAGED_URL
+            if provider == "openai-api":
+                provider_key = "openai"
+                primary = f"openai/{model}" if model else ""
+                compat = "openai"
+            elif provider == "anthropic-prod" or (
+                provider == "compatible-anthropic-endpoint"
+                and api != "openai-completions"
+            ):
+                provider_key = "anthropic"
+                primary = f"anthropic/{model}" if model else ""
+                base_url = "https://inference.local"
+                api = "anthropic-messages"
+                compat = "anthropic"
+            else:
+                provider_key = _MANAGED
+                primary = f"{_MANAGED}/{model}" if model else ""
+                compat = "openai"
+            out.append({
+                "sandbox": name,
+                "isDefault": bool(default_sb and name == default_sb),
+                "provider": provider,
+                "model": model,
+                "providerKey": provider_key,
+                "primaryModelRef": primary,
+                "inferenceBaseUrl": base_url,
+                "inferenceApi": api,
+                "inferenceCompat": compat,
+            })
+        except Exception:
+            continue
+    return out
+
+
 def _discover_model_router_port() -> Optional[int]:
     """Find the ``--port`` of a running ``model-router proxy`` process.
 
@@ -241,6 +308,105 @@ def _model_router_live() -> dict:
     if port is None:
         return {"modelRouterRunning": False}
     return {"modelRouterPort": port, "modelRouterRunning": _model_router_health_ok(port)}
+
+
+def _parse_proxy_config_model_list(content: str) -> Optional[List[str]]:
+    """Extract model names from a LiteLLM-style proxy-config YAML (#2960).
+
+    Tries ``yaml.safe_load`` first (PyYAML, optional dep); falls back to a
+    line-by-line scan for ``model_name:`` keys so no new hard dependency is
+    needed.  Returns ``None`` on parse failure so callers can omit the field.
+    Never raises.
+    """
+    try:
+        import yaml as _yaml  # type: ignore[import]
+        data = _yaml.safe_load(content)
+        items = data.get("model_list", []) if isinstance(data, dict) else []
+        return [
+            m["model_name"]
+            for m in items
+            if isinstance(m, dict) and "model_name" in m
+        ]
+    except ImportError:
+        pass
+    except Exception:
+        return None
+
+    # Fallback: line scan for ``model_name: <value>`` in a model_list block
+    in_list = False
+    names: List[str] = []
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped == "model_list:":
+            in_list = True
+            continue
+        if in_list:
+            if stripped.startswith("- model_name:"):
+                _, _, name = stripped.partition(":")
+                names.append(name.strip().strip("\"'"))
+            elif stripped and not stripped.startswith("-") and not stripped.startswith(" "):
+                in_list = False
+    return names or None
+
+
+def _model_router_proxy_config_models() -> dict:
+    """Read the NeMoClaw model-router proxy-config model roster (#2960).
+
+    The harness writes a proxy-config YAML during onboarding
+    (test/onboard-model-router.test.ts). Checks ``<venv>/proxy-config.yaml``
+    first; falls back to running ``model-router proxy-config --output <tmp>``
+    if the binary is on PATH.
+
+    Returns ``{"modelRouterProxyModels": ["name", ...]}`` or ``{}`` on any
+    failure (file absent, binary missing, parse error).  Never raises.
+    """
+    import subprocess
+    import shutil
+    import tempfile
+
+    venv = os.environ.get("NEMOCLAW_MODEL_ROUTER_VENV") or os.path.expanduser(
+        os.path.join("~", ".nemoclaw", "model-router-venv"))
+
+    # Fast path: static file written by harness onboarding
+    static_path = os.path.join(venv, "proxy-config.yaml")
+    content: Optional[str] = None
+    if os.path.isfile(static_path):
+        try:
+            with open(static_path, encoding="utf-8") as fh:
+                content = fh.read()
+        except OSError:
+            pass
+
+    # Slow path: generate via model-router CLI
+    if content is None:
+        mr_bin_venv = os.path.join(venv, "bin", "model-router")
+        mr_bin: Optional[str] = (
+            mr_bin_venv if os.path.isfile(mr_bin_venv) else shutil.which("model-router")
+        )
+        if not mr_bin:
+            return {}
+        tmp_path: Optional[str] = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".yaml", delete=False) as tmp:
+                tmp_path = tmp.name
+            subprocess.check_call(
+                [mr_bin, "proxy-config", "--output", tmp_path],
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+            with open(tmp_path, encoding="utf-8") as fh:
+                content = fh.read()
+        except Exception:
+            return {}
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+    models = _parse_proxy_config_model_list(content)
+    return {"modelRouterProxyModels": models} if models is not None else {}
 
 
 # NOTE (#2610, deferred): NemoClaw's skill-catalog version/provenance lives in
@@ -404,6 +570,7 @@ class OpenClawAdapter(AgentAdapter):
             # OpenClaw, so meta is unchanged there. (#2610 skill-catalog deferred
             # — see note above: no host-readable on-disk location.)
             meta.update(_model_router_fingerprint())
+            meta.update(_model_router_proxy_config_models())
             # Runtime liveness (#2795). The fingerprint above only proves the
             # router was INSTALLED; probe /health so a crashed router is no
             # longer indistinguishable from a healthy one. Only meaningful when
@@ -419,6 +586,11 @@ class OpenClawAdapter(AgentAdapter):
             _tc_kind = _openclaw_tool_catalog_kind()
             if _tc_kind is not None:
                 meta["openclawToolCatalogKind"] = _tc_kind
+            # Per-sandbox inference config (#2796): providerKey/primaryModelRef/
+            # inferenceBaseUrl/inferenceApi/inferenceCompat from sandboxes.json.
+            _sb_configs = _sandbox_inference_configs()
+            if _sb_configs:
+                meta["sandboxInferenceConfigs"] = _sb_configs
             return DetectResult(
                 name=self.name,
                 display_name=self.display_name,
@@ -491,8 +663,12 @@ class OpenClawAdapter(AgentAdapter):
                     cache_write_tokens=tok_cw,
                     reasoning_tokens=int(tok_reasoning or 0),
                     cost_usd=float(s["costUsd"]) if s.get("costUsd") is not None else None,
+                    ended_at=float(s["endedAt"]) / 1000.0 if s.get("endedAt") else None,
                     end_reason=s.get("endReason") or s.get("end_reason") or "",
                     parent_id=s.get("parentId") or None,
+                    message_count=int(s.get("messageCount") or 0),
+                    title=s.get("title") or "",
+                    cost_status=s.get("costStatus") or "",
                     extra=extra,
                 )
             )
