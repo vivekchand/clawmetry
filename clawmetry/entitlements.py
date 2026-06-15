@@ -697,6 +697,39 @@ class Entitlement:
         """
         return _TIER_RETENTION_DAYS.get(self.tier, 7)
 
+    def allows_retention_window(self, days: int | None) -> bool:
+        """Whether the install may query / keep a retention window of ``days``
+        days of history.
+
+        Sibling to :meth:`allows_runtime`, :meth:`allows_feature`, and the
+        ``allows_node_count`` axis -- gives the frontend (history-range toggles
+        like "7 / 30 / 90 / all") and the daemon's prune loop a single
+        canonical check, so neither has to re-derive tier to cap math.
+
+        Semantics:
+
+        * Grace mode: always ``True`` (no current behaviour changes pre-enforce).
+        * ``days <= 0``: ``True`` -- asking for zero history is trivially fine
+          regardless of tier.
+        * Expired entitlement: ``False`` for any positive window.
+        * Enterprise (``event_retention_days() is None``): ``True`` for any
+          finite or ``None`` (unlimited) request.
+        * ``days is None`` (request unlimited) on a finite-cap tier: ``False``.
+        * Otherwise: ``days <= cap``.
+        """
+        if self.grace:
+            return True
+        if days is not None and days <= 0:
+            return True
+        if self.expired:
+            return False
+        cap = self.event_retention_days()
+        if cap is None:  # Enterprise: unlimited
+            return True
+        if days is None:  # caller asked for unlimited; only Enterprise grants it
+            return False
+        return days <= cap
+
     def to_dict(self) -> dict:
         # ``retention_days`` mirrors :meth:`event_retention_days` so the
         # dashboard can render a tier-aware "we are keeping N days of history"
