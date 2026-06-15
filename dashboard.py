@@ -16481,6 +16481,12 @@ def _get_sessions():
                     ),
                     "kind": s.get("kind", "direct"),
                     "agent": s.get("agentId", "main"),
+                    "endedAt": s.get("endedAtMs") or s.get("endedAt"),
+                    "endReason": s.get("endReason") or "",
+                    "parentId": s.get("parentSessionId") or s.get("parentId") or "",
+                    "messageCount": int(s.get("messageCount") or 0),
+                    "title": s.get("title") or "",
+                    "costStatus": s.get("costStatus") or "",
                 }
             )
         _sessions_cache["data"] = sessions
