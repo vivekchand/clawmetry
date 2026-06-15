@@ -137,6 +137,7 @@ def api_runtimes():
                         "free": True,
                         "allowed": True,
                         "locked": False,
+                        "tier": "free",
                     },
                     {
                         "id": "openclaw",
@@ -144,6 +145,7 @@ def api_runtimes():
                         "free": True,
                         "allowed": True,
                         "locked": False,
+                        "tier": "free",
                     },
                 ],
                 "grace": True,
