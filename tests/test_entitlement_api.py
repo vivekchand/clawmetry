@@ -90,6 +90,27 @@ def test_api_entitlement_retention_days_oss_default(client):
     assert d["retention_days"] == 7
 
 
+def test_api_entitlement_effective_retention_reflects_env_override(monkeypatch, tmp_path):
+    """``CLAWMETRY_RETENTION_DAYS`` shrinks the *effective* retention surfaced
+    on /api/entitlement without touching the tier cap. Pins the HTTP contract
+    the dashboard reads when it renders "we are keeping N days" — the prune
+    loop reads the same value, so this guards them staying in lockstep."""
+    monkeypatch.delenv("CLAWMETRY_ENFORCE", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CLAWMETRY_RETENTION_DAYS", "2")
+    import clawmetry.entitlements as e
+    importlib.reload(e)
+    e.invalidate()
+
+    from routes.entitlement import bp_entitlement
+    app = Flask(__name__)
+    app.register_blueprint(bp_entitlement)
+    d = app.test_client().get("/api/entitlement").get_json()
+
+    assert d["retention_days"] == 7              # tier cap untouched
+    assert d["effective_retention_days"] == 2    # env override shrinks effective
+
+
 def test_api_entitlement_grace_defaults(client):
     c, _ = client
     d = c.get("/api/entitlement").get_json()
