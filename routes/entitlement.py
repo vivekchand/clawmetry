@@ -23,6 +23,7 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                          would add on top of the current ent.
   GET  /api/runtimes                  -- the full runtime catalog with
                                          locked/free/tier flags.
+  GET  /api/tiers                     -- the full tier ladder with per-tier metadata.
 
 Side-effect-free and never-raise (refresh's only side effect is busting the
 in-process cache), so it is safe to classify ``oss-passthrough`` on the cloud
@@ -277,6 +278,54 @@ def api_runtimes():
                         "locked": False,
                     },
                 ],
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/tiers")
+def api_tiers():
+    """Return the full tier ladder with per-tier metadata so the dashboard can
+    render an upgrade affordance without re-deriving tier identifiers in
+    JavaScript.
+
+    Shape::
+
+        {
+          "tiers": [
+            {"id": "oss", "label": "OSS", "is_paid": false,
+             "is_current": true, "rank": 0,
+             "unlocks_paid_runtimes": false,
+             "retention_days": 7, "features": []},
+            ...
+          ],
+          "current":  "oss",
+          "grace":    true | false,   # mirrors /api/entitlement.grace
+          "enforced": true | false
+        }
+
+    Side-effect-free and never-raise: any resolution error falls back to a
+    grace OSS-free shape so the UI still has something safe to render.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": _ent.tier_catalog(),
+                "current": ent.tier,
+                "grace": ent.grace,
+                "enforced": not ent.grace,
+            }
+        )
+    except Exception as exc:  # never crash the dashboard over a gate read
+        logger.warning("api_tiers: falling back to OSS-free: %s", exc)
+        return jsonify(
+            {
+                "tiers": [],
+                "current": "oss",
                 "grace": True,
                 "enforced": False,
             }
