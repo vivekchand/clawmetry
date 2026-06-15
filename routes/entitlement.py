@@ -104,12 +104,21 @@ def api_runtimes():
         {
           "runtimes": [
             {"id": "openclaw", "label": "OpenClaw",
-             "free": true, "allowed": true, "locked": false},
+             "free": true, "allowed": true, "locked": false,
+             "tier": "free"},
+            {"id": "claude_code", "label": "Claude Code",
+             "free": false, "allowed": true, "locked": false,
+             "tier": "starter"},
             ...
           ],
           "grace":    true | false,   # mirrors /api/entitlement.grace
           "enforced": true | false
         }
+
+    ``tier`` carries the minimum tier that unlocks each row — ``"free"`` for
+    ``FREE_RUNTIMES`` and ``"starter"`` for every paid runtime (since the
+    Starter ``multi_runtime`` grant unlocks them all). Mirrors
+    ``feature_catalog()``'s ``tier`` field so the UI uses one tier vocabulary.
 
     Side-effect-free and never-raise: any resolution error falls back to a
     grace OSS-free shape with the OpenClaw row, so the UI still has something
@@ -137,6 +146,7 @@ def api_runtimes():
                         "free": True,
                         "allowed": True,
                         "locked": False,
+                        "tier": "free",
                     },
                     {
                         "id": "openclaw",
@@ -144,6 +154,7 @@ def api_runtimes():
                         "free": True,
                         "allowed": True,
                         "locked": False,
+                        "tier": "free",
                     },
                 ],
                 "grace": True,
