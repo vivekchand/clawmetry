@@ -312,6 +312,43 @@ def is_enforced() -> bool:
     )
 
 
+# Display labels for every known tier id. The dashboard, the CLI, and any
+# operator-facing surface should call :func:`tier_label` instead of hard-coding
+# these strings so the vocabulary stays consistent (and translatable later).
+# An unknown tier id is rendered title-cased with underscores swapped for
+# spaces, so a future tier added before this map is updated still renders
+# *something* sensible.
+TIER_LABELS: dict[str, str] = {
+    TIER_OSS: "OSS",
+    TIER_CLOUD_FREE: "Free",
+    TIER_TRIAL: "Trial",
+    TIER_CLOUD_STARTER: "Starter",
+    TIER_CLOUD_PRO: "Pro",
+    TIER_PRO: "Self-hosted Pro",
+    TIER_ENTERPRISE: "Enterprise",
+}
+
+
+def tier_label(tier: str) -> str:
+    """Human-readable label for ``tier``. Mirrors :func:`runtime_label` so the
+    dashboard / CLI never hard-code tier strings.
+
+    An unknown tier id (a future tier added before :data:`TIER_LABELS` is
+    updated, or a typo on the wire) is rendered title-cased with underscores
+    turned into spaces — e.g. ``"cloud_team"`` -> ``"Cloud Team"`` — so the UI
+    still has *something* to render. The empty / falsy id falls back to the
+    OSS label, which is the safest default for a value that should never have
+    been blank.
+    """
+    t = (tier or "").strip().lower()
+    if not t:
+        return TIER_LABELS[TIER_OSS]
+    label = TIER_LABELS.get(t)
+    if label is not None:
+        return label
+    return t.replace("_", " ").title()
+
+
 @dataclass(frozen=True)
 class Entitlement:
     """Resolved entitlement for this install. Immutable; rebuild via
@@ -427,6 +464,7 @@ class Entitlement:
         # this is just the read-only API surface.
         return {
             "tier": self.tier,
+            "tier_label": tier_label(self.tier),
             "source": self.source,
             "node_limit": self.node_limit,
             "expiry": self.expiry,

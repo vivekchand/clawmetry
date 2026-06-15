@@ -390,6 +390,77 @@ def test_runtime_aliases_all_resolve_to_known_runtimes(ent):
         assert alias not in ent.ALL_RUNTIMES, alias
 
 
+# ── tier_label() ────────────────────────────────────────────────────────────
+
+
+def test_tier_label_known_tiers(ent):
+    """Every known tier id has an explicit display label so the dashboard
+    never shows a raw ``cloud_pro``-style snake-case string to operators."""
+    assert ent.tier_label(ent.TIER_OSS) == "OSS"
+    assert ent.tier_label(ent.TIER_CLOUD_FREE) == "Free"
+    assert ent.tier_label(ent.TIER_TRIAL) == "Trial"
+    assert ent.tier_label(ent.TIER_CLOUD_STARTER) == "Starter"
+    assert ent.tier_label(ent.TIER_CLOUD_PRO) == "Pro"
+    assert ent.tier_label(ent.TIER_PRO) == "Self-hosted Pro"
+    assert ent.tier_label(ent.TIER_ENTERPRISE) == "Enterprise"
+
+
+def test_tier_label_covers_every_known_tier_id(ent):
+    """TIER_LABELS must stay in sync with the tier-id constants. If a new
+    TIER_* constant lands without a label, this fails so the operator-facing
+    surface is never quietly missing a row."""
+    known = {
+        ent.TIER_OSS, ent.TIER_CLOUD_FREE, ent.TIER_TRIAL,
+        ent.TIER_CLOUD_STARTER, ent.TIER_CLOUD_PRO, ent.TIER_PRO,
+        ent.TIER_ENTERPRISE,
+    }
+    missing = known - set(ent.TIER_LABELS.keys())
+    assert not missing, f"TIER_LABELS missing rows for: {sorted(missing)}"
+
+
+def test_tier_label_unknown_titlecased(ent):
+    """An unknown tier id is rendered title-cased with underscores swapped for
+    spaces so a forward-compat shape from the cloud (a tier added before this
+    map was bumped) still renders *something* readable."""
+    assert ent.tier_label("cloud_team") == "Cloud Team"
+    assert ent.tier_label("FOO_BAR") == "Foo Bar"
+
+
+def test_tier_label_empty_and_none_safe(ent):
+    """Falsy / blank input falls back to the OSS label rather than raising —
+    matches the never-crash contract of the rest of this module."""
+    assert ent.tier_label("") == "OSS"
+    assert ent.tier_label("   ") == "OSS"
+    assert ent.tier_label(None) == "OSS"  # type: ignore[arg-type]
+
+
+def test_tier_label_normalises_case_and_whitespace(ent):
+    """Mirrors :func:`runtime_label`: lower-case + stripped, so callers can
+    pass a raw heartbeat-wire value without pre-massaging it."""
+    assert ent.tier_label("  CLOUD_PRO  ") == "Pro"
+    assert ent.tier_label("Enterprise") == "Enterprise"
+
+
+def test_to_dict_surfaces_tier_label(ent):
+    """The /api/entitlement payload exposes a human-readable label next to the
+    raw tier id so the dashboard doesn't have to maintain a duplicate label
+    map in JS."""
+    en = ent.get_entitlement(force=True)
+    payload = en.to_dict()
+    assert payload["tier"] == ent.TIER_OSS
+    assert payload["tier_label"] == "OSS"
+
+
+def test_to_dict_tier_label_for_paid_tier(ent):
+    """Paid-tier Entitlements (e.g. built from a cloud plan) also expose the
+    correct label, so the dashboard's tier badge updates from 'OSS' to 'Pro'
+    after activation without a second lookup."""
+    pro = ent._build(ent.TIER_CLOUD_PRO, "cloud", node_limit=2, expiry=None)
+    payload = pro.to_dict()
+    assert payload["tier"] == ent.TIER_CLOUD_PRO
+    assert payload["tier_label"] == "Pro"
+
+
 def test_appjs_teaser_wiring():
     """The catalog loader must use `entitled` (grace teaser) and must NOT
     early-return when enforcement is off, while guarding hosted paying/trial

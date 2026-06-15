@@ -165,3 +165,12 @@ def test_api_entitlement_paid_tier_grants_all_runtimes(monkeypatch, tmp_path, ti
     # All paid runtimes must be present.
     for rt in e.PAID_RUNTIMES:
         assert rt in d["runtimes"], f"{tier}: {rt} missing from runtimes"
+
+
+def test_api_entitlement_carries_tier_label(client):
+    """The payload includes a human-readable label alongside the tier id so
+    the dashboard's tier badge can render without a duplicate JS map."""
+    c, _ = client
+    d = c.get("/api/entitlement").get_json()
+    assert d["tier"] == "oss"
+    assert d["tier_label"] == "OSS"
