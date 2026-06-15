@@ -195,6 +195,70 @@ def api_features():
         return jsonify({"features": [], "grace": True, "enforced": False})
 
 
+@bp_entitlement.route("/api/entitlement/required-tier")
+def api_entitlement_required_tier():
+    """Resolve the minimum *purchasable* tier that unlocks a given feature or
+    runtime. Drives the lock affordance copy (``Available in Starter`` /
+    ``Available in Pro``) so each caller does not re-derive the order.
+    Query: exactly one of ``feature=<id>`` or ``runtime=<id>`` (case-insensitive).
+    Returns 200 with ``{"key": ..., "kind": "feature"|"runtime",
+    "required_tier": "<id>"|null, "required_tier_label": "<display>"|null,
+    "current_tier": "<id>", "current_tier_rank": <int>,
+    "required_tier_rank": <int>, "upgrade_required": true|false,
+    "allowed": true|false}`` on success. ``required_tier`` is ``null`` for an
+    unknown key (callers may choose to 404 client-side); when set it is the
+    cheapest plan a customer can pick that grants the key (Trial is excluded,
+    see :func:`clawmetry.entitlements.min_tier_for_feature`). 400 only when
+    neither ``feature`` nor ``runtime`` is supplied.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+        feature = (request.args.get("feature") or "").strip().lower()
+        runtime = (request.args.get("runtime") or "").strip().lower()
+        if not feature and not runtime:
+            return (
+                jsonify({"error": "supply either feature=<id> or runtime=<id>"}),
+                400,
+            )
+        if feature and runtime:
+            return (
+                jsonify({"error": "supply only one of feature= or runtime="}),
+                400,
+            )
+        if feature:
+            key, kind = feature, "feature"
+            required = _ent.min_tier_for_feature(feature)
+            allowed = _ent.get_entitlement().allows_feature(feature)
+        else:
+            key, kind = runtime, "runtime"
+            required = _ent.min_tier_for_runtime(runtime)
+            allowed = _ent.get_entitlement().allows_runtime(runtime)
+        ent = _ent.get_entitlement()
+        cur_rank = _ent.tier_rank(ent.tier)
+        req_rank = _ent.tier_rank(required) if required else -1
+        # tier_label() ships in the parallel tier-label PR; fall back to the
+        # tier id so this endpoint stays self-sufficient if labels aren't on
+        # main yet.
+        label_fn = getattr(_ent, "tier_label", None)
+        required_label = label_fn(required) if (required and callable(label_fn)) else required
+        return jsonify(
+            {
+                "key": key,
+                "kind": kind,
+                "required_tier": required,
+                "required_tier_label": required_label,
+                "required_tier_rank": req_rank,
+                "current_tier": ent.tier,
+                "current_tier_rank": cur_rank,
+                "upgrade_required": bool(required) and req_rank > cur_rank,
+                "allowed": allowed,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_required_tier: error: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
 @bp_entitlement.route("/api/license/status")
 def api_license_status():
     """Return the current self-hosted license info as JSON.

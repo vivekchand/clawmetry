@@ -297,6 +297,33 @@ _TIER_RETENTION_DAYS = {
 # Tiers that unlock the paid runtimes.
 _TIER_PAID_RUNTIMES = _PAID_TIERS
 
+# Canonical ordering of the *purchasable* plans, lowest -> highest. Used by
+# :func:`tier_rank` and the ``min_tier_for_*`` helpers so the UI can render
+# locked rows as "Available in Starter" / "Available in Pro" without each
+# caller re-deriving the order. Trial is excluded — it is a time-limited
+# promotional grant of Pro, not a plan a customer can pick from a price page.
+_PURCHASABLE_TIERS = (
+    TIER_OSS,
+    TIER_CLOUD_FREE,
+    TIER_CLOUD_STARTER,
+    TIER_CLOUD_PRO,
+    TIER_PRO,
+    TIER_ENTERPRISE,
+)
+
+# rank: oss/cloud_free = 0, starter = 1, pro/cloud_pro = 2, enterprise = 3.
+# Self-hosted Pro and cloud Pro share rank 2 because they unlock the same
+# feature set. Unknown tiers return -1 from :func:`tier_rank`.
+_TIER_RANK = {
+    TIER_OSS: 0,
+    TIER_CLOUD_FREE: 0,
+    TIER_CLOUD_STARTER: 1,
+    TIER_TRIAL: 2,        # trial unlocks the Pro feature set
+    TIER_CLOUD_PRO: 2,
+    TIER_PRO: 2,
+    TIER_ENTERPRISE: 3,
+}
+
 _LICENSE_PATH = os.path.expanduser("~/.clawmetry/license.key")
 _CLOUD_PLAN_CACHE = os.path.expanduser("~/.clawmetry/cloud_plan.json")
 _ENFORCE_ENABLE_VALUES = frozenset({"1", "true", "yes", "on"})
@@ -402,6 +429,25 @@ class Entitlement:
             return tuple(sorted(f for f in paid_universe if not self.allows_feature(f)))
         except Exception:
             return ()
+
+    def min_tier_for(self, key: str) -> str | None:
+        """Return the minimum *purchasable* tier id that would unlock ``key``.
+
+        ``key`` may be a feature id (e.g. ``"otel_export"``) or a runtime id
+        (e.g. ``"claude_code"``). For a free key returns :data:`TIER_OSS`; for
+        an unknown key returns ``None``. Convenience wrapper over the
+        module-level :func:`min_tier_for_feature` / :func:`min_tier_for_runtime`
+        so callers that already have an ``Entitlement`` don't need to import
+        both. Never raises.
+        """
+        k = (key or "").strip().lower()
+        if not k:
+            return None
+        if k in ALL_FEATURES:
+            return min_tier_for_feature(k)
+        if k in ALL_RUNTIMES:
+            return min_tier_for_runtime(k)
+        return None
 
     def event_retention_days(self) -> int | None:
         """Days of event history this tier may keep. ``None`` means unlimited
@@ -715,6 +761,59 @@ def runtime_label(runtime: str) -> str:
     when unknown so unknown plugin runtimes still render with *something*."""
     rt = canonical_runtime(runtime)
     return RUNTIME_LABELS.get(rt, rt)
+
+
+def tier_rank(tier: str) -> int:
+    """Comparable rank for ``tier`` (higher = unlocks more). Returns ``-1`` for
+    unknown tiers so callers can do ``tier_rank(a) > tier_rank(b)`` without a
+    KeyError. See :data:`_TIER_RANK` for the canonical numbering."""
+    return _TIER_RANK.get((tier or "").strip().lower(), -1)
+
+
+def min_tier_for_feature(feature: str) -> str | None:
+    """Return the cheapest *purchasable* tier id that grants ``feature``.
+
+    Resolution:
+      * ``feature in FREE_FEATURES`` -> :data:`TIER_OSS`
+      * else walks :data:`_PURCHASABLE_TIERS` in rank order and returns the
+        first tier whose grant includes ``feature``
+      * unknown ``feature`` -> ``None`` (caller decides whether to 404)
+
+    The result is intended for the UI's lock affordance — "Available in
+    Starter" / "Available in Pro" — so :data:`TIER_TRIAL` is intentionally
+    excluded: it is a time-limited promotional grant, not a plan a customer
+    picks from a price page. Never raises.
+    """
+    f = (feature or "").strip().lower()
+    if not f:
+        return None
+    if f in FREE_FEATURES:
+        return TIER_OSS
+    for tier in _PURCHASABLE_TIERS:
+        if tier == TIER_OSS or tier == TIER_CLOUD_FREE:
+            continue
+        if f in _TIER_FEATURES.get(tier, frozenset()):
+            return tier
+    return None
+
+
+def min_tier_for_runtime(runtime: str) -> str | None:
+    """Return the cheapest *purchasable* tier id that grants ``runtime``.
+
+    Free runtimes resolve to :data:`TIER_OSS`. Any runtime in
+    :data:`PAID_RUNTIMES` resolves to :data:`TIER_CLOUD_STARTER` — every paid
+    tier (Starter / Pro / Enterprise / self-hosted Pro) grants all paid
+    runtimes, so Starter is the cheapest one. Unknown runtimes return
+    ``None``. Never raises.
+    """
+    rt = (runtime or "").strip().lower()
+    if not rt:
+        return None
+    if rt in FREE_RUNTIMES:
+        return TIER_OSS
+    if rt in PAID_RUNTIMES:
+        return TIER_CLOUD_STARTER
+    return None
 
 
 def feature_label(feature: str) -> str:
