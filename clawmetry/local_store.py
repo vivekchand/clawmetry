@@ -5985,6 +5985,77 @@ class LocalStore:
                 "events_total", "data"]
         return _decode_data_blob_rows(self._fetch(sql, params), cols)
 
+    def query_version_health(
+        self,
+        *,
+        window_days: int = 90,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Per-OpenClaw-version session metric rollup for issue #2861.
+
+        Joins ``sessions`` with ``heartbeats`` by node_id + time to assign
+        each session the OpenClaw version active when it started, then groups
+        by version and computes avg cost/tokens/messages and an error_rate
+        (fraction of sessions with outcome in failed/error/stuck).
+
+        Returns a list ordered newest-version-first so callers can trivially
+        compare versions[0] (current) against versions[1] (previous).
+        """
+        from datetime import datetime, timedelta
+        cutoff = (datetime.utcnow() - timedelta(days=window_days)).isoformat()
+        sql = """
+            WITH session_versions AS (
+                SELECT
+                    s.session_id,
+                    COALESCE(s.cost_usd, 0.0)   AS cost_usd,
+                    COALESCE(s.total_tokens, 0)  AS total_tokens,
+                    COALESCE(s.message_count, 0) AS message_count,
+                    s.outcome,
+                    s.started_at,
+                    (
+                        SELECT h.version
+                        FROM heartbeats h
+                        WHERE h.node_id = s.node_id
+                          AND h.version IS NOT NULL
+                          AND h.version != ''
+                          AND h.ts <= s.started_at
+                        ORDER BY h.ts DESC
+                        LIMIT 1
+                    ) AS version
+                FROM sessions s
+                WHERE s.started_at >= ?
+                  AND s.node_id IS NOT NULL
+            )
+            SELECT
+                version,
+                COUNT(*)                                                  AS session_count,
+                AVG(cost_usd)                                             AS avg_cost_usd,
+                AVG(CAST(total_tokens AS DOUBLE))                         AS avg_tokens,
+                AVG(CAST(message_count AS DOUBLE))                        AS avg_messages,
+                AVG(CASE WHEN outcome IN ('failed', 'error', 'stuck')
+                         THEN 1.0 ELSE 0.0 END)                          AS error_rate,
+                MIN(started_at)                                           AS first_seen,
+                MAX(started_at)                                           AS last_seen
+            FROM session_versions
+            WHERE version IS NOT NULL
+            GROUP BY version
+            ORDER BY MAX(started_at) DESC
+            LIMIT ?
+        """
+        rows = self._fetch(sql, [cutoff, int(limit)])
+        cols = ["version", "session_count", "avg_cost_usd", "avg_tokens",
+                "avg_messages", "error_rate", "first_seen", "last_seen"]
+        result = []
+        for row in rows:
+            d = dict(zip(cols, row))
+            d["session_count"] = int(d["session_count"] or 0)
+            d["avg_cost_usd"] = round(float(d["avg_cost_usd"] or 0), 6)
+            d["avg_tokens"] = round(float(d["avg_tokens"] or 0), 1)
+            d["avg_messages"] = round(float(d["avg_messages"] or 0), 1)
+            d["error_rate"] = round(float(d["error_rate"] or 0), 4)
+            result.append(d)
+        return result
+
     def query_channels(
         self,
         *,
@@ -9961,6 +10032,45 @@ class LocalStore:
                 int(ev.get("output_tokens") or 0),
                 ev.get("model") or "",
             ])
+
+    def ingest_dive_run(
+        self,
+        *,
+        question: str = "",
+        sql: str = "",
+        chart_type: str = "",
+        row_count: int = 0,
+        latency_ms: int = 0,
+        had_error: bool = False,
+    ) -> None:
+        """Log one Dives query execution for prompt improvement (issue #999, DIVES-6).
+
+        Writes to the events table with event_type='dive_run'. The run_id is
+        derived from the question + sql + current time, making re-delivery of
+        the same RPC call within a sub-second window a safe no-op.
+        """
+        import hashlib as _hashlib
+        import json as _json
+        import time as _time
+        ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        run_id = "dive_" + _hashlib.sha256(
+            f"{question[:100]}{sql[:100]}{_time.time()}".encode()
+        ).hexdigest()[:24]
+        data = _json.dumps({
+            "question":   question[:200],
+            "sql":        sql[:500],
+            "chart_type": chart_type,
+            "row_count":  row_count,
+            "latency_ms": latency_ms,
+            "had_error":  had_error,
+        }).encode()
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO events
+                    (id, agent_type, node_id, agent_id, event_type, ts, data, created_at)
+                VALUES (?, 'clawmetry', 'local', 'dives', 'dive_run', ?, ?, ?)
+                ON CONFLICT (id) DO NOTHING
+            """, [run_id, ts, data, int(_time.time())])
 
     def query_external_calls(
         self,

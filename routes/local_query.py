@@ -716,11 +716,19 @@ _DAEMON_METHODS = frozenset({
     "query_rollup_model_daily",
     "query_rollup_runtime_daily",
     "query_rollup_sessions",
+    # Issue #999 DIVES-6: log Dives query telemetry via the daemon's writer
+    # connection so the dashboard process can fire-and-forget without opening
+    # DuckDB writable itself.
+    "ingest_dive_run",
     # Efficiency grade + measured savings (feat/efficiency-grade): trailing-
     # window per-(runtime, model) aggregate over rollup_model_daily, read by
     # routes/usage.py:/api/efficiency through the daemon proxy (read-only;
     # the daemon owns the writer lock).
     "query_efficiency_rollup",
+    # Issue #2861 -- version-aware health regression. Read-only join of
+    # sessions + heartbeats; routed through the daemon proxy so the
+    # dashboard process never opens DuckDB writable.
+    "query_version_health",
 })
 
 

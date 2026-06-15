@@ -257,7 +257,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.524"
+__version__ = "0.12.525"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -16464,7 +16464,12 @@ def _get_sessions():
                     ),
                     "kind": s.get("kind", "direct"),
                     "agent": s.get("agentId", "main"),
-                    "parentId": s.get("parentId") or s.get("spawnedBy") or s.get("parentKey") or None,
+                    "parentId": s.get("parentSessionId") or s.get("parentId") or s.get("spawnedBy") or s.get("parentKey") or None,
+                    "endedAt": s.get("endedAtMs") or s.get("endedAt"),
+                    "endReason": s.get("endReason") or "",
+                    "messageCount": int(s.get("messageCount") or 0),
+                    "title": s.get("title") or "",
+                    "costStatus": s.get("costStatus") or "",
                 }
             )
         _sessions_cache["data"] = sessions

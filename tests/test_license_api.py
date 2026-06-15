@@ -142,6 +142,71 @@ def test_activate_expired_key(app):
     assert resp.get_json()["ok"] is False
 
 
+# ── /api/license/verify (dry-run) ─────────────────────────────────────────────
+
+
+def test_verify_valid_key_returns_unlock_summary_without_writing(app):
+    import os
+
+    tok = app.lic._encode_token(_payload("pro", nodes=7), app.priv)
+    with app.app.test_client() as c:
+        resp = c.post(
+            "/api/license/verify",
+            data=json.dumps({"key": tok}),
+            content_type="application/json",
+        )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["valid"] is True
+    assert data["status"] == "active"
+    assert data["tier"] == "pro"
+    assert data["nodes"] == 7
+    assert data["dry_run"] is True
+    # critical contract: HTTP verify never persists the key
+    assert not os.path.isfile(app.license_path)
+
+
+def test_verify_invalid_key_returns_200_with_valid_false(app):
+    """A bogus key is a query result, not a 4xx — the body carries valid=false."""
+    with app.app.test_client() as c:
+        resp = c.post(
+            "/api/license/verify",
+            data=json.dumps({"key": "CLAW1.not.real"}),
+            content_type="application/json",
+        )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["valid"] is False
+    assert data["status"] == "invalid"
+    assert data["dry_run"] is True
+
+
+def test_verify_expired_key_marks_invalid(app):
+    tok = app.lic._encode_token(_payload(exp_delta=-3600), app.priv)
+    with app.app.test_client() as c:
+        resp = c.post(
+            "/api/license/verify",
+            data=json.dumps({"key": tok}),
+            content_type="application/json",
+        )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["valid"] is False
+    assert data["status"] == "expired"
+    assert data["dry_run"] is True
+
+
+def test_verify_missing_key_body_returns_400(app):
+    with app.app.test_client() as c:
+        resp = c.post(
+            "/api/license/verify",
+            data=json.dumps({}),
+            content_type="application/json",
+        )
+    assert resp.status_code == 400
+    assert resp.get_json()["ok"] is False
+
+
 # ── /api/license/deactivate ───────────────────────────────────────────────────
 
 
