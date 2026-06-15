@@ -147,3 +147,46 @@ def test_grace_allows_family_is_symmetric(ent):
     assert en.allows_runtime("claude_code") is True
     assert en.allows_feature("self_evolve") is True
     assert en.allows_channel_count(21) is True
+
+
+# -- to_dict wire shape -------------------------------------------------------
+
+
+def test_to_dict_grace_channel_limit_is_none(ent):
+    """``/api/entitlement`` carries ``channel_limit`` so the dashboard can
+    render the "X of N adapters" badge without re-deriving the tier-to-cap
+    table client-side. Grace mode reads ``None`` (JSON ``null``) so the badge
+    falls back to "X adapters" until the enforce flip."""
+    d = ent.get_entitlement(force=True).to_dict()
+    assert "channel_limit" in d
+    assert d["channel_limit"] is None
+
+
+def test_to_dict_enforce_oss_channel_limit_is_three(ent, monkeypatch):
+    monkeypatch.setenv("CLAWMETRY_ENFORCE", "1")
+    d = ent.get_entitlement(force=True).to_dict()
+    assert d["channel_limit"] == 3
+
+
+def test_to_dict_enforce_paid_channel_limit_is_none(ent, monkeypatch, tmp_path):
+    """Every paid tier renders the badge as "X adapters" (no denominator), so
+    the wire shape carries ``None`` for Starter/Pro/Enterprise."""
+    monkeypatch.setenv("CLAWMETRY_ENFORCE", "1")
+    cache = tmp_path / ".clawmetry" / "cloud_plan.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    for plan in ("cloud_starter", "cloud_pro", "enterprise", "trial"):
+        cache.write_text(json.dumps({"plan": plan}))
+        ent.invalidate()
+        d = ent.get_entitlement(force=True).to_dict()
+        assert d["tier"] == plan, plan
+        assert d["channel_limit"] is None, plan
+
+
+def test_to_dict_channel_limit_is_json_serialisable(ent, monkeypatch):
+    """Same round-trip invariant the table-conformance test pins for every
+    other ``to_dict`` key -- a non-serialisable type leaking in would 500 the
+    ``/api/entitlement`` handler."""
+    monkeypatch.setenv("CLAWMETRY_ENFORCE", "1")
+    d = ent.get_entitlement(force=True).to_dict()
+    roundtripped = json.loads(json.dumps(d))
+    assert roundtripped["channel_limit"] == d["channel_limit"]
