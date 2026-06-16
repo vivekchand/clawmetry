@@ -339,6 +339,84 @@ def test_api_upgrade_diff_starter_subscriber_to_pro(monkeypatch, tmp_path):
     assert d["added_runtimes"] == []
 
 
+# ── downgrade-diff endpoint ──────────────────────────────────────────────────
+
+
+def _client_for_plan(monkeypatch, tmp_path, plan):
+    """Helper -- build a Flask test client for an install on ``plan``."""
+    monkeypatch.delenv("CLAWMETRY_ENFORCE", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    import clawmetry.entitlements as e
+    importlib.reload(e)
+    e.invalidate()
+    cache = tmp_path / ".clawmetry" / "cloud_plan.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"plan": plan, "node_limit": 1, "expiry": None}))
+    from routes.entitlement import bp_entitlement
+    app = Flask(__name__)
+    app.register_blueprint(bp_entitlement)
+    return app.test_client(), e
+
+
+def test_api_downgrade_diff_pro_to_starter(monkeypatch, tmp_path):
+    c, e = _client_for_plan(monkeypatch, tmp_path, "cloud_pro")
+    resp = c.get("/api/entitlement/downgrade-diff?target=cloud_starter")
+    assert resp.status_code == 200
+    d = resp.get_json()
+    assert d["target"] == "cloud_starter"
+    assert set(d["lost_features"]) == set(e.PRO_ONLY_FEATURES)
+    assert d["lost_runtimes"] == []
+    assert d["lost_features"] == sorted(d["lost_features"])
+    assert d["lost_runtimes"] == sorted(d["lost_runtimes"])
+
+
+def test_api_downgrade_diff_pro_to_oss_loses_all_paid(monkeypatch, tmp_path):
+    """Enforce-flip preview: Pro -> OSS removes every paid feature and every
+    paid runtime in one shot. The dashboard renders this as the "you'll lose
+    these when grace ends" panel."""
+    c, e = _client_for_plan(monkeypatch, tmp_path, "cloud_pro")
+    d = c.get("/api/entitlement/downgrade-diff?target=oss").get_json()
+    assert set(d["lost_features"]) == set(e.PAID_FEATURES)
+    assert set(d["lost_runtimes"]) == set(e.PAID_RUNTIMES)
+
+
+def test_api_downgrade_diff_unknown_target_is_empty_not_500(client):
+    c, _ = client
+    resp = c.get("/api/entitlement/downgrade-diff?target=nope")
+    assert resp.status_code == 200
+    d = resp.get_json()
+    assert d["target"] == "nope"
+    assert d["lost_features"] == []
+    assert d["lost_runtimes"] == []
+
+
+def test_api_downgrade_diff_missing_target_is_empty(client):
+    c, _ = client
+    resp = c.get("/api/entitlement/downgrade-diff")
+    assert resp.status_code == 200
+    d = resp.get_json()
+    assert d["lost_features"] == []
+    assert d["lost_runtimes"] == []
+
+
+def test_api_downgrade_diff_case_insensitive(monkeypatch, tmp_path):
+    c, _ = _client_for_plan(monkeypatch, tmp_path, "cloud_pro")
+    a = c.get("/api/entitlement/downgrade-diff?target=cloud_starter").get_json()
+    b = c.get("/api/entitlement/downgrade-diff?target=CLOUD_STARTER").get_json()
+    assert a["lost_features"] == b["lost_features"]
+    assert a["lost_runtimes"] == b["lost_runtimes"]
+
+
+def test_api_downgrade_diff_from_oss_is_empty(client):
+    """An OSS-free install has nothing paid to lose; every target tier returns
+    empty lists."""
+    c, _ = client
+    for target in ("oss", "cloud_free", "cloud_starter", "cloud_pro", "enterprise"):
+        d = c.get(f"/api/entitlement/downgrade-diff?target={target}").get_json()
+        assert d["lost_features"] == [], target
+        assert d["lost_runtimes"] == [], target
+
+
 # ── grace countdown ───────────────────────────────────────────────────────────
 
 

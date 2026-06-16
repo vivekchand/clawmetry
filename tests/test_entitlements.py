@@ -539,6 +539,193 @@ def test_upgrade_diff_case_insensitive_target(ent):
     assert a["added_runtimes"] == b["added_runtimes"] == c["added_runtimes"]
 
 
+# ── downgrade_diff ──────────────────────────────────────────────────────────
+
+
+def test_downgrade_diff_pro_to_starter_loses_only_pro_only_features(ent, tmp_path):
+    cache = tmp_path / ".clawmetry" / "cloud_plan.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"plan": ent.TIER_CLOUD_PRO, "node_limit": 1,
+                                 "expiry": None}))
+    en = ent.get_entitlement(force=True)
+    assert en.tier == ent.TIER_CLOUD_PRO
+    diff = en.downgrade_diff(ent.TIER_CLOUD_STARTER)
+    assert diff["target"] == ent.TIER_CLOUD_STARTER
+    assert set(diff["lost_features"]) == set(ent.PRO_ONLY_FEATURES)
+    # Both Pro and Starter are paid tiers -> same paid-runtime set -> no
+    # runtimes lost on this hop.
+    assert diff["lost_runtimes"] == []
+    assert diff["lost_features"] == sorted(diff["lost_features"])
+    assert diff["lost_runtimes"] == sorted(diff["lost_runtimes"])
+
+
+def test_downgrade_diff_enterprise_to_pro_loses_only_enterprise_features(ent, tmp_path):
+    cache = tmp_path / ".clawmetry" / "cloud_plan.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"plan": ent.TIER_ENTERPRISE, "node_limit": 1,
+                                 "expiry": None}))
+    en = ent.get_entitlement(force=True)
+    assert en.tier == ent.TIER_ENTERPRISE
+    diff = en.downgrade_diff(ent.TIER_CLOUD_PRO)
+    assert set(diff["lost_features"]) == set(ent.ENTERPRISE_FEATURES)
+    assert diff["lost_runtimes"] == []
+
+
+def test_downgrade_diff_pro_to_oss_loses_all_paid(ent, tmp_path):
+    """The enforce-flip preview: when grace ends, a Pro install dropping to
+    OSS-free loses every paid feature and every paid runtime in one shot."""
+    cache = tmp_path / ".clawmetry" / "cloud_plan.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"plan": ent.TIER_CLOUD_PRO, "node_limit": 1,
+                                 "expiry": None}))
+    en = ent.get_entitlement(force=True)
+    diff = en.downgrade_diff(ent.TIER_OSS)
+    assert set(diff["lost_features"]) == set(ent.PAID_FEATURES)
+    assert set(diff["lost_runtimes"]) == set(ent.PAID_RUNTIMES)
+
+
+def test_downgrade_diff_starter_to_oss_loses_starter_features_and_paid_runtimes(ent, tmp_path):
+    cache = tmp_path / ".clawmetry" / "cloud_plan.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"plan": ent.TIER_CLOUD_STARTER, "node_limit": 1,
+                                 "expiry": None}))
+    en = ent.get_entitlement(force=True)
+    diff = en.downgrade_diff(ent.TIER_OSS)
+    assert set(diff["lost_features"]) == set(ent.STARTER_FEATURES)
+    # PRO_ONLY features were never granted at Starter, so they must not appear
+    # as "lost" -- the diff is the strict REMOVE list from current, not the
+    # gap between target and the top tier.
+    assert set(diff["lost_features"]).isdisjoint(ent.PRO_ONLY_FEATURES)
+    assert set(diff["lost_runtimes"]) == set(ent.PAID_RUNTIMES)
+
+
+def test_downgrade_diff_oss_to_anywhere_is_empty(ent):
+    """An OSS-free install has nothing paid to lose; every target tier is a
+    no-op for the downgrade preview."""
+    en = ent.get_entitlement(force=True)
+    assert en.tier == ent.TIER_OSS
+    for target in (ent.TIER_OSS, ent.TIER_CLOUD_FREE, ent.TIER_CLOUD_STARTER,
+                   ent.TIER_CLOUD_PRO, ent.TIER_ENTERPRISE):
+        diff = en.downgrade_diff(target)
+        assert diff["lost_features"] == [], target
+        assert diff["lost_runtimes"] == [], target
+
+
+def test_downgrade_diff_same_tier_is_empty(ent, tmp_path):
+    cache = tmp_path / ".clawmetry" / "cloud_plan.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"plan": ent.TIER_CLOUD_PRO, "node_limit": 1,
+                                 "expiry": None}))
+    en = ent.get_entitlement(force=True)
+    diff = en.downgrade_diff(ent.TIER_CLOUD_PRO)
+    assert diff["lost_features"] == []
+    assert diff["lost_runtimes"] == []
+
+
+def test_downgrade_diff_higher_tier_target_is_empty(ent, tmp_path):
+    """Asking what a *higher* tier would 'remove' is a no-op: the diff is the
+    strict REMOVE list, so nothing should appear."""
+    cache = tmp_path / ".clawmetry" / "cloud_plan.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"plan": ent.TIER_CLOUD_STARTER, "node_limit": 1,
+                                 "expiry": None}))
+    en = ent.get_entitlement(force=True)
+    diff = en.downgrade_diff(ent.TIER_CLOUD_PRO)
+    assert diff["lost_features"] == []
+    assert diff["lost_runtimes"] == []
+
+
+def test_downgrade_diff_lost_features_never_includes_free(ent, tmp_path):
+    """Free features survive every downgrade (they are in every tier's grant);
+    the REMOVE list must never claim a free feature is lost."""
+    cache = tmp_path / ".clawmetry" / "cloud_plan.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"plan": ent.TIER_CLOUD_PRO, "node_limit": 1,
+                                 "expiry": None}))
+    en = ent.get_entitlement(force=True)
+    diff = en.downgrade_diff(ent.TIER_OSS)
+    assert set(diff["lost_features"]).isdisjoint(ent.FREE_FEATURES)
+
+
+def test_downgrade_diff_lost_runtimes_never_includes_free(ent, tmp_path):
+    cache = tmp_path / ".clawmetry" / "cloud_plan.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"plan": ent.TIER_CLOUD_PRO, "node_limit": 1,
+                                 "expiry": None}))
+    en = ent.get_entitlement(force=True)
+    diff = en.downgrade_diff(ent.TIER_OSS)
+    assert set(diff["lost_runtimes"]).isdisjoint(ent.FREE_RUNTIMES)
+
+
+def test_downgrade_diff_unknown_target_returns_empty(ent):
+    en = ent.get_entitlement(force=True)
+    diff = en.downgrade_diff("totally-made-up-tier")
+    assert diff["target"] == "totally-made-up-tier"
+    assert diff["lost_features"] == []
+    assert diff["lost_runtimes"] == []
+
+
+def test_downgrade_diff_empty_and_none_targets_are_safe(ent):
+    en = ent.get_entitlement(force=True)
+    for bad in ("", None, "   "):
+        diff = en.downgrade_diff(bad)
+        assert diff["lost_features"] == []
+        assert diff["lost_runtimes"] == []
+
+
+def test_downgrade_diff_case_insensitive_target(ent, tmp_path):
+    cache = tmp_path / ".clawmetry" / "cloud_plan.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"plan": ent.TIER_CLOUD_PRO, "node_limit": 1,
+                                 "expiry": None}))
+    en = ent.get_entitlement(force=True)
+    a = en.downgrade_diff(ent.TIER_CLOUD_STARTER)
+    b = en.downgrade_diff(ent.TIER_CLOUD_STARTER.upper())
+    c = en.downgrade_diff("  " + ent.TIER_CLOUD_STARTER + "  ")
+    assert a["lost_features"] == b["lost_features"] == c["lost_features"]
+    assert a["lost_runtimes"] == b["lost_runtimes"] == c["lost_runtimes"]
+
+
+def test_downgrade_diff_module_helper_resolves_current(ent, tmp_path):
+    cache = tmp_path / ".clawmetry" / "cloud_plan.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"plan": ent.TIER_CLOUD_PRO, "node_limit": 1,
+                                 "expiry": None}))
+    ent.invalidate()
+    direct = ent.get_entitlement(force=True).downgrade_diff(ent.TIER_OSS)
+    via_module = ent.downgrade_diff(ent.TIER_OSS)
+    assert direct == via_module
+
+
+def test_downgrade_diff_module_helper_swallows_resolver_errors(monkeypatch, ent):
+    """If get_entitlement raises, the helper must return the empty-list shape
+    rather than crash a downgrade-warning render."""
+    def boom(*_a, **_kw):
+        raise RuntimeError("synthetic resolver failure")
+    monkeypatch.setattr(ent, "get_entitlement", boom)
+    out = ent.downgrade_diff(ent.TIER_OSS)
+    assert out["target"] == ent.TIER_OSS
+    assert out["lost_features"] == []
+    assert out["lost_runtimes"] == []
+
+
+def test_downgrade_diff_is_inverse_of_upgrade_diff_oss_pro(ent, tmp_path):
+    """Round-trip invariant: the features added on the way up from OSS->Pro
+    must equal the features removed on the way back down Pro->OSS (and same
+    for runtimes). Pins the symmetry so a future shuffle of one half cannot
+    silently diverge from the other."""
+    cache = tmp_path / ".clawmetry" / "cloud_plan.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"plan": ent.TIER_CLOUD_PRO, "node_limit": 1,
+                                 "expiry": None}))
+    pro = ent.get_entitlement(force=True)
+    down = pro.downgrade_diff(ent.TIER_OSS)
+    oss = ent._oss_free()
+    up = oss.upgrade_diff(ent.TIER_CLOUD_PRO)
+    assert set(down["lost_features"]) == set(up["added_features"])
+    assert set(down["lost_runtimes"]) == set(up["added_runtimes"])
+
+
 # ── CLAWMETRY_ENFORCE_AT (grace countdown) ────────────────────────────────────
 
 
