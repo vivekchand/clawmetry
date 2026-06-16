@@ -279,6 +279,55 @@ class Entitlement:
             return False
         return feature in self.features
 
+    def upgrade_diff(self, target_tier: str) -> dict:
+        """Features + runtimes ``target_tier`` would unlock on top of this
+        entitlement.
+
+        Drives the upgrade CTA on every locked surface ("Upgrade to Pro -
+        unlocks N features + M runtimes") and the comparison table the pricing
+        page renders. Single source of truth so the dashboard never re-derives
+        per-tier feature membership in JavaScript.
+
+        Returns the same shape regardless of inputs::
+
+            {
+              "target":          "<tier>",       # canonical id (lower-cased)
+              "added_features":  [...sorted...], # paid features the tier adds
+              "added_runtimes":  [...sorted...], # paid runtimes the tier adds
+            }
+
+        An unknown / empty ``target_tier`` returns empty lists rather than
+        raising, so a stray query-string typo never crashes the dashboard.
+        Free features are intentionally not subtracted from ``added_features``
+        because they are already in :attr:`features` for every entitlement; the
+        diff is the *delta*, not the destination set.
+        """
+        try:
+            tt = (target_tier or "").strip().lower()
+            target_paid_feats = _TIER_FEATURES.get(tt)
+            if target_paid_feats is None:
+                return {"target": tt, "added_features": [], "added_runtimes": []}
+            target_feats = FREE_FEATURES | target_paid_feats
+            if tt == TIER_ENTERPRISE:
+                target_feats = target_feats | ENTERPRISE_FEATURES
+            target_runtimes = (
+                FREE_RUNTIMES | PAID_RUNTIMES
+                if tt in _TIER_PAID_RUNTIMES
+                else FREE_RUNTIMES
+            )
+            return {
+                "target": tt,
+                "added_features": sorted(target_feats - self.features),
+                "added_runtimes": sorted(target_runtimes - self.runtimes),
+            }
+        except Exception as exc:
+            logger.warning("entitlements: upgrade_diff failed: %s", exc)
+            return {
+                "target": target_tier or "",
+                "added_features": [],
+                "added_runtimes": [],
+            }
+
     def event_retention_days(self) -> int | None:
         """Days of event history this tier may keep. ``None`` means unlimited
         / custom (Enterprise). The daemon's prune loop in ``clawmetry/sync.py``
@@ -418,6 +467,22 @@ def available_runtimes() -> list[str]:
     if ent.grace:
         return sorted(ALL_RUNTIMES)
     return sorted(ent.runtimes)
+
+
+def upgrade_diff(target_tier: str) -> dict:
+    """Module-level convenience: resolve the current entitlement and return
+    what ``target_tier`` would unlock on top of it. Same shape as
+    :meth:`Entitlement.upgrade_diff`. Never raises -- any resolution error
+    returns the empty-list shape so the dashboard CTA can always render."""
+    try:
+        return get_entitlement().upgrade_diff(target_tier)
+    except Exception as exc:
+        logger.warning("entitlements: upgrade_diff (module) failed: %s", exc)
+        return {
+            "target": (target_tier or ""),
+            "added_features": [],
+            "added_runtimes": [],
+        }
 
 
 def runtime_label(runtime: str) -> str:

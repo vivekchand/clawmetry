@@ -6,8 +6,11 @@ runtimes/features to surface (and, once enforcement is live, which to render
 locked behind an upgrade CTA). Backed by :mod:`clawmetry.entitlements`, which
 is the single source of truth — handlers never re-derive tier logic here.
 
-  GET /api/entitlement — the current Entitlement as JSON.
-  GET /api/runtimes    — the full runtime catalog with locked/free flags.
+  GET /api/entitlement              — the current Entitlement as JSON.
+  GET /api/entitlement/upgrade-diff — features + runtimes a target tier would
+                                      add on top of the current ent.
+  GET /api/runtimes                 — the full runtime catalog with
+                                      locked/free flags.
 
 Side-effect-free and never-raise, so it is safe to classify ``oss-passthrough``
 on the cloud side: when no license/cloud plan is present it returns a graceful
@@ -49,6 +52,36 @@ def api_entitlement():
                 "enforced": False,
                 "runtimes": ["nemoclaw", "openclaw"],
                 "features": [],
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/upgrade-diff")
+def api_entitlement_upgrade_diff():
+    """Return the features + runtimes ``?target=<tier>`` would unlock on top of
+    the current entitlement. Drives the upgrade CTA shown on locked rows
+    ("Upgrade to Pro - unlocks N features + M runtimes") so the dashboard
+    never re-derives per-tier feature membership in JavaScript.
+
+    Shape::
+
+        {"target": "<tier>", "added_features": [...], "added_runtimes": [...]}
+
+    Unknown / missing ``target`` returns empty lists rather than 4xx -- a stray
+    typo in the query string must never crash the dashboard CTA render.
+    Side-effect-free and never-raise."""
+    try:
+        target = (request.args.get("target") or "").strip().lower()
+        from clawmetry import entitlements as _ent
+
+        return jsonify(_ent.upgrade_diff(target))
+    except Exception as exc:  # never crash the dashboard over a gate read
+        logger.warning("api_entitlement_upgrade_diff: error: %s", exc)
+        return jsonify(
+            {
+                "target": (request.args.get("target") or "").strip().lower(),
+                "added_features": [],
+                "added_runtimes": [],
             }
         )
 
