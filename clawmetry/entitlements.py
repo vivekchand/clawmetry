@@ -644,6 +644,69 @@ class Entitlement:
             logger.warning("entitlements: next_purchasable_tier failed: %s", exc)
             return None
 
+    def previous_purchasable_tier(self) -> str | None:
+        """The highest *purchasable* tier id with a strictly lower rank than
+        this entitlement's tier -- the natural target for the cancellation /
+        "Downgrade to ___" CTA, and the input the downgrade-warning surface
+        passes back into :meth:`downgrade_diff` to render "what would I lose?".
+
+        Mirror of :meth:`next_purchasable_tier`: skips :data:`TIER_TRIAL`
+        (promotional grant, not a pickable downgrade target) and returns the
+        member of the next-lower rank cluster that matches this install's
+        source, so:
+
+        * ``enterprise`` (rank 3)         -> ``cloud_pro`` (cloud install)
+                                              or ``pro``     (license install)
+        * ``cloud_pro`` (rank 2)          -> ``cloud_starter``
+        * ``pro`` (rank 2, self-hosted)   -> ``cloud_starter``
+        * ``trial`` (rank 2)              -> ``cloud_starter``
+        * ``cloud_starter`` (rank 1)      -> ``cloud_free`` (cloud install)
+                                              or ``oss``    (license/self-hosted)
+        * ``oss`` / ``cloud_free`` (rank 0) -> ``None`` (already at the floor)
+
+        Source-aware cluster resolution: where multiple purchasable tiers
+        share a rank (``oss``/``cloud_free`` at rank 0, ``pro``/``cloud_pro``
+        at rank 2) a cloud-sourced entitlement picks the ``cloud_``-prefixed
+        sibling (account preserved, paid features removed) while a license /
+        OSS-sourced entitlement picks the self-hosted sibling. Ranks without
+        a cluster just return the only member.
+
+        Unknown tiers are treated as rank ``0`` (the OSS bucket), matching
+        :meth:`next_purchasable_tier` -- a misconfigured plan reports
+        "already at the floor" instead of returning a misleading downgrade
+        target. Never raises.
+
+        Companion to :meth:`downgrade_diff`:
+        ``ent.downgrade_diff(ent.previous_purchasable_tier())`` is the one-call
+        "what would I lose by cancelling one step?" payload.
+        """
+        try:
+            current_rank = max(0, tier_rank(self.tier))
+            lower_ranks = sorted(
+                {tier_rank(t) for t in _PURCHASABLE_TIERS if 0 <= tier_rank(t) < current_rank},
+                reverse=True,
+            )
+            if not lower_ranks:
+                return None
+            target_rank = lower_ranks[0]
+            cluster = [t for t in _PURCHASABLE_TIERS if tier_rank(t) == target_rank]
+            if not cluster:
+                return None
+            if self.source == "cloud":
+                cloud_pick = next((t for t in cluster if t.startswith("cloud_")), None)
+                if cloud_pick is not None:
+                    return cloud_pick
+            else:
+                self_hosted_pick = next(
+                    (t for t in cluster if not t.startswith("cloud_")), None,
+                )
+                if self_hosted_pick is not None:
+                    return self_hosted_pick
+            return cluster[0]
+        except Exception as exc:
+            logger.warning("entitlements: previous_purchasable_tier failed: %s", exc)
+            return None
+
     def upgrade_diff(self, target_tier: str) -> dict:
         """Features + runtimes ``target_tier`` would unlock on top of this
         entitlement. Returns ``{"target": "<tier>", "added_features": [...sorted...],
@@ -991,6 +1054,17 @@ class Entitlement:
             "next_tier_label": (
                 tier_label(self.next_purchasable_tier())
                 if self.next_purchasable_tier() is not None
+                else None
+            ),
+            # Symmetric downgrade target -- the cancellation / "Downgrade to
+            # ___" CTA target. ``None`` once the install is already on the
+            # OSS-free floor. Paired with /api/entitlement/downgrade-diff the
+            # dashboard can render "Cancelling drops you to <prev_tier_label>;
+            # you would lose ..." in one render pass.
+            "prev_tier": self.previous_purchasable_tier(),
+            "prev_tier_label": (
+                tier_label(self.previous_purchasable_tier())
+                if self.previous_purchasable_tier() is not None
                 else None
             ),
         }
@@ -1352,6 +1426,18 @@ def next_purchasable_tier() -> str | None:
         return get_entitlement().next_purchasable_tier()
     except Exception as exc:
         logger.warning("entitlements: next_purchasable_tier (module) failed: %s", exc)
+        return None
+
+
+def previous_purchasable_tier() -> str | None:
+    """Module-level convenience: resolve the current entitlement and return the
+    previous purchasable tier below it -- the dashboard's "Downgrade to ___" /
+    cancellation CTA target. See :meth:`Entitlement.previous_purchasable_tier`
+    for semantics. Never raises; any resolution error returns ``None``."""
+    try:
+        return get_entitlement().previous_purchasable_tier()
+    except Exception as exc:
+        logger.warning("entitlements: previous_purchasable_tier (module) failed: %s", exc)
         return None
 
 
