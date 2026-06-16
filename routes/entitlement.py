@@ -21,6 +21,10 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                          for a feature= or runtime= key.
   GET  /api/entitlement/upgrade-diff  -- features + runtimes a target tier
                                          would add on top of the current ent.
+  GET  /api/entitlement/downgrade-diff -- features + runtimes a target tier
+                                          would REMOVE from the current ent
+                                          (cancellation / downgrade preview;
+                                          target=oss == enforce-flip preview).
   GET  /api/runtimes                  -- the full runtime catalog with
                                          locked/free/tier flags.
   GET  /api/tiers                     -- the full tier ladder with per-tier metadata.
@@ -131,6 +135,37 @@ def api_entitlement_upgrade_diff():
                 "target": (request.args.get("target") or "").strip().lower(),
                 "added_features": [],
                 "added_runtimes": [],
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/downgrade-diff")
+def api_entitlement_downgrade_diff():
+    """Return the features + runtimes ``?target=<tier>`` would REMOVE from the
+    current entitlement. Symmetric counterpart of ``/api/entitlement/upgrade-diff``,
+    drives the cancellation / downgrade preview ("Switching to Starter will
+    lock N features + M runtimes you currently use") and the enforce-flip
+    preview when ``target=oss`` (the floor every install falls back to once
+    grace ends).
+
+    Shape: ``{"target": "<tier>", "lost_features": [...], "lost_runtimes": [...]}``
+
+    Unknown / missing ``target`` returns empty lists rather than 4xx so a
+    stray query-string typo never crashes the dashboard. Same-tier or
+    higher-tier ``target`` also returns empty lists because the diff is the
+    strict REMOVE list. Side-effect-free and never-raise."""
+    try:
+        target = (request.args.get("target") or "").strip().lower()
+        from clawmetry import entitlements as _ent
+
+        return jsonify(_ent.downgrade_diff(target))
+    except Exception as exc:
+        logger.warning("api_entitlement_downgrade_diff: error: %s", exc)
+        return jsonify(
+            {
+                "target": (request.args.get("target") or "").strip().lower(),
+                "lost_features": [],
+                "lost_runtimes": [],
             }
         )
 

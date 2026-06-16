@@ -674,6 +674,56 @@ class Entitlement:
                 "added_runtimes": [],
             }
 
+    def downgrade_diff(self, target_tier: str) -> dict:
+        """Features + runtimes ``target_tier`` would REMOVE from this
+        entitlement. The symmetric counterpart of :meth:`upgrade_diff`.
+
+        Drives the cancellation / downgrade-warning surface ("Switching to
+        Starter will lock 4 features your team uses + 8 runtimes you've ever
+        ingested") and the enforce-flip preview ("When grace ends you will
+        lose ..."), with ``target_tier=oss`` standing in for the OSS-free
+        floor every install falls back to.
+
+        Returns the same shape regardless of inputs::
+
+            {
+              "target":         "<tier>",        # canonical id (lower-cased)
+              "lost_features":  [...sorted...],  # features the move removes
+              "lost_runtimes":  [...sorted...],  # runtimes the move removes
+            }
+
+        An unknown / empty ``target_tier`` returns empty lists rather than
+        raising, so a stray query-string typo never crashes the dashboard. A
+        same-tier or higher-tier ``target_tier`` returns empty lists because
+        the diff is the strict REMOVE list -- no items move from current to
+        target.
+        """
+        try:
+            tt = (target_tier or "").strip().lower()
+            target_paid_feats = _TIER_FEATURES.get(tt)
+            if target_paid_feats is None:
+                return {"target": tt, "lost_features": [], "lost_runtimes": []}
+            target_feats = FREE_FEATURES | target_paid_feats
+            if tt == TIER_ENTERPRISE:
+                target_feats = target_feats | ENTERPRISE_FEATURES
+            target_runtimes = (
+                FREE_RUNTIMES | PAID_RUNTIMES
+                if tt in _TIER_PAID_RUNTIMES
+                else FREE_RUNTIMES
+            )
+            return {
+                "target": tt,
+                "lost_features": sorted(self.features - target_feats),
+                "lost_runtimes": sorted(self.runtimes - target_runtimes),
+            }
+        except Exception as exc:
+            logger.warning("entitlements: downgrade_diff failed: %s", exc)
+            return {
+                "target": target_tier or "",
+                "lost_features": [],
+                "lost_runtimes": [],
+            }
+
     def grace_remaining_days(self) -> int | None:
         """Days remaining in the grace period, or ``None`` when no enforce-at
         date is announced (``CLAWMETRY_ENFORCE_AT`` unset). Clamps to ``0``
@@ -1113,6 +1163,23 @@ def upgrade_diff(target_tier: str) -> dict:
             "target": target_tier or "",
             "added_features": [],
             "added_runtimes": [],
+        }
+
+
+def downgrade_diff(target_tier: str) -> dict:
+    """Module-level convenience: resolve the current entitlement and return
+    what ``target_tier`` would REMOVE. Same shape as
+    :meth:`Entitlement.downgrade_diff`. Never raises -- any resolution error
+    returns the empty-list shape so the downgrade-warning UI can always
+    render."""
+    try:
+        return get_entitlement().downgrade_diff(target_tier)
+    except Exception as exc:
+        logger.warning("entitlements: downgrade_diff (module) failed: %s", exc)
+        return {
+            "target": target_tier or "",
+            "lost_features": [],
+            "lost_runtimes": [],
         }
 
 
