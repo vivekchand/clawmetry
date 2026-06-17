@@ -218,6 +218,80 @@ def _sandbox_inference_configs() -> list:
     return out
 
 
+def _nemoclaw_agents_manifest() -> dict:
+    """Read the NemoClaw agents.yaml onboard manifest (#3185).
+
+    The harness writes this declarative roster during onboarding
+    (commit 01e5525 feat(onboard): add agents.yaml declarative manifest
+    #5440). It sits alongside sandboxes.json, proxy-config.yaml, and
+    .nemoclaw-source-fingerprint in ~/.nemoclaw/.
+
+    Surfaces agentsManifest (full per-agent entries), agentCount, and
+    agentNames on DetectResult.meta. Tries yaml.safe_load first (optional
+    PyYAML dep); falls back to a line scan for agent names. Never raises —
+    returns {} when the file is absent (plain OpenClaw or pre-01e5525
+    NemoClaw installs).
+    """
+    home = os.environ.get("HOME") or os.path.expanduser("~")
+    manifest_path = os.path.join(home, ".nemoclaw", "agents.yaml")
+    if not os.path.isfile(manifest_path):
+        return {}
+    try:
+        with open(manifest_path, encoding="utf-8") as fh:
+            content = fh.read()
+    except OSError:
+        return {}
+    if not content.strip():
+        return {}
+
+    agents: list = []
+    try:
+        import yaml as _yaml  # type: ignore[import]
+        data = _yaml.safe_load(content)
+        if isinstance(data, dict):
+            raw = data.get("agents", [])
+            if isinstance(raw, list):
+                agents = [e for e in raw if isinstance(e, dict)]
+            elif isinstance(raw, dict):
+                # keyed by agent name: {agentName: {sandbox: ..., ...}}
+                agents = [
+                    {"name": k, **v} if isinstance(v, dict) else {"name": k}
+                    for k, v in raw.items()
+                ]
+        elif isinstance(data, list):
+            agents = [e for e in data if isinstance(e, dict)]
+    except ImportError:
+        pass
+    except Exception:
+        return {}
+
+    if not agents:
+        # Fallback: line scan for "- name: <value>" under an "agents:" block
+        in_agents = False
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped == "agents:":
+                in_agents = True
+                continue
+            if in_agents:
+                if stripped.startswith("- name:"):
+                    _, _, name = stripped.partition(":")
+                    name = name.strip().strip("\"'")
+                    if name:
+                        agents.append({"name": name})
+                elif stripped and not stripped.startswith(("-", " ", "#")):
+                    in_agents = False
+
+    if not agents:
+        return {}
+
+    names = [a["name"] for a in agents if isinstance(a.get("name"), str) and a["name"]]
+    out: dict = {"agentsManifest": agents, "agentCount": len(agents)}
+    if names:
+        out["agentNames"] = names
+    return out
+
+
 def _discover_model_router_port() -> Optional[int]:
     """Find the ``--port`` of a running ``model-router proxy`` process.
 
@@ -591,6 +665,10 @@ class OpenClawAdapter(AgentAdapter):
             _sb_configs = _sandbox_inference_configs()
             if _sb_configs:
                 meta["sandboxInferenceConfigs"] = _sb_configs
+            # Agents manifest (#3185): agent roster + per-agent sandbox/config
+            # from ~/.nemoclaw/agents.yaml (written by harness onboarding,
+            # commit 01e5525).
+            meta.update(_nemoclaw_agents_manifest())
             return DetectResult(
                 name=self.name,
                 display_name=self.display_name,
