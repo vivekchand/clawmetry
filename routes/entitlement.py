@@ -74,6 +74,8 @@ def api_entitlement():
                 "retention_days": 7,
                 "runtimes": ["nemoclaw", "openclaw"],
                 "features": [],
+                "locked_runtimes": [],
+                "locked_features": [],
             }
         )
 
@@ -111,6 +113,8 @@ def api_entitlement_refresh():
                 "days_until_enforce": None,
                 "runtimes": ["nemoclaw", "openclaw"],
                 "features": [],
+                "locked_runtimes": [],
+                "locked_features": [],
             }
         )
 
