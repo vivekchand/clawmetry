@@ -703,6 +703,75 @@ def get_fleet():
     return jsonify({"nodes": nodes, "is_single_node": len(nodes) <= 1})
 
 
+# ── Skills API ───────────────────────────────────────────────────────────────
+
+@bp_v2.route("/api/v2/skills", methods=["GET"])
+def get_skills():
+    """Stage A: adapts routes.skills.compute_skills_payload() to the v2 wire shape.
+
+    Wire shape: {tree: [{name, active, dead, header_tokens,
+                          body_fetch_count_7d, linked_file_read_count_7d,
+                          last_used_ts}],
+                 summary: {total_installed, dead_count, wasted_header_tokens}}
+    """
+    try:
+        from routes.skills import compute_skills_payload
+        payload = compute_skills_payload()
+    except Exception:
+        payload = {}
+
+    skills = payload.get("skills") or []
+    summary = payload.get("summary") or {}
+
+    tree = [
+        {
+            "name": s.get("name", ""),
+            "active": s.get("status") not in ("dead", "stuck"),
+            "dead": s.get("status") == "dead",
+            "header_tokens": s.get("header_tokens", 0),
+            "body_fetch_count_7d": s.get("body_fetch_count_7d", 0),
+            "linked_file_read_count_7d": s.get("linked_file_read_count_7d", 0),
+            "last_used_ts": s.get("last_used_ts"),
+        }
+        for s in skills
+    ]
+
+    return jsonify({
+        "tree": tree,
+        "summary": {
+            "total_installed": summary.get("total_installed", 0),
+            "dead_count": summary.get("dead_count", 0),
+            "wasted_header_tokens": summary.get("wasted_header_tokens", 0),
+        },
+    })
+
+
+@bp_v2.route("/api/v2/skills/<name>/source", methods=["GET"])
+def get_skill_source(name: str):
+    """Return SKILL.md contents for a single skill.
+
+    Wire shape: {name, content, language: "markdown"}
+    Returns 400 on invalid name, 404 if not found.
+    """
+    if not name or "/" in name or ".." in name or "\\" in name:
+        return jsonify({"error": "invalid skill name"}), 400
+
+    try:
+        from routes.skills import _find_skill_dir
+        import os as _os
+        skill_dir = _find_skill_dir(name)
+        if not skill_dir:
+            return jsonify({"error": "skill not found"}), 404
+        skill_md = _os.path.join(skill_dir, "SKILL.md")
+        if not _os.path.isfile(skill_md):
+            return jsonify({"error": "SKILL.md not found"}), 404
+        with open(skill_md, "r", errors="replace") as fh:
+            content = fh.read(65_536)  # cap at 64 KB
+        return jsonify({"name": name, "content": content, "language": "markdown"})
+    except Exception:
+        return jsonify({"error": "failed to read skill"}), 500
+
+
 # ── SPA serving ───────────────────────────────────────────────────────────
 # Registered after the API routes. Flask matches by rule specificity, so the
 # explicit /api/v2/* rules still win over the catch-all even in default mode.
