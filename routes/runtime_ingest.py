@@ -20,20 +20,24 @@ import logging
 
 from flask import Blueprint, jsonify
 
+from clawmetry._paywall import upgrade_required_body
+
 logger = logging.getLogger("clawmetry.routes.runtime_ingest")
 
 bp_runtime_ingest = Blueprint("runtime_ingest", __name__)
 
 
-# Shared 402 body so the wire format is identical to ``@gate`` enforce-mode.
-_UPGRADE = {
-    "error": "upgrade_required",
-    "feature": "custom_runtime_ingest",
-    "hint": (
-        "Custom runtime ingest is a Pro feature. Install ``clawmetry-pro`` "
-        "with a valid license key, or use Cloud Pro at clawmetry.com/pricing."
-    ),
-}
+# Shared 402 body so the wire format is identical to ``@gate`` enforce-mode
+# (tier + required_tier included so the dashboard can route the right
+# upgrade CTA off the 402 directly).
+_HINT = (
+    "Custom runtime ingest is a Pro feature. Install ``clawmetry-pro`` "
+    "with a valid license key, or use Cloud Pro at clawmetry.com/pricing."
+)
+
+
+def _upgrade():
+    return jsonify(upgrade_required_body("custom_runtime_ingest", hint=_HINT)), 402
 
 
 @bp_runtime_ingest.route("/api/v1/runtimes", methods=["GET"])
@@ -52,27 +56,27 @@ def list_runtimes():
 
 @bp_runtime_ingest.route("/api/v1/runs", methods=["POST"])
 def start_run_stub():
-    return jsonify(_UPGRADE), 402
+    return _upgrade()
 
 
 @bp_runtime_ingest.route("/api/v1/runs/<run_id>/events", methods=["POST"])
 def append_events_stub(run_id: str):
-    return jsonify(_UPGRADE), 402
+    return _upgrade()
 
 
 @bp_runtime_ingest.route("/api/v1/runs/<run_id>/end", methods=["POST"])
 def end_run_stub(run_id: str):
-    return jsonify(_UPGRADE), 402
+    return _upgrade()
 
 
 @bp_runtime_ingest.route("/api/v1/runs/<run_id>", methods=["GET"])
 def get_run_stub(run_id: str):
-    return jsonify(_UPGRADE), 402
+    return _upgrade()
 
 
 @bp_runtime_ingest.route("/api/v1/engines", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 def engines_stub():
-    return jsonify(_UPGRADE), 402
+    return _upgrade()
 
 
 @bp_runtime_ingest.route(
@@ -80,4 +84,4 @@ def engines_stub():
     methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
 )
 def engines_subpath_stub(subpath: str):
-    return jsonify(_UPGRADE), 402
+    return _upgrade()

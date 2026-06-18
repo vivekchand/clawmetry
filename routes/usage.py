@@ -4481,3 +4481,64 @@ def api_efficiency():
         entry["runtime"] = runtime
         return jsonify(entry)
     return jsonify(out)
+
+
+# ---------------------------------------------------------------------------
+# Issue #2837 sub-task #1 — Compression Potential card
+# ---------------------------------------------------------------------------
+
+def _agg_compression(rows):
+    """Aggregate per-session compression-potential fields into fleet totals.
+
+    Thresholds mirror _derive_waste_summary: a session qualifies when
+    compression_potential_pct >= 50 AND compressible_tool_tokens >= 2000.
+    Returns {} when no sessions clear the thresholds (so callers can skip
+    rendering the card entirely).
+    """
+    if not rows:
+        return {}
+    compressible_sessions = 0
+    compressible_tokens = 0
+    recoverable_usd = 0.0
+    by_type = {}
+    for s in rows:
+        try:
+            pct = float(s.get("compression_potential_pct") or 0)
+            toks = int(s.get("compressible_tool_tokens") or 0)
+        except (TypeError, ValueError):
+            continue
+        if pct < 50 or toks < 2000:
+            continue
+        compressible_sessions += 1
+        compressible_tokens += toks
+        try:
+            recoverable_usd += float(s.get("compression_recoverable_usd") or 0)
+        except (TypeError, ValueError):
+            pass
+        ctype = s.get("dominant_compression_type") or "mixed"
+        by_type[ctype] = by_type.get(ctype, 0) + toks
+    if compressible_sessions == 0:
+        return {}
+    return {
+        "compressible_sessions": compressible_sessions,
+        "total_sessions": len(rows),
+        "compressible_tokens": compressible_tokens,
+        "recoverable_usd": round(recoverable_usd, 4),
+        "by_type": by_type,
+    }
+
+
+@bp_usage.route("/api/usage/compression")
+def api_usage_compression():
+    """Compression-potential roll-up for the Usage tab card (issue #2837).
+
+    Reads per-session compression fields written by the sync daemon and
+    returns fleet-level aggregates. Returns {} when no sessions clear the
+    thresholds so the JS can hide the card without any special-casing.
+    Never 500s.
+    """
+    try:
+        rows = _ls_call("query_sessions_table", limit=2000) or []
+        return jsonify(_agg_compression(rows))
+    except Exception:
+        return jsonify({})

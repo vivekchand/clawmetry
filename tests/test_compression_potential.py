@@ -4,9 +4,13 @@ aggregation that surfaces it (#2839 cache-risk roll-up).
 Measurement only: we assert the heuristics classify content correctly, the
 detector estimates recoverable token share, persists ONLY aggregates (never raw
 content), and the waste summary rolls per-session metrics into fleet figures.
+
+Also covers _agg_compression (issue #2837 sub-task #1) — the Usage-tab
+endpoint helper that rolls per-session fields into fleet totals.
 """
 import clawmetry.sync as S
 from routes.sessions import _derive_waste_summary
+from routes.usage import _agg_compression
 
 
 class _Ev:
@@ -67,3 +71,42 @@ def test_waste_summary_rolls_up_compression_and_cache_expiry():
     assert round(w["compressible_usd"], 2) == 0.02
     assert w["cache_expiry_sessions"] == 1
     assert w["cache_expiry_count"] == 3
+
+
+# ---------------------------------------------------------------------------
+# _agg_compression (issue #2837 sub-task #1)
+# ---------------------------------------------------------------------------
+
+def test_agg_compression_rolls_up_qualifying_sessions():
+    rows = [
+        {"compression_potential_pct": 85.0, "compressible_tool_tokens": 5000,
+         "compression_recoverable_usd": 0.03, "dominant_compression_type": "json"},
+        {"compression_potential_pct": 60.0, "compressible_tool_tokens": 3000,
+         "compression_recoverable_usd": 0.01, "dominant_compression_type": "diff"},
+        # below threshold: pct < 50
+        {"compression_potential_pct": 30.0, "compressible_tool_tokens": 5000,
+         "compression_recoverable_usd": 0.01},
+        # below threshold: tokens < 2000
+        {"compression_potential_pct": 80.0, "compressible_tool_tokens": 500,
+         "compression_recoverable_usd": 0.01},
+    ]
+    out = _agg_compression(rows)
+    assert out["compressible_sessions"] == 2
+    assert out["total_sessions"] == 4
+    assert out["compressible_tokens"] == 8000
+    assert round(out["recoverable_usd"], 2) == 0.04
+    assert out["by_type"]["json"] == 5000
+    assert out["by_type"]["diff"] == 3000
+
+
+def test_agg_compression_empty_input():
+    assert _agg_compression([]) == {}
+    assert _agg_compression(None) == {}
+
+
+def test_agg_compression_all_below_threshold():
+    rows = [
+        {"compression_potential_pct": 40.0, "compressible_tool_tokens": 10000},
+        {"compression_potential_pct": 90.0, "compressible_tool_tokens": 100},
+    ]
+    assert _agg_compression(rows) == {}
