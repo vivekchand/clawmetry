@@ -13002,6 +13002,8 @@ async function loadUsage() {
     loadCacheAnalytics();
     // Load cache re-read tax card (issue #2839)
     loadCacheRisk();
+    // Load compression-potential card (issue #2837)
+    loadCompressionPotential();
     // Load cost forecast (issue #1413)
     loadCostForecast();
     // Load per-agent / per-team cost attribution (issue #3000)
@@ -13176,6 +13178,53 @@ async function loadCacheRisk() {
       + '</div></div>';
     document.getElementById('cache-risk-content').innerHTML = html;
   } catch(e) {}
+}
+
+async function loadCompressionPotential() {
+  // Issue #2837 sub-task #1 — surface compression-potential fleet roll-up on the Usage tab.
+  try {
+    var d = await fetch('/api/usage/compression').then(function(r) { return r.json(); });
+    var title = document.getElementById('compression-potential-title');
+    var card = document.getElementById('compression-potential-card');
+    if (!title || !card) return;
+    var sessions = Number(d.compressible_sessions) || 0;
+    if (!sessions) return;
+    title.style.display = '';
+    card.style.display = '';
+    var toks = Number(d.compressible_tokens) || 0;
+    var usd = Number(d.recoverable_usd) || 0;
+    var total = Number(d.total_sessions) || 0;
+    var pct = total > 0 ? Math.round(sessions / total * 100) : 0;
+    var byType = d.by_type || {};
+
+    function fmtToks(n) { return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(0)+'K' : String(n||0); }
+    function fmtCost(c) { return c >= 0.01 ? '$'+c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
+
+    var html = '<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start;">'
+      + '<div style="min-width:140px;text-align:center;">'
+      + '<div style="font-size:28px;font-weight:700;color:#f59e0b;">'+fmtToks(toks)+'</div>'
+      + '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">compressible tokens</div>'
+      + (usd > 0 ? '<div style="font-size:12px;color:#22c55e;margin-top:4px;font-weight:600;">'+fmtCost(usd)+' recoverable</div>' : '')
+      + '</div>'
+      + '<div style="flex:1;min-width:200px;font-size:13px;color:var(--text-secondary);">'
+      + '<div style="margin-bottom:6px;"><strong>'+sessions+'</strong> of '+total+' sessions ('+pct+'%) have compressible tool output.'
+      + ' Summarising repeated JSON, diffs, or log blobs before context re-injection could recover these tokens.</div>';
+
+    var typeKeys = Object.keys(byType);
+    if (typeKeys.length > 0) {
+      html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">';
+      typeKeys.sort(function(a, b) { return (byType[b]||0) - (byType[a]||0); }).forEach(function(k) {
+        html += '<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:var(--bg-secondary);color:var(--text-muted);">'
+          + escHtml(k)+' '+fmtToks(byType[k])+'</span>';
+      });
+      html += '</div>';
+    }
+
+    html += '</div></div>';
+    document.getElementById('compression-potential-content').innerHTML = html;
+  } catch(e) {
+    // Compression panel is optional — skip silently on error
+  }
 }
 
 async function loadCacheAnalytics() {
