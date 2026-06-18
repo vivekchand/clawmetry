@@ -417,6 +417,34 @@ def runtime_label(runtime: str) -> str:
     return RUNTIME_LABELS.get(rt, rt)
 
 
+def min_tier_for_feature(feature_key: str) -> str | None:
+    """Cheapest tier identifier that unlocks ``feature_key``.
+
+    Returns one of the ``TIER_*`` constants (``cloud_starter``, ``cloud_pro``,
+    ``enterprise``) when the feature is paid, or ``None`` for free / unknown
+    keys. The 402 ``upgrade_required`` body and the dashboard's per-feature
+    paywall both call this so the upgrade CTA renders the right tier card
+    (Starter vs Pro vs Enterprise) without re-deriving the mapping in JS.
+
+    Never raises: any catalogue lookup error returns ``None`` so a flaky
+    read still produces a valid 402 body.
+    """
+    try:
+        key = (feature_key or "").strip()
+        if not key or key in FREE_FEATURES:
+            return None
+        if key in STARTER_FEATURES:
+            return TIER_CLOUD_STARTER
+        if key in PRO_ONLY_FEATURES:
+            return TIER_CLOUD_PRO
+        if key in ENTERPRISE_FEATURES:
+            return TIER_ENTERPRISE
+    except Exception as exc:
+        logger.warning("entitlements: min_tier_for_feature(%r) failed: %s", feature_key, exc)
+        return None
+    return None
+
+
 def runtime_catalog() -> list[dict]:
     """The full runtime catalog with the entitlement-derived availability for
     each entry. Single source of truth the UI uses to render *every* known

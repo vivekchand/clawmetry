@@ -249,3 +249,54 @@ def test_paid_runtimes_allowed_on_paid_tiers_enforced(ent, monkeypatch, tmp_path
             assert en.allows_runtime(rt) is True, f"{tier}/{rt}"
         for rt in ent.FREE_RUNTIMES:
             assert en.allows_runtime(rt) is True, f"{tier}/{rt}"
+
+
+# ── min_tier_for_feature ─────────────────────────────────────────────────────
+
+
+def test_min_tier_for_feature_starter(ent):
+    """Starter-card features resolve to ``cloud_starter`` so the upgrade CTA
+    routes the user to the cheapest purchasable tier that unlocks them."""
+    for key in ("multi_runtime", "fleet", "all_channels", "budget_limits"):
+        assert ent.min_tier_for_feature(key) == ent.TIER_CLOUD_STARTER, key
+
+
+def test_min_tier_for_feature_pro(ent):
+    """Pro-only features resolve to ``cloud_pro``."""
+    for key in ("self_evolve", "asset_registry", "otel_export", "custom_alerts"):
+        assert ent.min_tier_for_feature(key) == ent.TIER_CLOUD_PRO, key
+
+
+def test_min_tier_for_feature_enterprise(ent):
+    """Enterprise-only features resolve to ``enterprise``."""
+    for key in ("siem_export", "sso", "rbac", "audit_logs"):
+        assert ent.min_tier_for_feature(key) == ent.TIER_ENTERPRISE, key
+
+
+def test_min_tier_for_feature_free_is_none(ent):
+    """Free features never gate-fail; the helper returns ``None`` so a
+    caller can short-circuit instead of rendering an upgrade CTA."""
+    for key in ent.FREE_FEATURES:
+        assert ent.min_tier_for_feature(key) is None, key
+
+
+def test_min_tier_for_feature_unknown_is_none(ent):
+    """Unknown / typo'd keys resolve to ``None`` rather than raising. Keeps
+    the 402 body well-formed when a route uses a feature key that isn't yet
+    in the catalogue (e.g. a clawmetry-pro plugin's private key)."""
+    assert ent.min_tier_for_feature("totally_unknown_feature_xyz") is None
+    assert ent.min_tier_for_feature("") is None
+    assert ent.min_tier_for_feature(None) is None  # type: ignore[arg-type]
+
+
+def test_min_tier_for_feature_swallows_catalogue_errors(ent, monkeypatch):
+    """If a catalogue read itself raises the helper returns ``None`` rather
+    than propagating — the 402 body still serialises and the request path
+    stays defensive."""
+
+    class _Boom:
+        def __contains__(self, _key):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(ent, "STARTER_FEATURES", _Boom())
+    assert ent.min_tier_for_feature("self_evolve") is None
