@@ -23,6 +23,8 @@ import logging
 
 from flask import Blueprint, jsonify, request
 
+from clawmetry._paywall import upgrade_required_body
+
 logger = logging.getLogger("clawmetry.routes.otel_export")
 
 bp_otel_export = Blueprint("otel_export", __name__)
@@ -123,14 +125,12 @@ def _fetch_events(limit: int) -> list[dict]:
 def api_otel_export():
     """OTLP/JSON export of recent events. Pro+ entitlement-gated; permissive
     during the open-core grace period. Never raises."""
-    allowed, ent = _entitlement_allows()
+    allowed, _ent = _entitlement_allows()
     if not allowed:
-        return jsonify({
-            "error": "upgrade_required",
-            "feature": "otel_export",
-            "tier": ent.get("tier"),
-            "hint": "OTel export is a Pro feature on clawmetry.com/pricing",
-        }), 402
+        return jsonify(upgrade_required_body(
+            "otel_export",
+            hint="OTel export is a Pro feature on clawmetry.com/pricing",
+        )), 402
 
     try:
         limit = max(1, min(int(request.args.get("limit", 200) or 200), 5000))

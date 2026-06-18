@@ -15,6 +15,8 @@ import logging
 
 from flask import Blueprint, jsonify, request
 
+from clawmetry._paywall import upgrade_required_body
+
 logger = logging.getLogger("clawmetry.routes.audit")
 
 bp_audit = Blueprint("audit", __name__)
@@ -33,14 +35,12 @@ def _allowed() -> tuple[bool, dict]:
 
 @bp_audit.route("/api/audit-log", methods=["GET"])
 def api_audit_log():
-    ok, ent = _allowed()
+    ok, _ent = _allowed()
     if not ok:
-        return jsonify({
-            "error": "upgrade_required",
-            "feature": "audit_logs",
-            "tier": ent.get("tier"),
-            "hint": "Audit logs are an Enterprise feature. https://clawmetry.com/pricing",
-        }), 402
+        return jsonify(upgrade_required_body(
+            "audit_logs",
+            hint="Audit logs are an Enterprise feature. https://clawmetry.com/pricing",
+        )), 402
     try:
         from clawmetry import audit as _audit
 
