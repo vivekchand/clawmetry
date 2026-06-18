@@ -100,6 +100,22 @@ def gate(feature_key: str) -> Callable:
     return deco
 
 
+def _required_tier_for_runtime(runtime: str) -> str | None:
+    """Cheapest *purchasable* tier id that unlocks ``runtime``.
+
+    Mirrors :func:`_required_tier` (the feature variant): the 402 body
+    needs a target tier so the dashboard can render the correct upgrade
+    CTA instead of a generic one. Defensive: any lookup error returns
+    ``None`` so a flaky entitlement read still produces a valid 402 body.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        return _ent.min_tier_for_runtime(runtime)
+    except Exception:
+        return None
+
+
 def require_runtime(runtime: str):
     """Inline gate for runtime-scoped routes that pick the runtime out of a
     path or body parameter at request time.
@@ -110,6 +126,14 @@ def require_runtime(runtime: str):
     ``runtime``. Defensive: any error inside the entitlement read swallows
     to ``None`` so a flaky lookup never blocks a request that would otherwise
     succeed.
+
+    Alias-tolerant: ``"claude-code"`` / ``"open-claw"`` / etc. are
+    canonicalised via :func:`entitlements.canonical_runtime` before the
+    entitlement check so an alias for a free runtime still passes through.
+
+    The 402 body includes ``required_tier`` (the cheapest purchasable tier
+    that unlocks the runtime) so the dashboard can render the correct
+    upgrade CTA without re-deriving tier logic in JS.
 
     Typical usage::
 
@@ -126,7 +150,11 @@ def require_runtime(runtime: str):
         from flask import jsonify
         from clawmetry import entitlements as _ent
 
-        rt = (runtime or "").strip().lower()
+        raw = (runtime or "").strip().lower()
+        try:
+            rt = _ent.canonical_runtime(raw)
+        except Exception:
+            rt = raw
         en = _ent.get_entitlement()
         if en.allows_runtime(rt):
             return None
@@ -134,6 +162,7 @@ def require_runtime(runtime: str):
             "error": "upgrade_required",
             "runtime": rt,
             "tier": en.tier,
+            "required_tier": _required_tier_for_runtime(rt),
             "hint": (
                 "This runtime ships in the closed-source clawmetry-pro "
                 "package. Install it with a license key or use Cloud Pro at "

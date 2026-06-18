@@ -210,3 +210,90 @@ def test_require_runtime_unknown_runtime_returns_402_when_enforced(enforce):
         result = require_runtime("totally_unknown_xyz")
         assert result is not None
         assert result[1] == 402
+
+
+# -- required_tier + alias canonicalisation -----------------------------------
+
+
+def test_require_runtime_402_body_includes_required_tier(enforce):
+    """The 402 body carries the cheapest purchasable tier that unlocks the
+    runtime so the dashboard can render the correct upgrade CTA without
+    re-deriving tier logic in JS. Mirrors the ``@gate`` feature contract."""
+    from clawmetry._gate import require_runtime
+    from clawmetry import entitlements as _ent
+
+    app = Flask(__name__)
+    with app.test_request_context("/test"):
+        resp, status = require_runtime("claude_code")
+        assert status == 402
+        body = resp.get_json()
+        assert body["required_tier"] == _ent.TIER_CLOUD_STARTER
+
+
+def test_gate_runtime_402_body_includes_required_tier(enforce):
+    """``@gate_runtime`` shares the same 402 body shape as the inline form,
+    so it surfaces ``required_tier`` too."""
+    from clawmetry._gate import gate_runtime
+    from clawmetry import entitlements as _ent
+
+    app = Flask(__name__)
+
+    @app.route("/test")
+    @gate_runtime("codex")
+    def view():
+        return {"ok": True}
+
+    with app.test_client() as c:
+        r = c.get("/test")
+        assert r.status_code == 402
+        body = r.get_json()
+        assert body["required_tier"] == _ent.TIER_CLOUD_STARTER
+
+
+def test_require_runtime_402_body_required_tier_none_for_unknown(enforce):
+    """Unknown runtimes have no known purchasable tier, so ``required_tier``
+    is ``None`` rather than absent -- the field is part of the contract."""
+    from clawmetry._gate import require_runtime
+
+    app = Flask(__name__)
+    with app.test_request_context("/test"):
+        resp, status = require_runtime("totally_unknown_xyz")
+        assert status == 402
+        body = resp.get_json()
+        assert "required_tier" in body
+        assert body["required_tier"] is None
+
+
+@pytest.mark.parametrize(
+    "alias",
+    ["open-claw", "open_claw", "nemo-claw", "nemo_claw"],
+)
+def test_require_runtime_canonicalises_free_runtime_aliases(enforce, alias):
+    """Aliases for the FREE runtimes (``open-claw`` → ``openclaw``) must
+    pass through even in enforce mode -- they map onto a free runtime."""
+    from clawmetry._gate import require_runtime
+
+    app = Flask(__name__)
+    with app.test_request_context("/test"):
+        assert require_runtime(alias) is None
+
+
+@pytest.mark.parametrize(
+    "alias",
+    ["claude-code", "claudecode", "qwen-code", "qwencode"],
+)
+def test_require_runtime_canonicalises_paid_runtime_aliases(enforce, alias):
+    """Aliases for paid runtimes still get gated, and the 402 body reports
+    the *canonical* runtime id so the UI can render its proper label."""
+    from clawmetry._gate import require_runtime
+    from clawmetry import entitlements as _ent
+
+    app = Flask(__name__)
+    with app.test_request_context("/test"):
+        result = require_runtime(alias)
+        assert result is not None
+        resp, status = result
+        assert status == 402
+        body = resp.get_json()
+        assert body["runtime"] == _ent.canonical_runtime(alias)
+        assert body["required_tier"] == _ent.TIER_CLOUD_STARTER
