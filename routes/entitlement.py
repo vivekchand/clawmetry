@@ -19,6 +19,10 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                         TTL).
   GET  /api/entitlement/required-tier -- resolve the minimum purchasable tier
                                          for a feature= or runtime= key.
+  GET  /api/entitlement/lock-reason   -- human-readable explanation of why a
+                                         feature= or runtime= key is locked
+                                         on this install (None when allowed
+                                         or in grace mode).
   GET  /api/entitlement/upgrade-diff  -- features + runtimes a target tier
                                          would add on top of the current ent.
   GET  /api/entitlement/downgrade-diff -- features + runtimes a target tier
@@ -222,6 +226,77 @@ def api_entitlement_required_tier():
     except Exception as exc:
         logger.warning("api_entitlement_required_tier: error: %s", exc)
         return jsonify({"error": str(exc)}), 500
+
+
+@bp_entitlement.route("/api/entitlement/lock-reason")
+def api_entitlement_lock_reason():
+    """Resolve the human-readable "why is this locked" string for a single
+    feature or runtime key, off the same :meth:`Entitlement.lock_reason`
+    primitive the gate decorator's hint copy uses -- so a dashboard tooltip,
+    a 402 body, and the CLI diagnostics all say the same thing about the
+    same item.
+
+    Query: exactly one of ``feature=<id>`` or ``runtime=<id>``.
+
+    Returns 200 with ``{"key", "kind", "reason", "locked", "allowed"}``:
+
+    * ``reason``  -- the explanation string, or ``null`` when not locked
+                     (free items / grace mode / unknown ids / allowed by
+                     the current tier)
+    * ``locked``  -- ``true`` iff ``reason is not null``; convenience for
+                     callers that only need the boolean
+    * ``allowed`` -- the resolved ``allows_*`` answer for the same key, so
+                     a single round-trip carries both "is it usable now"
+                     and "what to render when it isn't"
+
+    Returns 400 when neither query param is supplied or both are given.
+    Never 5xx -- any internal failure returns the never-raise grace shape so
+    a flaky entitlement read can never break a paywall tooltip render."""
+    try:
+        from clawmetry import entitlements as _ent
+
+        feature = (request.args.get("feature") or "").strip().lower()
+        runtime = (request.args.get("runtime") or "").strip().lower()
+        if not feature and not runtime:
+            return jsonify({"error": "supply either feature=<id> or runtime=<id>"}), 400
+        if feature and runtime:
+            return jsonify({"error": "supply only one of feature= or runtime="}), 400
+        ent = _ent.get_entitlement()
+        if feature:
+            key, kind = feature, "feature"
+            allowed = ent.allows_feature(feature)
+        else:
+            key, kind = runtime, "runtime"
+            allowed = ent.allows_runtime(runtime)
+        reason = ent.lock_reason(key, kind=kind)
+        return jsonify(
+            {
+                "key": key,
+                "kind": kind,
+                "reason": reason,
+                "locked": reason is not None,
+                "allowed": allowed,
+            }
+        )
+    except Exception as exc:  # never crash the dashboard over a gate read
+        logger.warning("api_entitlement_lock_reason: error: %s", exc)
+        feature = (request.args.get("feature") or "").strip().lower()
+        runtime = (request.args.get("runtime") or "").strip().lower()
+        if feature:
+            key, kind = feature, "feature"
+        elif runtime:
+            key, kind = runtime, "runtime"
+        else:
+            key, kind = "", ""
+        return jsonify(
+            {
+                "key": key,
+                "kind": kind,
+                "reason": None,
+                "locked": False,
+                "allowed": True,
+            }
+        )
 
 
 @bp_entitlement.route("/api/entitlement/diagnostic")
