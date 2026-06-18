@@ -10,6 +10,7 @@ import { ContextPage } from "./pages/ContextPage";
 import { BrainPage } from "./pages/BrainPage";
 import { SubAgentsPage } from "./pages/SubAgentsPage";
 import { TurnAnatomyPage } from "./pages/TurnAnatomyPage";
+import { FlowTracePage } from "./pages/FlowTracePage";
 import { ToolPolicyPage } from "./pages/ToolPolicyPage";
 import { ContextEconomicsPage } from "./pages/ContextEconomicsPage";
 import { ToolCatalogPage } from "./pages/ToolCatalogPage";
@@ -25,6 +26,7 @@ const REAL_PAGES = new Set([
   "brain",
   "subagents",
   "trace",
+  "anatomy",
   "rules",
   "context-econ",
   "tools",
@@ -52,7 +54,8 @@ export default function App() {
         <Route path="context" element={<ContextPage />} />
         <Route path="brain" element={<BrainPage />} />
         <Route path="subagents" element={<SubAgentsPage />} />
-        <Route path="trace" element={<TurnAnatomyPage />} />
+        <Route path="trace" element={<FlowTracePage />} />
+        <Route path="anatomy" element={<TurnAnatomyPage />} />
         <Route path="rules" element={<ToolPolicyPage />} />
         <Route path="context-econ" element={<ContextEconomicsPage />} />
         <Route path="tools" element={<ToolCatalogPage />} />
