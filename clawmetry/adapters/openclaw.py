@@ -151,12 +151,52 @@ def _model_router_fingerprint() -> dict:
         return {}
 
 
+def _resolve_ollama_host() -> str:
+    """Return the active Ollama base URL from env vars or the default.
+
+    Mirrors getOllamaModelOptions() priority in nemoclaw/dist/lib/inference/local.js:
+    OLLAMA_HOST_DOCKER_INTERNAL → OLLAMA_LOCALHOST → http://localhost:11434.
+    """
+    for var in ("OLLAMA_HOST_DOCKER_INTERNAL", "OLLAMA_LOCALHOST"):
+        val = os.environ.get(var, "").strip()
+        if val:
+            return val if val.startswith("http") else f"http://{val}"
+    return "http://localhost:11434"
+
+
+def _list_ollama_models(host: str) -> list:
+    """Return available Ollama model names. Never raises; returns [] on failure.
+
+    Tries GET {host}/api/tags first (same as the harness HTTP path), then falls
+    back to `ollama list` CLI (same fallback the harness uses). Both failures
+    are silenced so a missing/offline Ollama doesn't error detection.
+    """
+    import urllib.request
+    try:
+        url = host.rstrip("/") + "/api/tags"
+        with urllib.request.urlopen(url, timeout=2) as resp:  # noqa: S310
+            data = json.loads(resp.read())
+            return [m["name"] for m in data.get("models", []) if m.get("name")]
+    except Exception:
+        pass
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["ollama", "list"], capture_output=True, text=True, timeout=5
+        )
+        lines = result.stdout.strip().splitlines()
+        return [ln.split()[0] for ln in lines[1:] if ln.split()]
+    except Exception:
+        return []
+
+
 def _sandbox_inference_configs() -> list:
     """Read per-sandbox inference config from ~/.nemoclaw/sandboxes.json.
 
     Mirrors getSandboxInferenceConfig() (nemoclaw/src/lib/inference/config.ts)
     to surface providerKey / primaryModelRef / inferenceBaseUrl / inferenceApi /
-    inferenceCompat on DetectResult.meta (gap #2796). The identical derivation
+    inferenceCompat on DetectResult.meta (gap #2796). Ollama-backed sandboxes
+    also receive ollamaHost + ollamaModels (gap #3201). The identical derivation
     lives in sync._read_nemoclaw_sandbox_routing (#2684); this helper makes it
     available in the adapter layer without importing the heavy sync module.
     Never raises -- returns [] on plain OpenClaw (no sandboxes.json).
@@ -198,6 +238,22 @@ def _sandbox_inference_configs() -> list:
                 base_url = "https://inference.local"
                 api = "anthropic-messages"
                 compat = "anthropic"
+            elif provider == "ollama":
+                ollama_host = _resolve_ollama_host()
+                out.append({
+                    "sandbox": name,
+                    "isDefault": bool(default_sb and name == default_sb),
+                    "provider": provider,
+                    "model": model,
+                    "providerKey": "ollama",
+                    "primaryModelRef": f"ollama/{model}" if model else "",
+                    "inferenceBaseUrl": ollama_host,
+                    "inferenceApi": api,
+                    "inferenceCompat": "openai",
+                    "ollamaHost": ollama_host,
+                    "ollamaModels": _list_ollama_models(ollama_host),
+                })
+                continue
             else:
                 provider_key = _MANAGED
                 primary = f"{_MANAGED}/{model}" if model else ""
@@ -1394,6 +1450,41 @@ class OpenClawAdapter(AgentAdapter):
                     "session_id": session_id,
                     "agent_type": "openclaw",
                     "attributes": comp_attrs,
+                })
+
+            elif t == "retry":
+                # Harness fix #92191/#93073 emits a retry event when the agent
+                # retries a thinking-only or empty post-tool turn, carrying
+                # retry reason and turn-kind metadata. Without this branch the
+                # span builder drops retried turns silently, so the Tracing tab
+                # shows a gap wherever a retry occurred (#3198).
+                retry_reason = (
+                    obj.get("reason") or obj.get("retry_reason") or obj.get("retryReason") or ""
+                )
+                turn_kind = (
+                    obj.get("turn_kind") or obj.get("turnKind") or ""
+                )
+                retry_count = obj.get("count") or obj.get("retry_count") or obj.get("retryCount")
+                retry_attrs: dict = {"event.kind": "retry"}
+                if isinstance(retry_reason, str) and retry_reason.strip():
+                    retry_attrs["retry.reason"] = retry_reason.strip()
+                if isinstance(turn_kind, str) and turn_kind.strip():
+                    retry_attrs["retry.turn_kind"] = turn_kind.strip()
+                if retry_count is not None:
+                    try:
+                        retry_attrs["retry.count"] = int(retry_count)
+                    except (TypeError, ValueError):
+                        pass
+                spans.append({
+                    "span_id": _sid("retry", session_id, str(raw_ts)),
+                    "trace_id": trace_id,
+                    "parent_span_id": session_span_id,
+                    "name": "retry",
+                    "kind": "INTERNAL",
+                    "start_ts": ts,
+                    "session_id": session_id,
+                    "agent_type": "openclaw",
+                    "attributes": retry_attrs,
                 })
 
         return spans
