@@ -2528,6 +2528,29 @@ def _extract_cost_tokens_model(obj: dict) -> tuple:
                         cost_usd = float(cv)
                     except (TypeError, ValueError):
                         cost_usd = None
+    else:
+        # Compaction events (harness fix #93084) and other non-message events
+        # carry usage at the top level, not nested under message.usage (#3199).
+        top_usage = obj.get("usage")
+        if isinstance(top_usage, dict):
+            if token_count is None:
+                tt = top_usage.get("totalTokens") or top_usage.get("total_tokens")
+                if tt is not None:
+                    try:
+                        token_count = int(tt)
+                    except (TypeError, ValueError):
+                        pass
+            if cost_usd is None:
+                cost = top_usage.get("cost")
+                if isinstance(cost, dict):
+                    cv = cost.get("total") or cost.get("total_usd")
+                else:
+                    cv = cost if isinstance(cost, (int, float)) else None
+                if cv is not None:
+                    try:
+                        cost_usd = float(cv)
+                    except (TypeError, ValueError):
+                        pass
 
     # #2049: derive cost when the provider didn't report it. OpenClaw / OAuth
     # events carry tokens + model but no cost_usd, so the Cost tab showed ~$0
