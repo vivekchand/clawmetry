@@ -35,7 +35,7 @@ def client(ent):
     return app.test_client()
 
 
-# ── tier_rank ────────────────────────────────────────────────────────────────
+# ── tier_rank ────────────────────────────────────────────────────────────────────
 
 
 def test_tier_rank_orders_purchasable_tiers(ent):
@@ -68,7 +68,7 @@ def test_tier_rank_is_strictly_increasing_along_purchasable_ladder(ent):
     assert len(set(ranks)) == len(ranks)
 
 
-# ── min_tier_for_feature ─────────────────────────────────────────────────────
+# ── min_tier_for_feature ───────────────────────────────────────────────────────────────
 
 
 def test_free_feature_minimum_is_oss(ent):
@@ -106,7 +106,7 @@ def test_min_tier_for_feature_is_case_insensitive(ent):
     assert ent.min_tier_for_feature("OTEL_EXPORT") == ent.TIER_CLOUD_PRO
 
 
-# ── min_tier_for_runtime ─────────────────────────────────────────────────────
+# ── min_tier_for_runtime ───────────────────────────────────────────────────────────────
 
 
 def test_free_runtime_minimum_is_oss(ent):
@@ -125,7 +125,7 @@ def test_min_tier_for_runtime_unknown_returns_none(ent):
     assert ent.min_tier_for_runtime(None) is None
 
 
-# ── Entitlement.min_tier_for ─────────────────────────────────────────────────
+# ── Entitlement.min_tier_for ──────────────────────────────────────────────────────────────
 
 
 def test_entitlement_min_tier_for_dispatches_to_feature_and_runtime(ent):
@@ -143,7 +143,7 @@ def test_entitlement_min_tier_for_unknown_returns_none(ent):
     assert en.min_tier_for(None) is None
 
 
-# ── /api/entitlement (tier_rank in response) ──────────────────────────────────
+# ── /api/entitlement (tier_rank in response) ──────────────────────────────────────────
 
 
 def test_api_entitlement_surfaces_tier_rank(client, ent):
@@ -157,7 +157,7 @@ def test_api_entitlement_surfaces_tier_rank(client, ent):
     assert body["tier_rank"] == 0
 
 
-# ── /api/entitlement/required-tier ───────────────────────────────────────────
+# ── /api/entitlement/required-tier ────────────────────────────────────────────────────────
 
 
 def test_required_tier_for_feature(client, ent):
@@ -167,7 +167,9 @@ def test_required_tier_for_feature(client, ent):
     assert d["key"] == "otel_export"
     assert d["kind"] == "feature"
     assert d["required_tier"] == ent.TIER_CLOUD_PRO
+    assert d["required_tier_rank"] == ent.tier_rank(ent.TIER_CLOUD_PRO)
     assert d["current_tier"] == ent.TIER_OSS
+    assert d["current_tier_rank"] == 0
     assert d["upgrade_required"] is True
     assert d["allowed"] is True  # grace mode
 
@@ -184,6 +186,8 @@ def test_required_tier_for_runtime(client, ent):
     assert d["key"] == "claude_code"
     assert d["kind"] == "runtime"
     assert d["required_tier"] == ent.TIER_CLOUD_STARTER
+    assert d["required_tier_rank"] == ent.tier_rank(ent.TIER_CLOUD_STARTER)
+    assert d["current_tier_rank"] == 0
     assert d["upgrade_required"] is True
 
 
