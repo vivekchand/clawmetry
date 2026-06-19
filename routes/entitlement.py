@@ -80,6 +80,8 @@ def api_entitlement():
                 "features": [],
                 "locked_runtimes": [],
                 "locked_features": [],
+                "next_tier_diff": None,
+                "prev_tier_diff": None,
             }
         )
 
@@ -119,6 +121,8 @@ def api_entitlement_refresh():
                 "features": [],
                 "locked_runtimes": [],
                 "locked_features": [],
+                "next_tier_diff": None,
+                "prev_tier_diff": None,
             }
         )
 

@@ -787,6 +787,57 @@ class Entitlement:
                 "lost_runtimes": [],
             }
 
+    def next_tier_diff(self) -> dict | None:
+        """One-call upgrade CTA payload: the :meth:`upgrade_diff` resolved against
+        :meth:`next_purchasable_tier`, so a single ``/api/entitlement`` read
+        carries everything the "Upgrade to ___" CTA needs to render -- the
+        target tier id, its label, and the features + runtimes the click would
+        unlock. Returns ``None`` once the install is already on the top
+        purchasable tier (Enterprise) so the dashboard short-circuits the CTA
+        instead of rendering an empty "Upgrade to nothing" surface.
+
+        Shape: ``{"target": "<tier>", "added_features": [...sorted...],
+        "added_runtimes": [...sorted...]}`` -- identical to
+        :meth:`upgrade_diff` so a caller can read either source interchangeably.
+
+        Never raises: any resolver failure returns ``None`` rather than
+        propagating, so a flaky tier-resolver call can never break the
+        ``/api/entitlement`` render.
+        """
+        try:
+            target = self.next_purchasable_tier()
+            if target is None:
+                return None
+            return self.upgrade_diff(target)
+        except Exception as exc:
+            logger.warning("entitlements: next_tier_diff failed: %s", exc)
+            return None
+
+    def previous_tier_diff(self) -> dict | None:
+        """One-call cancellation / downgrade CTA payload: the
+        :meth:`downgrade_diff` resolved against :meth:`previous_purchasable_tier`,
+        so the cancellation-warning surface ("Cancelling drops you to
+        <prev_tier_label>; you would lose ...") renders from a single
+        ``/api/entitlement`` read instead of chaining
+        ``prev_tier`` -> ``/api/entitlement/downgrade-diff?target=<prev_tier>``.
+        Returns ``None`` once the install is already on the OSS-free floor so
+        the dashboard short-circuits the "Downgrade to nothing" surface.
+
+        Shape: ``{"target": "<tier>", "lost_features": [...sorted...],
+        "lost_runtimes": [...sorted...]}`` -- identical to
+        :meth:`downgrade_diff` so callers can read either source interchangeably.
+
+        Never raises: any resolver failure returns ``None``.
+        """
+        try:
+            target = self.previous_purchasable_tier()
+            if target is None:
+                return None
+            return self.downgrade_diff(target)
+        except Exception as exc:
+            logger.warning("entitlements: previous_tier_diff failed: %s", exc)
+            return None
+
     def grace_remaining_days(self) -> int | None:
         """Days remaining in the grace period, or ``None`` when no enforce-at
         date is announced (``CLAWMETRY_ENFORCE_AT`` unset). Clamps to ``0``
@@ -1067,6 +1118,14 @@ class Entitlement:
                 if self.previous_purchasable_tier() is not None
                 else None
             ),
+            # One-call upgrade / cancellation CTA payloads. ``next_tier_diff``
+            # is what :meth:`upgrade_diff` would return for ``next_tier``;
+            # ``prev_tier_diff`` is the mirror for ``prev_tier``. ``None`` when
+            # the install is already at the corresponding ceiling / floor (no
+            # tier to advertise) so the dashboard can short-circuit the CTA
+            # without a second round trip to /api/entitlement/upgrade-diff.
+            "next_tier_diff": self.next_tier_diff(),
+            "prev_tier_diff": self.previous_tier_diff(),
         }
 
 
@@ -1255,6 +1314,31 @@ def downgrade_diff(target_tier: str) -> dict:
             "lost_features": [],
             "lost_runtimes": [],
         }
+
+
+def next_tier_diff() -> dict | None:
+    """Module-level convenience: resolve the current entitlement and return the
+    one-call upgrade CTA payload for its :meth:`Entitlement.next_purchasable_tier`.
+    ``None`` once the install is already on the top purchasable tier. See
+    :meth:`Entitlement.next_tier_diff` for the shape. Never raises."""
+    try:
+        return get_entitlement().next_tier_diff()
+    except Exception as exc:
+        logger.warning("entitlements: next_tier_diff (module) failed: %s", exc)
+        return None
+
+
+def previous_tier_diff() -> dict | None:
+    """Module-level convenience: resolve the current entitlement and return the
+    one-call cancellation / downgrade CTA payload for its
+    :meth:`Entitlement.previous_purchasable_tier`. ``None`` once the install is
+    already on the OSS-free floor. See :meth:`Entitlement.previous_tier_diff`
+    for the shape. Never raises."""
+    try:
+        return get_entitlement().previous_tier_diff()
+    except Exception as exc:
+        logger.warning("entitlements: previous_tier_diff (module) failed: %s", exc)
+        return None
 
 
 def resolution_diagnostic() -> dict:
