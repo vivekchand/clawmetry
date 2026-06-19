@@ -190,6 +190,35 @@ def _list_ollama_models(host: str) -> list:
         return []
 
 
+
+def _openshell_sandbox_phase_policy(name: str) -> dict:
+    """Call 'openshell sandbox get <name>' and parse Phase / Policy fields.
+
+    Returns a dict with 'sandboxPhase' and/or 'sandboxPolicy' keys from the
+    CLI output.  Never raises; returns {} when the openshell binary is absent
+    (plain OpenClaw installs) or the subprocess call fails, so existing entries
+    are left unchanged.
+    """
+    try:
+        import shutil as _sh
+        if not _sh.which("openshell"):
+            return {}
+        import subprocess as _sp
+        res = _sp.run(
+            ["openshell", "sandbox", "get", name],
+            capture_output=True, text=True, timeout=5,
+        )
+        out: dict = {}
+        for line in (res.stdout or "").splitlines():
+            if line.startswith("Phase:"):
+                out["sandboxPhase"] = line.split(":", 1)[1].strip()
+            elif line.startswith("Policy:"):
+                out["sandboxPolicy"] = line.split(":", 1)[1].strip()
+        return out
+    except Exception:
+        return {}
+
+
 def _sandbox_inference_configs() -> list:
     """Read per-sandbox inference config from ~/.nemoclaw/sandboxes.json.
 
@@ -199,6 +228,8 @@ def _sandbox_inference_configs() -> list:
     also receive ollamaHost + ollamaModels (gap #3201). The identical derivation
     lives in sync._read_nemoclaw_sandbox_routing (#2684); this helper makes it
     available in the adapter layer without importing the heavy sync module.
+    Also calls _openshell_sandbox_phase_policy() per sandbox to surface live
+    Phase / Policy fields (gap #3202).
     Never raises -- returns [] on plain OpenClaw (no sandboxes.json).
     """
     home = os.environ.get("HOME") or os.path.expanduser("~")
@@ -240,7 +271,7 @@ def _sandbox_inference_configs() -> list:
                 compat = "anthropic"
             elif provider == "ollama":
                 ollama_host = _resolve_ollama_host()
-                out.append({
+                entry = {
                     "sandbox": name,
                     "isDefault": bool(default_sb and name == default_sb),
                     "provider": provider,
@@ -252,13 +283,15 @@ def _sandbox_inference_configs() -> list:
                     "inferenceCompat": "openai",
                     "ollamaHost": ollama_host,
                     "ollamaModels": _list_ollama_models(ollama_host),
-                })
+                }
+                entry.update(_openshell_sandbox_phase_policy(name))
+                out.append(entry)
                 continue
             else:
                 provider_key = _MANAGED
                 primary = f"{_MANAGED}/{model}" if model else ""
                 compat = "openai"
-            out.append({
+            entry = {
                 "sandbox": name,
                 "isDefault": bool(default_sb and name == default_sb),
                 "provider": provider,
@@ -268,7 +301,9 @@ def _sandbox_inference_configs() -> list:
                 "inferenceBaseUrl": base_url,
                 "inferenceApi": api,
                 "inferenceCompat": compat,
-            })
+            }
+            entry.update(_openshell_sandbox_phase_policy(name))
+            out.append(entry)
         except Exception:
             continue
     return out
@@ -1068,7 +1103,7 @@ class OpenClawAdapter(AgentAdapter):
             Capability.CHANNELS,
         }
 
-    # ── Span reconstruction (issue #1010 / Trace 4) ───────────────────────────────────────
+    # ── Span reconstruction (issue #1010 / Trace 4) ───────────────────────────────────────────────
 
     @staticmethod
     def _span_id(*parts: str) -> str:
