@@ -1305,6 +1305,45 @@ class OpenClawAdapter(AgentAdapter):
                     "attributes": fa_attrs or None,
                 })
 
+            elif t == "compaction":
+                # Harness fix #93084 preserves fresh usage data on compaction
+                # records. Emit an INTERNAL span so the Tracing tab shows the
+                # compaction boundary; surface tokens_before + any usage so
+                # callers can see what was reclaimed and what was re-billed
+                # (#3199).
+                comp_attrs: dict = {"event.kind": "compaction"}
+                summary = obj.get("summary")
+                if isinstance(summary, str) and summary.strip():
+                    comp_attrs["compaction.summary"] = summary[:500]
+                tb = obj.get("tokensBefore") or obj.get("tokens_before")
+                if tb is not None:
+                    try:
+                        comp_attrs["compaction.tokens_before"] = int(tb)
+                    except (TypeError, ValueError):
+                        pass
+                from_hook = obj.get("fromHook") if obj.get("fromHook") is not None else obj.get("from_hook")
+                if from_hook is not None:
+                    comp_attrs["compaction.from_hook"] = bool(from_hook)
+                comp_usage = obj.get("usage")
+                if isinstance(comp_usage, dict):
+                    tok_total = int(comp_usage.get("totalTokens") or comp_usage.get("total_tokens") or 0)
+                    tok_in = int(comp_usage.get("input_tokens") or comp_usage.get("inputTokens") or 0)
+                    tok_out = int(comp_usage.get("output_tokens") or comp_usage.get("outputTokens") or 0)
+                    effective = tok_total or (tok_in + tok_out)
+                    if effective:
+                        comp_attrs["compaction.usage.total_tokens"] = effective
+                spans.append({
+                    "span_id": _sid("compaction", session_id, str(raw_ts)),
+                    "trace_id": trace_id,
+                    "parent_span_id": session_span_id,
+                    "name": "compaction",
+                    "kind": "INTERNAL",
+                    "start_ts": ts,
+                    "session_id": session_id,
+                    "agent_type": "openclaw",
+                    "attributes": comp_attrs,
+                })
+
         return spans
 
     def reconstruct_spans(self, jsonl_path: str) -> list:
