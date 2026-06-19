@@ -3057,6 +3057,95 @@ def _cmd_runtimes(args) -> None:
         print("  Upgrade: clawmetry license activate <KEY>")
 
 
+def _cmd_features(args) -> None:
+    """clawmetry features — list every observable feature and which are unlocked.
+
+    Sibling of :func:`_cmd_runtimes`: that one answers "which runtimes is
+    this install cleared to observe?", this one answers the same question
+    for features. Reads :func:`clawmetry.entitlements.feature_catalog` --
+    the same source the dashboard's ``GET /api/features`` consumes -- so the
+    CLI and the UI cannot drift on the locked-but-visible upgrade affordance.
+
+    Never raises. A poisoned catalog read surfaces the error inline (a
+    warning row in the human table, or an ``error`` key on the JSON payload
+    with ``features=[]``) so a wrapper script always sees a parseable
+    response. Matches the never-crash contract documented on
+    :func:`get_entitlement`.
+
+    Output:
+      default -- compact table (id, label, tier, status)
+      --json  -- ``{tier, grace, enforced, features: [...], error?: str}``
+    """
+    import json as _json
+
+    from clawmetry import entitlements as _ent
+
+    try:
+        ent = _ent.get_entitlement()
+        tier = ent.tier
+        grace = bool(ent.grace)
+        enforced = _ent.is_enforced()
+    except Exception as exc:
+        # Mirror _cmd_runtimes' never-crash fallback: a broken install still
+        # gets a parseable shape, with the failure surfaced to stderr so it
+        # isn't silently lost in a pipeline.
+        print(f"⚠️  entitlement resolution failed: {exc}", file=sys.stderr)
+        tier, grace, enforced = "oss", True, False
+
+    rows: list[dict] = []
+    catalog_error: str | None = None
+    try:
+        rows = list(_ent.feature_catalog())
+    except Exception as exc:
+        catalog_error = str(exc)
+
+    if getattr(args, "as_json", False):
+        payload: dict = {
+            "tier": tier,
+            "grace": grace,
+            "enforced": enforced,
+            "features": rows,
+        }
+        if catalog_error:
+            payload["error"] = catalog_error
+        print(_json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    mode_line = "off (grace)" if not enforced else "on"
+    print("ClawMetry Features\n" + "─" * 40)
+    print(f"  Tier:        {tier}")
+    print(f"  Enforcement: {mode_line}")
+    if catalog_error:
+        print(f"  ⚠️  catalog error: {catalog_error}")
+        return
+
+    any_locked = False
+    print()
+    print(f"  {'ID':<28} {'Label':<28} {'Tier':<14} Status")
+    print("  " + "─" * 80)
+    for row in rows:
+        # Alias rows duplicate a canonical feature -- hide them so the table
+        # mirrors the upgrade affordance shown in /pricing rather than
+        # advertising deprecated names.
+        if row.get("alias"):
+            continue
+        fid = str(row.get("id", ""))
+        label = str(row.get("label", fid))
+        feat_tier = str(row.get("tier", "oss"))
+        is_free = bool(row.get("free", False))
+        locked = bool(row.get("locked", False))
+        if locked:
+            status = "🔒 locked"
+            any_locked = True
+        else:
+            status = "✅ available"
+        tier_tag = "free" if is_free else feat_tier
+        print(f"  {fid:<28} {label:<28} {tier_tag:<14} {status}")
+    if any_locked:
+        print()
+        print("  Upgrade: clawmetry license activate <KEY>")
+
+
 def _cmd_verify_integrity(args) -> None:
     """clawmetry verify-integrity — walk the hash chain and report validity."""
     from clawmetry.local_store import get_store
@@ -3488,6 +3577,21 @@ def main() -> None:
         help="Emit {tier, grace, enforced, runtimes:[...]} JSON (jq-friendly)",
     )
 
+    # features — list every observable feature and which are unlocked.
+    # CLI sibling of `clawmetry runtimes` and of the dashboard's GET
+    # /api/features so the operator can answer "what does this tier unlock?"
+    # from the shell without parsing `tier --json`.
+    p_features = sub.add_parser(
+        "features",
+        help="List every observable feature and which this install can unlock",
+    )
+    p_features.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit {tier, grace, enforced, features:[...]} JSON (jq-friendly)",
+    )
+
     # verify-integrity — walk hash chain and report validity (Issue #2200)
     p_verify = sub.add_parser(
         "verify-integrity",
@@ -3518,6 +3622,7 @@ def main() -> None:
         "license",
         "tier",
         "runtimes",
+        "features",
         "verify-integrity",
         "nemoclaw-daemons",
     )
@@ -3557,6 +3662,8 @@ def main() -> None:
             _cmd_tier(args)
         elif args.cmd == "runtimes":
             _cmd_runtimes(args)
+        elif args.cmd == "features":
+            _cmd_features(args)
         elif args.cmd == "verify-integrity":
             _cmd_verify_integrity(args)
         elif args.cmd == "nemoclaw-daemons":
