@@ -669,6 +669,53 @@ def _openclaw_tool_catalog_kind() -> Optional[str]:
     return None
 
 
+def _gateway_plugin_health() -> dict:
+    """Per-plugin health state from the OpenClaw gateway status RPC (#3200).
+
+    As of harness 2026.6.9 (PR #93395) the gateway ``gateway.status`` response
+    includes a ``plugins`` list where each entry carries the plugin ``name``,
+    its ``state`` (``"loaded"`` / ``"errored"`` / ``"disabled"``), and an
+    optional ``type`` field (``"channel"`` / ``"provider"``).
+
+    Returns a dict with two keys when any plugin data is present:
+    - ``"gatewayPluginHealth"`` — the raw list of plugin entries
+      (``[{"name": str, "state": str, "type": str|None}, ...]``).
+    - ``"gatewayPluginHealthSummary"`` — a ``{state: count}`` tally for quick
+      health assessment (e.g. ``{"loaded": 3, "errored": 1}``).
+
+    Returns ``{}`` when the gateway RPC returns nothing, the response contains
+    no ``plugins`` key, or the list is empty. Never raises.
+    """
+    try:
+        d = _d()
+        rpc = getattr(d, "_gw_ws_rpc", None)
+        if rpc is None:
+            return {}
+        payload = rpc("gateway.status")
+        if not isinstance(payload, dict):
+            return {}
+        raw_plugins = payload.get("plugins")
+        if not isinstance(raw_plugins, list) or not raw_plugins:
+            return {}
+        plugins = []
+        summary: dict = {}
+        for entry in raw_plugins:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("name") or entry.get("id") or ""
+            state = str(entry.get("state") or "").lower()
+            ptype = entry.get("type") or entry.get("kind") or None
+            if not name or not state:
+                continue
+            plugins.append({"name": name, "state": state, **({"type": ptype} if ptype else {})})
+            summary[state] = summary.get(state, 0) + 1
+        if not plugins:
+            return {}
+        return {"gatewayPluginHealth": plugins, "gatewayPluginHealthSummary": summary}
+    except Exception:
+        return {}
+
+
 class OpenClawAdapter(AgentAdapter):
     name = "openclaw"
     display_name = "OpenClaw"
@@ -725,6 +772,11 @@ class OpenClawAdapter(AgentAdapter):
             # from ~/.nemoclaw/agents.yaml (written by harness onboarding,
             # commit 01e5525).
             meta.update(_nemoclaw_agents_manifest())
+            # Gateway plugin health (#3200): per-plugin state (loaded/errored/
+            # disabled) added to gateway.status in harness 2026.6.9 (#93395).
+            # Only meaningful — and safe to query — when the gateway is live.
+            if running:
+                meta.update(_gateway_plugin_health())
             return DetectResult(
                 name=self.name,
                 display_name=self.display_name,
