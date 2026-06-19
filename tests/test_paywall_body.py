@@ -131,18 +131,18 @@ def test_body_tier_reflects_current_install(ent_grace):
     assert body["tier"] == ent_grace.TIER_OSS
 
 
-def test_body_swallows_feature_set_errors(monkeypatch):
-    """If a catalogue set itself raises on membership lookup, the helper
-    still produces a well-formed body with ``required_tier=None`` rather
-    than 500-ing the request."""
+def test_body_swallows_min_tier_resolver_errors(monkeypatch):
+    """If the canonical tier resolver raises, the helper still produces a
+    well-formed body with ``required_tier=None`` rather than 500-ing the
+    request -- the body builder owns the never-raise contract regardless of
+    what the entitlements catalogue does."""
     import clawmetry.entitlements as ent
     from clawmetry._paywall import upgrade_required_body
 
-    class _Boom:
-        def __contains__(self, _key):
-            raise RuntimeError("boom")
+    def explode(_key):
+        raise RuntimeError("boom")
 
-    monkeypatch.setattr(ent, "PRO_ONLY_FEATURES", _Boom())
+    monkeypatch.setattr(ent, "min_tier_for_feature", explode)
     body = upgrade_required_body("self_evolve")
     assert body["error"] == "upgrade_required"
     assert body["feature"] == "self_evolve"
