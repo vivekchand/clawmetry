@@ -12,31 +12,17 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                         env, cache liveness) for operator
                                         triage.
   POST /api/entitlement/refresh      -- drop the cache and return the freshly
-                                        re-resolved Entitlement (used after a
-                                        license is dropped in or the daemon
-                                        writes a new cloud_plan.json, so the
-                                        UI does not have to wait for the 60 s
-                                        TTL).
+                                        re-resolved Entitlement.
   GET  /api/entitlement/required-tier -- resolve the minimum purchasable tier
                                          for a feature= or runtime= key.
   GET  /api/entitlement/lock-reason   -- human-readable explanation of why a
-                                         feature= or runtime= key is locked
-                                         on this install (None when allowed
-                                         or in grace mode).
+                                         feature= or runtime= key is locked.
   GET  /api/entitlement/upgrade-diff  -- features + runtimes a target tier
                                          would add on top of the current ent.
   GET  /api/entitlement/downgrade-diff -- features + runtimes a target tier
-                                          would REMOVE from the current ent
-                                          (cancellation / downgrade preview;
-                                          target=oss == enforce-flip preview).
-  GET  /api/runtimes                  -- the full runtime catalog with
-                                         locked/free/tier flags.
+                                          would REMOVE from the current ent.
+  GET  /api/runtimes                  -- the full runtime catalog.
   GET  /api/tiers                     -- the full tier ladder with per-tier metadata.
-
-Side-effect-free and never-raise (refresh's only side effect is busting the
-in-process cache), so it is safe to classify ``oss-passthrough`` on the cloud
-side: when no license/cloud plan is present every endpoint returns a graceful
-OSS-free shape, never a 4xx.
 """
 
 from __future__ import annotations
@@ -53,18 +39,17 @@ bp_entitlement = Blueprint("entitlement", __name__)
 
 @bp_entitlement.route("/api/entitlement")
 def api_entitlement():
-    """Return the resolved entitlement. Falls back to an OSS-free shape on any
-    error so the UI always has something safe to render."""
     try:
         from clawmetry import entitlements as _ent
 
         return jsonify(_ent.get_entitlement().to_dict())
-    except Exception as exc:  # never crash the dashboard over a gate read
+    except Exception as exc:
         logger.warning("api_entitlement: falling back to OSS-free: %s", exc)
         return jsonify(
             {
                 "tier": "oss",
                 "tier_label": "OSS",
+                "tier_rank": 0,
                 "source": "oss",
                 "node_limit": 1,
                 "expiry": None,
@@ -88,14 +73,6 @@ def api_entitlement():
 
 @bp_entitlement.route("/api/entitlement/refresh", methods=["POST"])
 def api_entitlement_refresh():
-    """Force-drop the in-process entitlement cache and re-resolve.
-
-    The resolver caches for 60 s; this endpoint covers the manual / out-of-band
-    install path where the operator just dropped a license file or the daemon
-    wrote a fresh cloud_plan.json and does not want to wait for the TTL.
-    Returns the freshly resolved Entitlement (same shape as ``/api/entitlement``).
-    Falls back to the grace OSS-free shape on any error.
-    """
     try:
         from clawmetry import entitlements as _ent
 
@@ -107,6 +84,7 @@ def api_entitlement_refresh():
             {
                 "tier": "oss",
                 "tier_label": "OSS",
+                "tier_rank": 0,
                 "source": "oss",
                 "node_limit": 1,
                 "expiry": None,
@@ -129,12 +107,6 @@ def api_entitlement_refresh():
 
 @bp_entitlement.route("/api/entitlement/upgrade-diff")
 def api_entitlement_upgrade_diff():
-    """Return the features + runtimes ``?target=<tier>`` would unlock on top of
-    the current entitlement. Drives the upgrade CTA shown on locked rows.
-
-    Shape: ``{"target": "<tier>", "added_features": [...], "added_runtimes": [...]}``
-
-    Unknown / missing ``target`` returns empty lists; never raises."""
     try:
         target = (request.args.get("target") or "").strip().lower()
         from clawmetry import entitlements as _ent
@@ -153,19 +125,6 @@ def api_entitlement_upgrade_diff():
 
 @bp_entitlement.route("/api/entitlement/downgrade-diff")
 def api_entitlement_downgrade_diff():
-    """Return the features + runtimes ``?target=<tier>`` would REMOVE from the
-    current entitlement. Symmetric counterpart of ``/api/entitlement/upgrade-diff``,
-    drives the cancellation / downgrade preview ("Switching to Starter will
-    lock N features + M runtimes you currently use") and the enforce-flip
-    preview when ``target=oss`` (the floor every install falls back to once
-    grace ends).
-
-    Shape: ``{"target": "<tier>", "lost_features": [...], "lost_runtimes": [...]}``
-
-    Unknown / missing ``target`` returns empty lists rather than 4xx so a
-    stray query-string typo never crashes the dashboard. Same-tier or
-    higher-tier ``target`` also returns empty lists because the diff is the
-    strict REMOVE list. Side-effect-free and never-raise."""
     try:
         target = (request.args.get("target") or "").strip().lower()
         from clawmetry import entitlements as _ent
@@ -184,15 +143,6 @@ def api_entitlement_downgrade_diff():
 
 @bp_entitlement.route("/api/entitlement/required-tier")
 def api_entitlement_required_tier():
-    """Resolve the minimum *purchasable* tier that unlocks a given feature or
-    runtime. Drives the lock affordance copy ("Available in Starter" / "Available
-    in Pro").
-
-    Query: exactly one of ``feature=<id>`` or ``runtime=<id>``.
-
-    Returns 200 with key, kind, required_tier, current_tier, upgrade_required,
-    allowed. Returns 400 when neither query param is supplied or both are given.
-    """
     try:
         from clawmetry import entitlements as _ent
 
@@ -229,33 +179,27 @@ def api_entitlement_required_tier():
         )
     except Exception as exc:
         logger.warning("api_entitlement_required_tier: error: %s", exc)
-        return jsonify({"error": str(exc)}), 500
+        feature = (request.args.get("feature") or "").strip().lower()
+        runtime = (request.args.get("runtime") or "").strip().lower()
+        key = feature or runtime
+        kind = "feature" if feature else ("runtime" if runtime else "")
+        return jsonify(
+            {
+                "key": key,
+                "kind": kind,
+                "required_tier": None,
+                "required_tier_label": None,
+                "required_tier_rank": -1,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "upgrade_required": False,
+                "allowed": True,
+            }
+        )
 
 
 @bp_entitlement.route("/api/entitlement/lock-reason")
 def api_entitlement_lock_reason():
-    """Resolve the human-readable "why is this locked" string for a single
-    feature or runtime key, off the same :meth:`Entitlement.lock_reason`
-    primitive the gate decorator's hint copy uses -- so a dashboard tooltip,
-    a 402 body, and the CLI diagnostics all say the same thing about the
-    same item.
-
-    Query: exactly one of ``feature=<id>`` or ``runtime=<id>``.
-
-    Returns 200 with ``{"key", "kind", "reason", "locked", "allowed"}``:
-
-    * ``reason``  -- the explanation string, or ``null`` when not locked
-                     (free items / grace mode / unknown ids / allowed by
-                     the current tier)
-    * ``locked``  -- ``true`` iff ``reason is not null``; convenience for
-                     callers that only need the boolean
-    * ``allowed`` -- the resolved ``allows_*`` answer for the same key, so
-                     a single round-trip carries both "is it usable now"
-                     and "what to render when it isn't"
-
-    Returns 400 when neither query param is supplied or both are given.
-    Never 5xx -- any internal failure returns the never-raise grace shape so
-    a flaky entitlement read can never break a paywall tooltip render."""
     try:
         from clawmetry import entitlements as _ent
 
@@ -282,7 +226,7 @@ def api_entitlement_lock_reason():
                 "allowed": allowed,
             }
         )
-    except Exception as exc:  # never crash the dashboard over a gate read
+    except Exception as exc:
         logger.warning("api_entitlement_lock_reason: error: %s", exc)
         feature = (request.args.get("feature") or "").strip().lower()
         runtime = (request.args.get("runtime") or "").strip().lower()
@@ -305,23 +249,11 @@ def api_entitlement_lock_reason():
 
 @bp_entitlement.route("/api/entitlement/diagnostic")
 def api_entitlement_diagnostic():
-    """Return the *inputs* the entitlement resolver consulted.
-
-    Where ``/api/entitlement`` reports the resolved outputs, this endpoint
-    reports the inputs — license/cloud-plan path presence (not contents), the
-    raw ``CLAWMETRY_ENFORCE`` env var and the boolean it resolves to, and the
-    cache liveness for the next call. Lets operators answer "why does this
-    install think it's on tier X?" without shelling into the host.
-
-    Side-effect-free, never reads file contents, never raises: on any
-    diagnostic-collection failure the route returns a minimal safe shape so a
-    dashboard panel can always render something.
-    """
     try:
         from clawmetry import entitlements as _ent
 
         return jsonify(_ent.resolution_diagnostic())
-    except Exception as exc:  # never crash the dashboard over a diagnostic read
+    except Exception as exc:
         logger.warning("api_entitlement_diagnostic: falling back to minimal: %s", exc)
         return jsonify(
             {
@@ -342,27 +274,6 @@ def api_entitlement_diagnostic():
 
 @bp_entitlement.route("/api/runtimes")
 def api_runtimes():
-    """Return the full runtime catalog with per-runtime ``free``/``allowed``/
-    ``locked`` flags so the dashboard can render *every* known runtime in the
-    switcher — including paid ones with zero local sessions — and overlay a
-    lock affordance on the locked rows once enforcement is on.
-
-    Shape::
-
-        {
-          "runtimes": [
-            {"id": "openclaw", "label": "OpenClaw",
-             "free": true, "allowed": true, "locked": false},
-            ...
-          ],
-          "grace":    true | false,   # mirrors /api/entitlement.grace
-          "enforced": true | false
-        }
-
-    Side-effect-free and never-raise: any resolution error falls back to a
-    grace OSS-free shape with the OpenClaw row, so the UI still has something
-    safe to render.
-    """
     try:
         from clawmetry import entitlements as _ent
 
@@ -374,7 +285,7 @@ def api_runtimes():
                 "enforced": not ent.grace,
             }
         )
-    except Exception as exc:  # never crash the dashboard over a gate read
+    except Exception as exc:
         logger.warning("api_runtimes: falling back to OSS-free: %s", exc)
         return jsonify(
             {
@@ -404,28 +315,6 @@ def api_runtimes():
 
 @bp_entitlement.route("/api/tiers")
 def api_tiers():
-    """Return the full tier ladder with per-tier metadata so the dashboard can
-    render an upgrade affordance without re-deriving tier identifiers in
-    JavaScript.
-
-    Shape::
-
-        {
-          "tiers": [
-            {"id": "oss", "label": "OSS", "is_paid": false,
-             "is_current": true, "rank": 0,
-             "unlocks_paid_runtimes": false,
-             "retention_days": 7, "features": []},
-            ...
-          ],
-          "current":  "oss",
-          "grace":    true | false,   # mirrors /api/entitlement.grace
-          "enforced": true | false
-        }
-
-    Side-effect-free and never-raise: any resolution error falls back to a
-    grace OSS-free shape so the UI still has something safe to render.
-    """
     try:
         from clawmetry import entitlements as _ent
 
@@ -438,7 +327,7 @@ def api_tiers():
                 "enforced": not ent.grace,
             }
         )
-    except Exception as exc:  # never crash the dashboard over a gate read
+    except Exception as exc:
         logger.warning("api_tiers: falling back to OSS-free: %s", exc)
         return jsonify(
             {
@@ -452,31 +341,6 @@ def api_tiers():
 
 @bp_entitlement.route("/api/features")
 def api_features():
-    """Return the full feature catalog with per-feature ``free``/``allowed``/
-    ``locked`` flags + the minimum tier that unlocks each one, so the dashboard
-    can render *every* known feature in the upgrade surface — including paid
-    ones the local install does not have — and overlay a lock affordance + an
-    accurate "Requires <Tier>" CTA once enforcement is on.
-
-    Shape::
-
-        {
-          "features": [
-            {"id": "sessions",  "label": "Sessions",
-             "tier": "oss",          "free": true,  "allowed": true,
-             "locked": false, "entitled": true},
-            {"id": "self_evolve", "label": "Self-Evolve",
-             "tier": "cloud_pro",    "free": false, "allowed": true,
-             "locked": false, "entitled": false},
-            ...
-          ],
-          "grace":    true | false,   # mirrors /api/entitlement.grace
-          "enforced": true | false
-        }
-
-    Side-effect-free and never-raise: any resolution error falls back to a
-    grace OSS-free shape so the UI still has something safe to render.
-    """
     try:
         from clawmetry import entitlements as _ent
 
@@ -488,15 +352,13 @@ def api_features():
                 "enforced": not ent.grace,
             }
         )
-    except Exception as exc:  # never crash the dashboard over a gate read
+    except Exception as exc:
         logger.warning("api_features: falling back to OSS-free: %s", exc)
         return jsonify({"features": [], "grace": True, "enforced": False})
 
 
 @bp_entitlement.route("/api/license/status")
 def api_license_status():
-    """Return the current self-hosted license info as JSON.
-    Returns ``{plan: 'oss', status: 'no_license'}`` when nothing is installed."""
     try:
         from clawmetry import license as _lic
 
@@ -511,19 +373,11 @@ def api_license_status():
 
 @bp_entitlement.route("/api/license/pubkey")
 def api_license_pubkey():
-    """Return the embedded Ed25519 license-verification key + its SHA-256
-    fingerprint, so operators can confirm the OSS install carries the genuine
-    trust anchor (the same one published at https://clawmetry.com/security).
-
-    Read-only, no auth, no license required — the public key is, by
-    construction, public. Never raises: on a parse failure the body still
-    includes ``valid: false`` so callers always get a stable shape.
-    """
     try:
         from clawmetry import license as _lic
 
         return jsonify(_lic.pubkey_info())
-    except Exception as exc:  # never crash the dashboard over a key read
+    except Exception as exc:
         logger.warning("api_license_pubkey: error: %s", exc)
         return jsonify(
             {
@@ -539,12 +393,6 @@ def api_license_pubkey():
 
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
 def api_paywall_event():
-    """Accept a client-side paywall telemetry ping (fire-and-forget).
-
-    Body: ``{"event": "paywall_view"|"paywall_cta_click",
-             "feature": "...", "harness": "...", "source": "..."}``
-    Always returns 204 — callers never need the response.
-    """
     try:
         body = request.get_json(silent=True) or {}
         event = str(body.get("event", ""))[:64]
@@ -561,11 +409,6 @@ def api_paywall_event():
 
 
 def _route_actor() -> str:
-    """Best-effort actor identity for the audit log. Routes don't have a
-    full auth surface yet; the dashboard sends an ``X-Actor`` header when
-    available, falling back to ``X-Forwarded-For`` then the remote address.
-    Empty string is fine — the audit reader UI shows ``system`` for
-    blank actors."""
     try:
         for h in ("X-Actor", "X-Forwarded-For"):
             v = request.headers.get(h, "") or ""
@@ -579,11 +422,6 @@ def _route_actor() -> str:
 
 @bp_entitlement.route("/api/license/activate", methods=["POST"])
 def api_license_activate():
-    """Activate a self-hosted Pro/Enterprise license key.
-
-    Body: ``{"key": "CLAW1.…"}``.
-    Returns ``{"ok": true, "message": "…"}`` on success or 400 on failure.
-    """
     try:
         body = request.get_json(silent=True) or {}
         key = str(body.get("key", "")).strip()
@@ -601,16 +439,6 @@ def api_license_activate():
 
 @bp_entitlement.route("/api/license/verify", methods=["POST"])
 def api_license_verify():
-    """Verify a license key OFFLINE without persisting it (dry-run).
-
-    Body: ``{"key": "CLAW1.…"}``. Returns the same shape as
-    ``/api/license/status`` plus a ``"dry_run": true`` marker, so the UI can
-    show "this is what activating this key would unlock" before the user
-    commits. Always 200 on a malformed/forged key (the body carries
-    ``valid=false``) — only a missing ``key`` field is a 400. The server never
-    writes the key to disk, never touches the entitlement cache, and never
-    raises.
-    """
     try:
         body = request.get_json(silent=True) or {}
         key = str(body.get("key", "")).strip()
@@ -633,11 +461,6 @@ def api_license_verify():
 
 @bp_entitlement.route("/api/license/deactivate", methods=["POST"])
 def api_license_deactivate():
-    """Remove the installed license key and revert to OSS tier.
-
-    Idempotent — returns ``{"ok": true, "removed": false}`` when no key was
-    installed.
-    """
     try:
         from clawmetry import license as _lic
 

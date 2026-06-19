@@ -35,7 +35,7 @@ def client(ent):
     return app.test_client()
 
 
-# ── tier_rank ────────────────────────────────────────────────────────────────
+# ── tier_rank ────────────────────────────────────────────────────────────────────
 
 
 def test_tier_rank_orders_purchasable_tiers(ent):
@@ -57,7 +57,18 @@ def test_tier_rank_case_insensitive(ent):
     assert ent.tier_rank("CLOUD_PRO") == ent.tier_rank(ent.TIER_CLOUD_PRO)
 
 
-# ── min_tier_for_feature ─────────────────────────────────────────────────────
+def test_tier_rank_is_strictly_increasing_along_purchasable_ladder(ent):
+    ranks = [
+        ent.tier_rank(ent.TIER_OSS),
+        ent.tier_rank(ent.TIER_CLOUD_STARTER),
+        ent.tier_rank(ent.TIER_CLOUD_PRO),
+        ent.tier_rank(ent.TIER_ENTERPRISE),
+    ]
+    assert ranks == sorted(ranks)
+    assert len(set(ranks)) == len(ranks)
+
+
+# ── min_tier_for_feature ───────────────────────────────────────────────────────────────
 
 
 def test_free_feature_minimum_is_oss(ent):
@@ -95,7 +106,7 @@ def test_min_tier_for_feature_is_case_insensitive(ent):
     assert ent.min_tier_for_feature("OTEL_EXPORT") == ent.TIER_CLOUD_PRO
 
 
-# ── min_tier_for_runtime ─────────────────────────────────────────────────────
+# ── min_tier_for_runtime ───────────────────────────────────────────────────────────────
 
 
 def test_free_runtime_minimum_is_oss(ent):
@@ -114,7 +125,7 @@ def test_min_tier_for_runtime_unknown_returns_none(ent):
     assert ent.min_tier_for_runtime(None) is None
 
 
-# ── Entitlement.min_tier_for ─────────────────────────────────────────────────
+# ── Entitlement.min_tier_for ──────────────────────────────────────────────────────────────
 
 
 def test_entitlement_min_tier_for_dispatches_to_feature_and_runtime(ent):
@@ -132,7 +143,21 @@ def test_entitlement_min_tier_for_unknown_returns_none(ent):
     assert en.min_tier_for(None) is None
 
 
-# ── /api/entitlement/required-tier ───────────────────────────────────────────
+# ── /api/entitlement (tier_rank in response) ──────────────────────────────────────────
+
+
+def test_api_entitlement_surfaces_tier_rank(client, ent):
+    """tier_rank must appear in the /api/entitlement response so the dashboard
+    can compare the current rank against a required rank in a single call."""
+    rv = client.get("/api/entitlement")
+    assert rv.status_code == 200
+    body = rv.get_json()
+    assert body["tier"] == ent.TIER_OSS
+    assert body["tier_label"] == "OSS"
+    assert body["tier_rank"] == 0
+
+
+# ── /api/entitlement/required-tier ────────────────────────────────────────────────────────
 
 
 def test_required_tier_for_feature(client, ent):
@@ -142,7 +167,9 @@ def test_required_tier_for_feature(client, ent):
     assert d["key"] == "otel_export"
     assert d["kind"] == "feature"
     assert d["required_tier"] == ent.TIER_CLOUD_PRO
+    assert d["required_tier_rank"] == ent.tier_rank(ent.TIER_CLOUD_PRO)
     assert d["current_tier"] == ent.TIER_OSS
+    assert d["current_tier_rank"] == 0
     assert d["upgrade_required"] is True
     assert d["allowed"] is True  # grace mode
 
@@ -159,6 +186,8 @@ def test_required_tier_for_runtime(client, ent):
     assert d["key"] == "claude_code"
     assert d["kind"] == "runtime"
     assert d["required_tier"] == ent.TIER_CLOUD_STARTER
+    assert d["required_tier_rank"] == ent.tier_rank(ent.TIER_CLOUD_STARTER)
+    assert d["current_tier_rank"] == 0
     assert d["upgrade_required"] is True
 
 
@@ -175,3 +204,17 @@ def test_required_tier_requires_one_query_param(client):
     assert client.get(
         "/api/entitlement/required-tier?feature=sessions&runtime=openclaw"
     ).status_code == 400
+
+
+def test_required_tier_swallows_resolver_failure(monkeypatch, client, ent):
+    """A flaky entitlement read must never 5xx the paywall tooltip endpoint."""
+    def boom(*_, **__):
+        raise RuntimeError("synthetic")
+
+    monkeypatch.setattr(ent, "get_entitlement", boom)
+    rv = client.get("/api/entitlement/required-tier?feature=multi_runtime")
+    assert rv.status_code == 200
+    body = rv.get_json()
+    assert body["allowed"] is True
+    assert body["current_tier"] == "oss"
+    assert body["upgrade_required"] is False
