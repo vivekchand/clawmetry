@@ -65,6 +65,49 @@ _PAID_TIERS = frozenset(
     {TIER_TRIAL, TIER_CLOUD_STARTER, TIER_CLOUD_PRO, TIER_PRO, TIER_ENTERPRISE}
 )
 
+# Human-readable labels for every known tier id. The dashboard, the CLI, and any
+# operator-facing surface should call :func:`tier_label` instead of hard-coding
+# these strings so the vocabulary stays consistent. Unknown ids are rendered
+# title-cased with underscores swapped for spaces, so a future tier added before
+# this map is updated still renders *something* sensible.
+TIER_LABELS = {
+    TIER_OSS: "OSS",
+    TIER_CLOUD_FREE: "Free",
+    TIER_TRIAL: "Trial",
+    TIER_CLOUD_STARTER: "Starter",
+    TIER_CLOUD_PRO: "Pro",
+    TIER_PRO: "Self-hosted Pro",
+    TIER_ENTERPRISE: "Enterprise",
+}
+
+# Comparable rank per tier (higher = unlocks more). Self-hosted Pro and cloud
+# Pro share rank 2 because they unlock the same feature set; trial sits at the
+# same rank because it grants the full Pro feature set for the trial window.
+# Unknown tiers resolve to -1 from :func:`tier_rank`.
+_TIER_RANK = {
+    TIER_OSS: 0,
+    TIER_CLOUD_FREE: 0,
+    TIER_CLOUD_STARTER: 1,
+    TIER_TRIAL: 2,
+    TIER_CLOUD_PRO: 2,
+    TIER_PRO: 2,
+    TIER_ENTERPRISE: 3,
+}
+
+# Canonical ordering of the *purchasable* plans, lowest -> highest. Used by the
+# ``min_tier_for_*`` helpers so the UI can render locked rows as "Available in
+# Starter" / "Available in Pro" without each caller re-deriving the order.
+# Trial is excluded: it is a time-limited promotional grant of Pro, not a plan a
+# customer can pick from a price page.
+_PURCHASABLE_TIERS = (
+    TIER_OSS,
+    TIER_CLOUD_FREE,
+    TIER_CLOUD_STARTER,
+    TIER_CLOUD_PRO,
+    TIER_PRO,
+    TIER_ENTERPRISE,
+)
+
 # ── Runtime catalogue ───────────────────────────────────────────────────────
 # FREE: the OpenClaw and NVIDIA NemoClaw runtimes. NeMo *governance* (policy
 # enforcement) is a separate free feature; ``nemoclaw`` here is the agent
@@ -287,6 +330,8 @@ class Entitlement:
     def to_dict(self) -> dict:
         return {
             "tier": self.tier,
+            "tier_label": tier_label(self.tier),
+            "tier_rank": tier_rank(self.tier),
             "source": self.source,
             "node_limit": self.node_limit,
             "expiry": self.expiry,
@@ -415,6 +460,69 @@ def runtime_label(runtime: str) -> str:
     so unknown plugin runtimes still render with *something*."""
     rt = (runtime or "").strip().lower()
     return RUNTIME_LABELS.get(rt, rt)
+
+
+def tier_label(tier: str) -> str:
+    """Human-readable label for ``tier``. Mirrors :func:`runtime_label` so the
+    dashboard / CLI never hard-code tier strings.
+
+    An unknown tier id is rendered title-cased with underscores turned into
+    spaces so the UI still has *something* to render. The empty / falsy id
+    falls back to the OSS label.
+    """
+    t = (tier or "").strip().lower()
+    if not t:
+        return TIER_LABELS[TIER_OSS]
+    label = TIER_LABELS.get(t)
+    if label is not None:
+        return label
+    return t.replace("_", " ").title()
+
+
+def tier_rank(tier: str) -> int:
+    """Comparable rank for ``tier`` (higher = unlocks more). Returns ``-1`` for
+    unknown tiers. See :data:`_TIER_RANK` for the canonical numbering."""
+    return _TIER_RANK.get((tier or "").strip().lower(), -1)
+
+
+def min_tier_for_feature(feature: str) -> str | None:
+    """Return the cheapest *purchasable* tier id that grants ``feature``.
+
+    Free features resolve to :data:`TIER_OSS`. Unknown / empty ids return
+    ``None`` so a caller can distinguish "free" from "unknown" without a
+    separate membership check. :data:`TIER_TRIAL` is intentionally excluded:
+    it is a promotional grant, not a plan a customer can select from a price
+    page. Never raises.
+    """
+    f = (feature or "").strip().lower()
+    if not f:
+        return None
+    if f in FREE_FEATURES:
+        return TIER_OSS
+    for tier in _PURCHASABLE_TIERS:
+        if tier in (TIER_OSS, TIER_CLOUD_FREE):
+            continue
+        if f in _TIER_FEATURES.get(tier, frozenset()):
+            return tier
+    return None
+
+
+def min_tier_for_runtime(runtime: str) -> str | None:
+    """Return the cheapest *purchasable* tier id that grants ``runtime``.
+
+    Free runtimes resolve to :data:`TIER_OSS`. Any runtime in
+    :data:`PAID_RUNTIMES` resolves to :data:`TIER_CLOUD_STARTER` (all paid
+    runtimes unlock together via the Starter ``multi_runtime`` grant).
+    Unknown / empty ids return ``None``. Never raises.
+    """
+    rt = (runtime or "").strip().lower()
+    if not rt:
+        return None
+    if rt in FREE_RUNTIMES:
+        return TIER_OSS
+    if rt in PAID_RUNTIMES:
+        return TIER_CLOUD_STARTER
+    return None
 
 
 def runtime_catalog() -> list[dict]:

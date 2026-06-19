@@ -6,8 +6,11 @@ runtimes/features to surface (and, once enforcement is live, which to render
 locked behind an upgrade CTA). Backed by :mod:`clawmetry.entitlements`, which
 is the single source of truth — handlers never re-derive tier logic here.
 
-  GET /api/entitlement — the current Entitlement as JSON.
-  GET /api/runtimes    — the full runtime catalog with locked/free flags.
+  GET /api/entitlement                — the current Entitlement as JSON.
+  GET /api/entitlement/required-tier  — minimum purchasable tier that unlocks a
+                                        ``feature=<id>`` or ``runtime=<id>``.
+  GET /api/runtimes                   — the full runtime catalog with
+                                        locked/free flags.
 
 Side-effect-free and never-raise, so it is safe to classify ``oss-passthrough``
 on the cloud side: when no license/cloud plan is present it returns a graceful
@@ -40,6 +43,8 @@ def api_entitlement():
         return jsonify(
             {
                 "tier": "oss",
+                "tier_label": "OSS",
+                "tier_rank": 0,
                 "source": "oss",
                 "node_limit": 1,
                 "expiry": None,
@@ -49,6 +54,88 @@ def api_entitlement():
                 "enforced": False,
                 "runtimes": ["nemoclaw", "openclaw"],
                 "features": [],
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/required-tier")
+def api_entitlement_required_tier():
+    """Resolve the minimum *purchasable* tier that unlocks a given feature or
+    runtime. Drives the lock-affordance copy ("Available in Starter" / "Available
+    in Pro") so the dashboard never re-derives the per-feature tier bucket in
+    JavaScript.
+
+    Query: exactly one of ``feature=<id>`` or ``runtime=<id>``.
+
+    Returns 200 with::
+
+        {
+          "key":                 "<id>",
+          "kind":                "feature" | "runtime",
+          "required_tier":       "<tier>" | null,
+          "required_tier_label": "<Display>" | null,
+          "required_tier_rank":  int,                 # -1 when unknown
+          "current_tier":        "<tier>",
+          "current_tier_rank":   int,
+          "upgrade_required":    bool,                # required rank > current rank
+          "allowed":             bool                 # resolved allows_* answer
+        }
+
+    Returns 400 when neither query param is supplied or both are given. Never
+    5xx — any internal failure returns the never-raise grace shape so a flaky
+    entitlement read can never break a paywall tooltip render.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        feature = (request.args.get("feature") or "").strip().lower()
+        runtime = (request.args.get("runtime") or "").strip().lower()
+        if not feature and not runtime:
+            return jsonify({"error": "supply either feature=<id> or runtime=<id>"}), 400
+        if feature and runtime:
+            return jsonify({"error": "supply only one of feature= or runtime="}), 400
+        ent = _ent.get_entitlement()
+        if feature:
+            key, kind = feature, "feature"
+            required = _ent.min_tier_for_feature(feature)
+            allowed = ent.allows_feature(feature)
+        else:
+            key, kind = runtime, "runtime"
+            required = _ent.min_tier_for_runtime(runtime)
+            allowed = ent.allows_runtime(runtime)
+        cur_rank = _ent.tier_rank(ent.tier)
+        req_rank = _ent.tier_rank(required) if required else -1
+        required_label = _ent.tier_label(required) if required else None
+        return jsonify(
+            {
+                "key": key,
+                "kind": kind,
+                "required_tier": required,
+                "required_tier_label": required_label,
+                "required_tier_rank": req_rank,
+                "current_tier": ent.tier,
+                "current_tier_rank": cur_rank,
+                "upgrade_required": bool(required) and req_rank > cur_rank,
+                "allowed": allowed,
+            }
+        )
+    except Exception as exc:  # never crash the dashboard over a gate read
+        logger.warning("api_entitlement_required_tier: error: %s", exc)
+        feature = (request.args.get("feature") or "").strip().lower()
+        runtime = (request.args.get("runtime") or "").strip().lower()
+        key = feature or runtime
+        kind = "feature" if feature else ("runtime" if runtime else "")
+        return jsonify(
+            {
+                "key": key,
+                "kind": kind,
+                "required_tier": None,
+                "required_tier_label": None,
+                "required_tier_rank": -1,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "upgrade_required": False,
+                "allowed": True,
             }
         )
 
