@@ -1021,6 +1021,86 @@ def min_tier_for_runtime(runtime: str) -> str | None:
     return None
 
 
+def min_tier_for_channel_count(count: int) -> str | None:
+    """Return the cheapest *purchasable* tier id whose channel-adapter cap fits
+    ``count`` configured channels. Closes the symmetry gap with
+    :func:`min_tier_for_feature` / :func:`min_tier_for_runtime` so the lock
+    affordance on the channels surface ("you have 5 channels -- Available in
+    Starter") reads from the same single source of truth.
+
+    Walks :data:`_PURCHASABLE_TIERS` (cheapest -> most capable, trial excluded
+    -- it is a promotional grant, not a plan a customer can pick from a price
+    page) and returns the first tier whose ``_TIER_CHANNEL_LIMIT`` value is
+    either ``None`` (unlimited) or ``>= count``.
+
+    Semantics:
+
+    * ``count <= 0`` -- collapses to :data:`TIER_OSS`. A zero/negative count is
+      either "not measured yet" or trivially satisfied; either way the free
+      floor covers it (matches :meth:`Entitlement.allows_channel_count`'s
+      grace-on-zero contract).
+    * Non-int ``count`` -- returns ``None`` so a caller can distinguish "free"
+      from "couldn't parse". Never raises.
+    * Otherwise -- the first tier whose cap admits ``count``, falling back to
+      :data:`TIER_ENTERPRISE` if every finite cap is exceeded (Enterprise is
+      unlimited, so this is always a safe ceiling).
+    """
+    try:
+        n = int(count)
+    except (TypeError, ValueError):
+        return None
+    if n <= 0:
+        return TIER_OSS
+    for tier in _PURCHASABLE_TIERS:
+        cap = _TIER_CHANNEL_LIMIT.get(tier, _FREE_CHANNEL_LIMIT)
+        if cap is None or n <= cap:
+            return tier
+    return TIER_ENTERPRISE
+
+
+def min_tier_for_retention_window(days: int | None) -> str | None:
+    """Return the cheapest *purchasable* tier id whose event-retention cap fits
+    a ``days`` history window. Companion to :func:`min_tier_for_channel_count`
+    so the history-range toggle ("7 / 30 / 90 / all") can render "Available in
+    <tier>" copy off the same canonical reverse lookup the other gates use.
+
+    Walks :data:`_PURCHASABLE_TIERS` (cheapest -> most capable, trial excluded)
+    and returns the first tier whose ``_TIER_RETENTION_DAYS`` value either
+    matches the unlimited request (``days is None``) or admits the finite
+    window.
+
+    Semantics:
+
+    * ``days is None`` (caller asked for unlimited history) -- returns the
+      first tier whose cap is ``None``, i.e. :data:`TIER_ENTERPRISE`. Mirrors
+      :meth:`Entitlement.allows_retention_window` which only grants ``None``
+      to Enterprise.
+    * ``days <= 0`` -- collapses to :data:`TIER_OSS`. Asking for zero history
+      is trivially satisfied by the free floor (same posture as
+      :meth:`Entitlement.allows_retention_window`).
+    * Non-int ``days`` (other than the explicit ``None``) -- returns ``None``
+      so a caller can distinguish "free" from "couldn't parse". Never raises.
+    * Otherwise -- the first tier whose cap admits ``days``, falling back to
+      :data:`TIER_ENTERPRISE` if every finite cap is exceeded.
+    """
+    if days is None:
+        for tier in _PURCHASABLE_TIERS:
+            if _TIER_RETENTION_DAYS.get(tier, 7) is None:
+                return tier
+        return TIER_ENTERPRISE
+    try:
+        n = int(days)
+    except (TypeError, ValueError):
+        return None
+    if n <= 0:
+        return TIER_OSS
+    for tier in _PURCHASABLE_TIERS:
+        cap = _TIER_RETENTION_DAYS.get(tier, 7)
+        if cap is None or n <= cap:
+            return tier
+    return TIER_ENTERPRISE
+
+
 def lock_reason(item: str, *, kind: str | None = None) -> str | None:
     try:
         return get_entitlement().lock_reason(item, kind=kind)
