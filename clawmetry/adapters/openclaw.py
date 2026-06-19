@@ -1051,7 +1051,7 @@ class OpenClawAdapter(AgentAdapter):
             Capability.CHANNELS,
         }
 
-    # ── Span reconstruction (issue #1010 / Trace 4) ───────────────────────────────────────
+    # ── Span reconstruction (issue #1010 / Trace 4) ───────────────────────────────────────────────
 
     @staticmethod
     def _span_id(*parts: str) -> str:
