@@ -10870,6 +10870,7 @@ window._traceActiveSpanId = null;
 window._traceActiveTab = 'details';
 window._traceSpanCache = {};
 window._traceSpanCopyBuf = '';
+window._traceCollapsed = {};
 
 var _TRACE_KIND_COLORS = {
   agent: '#ec4899', prompt: '#3b82f6', llm: '#8b5cf6', tool: '#10b981',
@@ -11206,6 +11207,7 @@ async function viewTrace(traceId) {
   if (pane) pane.innerHTML = '<div style="color:var(--text-muted);font-size:12px;text-align:center;padding:32px 14px;">Select a span on the left to see its <b>' + t("app.chat", null, "Chat") + '</b>, <b>' + t("app.inputs", null, "Inputs") + '</b>, <b>' + t("app.outputs", null, "Outputs") + '</b>, <b>' + t("app.attributes", null, "Attributes") + '</b>, and <b>' + t("app.events", null, "Events") + '</b>.</div>';
   window._traceActiveSpanId = null;
   window._traceSpanCache = {};
+  window._traceCollapsed = {};
   var data;
   try {
     data = await fetch('/api/trace/' + encodeURIComponent(traceId)).then(function(r){ return r.json(); });
@@ -11306,6 +11308,10 @@ function _traceRenderTreeGantt(spans, roots) {
     ? roots
     : spans.filter(function(s){ return !s.parent_span_id; }).map(function(s){ return s.span_id; });
 
+  if (spans.length > 500 && Object.keys(window._traceCollapsed).length === 0) {
+    Object.keys(children).forEach(function(k){ window._traceCollapsed[k] = true; });
+  }
+
   // Time-axis labels: 0s, q1, q2, q3, total. Aligned to the same flex column
   // the bars live in so the visual ticks line up exactly.
   var axisLabels = [0, 0.25, 0.5, 0.75, 1].map(function(f) {
@@ -11344,12 +11350,18 @@ function _traceRenderTreeGantt(spans, roots) {
     var tok = _traceTokens(s);
     var tokStr = tok ? (tok / 1000).toFixed(1) + 'K' : '';
     var bg = active ? 'rgba(99,102,241,0.12)' : (isErr ? 'rgba(239,68,68,0.06)' : '');
+    var hasKids = !!(children[s.span_id] || []).length;
+    var collapsed = !!window._traceCollapsed[s.span_id];
+    var toggleBtn = hasKids
+      ? '<span onclick="_traceGanttToggle(\'' + escHtml(s.span_id) + '\',event)" data-toggle-for="' + escHtml(s.span_id) + '" style="width:14px;flex-shrink:0;text-align:center;cursor:pointer;color:var(--text-muted);user-select:none;" title="Toggle children">' + (collapsed ? '▶' : '▼') + '</span>'
+      : '<span style="width:14px;flex-shrink:0;"></span>';
     var h = '<div onclick="traceShowSpan(\'' + escHtml(s.span_id) + '\')" data-span-id="' + escHtml(s.span_id) + '" class="trace-row" '
       + 'style="display:flex;align-items:center;gap:8px;padding:5px 8px;cursor:pointer;border-radius:4px;background:' + bg + ';" '
       + 'onmouseover="if(!this.classList.contains(\'active\'))this.style.background=\'var(--bg-tertiary,#1e293b)\'" '
       + 'onmouseout="this.style.background=\'' + bg + '\'">'
       + '<span style="width:260px;flex-shrink:0;display:flex;align-items:center;gap:6px;min-width:0;">'
         + '<span style="padding-left:' + (depth * 14) + 'px;"></span>'
+        + toggleBtn
         + '<span style="width:9px;height:9px;border-radius:2px;background:' + color + ';flex-shrink:0;"></span>'
         + '<span style="flex-shrink:0;font-size:11px;width:14px;text-align:center;">' + _traceIcon(s) + '</span>'
         + '<span style="flex:1;min-width:0;font-size:12px;color:' + (isErr ? '#f87171' : 'var(--text-primary)') + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + escHtml(s.name) + '">' + escHtml(s.name) + (isErr ? ' ⚠' : '') + '</span>'
@@ -11361,7 +11373,11 @@ function _traceRenderTreeGantt(spans, roots) {
       + '<span style="width:54px;flex-shrink:0;text-align:right;font-size:11px;color:var(--text-muted);">' + tokStr + '</span>'
       + '<span style="width:60px;flex-shrink:0;text-align:right;font-size:11px;color:var(--text-muted);">' + costStr + '</span>'
       + '</div>';
-    (children[s.span_id] || []).forEach(function(c){ h += row(c, depth + 1); });
+    if (hasKids) {
+      var kidHtml = '';
+      (children[s.span_id] || []).forEach(function(c){ kidHtml += row(c, depth + 1); });
+      h += '<div data-children-of="' + escHtml(s.span_id) + '" style="display:' + (collapsed ? 'none' : '') + ';">' + kidHtml + '</div>';
+    }
     return h;
   }
   var body = '';
@@ -11427,6 +11443,13 @@ function _traceRenderTree(spans, roots) {
   (roots && roots.length ? roots : spans.filter(function(s){return !s.parent_span_id;}).map(function(s){return s.span_id;}))
     .forEach(function(rid){ if (byId[rid]) html += row(byId[rid], 0); });
   el.innerHTML = html || '<div style="padding:18px;color:var(--text-muted);">No span tree.</div>';
+}
+
+function _traceGanttToggle(spanId, ev) {
+  ev.stopPropagation();
+  window._traceCollapsed[spanId] = !window._traceCollapsed[spanId];
+  var d = window._traceData;
+  if (d) _traceRenderTreeGantt(d.spans || [], d.root_span_ids || []);
 }
 
 function _traceRenderGraph(graph) {
