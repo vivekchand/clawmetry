@@ -1344,6 +1344,41 @@ class OpenClawAdapter(AgentAdapter):
                     "attributes": comp_attrs,
                 })
 
+            elif t == "retry":
+                # Harness fix #92191/#93073 emits a retry event when the agent
+                # retries a thinking-only or empty post-tool turn, carrying
+                # retry reason and turn-kind metadata. Without this branch the
+                # span builder drops retried turns silently, so the Tracing tab
+                # shows a gap wherever a retry occurred (#3198).
+                retry_reason = (
+                    obj.get("reason") or obj.get("retry_reason") or obj.get("retryReason") or ""
+                )
+                turn_kind = (
+                    obj.get("turn_kind") or obj.get("turnKind") or ""
+                )
+                retry_count = obj.get("count") or obj.get("retry_count") or obj.get("retryCount")
+                retry_attrs: dict = {"event.kind": "retry"}
+                if isinstance(retry_reason, str) and retry_reason.strip():
+                    retry_attrs["retry.reason"] = retry_reason.strip()
+                if isinstance(turn_kind, str) and turn_kind.strip():
+                    retry_attrs["retry.turn_kind"] = turn_kind.strip()
+                if retry_count is not None:
+                    try:
+                        retry_attrs["retry.count"] = int(retry_count)
+                    except (TypeError, ValueError):
+                        pass
+                spans.append({
+                    "span_id": _sid("retry", session_id, str(raw_ts)),
+                    "trace_id": trace_id,
+                    "parent_span_id": session_span_id,
+                    "name": "retry",
+                    "kind": "INTERNAL",
+                    "start_ts": ts,
+                    "session_id": session_id,
+                    "agent_type": "openclaw",
+                    "attributes": retry_attrs,
+                })
+
         return spans
 
     def reconstruct_spans(self, jsonl_path: str) -> list:
