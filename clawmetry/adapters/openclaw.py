@@ -151,12 +151,52 @@ def _model_router_fingerprint() -> dict:
         return {}
 
 
+def _resolve_ollama_host() -> str:
+    """Return the active Ollama base URL from env vars or the default.
+
+    Mirrors getOllamaModelOptions() priority in nemoclaw/dist/lib/inference/local.js:
+    OLLAMA_HOST_DOCKER_INTERNAL → OLLAMA_LOCALHOST → http://localhost:11434.
+    """
+    for var in ("OLLAMA_HOST_DOCKER_INTERNAL", "OLLAMA_LOCALHOST"):
+        val = os.environ.get(var, "").strip()
+        if val:
+            return val if val.startswith("http") else f"http://{val}"
+    return "http://localhost:11434"
+
+
+def _list_ollama_models(host: str) -> list:
+    """Return available Ollama model names. Never raises; returns [] on failure.
+
+    Tries GET {host}/api/tags first (same as the harness HTTP path), then falls
+    back to `ollama list` CLI (same fallback the harness uses). Both failures
+    are silenced so a missing/offline Ollama doesn't error detection.
+    """
+    import urllib.request
+    try:
+        url = host.rstrip("/") + "/api/tags"
+        with urllib.request.urlopen(url, timeout=2) as resp:  # noqa: S310
+            data = json.loads(resp.read())
+            return [m["name"] for m in data.get("models", []) if m.get("name")]
+    except Exception:
+        pass
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["ollama", "list"], capture_output=True, text=True, timeout=5
+        )
+        lines = result.stdout.strip().splitlines()
+        return [ln.split()[0] for ln in lines[1:] if ln.split()]
+    except Exception:
+        return []
+
+
 def _sandbox_inference_configs() -> list:
     """Read per-sandbox inference config from ~/.nemoclaw/sandboxes.json.
 
     Mirrors getSandboxInferenceConfig() (nemoclaw/src/lib/inference/config.ts)
     to surface providerKey / primaryModelRef / inferenceBaseUrl / inferenceApi /
-    inferenceCompat on DetectResult.meta (gap #2796). The identical derivation
+    inferenceCompat on DetectResult.meta (gap #2796). Ollama-backed sandboxes
+    also receive ollamaHost + ollamaModels (gap #3201). The identical derivation
     lives in sync._read_nemoclaw_sandbox_routing (#2684); this helper makes it
     available in the adapter layer without importing the heavy sync module.
     Never raises -- returns [] on plain OpenClaw (no sandboxes.json).
@@ -198,6 +238,22 @@ def _sandbox_inference_configs() -> list:
                 base_url = "https://inference.local"
                 api = "anthropic-messages"
                 compat = "anthropic"
+            elif provider == "ollama":
+                ollama_host = _resolve_ollama_host()
+                out.append({
+                    "sandbox": name,
+                    "isDefault": bool(default_sb and name == default_sb),
+                    "provider": provider,
+                    "model": model,
+                    "providerKey": "ollama",
+                    "primaryModelRef": f"ollama/{model}" if model else "",
+                    "inferenceBaseUrl": ollama_host,
+                    "inferenceApi": api,
+                    "inferenceCompat": "openai",
+                    "ollamaHost": ollama_host,
+                    "ollamaModels": _list_ollama_models(ollama_host),
+                })
+                continue
             else:
                 provider_key = _MANAGED
                 primary = f"{_MANAGED}/{model}" if model else ""
