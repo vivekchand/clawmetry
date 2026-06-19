@@ -49,21 +49,25 @@ def _required_tier(feature_key: str) -> str | None:
     free features and unknown keys. Used to enrich the 402 body so the UI
     can render the right upgrade CTA without re-deriving tier logic in JS.
     Never raises: any lookup error returns ``None``.
+
+    Thin wrapper over :func:`entitlements.min_tier_for_feature` (the
+    canonical purchasable-tier resolver, also used by ``min_tier_for`` and
+    ``/api/entitlement/required-tier``) so the feature->tier mapping lives
+    in exactly one place. The companion :func:`_required_tier_for_runtime`
+    already delegates to :func:`entitlements.min_tier_for_runtime`; this
+    closes the matching gap on the feature side. ``TIER_OSS`` collapses to
+    ``None`` because free features have no upgrade target -- the UI uses
+    ``None`` to short-circuit the CTA render.
     """
     try:
         from clawmetry import entitlements as _ent
 
-        if feature_key in _ent.FREE_FEATURES:
+        tier = _ent.min_tier_for_feature(feature_key)
+        if tier is None or tier == _ent.TIER_OSS:
             return None
-        if feature_key in _ent.STARTER_FEATURES:
-            return _ent.TIER_CLOUD_STARTER
-        if feature_key in _ent.PRO_ONLY_FEATURES:
-            return _ent.TIER_CLOUD_PRO
-        if feature_key in _ent.ENTERPRISE_FEATURES:
-            return _ent.TIER_ENTERPRISE
+        return tier
     except Exception:
         return None
-    return None
 
 
 def gate(feature_key: str) -> Callable:

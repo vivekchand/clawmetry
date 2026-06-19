@@ -114,25 +114,30 @@ def upgrade_required_body(
 def _min_tier_for_feature(ent_module, feature_key: str) -> str | None:
     """Map ``feature_key`` to the cheapest purchasable tier id that unlocks it.
 
-    Uses the catalogue sets that ``clawmetry/entitlements.py`` already
-    exports (``STARTER_FEATURES``, ``PRO_ONLY_FEATURES``,
-    ``ENTERPRISE_FEATURES``). A free or unknown key returns ``None``: free
-    features don't have an upgrade target, and an unknown key may be a
-    clawmetry-pro plugin's private id we don't have in the OSS catalogue.
+    Thin wrapper over :func:`entitlements.min_tier_for_feature` -- the
+    canonical purchasable-tier resolver also used by ``Entitlement.min_tier_for``,
+    ``/api/entitlement/required-tier`` and :func:`clawmetry._gate._required_tier`
+    -- so the feature->tier mapping lives in exactly one place and the OSS-stub
+    402 body can never drift from the ``@gate`` 402 body. ``TIER_OSS`` (returned
+    for free features) collapses to ``None`` so the body's ``required_tier`` is
+    ``None`` for a free key and the UI short-circuits the upgrade CTA, matching
+    the prior in-module if-tree exactly.
 
-    Kept private to this module so it doesn't compete with a future
-    catalogue-level helper in ``entitlements`` (and so the body builder
-    stays self-contained for OSS stubs).
+    Catalogue-set membership is read via ``getattr`` defaults on
+    :func:`min_tier_for_feature` indirectly: a stubbed-out ``ent_module``
+    without the canonical helper falls back to ``None`` via the swallowed
+    ``AttributeError`` -- the body builder's outer try/except still degrades
+    cleanly to ``required_tier=None``.
     """
     key = (feature_key or "").strip()
     if not key:
         return None
-    if key in getattr(ent_module, "FREE_FEATURES", frozenset()):
+    resolver = getattr(ent_module, "min_tier_for_feature", None)
+    if resolver is None:
         return None
-    if key in getattr(ent_module, "STARTER_FEATURES", frozenset()):
-        return getattr(ent_module, "TIER_CLOUD_STARTER", None)
-    if key in getattr(ent_module, "PRO_ONLY_FEATURES", frozenset()):
-        return getattr(ent_module, "TIER_CLOUD_PRO", None)
-    if key in getattr(ent_module, "ENTERPRISE_FEATURES", frozenset()):
-        return getattr(ent_module, "TIER_ENTERPRISE", None)
-    return None
+    tier = resolver(key)
+    if tier is None:
+        return None
+    if tier == getattr(ent_module, "TIER_OSS", "oss"):
+        return None
+    return tier
