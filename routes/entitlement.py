@@ -16,7 +16,12 @@ is the single source of truth -- handlers never re-derive tier logic here.
   GET  /api/entitlement/required-tier -- resolve the minimum purchasable tier
                                          for a feature= or runtime= key.
   GET  /api/entitlement/lock-reason   -- human-readable explanation of why a
-                                         feature= or runtime= key is locked.
+                                         feature= or runtime= key is locked,
+                                         carrying the structured
+                                         ``required_tier`` payload alongside
+                                         the message so a paywall tooltip can
+                                         render "Locked: <reason>. [Upgrade to
+                                         <X>]" in one round-trip.
   GET  /api/entitlement/upgrade-diff  -- features + runtimes a target tier
                                          would add on top of the current ent.
   GET  /api/entitlement/downgrade-diff -- features + runtimes a target tier
@@ -213,10 +218,15 @@ def api_entitlement_lock_reason():
         if feature:
             key, kind = feature, "feature"
             allowed = ent.allows_feature(feature)
+            required = _ent.min_tier_for_feature(feature)
         else:
             key, kind = runtime, "runtime"
             allowed = ent.allows_runtime(runtime)
+            required = _ent.min_tier_for_runtime(runtime)
         reason = ent.lock_reason(key, kind=kind)
+        cur_rank = _ent.tier_rank(ent.tier)
+        req_rank = _ent.tier_rank(required) if required else -1
+        required_label = _ent.tier_label(required) if required else None
         return jsonify(
             {
                 "key": key,
@@ -224,6 +234,12 @@ def api_entitlement_lock_reason():
                 "reason": reason,
                 "locked": reason is not None,
                 "allowed": allowed,
+                "required_tier": required,
+                "required_tier_label": required_label,
+                "required_tier_rank": req_rank,
+                "current_tier": ent.tier,
+                "current_tier_rank": cur_rank,
+                "upgrade_required": bool(required) and req_rank > cur_rank,
             }
         )
     except Exception as exc:
@@ -243,6 +259,12 @@ def api_entitlement_lock_reason():
                 "reason": None,
                 "locked": False,
                 "allowed": True,
+                "required_tier": None,
+                "required_tier_label": None,
+                "required_tier_rank": -1,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "upgrade_required": False,
             }
         )
 
