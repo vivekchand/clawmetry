@@ -364,6 +364,44 @@ def enforce_at_epoch() -> float | None:
         return None
 
 
+def _capacity_transition(before: int | None, after: int | None) -> dict:
+    """Encode one capacity-axis transition between two tiers.
+
+    ``None`` is the unlimited sentinel on either side. ``delta`` is
+    ``after - before`` only when both ends are finite; ``None`` whenever
+    either side is unlimited. ``unlocked`` flips True when a finite cap
+    goes unlimited (the "now unlimited" CTA copy); ``locked`` flips True
+    when an unlimited cap becomes finite (the cancellation-warning copy).
+    The pair is mutually exclusive, so callers can pick either side
+    without having to infer direction from ``delta``'s sign.
+    """
+    try:
+        unlocked = before is not None and after is None
+        locked = before is None and after is not None
+        if before is None or after is None:
+            delta: int | None = None
+        else:
+            try:
+                delta = int(after) - int(before)
+            except (TypeError, ValueError):
+                delta = None
+        return {
+            "before": before,
+            "after": after,
+            "delta": delta,
+            "unlocked": unlocked,
+            "locked": locked,
+        }
+    except Exception:
+        return {
+            "before": before,
+            "after": after,
+            "delta": None,
+            "unlocked": False,
+            "locked": False,
+        }
+
+
 @dataclass(frozen=True)
 class Entitlement:
     """Resolved entitlement for this install. Immutable; rebuild via
@@ -503,6 +541,76 @@ class Entitlement:
             return cluster[0]
         except Exception as exc:
             logger.warning("entitlements: previous_purchasable_tier failed: %s", exc)
+            return None
+
+    def capacity_diff(self, target_tier: str) -> dict:
+        """Per-axis capacity transition from this entitlement to ``target_tier``.
+
+        Companion to :meth:`upgrade_diff` / :meth:`downgrade_diff`: those
+        enumerate feature / runtime adds-or-losses; this one covers the three
+        capacity axes (channels, retention, nodes) that the CTA card needs to
+        say *"channel cap 3 -> unlimited"* alongside *"unlocks claude_code"*.
+
+        Direction-agnostic: each axis carries a ``before`` / ``after`` /
+        ``delta`` triple plus mutually-exclusive ``unlocked`` / ``locked``
+        booleans, so the same payload renders for upgrade and downgrade CTAs.
+        ``None`` on either side is the unlimited sentinel; ``delta`` is only
+        finite when both sides are.
+
+        Unknown / empty ``target_tier`` returns the fallback shape (target
+        echoed, every axis ``None``). Never raises.
+        """
+        try:
+            tt = (target_tier or "").strip().lower()
+            if tt not in _TIER_FEATURES:
+                return {
+                    "target": tt,
+                    "channel_limit": None,
+                    "retention_days": None,
+                    "node_limit": None,
+                }
+            return {
+                "target": tt,
+                "channel_limit": _capacity_transition(
+                    self.channel_limit(),
+                    _TIER_CHANNEL_LIMIT.get(tt, _FREE_CHANNEL_LIMIT),
+                ),
+                "retention_days": _capacity_transition(
+                    self.event_retention_days(),
+                    _TIER_RETENTION_DAYS.get(tt, 7),
+                ),
+                "node_limit": _capacity_transition(
+                    self.node_limit,
+                    _TIER_NODE_LIMIT.get(tt, _FREE_NODE_LIMIT),
+                ),
+            }
+        except Exception as exc:
+            logger.warning("entitlements: capacity_diff failed: %s", exc)
+            return {
+                "target": target_tier or "",
+                "channel_limit": None,
+                "retention_days": None,
+                "node_limit": None,
+            }
+
+    def next_tier_capacity_diff(self) -> dict | None:
+        try:
+            target = self.next_purchasable_tier()
+            if target is None:
+                return None
+            return self.capacity_diff(target)
+        except Exception as exc:
+            logger.warning("entitlements: next_tier_capacity_diff failed: %s", exc)
+            return None
+
+    def previous_tier_capacity_diff(self) -> dict | None:
+        try:
+            target = self.previous_purchasable_tier()
+            if target is None:
+                return None
+            return self.capacity_diff(target)
+        except Exception as exc:
+            logger.warning("entitlements: previous_tier_capacity_diff failed: %s", exc)
             return None
 
     def upgrade_diff(self, target_tier: str) -> dict:
@@ -815,6 +923,8 @@ class Entitlement:
             ),
             "next_tier_diff": self.next_tier_diff(),
             "prev_tier_diff": self.previous_tier_diff(),
+            "next_tier_capacity_diff": self.next_tier_capacity_diff(),
+            "prev_tier_capacity_diff": self.previous_tier_capacity_diff(),
         }
 
 
@@ -960,6 +1070,35 @@ def previous_tier_diff() -> dict | None:
         return get_entitlement().previous_tier_diff()
     except Exception as exc:
         logger.warning("entitlements: previous_tier_diff (module) failed: %s", exc)
+        return None
+
+
+def capacity_diff(target_tier: str) -> dict:
+    try:
+        return get_entitlement().capacity_diff(target_tier)
+    except Exception as exc:
+        logger.warning("entitlements: capacity_diff (module) failed: %s", exc)
+        return {
+            "target": target_tier or "",
+            "channel_limit": None,
+            "retention_days": None,
+            "node_limit": None,
+        }
+
+
+def next_tier_capacity_diff() -> dict | None:
+    try:
+        return get_entitlement().next_tier_capacity_diff()
+    except Exception as exc:
+        logger.warning("entitlements: next_tier_capacity_diff (module) failed: %s", exc)
+        return None
+
+
+def previous_tier_capacity_diff() -> dict | None:
+    try:
+        return get_entitlement().previous_tier_capacity_diff()
+    except Exception as exc:
+        logger.warning("entitlements: previous_tier_capacity_diff (module) failed: %s", exc)
         return None
 
 
