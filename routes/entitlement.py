@@ -14,7 +14,13 @@ is the single source of truth -- handlers never re-derive tier logic here.
   POST /api/entitlement/refresh      -- drop the cache and return the freshly
                                         re-resolved Entitlement.
   GET  /api/entitlement/required-tier -- resolve the minimum purchasable tier
-                                         for a feature= or runtime= key.
+                                         for a feature=, runtime=, channels=,
+                                         or retention_days= key. The capacity
+                                         axes (channels / retention_days) wrap
+                                         the matching ``min_tier_for_*`` Python
+                                         helpers so the same endpoint answers
+                                         all four "what tier do I need" axes
+                                         off one URL.
   GET  /api/entitlement/lock-reason   -- human-readable explanation of why a
                                          feature= or runtime= key is locked,
                                          carrying the structured
@@ -146,6 +152,32 @@ def api_entitlement_downgrade_diff():
         )
 
 
+_CAPACITY_PARAMS = ("channels", "retention_days")
+
+
+def _parse_capacity_arg(name: str) -> tuple[bool, bool, int | None, str]:
+    """Parse a capacity query param.
+
+    Returns ``(present, parsed_ok, value, raw)``. ``present`` is True iff the
+    caller supplied the param at all (even with an empty value, so blank input
+    doesn't silently fall through to a feature/runtime branch). ``parsed_ok``
+    is False when the supplied value couldn't be coerced to ``int`` -- the
+    HTTP wrapper then short-circuits to ``required_tier=None`` instead of
+    handing ``None`` to the underlying helper (where, for retention, ``None``
+    is the *unlimited* sentinel and would mis-route to Enterprise).
+    """
+    raw = request.args.get(name)
+    if raw is None:
+        return False, False, None, ""
+    raw_stripped = raw.strip()
+    if not raw_stripped:
+        return True, False, None, raw_stripped
+    try:
+        return True, True, int(raw_stripped), raw_stripped
+    except (TypeError, ValueError):
+        return True, False, None, raw_stripped
+
+
 @bp_entitlement.route("/api/entitlement/required-tier")
 def api_entitlement_required_tier():
     try:
@@ -153,19 +185,84 @@ def api_entitlement_required_tier():
 
         feature = (request.args.get("feature") or "").strip().lower()
         runtime = (request.args.get("runtime") or "").strip().lower()
-        if not feature and not runtime:
-            return jsonify({"error": "supply either feature=<id> or runtime=<id>"}), 400
-        if feature and runtime:
-            return jsonify({"error": "supply only one of feature= or runtime="}), 400
+        (
+            channels_present,
+            channels_ok,
+            channels_n,
+            channels_raw,
+        ) = _parse_capacity_arg("channels")
+        (
+            retention_present,
+            retention_ok,
+            retention_n,
+            retention_raw,
+        ) = _parse_capacity_arg("retention_days")
+
+        supplied = [
+            bool(feature),
+            bool(runtime),
+            channels_present,
+            retention_present,
+        ]
+        n_supplied = sum(1 for s in supplied if s)
+        if n_supplied == 0:
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply exactly one of feature=<id>, runtime=<id>, "
+                            "channels=<int>, or retention_days=<int>"
+                        )
+                    }
+                ),
+                400,
+            )
+        if n_supplied > 1:
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply only one of feature=, runtime=, channels=, "
+                            "or retention_days="
+                        )
+                    }
+                ),
+                400,
+            )
+
+        ent = _ent.get_entitlement()
         if feature:
             key, kind = feature, "feature"
             required = _ent.min_tier_for_feature(feature)
-            allowed = _ent.get_entitlement().allows_feature(feature)
-        else:
+            allowed = ent.allows_feature(feature)
+        elif runtime:
             key, kind = runtime, "runtime"
             required = _ent.min_tier_for_runtime(runtime)
-            allowed = _ent.get_entitlement().allows_runtime(runtime)
-        ent = _ent.get_entitlement()
+            allowed = ent.allows_runtime(runtime)
+        elif channels_present:
+            key, kind = channels_raw, "channels"
+            if channels_ok:
+                required = _ent.min_tier_for_channel_count(channels_n)
+                allowed = ent.allows_channel_count(channels_n)
+            else:
+                # Blank / non-int: never-crash short-circuit. ``required_tier``
+                # is None so the UI knows there's no upgrade target to render,
+                # and ``allowed`` defaults to True (same posture as
+                # ``allows_channel_count`` swallowing a non-int to True).
+                required = None
+                allowed = True
+        else:
+            key, kind = retention_raw, "retention_days"
+            if retention_ok:
+                required = _ent.min_tier_for_retention_window(retention_n)
+                allowed = ent.allows_retention_window(retention_n)
+            else:
+                # Blank / non-int: same posture as the channels branch.
+                # Important: don't forward ``None`` to
+                # :func:`min_tier_for_retention_window` -- there ``None`` is
+                # the *unlimited* sentinel and would mis-route to Enterprise.
+                required = None
+                allowed = True
         cur_rank = _ent.tier_rank(ent.tier)
         req_rank = _ent.tier_rank(required) if required else -1
         required_label = _ent.tier_label(required) if required else None
@@ -186,8 +283,18 @@ def api_entitlement_required_tier():
         logger.warning("api_entitlement_required_tier: error: %s", exc)
         feature = (request.args.get("feature") or "").strip().lower()
         runtime = (request.args.get("runtime") or "").strip().lower()
-        key = feature or runtime
-        kind = "feature" if feature else ("runtime" if runtime else "")
+        channels_raw = (request.args.get("channels") or "").strip()
+        retention_raw = (request.args.get("retention_days") or "").strip()
+        if feature:
+            key, kind = feature, "feature"
+        elif runtime:
+            key, kind = runtime, "runtime"
+        elif channels_raw:
+            key, kind = channels_raw, "channels"
+        elif retention_raw:
+            key, kind = retention_raw, "retention_days"
+        else:
+            key, kind = "", ""
         return jsonify(
             {
                 "key": key,
