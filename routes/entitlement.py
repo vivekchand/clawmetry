@@ -160,6 +160,32 @@ def api_entitlement_downgrade_diff():
         )
 
 
+@bp_entitlement.route("/api/entitlement/capacity-diff")
+def api_entitlement_capacity_diff():
+    """``GET /api/entitlement/capacity-diff?target=<tier>`` -- per-axis
+    capacity transition (channels / retention / nodes) from the resolved
+    entitlement to ``target``. Companion to ``/upgrade-diff`` (feature +
+    runtime adds) and ``/downgrade-diff`` (feature + runtime losses). The
+    payload is direction-agnostic: each axis carries the same
+    ``{before, after, delta, unlocked, locked}`` triple so both the
+    upgrade-to and the cancellation-to CTAs read off one shape."""
+    try:
+        target = (request.args.get("target") or "").strip().lower()
+        from clawmetry import entitlements as _ent
+
+        return jsonify(_ent.capacity_diff(target))
+    except Exception as exc:
+        logger.warning("api_entitlement_capacity_diff: error: %s", exc)
+        return jsonify(
+            {
+                "target": (request.args.get("target") or "").strip().lower(),
+                "channel_limit": None,
+                "retention_days": None,
+                "node_limit": None,
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/preview")
 def api_entitlement_preview():
     """``GET /api/entitlement/preview?tier=<id>`` -- the full
