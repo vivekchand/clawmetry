@@ -40,6 +40,16 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                           upgrade-CTA card can show concrete
                                           numbers without per-tier derivation
                                           in JS.
+  GET  /api/entitlement/required-tier-batch -- plural sibling of
+                                          ``/required-tier``: takes
+                                          ``features=a,b,c`` and/or
+                                          ``runtimes=x,y,z`` (comma-separated)
+                                          and returns the cheapest tier
+                                          admitting *all* of them at once.
+                                          Lets a dashboard answer "I'm using
+                                          fleet + otel_export + sso -- what
+                                          tier covers everything?" in a single
+                                          round-trip.
   GET  /api/runtimes                  -- the full runtime catalog.
   GET  /api/tiers                     -- the full tier ladder with per-tier metadata.
 """
@@ -550,6 +560,108 @@ def api_entitlement_lock_reason():
                 "current_tier": "oss",
                 "current_tier_rank": 0,
                 "upgrade_required": False,
+            }
+        )
+
+
+def _parse_csv_arg(name: str) -> list[str]:
+    """Parse a comma-separated query arg into a normalised id list.
+
+    Empty / whitespace tokens are dropped; remaining tokens are lowercased and
+    deduplicated while preserving first-seen order so the response payload is
+    stable. ``features=otel_export,,sso,otel_export`` -> ``["otel_export", "sso"]``.
+    Never raises (a missing arg returns ``[]``).
+    """
+    raw = request.args.get(name, "") or ""
+    out: list[str] = []
+    seen: set[str] = set()
+    for token in raw.split(","):
+        t = token.strip().lower()
+        if not t or t in seen:
+            continue
+        seen.add(t)
+        out.append(t)
+    return out
+
+
+@bp_entitlement.route("/api/entitlement/required-tier-batch")
+def api_entitlement_required_tier_batch():
+    """``GET /api/entitlement/required-tier-batch?features=a,b,c&runtimes=x,y``
+    -- plural sibling of ``/api/entitlement/required-tier``.
+
+    Returns the cheapest *purchasable* tier admitting **all** supplied
+    features and runtimes at once: the most-constraining item across the
+    two sets wins. Wraps :func:`min_tier_for_features` /
+    :func:`min_tier_for_runtimes` so a dashboard surface that mixes axes
+    ("you are using fleet + otel_export + sso + claude_code -- Available
+    in Enterprise") gets the answer in one round-trip instead of N calls
+    + max-by-rank on the client.
+
+    At least one of ``features=`` / ``runtimes=`` must be supplied
+    (non-empty after CSV parsing). Comma-separated tokens; whitespace and
+    duplicates are normalised away; unknown ids contribute nothing (so a
+    typo does not silently mis-route to Enterprise, matching the singular
+    helpers' posture). Never 5xxs: the OSS-free shape is returned on any
+    resolver failure.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        features = _parse_csv_arg("features")
+        runtimes = _parse_csv_arg("runtimes")
+        if not features and not runtimes:
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply at least one of features=<csv> or "
+                            "runtimes=<csv>"
+                        )
+                    }
+                ),
+                400,
+            )
+
+        ent = _ent.get_entitlement()
+        feat_tier = _ent.min_tier_for_features(features) if features else None
+        runtime_tier = _ent.min_tier_for_runtimes(runtimes) if runtimes else None
+        candidates = [t for t in (feat_tier, runtime_tier) if t is not None]
+        required = max(candidates, key=_ent.tier_rank) if candidates else None
+
+        cur_rank = _ent.tier_rank(ent.tier)
+        req_rank = _ent.tier_rank(required) if required else -1
+        required_label = _ent.tier_label(required) if required else None
+
+        feat_allowed = all(ent.allows_feature(f) for f in features)
+        runtime_allowed = all(ent.allows_runtime(r) for r in runtimes)
+        allowed = feat_allowed and runtime_allowed
+
+        return jsonify(
+            {
+                "features": features,
+                "runtimes": runtimes,
+                "required_tier": required,
+                "required_tier_label": required_label,
+                "required_tier_rank": req_rank,
+                "current_tier": ent.tier,
+                "current_tier_rank": cur_rank,
+                "upgrade_required": bool(required) and req_rank > cur_rank,
+                "allowed": allowed,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_required_tier_batch: error: %s", exc)
+        return jsonify(
+            {
+                "features": _parse_csv_arg("features"),
+                "runtimes": _parse_csv_arg("runtimes"),
+                "required_tier": None,
+                "required_tier_label": None,
+                "required_tier_rank": -1,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "upgrade_required": False,
+                "allowed": True,
             }
         )
 
