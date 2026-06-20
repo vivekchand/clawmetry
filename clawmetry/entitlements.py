@@ -1142,6 +1142,71 @@ def preview(target_tier: str) -> dict | None:
         return None
 
 
+def tier_unlocks(target_tier: str) -> dict | None:
+    """Per-tier marginal unlocks: features + runtimes that first become
+    available *at* ``target_tier`` -- the set difference between this
+    tier's grant and the next-lower purchasable tier's grant.
+
+    Companion to :func:`preview` (cumulative state at a tier): where
+    ``preview`` answers "what would the resulting Entitlement *look like*",
+    ``tier_unlocks`` answers "what does this tier *first* unlock vs the
+    tier below it" -- the "what's new in Pro vs Starter" view a
+    pricing-page row or upgrade-CTA card uses.
+
+    The "tier below" is the highest-rank entry in :data:`_PURCHASABLE_TIERS`
+    whose rank is strictly less than ``target_tier``'s rank (trial is
+    excluded from purchasables, so a promotional grant never shows up as
+    the upgrade source). When ``target_tier`` sits at the floor (rank 0 --
+    :data:`TIER_OSS` / :data:`TIER_CLOUD_FREE`) ``previous_tier`` is
+    ``None`` and the marginal collapses to the full free grant
+    (``FREE_FEATURES`` / ``FREE_RUNTIMES``).
+
+    Returns ``None`` for an unknown tier id (including :data:`TIER_TRIAL`,
+    which is not purchasable) and never raises.
+    """
+    try:
+        tid = (target_tier or "").strip().lower()
+        if tid not in _PURCHASABLE_TIERS:
+            return None
+        target_rank = _TIER_RANK.get(tid, -1)
+        prev_id: str | None = None
+        prev_rank = -1
+        for cand in _PURCHASABLE_TIERS:
+            cand_rank = _TIER_RANK.get(cand, -1)
+            if 0 <= cand_rank < target_rank and cand_rank > prev_rank:
+                prev_id = cand
+                prev_rank = cand_rank
+        this_feats = FREE_FEATURES | _TIER_FEATURES.get(tid, frozenset())
+        this_runtimes = (
+            FREE_RUNTIMES | PAID_RUNTIMES
+            if tid in _TIER_PAID_RUNTIMES
+            else FREE_RUNTIMES
+        )
+        if prev_id is None:
+            prev_feats: frozenset = frozenset()
+            prev_runtimes: frozenset = frozenset()
+        else:
+            prev_feats = FREE_FEATURES | _TIER_FEATURES.get(prev_id, frozenset())
+            prev_runtimes = (
+                FREE_RUNTIMES | PAID_RUNTIMES
+                if prev_id in _TIER_PAID_RUNTIMES
+                else FREE_RUNTIMES
+            )
+        return {
+            "tier": tid,
+            "tier_label": tier_label(tid),
+            "tier_rank": tier_rank(tid),
+            "previous_tier": prev_id,
+            "previous_tier_label": tier_label(prev_id) if prev_id else None,
+            "previous_tier_rank": tier_rank(prev_id) if prev_id else None,
+            "features": sorted(this_feats - prev_feats),
+            "runtimes": sorted(this_runtimes - prev_runtimes),
+        }
+    except Exception as exc:
+        logger.warning("entitlements: tier_unlocks failed: %s", exc)
+        return None
+
+
 def resolution_diagnostic() -> dict:
     out: dict = {
         "license_path": _LICENSE_PATH,
