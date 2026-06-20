@@ -1407,6 +1407,81 @@ def min_tier_for_node_count(count: int) -> str | None:
     return TIER_ENTERPRISE
 
 
+def min_tier_for_features(features) -> str | None:
+    """Cheapest *purchasable* tier admitting **all** ``features`` at once.
+
+    Plural sibling of :func:`min_tier_for_feature`. A dashboard wiring "you
+    are using fleet + otel_export + sso -- Available in Enterprise" has to
+    resolve the most-constraining feature in the set; this helper folds the
+    per-item lookups + max-by-rank in one place so callers don't reinvent
+    the walk (and so all five capacity axes look symmetric from the caller's
+    side: feature/runtime singular + features/runtimes plural).
+
+    Semantics:
+
+    * Empty / ``None`` iterable -- returns ``None``. "I asked for nothing"
+      has no upgrade target, distinct from "I asked for free features"
+      (which returns :data:`TIER_OSS`). Same posture as the singular helper
+      returning ``None`` for empty input.
+    * Unknown items contribute nothing -- they are skipped, not treated as
+      a constraint, so a typo doesn't silently mis-route to Enterprise. If
+      **every** item is unknown / empty, the helper returns ``None``.
+    * All-known-free items -- returns :data:`TIER_OSS` (same as the singular
+      free-feature path).
+    * Mixed -- returns the highest-rank ``min_tier_for_feature`` across the
+      set (the most-constraining feature wins).
+    * Non-iterable input -- returns ``None``. Never raises.
+    """
+    try:
+        if features is None:
+            return None
+        items = list(features)
+    except TypeError:
+        return None
+    tiers: list[str] = []
+    for f in items:
+        t = min_tier_for_feature(f)
+        if t is not None:
+            tiers.append(t)
+    if not tiers:
+        return None
+    return max(tiers, key=tier_rank)
+
+
+def min_tier_for_runtimes(runtimes) -> str | None:
+    """Cheapest *purchasable* tier admitting **all** ``runtimes`` at once.
+
+    Plural sibling of :func:`min_tier_for_runtime`. Today every paid runtime
+    unlocks at :data:`TIER_CLOUD_STARTER`, so for a set containing any paid
+    runtime the answer is always Starter -- but the helper is provided for
+    API symmetry with :func:`min_tier_for_features` (so a caller batching
+    feature+runtime asks reads off one shape) and to stay correct if the
+    paid-runtime tier mapping ever becomes per-runtime.
+
+    Semantics mirror :func:`min_tier_for_features` exactly:
+
+    * Empty / ``None`` iterable -- returns ``None``.
+    * Unknown items contribute nothing (skipped); all-unknown -- ``None``.
+    * All-free items -- :data:`TIER_OSS`.
+    * Mixed -- the highest-rank ``min_tier_for_runtime`` across the set.
+    * Non-iterable input -- ``None``. Never raises.
+    """
+    try:
+        if runtimes is None:
+            return None
+        items = list(runtimes)
+    except TypeError:
+        return None
+    tiers: list[str] = []
+    for rt in items:
+        t = min_tier_for_runtime(rt)
+        if t is not None:
+            tiers.append(t)
+    if not tiers:
+        return None
+    return max(tiers, key=tier_rank)
+
+
 def lock_reason(item: str, *, kind: str | None = None) -> str | None:
     try:
         return get_entitlement().lock_reason(item, kind=kind)
