@@ -182,7 +182,7 @@ def api_entitlement_preview():
         return jsonify({"error": "preview failed", "tier": target}), 500
 
 
-_CAPACITY_PARAMS = ("channels", "retention_days")
+_CAPACITY_PARAMS = ("channels", "retention_days", "nodes")
 
 
 def _parse_capacity_arg(name: str) -> tuple[bool, bool, int | None, str]:
@@ -227,12 +227,19 @@ def api_entitlement_required_tier():
             retention_n,
             retention_raw,
         ) = _parse_capacity_arg("retention_days")
+        (
+            nodes_present,
+            nodes_ok,
+            nodes_n,
+            nodes_raw,
+        ) = _parse_capacity_arg("nodes")
 
         supplied = [
             bool(feature),
             bool(runtime),
             channels_present,
             retention_present,
+            nodes_present,
         ]
         n_supplied = sum(1 for s in supplied if s)
         if n_supplied == 0:
@@ -241,7 +248,8 @@ def api_entitlement_required_tier():
                     {
                         "error": (
                             "supply exactly one of feature=<id>, runtime=<id>, "
-                            "channels=<int>, or retention_days=<int>"
+                            "channels=<int>, retention_days=<int>, or "
+                            "nodes=<int>"
                         )
                     }
                 ),
@@ -253,7 +261,7 @@ def api_entitlement_required_tier():
                     {
                         "error": (
                             "supply only one of feature=, runtime=, channels=, "
-                            "or retention_days="
+                            "retention_days=, or nodes="
                         )
                     }
                 ),
@@ -281,7 +289,7 @@ def api_entitlement_required_tier():
                 # ``allows_channel_count`` swallowing a non-int to True).
                 required = None
                 allowed = True
-        else:
+        elif retention_present:
             key, kind = retention_raw, "retention_days"
             if retention_ok:
                 required = _ent.min_tier_for_retention_window(retention_n)
@@ -291,6 +299,17 @@ def api_entitlement_required_tier():
                 # Important: don't forward ``None`` to
                 # :func:`min_tier_for_retention_window` -- there ``None`` is
                 # the *unlimited* sentinel and would mis-route to Enterprise.
+                required = None
+                allowed = True
+        else:
+            key, kind = nodes_raw, "nodes"
+            if nodes_ok:
+                required = _ent.min_tier_for_node_count(nodes_n)
+                allowed = ent.allows_node_count(nodes_n)
+            else:
+                # Same never-crash posture as the channels / retention_days
+                # branches -- a blank or non-int ``nodes`` swallows to
+                # ``required_tier=None`` rather than 500ing.
                 required = None
                 allowed = True
         cur_rank = _ent.tier_rank(ent.tier)
@@ -315,6 +334,7 @@ def api_entitlement_required_tier():
         runtime = (request.args.get("runtime") or "").strip().lower()
         channels_raw = (request.args.get("channels") or "").strip()
         retention_raw = (request.args.get("retention_days") or "").strip()
+        nodes_raw = (request.args.get("nodes") or "").strip()
         if feature:
             key, kind = feature, "feature"
         elif runtime:
@@ -323,6 +343,8 @@ def api_entitlement_required_tier():
             key, kind = channels_raw, "channels"
         elif retention_raw:
             key, kind = retention_raw, "retention_days"
+        elif nodes_raw:
+            key, kind = nodes_raw, "nodes"
         else:
             key, kind = "", ""
         return jsonify(
@@ -359,12 +381,19 @@ def api_entitlement_lock_reason():
             retention_n,
             retention_raw,
         ) = _parse_capacity_arg("retention_days")
+        (
+            nodes_present,
+            nodes_ok,
+            nodes_n,
+            nodes_raw,
+        ) = _parse_capacity_arg("nodes")
 
         supplied = [
             bool(feature),
             bool(runtime),
             channels_present,
             retention_present,
+            nodes_present,
         ]
         n_supplied = sum(1 for s in supplied if s)
         if n_supplied == 0:
@@ -373,7 +402,8 @@ def api_entitlement_lock_reason():
                     {
                         "error": (
                             "supply exactly one of feature=<id>, runtime=<id>, "
-                            "channels=<int>, or retention_days=<int>"
+                            "channels=<int>, retention_days=<int>, or "
+                            "nodes=<int>"
                         )
                     }
                 ),
@@ -385,7 +415,7 @@ def api_entitlement_lock_reason():
                     {
                         "error": (
                             "supply only one of feature=, runtime=, channels=, "
-                            "or retention_days="
+                            "retention_days=, or nodes="
                         )
                     }
                 ),
@@ -418,7 +448,7 @@ def api_entitlement_lock_reason():
                 required = None
                 allowed = True
                 reason = None
-        else:
+        elif retention_present:
             key, kind = retention_raw, "retention_days"
             if retention_ok:
                 required = _ent.min_tier_for_retention_window(retention_n)
@@ -429,6 +459,18 @@ def api_entitlement_lock_reason():
                 # don't forward ``None`` to
                 # :func:`min_tier_for_retention_window` -- there ``None`` is
                 # the *unlimited* sentinel and would mis-route to Enterprise.
+                required = None
+                allowed = True
+                reason = None
+        else:
+            key, kind = nodes_raw, "nodes"
+            if nodes_ok:
+                required = _ent.min_tier_for_node_count(nodes_n)
+                allowed = ent.allows_node_count(nodes_n)
+                reason = ent.lock_reason(str(nodes_n), kind=kind)
+            else:
+                # Same never-crash posture as the other capacity branches --
+                # a blank or non-int ``nodes`` swallows to ``reason=None``.
                 required = None
                 allowed = True
                 reason = None
@@ -456,6 +498,7 @@ def api_entitlement_lock_reason():
         runtime = (request.args.get("runtime") or "").strip().lower()
         channels_raw = (request.args.get("channels") or "").strip()
         retention_raw = (request.args.get("retention_days") or "").strip()
+        nodes_raw = (request.args.get("nodes") or "").strip()
         if feature:
             key, kind = feature, "feature"
         elif runtime:
@@ -464,6 +507,8 @@ def api_entitlement_lock_reason():
             key, kind = channels_raw, "channels"
         elif retention_raw:
             key, kind = retention_raw, "retention_days"
+        elif nodes_raw:
+            key, kind = nodes_raw, "nodes"
         else:
             key, kind = "", ""
         return jsonify(
