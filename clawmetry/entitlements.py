@@ -598,6 +598,50 @@ class Entitlement:
                 req = min_tier_for_feature(k)
                 lbl = tier_label(req) if req else "Paid"
                 return f"'{k}' feature requires {lbl} or above."
+            if inferred_kind == "channels":
+                try:
+                    n = int(k)
+                except (TypeError, ValueError):
+                    return None
+                if n <= 0:
+                    return None
+                if self.allows_channel_count(n):
+                    return None
+                if self.expired:
+                    return (
+                        f"License expired; {n} channels requires a valid "
+                        f"subscription."
+                    )
+                cap = self.channel_limit()
+                cap_str = str(cap) if cap is not None else "unlimited"
+                req = min_tier_for_channel_count(n)
+                lbl = tier_label(req) if req else "Paid"
+                return (
+                    f"{n} channels exceeds the {tier_label(self.tier)} cap of "
+                    f"{cap_str}; requires {lbl} or above."
+                )
+            if inferred_kind == "retention_days":
+                try:
+                    n = int(k)
+                except (TypeError, ValueError):
+                    return None
+                if n <= 0:
+                    return None
+                if self.allows_retention_window(n):
+                    return None
+                if self.expired:
+                    return (
+                        f"License expired; {n}-day retention requires a valid "
+                        f"subscription."
+                    )
+                cap = self.event_retention_days()
+                cap_str = f"{cap} days" if cap is not None else "unlimited"
+                req = min_tier_for_retention_window(n)
+                lbl = tier_label(req) if req else "Paid"
+                return (
+                    f"{n}-day retention exceeds the {tier_label(self.tier)} "
+                    f"cap of {cap_str}; requires {lbl} or above."
+                )
             return None
         except Exception:
             return None

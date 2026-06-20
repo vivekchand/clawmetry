@@ -22,12 +22,15 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                          all four "what tier do I need" axes
                                          off one URL.
   GET  /api/entitlement/lock-reason   -- human-readable explanation of why a
-                                         feature= or runtime= key is locked,
+                                         feature=, runtime=, channels= or
+                                         retention_days= key is locked,
                                          carrying the structured
                                          ``required_tier`` payload alongside
                                          the message so a paywall tooltip can
                                          render "Locked: <reason>. [Upgrade to
-                                         <X>]" in one round-trip.
+                                         <X>]" in one round-trip. The four
+                                         axes match the ones on
+                                         ``/api/entitlement/required-tier``.
   GET  /api/entitlement/upgrade-diff  -- features + runtimes a target tier
                                          would add on top of the current ent.
   GET  /api/entitlement/downgrade-diff -- features + runtimes a target tier
@@ -317,20 +320,91 @@ def api_entitlement_lock_reason():
 
         feature = (request.args.get("feature") or "").strip().lower()
         runtime = (request.args.get("runtime") or "").strip().lower()
-        if not feature and not runtime:
-            return jsonify({"error": "supply either feature=<id> or runtime=<id>"}), 400
-        if feature and runtime:
-            return jsonify({"error": "supply only one of feature= or runtime="}), 400
+        (
+            channels_present,
+            channels_ok,
+            channels_n,
+            channels_raw,
+        ) = _parse_capacity_arg("channels")
+        (
+            retention_present,
+            retention_ok,
+            retention_n,
+            retention_raw,
+        ) = _parse_capacity_arg("retention_days")
+
+        supplied = [
+            bool(feature),
+            bool(runtime),
+            channels_present,
+            retention_present,
+        ]
+        n_supplied = sum(1 for s in supplied if s)
+        if n_supplied == 0:
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply exactly one of feature=<id>, runtime=<id>, "
+                            "channels=<int>, or retention_days=<int>"
+                        )
+                    }
+                ),
+                400,
+            )
+        if n_supplied > 1:
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply only one of feature=, runtime=, channels=, "
+                            "or retention_days="
+                        )
+                    }
+                ),
+                400,
+            )
+
         ent = _ent.get_entitlement()
         if feature:
             key, kind = feature, "feature"
             allowed = ent.allows_feature(feature)
             required = _ent.min_tier_for_feature(feature)
-        else:
+            reason = ent.lock_reason(key, kind=kind)
+        elif runtime:
             key, kind = runtime, "runtime"
             allowed = ent.allows_runtime(runtime)
             required = _ent.min_tier_for_runtime(runtime)
-        reason = ent.lock_reason(key, kind=kind)
+            reason = ent.lock_reason(key, kind=kind)
+        elif channels_present:
+            key, kind = channels_raw, "channels"
+            if channels_ok:
+                required = _ent.min_tier_for_channel_count(channels_n)
+                allowed = ent.allows_channel_count(channels_n)
+                reason = ent.lock_reason(str(channels_n), kind=kind)
+            else:
+                # Blank / non-int: mirror the required-tier wrapper's
+                # never-crash posture -- ``reason`` is None so the UI has
+                # nothing to render, ``required_tier`` is None, and
+                # ``allowed`` defaults to True (same as
+                # ``allows_channel_count`` swallowing a non-int to True).
+                required = None
+                allowed = True
+                reason = None
+        else:
+            key, kind = retention_raw, "retention_days"
+            if retention_ok:
+                required = _ent.min_tier_for_retention_window(retention_n)
+                allowed = ent.allows_retention_window(retention_n)
+                reason = ent.lock_reason(str(retention_n), kind=kind)
+            else:
+                # Same never-crash posture as the channels branch. Important:
+                # don't forward ``None`` to
+                # :func:`min_tier_for_retention_window` -- there ``None`` is
+                # the *unlimited* sentinel and would mis-route to Enterprise.
+                required = None
+                allowed = True
+                reason = None
         cur_rank = _ent.tier_rank(ent.tier)
         req_rank = _ent.tier_rank(required) if required else -1
         required_label = _ent.tier_label(required) if required else None
@@ -353,10 +427,16 @@ def api_entitlement_lock_reason():
         logger.warning("api_entitlement_lock_reason: error: %s", exc)
         feature = (request.args.get("feature") or "").strip().lower()
         runtime = (request.args.get("runtime") or "").strip().lower()
+        channels_raw = (request.args.get("channels") or "").strip()
+        retention_raw = (request.args.get("retention_days") or "").strip()
         if feature:
             key, kind = feature, "feature"
         elif runtime:
             key, kind = runtime, "runtime"
+        elif channels_raw:
+            key, kind = channels_raw, "channels"
+        elif retention_raw:
+            key, kind = retention_raw, "retention_days"
         else:
             key, kind = "", ""
         return jsonify(
