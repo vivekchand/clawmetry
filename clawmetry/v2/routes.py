@@ -44,7 +44,7 @@ _PREFS_FILE = _PREFS_DIR / "preferences.json"
 
 _VALID_THEMES = {"light", "mid", "dark"}
 _VALID_DENSITIES = {"compact", "regular", "comfy"}
-_DEFAULT_PREFS = {"theme": "light", "density": "regular"}
+_DEFAULT_PREFS = {"theme": None, "density": "regular"}
 
 bp_v2 = Blueprint(
     "v2",
@@ -60,7 +60,7 @@ def _read_prefs() -> dict:
             with open(_PREFS_FILE) as f:
                 stored = json.load(f)
             return {
-                "theme": stored.get("theme", "light") if stored.get("theme") in _VALID_THEMES else "light",
+                "theme": stored.get("theme") if stored.get("theme") in _VALID_THEMES else None,
                 "density": stored.get("density", "regular") if stored.get("density") in _VALID_DENSITIES else "regular",
             }
     except (json.JSONDecodeError, OSError):

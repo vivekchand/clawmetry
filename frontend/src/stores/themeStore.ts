@@ -41,17 +41,20 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
   },
 
   hydrate: async () => {
+    let storedTheme: Theme | null = null;
+    let storedDensity: Density = "regular";
     try {
       const res = await fetch("/api/v2/preferences");
       if (res.ok) {
         const prefs = await res.json();
-        const theme = prefs.theme ?? "light";
-        const density = prefs.density ?? "regular";
-        set({ theme, density });
-        applyToDOM(theme, density);
+        storedTheme = (prefs.theme as Theme) ?? null;
+        storedDensity = (prefs.density as Density) ?? "regular";
       }
-    } catch {
-      applyToDOM(get().theme, get().density);
-    }
+    } catch {}
+    // null theme means no stored preference — respect prefers-color-scheme
+    const theme: Theme =
+      storedTheme ?? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    set({ theme, density: storedDensity });
+    applyToDOM(theme, storedDensity);
   },
 }));
