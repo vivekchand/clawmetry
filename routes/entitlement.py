@@ -35,6 +35,11 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                          would add on top of the current ent.
   GET  /api/entitlement/downgrade-diff -- features + runtimes a target tier
                                           would REMOVE from the current ent.
+  GET  /api/entitlement/preview        -- the full Entitlement.to_dict() shape
+                                          rendered for an arbitrary tier so the
+                                          upgrade-CTA card can show concrete
+                                          numbers without per-tier derivation
+                                          in JS.
   GET  /api/runtimes                  -- the full runtime catalog.
   GET  /api/tiers                     -- the full tier ladder with per-tier metadata.
 """
@@ -153,6 +158,28 @@ def api_entitlement_downgrade_diff():
                 "lost_runtimes": [],
             }
         )
+
+
+@bp_entitlement.route("/api/entitlement/preview")
+def api_entitlement_preview():
+    """``GET /api/entitlement/preview?tier=<id>`` -- the full
+    :meth:`Entitlement.to_dict` shape rendered for a hypothetical tier so an
+    upgrade-CTA card can show concrete numbers ("365-day retention, unlimited
+    channels, claude_code unlocked") without the client re-deriving per-tier
+    capacity. ``404`` when the tier id is unknown."""
+    target = (request.args.get("tier") or "").strip().lower()
+    if not target:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        body = _ent.preview(target)
+        if body is None:
+            return jsonify({"error": "unknown tier", "tier": target}), 404
+        return jsonify(body)
+    except Exception as exc:
+        logger.warning("api_entitlement_preview: error: %s", exc)
+        return jsonify({"error": "preview failed", "tier": target}), 500
 
 
 _CAPACITY_PARAMS = ("channels", "retention_days")

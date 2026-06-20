@@ -919,6 +919,46 @@ def previous_tier_diff() -> dict | None:
         return None
 
 
+def preview(target_tier: str) -> dict | None:
+    """Render the :meth:`Entitlement.to_dict` shape for a hypothetical tier.
+
+    Companion to :func:`upgrade_diff` / :func:`downgrade_diff`: where those
+    answer "what would change", ``preview`` answers "what would the resulting
+    Entitlement *look like*" -- the full denormalised shape the upgrade-CTA
+    card renders ("Cloud Pro: 365-day retention, unlimited channels, claude_code
+    + codex + ... unlocked"). Returns ``None`` for an unknown tier id and never
+    raises.
+
+    The previewed Entitlement is always rendered with ``grace=False`` so the
+    concrete per-tier limits (``channel_limit``, ``retention_days``) surface --
+    a grace-mode preview would zero those out and defeat the purpose. Source
+    is tagged ``"preview"`` so the UI never mistakes it for a live entitlement.
+    """
+    try:
+        tt = (target_tier or "").strip().lower()
+        if tt not in _PURCHASABLE_TIERS:
+            return None
+        paid_feats = _TIER_FEATURES.get(tt, frozenset())
+        runtimes = (
+            FREE_RUNTIMES | PAID_RUNTIMES
+            if tt in _TIER_PAID_RUNTIMES
+            else FREE_RUNTIMES
+        )
+        ent = Entitlement(
+            tier=tt,
+            source="preview",
+            node_limit=1,
+            expiry=None,
+            features=FREE_FEATURES | paid_feats,
+            runtimes=runtimes,
+            grace=False,
+        )
+        return ent.to_dict()
+    except Exception as exc:
+        logger.warning("entitlements: preview failed: %s", exc)
+        return None
+
+
 def resolution_diagnostic() -> dict:
     out: dict = {
         "license_path": _LICENSE_PATH,
