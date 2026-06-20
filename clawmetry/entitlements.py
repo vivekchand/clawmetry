@@ -286,6 +286,23 @@ _TIER_CHANNEL_LIMIT = {
     TIER_ENTERPRISE: None,
 }
 
+# Node-count cap per tier. OSS / Cloud Free are a single-node grant; every paid
+# tier is license-bound (the actual node_limit comes off the license payload or
+# cached cloud plan), so the static per-tier ceiling here is the *unlimited*
+# sentinel ``None``. ``min_tier_for_node_count`` walks this map the same way
+# ``min_tier_for_channel_count`` walks ``_TIER_CHANNEL_LIMIT`` so all four
+# capacity axes resolve off a single shape.
+_FREE_NODE_LIMIT = 1
+_TIER_NODE_LIMIT = {
+    TIER_OSS: _FREE_NODE_LIMIT,
+    TIER_CLOUD_FREE: _FREE_NODE_LIMIT,
+    TIER_TRIAL: None,
+    TIER_CLOUD_STARTER: None,
+    TIER_CLOUD_PRO: None,
+    TIER_PRO: None,
+    TIER_ENTERPRISE: None,
+}
+
 _TIER_PAID_RUNTIMES = _PAID_TIERS
 
 _PURCHASABLE_TIERS = (
@@ -641,6 +658,33 @@ class Entitlement:
                 return (
                     f"{n}-day retention exceeds the {tier_label(self.tier)} "
                     f"cap of {cap_str}; requires {lbl} or above."
+                )
+            if inferred_kind == "nodes":
+                try:
+                    n = int(k)
+                except (TypeError, ValueError):
+                    return None
+                if n <= 0:
+                    return None
+                if self.allows_node_count(n):
+                    return None
+                if self.expired:
+                    return (
+                        f"License expired; {n} nodes requires a valid "
+                        f"subscription."
+                    )
+                # node_limit comes off the license payload (per-grant), not the
+                # static per-tier map. <=0 is the unlimited sentinel licenses
+                # use for Enterprise.
+                lim = self.node_limit
+                cap_str = (
+                    str(lim) if isinstance(lim, int) and lim > 0 else "unlimited"
+                )
+                req = min_tier_for_node_count(n)
+                lbl = tier_label(req) if req else "Paid"
+                return (
+                    f"{n} nodes exceeds the {tier_label(self.tier)} cap of "
+                    f"{cap_str}; requires {lbl} or above."
                 )
             return None
         except Exception:
@@ -1185,6 +1229,45 @@ def min_tier_for_retention_window(days: int | None) -> str | None:
     return TIER_ENTERPRISE
 
 
+def min_tier_for_node_count(count: int) -> str | None:
+    """Return the cheapest *purchasable* tier id whose node-count cap admits
+    ``count`` registered nodes. Closes the fourth axis (alongside
+    :func:`min_tier_for_feature` / :func:`min_tier_for_runtime` /
+    :func:`min_tier_for_channel_count` / :func:`min_tier_for_retention_window`)
+    so the fleet-page upgrade affordance ("you have 4 nodes -- Available in
+    Starter") reads from the same single source of truth.
+
+    Walks :data:`_PURCHASABLE_TIERS` (cheapest -> most capable, trial excluded
+    -- it is a promotional grant, not a plan a customer can pick from a price
+    page) and returns the first tier whose ``_TIER_NODE_LIMIT`` value is either
+    ``None`` (unlimited) or ``>= count``.
+
+    Semantics mirror :func:`min_tier_for_channel_count` exactly so the four
+    capacity axes are interchangeable from the caller's perspective:
+
+    * ``count <= 0`` -- collapses to :data:`TIER_OSS`. A zero/negative count is
+      either "no nodes registered yet" or trivially satisfied; either way the
+      free floor covers it (matches :meth:`Entitlement.allows_node_count`'s
+      grace-on-zero contract).
+    * Non-int ``count`` -- returns ``None`` so a caller can distinguish "free"
+      from "couldn't parse". Never raises.
+    * Otherwise -- the first tier whose cap admits ``count``, falling back to
+      :data:`TIER_ENTERPRISE` if every finite cap is exceeded (Enterprise is
+      unlimited, so this is always a safe ceiling).
+    """
+    try:
+        n = int(count)
+    except (TypeError, ValueError):
+        return None
+    if n <= 0:
+        return TIER_OSS
+    for tier in _PURCHASABLE_TIERS:
+        cap = _TIER_NODE_LIMIT.get(tier, _FREE_NODE_LIMIT)
+        if cap is None or n <= cap:
+            return tier
+    return TIER_ENTERPRISE
+
+
 def lock_reason(item: str, *, kind: str | None = None) -> str | None:
     try:
         return get_entitlement().lock_reason(item, kind=kind)
@@ -1310,6 +1393,7 @@ def tier_catalog() -> list[dict]:
                 "unlocks_paid_runtimes": unlocks_paid,
                 "retention_days": _TIER_RETENTION_DAYS.get(tier, 7),
                 "channel_limit": _TIER_CHANNEL_LIMIT.get(tier, _FREE_CHANNEL_LIMIT),
+                "node_limit": _TIER_NODE_LIMIT.get(tier, _FREE_NODE_LIMIT),
                 "features": sorted(paid_feats),
                 "runtimes": list(paid_runtimes_sorted) if unlocks_paid else [],
             }
