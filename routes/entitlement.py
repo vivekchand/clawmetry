@@ -59,6 +59,14 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                           so a Settings or paywall matrix UI
                                           renders N rows off one round-trip
                                           instead of N calls.
+  GET  /api/entitlement/tier-unlocks-batch -- plural sibling of
+                                          ``/tier-unlocks``: returns the full
+                                          pricing-page marginal-unlock ladder
+                                          in one pass.
+  GET  /api/entitlement/upgrade-path  -- ordered marginal-unlock ladder from
+                                         the resolved tier upward (current-
+                                         user-relative sibling of
+                                         ``/tier-unlocks-batch``).
   GET  /api/runtimes                  -- the full runtime catalog.
   GET  /api/tiers                     -- the full tier ladder with per-tier metadata.
 """
@@ -296,6 +304,60 @@ def api_entitlement_tier_unlocks_batch():
         return jsonify(
             {
                 "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/upgrade-path")
+def api_entitlement_upgrade_path():
+    """``GET /api/entitlement/upgrade-path`` -- ordered marginal-unlock
+    ladder from the resolved tier upward.
+
+    Current-user-relative sibling of ``/api/entitlement/tier-unlocks-batch``:
+    where the batch returns the full purchasable ladder, this returns only
+    tiers whose rank is *strictly above* the caller's resolved entitlement
+    rank, so an upgrade-CTA wizard renders its step sequence without
+    client-side filtering.
+
+    Response shape::
+
+        {
+          "path":              [<row>, ...],
+          "current_tier":      "...",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<row>`` matches ``/api/entitlement/tier-unlocks`` exactly
+    (``tier``, ``tier_label``, ``tier_rank``, ``previous_tier``,
+    ``previous_tier_label``, ``previous_tier_rank``, ``features``,
+    ``runtimes``). Enterprise callers get an empty ``path`` (already at
+    the top). Never 5xxs: a resolver failure yields ``path: []`` with the
+    grace-shape envelope so the upgrade CTA keeps rendering.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "path": _ent.upgrade_path(),
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_upgrade_path: error: %s", exc)
+        return jsonify(
+            {
+                "path": [],
                 "current_tier": "oss",
                 "current_tier_rank": 0,
                 "grace": True,

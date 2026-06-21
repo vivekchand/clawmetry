@@ -1248,6 +1248,56 @@ def tier_unlocks_batch() -> list[dict]:
         return []
 
 
+def upgrade_path() -> list[dict]:
+    """Ordered marginal-unlock ladder from the resolved tier upward.
+
+    Where :func:`tier_unlocks` answers "what does tier X unlock vs the
+    tier below it" for one named tier, ``upgrade_path`` answers "which
+    tiers are still available to me, and what does each one unlock as I
+    climb" -- the sequenced view an upgrade flow renders ("Starter adds
+    these runtimes, then Pro adds these features, then Enterprise adds
+    SSO + audit").
+
+    Walks :data:`_PURCHASABLE_TIERS` sorted by ``(tier_rank, tier_id)``,
+    filters to entries whose rank is strictly *greater* than the resolved
+    entitlement's rank, and folds :func:`tier_unlocks` over each. Same-rank
+    siblings (e.g. ``TIER_CLOUD_PRO`` and ``TIER_PRO`` both at rank 2) both
+    appear so a caller keyed off the tier id keeps working; rank-deduped
+    consumers can collapse by ``tier_rank`` client-side.
+
+    The marginal stored on each row is :func:`tier_unlocks`'s answer (vs
+    the absolute next-lower purchasable tier in the catalogue) -- *not*
+    "vs the previous step in the path". So the union of the rows is
+    direction-agnostic and matches the corresponding rows from a
+    full-ladder ``tier_unlocks_batch``-style call, while the *selection*
+    of rows is current-tier-relative.
+
+    Returns an empty list when the resolved tier already sits at the top
+    of the purchasable ladder (Enterprise), and never raises -- a resolver
+    failure short-circuits to ``[]`` so an upgrade-CTA surface keeps
+    rendering instead of breaking.
+    """
+    try:
+        ent = get_entitlement()
+        current_rank = _TIER_RANK.get(ent.tier, -1)
+        ordered = sorted(
+            _PURCHASABLE_TIERS,
+            key=lambda t: (_TIER_RANK.get(t, -1), t),
+        )
+        path: list[dict] = []
+        for tid in ordered:
+            cand_rank = _TIER_RANK.get(tid, -1)
+            if cand_rank <= current_rank:
+                continue
+            row = tier_unlocks(tid)
+            if row is not None:
+                path.append(row)
+        return path
+    except Exception as exc:
+        logger.warning("entitlements: upgrade_path failed: %s", exc)
+        return []
+
+
 def resolution_diagnostic() -> dict:
     out: dict = {
         "license_path": _LICENSE_PATH,
