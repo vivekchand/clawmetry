@@ -1248,6 +1248,56 @@ def tier_unlocks_batch() -> list[dict]:
         return []
 
 
+def upgrade_path() -> list[dict]:
+    """Ordered marginal-unlock ladder from the resolved tier upward.
+
+    Where :func:`tier_unlocks` answers "what does tier X unlock vs the
+    tier below it" for one named tier, ``upgrade_path`` answers "which
+    tiers are still available to me, and what does each one unlock as I
+    climb" -- the sequenced view an upgrade flow renders ("Starter adds
+    these runtimes, then Pro adds these features, then Enterprise adds
+    SSO + audit").
+
+    Walks :data:`_PURCHASABLE_TIERS` sorted by ``(tier_rank, tier_id)``,
+    filters to entries whose rank is strictly *greater* than the resolved
+    entitlement's rank, and folds :func:`tier_unlocks` over each. Same-rank
+    siblings (e.g. ``TIER_CLOUD_PRO`` and ``TIER_PRO`` both at rank 2) both
+    appear so a caller keyed off the tier id keeps working; rank-deduped
+    consumers can collapse by ``tier_rank`` client-side.
+
+    The marginal stored on each row is :func:`tier_unlocks`'s answer (vs
+    the absolute next-lower purchasable tier in the catalogue) -- *not*
+    "vs the previous step in the path". So the union of the rows is
+    direction-agnostic and matches the corresponding rows from a
+    full-ladder ``tier_unlocks_batch``-style call, while the *selection*
+    of rows is current-tier-relative.
+
+    Returns an empty list when the resolved tier already sits at the top
+    of the purchasable ladder (Enterprise), and never raises -- a resolver
+    failure short-circuits to ``[]`` so an upgrade-CTA surface keeps
+    rendering instead of breaking.
+    """
+    try:
+        ent = get_entitlement()
+        current_rank = _TIER_RANK.get(ent.tier, -1)
+        ordered = sorted(
+            _PURCHASABLE_TIERS,
+            key=lambda t: (_TIER_RANK.get(t, -1), t),
+        )
+        path: list[dict] = []
+        for tid in ordered:
+            cand_rank = _TIER_RANK.get(tid, -1)
+            if cand_rank <= current_rank:
+                continue
+            row = tier_unlocks(tid)
+            if row is not None:
+                path.append(row)
+        return path
+    except Exception as exc:
+        logger.warning("entitlements: upgrade_path failed: %s", exc)
+        return []
+
+
 def resolution_diagnostic() -> dict:
     out: dict = {
         "license_path": _LICENSE_PATH,
@@ -1733,229 +1783,4 @@ def _lock_row(ent, key: str, kind: str) -> dict:
                 n = int(key)
             except (TypeError, ValueError):
                 return {
-                    "key": str(key),
-                    "kind": kind,
-                    "reason": None,
-                    "locked": False,
-                    "allowed": True,
-                    "required_tier": None,
-                    "required_tier_label": None,
-                    "required_tier_rank": -1,
-                }
-            allowed = ent.allows_node_count(n)
-            required = min_tier_for_node_count(n)
-            key = str(n)
-        else:
-            allowed = True
-            required = None
-        reason = ent.lock_reason(key, kind=kind)
-        return {
-            "key": key,
-            "kind": kind,
-            "reason": reason,
-            "locked": reason is not None,
-            "allowed": allowed,
-            "required_tier": required,
-            "required_tier_label": tier_label(required) if required else None,
-            "required_tier_rank": tier_rank(required) if required else -1,
-        }
-    except Exception:
-        return {
-            "key": str(key),
-            "kind": kind,
-            "reason": None,
-            "locked": False,
-            "allowed": True,
-            "required_tier": None,
-            "required_tier_label": None,
-            "required_tier_rank": -1,
-        }
-
-
-def lock_reasons_batch(
-    *,
-    features=None,
-    runtimes=None,
-    channels: int | None = None,
-    retention_days: int | None = None,
-    nodes: int | None = None,
-) -> dict:
-    """Per-item lock reasons for every supplied item across all 5 axes in one
-    pass.
-
-    Plural sibling of :func:`lock_reason`. While
-    :func:`min_tier_for_all` / ``/required-tier-batch`` collapse the answer to
-    the single most-constraining tier, this helper preserves the per-item
-    detail so a Settings or paywall matrix UI can render N rows with their
-    individual reasons + per-row required tier off **one** call instead of N
-    round-trips to ``/lock-reason``.
-
-    Shape::
-
-        {
-          "features":       [<row>, ...],
-          "runtimes":       [<row>, ...],
-          "channels":       <row> | None,
-          "retention_days": <row> | None,
-          "nodes":          <row> | None,
-        }
-
-    Each ``<row>`` carries ``key``, ``kind``, ``reason`` (``None`` when not
-    locked / unknown id / grace mode), ``locked``, ``allowed``,
-    ``required_tier``, ``required_tier_label``, ``required_tier_rank``.
-
-    The capacity axes (``channels`` / ``retention_days`` / ``nodes``) use
-    ``None`` as the "axis not supplied" sentinel and the corresponding key
-    in the returned dict is ``None``. Mirrors ``min_tier_for_all`` exactly:
-    ``retention_days=None`` here means *unset*, NOT *unlimited*.
-
-    Grace mode (the default until enforcement flips on): every row has
-    ``reason=None`` / ``locked=False`` / ``allowed=True`` -- the helper does
-    not invent locks. Never raises: a resolver failure short-circuits to the
-    grace-shape rows so the UI keeps rendering.
-    """
-    feats = _normalise_csv(features)
-    rts = _normalise_csv(runtimes)
-    try:
-        ent = get_entitlement()
-    except Exception as exc:
-        logger.warning("entitlements: lock_reasons_batch falling back to grace: %s", exc)
-        ent = _oss_free()
-    out: dict = {
-        "features": [_lock_row(ent, f, "feature") for f in feats],
-        "runtimes": [_lock_row(ent, r, "runtime") for r in rts],
-        "channels": _lock_row(ent, channels, "channels") if channels is not None else None,
-        "retention_days": (
-            _lock_row(ent, retention_days, "retention_days")
-            if retention_days is not None
-            else None
-        ),
-        "nodes": _lock_row(ent, nodes, "nodes") if nodes is not None else None,
-    }
-    return out
-
-
-def feature_label(feature: str) -> str:
-    fid = (feature or "").strip().lower()
-    return FEATURE_LABELS.get(fid, fid)
-
-
-_FEATURE_TIER_ORDER = (
-    (TIER_OSS, FREE_FEATURES),
-    (TIER_CLOUD_STARTER, STARTER_FEATURES),
-    (TIER_CLOUD_PRO, PRO_ONLY_FEATURES),
-    (TIER_ENTERPRISE, ENTERPRISE_FEATURES),
-)
-
-
-def feature_tier(feature: str) -> str:
-    fid = (feature or "").strip().lower()
-    for tier, bucket in _FEATURE_TIER_ORDER:
-        if fid in bucket:
-            return tier
-    return TIER_OSS
-
-
-_FEATURE_TIER_RANK = {
-    TIER_OSS: 0,
-    TIER_CLOUD_STARTER: 1,
-    TIER_CLOUD_PRO: 2,
-    TIER_ENTERPRISE: 3,
-}
-
-
-def feature_catalog() -> list[dict]:
-    try:
-        ent = get_entitlement()
-    except Exception as exc:
-        logger.warning("entitlements: feature_catalog falling back to grace: %s", exc)
-        ent = _oss_free()
-    out: list[dict] = []
-    for fid in sorted(ALL_FEATURES, key=lambda f: (_FEATURE_TIER_RANK.get(feature_tier(f), 9), f)):
-        tier = feature_tier(fid)
-        is_free = fid in FREE_FEATURES
-        allowed = ent.allows_feature(fid)
-        if is_free:
-            entitled = True
-        elif ent.expired:
-            entitled = False
-        else:
-            entitled = fid in ent.features
-        out.append(
-            {
-                "id": fid,
-                "label": feature_label(fid),
-                "tier": tier,
-                "free": is_free,
-                "allowed": allowed,
-                "locked": (not is_free) and (not allowed),
-                "entitled": entitled,
-                "alias": fid in _ALIAS_FEATURES,
-            }
-        )
-    return out
-
-
-def runtime_catalog() -> list[dict]:
-    try:
-        ent = get_entitlement()
-    except Exception as exc:
-        logger.warning("entitlements: runtime_catalog falling back to grace: %s", exc)
-        ent = _oss_free()
-    out: list[dict] = []
-    for rt in sorted(FREE_RUNTIMES):
-        out.append(
-            {
-                "id": rt,
-                "label": runtime_label(rt),
-                "free": True,
-                "tier": "free",
-                "allowed": True,
-                "locked": False,
-                "entitled": True,
-            }
-        )
-    for rt in sorted(PAID_RUNTIMES):
-        allowed = ent.allows_runtime(rt)
-        out.append(
-            {
-                "id": rt,
-                "label": runtime_label(rt),
-                "free": False,
-                "tier": "starter",
-                "allowed": allowed,
-                "locked": not allowed,
-                "entitled": ent.entitled_runtime(rt),
-            }
-        )
-    return out
-
-
-def tier_catalog() -> list[dict]:
-    try:
-        ent = get_entitlement()
-        current = ent.tier
-    except Exception as exc:
-        logger.warning("entitlements: tier_catalog falling back to OSS-free: %s", exc)
-        current = TIER_OSS
-    out: list[dict] = []
-    paid_runtimes_sorted = sorted(PAID_RUNTIMES)
-    for rank, tier in enumerate(_TIER_ORDER):
-        paid_feats = _TIER_FEATURES.get(tier, frozenset())
-        unlocks_paid = tier in _TIER_PAID_RUNTIMES
-        out.append(
-            {
-                "id": tier,
-                "label": tier_label(tier),
-                "is_paid": tier in _PAID_TIERS,
-                "is_current": tier == current,
-                "rank": rank,
-                "unlocks_paid_runtimes": unlocks_paid,
-                "retention_days": _TIER_RETENTION_DAYS.get(tier, 7),
-                "channel_limit": _TIER_CHANNEL_LIMIT.get(tier, _FREE_CHANNEL_LIMIT),
-                "node_limit": _TIER_NODE_LIMIT.get(tier, _FREE_NODE_LIMIT),
-                "features": sorted(paid_feats),
-                "runtimes": list(paid_runtimes_sorted) if unlocks_paid else [],
-            }
-        )
-    return out
+                 
