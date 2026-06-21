@@ -218,6 +218,28 @@ def api_entitlement_preview():
         return jsonify({"error": "preview failed", "tier": target}), 500
 
 
+@bp_entitlement.route("/api/entitlement/tier-unlocks")
+def api_entitlement_tier_unlocks():
+    """``GET /api/entitlement/tier-unlocks?tier=<id>`` -- marginal unlocks
+    for ``tier`` (features + runtimes that first become available at that
+    tier vs the next-lower purchasable tier). Sibling of ``/preview``
+    (cumulative shape). ``404`` when the tier id is unknown (including
+    ``trial`` -- not purchasable)."""
+    target = (request.args.get("tier") or "").strip().lower()
+    if not target:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        body = _ent.tier_unlocks(target)
+        if body is None:
+            return jsonify({"error": "unknown tier", "tier": target}), 404
+        return jsonify(body)
+    except Exception as exc:
+        logger.warning("api_entitlement_tier_unlocks: error: %s", exc)
+        return jsonify({"error": "tier-unlocks failed", "tier": target}), 500
+
+
 _CAPACITY_PARAMS = ("channels", "retention_days", "nodes")
 
 
