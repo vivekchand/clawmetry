@@ -8,6 +8,7 @@ is the single source of truth — handlers never re-derive tier logic here.
 
   GET /api/entitlement — the current Entitlement as JSON.
   GET /api/runtimes    — the full runtime catalog with locked/free flags.
+  GET /api/features    — the full feature catalog with locked/free/tier flags.
 
 Side-effect-free and never-raise, so it is safe to classify ``oss-passthrough``
 on the cloud side: when no license/cloud plan is present it returns a graceful
@@ -107,6 +108,71 @@ def api_runtimes():
                         "locked": False,
                     },
                 ],
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/features")
+def api_features():
+    """Return the full feature catalog with per-feature ``free``/``tier``/
+    ``allowed``/``locked`` flags so the dashboard's Settings matrix, the
+    pricing-parity grid, and the upgrade-CTA copy all read off one canonical
+    list instead of re-deriving tier buckets in JS.
+
+    Shape::
+
+        {
+          "features": [
+            {"id": "sessions", "label": "Sessions", "tier": "oss",
+             "free": true, "allowed": true, "locked": false},
+            {"id": "fleet", "label": "Multi-node fleet",
+             "tier": "cloud_starter", "free": false,
+             "allowed": true, "locked": false},
+            ...
+          ],
+          "grace":    true | false,   # mirrors /api/entitlement.grace
+          "enforced": true | false
+        }
+
+    Side-effect-free and never-raise: any resolution error falls back to a
+    grace-mode shape (every feature ``allowed=True``, ``locked=False``) so
+    the UI still has something safe to render.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "features": _ent.feature_catalog(),
+                "grace": ent.grace,
+                "enforced": not ent.grace,
+            }
+        )
+    except Exception as exc:  # never crash the dashboard over a gate read
+        logger.warning("api_features: falling back to grace shape: %s", exc)
+        try:
+            from clawmetry import entitlements as _ent
+
+            fallback = [
+                {
+                    "id": fid,
+                    "label": _ent.feature_label(fid),
+                    "tier": _ent.feature_tier(fid),
+                    "free": fid in _ent.FREE_FEATURES,
+                    "allowed": True,
+                    "locked": False,
+                }
+                for tier, bucket in _ent._FEATURE_TIER_ORDER
+                for fid in sorted(bucket)
+            ]
+        except Exception:
+            fallback = []
+        return jsonify(
+            {
+                "features": fallback,
                 "grace": True,
                 "enforced": False,
             }

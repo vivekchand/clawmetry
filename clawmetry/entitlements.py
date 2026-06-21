@@ -111,6 +111,57 @@ RUNTIME_LABELS = {
     "nanoclaw": "NanoClaw",
 }
 
+# Display labels for every known feature. Used by :func:`feature_catalog` so
+# the dashboard's Settings / pricing-parity surfaces render human copy off the
+# same source of truth as the gate. Falls back to the id when a key is
+# missing, so adding a feature key without a label here is safe (but please
+# add one — the id reads as snake_case in the UI otherwise).
+FEATURE_LABELS = {
+    # free
+    "sessions": "Sessions",
+    "transcripts": "Transcripts",
+    "usage": "Usage",
+    "brain": "Brain",
+    "flow": "Flow",
+    "tracing": "Tracing",
+    "health": "Health",
+    "logs": "Logs",
+    "crons": "Crons",
+    "channels": "Channels",
+    "nemo_governance": "NeMo governance",
+    "overview": "Overview",
+    # starter
+    "multi_runtime": "Multi-runtime support",
+    "fleet": "Multi-node fleet",
+    "cloud_sync": "Cloud sync",
+    "all_channels": "All channel adapters",
+    "approval_queue": "Approval queue",
+    "budget_limits": "Budget limits",
+    "per_runtime_health_timeline": "Per-runtime health timeline",
+    # pro-only
+    "per_run_waste_flags": "Per-run waste flags",
+    "per_run_compare": "Per-run compare",
+    "error_triage": "Error triage",
+    "self_evolve": "Self-Evolve",
+    "asset_registry": "Asset registry",
+    "eval_suite": "Eval suite",
+    "tool_policy": "Tool policy",
+    "otel_export": "OTel export",
+    "custom_webhooks": "Custom webhooks",
+    "custom_runtime_ingest": "Custom runtime ingest",
+    "custom_alerts": "Custom alerts",
+    "alert_webhooks": "Alert webhooks",
+    "anomaly_detection": "Anomaly detection",
+    "cost_optimizer": "Cost optimizer",
+    # enterprise
+    "siem_export": "SIEM export",
+    "sso": "SSO",
+    "audit_logs": "Audit logs",
+    "rbac": "RBAC",
+    "air_gapped_license": "Air-gapped license",
+    "custom_data_residency": "Custom data residency",
+}
+
 # ── Feature catalogue ───────────────────────────────────────────────────────
 # Core observability — always free. Keys are stable identifiers the route /
 # UI layer checks via Entitlement.allows_feature(...).
@@ -466,4 +517,89 @@ def runtime_catalog() -> list[dict]:
                 "locked": not allowed,
             }
         )
+    return out
+
+
+def feature_label(feature: str) -> str:
+    """Human-readable label for ``feature``. Falls back to the id when unknown
+    so a not-yet-labelled key still renders with *something*."""
+    fid = (feature or "").strip().lower()
+    return FEATURE_LABELS.get(fid, fid)
+
+
+# Per-feature unlock tier — the cheapest tier id where this feature is granted.
+# Walked once in :func:`feature_tier` so the catalog's ``tier`` column reads off
+# the same source of truth as :data:`_TIER_FEATURES`. FREE features collapse to
+# :data:`TIER_OSS`. An unknown id is treated as OSS to stay grace-safe (an
+# unknown feature is never spuriously rendered as a locked Enterprise row).
+_FEATURE_TIER_ORDER = (
+    (TIER_OSS, FREE_FEATURES),
+    (TIER_CLOUD_STARTER, STARTER_FEATURES),
+    (TIER_CLOUD_PRO, PRO_ONLY_FEATURES),
+    (TIER_ENTERPRISE, ENTERPRISE_FEATURES),
+)
+
+
+def feature_tier(feature: str) -> str:
+    """Return the cheapest tier id that grants ``feature``.
+
+    The mapping is:
+        FREE_FEATURES        -> ``TIER_OSS``
+        STARTER_FEATURES     -> ``TIER_CLOUD_STARTER``
+        PRO_ONLY_FEATURES    -> ``TIER_CLOUD_PRO``
+        ENTERPRISE_FEATURES  -> ``TIER_ENTERPRISE``
+        unknown id           -> ``TIER_OSS`` (grace-safe fallback)
+    """
+    fid = (feature or "").strip().lower()
+    for tier, bucket in _FEATURE_TIER_ORDER:
+        if fid in bucket:
+            return tier
+    return TIER_OSS
+
+
+def feature_catalog() -> list[dict]:
+    """The full feature catalog with the entitlement-derived availability for
+    each entry. Mirrors :func:`runtime_catalog` for paid *features*: single
+    source of truth the UI reads to render every known feature row (Settings
+    matrix, pricing-parity grid, upgrade CTA copy) without re-deriving tier
+    buckets in JS.
+
+    Each entry:
+        {
+          "id":      "<feature>",                # canonical key
+          "label":   "<Display Name>",           # falls back to id
+          "tier":    "oss" | "cloud_starter" |   # unlock tier id (see
+                     "cloud_pro" | "enterprise", #  feature_tier())
+          "free":    True | False,               # FREE_FEATURES membership
+          "allowed": True | False,               # entitlement allows it
+          "locked":  True | False,               # paid + not allowed (UI 🔒)
+        }
+
+    Ordering: free first, then starter, then pro-only, then enterprise —
+    alphabetical within each group, so the UI grid is deterministic.
+
+    Never raises; on any resolution error the catalog is built against the
+    OSS-free grace shape so every paid row reports ``locked=False`` and the
+    UI stays renderable.
+    """
+    try:
+        ent = get_entitlement()
+    except Exception as exc:  # never crash a catalog read
+        logger.warning("entitlements: feature_catalog falling back to grace: %s", exc)
+        ent = _oss_free()
+    out: list[dict] = []
+    for tier, bucket in _FEATURE_TIER_ORDER:
+        is_free = tier == TIER_OSS
+        for fid in sorted(bucket):
+            allowed = ent.allows_feature(fid)
+            out.append(
+                {
+                    "id": fid,
+                    "label": feature_label(fid),
+                    "tier": tier,
+                    "free": is_free,
+                    "allowed": allowed,
+                    "locked": (not is_free) and (not allowed),
+                }
+            )
     return out
