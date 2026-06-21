@@ -87,7 +87,7 @@ The **sync daemon** (`clawmetry/sync.py`) ingests these sources into the local *
    adapter directories match the routes in `routes/channels.py`. New
    adapter? Add its dir name to `_CHANNEL_DIRS` in `clawmetry/sync.py`.
 3. OpenClaw gateway via WebSocket (JSON-RPC, port 18789) for live data
-4. Optional OpenTelemetry metrics/traces on `/v1/metrics` and `/v1/traces`
+4. Optional OpenTelemetry metrics/traces/logs on `/v1/metrics`, `/v1/traces`, and `/v1/logs`
 
 The daemon owns the DuckDB writer lock and runs a localhost query server so the dashboard reads through it. The dashboard serves the UI at `http://localhost:8900`; for cloud, the daemon also pushes an E2E-encrypted snapshot to `ingest.clawmetry.com` (decrypted client-side in the browser).
 
