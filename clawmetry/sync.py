@@ -2325,7 +2325,8 @@ def sync_sandbox_sessions_openshell(config: dict, state: dict) -> int:
                     if isinstance(obj, dict):
                         batch.append(obj)
                 if batch:
-                    _flush_session_batch(batch, fname, api_key, enc_key, node_id, None)
+                    _flush_session_batch(batch, fname, api_key, enc_key, node_id, None,
+                                         agent_type="nemoclaw")
                     total += len(batch)
                 cursors[cursor_key] = len(all_lines)
             except Exception as _ce:
@@ -2344,6 +2345,7 @@ def _flush_session_batch(
     enc_key: str | None,
     node_id: str,
     subagent_id: str | None = None,
+    agent_type: str = "openclaw",
 ) -> None:
     # Write-through to local DuckDB FIRST (epic #964 / phase 1 / issue #958),
     # then synchronously flush so the rows are durable BEFORE the caller
@@ -2372,7 +2374,7 @@ def _flush_session_batch(
     # or partial installs without DuckDB. The next flusher tick (or daemon
     # restart) will retry the local write; INSERT OR IGNORE makes it safe.
     try:
-        _local_ingest_session_batch(batch, fname, node_id, subagent_id)
+        _local_ingest_session_batch(batch, fname, node_id, subagent_id, agent_type)
         from clawmetry import local_store as _ls
         _ls.get_store().flush()
     except Exception as _e:
@@ -3073,6 +3075,7 @@ def _local_ingest_session_batch(
     session_file: str,
     node_id: str,
     subagent_id: str | None,
+    agent_type: str = "openclaw",
 ) -> None:
     """Translate a batch of raw OpenClaw transcript events into the local
     store's normalised shape and queue them for write. Idempotent at the
@@ -3156,6 +3159,7 @@ def _local_ingest_session_batch(
             data_payload = obj
         rows.append({
             "id": str(eid),
+            "agent_type": agent_type,
             "node_id": node_id,
             "agent_id": obj.get("agent_id") or "main",
             "session_id": session_id,
