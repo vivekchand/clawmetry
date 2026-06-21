@@ -1621,6 +1621,179 @@ def lock_reason(item: str, *, kind: str | None = None) -> str | None:
         return None
 
 
+def _normalise_csv(items) -> list[str]:
+    if items is None:
+        return []
+    if isinstance(items, str):
+        raw = items.split(",")
+    else:
+        try:
+            raw = list(items)
+        except TypeError:
+            return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for tok in raw:
+        try:
+            s = str(tok).strip().lower()
+        except Exception:
+            continue
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    return out
+
+
+def _lock_row(ent, key: str, kind: str) -> dict:
+    try:
+        if kind == "feature":
+            allowed = ent.allows_feature(key)
+            required = min_tier_for_feature(key)
+        elif kind == "runtime":
+            allowed = ent.allows_runtime(key)
+            required = min_tier_for_runtime(key)
+        elif kind == "channels":
+            try:
+                n = int(key)
+            except (TypeError, ValueError):
+                return {
+                    "key": str(key),
+                    "kind": kind,
+                    "reason": None,
+                    "locked": False,
+                    "allowed": True,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                }
+            allowed = ent.allows_channel_count(n)
+            required = min_tier_for_channel_count(n)
+            key = str(n)
+        elif kind == "retention_days":
+            try:
+                n = int(key)
+            except (TypeError, ValueError):
+                return {
+                    "key": str(key),
+                    "kind": kind,
+                    "reason": None,
+                    "locked": False,
+                    "allowed": True,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                }
+            allowed = ent.allows_retention_window(n)
+            required = min_tier_for_retention_window(n)
+            key = str(n)
+        elif kind == "nodes":
+            try:
+                n = int(key)
+            except (TypeError, ValueError):
+                return {
+                    "key": str(key),
+                    "kind": kind,
+                    "reason": None,
+                    "locked": False,
+                    "allowed": True,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                }
+            allowed = ent.allows_node_count(n)
+            required = min_tier_for_node_count(n)
+            key = str(n)
+        else:
+            allowed = True
+            required = None
+        reason = ent.lock_reason(key, kind=kind)
+        return {
+            "key": key,
+            "kind": kind,
+            "reason": reason,
+            "locked": reason is not None,
+            "allowed": allowed,
+            "required_tier": required,
+            "required_tier_label": tier_label(required) if required else None,
+            "required_tier_rank": tier_rank(required) if required else -1,
+        }
+    except Exception:
+        return {
+            "key": str(key),
+            "kind": kind,
+            "reason": None,
+            "locked": False,
+            "allowed": True,
+            "required_tier": None,
+            "required_tier_label": None,
+            "required_tier_rank": -1,
+        }
+
+
+def lock_reasons_batch(
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict:
+    """Per-item lock reasons for every supplied item across all 5 axes in one
+    pass.
+
+    Plural sibling of :func:`lock_reason`. While
+    :func:`min_tier_for_all` / ``/required-tier-batch`` collapse the answer to
+    the single most-constraining tier, this helper preserves the per-item
+    detail so a Settings or paywall matrix UI can render N rows with their
+    individual reasons + per-row required tier off **one** call instead of N
+    round-trips to ``/lock-reason``.
+
+    Shape::
+
+        {
+          "features":       [<row>, ...],
+          "runtimes":       [<row>, ...],
+          "channels":       <row> | None,
+          "retention_days": <row> | None,
+          "nodes":          <row> | None,
+        }
+
+    Each ``<row>`` carries ``key``, ``kind``, ``reason`` (``None`` when not
+    locked / unknown id / grace mode), ``locked``, ``allowed``,
+    ``required_tier``, ``required_tier_label``, ``required_tier_rank``.
+
+    The capacity axes (``channels`` / ``retention_days`` / ``nodes``) use
+    ``None`` as the "axis not supplied" sentinel and the corresponding key
+    in the returned dict is ``None``. Mirrors ``min_tier_for_all`` exactly:
+    ``retention_days=None`` here means *unset*, NOT *unlimited*.
+
+    Grace mode (the default until enforcement flips on): every row has
+    ``reason=None`` / ``locked=False`` / ``allowed=True`` -- the helper does
+    not invent locks. Never raises: a resolver failure short-circuits to the
+    grace-shape rows so the UI keeps rendering.
+    """
+    feats = _normalise_csv(features)
+    rts = _normalise_csv(runtimes)
+    try:
+        ent = get_entitlement()
+    except Exception as exc:
+        logger.warning("entitlements: lock_reasons_batch falling back to grace: %s", exc)
+        ent = _oss_free()
+    out: dict = {
+        "features": [_lock_row(ent, f, "feature") for f in feats],
+        "runtimes": [_lock_row(ent, r, "runtime") for r in rts],
+        "channels": _lock_row(ent, channels, "channels") if channels is not None else None,
+        "retention_days": (
+            _lock_row(ent, retention_days, "retention_days")
+            if retention_days is not None
+            else None
+        ),
+        "nodes": _lock_row(ent, nodes, "nodes") if nodes is not None else None,
+    }
+    return out
+
+
 def feature_label(feature: str) -> str:
     fid = (feature or "").strip().lower()
     return FEATURE_LABELS.get(fid, fid)

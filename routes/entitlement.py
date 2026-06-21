@@ -50,6 +50,15 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                           fleet + otel_export + sso -- what
                                           tier covers everything?" in a single
                                           round-trip.
+  GET  /api/entitlement/lock-reason-batch -- per-item plural sibling of
+                                          ``/lock-reason``: same CSV +
+                                          capacity inputs as
+                                          ``/required-tier-batch``, but
+                                          preserves per-item ``reason`` /
+                                          ``locked`` / ``required_tier`` rows
+                                          so a Settings or paywall matrix UI
+                                          renders N rows off one round-trip
+                                          instead of N calls.
   GET  /api/runtimes                  -- the full runtime catalog.
   GET  /api/tiers                     -- the full tier ladder with per-tier metadata.
 """
@@ -726,6 +735,105 @@ def api_entitlement_required_tier_batch():
                 "current_tier_rank": 0,
                 "upgrade_required": False,
                 "allowed": True,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/lock-reason-batch")
+def api_entitlement_lock_reason_batch():
+    """``GET /api/entitlement/lock-reason-batch?features=a,b,c&runtimes=x,y
+    &channels=N&retention_days=K&nodes=M`` -- per-item plural sibling of
+    ``/api/entitlement/lock-reason``.
+
+    Where ``/required-tier-batch`` aggregates the most-constraining axis into
+    one tier answer, this preserves the per-item detail so a Settings or
+    paywall matrix UI ("show me each runtime + feature row with its
+    individual lock + required tier") renders off **one** round-trip instead
+    of N calls to ``/lock-reason``.
+
+    At least one of ``features=`` / ``runtimes=`` / ``channels=`` /
+    ``retention_days=`` / ``nodes=`` must be supplied. ``features=`` /
+    ``runtimes=`` take comma-separated tokens (whitespace + duplicates are
+    normalised away; unknown ids contribute a grace-shape row -- they don't
+    error). The three capacity axes take a single int each; a blank or
+    non-int value is treated as "not supplied" (matches the singular
+    endpoint's never-crash posture rather than mis-routing a typo to
+    Enterprise). Never 5xxs: the per-axis grace shape is returned on any
+    resolver failure.
+
+    Response shape::
+
+        {
+          "features":       [<row>, ...],
+          "runtimes":       [<row>, ...],
+          "channels":       <row> | None,
+          "retention_days": <row> | None,
+          "nodes":          <row> | None,
+          "current_tier":   "...",
+          "current_tier_rank": <int>,
+          "grace":          <bool>,
+          "enforced":       <bool>,
+        }
+
+    Each ``<row>`` carries ``key``, ``kind``, ``reason``, ``locked``,
+    ``allowed``, ``required_tier``, ``required_tier_label``,
+    ``required_tier_rank``.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        features = _parse_csv_arg("features")
+        runtimes = _parse_csv_arg("runtimes")
+        (_, channels_ok, channels_n, _) = _parse_capacity_arg("channels")
+        (_, retention_ok, retention_n, _) = _parse_capacity_arg("retention_days")
+        (_, nodes_ok, nodes_n, _) = _parse_capacity_arg("nodes")
+
+        if (
+            not features
+            and not runtimes
+            and not channels_ok
+            and not retention_ok
+            and not nodes_ok
+        ):
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply at least one of features=<csv>, "
+                            "runtimes=<csv>, channels=<int>, "
+                            "retention_days=<int>, or nodes=<int>"
+                        )
+                    }
+                ),
+                400,
+            )
+
+        batch = _ent.lock_reasons_batch(
+            features=features or None,
+            runtimes=runtimes or None,
+            channels=channels_n if channels_ok else None,
+            retention_days=retention_n if retention_ok else None,
+            nodes=nodes_n if nodes_ok else None,
+        )
+        ent = _ent.get_entitlement()
+        batch["current_tier"] = ent.tier
+        batch["current_tier_rank"] = _ent.tier_rank(ent.tier)
+        batch["grace"] = bool(ent.grace)
+        batch["enforced"] = _ent.is_enforced()
+        return jsonify(batch)
+    except Exception as exc:
+        logger.warning("api_entitlement_lock_reason_batch: error: %s", exc)
+        return jsonify(
+            {
+                "features": [],
+                "runtimes": [],
+                "channels": None,
+                "retention_days": None,
+                "nodes": None,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
             }
         )
 
