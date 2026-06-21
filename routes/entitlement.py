@@ -608,22 +608,26 @@ def _parse_csv_arg(name: str) -> list[str]:
 
 @bp_entitlement.route("/api/entitlement/required-tier-batch")
 def api_entitlement_required_tier_batch():
-    """``GET /api/entitlement/required-tier-batch?features=a,b,c&runtimes=x,y``
-    -- plural sibling of ``/api/entitlement/required-tier``.
+    """``GET /api/entitlement/required-tier-batch?features=a,b,c&runtimes=x,y
+    &channels=N&retention_days=K&nodes=M`` -- aggregate sibling of
+    ``/api/entitlement/required-tier``.
 
     Returns the cheapest *purchasable* tier admitting **all** supplied
-    features and runtimes at once: the most-constraining item across the
-    two sets wins. Wraps :func:`min_tier_for_features` /
-    :func:`min_tier_for_runtimes` so a dashboard surface that mixes axes
-    ("you are using fleet + otel_export + sso + claude_code -- Available
-    in Enterprise") gets the answer in one round-trip instead of N calls
-    + max-by-rank on the client.
+    constraints across every capacity axis at once: the most-constraining
+    item across all five wins. Wraps :func:`min_tier_for_all` so a
+    dashboard surface that mixes axes ("you are using fleet + claude_code
+    + 5 channels + 30-day retention + 2 nodes -- Available in Pro") gets
+    the answer in one round-trip instead of five calls + max-by-rank on
+    the client.
 
-    At least one of ``features=`` / ``runtimes=`` must be supplied
-    (non-empty after CSV parsing). Comma-separated tokens; whitespace and
-    duplicates are normalised away; unknown ids contribute nothing (so a
-    typo does not silently mis-route to Enterprise, matching the singular
-    helpers' posture). Never 5xxs: the OSS-free shape is returned on any
+    At least one of ``features=`` / ``runtimes=`` / ``channels=`` /
+    ``retention_days=`` / ``nodes=`` must be supplied (non-empty / parseable
+    after normalisation). ``features=`` / ``runtimes=`` take comma-separated
+    tokens (whitespace and duplicates are normalised away; unknown ids
+    contribute nothing). The three capacity axes take a single int each;
+    a blank or non-int value is treated as "not supplied" (matches the
+    singular endpoint's never-crash posture rather than mis-routing a typo
+    to Enterprise). Never 5xxs: the OSS-free shape is returned on any
     resolver failure.
     """
     try:
@@ -631,13 +635,26 @@ def api_entitlement_required_tier_batch():
 
         features = _parse_csv_arg("features")
         runtimes = _parse_csv_arg("runtimes")
-        if not features and not runtimes:
+        (_, channels_ok, channels_n, channels_raw) = _parse_capacity_arg("channels")
+        (_, retention_ok, retention_n, retention_raw) = _parse_capacity_arg(
+            "retention_days",
+        )
+        (_, nodes_ok, nodes_n, nodes_raw) = _parse_capacity_arg("nodes")
+
+        if (
+            not features
+            and not runtimes
+            and not channels_ok
+            and not retention_ok
+            and not nodes_ok
+        ):
             return (
                 jsonify(
                     {
                         "error": (
-                            "supply at least one of features=<csv> or "
-                            "runtimes=<csv>"
+                            "supply at least one of features=<csv>, "
+                            "runtimes=<csv>, channels=<int>, "
+                            "retention_days=<int>, or nodes=<int>"
                         )
                     }
                 ),
@@ -645,10 +662,13 @@ def api_entitlement_required_tier_batch():
             )
 
         ent = _ent.get_entitlement()
-        feat_tier = _ent.min_tier_for_features(features) if features else None
-        runtime_tier = _ent.min_tier_for_runtimes(runtimes) if runtimes else None
-        candidates = [t for t in (feat_tier, runtime_tier) if t is not None]
-        required = max(candidates, key=_ent.tier_rank) if candidates else None
+        required = _ent.min_tier_for_all(
+            features=features or None,
+            runtimes=runtimes or None,
+            channels=channels_n if channels_ok else None,
+            retention_days=retention_n if retention_ok else None,
+            nodes=nodes_n if nodes_ok else None,
+        )
 
         cur_rank = _ent.tier_rank(ent.tier)
         req_rank = _ent.tier_rank(required) if required else -1
@@ -656,12 +676,28 @@ def api_entitlement_required_tier_batch():
 
         feat_allowed = all(ent.allows_feature(f) for f in features)
         runtime_allowed = all(ent.allows_runtime(r) for r in runtimes)
-        allowed = feat_allowed and runtime_allowed
+        channels_allowed = (
+            ent.allows_channel_count(channels_n) if channels_ok else True
+        )
+        retention_allowed = (
+            ent.allows_retention_window(retention_n) if retention_ok else True
+        )
+        nodes_allowed = ent.allows_node_count(nodes_n) if nodes_ok else True
+        allowed = (
+            feat_allowed
+            and runtime_allowed
+            and channels_allowed
+            and retention_allowed
+            and nodes_allowed
+        )
 
         return jsonify(
             {
                 "features": features,
                 "runtimes": runtimes,
+                "channels": channels_n if channels_ok else None,
+                "retention_days": retention_n if retention_ok else None,
+                "nodes": nodes_n if nodes_ok else None,
                 "required_tier": required,
                 "required_tier_label": required_label,
                 "required_tier_rank": req_rank,
@@ -673,10 +709,16 @@ def api_entitlement_required_tier_batch():
         )
     except Exception as exc:
         logger.warning("api_entitlement_required_tier_batch: error: %s", exc)
+        (_, channels_ok, channels_n, _) = _parse_capacity_arg("channels")
+        (_, retention_ok, retention_n, _) = _parse_capacity_arg("retention_days")
+        (_, nodes_ok, nodes_n, _) = _parse_capacity_arg("nodes")
         return jsonify(
             {
                 "features": _parse_csv_arg("features"),
                 "runtimes": _parse_csv_arg("runtimes"),
+                "channels": channels_n if channels_ok else None,
+                "retention_days": retention_n if retention_ok else None,
+                "nodes": nodes_n if nodes_ok else None,
                 "required_tier": None,
                 "required_tier_label": None,
                 "required_tier_rank": -1,

@@ -1547,6 +1547,73 @@ def min_tier_for_runtimes(runtimes) -> str | None:
     return max(tiers, key=tier_rank)
 
 
+def min_tier_for_all(
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> str | None:
+    """Cheapest *purchasable* tier admitting **all** supplied constraints at
+    once across every capacity axis.
+
+    Aggregate sibling of :func:`min_tier_for_features` /
+    :func:`min_tier_for_runtimes` / :func:`min_tier_for_channel_count` /
+    :func:`min_tier_for_retention_window` / :func:`min_tier_for_node_count`.
+    A dashboard surface that mixes axes ("fleet + claude_code + 5 channels +
+    30-day retention + 2 nodes -- what tier covers everything?") gets a
+    single tier id back instead of N round-trips + max-by-rank on the client.
+
+    The capacity axes use ``None`` as the "axis not supplied" sentinel so a
+    caller can omit any subset and the helper just skips them. Critically,
+    ``retention_days=None`` here means *unset*, NOT *unlimited* -- asking
+    for the unlimited-retention tier is the singular
+    :func:`min_tier_for_retention_window` (``days=None``) call's job and
+    would mis-route the aggregate to Enterprise.
+
+    Semantics mirror the plural helpers exactly:
+
+    * No constraints supplied -- returns ``None`` (matches the "nothing
+      asked" posture of the plural helpers).
+    * Any axis collapses to ``None`` (empty iterable / non-int / all-
+      unknown items) -- that axis contributes nothing, the result is
+      resolved off the remaining axes.
+    * All axes collapse to ``None`` -- returns ``None``.
+    * Otherwise -- the highest-rank tier across the per-axis answers (the
+      most-constraining axis wins).
+    * Never raises.
+    """
+    try:
+        tiers: list[str] = []
+        if features is not None:
+            t = min_tier_for_features(features)
+            if t is not None:
+                tiers.append(t)
+        if runtimes is not None:
+            t = min_tier_for_runtimes(runtimes)
+            if t is not None:
+                tiers.append(t)
+        if channels is not None:
+            t = min_tier_for_channel_count(channels)
+            if t is not None:
+                tiers.append(t)
+        if retention_days is not None:
+            t = min_tier_for_retention_window(retention_days)
+            if t is not None:
+                tiers.append(t)
+        if nodes is not None:
+            t = min_tier_for_node_count(nodes)
+            if t is not None:
+                tiers.append(t)
+        if not tiers:
+            return None
+        return max(tiers, key=tier_rank)
+    except Exception as exc:
+        logger.warning("entitlements: min_tier_for_all failed: %s", exc)
+        return None
+
+
 def lock_reason(item: str, *, kind: str | None = None) -> str | None:
     try:
         return get_entitlement().lock_reason(item, kind=kind)
