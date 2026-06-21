@@ -1,4 +1,4 @@
-"""Tests for sync_sandbox_sessions_openshell (issue #3116).
+"""Tests for sync_sandbox_sessions_openshell (issues #3116, #3234).
 
 No DuckDB or network required — all openshell and flush calls are mocked.
 """
@@ -70,6 +70,31 @@ def test_sidecar_files_excluded():
         sync_sandbox_sessions_openshell(CONFIG, {})
 
     assert len(flushed) == 1
+
+
+def test_sandbox_sessions_tagged_as_nemoclaw():
+    """Sandbox sessions must land with agent_type='nemoclaw' so NemoClawAdapter
+    list_sessions() (which filters WHERE agent_type='nemoclaw') can see them.
+    Regression test for #3234."""
+    events = [json.dumps({"type": "message", "id": "e1", "content": "hi"})]
+    sandbox_list = json.dumps([{"name": "sb", "status": "running"}])
+    ls_output = "sess.jsonl\n"
+    cat_output = "\n".join(events) + "\n"
+
+    side_effects = [_run(0, sandbox_list), _run(0, ls_output), _run(0, cat_output)]
+
+    flush_kwargs = []
+    with patch("clawmetry.sync._find_openshell_bin", return_value="/usr/bin/openshell"), \
+         patch("subprocess.run", side_effect=side_effects), \
+         patch("clawmetry.sync._flush_session_batch",
+               side_effect=lambda b, *a, **k: flush_kwargs.append(k)):
+        sync_sandbox_sessions_openshell(CONFIG, {})
+
+    assert flush_kwargs, "flush was never called"
+    assert flush_kwargs[0].get("agent_type") == "nemoclaw", (
+        "sandbox sessions must be tagged agent_type='nemoclaw' so the "
+        "NemoClawAdapter session query can find them"
+    )
 
 
 def test_cursor_skips_already_seen_lines_on_second_call():
