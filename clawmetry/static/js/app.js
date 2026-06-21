@@ -1200,15 +1200,6 @@ function switchTab(name) {
   if (name === 'alerts') { if (typeof loadAlertsPage === 'function') loadAlertsPage(); }
   if (name === 'dives') { if (typeof loadDivesPage === 'function') loadDivesPage(); }
   if (name === 'actions') loadQAHistory();
-  if (name === 'logs') {
-    // Phase 3 (#1252): defer the SSE handshake until the user actually
-    // dwells on the Logs tab for ≥2 s. Initial loadLogs() still fires
-    // immediately so the page paints content from cache.
-    if (!logStream || logStream.readyState === EventSource.CLOSED) {
-      dwellOpenSSE('logs', startLogStream);
-    }
-    loadLogs();
-  }
   if (name === 'models') loadModelAttribution();
   if (name === 'nemoclaw') { loadNemoClaw(); _startNcApprovalsAutoRefresh(); }
   if (name !== 'nemoclaw') _stopNcApprovalsAutoRefresh();
