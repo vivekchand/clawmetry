@@ -249,6 +249,53 @@ def api_entitlement_tier_unlocks():
         return jsonify({"error": "tier-unlocks failed", "tier": target}), 500
 
 
+@bp_entitlement.route("/api/entitlement/upgrade-path")
+def api_entitlement_upgrade_path():
+    """``GET /api/entitlement/upgrade-path`` -- ordered marginal-unlock
+    ladder from the resolved tier upward.
+
+    Where ``/tier-unlocks?tier=<id>`` returns the marginal for one named
+    tier, this returns the *sequence* of marginals for every purchasable
+    tier strictly above the user's current rank -- the view an upgrade
+    flow wizard uses to render "Starter unlocks X, then Pro adds Y, then
+    Enterprise adds Z". Empty ``path`` when the resolved tier already sits
+    at the top of the ladder.
+
+    Each row in ``path`` is byte-identical to the singular
+    ``/tier-unlocks?tier=`` response (same shape, same marginals -- both
+    computed vs the absolute next-lower purchasable tier in the catalogue,
+    *not* vs the previous step in the path). The envelope adds
+    ``current_tier`` / ``current_tier_rank`` / ``grace`` / ``enforced`` so
+    the CTA can render alongside without a second round-trip. Never 5xxs:
+    a resolver failure returns the grace-shape envelope with an empty
+    ``path``.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "path": _ent.upgrade_path(),
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_upgrade_path: error: %s", exc)
+        return jsonify(
+            {
+                "path": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 _CAPACITY_PARAMS = ("channels", "retention_days", "nodes")
 
 
