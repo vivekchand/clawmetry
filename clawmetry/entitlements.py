@@ -1207,6 +1207,47 @@ def tier_unlocks(target_tier: str) -> dict | None:
         return None
 
 
+def tier_unlocks_batch() -> list[dict]:
+    """Marginal unlocks for every purchasable tier in one pass.
+
+    Plural sibling of :func:`tier_unlocks`. Where the singular helper
+    answers "what does *this* tier first unlock vs the tier below it"
+    one tier at a time, the batch returns the same row shape for every
+    entry in :data:`_PURCHASABLE_TIERS` so a pricing-page table can
+    render the full "what's new in X" column off **one** round-trip
+    instead of N calls to ``/tier-unlocks``.
+
+    Rows are sorted by tier rank ascending (cheapest -> most capable)
+    and, within the same rank, by tier id so the ordering is stable
+    across calls. The trial tier is excluded (mirrors
+    :func:`tier_unlocks`, which returns ``None`` for non-purchasable
+    tiers); the floor tiers (``TIER_OSS`` / ``TIER_CLOUD_FREE``) appear
+    with ``previous_tier=None`` and their marginal collapses to the
+    full free grant -- same shape the singular helper returns.
+
+    Same-rank tiers (e.g. ``TIER_CLOUD_PRO`` and ``TIER_PRO`` both at
+    rank 2) are both returned, since callers may key off the tier id
+    rather than the rank. Consumers that want a deduped pricing ladder
+    can drop duplicates by ``tier_rank``.
+
+    Never raises: if the resolver blows up the helper returns ``[]``
+    so the UI keeps rendering instead of 500-ing.
+    """
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            row = tier_unlocks(tid)
+            if row is not None:
+                out.append(row)
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: tier_unlocks_batch failed: %s", exc)
+        return []
+
+
 def resolution_diagnostic() -> dict:
     out: dict = {
         "license_path": _LICENSE_PATH,

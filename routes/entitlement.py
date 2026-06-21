@@ -249,6 +249,61 @@ def api_entitlement_tier_unlocks():
         return jsonify({"error": "tier-unlocks failed", "tier": target}), 500
 
 
+@bp_entitlement.route("/api/entitlement/tier-unlocks-batch")
+def api_entitlement_tier_unlocks_batch():
+    """``GET /api/entitlement/tier-unlocks-batch`` -- marginal unlocks for
+    every purchasable tier in one pass. Plural sibling of
+    ``/api/entitlement/tier-unlocks``: where the singular endpoint
+    returns one tier's row (and 404s on an unknown id), the batch
+    returns the full pricing-page ladder in tier-rank order so a
+    pricing-table UI can render the "what's new in X" column off
+    **one** round-trip instead of N calls.
+
+    Response shape::
+
+        {
+          "tiers":             [<row>, ...],
+          "current_tier":      "...",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<row>`` matches ``/api/entitlement/tier-unlocks`` exactly
+    (``tier``, ``tier_label``, ``tier_rank``, ``previous_tier``,
+    ``previous_tier_label``, ``previous_tier_rank``, ``features``,
+    ``runtimes``). The trial tier is excluded -- it is not purchasable,
+    same posture as the singular helper. Never 5xxs: a resolver failure
+    yields an empty ``tiers`` list and the grace-shape envelope so the
+    pricing page keeps rendering.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.tier_unlocks_batch()
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": rows,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_tier_unlocks_batch: error: %s", exc)
+        return jsonify(
+            {
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 _CAPACITY_PARAMS = ("channels", "retention_days", "nodes")
 
 
