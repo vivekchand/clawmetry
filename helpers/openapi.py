@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import json
 import re
-from flask import Blueprint, jsonify, current_app
+from flask import Blueprint, Response, current_app
 
 bp_openapi = Blueprint("openapi", __name__)
 
@@ -414,7 +414,12 @@ def openapi_json():
     v1 = (request.args.get("v1_only") == "1"
           or getattr(current_app, '_cloud_mode', False)
           or bool(current_app.config.get("CLOUD_MODE")))
-    return jsonify(build_spec(current_app, v1_only=v1))
+    # Use json.dumps (not jsonify) so insertion order is preserved regardless
+    # of Flask version — jsonify sorts keys alphabetically on Flask ≤2.1,
+    # which buries the required "openapi" field after the large "components"
+    # block and breaks any validator reading only the first N bytes.
+    return Response(json.dumps(build_spec(current_app, v1_only=v1)),
+                    mimetype="application/json")
 
 
 @bp_openapi.route("/api/docs")
