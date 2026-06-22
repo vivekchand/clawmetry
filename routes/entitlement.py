@@ -71,6 +71,12 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                           ``/tier-unlocks``: returns the full
                                           pricing-page marginal-unlock ladder
                                           in one pass.
+  GET  /api/entitlement/preview-batch  -- plural sibling of ``/preview``:
+                                         the full ``Entitlement.to_dict``
+                                         shape rendered for every purchasable
+                                         tier in one pass so a pricing-page
+                                         table can render the cumulative-state
+                                         column off one round-trip.
   GET  /api/entitlement/tier-locks    -- marginal-loss companion of
                                          ``/tier-unlocks``: features + runtimes
                                          that disappear when you step down to
@@ -388,6 +394,68 @@ def api_entitlement_preview():
     except Exception as exc:
         logger.warning("api_entitlement_preview: error: %s", exc)
         return jsonify({"error": "preview failed", "tier": target}), 500
+
+
+@bp_entitlement.route("/api/entitlement/preview-batch")
+def api_entitlement_preview_batch():
+    """``GET /api/entitlement/preview-batch`` -- the full
+    :meth:`Entitlement.to_dict` shape rendered for every purchasable tier
+    in one pass. Plural sibling of ``/api/entitlement/preview``: where the
+    singular endpoint returns one tier's row (and 404s on an unknown id),
+    the batch returns the full pricing-page ladder in tier-rank order so a
+    pricing-table UI can render the cumulative-state column off **one**
+    round-trip instead of N calls.
+
+    Cumulative-state companion to ``/api/entitlement/tier-unlocks-batch``
+    (marginal grant per rung) and ``/api/entitlement/tier-locks-batch``
+    (marginal loss per rung): pair the three to render the "what's at X /
+    what's new at X / what you'd give up at X" three-column view of a
+    pricing table without client-side composition.
+
+    Response shape::
+
+        {
+          "tiers":             [<row>, ...],
+          "current_tier":      "...",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<row>`` matches ``/api/entitlement/preview`` exactly -- the
+    full ``Entitlement.to_dict`` shape with ``source="preview"`` and
+    ``grace=False`` so concrete per-tier capacity surfaces. The trial
+    tier is excluded -- it is not purchasable, same posture as the
+    singular helper. Row order matches ``/api/entitlement/tier-unlocks-batch``
+    and ``/api/entitlement/tier-locks-batch`` rung-for-rung. Never 5xxs:
+    a resolver failure yields an empty ``tiers`` list and the grace-shape
+    envelope so the pricing page keeps rendering.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.preview_batch()
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": rows,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_preview_batch: error: %s", exc)
+        return jsonify(
+            {
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
 
 
 @bp_entitlement.route("/api/entitlement/tier-unlocks")
