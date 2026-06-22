@@ -1824,3 +1824,62 @@ def cloud_cta_verify_otp():
         except Exception:
             _eb = {}
         return jsonify({"ok": False, "error": _eb.get("error", "Invalid code")}), 502
+
+
+def _compute_device_summary() -> dict:
+    """Build the compact /api/device/summary payload for embedded displays.
+
+    Pulls session count + current model from query_sessions_table and
+    today's token/cost totals from query_aggregates. Both store methods
+    are already registered in the daemon proxy dispatch table so this
+    works in both single-process (dev) and split-process (daemon) modes.
+    """
+    now = time.time()
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+
+    sess_rows = _ls_call("query_sessions_table", limit=200) or []
+    sessions_out = []
+    for r in sess_rows:
+        meta = r.get("metadata") or {}
+        sessions_out.append({
+            "status": (r.get("status") or "").lower(),
+            "model": meta.get("model"),
+        })
+    active = sum(1 for s in sessions_out if s["status"] == "active")
+    model = next((s["model"] for s in sessions_out if s.get("model")), "unknown")
+
+    agg_rows = _ls_call("query_aggregates", since=today + "T00:00:00") or []
+    tokens_today = int(sum(r.get("token_count", 0) or 0 for r in agg_rows))
+    cost_today = round(float(sum(r.get("cost_usd", 0.0) or 0.0 for r in agg_rows)), 6)
+
+    return {
+        "model": model,
+        "sessions": len(sessions_out),
+        "active_sessions": active,
+        "tokens_today": tokens_today,
+        "cost_today_usd": cost_today,
+        "ts": int(now),
+    }
+
+
+@bp_overview.route("/api/device/summary")
+def api_device_summary():
+    """Compact stats endpoint for embedded displays (e.g. ESP32-S3).
+
+    Returns a minimal JSON payload — model, session counts, today's token and
+    cost totals — suitable for low-bandwidth polling by hardware dashboards.
+    All fields degrade gracefully to zero/unknown when DuckDB is unavailable.
+
+    Added for issue #3244 (ESP32-S3 / Clawdmeter-style integration).
+    """
+    try:
+        return jsonify(_compute_device_summary())
+    except Exception:
+        return jsonify({
+            "model": "unknown",
+            "sessions": 0,
+            "active_sessions": 0,
+            "tokens_today": 0,
+            "cost_today_usd": 0.0,
+            "ts": int(time.time()),
+        })
