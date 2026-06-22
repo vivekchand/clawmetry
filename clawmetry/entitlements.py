@@ -1248,6 +1248,86 @@ def tier_unlocks_batch() -> list[dict]:
         return []
 
 
+def tier_locks(target_tier: str) -> dict | None:
+    """Per-tier marginal locks: features + runtimes that disappear when
+    you *descend to* ``target_tier`` from the next-higher purchasable
+    tier -- the marginal-loss companion to :func:`tier_unlocks`.
+
+    Where ``tier_unlocks(X)`` answers "what does X *first* unlock vs the
+    tier below it" (the upgrade-step marginal grant), ``tier_locks(X)``
+    answers "what does X *first* lose vs the tier above it" (the
+    downgrade-step marginal loss) -- the "what you'd be giving up by
+    stepping down to Starter from Pro" view a per-rung downgrade-warning
+    row uses, paired with :func:`downgrade_path` (cumulative state at a
+    rung) the way :func:`tier_unlocks` is paired with :func:`upgrade_path`.
+
+    The "tier above" is the *lowest*-rank entry in :data:`_PURCHASABLE_TIERS`
+    whose rank is strictly *greater* than ``target_tier``'s rank (trial is
+    excluded from purchasables, so a promotional grant never shows up as
+    the downgrade source). When ``target_tier`` sits at the ceiling
+    (:data:`TIER_ENTERPRISE`) ``next_tier`` is ``None`` and the marginal
+    collapses to empty loss lists -- there is no rung above to step down
+    from.
+
+    Set-identity: by construction the marginal loss at ``X`` equals the
+    marginal unlock at the next-higher purchasable tier above ``X``,
+    just attributed to the destination (the rung you land on) rather
+    than the source (the rung you stepped off). So
+    ``tier_locks(X)['lost_features']`` byte-equals
+    ``tier_unlocks(next_tier(X))['features']``, and likewise for runtimes
+    -- pinned in the test suite so a future reshuffle of the tier grant
+    sets can't silently desync the two views.
+
+    Returns ``None`` for an unknown tier id (including :data:`TIER_TRIAL`,
+    which is not purchasable) and never raises -- a resolver failure
+    short-circuits to ``None`` so a downgrade-warning surface keeps
+    rendering instead of 500-ing.
+    """
+    try:
+        tid = (target_tier or "").strip().lower()
+        if tid not in _PURCHASABLE_TIERS:
+            return None
+        target_rank = _TIER_RANK.get(tid, -1)
+        next_candidates = sorted(
+            (
+                c
+                for c in _PURCHASABLE_TIERS
+                if _TIER_RANK.get(c, -1) > target_rank
+            ),
+            key=lambda c: (_TIER_RANK.get(c, -1), c),
+        )
+        next_id: str | None = next_candidates[0] if next_candidates else None
+        this_feats = FREE_FEATURES | _TIER_FEATURES.get(tid, frozenset())
+        this_runtimes = (
+            FREE_RUNTIMES | PAID_RUNTIMES
+            if tid in _TIER_PAID_RUNTIMES
+            else FREE_RUNTIMES
+        )
+        if next_id is None:
+            next_feats: frozenset = frozenset()
+            next_runtimes: frozenset = frozenset()
+        else:
+            next_feats = FREE_FEATURES | _TIER_FEATURES.get(next_id, frozenset())
+            next_runtimes = (
+                FREE_RUNTIMES | PAID_RUNTIMES
+                if next_id in _TIER_PAID_RUNTIMES
+                else FREE_RUNTIMES
+            )
+        return {
+            "tier": tid,
+            "tier_label": tier_label(tid),
+            "tier_rank": tier_rank(tid),
+            "next_tier": next_id,
+            "next_tier_label": tier_label(next_id) if next_id else None,
+            "next_tier_rank": tier_rank(next_id) if next_id else None,
+            "lost_features": sorted(next_feats - this_feats),
+            "lost_runtimes": sorted(next_runtimes - this_runtimes),
+        }
+    except Exception as exc:
+        logger.warning("entitlements: tier_locks failed: %s", exc)
+        return None
+
+
 def upgrade_path() -> list[dict]:
     """Ordered marginal-unlock ladder from the resolved tier upward.
 
