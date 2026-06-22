@@ -1298,6 +1298,80 @@ def upgrade_path() -> list[dict]:
         return []
 
 
+def downgrade_path() -> list[dict]:
+    """Ordered cumulative-loss ladder from the resolved tier downward.
+
+    Direction-flipped sibling of :func:`upgrade_path`: where the upgrade
+    ladder walks purchasable tiers strictly *above* the caller and folds
+    :func:`tier_unlocks` over each, this walks purchasable tiers strictly
+    *below* the caller and folds :meth:`Entitlement.downgrade_diff` over
+    each. The destination view a downgrade-warning CTA renders ("dropping
+    to Starter loses claude_code + custom_alerts; dropping to Free also
+    loses retention beyond 7 days and every paid runtime").
+
+    Rows are sorted by ``(-tier_rank, tier_id)`` so the closest-to-current
+    rung sits first and same-rank siblings (e.g. ``TIER_CLOUD_FREE`` and
+    ``TIER_OSS`` both at rank 0) appear in stable lexicographic order. Each
+    row is the ``downgrade_diff`` shape augmented with destination tier
+    metadata + the caller's current-tier context::
+
+        {
+          "target":             "<tier id>",
+          "target_label":       "<display>",
+          "target_rank":        <int>,
+          "current_tier":       "<resolved tier id>",
+          "current_tier_label": "<display>",
+          "current_tier_rank":  <int>,
+          "lost_features":      [...],
+          "lost_runtimes":      [...],
+        }
+
+    Cumulative not marginal: ``lost_features`` / ``lost_runtimes`` on each
+    row reflect the *full* delta between the caller's resolved entitlement
+    and that row's destination -- so the lists strictly grow as the path
+    descends and consumers can render "if you drop to X, here's everything
+    you'd lose" without summing rows client-side. The marginal-per-rung
+    view (analogue of :func:`tier_unlocks`) is a separate future helper;
+    this one mirrors :func:`upgrade_path`'s *selection* (current-tier-relative
+    catalogue walk) rather than its *row shape*.
+
+    Returns an empty list when the resolved tier already sits at the floor
+    of the purchasable ladder (no rung below to descend to) and never raises
+    -- a resolver failure short-circuits to ``[]`` so a downgrade-warning
+    surface keeps rendering instead of breaking.
+    """
+    try:
+        ent = get_entitlement()
+        current_rank = _TIER_RANK.get(ent.tier, -1)
+        current_label = tier_label(ent.tier)
+        ordered = sorted(
+            _PURCHASABLE_TIERS,
+            key=lambda t: (-_TIER_RANK.get(t, -1), t),
+        )
+        path: list[dict] = []
+        for tid in ordered:
+            cand_rank = _TIER_RANK.get(tid, -1)
+            if cand_rank < 0 or cand_rank >= current_rank:
+                continue
+            diff = ent.downgrade_diff(tid)
+            path.append(
+                {
+                    "target": tid,
+                    "target_label": tier_label(tid),
+                    "target_rank": cand_rank,
+                    "current_tier": ent.tier,
+                    "current_tier_label": current_label,
+                    "current_tier_rank": current_rank,
+                    "lost_features": list(diff.get("lost_features") or []),
+                    "lost_runtimes": list(diff.get("lost_runtimes") or []),
+                }
+            )
+        return path
+    except Exception as exc:
+        logger.warning("entitlements: downgrade_path failed: %s", exc)
+        return []
+
+
 def resolution_diagnostic() -> dict:
     out: dict = {
         "license_path": _LICENSE_PATH,
