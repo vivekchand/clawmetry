@@ -67,6 +67,9 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                          the resolved tier upward (current-
                                          user-relative sibling of
                                          ``/tier-unlocks-batch``).
+  GET  /api/entitlement/downgrade-path -- ordered cumulative-loss ladder from
+                                         the resolved tier downward (direction-
+                                         flipped sibling of ``/upgrade-path``).
   GET  /api/runtimes                  -- the full runtime catalog.
   GET  /api/tiers                     -- the full tier ladder with per-tier metadata.
 """
@@ -355,6 +358,59 @@ def api_entitlement_upgrade_path():
         )
     except Exception as exc:
         logger.warning("api_entitlement_upgrade_path: error: %s", exc)
+        return jsonify(
+            {
+                "path": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/downgrade-path")
+def api_entitlement_downgrade_path():
+    """``GET /api/entitlement/downgrade-path`` -- ordered cumulative-loss
+    ladder from the resolved tier downward.
+
+    Direction-flipped sibling of ``/api/entitlement/upgrade-path``: rows
+    cover the purchasable tiers whose rank is strictly *below* the caller's
+    resolved entitlement rank, closest rung first. Lets a downgrade-warning
+    surface render every rung's full loss list without per-tier round-trips.
+
+    Response shape::
+
+        {
+          "path":              [<row>, ...],
+          "current_tier":      "...",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<row>`` carries the destination tier metadata + the caller's
+    current-tier context + ``lost_features`` / ``lost_runtimes`` cumulative
+    over the gap (see :func:`clawmetry.entitlements.downgrade_path`). Floor
+    callers (OSS / Cloud Free) get an empty ``path`` -- no rung below to
+    descend to. Never 5xxs: a resolver failure yields ``path: []`` with the
+    grace-shape envelope so the downgrade CTA keeps rendering.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "path": _ent.downgrade_path(),
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_downgrade_path: error: %s", exc)
         return jsonify(
             {
                 "path": [],
