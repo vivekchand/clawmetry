@@ -63,6 +63,11 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                           ``/tier-unlocks``: returns the full
                                           pricing-page marginal-unlock ladder
                                           in one pass.
+  GET  /api/entitlement/tier-locks    -- marginal-loss companion of
+                                         ``/tier-unlocks``: features + runtimes
+                                         that disappear when you step down to
+                                         the named tier from the next-higher
+                                         purchasable tier.
   GET  /api/entitlement/upgrade-path  -- ordered marginal-unlock ladder from
                                          the resolved tier upward (current-
                                          user-relative sibling of
@@ -313,6 +318,39 @@ def api_entitlement_tier_unlocks_batch():
                 "enforced": False,
             }
         )
+
+
+@bp_entitlement.route("/api/entitlement/tier-locks")
+def api_entitlement_tier_locks():
+    """``GET /api/entitlement/tier-locks?tier=<id>`` -- marginal locks for
+    ``tier`` (features + runtimes that disappear when descending from
+    the next-higher purchasable tier into ``tier``). Marginal-loss
+    companion to ``/tier-unlocks``: where the unlocks endpoint answers
+    "what does X first unlock vs the tier below it", this answers "what
+    does X first lose vs the tier above it" -- the per-rung
+    downgrade-warning row a step-down CTA renders, paired with
+    ``/downgrade-path`` the way ``/tier-unlocks`` is paired with
+    ``/upgrade-path``.
+
+    Returns ``404`` when the tier id is unknown (including ``trial`` --
+    not purchasable). Enterprise callers get a populated envelope with
+    ``next_tier=null`` and empty loss lists (nothing above to step down
+    from), not a 404 -- the tier is valid, the marginal just collapses
+    to nothing.
+    """
+    target = (request.args.get("tier") or "").strip().lower()
+    if not target:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        body = _ent.tier_locks(target)
+        if body is None:
+            return jsonify({"error": "unknown tier", "tier": target}), 404
+        return jsonify(body)
+    except Exception as exc:
+        logger.warning("api_entitlement_tier_locks: error: %s", exc)
+        return jsonify({"error": "tier-locks failed", "tier": target}), 500
 
 
 @bp_entitlement.route("/api/entitlement/upgrade-path")
