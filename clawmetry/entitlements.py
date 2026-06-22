@@ -1173,6 +1173,83 @@ def tier_diff(from_tier: str, to_tier: str) -> dict | None:
         return None
 
 
+def tier_path(from_tier: str, to_tier: str) -> list[dict] | None:
+    """Arbitrary-endpoint stepwise path between two tiers.
+
+    Generalises :func:`upgrade_path` / :func:`downgrade_path` (which pin
+    one endpoint to the resolved entitlement) to ANY pair of known tiers
+    -- the path analogue of :func:`tier_diff`. Lets a "Compare A vs B"
+    pricing-page widget render the *sequence of rungs* between any two
+    tiers (and the marginal transition at each rung) without first
+    switching the resolver.
+
+    The walk visits every purchasable tier strictly between ``from_tier``
+    and ``to_tier`` plus the destination ``to_tier`` itself, in tier-rank
+    order. Same-rank siblings *between* the endpoints are both included
+    (matching :func:`upgrade_path`'s ladder shape); same-rank siblings of
+    the destination are excluded so the path terminates exactly at
+    ``to_tier`` and not at one of its rank peers. Each row is the
+    :func:`tier_diff` payload between the previous step in the path (or
+    ``from_tier`` for the first row) and the current rung -- so each row
+    is a marginal step diff, and a consumer can fold the rows to
+    reconstruct the cumulative ``tier_diff(from_tier, to_tier)`` shape.
+
+    Endpoint semantics match :func:`tier_diff`: both ids accept any entry
+    in :data:`_TIER_FEATURES` (including :data:`TIER_TRIAL`, which is not
+    purchasable -- it is excluded from the walked rungs but is a valid
+    endpoint for the marginal-step computation). Identity (``from == to``)
+    returns ``[]`` -- no rungs to walk. Lateral (same rank, different id)
+    returns a single-row path: ``[tier_diff(from, to)]``. Unknown ids on
+    either side short-circuit to ``None``.
+
+    Never raises: a resolver failure logs a warning and returns ``None``
+    so a pricing-page surface keeps rendering.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+        if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+            return None
+        if f == t:
+            return []
+        from_rank = _TIER_RANK.get(f, -1)
+        to_rank = _TIER_RANK.get(t, -1)
+        if from_rank == to_rank:
+            row = tier_diff(f, t)
+            return [row] if row is not None else []
+        ascending = to_rank > from_rank
+        if ascending:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (_TIER_RANK.get(x, -1), x),
+            )
+        else:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (-_TIER_RANK.get(x, -1), x),
+            )
+        path: list[dict] = []
+        prev_step = f
+        for tid in ordered:
+            r = _TIER_RANK.get(tid, -1)
+            if ascending:
+                if r <= from_rank or r > to_rank:
+                    continue
+            else:
+                if r >= from_rank or r < to_rank:
+                    continue
+            if r == to_rank and tid != t:
+                continue
+            row = tier_diff(prev_step, tid)
+            if row is not None:
+                path.append(row)
+                prev_step = tid
+        return path
+    except Exception as exc:
+        logger.warning("entitlements: tier_path failed: %s", exc)
+        return None
+
+
 def next_tier_diff() -> dict | None:
     try:
         return get_entitlement().next_tier_diff()

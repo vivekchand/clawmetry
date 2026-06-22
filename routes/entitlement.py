@@ -83,6 +83,14 @@ is the single source of truth -- handlers never re-derive tier logic here.
   GET  /api/entitlement/downgrade-path -- ordered cumulative-loss ladder from
                                          the resolved tier downward (direction-
                                          flipped sibling of ``/upgrade-path``).
+  GET  /api/entitlement/tier-path     -- arbitrary-endpoint stepwise path
+                                         between any two tiers (``?from=&to=``);
+                                         path analogue of ``/tier-diff``,
+                                         generalising ``/upgrade-path`` /
+                                         ``/downgrade-path`` from "current vs
+                                         target" to "any vs any" with each
+                                         row a marginal-step ``tier_diff``
+                                         payload.
   GET  /api/entitlement/tiers-for     -- inverse of ``/required-tier``: the
                                          full ladder of tiers that grant a
                                          ``feature=`` or ``runtime=`` key
@@ -247,6 +255,87 @@ def api_entitlement_tier_diff():
         return jsonify(body)
     except Exception as exc:
         logger.warning("api_entitlement_tier_diff: error: %s", exc)
+        return (
+            jsonify({"error": "unknown tier", "from": f, "to": t}),
+            404,
+        )
+
+
+@bp_entitlement.route("/api/entitlement/tier-path")
+def api_entitlement_tier_path():
+    """``GET /api/entitlement/tier-path?from=<id>&to=<id>`` -- arbitrary-
+    endpoint stepwise path between any two tiers; the path analogue of
+    ``/api/entitlement/tier-diff``, generalising ``/upgrade-path`` /
+    ``/downgrade-path`` (which pin one endpoint to the resolved
+    entitlement) to ANY pair so a "Compare A vs B" pricing-page widget
+    can render the rung sequence between any two tiers without first
+    switching the resolver.
+
+    Each row in ``path`` is a full :func:`clawmetry.entitlements.tier_diff`
+    payload between the previous step in the path (or ``from`` for the
+    first row) and the current rung -- so each row is a marginal step
+    diff. Same-rank siblings strictly between the endpoints are both
+    included; same-rank siblings of the destination are excluded so the
+    path terminates exactly at ``to``.
+
+    Response shape::
+
+        {
+          "from":       "<tier id>",
+          "from_label": "...",
+          "from_rank":  <int>,
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<tier_diff row>, ...],
+        }
+
+    Identity (``from == to``) returns an empty path. Lateral (same rank,
+    different id) returns a single-row path. ``400`` when ``from=`` or
+    ``to=`` is missing; ``404`` when either id is unknown. ``trial`` IS
+    accepted as an endpoint -- it is excluded from the walked rungs (not
+    purchasable) but the endpoint computation still resolves. Never
+    5xxs: a resolver failure short-circuits to ``404`` so a pricing-page
+    surface keeps rendering instead of breaking.
+    """
+    f = (request.args.get("from") or "").strip().lower()
+    t = (request.args.get("to") or "").strip().lower()
+    if not f or not t:
+        return jsonify({"error": "missing from or to"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        path = _ent.tier_path(f, t)
+        if path is None:
+            return (
+                jsonify({"error": "unknown tier", "from": f, "to": t}),
+                404,
+            )
+        from_rank = _ent.tier_rank(f)
+        to_rank = _ent.tier_rank(t)
+        if f == t:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        return jsonify(
+            {
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": from_rank,
+                "to": t,
+                "to_label": _ent.tier_label(t),
+                "to_rank": to_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_tier_path: error: %s", exc)
         return (
             jsonify({"error": "unknown tier", "from": f, "to": t}),
             404,
