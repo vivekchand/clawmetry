@@ -157,10 +157,16 @@ def _resolve_ollama_host() -> str:
     Mirrors getOllamaModelOptions() priority in nemoclaw/dist/lib/inference/local.js:
     OLLAMA_HOST_DOCKER_INTERNAL → OLLAMA_LOCALHOST → http://localhost:11434.
     """
+    from urllib.parse import urlparse
     for var in ("OLLAMA_HOST_DOCKER_INTERNAL", "OLLAMA_LOCALHOST"):
         val = os.environ.get(var, "").strip()
-        if val:
-            return val if val.startswith("http") else f"http://{val}"
+        if not val:
+            continue
+        if not val.startswith("http"):
+            val = f"http://{val}"
+        if not urlparse(val).port:
+            val = f"{val}:11434"
+        return val
     return "http://localhost:11434"
 
 
