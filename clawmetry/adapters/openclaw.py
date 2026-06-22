@@ -1094,6 +1094,29 @@ class OpenClawAdapter(AgentAdapter):
                                         _res = max(0, int(_tt) - _split)
                                         if _res:
                                             extra["reasoningTokens"] = _res
+                            # Walk message.content blocks for tool_result.details (#3255).
+                            # nemoClawBuildToolResult attaches a `details` dict on every
+                            # tool_result block; _build_spans_from_events() already reads
+                            # it for OTel spans but list_events() was not propagating it
+                            # to Event.extra, so the live event stream lacked this data.
+                            if isinstance(msg, dict):
+                                _content = msg.get("content")
+                                if isinstance(_content, list):
+                                    _tr_details = [
+                                        {
+                                            "tool_use_id": (
+                                                blk.get("tool_use_id")
+                                                or blk.get("toolUseId")
+                                            ),
+                                            "details": blk["details"],
+                                        }
+                                        for blk in _content
+                                        if isinstance(blk, dict)
+                                        and blk.get("type") == "tool_result"
+                                        and blk.get("details") is not None
+                                    ]
+                                    if _tr_details:
+                                        extra["tool_result_details"] = _tr_details
                     except Exception:
                         pass
                 # #2794: DB token_count derives from input+output and under-counts
