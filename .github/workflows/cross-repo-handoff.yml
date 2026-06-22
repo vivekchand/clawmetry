@@ -21,7 +21,7 @@ jobs:
 
     steps:
       - name: Checkout clawmetry (OSS)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           path: oss
 
@@ -46,7 +46,7 @@ jobs:
       # Cloud repo provides run_cloud.py stub + DaemonSim wire-format simulator.
       - name: Checkout clawmetry-cloud
         if: steps.access.outputs.available == 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: vivekchand/clawmetry-cloud
           token: ${{ secrets.CLOUD_REPO_PAT }}

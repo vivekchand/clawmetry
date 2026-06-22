@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout OSS repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Get OSS version
         id: oss_version
@@ -42,7 +42,7 @@ jobs:
           echo "::warning::clawmetry==$V not on PyPI after wait; continuing (cloud CI will gate the merge)"
 
       - name: Checkout cloud repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: vivekchand/clawmetry-cloud
           token: ${{ secrets.CLOUD_REPO_PAT }}
