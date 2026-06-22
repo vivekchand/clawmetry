@@ -35,6 +35,14 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                          would add on top of the current ent.
   GET  /api/entitlement/downgrade-diff -- features + runtimes a target tier
                                           would REMOVE from the current ent.
+  GET  /api/entitlement/tier-diff     -- arbitrary-endpoint diff between any
+                                         two tiers (``?from=&to=``);
+                                         generalises ``/upgrade-diff`` /
+                                         ``/downgrade-diff`` from "current vs
+                                         target" to "any tier vs any tier" so
+                                         a "Compare A vs B" pricing-page
+                                         widget can render any pair without
+                                         first switching the resolver.
   GET  /api/entitlement/preview        -- the full Entitlement.to_dict() shape
                                           rendered for an arbitrary tier so the
                                           upgrade-CTA card can show concrete
@@ -199,6 +207,49 @@ def api_entitlement_downgrade_diff():
                 "lost_features": [],
                 "lost_runtimes": [],
             }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/tier-diff")
+def api_entitlement_tier_diff():
+    """``GET /api/entitlement/tier-diff?from=<id>&to=<id>`` -- arbitrary-
+    endpoint diff between any two tiers, generalising ``/upgrade-diff`` /
+    ``/downgrade-diff`` (which pin one endpoint to the resolved entitlement)
+    to ANY pair so a "Compare A vs B" pricing-page widget can render the
+    transition between any two rungs without first switching the resolver.
+
+    The payload carries both ``added_*`` and ``lost_*`` lists on every call,
+    plus a ``direction`` tag (``upgrade`` | ``downgrade`` | ``lateral`` |
+    ``identity``) and a ``capacity_changes`` dict for the three capacity
+    axes (channels / retention / nodes), so the same shape covers all four
+    transition kinds and the consumer reads the tag instead of inferring
+    direction from the deltas.
+
+    ``400`` when ``from=`` or ``to=`` is missing; ``404`` when either id
+    is unknown. ``trial`` IS accepted -- it is unreachable via the
+    purchasable-only helpers but is a valid hypothetical endpoint.
+    Never 5xxs: a resolver failure short-circuits to ``404`` instead of
+    raising so a paywall surface keeps rendering.
+    """
+    f = (request.args.get("from") or "").strip().lower()
+    t = (request.args.get("to") or "").strip().lower()
+    if not f or not t:
+        return jsonify({"error": "missing from or to"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        body = _ent.tier_diff(f, t)
+        if body is None:
+            return (
+                jsonify({"error": "unknown tier", "from": f, "to": t}),
+                404,
+            )
+        return jsonify(body)
+    except Exception as exc:
+        logger.warning("api_entitlement_tier_diff: error: %s", exc)
+        return (
+            jsonify({"error": "unknown tier", "from": f, "to": t}),
+            404,
         )
 
 

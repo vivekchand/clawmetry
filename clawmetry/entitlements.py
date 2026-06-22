@@ -1057,6 +1057,122 @@ def downgrade_diff(target_tier: str) -> dict:
         return {"target": target_tier or "", "lost_features": [], "lost_runtimes": []}
 
 
+def tier_diff(from_tier: str, to_tier: str) -> dict | None:
+    """Arbitrary-endpoint diff between two tiers.
+
+    Generalises :func:`upgrade_diff` / :func:`downgrade_diff` (which pin one
+    endpoint to the resolved entitlement) to ANY pair of known tiers, so a
+    "Compare A vs B" pricing-page widget can render the transition between
+    any two rungs without first switching the resolver. The payload carries
+    both directions on every call so the same shape covers an upgrade, a
+    downgrade, a lateral (same-rank, different id) and an identity (same
+    tier) -- the consumer reads the ``direction`` tag instead of inferring
+    it from the deltas.
+
+    Both endpoints accept any id in :data:`_TIER_FEATURES` (including
+    :data:`TIER_TRIAL`, which is unreachable via the purchasable-only
+    helpers but is a valid hypothetical destination for "what would a
+    14-day trial unlock right now" copy). Unknown ids on either side
+    short-circuit to ``None`` -- the same posture as :func:`preview` /
+    :func:`tier_unlocks` -- so a paywall surface keeps rendering instead
+    of 500-ing.
+
+    Response shape::
+
+        {
+          "from":             "<tier id>",
+          "from_label":       "...",
+          "from_rank":        <int>,
+          "to":               "<tier id>",
+          "to_label":         "...",
+          "to_rank":          <int>,
+          "direction":        "upgrade" | "downgrade" | "lateral" | "identity",
+          "added_features":   [...],   # in `to` but not in `from`
+          "lost_features":    [...],   # in `from` but not in `to`
+          "added_runtimes":   [...],
+          "lost_runtimes":    [...],
+          "capacity_changes": {
+              "channel_limit":   {before, after, delta, unlocked, locked},
+              "retention_days":  {before, after, delta, unlocked, locked},
+              "node_limit":      {before, after, delta, unlocked, locked},
+          },
+        }
+
+    The ``added_*`` / ``lost_*`` lists are sorted for byte-stable output,
+    so a snapshot diff against a fixture stays deterministic. Set-identity:
+    by construction ``tier_diff(X, Y)['added_features']`` byte-equals
+    ``tier_diff(Y, X)['lost_features']`` (and likewise for runtimes) -- the
+    same swap-the-endpoints invariant the upgrade/downgrade pair holds
+    against the current entitlement, lifted to arbitrary endpoints.
+    Pinned in the test suite so a future reshuffle of the tier grant sets
+    can't silently desync the two views.
+
+    Never raises: a resolver failure logs a warning and returns ``None``
+    so the surface keeps rendering.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+        if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+            return None
+        from_feats = FREE_FEATURES | _TIER_FEATURES.get(f, frozenset())
+        if f == TIER_ENTERPRISE:
+            from_feats = from_feats | ENTERPRISE_FEATURES
+        to_feats = FREE_FEATURES | _TIER_FEATURES.get(t, frozenset())
+        if t == TIER_ENTERPRISE:
+            to_feats = to_feats | ENTERPRISE_FEATURES
+        from_runtimes = (
+            FREE_RUNTIMES | PAID_RUNTIMES
+            if f in _TIER_PAID_RUNTIMES
+            else FREE_RUNTIMES
+        )
+        to_runtimes = (
+            FREE_RUNTIMES | PAID_RUNTIMES
+            if t in _TIER_PAID_RUNTIMES
+            else FREE_RUNTIMES
+        )
+        from_rank = _TIER_RANK.get(f, -1)
+        to_rank = _TIER_RANK.get(t, -1)
+        if f == t:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        return {
+            "from": f,
+            "from_label": tier_label(f),
+            "from_rank": from_rank,
+            "to": t,
+            "to_label": tier_label(t),
+            "to_rank": to_rank,
+            "direction": direction,
+            "added_features": sorted(to_feats - from_feats),
+            "lost_features": sorted(from_feats - to_feats),
+            "added_runtimes": sorted(to_runtimes - from_runtimes),
+            "lost_runtimes": sorted(from_runtimes - to_runtimes),
+            "capacity_changes": {
+                "channel_limit": _capacity_transition(
+                    _TIER_CHANNEL_LIMIT.get(f, _FREE_CHANNEL_LIMIT),
+                    _TIER_CHANNEL_LIMIT.get(t, _FREE_CHANNEL_LIMIT),
+                ),
+                "retention_days": _capacity_transition(
+                    _TIER_RETENTION_DAYS.get(f, 7),
+                    _TIER_RETENTION_DAYS.get(t, 7),
+                ),
+                "node_limit": _capacity_transition(
+                    _TIER_NODE_LIMIT.get(f, _FREE_NODE_LIMIT),
+                    _TIER_NODE_LIMIT.get(t, _FREE_NODE_LIMIT),
+                ),
+            },
+        }
+    except Exception as exc:
+        logger.warning("entitlements: tier_diff failed: %s", exc)
+        return None
+
+
 def next_tier_diff() -> dict | None:
     try:
         return get_entitlement().next_tier_diff()
