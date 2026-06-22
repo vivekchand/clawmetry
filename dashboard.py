@@ -14,6 +14,7 @@ https://github.com/vivekchand/clawmetry
 MIT License
 """
 
+import hmac
 import os
 import sys
 
@@ -554,7 +555,7 @@ def _fleet_check_key(req):
     if not FLEET_API_KEY:
         return True  # No key configured = open (for dev/testing)
     key = req.headers.get("X-Fleet-Key", "")
-    return key == FLEET_API_KEY
+    return hmac.compare_digest(key, FLEET_API_KEY)
 
 
 def _fleet_update_statuses():
@@ -9151,7 +9152,7 @@ def _fleet_check_key(req):
     if not FLEET_API_KEY:
         return True  # No key configured = open (for dev/testing)
     key = req.headers.get("X-Fleet-Key", "")
-    return key == FLEET_API_KEY
+    return hmac.compare_digest(key, FLEET_API_KEY)
 
 
 def _fleet_update_statuses():
@@ -12746,7 +12747,7 @@ def _check_auth():
     token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
     if not token:
         token = request.args.get("token", "").strip()
-    if token == GATEWAY_TOKEN:
+    if hmac.compare_digest(token, GATEWAY_TOKEN):
         return
     return jsonify({"error": "Unauthorized", "authRequired": True}), 401
 
