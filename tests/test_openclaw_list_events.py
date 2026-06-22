@@ -541,3 +541,102 @@ def test_first_event_latency_from_harness_field():
     assert attrs_first.get("llm.slow_reply") is True
     assert "llm.first_event_latency_ms" not in attrs_second
     assert "llm.slow_reply" not in attrs_second
+
+
+# ── NeMo Guardrails catalog dispatch tagging (issue #3254) ───────────────────
+
+
+def test_list_events_tags_catalog_tools_in_tool_metas(isolated_store):
+    """model.completed events whose toolMetas include a catalog guardrail name
+    get hasCatalogTools=True and catalogToolNames populated in extra (#3254).
+
+    The NeMo Guardrails tool catalog injects tool_search, tool_describe, and
+    tool_call as control-plane meta-tools. When an assistant turn contains one
+    or more of these as tool_use blocks, sync.py stores them in toolMetas.
+    list_events() must flag these so callers can filter/style them separately
+    from real agent tool calls.
+    """
+    import uuid, time as _t
+    isolated_store.ingest({
+        "id": str(uuid.uuid4()),
+        "node_id": "agent+test-node",
+        "agent_id": "main",
+        "agent_type": "openclaw",
+        "session_id": "sess-CATALOG",
+        "event_type": "model.completed",
+        "ts": _t.time(),
+        "model": "nv/llama3-70b",
+        "token_count": 10,
+        "data": {
+            "type": "model.completed",
+            "toolMetas": [
+                {"id": "tu_1", "name": "tool_search", "input": {"query": "bash"}},
+                {"id": "tu_2", "name": "bash", "input": {"command": "ls"}},
+            ],
+        },
+    })
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess-CATALOG")
+    assert len(events) == 1
+    ex = events[0].extra
+    assert ex.get("hasCatalogTools") is True
+    assert ex.get("catalogToolNames") == ["tool_search"]
+
+
+def test_list_events_no_catalog_flag_for_real_tools(isolated_store):
+    """model.completed events whose toolMetas contain only real tool names
+    must NOT get the catalog flag — only catalog guardrail names trigger it (#3254)."""
+    import uuid, time as _t
+    isolated_store.ingest({
+        "id": str(uuid.uuid4()),
+        "node_id": "agent+test-node",
+        "agent_id": "main",
+        "agent_type": "openclaw",
+        "session_id": "sess-REAL",
+        "event_type": "model.completed",
+        "ts": _t.time(),
+        "data": {
+            "type": "model.completed",
+            "toolMetas": [
+                {"id": "tu_1", "name": "bash", "input": {"command": "ls"}},
+                {"id": "tu_2", "name": "read_file", "input": {"path": "/etc/hosts"}},
+            ],
+        },
+    })
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess-REAL")
+    assert len(events) == 1
+    ex = events[0].extra
+    assert "hasCatalogTools" not in ex
+    assert "catalogToolNames" not in ex
+
+
+def test_list_events_tags_top_level_catalog_tool_call(isolated_store):
+    """Top-level tool.call events (rare; name at obj['name']) also get
+    isCatalogTool=True when the tool is a catalog guardrail dispatch (#3254)."""
+    import uuid, time as _t
+    isolated_store.ingest({
+        "id": str(uuid.uuid4()),
+        "node_id": "agent+test-node",
+        "agent_id": "main",
+        "agent_type": "openclaw",
+        "session_id": "sess-TOP",
+        "event_type": "tool.call",
+        "ts": _t.time(),
+        "data": {
+            "type": "tool.call",
+            "name": "tool_describe",
+            "input": {"tool": "bash"},
+        },
+    })
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess-TOP")
+    assert len(events) == 1
+    ex = events[0].extra
+    assert ex.get("isCatalogTool") is True

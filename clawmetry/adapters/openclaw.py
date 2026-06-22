@@ -157,10 +157,16 @@ def _resolve_ollama_host() -> str:
     Mirrors getOllamaModelOptions() priority in nemoclaw/dist/lib/inference/local.js:
     OLLAMA_HOST_DOCKER_INTERNAL → OLLAMA_LOCALHOST → http://localhost:11434.
     """
+    from urllib.parse import urlparse
     for var in ("OLLAMA_HOST_DOCKER_INTERNAL", "OLLAMA_LOCALHOST"):
         val = os.environ.get(var, "").strip()
-        if val:
-            return val if val.startswith("http") else f"http://{val}"
+        if not val:
+            continue
+        if not val.startswith("http"):
+            val = f"http://{val}"
+        if not urlparse(val).port:
+            val = f"{val}:11434"
+        return val
     return "http://localhost:11434"
 
 
@@ -1029,6 +1035,28 @@ class OpenClawAdapter(AgentAdapter):
                             _sr = obj.get("slow_reply") or obj.get("slowReply") or obj.get("is_slow")
                             if _sr:
                                 extra["slow_reply"] = True
+                            # NeMo Guardrails catalog dispatch tag (#3254):
+                            # toolMetas carries tool_use blocks from the assistant
+                            # turn; names in _NEMOCLAW_CATALOG_TOOLS are guardrail
+                            # control-plane calls, not real agent actions.
+                            _tool_metas = (
+                                obj.get("toolMetas")
+                                or (obj.get("data") or {}).get("toolMetas")
+                                or []
+                            )
+                            if isinstance(_tool_metas, list):
+                                _catalog = [
+                                    m["name"] for m in _tool_metas
+                                    if isinstance(m, dict)
+                                    and m.get("name") in _NEMOCLAW_CATALOG_TOOLS
+                                ]
+                                if _catalog:
+                                    extra["hasCatalogTools"] = True
+                                    extra["catalogToolNames"] = _catalog
+                            # Top-level tool.call events store the name at obj["name"].
+                            _tname = obj.get("name") or (obj.get("data") or {}).get("name")
+                            if isinstance(_tname, str) and _tname in _NEMOCLAW_CATALOG_TOOLS:
+                                extra["isCatalogTool"] = True
                             msg = obj.get("message")
                             if isinstance(msg, str):
                                 content_text = msg
