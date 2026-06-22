@@ -1646,6 +1646,110 @@ def min_tier_for_runtime(runtime: str) -> str | None:
     return None
 
 
+def _tier_row(tier: str) -> dict:
+    return {
+        "id": tier,
+        "label": tier_label(tier),
+        "rank": tier_rank(tier),
+        "purchasable": tier in _PURCHASABLE_TIERS,
+    }
+
+
+def tiers_for_feature(feature: str) -> dict | None:
+    """Inverse of :func:`min_tier_for_feature`: list **every** tier that
+    grants ``feature`` (not just the cheapest one).
+
+    Where ``min_tier_for_feature`` answers "what's the cheapest tier
+    that unlocks X" -- a single id used by the upgrade-CTA -- this
+    helper returns the full "Available in: Pro, Self-hosted Pro,
+    Trial, Enterprise" availability list a pricing-page row or
+    feature tooltip renders. Walks :data:`_TIER_ORDER` so the
+    promotional ``trial`` tier appears alongside the purchasable
+    plans (each row carries ``purchasable`` so the UI can dim or
+    badge it).
+
+    Rows are sorted by ``(tier_rank, tier_id)`` for stable output.
+    ``min_tier`` matches :func:`min_tier_for_feature` (trial
+    excluded -- not a plan a customer picks).
+
+    Returns ``None`` for empty / unknown feature ids and never raises.
+    """
+    try:
+        f = (feature or "").strip().lower()
+        if not f or f not in ALL_FEATURES:
+            return None
+        carriers: list[str] = []
+        for tier in _TIER_ORDER:
+            paid_feats = _TIER_FEATURES.get(tier, frozenset())
+            if f in FREE_FEATURES or f in paid_feats:
+                carriers.append(tier)
+        rows = [
+            _tier_row(t)
+            for t in sorted(carriers, key=lambda t: (tier_rank(t), t))
+        ]
+        min_t = min_tier_for_feature(f)
+        return {
+            "item": f,
+            "kind": "feature",
+            "label": feature_label(f),
+            "free": f in FREE_FEATURES,
+            "min_tier": min_t,
+            "min_tier_label": tier_label(min_t) if min_t else None,
+            "min_tier_rank": tier_rank(min_t) if min_t else None,
+            "tiers": rows,
+        }
+    except Exception as exc:
+        logger.warning("entitlements: tiers_for_feature failed: %s", exc)
+        return None
+
+
+def tiers_for_runtime(runtime: str) -> dict | None:
+    """Inverse of :func:`min_tier_for_runtime`: list every tier that
+    grants ``runtime``.
+
+    FREE_RUNTIMES are granted at every tier in :data:`_TIER_ORDER`;
+    PAID_RUNTIMES are granted at every tier in
+    :data:`_TIER_PAID_RUNTIMES` (trial, starter, cloud_pro, self-hosted
+    pro, enterprise). Rows sorted ``(rank, id)``; trial appears
+    alongside purchasable plans with ``purchasable=False`` so the UI
+    can render it as a separate promotional badge.
+
+    Returns ``None`` for empty / unknown runtime ids and never raises.
+    Accepts the canonical id (``claude_code``) or any registered alias
+    (``claude-code``).
+    """
+    try:
+        rt = canonical_runtime(runtime)
+        if not rt or rt not in ALL_RUNTIMES:
+            return None
+        carriers: list[str] = []
+        is_free = rt in FREE_RUNTIMES
+        is_paid = rt in PAID_RUNTIMES
+        for tier in _TIER_ORDER:
+            if is_free:
+                carriers.append(tier)
+            elif is_paid and tier in _TIER_PAID_RUNTIMES:
+                carriers.append(tier)
+        rows = [
+            _tier_row(t)
+            for t in sorted(carriers, key=lambda t: (tier_rank(t), t))
+        ]
+        min_t = min_tier_for_runtime(rt)
+        return {
+            "item": rt,
+            "kind": "runtime",
+            "label": runtime_label(rt),
+            "free": is_free,
+            "min_tier": min_t,
+            "min_tier_label": tier_label(min_t) if min_t else None,
+            "min_tier_rank": tier_rank(min_t) if min_t else None,
+            "tiers": rows,
+        }
+    except Exception as exc:
+        logger.warning("entitlements: tiers_for_runtime failed: %s", exc)
+        return None
+
+
 def min_tier_for_channel_count(count: int) -> str | None:
     """Return the cheapest *purchasable* tier id whose channel-adapter cap fits
     ``count`` configured channels. Closes the symmetry gap with
@@ -2116,6 +2220,25 @@ _FEATURE_TIER_RANK = {
 }
 
 
+def _feature_tier_ids(feature: str) -> list[str]:
+    """Compact id-only sibling of :func:`tiers_for_feature` (just the
+    ladder of tier ids that grant ``feature``). Used to enrich the
+    feature catalog row so a matrix UI doesn't need a per-row roundtrip
+    to ``/api/entitlement/tiers-for`` to know which columns to tick."""
+    body = tiers_for_feature(feature)
+    if body is None:
+        return []
+    return [row["id"] for row in body.get("tiers", [])]
+
+
+def _runtime_tier_ids(runtime: str) -> list[str]:
+    """Compact id-only sibling of :func:`tiers_for_runtime`."""
+    body = tiers_for_runtime(runtime)
+    if body is None:
+        return []
+    return [row["id"] for row in body.get("tiers", [])]
+
+
 def feature_catalog() -> list[dict]:
     try:
         ent = get_entitlement()
@@ -2138,6 +2261,7 @@ def feature_catalog() -> list[dict]:
                 "id": fid,
                 "label": feature_label(fid),
                 "tier": tier,
+                "tiers": _feature_tier_ids(fid),
                 "free": is_free,
                 "allowed": allowed,
                 "locked": (not is_free) and (not allowed),
@@ -2162,6 +2286,7 @@ def runtime_catalog() -> list[dict]:
                 "label": runtime_label(rt),
                 "free": True,
                 "tier": "free",
+                "tiers": _runtime_tier_ids(rt),
                 "allowed": True,
                 "locked": False,
                 "entitled": True,
@@ -2175,6 +2300,7 @@ def runtime_catalog() -> list[dict]:
                 "label": runtime_label(rt),
                 "free": False,
                 "tier": "starter",
+                "tiers": _runtime_tier_ids(rt),
                 "allowed": allowed,
                 "locked": not allowed,
                 "entitled": ent.entitled_runtime(rt),

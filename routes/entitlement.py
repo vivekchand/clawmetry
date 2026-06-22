@@ -75,6 +75,13 @@ is the single source of truth -- handlers never re-derive tier logic here.
   GET  /api/entitlement/downgrade-path -- ordered cumulative-loss ladder from
                                          the resolved tier downward (direction-
                                          flipped sibling of ``/upgrade-path``).
+  GET  /api/entitlement/tiers-for     -- inverse of ``/required-tier``: the
+                                         full ladder of tiers that grant a
+                                         ``feature=`` or ``runtime=`` key
+                                         (the "Available in: Pro,
+                                         Self-hosted Pro, Trial, Enterprise"
+                                         availability list a pricing-page
+                                         row or feature tooltip needs).
   GET  /api/runtimes                  -- the full runtime catalog.
   GET  /api/tiers                     -- the full tier ladder with per-tier metadata.
 """
@@ -1131,6 +1138,48 @@ def api_entitlement_diagnostic():
                 "error": str(exc),
             }
         )
+
+
+@bp_entitlement.route("/api/entitlement/tiers-for")
+def api_entitlement_tiers_for():
+    """``GET /api/entitlement/tiers-for?feature=<id>`` (or
+    ``?runtime=<id>``) -- inverse of ``/required-tier``: returns the
+    full ladder of tiers that grant the named feature or runtime, not
+    just the cheapest one. The "Available in: Pro, Self-hosted Pro,
+    Trial, Enterprise" availability list a pricing-page row or feature
+    tooltip needs.
+
+    Exactly one of ``feature=`` or ``runtime=`` must be supplied -- a
+    missing key is ``400``, both keys at once is ``400`` (no implicit
+    precedence so callers cannot accidentally query the wrong axis).
+    An unknown id (not in ``ALL_FEATURES`` / ``ALL_RUNTIMES``) is
+    ``404``. Never 5xxs.
+    """
+    feat = (request.args.get("feature") or "").strip().lower()
+    rt = (request.args.get("runtime") or "").strip().lower()
+    if not feat and not rt:
+        return jsonify({"error": "missing feature or runtime"}), 400
+    if feat and rt:
+        return jsonify(
+            {"error": "pass feature OR runtime, not both"}
+        ), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if feat:
+            body = _ent.tiers_for_feature(feat)
+            kind = "feature"
+            item = feat
+        else:
+            body = _ent.tiers_for_runtime(rt)
+            kind = "runtime"
+            item = rt
+        if body is None:
+            return jsonify({"error": f"unknown {kind}", kind: item}), 404
+        return jsonify(body)
+    except Exception as exc:
+        logger.warning("api_entitlement_tiers_for: error: %s", exc)
+        return jsonify({"error": "tiers-for failed"}), 500
 
 
 @bp_entitlement.route("/api/runtimes")
