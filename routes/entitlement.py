@@ -353,6 +353,65 @@ def api_entitlement_tier_locks():
         return jsonify({"error": "tier-locks failed", "tier": target}), 500
 
 
+@bp_entitlement.route("/api/entitlement/tier-locks-batch")
+def api_entitlement_tier_locks_batch():
+    """``GET /api/entitlement/tier-locks-batch`` -- marginal locks for
+    every purchasable tier in one pass. Plural sibling of
+    ``/api/entitlement/tier-locks``: where the singular endpoint
+    returns one tier's row (and 404s on an unknown id), the batch
+    returns the full purchasable ladder in tier-rank order so a
+    downgrade-warning matrix can render the "what you'd give up at X"
+    column off **one** round-trip instead of N calls.
+
+    Marginal-loss companion to ``/api/entitlement/tier-unlocks-batch``:
+    pair the two endpoints to render the upgrade-CTA + downgrade-warning
+    columns on a pricing table without client-side composition.
+
+    Response shape::
+
+        {
+          "tiers":             [<row>, ...],
+          "current_tier":      "...",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<row>`` matches ``/api/entitlement/tier-locks`` exactly
+    (``tier``, ``tier_label``, ``tier_rank``, ``next_tier``,
+    ``next_tier_label``, ``next_tier_rank``, ``lost_features``,
+    ``lost_runtimes``). The trial tier is excluded -- it is not
+    purchasable, same posture as the singular helper. Never 5xxs: a
+    resolver failure yields an empty ``tiers`` list and the grace-shape
+    envelope so the downgrade-warning UI keeps rendering.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.tier_locks_batch()
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": rows,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_tier_locks_batch: error: %s", exc)
+        return jsonify(
+            {
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/upgrade-path")
 def api_entitlement_upgrade_path():
     """``GET /api/entitlement/upgrade-path`` -- ordered marginal-unlock

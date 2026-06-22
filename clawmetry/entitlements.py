@@ -1328,6 +1328,54 @@ def tier_locks(target_tier: str) -> dict | None:
         return None
 
 
+def tier_locks_batch() -> list[dict]:
+    """Marginal locks for every purchasable tier in one pass.
+
+    Plural sibling of :func:`tier_locks`. Where the singular helper
+    answers "what does *this* tier first lose vs the tier above it"
+    one tier at a time, the batch returns the same row shape for every
+    entry in :data:`_PURCHASABLE_TIERS` so a downgrade-warning surface
+    can render the full "what you'd give up at X" column off **one**
+    round-trip instead of N calls to ``/tier-locks``.
+
+    Marginal-loss companion to :func:`tier_unlocks_batch`: where the
+    unlocks batch is the upgrade-CTA column on a pricing table, this
+    is the downgrade-warning column on the same row -- pair them to
+    render an "if you stay / if you drop" two-tone matrix without any
+    client-side composition.
+
+    Rows are sorted by tier rank ascending (cheapest -> most capable)
+    and, within the same rank, by tier id so the ordering is stable
+    across calls and byte-stable against :func:`tier_unlocks_batch`'s
+    ordering. The trial tier is excluded (mirrors :func:`tier_locks`,
+    which returns ``None`` for non-purchasable tiers); the ceiling
+    tier (:data:`TIER_ENTERPRISE`) appears with ``next_tier=None`` and
+    its marginal collapses to empty loss lists -- same shape the
+    singular helper returns.
+
+    Same-rank tiers (e.g. ``TIER_CLOUD_PRO`` and ``TIER_PRO`` both at
+    rank 2) are both returned, since callers may key off the tier id
+    rather than the rank. Consumers that want a deduped pricing ladder
+    can drop duplicates by ``tier_rank``.
+
+    Never raises: if the resolver blows up the helper returns ``[]``
+    so the UI keeps rendering instead of 500-ing.
+    """
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            row = tier_locks(tid)
+            if row is not None:
+                out.append(row)
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: tier_locks_batch failed: %s", exc)
+        return []
+
+
 def upgrade_path() -> list[dict]:
     """Ordered marginal-unlock ladder from the resolved tier upward.
 
