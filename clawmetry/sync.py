@@ -11,6 +11,7 @@ import json
 import os
 import random
 import sys
+import tempfile
 import time
 import glob
 import base64
@@ -782,8 +783,17 @@ def load_config() -> dict:
 
 def save_config(data: dict) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(data, indent=2))
-    CONFIG_FILE.chmod(0o600)
+    content = json.dumps(data, indent=2).encode()
+    # Write to a temp file with 0o600 mode first, then atomically replace to
+    # avoid a window where the file exists but is world-readable (the race
+    # between write_text() and chmod()).
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=CONFIG_DIR, prefix=".config.tmp.")
+    try:
+        os.write(tmp_fd, content)
+        os.fchmod(tmp_fd, 0o600)
+    finally:
+        os.close(tmp_fd)
+    os.replace(tmp_path, CONFIG_FILE)
 
 
 def load_state() -> dict:
