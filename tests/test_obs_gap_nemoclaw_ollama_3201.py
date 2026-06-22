@@ -47,6 +47,13 @@ def test_resolve_ollama_host_prepends_http_scheme(monkeypatch):
     assert _resolve_ollama_host() == "http://172.17.0.1:11434"
 
 
+def test_resolve_ollama_host_bare_ip_gets_default_port(monkeypatch):
+    """Bare IP/hostname without port must get :11434, not :80 (regression #3253)."""
+    monkeypatch.setenv("OLLAMA_HOST_DOCKER_INTERNAL", "172.17.0.1")
+    monkeypatch.delenv("OLLAMA_LOCALHOST", raising=False)
+    assert _resolve_ollama_host() == "http://172.17.0.1:11434"
+
+
 # ---------------------------------------------------------------------------
 # _list_ollama_models — HTTP path
 # ---------------------------------------------------------------------------
