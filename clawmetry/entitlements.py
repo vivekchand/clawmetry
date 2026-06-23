@@ -1335,6 +1335,62 @@ def preview(target_tier: str) -> dict | None:
         return None
 
 
+def preview_batch() -> list[dict]:
+    """Cumulative ``Entitlement.to_dict`` shape for every purchasable tier
+    in one pass.
+
+    Plural sibling of :func:`preview`. Where the singular helper answers
+    "what would the resulting Entitlement *look like* at tier X" one tier
+    at a time, the batch returns the same denormalised row for every
+    entry in :data:`_PURCHASABLE_TIERS` so a pricing-page table can render
+    the full "Cloud Pro: 90-day retention, unlimited channels, claude_code
+    unlocked" matrix off **one** round-trip instead of N calls to
+    ``/preview``.
+
+    Cumulative-state companion to :func:`tier_unlocks_batch` (marginal
+    grant per rung) and :func:`tier_locks_batch` (marginal loss per rung):
+    pair them to render the "what's at X / what's new at X / what you'd
+    give up at X" three-column view of a pricing table without
+    client-side composition.
+
+    Rows are sorted by tier rank ascending (cheapest -> most capable)
+    and, within the same rank, by tier id so the ordering is stable
+    across calls and byte-stable against :func:`tier_unlocks_batch` /
+    :func:`tier_locks_batch` (the three batches walk
+    :data:`_PURCHASABLE_TIERS` in the same ``(rank, id)`` order so a
+    pricing table lines up rung-for-rung without client-side re-sort).
+    The trial tier is excluded (mirrors :func:`preview`, which returns
+    ``None`` for non-purchasable tiers).
+
+    Each row carries the full ``Entitlement.to_dict`` shape with
+    ``source="preview"`` and ``grace=False`` -- same posture as
+    :func:`preview` so the concrete per-tier capacity
+    (``channel_limit``, ``retention_days``, ``node_limit``) surfaces. A
+    grace-mode preview would zero those out and defeat the purpose.
+
+    Same-rank tiers (e.g. ``TIER_CLOUD_PRO`` and ``TIER_PRO`` both at
+    rank 2) are both returned, since callers may key off the tier id
+    rather than the rank. Consumers that want a deduped pricing ladder
+    can drop duplicates by ``tier_rank``.
+
+    Never raises: if the resolver blows up the helper returns ``[]``
+    so the UI keeps rendering instead of 500-ing.
+    """
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            row = preview(tid)
+            if row is not None:
+                out.append(row)
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: preview_batch failed: %s", exc)
+        return []
+
+
 def tier_unlocks(target_tier: str) -> dict | None:
     """Per-tier marginal unlocks: features + runtimes that first become
     available *at* ``target_tier`` -- the set difference between this
