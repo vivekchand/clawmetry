@@ -198,12 +198,12 @@ def _list_ollama_models(host: str) -> list:
 
 
 def _openshell_sandbox_phase_policy(name: str) -> dict:
-    """Call 'openshell sandbox get <name>' and parse Phase / Policy fields.
+    """Call 'openshell sandbox get <name>' and parse Phase / Policy / Runtime fields.
 
-    Returns a dict with 'sandboxPhase' and/or 'sandboxPolicy' keys from the
-    CLI output.  Never raises; returns {} when the openshell binary is absent
-    (plain OpenClaw installs) or the subprocess call fails, so existing entries
-    are left unchanged.
+    Returns a dict with 'sandboxPhase', 'sandboxPolicy', and/or
+    'sandboxRuntimeKind' keys from the CLI output.  Never raises; returns {}
+    when the openshell binary is absent (plain OpenClaw installs) or the
+    subprocess call fails, so existing entries are left unchanged.
     """
     try:
         import shutil as _sh
@@ -220,6 +220,8 @@ def _openshell_sandbox_phase_policy(name: str) -> dict:
                 out["sandboxPhase"] = line.split(":", 1)[1].strip()
             elif line.startswith("Policy:"):
                 out["sandboxPolicy"] = line.split(":", 1)[1].strip()
+            elif line.startswith("Runtime:"):
+                out["sandboxRuntimeKind"] = line.split(":", 1)[1].strip()
         return out
     except Exception:
         return {}
@@ -261,6 +263,13 @@ def _sandbox_inference_configs() -> list:
             provider = entry.get("provider") or ""
             model = entry.get("model") or ""
             api = entry.get("preferredInferenceApi") or "openai-completions"
+            # Read runtimeKind from JSON before the loop variable is shadowed
+            # below. openshell output takes precedence; this is the fallback.
+            json_runtime_kind = (
+                entry.get("runtimeKind")
+                or (entry.get("runtime") or {}).get("kind")
+                or ""
+            )
             base_url = _MANAGED_URL
             if provider == "openai-api":
                 provider_key = "openai"
@@ -291,6 +300,8 @@ def _sandbox_inference_configs() -> list:
                     "ollamaModels": _list_ollama_models(ollama_host),
                 }
                 entry.update(_openshell_sandbox_phase_policy(name))
+                if json_runtime_kind and "sandboxRuntimeKind" not in entry:
+                    entry["sandboxRuntimeKind"] = json_runtime_kind
                 out.append(entry)
                 continue
             else:
@@ -309,6 +320,8 @@ def _sandbox_inference_configs() -> list:
                 "inferenceCompat": compat,
             }
             entry.update(_openshell_sandbox_phase_policy(name))
+            if json_runtime_kind and "sandboxRuntimeKind" not in entry:
+                entry["sandboxRuntimeKind"] = json_runtime_kind
             out.append(entry)
         except Exception:
             continue
