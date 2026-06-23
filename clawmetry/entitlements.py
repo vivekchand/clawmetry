@@ -1752,10 +1752,11 @@ def tier_unlocks_path(from_tier: str, to_tier: str) -> list[dict] | None:
       I climb this far" walkthrough.
     * ``downgrade`` (descending) -- each row's ``features`` /
       ``runtimes`` are typically empty (you're losing things, not
-      unlocking them); use :func:`tier_path` (or the future
-      ``tier_locks_path``) for the marginal-loss view of a downgrade.
-      The path still walks rungs so a UI keyed off rung shape keeps
-      working; the empty lists are the correct "unlocks" answer.
+      unlocking them); use :func:`tier_path` or
+      :func:`tier_locks_path` for the marginal-loss view of a
+      downgrade. The path still walks rungs so a UI keyed off rung
+      shape keeps working; the empty lists are the correct "unlocks"
+      answer.
     * ``lateral`` (same rank, different id) -- single-row path; row
       carries the set difference between the two same-rank tier grants.
     * ``identity`` (``from == to``) -- empty path; no rungs to walk.
@@ -1940,6 +1941,164 @@ def tier_locks_batch() -> list[dict]:
     except Exception as exc:
         logger.warning("entitlements: tier_locks_batch failed: %s", exc)
         return []
+
+
+def _locks_row(from_tier: str, to_tier: str) -> dict | None:
+    """Single marginal-locks row between two arbitrary tiers, with the
+    source carried as ``next_tier`` (path-chained, **not** the global
+    next-higher-purchasable-tier anchor used by :func:`tier_locks`).
+
+    Private builder for :func:`tier_locks_path`: each row is "what the
+    ``to`` rung first *loses* vs the previous step in the walked path"
+    so a consumer can fold the per-rung rows to reconstruct the
+    cumulative ``tier_diff(from, to)['lost_*']`` shape -- the marginal-
+    loss mirror of :func:`_unlocks_row` (which folds to
+    ``tier_diff(...)['added_*']``).
+
+    Returns ``None`` on unknown ids and never raises -- the path walker
+    drops ``None`` rows on the floor so a downgrade-warning surface
+    keeps rendering.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+        if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+            return None
+        from_feats = FREE_FEATURES | _TIER_FEATURES.get(f, frozenset())
+        if f == TIER_ENTERPRISE:
+            from_feats = from_feats | ENTERPRISE_FEATURES
+        to_feats = FREE_FEATURES | _TIER_FEATURES.get(t, frozenset())
+        if t == TIER_ENTERPRISE:
+            to_feats = to_feats | ENTERPRISE_FEATURES
+        from_runtimes = (
+            FREE_RUNTIMES | PAID_RUNTIMES
+            if f in _TIER_PAID_RUNTIMES
+            else FREE_RUNTIMES
+        )
+        to_runtimes = (
+            FREE_RUNTIMES | PAID_RUNTIMES
+            if t in _TIER_PAID_RUNTIMES
+            else FREE_RUNTIMES
+        )
+        return {
+            "tier": t,
+            "tier_label": tier_label(t),
+            "tier_rank": tier_rank(t),
+            "next_tier": f,
+            "next_tier_label": tier_label(f),
+            "next_tier_rank": tier_rank(f),
+            "lost_features": sorted(from_feats - to_feats),
+            "lost_runtimes": sorted(from_runtimes - to_runtimes),
+        }
+    except Exception as exc:
+        logger.warning("entitlements: _locks_row failed: %s", exc)
+        return None
+
+
+def tier_locks_path(from_tier: str, to_tier: str) -> list[dict] | None:
+    """Arbitrary-endpoint stepwise marginal-loss path between two tiers.
+
+    Marginal-loss mirror of :func:`tier_unlocks_path` and the fourth
+    member of the ``_path`` family alongside :func:`tier_path` (full
+    ``tier_diff`` per rung), :func:`capacity_diff_path` (capacity-only
+    per rung), and :func:`tier_unlocks_path` (marginal grant per rung).
+    Lets a "downgrade-walkthrough" surface render only the *newly-lost*
+    features + runtimes at each rung between any two tiers off ONE
+    round-trip, without the noise of the capacity axes or the symmetric
+    ``added_*`` lists :func:`tier_path` carries.
+
+    Per-rung row shape matches :func:`tier_locks` exactly -- ``tier``,
+    ``tier_label``, ``tier_rank``, ``next_tier``, ``next_tier_label``,
+    ``next_tier_rank``, ``lost_features``, ``lost_runtimes`` -- with
+    one critical difference: ``next_tier`` is the **previous step in
+    the walked path** (or ``from_tier`` for the first row), NOT the
+    global "next-higher purchasable tier" anchor :func:`tier_locks`
+    uses. The path-chained source guarantees
+    ``row[i]['tier'] == row[i+1]['next_tier']`` so a consumer can fold
+    ``lost_features`` / ``lost_runtimes`` across rows to reconstruct the
+    cumulative ``tier_diff(from_tier, to_tier)['lost_*']`` shape -- the
+    same chain-property :func:`tier_path`, :func:`capacity_diff_path`,
+    and :func:`tier_unlocks_path` enforce on their rows.
+
+    The walk visits every purchasable tier strictly between ``from_tier``
+    and ``to_tier`` plus the destination ``to_tier`` itself, in tier-rank
+    order (ascending or descending depending on direction). Same-rank
+    siblings *between* the endpoints are both included (matching
+    :func:`tier_path`'s ladder shape); same-rank siblings of the
+    destination are excluded so the path terminates exactly at
+    ``to_tier``. Rung walk is byte-stable against :func:`tier_path`,
+    :func:`capacity_diff_path`, and :func:`tier_unlocks_path` (same
+    ``_PURCHASABLE_TIERS`` filter + same sort key + same destination-
+    sibling exclusion).
+
+    Direction semantics:
+
+    * ``downgrade`` (descending) -- each row's ``lost_features`` /
+      ``lost_runtimes`` are the marginal loss at that rung. The natural
+      "what do I give up if I drop this far" walkthrough.
+    * ``upgrade`` (ascending) -- each row's ``lost_features`` /
+      ``lost_runtimes`` are typically empty (you're gaining things, not
+      losing them); use :func:`tier_unlocks_path` for the marginal-grant
+      view of an upgrade. The path still walks rungs so a UI keyed off
+      rung shape keeps working; the empty lists are the correct "locks"
+      answer.
+    * ``lateral`` (same rank, different id) -- single-row path; row
+      carries the set difference (``from`` minus ``to``) between the
+      two same-rank tier grants.
+    * ``identity`` (``from == to``) -- empty path; no rungs to walk.
+
+    Endpoint semantics match :func:`tier_path` / :func:`tier_unlocks_path`:
+    both ids accept any entry in :data:`_TIER_FEATURES` (including
+    :data:`TIER_TRIAL`, which is not purchasable -- it is excluded from
+    the walked rungs but is a valid endpoint for the marginal-step
+    computation). Unknown ids on either side short-circuit to ``None``.
+
+    Never raises: a resolver failure logs a warning and returns ``None``
+    so a downgrade-walkthrough surface keeps rendering.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+        if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+            return None
+        if f == t:
+            return []
+        from_rank = _TIER_RANK.get(f, -1)
+        to_rank = _TIER_RANK.get(t, -1)
+        if from_rank == to_rank:
+            row = _locks_row(f, t)
+            return [row] if row is not None else []
+        ascending = to_rank > from_rank
+        if ascending:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (_TIER_RANK.get(x, -1), x),
+            )
+        else:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (-_TIER_RANK.get(x, -1), x),
+            )
+        path: list[dict] = []
+        prev_step = f
+        for tid in ordered:
+            r = _TIER_RANK.get(tid, -1)
+            if ascending:
+                if r <= from_rank or r > to_rank:
+                    continue
+            else:
+                if r >= from_rank or r < to_rank:
+                    continue
+            if r == to_rank and tid != t:
+                continue
+            row = _locks_row(prev_step, tid)
+            if row is not None:
+                path.append(row)
+                prev_step = tid
+        return path
+    except Exception as exc:
+        logger.warning("entitlements: tier_locks_path failed: %s", exc)
+        return None
 
 
 def upgrade_path() -> list[dict]:
