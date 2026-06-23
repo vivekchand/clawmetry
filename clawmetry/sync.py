@@ -778,7 +778,21 @@ def _dlq_replay(api_key: str, enc_key: str | None) -> int:
 def load_config() -> dict:
     if not CONFIG_FILE.exists():
         raise FileNotFoundError(f"No config at {CONFIG_FILE}. Run: clawmetry connect")
-    return json.loads(CONFIG_FILE.read_text())
+    data = json.loads(CONFIG_FILE.read_text())
+    # Local-only installs (clawmetry onboard -> [1] Local only, #3281) write a
+    # config with no api_key, but the daemon startup path subscripts
+    # config["api_key"] (start_log_streamer + ~12 other call sites). Normalize
+    # so a missing key degrades to "" instead of KeyError-crashing the daemon
+    # on every boot (which leaves the local store empty). Cloud egress is
+    # independently gated by is_cloud_disabled(), so an empty api_key is never
+    # used for a real cloud call. node_id is likewise required by the start
+    # banner; default it to the hostname to match the daemon's own fallback.
+    if isinstance(data, dict):
+        data.setdefault("api_key", "")
+        if not data.get("node_id"):
+            import socket as _sock
+            data["node_id"] = _sock.gethostname() or "local"
+    return data
 
 
 def save_config(data: dict) -> None:
