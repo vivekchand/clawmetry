@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Fix: local-only installs now ingest your agents (and Brain shows your full history) (2026-06-23)
+- **A local-only install (the new [1] Local only path) crash-looped the sync daemon, so nothing was ingested (#3285).** The local-only setup wrote a config with no API key, but the daemon's startup read that key directly and crashed on every boot before it could read your agent sessions. The daemon now starts cleanly with or without an account, and existing broken local-only installs self-heal on this update (no reinstall needed). Local-only mode never sends anything to the cloud regardless.
+- **The Brain tab now shows ALL of your local history, with no 24-hour limit and no upgrade prompt (#3286).** On your own machine your agent history is yours, so the local dashboard no longer caps the Brain view to the last 24 hours. ClawMetry's own background diagnostics are also hidden from the Brain feed now, so a busy or restarting daemon can't bury your agent's actual activity.
+
 ### Install: the installer now asks before creating a cloud account (2026-06-23)
 - **`curl -fsSL https://clawmetry.com/install.sh | bash` no longer creates a cloud account by default (#3281).** The setup wizard used to default a no-account answer (and a headless install with no terminal) straight into creating a cloud account, so some people ended up with an account they never asked for. It now presents a clear choice: **[1] Local only** (free, no account, nothing leaves your machine, the default), **[2] Cloud** (free trial dashboard you can open anywhere), or **[3] License key** (activate Self-Hosted Pro for all 12 runtimes, offline). A non-interactive install defaults to local and never creates an account. You can script it with `--local` / `--cloud` or `CLAWMETRY_LOCAL_ONLY=1`. Local-only writes the `~/.clawmetry/nocloud` marker so updates can't silently re-enable cloud sync; the local dashboard at http://localhost:8900 works exactly as before.
 

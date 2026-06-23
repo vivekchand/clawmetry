@@ -327,6 +327,17 @@ def _try_local_store_brain(limit, include_artifacts, since=None):
         # -mem-probe …) so our plumbing doesn't show up in the Brain feed.
         if hide_clawmetry_session(r.get("session_id")):
             continue
+        # Hide ClawMetry's OWN daemon diagnostics (the daemon-error -> DuckDB
+        # tee, PRD #1133) from the Brain conversation feed. These carry
+        # agent_id="clawmetry-daemon" / event_type="daemon.*" and an empty
+        # session_id, so the helper-session filter above misses them; left in,
+        # a noisy daemon (or a crash loop) buries the user's actual agent
+        # conversation under our own error spam. They still feed the health /
+        # diagnostics views.
+        _agent = (r.get("agent_id") or "")
+        _etype = (r.get("event_type") or "").lower()
+        if _agent == "clawmetry-daemon" or _etype.startswith("daemon."):
+            continue
         # P0 regression fix (#1143): the v3 sync mapper nests content under
         # ``data.data`` and the legacy trajectory parser nests it under
         # ``data.message.content`` — neither exposes the flat ``input/summary/
@@ -457,19 +468,14 @@ def api_brain_history():
     include_artifacts = _brain_history_bool_arg(
         request.args.get("include_artifacts") or request.args.get("artifacts")
     )
-    # OSS / Cloud-Free 24h retention cap (issue #1448 surface 3). Pro
-    # users bypass entirely; everyone else gets clamped to the last 24h
-    # of ts. ``capped_at_24h`` is mirrored back so the UI can render the
-    # Cloud-Pro upgrade CTA above the brain stream.
-    try:
-        is_pro = bool(_d._is_pro_user())
-    except Exception:
-        is_pro = False
+    # Local dashboards show ALL Brain history for free (founder call,
+    # 2026-06-23). The data lives in the user's own DuckDB and OpenClaw / NeMo
+    # observability is free on every plan, so we never cap it or upsell here.
+    # This OSS route only serves real data on the LOCAL dashboard; on the cloud
+    # server it returns empty (no DuckDB) and a cm-cloud interceptor renders
+    # Brain from the encrypted snapshot, where retention is enforced separately.
+    # (Was issue #1448's 24h cap, which only ever gated a user's own local data.)
     cap_since = None
-    if not is_pro:
-        cap_since = (
-            datetime.now(timezone.utc) - timedelta(hours=24)
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
     # Epic #964 phase 1b: opt-in local-store fast path. Skip the JSONL
     # parser entirely when CLAWMETRY_LOCAL_STORE_READ=1 AND the store
     # has data. Falls through to the full parser otherwise (so a fresh
@@ -1840,25 +1846,21 @@ def api_brain_clusters():
         days = max(1, min(90, int(request.args.get("days", 30))))
     except (TypeError, ValueError):
         days = 30
-    try:
-        is_pro = bool(_d._is_pro_user())
-    except Exception:
-        is_pro = False
-    if not is_pro:
-        days = 1  # mirror the 24h cap applied by /api/brain-history
+    # No local cap (founder call, 2026-06-23): local dashboards show the full
+    # requested window for free. Mirrors the uncapped /api/brain-history above.
     if is_local_store_read_enabled():
         # Late import to avoid circular dependency at module load time.
         from routes.usage import _try_local_store_sessions_clusters
         payload = _try_local_store_sessions_clusters(days)
         if payload is not None:
             payload["_shape"] = "brain_clusters"
-            payload["capped_at_24h"] = not is_pro
+            payload["capped_at_24h"] = False
             return jsonify(payload)
     return jsonify({
         "clusters": [],
         "total_sessions": 0,
         "days": days,
-        "capped_at_24h": not is_pro,
+        "capped_at_24h": False,
         "_source": "unavailable",
         "_shape": "brain_clusters",
     })
