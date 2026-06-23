@@ -1250,6 +1250,81 @@ def tier_path(from_tier: str, to_tier: str) -> list[dict] | None:
         return None
 
 
+def tier_diff_batch() -> list[dict]:
+    """Full marginal ``tier_diff`` for every purchasable tier in one pass.
+
+    Plural sibling of :func:`tier_diff` and the "all-slices-in-one-row"
+    member of the batch family alongside :func:`tier_unlocks_batch`
+    (feature/runtime grant slice), :func:`tier_locks_batch` (feature/
+    runtime loss slice) and :func:`capacity_diff_batch` (capacity slice).
+    Where each of those siblings carries a single slice of the per-rung
+    transition, ``tier_diff_batch`` carries ALL slices (``added_features``
+    + ``lost_features`` + ``added_runtimes`` + ``lost_runtimes`` +
+    ``capacity_changes``) in one row so a pricing-page table can render
+    the full marginal column off **one** round-trip instead of N calls
+    to ``/tier-diff``.
+
+    Anchor matches :func:`tier_unlocks_batch`: each row is the
+    :func:`tier_diff` payload between the next-lower-rank purchasable
+    tier (the upgrade source) and the current tier. At the floor
+    (``TIER_OSS`` / ``TIER_CLOUD_FREE``) there is no rung below, so the
+    row collapses to ``tier_diff(tid, tid)`` -- an identity row with
+    ``from == to``, ``direction == "identity"`` and all marginal lists
+    empty. Consumers that want the floor's *cumulative* grant should
+    pair with :func:`preview_batch` (whose floor row carries the full
+    free grant); ``tier_diff_batch`` keeps every row byte-stable with a
+    valid :func:`tier_diff` payload so the singular and the batch never
+    diverge in shape.
+
+    Rows are sorted by tier rank ascending (cheapest -> most capable)
+    and, within the same rank, by tier id so the ordering is stable
+    across calls and byte-stable against :func:`tier_unlocks_batch` /
+    :func:`tier_locks_batch` / :func:`capacity_diff_batch` /
+    :func:`preview_batch` (the five batches walk
+    :data:`_PURCHASABLE_TIERS` in the same ``(rank, id)`` order so a
+    pricing table lines up rung-for-rung without client-side re-sort).
+    The trial tier is excluded -- it is not purchasable, same posture as
+    the other batches.
+
+    Each non-floor row's ``added_features`` byte-equals the same row in
+    :func:`tier_unlocks_batch`'s ``features`` slot (and ditto for
+    ``added_runtimes`` / ``runtimes``); each non-floor row's
+    ``capacity_changes`` byte-equals the per-rung step in
+    :func:`capacity_diff_path` (``TIER_OSS``, ``TIER_ENTERPRISE``). Both
+    are pinned in the test suite so the batches can never silently drift
+    apart.
+
+    Decoupled from the resolved entitlement (walks the static per-tier
+    maps), so grace vs enforce yields identical rows -- pinned in the
+    test suite via a grace/enforce reload roundtrip.
+
+    Never raises: if the helper blows up the function returns ``[]`` so
+    the pricing-page UI keeps rendering instead of 500-ing.
+    """
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            target_rank = _TIER_RANK.get(tid, -1)
+            prev_id: str | None = None
+            prev_rank_seen = -1
+            for cand in _PURCHASABLE_TIERS:
+                cand_rank = _TIER_RANK.get(cand, -1)
+                if 0 <= cand_rank < target_rank and cand_rank > prev_rank_seen:
+                    prev_id = cand
+                    prev_rank_seen = cand_rank
+            anchor = prev_id if prev_id is not None else tid
+            row = tier_diff(anchor, tid)
+            if row is not None:
+                out.append(row)
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: tier_diff_batch failed: %s", exc)
+        return []
+
+
 def next_tier_diff() -> dict | None:
     try:
         return get_entitlement().next_tier_diff()
