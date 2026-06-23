@@ -71,6 +71,16 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                           ``/tier-unlocks``: returns the full
                                           pricing-page marginal-unlock ladder
                                           in one pass.
+  GET  /api/entitlement/tier-unlocks-path -- arbitrary-endpoint stepwise
+                                          unlock path between any two tiers
+                                          (``?from=&to=``); unlocks-focused
+                                          analogue of ``/tier-path`` (full
+                                          ``tier_diff`` per rung) and
+                                          ``/capacity-diff-path`` (capacity-
+                                          only per rung). Each row is a
+                                          ``tier_unlocks`` payload between
+                                          the previous step in the path and
+                                          the current rung.
   GET  /api/entitlement/capacity-diff-batch -- plural sibling of
                                           ``/capacity-diff``: per-axis
                                           capacity transitions (channels /
@@ -701,6 +711,112 @@ def api_entitlement_tier_unlocks_batch():
                 "grace": True,
                 "enforced": False,
             }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/tier-unlocks-path")
+def api_entitlement_tier_unlocks_path():
+    """``GET /api/entitlement/tier-unlocks-path?from=<id>&to=<id>`` --
+    arbitrary-endpoint stepwise unlock path between any two tiers; the
+    unlocks-focused analogue of ``/tier-path`` (full ``tier_diff`` per
+    rung) and ``/capacity-diff-path`` (capacity-only per rung). Lets an
+    upgrade-walkthrough surface render only the *newly-unlocked* features
+    + runtimes at each rung between any two tiers off ONE round-trip,
+    without the noise of the capacity axes or the symmetric ``lost_*``
+    lists ``/tier-path`` carries.
+
+    Each row in ``path`` is a :func:`clawmetry.entitlements.tier_unlocks`
+    payload between the previous step in the path (or ``from`` for the
+    first row) and the current rung -- so each row is a marginal-step
+    unlock and a consumer can fold ``features`` / ``runtimes`` across
+    rows to reconstruct the cumulative
+    ``tier_diff(from, to)['added_*']`` shape (the same chain-property
+    ``/tier-path`` and ``/capacity-diff-path`` enforce on their rows).
+    Same-rank siblings strictly between the endpoints are both included;
+    same-rank siblings of the destination are excluded so the path
+    terminates exactly at ``to``. Rung walk is byte-stable against
+    ``/tier-path`` and ``/capacity-diff-path``.
+
+    Response shape::
+
+        {
+          "from":       "<tier id>",
+          "from_label": "...",
+          "from_rank":  <int>,
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<tier_unlocks row>, ...],
+        }
+
+    Each ``<row>`` matches the singular ``/tier-unlocks`` row shape
+    exactly (``tier``, ``tier_label``, ``tier_rank``, ``previous_tier``,
+    ``previous_tier_label``, ``previous_tier_rank``, ``features``,
+    ``runtimes``) -- with ``previous_tier`` chained from the path (the
+    previous step), NOT the global next-lower-purchasable-tier anchor
+    the singular helper uses.
+
+    Direction semantics:
+
+    * ``upgrade`` (ascending) -- each row's ``features`` / ``runtimes``
+      are the marginal grant at that rung.
+    * ``downgrade`` (descending) -- each row's ``features`` /
+      ``runtimes`` are typically empty (use ``/tier-path`` for the
+      marginal-loss view of a downgrade). The path still walks rungs so
+      a UI keyed off rung shape keeps working.
+    * ``lateral`` (same rank, different id) -- single-row path; carries
+      the set difference between the two same-rank tier grants.
+    * ``identity`` (``from == to``) -- empty path; no rungs to walk.
+
+    Identity (``from == to``) returns an empty path. Lateral (same rank,
+    different id) returns a single-row path. ``400`` when ``from=`` or
+    ``to=`` is missing; ``404`` when either id is unknown. ``trial`` IS
+    accepted as an endpoint -- it is excluded from the walked rungs (not
+    purchasable) but the endpoint computation still resolves. Never
+    5xxs: a resolver failure short-circuits to ``404`` so an upgrade-
+    walkthrough surface keeps rendering instead of breaking.
+    """
+    f = (request.args.get("from") or "").strip().lower()
+    t = (request.args.get("to") or "").strip().lower()
+    if not f or not t:
+        return jsonify({"error": "missing from or to"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        path = _ent.tier_unlocks_path(f, t)
+        if path is None:
+            return (
+                jsonify({"error": "unknown tier", "from": f, "to": t}),
+                404,
+            )
+        from_rank = _ent.tier_rank(f)
+        to_rank = _ent.tier_rank(t)
+        if f == t:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        return jsonify(
+            {
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": from_rank,
+                "to": t,
+                "to_label": _ent.tier_label(t),
+                "to_rank": to_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_tier_unlocks_path: error: %s", exc)
+        return (
+            jsonify({"error": "unknown tier", "from": f, "to": t}),
+            404,
         )
 
 
