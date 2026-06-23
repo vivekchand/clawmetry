@@ -29,31 +29,31 @@ All HTTP endpoints live here, organised by feature. Each module owns one or more
 
 | File | Lines | Blueprints / Purpose |
 |------|-------|----------------------|
-| `routes/sessions.py` | ~1,560 | `bp_sessions` — sessions list, transcripts, compactions, tool timeline, cost split, subagents, exports |
-| `routes/channels.py` | ~1,500 | `bp_channels` — 21 chat-channel adapters (Telegram, Signal, WhatsApp, Discord, Slack, IRC, iMessage, WebChat, …) |
-| `routes/components.py` | ~1,040 | `bp_components` — Flow-panel detail endpoints (tool / runtime / machine / gateway / brain) |
-| `routes/usage.py` | ~1,070 | `bp_usage` — token/cost analytics, anomaly detection, model + skill attribution |
-| `routes/health.py` | ~920 | `bp_health` — system-health, reliability, diagnostics, rate-limits, sandbox-status, health-stream (SSE) |
-| `routes/brain.py` | ~1,030 | `bp_brain` — `/api/brain-history` + `/api/brain-stream` (SSE) |
-| `routes/local_query.py` | ~585 | `bp_local_query` — `/api/local/*` DuckDB read API + the daemon-proxy `_dispatch` (shape→store bridge shared by HTTP and the cloud relay) |
-| `routes/infra.py` | ~785 | `bp_logs` + `bp_memory` + `bp_security` + `bp_config` — logs stream, memory files, security posture, cost-optimizer |
-| `routes/overview.py` | ~585 | `bp_overview` — main dashboard endpoint, channels list, timeline, cloud-CTA OTP |
-| `routes/crons.py` | ~530 | `bp_crons` — cron CRUD + run log + health summary |
-| `routes/meta.py` | ~520 | `bp_auth` + `bp_gateway` + `bp_otel` + `bp_version` + `bp_version_impact` + `bp_clusters` — auth, gateway proxy, OTLP ingestion, version meta |
-| `routes/alerts.py` | ~400 | `bp_alerts` + `bp_budget` — alert rules, webhooks, velocity, budget config |
-| `routes/fleet_history.py` | ~310 | `bp_fleet` + `bp_history` — multi-node fleet + SQLite time-series |
-| `routes/nemoclaw.py` | ~290 | `bp_nemoclaw` — NeMo Guardrails governance + approval queue |
+| `routes/sessions.py` | ~7,300 | `bp_sessions` — sessions list, transcripts, compactions, tool timeline, cost split, subagents, exports |
+| `routes/channels.py` | ~2,800 | `bp_channels` — 21 chat-channel adapters (Telegram, Signal, WhatsApp, Discord, Slack, IRC, iMessage, WebChat, …) |
+| `routes/components.py` | ~2,100 | `bp_components` — Flow-panel detail endpoints (tool / runtime / machine / gateway / brain) |
+| `routes/usage.py` | ~4,500 | `bp_usage` — token/cost analytics, anomaly detection, model + skill attribution |
+| `routes/health.py` | ~3,500 | `bp_health` — system-health, reliability, diagnostics, rate-limits, sandbox-status, health-stream (SSE) |
+| `routes/brain.py` | ~1,900 | `bp_brain` — `/api/brain-history` + `/api/brain-stream` (SSE) |
+| `routes/local_query.py` | ~850 | `bp_local_query` — `/api/local/*` DuckDB read API + the daemon-proxy `_dispatch` (shape→store bridge shared by HTTP and the cloud relay) |
+| `routes/infra.py` | ~2,400 | `bp_logs` + `bp_memory` + `bp_security` + `bp_config` — logs stream, memory files, security posture, cost-optimizer |
+| `routes/overview.py` | ~1,900 | `bp_overview` — main dashboard endpoint, channels list, timeline, cloud-CTA OTP |
+| `routes/crons.py` | ~1,500 | `bp_crons` — cron CRUD + run log + health summary |
+| `routes/meta.py` | ~1,600 | `bp_auth` + `bp_gateway` + `bp_otel` + `bp_version` + `bp_version_impact` + `bp_clusters` — auth, gateway proxy, OTLP ingestion, version meta |
+| `routes/alerts.py` | ~980 | `bp_alerts` + `bp_budget` — alert rules, webhooks, velocity, budget config |
+| `routes/fleet_history.py` | ~240 | `bp_fleet` + `bp_history` — multi-node fleet + SQLite time-series |
+| `routes/nemoclaw.py` | ~125 | `bp_nemoclaw` — NeMo Guardrails governance + approval queue |
 | `routes/__init__.py` | — | Package marker |
 
 ### Package (`clawmetry/`)
 | File | Lines | Purpose |
 |------|-------|---------|
-| `cli.py` | ~1,900 | CLI entry point — `clawmetry`, `clawmetry connect`, `clawmetry sync`, `clawmetry status` |
-| `sync.py` | ~10,600 | Cloud sync daemon — ingests into DuckDB, owns the writer lock, E2E-encrypted (AES-256-GCM) snapshot streaming to `ingest.clawmetry.com` |
-| `local_store.py` | ~7,300 | **DuckDB store** — the single data layer features read/write (daemon holds the writer lock) |
+| `cli.py` | ~3,700 | CLI entry point — `clawmetry`, `clawmetry connect`, `clawmetry sync`, `clawmetry status` |
+| `sync.py` | ~18,900 | Cloud sync daemon — ingests into DuckDB, owns the writer lock, E2E-encrypted (AES-256-GCM) snapshot streaming to `ingest.clawmetry.com` |
+| `local_store.py` | ~11,200 | **DuckDB store** — the single data layer features read/write (daemon holds the writer lock) |
 | `local_server.py` | ~200 | Daemon-hosted localhost query server (`/__local_query__/<method>`) so the dashboard/sync read DuckDB without grabbing the writer lock |
-| `proxy.py` | ~1,290 | Enforcement proxy — budget limits, loop detection, model routing (port 4100) |
-| `interceptor.py` | ~465 | Zero-config HTTP monkey-patching for LLM cost tracking (patches httpx/requests) |
+| `proxy.py` | ~2,600 | Enforcement proxy — budget limits, loop detection, model routing (port 4100) |
+| `interceptor.py` | ~630 | Zero-config HTTP monkey-patching for LLM cost tracking (patches httpx/requests) |
 | `providers_pricing.py` | ~134 | Multi-provider pricing table (Anthropic, OpenAI, Google, OpenRouter, etc.) |
 | `config.py` | ~80 | Configuration dataclass |
 | `extensions.py` | ~109 | Plugin/hook system |
@@ -146,7 +146,7 @@ Tests use `CLAWMETRY_URL` and `CLAWMETRY_TOKEN` env vars. Test matrix in CI: 3 O
 ## Deploy
 - **PyPI**: `pip install clawmetry && clawmetry`
 - **Docker**: `docker build -t clawmetry . && docker run -p 8900:8900 -v ~/.openclaw:/root/.openclaw:ro clawmetry`
-- **Current version**: `0.12.275` (in `dashboard.py` `__version__`)
+- **Current version**: `0.12.525` (in `dashboard.py` `__version__`)
 
 ## CI/CD (GitHub Actions)
 - `ci.yml` — Lint + test matrix on push/PR
