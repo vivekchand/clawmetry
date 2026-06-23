@@ -1295,6 +1295,57 @@ def previous_tier_capacity_diff() -> dict | None:
         return None
 
 
+def capacity_diff_batch() -> list[dict]:
+    """Per-tier capacity transition for every purchasable tier in one pass.
+
+    Plural sibling of :func:`capacity_diff`. Where the singular helper
+    answers "what would the channel cap / retention / node cap look like
+    at tier X" one tier at a time, the batch returns the same payload
+    shape for every entry in :data:`_PURCHASABLE_TIERS` so a pricing-page
+    table can render the capacity column off **one** round-trip instead
+    of N calls to ``/capacity-diff``.
+
+    Direction-agnostic capacity companion to the existing pricing-page
+    batches: pair with :func:`tier_unlocks_batch` (marginal feature/
+    runtime grant per rung), :func:`tier_locks_batch` (marginal feature/
+    runtime loss per rung) and :func:`preview_batch` (cumulative shape
+    per rung) to render the full "what's at X / what's new at X / what
+    you'd give up at X / capacity at X" pricing-table view without
+    client-side composition.
+
+    Rows are sorted by tier rank ascending (cheapest -> most capable)
+    and, within the same rank, by tier id so the ordering is stable
+    across calls and byte-stable against :func:`tier_unlocks_batch` /
+    :func:`tier_locks_batch` / :func:`preview_batch` (the four batches
+    walk :data:`_PURCHASABLE_TIERS` in the same ``(rank, id)`` order so
+    a pricing table lines up rung-for-rung without client-side re-sort).
+    The trial tier is excluded (mirrors :func:`preview_batch` / the
+    other batches -- it is not purchasable).
+
+    Each row carries the singular :func:`capacity_diff` payload exactly
+    (``target``, ``channel_limit``, ``retention_days``, ``node_limit``)
+    so per-axis ``{before, after, delta, unlocked, locked}`` triples
+    render identically off the batch and the singular endpoint. The
+    ``before`` side comes off the resolved entitlement, so under grace
+    the per-axis caps collapse to the unlimited (``None``) sentinel --
+    same posture as the singular helper.
+
+    Never raises: if the resolver blows up the helper returns ``[]``
+    so the UI keeps rendering instead of 500-ing.
+    """
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            out.append(capacity_diff(tid))
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: capacity_diff_batch failed: %s", exc)
+        return []
+
+
 def preview(target_tier: str) -> dict | None:
     """Render the :meth:`Entitlement.to_dict` shape for a hypothetical tier.
 

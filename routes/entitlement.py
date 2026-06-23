@@ -71,6 +71,14 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                           ``/tier-unlocks``: returns the full
                                           pricing-page marginal-unlock ladder
                                           in one pass.
+  GET  /api/entitlement/capacity-diff-batch -- plural sibling of
+                                          ``/capacity-diff``: per-axis
+                                          capacity transitions (channels /
+                                          retention / nodes) for every
+                                          purchasable tier in one pass so
+                                          a pricing-page table can render
+                                          the capacity column off one
+                                          round-trip.
   GET  /api/entitlement/preview-batch  -- plural sibling of ``/preview``:
                                          the full ``Entitlement.to_dict``
                                          shape rendered for every purchasable
@@ -370,6 +378,70 @@ def api_entitlement_capacity_diff():
                 "channel_limit": None,
                 "retention_days": None,
                 "node_limit": None,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/capacity-diff-batch")
+def api_entitlement_capacity_diff_batch():
+    """``GET /api/entitlement/capacity-diff-batch`` -- per-axis capacity
+    transition for every purchasable tier in one pass. Plural sibling of
+    ``/api/entitlement/capacity-diff``: where the singular endpoint
+    returns one tier's per-axis triple, the batch returns the full
+    pricing-page ladder in tier-rank order so a pricing-table UI can
+    render the capacity column ("channels: 3 -> unlimited, retention:
+    7d -> 30d, nodes: 1 -> unlimited") off **one** round-trip instead
+    of N calls.
+
+    Direction-agnostic capacity companion to ``/tier-unlocks-batch``
+    (marginal feature / runtime grant per rung), ``/tier-locks-batch``
+    (marginal feature / runtime loss per rung) and ``/preview-batch``
+    (cumulative ``Entitlement.to_dict`` shape per rung): pair them to
+    render the full "what's at X / what's new at X / what you'd give
+    up at X / capacity at X" view of a pricing table without
+    client-side composition.
+
+    Response shape::
+
+        {
+          "tiers":             [<row>, ...],
+          "current_tier":      "...",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<row>`` matches ``/api/entitlement/capacity-diff`` exactly
+    (``target``, ``channel_limit``, ``retention_days``, ``node_limit``
+    where each axis is the same ``{before, after, delta, unlocked,
+    locked}`` triple). The trial tier is excluded -- not purchasable,
+    same posture as the other ``*-batch`` siblings. Never 5xxs: a
+    resolver failure yields an empty ``tiers`` list and the grace-shape
+    envelope so the pricing page keeps rendering.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.capacity_diff_batch()
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": rows,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_capacity_diff_batch: error: %s", exc)
+        return jsonify(
+            {
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
             }
         )
 
