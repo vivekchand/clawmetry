@@ -105,6 +105,19 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                          tier in one pass so a pricing-page
                                          table can render the cumulative-state
                                          column off one round-trip.
+  GET  /api/entitlement/preview-path   -- arbitrary-endpoint stepwise
+                                         cumulative-state path between any two
+                                         tiers (``?from=&to=``); path analogue
+                                         of ``/preview-batch`` and the
+                                         cumulative-state sibling of
+                                         ``/tier-path`` / ``/tier-unlocks-path``
+                                         / ``/tier-locks-path`` /
+                                         ``/capacity-diff-path``. Each row is
+                                         the full ``/preview`` payload for that
+                                         rung so an upgrade-walkthrough surface
+                                         can render the "Cloud Pro: 90-day
+                                         retention, ..." card at every step
+                                         off one round-trip.
   GET  /api/entitlement/tier-locks    -- marginal-loss companion of
                                          ``/tier-unlocks``: features + runtimes
                                          that disappear when you step down to
@@ -712,6 +725,103 @@ def api_entitlement_preview_batch():
                 "grace": True,
                 "enforced": False,
             }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/preview-path")
+def api_entitlement_preview_path():
+    """``GET /api/entitlement/preview-path?from=<id>&to=<id>`` --
+    arbitrary-endpoint stepwise cumulative-state path between any two
+    tiers; the cumulative-state analogue of ``/tier-path`` (full
+    ``tier_diff`` per rung), ``/capacity-diff-path`` (capacity-only per
+    rung), ``/tier-unlocks-path`` (marginal grants per rung) and
+    ``/tier-locks-path`` (marginal losses per rung) -- the fifth and
+    final member of the ``_path`` family, the path-shaped sibling of
+    ``/preview-batch``. Lets an upgrade-walkthrough surface render the
+    "Cloud Pro: 90-day retention, unlimited channels, claude_code
+    unlocked" card at every rung between any two tiers off ONE
+    round-trip, without re-deriving capacity in JS.
+
+    Each row in ``path`` is the full
+    :meth:`Entitlement.to_dict` payload at that rung -- identical shape
+    to a single ``/preview`` row, with ``source="preview"`` and
+    ``grace=False`` so concrete per-tier capacity surfaces. Rung walk
+    is byte-stable against ``/tier-path``, ``/capacity-diff-path``,
+    ``/tier-unlocks-path`` and ``/tier-locks-path`` (same
+    ``_PURCHASABLE_TIERS`` filter + same sort + same destination-sibling
+    exclusion), so the five paths line up rung-for-rung.
+
+    Response shape::
+
+        {
+          "from":       "<tier id>",
+          "from_label": "...",
+          "from_rank":  <int>,
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<preview row>, ...],
+        }
+
+    Direction semantics:
+
+    * ``upgrade`` (ascending) -- rows climb cumulatively rung by rung.
+    * ``downgrade`` (descending) -- rows shrink cumulatively rung by
+      rung; the cancellation-walkthrough counterpart.
+    * ``lateral`` (same rank, different id) -- single-row path; row
+      carries the cumulative preview at ``to``.
+    * ``identity`` (``from == to``) -- empty path; no rungs to walk.
+
+    Same-rank siblings strictly between the endpoints are both
+    included; same-rank siblings of the destination are excluded so the
+    path terminates exactly at ``to``. ``400`` when ``from=`` or ``to=``
+    is missing; ``404`` when either id is unknown. ``trial`` IS accepted
+    as an endpoint -- it is excluded from the walked intermediate rungs
+    (not purchasable) but is a valid endpoint via the lateral branch.
+    Never 5xxs: a resolver failure short-circuits to ``404`` so an
+    upgrade-walkthrough surface keeps rendering instead of breaking.
+    """
+    f = (request.args.get("from") or "").strip().lower()
+    t = (request.args.get("to") or "").strip().lower()
+    if not f or not t:
+        return jsonify({"error": "missing from or to"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        path = _ent.preview_path(f, t)
+        if path is None:
+            return (
+                jsonify({"error": "unknown tier", "from": f, "to": t}),
+                404,
+            )
+        from_rank = _ent.tier_rank(f)
+        to_rank = _ent.tier_rank(t)
+        if f == t:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        return jsonify(
+            {
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": from_rank,
+                "to": t,
+                "to_label": _ent.tier_label(t),
+                "to_rank": to_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_preview_path: error: %s", exc)
+        return (
+            jsonify({"error": "unknown tier", "from": f, "to": t}),
+            404,
         )
 
 
