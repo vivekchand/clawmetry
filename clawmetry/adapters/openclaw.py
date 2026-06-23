@@ -227,6 +227,32 @@ def _openshell_sandbox_phase_policy(name: str) -> dict:
         return {}
 
 
+def _openshell_sandbox_ocsf_enabled(name: str) -> dict:
+    """Call 'openshell settings get <name>' and surface sandboxOcsfJsonEnabled.
+
+    Returns {"sandboxOcsfJsonEnabled": bool} when the ocsf_json_enabled key
+    is present in the settings output, {} otherwise.  Never raises; returns {}
+    when openshell is absent (plain OpenClaw installs) or the call fails.
+    """
+    try:
+        import shutil as _sh
+        if not _sh.which("openshell"):
+            return {}
+        import subprocess as _sp
+        res = _sp.run(
+            ["openshell", "settings", "get", name],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in (res.stdout or "").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("ocsf_json_enabled:"):
+                val = stripped.split(":", 1)[1].strip().lower()
+                return {"sandboxOcsfJsonEnabled": val == "true"}
+        return {}
+    except Exception:
+        return {}
+
+
 def _sandbox_inference_configs() -> list:
     """Read per-sandbox inference config from ~/.nemoclaw/sandboxes.json.
 
@@ -300,6 +326,7 @@ def _sandbox_inference_configs() -> list:
                     "ollamaModels": _list_ollama_models(ollama_host),
                 }
                 entry.update(_openshell_sandbox_phase_policy(name))
+                entry.update(_openshell_sandbox_ocsf_enabled(name))
                 if json_runtime_kind and "sandboxRuntimeKind" not in entry:
                     entry["sandboxRuntimeKind"] = json_runtime_kind
                 out.append(entry)
@@ -320,6 +347,7 @@ def _sandbox_inference_configs() -> list:
                 "inferenceCompat": compat,
             }
             entry.update(_openshell_sandbox_phase_policy(name))
+            entry.update(_openshell_sandbox_ocsf_enabled(name))
             if json_runtime_kind and "sandboxRuntimeKind" not in entry:
                 entry["sandboxRuntimeKind"] = json_runtime_kind
             out.append(entry)
