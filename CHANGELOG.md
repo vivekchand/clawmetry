@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Install: the installer now asks before creating a cloud account (2026-06-23)
+- **`curl -fsSL https://clawmetry.com/install.sh | bash` no longer creates a cloud account by default (#3281).** The setup wizard used to default a no-account answer (and a headless install with no terminal) straight into creating a cloud account, so some people ended up with an account they never asked for. It now presents a clear choice: **[1] Local only** (free, no account, nothing leaves your machine, the default), **[2] Cloud** (free trial dashboard you can open anywhere), or **[3] License key** (activate Self-Hosted Pro for all 12 runtimes, offline). A non-interactive install defaults to local and never creates an account. You can script it with `--local` / `--cloud` or `CLAWMETRY_LOCAL_ONLY=1`. Local-only writes the `~/.clawmetry/nocloud` marker so updates can't silently re-enable cloud sync; the local dashboard at http://localhost:8900 works exactly as before.
+
 ### Security: stronger protection for custom encryption passphrases (2026-06-14)
 - **A typed custom secret is now run through a strong, salted key derivation (#3127).** Previously a custom passphrase was stored as-is and turned into the encryption key with a single, unsalted hash, so a weak passphrase could be brute-forced offline and the same passphrase produced the same key for everyone. ClawMetry now derives the key with scrypt and a random salt at setup and stores only the derived key (you back it up and paste it as before, via `clawmetry status --show-key`); the passphrase itself is never saved. Existing installs are unaffected and keep decrypting their data. If you auto-generate your key (the default), nothing changes.
 
