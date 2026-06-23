@@ -384,6 +384,76 @@ def api_entitlement_tier_path():
         )
 
 
+@bp_entitlement.route("/api/entitlement/tier-diff-batch")
+def api_entitlement_tier_diff_batch():
+    """``GET /api/entitlement/tier-diff-batch`` -- full marginal
+    :func:`tier_diff` for every purchasable tier in one pass. Plural
+    sibling of ``/api/entitlement/tier-diff`` and the "all-slices-in-one-
+    row" member of the batch family alongside ``/tier-unlocks-batch``
+    (feature/runtime grant slice), ``/tier-locks-batch`` (feature/
+    runtime loss slice) and ``/capacity-diff-batch`` (capacity slice).
+    Where each of those siblings carries a single slice of the per-rung
+    transition, this endpoint carries ALL slices (``added_features`` +
+    ``lost_features`` + ``added_runtimes`` + ``lost_runtimes`` +
+    ``capacity_changes``) in one row so a pricing-page UI can render the
+    full marginal column off **one** round-trip instead of N calls to
+    ``/tier-diff``.
+
+    Anchor matches ``/tier-unlocks-batch``: each row is the
+    :func:`clawmetry.entitlements.tier_diff` payload between the next-
+    lower-rank purchasable tier and the current rung. At the floor
+    (``TIER_OSS`` / ``TIER_CLOUD_FREE``) the row collapses to an
+    identity diff (``from == to``, ``direction == "identity"``, empty
+    marginal lists) -- every row stays byte-stable with a valid
+    ``/tier-diff`` payload so the singular and batch never diverge in
+    shape.
+
+    Response shape::
+
+        {
+          "tiers":             [<tier_diff row>, ...],
+          "current_tier":      "...",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<row>`` matches ``/api/entitlement/tier-diff`` exactly
+    (``from``, ``from_label``, ``from_rank``, ``to``, ``to_label``,
+    ``to_rank``, ``direction``, ``added_features``, ``lost_features``,
+    ``added_runtimes``, ``lost_runtimes``, ``capacity_changes``). The
+    trial tier is excluded -- it is not purchasable, same posture as the
+    other batches. Never 5xxs: a resolver failure yields an empty
+    ``tiers`` list and the grace-shape envelope so the pricing page
+    keeps rendering.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.tier_diff_batch()
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": rows,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_tier_diff_batch: error: %s", exc)
+        return jsonify(
+            {
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/capacity-diff")
 def api_entitlement_capacity_diff():
     """``GET /api/entitlement/capacity-diff?target=<tier>`` -- per-axis
