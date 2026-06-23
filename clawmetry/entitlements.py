@@ -1295,6 +1295,118 @@ def previous_tier_capacity_diff() -> dict | None:
         return None
 
 
+def _capacity_row(from_tier: str, to_tier: str) -> dict:
+    """Build one ``capacity_diff``-shape row for an arbitrary ``from -> to`` pair.
+
+    Singular-helper-shape row (``target``, ``channel_limit``, ``retention_days``,
+    ``node_limit``) computed off the static per-tier caps, NOT off the resolved
+    entitlement -- so a path / pair caller can compose marginal capacity steps
+    without pinning either side to the resolver.
+    """
+    return {
+        "target": to_tier,
+        "channel_limit": _capacity_transition(
+            _TIER_CHANNEL_LIMIT.get(from_tier, _FREE_CHANNEL_LIMIT),
+            _TIER_CHANNEL_LIMIT.get(to_tier, _FREE_CHANNEL_LIMIT),
+        ),
+        "retention_days": _capacity_transition(
+            _TIER_RETENTION_DAYS.get(from_tier, 7),
+            _TIER_RETENTION_DAYS.get(to_tier, 7),
+        ),
+        "node_limit": _capacity_transition(
+            _TIER_NODE_LIMIT.get(from_tier, _FREE_NODE_LIMIT),
+            _TIER_NODE_LIMIT.get(to_tier, _FREE_NODE_LIMIT),
+        ),
+    }
+
+
+def capacity_diff_path(from_tier: str, to_tier: str) -> list[dict] | None:
+    """Arbitrary-endpoint stepwise capacity-transition path between two tiers.
+
+    Capacity-only path companion to :func:`tier_path` -- where the parent
+    helper returns the full :func:`tier_diff` payload per rung (added /
+    lost features + runtimes + ``capacity_changes``), this helper returns
+    just the singular :func:`capacity_diff` shape per rung
+    (``target``, ``channel_limit``, ``retention_days``, ``node_limit``)
+    so a capacity-only pricing widget can render the per-rung channel /
+    retention / node transitions off **one** round-trip without paying
+    for the feature / runtime set diff on every row.
+
+    Pairs with the ``*-batch`` family: :func:`capacity_diff_batch` walks
+    every purchasable tier as a cumulative "what does capacity look like
+    at each rung off the resolver" ladder; this helper walks an
+    arbitrary ``from -> to`` segment as a marginal "what happens to
+    capacity at each step between two endpoints" ladder. Same rung
+    semantics as :func:`tier_path`: visit every purchasable tier strictly
+    between ``from_tier`` and ``to_tier`` plus the destination
+    ``to_tier`` itself, in tier-rank order (ascending for an upgrade,
+    descending for a downgrade); same-rank siblings between the
+    endpoints are both included, same-rank siblings of the destination
+    are excluded so the path terminates exactly at ``to_tier``.
+
+    Each row's ``before`` side comes off the previous step's static
+    caps (or ``from_tier`` for the first row), so a consumer can fold
+    the rows to reconstruct the cumulative
+    ``tier_diff(from_tier, to_tier)['capacity_changes']`` shape. This is
+    deliberately decoupled from the resolved entitlement -- the path is
+    a hypothetical "if I walked from X to Y, what would each rung cost
+    me in capacity" view, not a "what would it cost from where I am
+    now" view (that's what :func:`capacity_diff_batch` is for).
+
+    Endpoint semantics match :func:`tier_diff` / :func:`tier_path`: both
+    ids accept any entry in :data:`_TIER_FEATURES` (including
+    :data:`TIER_TRIAL`, which is not purchasable -- excluded from the
+    walked rungs but is a valid endpoint for the marginal-step
+    computation). Identity (``from == to``) returns ``[]`` -- no rungs
+    to walk. Lateral (same rank, different id) returns a single-row
+    path: ``[_capacity_row(from, to)]``. Unknown ids on either side
+    short-circuit to ``None``.
+
+    Never raises: a resolver failure logs a warning and returns ``None``
+    so a pricing-page surface keeps rendering.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+        if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+            return None
+        if f == t:
+            return []
+        from_rank = _TIER_RANK.get(f, -1)
+        to_rank = _TIER_RANK.get(t, -1)
+        if from_rank == to_rank:
+            return [_capacity_row(f, t)]
+        ascending = to_rank > from_rank
+        if ascending:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (_TIER_RANK.get(x, -1), x),
+            )
+        else:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (-_TIER_RANK.get(x, -1), x),
+            )
+        path: list[dict] = []
+        prev_step = f
+        for tid in ordered:
+            r = _TIER_RANK.get(tid, -1)
+            if ascending:
+                if r <= from_rank or r > to_rank:
+                    continue
+            else:
+                if r >= from_rank or r < to_rank:
+                    continue
+            if r == to_rank and tid != t:
+                continue
+            path.append(_capacity_row(prev_step, tid))
+            prev_step = tid
+        return path
+    except Exception as exc:
+        logger.warning("entitlements: capacity_diff_path failed: %s", exc)
+        return None
+
+
 def capacity_diff_batch() -> list[dict]:
     """Per-tier capacity transition for every purchasable tier in one pass.
 

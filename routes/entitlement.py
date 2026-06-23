@@ -89,6 +89,16 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                           a pricing-page table can render
                                           the capacity column off one
                                           round-trip.
+  GET  /api/entitlement/capacity-diff-path -- path analogue of
+                                          ``/capacity-diff-batch``: per-rung
+                                          capacity transition along an
+                                          arbitrary ``?from=&to=`` segment,
+                                          capacity-only mirror of
+                                          ``/tier-path`` so a capacity-only
+                                          pricing widget can render
+                                          channel / retention / node
+                                          marginal steps between two tiers
+                                          off one round-trip.
   GET  /api/entitlement/preview-batch  -- plural sibling of ``/preview``:
                                          the full ``Entitlement.to_dict``
                                          shape rendered for every purchasable
@@ -453,6 +463,93 @@ def api_entitlement_capacity_diff_batch():
                 "grace": True,
                 "enforced": False,
             }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/capacity-diff-path")
+def api_entitlement_capacity_diff_path():
+    """``GET /api/entitlement/capacity-diff-path?from=<id>&to=<id>`` --
+    per-rung capacity transition along an arbitrary ``from -> to`` segment.
+    Path analogue of ``/capacity-diff-batch`` (which walks every purchasable
+    tier off the resolved entitlement); capacity-only mirror of
+    ``/tier-path`` (which carries the full ``tier_diff`` per rung). Lets a
+    capacity-only pricing widget render the channels / retention / nodes
+    marginal steps between any two tiers off ONE round-trip without paying
+    for the feature / runtime set diff on every row.
+
+    Rung walk matches ``/tier-path``: visit every purchasable tier strictly
+    between ``from`` and ``to`` plus the destination ``to`` itself, in
+    tier-rank order. Same-rank siblings between the endpoints are both
+    included; same-rank siblings of the destination are excluded so the
+    path terminates exactly at ``to``. Each row's ``before`` side comes
+    off the previous step's static caps (or ``from`` for the first row),
+    so a consumer can fold the rows to reconstruct the cumulative
+    ``tier_diff(from, to)['capacity_changes']`` shape.
+
+    Response shape::
+
+        {
+          "from":       "<tier id>",
+          "from_label": "...",
+          "from_rank":  <int>,
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<capacity_diff row>, ...],
+        }
+
+    Each ``<capacity_diff row>`` matches ``/capacity-diff`` exactly
+    (``target``, ``channel_limit``, ``retention_days``, ``node_limit``
+    where each axis is the same ``{before, after, delta, unlocked,
+    locked}`` triple). Identity (``from == to``) returns an empty path.
+    Lateral (same rank, different id) returns a single-row path. ``400``
+    when ``from=`` or ``to=`` is missing; ``404`` when either id is
+    unknown. ``trial`` IS accepted as an endpoint -- it is excluded from
+    the walked rungs (not purchasable) but the endpoint computation
+    still resolves. Never 5xxs: a resolver failure short-circuits to
+    ``404`` so a pricing-page surface keeps rendering instead of breaking.
+    """
+    f = (request.args.get("from") or "").strip().lower()
+    t = (request.args.get("to") or "").strip().lower()
+    if not f or not t:
+        return jsonify({"error": "missing from or to"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        path = _ent.capacity_diff_path(f, t)
+        if path is None:
+            return (
+                jsonify({"error": "unknown tier", "from": f, "to": t}),
+                404,
+            )
+        from_rank = _ent.tier_rank(f)
+        to_rank = _ent.tier_rank(t)
+        if f == t:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        return jsonify(
+            {
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": from_rank,
+                "to": t,
+                "to_label": _ent.tier_label(t),
+                "to_rank": to_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_capacity_diff_path: error: %s", exc)
+        return (
+            jsonify({"error": "unknown tier", "from": f, "to": t}),
+            404,
         )
 
 
