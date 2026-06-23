@@ -2108,6 +2108,10 @@ def _cmd_onboard(args) -> None:
         try:
             from clawmetry.sync import save_config as _save_config
             _save_config({
+                # Empty api_key keeps the local-only config shape complete: the
+                # daemon startup path subscripts config["api_key"], and an empty
+                # string is safe because is_cloud_disabled() gates all egress.
+                "api_key": "",
                 "node_id": _local_node_id,
                 "platform": _plat.system(),
                 "connected_at": __import__("datetime").datetime.now().isoformat(),
