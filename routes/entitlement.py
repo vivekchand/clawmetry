@@ -1390,6 +1390,63 @@ def api_entitlement_tiers_for():
         return jsonify({"error": "tiers-for failed"}), 500
 
 
+@bp_entitlement.route("/api/entitlement/tiers-for-batch")
+def api_entitlement_tiers_for_batch():
+    """``GET /api/entitlement/tiers-for-batch`` -- full availability
+    ladder for every feature *and* runtime in one pass. Plural sibling
+    of ``/api/entitlement/tiers-for``: where the singular endpoint
+    returns one feature-or-runtime row (and 400s on a missing axis,
+    404s on an unknown id), the batch returns both surfaces in tier-rank
+    order so a pricing-table / feature-comparison matrix UI can render
+    the full "Available in X" grid off **one** round-trip instead of an
+    N+1 fan-out.
+
+    Response shape::
+
+        {
+          "features":          [<row>, ...],
+          "runtimes":          [<row>, ...],
+          "current_tier":      "...",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<row>`` matches ``/api/entitlement/tiers-for`` exactly
+    (``item``, ``kind``, ``label``, ``free``, ``min_tier``,
+    ``min_tier_label``, ``min_tier_rank``, ``tiers``). Never 5xxs: a
+    resolver failure yields empty ``features`` / ``runtimes`` lists and
+    the grace-shape envelope so the pricing UI keeps rendering.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        body = _ent.tiers_for_batch()
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "features": body.get("features", []),
+                "runtimes": body.get("runtimes", []),
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_tiers_for_batch: error: %s", exc)
+        return jsonify(
+            {
+                "features": [],
+                "runtimes": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route("/api/runtimes")
 def api_runtimes():
     try:
