@@ -2800,6 +2800,93 @@ def min_tier_for_all(
         return None
 
 
+def affordable_tiers(
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> list[dict] | None:
+    """Every *purchasable* tier admitting **all** supplied constraints, ordered
+    by rank ascending.
+
+    Plural sibling of :func:`min_tier_for_all` (which returns only the floor).
+    Same arg shape, same per-axis ``None`` "not supplied" sentinels, same
+    never-raise contract. Lets a pricing-page surface render "you need at
+    least Starter; Pro and Enterprise also qualify" off ONE round-trip
+    instead of resolving the floor and then walking the catalog client-side.
+
+    Row schema (one per qualifying tier)::
+
+        {
+            "tier":       "<id>",
+            "tier_label": "<human>",
+            "tier_rank":  <int>,
+            "is_minimum": <bool>,   # True on the first (cheapest) row only.
+        }
+
+    Ordering: ``tier_rank`` ascending, same-rank ties broken by tier id
+    alphabetical so the row sequence is deterministic and byte-stable across
+    invocations.
+
+    Semantics mirror :func:`min_tier_for_all` exactly:
+
+    * No constraints supplied -- returns ``None`` (matches the "nothing
+      asked" posture of :func:`min_tier_for_all`).
+    * Any axis collapses to ``None`` (empty iterable / non-int / all-unknown
+      items) -- that axis contributes nothing, the floor is resolved off the
+      remaining axes.
+    * All axes collapse to ``None`` -- returns ``None``.
+    * Otherwise -- the full list of purchasable tiers with rank ``>=`` the
+      floor, ordered as above. ``TIER_TRIAL`` is intentionally excluded
+      (matches every other path/batch helper, which walk ``_PURCHASABLE_TIERS``).
+    * Never raises.
+
+    Decoupled from the resolved entitlement so grace vs enforce yields
+    identical lists -- this is the hypothetical "given these requirements,
+    which tiers qualify" view, complementing the resolver-pinned
+    :func:`min_tier_for_all` flow.
+    """
+    try:
+        if (
+            features is None
+            and runtimes is None
+            and channels is None
+            and retention_days is None
+            and nodes is None
+        ):
+            return None
+        floor = min_tier_for_all(
+            features=features,
+            runtimes=runtimes,
+            channels=channels,
+            retention_days=retention_days,
+            nodes=nodes,
+        )
+        if floor is None:
+            return None
+        floor_rank = tier_rank(floor)
+        candidates = sorted(
+            (t for t in _PURCHASABLE_TIERS if tier_rank(t) >= floor_rank),
+            key=lambda t: (tier_rank(t), t),
+        )
+        out: list[dict] = []
+        for idx, tier in enumerate(candidates):
+            out.append(
+                {
+                    "tier": tier,
+                    "tier_label": tier_label(tier),
+                    "tier_rank": tier_rank(tier),
+                    "is_minimum": idx == 0,
+                }
+            )
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: affordable_tiers failed: %s", exc)
+        return None
+
+
 def lock_reason(item: str, *, kind: str | None = None) -> str | None:
     try:
         return get_entitlement().lock_reason(item, kind=kind)

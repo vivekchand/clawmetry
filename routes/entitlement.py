@@ -125,6 +125,14 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                          target" to "any vs any" with each
                                          row a marginal-step ``tier_diff``
                                          payload.
+  GET  /api/entitlement/affordable-tiers -- plural sibling of
+                                         ``/required-tier-batch``: returns
+                                         the full ordered list of purchasable
+                                         tiers admitting a constraint bundle
+                                         (not just the floor) so a pricing
+                                         page can render "you need at least
+                                         Starter -- Pro and Enterprise also
+                                         qualify" off one round-trip.
   GET  /api/entitlement/tiers-for     -- inverse of ``/required-tier``: the
                                          full ladder of tiers that grant a
                                          ``feature=`` or ``runtime=`` key
@@ -1614,6 +1622,157 @@ def api_entitlement_required_tier_batch():
                 "current_tier_rank": 0,
                 "upgrade_required": False,
                 "allowed": True,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/affordable-tiers")
+def api_entitlement_affordable_tiers():
+    """``GET /api/entitlement/affordable-tiers?features=a,b,c&runtimes=x,y
+    &channels=N&retention_days=K&nodes=M`` -- plural sibling of
+    ``/api/entitlement/required-tier-batch``.
+
+    ``/required-tier-batch`` returns only the *floor* tier admitting a
+    constraint bundle. ``/affordable-tiers`` returns the **full ordered
+    list** of purchasable tiers admitting the same bundle, so a pricing-
+    page surface can render "you need at least Starter -- Pro and
+    Enterprise also qualify" off ONE round-trip instead of resolving the
+    floor and then walking the catalog client-side.
+
+    Args are byte-identical to ``/required-tier-batch``: at least one of
+    ``features=`` / ``runtimes=`` / ``channels=`` / ``retention_days=`` /
+    ``nodes=`` must be supplied (non-empty / parseable after normalisation).
+    Same CSV normalisation, same capacity-axis parsing, same ``None`` =
+    "not supplied" sentinel (so ``retention_days=`` blank is "unset", NOT
+    the "unlimited" sentinel that would mis-route to Enterprise).
+
+    Envelope::
+
+        {
+            "features":       [...],            # echoed, normalised
+            "runtimes":       [...],            # echoed, normalised
+            "channels":       <int|None>,
+            "retention_days": <int|None>,
+            "nodes":          <int|None>,
+            "current_tier":      "<id>",
+            "current_tier_rank": <int>,
+            "minimum_tier":      "<id|null>",   # floor; null on resolver miss
+            "minimum_tier_label":"<human|null>",
+            "minimum_tier_rank": <int>,         # -1 on resolver miss
+            "tiers": [                          # ordered rank ascending
+                {
+                    "tier":               "<id>",
+                    "tier_label":         "<human>",
+                    "tier_rank":          <int>,
+                    "is_minimum":         <bool>,  # True on first row only
+                    "is_current":         <bool>,
+                    "is_current_or_better": <bool>,
+                },
+                ...
+            ]
+        }
+
+    Decoupled from the resolved entitlement off the helper side: grace vs
+    enforce yields identical ``tiers`` rows. ``current_tier`` /
+    ``is_current`` / ``is_current_or_better`` are layered on the response
+    here (not the helper) so the helper stays a pure tier-catalog walker
+    while the HTTP wrapper still answers "where am I" off one call.
+
+    Never 5xxs: the OSS-free shape (empty tier list, current_tier=oss) is
+    returned on any resolver failure.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        features = _parse_csv_arg("features")
+        runtimes = _parse_csv_arg("runtimes")
+        (_, channels_ok, channels_n, _) = _parse_capacity_arg("channels")
+        (_, retention_ok, retention_n, _) = _parse_capacity_arg(
+            "retention_days",
+        )
+        (_, nodes_ok, nodes_n, _) = _parse_capacity_arg("nodes")
+
+        if (
+            not features
+            and not runtimes
+            and not channels_ok
+            and not retention_ok
+            and not nodes_ok
+        ):
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply at least one of features=<csv>, "
+                            "runtimes=<csv>, channels=<int>, "
+                            "retention_days=<int>, or nodes=<int>"
+                        )
+                    }
+                ),
+                400,
+            )
+
+        ent = _ent.get_entitlement()
+        rows = _ent.affordable_tiers(
+            features=features or None,
+            runtimes=runtimes or None,
+            channels=channels_n if channels_ok else None,
+            retention_days=retention_n if retention_ok else None,
+            nodes=nodes_n if nodes_ok else None,
+        ) or []
+
+        cur_tier = ent.tier
+        cur_rank = _ent.tier_rank(cur_tier)
+        minimum_tier = rows[0]["tier"] if rows else None
+        minimum_label = rows[0]["tier_label"] if rows else None
+        minimum_rank = rows[0]["tier_rank"] if rows else -1
+
+        augmented: list[dict] = []
+        for row in rows:
+            augmented.append(
+                {
+                    "tier": row["tier"],
+                    "tier_label": row["tier_label"],
+                    "tier_rank": row["tier_rank"],
+                    "is_minimum": row["is_minimum"],
+                    "is_current": row["tier"] == cur_tier,
+                    "is_current_or_better": row["tier_rank"] >= cur_rank,
+                }
+            )
+
+        return jsonify(
+            {
+                "features": features,
+                "runtimes": runtimes,
+                "channels": channels_n if channels_ok else None,
+                "retention_days": retention_n if retention_ok else None,
+                "nodes": nodes_n if nodes_ok else None,
+                "current_tier": cur_tier,
+                "current_tier_rank": cur_rank,
+                "minimum_tier": minimum_tier,
+                "minimum_tier_label": minimum_label,
+                "minimum_tier_rank": minimum_rank,
+                "tiers": augmented,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_affordable_tiers: error: %s", exc)
+        (_, channels_ok, channels_n, _) = _parse_capacity_arg("channels")
+        (_, retention_ok, retention_n, _) = _parse_capacity_arg("retention_days")
+        (_, nodes_ok, nodes_n, _) = _parse_capacity_arg("nodes")
+        return jsonify(
+            {
+                "features": _parse_csv_arg("features"),
+                "runtimes": _parse_csv_arg("runtimes"),
+                "channels": channels_n if channels_ok else None,
+                "retention_days": retention_n if retention_ok else None,
+                "nodes": nodes_n if nodes_ok else None,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "minimum_tier": None,
+                "minimum_tier_label": None,
+                "minimum_tier_rank": -1,
+                "tiers": [],
             }
         )
 
