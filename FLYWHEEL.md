@@ -1,6 +1,6 @@
 # FLYWHEEL.md — ClawMetry
 
-> 🌀 ClawMetry's adoption of the **[FLYWHEEL.md](https://flywheel.md)** convention — the third file in the agent canon: `AGENTS.md` (what to do), `SOUL.md` (who to be), `FLYWHEEL.md` (how to ship). ClawMetry is its first adopter. This is our tailored instance; yours will differ — keep the bar.
+> 🌀 ClawMetry's adoption of the **[FLYWHEEL.md](https://flywheel.md)** convention — the agent canon: `AGENTS.md` (what to do), `CLAUDE.md` (architecture), `FLYWHEEL.md` (how to ship). ClawMetry is its first adopter. This is our tailored instance; yours will differ — keep the bar.
 
 How an autonomous agent should ship a change in this repo **end to end**: code → PR → green CI → merge → `[RELEASE]` → PyPI → promote to clawmetry-cloud → verify live. Read this with `CLAUDE.md` (architecture) and the cloud repo's `FLYWHEEL.md` (the other half of the loop).
 
