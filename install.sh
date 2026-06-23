@@ -764,6 +764,17 @@ fi
 # ── Onboarding ───────────────────────────────────────────────────────────────
 # Runs: clawmetry onboard (skipped when NemoClaw is detected — onboard happens inside sandbox)
 
+# Local-only opt-out: CLAWMETRY_LOCAL_ONLY=1 means "never create a cloud
+# account, nothing leaves this machine." Write the persistent marker now so it
+# holds even when onboard is skipped; onboard itself also defaults to local.
+case "${CLAWMETRY_LOCAL_ONLY:-}" in
+  1|true|yes|on|TRUE|YES|ON)
+    mkdir -p "$HOME/.clawmetry" 2>/dev/null || true
+    touch "$HOME/.clawmetry/nocloud" 2>/dev/null || true
+    echo -e "  ${DIM}Local-only mode (CLAWMETRY_LOCAL_ONLY set): no cloud account will be created.${NC}"
+    ;;
+esac
+
 if [ "${CLAWMETRY_SKIP_ONBOARD:-}" = "1" ] || [ "$NEMOCLAW_DETECTED" = "1" ]; then
   [ "$NEMOCLAW_DETECTED" = "1" ] || echo -e "  ${DIM}Skipping onboard (CLAWMETRY_SKIP_ONBOARD=1)${NC}"
 elif (exec </dev/tty) 2>/dev/null; then

@@ -2074,30 +2074,122 @@ def _cmd_onboard(args) -> None:
 
     print(f"\n  {BOLD(f'ClawMetry{_ver_str} installed!')}")
     print()
-    print(f"  Monitor your AI agents from anywhere with ClawMetry Cloud.")
+    print(f"  {BOLD('How do you want to run ClawMetry?')}")
+    print()
+    print(f"    {BOLD('[1] Local only')}    {DIM('Free. No account, nothing leaves this machine.')}")
+    print(f"                     {DIM('Watch OpenClaw and NeMo at http://localhost:8900.')}")
+    print(f"    {BOLD('[2] Cloud')}         {DIM('Free trial. A dashboard you can open from anywhere.')}")
+    print(f"                     {DIM('Creates an account for this machine. No card needed.')}")
+    print(f"    {BOLD('[3] License key')}   {DIM('Self-Hosted Pro: all 12 runtimes, offline. Paste a key.')}")
     print()
 
-    try:
-        choice = _input("  Do you have a ClawMetry account? [y/N]: ").strip().lower() or "n"
-    except (EOFError, KeyboardInterrupt):
-        choice = "n"
+    def _write_nocloud_marker():
+        """Persist the local-only opt-out so updates can't silently re-enable
+        cloud sync (clawmetry/config.py is_cloud_disabled / GitHub #1937)."""
+        try:
+            from clawmetry.config import NOCLOUD_MARKER_PATH
+            from pathlib import Path as _P
+            _P(NOCLOUD_MARKER_PATH).parent.mkdir(parents=True, exist_ok=True)
+            _P(NOCLOUD_MARKER_PATH).touch()
+        except Exception:
+            pass
+
+    def _finish_local():
+        """Save an account-free config and start the daemon. The nocloud
+        marker makes every cloud call a no-op while local DuckDB ingestion
+        still feeds http://localhost:8900."""
+        import platform as _plat
+        import socket as _sock
+        # The daemon reads config['node_id'] by subscript on start, so a
+        # local-only config still needs one. Hostname matches the daemon's own
+        # _node_id() fallback. No api_key/encryption_key -> the nocloud marker
+        # short-circuits every cloud call regardless.
+        _local_node_id = getattr(args, "custom_node_id", None) or _sock.gethostname() or "local"
+        try:
+            from clawmetry.sync import save_config as _save_config
+            _save_config({
+                "node_id": _local_node_id,
+                "platform": _plat.system(),
+                "connected_at": __import__("datetime").datetime.now().isoformat(),
+                "local_only": True,
+            })
+        except Exception:
+            pass
+        print(f"  Starting local dashboard...")
+        _stop_existing_daemon()
+        _start_daemon({"local_only": True}, args)
+        print()
+        print(f"  {GREEN(BOLD('Watching your agents locally.'))}")
+        print(f"     {BOLD('http://localhost:8900')}")
+        print(f"     {DIM('Nothing leaves this machine. Enable cloud anytime: clawmetry connect')}")
         print()
 
+    # Scriptable / non-interactive overrides. A headless install (curl | bash
+    # with no /dev/tty) must NEVER silently create a cloud account, so the
+    # default AND the EOF fallback are both LOCAL.
+    _env_local = _os.environ.get("CLAWMETRY_LOCAL_ONLY", "").strip().lower() in ("1", "true", "yes", "on")
+    if getattr(args, "local", False) or _env_local:
+        choice = "1"
+    elif getattr(args, "cloud", False):
+        choice = "2"
+    else:
+        try:
+            choice = _input("  Choose [1]: ").strip() or "1"
+        except (EOFError, KeyboardInterrupt):
+            choice = "1"
+            print()
+
     print()
 
-    if choice in ("y", "yes"):
-        # Existing user: email -> OTP -> connect
-        import argparse as _ap
-
-        _fake_args = _ap.Namespace(
-            key=None, foreground=False, custom_node_id=None,
-            enc_key=None, key_only=False, no_daemon=False,
-        )
-        _cmd_connect(_fake_args)
-
+    if choice == "3":
+        # ── Self-Hosted Pro license (local, offline, all 12 runtimes) ──────
+        _write_nocloud_marker()
+        try:
+            _lic_key = _input("  Paste your license key (CLAW1...), or press Enter to do it later: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            _lic_key = ""
+            print()
+        print()
+        if _lic_key:
+            try:
+                from clawmetry import license as _lic
+                ok, msg = _lic.activate(_lic_key, node_id=_lic._node_id())
+                print(f"  {GREEN('Activated.') if ok else '⚠️  '}{msg}")
+                if not ok:
+                    print(f"     {DIM('Try again later:')} {CYAN('clawmetry activate <key>')}")
+            except Exception as _e:
+                print(f"  ⚠️  Activation failed: {_e}")
+                print(f"     {DIM('Try again later:')} {CYAN('clawmetry activate <key>')}")
+        else:
+            print(f"  {DIM('No problem. Buy a key at')} {CYAN('https://clawmetry.com/pricing')}")
+            print(f"  {DIM('then run')} {CYAN('clawmetry activate <key>')}")
         print()
         _maybe_apply_nemoclaw_preset(_input, BOLD, CYAN, DIM)
-    else:
+        _finish_local()
+        return
+
+    if choice == "2":
+        # ── Cloud (free trial) ────────────────────────────────────────────
+        try:
+            has_acct = (_input("  Already have a ClawMetry account? [y/N]: ").strip().lower() or "n")
+        except (EOFError, KeyboardInterrupt):
+            has_acct = "n"
+            print()
+        print()
+        if has_acct in ("y", "yes"):
+            # Existing user: email -> OTP -> connect
+            import argparse as _ap
+
+            _fake_args = _ap.Namespace(
+                key=None, foreground=False, custom_node_id=None,
+                enc_key=None, key_only=False, no_daemon=False,
+            )
+            _cmd_connect(_fake_args)
+
+            print()
+            _maybe_apply_nemoclaw_preset(_input, BOLD, CYAN, DIM)
+            return
+
         # New user: instant registration (no OTP)
         print(f"  Setting up your cloud dashboard...")
         print()
@@ -2175,6 +2267,15 @@ def _cmd_onboard(args) -> None:
         _start_daemon(config, args)
         print(f"  {GREEN(BOLD('Your agent is now being monitored!'))}")
         print()
+        return
+
+    # ── [1] Local only (default) ──────────────────────────────────────────
+    print(f"  {GREEN(BOLD('Local only.'))} {DIM('No account, no cloud.')}")
+    print()
+    _write_nocloud_marker()
+    _maybe_apply_nemoclaw_preset(_input, BOLD, CYAN, DIM)
+    _finish_local()
+    return
 
 
 def _cmd_account(args) -> None:
@@ -3313,6 +3414,14 @@ def main() -> None:
         dest="custom_node_id",
         help="Custom node name (default: hostname)",
     )
+    p_onboard.add_argument(
+        "--local", "--no-cloud", action="store_true", dest="local",
+        help="Local only: no cloud account, nothing leaves this machine",
+    )
+    p_onboard.add_argument(
+        "--cloud", action="store_true", dest="cloud",
+        help="Create a cloud account non-interactively (skip the prompt)",
+    )
 
     # connect
     p_connect = sub.add_parser("connect", help="Activate cloud sync")
@@ -3373,6 +3482,14 @@ def main() -> None:
         metavar="NAME",
         dest="custom_node_id",
         help="Custom node name (default: hostname)",
+    )
+    p_setup.add_argument(
+        "--local", "--no-cloud", action="store_true", dest="local",
+        help="Local only: no cloud account, nothing leaves this machine",
+    )
+    p_setup.add_argument(
+        "--cloud", action="store_true", dest="cloud",
+        help="Create a cloud account non-interactively (skip the prompt)",
     )
 
     # account — link email or show account info
