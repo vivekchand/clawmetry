@@ -1548,6 +1548,160 @@ def tier_unlocks_batch() -> list[dict]:
         return []
 
 
+def _unlocks_row(from_tier: str, to_tier: str) -> dict | None:
+    """Single marginal-unlocks row between two arbitrary tiers, with the
+    source carried as ``previous_tier`` (path-chained, **not** the global
+    next-lower-purchasable-tier anchor used by :func:`tier_unlocks`).
+
+    Private builder for :func:`tier_unlocks_path`: each row is "what the
+    `to` rung first unlocks vs the previous step in the walked path" so a
+    consumer can fold the per-rung rows to reconstruct the cumulative
+    ``tier_diff(from, to)['added_*']`` shape -- the same chain-property
+    :func:`tier_path` and :func:`capacity_diff_path` enforce on their rows.
+
+    Returns ``None`` on unknown ids and never raises -- the path walker
+    drops ``None`` rows on the floor so a pricing surface keeps rendering.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+        if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+            return None
+        from_feats = FREE_FEATURES | _TIER_FEATURES.get(f, frozenset())
+        if f == TIER_ENTERPRISE:
+            from_feats = from_feats | ENTERPRISE_FEATURES
+        to_feats = FREE_FEATURES | _TIER_FEATURES.get(t, frozenset())
+        if t == TIER_ENTERPRISE:
+            to_feats = to_feats | ENTERPRISE_FEATURES
+        from_runtimes = (
+            FREE_RUNTIMES | PAID_RUNTIMES
+            if f in _TIER_PAID_RUNTIMES
+            else FREE_RUNTIMES
+        )
+        to_runtimes = (
+            FREE_RUNTIMES | PAID_RUNTIMES
+            if t in _TIER_PAID_RUNTIMES
+            else FREE_RUNTIMES
+        )
+        return {
+            "tier": t,
+            "tier_label": tier_label(t),
+            "tier_rank": tier_rank(t),
+            "previous_tier": f,
+            "previous_tier_label": tier_label(f),
+            "previous_tier_rank": tier_rank(f),
+            "features": sorted(to_feats - from_feats),
+            "runtimes": sorted(to_runtimes - from_runtimes),
+        }
+    except Exception as exc:
+        logger.warning("entitlements: _unlocks_row failed: %s", exc)
+        return None
+
+
+def tier_unlocks_path(from_tier: str, to_tier: str) -> list[dict] | None:
+    """Arbitrary-endpoint stepwise unlock path between two tiers.
+
+    Unlocks-focused analogue of :func:`tier_path` and unlocks-focused
+    path analogue of :func:`tier_unlocks` -- the third member of the
+    ``_path`` family alongside :func:`tier_path` (full ``tier_diff`` per
+    rung) and :func:`capacity_diff_path` (capacity-only per rung). Lets
+    an "upgrade-walkthrough" surface render only the *newly-unlocked*
+    features + runtimes at each rung between any two tiers off ONE
+    round-trip, without the noise of the capacity axes or the symmetric
+    ``lost_*`` lists that :func:`tier_path` carries.
+
+    Per-rung row shape matches :func:`tier_unlocks` exactly --
+    ``tier``, ``tier_label``, ``tier_rank``, ``previous_tier``,
+    ``previous_tier_label``, ``previous_tier_rank``, ``features``,
+    ``runtimes`` -- with one critical difference: ``previous_tier`` is
+    the **previous step in the walked path** (or ``from_tier`` for the
+    first row), NOT the global "next-lower purchasable tier" anchor
+    :func:`tier_unlocks` uses. The path-chained source guarantees
+    ``row[i]['tier'] == row[i+1]['previous_tier']`` so a consumer can
+    fold ``features`` / ``runtimes`` across rows to reconstruct the
+    cumulative ``tier_diff(from_tier, to_tier)['added_*']`` shape -- the
+    same chain-property :func:`tier_path` and :func:`capacity_diff_path`
+    enforce on their rows.
+
+    The walk visits every purchasable tier strictly between ``from_tier``
+    and ``to_tier`` plus the destination ``to_tier`` itself, in tier-rank
+    order (ascending or descending depending on direction). Same-rank
+    siblings *between* the endpoints are both included (matching
+    :func:`tier_path`'s ladder shape); same-rank siblings of the
+    destination are excluded so the path terminates exactly at
+    ``to_tier``. Rung walk is byte-stable against :func:`tier_path` and
+    :func:`capacity_diff_path` (same ``_PURCHASABLE_TIERS`` filter +
+    same sort key + same destination-sibling exclusion).
+
+    Direction semantics:
+
+    * ``upgrade`` (ascending) -- each row's ``features`` / ``runtimes``
+      are the marginal grant at that rung. The natural "what do I get if
+      I climb this far" walkthrough.
+    * ``downgrade`` (descending) -- each row's ``features`` /
+      ``runtimes`` are typically empty (you're losing things, not
+      unlocking them); use :func:`tier_path` (or the future
+      ``tier_locks_path``) for the marginal-loss view of a downgrade.
+      The path still walks rungs so a UI keyed off rung shape keeps
+      working; the empty lists are the correct "unlocks" answer.
+    * ``lateral`` (same rank, different id) -- single-row path; row
+      carries the set difference between the two same-rank tier grants.
+    * ``identity`` (``from == to``) -- empty path; no rungs to walk.
+
+    Endpoint semantics match :func:`tier_path` / :func:`tier_diff`: both
+    ids accept any entry in :data:`_TIER_FEATURES` (including
+    :data:`TIER_TRIAL`, which is not purchasable -- it is excluded from
+    the walked rungs but is a valid endpoint for the marginal-step
+    computation). Unknown ids on either side short-circuit to ``None``.
+
+    Never raises: a resolver failure logs a warning and returns ``None``
+    so an upgrade-walkthrough surface keeps rendering.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+        if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+            return None
+        if f == t:
+            return []
+        from_rank = _TIER_RANK.get(f, -1)
+        to_rank = _TIER_RANK.get(t, -1)
+        if from_rank == to_rank:
+            row = _unlocks_row(f, t)
+            return [row] if row is not None else []
+        ascending = to_rank > from_rank
+        if ascending:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (_TIER_RANK.get(x, -1), x),
+            )
+        else:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (-_TIER_RANK.get(x, -1), x),
+            )
+        path: list[dict] = []
+        prev_step = f
+        for tid in ordered:
+            r = _TIER_RANK.get(tid, -1)
+            if ascending:
+                if r <= from_rank or r > to_rank:
+                    continue
+            else:
+                if r >= from_rank or r < to_rank:
+                    continue
+            if r == to_rank and tid != t:
+                continue
+            row = _unlocks_row(prev_step, tid)
+            if row is not None:
+                path.append(row)
+                prev_step = tid
+        return path
+    except Exception as exc:
+        logger.warning("entitlements: tier_unlocks_path failed: %s", exc)
+        return None
+
+
 def tier_locks(target_tier: str) -> dict | None:
     """Per-tier marginal locks: features + runtimes that disappear when
     you *descend to* ``target_tier`` from the next-higher purchasable
