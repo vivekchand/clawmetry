@@ -1999,6 +1999,70 @@ def tiers_for_runtime(runtime: str) -> dict | None:
         return None
 
 
+def tiers_for_batch() -> dict:
+    """Full availability ladder for every known feature *and* runtime in
+    one pass. Plural sibling of :func:`tiers_for_feature` /
+    :func:`tiers_for_runtime` and the inverse of the existing
+    ``min_tier_for_*`` resolvers: where the singular helpers answer
+    "which tiers grant *this* item" one id at a time -- the shape a
+    pricing-page row uses -- the batch returns the same row shape for
+    every entry in :data:`ALL_FEATURES` and :data:`ALL_RUNTIMES` so a
+    pricing-table or feature-comparison matrix UI can render the full
+    "Available in X" grid off **one** round-trip instead of an N+1
+    fan-out across ``/api/entitlement/tiers-for``.
+
+    Response shape::
+
+        {
+          "features": [<tiers_for_feature row>, ...],
+          "runtimes": [<tiers_for_runtime row>, ...],
+        }
+
+    Feature rows are sorted by ``(feature_tier_rank, id)`` so the free
+    surface appears first, then Starter, Pro, Enterprise -- the same
+    order :func:`feature_catalog` uses, so a UI that joins the two
+    surfaces (catalog row + availability ladder) sees a consistent
+    ordering. Runtime rows put :data:`FREE_RUNTIMES` first (alpha
+    within), then :data:`PAID_RUNTIMES` (alpha within), mirroring
+    :func:`runtime_catalog`.
+
+    Each row matches its singular helper exactly (``item``, ``kind``,
+    ``label``, ``free``, ``min_tier``, ``min_tier_label``,
+    ``min_tier_rank``, ``tiers``) so callers can pass a row to existing
+    components without reshaping. Aliases (``custom_alerts``,
+    ``alert_webhooks``, ``anomaly_detection``, ``cost_optimizer``) are
+    surfaced alongside their canonical features -- they each carry a
+    distinct id used by the dashboard, and the catalog already lists
+    them.
+
+    Never raises: if the resolver blows up the helper returns
+    ``{"features": [], "runtimes": []}`` so the pricing UI keeps
+    rendering instead of 500-ing.
+    """
+    try:
+        features: list[dict] = []
+        for fid in sorted(
+            ALL_FEATURES,
+            key=lambda f: (_FEATURE_TIER_RANK.get(feature_tier(f), 9), f),
+        ):
+            row = tiers_for_feature(fid)
+            if row is not None:
+                features.append(row)
+        runtimes: list[dict] = []
+        for rt in sorted(FREE_RUNTIMES):
+            row = tiers_for_runtime(rt)
+            if row is not None:
+                runtimes.append(row)
+        for rt in sorted(PAID_RUNTIMES):
+            row = tiers_for_runtime(rt)
+            if row is not None:
+                runtimes.append(row)
+        return {"features": features, "runtimes": runtimes}
+    except Exception as exc:
+        logger.warning("entitlements: tiers_for_batch failed: %s", exc)
+        return {"features": [], "runtimes": []}
+
+
 def min_tier_for_channel_count(count: int) -> str | None:
     """Return the cheapest *purchasable* tier id whose channel-adapter cap fits
     ``count`` configured channels. Closes the symmetry gap with
