@@ -3772,3 +3772,56 @@ def tier_spec(tier: str) -> dict | None:
         "features": sorted(paid_feats),
         "runtimes": list(paid_runtimes_sorted) if unlocks_paid else [],
     }
+
+
+def tier_catalog_at(tier: str) -> list[dict] | None:
+    """What-if sibling of :func:`tier_catalog`: the full tier ladder with
+    ``is_current`` recomputed as if the install were on ``tier`` instead of
+    the live resolved entitlement.
+
+    The row shape, ordering, and every other field are identical to
+    :func:`tier_catalog` (catalogue-derived, user-context-free) -- only the
+    ``is_current`` flag shifts. Lets a pricing-comparison UI render the
+    same ladder as :func:`tier_catalog` from the perspective of any
+    hypothetical tier without first switching the live resolver.
+
+    Returns ``None`` for empty / unknown tier ids (caller renders "unknown
+    tier" / 404). Never raises: a catalogue failure short-circuits to the
+    OSS-floor view (ladder with ``is_current`` pinned on :data:`TIER_OSS`)
+    so the surface still renders.
+
+    Companion to :func:`feature_catalog_at` / :func:`runtime_catalog_at`
+    (which recompute the catalogue's resolution-dependent fields against a
+    hypothetical Entitlement). This one only needs to flip the
+    ``is_current`` boolean -- every other field on a tier row is already
+    catalogue-derived -- so it shares the static per-tier maps with
+    :func:`tier_catalog` rather than synthesising a full
+    :class:`Entitlement`.
+    """
+    try:
+        t = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not t or t not in _TIER_ORDER:
+        return None
+    out: list[dict] = []
+    paid_runtimes_sorted = sorted(PAID_RUNTIMES)
+    for rank, tid in enumerate(_TIER_ORDER):
+        paid_feats = _TIER_FEATURES.get(tid, frozenset())
+        unlocks_paid = tid in _TIER_PAID_RUNTIMES
+        out.append(
+            {
+                "id": tid,
+                "label": tier_label(tid),
+                "is_paid": tid in _PAID_TIERS,
+                "is_current": tid == t,
+                "rank": rank,
+                "unlocks_paid_runtimes": unlocks_paid,
+                "retention_days": _TIER_RETENTION_DAYS.get(tid, 7),
+                "channel_limit": _TIER_CHANNEL_LIMIT.get(tid, _FREE_CHANNEL_LIMIT),
+                "node_limit": _TIER_NODE_LIMIT.get(tid, _FREE_NODE_LIMIT),
+                "features": sorted(paid_feats),
+                "runtimes": list(paid_runtimes_sorted) if unlocks_paid else [],
+            }
+        )
+    return out
