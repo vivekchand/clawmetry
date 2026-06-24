@@ -1488,6 +1488,10 @@ def _read_nemoclaw_sandbox_routing() -> list:
                 primary = f"anthropic/{model}" if model else ""
                 base_url = "https://inference.local"
                 api = "anthropic-messages"
+            elif provider in ("minimax", "minimax-api"):
+                provider_key = "minimax"
+                primary = f"minimax/{model}" if model else ""
+                base_url = os.environ.get("MINIMAX_BASE_URL", "").strip() or "https://api.minimax.chat/v1"
             else:
                 # Includes compatible-anthropic-endpoint + openai-completions
                 # (the common default) → managed "inference" provider.
