@@ -199,6 +199,8 @@ def api_entitlement():
                 "locked_features": [],
                 "next_tier_diff": None,
                 "prev_tier_diff": None,
+                "next_tier_unlocks": None,
+                "prev_tier_unlocks": None,
             }
         )
 
@@ -233,6 +235,8 @@ def api_entitlement_refresh():
                 "locked_features": [],
                 "next_tier_diff": None,
                 "prev_tier_diff": None,
+                "next_tier_unlocks": None,
+                "prev_tier_unlocks": None,
             }
         )
 
@@ -1005,6 +1009,94 @@ def api_entitlement_tier_unlocks_path():
         return (
             jsonify({"error": "unknown tier", "from": f, "to": t}),
             404,
+        )
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-unlocks")
+def api_entitlement_next_tier_unlocks():
+    """``GET /api/entitlement/next-tier-unlocks`` -- marginal unlocks row
+    for the rung immediately above the resolved entitlement, in
+    :func:`clawmetry.entitlements.tier_unlocks` shape (``tier``,
+    ``tier_label``, ``tier_rank``, ``previous_tier``, ``previous_tier_label``,
+    ``previous_tier_rank``, ``features``, ``runtimes``).
+
+    Current-relative convenience for ``/api/entitlement/tier-unlocks
+    ?tier=<next_purchasable_tier>``; the upgrade-CTA companion to
+    ``/api/entitlement/next-tier-diff`` (same marginal, ``upgrade_diff``
+    shape). Returns ``{"unlocks": null, ...}`` at the ceiling
+    (no rung above to upgrade to). Never 5xxs: a resolver failure
+    short-circuits to the grace-shape envelope so the dashboard CTA
+    keeps rendering instead of disappearing.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        body = ent.next_tier_unlocks()
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "unlocks": body,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_next_tier_unlocks: error: %s", exc)
+        return jsonify(
+            {
+                "current_tier": "oss",
+                "current_tier_label": "OSS",
+                "current_tier_rank": 0,
+                "unlocks": None,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-unlocks")
+def api_entitlement_previous_tier_unlocks():
+    """``GET /api/entitlement/previous-tier-unlocks`` -- marginal unlocks row
+    for the rung immediately below the resolved entitlement, in
+    :func:`clawmetry.entitlements.tier_unlocks` shape.
+
+    Current-relative convenience for ``/api/entitlement/tier-unlocks
+    ?tier=<previous_purchasable_tier>``. Useful as a downgrade-confirmation
+    detail row alongside :func:`previous_tier_diff` -- ``features`` /
+    ``runtimes`` here are what the rung below *first* unlocked vs the rung
+    below it (a tier-property), so a "you'd still keep X" copy can
+    reference the same set the rung-below was originally sold on. Returns
+    ``{"unlocks": null, ...}`` at the floor (no rung below). Never 5xxs.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        body = ent.previous_tier_unlocks()
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "unlocks": body,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_previous_tier_unlocks: error: %s", exc)
+        return jsonify(
+            {
+                "current_tier": "oss",
+                "current_tier_label": "OSS",
+                "current_tier_rank": 0,
+                "unlocks": None,
+                "grace": True,
+                "enforced": False,
+            }
         )
 
 
