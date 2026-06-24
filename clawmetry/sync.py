@@ -2363,6 +2363,41 @@ def sync_sandbox_sessions_openshell(config: dict, state: dict) -> int:
                     sb_name, fname, _ce,
                 )
 
+        # OCSF audit log ingest — gap #3299.
+        # Only attempt when the sandbox has OCSF JSON output armed.
+        try:
+            from clawmetry.adapters.openclaw import (
+                _openshell_sandbox_ocsf_enabled,
+                _openshell_sandbox_logs,
+            )
+            if _openshell_sandbox_ocsf_enabled(sb_name).get("sandboxOcsfJsonEnabled"):
+                ocsf_events = _openshell_sandbox_logs(sb_name)
+                if ocsf_events:
+                    from clawmetry import local_store as _ls
+                    _store_obj = _ls.get_store()
+                    for idx, ev in enumerate(ocsf_events):
+                        uid = ev.get("uid") or ev.get("activity_id") or str(idx)
+                        ts_val = ev.get("time")
+                        ts_iso = (
+                            datetime.fromtimestamp(ts_val, tz=timezone.utc).isoformat()
+                            if isinstance(ts_val, (int, float))
+                            else datetime.now(timezone.utc).isoformat()
+                        )
+                        _store_obj.ingest({
+                            "id": f"nemoclaw-ocsf:{sb_name}:{uid}",
+                            "node_id": node_id,
+                            "agent_type": "nemoclaw",
+                            "agent_id": sb_name,
+                            "session_id": sb_name,
+                            "event_type": "sandbox.audit_log",
+                            "ts": ts_iso,
+                            "data": ev,
+                        })
+                    _store_obj.flush()
+                    log.debug("nemoclaw OCSF: ingested %d events for %s", len(ocsf_events), sb_name)
+        except Exception as _oe:
+            log.debug("nemoclaw OCSF ingest failed (non-fatal): %s", _oe)
+
     return total
 
 

@@ -460,6 +460,33 @@ def http_search():
         return jsonify({"error": str(e)[:300]}), 500
 
 
+@bp_local_query.route("/api/local/sandbox-logs/<sandbox_name>", methods=["GET"])
+def http_sandbox_logs(sandbox_name: str):
+    """Return OCSF sandbox audit log events for a NemoClaw sandbox.
+
+    Queries ``events WHERE event_type='sandbox.audit_log' AND
+    agent_id=<sandbox_name>``. Optional query param: ``limit`` (int,
+    default 50, max 200).  Gap #3299.
+    """
+    try:
+        limit = min(int(request.args.get("limit", 50)), 200)
+        rows = local_store_via_daemon(
+            "query_events",
+            event_type="sandbox.audit_log",
+            agent_id=sandbox_name,
+            limit=limit,
+        )
+        if rows is None:
+            rows = _store().query_events(
+                event_type="sandbox.audit_log",
+                agent_id=sandbox_name,
+                limit=limit,
+            )
+        return jsonify({"events": rows or [], "sandbox": sandbox_name})
+    except Exception as e:
+        return jsonify({"error": str(e)[:300]}), 500
+
+
 @bp_local_query.route("/api/local/query", methods=["POST"])
 def http_query():
     """Generic shape-dispatched endpoint. Mirrors the WS relay frame format,
