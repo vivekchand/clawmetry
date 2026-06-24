@@ -1,1 +1,3633 @@
-PLACEHOLDER_ENT
+"""
+clawmetry/entitlements.py — open-core entitlement resolution.
+
+Single source of truth for "what is this install allowed to do". Everything
+that gates a runtime or an advanced feature reads :func:`get_entitlement` —
+nothing should gate on a hardcoded plan check scattered across routes.
+
+Open-core model
+---------------
+* **FREE** (this OSS package): the OpenClaw + NVIDIA NemoClaw runtimes +
+  NeMo governance + the core observability surface. Always available — no
+  key, no network call.
+* **PAID** (the closed-source ``clawmetry-pro`` package, fetched only with
+  a valid license key or a cloud entitlement — it is *not* shipped in this
+  repo): the other agent runtimes (Claude Code, Codex, Cursor, …), the
+  advanced features (custom alerts, multi-node fleet, anomaly detection, …),
+  and paid CLI capabilities.
+
+  NeMo governance (policy enforcement on top of any runtime) remains a free
+  *feature* (``nemo_governance``). The ``nemoclaw`` agent runtime is also
+  free and sits alongside ``openclaw`` in ``FREE_RUNTIMES``.
+
+Resolution order (first hit wins), all cached
+---------------------------------------------
+1. A local signed license file (``~/.clawmetry/license.key``)  -> self-hosted Pro/Enterprise
+2. A cloud plan cached from the last heartbeat                  -> cloud Free/Starter/Pro/Trial
+3. else                                                         -> OSS free
+
+Both (1) and (2) are stubs in this phase — (1) lands with the Ed25519 license
+client, (2) when the daemon caches the heartbeat plan. Today this always
+resolves to the OSS-free entitlement.
+
+Rollout: GRACE vs ENFORCE
+-------------------------
+Until the announced enforce date this resolver runs in **GRACE** mode:
+``Entitlement.grace`` is ``True`` and every ``allows_*`` check returns ``True``,
+so wiring this in changes **no current behaviour** — the gate is present but
+inert. Set ``CLAWMETRY_ENFORCE=1`` to turn enforcement on (the enforce-phase
+release flips the default). The module never raises: any error falls back to
+the OSS-free entitlement and logs a warning.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import threading
+import time
+from dataclasses import dataclass, field
+
+logger = logging.getLogger("clawmetry.entitlements")
+
+# ── Tier identifiers ────────────────────────────────────────────────────────
+TIER_OSS = "oss"
+TIER_CLOUD_FREE = "cloud_free"
+TIER_TRIAL = "trial"
+TIER_CLOUD_STARTER = "cloud_starter"
+TIER_CLOUD_PRO = "cloud_pro"
+TIER_PRO = "pro"  # self-hosted Pro (license key)
+TIER_ENTERPRISE = "enterprise"
+
+# Tiers that unlock the paid (closed-source) layer.
+_PAID_TIERS = frozenset(
+    {TIER_TRIAL, TIER_CLOUD_STARTER, TIER_CLOUD_PRO, TIER_PRO, TIER_ENTERPRISE}
+)
+
+# ── Runtime catalogue ───────────────────────────────────────────────────────
+# FREE: the OpenClaw and NVIDIA NemoClaw runtimes. NeMo *governance* (policy
+# enforcement) is a separate free feature; ``nemoclaw`` here is the agent
+# runtime itself, which is part of the free tier alongside ``openclaw``.
+FREE_RUNTIMES = frozenset({"openclaw", "nemoclaw"})
+
+# PAID: every other agent runtime ClawMetry can observe. These ship in the
+# closed-source ``clawmetry-pro`` package, not here — listed so the UI can
+# render locked rows + an upgrade CTA, and so the gate has a known universe.
+PAID_RUNTIMES = frozenset(
+    {
+        "claude_code",
+        "codex",
+        "cursor",
+        "aider",
+        "goose",
+        "opencode",
+        "qwen_code",
+        "hermes",
+        "picoclaw",
+        "nanoclaw",
+    }
+)
+
+ALL_RUNTIMES = FREE_RUNTIMES | PAID_RUNTIMES
+
+# Display labels for every known runtime.
+RUNTIME_LABELS = {
+    "openclaw": "OpenClaw",
+    "nemoclaw": "NemoClaw",
+    "claude_code": "Claude Code",
+    "codex": "Codex",
+    "cursor": "Cursor",
+    "aider": "Aider",
+    "goose": "Goose",
+    "opencode": "opencode",
+    "qwen_code": "Qwen Code",
+    "hermes": "Hermes",
+    "picoclaw": "PicoClaw",
+    "nanoclaw": "NanoClaw",
+}
+
+_TIER_ORDER = (
+    TIER_OSS,
+    TIER_CLOUD_FREE,
+    TIER_TRIAL,
+    TIER_CLOUD_STARTER,
+    TIER_CLOUD_PRO,
+    TIER_PRO,
+    TIER_ENTERPRISE,
+)
+
+RUNTIME_ALIASES = {
+    "claude-code": "claude_code",
+    "claudecode": "claude_code",
+    "qwen-code": "qwen_code",
+    "qwencode": "qwen_code",
+    "open-code": "opencode",
+    "open_code": "opencode",
+    "open-claw": "openclaw",
+    "open_claw": "openclaw",
+    "nemo-claw": "nemoclaw",
+    "nemo_claw": "nemoclaw",
+    "pico-claw": "picoclaw",
+    "pico_claw": "picoclaw",
+    "nano-claw": "nanoclaw",
+    "nano_claw": "nanoclaw",
+}
+
+TIER_LABELS = {
+    TIER_OSS: "OSS",
+    TIER_CLOUD_FREE: "Free",
+    TIER_TRIAL: "Trial",
+    TIER_CLOUD_STARTER: "Starter",
+    TIER_CLOUD_PRO: "Pro",
+    TIER_PRO: "Self-hosted Pro",
+    TIER_ENTERPRISE: "Enterprise",
+}
+
+FEATURE_LABELS = {
+    "sessions": "Sessions",
+    "transcripts": "Transcripts",
+    "usage": "Usage",
+    "brain": "Brain",
+    "flow": "Flow",
+    "tracing": "Tracing",
+    "health": "Health",
+    "logs": "Logs",
+    "crons": "Crons",
+    "channels": "Channels",
+    "nemo_governance": "NeMo Governance",
+    "overview": "Overview",
+    "multi_runtime": "Multi-runtime",
+    "fleet": "Multi-node fleet",
+    "cloud_sync": "Cloud sync",
+    "all_channels": "All channels",
+    "approval_queue": "Approval queue",
+    "budget_limits": "Budget limits",
+    "per_runtime_health_timeline": "Per-runtime health timeline",
+    "per_run_waste_flags": "Per-run waste flags",
+    "per_run_compare": "Per-run compare",
+    "error_triage": "Error triage",
+    "self_evolve": "Self-Evolve",
+    "asset_registry": "Asset registry",
+    "eval_suite": "Eval suite",
+    "tool_policy": "Tool policy",
+    "otel_export": "OTel export",
+    "custom_webhooks": "Custom webhooks",
+    "custom_runtime_ingest": "Custom runtime ingest",
+    "custom_alerts": "Custom alerts",
+    "alert_webhooks": "Alert webhooks",
+    "anomaly_detection": "Anomaly detection",
+    "cost_optimizer": "Cost optimizer",
+    "siem_export": "SIEM export",
+    "sso": "SSO",
+    "audit_logs": "Audit logs",
+    "rbac": "RBAC",
+    "air_gapped_license": "Air-gapped license",
+    "custom_data_residency": "Custom data residency",
+}
+
+_ALIAS_FEATURES = frozenset(
+    {"custom_alerts", "alert_webhooks", "anomaly_detection", "cost_optimizer"}
+)
+
+
+# ── Feature catalogue ───────────────────────────────────────────────────────
+FREE_FEATURES = frozenset(
+    {
+        "sessions",
+        "transcripts",
+        "usage",
+        "brain",
+        "flow",
+        "tracing",
+        "health",
+        "logs",
+        "crons",
+        "channels",
+        "nemo_governance",
+        "overview",
+    }
+)
+
+STARTER_FEATURES = frozenset(
+    {
+        "multi_runtime",
+        "fleet",
+        "cloud_sync",
+        "all_channels",
+        "approval_queue",
+        "budget_limits",
+        "per_runtime_health_timeline",
+    }
+)
+
+PRO_ONLY_FEATURES = frozenset(
+    {
+        "per_run_waste_flags",
+        "per_run_compare",
+        "error_triage",
+        "self_evolve",
+        "asset_registry",
+        "eval_suite",
+        "tool_policy",
+        "otel_export",
+        "custom_webhooks",
+        "custom_runtime_ingest",
+        "custom_alerts",
+        "alert_webhooks",
+        "anomaly_detection",
+        "cost_optimizer",
+    }
+)
+
+PAID_FEATURES = STARTER_FEATURES | PRO_ONLY_FEATURES
+
+ENTERPRISE_FEATURES = frozenset(
+    {
+        "siem_export",
+        "sso",
+        "audit_logs",
+        "rbac",
+        "air_gapped_license",
+        "custom_data_residency",
+    }
+)
+
+ALL_FEATURES = FREE_FEATURES | PAID_FEATURES | ENTERPRISE_FEATURES
+
+_TIER_FEATURES = {
+    TIER_OSS: frozenset(),
+    TIER_CLOUD_FREE: frozenset(),
+    TIER_TRIAL: PAID_FEATURES,
+    TIER_CLOUD_STARTER: STARTER_FEATURES,
+    TIER_CLOUD_PRO: PAID_FEATURES,
+    TIER_PRO: PAID_FEATURES,
+    TIER_ENTERPRISE: PAID_FEATURES | ENTERPRISE_FEATURES,
+}
+
+_TIER_RETENTION_DAYS = {
+    TIER_OSS: 7,
+    TIER_CLOUD_FREE: 7,
+    TIER_TRIAL: 30,
+    TIER_CLOUD_STARTER: 30,
+    TIER_CLOUD_PRO: 90,
+    TIER_PRO: 90,
+    TIER_ENTERPRISE: None,
+}
+
+_FREE_CHANNEL_LIMIT = 3
+_TIER_CHANNEL_LIMIT = {
+    TIER_OSS: _FREE_CHANNEL_LIMIT,
+    TIER_CLOUD_FREE: _FREE_CHANNEL_LIMIT,
+    TIER_TRIAL: None,
+    TIER_CLOUD_STARTER: None,
+    TIER_CLOUD_PRO: None,
+    TIER_PRO: None,
+    TIER_ENTERPRISE: None,
+}
+
+# Node-count cap per tier. OSS / Cloud Free are a single-node grant; every paid
+# tier is license-bound (the actual node_limit comes off the license payload or
+# cached cloud plan), so the static per-tier ceiling here is the *unlimited*
+# sentinel ``None``. ``min_tier_for_node_count`` walks this map the same way
+# ``min_tier_for_channel_count`` walks ``_TIER_CHANNEL_LIMIT`` so all four
+# capacity axes resolve off a single shape.
+_FREE_NODE_LIMIT = 1
+_TIER_NODE_LIMIT = {
+    TIER_OSS: _FREE_NODE_LIMIT,
+    TIER_CLOUD_FREE: _FREE_NODE_LIMIT,
+    TIER_TRIAL: None,
+    TIER_CLOUD_STARTER: None,
+    TIER_CLOUD_PRO: None,
+    TIER_PRO: None,
+    TIER_ENTERPRISE: None,
+}
+
+_TIER_PAID_RUNTIMES = _PAID_TIERS
+
+_PURCHASABLE_TIERS = (
+    TIER_OSS,
+    TIER_CLOUD_FREE,
+    TIER_CLOUD_STARTER,
+    TIER_CLOUD_PRO,
+    TIER_PRO,
+    TIER_ENTERPRISE,
+)
+
+_TIER_RANK = {
+    TIER_OSS: 0,
+    TIER_CLOUD_FREE: 0,
+    TIER_CLOUD_STARTER: 1,
+    TIER_TRIAL: 2,
+    TIER_CLOUD_PRO: 2,
+    TIER_PRO: 2,
+    TIER_ENTERPRISE: 3,
+}
+
+_LICENSE_PATH = os.path.expanduser("~/.clawmetry/license.key")
+_CLOUD_PLAN_CACHE = os.path.expanduser("~/.clawmetry/cloud_plan.json")
+_ENFORCE_ENABLE_VALUES = frozenset({"1", "true", "yes", "on"})
+_CACHE_TTL_SECS = 60.0
+_ENFORCE_AT_ENV = "CLAWMETRY_ENFORCE_AT"
+_RETENTION_OVERRIDE_ENV = "CLAWMETRY_RETENTION_DAYS"
+
+
+def is_enforced() -> bool:
+    """True when the paywall is live. Default OFF (grace) until the enforce
+    release flips it. ``CLAWMETRY_ENFORCE=1`` (1/true/yes/on) turns it on."""
+    return (
+        os.environ.get("CLAWMETRY_ENFORCE", "").strip().lower()
+        in _ENFORCE_ENABLE_VALUES
+    )
+
+
+def enforce_at_epoch() -> float | None:
+    """Resolve the announced enforce-at moment from ``CLAWMETRY_ENFORCE_AT``.
+    Accepts ISO date, ISO datetime, or epoch seconds. Never raises."""
+    raw = os.environ.get(_ENFORCE_AT_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        pass
+    try:
+        from datetime import datetime, timezone
+
+        s = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except Exception as exc:
+        logger.warning("entitlements: bad CLAWMETRY_ENFORCE_AT %r: %s", raw, exc)
+        return None
+
+
+def _capacity_transition(before: int | None, after: int | None) -> dict:
+    """Encode one capacity-axis transition between two tiers.
+
+    ``None`` is the unlimited sentinel on either side. ``delta`` is
+    ``after - before`` only when both ends are finite; ``None`` whenever
+    either side is unlimited. ``unlocked`` flips True when a finite cap
+    goes unlimited (the "now unlimited" CTA copy); ``locked`` flips True
+    when an unlimited cap becomes finite (the cancellation-warning copy).
+    The pair is mutually exclusive, so callers can pick either side
+    without having to infer direction from ``delta``'s sign.
+    """
+    try:
+        unlocked = before is not None and after is None
+        locked = before is None and after is not None
+        if before is None or after is None:
+            delta: int | None = None
+        else:
+            try:
+                delta = int(after) - int(before)
+            except (TypeError, ValueError):
+                delta = None
+        return {
+            "before": before,
+            "after": after,
+            "delta": delta,
+            "unlocked": unlocked,
+            "locked": locked,
+        }
+    except Exception:
+        return {
+            "before": before,
+            "after": after,
+            "delta": None,
+            "unlocked": False,
+            "locked": False,
+        }
+
+
+@dataclass(frozen=True)
+class Entitlement:
+    """Resolved entitlement for this install. Immutable; rebuild via
+    :func:`get_entitlement`."""
+
+    tier: str = TIER_OSS
+    source: str = "oss"  # "license" | "cloud" | "oss"
+    node_limit: int = 1
+    expiry: float | None = None
+    features: frozenset = field(default_factory=lambda: FREE_FEATURES)
+    runtimes: frozenset = field(default_factory=lambda: FREE_RUNTIMES)
+    grace: bool = True
+
+    @property
+    def is_paid(self) -> bool:
+        return self.tier in _PAID_TIERS
+
+    @property
+    def expired(self) -> bool:
+        return self.expiry is not None and time.time() > self.expiry
+
+    def days_until_expiry(self) -> int | None:
+        try:
+            if self.expiry is None:
+                return None
+            remaining = float(self.expiry) - time.time()
+            if remaining <= 0:
+                return 0
+            return int(remaining // 86400)
+        except (TypeError, ValueError):
+            return None
+
+    def expires_within(self, days: int) -> bool:
+        remaining = self.days_until_expiry()
+        if remaining is None:
+            return False
+        try:
+            threshold = max(0, int(days))
+        except (TypeError, ValueError):
+            return False
+        return remaining <= threshold
+
+    def allows_runtime(self, runtime: str) -> bool:
+        if self.grace:
+            return True
+        return self.entitled_runtime(runtime)
+
+    def entitled_runtime(self, runtime: str) -> bool:
+        rt = (runtime or "").lower()
+        if rt in FREE_RUNTIMES:
+            return True
+        if self.expired:
+            return False
+        return rt in self.runtimes
+
+    def allows_feature(self, feature: str) -> bool:
+        if self.grace:
+            return True
+        if feature in FREE_FEATURES:
+            return True
+        if self.expired:
+            return False
+        return feature in self.features
+
+    def allows_node_count(self, current: int) -> bool:
+        if self.grace:
+            return True
+        try:
+            n = int(current)
+        except (TypeError, ValueError):
+            return True
+        if n <= 0:
+            return True
+        if self.expired:
+            return n <= 1
+        if self.node_limit is None or int(self.node_limit) <= 0:
+            return True
+        return n <= int(self.node_limit)
+
+    def locked_runtimes(self) -> tuple[str, ...]:
+        try:
+            return tuple(sorted(rt for rt in PAID_RUNTIMES if not self.allows_runtime(rt)))
+        except Exception:
+            return ()
+
+    def locked_features(self) -> tuple[str, ...]:
+        try:
+            paid_universe = PAID_FEATURES | ENTERPRISE_FEATURES
+            return tuple(sorted(f for f in paid_universe if not self.allows_feature(f)))
+        except Exception:
+            return ()
+
+    def min_tier_for(self, key: str) -> str | None:
+        k = (key or "").strip().lower()
+        if not k:
+            return None
+        if k in ALL_FEATURES:
+            return min_tier_for_feature(k)
+        if k in ALL_RUNTIMES:
+            return min_tier_for_runtime(k)
+        return None
+
+    def next_purchasable_tier(self) -> str | None:
+        try:
+            current_rank = max(0, tier_rank(self.tier))
+            for candidate in _PURCHASABLE_TIERS:
+                if tier_rank(candidate) > current_rank:
+                    return candidate
+            return None
+        except Exception as exc:
+            logger.warning("entitlements: next_purchasable_tier failed: %s", exc)
+            return None
+
+    def previous_purchasable_tier(self) -> str | None:
+        try:
+            current_rank = max(0, tier_rank(self.tier))
+            lower_ranks = sorted(
+                {tier_rank(t) for t in _PURCHASABLE_TIERS if 0 <= tier_rank(t) < current_rank},
+                reverse=True,
+            )
+            if not lower_ranks:
+                return None
+            target_rank = lower_ranks[0]
+            cluster = [t for t in _PURCHASABLE_TIERS if tier_rank(t) == target_rank]
+            if not cluster:
+                return None
+            if self.source == "cloud":
+                cloud_pick = next((t for t in cluster if t.startswith("cloud_")), None)
+                if cloud_pick is not None:
+                    return cloud_pick
+            else:
+                self_hosted_pick = next(
+                    (t for t in cluster if not t.startswith("cloud_")), None,
+                )
+                if self_hosted_pick is not None:
+                    return self_hosted_pick
+            return cluster[0]
+        except Exception as exc:
+            logger.warning("entitlements: previous_purchasable_tier failed: %s", exc)
+            return None
+
+    def capacity_diff(self, target_tier: str) -> dict:
+        """Per-axis capacity transition from this entitlement to ``target_tier``.
+
+        Companion to :meth:`upgrade_diff` / :meth:`downgrade_diff`: those
+        enumerate feature / runtime adds-or-losses; this one covers the three
+        capacity axes (channels, retention, nodes) that the CTA card needs to
+        say *"channel cap 3 -> unlimited"* alongside *"unlocks claude_code"*.
+
+        Direction-agnostic: each axis carries a ``before`` / ``after`` /
+        ``delta`` triple plus mutually-exclusive ``unlocked`` / ``locked``
+        booleans, so the same payload renders for upgrade and downgrade CTAs.
+        ``None`` on either side is the unlimited sentinel; ``delta`` is only
+        finite when both sides are.
+
+        Unknown / empty ``target_tier`` returns the fallback shape (target
+        echoed, every axis ``None``). Never raises.
+        """
+        try:
+            tt = (target_tier or "").strip().lower()
+            if tt not in _TIER_FEATURES:
+                return {
+                    "target": tt,
+                    "channel_limit": None,
+                    "retention_days": None,
+                    "node_limit": None,
+                }
+            return {
+                "target": tt,
+                "channel_limit": _capacity_transition(
+                    self.channel_limit(),
+                    _TIER_CHANNEL_LIMIT.get(tt, _FREE_CHANNEL_LIMIT),
+                ),
+                "retention_days": _capacity_transition(
+                    self.event_retention_days(),
+                    _TIER_RETENTION_DAYS.get(tt, 7),
+                ),
+                "node_limit": _capacity_transition(
+                    self.node_limit,
+                    _TIER_NODE_LIMIT.get(tt, _FREE_NODE_LIMIT),
+                ),
+            }
+        except Exception as exc:
+            logger.warning("entitlements: capacity_diff failed: %s", exc)
+            return {
+                "target": target_tier or "",
+                "channel_limit": None,
+                "retention_days": None,
+                "node_limit": None,
+            }
+
+    def next_tier_capacity_diff(self) -> dict | None:
+        try:
+            target = self.next_purchasable_tier()
+            if target is None:
+                return None
+            return self.capacity_diff(target)
+        except Exception as exc:
+            logger.warning("entitlements: next_tier_capacity_diff failed: %s", exc)
+            return None
+
+    def previous_tier_capacity_diff(self) -> dict | None:
+        try:
+            target = self.previous_purchasable_tier()
+            if target is None:
+                return None
+            return self.capacity_diff(target)
+        except Exception as exc:
+            logger.warning("entitlements: previous_tier_capacity_diff failed: %s", exc)
+            return None
+
+    def upgrade_diff(self, target_tier: str) -> dict:
+        try:
+            tt = (target_tier or "").strip().lower()
+            target_paid_feats = _TIER_FEATURES.get(tt)
+            if target_paid_feats is None:
+                return {"target": tt, "added_features": [], "added_runtimes": []}
+            target_feats = FREE_FEATURES | target_paid_feats
+            if tt == TIER_ENTERPRISE:
+                target_feats = target_feats | ENTERPRISE_FEATURES
+            target_runtimes = (
+                FREE_RUNTIMES | PAID_RUNTIMES
+                if tt in _TIER_PAID_RUNTIMES
+                else FREE_RUNTIMES
+            )
+            return {
+                "target": tt,
+                "added_features": sorted(target_feats - self.features),
+                "added_runtimes": sorted(target_runtimes - self.runtimes),
+            }
+        except Exception as exc:
+            logger.warning("entitlements: upgrade_diff failed: %s", exc)
+            return {"target": target_tier or "", "added_features": [], "added_runtimes": []}
+
+    def downgrade_diff(self, target_tier: str) -> dict:
+        try:
+            tt = (target_tier or "").strip().lower()
+            target_paid_feats = _TIER_FEATURES.get(tt)
+            if target_paid_feats is None:
+                return {"target": tt, "lost_features": [], "lost_runtimes": []}
+            target_feats = FREE_FEATURES | target_paid_feats
+            if tt == TIER_ENTERPRISE:
+                target_feats = target_feats | ENTERPRISE_FEATURES
+            target_runtimes = (
+                FREE_RUNTIMES | PAID_RUNTIMES
+                if tt in _TIER_PAID_RUNTIMES
+                else FREE_RUNTIMES
+            )
+            return {
+                "target": tt,
+                "lost_features": sorted(self.features - target_feats),
+                "lost_runtimes": sorted(self.runtimes - target_runtimes),
+            }
+        except Exception as exc:
+            logger.warning("entitlements: downgrade_diff failed: %s", exc)
+            return {"target": target_tier or "", "lost_features": [], "lost_runtimes": []}
+
+    def next_tier_diff(self) -> dict | None:
+        try:
+            target = self.next_purchasable_tier()
+            if target is None:
+                return None
+            return self.upgrade_diff(target)
+        except Exception as exc:
+            logger.warning("entitlements: next_tier_diff failed: %s", exc)
+            return None
+
+    def previous_tier_diff(self) -> dict | None:
+        try:
+            target = self.previous_purchasable_tier()
+            if target is None:
+                return None
+            return self.downgrade_diff(target)
+        except Exception as exc:
+            logger.warning("entitlements: previous_tier_diff failed: %s", exc)
+            return None
+
+    def next_tier_unlocks(self) -> dict | None:
+        """One-rung-up unlocks row in :func:`tier_unlocks` shape.
+
+        Convenience for ``tier_unlocks(self.next_purchasable_tier())`` so an
+        upgrade-CTA card can render the marginal "what's new at the next
+        rung" payload (with full ``tier`` / ``previous_tier`` metadata)
+        without first looking up the next purchasable tier. Returns ``None``
+        at the ceiling (no rung above to upgrade to) and never raises --
+        a resolver failure short-circuits to ``None`` so a CTA surface
+        keeps rendering instead of 500-ing.
+        """
+        try:
+            target = self.next_purchasable_tier()
+            if target is None:
+                return None
+            return tier_unlocks(target)
+        except Exception as exc:
+            logger.warning("entitlements: next_tier_unlocks failed: %s", exc)
+            return None
+
+    def previous_tier_unlocks(self) -> dict | None:
+        """One-rung-down unlocks row in :func:`tier_unlocks` shape.
+
+        Convenience for ``tier_unlocks(self.previous_purchasable_tier())`` --
+        the marginal-unlocks row of the rung immediately below current.
+        Useful for "you'd still keep X / you've already unlocked Y at your
+        current tier" copy on a downgrade confirmation card, paired with
+        :meth:`previous_tier_diff` (which carries the same marginal in
+        ``downgrade_diff`` shape). Returns ``None`` at the floor (no rung
+        below) and never raises.
+        """
+        try:
+            target = self.previous_purchasable_tier()
+            if target is None:
+                return None
+            return tier_unlocks(target)
+        except Exception as exc:
+            logger.warning("entitlements: previous_tier_unlocks failed: %s", exc)
+            return None
+
+    def grace_remaining_days(self) -> int | None:
+        at = enforce_at_epoch()
+        if at is None:
+            return None
+        remaining = (at - time.time()) / 86400.0
+        return int(remaining) if remaining > 0 else 0
+
+    def lock_reason(self, item: str, *, kind: str | None = None) -> str | None:
+        try:
+            k = (item or "").strip().lower()
+            if not k or len(k) > 256:
+                return None
+            if self.grace:
+                return None
+            inferred_kind = kind
+            if inferred_kind is None:
+                if k in ALL_RUNTIMES:
+                    inferred_kind = "runtime"
+                elif k in ALL_FEATURES:
+                    inferred_kind = "feature"
+                else:
+                    return None
+            if inferred_kind == "runtime":
+                if k not in ALL_RUNTIMES:
+                    return None
+                if k in FREE_RUNTIMES:
+                    return None
+                if self.expired:
+                    return f"License expired; '{k}' runtime requires a valid subscription."
+                if self.allows_runtime(k):
+                    return None
+                return f"Paid runtime '{k}' requires Starter or above."
+            if inferred_kind == "feature":
+                if k not in ALL_FEATURES:
+                    return None
+                if k in FREE_FEATURES:
+                    return None
+                if self.expired:
+                    return f"License expired; '{k}' feature requires a valid subscription."
+                if self.allows_feature(k):
+                    return None
+                req = min_tier_for_feature(k)
+                lbl = tier_label(req) if req else "Paid"
+                return f"'{k}' feature requires {lbl} or above."
+            if inferred_kind == "channels":
+                try:
+                    n = int(k)
+                except (TypeError, ValueError):
+                    return None
+                if n <= 0:
+                    return None
+                if self.allows_channel_count(n):
+                    return None
+                if self.expired:
+                    return (
+                        f"License expired; {n} channels requires a valid "
+                        f"subscription."
+                    )
+                cap = self.channel_limit()
+                cap_str = str(cap) if cap is not None else "unlimited"
+                req = min_tier_for_channel_count(n)
+                lbl = tier_label(req) if req else "Paid"
+                return (
+                    f"{n} channels exceeds the {tier_label(self.tier)} cap of "
+                    f"{cap_str}; requires {lbl} or above."
+                )
+            if inferred_kind == "retention_days":
+                try:
+                    n = int(k)
+                except (TypeError, ValueError):
+                    return None
+                if n <= 0:
+                    return None
+                if self.allows_retention_window(n):
+                    return None
+                if self.expired:
+                    return (
+                        f"License expired; {n}-day retention requires a valid "
+                        f"subscription."
+                    )
+                cap = self.event_retention_days()
+                cap_str = f"{cap} days" if cap is not None else "unlimited"
+                req = min_tier_for_retention_window(n)
+                lbl = tier_label(req) if req else "Paid"
+                return (
+                    f"{n}-day retention exceeds the {tier_label(self.tier)} "
+                    f"cap of {cap_str}; requires {lbl} or above."
+                )
+            if inferred_kind == "nodes":
+                try:
+                    n = int(k)
+                except (TypeError, ValueError):
+                    return None
+                if n <= 0:
+                    return None
+                if self.allows_node_count(n):
+                    return None
+                if self.expired:
+                    return (
+                        f"License expired; {n} nodes requires a valid "
+                        f"subscription."
+                    )
+                # node_limit comes off the license payload (per-grant), not the
+                # static per-tier map. <=0 is the unlimited sentinel licenses
+                # use for Enterprise.
+                lim = self.node_limit
+                cap_str = (
+                    str(lim) if isinstance(lim, int) and lim > 0 else "unlimited"
+                )
+                req = min_tier_for_node_count(n)
+                lbl = tier_label(req) if req else "Paid"
+                return (
+                    f"{n} nodes exceeds the {tier_label(self.tier)} cap of "
+                    f"{cap_str}; requires {lbl} or above."
+                )
+            return None
+        except Exception:
+            return None
+
+    def event_retention_days(self) -> int | None:
+        return _TIER_RETENTION_DAYS.get(self.tier, 7)
+
+    def effective_retention_days(self, env_override: object = None) -> int | None:
+        try:
+            cap = self.event_retention_days()
+            raw = env_override
+            if raw is None:
+                raw = os.environ.get(_RETENTION_OVERRIDE_ENV, "")
+            try:
+                raw_str = str(raw).strip()
+            except Exception:
+                return cap
+            if not raw_str:
+                return cap
+            try:
+                ev = int(raw_str)
+            except (TypeError, ValueError):
+                logger.debug(
+                    "entitlements: ignoring non-integer %s=%r",
+                    _RETENTION_OVERRIDE_ENV, raw_str,
+                )
+                return cap
+            if ev < 1:
+                logger.debug(
+                    "entitlements: ignoring non-positive %s=%d",
+                    _RETENTION_OVERRIDE_ENV, ev,
+                )
+                return cap
+            if cap is None:
+                return ev
+            return min(ev, cap)
+        except Exception as exc:
+            logger.debug("entitlements: effective_retention_days fallback: %s", exc)
+            try:
+                return self.event_retention_days()
+            except Exception:
+                return None
+
+    def allows_retention_window(self, days: int | None) -> bool:
+        if self.grace:
+            return True
+        if days is not None and days <= 0:
+            return True
+        if self.expired:
+            return False
+        cap = self.event_retention_days()
+        if cap is None:
+            return True
+        if days is None:
+            return False
+        return days <= cap
+
+    def channel_limit(self) -> int | None:
+        if self.grace:
+            return None
+        return _TIER_CHANNEL_LIMIT.get(self.tier, _FREE_CHANNEL_LIMIT)
+
+    def allows_channel_count(self, current: int) -> bool:
+        if self.grace:
+            return True
+        try:
+            n = int(current)
+        except (TypeError, ValueError):
+            return True
+        if n <= 0:
+            return True
+        if self.expired:
+            return n <= _FREE_CHANNEL_LIMIT
+        lim = self.channel_limit()
+        return lim is None or n <= lim
+
+    def to_dict(self) -> dict:
+        enforce_at = enforce_at_epoch()
+        enforce_at_iso: str | None = None
+        if enforce_at is not None:
+            try:
+                from datetime import datetime, timezone
+
+                enforce_at_iso = (
+                    datetime.fromtimestamp(enforce_at, tz=timezone.utc)
+                    .isoformat()
+                    .replace("+00:00", "Z")
+                )
+            except Exception:
+                enforce_at_iso = None
+        return {
+            "tier": self.tier,
+            "tier_label": tier_label(self.tier),
+            "tier_rank": tier_rank(self.tier),
+            "source": self.source,
+            "node_limit": self.node_limit,
+            "channel_limit": self.channel_limit(),
+            "expiry": self.expiry,
+            "expired": self.expired,
+            "days_until_expiry": self.days_until_expiry(),
+            "is_paid": self.is_paid,
+            "grace": self.grace,
+            "enforced": not self.grace,
+            "enforce_at": enforce_at,
+            "enforce_at_iso": enforce_at_iso,
+            "days_until_enforce": self.grace_remaining_days(),
+            "retention_days": self.event_retention_days(),
+            "effective_retention_days": self.effective_retention_days(),
+            "runtimes": sorted(self.runtimes),
+            "features": sorted(self.features),
+            "free_runtimes": sorted(FREE_RUNTIMES),
+            "paid_runtimes": sorted(PAID_RUNTIMES),
+            "all_runtimes": sorted(ALL_RUNTIMES),
+            "locked_runtimes": list(self.locked_runtimes()),
+            "locked_features": list(self.locked_features()),
+            "next_tier": self.next_purchasable_tier(),
+            "next_tier_label": (
+                tier_label(self.next_purchasable_tier())
+                if self.next_purchasable_tier() is not None
+                else None
+            ),
+            "prev_tier": self.previous_purchasable_tier(),
+            "prev_tier_label": (
+                tier_label(self.previous_purchasable_tier())
+                if self.previous_purchasable_tier() is not None
+                else None
+            ),
+            "next_tier_diff": self.next_tier_diff(),
+            "prev_tier_diff": self.previous_tier_diff(),
+            "next_tier_capacity_diff": self.next_tier_capacity_diff(),
+            "prev_tier_capacity_diff": self.previous_tier_capacity_diff(),
+            "next_tier_unlocks": self.next_tier_unlocks(),
+            "prev_tier_unlocks": self.previous_tier_unlocks(),
+        }
+
+
+def _build(tier: str, source: str, node_limit: int = 1, expiry: float | None = None) -> Entitlement:
+    paid_feats = _TIER_FEATURES.get(tier, frozenset())
+    runtimes = FREE_RUNTIMES | PAID_RUNTIMES if tier in _TIER_PAID_RUNTIMES else FREE_RUNTIMES
+    return Entitlement(
+        tier=tier,
+        source=source,
+        node_limit=node_limit,
+        expiry=expiry,
+        features=FREE_FEATURES | paid_feats,
+        runtimes=runtimes,
+        grace=not is_enforced(),
+    )
+
+
+def _oss_free() -> Entitlement:
+    return _build(TIER_OSS, "oss", node_limit=1, expiry=None)
+
+
+def _read_local_license() -> Entitlement | None:
+    try:
+        if not os.path.isfile(_LICENSE_PATH):
+            return None
+        from clawmetry import license as _lic
+
+        return _lic.load_license(_LICENSE_PATH)
+    except Exception as exc:
+        logger.warning("entitlements: license read failed: %s", exc)
+        return None
+
+
+def _read_cloud_plan() -> Entitlement | None:
+    try:
+        if not os.path.isfile(_CLOUD_PLAN_CACHE):
+            return None
+        with open(_CLOUD_PLAN_CACHE, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        plan = str(data.get("plan", "")).strip().lower()
+        if plan not in _PAID_TIERS and plan not in (TIER_CLOUD_FREE,):
+            return None
+        return _build(
+            plan,
+            "cloud",
+            node_limit=int(data.get("node_limit", 1) or 1),
+            expiry=data.get("expiry"),
+        )
+    except Exception as exc:
+        logger.warning("entitlements: cloud-plan read failed: %s", exc)
+        return None
+
+
+# ── cached resolution ────────────────────────────────────────────────────────
+_lock = threading.Lock()
+_cache: dict = {"ent": None, "ts": 0.0, "enforce": None}
+_last_emitted_tier: str | None = None
+
+
+def _maybe_emit_change(ent: Entitlement) -> None:
+    global _last_emitted_tier
+    try:
+        with _lock:
+            if _last_emitted_tier == ent.tier:
+                return
+            previous = _last_emitted_tier
+            _last_emitted_tier = ent.tier
+        try:
+            from clawmetry import extensions as _ext
+        except Exception:
+            return
+        try:
+            _ext.emit(
+                "entitlement.changed",
+                {
+                    "previous_tier": previous,
+                    "tier": ent.tier,
+                    "source": ent.source,
+                    "is_paid": ent.is_paid,
+                    "grace": ent.grace,
+                },
+            )
+        except Exception as exc:
+            logger.debug("entitlements: emit failed: %s", exc)
+    except Exception as exc:
+        logger.debug("entitlements: change-emit skipped: %s", exc)
+
+
+def get_entitlement(force: bool = False) -> Entitlement:
+    """Resolve (and cache) the current entitlement. Never raises."""
+    try:
+        enforce = is_enforced()
+        with _lock:
+            fresh = (
+                not force
+                and _cache["ent"] is not None
+                and _cache["enforce"] == enforce
+                and (time.time() - _cache["ts"]) < _CACHE_TTL_SECS
+            )
+            if fresh:
+                return _cache["ent"]
+        ent = _read_local_license() or _read_cloud_plan() or _oss_free()
+        with _lock:
+            _cache.update(ent=ent, ts=time.time(), enforce=enforce)
+        _maybe_emit_change(ent)
+        return ent
+    except Exception as exc:
+        logger.warning("entitlements: resolution failed, defaulting to OSS free: %s", exc)
+        return _oss_free()
+
+
+def invalidate() -> None:
+    with _lock:
+        _cache.update(ent=None, ts=0.0, enforce=None)
+
+
+def upgrade_diff(target_tier: str) -> dict:
+    try:
+        return get_entitlement().upgrade_diff(target_tier)
+    except Exception as exc:
+        logger.warning("entitlements: upgrade_diff (module) failed: %s", exc)
+        return {"target": target_tier or "", "added_features": [], "added_runtimes": []}
+
+
+def downgrade_diff(target_tier: str) -> dict:
+    try:
+        return get_entitlement().downgrade_diff(target_tier)
+    except Exception as exc:
+        logger.warning("entitlements: downgrade_diff (module) failed: %s", exc)
+        return {"target": target_tier or "", "lost_features": [], "lost_runtimes": []}
+
+
+def tier_diff(from_tier: str, to_tier: str) -> dict | None:
+    """Arbitrary-endpoint diff between two tiers.
+
+    Generalises :func:`upgrade_diff` / :func:`downgrade_diff` (which pin one
+    endpoint to the resolved entitlement) to ANY pair of known tiers, so a
+    "Compare A vs B" pricing-page widget can render the transition between
+    any two rungs without first switching the resolver. The payload carries
+    both directions on every call so the same shape covers an upgrade, a
+    downgrade, a lateral (same-rank, different id) and an identity (same
+    tier) -- the consumer reads the ``direction`` tag instead of inferring
+    it from the deltas.
+
+    Both endpoints accept any id in :data:`_TIER_FEATURES` (including
+    :data:`TIER_TRIAL`, which is unreachable via the purchasable-only
+    helpers but is a valid hypothetical destination for "what would a
+    14-day trial unlock right now" copy). Unknown ids on either side
+    short-circuit to ``None`` -- the same posture as :func:`preview` /
+    :func:`tier_unlocks` -- so a paywall surface keeps rendering instead
+    of 500-ing.
+
+    Response shape::
+
+        {
+          "from":             "<tier id>",
+          "from_label":       "...",
+          "from_rank":        <int>,
+          "to":               "<tier id>",
+          "to_label":         "...",
+          "to_rank":          <int>,
+          "direction":        "upgrade" | "downgrade" | "lateral" | "identity",
+          "added_features":   [...],   # in `to` but not in `from`
+          "lost_features":    [...],   # in `from` but not in `to`
+          "added_runtimes":   [...],
+          "lost_runtimes":    [...],
+          "capacity_changes": {
+              "channel_limit":   {before, after, delta, unlocked, locked},
+              "retention_days":  {before, after, delta, unlocked, locked},
+              "node_limit":      {before, after, delta, unlocked, locked},
+          },
+        }
+
+    The ``added_*`` / ``lost_*`` lists are sorted for byte-stable output,
+    so a snapshot diff against a fixture stays deterministic. Set-identity:
+    by construction ``tier_diff(X, Y)['added_features']`` byte-equals
+    ``tier_diff(Y, X)['lost_features']`` (and likewise for runtimes) -- the
+    same swap-the-endpoints invariant the upgrade/downgrade pair holds
+    against the current entitlement, lifted to arbitrary endpoints.
+    Pinned in the test suite so a future reshuffle of the tier grant sets
+    can't silently desync the two views.
+
+    Never raises: a resolver failure logs a warning and returns ``None``
+    so the surface keeps rendering.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+        if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+            return None
+        from_feats = FREE_FEATURES | _TIER_FEATURES.get(f, frozenset())
+        if f == TIER_ENTERPRISE:
+            from_feats = from_feats | ENTERPRISE_FEATURES
+        to_feats = FREE_FEATURES | _TIER_FEATURES.get(t, frozenset())
+        if t == TIER_ENTERPRISE:
+            to_feats = to_feats | ENTERPRISE_FEATURES
+        from_runtimes = (
+            FREE_RUNTIMES | PAID_RUNTIMES
+            if f in _TIER_PAID_RUNTIMES
+            else FREE_RUNTIMES
+        )
+        to_runtimes = (
+            FREE_RUNTIMES | PAID_RUNTIMES
+            if t in _TIER_PAID_RUNTIMES
+            else FREE_RUNTIMES
+        )
+        from_rank = _TIER_RANK.get(f, -1)
+        to_rank = _TIER_RANK.get(t, -1)
+        if f == t:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        return {
+            "from": f,
+            "from_label": tier_label(f),
+            "from_rank": from_rank,
+            "to": t,
+            "to_label": tier_label(t),
+            "to_rank": to_rank,
+            "direction": direction,
+            "added_features": sorted(to_feats - from_feats),
+            "lost_features": sorted(from_feats - to_feats),
+            "added_runtimes": sorted(to_runtimes - from_runtimes),
+            "lost_runtimes": sorted(from_runtimes - to_runtimes),
+            "capacity_changes": {
+                "channel_limit": _capacity_transition(
+                    _TIER_CHANNEL_LIMIT.get(f, _FREE_CHANNEL_LIMIT),
+                    _TIER_CHANNEL_LIMIT.get(t, _FREE_CHANNEL_LIMIT),
+                ),
+                "retention_days": _capacity_transition(
+                    _TIER_RETENTION_DAYS.get(f, 7),
+                    _TIER_RETENTION_DAYS.get(t, 7),
+                ),
+                "node_limit": _capacity_transition(
+                    _TIER_NODE_LIMIT.get(f, _FREE_NODE_LIMIT),
+                    _TIER_NODE_LIMIT.get(t, _FREE_NODE_LIMIT),
+                ),
+            },
+        }
+    except Exception as exc:
+        logger.warning("entitlements: tier_diff failed: %s", exc)
+        return None
+
+
+def tier_path(from_tier: str, to_tier: str) -> list[dict] | None:
+    """Arbitrary-endpoint stepwise path between two tiers.
+
+    Generalises :func:`upgrade_path` / :func:`downgrade_path` (which pin
+    one endpoint to the resolved entitlement) to ANY pair of known tiers
+    -- the path analogue of :func:`tier_diff`. Lets a "Compare A vs B"
+    pricing-page widget render the *sequence of rungs* between any two
+    tiers (and the marginal transition at each rung) without first
+    switching the resolver.
+
+    The walk visits every purchasable tier strictly between ``from_tier``
+    and ``to_tier`` plus the destination ``to_tier`` itself, in tier-rank
+    order. Same-rank siblings *between* the endpoints are both included
+    (matching :func:`upgrade_path`'s ladder shape); same-rank siblings of
+    the destination are excluded so the path terminates exactly at
+    ``to_tier`` and not at one of its rank peers. Each row is the
+    :func:`tier_diff` payload between the previous step in the path (or
+    ``from_tier`` for the first row) and the current rung -- so each row
+    is a marginal step diff, and a consumer can fold the rows to
+    reconstruct the cumulative ``tier_diff(from_tier, to_tier)`` shape.
+
+    Endpoint semantics match :func:`tier_diff`: both ids accept any entry
+    in :data:`_TIER_FEATURES` (including :data:`TIER_TRIAL`, which is not
+    purchasable -- it is excluded from the walked rungs but is a valid
+    endpoint for the marginal-step computation). Identity (``from == to``)
+    returns ``[]`` -- no rungs to walk. Lateral (same rank, different id)
+    returns a single-row path: ``[tier_diff(from, to)]``. Unknown ids on
+    either side short-circuit to ``None``.
+
+    Never raises: a resolver failure logs a warning and returns ``None``
+    so a pricing-page surface keeps rendering.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+        if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+            return None
+        if f == t:
+            return []
+        from_rank = _TIER_RANK.get(f, -1)
+        to_rank = _TIER_RANK.get(t, -1)
+        if from_rank == to_rank:
+            row = tier_diff(f, t)
+            return [row] if row is not None else []
+        ascending = to_rank > from_rank
+        if ascending:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (_TIER_RANK.get(x, -1), x),
+            )
+        else:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (-_TIER_RANK.get(x, -1), x),
+            )
+        path: list[dict] = []
+        prev_step = f
+        for tid in ordered:
+            r = _TIER_RANK.get(tid, -1)
+            if ascending:
+                if r <= from_rank or r > to_rank:
+                    continue
+            else:
+                if r >= from_rank or r < to_rank:
+                    continue
+            if r == to_rank and tid != t:
+                continue
+            row = tier_diff(prev_step, tid)
+            if row is not None:
+                path.append(row)
+                prev_step = tid
+        return path
+    except Exception as exc:
+        logger.warning("entitlements: tier_path failed: %s", exc)
+        return None
+
+
+def tier_diff_batch() -> list[dict]:
+    """Full marginal ``tier_diff`` for every purchasable tier in one pass.
+
+    Plural sibling of :func:`tier_diff` and the "all-slices-in-one-row"
+    member of the batch family alongside :func:`tier_unlocks_batch`
+    (feature/runtime grant slice), :func:`tier_locks_batch` (feature/
+    runtime loss slice) and :func:`capacity_diff_batch` (capacity slice).
+    Where each of those siblings carries a single slice of the per-rung
+    transition, ``tier_diff_batch`` carries ALL slices (``added_features``
+    + ``lost_features`` + ``added_runtimes`` + ``lost_runtimes`` +
+    ``capacity_changes``) in one row so a pricing-page table can render
+    the full marginal column off **one** round-trip instead of N calls
+    to ``/tier-diff``.
+
+    Anchor matches :func:`tier_unlocks_batch`: each row is the
+    :func:`tier_diff` payload between the next-lower-rank purchasable
+    tier (the upgrade source) and the current tier. At the floor
+    (``TIER_OSS`` / ``TIER_CLOUD_FREE``) there is no rung below, so the
+    row collapses to ``tier_diff(tid, tid)`` -- an identity row with
+    ``from == to``, ``direction == "identity"`` and all marginal lists
+    empty. Consumers that want the floor's *cumulative* grant should
+    pair with :func:`preview_batch` (whose floor row carries the full
+    free grant); ``tier_diff_batch`` keeps every row byte-stable with a
+    valid :func:`tier_diff` payload so the singular and the batch never
+    diverge in shape.
+
+    Rows are sorted by tier rank ascending (cheapest -> most capable)
+    and, within the same rank, by tier id so the ordering is stable
+    across calls and byte-stable against :func:`tier_unlocks_batch` /
+    :func:`tier_locks_batch` / :func:`capacity_diff_batch` /
+    :func:`preview_batch` (the five batches walk
+    :data:`_PURCHASABLE_TIERS` in the same ``(rank, id)`` order so a
+    pricing table lines up rung-for-rung without client-side re-sort).
+    The trial tier is excluded -- it is not purchasable, same posture as
+    the other batches.
+
+    Each non-floor row's ``added_features`` byte-equals the same row in
+    :func:`tier_unlocks_batch`'s ``features`` slot (and ditto for
+    ``added_runtimes`` / ``runtimes``); each non-floor row's
+    ``capacity_changes`` byte-equals the per-rung step in
+    :func:`capacity_diff_path` (``TIER_OSS``, ``TIER_ENTERPRISE``). Both
+    are pinned in the test suite so the batches can never silently drift
+    apart.
+
+    Decoupled from the resolved entitlement (walks the static per-tier
+    maps), so grace vs enforce yields identical rows -- pinned in the
+    test suite via a grace/enforce reload roundtrip.
+
+    Never raises: if the helper blows up the function returns ``[]`` so
+    the pricing-page UI keeps rendering instead of 500-ing.
+    """
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            target_rank = _TIER_RANK.get(tid, -1)
+            prev_id: str | None = None
+            prev_rank_seen = -1
+            for cand in _PURCHASABLE_TIERS:
+                cand_rank = _TIER_RANK.get(cand, -1)
+                if 0 <= cand_rank < target_rank and cand_rank > prev_rank_seen:
+                    prev_id = cand
+                    prev_rank_seen = cand_rank
+            anchor = prev_id if prev_id is not None else tid
+            row = tier_diff(anchor, tid)
+            if row is not None:
+                out.append(row)
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: tier_diff_batch failed: %s", exc)
+        return []
+
+
+def next_tier_diff() -> dict | None:
+    try:
+        return get_entitlement().next_tier_diff()
+    except Exception as exc:
+        logger.warning("entitlements: next_tier_diff (module) failed: %s", exc)
+        return None
+
+
+def previous_tier_diff() -> dict | None:
+    try:
+        return get_entitlement().previous_tier_diff()
+    except Exception as exc:
+        logger.warning("entitlements: previous_tier_diff (module) failed: %s", exc)
+        return None
+
+
+def next_tier_unlocks() -> dict | None:
+    """Module-level :meth:`Entitlement.next_tier_unlocks` against the resolved
+    entitlement. Never raises."""
+    try:
+        return get_entitlement().next_tier_unlocks()
+    except Exception as exc:
+        logger.warning("entitlements: next_tier_unlocks (module) failed: %s", exc)
+        return None
+
+
+def previous_tier_unlocks() -> dict | None:
+    """Module-level :meth:`Entitlement.previous_tier_unlocks` against the
+    resolved entitlement. Never raises."""
+    try:
+        return get_entitlement().previous_tier_unlocks()
+    except Exception as exc:
+        logger.warning("entitlements: previous_tier_unlocks (module) failed: %s", exc)
+        return None
+
+
+def capacity_diff(target_tier: str) -> dict:
+    try:
+        return get_entitlement().capacity_diff(target_tier)
+    except Exception as exc:
+        logger.warning("entitlements: capacity_diff (module) failed: %s", exc)
+        return {
+            "target": target_tier or "",
+            "channel_limit": None,
+            "retention_days": None,
+            "node_limit": None,
+        }
+
+
+def next_tier_capacity_diff() -> dict | None:
+    try:
+        return get_entitlement().next_tier_capacity_diff()
+    except Exception as exc:
+        logger.warning("entitlements: next_tier_capacity_diff (module) failed: %s", exc)
+        return None
+
+
+def previous_tier_capacity_diff() -> dict | None:
+    try:
+        return get_entitlement().previous_tier_capacity_diff()
+    except Exception as exc:
+        logger.warning("entitlements: previous_tier_capacity_diff (module) failed: %s", exc)
+        return None
+
+
+def _capacity_row(from_tier: str, to_tier: str) -> dict:
+    """Build one ``capacity_diff``-shape row for an arbitrary ``from -> to`` pair.
+
+    Singular-helper-shape row (``target``, ``channel_limit``, ``retention_days``,
+    ``node_limit``) computed off the static per-tier caps, NOT off the resolved
+    entitlement -- so a path / pair caller can compose marginal capacity steps
+    without pinning either side to the resolver.
+    """
+    return {
+        "target": to_tier,
+        "channel_limit": _capacity_transition(
+            _TIER_CHANNEL_LIMIT.get(from_tier, _FREE_CHANNEL_LIMIT),
+            _TIER_CHANNEL_LIMIT.get(to_tier, _FREE_CHANNEL_LIMIT),
+        ),
+        "retention_days": _capacity_transition(
+            _TIER_RETENTION_DAYS.get(from_tier, 7),
+            _TIER_RETENTION_DAYS.get(to_tier, 7),
+        ),
+        "node_limit": _capacity_transition(
+            _TIER_NODE_LIMIT.get(from_tier, _FREE_NODE_LIMIT),
+            _TIER_NODE_LIMIT.get(to_tier, _FREE_NODE_LIMIT),
+        ),
+    }
+
+
+def capacity_diff_path(from_tier: str, to_tier: str) -> list[dict] | None:
+    """Arbitrary-endpoint stepwise capacity-transition path between two tiers.
+
+    Capacity-only path companion to :func:`tier_path` -- where the parent
+    helper returns the full :func:`tier_diff` payload per rung (added /
+    lost features + runtimes + ``capacity_changes``), this helper returns
+    just the singular :func:`capacity_diff` shape per rung
+    (``target``, ``channel_limit``, ``retention_days``, ``node_limit``)
+    so a capacity-only pricing widget can render the per-rung channel /
+    retention / node transitions off **one** round-trip without paying
+    for the feature / runtime set diff on every row.
+
+    Pairs with the ``*-batch`` family: :func:`capacity_diff_batch` walks
+    every purchasable tier as a cumulative "what does capacity look like
+    at each rung off the resolver" ladder; this helper walks an
+    arbitrary ``from -> to`` segment as a marginal "what happens to
+    capacity at each step between two endpoints" ladder. Same rung
+    semantics as :func:`tier_path`: visit every purchasable tier strictly
+    between ``from_tier`` and ``to_tier`` plus the destination
+    ``to_tier`` itself, in tier-rank order (ascending for an upgrade,
+    descending for a downgrade); same-rank siblings between the
+    endpoints are both included, same-rank siblings of the destination
+    are excluded so the path terminates exactly at ``to_tier``.
+
+    Each row's ``before`` side comes off the previous step's static
+    caps (or ``from_tier`` for the first row), so a consumer can fold
+    the rows to reconstruct the cumulative
+    ``tier_diff(from_tier, to_tier)['capacity_changes']`` shape. This is
+    deliberately decoupled from the resolved entitlement -- the path is
+    a hypothetical "if I walked from X to Y, what would each rung cost
+    me in capacity" view, not a "what would it cost from where I am
+    now" view (that's what :func:`capacity_diff_batch` is for).
+
+    Endpoint semantics match :func:`tier_diff` / :func:`tier_path`: both
+    ids accept any entry in :data:`_TIER_FEATURES` (including
+    :data:`TIER_TRIAL`, which is not purchasable -- excluded from the
+    walked rungs but is a valid endpoint for the marginal-step
+    computation). Identity (``from == to``) returns ``[]`` -- no rungs
+    to walk. Lateral (same rank, different id) returns a single-row
+    path: ``[_capacity_row(from, to)]``. Unknown ids on either side
+    short-circuit to ``None``.
+
+    Never raises: a resolver failure logs a warning and returns ``None``
+    so a pricing-page surface keeps rendering.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+        if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+            return None
+        if f == t:
+            return []
+        from_rank = _TIER_RANK.get(f, -1)
+        to_rank = _TIER_RANK.get(t, -1)
+        if from_rank == to_rank:
+            return [_capacity_row(f, t)]
+        ascending = to_rank > from_rank
+        if ascending:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (_TIER_RANK.get(x, -1), x),
+            )
+        else:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (-_TIER_RANK.get(x, -1), x),
+            )
+        path: list[dict] = []
+        prev_step = f
+        for tid in ordered:
+            r = _TIER_RANK.get(tid, -1)
+            if ascending:
+                if r <= from_rank or r > to_rank:
+                    continue
+            else:
+                if r >= from_rank or r < to_rank:
+                    continue
+            if r == to_rank and tid != t:
+                continue
+            path.append(_capacity_row(prev_step, tid))
+            prev_step = tid
+        return path
+    except Exception as exc:
+        logger.warning("entitlements: capacity_diff_path failed: %s", exc)
+        return None
+
+
+def capacity_diff_batch() -> list[dict]:
+    """Per-tier capacity transition for every purchasable tier in one pass.
+
+    Plural sibling of :func:`capacity_diff`. Where the singular helper
+    answers "what would the channel cap / retention / node cap look like
+    at tier X" one tier at a time, the batch returns the same payload
+    shape for every entry in :data:`_PURCHASABLE_TIERS` so a pricing-page
+    table can render the capacity column off **one** round-trip instead
+    of N calls to ``/capacity-diff``.
+
+    Direction-agnostic capacity companion to the existing pricing-page
+    batches: pair with :func:`tier_unlocks_batch` (marginal feature/
+    runtime grant per rung), :func:`tier_locks_batch` (marginal feature/
+    runtime loss per rung) and :func:`preview_batch` (cumulative shape
+    per rung) to render the full "what's at X / what's new at X / what
+    you'd give up at X / capacity at X" pricing-table view without
+    client-side composition.
+
+    Rows are sorted by tier rank ascending (cheapest -> most capable)
+    and, within the same rank, by tier id so the ordering is stable
+    across calls and byte-stable against :func:`tier_unlocks_batch` /
+    :func:`tier_locks_batch` / :func:`preview_batch` (the four batches
+    walk :data:`_PURCHASABLE_TIERS` in the same ``(rank, id)`` order so
+    a pricing table lines up rung-for-rung without client-side re-sort).
+    The trial tier is excluded (mirrors :func:`preview_batch` / the
+    other batches -- it is not purchasable).
+
+    Each row carries the singular :func:`capacity_diff` payload exactly
+    (``target``, ``channel_limit``, ``retention_days``, ``node_limit``)
+    so per-axis ``{before, after, delta, unlocked, locked}`` triples
+    render identically off the batch and the singular endpoint. The
+    ``before`` side comes off the resolved entitlement, so under grace
+    the per-axis caps collapse to the unlimited (``None``) sentinel --
+    same posture as the singular helper.
+
+    Never raises: if the resolver blows up the helper returns ``[]``
+    so the UI keeps rendering instead of 500-ing.
+    """
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            out.append(capacity_diff(tid))
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: capacity_diff_batch failed: %s", exc)
+        return []
+
+
+def preview(target_tier: str) -> dict | None:
+    """Render the :meth:`Entitlement.to_dict` shape for a hypothetical tier.
+
+    Companion to :func:`upgrade_diff` / :func:`downgrade_diff`: where those
+    answer "what would change", ``preview`` answers "what would the resulting
+    Entitlement *look like*" -- the full denormalised shape the upgrade-CTA
+    card renders ("Cloud Pro: 365-day retention, unlimited channels, claude_code
+    + codex + ... unlocked"). Returns ``None`` for an unknown tier id and never
+    raises.
+
+    The previewed Entitlement is always rendered with ``grace=False`` so the
+    concrete per-tier limits (``channel_limit``, ``retention_days``) surface --
+    a grace-mode preview would zero those out and defeat the purpose. Source
+    is tagged ``"preview"`` so the UI never mistakes it for a live entitlement.
+    """
+    try:
+        tt = (target_tier or "").strip().lower()
+        if tt not in _PURCHASABLE_TIERS:
+            return None
+        paid_feats = _TIER_FEATURES.get(tt, frozenset())
+        runtimes = (
+            FREE_RUNTIMES | PAID_RUNTIMES
+            if tt in _TIER_PAID_RUNTIMES
+            else FREE_RUNTIMES
+        )
+        ent = Entitlement(
+            tier=tt,
+            source="preview",
+            node_limit=1,
+            expiry=None,
+            features=FREE_FEATURES | paid_feats,
+            runtimes=runtimes,
+            grace=False,
+        )
+        return ent.to_dict()
+    except Exception as exc:
+        logger.warning("entitlements: preview failed: %s", exc)
+        return None
+
+
+def preview_batch() -> list[dict]:
+    """Cumulative ``Entitlement.to_dict`` shape for every purchasable tier
+    in one pass.
+
+    Plural sibling of :func:`preview`. Where the singular helper answers
+    "what would the resulting Entitlement *look like* at tier X" one tier
+    at a time, the batch returns the same denormalised row for every
+    entry in :data:`_PURCHASABLE_TIERS` so a pricing-page table can render
+    the full "Cloud Pro: 90-day retention, unlimited channels, claude_code
+    unlocked" matrix off **one** round-trip instead of N calls to
+    ``/preview``.
+
+    Cumulative-state companion to :func:`tier_unlocks_batch` (marginal
+    grant per rung) and :func:`tier_locks_batch` (marginal loss per rung):
+    pair them to render the "what's at X / what's new at X / what you'd
+    give up at X" three-column view of a pricing table without
+    client-side composition.
+
+    Rows are sorted by tier rank ascending (cheapest -> most capable)
+    and, within the same rank, by tier id so the ordering is stable
+    across calls and byte-stable against :func:`tier_unlocks_batch` /
+    :func:`tier_locks_batch` (the three batches walk
+    :data:`_PURCHASABLE_TIERS` in the same ``(rank, id)`` order so a
+    pricing table lines up rung-for-rung without client-side re-sort).
+    The trial tier is excluded (mirrors :func:`preview`, which returns
+    ``None`` for non-purchasable tiers).
+
+    Each row carries the full ``Entitlement.to_dict`` shape with
+    ``source="preview"`` and ``grace=False`` -- same posture as
+    :func:`preview` so the concrete per-tier capacity
+    (``channel_limit``, ``retention_days``, ``node_limit``) surfaces. A
+    grace-mode preview would zero those out and defeat the purpose.
+
+    Same-rank tiers (e.g. ``TIER_CLOUD_PRO`` and ``TIER_PRO`` both at
+    rank 2) are both returned, since callers may key off the tier id
+    rather than the rank. Consumers that want a deduped pricing ladder
+    can drop duplicates by ``tier_rank``.
+
+    Never raises: if the resolver blows up the helper returns ``[]``
+    so the UI keeps rendering instead of 500-ing.
+    """
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            row = preview(tid)
+            if row is not None:
+                out.append(row)
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: preview_batch failed: %s", exc)
+        return []
+
+
+def _preview_row(tier: str) -> dict | None:
+    """Cumulative preview row for an arbitrary known tier.
+
+    Private builder for :func:`preview_path`: mirrors :func:`preview` but
+    accepts any id in :data:`_TIER_FEATURES` (including :data:`TIER_TRIAL`,
+    which the singular :func:`preview` rejects because it is not
+    purchasable), so a path that anchors a lateral or trial endpoint
+    still resolves the cumulative-state row. Same posture as
+    :func:`_unlocks_row` for :func:`tier_unlocks_path` -- the path
+    walker only emits these via rungs that are themselves in
+    :data:`_PURCHASABLE_TIERS`, so trial only surfaces here when the
+    destination itself is trial (the lateral branch).
+
+    Source is tagged ``"preview"`` and ``grace=False`` so concrete
+    per-tier capacity (``channel_limit``, ``retention_days``,
+    ``node_limit``) surfaces in the row -- a grace-mode preview would
+    zero those out and defeat the purpose. Returns ``None`` on unknown
+    ids and never raises.
+    """
+    try:
+        tt = (tier or "").strip().lower()
+        if tt not in _TIER_FEATURES:
+            return None
+        paid_feats = _TIER_FEATURES.get(tt, frozenset())
+        runtimes = (
+            FREE_RUNTIMES | PAID_RUNTIMES
+            if tt in _TIER_PAID_RUNTIMES
+            else FREE_RUNTIMES
+        )
+        ent = Entitlement(
+            tier=tt,
+            source="preview",
+            node_limit=1,
+            expiry=None,
+            features=FREE_FEATURES | paid_feats,
+            runtimes=runtimes,
+            grace=False,
+        )
+        return ent.to_dict()
+    except Exception as exc:
+        logger.warning("entitlements: _preview_row failed: %s", exc)
+        return None
+
+
+def preview_path(from_tier: str, to_tier: str) -> list[dict] | None:
+    """Arbitrary-endpoint stepwise cumulative-state path between two tiers.
+
+    Cumulative-state analogue of :func:`tier_path` (full ``tier_diff``
+    per rung), :func:`capacity_diff_path` (capacity-only per rung),
+    :func:`tier_unlocks_path` (marginal grants per rung) and
+    :func:`tier_locks_path` (marginal losses per rung) -- the fifth and
+    final member of the ``_path`` family, the path-shaped sibling of
+    :func:`preview_batch`. Where the four marginal/diff paths answer
+    "what *changes* at each rung", this one answers "what does the
+    resulting Entitlement *look like* at each rung" -- the cumulative
+    ``Entitlement.to_dict`` snapshot at every step between ``from_tier``
+    and ``to_tier``, so an upgrade-walkthrough surface can render the
+    "Cloud Pro: 90-day retention, unlimited channels, claude_code
+    unlocked" card at each rung off ONE round-trip without re-deriving
+    capacity in JS.
+
+    Per-rung row shape matches :func:`preview` exactly -- the full
+    ``Entitlement.to_dict`` shape with ``source="preview"`` and
+    ``grace=False`` -- so a UI that already renders a ``/preview`` row
+    needs zero new shape code to render a row off this path.
+
+    Walk semantics mirror :func:`tier_path` /
+    :func:`capacity_diff_path` / :func:`tier_unlocks_path` /
+    :func:`tier_locks_path` byte-for-byte (same ``_PURCHASABLE_TIERS``
+    filter + same sort key + same destination-sibling exclusion), so the
+    rung ``tier`` ids from this helper match the rung ``to`` ids from
+    those four helpers identically -- the five paths line up
+    rung-for-rung. Same-rank siblings strictly between the endpoints are
+    both included (matching :func:`tier_path`'s ladder shape); same-rank
+    siblings of the destination are excluded so the path terminates
+    exactly at ``to_tier``.
+
+    Direction semantics (all rows share the same cumulative-snapshot
+    shape; only the sequence changes):
+
+    * ``upgrade`` (ascending) -- rows climb cumulatively from the rung
+      above ``from_tier`` toward ``to_tier``; the natural "what does my
+      surface look like at each step up" walkthrough.
+    * ``downgrade`` (descending) -- rows shrink cumulatively rung by
+      rung; the cancellation-walkthrough counterpart.
+    * ``lateral`` (same rank, different id) -- single-row path; row
+      carries the cumulative preview at ``to_tier``.
+    * ``identity`` (``from == to``) -- empty path; no rungs to walk.
+
+    Endpoint semantics match :func:`tier_path` / :func:`tier_diff`: both
+    ids accept any entry in :data:`_TIER_FEATURES` (including
+    :data:`TIER_TRIAL`, which is not purchasable -- it is excluded from
+    the walked intermediate rungs but is a valid endpoint via the
+    lateral branch). Unknown ids on either side short-circuit to
+    ``None``.
+
+    Resolver-independent: walks the static per-tier maps, so flipping
+    enforce on yields byte-identical rows -- same property the rest of
+    the ``_path`` family guarantees.
+
+    Never raises: a resolver failure logs a warning and returns ``None``
+    so an upgrade-walkthrough surface keeps rendering instead of
+    breaking.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+        if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+            return None
+        if f == t:
+            return []
+        from_rank = _TIER_RANK.get(f, -1)
+        to_rank = _TIER_RANK.get(t, -1)
+        if from_rank == to_rank:
+            row = _preview_row(t)
+            return [row] if row is not None else []
+        ascending = to_rank > from_rank
+        if ascending:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (_TIER_RANK.get(x, -1), x),
+            )
+        else:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (-_TIER_RANK.get(x, -1), x),
+            )
+        path: list[dict] = []
+        for tid in ordered:
+            r = _TIER_RANK.get(tid, -1)
+            if ascending:
+                if r <= from_rank or r > to_rank:
+                    continue
+            else:
+                if r >= from_rank or r < to_rank:
+                    continue
+            if r == to_rank and tid != t:
+                continue
+            row = _preview_row(tid)
+            if row is not None:
+                path.append(row)
+        return path
+    except Exception as exc:
+        logger.warning("entitlements: preview_path failed: %s", exc)
+        return None
+
+
+def tier_unlocks(target_tier: str) -> dict | None:
+    """Per-tier marginal unlocks: features + runtimes that first become
+    available *at* ``target_tier`` -- the set difference between this
+    tier's grant and the next-lower purchasable tier's grant.
+
+    Companion to :func:`preview` (cumulative state at a tier): where
+    ``preview`` answers "what would the resulting Entitlement *look like*",
+    ``tier_unlocks`` answers "what does this tier *first* unlock vs the
+    tier below it" -- the "what's new in Pro vs Starter" view a
+    pricing-page row or upgrade-CTA card uses.
+
+    The "tier below" is the highest-rank entry in :data:`_PURCHASABLE_TIERS`
+    whose rank is strictly less than ``target_tier``'s rank (trial is
+    excluded from purchasables, so a promotional grant never shows up as
+    the upgrade source). When ``target_tier`` sits at the floor (rank 0 --
+    :data:`TIER_OSS` / :data:`TIER_CLOUD_FREE`) ``previous_tier`` is
+    ``None`` and the marginal collapses to the full free grant
+    (``FREE_FEATURES`` / ``FREE_RUNTIMES``).
+
+    Returns ``None`` for an unknown tier id (including :data:`TIER_TRIAL`,
+    which is not purchasable) and never raises.
+    """
+    try:
+        tid = (target_tier or "").strip().lower()
+        if tid not in _PURCHASABLE_TIERS:
+            return None
+        target_rank = _TIER_RANK.get(tid, -1)
+        prev_id: str | None = None
+        prev_rank = -1
+        for cand in _PURCHASABLE_TIERS:
+            cand_rank = _TIER_RANK.get(cand, -1)
+            if 0 <= cand_rank < target_rank and cand_rank > prev_rank:
+                prev_id = cand
+                prev_rank = cand_rank
+        this_feats = FREE_FEATURES | _TIER_FEATURES.get(tid, frozenset())
+        this_runtimes = (
+            FREE_RUNTIMES | PAID_RUNTIMES
+            if tid in _TIER_PAID_RUNTIMES
+            else FREE_RUNTIMES
+        )
+        if prev_id is None:
+            prev_feats: frozenset = frozenset()
+            prev_runtimes: frozenset = frozenset()
+        else:
+            prev_feats = FREE_FEATURES | _TIER_FEATURES.get(prev_id, frozenset())
+            prev_runtimes = (
+                FREE_RUNTIMES | PAID_RUNTIMES
+                if prev_id in _TIER_PAID_RUNTIMES
+                else FREE_RUNTIMES
+            )
+        return {
+            "tier": tid,
+            "tier_label": tier_label(tid),
+            "tier_rank": tier_rank(tid),
+            "previous_tier": prev_id,
+            "previous_tier_label": tier_label(prev_id) if prev_id else None,
+            "previous_tier_rank": tier_rank(prev_id) if prev_id else None,
+            "features": sorted(this_feats - prev_feats),
+            "runtimes": sorted(this_runtimes - prev_runtimes),
+        }
+    except Exception as exc:
+        logger.warning("entitlements: tier_unlocks failed: %s", exc)
+        return None
+
+
+def tier_unlocks_batch() -> list[dict]:
+    """Marginal unlocks for every purchasable tier in one pass.
+
+    Plural sibling of :func:`tier_unlocks`. Where the singular helper
+    answers "what does *this* tier first unlock vs the tier below it"
+    one tier at a time, the batch returns the same row shape for every
+    entry in :data:`_PURCHASABLE_TIERS` so a pricing-page table can
+    render the full "what's new in X" column off **one** round-trip
+    instead of N calls to ``/tier-unlocks``.
+
+    Rows are sorted by tier rank ascending (cheapest -> most capable)
+    and, within the same rank, by tier id so the ordering is stable
+    across calls. The trial tier is excluded (mirrors
+    :func:`tier_unlocks`, which returns ``None`` for non-purchasable
+    tiers); the floor tiers (``TIER_OSS`` / ``TIER_CLOUD_FREE``) appear
+    with ``previous_tier=None`` and their marginal collapses to the
+    full free grant -- same shape the singular helper returns.
+
+    Same-rank tiers (e.g. ``TIER_CLOUD_PRO`` and ``TIER_PRO`` both at
+    rank 2) are both returned, since callers may key off the tier id
+    rather than the rank. Consumers that want a deduped pricing ladder
+    can drop duplicates by ``tier_rank``.
+
+    Never raises: if the resolver blows up the helper returns ``[]``
+    so the UI keeps rendering instead of 500-ing.
+    """
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            row = tier_unlocks(tid)
+            if row is not None:
+                out.append(row)
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: tier_unlocks_batch failed: %s", exc)
+        return []
+
+
+def _unlocks_row(from_tier: str, to_tier: str) -> dict | None:
+    """Single marginal-unlocks row between two arbitrary tiers, with the
+    source carried as ``previous_tier`` (path-chained, **not** the global
+    next-lower-purchasable-tier anchor used by :func:`tier_unlocks`).
+
+    Private builder for :func:`tier_unlocks_path`: each row is "what the
+    `to` rung first unlocks vs the previous step in the walked path" so a
+    consumer can fold the per-rung rows to reconstruct the cumulative
+    ``tier_diff(from, to)['added_*']`` shape -- the same chain-property
+    :func:`tier_path` and :func:`capacity_diff_path` enforce on their rows.
+
+    Returns ``None`` on unknown ids and never raises -- the path walker
+    drops ``None`` rows on the floor so a pricing surface keeps rendering.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+        if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+            return None
+        from_feats = FREE_FEATURES | _TIER_FEATURES.get(f, frozenset())
+        if f == TIER_ENTERPRISE:
+            from_feats = from_feats | ENTERPRISE_FEATURES
+        to_feats = FREE_FEATURES | _TIER_FEATURES.get(t, frozenset())
+        if t == TIER_ENTERPRISE:
+            to_feats = to_feats | ENTERPRISE_FEATURES
+        from_runtimes = (
+            FREE_RUNTIMES | PAID_RUNTIMES
+            if f in _TIER_PAID_RUNTIMES
+            else FREE_RUNTIMES
+        )
+        to_runtimes = (
+            FREE_RUNTIMES | PAID_RUNTIMES
+            if t in _TIER_PAID_RUNTIMES
+            else FREE_RUNTIMES
+        )
+        return {
+            "tier": t,
+            "tier_label": tier_label(t),
+            "tier_rank": tier_rank(t),
+            "previous_tier": f,
+            "previous_tier_label": tier_label(f),
+            "previous_tier_rank": tier_rank(f),
+            "features": sorted(to_feats - from_feats),
+            "runtimes": sorted(to_runtimes - from_runtimes),
+        }
+    except Exception as exc:
+        logger.warning("entitlements: _unlocks_row failed: %s", exc)
+        return None
+
+
+def tier_unlocks_path(from_tier: str, to_tier: str) -> list[dict] | None:
+    """Arbitrary-endpoint stepwise unlock path between two tiers.
+
+    Unlocks-focused analogue of :func:`tier_path` and unlocks-focused
+    path analogue of :func:`tier_unlocks` -- the third member of the
+    ``_path`` family alongside :func:`tier_path` (full ``tier_diff`` per
+    rung) and :func:`capacity_diff_path` (capacity-only per rung). Lets
+    an "upgrade-walkthrough" surface render only the *newly-unlocked*
+    features + runtimes at each rung between any two tiers off ONE
+    round-trip, without the noise of the capacity axes or the symmetric
+    ``lost_*`` lists that :func:`tier_path` carries.
+
+    Per-rung row shape matches :func:`tier_unlocks` exactly --
+    ``tier``, ``tier_label``, ``tier_rank``, ``previous_tier``,
+    ``previous_tier_label``, ``previous_tier_rank``, ``features``,
+    ``runtimes`` -- with one critical difference: ``previous_tier`` is
+    the **previous step in the walked path** (or ``from_tier`` for the
+    first row), NOT the global "next-lower purchasable tier" anchor
+    :func:`tier_unlocks` uses. The path-chained source guarantees
+    ``row[i]['tier'] == row[i+1]['previous_tier']`` so a consumer can
+    fold ``features`` / ``runtimes`` across rows to reconstruct the
+    cumulative ``tier_diff(from_tier, to_tier)['added_*']`` shape -- the
+    same chain-property :func:`tier_path` and :func:`capacity_diff_path`
+    enforce on their rows.
+
+    The walk visits every purchasable tier strictly between ``from_tier``
+    and ``to_tier`` plus the destination ``to_tier`` itself, in tier-rank
+    order (ascending or descending depending on direction). Same-rank
+    siblings *between* the endpoints are both included (matching
+    :func:`tier_path`'s ladder shape); same-rank siblings of the
+    destination are excluded so the path terminates exactly at
+    ``to_tier``. Rung walk is byte-stable against :func:`tier_path` and
+    :func:`capacity_diff_path` (same ``_PURCHASABLE_TIERS`` filter +
+    same sort key + same destination-sibling exclusion).
+
+    Direction semantics:
+
+    * ``upgrade`` (ascending) -- each row's ``features`` / ``runtimes``
+      are the marginal grant at that rung. The natural "what do I get if
+      I climb this far" walkthrough.
+    * ``downgrade`` (descending) -- each row's ``features`` /
+      ``runtimes`` are typically empty (you're losing things, not
+      unlocking them); use :func:`tier_path` or
+      :func:`tier_locks_path` for the marginal-loss view of a
+      downgrade. The path still walks rungs so a UI keyed off rung
+      shape keeps working; the empty lists are the correct "unlocks"
+      answer.
+    * ``lateral`` (same rank, different id) -- single-row path; row
+      carries the set difference between the two same-rank tier grants.
+    * ``identity`` (``from == to``) -- empty path; no rungs to walk.
+
+    Endpoint semantics match :func:`tier_path` / :func:`tier_diff`: both
+    ids accept any entry in :data:`_TIER_FEATURES` (including
+    :data:`TIER_TRIAL`, which is not purchasable -- it is excluded from
+    the walked rungs but is a valid endpoint for the marginal-step
+    computation). Unknown ids on either side short-circuit to ``None``.
+
+    Never raises: a resolver failure logs a warning and returns ``None``
+    so an upgrade-walkthrough surface keeps rendering.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+        if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+            return None
+        if f == t:
+            return []
+        from_rank = _TIER_RANK.get(f, -1)
+        to_rank = _TIER_RANK.get(t, -1)
+        if from_rank == to_rank:
+            row = _unlocks_row(f, t)
+            return [row] if row is not None else []
+        ascending = to_rank > from_rank
+        if ascending:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (_TIER_RANK.get(x, -1), x),
+            )
+        else:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (-_TIER_RANK.get(x, -1), x),
+            )
+        path: list[dict] = []
+        prev_step = f
+        for tid in ordered:
+            r = _TIER_RANK.get(tid, -1)
+            if ascending:
+                if r <= from_rank or r > to_rank:
+                    continue
+            else:
+                if r >= from_rank or r < to_rank:
+                    continue
+            if r == to_rank and tid != t:
+                continue
+            row = _unlocks_row(prev_step, tid)
+            if row is not None:
+                path.append(row)
+                prev_step = tid
+        return path
+    except Exception as exc:
+        logger.warning("entitlements: tier_unlocks_path failed: %s", exc)
+        return None
+
+
+def tier_locks(target_tier: str) -> dict | None:
+    """Per-tier marginal locks: features + runtimes that disappear when
+    you *descend to* ``target_tier`` from the next-higher purchasable
+    tier -- the marginal-loss companion to :func:`tier_unlocks`.
+
+    Where ``tier_unlocks(X)`` answers "what does X *first* unlock vs the
+    tier below it" (the upgrade-step marginal grant), ``tier_locks(X)``
+    answers "what does X *first* lose vs the tier above it" (the
+    downgrade-step marginal loss) -- the "what you'd be giving up by
+    stepping down to Starter from Pro" view a per-rung downgrade-warning
+    row uses, paired with :func:`downgrade_path` (cumulative state at a
+    rung) the way :func:`tier_unlocks` is paired with :func:`upgrade_path`.
+
+    The "tier above" is the *lowest*-rank entry in :data:`_PURCHASABLE_TIERS`
+    whose rank is strictly *greater* than ``target_tier``'s rank (trial is
+    excluded from purchasables, so a promotional grant never shows up as
+    the downgrade source). When ``target_tier`` sits at the ceiling
+    (:data:`TIER_ENTERPRISE`) ``next_tier`` is ``None`` and the marginal
+    collapses to empty loss lists -- there is no rung above to step down
+    from.
+
+    Set-identity: by construction the marginal loss at ``X`` equals the
+    marginal unlock at the next-higher purchasable tier above ``X``,
+    just attributed to the destination (the rung you land on) rather
+    than the source (the rung you stepped off). So
+    ``tier_locks(X)['lost_features']`` byte-equals
+    ``tier_unlocks(next_tier(X))['features']``, and likewise for runtimes
+    -- pinned in the test suite so a future reshuffle of the tier grant
+    sets can't silently desync the two views.
+
+    Returns ``None`` for an unknown tier id (including :data:`TIER_TRIAL`,
+    which is not purchasable) and never raises -- a resolver failure
+    short-circuits to ``None`` so a downgrade-warning surface keeps
+    rendering instead of 500-ing.
+    """
+    try:
+        tid = (target_tier or "").strip().lower()
+        if tid not in _PURCHASABLE_TIERS:
+            return None
+        target_rank = _TIER_RANK.get(tid, -1)
+        next_candidates = sorted(
+            (
+                c
+                for c in _PURCHASABLE_TIERS
+                if _TIER_RANK.get(c, -1) > target_rank
+            ),
+            key=lambda c: (_TIER_RANK.get(c, -1), c),
+        )
+        next_id: str | None = next_candidates[0] if next_candidates else None
+        this_feats = FREE_FEATURES | _TIER_FEATURES.get(tid, frozenset())
+        this_runtimes = (
+            FREE_RUNTIMES | PAID_RUNTIMES
+            if tid in _TIER_PAID_RUNTIMES
+            else FREE_RUNTIMES
+        )
+        if next_id is None:
+            next_feats: frozenset = frozenset()
+            next_runtimes: frozenset = frozenset()
+        else:
+            next_feats = FREE_FEATURES | _TIER_FEATURES.get(next_id, frozenset())
+            next_runtimes = (
+                FREE_RUNTIMES | PAID_RUNTIMES
+                if next_id in _TIER_PAID_RUNTIMES
+                else FREE_RUNTIMES
+            )
+        return {
+            "tier": tid,
+            "tier_label": tier_label(tid),
+            "tier_rank": tier_rank(tid),
+            "next_tier": next_id,
+            "next_tier_label": tier_label(next_id) if next_id else None,
+            "next_tier_rank": tier_rank(next_id) if next_id else None,
+            "lost_features": sorted(next_feats - this_feats),
+            "lost_runtimes": sorted(next_runtimes - this_runtimes),
+        }
+    except Exception as exc:
+        logger.warning("entitlements: tier_locks failed: %s", exc)
+        return None
+
+
+def tier_locks_batch() -> list[dict]:
+    """Marginal locks for every purchasable tier in one pass.
+
+    Plural sibling of :func:`tier_locks`. Where the singular helper
+    answers "what does *this* tier first lose vs the tier above it"
+    one tier at a time, the batch returns the same row shape for every
+    entry in :data:`_PURCHASABLE_TIERS` so a downgrade-warning surface
+    can render the full "what you'd give up at X" column off **one**
+    round-trip instead of N calls to ``/tier-locks``.
+
+    Marginal-loss companion to :func:`tier_unlocks_batch`: where the
+    unlocks batch is the upgrade-CTA column on a pricing table, this
+    is the downgrade-warning column on the same row -- pair them to
+    render an "if you stay / if you drop" two-tone matrix without any
+    client-side composition.
+
+    Rows are sorted by tier rank ascending (cheapest -> most capable)
+    and, within the same rank, by tier id so the ordering is stable
+    across calls and byte-stable against :func:`tier_unlocks_batch`'s
+    ordering. The trial tier is excluded (mirrors :func:`tier_locks`,
+    which returns ``None`` for non-purchasable tiers); the ceiling
+    tier (:data:`TIER_ENTERPRISE`) appears with ``next_tier=None`` and
+    its marginal collapses to empty loss lists -- same shape the
+    singular helper returns.
+
+    Same-rank tiers (e.g. ``TIER_CLOUD_PRO`` and ``TIER_PRO`` both at
+    rank 2) are both returned, since callers may key off the tier id
+    rather than the rank. Consumers that want a deduped pricing ladder
+    can drop duplicates by ``tier_rank``.
+
+    Never raises: if the resolver blows up the helper returns ``[]``
+    so the UI keeps rendering instead of 500-ing.
+    """
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            row = tier_locks(tid)
+            if row is not None:
+                out.append(row)
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: tier_locks_batch failed: %s", exc)
+        return []
+
+
+def _locks_row(from_tier: str, to_tier: str) -> dict | None:
+    """Single marginal-locks row between two arbitrary tiers, with the
+    source carried as ``next_tier`` (path-chained, **not** the global
+    next-higher-purchasable-tier anchor used by :func:`tier_locks`).
+
+    Private builder for :func:`tier_locks_path`: each row is "what the
+    ``to`` rung first *loses* vs the previous step in the walked path"
+    so a consumer can fold the per-rung rows to reconstruct the
+    cumulative ``tier_diff(from, to)['lost_*']`` shape -- the marginal-
+    loss mirror of :func:`_unlocks_row` (which folds to
+    ``tier_diff(...)['added_*']``).
+
+    Returns ``None`` on unknown ids and never raises -- the path walker
+    drops ``None`` rows on the floor so a downgrade-warning surface
+    keeps rendering.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+        if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+            return None
+        from_feats = FREE_FEATURES | _TIER_FEATURES.get(f, frozenset())
+        if f == TIER_ENTERPRISE:
+            from_feats = from_feats | ENTERPRISE_FEATURES
+        to_feats = FREE_FEATURES | _TIER_FEATURES.get(t, frozenset())
+        if t == TIER_ENTERPRISE:
+            to_feats = to_feats | ENTERPRISE_FEATURES
+        from_runtimes = (
+            FREE_RUNTIMES | PAID_RUNTIMES
+            if f in _TIER_PAID_RUNTIMES
+            else FREE_RUNTIMES
+        )
+        to_runtimes = (
+            FREE_RUNTIMES | PAID_RUNTIMES
+            if t in _TIER_PAID_RUNTIMES
+            else FREE_RUNTIMES
+        )
+        return {
+            "tier": t,
+            "tier_label": tier_label(t),
+            "tier_rank": tier_rank(t),
+            "next_tier": f,
+            "next_tier_label": tier_label(f),
+            "next_tier_rank": tier_rank(f),
+            "lost_features": sorted(from_feats - to_feats),
+            "lost_runtimes": sorted(from_runtimes - to_runtimes),
+        }
+    except Exception as exc:
+        logger.warning("entitlements: _locks_row failed: %s", exc)
+        return None
+
+
+def tier_locks_path(from_tier: str, to_tier: str) -> list[dict] | None:
+    """Arbitrary-endpoint stepwise marginal-loss path between two tiers.
+
+    Marginal-loss mirror of :func:`tier_unlocks_path` and the fourth
+    member of the ``_path`` family alongside :func:`tier_path` (full
+    ``tier_diff`` per rung), :func:`capacity_diff_path` (capacity-only
+    per rung), and :func:`tier_unlocks_path` (marginal grant per rung).
+    Lets a "downgrade-walkthrough" surface render only the *newly-lost*
+    features + runtimes at each rung between any two tiers off ONE
+    round-trip, without the noise of the capacity axes or the symmetric
+    ``added_*`` lists :func:`tier_path` carries.
+
+    Per-rung row shape matches :func:`tier_locks` exactly -- ``tier``,
+    ``tier_label``, ``tier_rank``, ``next_tier``, ``next_tier_label``,
+    ``next_tier_rank``, ``lost_features``, ``lost_runtimes`` -- with
+    one critical difference: ``next_tier`` is the **previous step in
+    the walked path** (or ``from_tier`` for the first row), NOT the
+    global "next-higher purchasable tier" anchor :func:`tier_locks`
+    uses. The path-chained source guarantees
+    ``row[i]['tier'] == row[i+1]['next_tier']`` so a consumer can fold
+    ``lost_features`` / ``lost_runtimes`` across rows to reconstruct the
+    cumulative ``tier_diff(from_tier, to_tier)['lost_*']`` shape -- the
+    same chain-property :func:`tier_path`, :func:`capacity_diff_path`,
+    and :func:`tier_unlocks_path` enforce on their rows.
+
+    The walk visits every purchasable tier strictly between ``from_tier``
+    and ``to_tier`` plus the destination ``to_tier`` itself, in tier-rank
+    order (ascending or descending depending on direction). Same-rank
+    siblings *between* the endpoints are both included (matching
+    :func:`tier_path`'s ladder shape); same-rank siblings of the
+    destination are excluded so the path terminates exactly at
+    ``to_tier``. Rung walk is byte-stable against :func:`tier_path`,
+    :func:`capacity_diff_path`, and :func:`tier_unlocks_path` (same
+    ``_PURCHASABLE_TIERS`` filter + same sort key + same destination-
+    sibling exclusion).
+
+    Direction semantics:
+
+    * ``downgrade`` (descending) -- each row's ``lost_features`` /
+      ``lost_runtimes`` are the marginal loss at that rung. The natural
+      "what do I give up if I drop this far" walkthrough.
+    * ``upgrade`` (ascending) -- each row's ``lost_features`` /
+      ``lost_runtimes`` are typically empty (you're gaining things, not
+      losing them); use :func:`tier_unlocks_path` for the marginal-grant
+      view of an upgrade. The path still walks rungs so a UI keyed off
+      rung shape keeps working; the empty lists are the correct "locks"
+      answer.
+    * ``lateral`` (same rank, different id) -- single-row path; row
+      carries the set difference (``from`` minus ``to``) between the
+      two same-rank tier grants.
+    * ``identity`` (``from == to``) -- empty path; no rungs to walk.
+
+    Endpoint semantics match :func:`tier_path` / :func:`tier_unlocks_path`:
+    both ids accept any entry in :data:`_TIER_FEATURES` (including
+    :data:`TIER_TRIAL`, which is not purchasable -- it is excluded from
+    the walked rungs but is a valid endpoint for the marginal-step
+    computation). Unknown ids on either side short-circuit to ``None``.
+
+    Never raises: a resolver failure logs a warning and returns ``None``
+    so a downgrade-walkthrough surface keeps rendering.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+        if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+            return None
+        if f == t:
+            return []
+        from_rank = _TIER_RANK.get(f, -1)
+        to_rank = _TIER_RANK.get(t, -1)
+        if from_rank == to_rank:
+            row = _locks_row(f, t)
+            return [row] if row is not None else []
+        ascending = to_rank > from_rank
+        if ascending:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (_TIER_RANK.get(x, -1), x),
+            )
+        else:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (-_TIER_RANK.get(x, -1), x),
+            )
+        path: list[dict] = []
+        prev_step = f
+        for tid in ordered:
+            r = _TIER_RANK.get(tid, -1)
+            if ascending:
+                if r <= from_rank or r > to_rank:
+                    continue
+            else:
+                if r >= from_rank or r < to_rank:
+                    continue
+            if r == to_rank and tid != t:
+                continue
+            row = _locks_row(prev_step, tid)
+            if row is not None:
+                path.append(row)
+                prev_step = tid
+        return path
+    except Exception as exc:
+        logger.warning("entitlements: tier_locks_path failed: %s", exc)
+        return None
+
+
+def upgrade_path() -> list[dict]:
+    """Ordered marginal-unlock ladder from the resolved tier upward.
+
+    Where :func:`tier_unlocks` answers "what does tier X unlock vs the
+    tier below it" for one named tier, ``upgrade_path`` answers "which
+    tiers are still available to me, and what does each one unlock as I
+    climb" -- the sequenced view an upgrade flow renders ("Starter adds
+    these runtimes, then Pro adds these features, then Enterprise adds
+    SSO + audit").
+
+    Walks :data:`_PURCHASABLE_TIERS` sorted by ``(tier_rank, tier_id)``,
+    filters to entries whose rank is strictly *greater* than the resolved
+    entitlement's rank, and folds :func:`tier_unlocks` over each. Same-rank
+    siblings (e.g. ``TIER_CLOUD_PRO`` and ``TIER_PRO`` both at rank 2) both
+    appear so a caller keyed off the tier id keeps working; rank-deduped
+    consumers can collapse by ``tier_rank`` client-side.
+
+    The marginal stored on each row is :func:`tier_unlocks`'s answer (vs
+    the absolute next-lower purchasable tier in the catalogue) -- *not*
+    "vs the previous step in the path". So the union of the rows is
+    direction-agnostic and matches the corresponding rows from a
+    full-ladder ``tier_unlocks_batch``-style call, while the *selection*
+    of rows is current-tier-relative.
+
+    Returns an empty list when the resolved tier already sits at the top
+    of the purchasable ladder (Enterprise), and never raises -- a resolver
+    failure short-circuits to ``[]`` so an upgrade-CTA surface keeps
+    rendering instead of breaking.
+    """
+    try:
+        ent = get_entitlement()
+        current_rank = _TIER_RANK.get(ent.tier, -1)
+        ordered = sorted(
+            _PURCHASABLE_TIERS,
+            key=lambda t: (_TIER_RANK.get(t, -1), t),
+        )
+        path: list[dict] = []
+        for tid in ordered:
+            cand_rank = _TIER_RANK.get(tid, -1)
+            if cand_rank <= current_rank:
+                continue
+            row = tier_unlocks(tid)
+            if row is not None:
+                path.append(row)
+        return path
+    except Exception as exc:
+        logger.warning("entitlements: upgrade_path failed: %s", exc)
+        return []
+
+
+def downgrade_path() -> list[dict]:
+    """Ordered cumulative-loss ladder from the resolved tier downward.
+
+    Direction-flipped sibling of :func:`upgrade_path`: where the upgrade
+    ladder walks purchasable tiers strictly *above* the caller and folds
+    :func:`tier_unlocks` over each, this walks purchasable tiers strictly
+    *below* the caller and folds :meth:`Entitlement.downgrade_diff` over
+    each. The destination view a downgrade-warning CTA renders ("dropping
+    to Starter loses claude_code + custom_alerts; dropping to Free also
+    loses retention beyond 7 days and every paid runtime").
+
+    Rows are sorted by ``(-tier_rank, tier_id)`` so the closest-to-current
+    rung sits first and same-rank siblings (e.g. ``TIER_CLOUD_FREE`` and
+    ``TIER_OSS`` both at rank 0) appear in stable lexicographic order. Each
+    row is the ``downgrade_diff`` shape augmented with destination tier
+    metadata + the caller's current-tier context::
+
+        {
+          "target":             "<tier id>",
+          "target_label":       "<display>",
+          "target_rank":        <int>,
+          "current_tier":       "<resolved tier id>",
+          "current_tier_label": "<display>",
+          "current_tier_rank":  <int>,
+          "lost_features":      [...],
+          "lost_runtimes":      [...],
+        }
+
+    Cumulative not marginal: ``lost_features`` / ``lost_runtimes`` on each
+    row reflect the *full* delta between the caller's resolved entitlement
+    and that row's destination -- so the lists strictly grow as the path
+    descends and consumers can render "if you drop to X, here's everything
+    you'd lose" without summing rows client-side. The marginal-per-rung
+    view (analogue of :func:`tier_unlocks`) is a separate future helper;
+    this one mirrors :func:`upgrade_path`'s *selection* (current-tier-relative
+    catalogue walk) rather than its *row shape*.
+
+    Returns an empty list when the resolved tier already sits at the floor
+    of the purchasable ladder (no rung below to descend to) and never raises
+    -- a resolver failure short-circuits to ``[]`` so a downgrade-warning
+    surface keeps rendering instead of breaking.
+    """
+    try:
+        ent = get_entitlement()
+        current_rank = _TIER_RANK.get(ent.tier, -1)
+        current_label = tier_label(ent.tier)
+        ordered = sorted(
+            _PURCHASABLE_TIERS,
+            key=lambda t: (-_TIER_RANK.get(t, -1), t),
+        )
+        path: list[dict] = []
+        for tid in ordered:
+            cand_rank = _TIER_RANK.get(tid, -1)
+            if cand_rank < 0 or cand_rank >= current_rank:
+                continue
+            diff = ent.downgrade_diff(tid)
+            path.append(
+                {
+                    "target": tid,
+                    "target_label": tier_label(tid),
+                    "target_rank": cand_rank,
+                    "current_tier": ent.tier,
+                    "current_tier_label": current_label,
+                    "current_tier_rank": current_rank,
+                    "lost_features": list(diff.get("lost_features") or []),
+                    "lost_runtimes": list(diff.get("lost_runtimes") or []),
+                }
+            )
+        return path
+    except Exception as exc:
+        logger.warning("entitlements: downgrade_path failed: %s", exc)
+        return []
+
+
+def resolution_diagnostic() -> dict:
+    out: dict = {
+        "license_path": _LICENSE_PATH,
+        "license_present": False,
+        "license_size_bytes": 0,
+        "cloud_plan_path": _CLOUD_PLAN_CACHE,
+        "cloud_plan_present": False,
+        "cloud_plan_size_bytes": 0,
+        "enforce_env": os.environ.get("CLAWMETRY_ENFORCE"),
+        "is_enforced": False,
+        "cache_age_seconds": None,
+        "cache_ttl_seconds": _CACHE_TTL_SECS,
+        "cache_hit_next_call": False,
+        "cache_cached_tier": None,
+        "retention_override_env_name": _RETENTION_OVERRIDE_ENV,
+        "retention_override_env_value": os.environ.get(_RETENTION_OVERRIDE_ENV),
+    }
+    try:
+        out["is_enforced"] = is_enforced()
+    except Exception as exc:
+        logger.warning("resolution_diagnostic: is_enforced failed: %s", exc)
+    try:
+        st = os.stat(_LICENSE_PATH)
+        out["license_present"] = True
+        out["license_size_bytes"] = int(st.st_size)
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        out["license_error"] = str(exc)
+    try:
+        st = os.stat(_CLOUD_PLAN_CACHE)
+        out["cloud_plan_present"] = True
+        out["cloud_plan_size_bytes"] = int(st.st_size)
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        out["cloud_plan_error"] = str(exc)
+    try:
+        with _lock:
+            ts = float(_cache.get("ts") or 0.0)
+            cached_ent = _cache.get("ent")
+            cached_enforce = _cache.get("enforce")
+        if ts > 0.0:
+            age = max(0.0, time.time() - ts)
+            out["cache_age_seconds"] = round(age, 3)
+            out["cache_hit_next_call"] = (
+                cached_ent is not None
+                and cached_enforce == out["is_enforced"]
+                and age < _CACHE_TTL_SECS
+            )
+            if cached_ent is not None:
+                out["cache_cached_tier"] = getattr(cached_ent, "tier", None)
+    except Exception as exc:
+        out["cache_error"] = str(exc)
+    return out
+
+
+def available_runtimes() -> list[str]:
+    ent = get_entitlement()
+    if ent.grace:
+        return sorted(ALL_RUNTIMES)
+    return sorted(ent.runtimes)
+
+
+def canonical_runtime(runtime: str) -> str:
+    try:
+        rt = (runtime or "").strip().lower()
+    except Exception:
+        return ""
+    if not rt:
+        return ""
+    if rt in ALL_RUNTIMES:
+        return rt
+    return RUNTIME_ALIASES.get(rt, rt)
+
+
+def runtime_label(runtime: str) -> str:
+    rt = canonical_runtime(runtime)
+    return RUNTIME_LABELS.get(rt, rt)
+
+
+def runtime_tier(runtime: str) -> str:
+    try:
+        rt = (runtime or "").strip().lower()
+    except (AttributeError, TypeError):
+        return "starter"
+    return "free" if rt in FREE_RUNTIMES else "starter"
+
+
+def tier_label(tier: str) -> str:
+    t = (tier or "").strip().lower()
+    if not t:
+        return TIER_LABELS[TIER_OSS]
+    label = TIER_LABELS.get(t)
+    if label is not None:
+        return label
+    return t.replace("_", " ").title()
+
+
+def tier_rank(tier: str) -> int:
+    """Comparable rank for ``tier`` (higher = unlocks more). Returns ``-1`` for
+    unknown tiers. See :data:`_TIER_RANK` for the canonical numbering."""
+    return _TIER_RANK.get((tier or "").strip().lower(), -1)
+
+
+def next_purchasable_tier() -> str | None:
+    try:
+        return get_entitlement().next_purchasable_tier()
+    except Exception as exc:
+        logger.warning("entitlements: next_purchasable_tier (module) failed: %s", exc)
+        return None
+
+
+def previous_purchasable_tier() -> str | None:
+    try:
+        return get_entitlement().previous_purchasable_tier()
+    except Exception as exc:
+        logger.warning("entitlements: previous_purchasable_tier (module) failed: %s", exc)
+        return None
+
+
+def min_tier_for_feature(feature: str) -> str | None:
+    f = (feature or "").strip().lower()
+    if not f:
+        return None
+    if f in FREE_FEATURES:
+        return TIER_OSS
+    for tier in _PURCHASABLE_TIERS:
+        if tier in (TIER_OSS, TIER_CLOUD_FREE):
+            continue
+        if f in _TIER_FEATURES.get(tier, frozenset()):
+            return tier
+    return None
+
+
+def min_tier_for_runtime(runtime: str) -> str | None:
+    rt = (runtime or "").strip().lower()
+    if not rt:
+        return None
+    if rt in FREE_RUNTIMES:
+        return TIER_OSS
+    if rt in PAID_RUNTIMES:
+        return TIER_CLOUD_STARTER
+    return None
+
+
+def _tier_row(tier: str) -> dict:
+    return {
+        "id": tier,
+        "label": tier_label(tier),
+        "rank": tier_rank(tier),
+        "purchasable": tier in _PURCHASABLE_TIERS,
+    }
+
+
+def tiers_for_feature(feature: str) -> dict | None:
+    """Inverse of :func:`min_tier_for_feature`: list **every** tier that
+    grants ``feature`` (not just the cheapest one).
+
+    Where ``min_tier_for_feature`` answers "what's the cheapest tier
+    that unlocks X" -- a single id used by the upgrade-CTA -- this
+    helper returns the full "Available in: Pro, Self-hosted Pro,
+    Trial, Enterprise" availability list a pricing-page row or
+    feature tooltip renders. Walks :data:`_TIER_ORDER` so the
+    promotional ``trial`` tier appears alongside the purchasable
+    plans (each row carries ``purchasable`` so the UI can dim or
+    badge it).
+
+    Rows are sorted by ``(tier_rank, tier_id)`` for stable output.
+    ``min_tier`` matches :func:`min_tier_for_feature` (trial
+    excluded -- not a plan a customer picks).
+
+    Returns ``None`` for empty / unknown feature ids and never raises.
+    """
+    try:
+        f = (feature or "").strip().lower()
+        if not f or f not in ALL_FEATURES:
+            return None
+        carriers: list[str] = []
+        for tier in _TIER_ORDER:
+            paid_feats = _TIER_FEATURES.get(tier, frozenset())
+            if f in FREE_FEATURES or f in paid_feats:
+                carriers.append(tier)
+        rows = [
+            _tier_row(t)
+            for t in sorted(carriers, key=lambda t: (tier_rank(t), t))
+        ]
+        min_t = min_tier_for_feature(f)
+        return {
+            "item": f,
+            "kind": "feature",
+            "label": feature_label(f),
+            "free": f in FREE_FEATURES,
+            "min_tier": min_t,
+            "min_tier_label": tier_label(min_t) if min_t else None,
+            "min_tier_rank": tier_rank(min_t) if min_t else None,
+            "tiers": rows,
+        }
+    except Exception as exc:
+        logger.warning("entitlements: tiers_for_feature failed: %s", exc)
+        return None
+
+
+def tiers_for_runtime(runtime: str) -> dict | None:
+    """Inverse of :func:`min_tier_for_runtime`: list every tier that
+    grants ``runtime``.
+
+    FREE_RUNTIMES are granted at every tier in :data:`_TIER_ORDER`;
+    PAID_RUNTIMES are granted at every tier in
+    :data:`_TIER_PAID_RUNTIMES` (trial, starter, cloud_pro, self-hosted
+    pro, enterprise). Rows sorted ``(rank, id)``; trial appears
+    alongside purchasable plans with ``purchasable=False`` so the UI
+    can render it as a separate promotional badge.
+
+    Returns ``None`` for empty / unknown runtime ids and never raises.
+    Accepts the canonical id (``claude_code``) or any registered alias
+    (``claude-code``).
+    """
+    try:
+        rt = canonical_runtime(runtime)
+        if not rt or rt not in ALL_RUNTIMES:
+            return None
+        carriers: list[str] = []
+        is_free = rt in FREE_RUNTIMES
+        is_paid = rt in PAID_RUNTIMES
+        for tier in _TIER_ORDER:
+            if is_free:
+                carriers.append(tier)
+            elif is_paid and tier in _TIER_PAID_RUNTIMES:
+                carriers.append(tier)
+        rows = [
+            _tier_row(t)
+            for t in sorted(carriers, key=lambda t: (tier_rank(t), t))
+        ]
+        min_t = min_tier_for_runtime(rt)
+        return {
+            "item": rt,
+            "kind": "runtime",
+            "label": runtime_label(rt),
+            "free": is_free,
+            "min_tier": min_t,
+            "min_tier_label": tier_label(min_t) if min_t else None,
+            "min_tier_rank": tier_rank(min_t) if min_t else None,
+            "tiers": rows,
+        }
+    except Exception as exc:
+        logger.warning("entitlements: tiers_for_runtime failed: %s", exc)
+        return None
+
+
+def tiers_for_batch() -> dict:
+    """Full availability ladder for every known feature *and* runtime in
+    one pass. Plural sibling of :func:`tiers_for_feature` /
+    :func:`tiers_for_runtime` and the inverse of the existing
+    ``min_tier_for_*`` resolvers: where the singular helpers answer
+    "which tiers grant *this* item" one id at a time -- the shape a
+    pricing-page row uses -- the batch returns the same row shape for
+    every entry in :data:`ALL_FEATURES` and :data:`ALL_RUNTIMES` so a
+    pricing-table or feature-comparison matrix UI can render the full
+    "Available in X" grid off **one** round-trip instead of an N+1
+    fan-out across ``/api/entitlement/tiers-for``.
+
+    Response shape::
+
+        {
+          "features": [<tiers_for_feature row>, ...],
+          "runtimes": [<tiers_for_runtime row>, ...],
+        }
+
+    Feature rows are sorted by ``(feature_tier_rank, id)`` so the free
+    surface appears first, then Starter, Pro, Enterprise -- the same
+    order :func:`feature_catalog` uses, so a UI that joins the two
+    surfaces (catalog row + availability ladder) sees a consistent
+    ordering. Runtime rows put :data:`FREE_RUNTIMES` first (alpha
+    within), then :data:`PAID_RUNTIMES` (alpha within), mirroring
+    :func:`runtime_catalog`.
+
+    Each row matches its singular helper exactly (``item``, ``kind``,
+    ``label``, ``free``, ``min_tier``, ``min_tier_label``,
+    ``min_tier_rank``, ``tiers``) so callers can pass a row to existing
+    components without reshaping. Aliases (``custom_alerts``,
+    ``alert_webhooks``, ``anomaly_detection``, ``cost_optimizer``) are
+    surfaced alongside their canonical features -- they each carry a
+    distinct id used by the dashboard, and the catalog already lists
+    them.
+
+    Never raises: if the resolver blows up the helper returns
+    ``{"features": [], "runtimes": []}`` so the pricing UI keeps
+    rendering instead of 500-ing.
+    """
+    try:
+        features: list[dict] = []
+        for fid in sorted(
+            ALL_FEATURES,
+            key=lambda f: (_FEATURE_TIER_RANK.get(feature_tier(f), 9), f),
+        ):
+            row = tiers_for_feature(fid)
+            if row is not None:
+                features.append(row)
+        runtimes: list[dict] = []
+        for rt in sorted(FREE_RUNTIMES):
+            row = tiers_for_runtime(rt)
+            if row is not None:
+                runtimes.append(row)
+        for rt in sorted(PAID_RUNTIMES):
+            row = tiers_for_runtime(rt)
+            if row is not None:
+                runtimes.append(row)
+        return {"features": features, "runtimes": runtimes}
+    except Exception as exc:
+        logger.warning("entitlements: tiers_for_batch failed: %s", exc)
+        return {"features": [], "runtimes": []}
+
+
+def min_tier_for_channel_count(count: int) -> str | None:
+    """Return the cheapest *purchasable* tier id whose channel-adapter cap fits
+    ``count`` configured channels. Closes the symmetry gap with
+    :func:`min_tier_for_feature` / :func:`min_tier_for_runtime` so the lock
+    affordance on the channels surface ("you have 5 channels -- Available in
+    Starter") reads from the same single source of truth.
+
+    Walks :data:`_PURCHASABLE_TIERS` (cheapest -> most capable, trial excluded
+    -- it is a promotional grant, not a plan a customer can pick from a price
+    page) and returns the first tier whose ``_TIER_CHANNEL_LIMIT`` value is
+    either ``None`` (unlimited) or ``>= count``.
+
+    Semantics:
+
+    * ``count <= 0`` -- collapses to :data:`TIER_OSS`. A zero/negative count is
+      either "not measured yet" or trivially satisfied; either way the free
+      floor covers it (matches :meth:`Entitlement.allows_channel_count`'s
+      grace-on-zero contract).
+    * Non-int ``count`` -- returns ``None`` so a caller can distinguish "free"
+      from "couldn't parse". Never raises.
+    * Otherwise -- the first tier whose cap admits ``count``, falling back to
+      :data:`TIER_ENTERPRISE` if every finite cap is exceeded (Enterprise is
+      unlimited, so this is always a safe ceiling).
+    """
+    try:
+        n = int(count)
+    except (TypeError, ValueError):
+        return None
+    if n <= 0:
+        return TIER_OSS
+    for tier in _PURCHASABLE_TIERS:
+        cap = _TIER_CHANNEL_LIMIT.get(tier, _FREE_CHANNEL_LIMIT)
+        if cap is None or n <= cap:
+            return tier
+    return TIER_ENTERPRISE
+
+
+def min_tier_for_retention_window(days: int | None) -> str | None:
+    """Return the cheapest *purchasable* tier id whose event-retention cap fits
+    a ``days`` history window. Companion to :func:`min_tier_for_channel_count`
+    so the history-range toggle ("7 / 30 / 90 / all") can render "Available in
+    <tier>" copy off the same canonical reverse lookup the other gates use.
+
+    Walks :data:`_PURCHASABLE_TIERS` (cheapest -> most capable, trial excluded)
+    and returns the first tier whose ``_TIER_RETENTION_DAYS`` value either
+    matches the unlimited request (``days is None``) or admits the finite
+    window.
+
+    Semantics:
+
+    * ``days is None`` (caller asked for unlimited history) -- returns the
+      first tier whose cap is ``None``, i.e. :data:`TIER_ENTERPRISE`. Mirrors
+      :meth:`Entitlement.allows_retention_window` which only grants ``None``
+      to Enterprise.
+    * ``days <= 0`` -- collapses to :data:`TIER_OSS`. Asking for zero history
+      is trivially satisfied by the free floor (same posture as
+      :meth:`Entitlement.allows_retention_window`).
+    * Non-int ``days`` (other than the explicit ``None``) -- returns ``None``
+      so a caller can distinguish "free" from "couldn't parse". Never raises.
+    * Otherwise -- the first tier whose cap admits ``days``, falling back to
+      :data:`TIER_ENTERPRISE` if every finite cap is exceeded.
+    """
+    if days is None:
+        for tier in _PURCHASABLE_TIERS:
+            if _TIER_RETENTION_DAYS.get(tier, 7) is None:
+                return tier
+        return TIER_ENTERPRISE
+    try:
+        n = int(days)
+    except (TypeError, ValueError):
+        return None
+    if n <= 0:
+        return TIER_OSS
+    for tier in _PURCHASABLE_TIERS:
+        cap = _TIER_RETENTION_DAYS.get(tier, 7)
+        if cap is None or n <= cap:
+            return tier
+    return TIER_ENTERPRISE
+
+
+def min_tier_for_node_count(count: int) -> str | None:
+    """Return the cheapest *purchasable* tier id whose node-count cap admits
+    ``count`` registered nodes. Closes the fourth axis (alongside
+    :func:`min_tier_for_feature` / :func:`min_tier_for_runtime` /
+    :func:`min_tier_for_channel_count` / :func:`min_tier_for_retention_window`)
+    so the fleet-page upgrade affordance ("you have 4 nodes -- Available in
+    Starter") reads from the same single source of truth.
+
+    Walks :data:`_PURCHASABLE_TIERS` (cheapest -> most capable, trial excluded
+    -- it is a promotional grant, not a plan a customer can pick from a price
+    page) and returns the first tier whose ``_TIER_NODE_LIMIT`` value is either
+    ``None`` (unlimited) or ``>= count``.
+
+    Semantics mirror :func:`min_tier_for_channel_count` exactly so the four
+    capacity axes are interchangeable from the caller's perspective:
+
+    * ``count <= 0`` -- collapses to :data:`TIER_OSS`. A zero/negative count is
+      either "no nodes registered yet" or trivially satisfied; either way the
+      free floor covers it (matches :meth:`Entitlement.allows_node_count`'s
+      grace-on-zero contract).
+    * Non-int ``count`` -- returns ``None`` so a caller can distinguish "free"
+      from "couldn't parse". Never raises.
+    * Otherwise -- the first tier whose cap admits ``count``, falling back to
+      :data:`TIER_ENTERPRISE` if every finite cap is exceeded (Enterprise is
+      unlimited, so this is always a safe ceiling).
+    """
+    try:
+        n = int(count)
+    except (TypeError, ValueError):
+        return None
+    if n <= 0:
+        return TIER_OSS
+    for tier in _PURCHASABLE_TIERS:
+        cap = _TIER_NODE_LIMIT.get(tier, _FREE_NODE_LIMIT)
+        if cap is None or n <= cap:
+            return tier
+    return TIER_ENTERPRISE
+
+
+def min_tier_for_features(features) -> str | None:
+    """Cheapest *purchasable* tier admitting **all** ``features`` at once.
+
+    Plural sibling of :func:`min_tier_for_feature`. A dashboard wiring "you
+    are using fleet + otel_export + sso -- Available in Enterprise" has to
+    resolve the most-constraining feature in the set; this helper folds the
+    per-item lookups + max-by-rank in one place so callers don't reinvent
+    the walk (and so all five capacity axes look symmetric from the caller's
+    side: feature/runtime singular + features/runtimes plural).
+
+    Semantics:
+
+    * Empty / ``None`` iterable -- returns ``None``. "I asked for nothing"
+      has no upgrade target, distinct from "I asked for free features"
+      (which returns :data:`TIER_OSS`). Same posture as the singular helper
+      returning ``None`` for empty input.
+    * Unknown items contribute nothing -- they are skipped, not treated as
+      a constraint, so a typo doesn't silently mis-route to Enterprise. If
+      **every** item is unknown / empty, the helper returns ``None``.
+    * All-known-free items -- returns :data:`TIER_OSS` (same as the singular
+      free-feature path).
+    * Mixed -- returns the highest-rank ``min_tier_for_feature`` across the
+      set (the most-constraining feature wins).
+    * Non-iterable input -- returns ``None``. Never raises.
+    """
+    try:
+        if features is None:
+            return None
+        items = list(features)
+    except TypeError:
+        return None
+    tiers: list[str] = []
+    for f in items:
+        t = min_tier_for_feature(f)
+        if t is not None:
+            tiers.append(t)
+    if not tiers:
+        return None
+    return max(tiers, key=tier_rank)
+
+
+def min_tier_for_runtimes(runtimes) -> str | None:
+    """Cheapest *purchasable* tier admitting **all** ``runtimes`` at once.
+
+    Plural sibling of :func:`min_tier_for_runtime`. Today every paid runtime
+    unlocks at :data:`TIER_CLOUD_STARTER`, so for a set containing any paid
+    runtime the answer is always Starter -- but the helper is provided for
+    API symmetry with :func:`min_tier_for_features` (so a caller batching
+    feature+runtime asks reads off one shape) and to stay correct if the
+    paid-runtime tier mapping ever becomes per-runtime.
+
+    Semantics mirror :func:`min_tier_for_features` exactly:
+
+    * Empty / ``None`` iterable -- returns ``None``.
+    * Unknown items contribute nothing (skipped); all-unknown -- ``None``.
+    * All-free items -- :data:`TIER_OSS`.
+    * Mixed -- the highest-rank ``min_tier_for_runtime`` across the set.
+    * Non-iterable input -- ``None``. Never raises.
+    """
+    try:
+        if runtimes is None:
+            return None
+        items = list(runtimes)
+    except TypeError:
+        return None
+    tiers: list[str] = []
+    for rt in items:
+        t = min_tier_for_runtime(rt)
+        if t is not None:
+            tiers.append(t)
+    if not tiers:
+        return None
+    return max(tiers, key=tier_rank)
+
+
+def min_tier_for_all(
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> str | None:
+    """Cheapest *purchasable* tier admitting **all** supplied constraints at
+    once across every capacity axis.
+
+    Aggregate sibling of :func:`min_tier_for_features` /
+    :func:`min_tier_for_runtimes` / :func:`min_tier_for_channel_count` /
+    :func:`min_tier_for_retention_window` / :func:`min_tier_for_node_count`.
+    A dashboard surface that mixes axes ("fleet + claude_code + 5 channels +
+    30-day retention + 2 nodes -- what tier covers everything?") gets a
+    single tier id back instead of N round-trips + max-by-rank on the client.
+
+    The capacity axes use ``None`` as the "axis not supplied" sentinel so a
+    caller can omit any subset and the helper just skips them. Critically,
+    ``retention_days=None`` here means *unset*, NOT *unlimited* -- asking
+    for the unlimited-retention tier is the singular
+    :func:`min_tier_for_retention_window` (``days=None``) call's job and
+    would mis-route the aggregate to Enterprise.
+
+    Semantics mirror the plural helpers exactly:
+
+    * No constraints supplied -- returns ``None`` (matches the "nothing
+      asked" posture of the plural helpers).
+    * Any axis collapses to ``None`` (empty iterable / non-int / all-
+      unknown items) -- that axis contributes nothing, the result is
+      resolved off the remaining axes.
+    * All axes collapse to ``None`` -- returns ``None``.
+    * Otherwise -- the highest-rank tier across the per-axis answers (the
+      most-constraining axis wins).
+    * Never raises.
+    """
+    try:
+        tiers: list[str] = []
+        if features is not None:
+            t = min_tier_for_features(features)
+            if t is not None:
+                tiers.append(t)
+        if runtimes is not None:
+            t = min_tier_for_runtimes(runtimes)
+            if t is not None:
+                tiers.append(t)
+        if channels is not None:
+            t = min_tier_for_channel_count(channels)
+            if t is not None:
+                tiers.append(t)
+        if retention_days is not None:
+            t = min_tier_for_retention_window(retention_days)
+            if t is not None:
+                tiers.append(t)
+        if nodes is not None:
+            t = min_tier_for_node_count(nodes)
+            if t is not None:
+                tiers.append(t)
+        if not tiers:
+            return None
+        return max(tiers, key=tier_rank)
+    except Exception as exc:
+        logger.warning("entitlements: min_tier_for_all failed: %s", exc)
+        return None
+
+
+def affordable_tiers(
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> list[dict] | None:
+    """Every *purchasable* tier admitting **all** supplied constraints, ordered
+    by rank ascending.
+
+    Plural sibling of :func:`min_tier_for_all` (which returns only the floor).
+    Same arg shape, same per-axis ``None`` "not supplied" sentinels, same
+    never-raise contract. Lets a pricing-page surface render "you need at
+    least Starter; Pro and Enterprise also qualify" off ONE round-trip
+    instead of resolving the floor and then walking the catalog client-side.
+
+    Row schema (one per qualifying tier)::
+
+        {
+            "tier":       "<id>",
+            "tier_label": "<human>",
+            "tier_rank":  <int>,
+            "is_minimum": <bool>,   # True on the first (cheapest) row only.
+        }
+
+    Ordering: ``tier_rank`` ascending, same-rank ties broken by tier id
+    alphabetical so the row sequence is deterministic and byte-stable across
+    invocations.
+
+    Semantics mirror :func:`min_tier_for_all` exactly:
+
+    * No constraints supplied -- returns ``None`` (matches the "nothing
+      asked" posture of :func:`min_tier_for_all`).
+    * Any axis collapses to ``None`` (empty iterable / non-int / all-unknown
+      items) -- that axis contributes nothing, the floor is resolved off the
+      remaining axes.
+    * All axes collapse to ``None`` -- returns ``None``.
+    * Otherwise -- the full list of purchasable tiers with rank ``>=`` the
+      floor, ordered as above. ``TIER_TRIAL`` is intentionally excluded
+      (matches every other path/batch helper, which walk ``_PURCHASABLE_TIERS``).
+    * Never raises.
+
+    Decoupled from the resolved entitlement so grace vs enforce yields
+    identical lists -- this is the hypothetical "given these requirements,
+    which tiers qualify" view, complementing the resolver-pinned
+    :func:`min_tier_for_all` flow.
+    """
+    try:
+        if (
+            features is None
+            and runtimes is None
+            and channels is None
+            and retention_days is None
+            and nodes is None
+        ):
+            return None
+        floor = min_tier_for_all(
+            features=features,
+            runtimes=runtimes,
+            channels=channels,
+            retention_days=retention_days,
+            nodes=nodes,
+        )
+        if floor is None:
+            return None
+        floor_rank = tier_rank(floor)
+        candidates = sorted(
+            (t for t in _PURCHASABLE_TIERS if tier_rank(t) >= floor_rank),
+            key=lambda t: (tier_rank(t), t),
+        )
+        out: list[dict] = []
+        for idx, tier in enumerate(candidates):
+            out.append(
+                {
+                    "tier": tier,
+                    "tier_label": tier_label(tier),
+                    "tier_rank": tier_rank(tier),
+                    "is_minimum": idx == 0,
+                }
+            )
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: affordable_tiers failed: %s", exc)
+        return None
+
+
+def lock_reason(item: str, *, kind: str | None = None) -> str | None:
+    try:
+        return get_entitlement().lock_reason(item, kind=kind)
+    except Exception:
+        return None
+
+
+def _normalise_csv(items) -> list[str]:
+    if items is None:
+        return []
+    if isinstance(items, str):
+        raw = items.split(",")
+    else:
+        try:
+            raw = list(items)
+        except TypeError:
+            return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for tok in raw:
+        try:
+            s = str(tok).strip().lower()
+        except Exception:
+            continue
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    return out
+
+
+def _lock_row(ent, key: str, kind: str) -> dict:
+    try:
+        if kind == "feature":
+            allowed = ent.allows_feature(key)
+            required = min_tier_for_feature(key)
+        elif kind == "runtime":
+            allowed = ent.allows_runtime(key)
+            required = min_tier_for_runtime(key)
+        elif kind == "channels":
+            try:
+                n = int(key)
+            except (TypeError, ValueError):
+                return {
+                    "key": str(key),
+                    "kind": kind,
+                    "reason": None,
+                    "locked": False,
+                    "allowed": True,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                }
+            allowed = ent.allows_channel_count(n)
+            required = min_tier_for_channel_count(n)
+            key = str(n)
+        elif kind == "retention_days":
+            try:
+                n = int(key)
+            except (TypeError, ValueError):
+                return {
+                    "key": str(key),
+                    "kind": kind,
+                    "reason": None,
+                    "locked": False,
+                    "allowed": True,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                }
+            allowed = ent.allows_retention_window(n)
+            required = min_tier_for_retention_window(n)
+            key = str(n)
+        elif kind == "nodes":
+            try:
+                n = int(key)
+            except (TypeError, ValueError):
+                return {
+                    "key": str(key),
+                    "kind": kind,
+                    "reason": None,
+                    "locked": False,
+                    "allowed": True,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                }
+            allowed = ent.allows_node_count(n)
+            required = min_tier_for_node_count(n)
+            key = str(n)
+        else:
+            allowed = True
+            required = None
+        reason = ent.lock_reason(key, kind=kind)
+        return {
+            "key": key,
+            "kind": kind,
+            "reason": reason,
+            "locked": reason is not None,
+            "allowed": allowed,
+            "required_tier": required,
+            "required_tier_label": tier_label(required) if required else None,
+            "required_tier_rank": tier_rank(required) if required else -1,
+        }
+    except Exception:
+        return {
+            "key": str(key),
+            "kind": kind,
+            "reason": None,
+            "locked": False,
+            "allowed": True,
+            "required_tier": None,
+            "required_tier_label": None,
+            "required_tier_rank": -1,
+        }
+
+
+def lock_reasons_batch(
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict:
+    """Per-item lock reasons for every supplied item across all 5 axes in one
+    pass.
+
+    Plural sibling of :func:`lock_reason`. While
+    :func:`min_tier_for_all` / ``/required-tier-batch`` collapse the answer to
+    the single most-constraining tier, this helper preserves the per-item
+    detail so a Settings or paywall matrix UI can render N rows with their
+    individual reasons + per-row required tier off **one** call instead of N
+    round-trips to ``/lock-reason``.
+
+    Shape::
+
+        {
+          "features":       [<row>, ...],
+          "runtimes":       [<row>, ...],
+          "channels":       <row> | None,
+          "retention_days": <row> | None,
+          "nodes":          <row> | None,
+        }
+
+    Each ``<row>`` carries ``key``, ``kind``, ``reason`` (``None`` when not
+    locked / unknown id / grace mode), ``locked``, ``allowed``,
+    ``required_tier``, ``required_tier_label``, ``required_tier_rank``.
+
+    The capacity axes (``channels`` / ``retention_days`` / ``nodes``) use
+    ``None`` as the "axis not supplied" sentinel and the corresponding key
+    in the returned dict is ``None``. Mirrors ``min_tier_for_all`` exactly:
+    ``retention_days=None`` here means *unset*, NOT *unlimited*.
+
+    Grace mode (the default until enforcement flips on): every row has
+    ``reason=None`` / ``locked=False`` / ``allowed=True`` -- the helper does
+    not invent locks. Never raises: a resolver failure short-circuits to the
+    grace-shape rows so the UI keeps rendering.
+    """
+    feats = _normalise_csv(features)
+    rts = _normalise_csv(runtimes)
+    try:
+        ent = get_entitlement()
+    except Exception as exc:
+        logger.warning("entitlements: lock_reasons_batch falling back to grace: %s", exc)
+        ent = _oss_free()
+    out: dict = {
+        "features": [_lock_row(ent, f, "feature") for f in feats],
+        "runtimes": [_lock_row(ent, r, "runtime") for r in rts],
+        "channels": _lock_row(ent, channels, "channels") if channels is not None else None,
+        "retention_days": (
+            _lock_row(ent, retention_days, "retention_days")
+            if retention_days is not None
+            else None
+        ),
+        "nodes": _lock_row(ent, nodes, "nodes") if nodes is not None else None,
+    }
+    return out
+
+
+def feature_label(feature: str) -> str:
+    fid = (feature or "").strip().lower()
+    return FEATURE_LABELS.get(fid, fid)
+
+
+_FEATURE_TIER_ORDER = (
+    (TIER_OSS, FREE_FEATURES),
+    (TIER_CLOUD_STARTER, STARTER_FEATURES),
+    (TIER_CLOUD_PRO, PRO_ONLY_FEATURES),
+    (TIER_ENTERPRISE, ENTERPRISE_FEATURES),
+)
+
+
+def feature_tier(feature: str) -> str:
+    fid = (feature or "").strip().lower()
+    for tier, bucket in _FEATURE_TIER_ORDER:
+        if fid in bucket:
+            return tier
+    return TIER_OSS
+
+
+_FEATURE_TIER_RANK = {
+    TIER_OSS: 0,
+    TIER_CLOUD_STARTER: 1,
+    TIER_CLOUD_PRO: 2,
+    TIER_ENTERPRISE: 3,
+}
+
+
+def _feature_tier_ids(feature: str) -> list[str]:
+    """Compact id-only sibling of :func:`tiers_for_feature` (just the
+    ladder of tier ids that grant ``feature``). Used to enrich the
+    feature catalog row so a matrix UI doesn't need a per-row roundtrip
+    to ``/api/entitlement/tiers-for`` to know which columns to tick."""
+    body = tiers_for_feature(feature)
+    if body is None:
+        return []
+    return [row["id"] for row in body.get("tiers", [])]
+
+
+def _runtime_tier_ids(runtime: str) -> list[str]:
+    """Compact id-only sibling of :func:`tiers_for_runtime`."""
+    body = tiers_for_runtime(runtime)
+    if body is None:
+        return []
+    return [row["id"] for row in body.get("tiers", [])]
+
+
+def _feature_spec_row(ent: "Entitlement", fid: str) -> dict:
+    """Build the single feature row shape that ``feature_catalog()`` and
+    :func:`feature_spec` both return. Centralised so the scalar and bulk
+    accessors cannot drift (a parity test pins this)."""
+    tier = feature_tier(fid)
+    is_free = fid in FREE_FEATURES
+    allowed = ent.allows_feature(fid)
+    if is_free:
+        entitled = True
+    elif ent.expired:
+        entitled = False
+    else:
+        entitled = fid in ent.features
+    return {
+        "id": fid,
+        "label": feature_label(fid),
+        "tier": tier,
+        "tiers": _feature_tier_ids(fid),
+        "free": is_free,
+        "allowed": allowed,
+        "locked": (not is_free) and (not allowed),
+        "entitled": entitled,
+        "alias": fid in _ALIAS_FEATURES,
+    }
+
+
+def _runtime_spec_row(ent: "Entitlement", rt: str) -> dict:
+    """Build the single runtime row shape that ``runtime_catalog()`` and
+    :func:`runtime_spec` both return. Centralised so the scalar and bulk
+    accessors cannot drift (a parity test pins this)."""
+    if rt in FREE_RUNTIMES:
+        return {
+            "id": rt,
+            "label": runtime_label(rt),
+            "free": True,
+            "tier": "free",
+            "tiers": _runtime_tier_ids(rt),
+            "allowed": True,
+            "locked": False,
+            "entitled": True,
+        }
+    allowed = ent.allows_runtime(rt)
+    return {
+        "id": rt,
+        "label": runtime_label(rt),
+        "free": False,
+        "tier": "starter",
+        "tiers": _runtime_tier_ids(rt),
+        "allowed": allowed,
+        "locked": not allowed,
+        "entitled": ent.entitled_runtime(rt),
+    }
+
+
+def feature_catalog() -> list[dict]:
+    try:
+        ent = get_entitlement()
+    except Exception as exc:
+        logger.warning("entitlements: feature_catalog falling back to grace: %s", exc)
+        ent = _oss_free()
+    return [
+        _feature_spec_row(ent, fid)
+        for fid in sorted(
+            ALL_FEATURES,
+            key=lambda f: (_FEATURE_TIER_RANK.get(feature_tier(f), 9), f),
+        )
+    ]
+
+
+def runtime_catalog() -> list[dict]:
+    try:
+        ent = get_entitlement()
+    except Exception as exc:
+        logger.warning("entitlements: runtime_catalog falling back to grace: %s", exc)
+        ent = _oss_free()
+    out: list[dict] = []
+    for rt in sorted(FREE_RUNTIMES):
+        out.append(_runtime_spec_row(ent, rt))
+    for rt in sorted(PAID_RUNTIMES):
+        out.append(_runtime_spec_row(ent, rt))
+    return out
+
+
+def feature_spec(feature: str) -> dict | None:
+    """Scalar sibling of :func:`feature_catalog`: return the single
+    catalogue row for ``feature`` (case-insensitive, trimmed), or
+    ``None`` for empty / unknown ids.
+
+    Lets a feature-detail page or upgrade tooltip hydrate against one
+    feature in one round-trip instead of fetching the full catalogue
+    and filtering client-side. The returned row matches a row from
+    :func:`feature_catalog` exactly -- a parity test pins this.
+
+    Never raises: on resolver failure the row is still built against
+    the OSS-free fallback (matches the catalogue's never-crash
+    contract)."""
+    try:
+        f = (feature or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not f or f not in ALL_FEATURES:
+        return None
+    try:
+        ent = get_entitlement()
+    except Exception as exc:
+        logger.warning("entitlements: feature_spec falling back to grace: %s", exc)
+        ent = _oss_free()
+    try:
+        return _feature_spec_row(ent, f)
+    except Exception as exc:
+        logger.warning("entitlements: feature_spec row build failed: %s", exc)
+        return None
+
+
+def runtime_spec(runtime: str) -> dict | None:
+    """Scalar sibling of :func:`runtime_catalog`: return the single
+    catalogue row for ``runtime`` (canonicalised via
+    :func:`canonical_runtime`, so aliases like ``claude-code`` resolve
+    to ``claude_code``), or ``None`` for empty / unknown ids.
+
+    Lets a runtime-detail page or upgrade tooltip hydrate against one
+    runtime in one round-trip instead of fetching the full catalogue
+    and filtering client-side. The returned row matches a row from
+    :func:`runtime_catalog` exactly -- a parity test pins this.
+
+    Never raises: on resolver failure the row is still built against
+    the OSS-free fallback (matches the catalogue's never-crash
+    contract)."""
+    rt = canonical_runtime(runtime)
+    if not rt or rt not in ALL_RUNTIMES:
+        return None
+    try:
+        ent = get_entitlement()
+    except Exception as exc:
+        logger.warning("entitlements: runtime_spec falling back to grace: %s", exc)
+        ent = _oss_free()
+    try:
+        return _runtime_spec_row(ent, rt)
+    except Exception as exc:
+        logger.warning("entitlements: runtime_spec row build failed: %s", exc)
+        return None
+
+
+def tier_catalog() -> list[dict]:
+    try:
+        ent = get_entitlement()
+        current = ent.tier
+    except Exception as exc:
+        logger.warning("entitlements: tier_catalog falling back to OSS-free: %s", exc)
+        current = TIER_OSS
+    out: list[dict] = []
+    paid_runtimes_sorted = sorted(PAID_RUNTIMES)
+    for rank, tier in enumerate(_TIER_ORDER):
+        paid_feats = _TIER_FEATURES.get(tier, frozenset())
+        unlocks_paid = tier in _TIER_PAID_RUNTIMES
+        out.append(
+            {
+                "id": tier,
+                "label": tier_label(tier),
+                "is_paid": tier in _PAID_TIERS,
+                "is_current": tier == current,
+                "rank": rank,
+                "unlocks_paid_runtimes": unlocks_paid,
+                "retention_days": _TIER_RETENTION_DAYS.get(tier, 7),
+                "channel_limit": _TIER_CHANNEL_LIMIT.get(tier, _FREE_CHANNEL_LIMIT),
+                "node_limit": _TIER_NODE_LIMIT.get(tier, _FREE_NODE_LIMIT),
+                "features": sorted(paid_feats),
+                "runtimes": list(paid_runtimes_sorted) if unlocks_paid else [],
+            }
+        )
+    return out
+
+
+def tier_spec(tier: str) -> dict | None:
+    """Scalar variant of :func:`tier_catalog`: full descriptor for a single
+    tier in one shot.
+
+    Catalogue-derived, user-context-free — the answer is identical in grace
+    and enforce mode and does not depend on the resolved entitlement. The
+    only resolution-dependent field is ``is_current`` (whether *this* install
+    is on the named tier today); resolution failures degrade to
+    ``is_current=False`` so the row still renders.
+
+    Returns ``None`` for empty / unknown tier ids (caller renders "unknown
+    tier" / 404) and never raises.
+
+    Each entry mirrors a row from ``tier_catalog`` exactly so a pricing-page
+    column can be hydrated off one round-trip instead of fetching the full
+    catalogue and filtering client-side::
+
+        {
+          "id":                     "<tier>",       # canonical key
+          "label":                  "<Display>",    # falls back to titlecased id
+          "is_paid":                bool,           # _PAID_TIERS membership
+          "is_current":             bool,           # this install's resolved tier
+          "rank":                   int,            # tier_rank() value (>=0)
+          "unlocks_paid_runtimes":  bool,           # PAID_RUNTIMES granted at this tier
+          "retention_days":         int | None,     # None = unlimited (Enterprise)
+          "channel_limit":          int,
+          "node_limit":             int,
+          "features":               [<id>, ...],    # paid features carried (free always granted on top)
+          "runtimes":               [<id>, ...],    # PAID_RUNTIMES carried, [] when unlocks_paid_runtimes is False
+        }
+    """
+    try:
+        t = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not t or t not in _TIER_ORDER:
+        return None
+    try:
+        ent = get_entitlement()
+        current = ent.tier
+    except Exception as exc:
+        logger.warning("entitlements: tier_spec falling back to OSS-free: %s", exc)
+        current = TIER_OSS
+    paid_feats = _TIER_FEATURES.get(t, frozenset())
+    unlocks_paid = t in _TIER_PAID_RUNTIMES
+    paid_runtimes_sorted = sorted(PAID_RUNTIMES)
+    return {
+        "id": t,
+        "label": tier_label(t),
+        "is_paid": t in _PAID_TIERS,
+        "is_current": t == current,
+        "rank": _TIER_ORDER.index(t),
+        "unlocks_paid_runtimes": unlocks_paid,
+        "retention_days": _TIER_RETENTION_DAYS.get(t, 7),
+        "channel_limit": _TIER_CHANNEL_LIMIT.get(t, _FREE_CHANNEL_LIMIT),
+        "node_limit": _TIER_NODE_LIMIT.get(t, _FREE_NODE_LIMIT),
+        "features": sorted(paid_feats),
+        "runtimes": list(paid_runtimes_sorted) if unlocks_paid else [],
+    }

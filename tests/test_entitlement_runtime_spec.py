@@ -64,7 +64,7 @@ def client(ent):
     return app.test_client()
 
 
-# ── shape ─────────────────────────────────────────────────────────────────────────────
+# ── shape ─────────────────────────────────────────────────────────────────────
 
 
 def test_spec_row_keys_match_catalog_row(ent):
@@ -87,7 +87,7 @@ def test_spec_parity_with_every_catalog_row(ent):
         assert ent.runtime_spec(rt) == row, rt
 
 
-# ── round-trip ───────────────────────────────────────────────────────────────────────────
+# ── round-trip ────────────────────────────────────────────────────────────────
 
 
 def test_every_known_runtime_round_trips(ent):
@@ -131,7 +131,7 @@ def test_alias_canonicalises_to_canonical_id(ent):
         assert spec["id"] == "claude_code"
 
 
-# ── free vs paid carriage ───────────────────────────────────────────────────────────────────
+# ── free vs paid carriage ─────────────────────────────────────────────────────
 
 
 def test_free_runtimes_carry_free_tier_and_unlocked(ent):
@@ -157,7 +157,7 @@ def test_tiers_field_matches_runtime_tier_ids(ent):
         assert row["tiers"] == ent._runtime_tier_ids(rt), rt
 
 
-# ── grace vs enforce ────────────────────────────────────────────────────────────────────────
+# ── grace vs enforce ──────────────────────────────────────────────────────────
 
 
 def test_grace_locks_nothing(ent):
@@ -195,7 +195,7 @@ def test_enforce_cloud_pro_unlocks_paid_runtimes(ent, monkeypatch, tmp_path):
         assert row["entitled"] is True, rt
 
 
-# ── never-raise ─────────────────────────────────────────────────────────────────────────────
+# ── never-raise ───────────────────────────────────────────────────────────────
 
 
 def test_never_raises_when_resolver_crashes(ent, monkeypatch):
@@ -214,7 +214,7 @@ def test_never_raises_when_resolver_crashes(ent, monkeypatch):
     assert row["free"] is True
 
 
-# ── HTTP endpoint ───────────────────────────────────────────────────────────────────────────
+# ── HTTP endpoint ─────────────────────────────────────────────────────────────
 
 
 def test_endpoint_known_runtime_returns_row(client, ent):

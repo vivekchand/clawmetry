@@ -65,7 +65,7 @@ def client(ent):
     return app.test_client()
 
 
-# ── shape ─────────────────────────────────────────────────────────────────────────────
+# ── shape ─────────────────────────────────────────────────────────────────────
 
 
 def test_spec_row_keys_match_catalog_row(ent):
@@ -88,7 +88,7 @@ def test_spec_parity_with_every_catalog_row(ent):
         assert ent.feature_spec(fid) == row, fid
 
 
-# ── round-trip ───────────────────────────────────────────────────────────────────────────
+# ── round-trip ────────────────────────────────────────────────────────────────
 
 
 def test_every_known_feature_round_trips(ent):
@@ -122,7 +122,7 @@ def test_input_is_lowercased_and_trimmed(ent):
     assert ent.feature_spec(f"  {fid}  ") == ent.feature_spec(fid)
 
 
-# ── per-bucket tier carriage ─────────────────────────────────────────────────────────────
+# ── per-bucket tier carriage ──────────────────────────────────────────────────
 
 
 def test_free_features_carry_oss_tier_and_unlocked(ent):
@@ -155,7 +155,7 @@ def test_enterprise_features_carry_enterprise_tier(ent):
         assert row["free"] is False, fid
 
 
-# ── alias flag ────────────────────────────────────────────────────────────────────────────
+# ── alias flag ────────────────────────────────────────────────────────────────
 
 
 def test_alias_flag_marks_backcompat_pro_keys(ent):
@@ -170,7 +170,7 @@ def test_alias_flag_false_for_canonical_keys(ent):
         assert row is not None and row["alias"] is False, fid
 
 
-# ── tiers ladder ──────────────────────────────────────────────────────────────────────────
+# ── tiers ladder ──────────────────────────────────────────────────────────────
 
 
 def test_tiers_field_matches_feature_tier_ids(ent):
@@ -179,7 +179,7 @@ def test_tiers_field_matches_feature_tier_ids(ent):
         assert row["tiers"] == ent._feature_tier_ids(fid), fid
 
 
-# ── grace vs enforce ────────────────────────────────────────────────────────────────────────
+# ── grace vs enforce ──────────────────────────────────────────────────────────
 
 
 def test_grace_locks_nothing(ent):
@@ -221,7 +221,7 @@ def test_enforce_cloud_pro_unlocks_paid_but_not_enterprise(ent, monkeypatch, tmp
         assert row["entitled"] is False, fid
 
 
-# ── never-raise ─────────────────────────────────────────────────────────────────────────────
+# ── never-raise ───────────────────────────────────────────────────────────────
 
 
 def test_never_raises_when_resolver_crashes(ent, monkeypatch):
@@ -240,7 +240,7 @@ def test_never_raises_when_resolver_crashes(ent, monkeypatch):
     assert row["free"] is True
 
 
-# ── HTTP endpoint ───────────────────────────────────────────────────────────────────────────
+# ── HTTP endpoint ─────────────────────────────────────────────────────────────
 
 
 def test_endpoint_known_feature_returns_row(client, ent):
