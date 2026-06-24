@@ -262,6 +262,17 @@ QUERY_CONTRACT: dict = {
         "backing": "query_approvals",
         "doc": "Approval queue metadata (ids, states, timestamps; no content).",
     },
+    "agent_graph": {
+        "status": STATUS_LIVE,
+        "args": {
+            "since": _arg(),
+            "until": _arg(),
+            "limit": _arg(default=500, lo=1, hi=2000),
+        },
+        "trust": TRUST_PLAINTEXT,
+        "backing": "query_agent_graph",
+        "doc": "Cross-session agent spawn graph: nodes (agent_type+id stats) + spawn edges.",
+    },
 }
 
 

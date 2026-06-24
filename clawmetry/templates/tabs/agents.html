@@ -1,0 +1,26 @@
+<div class="page" id="page-agents">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:16px;flex-wrap:wrap;">
+    <div>
+      <div style="font-size:18px;font-weight:700;color:var(--text-primary);">Agent Graph</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Who spawned whom — cross-session agent topology from span data.</div>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;">
+      <select id="agent-graph-window" onchange="loadAgentGraph()" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:6px;padding:5px 10px;color:var(--text-primary);font-size:12px;cursor:pointer;">
+        <option value="86400">24h</option>
+        <option value="604800">7d</option>
+        <option value="2592000">30d</option>
+      </select>
+      <button class="refresh-btn" onclick="loadAgentGraph()">↻</button>
+    </div>
+  </div>
+
+  <div class="card" id="agent-graph-card" style="padding:16px;min-height:420px;">
+    <div id="agent-graph-status" style="color:var(--text-muted);font-size:13px;">Loading…</div>
+    <svg id="agent-graph-svg" width="100%" viewBox="0 0 700 440" style="display:none;overflow:visible;"></svg>
+    <div id="agent-graph-legend" style="display:none;margin-top:12px;display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:var(--text-muted);"></div>
+  </div>
+
+  <div class="card" id="agent-graph-stats" style="display:none;margin-top:10px;padding:12px 16px;">
+    <div id="agent-graph-stats-inner" style="display:flex;gap:24px;flex-wrap:wrap;font-size:12px;color:var(--text-secondary);"></div>
+  </div>
+</div>

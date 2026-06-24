@@ -35,6 +35,7 @@ test enforces both directions).
 
 | Method | Status | Trust | Backing | Args | Description |
 | - | - | - | - | - | - |
+| `agent_graph` | live | plaintext | `query_agent_graph` | `since`, `until`, `limit` (default 500, range 1..2000) | Cross-session agent spawn graph: nodes (agent_type+id stats) + spawn edges. |
 | `aggregates` | live | plaintext | `query_aggregates` | `agent_id`, `since`, `until` | Per-day rollup of events/tokens/cost (aggregate counters only). |
 | `events` | live | e2e | `query_events` | `session_id`, `agent_id`, `event_type`, `since`, `until`, `limit` (default 200, range 1..5000) | Raw event rows (tool calls, messages, errors), newest first. |
 | `external_calls` | live | e2e | `query_external_calls` | `session_id`, `since`, `until`, `limit` (default 200, range 1..2000) | External (non-LLM) API calls captured by the interceptor. |
@@ -53,4 +54,4 @@ test enforces both directions).
 | `session` | planned | e2e | `query_sessions_table` | `session_id` (required) | Single-session detail row (title, status, outcome, totals). |
 | `usage` | planned | plaintext | `rollup_usage_daily` | `runtime`, `since`, `until` | Daily token/cost usage series (input/output/cache splits). |
 
-Live methods: 12. Planned methods: 5.
+Live methods: 13. Planned methods: 5.
