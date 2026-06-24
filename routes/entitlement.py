@@ -155,6 +155,15 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                          row or feature tooltip needs).
   GET  /api/runtimes                  -- the full runtime catalog.
   GET  /api/tiers                     -- the full tier ladder with per-tier metadata.
+  GET  /api/entitlement/tier-spec     -- scalar sibling of ``/api/tiers``:
+                                         full per-tier descriptor for one
+                                         ``tier=`` key (label, rank,
+                                         retention, channel/node limits,
+                                         features + paid runtimes carried)
+                                         so a pricing-page column / upsell
+                                         tooltip can hydrate off one
+                                         round-trip instead of walking the
+                                         full ladder client-side.
 """
 
 from __future__ import annotations
@@ -2419,6 +2428,38 @@ def api_tiers():
                 "enforced": False,
             }
         )
+
+
+@bp_entitlement.route("/api/entitlement/tier-spec")
+def api_entitlement_tier_spec():
+    """``GET /api/entitlement/tier-spec?tier=<id>`` -- scalar sibling of
+    ``/api/tiers``: the full per-tier descriptor for one tier id in one
+    shot, matching exactly one row from :func:`entitlements.tier_catalog`.
+
+    Lets a pricing-page column / upsell tooltip hydrate against a single
+    tier without fetching the whole ladder and filtering client-side.
+
+    - **400** when ``tier=`` is missing / blank
+    - **404** when the id is not a known tier (catalogue-derived; the
+      id is echoed in the body so the caller can render "unknown tier")
+    - **Never 5xxs**: a resolver failure short-circuits to the OSS-free
+      shape (``is_current=False`` for the resolved fields) but still
+      returns the catalogue row for the requested tier.
+    """
+    raw = request.args.get("tier")
+    tier = (raw or "").strip().lower()
+    if not tier:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        body = _ent.tier_spec(tier)
+        if body is None:
+            return jsonify({"error": "unknown tier", "tier": tier}), 404
+        return jsonify(body)
+    except Exception as exc:
+        logger.warning("api_entitlement_tier_spec: error: %s", exc)
+        return jsonify({"error": "tier-spec failed"}), 500
 
 
 @bp_entitlement.route("/api/features")
