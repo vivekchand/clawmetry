@@ -164,6 +164,20 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                          tooltip can hydrate off one
                                          round-trip instead of walking the
                                          full ladder client-side.
+  GET  /api/entitlement/tier-catalog-at -- what-if sibling of the tier
+                                         ladder: returns the full
+                                         ``tier_catalog`` rows but with
+                                         ``is_current`` recomputed as if
+                                         the install were on the named
+                                         ``tier=`` instead of the live
+                                         resolved entitlement. Mirrors
+                                         ``/feature-catalog-at`` and
+                                         ``/runtime-catalog-at`` for the
+                                         tier ladder so a pricing-
+                                         comparison UI can render any
+                                         hypothetical "current tier"
+                                         without first switching the live
+                                         resolver.
 """
 
 from __future__ import annotations
@@ -1946,4 +1960,38 @@ def api_entitlement_runtime_catalog_at():
     except Exception as exc:
         logger.warning("api_entitlement_runtime_catalog_at: error: %s", exc)
         return jsonify({"error": "runtime-catalog-at failed"}), 500
+
+
+@bp_entitlement.route("/api/entitlement/tier-catalog-at")
+def api_entitlement_tier_catalog_at():
+    """``GET /api/entitlement/tier-catalog-at?tier=<id>`` -- what-if
+    sibling of the tier ladder: returns the full tier-catalog rows but
+    with ``is_current`` recomputed as if the install were on ``tier``
+    instead of the live resolved entitlement.
+
+    Row shape and ordering match :func:`entitlements.tier_catalog`
+    exactly; only the ``is_current`` boolean shifts. Lets a pricing-
+    comparison UI render the upgrade ladder from the perspective of any
+    hypothetical tier without first switching the live resolver.
+
+    - **400** when ``tier=`` is missing / blank
+    - **404** when the id is not a known tier (catalogue-derived; the
+      id is echoed in the body so the caller can render "unknown tier")
+    - **Never 5xxs**: a catalogue failure short-circuits to the OSS-floor
+      fallback inside the helper, so the endpoint still returns rows.
+    """
+    raw = request.args.get("tier")
+    tier = (raw or "").strip().lower()
+    if not tier:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        body = _ent.tier_catalog_at(tier)
+        if body is None:
+            return jsonify({"error": "unknown tier", "tier": tier}), 404
+        return jsonify({"tier": tier, "tiers": body})
+    except Exception as exc:
+        logger.warning("api_entitlement_tier_catalog_at: error: %s", exc)
+        return jsonify({"error": "tier-catalog-at failed"}), 500
 
