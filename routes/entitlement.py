@@ -155,6 +155,19 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                          row or feature tooltip needs).
   GET  /api/runtimes                  -- the full runtime catalog.
   GET  /api/tiers                     -- the full tier ladder with per-tier metadata.
+  GET  /api/entitlement/feature-spec  -- scalar sibling of ``/api/features``:
+                                         single ``feature_catalog()`` row for
+                                         ``feature=<id>`` so a feature-detail
+                                         page or upgrade tooltip can hydrate
+                                         without filtering the full catalogue
+                                         client-side.
+  GET  /api/entitlement/runtime-spec  -- scalar sibling of ``/api/runtimes``:
+                                         single ``runtime_catalog()`` row for
+                                         ``runtime=<id>`` (canonical id or
+                                         alias) so a runtime-detail page or
+                                         upgrade tooltip can hydrate without
+                                         filtering the full catalogue
+                                         client-side.
 """
 
 from __future__ import annotations
@@ -2437,6 +2450,75 @@ def api_features():
     except Exception as exc:
         logger.warning("api_features: falling back to OSS-free: %s", exc)
         return jsonify({"features": [], "grace": True, "enforced": False})
+
+
+@bp_entitlement.route("/api/entitlement/feature-spec")
+def api_entitlement_feature_spec():
+    """``GET /api/entitlement/feature-spec?feature=<id>`` -- scalar
+    sibling of ``/api/features``: return the single catalogue row a
+    feature-detail page or upgrade tooltip needs without forcing the
+    caller to fetch the full ladder and filter client-side.
+
+    Response shape matches a row from ``feature_catalog()`` exactly
+    (``id``, ``label``, ``tier``, ``tiers``, ``free``, ``allowed``,
+    ``locked``, ``entitled``, ``alias``).
+
+    - **400** when ``feature=`` is missing / blank.
+    - **404** for unknown ids (the requested id is echoed back so the
+      caller can render ``"unknown feature"``).
+    - Never 5xxs: a resolver failure still returns the catalogue row
+      built against the OSS-free fallback.
+    """
+    feat_raw = request.args.get("feature")
+    if feat_raw is None or not feat_raw.strip():
+        return jsonify({"error": "missing feature"}), 400
+    feat = feat_raw.strip().lower()
+    try:
+        from clawmetry import entitlements as _ent
+
+        row = _ent.feature_spec(feat)
+        if row is None:
+            return jsonify({"error": "unknown feature", "feature": feat}), 404
+        return jsonify(row)
+    except Exception as exc:
+        logger.warning("api_entitlement_feature_spec: error: %s", exc)
+        return jsonify({"error": "feature-spec failed", "feature": feat}), 500
+
+
+@bp_entitlement.route("/api/entitlement/runtime-spec")
+def api_entitlement_runtime_spec():
+    """``GET /api/entitlement/runtime-spec?runtime=<id>`` -- scalar
+    sibling of ``/api/runtimes``: return the single catalogue row a
+    runtime-detail page or upgrade tooltip needs without forcing the
+    caller to fetch the full ladder and filter client-side.
+
+    Accepts the canonical id (``claude_code``) or any registered alias
+    (``claude-code``) -- the response always echoes the canonical id.
+
+    Response shape matches a row from ``runtime_catalog()`` exactly
+    (``id``, ``label``, ``free``, ``tier``, ``tiers``, ``allowed``,
+    ``locked``, ``entitled``).
+
+    - **400** when ``runtime=`` is missing / blank.
+    - **404** for unknown ids (the requested id is echoed back so the
+      caller can render ``"unknown runtime"``).
+    - Never 5xxs: a resolver failure still returns the catalogue row
+      built against the OSS-free fallback.
+    """
+    rt_raw = request.args.get("runtime")
+    if rt_raw is None or not rt_raw.strip():
+        return jsonify({"error": "missing runtime"}), 400
+    rt_input = rt_raw.strip().lower()
+    try:
+        from clawmetry import entitlements as _ent
+
+        row = _ent.runtime_spec(rt_input)
+        if row is None:
+            return jsonify({"error": "unknown runtime", "runtime": rt_input}), 404
+        return jsonify(row)
+    except Exception as exc:
+        logger.warning("api_entitlement_runtime_spec: error: %s", exc)
+        return jsonify({"error": "runtime-spec failed", "runtime": rt_input}), 500
 
 
 @bp_entitlement.route("/api/license/status")

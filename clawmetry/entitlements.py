@@ -3399,37 +3399,73 @@ def _runtime_tier_ids(runtime: str) -> list[str]:
     return [row["id"] for row in body.get("tiers", [])]
 
 
+def _feature_spec_row(ent: "Entitlement", fid: str) -> dict:
+    """Build the single feature row shape that ``feature_catalog()`` and
+    :func:`feature_spec` both return. Centralised so the scalar and bulk
+    accessors cannot drift (a parity test pins this)."""
+    tier = feature_tier(fid)
+    is_free = fid in FREE_FEATURES
+    allowed = ent.allows_feature(fid)
+    if is_free:
+        entitled = True
+    elif ent.expired:
+        entitled = False
+    else:
+        entitled = fid in ent.features
+    return {
+        "id": fid,
+        "label": feature_label(fid),
+        "tier": tier,
+        "tiers": _feature_tier_ids(fid),
+        "free": is_free,
+        "allowed": allowed,
+        "locked": (not is_free) and (not allowed),
+        "entitled": entitled,
+        "alias": fid in _ALIAS_FEATURES,
+    }
+
+
+def _runtime_spec_row(ent: "Entitlement", rt: str) -> dict:
+    """Build the single runtime row shape that ``runtime_catalog()`` and
+    :func:`runtime_spec` both return. Centralised so the scalar and bulk
+    accessors cannot drift (a parity test pins this)."""
+    if rt in FREE_RUNTIMES:
+        return {
+            "id": rt,
+            "label": runtime_label(rt),
+            "free": True,
+            "tier": "free",
+            "tiers": _runtime_tier_ids(rt),
+            "allowed": True,
+            "locked": False,
+            "entitled": True,
+        }
+    allowed = ent.allows_runtime(rt)
+    return {
+        "id": rt,
+        "label": runtime_label(rt),
+        "free": False,
+        "tier": "starter",
+        "tiers": _runtime_tier_ids(rt),
+        "allowed": allowed,
+        "locked": not allowed,
+        "entitled": ent.entitled_runtime(rt),
+    }
+
+
 def feature_catalog() -> list[dict]:
     try:
         ent = get_entitlement()
     except Exception as exc:
         logger.warning("entitlements: feature_catalog falling back to grace: %s", exc)
         ent = _oss_free()
-    out: list[dict] = []
-    for fid in sorted(ALL_FEATURES, key=lambda f: (_FEATURE_TIER_RANK.get(feature_tier(f), 9), f)):
-        tier = feature_tier(fid)
-        is_free = fid in FREE_FEATURES
-        allowed = ent.allows_feature(fid)
-        if is_free:
-            entitled = True
-        elif ent.expired:
-            entitled = False
-        else:
-            entitled = fid in ent.features
-        out.append(
-            {
-                "id": fid,
-                "label": feature_label(fid),
-                "tier": tier,
-                "tiers": _feature_tier_ids(fid),
-                "free": is_free,
-                "allowed": allowed,
-                "locked": (not is_free) and (not allowed),
-                "entitled": entitled,
-                "alias": fid in _ALIAS_FEATURES,
-            }
+    return [
+        _feature_spec_row(ent, fid)
+        for fid in sorted(
+            ALL_FEATURES,
+            key=lambda f: (_FEATURE_TIER_RANK.get(feature_tier(f), 9), f),
         )
-    return out
+    ]
 
 
 def runtime_catalog() -> list[dict]:
@@ -3440,33 +3476,70 @@ def runtime_catalog() -> list[dict]:
         ent = _oss_free()
     out: list[dict] = []
     for rt in sorted(FREE_RUNTIMES):
-        out.append(
-            {
-                "id": rt,
-                "label": runtime_label(rt),
-                "free": True,
-                "tier": "free",
-                "tiers": _runtime_tier_ids(rt),
-                "allowed": True,
-                "locked": False,
-                "entitled": True,
-            }
-        )
+        out.append(_runtime_spec_row(ent, rt))
     for rt in sorted(PAID_RUNTIMES):
-        allowed = ent.allows_runtime(rt)
-        out.append(
-            {
-                "id": rt,
-                "label": runtime_label(rt),
-                "free": False,
-                "tier": "starter",
-                "tiers": _runtime_tier_ids(rt),
-                "allowed": allowed,
-                "locked": not allowed,
-                "entitled": ent.entitled_runtime(rt),
-            }
-        )
+        out.append(_runtime_spec_row(ent, rt))
     return out
+
+
+def feature_spec(feature: str) -> dict | None:
+    """Scalar sibling of :func:`feature_catalog`: return the single
+    catalogue row for ``feature`` (case-insensitive, trimmed), or
+    ``None`` for empty / unknown ids.
+
+    Lets a feature-detail page or upgrade tooltip hydrate against one
+    feature in one round-trip instead of fetching the full catalogue
+    and filtering client-side. The returned row matches a row from
+    :func:`feature_catalog` exactly -- a parity test pins this.
+
+    Never raises: on resolver failure the row is still built against
+    the OSS-free fallback (matches the catalogue's never-crash
+    contract)."""
+    try:
+        f = (feature or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not f or f not in ALL_FEATURES:
+        return None
+    try:
+        ent = get_entitlement()
+    except Exception as exc:
+        logger.warning("entitlements: feature_spec falling back to grace: %s", exc)
+        ent = _oss_free()
+    try:
+        return _feature_spec_row(ent, f)
+    except Exception as exc:
+        logger.warning("entitlements: feature_spec row build failed: %s", exc)
+        return None
+
+
+def runtime_spec(runtime: str) -> dict | None:
+    """Scalar sibling of :func:`runtime_catalog`: return the single
+    catalogue row for ``runtime`` (canonicalised via
+    :func:`canonical_runtime`, so aliases like ``claude-code`` resolve
+    to ``claude_code``), or ``None`` for empty / unknown ids.
+
+    Lets a runtime-detail page or upgrade tooltip hydrate against one
+    runtime in one round-trip instead of fetching the full catalogue
+    and filtering client-side. The returned row matches a row from
+    :func:`runtime_catalog` exactly -- a parity test pins this.
+
+    Never raises: on resolver failure the row is still built against
+    the OSS-free fallback (matches the catalogue's never-crash
+    contract)."""
+    rt = canonical_runtime(runtime)
+    if not rt or rt not in ALL_RUNTIMES:
+        return None
+    try:
+        ent = get_entitlement()
+    except Exception as exc:
+        logger.warning("entitlements: runtime_spec falling back to grace: %s", exc)
+        ent = _oss_free()
+    try:
+        return _runtime_spec_row(ent, rt)
+    except Exception as exc:
+        logger.warning("entitlements: runtime_spec row build failed: %s", exc)
+        return None
 
 
 def tier_catalog() -> list[dict]:
