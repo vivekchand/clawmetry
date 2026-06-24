@@ -3497,3 +3497,64 @@ def tier_catalog() -> list[dict]:
             }
         )
     return out
+
+
+def tier_spec(tier: str) -> dict | None:
+    """Scalar variant of :func:`tier_catalog`: full descriptor for a single
+    tier in one shot.
+
+    Catalogue-derived, user-context-free — the answer is identical in grace
+    and enforce mode and does not depend on the resolved entitlement. The
+    only resolution-dependent field is ``is_current`` (whether *this* install
+    is on the named tier today); resolution failures degrade to
+    ``is_current=False`` so the row still renders.
+
+    Returns ``None`` for empty / unknown tier ids (caller renders "unknown
+    tier" / 404) and never raises.
+
+    Each entry mirrors a row from ``tier_catalog`` exactly so a pricing-page
+    column can be hydrated off one round-trip instead of fetching the full
+    catalogue and filtering client-side::
+
+        {
+          "id":                     "<tier>",       # canonical key
+          "label":                  "<Display>",    # falls back to titlecased id
+          "is_paid":                bool,           # _PAID_TIERS membership
+          "is_current":             bool,           # this install's resolved tier
+          "rank":                   int,            # tier_rank() value (>=0)
+          "unlocks_paid_runtimes":  bool,           # PAID_RUNTIMES granted at this tier
+          "retention_days":         int | None,     # None = unlimited (Enterprise)
+          "channel_limit":          int,
+          "node_limit":             int,
+          "features":               [<id>, ...],    # paid features carried (free always granted on top)
+          "runtimes":               [<id>, ...],    # PAID_RUNTIMES carried, [] when unlocks_paid_runtimes is False
+        }
+    """
+    try:
+        t = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not t or t not in _TIER_ORDER:
+        return None
+    try:
+        ent = get_entitlement()
+        current = ent.tier
+    except Exception as exc:
+        logger.warning("entitlements: tier_spec falling back to OSS-free: %s", exc)
+        current = TIER_OSS
+    paid_feats = _TIER_FEATURES.get(t, frozenset())
+    unlocks_paid = t in _TIER_PAID_RUNTIMES
+    paid_runtimes_sorted = sorted(PAID_RUNTIMES)
+    return {
+        "id": t,
+        "label": tier_label(t),
+        "is_paid": t in _PAID_TIERS,
+        "is_current": t == current,
+        "rank": _TIER_ORDER.index(t),
+        "unlocks_paid_runtimes": unlocks_paid,
+        "retention_days": _TIER_RETENTION_DAYS.get(t, 7),
+        "channel_limit": _TIER_CHANNEL_LIMIT.get(t, _FREE_CHANNEL_LIMIT),
+        "node_limit": _TIER_NODE_LIMIT.get(t, _FREE_NODE_LIMIT),
+        "features": sorted(paid_feats),
+        "runtimes": list(paid_runtimes_sorted) if unlocks_paid else [],
+    }
