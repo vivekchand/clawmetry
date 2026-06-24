@@ -3572,6 +3572,147 @@ def tier_catalog() -> list[dict]:
     return out
 
 
+def _hypothetical_entitlement(tier: str) -> "Entitlement":
+    """Build an enforce-mode :class:`Entitlement` for a hypothetical ``tier``.
+
+    Backs :func:`feature_catalog_at` / :func:`runtime_catalog_at`: synthesises
+    the feature + runtime sets the resolver would have produced if the install
+    were on ``tier`` today, without touching the live resolved entitlement
+    (and without caching it -- callers always get a fresh row from the static
+    constant tables). ``grace`` is forced off so ``allowed`` actually reflects
+    the per-tier feature/runtime grant; a grace-on row would report everything
+    allowed and defeat the what-if purpose.
+    """
+    paid_feats = _TIER_FEATURES.get(tier, frozenset())
+    rts = (FREE_RUNTIMES | PAID_RUNTIMES) if tier in _TIER_PAID_RUNTIMES else FREE_RUNTIMES
+    return Entitlement(
+        tier=tier,
+        source="hypothetical",
+        node_limit=1,
+        expiry=None,
+        features=FREE_FEATURES | paid_feats,
+        runtimes=rts,
+        grace=False,
+    )
+
+
+def feature_catalog_at(tier: str) -> list[dict] | None:
+    """What-if sibling of :func:`feature_catalog`: catalog rows with the
+    ``allowed`` / ``locked`` / ``entitled`` fields computed as if the install
+    were on ``tier``.
+
+    The row shape is identical to :func:`feature_catalog` (same keys, same
+    ordering) so a pricing-comparison UI can swap between "current state" and
+    "if I were on Pro" without reshaping anything client-side. Catalogue-
+    derived fields (``id``, ``label``, ``tier``, ``tiers``, ``free``,
+    ``alias``) are unchanged; the resolution-dependent fields are recomputed
+    against a synthetic Entitlement built off the static per-tier feature
+    grant in :data:`_TIER_FEATURES`.
+
+    Returns ``None`` for empty / unknown tier ids (caller renders "unknown
+    tier" / 404). Never raises: a synthesis failure short-circuits to the
+    OSS-free fallback so the catalogue still renders.
+    """
+    try:
+        t = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not t or t not in _TIER_ORDER:
+        return None
+    try:
+        ent = _hypothetical_entitlement(t)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: feature_catalog_at falling back to OSS-free: %s", exc
+        )
+        ent = _oss_free()
+    out: list[dict] = []
+    for fid in sorted(
+        ALL_FEATURES,
+        key=lambda f: (_FEATURE_TIER_RANK.get(feature_tier(f), 9), f),
+    ):
+        ftier = feature_tier(fid)
+        is_free = fid in FREE_FEATURES
+        allowed = ent.allows_feature(fid)
+        if is_free:
+            entitled = True
+        elif ent.expired:
+            entitled = False
+        else:
+            entitled = fid in ent.features
+        out.append(
+            {
+                "id": fid,
+                "label": feature_label(fid),
+                "tier": ftier,
+                "tiers": _feature_tier_ids(fid),
+                "free": is_free,
+                "allowed": allowed,
+                "locked": (not is_free) and (not allowed),
+                "entitled": entitled,
+                "alias": fid in _ALIAS_FEATURES,
+            }
+        )
+    return out
+
+
+def runtime_catalog_at(tier: str) -> list[dict] | None:
+    """What-if sibling of :func:`runtime_catalog`: catalog rows with the
+    ``allowed`` / ``locked`` / ``entitled`` fields computed as if the install
+    were on ``tier``.
+
+    Mirrors :func:`feature_catalog_at` for runtimes -- same row shape as
+    :func:`runtime_catalog`, same ordering (free runtimes first, then paid,
+    alpha within each bucket). Accepts canonical ids; tier alias resolution
+    via the standard trim+lowercase pipeline matches :func:`tier_spec`.
+
+    Returns ``None`` for empty / unknown tier ids and never raises (a
+    synthesis failure short-circuits to the OSS-free fallback).
+    """
+    try:
+        t = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not t or t not in _TIER_ORDER:
+        return None
+    try:
+        ent = _hypothetical_entitlement(t)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: runtime_catalog_at falling back to OSS-free: %s", exc
+        )
+        ent = _oss_free()
+    out: list[dict] = []
+    for rt in sorted(FREE_RUNTIMES):
+        out.append(
+            {
+                "id": rt,
+                "label": runtime_label(rt),
+                "free": True,
+                "tier": "free",
+                "tiers": _runtime_tier_ids(rt),
+                "allowed": True,
+                "locked": False,
+                "entitled": True,
+            }
+        )
+    for rt in sorted(PAID_RUNTIMES):
+        allowed = ent.allows_runtime(rt)
+        out.append(
+            {
+                "id": rt,
+                "label": runtime_label(rt),
+                "free": False,
+                "tier": "starter",
+                "tiers": _runtime_tier_ids(rt),
+                "allowed": allowed,
+                "locked": not allowed,
+                "entitled": ent.entitled_runtime(rt),
+            }
+        )
+    return out
+
+
 def tier_spec(tier: str) -> dict | None:
     """Scalar variant of :func:`tier_catalog`: full descriptor for a single
     tier in one shot.
