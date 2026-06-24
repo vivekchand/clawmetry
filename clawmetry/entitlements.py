@@ -679,6 +679,46 @@ class Entitlement:
             logger.warning("entitlements: previous_tier_diff failed: %s", exc)
             return None
 
+    def next_tier_unlocks(self) -> dict | None:
+        """One-rung-up unlocks row in :func:`tier_unlocks` shape.
+
+        Convenience for ``tier_unlocks(self.next_purchasable_tier())`` so an
+        upgrade-CTA card can render the marginal "what's new at the next
+        rung" payload (with full ``tier`` / ``previous_tier`` metadata)
+        without first looking up the next purchasable tier. Returns ``None``
+        at the ceiling (no rung above to upgrade to) and never raises --
+        a resolver failure short-circuits to ``None`` so a CTA surface
+        keeps rendering instead of 500-ing.
+        """
+        try:
+            target = self.next_purchasable_tier()
+            if target is None:
+                return None
+            return tier_unlocks(target)
+        except Exception as exc:
+            logger.warning("entitlements: next_tier_unlocks failed: %s", exc)
+            return None
+
+    def previous_tier_unlocks(self) -> dict | None:
+        """One-rung-down unlocks row in :func:`tier_unlocks` shape.
+
+        Convenience for ``tier_unlocks(self.previous_purchasable_tier())`` --
+        the marginal-unlocks row of the rung immediately below current.
+        Useful for "you'd still keep X / you've already unlocked Y at your
+        current tier" copy on a downgrade confirmation card, paired with
+        :meth:`previous_tier_diff` (which carries the same marginal in
+        ``downgrade_diff`` shape). Returns ``None`` at the floor (no rung
+        below) and never raises.
+        """
+        try:
+            target = self.previous_purchasable_tier()
+            if target is None:
+                return None
+            return tier_unlocks(target)
+        except Exception as exc:
+            logger.warning("entitlements: previous_tier_unlocks failed: %s", exc)
+            return None
+
     def grace_remaining_days(self) -> int | None:
         at = enforce_at_epoch()
         if at is None:
@@ -925,6 +965,8 @@ class Entitlement:
             "prev_tier_diff": self.previous_tier_diff(),
             "next_tier_capacity_diff": self.next_tier_capacity_diff(),
             "prev_tier_capacity_diff": self.previous_tier_capacity_diff(),
+            "next_tier_unlocks": self.next_tier_unlocks(),
+            "prev_tier_unlocks": self.previous_tier_unlocks(),
         }
 
 
@@ -1338,6 +1380,26 @@ def previous_tier_diff() -> dict | None:
         return get_entitlement().previous_tier_diff()
     except Exception as exc:
         logger.warning("entitlements: previous_tier_diff (module) failed: %s", exc)
+        return None
+
+
+def next_tier_unlocks() -> dict | None:
+    """Module-level :meth:`Entitlement.next_tier_unlocks` against the resolved
+    entitlement. Never raises."""
+    try:
+        return get_entitlement().next_tier_unlocks()
+    except Exception as exc:
+        logger.warning("entitlements: next_tier_unlocks (module) failed: %s", exc)
+        return None
+
+
+def previous_tier_unlocks() -> dict | None:
+    """Module-level :meth:`Entitlement.previous_tier_unlocks` against the
+    resolved entitlement. Never raises."""
+    try:
+        return get_entitlement().previous_tier_unlocks()
+    except Exception as exc:
+        logger.warning("entitlements: previous_tier_unlocks (module) failed: %s", exc)
         return None
 
 
