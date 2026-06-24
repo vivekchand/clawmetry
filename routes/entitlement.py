@@ -2049,6 +2049,88 @@ def api_entitlement_affordable_tiers():
         )
 
 
+@bp_entitlement.route("/api/entitlement/min-tier")
+def api_entitlement_min_tier():
+    """``GET /api/entitlement/min-tier?feature=<f>`` or ``?runtime=<r>`` --
+    cheapest purchasable tier that unlocks the named feature or runtime.
+
+    Catalogue-derived, so the answer is identical in grace and enforce mode.
+    Response shape::
+
+        {
+          "key":        "feature" | "runtime",
+          "value":      "<input>",
+          "free":       <bool>,           # true when min_tier == OSS
+          "min_tier":   "<tier id>" | null,
+          "tier_label": "<Display Label>" | null,
+          "tier_rank":  <int> | null,
+        }
+
+    400 when neither ``feature`` nor ``runtime`` is supplied (or both are).
+    404 when the input id is unknown -- the caller can show a neutral
+    "not available" hint rather than pointing at a nonsense tier. Never 5xxs.
+    """
+    feature = (request.args.get("feature") or "").strip()
+    runtime = (request.args.get("runtime") or "").strip().lower()
+    if bool(feature) == bool(runtime):
+        return (
+            jsonify(
+                {
+                    "error": "exactly one of feature= or runtime= is required",
+                }
+            ),
+            400,
+        )
+    try:
+        from clawmetry import entitlements as _ent
+
+        if feature:
+            min_t = _ent.min_tier_for_feature(feature)
+            key, value = "feature", feature
+            known = feature in _ent.ALL_FEATURES
+        else:
+            min_t = _ent.min_tier_for_runtime(runtime)
+            key, value = "runtime", runtime
+            known = runtime in _ent.ALL_RUNTIMES
+        if not known:
+            return (
+                jsonify(
+                    {
+                        "key": key,
+                        "value": value,
+                        "free": False,
+                        "min_tier": None,
+                        "tier_label": None,
+                        "tier_rank": None,
+                        "error": "unknown",
+                    }
+                ),
+                404,
+            )
+        return jsonify(
+            {
+                "key": key,
+                "value": value,
+                "free": min_t == _ent.TIER_OSS,
+                "min_tier": min_t,
+                "tier_label": _ent.tier_label(min_t) if min_t else None,
+                "tier_rank": _ent.tier_rank(min_t) if min_t else None,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_min_tier: error: %s", exc)
+        return jsonify(
+            {
+                "key": "feature" if feature else "runtime",
+                "value": feature or runtime,
+                "free": False,
+                "min_tier": None,
+                "tier_label": None,
+                "tier_rank": None,
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/lock-reason-batch")
 def api_entitlement_lock_reason_batch():
     """``GET /api/entitlement/lock-reason-batch?features=a,b,c&runtimes=x,y
