@@ -65,6 +65,42 @@ _PAID_TIERS = frozenset(
     {TIER_TRIAL, TIER_CLOUD_STARTER, TIER_CLOUD_PRO, TIER_PRO, TIER_ENTERPRISE}
 )
 
+# Purchasable tiers — the rungs an upgrade CTA may point at. Trial is paid but
+# promotional (granted, not sold), so it is *excluded* from the purchasable
+# ladder. ``min_tier_for_*`` returns picks from this set so a CTA never
+# tells the operator to "upgrade to Trial".
+_PURCHASABLE_TIERS = frozenset(
+    {TIER_CLOUD_STARTER, TIER_CLOUD_PRO, TIER_PRO, TIER_ENTERPRISE}
+)
+
+# Tier rank for ordering — cheapest (0) to most capable (3). The OSS and
+# Cloud Free tiers share rank 0 (both are floor); the self-hosted Pro and
+# Cloud Pro tiers share rank 2 with Trial (functionally equivalent grants);
+# Enterprise sits alone at rank 3. Used by ``tier_rank`` and the
+# ``min_tier_for_*`` helpers so the upgrade ladder is single-sourced.
+_TIER_RANK = {
+    TIER_OSS: 0,
+    TIER_CLOUD_FREE: 0,
+    TIER_CLOUD_STARTER: 1,
+    TIER_TRIAL: 2,
+    TIER_CLOUD_PRO: 2,
+    TIER_PRO: 2,
+    TIER_ENTERPRISE: 3,
+}
+
+# Display labels for tier ids — used by upgrade-CTA copy. Mirrors the
+# ``_CM_TIER_LABEL`` map in ``clawmetry/static/js/app.js`` so the dashboard
+# and the API agree on tier wording (e.g. "Pro (Self-hosted)" vs "Pro").
+TIER_LABELS = {
+    TIER_OSS: "OSS",
+    TIER_CLOUD_FREE: "Free",
+    TIER_CLOUD_STARTER: "Starter",
+    TIER_TRIAL: "Trial",
+    TIER_CLOUD_PRO: "Pro",
+    TIER_PRO: "Pro (Self-hosted)",
+    TIER_ENTERPRISE: "Enterprise",
+}
+
 # ── Runtime catalogue ───────────────────────────────────────────────────────
 # FREE: the OpenClaw and NVIDIA NemoClaw runtimes. NeMo *governance* (policy
 # enforcement) is a separate free feature; ``nemoclaw`` here is the agent
@@ -287,6 +323,8 @@ class Entitlement:
     def to_dict(self) -> dict:
         return {
             "tier": self.tier,
+            "tier_label": tier_label(self.tier),
+            "tier_rank": tier_rank(self.tier),
             "source": self.source,
             "node_limit": self.node_limit,
             "expiry": self.expiry,
@@ -467,3 +505,90 @@ def runtime_catalog() -> list[dict]:
             }
         )
     return out
+
+
+def tier_label(tier: str) -> str:
+    """Human-readable label for ``tier``. Falls back to the id when unknown so
+    a misconfigured plan still renders with *something* rather than blowing up
+    the upgrade-CTA copy."""
+    tid = (tier or "").strip().lower()
+    return TIER_LABELS.get(tid, tid or "Unknown")
+
+
+def tier_rank(tier: str) -> int:
+    """Numeric rank for ``tier`` (0=floor, 3=ceiling). Unknown tier ids map to
+    0 so an unrecognised plan is treated as floor for ladder comparisons —
+    matches the OSS-free fallback in :func:`get_entitlement` which returns the
+    floor rather than crashing."""
+    tid = (tier or "").strip().lower()
+    return _TIER_RANK.get(tid, 0)
+
+
+def min_tier_for_feature(feature: str) -> str | None:
+    """Cheapest purchasable tier that unlocks ``feature``.
+
+    Single source of truth for "Unlock <feature> starting at <tier>" upgrade-CTA
+    copy: returns the lowest-ranked tier in :data:`_PURCHASABLE_TIERS` whose
+    feature grant first includes ``feature``. Trial is intentionally excluded
+    (it's granted, not sold), so a CTA never tells the operator to "upgrade to
+    Trial". Same-rank ties break alphabetically so the cloud path
+    (``cloud_pro``) wins over the self-hosted path (``pro``) for Pro-only
+    features — matches how /pricing positions the standard upsell.
+
+    Returns:
+        - :data:`TIER_OSS` for any feature in :data:`FREE_FEATURES`.
+        - The cheapest tier id whose grant contains ``feature``, for
+          paid/enterprise features.
+        - ``None`` for unknown or empty feature ids so the caller can render a
+          neutral "not available" hint instead of pointing at a nonsense tier.
+
+    Never raises: an empty input or an unknown id returns ``None`` rather than
+    propagating an error so a misconfigured paywall ping can't crash the
+    dashboard. Catalogue-derived, so the answer is identical in grace and
+    enforce mode (this helper answers "where would this be unlocked", not
+    "is it unlocked right now").
+    """
+    f = (feature or "").strip()
+    if not f:
+        return None
+    if f in FREE_FEATURES:
+        return TIER_OSS
+    if f not in ALL_FEATURES:
+        return None
+    purchasable = sorted(
+        _PURCHASABLE_TIERS,
+        key=lambda t: (_TIER_RANK.get(t, 99), t),
+    )
+    for tier in purchasable:
+        if f in _TIER_FEATURES.get(tier, frozenset()):
+            return tier
+    return None
+
+
+def min_tier_for_runtime(runtime: str) -> str | None:
+    """Cheapest purchasable tier that unlocks ``runtime``.
+
+    Companion to :func:`min_tier_for_feature` — the runtime-side resolver an
+    upgrade CTA on a locked runtime row reads to render "Unlock {runtime}
+    starting at {tier}" copy. Every paid runtime is granted by every paid
+    tier (there is no per-runtime tier carve-out), so for any
+    ``runtime in PAID_RUNTIMES`` the answer is the cheapest purchasable paid
+    tier (:data:`TIER_CLOUD_STARTER`). Free runtimes return :data:`TIER_OSS`;
+    unknown runtimes return ``None``.
+
+    Same never-raise / catalogue-derived posture as
+    :func:`min_tier_for_feature` so the resolver is grace/enforce-invariant
+    and safe to call from a 402 handler.
+    """
+    rt = (runtime or "").strip().lower()
+    if not rt:
+        return None
+    if rt in FREE_RUNTIMES:
+        return TIER_OSS
+    if rt not in ALL_RUNTIMES:
+        return None
+    purchasable = sorted(
+        (t for t in _TIER_PAID_RUNTIMES if t in _PURCHASABLE_TIERS),
+        key=lambda t: (_TIER_RANK.get(t, 99), t),
+    )
+    return purchasable[0] if purchasable else None

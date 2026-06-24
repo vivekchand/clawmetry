@@ -6,8 +6,9 @@ runtimes/features to surface (and, once enforcement is live, which to render
 locked behind an upgrade CTA). Backed by :mod:`clawmetry.entitlements`, which
 is the single source of truth — handlers never re-derive tier logic here.
 
-  GET /api/entitlement — the current Entitlement as JSON.
-  GET /api/runtimes    — the full runtime catalog with locked/free flags.
+  GET /api/entitlement          — the current Entitlement as JSON.
+  GET /api/runtimes             — the full runtime catalog with locked/free flags.
+  GET /api/entitlement/min-tier — cheapest tier that unlocks a feature/runtime.
 
 Side-effect-free and never-raise, so it is safe to classify ``oss-passthrough``
 on the cloud side: when no license/cloud plan is present it returns a graceful
@@ -109,6 +110,96 @@ def api_runtimes():
                 ],
                 "grace": True,
                 "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/min-tier")
+def api_entitlement_min_tier():
+    """``GET /api/entitlement/min-tier?feature=<f>`` or ``?runtime=<r>`` —
+    cheapest purchasable tier that unlocks the named feature or runtime.
+
+    The dashboard's locked-row CTA (paid runtime / paid feature) reads this to
+    render "Unlock <X> starting at <Tier>" copy off a single fetch, instead of
+    walking the catalogue client-side. Backed by
+    :func:`clawmetry.entitlements.min_tier_for_feature` /
+    :func:`min_tier_for_runtime` — catalogue-derived, so the answer is
+    identical in grace and enforce mode.
+
+    Response shape::
+
+        {
+          "key":        "feature" | "runtime",
+          "value":      "<input>",
+          "free":       <bool>,           # true when min_tier == OSS
+          "min_tier":   "<tier id>" | null,
+          "tier_label": "<Display Label>" | null,
+          "tier_rank":  <int> | null,
+        }
+
+    400 when neither ``feature`` nor ``runtime`` is supplied (or both are).
+    404 when the input id is unknown — the caller can show a neutral "not
+    available" hint rather than pointing at a nonsense tier. Never 5xxs: a
+    resolver failure short-circuits to a grace-shape ``null`` envelope so the
+    dashboard CTA keeps rendering.
+    """
+    feature = (request.args.get("feature") or "").strip()
+    runtime = (request.args.get("runtime") or "").strip().lower()
+    if bool(feature) == bool(runtime):
+        return (
+            jsonify(
+                {
+                    "error": "exactly one of feature= or runtime= is required",
+                }
+            ),
+            400,
+        )
+    try:
+        from clawmetry import entitlements as _ent
+
+        if feature:
+            min_t = _ent.min_tier_for_feature(feature)
+            key, value = "feature", feature
+            known = feature in _ent.ALL_FEATURES
+        else:
+            min_t = _ent.min_tier_for_runtime(runtime)
+            key, value = "runtime", runtime
+            known = runtime in _ent.ALL_RUNTIMES
+        if not known:
+            return (
+                jsonify(
+                    {
+                        "key": key,
+                        "value": value,
+                        "free": False,
+                        "min_tier": None,
+                        "tier_label": None,
+                        "tier_rank": None,
+                        "error": "unknown",
+                    }
+                ),
+                404,
+            )
+        return jsonify(
+            {
+                "key": key,
+                "value": value,
+                "free": min_t == _ent.TIER_OSS,
+                "min_tier": min_t,
+                "tier_label": _ent.tier_label(min_t) if min_t else None,
+                "tier_rank": _ent.tier_rank(min_t) if min_t else None,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_min_tier: error: %s", exc)
+        return jsonify(
+            {
+                "key": "feature" if feature else "runtime",
+                "value": feature or runtime,
+                "free": False,
+                "min_tier": None,
+                "tier_label": None,
+                "tier_rank": None,
             }
         )
 
