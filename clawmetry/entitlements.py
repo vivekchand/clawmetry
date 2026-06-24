@@ -1629,6 +1629,153 @@ def preview_batch() -> list[dict]:
         return []
 
 
+def _preview_row(tier: str) -> dict | None:
+    """Cumulative preview row for an arbitrary known tier.
+
+    Private builder for :func:`preview_path`: mirrors :func:`preview` but
+    accepts any id in :data:`_TIER_FEATURES` (including :data:`TIER_TRIAL`,
+    which the singular :func:`preview` rejects because it is not
+    purchasable), so a path that anchors a lateral or trial endpoint
+    still resolves the cumulative-state row. Same posture as
+    :func:`_unlocks_row` for :func:`tier_unlocks_path` -- the path
+    walker only emits these via rungs that are themselves in
+    :data:`_PURCHASABLE_TIERS`, so trial only surfaces here when the
+    destination itself is trial (the lateral branch).
+
+    Source is tagged ``"preview"`` and ``grace=False`` so concrete
+    per-tier capacity (``channel_limit``, ``retention_days``,
+    ``node_limit``) surfaces in the row -- a grace-mode preview would
+    zero those out and defeat the purpose. Returns ``None`` on unknown
+    ids and never raises.
+    """
+    try:
+        tt = (tier or "").strip().lower()
+        if tt not in _TIER_FEATURES:
+            return None
+        paid_feats = _TIER_FEATURES.get(tt, frozenset())
+        runtimes = (
+            FREE_RUNTIMES | PAID_RUNTIMES
+            if tt in _TIER_PAID_RUNTIMES
+            else FREE_RUNTIMES
+        )
+        ent = Entitlement(
+            tier=tt,
+            source="preview",
+            node_limit=1,
+            expiry=None,
+            features=FREE_FEATURES | paid_feats,
+            runtimes=runtimes,
+            grace=False,
+        )
+        return ent.to_dict()
+    except Exception as exc:
+        logger.warning("entitlements: _preview_row failed: %s", exc)
+        return None
+
+
+def preview_path(from_tier: str, to_tier: str) -> list[dict] | None:
+    """Arbitrary-endpoint stepwise cumulative-state path between two tiers.
+
+    Cumulative-state analogue of :func:`tier_path` (full ``tier_diff``
+    per rung), :func:`capacity_diff_path` (capacity-only per rung),
+    :func:`tier_unlocks_path` (marginal grants per rung) and
+    :func:`tier_locks_path` (marginal losses per rung) -- the fifth and
+    final member of the ``_path`` family, the path-shaped sibling of
+    :func:`preview_batch`. Where the four marginal/diff paths answer
+    "what *changes* at each rung", this one answers "what does the
+    resulting Entitlement *look like* at each rung" -- the cumulative
+    ``Entitlement.to_dict`` snapshot at every step between ``from_tier``
+    and ``to_tier``, so an upgrade-walkthrough surface can render the
+    "Cloud Pro: 90-day retention, unlimited channels, claude_code
+    unlocked" card at each rung off ONE round-trip without re-deriving
+    capacity in JS.
+
+    Per-rung row shape matches :func:`preview` exactly -- the full
+    ``Entitlement.to_dict`` shape with ``source="preview"`` and
+    ``grace=False`` -- so a UI that already renders a ``/preview`` row
+    needs zero new shape code to render a row off this path.
+
+    Walk semantics mirror :func:`tier_path` /
+    :func:`capacity_diff_path` / :func:`tier_unlocks_path` /
+    :func:`tier_locks_path` byte-for-byte (same ``_PURCHASABLE_TIERS``
+    filter + same sort key + same destination-sibling exclusion), so the
+    rung ``tier`` ids from this helper match the rung ``to`` ids from
+    those four helpers identically -- the five paths line up
+    rung-for-rung. Same-rank siblings strictly between the endpoints are
+    both included (matching :func:`tier_path`'s ladder shape); same-rank
+    siblings of the destination are excluded so the path terminates
+    exactly at ``to_tier``.
+
+    Direction semantics (all rows share the same cumulative-snapshot
+    shape; only the sequence changes):
+
+    * ``upgrade`` (ascending) -- rows climb cumulatively from the rung
+      above ``from_tier`` toward ``to_tier``; the natural "what does my
+      surface look like at each step up" walkthrough.
+    * ``downgrade`` (descending) -- rows shrink cumulatively rung by
+      rung; the cancellation-walkthrough counterpart.
+    * ``lateral`` (same rank, different id) -- single-row path; row
+      carries the cumulative preview at ``to_tier``.
+    * ``identity`` (``from == to``) -- empty path; no rungs to walk.
+
+    Endpoint semantics match :func:`tier_path` / :func:`tier_diff`: both
+    ids accept any entry in :data:`_TIER_FEATURES` (including
+    :data:`TIER_TRIAL`, which is not purchasable -- it is excluded from
+    the walked intermediate rungs but is a valid endpoint via the
+    lateral branch). Unknown ids on either side short-circuit to
+    ``None``.
+
+    Resolver-independent: walks the static per-tier maps, so flipping
+    enforce on yields byte-identical rows -- same property the rest of
+    the ``_path`` family guarantees.
+
+    Never raises: a resolver failure logs a warning and returns ``None``
+    so an upgrade-walkthrough surface keeps rendering instead of
+    breaking.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+        if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+            return None
+        if f == t:
+            return []
+        from_rank = _TIER_RANK.get(f, -1)
+        to_rank = _TIER_RANK.get(t, -1)
+        if from_rank == to_rank:
+            row = _preview_row(t)
+            return [row] if row is not None else []
+        ascending = to_rank > from_rank
+        if ascending:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (_TIER_RANK.get(x, -1), x),
+            )
+        else:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (-_TIER_RANK.get(x, -1), x),
+            )
+        path: list[dict] = []
+        for tid in ordered:
+            r = _TIER_RANK.get(tid, -1)
+            if ascending:
+                if r <= from_rank or r > to_rank:
+                    continue
+            else:
+                if r >= from_rank or r < to_rank:
+                    continue
+            if r == to_rank and tid != t:
+                continue
+            row = _preview_row(tid)
+            if row is not None:
+                path.append(row)
+        return path
+    except Exception as exc:
+        logger.warning("entitlements: preview_path failed: %s", exc)
+        return None
+
+
 def tier_unlocks(target_tier: str) -> dict | None:
     """Per-tier marginal unlocks: features + runtimes that first become
     available *at* ``target_tier`` -- the set difference between this
