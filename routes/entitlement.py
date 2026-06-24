@@ -2462,6 +2462,69 @@ def api_entitlement_tier_spec():
         return jsonify({"error": "tier-spec failed"}), 500
 
 
+@bp_entitlement.route("/api/entitlement/feature-catalog-at")
+def api_entitlement_feature_catalog_at():
+    """``GET /api/entitlement/feature-catalog-at?tier=<id>`` -- what-if
+    sibling of ``/api/features``: returns the same feature-catalog rows but
+    with ``allowed`` / ``locked`` / ``entitled`` computed as if the install
+    were on ``tier``.
+
+    Lets a pricing-comparison UI render the same row shape as
+    :func:`entitlements.feature_catalog` for any tier in
+    :data:`entitlements._TIER_ORDER` without first switching the live
+    resolver.
+
+    - **400** when ``tier=`` is missing / blank
+    - **404** when the id is not a known tier (catalogue-derived; the
+      id is echoed in the body so the caller can render "unknown tier")
+    - **Never 5xxs**: a resolver failure short-circuits to the OSS-free
+      fallback inside the helper, so the endpoint still returns the
+      catalogue rows.
+    """
+    raw = request.args.get("tier")
+    tier = (raw or "").strip().lower()
+    if not tier:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        body = _ent.feature_catalog_at(tier)
+        if body is None:
+            return jsonify({"error": "unknown tier", "tier": tier}), 404
+        return jsonify({"tier": tier, "features": body})
+    except Exception as exc:
+        logger.warning("api_entitlement_feature_catalog_at: error: %s", exc)
+        return jsonify({"error": "feature-catalog-at failed"}), 500
+
+
+@bp_entitlement.route("/api/entitlement/runtime-catalog-at")
+def api_entitlement_runtime_catalog_at():
+    """``GET /api/entitlement/runtime-catalog-at?tier=<id>`` -- what-if
+    sibling of ``/api/runtimes``: returns the same runtime-catalog rows
+    but with ``allowed`` / ``locked`` / ``entitled`` computed as if the
+    install were on ``tier``.
+
+    - **400** when ``tier=`` is missing / blank
+    - **404** when the id is not a known tier
+    - **Never 5xxs**: a resolver failure short-circuits to the OSS-free
+      fallback so the catalogue still renders.
+    """
+    raw = request.args.get("tier")
+    tier = (raw or "").strip().lower()
+    if not tier:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        body = _ent.runtime_catalog_at(tier)
+        if body is None:
+            return jsonify({"error": "unknown tier", "tier": tier}), 404
+        return jsonify({"tier": tier, "runtimes": body})
+    except Exception as exc:
+        logger.warning("api_entitlement_runtime_catalog_at: error: %s", exc)
+        return jsonify({"error": "runtime-catalog-at failed"}), 500
+
+
 @bp_entitlement.route("/api/features")
 def api_features():
     try:
