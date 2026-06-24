@@ -170,6 +170,16 @@ def _resolve_ollama_host() -> str:
     return "http://localhost:11434"
 
 
+def _resolve_minimax_base_url() -> str:
+    """Return the active Minimax base URL from env var or the default.
+
+    Mirrors the MINIMAX_BASE_URL env var consumed by completeSimple()
+    in openclaw/plugin-sdk/llm. Falls back to the standard Minimax API.
+    """
+    val = os.environ.get("MINIMAX_BASE_URL", "").strip()
+    return val or "https://api.minimax.chat/v1"
+
+
 def _list_ollama_models(host: str) -> list:
     """Return available Ollama model names. Never raises; returns [] on failure.
 
@@ -331,6 +341,11 @@ def _sandbox_inference_configs() -> list:
                     entry["sandboxRuntimeKind"] = json_runtime_kind
                 out.append(entry)
                 continue
+            elif provider in ("minimax", "minimax-api"):
+                provider_key = "minimax"
+                primary = f"minimax/{model}" if model else ""
+                base_url = _resolve_minimax_base_url()
+                compat = "openai"
             else:
                 provider_key = _MANAGED
                 primary = f"{_MANAGED}/{model}" if model else ""
