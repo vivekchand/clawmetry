@@ -960,6 +960,11 @@ class OpenClawAdapter(AgentAdapter):
             _fm = s.get("fastMode") if s.get("fastMode") is not None else s.get("isFastMode")
             if _fm is not None:
                 extra["fastMode"] = bool(_fm)
+            # /think reasoning-level tier (#3324): PR #94067 stores the active
+            # level (light/medium/deep) on session records; surface when present.
+            _think_level = s.get("thinkLevel") or s.get("reasoningLevel")
+            if _think_level is not None:
+                extra["thinkLevel"] = _think_level
             tok_total = int(s.get("totalTokens") or 0)
             tok_in = int(s.get("inputTokens") or 0)
             tok_out = int(s.get("outputTokens") or 0)
@@ -1124,6 +1129,12 @@ class OpenClawAdapter(AgentAdapter):
                                 if _fmval is not None:
                                     extra["fastMode"] = bool(_fmval)
                                     break
+                            # /think reasoning-level tier (#3324): PR #94067 stores
+                            # the active level (light/medium/deep) on model-turn
+                            # records; try camelCase then snake_case.
+                            _tl = obj.get("thinkLevel") or obj.get("reasoningLevel")
+                            if _tl is not None:
+                                extra["thinkLevel"] = _tl
                             # Normalized TTFR keys (#3054): also write ttfr_ms /
                             # slow_reply so callers that read the normalized form
                             # don't need to know the original key spellings.
