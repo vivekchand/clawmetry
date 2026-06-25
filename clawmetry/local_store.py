@@ -3981,14 +3981,14 @@ class LocalStore:
         nodes: list[dict] = []
         try:
             agg_sql = f"""
-                SELECT COALESCE(agent_type,'openclaw') AS at,
-                       COALESCE(agent_id,'main')       AS ai,
-                       COUNT(DISTINCT session_id)       AS sessions,
+                SELECT COALESCE(agent_type,'openclaw') AS atype,
+                       COALESCE(agent_id,'main')       AS aid,
+                       COUNT(DISTINCT session_id)       AS sess_count,
                        COUNT(*)                         AS span_count,
-                       COALESCE(SUM(cost_usd),0)        AS cost,
-                       COALESCE(SUM(COALESCE(tokens_input,0)+COALESCE(tokens_output,0)),0) AS toks
+                       COALESCE(SUM(cost_usd),0)        AS total_cost,
+                       COALESCE(SUM(COALESCE(tokens_input,0)+COALESCE(tokens_output,0)),0) AS total_toks
                 FROM spans {ts_where}
-                GROUP BY at, ai ORDER BY span_count DESC LIMIT ?
+                GROUP BY atype, aid ORDER BY span_count DESC LIMIT ?
             """
             for r in self._fetch(agg_sql, ts_params + [int(limit)]):
                 nodes.append({
