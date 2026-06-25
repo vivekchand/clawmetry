@@ -3970,3 +3970,74 @@ def runtime_spec_at(tier: str, runtime: str) -> dict | None:
     except Exception as exc:
         logger.warning("entitlements: runtime_spec_at row build failed: %s", exc)
         return None
+
+
+def lock_reason_at(
+    perspective_tier: str, item: str, *, kind: str | None = None
+) -> str | None:
+    """What-if sibling of :func:`lock_reason`: the lock-reason string for
+    ``item`` (interpreted as ``kind``) computed as if the install were on
+    ``perspective_tier``, NOT against the live resolved entitlement.
+
+    Pairs with :func:`feature_spec_at` / :func:`runtime_spec_at` /
+    :func:`tier_spec_at` -- where those return the catalog row at a
+    hypothetical tier, this returns the human-readable lock sentence the
+    paywall surface renders ("``'sso' feature requires Cloud Pro or
+    above.``"). Lets a pricing-comparison tooltip preview the lock copy
+    a downgrade would surface BEFORE the user commits, without
+    consulting the live resolver.
+
+    Synthesises a fresh :class:`Entitlement` for ``perspective_tier``
+    with ``grace=False`` and the per-tier capacity caps
+    (``_TIER_NODE_LIMIT`` / ``_TIER_CHANNEL_LIMIT`` /
+    ``_TIER_RETENTION_DAYS`` flow off ``self.tier`` already), so the
+    capacity axes (``channels`` / ``retention_days`` / ``nodes``)
+    resolve correctly at the hypothetical tier rather than against the
+    OSS single-node default the unparameterised ``_hypothetical_entitlement``
+    uses for feature/runtime-only callers.
+
+    ``kind`` follows :meth:`Entitlement.lock_reason`: ``"feature"`` /
+    ``"runtime"`` / ``"channels"`` / ``"retention_days"`` / ``"nodes"``
+    explicitly; ``None`` lets the inner method infer ``feature`` vs
+    ``runtime`` from the id (capacity axes can't be inferred, so pass
+    ``kind=`` for those).
+
+    Returns ``None`` for empty / unknown perspective tier (caller renders
+    "unknown tier" / 404), for ids the inner method considers
+    unlockable (free features / runtimes, empty keys, malformed
+    capacity counts), or when the perspective is unenforceable. Never
+    raises: a synthesis failure short-circuits to ``None`` so the
+    tooltip silently hides instead of crashing the UI.
+    """
+    try:
+        t = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not t or t not in _TIER_ORDER:
+        return None
+    try:
+        paid_feats = _TIER_FEATURES.get(t, frozenset())
+        rts = (
+            (FREE_RUNTIMES | PAID_RUNTIMES)
+            if t in _TIER_PAID_RUNTIMES
+            else FREE_RUNTIMES
+        )
+        ent = Entitlement(
+            tier=t,
+            source="hypothetical",
+            node_limit=_TIER_NODE_LIMIT.get(t, _FREE_NODE_LIMIT),
+            expiry=None,
+            features=FREE_FEATURES | paid_feats,
+            runtimes=rts,
+            grace=False,
+        )
+    except Exception as exc:
+        logger.warning(
+            "entitlements: lock_reason_at synthesis failed: %s", exc
+        )
+        return None
+    try:
+        return ent.lock_reason(item, kind=kind)
+    except Exception as exc:
+        logger.warning("entitlements: lock_reason_at lookup failed: %s", exc)
+        return None

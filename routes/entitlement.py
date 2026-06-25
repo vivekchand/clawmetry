@@ -1765,6 +1765,207 @@ def api_entitlement_lock_reason():
         )
 
 
+@bp_entitlement.route("/api/entitlement/lock-reason-at")
+def api_entitlement_lock_reason_at():
+    """``GET /api/entitlement/lock-reason-at?tier=<perspective>&<axis>=<id>``
+    -- what-if sibling of ``/api/entitlement/lock-reason``: the lock-row
+    for one item computed as if the install were on ``perspective_tier``,
+    NOT against the live resolved entitlement.
+
+    Same row shape as ``/api/entitlement/lock-reason`` -- ``key``,
+    ``kind``, ``reason``, ``locked``, ``allowed``, ``required_tier``,
+    ``required_tier_label``, ``required_tier_rank``, ``current_tier``
+    (the perspective), ``current_tier_rank``, ``upgrade_required``.
+    Lets a pricing-comparison tooltip preview the exact lock sentence a
+    downgrade-to-target would surface in one round-trip, before the
+    user commits.
+
+    Pairs with :func:`api_entitlement_feature_spec_at` /
+    :func:`api_entitlement_runtime_spec_at`: those return the catalog
+    row at a hypothetical tier; this returns the lock copy and
+    ``upgrade_required`` cue the paywall renders against that tier.
+
+    Exactly one of ``feature=`` / ``runtime=`` / ``channels=`` /
+    ``retention_days=`` / ``nodes=`` must be supplied.
+
+    - **400** when ``tier=`` is missing / blank, when no axis is
+      supplied, or when more than one axis is supplied
+    - **404** when ``tier`` is unknown (not in
+      :data:`entitlements._TIER_ORDER`). The body carries ``which`` so a
+      caller can render the right "unknown ..." message.
+    - **Never 5xxs**: a synthesis failure short-circuits to the
+      grace-shape row (``reason=null`` / ``locked=false`` /
+      ``allowed=true``) so the UI keeps rendering.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        feature = (request.args.get("feature") or "").strip().lower()
+        runtime_in = (request.args.get("runtime") or "").strip().lower()
+        (
+            channels_present,
+            channels_ok,
+            channels_n,
+            channels_raw,
+        ) = _parse_capacity_arg("channels")
+        (
+            retention_present,
+            retention_ok,
+            retention_n,
+            retention_raw,
+        ) = _parse_capacity_arg("retention_days")
+        (
+            nodes_present,
+            nodes_ok,
+            nodes_n,
+            nodes_raw,
+        ) = _parse_capacity_arg("nodes")
+
+        supplied = [
+            bool(feature),
+            bool(runtime_in),
+            channels_present,
+            retention_present,
+            nodes_present,
+        ]
+        n_supplied = sum(1 for s in supplied if s)
+        if n_supplied == 0:
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply exactly one of feature=<id>, runtime=<id>, "
+                            "channels=<int>, retention_days=<int>, or "
+                            "nodes=<int>"
+                        )
+                    }
+                ),
+                400,
+            )
+        if n_supplied > 1:
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply only one of feature=, runtime=, channels=, "
+                            "retention_days=, or nodes="
+                        )
+                    }
+                ),
+                400,
+            )
+
+        if feature:
+            key, kind = feature, "feature"
+            required = _ent.min_tier_for_feature(feature)
+            reason = _ent.lock_reason_at(tier_in, feature, kind=kind)
+            allowed = reason is None
+        elif runtime_in:
+            rt = _ent.canonical_runtime(runtime_in)
+            key, kind = rt or runtime_in, "runtime"
+            required = _ent.min_tier_for_runtime(rt) if rt else None
+            reason = _ent.lock_reason_at(tier_in, rt or runtime_in, kind=kind)
+            allowed = reason is None
+        elif channels_present:
+            key, kind = channels_raw, "channels"
+            if channels_ok:
+                required = _ent.min_tier_for_channel_count(channels_n)
+                reason = _ent.lock_reason_at(
+                    tier_in, str(channels_n), kind=kind
+                )
+                allowed = reason is None
+            else:
+                required = None
+                reason = None
+                allowed = True
+        elif retention_present:
+            key, kind = retention_raw, "retention_days"
+            if retention_ok:
+                required = _ent.min_tier_for_retention_window(retention_n)
+                reason = _ent.lock_reason_at(
+                    tier_in, str(retention_n), kind=kind
+                )
+                allowed = reason is None
+            else:
+                required = None
+                reason = None
+                allowed = True
+        else:
+            key, kind = nodes_raw, "nodes"
+            if nodes_ok:
+                required = _ent.min_tier_for_node_count(nodes_n)
+                reason = _ent.lock_reason_at(tier_in, str(nodes_n), kind=kind)
+                allowed = reason is None
+            else:
+                required = None
+                reason = None
+                allowed = True
+
+        cur_rank = _ent.tier_rank(tier_in)
+        req_rank = _ent.tier_rank(required) if required else -1
+        required_label = _ent.tier_label(required) if required else None
+        return jsonify(
+            {
+                "key": key,
+                "kind": kind,
+                "reason": reason,
+                "locked": reason is not None,
+                "allowed": allowed,
+                "required_tier": required,
+                "required_tier_label": required_label,
+                "required_tier_rank": req_rank,
+                "current_tier": tier_in,
+                "current_tier_rank": cur_rank,
+                "upgrade_required": bool(required) and req_rank > cur_rank,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_lock_reason_at: error: %s", exc)
+        feature = (request.args.get("feature") or "").strip().lower()
+        runtime_in = (request.args.get("runtime") or "").strip().lower()
+        channels_raw = (request.args.get("channels") or "").strip()
+        retention_raw = (request.args.get("retention_days") or "").strip()
+        nodes_raw = (request.args.get("nodes") or "").strip()
+        if feature:
+            key, kind = feature, "feature"
+        elif runtime_in:
+            key, kind = runtime_in, "runtime"
+        elif channels_raw:
+            key, kind = channels_raw, "channels"
+        elif retention_raw:
+            key, kind = retention_raw, "retention_days"
+        elif nodes_raw:
+            key, kind = nodes_raw, "nodes"
+        else:
+            key, kind = "", ""
+        return jsonify(
+            {
+                "key": key,
+                "kind": kind,
+                "reason": None,
+                "locked": False,
+                "allowed": True,
+                "required_tier": None,
+                "required_tier_label": None,
+                "required_tier_rank": -1,
+                "current_tier": tier_in,
+                "current_tier_rank": 0,
+                "upgrade_required": False,
+            }
+        )
+
+
 def _parse_csv_arg(name: str) -> list[str]:
     """Parse a comma-separated query arg into a normalised id list.
 
