@@ -338,6 +338,10 @@ def _dispatch(shape: str, args: dict) -> dict:
     store = _store()
     if shape == "health":
         body = store.health()
+    elif shape == "agent_graph":
+        # agent_graph returns a dict directly (nodes/edges/count), not a list,
+        # so pass it through like health rather than wrapping in {"rows": ...}.
+        body = getattr(store, _SHAPES[shape])(**args)
     else:
         method_name = _SHAPES[shape]
         rows = getattr(store, method_name)(**args)

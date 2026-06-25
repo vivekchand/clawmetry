@@ -2,22 +2,18 @@
   "_elapsed_ms": "<volatile>",
   "_shape": "agent_graph",
   "_via": "<volatile>",
-  "count": 4,
-  "rows": {
-    "_shape": "agent_graph",
-    "count": 1,
-    "edges": [],
-    "nodes": [
-      {
-        "agent_id": "main",
-        "agent_type": "openclaw",
-        "cost_usd": 0.003,
-        "id": "openclaw:main",
-        "label": "openclaw/main",
-        "session_count": 2,
-        "span_count": 3,
-        "total_tokens": 180
-      }
-    ]
-  }
+  "count": 1,
+  "edges": [],
+  "nodes": [
+    {
+      "agent_id": "main",
+      "agent_type": "openclaw",
+      "cost_usd": 0.003,
+      "id": "openclaw:main",
+      "label": "openclaw/main",
+      "session_count": 2,
+      "span_count": 3,
+      "total_tokens": 180
+    }
+  ]
 }
