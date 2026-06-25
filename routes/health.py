@@ -3458,3 +3458,44 @@ def api_version_health():
         "regression": {"detected": False},
         "_source": "unavailable",
     })
+
+
+@bp_health.route("/api/authority-violations")
+def api_authority_violations():
+    """Return recent authority-violation events from the enforcement proxy (#3305).
+
+    Query params:
+      session_id — narrow to one session
+      since      — ISO timestamp lower bound
+      limit      — max rows (default 200)
+    """
+    session_id = (request.args.get("session_id") or "").strip() or None
+    since = (request.args.get("since") or "").strip() or None
+    try:
+        limit = max(1, min(1000, int(request.args.get("limit", 200))))
+    except (TypeError, ValueError):
+        limit = 200
+
+    rows = None
+    if is_local_store_read_enabled():
+        try:
+            from routes.local_query import local_store_via_daemon
+            rows = local_store_via_daemon(
+                "query_authority_violations",
+                session_id=session_id,
+                since=since,
+                limit=limit,
+            )
+        except Exception:
+            rows = None
+
+    if rows is None:
+        try:
+            from clawmetry import local_store as _ls
+            rows = _ls.get_store().query_authority_violations(
+                session_id=session_id, since=since, limit=limit
+            )
+        except Exception:
+            rows = []
+
+    return jsonify({"violations": rows or [], "total": len(rows or [])})

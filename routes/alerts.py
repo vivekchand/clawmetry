@@ -133,6 +133,27 @@ DEFAULT_ALERT_RULES = [
             "Catches genuine spinning, not just busy productive burn."
         ),
     },
+    # #3305 (authority tracking): fires when the proxy detects a tool
+    # declaration outside the operator's allowed_tools list. Off by default
+    # because allowed_tools is empty (= no restriction) until explicitly
+    # configured. Pro-only because it requires the enforcement proxy.
+    {
+        "id":           "authority_violation_default",
+        "type":         "authority_violation",
+        "event_type":   "authority_violation",
+        "window_hours": 24,
+        "threshold":    1,
+        "channels":     ["banner"],
+        "cooldown_min": 60,
+        "enabled":      False,
+        "pro_only":     True,
+        "label":        "Agent exceeded declared authority",
+        "description": (
+            "Fires when the proxy detects a tool declaration not in the "
+            "session's allowed_tools list. Configure allowed_tools in "
+            "proxy.json to activate. Observe-only: requests are never blocked."
+        ),
+    },
     # G3 of #1708 (Wolfgang burnout): the proxy now emits a structured
     # BUDGET_EXCEEDED abort signal when the daily cap is hit. This seed
     # rule surfaces those aborts in the alerts UI as an opt-in template
