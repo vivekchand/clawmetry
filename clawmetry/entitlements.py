@@ -4079,6 +4079,137 @@ def runtime_spec_at(tier: str, runtime: str) -> dict | None:
         return None
 
 
+def feature_spec_at_batch(tier: str, features) -> dict | None:
+    """What-if + batch sibling of :func:`feature_spec_batch`: return spec
+    rows for a caller-supplied subset of feature ids, with ``allowed`` /
+    ``locked`` / ``entitled`` computed as if the install were on ``tier``.
+
+    Composes :func:`feature_spec_at` (scalar what-if) and
+    :func:`feature_spec_batch` (live batch) -- same shape as the batch
+    helper, same hypothetical perspective as the ``_at`` helper. Lets a
+    pricing-comparison matrix UI ("here is what 6 features look like on
+    Cloud Pro") hydrate the N visible rows off ONE round-trip instead of
+    N calls to :func:`feature_spec_at`.
+
+    Each returned row is byte-identical to a row from
+    :func:`feature_catalog_at` -- a parity test pins this so the scalar
+    what-if (`feature_spec_at`) and bulk what-if (`feature_catalog_at`)
+    and batch what-if accessors cannot drift.
+
+    Shape::
+
+        {
+          "features": [<spec_row>, ...],   # one per known supplied id, in supply order
+          "unknown":  ["bogus_id", ...],   # supplied ids not in ALL_FEATURES, in supply order
+        }
+
+    Returns ``None`` for empty / unknown ``tier`` (caller renders "unknown
+    tier" / 404). Supplied feature ids are normalised via
+    :func:`_normalise_csv`; an empty feature list returns
+    ``{"features": [], "unknown": []}`` -- the HTTP wrapper turns that
+    into a 400, this helper does not raise.
+
+    Never raises: a synthesis failure short-circuits to the OSS-free
+    fallback so the matrix keeps rendering.
+    """
+    try:
+        t = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not t or t not in _TIER_ORDER:
+        return None
+    feats = _normalise_csv(features)
+    try:
+        ent = _hypothetical_entitlement(t)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: feature_spec_at_batch falling back to OSS-free: %s", exc
+        )
+        ent = _oss_free()
+    rows: list[dict] = []
+    unknown: list[str] = []
+    for fid in feats:
+        if fid in ALL_FEATURES:
+            try:
+                rows.append(_feature_spec_row(ent, fid))
+            except Exception as exc:
+                logger.warning(
+                    "entitlements: feature_spec_at_batch row %r failed: %s",
+                    fid,
+                    exc,
+                )
+                unknown.append(fid)
+        else:
+            unknown.append(fid)
+    return {"features": rows, "unknown": unknown}
+
+
+def runtime_spec_at_batch(tier: str, runtimes) -> dict | None:
+    """What-if + batch sibling of :func:`runtime_spec_batch`: return spec
+    rows for a caller-supplied subset of runtime ids, with ``allowed`` /
+    ``locked`` / ``entitled`` computed as if the install were on ``tier``.
+
+    Mirrors :func:`feature_spec_at_batch` for the runtime axis; together
+    they let a pricing-comparison matrix UI hydrate a viewport's worth
+    of feature + runtime rows at a hypothetical tier off TWO calls
+    instead of N + M.
+
+    Aliases are canonicalised via :func:`canonical_runtime`
+    (``claude-code`` -> ``claude_code``) and aliases that collapse to a
+    canonical id already in the response are silently de-duplicated --
+    same behaviour as :func:`runtime_spec_batch`.
+
+    Each returned row is byte-identical to a row from
+    :func:`runtime_catalog_at` (parity-pinned by the tests below).
+
+    Shape::
+
+        {
+          "runtimes": [<spec_row>, ...],   # one per known supplied id, in (canonical) first-seen order
+          "unknown":  ["bogus_id", ...],   # supplied ids not in ALL_RUNTIMES after canonicalisation
+        }
+
+    Returns ``None`` for empty / unknown ``tier``. Never raises: a
+    synthesis failure short-circuits to the OSS-free fallback so the
+    matrix keeps rendering.
+    """
+    try:
+        t = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not t or t not in _TIER_ORDER:
+        return None
+    rts = _normalise_csv(runtimes)
+    try:
+        ent = _hypothetical_entitlement(t)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: runtime_spec_at_batch falling back to OSS-free: %s", exc
+        )
+        ent = _oss_free()
+    rows: list[dict] = []
+    unknown: list[str] = []
+    seen: set[str] = set()
+    for raw in rts:
+        rt = canonical_runtime(raw)
+        if rt and rt in ALL_RUNTIMES:
+            if rt in seen:
+                continue
+            seen.add(rt)
+            try:
+                rows.append(_runtime_spec_row(ent, rt))
+            except Exception as exc:
+                logger.warning(
+                    "entitlements: runtime_spec_at_batch row %r failed: %s",
+                    rt,
+                    exc,
+                )
+                unknown.append(raw)
+        else:
+            unknown.append(raw)
+    return {"runtimes": rows, "unknown": unknown}
+
+
 def lock_reason_at(
     perspective_tier: str, item: str, *, kind: str | None = None
 ) -> str | None:
