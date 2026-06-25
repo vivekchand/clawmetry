@@ -956,6 +956,10 @@ class OpenClawAdapter(AgentAdapter):
                 extra["nemoclawToolCatalogEnabled"] = _tc_enabled
             if _tc_kind is not None:
                 extra["openclawToolCatalogKind"] = _tc_kind
+            # Fast-mode state (#3322): PR #85104 added fastMode to session records.
+            _fm = s.get("fastMode") if s.get("fastMode") is not None else s.get("isFastMode")
+            if _fm is not None:
+                extra["fastMode"] = bool(_fm)
             tok_total = int(s.get("totalTokens") or 0)
             tok_in = int(s.get("inputTokens") or 0)
             tok_out = int(s.get("outputTokens") or 0)
@@ -1113,6 +1117,13 @@ class OpenClawAdapter(AgentAdapter):
                             _final = obj.get("talkFinal")
                             if _final is not None:
                                 extra["final"] = _final
+                            # Fast-mode state (#3322): PR #85104 emits fastMode on
+                            # event blobs; try all three spellings in precedence order.
+                            for _fmkey in ("fastMode", "isFastMode", "talkFastMode"):
+                                _fmval = obj.get(_fmkey)
+                                if _fmval is not None:
+                                    extra["fastMode"] = bool(_fmval)
+                                    break
                             # Normalized TTFR keys (#3054): also write ttfr_ms /
                             # slow_reply so callers that read the normalized form
                             # don't need to know the original key spellings.
