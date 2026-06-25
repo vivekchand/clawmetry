@@ -22241,3 +22241,91 @@ function _swimlaneRenderEvents(events) {
   });
   return rows;
 }
+
+// ── Agent Graph tab (#1012) ─────────────────────────────────────────────────
+// Fleet-level cross-session view: which agent types were active in the window
+// and their spawn relationships.  No vendor JS needed — plain SVG.
+
+var _AGENT_COLORS = {
+  openclaw: '#6366f1', 'claude-code': '#10b981', cursor: '#f59e0b',
+  codex: '#3b82f6', hermes: '#ec4899', gemini: '#8b5cf6'
+};
+
+function loadAgentGraph() {
+  var statusEl = document.getElementById('agent-graph-status');
+  var svgEl    = document.getElementById('agent-graph-svg');
+  var statsEl  = document.getElementById('agent-graph-stats');
+  if (!statusEl) return;
+  statusEl.style.display = 'block';
+  statusEl.textContent = 'Loading…';
+  if (svgEl) svgEl.style.display = 'none';
+  if (statsEl) statsEl.style.display = 'none';
+
+  var win   = parseInt((document.getElementById('agent-graph-window') || {}).value || '86400', 10);
+  var now   = Math.floor(Date.now() / 1000);
+  var since = now - win;
+  fetch('/api/local/agent-graph?since=' + since + '&until=' + now)
+    .then(function(r) { return r.ok ? r.json() : {nodes: [], edges: []}; })
+    .then(function(data) {
+      statusEl.style.display = 'none';
+      _renderAgentGraph(data.nodes || [], data.edges || []);
+    })
+    .catch(function() {
+      statusEl.textContent = 'Could not load agent graph — is the daemon running?';
+    });
+}
+
+function _renderAgentGraph(nodes, edges) {
+  var svgEl   = document.getElementById('agent-graph-svg');
+  var statsEl = document.getElementById('agent-graph-stats');
+  var statsIn = document.getElementById('agent-graph-stats-inner');
+  if (!svgEl) return;
+
+  if (!nodes.length) {
+    svgEl.style.display = 'none';
+    var statusEl = document.getElementById('agent-graph-status');
+    if (statusEl) { statusEl.style.display = 'block'; statusEl.textContent = 'No agent span data in this time window.'; }
+    return;
+  }
+
+  var W = 700, H = 420, cx = W / 2, cy = H / 2;
+  var r = Math.min(cx - 80, cy - 80);
+  var angle = nodes.length > 1 ? (2 * Math.PI / nodes.length) : 0;
+  var pos = {};
+  nodes.forEach(function(n, i) {
+    var a = nodes.length === 1 ? 0 : angle * i - Math.PI / 2;
+    pos[n.id] = {x: nodes.length === 1 ? cx : cx + r * Math.cos(a), y: nodes.length === 1 ? cy : cy + r * Math.sin(a)};
+  });
+
+  var parts = ['<defs><marker id="ag-arrow" markerWidth="7" markerHeight="7" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#6366f155"/></marker></defs>'];
+  edges.forEach(function(e) {
+    var f = pos[e.from], t = pos[e.to];
+    if (!f || !t) return;
+    parts.push('<line x1="' + f.x.toFixed(1) + '" y1="' + f.y.toFixed(1) + '" x2="' + t.x.toFixed(1) + '" y2="' + t.y.toFixed(1) + '" stroke="#6366f155" stroke-width="2" marker-end="url(#ag-arrow)"/>');
+  });
+
+  nodes.forEach(function(n) {
+    var p   = pos[n.id];
+    var col = _AGENT_COLORS[n.agent_type] || '#94a3b8';
+    var nr  = Math.max(22, Math.min(44, 22 + Math.log1p(n.span_count) * 3.5));
+    parts.push(
+      '<circle cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="' + nr.toFixed(1) + '" fill="' + col + '22" stroke="' + col + '" stroke-width="2" style="cursor:pointer" onclick="switchTab(\'tracing\')" title="' + escHtml(n.label) + ': ' + n.span_count + ' spans"/>',
+      '<text x="' + p.x.toFixed(1) + '" y="' + (p.y + 4).toFixed(1) + '" text-anchor="middle" fill="' + col + '" font-size="10" font-weight="700" pointer-events="none">' + escHtml(n.agent_type.slice(0, 10)) + '</text>',
+      '<text x="' + p.x.toFixed(1) + '" y="' + (p.y + nr + 14).toFixed(1) + '" text-anchor="middle" fill="var(--text-muted)" font-size="10" pointer-events="none">' + n.session_count + ' sess · ' + n.span_count + ' spans</text>'
+    );
+  });
+
+  svgEl.innerHTML = parts.join('');
+  svgEl.style.display = 'block';
+
+  if (statsEl && statsIn) {
+    var totalCost = nodes.reduce(function(s, n) { return s + (n.cost_usd || 0); }, 0);
+    var totalTok  = nodes.reduce(function(s, n) { return s + (n.total_tokens || 0); }, 0);
+    statsIn.innerHTML =
+      '<span><b>' + nodes.length + '</b> agent type' + (nodes.length !== 1 ? 's' : '') + '</span>' +
+      '<span><b>' + edges.length + '</b> spawn edge' + (edges.length !== 1 ? 's' : '') + '</span>' +
+      (totalCost ? '<span>$<b>' + totalCost.toFixed(4) + '</b> total cost</span>' : '') +
+      (totalTok  ? '<span><b>' + (totalTok / 1000).toFixed(1) + 'K</b> tokens</span>' : '');
+    statsEl.style.display = 'block';
+  }
+}

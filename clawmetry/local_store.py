@@ -3955,6 +3955,80 @@ class LocalStore:
         except Exception:
             return []
 
+    def query_agent_graph(
+        self,
+        *,
+        since: float | None = None,
+        until: float | None = None,
+        limit: int = 500,
+    ) -> dict:
+        """Cross-session agent spawn graph for the Agents tab (#1012).
+
+        Aggregates per-(agent_type, agent_id) node stats from all spans,
+        then derives spawn edges from ``agent.spawn`` spans joined to their
+        parent span.  Returns ``{nodes, edges, count, _shape}``.
+        """
+        ts_clauses: list[str] = []
+        ts_params: list[Any] = []
+        if since is not None:
+            ts_clauses.append("start_ts >= ?")
+            ts_params.append(float(since))
+        if until is not None:
+            ts_clauses.append("start_ts <= ?")
+            ts_params.append(float(until))
+        ts_where = ("WHERE " + " AND ".join(ts_clauses)) if ts_clauses else ""
+
+        nodes: list[dict] = []
+        try:
+            agg_sql = f"""
+                SELECT COALESCE(agent_type,'openclaw') AS atype,
+                       COALESCE(agent_id,'main')       AS aid,
+                       COUNT(DISTINCT session_id)       AS sess_count,
+                       COUNT(*)                         AS span_count,
+                       COALESCE(SUM(cost_usd),0)        AS total_cost,
+                       COALESCE(SUM(COALESCE(tokens_input,0)+COALESCE(tokens_output,0)),0) AS total_toks
+                FROM spans {ts_where}
+                GROUP BY atype, aid ORDER BY span_count DESC LIMIT ?
+            """
+            for r in self._fetch(agg_sql, ts_params + [int(limit)]):
+                nodes.append({
+                    "id": f"{r[0]}:{r[1]}",
+                    "agent_type": r[0],
+                    "agent_id": r[1],
+                    "label": f"{r[0]}/{r[1]}",
+                    "session_count": int(r[2] or 0),
+                    "span_count": int(r[3] or 0),
+                    "cost_usd": round(float(r[4] or 0), 6),
+                    "total_tokens": int(r[5] or 0),
+                })
+        except Exception:
+            pass
+
+        edges: list[dict] = []
+        try:
+            spawn_parts = ["cs.name = 'agent.spawn'"]
+            if since is not None:
+                spawn_parts.append("cs.start_ts >= ?")
+            if until is not None:
+                spawn_parts.append("cs.start_ts <= ?")
+            spawn_sql = f"""
+                SELECT DISTINCT
+                    COALESCE(ps.agent_type,'openclaw'), COALESCE(ps.agent_id,'main'),
+                    COALESCE(cs.agent_type,'openclaw'), COALESCE(cs.agent_id,'main')
+                FROM spans cs
+                JOIN spans ps ON ps.span_id = cs.parent_span_id
+                WHERE {" AND ".join(spawn_parts)}
+                LIMIT 200
+            """
+            for r in self._fetch(spawn_sql, ts_params):
+                src, dst = f"{r[0]}:{r[1]}", f"{r[2]}:{r[3]}"
+                if src != dst:
+                    edges.append({"from": src, "to": dst})
+        except Exception:
+            pass
+
+        return {"nodes": nodes, "edges": edges, "count": len(nodes), "_shape": "agent_graph"}
+
     def query_recent_spans(
         self,
         *,

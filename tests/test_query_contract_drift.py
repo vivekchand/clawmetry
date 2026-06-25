@@ -31,7 +31,7 @@ LIVE = {n for n, s in qc.QUERY_CONTRACT.items() if s["status"] == qc.STATUS_LIVE
 PLANNED = {n for n, s in qc.QUERY_CONTRACT.items() if s["status"] == qc.STATUS_PLANNED}
 
 
-# ── registry <-> _SHAPES ────────────────────────────────────────────────────
+# ── registry <-> _SHAPES ──────────────────────────────────────────────
 
 def test_every_live_method_is_a_shape_and_vice_versa():
     assert set(lq._SHAPES) == LIVE, (
@@ -75,7 +75,7 @@ def test_statuses_and_version():
         assert isinstance(spec["args"], dict), name
 
 
-# ── registry args <-> _coerce_args ──────────────────────────────────────────
+# ── registry args <-> _coerce_args ───────────────────────────────────────────
 
 def _required_args(name: str) -> dict:
     return {
@@ -132,7 +132,7 @@ def test_live_int_arg_defaults_match():
             assert capped[arg] == meta["hi"], (name, arg)
 
 
-# ── doc generation ──────────────────────────────────────────────────────────
+# ── doc generation ─────────────────────────────────────────────────────────
 
 def test_committed_doc_matches_generator():
     spec = importlib.util.spec_from_file_location(
@@ -148,7 +148,7 @@ def test_committed_doc_matches_generator():
     )
 
 
-# ── trust classes ───────────────────────────────────────────────────────────
+# ── trust classes ─────────────────────────────────────────────────────────────
 
 # Pinned on purpose: changing a method's trust class is a privacy decision
 # and must be made twice (registry + here), never as a drive-by.
@@ -171,6 +171,8 @@ EXPECTED_TRUST = {
     "traces": "e2e",
     "external_calls": "e2e",
     "search": "e2e",
+    # #1012 Agent Graph: aggregate node/edge counts only, no content.
+    "agent_graph": "plaintext",
 }
 
 

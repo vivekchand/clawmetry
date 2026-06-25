@@ -6712,6 +6712,7 @@ function switchTab(name) {
   if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
   if (name === 'selfconfig') loadSelfConfig();
   if (name === 'review') loadReview();
+  if (name === 'agents') loadAgentGraph();
 }
 
 // ── Review tab (issue #1615) ─────────────────────────────────────────────
@@ -12051,6 +12052,9 @@ DASHBOARD_HTML = r"""
         <div class="left-nav-item left-nav-item-sub" id="left-nav-tracing" data-tab="tracing" onclick="switchTab('tracing')" data-i18n-title="nav.tracing_tooltip" title="Every trace: span waterfall, tree, and agent graph">
           <span class="left-nav-label" data-i18n="nav.tracing">Tracing</span>
         </div>
+        <div class="left-nav-item left-nav-item-sub" id="left-nav-agents" data-tab="agents" onclick="switchTab('agents')" title="Cross-session agent spawn topology from span data">
+          <span class="left-nav-label">Agent Graph</span>
+        </div>
         <div class="left-nav-item left-nav-item-sub" id="left-nav-turn-anatomy" data-tab="turn-anatomy" onclick="switchTab('turn-anatomy')" title="Decompose a turn into prompt, model, tools, compaction and reply">
           <span class="left-nav-label">Turn anatomy</span>
         </div>
@@ -12192,6 +12196,9 @@ DASHBOARD_HTML = r"""
 
 <!-- TRACING (Phoenix/Arize-style: span waterfall + tree + agent graph) -->
 {% include 'tabs/tracing.html' %}
+
+<!-- AGENT GRAPH (cross-session agent spawn topology, issue #1012) -->
+{% include 'tabs/agents.html' %}
 
 <!-- TURN ANATOMY (per-turn waterfall + stalled detector, P0-3) -->
 {% include 'tabs/turn-anatomy.html' %}

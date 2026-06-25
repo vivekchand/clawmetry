@@ -253,6 +253,12 @@ def _coerce_args(shape: str, raw: dict) -> dict:
             "until":  raw.get("until"),
             "limit":  _safe_int(raw.get("limit"), default=50, lo=1, hi=500),
         }
+    if shape == "agent_graph":
+        return {
+            "since": raw.get("since"),
+            "until": raw.get("until"),
+            "limit": _safe_int(raw.get("limit"), default=500, lo=1, hi=2000),
+        }
     raise ValueError(f"unknown shape: {shape}")
 
 
@@ -332,6 +338,10 @@ def _dispatch(shape: str, args: dict) -> dict:
     store = _store()
     if shape == "health":
         body = store.health()
+    elif shape == "agent_graph":
+        # agent_graph returns a dict directly (nodes/edges/count), not a list,
+        # so pass it through like health rather than wrapping in {"rows": ...}.
+        body = getattr(store, _SHAPES[shape])(**args)
     else:
         method_name = _SHAPES[shape]
         rows = getattr(store, method_name)(**args)
@@ -456,6 +466,16 @@ def http_search():
         return jsonify(_dispatch("search", args))
     except ValueError as e:
         return jsonify({"error": str(e)[:300]}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)[:300]}), 500
+
+
+@bp_local_query.route("/api/local/agent-graph", methods=["GET"])
+def http_agent_graph():
+    """Cross-session agent spawn graph. Optional: since, until (unix seconds), limit."""
+    try:
+        args = _coerce_args("agent_graph", request.args.to_dict())
+        return jsonify(_dispatch("agent_graph", args))
     except Exception as e:
         return jsonify({"error": str(e)[:300]}), 500
 

@@ -46,6 +46,8 @@ DISPATCH_ARGS = {
     "models": {},
     "runtimes": {},
     "rollup_sessions": {},
+    # #1012 (Agent Graph tab, Phase 6 Tracing): spawn topology from spans.
+    "agent_graph": {},
 }
 
 # health() fields that legitimately vary run-to-run / machine-to-machine.
@@ -102,7 +104,7 @@ def seeded(tmp_path, monkeypatch):
     store.ingest(_ev(3, session_id="sess-b", agent_id="worker",
                      model="claude-haiku-4-5"))
 
-    # ── sessions table (search backing) ─────────────────────────────────
+    # ── sessions table (search backing) ──────────────────────────────────
     store.ingest_session({
         "session_id": "sess-a", "agent_type": "openclaw",
         "node_id": "agent+golden", "title": "golden alpha refactor",
@@ -143,7 +145,7 @@ def seeded(tmp_path, monkeypatch):
         "tokens_input": 50, "tokens_output": 10, "status": "ERROR",
     })
 
-    # ── external API calls (direct write) ────────────────────────────────
+    # ── external API calls (direct write) ─────────────────────────────────
     store.ingest_external_call({
         "ts": "2026-01-02T10:00:01Z", "host": "api.github.com",
         "url": "https://api.github.com/repos/x/y", "method": "get",
