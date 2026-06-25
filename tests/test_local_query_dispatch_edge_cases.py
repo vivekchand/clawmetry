@@ -5,15 +5,15 @@ that share its ``_coerce_args``) is the single query seam the dashboard, the
 future WS relay, and the cloud heartbeat-piggyback ``pending_queries`` all go
 through. It is a security + robustness boundary:
 
-  * a shape ALLOWLIST (only events/sessions/aggregates/health/transcript) —
+  * a shape ALLOWLIST (only events/sessions/aggregates/health/transcript) --
     an unknown shape must never reach a store method;
-  * per-shape arg coercion that DROPS unknown kwargs — the root cause of the
+  * per-shape arg coercion that DROPS unknown kwargs -- the root cause of the
     2026-05-18 "cloud shows 0 sessions" P0 was an extra ``node_id`` kwarg
     reaching a store method as a TypeError;
   * ``limit`` clamping to a safe range so a caller can't request a runaway
     scan or pass garbage.
 
-These edge cases need no seeded data — they pin the boundary itself — so they
+These edge cases need no seeded data -- they pin the boundary itself -- so they
 are fully deterministic. Hermetic store (forced direct, past any host daemon).
 """
 
@@ -51,7 +51,7 @@ def lq_app(tmp_path, monkeypatch):
         pass
 
 
-# ── shape allowlist (security) ──────────────────────────────────────────────
+# -- shape allowlist (security) -----------------------------------------------
 
 
 def test_unknown_shape_rejected_not_dispatched(lq_app):
@@ -77,19 +77,21 @@ def test_known_shapes_are_exactly_the_allowlist(lq_app):
                                # #2988 Query Spine P2: materialized-rollup
                                # backed shapes (models/runtimes plaintext
                                # aggregates; rollup_sessions e2e-classed).
-                               "models", "runtimes", "rollup_sessions"}, (
-        "the dispatch allowlist changed — review for new query surface before "
+                               "models", "runtimes", "rollup_sessions",
+                               # #1012 Agent Graph tab: cross-session spawn topology.
+                               "agent_graph"}, (
+        "the dispatch allowlist changed -- review for new query surface before "
         "widening what the relay/cloud can ask the local store to run "
         f"(got {sorted(lq._SHAPES)})"
     )
 
 
-# ── arg coercion: drop unknown kwargs (#P0 2026-05-18) ──────────────────────
+# -- arg coercion: drop unknown kwargs (#P0 2026-05-18) -----------------------
 
 
 def test_unknown_kwargs_dropped_no_typeerror(lq_app):
     """The cloud attaches routing metadata (e.g. node_id) the store methods
-    don't accept. Coercion must DROP it so the call never TypeErrors — the
+    don't accept. Coercion must DROP it so the call never TypeErrors -- the
     exact regression behind 'cloud shows 0 sessions'."""
     lq, _c = lq_app
     out = lq.relay_dispatch("events", {
@@ -109,7 +111,7 @@ def test_coerce_drops_unknown_keys_for_every_shape(lq_app):
         )
 
 
-# ── limit clamping ──────────────────────────────────────────────────────────
+# -- limit clamping -----------------------------------------------------------
 
 
 def test_limit_clamped_high_low_and_garbage(lq_app):
@@ -132,7 +134,7 @@ def test_safe_int_helper_bounds(lq_app):
     assert lq._safe_int("abc", default=7, lo=1, hi=10) == 7
 
 
-# ── required args ───────────────────────────────────────────────────────────
+# -- required args ------------------------------------------------------------
 
 
 def test_transcript_without_session_id_raises(lq_app):
@@ -141,7 +143,7 @@ def test_transcript_without_session_id_raises(lq_app):
         lq._coerce_args("transcript", {})
 
 
-# ── HTTP surface mirrors the boundary ───────────────────────────────────────
+# -- HTTP surface mirrors the boundary ----------------------------------------
 
 
 def test_http_events_limit_garbage_is_200_not_500(lq_app):
