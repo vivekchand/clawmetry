@@ -840,7 +840,7 @@ def _gateway_plugin_health() -> dict:
             ptype = entry.get("type") or entry.get("kind") or None
             if not name or not state:
                 continue
-            plugins.append({"name": name, "state": state, **({"type": ptype} if ptype else {})})
+            plugins.append({"name": name, "state": state, **({{"type": ptype}} if ptype else {})})
             summary[state] = summary.get(state, 0) + 1
         if not plugins:
             return {}
