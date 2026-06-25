@@ -282,6 +282,20 @@ class AutoRoutingConfig:
 
 
 @dataclass
+class AuthorityConfig:
+    """Observe-only agent authority tracker (#3305).
+
+    When ``allowed_tools`` is non-empty, any request that declares a tool
+    not in the list is recorded as an ``authority_violation`` event in DuckDB.
+    Requests are NEVER blocked in v1 — observe only.
+    """
+
+    enabled: bool = False
+    allowed_tools: List[str] = field(default_factory=list)
+    allowed_hosts: List[str] = field(default_factory=list)
+
+
+@dataclass
 class RoutingRule:
     """Route requests matching a pattern to a different model."""
 
@@ -308,6 +322,7 @@ class ProxyConfig:
     rate_breaker: RateBreakerConfig = field(default_factory=RateBreakerConfig)
     cost_spiral: CostSpiralConfig = field(default_factory=CostSpiralConfig)
     auto_routing: AutoRoutingConfig = field(default_factory=AutoRoutingConfig)
+    authority: AuthorityConfig = field(default_factory=AuthorityConfig)
     routing_rules: List[RoutingRule] = field(default_factory=list)
     providers: Dict[str, ProviderConfig] = field(default_factory=dict)
     log_requests: bool = False
@@ -389,6 +404,14 @@ class ProxyConfig:
                         require_no_tools=ar.get("require_no_tools", True),
                         include_heartbeat=ar.get("include_heartbeat", True),
                         downgrade_map=ar.get("downgrade_map", {}) or {},
+                    )
+
+                if "authority" in raw:
+                    av = raw["authority"]
+                    config.authority = AuthorityConfig(
+                        enabled=av.get("enabled", False),
+                        allowed_tools=list(av.get("allowed_tools") or []),
+                        allowed_hosts=list(av.get("allowed_hosts") or []),
                     )
 
                 if "routing" in raw and "rules" in raw["routing"]:
@@ -482,6 +505,11 @@ class ProxyConfig:
                 "require_no_tools": self.auto_routing.require_no_tools,
                 "include_heartbeat": self.auto_routing.include_heartbeat,
                 "downgrade_map": self.auto_routing.downgrade_map,
+            },
+            "authority": {
+                "enabled": self.authority.enabled,
+                "allowed_tools": self.authority.allowed_tools,
+                "allowed_hosts": self.authority.allowed_hosts,
             },
             "routing": {
                 "rules": [
@@ -1448,6 +1476,46 @@ class CostSpiralBreaker:
         return False, ""
 
 
+# ── Authority Checker (tool-scope enforcement, observe-only) ───────────
+
+
+class AuthorityChecker:
+    """Observe-only checker: flags when an agent declares tools outside the
+    allowed list. Never blocks — violations are written to DuckDB so the
+    dashboard can surface them. Global-config v1 (#3305)."""
+
+    def __init__(self, config: AuthorityConfig):
+        self.config = config
+
+    def check(self, session_id: str, body: dict) -> list:
+        """Return a list of violating tool names (empty → no violation).
+
+        Only active when ``enabled=True`` and ``allowed_tools`` is non-empty.
+        Zero-copy: does not mutate *body*.
+        """
+        if not self.config.enabled or not self.config.allowed_tools:
+            return []
+        allowed = set(self.config.allowed_tools)
+        tools = body.get("tools") or []
+        if not isinstance(tools, list):
+            return []
+        violations = [
+            t["name"] for t in tools
+            if isinstance(t, dict) and t.get("name") and t["name"] not in allowed
+        ]
+        if violations:
+            _emit_duckdb_event("authority_violation", session_id, {
+                "violating_tools": violations,
+                "declared_tools":  [t.get("name") for t in tools if isinstance(t, dict)],
+                "allowed_tools":   self.config.allowed_tools,
+            })
+            logger.info(
+                "authority_violation session=%s tools=%s",
+                session_id, violations,
+            )
+        return violations
+
+
 # ── Model Router ───────────────────────────────────────────────────────
 
 
@@ -1681,6 +1749,7 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
     rate_breaker = RateBreaker(config.rate_breaker, db)
     cost_spiral_breaker = CostSpiralBreaker(config.cost_spiral, db)
     auto_router = AutoRouter(config.auto_routing)
+    authority_checker = AuthorityChecker(config.authority)
     router = ModelRouter(config.routing_rules)
 
     _stats = {
@@ -2069,6 +2138,18 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
             if "downgrade_map" in ar and isinstance(ar["downgrade_map"], dict):
                 config.auto_routing.downgrade_map = ar["downgrade_map"]
 
+        if "authority" in data:
+            av = data["authority"]
+            if "enabled" in av:
+                config.authority.enabled = bool(av["enabled"])
+                authority_checker.config.enabled = config.authority.enabled
+            if "allowed_tools" in av and isinstance(av["allowed_tools"], list):
+                config.authority.allowed_tools = list(av["allowed_tools"])
+                authority_checker.config.allowed_tools = config.authority.allowed_tools
+            if "allowed_hosts" in av and isinstance(av["allowed_hosts"], list):
+                config.authority.allowed_hosts = list(av["allowed_hosts"])
+                authority_checker.config.allowed_hosts = config.authority.allowed_hosts
+
         config.save()
         db.record_event(
             "config_updated",
@@ -2227,6 +2308,12 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                 logger.warning(f"Cost spiral: {spiral_reason}")
                 _arm_backoff_pause(session_id, "cost_spiral", spiral_reason)
                 return _error_response(429, "cost_spiral", spiral_reason, provider)
+            # ── Authority checker (#3305): tool-scope observe-only ─────────
+            try:
+                authority_checker.check(session_id, body)
+            except Exception as _exc:  # noqa: BLE001 — never break enforcement
+                logger.debug("authority check skipped: %s", _exc)
+
             # ── Cache-bust risk (Headroom-inspired, #2839/#2840) ───────────
             # Detect prompts that self-bust the prompt cache: volatile content in the
             # cache-stable prefix (timestamps/UUIDs/JWTs) and prefix DRIFT turn over

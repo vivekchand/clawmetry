@@ -604,6 +604,22 @@ _DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_guardrail_events_ts      ON guardrail_events(ts)",
     "CREATE INDEX IF NOT EXISTS idx_guardrail_events_session ON guardrail_events(session_id, ts)",
+    # Issue #3305 — authority-violation events from the enforcement proxy.
+    # ``allowed_tools`` / ``declared_tools`` stored as JSON strings so no
+    # schema version bump is needed.  Idempotent (CREATE TABLE IF NOT EXISTS).
+    """
+    CREATE TABLE IF NOT EXISTS authority_violations (
+        id             VARCHAR PRIMARY KEY,
+        session_id     VARCHAR,
+        ts             VARCHAR NOT NULL,
+        tool           VARCHAR,
+        violation_type VARCHAR,
+        declared_tools VARCHAR,
+        allowed_tools  VARCHAR
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_authority_violations_ts      ON authority_violations(ts)",
+    "CREATE INDEX IF NOT EXISTS idx_authority_violations_session ON authority_violations(session_id, ts)",
     # Issue #2201 — asset registry. Evidence + review layer that turns
     # individual agent discoveries (Self-Evolve findings, useful prompts,
     # improved skills) into reviewable, reusable assets without auto-promoting
@@ -7317,6 +7333,64 @@ class LocalStore:
         params.append(int(limit))
         cols = ["id", "owner_hash", "ts", "rule_name", "verdict",
                 "session_id", "action", "latency_ms"]
+        return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
+
+    def ingest_authority_violation(self, event: dict[str, Any]) -> None:
+        """Upsert one proxy authority-violation row. Required: ``id``, ``ts``."""
+        import json as _json
+        eid = event.get("id")
+        if not eid:
+            raise ValueError("authority_violation event must include 'id'")
+        ts = event.get("ts") or datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+        declared = event.get("declared_tools")
+        allowed = event.get("allowed_tools")
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO authority_violations (
+                    id, session_id, ts, tool, violation_type, declared_tools, allowed_tools
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET
+                    tool           = COALESCE(excluded.tool,           authority_violations.tool),
+                    violation_type = COALESCE(excluded.violation_type, authority_violations.violation_type),
+                    declared_tools = COALESCE(excluded.declared_tools, authority_violations.declared_tools),
+                    allowed_tools  = COALESCE(excluded.allowed_tools,  authority_violations.allowed_tools)
+            """, [
+                str(eid),
+                event.get("session_id"),
+                ts,
+                event.get("tool"),
+                event.get("violation_type", "tool_not_in_allowed_list"),
+                _json.dumps(declared) if isinstance(declared, list) else declared,
+                _json.dumps(allowed) if isinstance(allowed, list) else allowed,
+            ])
+
+    def query_authority_violations(
+        self,
+        *,
+        session_id: str | None = None,
+        since: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Read authority-violation rows, most-recent first."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if session_id:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        if since:
+            clauses.append("ts >= ?")
+            params.append(since)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT id, session_id, ts, tool, violation_type, declared_tools, allowed_tools
+            FROM authority_violations
+            {where}
+            ORDER BY ts DESC, id
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["id", "session_id", "ts", "tool", "violation_type",
+                "declared_tools", "allowed_tools"]
         return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
 
     def query_nemoclaw_metrics(

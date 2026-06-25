@@ -840,7 +840,7 @@ def _gateway_plugin_health() -> dict:
             ptype = entry.get("type") or entry.get("kind") or None
             if not name or not state:
                 continue
-            plugins.append({"name": name, "state": state, **({"type": ptype} if ptype else {})})
+            plugins.append({"name": name, "state": state, **({{"type": ptype}} if ptype else {})})
             summary[state] = summary.get(state, 0) + 1
         if not plugins:
             return {}
@@ -965,6 +965,12 @@ class OpenClawAdapter(AgentAdapter):
             _think_level = s.get("thinkLevel") or s.get("reasoningLevel")
             if _think_level is not None:
                 extra["thinkLevel"] = _think_level
+            # SDK transcript identity target (#3323): PR #95030 adds a target
+            # identity field so consumers can identify which agent/session
+            # context a transcript belongs to.
+            _idt = s.get("target") or s.get("identityTarget")
+            if _idt is not None:
+                extra["identityTarget"] = _idt
             tok_total = int(s.get("totalTokens") or 0)
             tok_in = int(s.get("inputTokens") or 0)
             tok_out = int(s.get("outputTokens") or 0)
@@ -1073,6 +1079,12 @@ class OpenClawAdapter(AgentAdapter):
                                 _val = obj.get(_field)
                                 if _val:
                                     extra[_key] = _val
+                            # SDK transcript identity target (#3323): PR #95030
+                            # stores the target identity on event blobs so
+                            # consumers can correlate events to agent/session context.
+                            _idt = obj.get("target") or obj.get("identityTarget")
+                            if _idt is not None:
+                                extra["identityTarget"] = _idt
                             # Talk / realtime-voice / managed-room lifecycle
                             # fields (#2957). sync.py stores these top-level in
                             # the data blob for voice events (sync.py ~L4960);

@@ -16478,6 +16478,7 @@ def _get_sessions():
                     "messageCount": int(s.get("messageCount") or 0),
                     "title": s.get("title") or "",
                     "costStatus": s.get("costStatus") or "",
+                    "target": s.get("target") or s.get("identityTarget"),
                 }
             )
         _sessions_cache["data"] = sessions
