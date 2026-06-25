@@ -3827,6 +3827,61 @@ def tier_catalog_at(tier: str) -> list[dict] | None:
     return out
 
 
+def tier_spec_at(tier: str, target: str) -> dict | None:
+    """Scalar what-if sibling of :func:`tier_catalog_at`: the single tier
+    descriptor for ``target`` with ``is_current`` computed as if the install
+    were on ``tier``.
+
+    Pairs with :func:`tier_spec` (scalar against the LIVE resolved
+    entitlement) the same way :func:`tier_catalog_at` pairs with
+    :func:`tier_catalog`. Lets a pricing-comparison tooltip hydrate against
+    ONE tier descriptor from the perspective of a hypothetical install in
+    one round-trip instead of fetching the full ``tier_catalog_at`` payload
+    and filtering client-side.
+
+    The returned row matches the row from :func:`tier_catalog_at` whose
+    ``id == target`` exactly -- a parity test pins this so the scalar and
+    bulk what-if accessors cannot drift. Catalogue-derived fields (``id``,
+    ``label``, ``is_paid``, ``rank``, ``unlocks_paid_runtimes``,
+    ``retention_days``, ``channel_limit``, ``node_limit``, ``features``,
+    ``runtimes``) come straight from the static per-tier maps; only the
+    ``is_current`` boolean shifts to reflect the hypothetical perspective.
+
+    Returns ``None`` for empty / unknown ``tier`` or ``target`` ids (caller
+    renders "unknown tier" / 404). Never raises: a catalogue failure short-
+    circuits to the OSS-floor view (row with ``is_current=False``) so the
+    surface still renders.
+    """
+    try:
+        t = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not t or t not in _TIER_ORDER:
+        return None
+    try:
+        g = (target or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not g or g not in _TIER_ORDER:
+        return None
+    paid_feats = _TIER_FEATURES.get(g, frozenset())
+    unlocks_paid = g in _TIER_PAID_RUNTIMES
+    paid_runtimes_sorted = sorted(PAID_RUNTIMES)
+    return {
+        "id": g,
+        "label": tier_label(g),
+        "is_paid": g in _PAID_TIERS,
+        "is_current": g == t,
+        "rank": _TIER_ORDER.index(g),
+        "unlocks_paid_runtimes": unlocks_paid,
+        "retention_days": _TIER_RETENTION_DAYS.get(g, 7),
+        "channel_limit": _TIER_CHANNEL_LIMIT.get(g, _FREE_CHANNEL_LIMIT),
+        "node_limit": _TIER_NODE_LIMIT.get(g, _FREE_NODE_LIMIT),
+        "features": sorted(paid_feats),
+        "runtimes": list(paid_runtimes_sorted) if unlocks_paid else [],
+    }
+
+
 def feature_spec_at(tier: str, feature: str) -> dict | None:
     """Scalar what-if sibling of :func:`feature_catalog_at`: the single
     catalogue row for ``feature`` with ``allowed`` / ``locked`` /

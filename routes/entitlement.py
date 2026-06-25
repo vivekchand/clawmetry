@@ -178,6 +178,16 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                          hypothetical "current tier"
                                          without first switching the live
                                          resolver.
+  GET  /api/entitlement/tier-spec-at  -- scalar what-if sibling of
+                                         ``/tier-catalog-at``: the single
+                                         tier descriptor for ``target=`` with
+                                         ``is_current`` computed as if the
+                                         install were on ``tier=``. Lets a
+                                         pricing-comparison tooltip hydrate
+                                         against ONE tier descriptor from a
+                                         hypothetical perspective in one
+                                         round-trip instead of fetching the
+                                         full ``/tier-catalog-at`` payload.
 """
 
 from __future__ import annotations
@@ -1994,6 +2004,72 @@ def api_entitlement_tier_catalog_at():
     except Exception as exc:
         logger.warning("api_entitlement_tier_catalog_at: error: %s", exc)
         return jsonify({"error": "tier-catalog-at failed"}), 500
+
+
+@bp_entitlement.route("/api/entitlement/tier-spec-at")
+def api_entitlement_tier_spec_at():
+    """``GET /api/entitlement/tier-spec-at?tier=<id>&target=<id>`` -- scalar
+    what-if sibling of ``/api/entitlement/tier-catalog-at``: the single tier
+    descriptor for ``target`` with ``is_current`` computed as if the install
+    were on ``tier``.
+
+    Lets a pricing-comparison tooltip hydrate against ONE tier descriptor from
+    a hypothetical perspective in one round-trip instead of fetching the full
+    ``/api/entitlement/tier-catalog-at`` payload and filtering client-side.
+    The returned row matches exactly one row from
+    :func:`entitlements.tier_catalog_at`.
+
+    - **400** when either ``tier=`` or ``target=`` is missing / blank
+    - **404** when ``tier`` or ``target`` is unknown (not in
+      :data:`entitlements._TIER_ORDER`). The body carries ``which`` so a
+      caller can render the right "unknown ..." message.
+    - **Never 5xxs**: the helper internally falls back to the OSS-floor view
+      on catalogue failure, so the endpoint still returns 200 with a valid
+      row.
+    """
+    raw_tier = request.args.get("tier")
+    tier = (raw_tier or "").strip().lower()
+    if not tier:
+        return jsonify({"error": "missing tier"}), 400
+    raw_target = request.args.get("target")
+    target = (raw_target or "").strip().lower()
+    if not target:
+        return jsonify({"error": "missing target"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier not in _ent._TIER_ORDER:
+            return (
+                jsonify({"error": "unknown tier", "which": "tier", "tier": tier}),
+                404,
+            )
+        if target not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {
+                        "error": "unknown target",
+                        "which": "target",
+                        "target": target,
+                    }
+                ),
+                404,
+            )
+        body = _ent.tier_spec_at(tier, target)
+        if body is None:
+            return (
+                jsonify(
+                    {
+                        "error": "tier-spec-at failed",
+                        "tier": tier,
+                        "target": target,
+                    }
+                ),
+                404,
+            )
+        return jsonify({"tier": tier, "target": target, "spec": body})
+    except Exception as exc:
+        logger.warning("api_entitlement_tier_spec_at: error: %s", exc)
+        return jsonify({"error": "tier-spec-at failed"}), 500
 
 
 @bp_entitlement.route("/api/entitlement/feature-spec-at")
