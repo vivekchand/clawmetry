@@ -4041,3 +4041,97 @@ def lock_reason_at(
     except Exception as exc:
         logger.warning("entitlements: lock_reason_at lookup failed: %s", exc)
         return None
+
+
+def lock_reasons_at_batch(
+    perspective_tier: str,
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict | None:
+    """What-if sibling of :func:`lock_reasons_batch`: per-item lock-reason
+    rows for every supplied item across all 5 axes, computed as if the
+    install were on ``perspective_tier``.
+
+    Pairs with :func:`lock_reason_at` the same way :func:`lock_reasons_batch`
+    pairs with :func:`lock_reason` -- where the scalar what-if returns one
+    sentence for one item, this returns the full N-row matrix in one pass
+    so a pricing-comparison matrix UI can preview the lock copy a
+    downgrade-to-target would surface for many items BEFORE the user
+    commits, without N round-trips to ``/lock-reason-at``.
+
+    Synthesises a fresh :class:`Entitlement` for ``perspective_tier`` (with
+    grace=False and the per-tier capacity caps off ``_TIER_NODE_LIMIT``)
+    rather than calling :func:`_hypothetical_entitlement`, for the same
+    reason :func:`lock_reason_at` does: the unparameterised helper
+    hard-codes ``node_limit=1`` because its catalog-row callers don't
+    expose node counts, but the capacity axes here (``nodes`` etc.) must
+    resolve against the perspective tier's true cap.
+
+    Shape (byte-identical to :func:`lock_reasons_batch`)::
+
+        {
+          "features":       [<row>, ...],
+          "runtimes":       [<row>, ...],
+          "channels":       <row> | None,
+          "retention_days": <row> | None,
+          "nodes":          <row> | None,
+        }
+
+    Each ``<row>`` carries ``key``, ``kind``, ``reason``, ``locked``,
+    ``allowed``, ``required_tier``, ``required_tier_label``,
+    ``required_tier_rank`` -- the same 8 keys :func:`_lock_row` emits.
+
+    Returns ``None`` for empty / unknown perspective tier (caller renders
+    404). Never raises: a synthesis failure short-circuits to the
+    grace-shape rows so the matrix keeps rendering. Capacity axes use
+    ``None`` as the "axis not supplied" sentinel: ``retention_days=None``
+    here means *unset*, NOT *unlimited* -- matches
+    :func:`lock_reasons_batch` exactly.
+    """
+    try:
+        t = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not t or t not in _TIER_ORDER:
+        return None
+    feats = _normalise_csv(features)
+    rts = _normalise_csv(runtimes)
+    try:
+        paid_feats = _TIER_FEATURES.get(t, frozenset())
+        rt_set = (
+            (FREE_RUNTIMES | PAID_RUNTIMES)
+            if t in _TIER_PAID_RUNTIMES
+            else FREE_RUNTIMES
+        )
+        ent = Entitlement(
+            tier=t,
+            source="hypothetical",
+            node_limit=_TIER_NODE_LIMIT.get(t, _FREE_NODE_LIMIT),
+            expiry=None,
+            features=FREE_FEATURES | paid_feats,
+            runtimes=rt_set,
+            grace=False,
+        )
+    except Exception as exc:
+        logger.warning(
+            "entitlements: lock_reasons_at_batch synthesis failed: %s", exc
+        )
+        ent = _oss_free()
+    out: dict = {
+        "features": [_lock_row(ent, f, "feature") for f in feats],
+        "runtimes": [_lock_row(ent, r, "runtime") for r in rts],
+        "channels": (
+            _lock_row(ent, channels, "channels") if channels is not None else None
+        ),
+        "retention_days": (
+            _lock_row(ent, retention_days, "retention_days")
+            if retention_days is not None
+            else None
+        ),
+        "nodes": _lock_row(ent, nodes, "nodes") if nodes is not None else None,
+    }
+    return out
