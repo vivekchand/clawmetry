@@ -1014,10 +1014,6 @@ class NemoClawAdapter(AgentAdapter):
                 extra: dict = {}
                 if r[3]:
                     extra["model"] = r[3]
-                # Decode OCSF audit log payload (#3325): sync.py already ingests
-                # these events via _openshell_sandbox_logs(); surface the key OCSF
-                # fields so callers can see guardrail decisions, tool invocations,
-                # and session lifecycle entries.
                 raw_data = r[5]
                 if raw_data is not None and r[1] == "sandbox.audit_log":
                     try:
