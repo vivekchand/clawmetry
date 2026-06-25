@@ -1727,6 +1727,13 @@ def _cmd_status(args) -> None:
             _det = []
         print("  Runtimes:")
         print("    🦞 OpenClaw            ✅ syncing  (free)")
+        try:
+            from clawmetry.adapters.nemo import NemoClawAdapter as _NCA
+            _nemo = _NCA().detect()
+            if _nemo.detected:
+                print("    ⚡ NemoClaw            ✅ syncing  (free)")
+        except Exception:
+            pass
         for _r in _det:
             _n = int(_r.get("sessionCount") or 0)
             _nm = _r.get("displayName") or _r.get("name") or "runtime"
