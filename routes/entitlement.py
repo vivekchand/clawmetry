@@ -8,6 +8,7 @@ is the single source of truth — handlers never re-derive tier logic here.
 
   GET /api/entitlement — the current Entitlement as JSON.
   GET /api/runtimes    — the full runtime catalog with locked/free flags.
+  GET /api/features    — the full feature catalog with locked/free/tier flags.
 
 Side-effect-free and never-raise, so it is safe to classify ``oss-passthrough``
 on the cloud side: when no license/cloud plan is present it returns a graceful
@@ -106,6 +107,84 @@ def api_runtimes():
                         "allowed": True,
                         "locked": False,
                     },
+                ],
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/features")
+def api_features():
+    """Return the full feature catalog with per-feature ``free``/``allowed``/
+    ``locked``/``tier`` flags so the dashboard can render *every* known feature
+    in the settings + paywall surfaces — including paid ones on a free install
+    — and overlay a lock affordance on the locked rows once enforcement is on.
+
+    Feature-side sibling of ``/api/runtimes``: same envelope (``grace`` /
+    ``enforced`` mirror ``/api/entitlement``), same never-crash contract.
+
+    Shape::
+
+        {
+          "features": [
+            {"id": "sessions", "label": "Sessions",
+             "tier": "oss", "free": true,
+             "allowed": true, "locked": false},
+            {"id": "fleet", "label": "Fleet View",
+             "tier": "cloud_starter", "free": false,
+             "allowed": true,  # grace
+             "locked": false},
+            ...
+          ],
+          "grace":    true | false,   # mirrors /api/entitlement.grace
+          "enforced": true | false
+        }
+
+    Side-effect-free and never-raise: any resolution error falls back to a
+    grace OSS-free shape that still lists the free features so the UI has
+    something safe to render.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "features": _ent.feature_catalog(),
+                "grace": ent.grace,
+                "enforced": not ent.grace,
+            }
+        )
+    except Exception as exc:  # never crash the dashboard over a gate read
+        logger.warning("api_features: falling back to OSS-free: %s", exc)
+        return jsonify(
+            {
+                "features": [
+                    {
+                        "id": fid,
+                        "label": fid,
+                        "tier": "oss",
+                        "free": True,
+                        "allowed": True,
+                        "locked": False,
+                    }
+                    for fid in sorted(
+                        [
+                            "sessions",
+                            "transcripts",
+                            "usage",
+                            "brain",
+                            "flow",
+                            "tracing",
+                            "health",
+                            "logs",
+                            "crons",
+                            "channels",
+                            "nemo_governance",
+                            "overview",
+                        ]
+                    )
                 ],
                 "grace": True,
                 "enforced": False,

@@ -185,6 +185,56 @@ ENTERPRISE_FEATURES = frozenset(
 
 ALL_FEATURES = FREE_FEATURES | PAID_FEATURES | ENTERPRISE_FEATURES
 
+# Display labels for every known feature. Mirrors what /pricing and the UI
+# settings surfaces render so the dashboard and the API agree on the human-
+# readable name. The frontend falls back to the feature id when a label is
+# missing, so adding a feature without a label is safe — but please add one.
+FEATURE_LABELS = {
+    # Free / core observability
+    "sessions": "Sessions",
+    "transcripts": "Transcripts",
+    "usage": "Usage",
+    "brain": "Brain",
+    "flow": "Flow",
+    "tracing": "Tracing",
+    "health": "Health",
+    "logs": "Logs",
+    "crons": "Crons",
+    "channels": "Channels",
+    "nemo_governance": "NeMo Governance",
+    "overview": "Overview",
+    # Starter
+    "multi_runtime": "Multi-Runtime",
+    "fleet": "Fleet View",
+    "cloud_sync": "Cloud Sync",
+    "all_channels": "All Channels",
+    "approval_queue": "Approval Queue",
+    "budget_limits": "Budget Limits",
+    "per_runtime_health_timeline": "Per-Runtime Health Timeline",
+    # Pro
+    "per_run_waste_flags": "Per-Run Waste Flags",
+    "per_run_compare": "Per-Run Compare",
+    "error_triage": "Error Triage",
+    "self_evolve": "Self-Evolve",
+    "asset_registry": "Asset Registry",
+    "eval_suite": "Eval Suite",
+    "tool_policy": "Tool Policy",
+    "otel_export": "OTel Export",
+    "custom_webhooks": "Custom Webhooks",
+    "custom_runtime_ingest": "Custom Runtime Ingest",
+    "custom_alerts": "Custom Alerts",
+    "alert_webhooks": "Alert Webhooks",
+    "anomaly_detection": "Anomaly Detection",
+    "cost_optimizer": "Cost Optimizer",
+    # Enterprise
+    "siem_export": "SIEM Export",
+    "sso": "SSO",
+    "audit_logs": "Audit Logs",
+    "rbac": "RBAC",
+    "air_gapped_license": "Air-Gapped License",
+    "custom_data_residency": "Custom Data Residency",
+}
+
 # Per-tier paid feature grants (free features are always included on top).
 _TIER_FEATURES = {
     TIER_OSS: frozenset(),
@@ -466,4 +516,71 @@ def runtime_catalog() -> list[dict]:
                 "locked": not allowed,
             }
         )
+    return out
+
+
+def feature_label(feature: str) -> str:
+    """Human-readable label for ``feature``. Falls back to the id when unknown
+    so unknown plugin features still render with *something*."""
+    fid = (feature or "").strip().lower()
+    return FEATURE_LABELS.get(fid, fid)
+
+
+# Per-bucket → tier identifier the feature_catalog row carries. The order
+# here is also the catalog's row order (free first, then starter, pro, and
+# enterprise) so the UI dropdown is deterministic.
+_FEATURE_BUCKETS = (
+    (FREE_FEATURES, TIER_OSS),
+    (STARTER_FEATURES, TIER_CLOUD_STARTER),
+    (PRO_ONLY_FEATURES, TIER_CLOUD_PRO),
+    (ENTERPRISE_FEATURES, TIER_ENTERPRISE),
+)
+
+
+def feature_catalog() -> list[dict]:
+    """The full feature catalog with the entitlement-derived availability for
+    each entry. Feature-side sibling of :func:`runtime_catalog` — single source
+    of truth the UI uses to render *every* known feature (including paid ones
+    on a free install) so the locked-but-visible upgrade affordance has data
+    to render against.
+
+    Each entry::
+
+        {
+          "id":      "<feature>",            # canonical key
+          "label":   "<Display Name>",       # falls back to id
+          "tier":    "oss" | "cloud_starter" # tier the feature first appears in
+                   | "cloud_pro" | "enterprise",
+          "free":    True | False,           # FREE_FEATURES membership
+          "allowed": True | False,           # entitlement allows it now
+          "locked":  True | False,           # paid + not allowed (UI shows 🔒)
+        }
+
+    Ordering: free features first, then starter, pro-only, and enterprise —
+    each bucket sorted alphabetically so the UI surface is deterministic.
+
+    Never raises; on any resolution error every paid feature is reported as
+    ``locked=False`` (grace) to match the OSS-free fallback in
+    :func:`get_entitlement`.
+    """
+    try:
+        ent = get_entitlement()
+    except Exception as exc:  # never crash a catalog read
+        logger.warning("entitlements: feature_catalog falling back to grace: %s", exc)
+        ent = _oss_free()
+    out: list[dict] = []
+    for bucket, tier in _FEATURE_BUCKETS:
+        for fid in sorted(bucket):
+            is_free = fid in FREE_FEATURES
+            allowed = ent.allows_feature(fid)
+            out.append(
+                {
+                    "id": fid,
+                    "label": feature_label(fid),
+                    "tier": tier,
+                    "free": is_free,
+                    "allowed": allowed,
+                    "locked": (not is_free) and (not allowed),
+                }
+            )
     return out
