@@ -3542,6 +3542,113 @@ def runtime_spec(runtime: str) -> dict | None:
         return None
 
 
+def feature_spec_batch(features) -> dict:
+    """Plural sibling of :func:`feature_spec`: return spec rows for a
+    caller-supplied subset of feature ids in one pass.
+
+    Where :func:`feature_catalog` returns rows for *every* known feature,
+    this lets a paywall matrix UI hydrate only the N rows it is about to
+    render off **one** round-trip instead of N calls to
+    ``/api/entitlement/feature-spec``. Each returned row is byte-identical
+    to a row from :func:`feature_catalog` -- a parity test pins this so
+    the scalar / bulk / batch accessors cannot drift.
+
+    Shape::
+
+        {
+          "features": [<spec_row>, ...],   # one per known supplied id, in supply order
+          "unknown":  ["bogus_id", ...],   # supplied ids not in ALL_FEATURES, in supply order
+        }
+
+    Supplied ids are normalised via :func:`_normalise_csv` (whitespace
+    stripped, lowercased, duplicates dropped while preserving first-seen
+    order) so the response is stable across repeated calls. Empty input
+    returns ``{"features": [], "unknown": []}`` -- the HTTP wrapper turns
+    that into a 400, this helper does not raise.
+
+    Grace mode (the default until enforcement flips on): every row reports
+    ``locked=False`` / ``allowed=True`` -- this helper does not invent
+    locks. Never raises: a resolver failure short-circuits to the OSS-free
+    fallback so the matrix keeps rendering.
+    """
+    feats = _normalise_csv(features)
+    try:
+        ent = get_entitlement()
+    except Exception as exc:
+        logger.warning("entitlements: feature_spec_batch falling back to grace: %s", exc)
+        ent = _oss_free()
+    rows: list[dict] = []
+    unknown: list[str] = []
+    for fid in feats:
+        if fid in ALL_FEATURES:
+            try:
+                rows.append(_feature_spec_row(ent, fid))
+            except Exception as exc:
+                logger.warning(
+                    "entitlements: feature_spec_batch row %r failed: %s", fid, exc
+                )
+                unknown.append(fid)
+        else:
+            unknown.append(fid)
+    return {"features": rows, "unknown": unknown}
+
+
+def runtime_spec_batch(runtimes) -> dict:
+    """Plural sibling of :func:`runtime_spec`: return spec rows for a
+    caller-supplied subset of runtime ids in one pass.
+
+    Mirrors :func:`feature_spec_batch` for the runtime axis. Lets a
+    runtime-matrix UI ("show me the lock state for the 4 runtimes
+    detected on this node") hydrate off **one** round-trip instead of N
+    calls to ``/api/entitlement/runtime-spec``. Each returned row is
+    byte-identical to a row from :func:`runtime_catalog`.
+
+    Supplied ids are normalised via :func:`_normalise_csv` and then
+    canonicalised via :func:`canonical_runtime`, so aliases (``claude-code``
+    -> ``claude_code``) resolve the same way they do on
+    ``/api/entitlement/runtime-spec``. Duplicates that collapse after
+    aliasing (e.g. ``claude-code,claude_code``) only contribute one row;
+    later aliases that already mapped to a seen canonical id drop into
+    the response in their first-seen position.
+
+    Shape::
+
+        {
+          "runtimes": [<spec_row>, ...],   # one per known supplied id, in (canonical) first-seen order
+          "unknown":  ["bogus_id", ...],   # supplied ids not in ALL_RUNTIMES after canonicalisation
+        }
+
+    Grace mode (the default until enforcement flips on): every row reports
+    ``locked=False`` / ``allowed=True``. Never raises: a resolver failure
+    short-circuits to the OSS-free fallback so the matrix keeps rendering.
+    """
+    rts = _normalise_csv(runtimes)
+    try:
+        ent = get_entitlement()
+    except Exception as exc:
+        logger.warning("entitlements: runtime_spec_batch falling back to grace: %s", exc)
+        ent = _oss_free()
+    rows: list[dict] = []
+    unknown: list[str] = []
+    seen: set[str] = set()
+    for raw in rts:
+        rt = canonical_runtime(raw)
+        if rt and rt in ALL_RUNTIMES:
+            if rt in seen:
+                continue
+            seen.add(rt)
+            try:
+                rows.append(_runtime_spec_row(ent, rt))
+            except Exception as exc:
+                logger.warning(
+                    "entitlements: runtime_spec_batch row %r failed: %s", rt, exc
+                )
+                unknown.append(raw)
+        else:
+            unknown.append(raw)
+    return {"runtimes": rows, "unknown": unknown}
+
+
 def tier_catalog() -> list[dict]:
     try:
         ent = get_entitlement()

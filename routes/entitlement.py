@@ -2480,6 +2480,136 @@ def api_entitlement_runtime_spec():
         return jsonify({"error": "runtime-spec failed"}), 500
 
 
+@bp_entitlement.route("/api/entitlement/feature-spec-batch")
+def api_entitlement_feature_spec_batch():
+    """``GET /api/entitlement/feature-spec-batch?features=a,b,c`` -- plural
+    sibling of ``/api/entitlement/feature-spec``.
+
+    Returns the full catalogue spec row for every supplied feature id in
+    one round-trip. Mirrors the
+    ``scalar -> /feature-spec`` / ``batch -> /feature-spec-batch`` pair
+    that ``/lock-reason`` <-> ``/lock-reason-batch`` already establishes,
+    so a paywall matrix UI hydrates the N visible rows off one call
+    instead of N calls to ``/feature-spec``.
+
+    Each ``features[]`` entry is byte-identical to a row from
+    :func:`entitlements.feature_catalog` -- a parity test pins this so
+    the scalar / bulk / batch accessors cannot drift. Supplied ids are
+    normalised (whitespace stripped, lowercased, duplicates dropped while
+    preserving first-seen order). Unknown ids do not 404 the call --
+    they are echoed in ``unknown[]`` so a partially-bad caller still
+    gets rows back for the valid ids alongside a list of what was
+    dropped.
+
+    Response shape::
+
+        {
+          "features":          [<spec_row>, ...],
+          "unknown":           ["bogus_id", ...],
+          "current_tier":      "...",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    - **400** when ``features=`` is missing or empty after normalisation
+    - **Never 5xxs**: a resolver crash short-circuits to the OSS-free
+      shape (empty rows, ``current_tier=oss``, ``grace=true``).
+    """
+    try:
+        features = _parse_csv_arg("features")
+        if not features:
+            return (
+                jsonify({"error": "supply features=<csv>"}),
+                400,
+            )
+        from clawmetry import entitlements as _ent
+
+        batch = _ent.feature_spec_batch(features)
+        ent = _ent.get_entitlement()
+        batch["current_tier"] = ent.tier
+        batch["current_tier_rank"] = _ent.tier_rank(ent.tier)
+        batch["grace"] = bool(ent.grace)
+        batch["enforced"] = _ent.is_enforced()
+        return jsonify(batch)
+    except Exception as exc:
+        logger.warning("api_entitlement_feature_spec_batch: error: %s", exc)
+        return jsonify(
+            {
+                "features": [],
+                "unknown": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/runtime-spec-batch")
+def api_entitlement_runtime_spec_batch():
+    """``GET /api/entitlement/runtime-spec-batch?runtimes=a,b,c`` -- plural
+    sibling of ``/api/entitlement/runtime-spec``.
+
+    Returns the full catalogue spec row for every supplied runtime id in
+    one round-trip. Mirrors :func:`api_entitlement_feature_spec_batch` for
+    the runtime axis; together they let a Settings or paywall matrix UI
+    hydrate the per-row state ("lock badge + required tier + entitled
+    flag") for a viewport's worth of features + runtimes off TWO calls
+    instead of N + M.
+
+    Each ``runtimes[]`` entry is byte-identical to a row from
+    :func:`entitlements.runtime_catalog`. Aliases are canonicalised the
+    same way ``/api/entitlement/runtime-spec`` already does
+    (``claude-code`` -> ``claude_code``), and aliases that collapse to a
+    canonical id already in the response are silently de-duplicated so
+    the row count matches the unique-canonical-id count.
+
+    Response shape::
+
+        {
+          "runtimes":          [<spec_row>, ...],
+          "unknown":           ["bogus_id", ...],
+          "current_tier":      "...",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    - **400** when ``runtimes=`` is missing or empty after normalisation
+    - **Never 5xxs**: a resolver crash short-circuits to the OSS-free
+      shape (empty rows, ``current_tier=oss``, ``grace=true``).
+    """
+    try:
+        runtimes = _parse_csv_arg("runtimes")
+        if not runtimes:
+            return (
+                jsonify({"error": "supply runtimes=<csv>"}),
+                400,
+            )
+        from clawmetry import entitlements as _ent
+
+        batch = _ent.runtime_spec_batch(runtimes)
+        ent = _ent.get_entitlement()
+        batch["current_tier"] = ent.tier
+        batch["current_tier_rank"] = _ent.tier_rank(ent.tier)
+        batch["grace"] = bool(ent.grace)
+        batch["enforced"] = _ent.is_enforced()
+        return jsonify(batch)
+    except Exception as exc:
+        logger.warning("api_entitlement_runtime_spec_batch: error: %s", exc)
+        return jsonify(
+            {
+                "runtimes": [],
+                "unknown": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/affordable-tiers")
 def api_entitlement_affordable_tiers():
     """``GET /api/entitlement/affordable-tiers?features=a,b,c&runtimes=x,y
