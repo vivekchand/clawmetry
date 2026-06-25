@@ -81,6 +81,7 @@ so the dashboard renders NeMo sessions identically to OpenClaw sessions.
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -999,20 +1000,51 @@ class NemoClawAdapter(AgentAdapter):
             from clawmetry import local_store as _ls
             store = _ls.get_store(read_only=True)
             rows = store._fetch(
-                "SELECT id, event_type, ts, model, token_count "
+                "SELECT id, event_type, ts, model, token_count, data "
                 "FROM events WHERE agent_type = ? AND session_id = ? "
                 "ORDER BY ts ASC LIMIT ?",
                 ["nemoclaw", str(session_id), int(limit)],
             )
             for r in rows or []:
+                ts_raw = r[2]
+                try:
+                    ts_f = float(ts_raw) if ts_raw not in (None, "") else 0.0
+                except (TypeError, ValueError):
+                    ts_f = 0.0
+                extra: dict = {}
+                if r[3]:
+                    extra["model"] = r[3]
+                # Decode OCSF audit log payload (#3325): sync.py already ingests
+                # these events via _openshell_sandbox_logs(); surface the key OCSF
+                # fields so callers can see guardrail decisions, tool invocations,
+                # and session lifecycle entries.
+                raw_data = r[5]
+                if raw_data is not None and r[1] == "sandbox.audit_log":
+                    try:
+                        if isinstance(raw_data, (bytes, bytearray)):
+                            raw_data = bytes(raw_data).decode("utf-8", "replace")
+                        obj = (
+                            json.loads(raw_data) if isinstance(raw_data, str) else raw_data
+                        )
+                        if isinstance(obj, dict):
+                            for _field in (
+                                "class_uid", "type_uid", "activity_name",
+                                "verdict", "rule_name",
+                            ):
+                                _val = obj.get(_field)
+                                if _val is not None:
+                                    extra[_field] = _val
+                            extra["ocsf"] = True
+                    except Exception:
+                        pass
                 events.append(Event(
                     agent=self.name,
                     session_id=str(session_id),
                     id=str(r[0]),
                     type=str(r[1] or "event"),
-                    ts=float(r[2]) if isinstance(r[2], (int, float)) else 0.0,
+                    ts=ts_f,
                     tokens=int(r[4] or 0),
-                    extra={"model": r[3]} if r[3] else {},
+                    extra=extra,
                 ))
         except Exception as exc:
             logger.debug("nemoclaw list_events read failed: %s", exc)
@@ -1025,6 +1057,7 @@ class NemoClawAdapter(AgentAdapter):
             Capability.BRAIN,
             Capability.COST,
             Capability.SKILLS,
+            Capability.LOGS,
         }
 
 
