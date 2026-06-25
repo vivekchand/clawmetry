@@ -1996,6 +1996,143 @@ def api_entitlement_tier_catalog_at():
         return jsonify({"error": "tier-catalog-at failed"}), 500
 
 
+@bp_entitlement.route("/api/entitlement/feature-spec-at")
+def api_entitlement_feature_spec_at():
+    """``GET /api/entitlement/feature-spec-at?tier=<id>&feature=<id>`` --
+    scalar what-if sibling of ``/api/entitlement/feature-catalog-at``:
+    the single catalogue row for ``feature`` with ``allowed`` /
+    ``locked`` / ``entitled`` computed as if the install were on
+    ``tier``.
+
+    Lets a pricing-comparison tooltip hydrate against ONE feature at a
+    hypothetical tier in one round-trip instead of fetching the full
+    ``/api/entitlement/feature-catalog-at`` payload and filtering
+    client-side. The returned row matches exactly one row from
+    :func:`entitlements.feature_catalog_at`.
+
+    - **400** when either ``tier=`` or ``feature=`` is missing / blank
+    - **404** when ``tier`` is unknown (not in
+      :data:`entitlements._TIER_ORDER`) or ``feature`` is unknown (not
+      in :data:`ALL_FEATURES`). The body carries ``which`` so a caller
+      can render the right "unknown ..." message.
+    - **Never 5xxs**: the helper internally falls back to the OSS-free
+      shape on resolver failure, so the endpoint still returns 200 with
+      a valid row.
+    """
+    raw_tier = request.args.get("tier")
+    tier = (raw_tier or "").strip().lower()
+    if not tier:
+        return jsonify({"error": "missing tier"}), 400
+    raw_feature = request.args.get("feature")
+    feature = (raw_feature or "").strip().lower()
+    if not feature:
+        return jsonify({"error": "missing feature"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier not in _ent._TIER_ORDER:
+            return (
+                jsonify({"error": "unknown tier", "which": "tier", "tier": tier}),
+                404,
+            )
+        if feature not in _ent.ALL_FEATURES:
+            return (
+                jsonify(
+                    {
+                        "error": "unknown feature",
+                        "which": "feature",
+                        "feature": feature,
+                    }
+                ),
+                404,
+            )
+        body = _ent.feature_spec_at(tier, feature)
+        if body is None:
+            return (
+                jsonify(
+                    {
+                        "error": "feature-spec-at failed",
+                        "tier": tier,
+                        "feature": feature,
+                    }
+                ),
+                404,
+            )
+        return jsonify({"tier": tier, "feature": feature, "spec": body})
+    except Exception as exc:
+        logger.warning("api_entitlement_feature_spec_at: error: %s", exc)
+        return jsonify({"error": "feature-spec-at failed"}), 500
+
+
+@bp_entitlement.route("/api/entitlement/runtime-spec-at")
+def api_entitlement_runtime_spec_at():
+    """``GET /api/entitlement/runtime-spec-at?tier=<id>&runtime=<id>`` --
+    scalar what-if sibling of ``/api/entitlement/runtime-catalog-at``:
+    the single catalogue row for ``runtime`` with ``allowed`` /
+    ``locked`` / ``entitled`` computed as if the install were on
+    ``tier``.
+
+    Lets a pricing-comparison tooltip hydrate against ONE runtime at a
+    hypothetical tier in one round-trip instead of fetching the full
+    ``/api/entitlement/runtime-catalog-at`` payload and filtering
+    client-side. Accepts aliases (``claude-code`` -> ``claude_code``)
+    via :func:`entitlements.canonical_runtime`. The returned row
+    matches exactly one row from :func:`entitlements.runtime_catalog_at`.
+
+    - **400** when either ``tier=`` or ``runtime=`` is missing / blank
+    - **404** when ``tier`` is unknown (not in
+      :data:`entitlements._TIER_ORDER`) or ``runtime`` (after alias
+      canonicalisation) is unknown (not in :data:`ALL_RUNTIMES`).
+    - **Never 5xxs**: the helper internally falls back to the OSS-free
+      shape on resolver failure, so the endpoint still returns 200 with
+      a valid row.
+    """
+    raw_tier = request.args.get("tier")
+    tier = (raw_tier or "").strip().lower()
+    if not tier:
+        return jsonify({"error": "missing tier"}), 400
+    raw_runtime = request.args.get("runtime")
+    runtime_in = (raw_runtime or "").strip().lower()
+    if not runtime_in:
+        return jsonify({"error": "missing runtime"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier not in _ent._TIER_ORDER:
+            return (
+                jsonify({"error": "unknown tier", "which": "tier", "tier": tier}),
+                404,
+            )
+        rt = _ent.canonical_runtime(runtime_in)
+        if not rt or rt not in _ent.ALL_RUNTIMES:
+            return (
+                jsonify(
+                    {
+                        "error": "unknown runtime",
+                        "which": "runtime",
+                        "runtime": runtime_in,
+                    }
+                ),
+                404,
+            )
+        body = _ent.runtime_spec_at(tier, rt)
+        if body is None:
+            return (
+                jsonify(
+                    {
+                        "error": "runtime-spec-at failed",
+                        "tier": tier,
+                        "runtime": rt,
+                    }
+                ),
+                404,
+            )
+        return jsonify({"tier": tier, "runtime": rt, "spec": body})
+    except Exception as exc:
+        logger.warning("api_entitlement_runtime_spec_at: error: %s", exc)
+        return jsonify({"error": "runtime-spec-at failed"}), 500
+
+
 @bp_entitlement.route("/api/entitlement/feature-spec")
 def api_entitlement_feature_spec():
     """``GET /api/entitlement/feature-spec?feature=<id>`` -- scalar sibling of
