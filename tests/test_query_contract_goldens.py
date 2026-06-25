@@ -46,7 +46,7 @@ DISPATCH_ARGS = {
     "models": {},
     "runtimes": {},
     "rollup_sessions": {},
-    # #1012: cross-session agent spawn topology (plaintext-classed stats only).
+    # #1012 (Agent Graph tab, Phase 6 Tracing): spawn topology from spans.
     "agent_graph": {},
 }
 
@@ -81,7 +81,7 @@ def seeded(tmp_path, monkeypatch):
 
     store = ls.get_store()
 
-    # -- seed corpus: events (ring-buffered ingest) --------------------------
+    # ── seed corpus: events (ring-buffered ingest) ──────────────────────
     def _ev(i, **over):
         base = {
             "id": f"ev-{i:03d}",
@@ -104,7 +104,7 @@ def seeded(tmp_path, monkeypatch):
     store.ingest(_ev(3, session_id="sess-b", agent_id="worker",
                      model="claude-haiku-4-5"))
 
-    # -- sessions table (search backing) ------------------------------------
+    # ── sessions table (search backing) ──────────────────────────────────
     store.ingest_session({
         "session_id": "sess-a", "agent_type": "openclaw",
         "node_id": "agent+golden", "title": "golden alpha refactor",
@@ -122,7 +122,7 @@ def seeded(tmp_path, monkeypatch):
         "message_count": 1,
     })
 
-    # -- spans (direct write) -----------------------------------------------
+    # ── spans (direct write) ─────────────────────────────────────────────
     base_ts = 1767348000.0  # fixed unix seconds
     store.put_span({
         "span_id": "sp-001", "trace_id": "tr-001", "name": "llm_call",
@@ -145,7 +145,7 @@ def seeded(tmp_path, monkeypatch):
         "tokens_input": 50, "tokens_output": 10, "status": "ERROR",
     })
 
-    # -- external API calls (direct write) ----------------------------------
+    # ── external API calls (direct write) ─────────────────────────────────
     store.ingest_external_call({
         "ts": "2026-01-02T10:00:01Z", "host": "api.github.com",
         "url": "https://api.github.com/repos/x/y", "method": "get",
@@ -235,7 +235,7 @@ def test_live_methods_match_goldens(seeded):
 
 
 def test_goldens_are_deterministic_sanity(seeded):
-    """Two dispatches over the same corpus normalize identically -- guards
+    """Two dispatches over the same corpus normalize identically — guards
     against accidentally pinning a volatile field into the goldens."""
     a = _normalize("sessions", seeded._dispatch("sessions", {}))
     b = _normalize("sessions", seeded._dispatch("sessions", {}))
