@@ -3825,3 +3825,93 @@ def tier_catalog_at(tier: str) -> list[dict] | None:
             }
         )
     return out
+
+
+def feature_spec_at(tier: str, feature: str) -> dict | None:
+    """Scalar what-if sibling of :func:`feature_catalog_at`: the single
+    catalogue row for ``feature`` with ``allowed`` / ``locked`` /
+    ``entitled`` computed as if the install were on ``tier``.
+
+    Pairs with :func:`feature_spec` (scalar against the LIVE resolved
+    entitlement) the same way :func:`feature_catalog_at` pairs with
+    :func:`feature_catalog`. Lets a pricing-comparison tooltip hydrate
+    against ONE feature at a hypothetical tier in one round-trip instead
+    of fetching the full ``feature_catalog_at`` payload and filtering
+    client-side.
+
+    The returned row matches a row from :func:`feature_catalog_at`
+    exactly -- a parity test pins this so the scalar and bulk accessors
+    cannot drift.
+
+    Returns ``None`` for empty / unknown tier or feature ids (caller
+    renders "unknown tier" / "unknown feature" / 404). Never raises: a
+    synthesis failure short-circuits to the OSS-free fallback so the
+    row still renders.
+    """
+    try:
+        t = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not t or t not in _TIER_ORDER:
+        return None
+    try:
+        f = (feature or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not f or f not in ALL_FEATURES:
+        return None
+    try:
+        ent = _hypothetical_entitlement(t)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: feature_spec_at falling back to OSS-free: %s", exc
+        )
+        ent = _oss_free()
+    try:
+        return _feature_spec_row(ent, f)
+    except Exception as exc:
+        logger.warning("entitlements: feature_spec_at row build failed: %s", exc)
+        return None
+
+
+def runtime_spec_at(tier: str, runtime: str) -> dict | None:
+    """Scalar what-if sibling of :func:`runtime_catalog_at`: the single
+    catalogue row for ``runtime`` with ``allowed`` / ``locked`` /
+    ``entitled`` computed as if the install were on ``tier``.
+
+    Pairs with :func:`runtime_spec` (scalar against the LIVE resolved
+    entitlement) the same way :func:`runtime_catalog_at` pairs with
+    :func:`runtime_catalog`. Accepts aliases (``claude-code`` ->
+    ``claude_code``) via :func:`canonical_runtime` so the URL surface
+    matches what callers already pass to ``/api/entitlement/required-tier``.
+
+    The returned row matches a row from :func:`runtime_catalog_at`
+    exactly -- a parity test pins this so the scalar and bulk accessors
+    cannot drift.
+
+    Returns ``None`` for empty / unknown tier or runtime ids (caller
+    renders "unknown tier" / "unknown runtime" / 404). Never raises: a
+    synthesis failure short-circuits to the OSS-free fallback so the
+    row still renders.
+    """
+    try:
+        t = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not t or t not in _TIER_ORDER:
+        return None
+    rt = canonical_runtime(runtime)
+    if not rt or rt not in ALL_RUNTIMES:
+        return None
+    try:
+        ent = _hypothetical_entitlement(t)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: runtime_spec_at falling back to OSS-free: %s", exc
+        )
+        ent = _oss_free()
+    try:
+        return _runtime_spec_row(ent, rt)
+    except Exception as exc:
+        logger.warning("entitlements: runtime_spec_at row build failed: %s", exc)
+        return None
