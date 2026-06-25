@@ -1,1 +1,1 @@
-$(python3 -c "with open('/tmp/claude-0/-home-user/030eabea-fb57-51fe-82f3-f054a2f8aaa1/scratchpad/local_store_clean.py','r',encoding='utf-8') as f: print(f.read(), end='')")
+CONTENT_FROM_FILE
