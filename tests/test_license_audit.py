@@ -49,9 +49,21 @@ def _payload(tier="pro", nodes=4, exp_delta=365 * 86400, sub="acct_test"):
 def lic(monkeypatch, tmp_path):
     """Hermetic license fixture: ephemeral keypair, tmp license path, tmp
     audit DB. Mirrors the fixture in test_license.py / test_license_api.py
-    so behavioural pins stay symmetric."""
+    so behavioural pins stay symmetric.
+
+    Also isolates the entitlements module's resolver state -- some other
+    tests in the suite ``importlib.reload(clawmetry.entitlements)`` after
+    pointing ``HOME`` at a tmp_path and write a ``cloud_plan.json`` into
+    it. pytest keeps the last few tmp_path roots, so the module-level
+    ``_CLOUD_PLAN_CACHE`` constant can still resolve to a real file with
+    a paid ``plan`` value when this fixture runs later in the session.
+    Anchoring it (and ``_LICENSE_PATH``) at the per-test tmp_path makes
+    deactivate-then-resolve correctly fall back to OSS regardless of
+    cross-test leakage, and the in-process resolver cache is busted both
+    on entry and exit."""
     import clawmetry.license as L
     import clawmetry.audit as A
+    import clawmetry.entitlements as e
 
     priv, pub_pem = _keypair()
     monkeypatch.setattr(L, "_PUBLIC_KEY_PEM", pub_pem)
@@ -60,11 +72,17 @@ def lic(monkeypatch, tmp_path):
     monkeypatch.delenv("CLAWMETRY_LICENSE_SERVER", raising=False)
     monkeypatch.delenv("CLAWMETRY_INGEST_URL", raising=False)
     monkeypatch.delenv("CLAWMETRY_ENFORCE", raising=False)
+    # Point the entitlements resolver at the same tmp paths so a leaked
+    # cloud_plan.json from another test can't override the deactivate path.
+    monkeypatch.setattr(e, "_LICENSE_PATH", str(tmp_path / "license.key"))
+    monkeypatch.setattr(e, "_CLOUD_PLAN_CACHE", str(tmp_path / "cloud_plan.json"))
+    e.invalidate()
     # Point the audit DB at a per-test file and reset the "initialised" guard
     # so the schema is rebuilt against the fresh DB.
     monkeypatch.setenv("CLAWMETRY_AUDIT_DB", str(tmp_path / "audit.db"))
     A._initialised.clear()
-    return SimpleNamespace(L=L, A=A, priv=priv)
+    yield SimpleNamespace(L=L, A=A, priv=priv)
+    e.invalidate()
 
 
 def _audit_rows(A, event_type: str | None = None) -> list[dict]:

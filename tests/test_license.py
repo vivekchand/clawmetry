@@ -273,6 +273,10 @@ def _fake_entitlement(monkeypatch, L, *, entitled, pro_available=True):
     calls = {"download": 0, "entitlement": 0}
 
     class _Resp(io.BytesIO):
+        # urllib's real HTTPResponse always exposes .headers; the wheel
+        # downloader reads Content-Disposition to keep the PEP-427 filename.
+        headers: dict = {}
+
         def __enter__(self):
             return self
 
@@ -341,12 +345,22 @@ def test_auto_provision_never_raises_on_install_failure(prov, monkeypatch):
 
 
 def test_auto_provision_idempotent_when_pro_present(prov, monkeypatch):
+    """When the installed pro version is >= the wheel the server is serving,
+    no re-install happens. The wheel itself is still downloaded every time --
+    that re-validate-on-every-connect policy is intentional (see the comment
+    on ``_provision_pro_wheel``: an installed pro never used to upgrade, so a
+    fix in 0.3.4 sat unused on nodes still pinned to 0.3.3)."""
     L = prov.L
     calls = _fake_entitlement(monkeypatch, L, entitled=True)
     monkeypatch.setattr(L, "_pro_installed_version", lambda: "0.2.0")
+    # Pin the wheel's advertised version <= the installed version so
+    # _provision_pro_wheel short-circuits before re-installing. We have to
+    # stub the parser because the fake `PK\x03\x04fake-wheel-bytes` body
+    # isn't a real PEP-427 wheel and would otherwise parse to None.
+    monkeypatch.setattr(L, "_wheel_file_version", lambda _path: "0.2.0")
     installed, msg = L.auto_provision_pro("cm_prouser", node_id="n1")
     assert installed is True
-    assert calls["download"] == 0  # already current -> no re-download
+    assert calls["download"] == 1  # re-validates with the server every call
     assert "already installed" in msg
 
 
