@@ -279,7 +279,10 @@ def _try_local_store_brain(limit, include_artifacts, since=None):
     cap (issue #1448) is enforced at the SQL layer.
     """
     rows = None
-    qkwargs = {"limit": limit}
+    # exclude_daemon: drop ClawMetry's own daemon diagnostics at the SQL level
+    # so a noisy/erroring daemon can't bury the user's real agent events inside
+    # the fetch limit window (the post-loop filter below is belt-and-braces).
+    qkwargs = {"limit": limit, "exclude_daemon": True}
     if since:
         qkwargs["since"] = since
     # Issue #1088: cross-process fast-path. The standard install runs daemon
