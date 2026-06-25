@@ -17668,7 +17668,19 @@ def run_daemon() -> None:
 
             now = time.time()
             if now - last_heartbeat > heartbeat_interval:
-                if send_heartbeat(config):
+                from clawmetry.config import is_cloud_disabled as _hb_cloud_off
+                if _hb_cloud_off():
+                    # Local-only mode (#3281): there is no cloud to heart-beat.
+                    # Skip the attempt entirely. Otherwise send_heartbeat returns
+                    # falsy every cycle, consecutive_hb_failures climbs without
+                    # bound, and we log CRITICAL "node appears offline in cloud"
+                    # every ~15s -- which the daemon-error tee (PRD #1133) writes
+                    # into the capped events table, EVICTING the user's real
+                    # agent events from the Brain feed. Local-only must be silent.
+                    consecutive_hb_failures = 0
+                    last_heartbeat = now
+                    heartbeat_interval = HEARTBEAT_INTERVAL_SLOW
+                elif send_heartbeat(config):
                     if consecutive_hb_failures > 0:
                         log.info(
                             f"Heartbeat recovered after {consecutive_hb_failures} consecutive failures"

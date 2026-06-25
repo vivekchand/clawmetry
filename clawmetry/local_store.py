@@ -5348,11 +5348,22 @@ class LocalStore:
         since: str | None = None,
         until: str | None = None,
         runtime: str | None = None,
+        exclude_daemon: bool = False,
         limit: int = 500,
     ) -> list[dict[str, Any]]:
-        """Read events. Defaults to most recent first."""
+        """Read events. Defaults to most recent first.
+
+        ``exclude_daemon=True`` drops ClawMetry's own diagnostics (the
+        daemon-error -> DuckDB tee, PRD #1133: agent_id='clawmetry-daemon' /
+        event_type LIKE 'daemon.%') at the SQL level, so a noisy daemon can't
+        bury the user's real agent events inside the fetch ``limit`` window
+        (the Brain feed passes this).
+        """
         clauses: list[str] = []
         params: list[Any] = []
+        if exclude_daemon:
+            clauses.append("(agent_id IS DISTINCT FROM 'clawmetry-daemon')")
+            clauses.append("(event_type IS NULL OR event_type NOT LIKE 'daemon.%')")
         if session_id:
             clauses.append("session_id = ?")
             params.append(session_id)

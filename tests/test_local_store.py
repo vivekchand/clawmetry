@@ -815,3 +815,29 @@ def test_query_session_errors_edge(store):
     e1 = next(e for e in errs if e["span_id"] == "e1")
     assert e1["parent_span_id"] == "p1" and e1["tool_name"] == "browser"
     assert store.query_session_errors("") == []
+
+
+# ── exclude_daemon: keep ClawMetry's own diagnostics out of the agent feed ──
+
+def test_query_events_exclude_daemon(store):
+    """exclude_daemon drops agent_id='clawmetry-daemon' / event_type='daemon.*'
+    at the SQL level so a noisy/erroring daemon can't bury real agent events
+    inside the fetch limit window (the Brain feed depends on this)."""
+    store.ingest(_ev(id="real-1", agent_id="main", event_type="tool_call",
+                     session_id="sess-real"))
+    store.ingest(_ev(id="daemon-err", agent_id="clawmetry-daemon",
+                     event_type="daemon.error", session_id=""))
+    store.ingest(_ev(id="daemon-metric", agent_id="clawmetry-daemon",
+                     event_type="daemon.metric", session_id=""))
+    _wait_for_flush(store)
+
+    # Without the flag, daemon diagnostics are included.
+    all_ids = {e["id"] for e in store.query_events(limit=50)}
+    assert {"real-1", "daemon-err", "daemon-metric"} <= all_ids
+
+    # With exclude_daemon, only the real agent event survives.
+    kept = store.query_events(limit=50, exclude_daemon=True)
+    kept_ids = {e["id"] for e in kept}
+    assert "real-1" in kept_ids
+    assert "daemon-err" not in kept_ids
+    assert "daemon-metric" not in kept_ids
