@@ -789,6 +789,105 @@ def api_entitlement_capacity_diff_at_batch():
         )
 
 
+@bp_entitlement.route("/api/entitlement/tier-diff-at-batch")
+def api_entitlement_tier_diff_at_batch():
+    """``GET /api/entitlement/tier-diff-at-batch?tier=<source>`` --
+    what-if + batch sibling of ``/api/entitlement/tier-diff-batch``:
+    full marginal :func:`tier_diff` payload between the caller-supplied
+    ``tier`` and every purchasable tier as a target, in one pass.
+
+    Composes the arbitrary-endpoint diff (``/tier-diff``) and the live
+    batch (``/tier-diff-batch``) -- same row shape and ordering as the
+    live batch, but every row's ``from`` side is anchored to the
+    caller-supplied ``tier`` instead of the per-rung next-lower-
+    purchasable anchor ``/tier-diff-batch`` carries. Lets a pricing-
+    comparison matrix UI render the "full marginal vs <hypothetical-
+    tier>" column for every rung off **one** round-trip instead of N
+    calls to ``/tier-diff``.
+
+    The "all-slices-in-one-row" member of the ``_at`` batch family
+    alongside ``/tier-unlocks-at-batch`` (marginal feature/runtime
+    grant slice), ``/tier-locks-at-batch`` (marginal feature/runtime
+    loss slice) and ``/capacity-diff-at-batch`` (capacity slice). Pair
+    them to render the full "what's new at X / what you'd give up at
+    X / capacity at X" view of a pricing matrix pivoted around any
+    hypothetical perspective tier without client-side composition;
+    this endpoint folds the three slices into one row for callers that
+    prefer a single call.
+
+    Accepts any tier id in :data:`entitlements._TIER_FEATURES` on the
+    ``tier`` arg (including ``trial``), matching the other ``_at``
+    family endpoints. The target list mirrors ``/tier-diff-batch``
+    (purchasable tiers only -- trial excluded), so the rows match the
+    live batch's target axis byte-for-byte and the response can be
+    folded into the same pricing-page table.
+
+    Response shape::
+
+        {
+          "tier":              "<source tier id>",
+          "tiers":             [<row>, ...],
+          "current_tier":      "<resolved tier id>",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<row>`` matches ``/api/entitlement/tier-diff`` for the same
+    ``(from=tier, to=target)`` pair exactly -- ``from``, ``from_label``,
+    ``from_rank``, ``to``, ``to_label``, ``to_rank``, ``direction``,
+    ``added_features``, ``lost_features``, ``added_runtimes``,
+    ``lost_runtimes``, ``capacity_changes`` -- with ``from`` byte-equal
+    to the caller-supplied ``tier`` on every row.
+
+    - **400** when ``tier=`` is missing / blank.
+    - **404** when ``tier`` is unknown. The body carries ``which=tier``
+      so a caller can render the right "unknown tier" message.
+    - **Never 5xxs**: a resolver failure yields an empty ``tiers`` list
+      and the grace-shape envelope so the matrix keeps rendering.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_FEATURES:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        rows = _ent.tier_diff_at_batch(tier_in) or []
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tiers": rows,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tier_diff_at_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/capacity-diff-path")
 def api_entitlement_capacity_diff_path():
     """``GET /api/entitlement/capacity-diff-path?from=<id>&to=<id>`` --
