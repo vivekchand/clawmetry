@@ -4906,3 +4906,144 @@ def tier_diff_at_batch(tier: str) -> list[dict] | None:
     except Exception as exc:
         logger.warning("entitlements: tier_diff_at_batch failed: %s", exc)
         return []
+
+
+def _next_purchasable_tier_after(tier: str) -> str | None:
+    """Pure helper: next strictly-higher-rank entry in
+    :data:`_PURCHASABLE_TIERS` after ``tier``, ties broken by the order
+    of declaration in :data:`_PURCHASABLE_TIERS`.
+
+    Mirrors :meth:`Entitlement.next_purchasable_tier` but takes a
+    caller-supplied source tier instead of resolving the live
+    entitlement -- the source-anchored pure stepper the ``_at`` family
+    needs so its scalar what-if helpers do not depend on the resolver.
+
+    The tie-break (rank-only, declaration-order otherwise) intentionally
+    elides the cloud-vs-self-hosted preference the live method applies:
+    the ``_at`` family is for hypothetical comparison and should be
+    deterministic on the static catalogue, not driven by which install
+    flavour the resolver is currently in.
+
+    Accepts any id in :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`,
+    rank 2 -- "next strictly above trial" resolves to enterprise,
+    matching how :meth:`Entitlement.next_purchasable_tier` walks past
+    same-rank trial when called from a trial entitlement).
+
+    Returns ``None`` for empty / unknown ``tier`` and at the ceiling
+    (enterprise -- nothing strictly above). Never raises.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        src_rank = _TIER_RANK.get(src, -1)
+        for cand in _PURCHASABLE_TIERS:
+            if _TIER_RANK.get(cand, -1) > src_rank:
+                return cand
+        return None
+    except Exception as exc:
+        logger.warning("entitlements: _next_purchasable_tier_after failed: %s", exc)
+        return None
+
+
+def next_tier_unlocks_at(tier: str) -> dict | None:
+    """Scalar what-if sibling of :meth:`Entitlement.next_tier_unlocks`:
+    marginal unlocks row at the rung above the caller-supplied ``tier``,
+    in :func:`tier_unlocks` shape.
+
+    Convenience for ``tier_unlocks(_next_purchasable_tier_after(tier))``
+    -- the source-anchored equivalent of the live method, so a pricing
+    page can render "what's new at the next rung above X" for any X
+    without first having to ask the resolver and without monkey-patching
+    the entitlement context. Pairs with :func:`next_tier_locks_at` (the
+    marginal-loss view of the same rung) on a hypothetical pricing
+    matrix cell.
+
+    Row shape matches :func:`tier_unlocks` exactly -- ``tier``,
+    ``tier_label``, ``tier_rank``, ``previous_tier``, ``previous_tier_label``,
+    ``previous_tier_rank``, ``features``, ``runtimes``. The row IS the
+    tier-property row of the rung above (its ``previous_tier`` is that
+    rung's natural next-lower purchasable, NOT the caller-supplied
+    ``tier``) -- the same posture :meth:`Entitlement.next_tier_unlocks`
+    surfaces via the live resolver. Callers who want the source-anchored
+    ``previous_tier`` should use :func:`tier_unlocks_at` directly with
+    the explicit ``(tier, target)`` pair.
+
+    Accepts any id in :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`)
+    -- the lenient ``_at`` posture, since the source is hypothetical
+    and may legitimately answer "what would step Trial -> Enterprise
+    unlock?".
+
+    Returns ``None`` for empty / unknown ``tier`` and at the ceiling
+    (no rung strictly above). Never raises: a builder failure short-
+    circuits to ``None`` so the CTA surface stays mute instead of
+    breaking.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        target = _next_purchasable_tier_after(src)
+        if target is None:
+            return None
+        return tier_unlocks(target)
+    except Exception as exc:
+        logger.warning("entitlements: next_tier_unlocks_at failed: %s", exc)
+        return None
+
+
+def next_tier_locks_at(tier: str) -> dict | None:
+    """Scalar what-if sibling of :meth:`Entitlement.next_tier_locks`:
+    marginal locks row at the rung above the caller-supplied ``tier``,
+    in :func:`tier_locks` shape.
+
+    Marginal-loss mirror of :func:`next_tier_unlocks_at` and pairs
+    with :meth:`Entitlement.next_tier_locks` (live, source pinned to
+    the resolver) the same way :func:`tier_locks_at` pairs with
+    :func:`tier_locks`. Convenience for
+    ``tier_locks(_next_purchasable_tier_after(tier))`` -- the source-
+    anchored equivalent of the live method, so a pricing page can
+    render "what does the rung above X first lose vs the rung above
+    IT" for any X without first asking the resolver.
+
+    Row shape matches :func:`tier_locks` exactly -- ``tier``,
+    ``tier_label``, ``tier_rank``, ``next_tier``, ``next_tier_label``,
+    ``next_tier_rank``, ``lost_features``, ``lost_runtimes``. The row
+    IS the tier-property row of the rung above (its ``next_tier`` is
+    that rung's natural next-higher purchasable, NOT the caller-
+    supplied ``tier``) -- the same posture
+    :meth:`Entitlement.next_tier_locks` surfaces via the live resolver.
+
+    Accepts any id in :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`)
+    -- the lenient ``_at`` posture.
+
+    Returns ``None`` for empty / unknown ``tier`` and at the ceiling
+    (no rung strictly above). At the rung where the next-above IS the
+    ladder ceiling (enterprise as ``_next_purchasable_tier_after``'s
+    answer) the returned row carries ``next_tier=None`` and empty
+    ``lost_*`` lists -- :func:`tier_locks` shape for "this rung has no
+    rung above to step down from", not ``None``.
+
+    Never raises: a builder failure short-circuits to ``None`` so the
+    CTA surface stays mute instead of breaking.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        target = _next_purchasable_tier_after(src)
+        if target is None:
+            return None
+        return tier_locks(target)
+    except Exception as exc:
+        logger.warning("entitlements: next_tier_locks_at failed: %s", exc)
+        return None
