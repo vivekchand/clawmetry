@@ -4373,3 +4373,124 @@ def lock_reasons_at_batch(
         "nodes": _lock_row(ent, nodes, "nodes") if nodes is not None else None,
     }
     return out
+
+
+def tier_unlocks_at(tier: str, target: str) -> dict | None:
+    """Scalar what-if sibling of :func:`tier_unlocks`: marginal unlocks for
+    ``target`` (features + runtimes that first become available at the
+    destination) computed against the caller-supplied ``tier`` rather than
+    the global next-lower-purchasable-tier anchor :func:`tier_unlocks` uses.
+
+    Pairs with :func:`tier_unlocks` (live, anchored to the next-lower
+    purchasable tier) the same way :func:`tier_spec_at` pairs with
+    :func:`tier_spec`: same row shape, hypothetical source. Lets a
+    pricing-comparison tooltip render "what's new in B vs A" for any
+    ``(A, B)`` pair in one round-trip -- the single-hop view of
+    ``tier_unlocks_path(A, B)`` that elides intermediate rungs and just
+    reports the cumulative ``A -> B`` marginal grant.
+
+    Row shape matches :func:`tier_unlocks` exactly -- ``tier``,
+    ``tier_label``, ``tier_rank``, ``previous_tier``, ``previous_tier_label``,
+    ``previous_tier_rank``, ``features``, ``runtimes`` -- with one
+    difference: ``previous_tier`` is the caller-supplied ``tier`` (the
+    scalar what-if source), NOT the global next-lower-purchasable anchor
+    :func:`tier_unlocks` uses, and NOT the previous walked rung
+    :func:`tier_unlocks_path` carries. ``features`` / ``runtimes`` byte-
+    equal ``tier_diff(tier, target)['added_features']`` /
+    ``['added_runtimes']`` -- a parity test pins this so the scalar
+    what-if and the cumulative diff cannot drift.
+
+    Both endpoints accept any tier id in :data:`_TIER_ORDER` (including
+    :data:`TIER_TRIAL`), matching :func:`_unlocks_row` and the other ``_at``
+    family helpers; the live :func:`tier_unlocks` blocks ``trial`` because
+    it routes an upgrade CTA, but this scalar what-if is for hypothetical
+    comparison and does not.
+
+    Direction is *not* normalised: when ``target_rank <= tier_rank`` (a
+    downgrade or identity pair) ``features`` / ``runtimes`` collapse to
+    empty lists -- you unlock nothing going down. Use :func:`tier_locks_at`
+    for the marginal-loss view of a downgrade.
+
+    Returns ``None`` for empty / unknown ``tier`` or ``target`` ids (caller
+    renders "unknown tier" / 404). Never raises: a builder failure
+    short-circuits to ``None`` so the tooltip surface stays mute instead
+    of breaking.
+    """
+    try:
+        a = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not a or a not in _TIER_ORDER:
+        return None
+    try:
+        t = (target or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not t or t not in _TIER_ORDER:
+        return None
+    try:
+        return _unlocks_row(a, t)
+    except Exception as exc:
+        logger.warning("entitlements: tier_unlocks_at failed: %s", exc)
+        return None
+
+
+def tier_locks_at(tier: str, target: str) -> dict | None:
+    """Scalar what-if sibling of :func:`tier_locks`: marginal losses for
+    ``target`` (features + runtimes that disappear at the destination)
+    computed against the caller-supplied ``tier`` rather than the global
+    next-higher-purchasable-tier anchor :func:`tier_locks` uses.
+
+    Marginal-loss mirror of :func:`tier_unlocks_at` and pairs with
+    :func:`tier_locks` (live, anchored to the next-higher purchasable tier)
+    the same way :func:`tier_spec_at` pairs with :func:`tier_spec`. Lets a
+    downgrade-warning tooltip render "what you'd give up dropping from A
+    to B" for any ``(A, B)`` pair in one round-trip -- the single-hop view
+    of ``tier_locks_path(A, B)`` that elides intermediate rungs and just
+    reports the cumulative ``A -> B`` marginal loss.
+
+    Row shape matches :func:`tier_locks` exactly -- ``tier``,
+    ``tier_label``, ``tier_rank``, ``next_tier``, ``next_tier_label``,
+    ``next_tier_rank``, ``lost_features``, ``lost_runtimes`` -- with one
+    difference: ``next_tier`` is the caller-supplied ``tier`` (the scalar
+    what-if source you're stepping down FROM), NOT the global
+    next-higher-purchasable anchor :func:`tier_locks` uses, and NOT the
+    previous walked rung :func:`tier_locks_path` carries.
+    ``lost_features`` / ``lost_runtimes`` byte-equal
+    ``tier_diff(tier, target)['lost_features']`` / ``['lost_runtimes']``
+    -- a parity test pins this so the scalar what-if and the cumulative
+    diff cannot drift.
+
+    Both endpoints accept any tier id in :data:`_TIER_ORDER` (including
+    :data:`TIER_TRIAL`), matching :func:`_locks_row` and the other ``_at``
+    family helpers; the live :func:`tier_locks` blocks ``trial`` because
+    it routes a downgrade warning, but this scalar what-if is for
+    hypothetical comparison and does not.
+
+    Direction is *not* normalised: when ``target_rank >= tier_rank`` (an
+    upgrade or identity pair) ``lost_features`` / ``lost_runtimes``
+    collapse to empty lists -- you lose nothing going up. Use
+    :func:`tier_unlocks_at` for the marginal-grant view of an upgrade.
+
+    Returns ``None`` for empty / unknown ``tier`` or ``target`` ids (caller
+    renders "unknown tier" / 404). Never raises: a builder failure
+    short-circuits to ``None`` so the tooltip surface stays mute instead
+    of breaking.
+    """
+    try:
+        a = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not a or a not in _TIER_ORDER:
+        return None
+    try:
+        t = (target or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not t or t not in _TIER_ORDER:
+        return None
+    try:
+        return _locks_row(a, t)
+    except Exception as exc:
+        logger.warning("entitlements: tier_locks_at failed: %s", exc)
+        return None
