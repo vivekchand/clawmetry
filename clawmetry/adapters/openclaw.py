@@ -960,6 +960,27 @@ class OpenClawAdapter(AgentAdapter):
             _fm = s.get("fastMode") if s.get("fastMode") is not None else s.get("isFastMode")
             if _fm is not None:
                 extra["fastMode"] = bool(_fm)
+            # Fast-mode fallback/cutoff metadata (#3341): PR #85104 also emits
+            # cutoff state, reason, transition count, delivery mode, and fallback
+            # model for sessions where fast-mode reverts to normal mode.
+            _fmc = s.get("fastModeCutoff")
+            if _fmc is not None:
+                extra["fastModeCutoff"] = bool(_fmc)
+            _fmc_reason = s.get("fastModeCutoffReason") or s.get("cutoffReason")
+            if _fmc_reason is not None:
+                extra["fastModeCutoffReason"] = _fmc_reason
+            _fmc_count = s.get("fastModeTransitionCount") or s.get("transitionCount")
+            if _fmc_count is not None:
+                try:
+                    extra["fastModeTransitionCount"] = int(_fmc_count)
+                except (TypeError, ValueError):
+                    pass
+            _fmc_mode = s.get("fastModeDeliveryMode") or s.get("deliveryMode")
+            if _fmc_mode is not None:
+                extra["fastModeDeliveryMode"] = _fmc_mode
+            _fm_fallback = s.get("fallbackModel") or s.get("fastModeFallbackModel")
+            if _fm_fallback is not None:
+                extra["fallbackModel"] = _fm_fallback
             # /think reasoning-level tier (#3324): PR #94067 stores the active
             # level (light/medium/deep) on session records; surface when present.
             _think_level = s.get("thinkLevel") or s.get("reasoningLevel")
@@ -1151,6 +1172,27 @@ class OpenClawAdapter(AgentAdapter):
                                 if _fmval is not None:
                                     extra["fastMode"] = bool(_fmval)
                                     break
+                            # Fast-mode fallback/cutoff metadata (#3341): PR #85104
+                            # also emits cutoff state on event blobs; extract reason,
+                            # transition count, delivery mode, and fallback model.
+                            _fmc = obj.get("fastModeCutoff")
+                            if _fmc is not None:
+                                extra["fastModeCutoff"] = bool(_fmc)
+                            _fmc_reason = obj.get("fastModeCutoffReason") or obj.get("cutoffReason")
+                            if _fmc_reason is not None:
+                                extra["fastModeCutoffReason"] = _fmc_reason
+                            _fmc_count = obj.get("fastModeTransitionCount") or obj.get("transitionCount")
+                            if _fmc_count is not None:
+                                try:
+                                    extra["fastModeTransitionCount"] = int(_fmc_count)
+                                except (TypeError, ValueError):
+                                    pass
+                            _fmc_mode = obj.get("fastModeDeliveryMode") or obj.get("deliveryMode")
+                            if _fmc_mode is not None:
+                                extra["fastModeDeliveryMode"] = _fmc_mode
+                            _fm_fallback = obj.get("fallbackModel") or obj.get("fastModeFallbackModel")
+                            if _fm_fallback is not None:
+                                extra["fallbackModel"] = _fm_fallback
                             # /think reasoning-level tier (#3324): PR #94067 stores
                             # the active level (light/medium/deep) on model-turn
                             # records; try camelCase then snake_case.
