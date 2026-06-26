@@ -37,8 +37,8 @@
   },
   "gateway_health": {
     "captured_at": "2026-06-26",
-    "captured_sha": "7f42aa8",
-    "fast_path_ms_p50": 8.0,
+    "captured_sha": "cae1a26",
+    "fast_path_ms_p50": 11.5,
     "url": "/api/gateway-health"
   },
   "model_transitions": {
