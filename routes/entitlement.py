@@ -2794,6 +2794,203 @@ def api_entitlement_runtime_spec_at_batch():
         )
 
 
+@bp_entitlement.route("/api/entitlement/tier-unlocks-at")
+def api_entitlement_tier_unlocks_at():
+    """``GET /api/entitlement/tier-unlocks-at?tier=<source>&target=<dest>`` --
+    scalar what-if sibling of ``/api/entitlement/tier-unlocks``: marginal
+    unlocks for ``target`` (features + runtimes that first become available
+    at the destination) computed against the caller-supplied ``tier``
+    rather than the global next-lower-purchasable-tier anchor
+    ``/tier-unlocks`` uses.
+
+    Lets a pricing-comparison tooltip render "what's new in B vs A" for
+    any ``(A, B)`` pair in one round-trip without fetching the full
+    ``/tier-unlocks-path?from=A&to=B`` payload and reading the destination
+    row client-side. The returned row matches the destination row of
+    :func:`entitlements.tier_unlocks_path` for the same pair -- a parity
+    test pins this so the scalar what-if and the path-walker cannot drift.
+
+    Accepts any tier id in :data:`entitlements._TIER_ORDER` on either
+    argument (including ``trial``), matching the other ``_at`` family
+    endpoints. Direction is not normalised: a downgrade or identity pair
+    returns empty ``features`` / ``runtimes`` lists; use
+    ``/tier-locks-at`` for the marginal-loss view of a downgrade.
+
+    Response shape::
+
+        {
+          "tier":   "<source tier id>",
+          "target": "<destination tier id>",
+          "row":    {<tier_unlocks row>},
+        }
+
+    The inner ``row`` matches the singular ``/tier-unlocks`` row shape
+    exactly (``tier``, ``tier_label``, ``tier_rank``, ``previous_tier``,
+    ``previous_tier_label``, ``previous_tier_rank``, ``features``,
+    ``runtimes``) -- with ``previous_tier`` carrying the caller-supplied
+    ``tier`` arg, NOT the global next-lower-purchasable anchor.
+
+    - **400** when either ``tier=`` or ``target=`` is missing / blank
+    - **404** when ``tier`` or ``target`` is unknown. The body carries
+      ``which`` so a caller can render the right "unknown ..." message.
+    - **Never 5xxs**: builder failure falls through to a 404 so the
+      tooltip surface stays mute instead of breaking.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    raw_target = request.args.get("target")
+    target_in = (raw_target or "").strip().lower()
+    if not target_in:
+        return jsonify({"error": "missing target"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        if target_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {
+                        "error": "unknown target",
+                        "which": "target",
+                        "target": target_in,
+                    }
+                ),
+                404,
+            )
+        row = _ent.tier_unlocks_at(tier_in, target_in)
+        if row is None:
+            return (
+                jsonify(
+                    {
+                        "error": "tier-unlocks-at failed",
+                        "tier": tier_in,
+                        "target": target_in,
+                    }
+                ),
+                404,
+            )
+        return jsonify({"tier": tier_in, "target": target_in, "row": row})
+    except Exception as exc:
+        logger.warning("api_entitlement_tier_unlocks_at: error: %s", exc)
+        return (
+            jsonify(
+                {
+                    "error": "tier-unlocks-at failed",
+                    "tier": tier_in,
+                    "target": target_in,
+                }
+            ),
+            404,
+        )
+
+
+@bp_entitlement.route("/api/entitlement/tier-locks-at")
+def api_entitlement_tier_locks_at():
+    """``GET /api/entitlement/tier-locks-at?tier=<source>&target=<dest>`` --
+    scalar what-if sibling of ``/api/entitlement/tier-locks``: marginal
+    losses for ``target`` (features + runtimes that disappear at the
+    destination) computed against the caller-supplied ``tier`` rather than
+    the global next-higher-purchasable-tier anchor ``/tier-locks`` uses.
+
+    Marginal-loss mirror of ``/tier-unlocks-at``. Lets a downgrade-warning
+    tooltip render "what you'd give up dropping from A to B" for any
+    ``(A, B)`` pair in one round-trip without fetching the full
+    ``/tier-locks-path?from=A&to=B`` payload and reading the destination
+    row client-side. The returned row matches the destination row of
+    :func:`entitlements.tier_locks_path` for the same pair -- a parity
+    test pins this so the scalar what-if and the path-walker cannot drift.
+
+    Accepts any tier id in :data:`entitlements._TIER_ORDER` on either
+    argument (including ``trial``), matching the other ``_at`` family
+    endpoints. Direction is not normalised: an upgrade or identity pair
+    returns empty ``lost_features`` / ``lost_runtimes`` lists; use
+    ``/tier-unlocks-at`` for the marginal-grant view of an upgrade.
+
+    Response shape::
+
+        {
+          "tier":   "<source tier id>",
+          "target": "<destination tier id>",
+          "row":    {<tier_locks row>},
+        }
+
+    The inner ``row`` matches the singular ``/tier-locks`` row shape
+    exactly (``tier``, ``tier_label``, ``tier_rank``, ``next_tier``,
+    ``next_tier_label``, ``next_tier_rank``, ``lost_features``,
+    ``lost_runtimes``) -- with ``next_tier`` carrying the caller-supplied
+    ``tier`` arg (the rung you're stepping FROM), NOT the global
+    next-higher-purchasable anchor.
+
+    - **400** when either ``tier=`` or ``target=`` is missing / blank
+    - **404** when ``tier`` or ``target`` is unknown. The body carries
+      ``which`` so a caller can render the right "unknown ..." message.
+    - **Never 5xxs**: builder failure falls through to a 404 so the
+      tooltip surface stays mute instead of breaking.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    raw_target = request.args.get("target")
+    target_in = (raw_target or "").strip().lower()
+    if not target_in:
+        return jsonify({"error": "missing target"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        if target_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {
+                        "error": "unknown target",
+                        "which": "target",
+                        "target": target_in,
+                    }
+                ),
+                404,
+            )
+        row = _ent.tier_locks_at(tier_in, target_in)
+        if row is None:
+            return (
+                jsonify(
+                    {
+                        "error": "tier-locks-at failed",
+                        "tier": tier_in,
+                        "target": target_in,
+                    }
+                ),
+                404,
+            )
+        return jsonify({"tier": tier_in, "target": target_in, "row": row})
+    except Exception as exc:
+        logger.warning("api_entitlement_tier_locks_at: error: %s", exc)
+        return (
+            jsonify(
+                {
+                    "error": "tier-locks-at failed",
+                    "tier": tier_in,
+                    "target": target_in,
+                }
+            ),
+            404,
+        )
+
+
 @bp_entitlement.route("/api/entitlement/affordable-tiers")
 def api_entitlement_affordable_tiers():
     """``GET /api/entitlement/affordable-tiers?features=a,b,c&runtimes=x,y
