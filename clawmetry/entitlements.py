@@ -4730,3 +4730,93 @@ def capacity_diff_at_batch(tier: str) -> list[dict] | None:
     except Exception as exc:
         logger.warning("entitlements: capacity_diff_at_batch failed: %s", exc)
         return []
+
+
+def tier_diff_at_batch(tier: str) -> list[dict] | None:
+    """What-if + batch sibling of :func:`tier_diff_batch`: full marginal
+    :func:`tier_diff` payload between the caller-supplied ``tier`` and
+    every purchasable tier as a target, in one pass.
+
+    Composes :func:`tier_diff` (arbitrary-endpoint diff) and
+    :func:`tier_diff_batch` (live walking batch): same row shape as the
+    live batch, but every row's ``from`` side is anchored to the caller-
+    supplied ``tier`` instead of the per-rung next-lower-purchasable
+    anchor :func:`tier_diff_batch` carries. Lets a pricing-comparison
+    matrix UI render the "full marginal vs <hypothetical-tier>" column
+    for every rung off **one** round-trip instead of N calls to
+    :func:`tier_diff`.
+
+    The "all-slices-in-one-row" member of the ``_at`` batch family
+    alongside :func:`tier_unlocks_at_batch` (feature/runtime grant
+    slice), :func:`tier_locks_at_batch` (feature/runtime loss slice)
+    and :func:`capacity_diff_at_batch` (capacity slice). Where each of
+    those siblings carries a single slice of the per-rung transition,
+    ``tier_diff_at_batch`` carries ALL slices (``added_features`` +
+    ``lost_features`` + ``added_runtimes`` + ``lost_runtimes`` +
+    ``capacity_changes``) in one row so a UI can render the whole
+    matrix off one call instead of three.
+
+    Each row is byte-identical to ``tier_diff(tier, target)`` for the
+    same ``(tier, target)`` pair -- a parity test pins this so the
+    batch what-if cannot drift from :func:`tier_diff` (the same
+    invariant ``tier_unlocks_at_batch`` / ``tier_locks_at_batch`` /
+    ``capacity_diff_at_batch`` enforce against their scalar siblings).
+
+    Per-slice parity with the other ``_at`` batches: each row's
+    ``added_features`` byte-equals ``tier_unlocks_at_batch(tier)``'s
+    ``features`` slot for the same target (and ditto for
+    ``added_runtimes``); each row's ``lost_features`` byte-equals
+    ``tier_locks_at_batch(tier)``'s ``lost_features`` slot for the
+    same target (and ditto for ``lost_runtimes``); each row's
+    ``capacity_changes`` byte-equals the per-axis triples
+    ``capacity_diff_at_batch(tier)`` carries for the same target.
+    Pinned in the test suite so the four ``_at`` batches can never
+    silently drift apart.
+
+    Rows are sorted by ``(tier_rank, tier_id)`` ascending -- byte-
+    stable against :func:`tier_diff_batch`'s ordering and against
+    :func:`tier_unlocks_at_batch` / :func:`tier_locks_at_batch` /
+    :func:`capacity_diff_at_batch` for the same source tier, so a UI
+    can fold the four responses into a single matrix without re-
+    sorting client-side. Same-rank sibling tiers (``cloud_pro`` /
+    ``pro`` both at rank 2) are both returned.
+
+    Target list is :data:`_PURCHASABLE_TIERS` (trial excluded),
+    matching :func:`tier_diff_batch`. The source ``tier`` accepts any
+    id in :data:`_TIER_FEATURES` including :data:`TIER_TRIAL` -- the
+    lenient ``_at`` posture, since the source is hypothetical and may
+    legitimately answer "what would Cloud Pro grant vs a trial
+    install?".
+
+    Identity row (target matches source) collapses to ``tier_diff(t,
+    t)`` -- ``direction == "identity"`` with empty marginal lists and
+    no-op capacity triples -- so a UI rendering "from X you're already
+    at X" copy gets a real row instead of a missing entry.
+
+    Decoupled from the resolved entitlement (walks the static per-tier
+    maps), so grace vs enforce yields identical rows.
+
+    Returns ``None`` for empty / unknown source ``tier`` (caller
+    renders "unknown tier" / 404). Never raises: a builder failure
+    short-circuits to ``[]`` so the matrix keeps rendering instead of
+    breaking.
+    """
+    try:
+        a = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not a or a not in _TIER_FEATURES:
+        return None
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            row = tier_diff(a, tid)
+            if row is not None:
+                out.append(row)
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: tier_diff_at_batch failed: %s", exc)
+        return []
