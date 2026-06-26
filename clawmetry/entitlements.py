@@ -4603,3 +4603,130 @@ def tier_locks_at_batch(tier: str) -> list[dict] | None:
     except Exception as exc:
         logger.warning("entitlements: tier_locks_at_batch failed: %s", exc)
         return []
+
+
+def capacity_diff_at(tier: str, target: str) -> dict | None:
+    """Scalar what-if sibling of :func:`capacity_diff`: per-axis capacity
+    transition (channels / retention / nodes) from a caller-supplied
+    ``tier`` to ``target``, computed off the static per-tier caps rather
+    than the resolved entitlement :func:`capacity_diff` anchors to.
+
+    Pairs with :func:`capacity_diff` (live, anchored to the resolver) the
+    same way :func:`tier_unlocks_at` pairs with :func:`tier_unlocks`:
+    same row shape, hypothetical source. Lets a pricing-comparison
+    tooltip render "capacity at B vs A" for any ``(A, B)`` pair in one
+    round-trip -- the single-hop view of :func:`capacity_diff_path` that
+    elides intermediate rungs and just reports the cumulative
+    ``A -> B`` marginal capacity step.
+
+    Row shape matches :func:`capacity_diff` exactly -- ``target``,
+    ``channel_limit``, ``retention_days``, ``node_limit`` where each
+    axis is the ``{before, after, delta, unlocked, locked}`` triple
+    :func:`_capacity_transition` builds. The ``before`` side comes off
+    the static per-tier caps (not the resolved entitlement), so the
+    helper is independent of grace mode and the per-axis caps do NOT
+    collapse to the unlimited sentinel the way :func:`capacity_diff`
+    does under grace -- the ``_at`` posture is "if I were at A, what
+    would B cost", not "from where I am now".
+
+    Each row is byte-identical to the destination row of
+    :func:`capacity_diff_path` for the same ``(tier, target)`` pair --
+    a parity test pins this so the scalar what-if and the path-walker
+    cannot drift (the same invariant ``tier_unlocks_at`` already
+    enforces against :func:`tier_unlocks_path`).
+
+    Both endpoints accept any tier id in :data:`_TIER_FEATURES`
+    (including :data:`TIER_TRIAL`), matching :func:`_capacity_row` and
+    the other ``_at`` family helpers; the live :func:`capacity_diff`
+    accepts any id but anchors ``before`` to the resolver, while this
+    scalar what-if anchors ``before`` to the caller-supplied ``tier``.
+
+    Direction is *not* normalised: an upgrade pair flips ``unlocked``
+    on axes that go from a finite cap to unlimited; a downgrade pair
+    flips ``locked`` on axes that go from unlimited to a finite cap;
+    identity / lateral-rank pairs collapse every axis to a no-op
+    triple (``before == after``, ``delta == 0`` or ``None``, both flags
+    ``False``).
+
+    Returns ``None`` for empty / unknown ``tier`` or ``target`` ids
+    (caller renders "unknown tier" / 404). Never raises: a builder
+    failure short-circuits to ``None`` so the tooltip surface stays
+    mute instead of breaking.
+    """
+    try:
+        a = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not a or a not in _TIER_FEATURES:
+        return None
+    try:
+        t = (target or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not t or t not in _TIER_FEATURES:
+        return None
+    try:
+        return _capacity_row(a, t)
+    except Exception as exc:
+        logger.warning("entitlements: capacity_diff_at failed: %s", exc)
+        return None
+
+
+def capacity_diff_at_batch(tier: str) -> list[dict] | None:
+    """What-if + batch sibling of :func:`capacity_diff_batch`: per-axis
+    capacity-transition rows for every purchasable tier as a target,
+    computed against the caller-supplied ``tier`` rather than the
+    resolved entitlement :func:`capacity_diff_batch` anchors to.
+
+    Composes :func:`capacity_diff_at` (scalar what-if) and
+    :func:`capacity_diff_batch` (live batch): same row shape and
+    ordering as the live batch helper, same hypothetical perspective
+    as the ``_at`` helper. Lets a pricing-comparison matrix UI render
+    the "capacity vs <hypothetical-tier>" column for every rung off
+    **one** round-trip instead of N calls to :func:`capacity_diff_at`.
+
+    Each row is byte-identical to ``capacity_diff_at(tier, target)``
+    for the same ``(tier, target)`` pair -- a parity test pins this so
+    the batch what-if cannot drift from the scalar what-if (the same
+    invariant ``tier_unlocks_at_batch`` / ``tier_locks_at_batch`` enforce
+    against their scalar siblings).
+
+    Rows are sorted by ``(tier_rank, tier_id)`` ascending -- byte-
+    stable against :func:`capacity_diff_batch`'s ordering, against
+    :func:`tier_unlocks_at_batch` / :func:`tier_locks_at_batch` for the
+    same source tier, and against :func:`preview_batch`, so a UI can
+    fold the four responses into a single "what's at X / new at X /
+    lost at X / capacity at X" matrix without re-sorting client-side.
+    Same-rank sibling tiers (``cloud_pro`` / ``pro`` both at rank 2)
+    are both returned.
+
+    Target list is :data:`_PURCHASABLE_TIERS` (trial excluded), matching
+    :func:`capacity_diff_batch`. The source ``tier`` accepts any id in
+    :data:`_TIER_FEATURES` including :data:`TIER_TRIAL` -- the lenient
+    ``_at`` posture, since the source is hypothetical and may
+    legitimately answer "what would Cloud Pro cost in capacity vs a
+    trial install?".
+
+    Returns ``None`` for empty / unknown source ``tier`` (caller renders
+    "unknown tier" / 404). Never raises: a builder failure short-circuits
+    to ``[]`` so the matrix keeps rendering instead of breaking.
+    """
+    try:
+        a = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not a or a not in _TIER_FEATURES:
+        return None
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            row = _capacity_row(a, tid)
+            if row is not None:
+                out.append(row)
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: capacity_diff_at_batch failed: %s", exc)
+        return []
