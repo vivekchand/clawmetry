@@ -594,6 +594,201 @@ def api_entitlement_capacity_diff_batch():
         )
 
 
+@bp_entitlement.route("/api/entitlement/capacity-diff-at")
+def api_entitlement_capacity_diff_at():
+    """``GET /api/entitlement/capacity-diff-at?tier=<source>&target=<dest>``
+    -- scalar what-if sibling of ``/api/entitlement/capacity-diff``: per-
+    axis capacity transition (channels / retention / nodes) from a
+    caller-supplied ``tier`` to ``target``, computed off the static
+    per-tier caps rather than the resolved entitlement
+    ``/capacity-diff`` anchors to.
+
+    Lets a pricing-comparison tooltip render "capacity at B vs A" for
+    any ``(A, B)`` pair in one round-trip without fetching the full
+    ``/capacity-diff-path?from=A&to=B`` payload and reading the
+    destination row client-side. The returned row matches the
+    destination row of ``/capacity-diff-path`` for the same pair --
+    a parity test pins this so the scalar what-if and the path-walker
+    cannot drift.
+
+    Accepts any tier id in :data:`entitlements._TIER_FEATURES` on either
+    argument (including ``trial``), matching the other ``_at`` family
+    endpoints. Direction is not normalised: an upgrade pair flips
+    ``unlocked`` on axes that go from a finite cap to unlimited; a
+    downgrade pair flips ``locked`` on axes that go from unlimited to
+    finite; identity / lateral-rank pairs collapse every axis to a
+    no-op triple.
+
+    Response shape::
+
+        {
+          "tier":   "<source tier id>",
+          "target": "<destination tier id>",
+          "row":    {<capacity_diff row>},
+        }
+
+    The inner ``row`` matches the singular ``/capacity-diff`` row shape
+    exactly (``target``, ``channel_limit``, ``retention_days``,
+    ``node_limit`` where each axis is the same ``{before, after, delta,
+    unlocked, locked}`` triple) -- with the ``before`` side carrying the
+    caller-supplied ``tier``'s static caps (NOT the resolved
+    entitlement's caps the singular endpoint uses).
+
+    - **400** when either ``tier=`` or ``target=`` is missing / blank.
+    - **404** when ``tier`` or ``target`` is unknown. The body carries
+      ``which`` so a caller can render the right "unknown ..." message.
+    - **Never 5xxs**: builder failure falls through to a 404 so the
+      tooltip surface stays mute instead of breaking.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    raw_target = request.args.get("target")
+    target_in = (raw_target or "").strip().lower()
+    if not target_in:
+        return jsonify({"error": "missing target"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_FEATURES:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        if target_in not in _ent._TIER_FEATURES:
+            return (
+                jsonify(
+                    {
+                        "error": "unknown target",
+                        "which": "target",
+                        "target": target_in,
+                    }
+                ),
+                404,
+            )
+        row = _ent.capacity_diff_at(tier_in, target_in)
+        if row is None:
+            return (
+                jsonify(
+                    {
+                        "error": "capacity-diff-at failed",
+                        "tier": tier_in,
+                        "target": target_in,
+                    }
+                ),
+                404,
+            )
+        return jsonify({"tier": tier_in, "target": target_in, "row": row})
+    except Exception as exc:
+        logger.warning("api_entitlement_capacity_diff_at: error: %s", exc)
+        return (
+            jsonify(
+                {
+                    "error": "capacity-diff-at failed",
+                    "tier": tier_in,
+                    "target": target_in,
+                }
+            ),
+            404,
+        )
+
+
+@bp_entitlement.route("/api/entitlement/capacity-diff-at-batch")
+def api_entitlement_capacity_diff_at_batch():
+    """``GET /api/entitlement/capacity-diff-at-batch?tier=<source>`` --
+    what-if + batch sibling of ``/api/entitlement/capacity-diff-batch``:
+    per-axis capacity-transition rows for every purchasable tier as a
+    target, computed against the caller-supplied ``tier`` rather than
+    the resolved entitlement ``/capacity-diff-batch`` anchors to.
+
+    Composes the scalar what-if (``/capacity-diff-at``) and the live
+    batch (``/capacity-diff-batch``) -- same row shape and ordering as
+    the live batch, same hypothetical perspective as the ``_at``
+    endpoint. Lets a pricing-comparison matrix UI render the "capacity
+    vs <hypothetical-tier>" column for every rung off **one** round-
+    trip instead of N calls to ``/capacity-diff-at``.
+
+    Pair with ``/tier-unlocks-at-batch`` (marginal feature/runtime
+    grant per rung) and ``/tier-locks-at-batch`` (marginal loss per
+    rung) to render the full "what's new at X / what you'd give up at
+    X / capacity at X" view of a pricing matrix pivoted around any
+    hypothetical perspective tier without client-side composition.
+
+    Accepts any tier id in :data:`entitlements._TIER_FEATURES` on the
+    ``tier`` arg (including ``trial``), matching the other ``_at``
+    family endpoints. The target list mirrors ``/capacity-diff-batch``
+    (purchasable tiers only -- trial excluded), so the rows match the
+    live batch's target axis byte-for-byte and the response can be
+    folded into the same pricing-page table.
+
+    Response shape::
+
+        {
+          "tier":              "<source tier id>",
+          "tiers":             [<row>, ...],
+          "current_tier":      "<resolved tier id>",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<row>`` matches ``/api/entitlement/capacity-diff-at`` for
+    the same ``(tier, target)`` pair exactly (``target``,
+    ``channel_limit``, ``retention_days``, ``node_limit``) -- with the
+    ``before`` side carrying the caller-supplied ``tier``'s static
+    caps (NOT the resolved entitlement's caps the live batch uses).
+
+    - **400** when ``tier=`` is missing / blank.
+    - **404** when ``tier`` is unknown. The body carries ``which=tier``
+      so a caller can render the right "unknown tier" message.
+    - **Never 5xxs**: a resolver failure yields an empty ``tiers`` list
+      and the grace-shape envelope so the matrix keeps rendering.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_FEATURES:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        rows = _ent.capacity_diff_at_batch(tier_in) or []
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tiers": rows,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_capacity_diff_at_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/capacity-diff-path")
 def api_entitlement_capacity_diff_path():
     """``GET /api/entitlement/capacity-diff-path?from=<id>&to=<id>`` --
