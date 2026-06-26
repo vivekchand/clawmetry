@@ -2610,6 +2610,190 @@ def api_entitlement_runtime_spec_batch():
         )
 
 
+@bp_entitlement.route("/api/entitlement/feature-spec-at-batch")
+def api_entitlement_feature_spec_at_batch():
+    """``GET /api/entitlement/feature-spec-at-batch?tier=<perspective>
+    &features=a,b,c`` -- what-if + batch sibling of
+    ``/api/entitlement/feature-spec-batch``.
+
+    Where ``/feature-spec-batch`` returns batch rows against the LIVE
+    resolved entitlement, this returns them against a HYPOTHETICAL
+    ``perspective_tier``. Pairs with ``/feature-spec-at`` the same way
+    ``/feature-spec-batch`` pairs with ``/feature-spec``: scalar -> matrix
+    in one round-trip.
+
+    Use case: a pricing-comparison matrix UI ("here are the 6 features I
+    want to render at Cloud Pro") hydrates the visible rows off ONE call
+    instead of N calls to ``/feature-spec-at``.
+
+    Each ``features[]`` entry is byte-identical to a row from
+    :func:`entitlements.feature_catalog_at` -- pinned by the parity
+    tests so the scalar / bulk / batch what-if accessors cannot drift.
+    Supplied ids are normalised (whitespace stripped, lowercased,
+    duplicates dropped, first-seen order preserved). Unknown ids do not
+    404 the call -- they are echoed in ``unknown[]`` so a partially-bad
+    caller still gets rows back for the valid ids alongside a list of
+    what was dropped.
+
+    Response shape (mirrors ``/feature-spec-batch`` plus a
+    ``perspective_tier`` echo for caller round-trip safety)::
+
+        {
+          "features":              [<spec_row>, ...],
+          "unknown":               ["bogus_id", ...],
+          "perspective_tier":      "...",
+          "perspective_tier_rank": <int>,
+          "current_tier":          "...",
+          "current_tier_rank":     <int>,
+          "grace":                 <bool>,
+          "enforced":              <bool>,
+        }
+
+    - **400** when ``tier=`` is missing / blank or ``features=`` is
+      missing / empty after normalisation
+    - **404** when ``tier`` is unknown (body carries ``which: "tier"``)
+    - **Never 5xxs**: a synthesis failure short-circuits to the OSS-free
+      shape (empty rows, ``current_tier=oss``, ``grace=true``) with the
+      perspective tier echoed so the UI keeps rendering.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        features = _parse_csv_arg("features")
+        if not features:
+            return (
+                jsonify({"error": "supply features=<csv>"}),
+                400,
+            )
+        batch = _ent.feature_spec_at_batch(tier_in, features)
+        if batch is None:
+            batch = {"features": [], "unknown": []}
+        ent = _ent.get_entitlement()
+        batch["perspective_tier"] = tier_in
+        batch["perspective_tier_rank"] = _ent.tier_rank(tier_in)
+        batch["current_tier"] = ent.tier
+        batch["current_tier_rank"] = _ent.tier_rank(ent.tier)
+        batch["grace"] = bool(ent.grace)
+        batch["enforced"] = _ent.is_enforced()
+        return jsonify(batch)
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_feature_spec_at_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "features": [],
+                "unknown": [],
+                "perspective_tier": tier_in,
+                "perspective_tier_rank": 0,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/runtime-spec-at-batch")
+def api_entitlement_runtime_spec_at_batch():
+    """``GET /api/entitlement/runtime-spec-at-batch?tier=<perspective>
+    &runtimes=a,b,c`` -- what-if + batch sibling of
+    ``/api/entitlement/runtime-spec-batch``.
+
+    Mirrors :func:`api_entitlement_feature_spec_at_batch` for the
+    runtime axis; together they let a pricing-comparison matrix UI
+    hydrate per-row state for a viewport's worth of features + runtimes
+    at a hypothetical tier off TWO calls instead of N + M calls to
+    ``/feature-spec-at`` + ``/runtime-spec-at``.
+
+    Each ``runtimes[]`` entry is byte-identical to a row from
+    :func:`entitlements.runtime_catalog_at`. Aliases are canonicalised
+    the same way ``/runtime-spec`` already does (``claude-code`` ->
+    ``claude_code``), and aliases that collapse to a canonical id
+    already in the response are silently de-duplicated so the row count
+    matches the unique-canonical-id count.
+
+    Response shape (mirrors ``/runtime-spec-batch`` plus a
+    ``perspective_tier`` echo)::
+
+        {
+          "runtimes":              [<spec_row>, ...],
+          "unknown":               ["bogus_id", ...],
+          "perspective_tier":      "...",
+          "perspective_tier_rank": <int>,
+          "current_tier":          "...",
+          "current_tier_rank":     <int>,
+          "grace":                 <bool>,
+          "enforced":              <bool>,
+        }
+
+    - **400** when ``tier=`` is missing / blank or ``runtimes=`` is
+      missing / empty after normalisation
+    - **404** when ``tier`` is unknown (body carries ``which: "tier"``)
+    - **Never 5xxs**: a synthesis failure short-circuits to the OSS-free
+      shape (empty rows, ``current_tier=oss``, ``grace=true``) with the
+      perspective tier echoed.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        runtimes = _parse_csv_arg("runtimes")
+        if not runtimes:
+            return (
+                jsonify({"error": "supply runtimes=<csv>"}),
+                400,
+            )
+        batch = _ent.runtime_spec_at_batch(tier_in, runtimes)
+        if batch is None:
+            batch = {"runtimes": [], "unknown": []}
+        ent = _ent.get_entitlement()
+        batch["perspective_tier"] = tier_in
+        batch["perspective_tier_rank"] = _ent.tier_rank(tier_in)
+        batch["current_tier"] = ent.tier
+        batch["current_tier_rank"] = _ent.tier_rank(ent.tier)
+        batch["grace"] = bool(ent.grace)
+        batch["enforced"] = _ent.is_enforced()
+        return jsonify(batch)
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_runtime_spec_at_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "runtimes": [],
+                "unknown": [],
+                "perspective_tier": tier_in,
+                "perspective_tier_rank": 0,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/affordable-tiers")
 def api_entitlement_affordable_tiers():
     """``GET /api/entitlement/affordable-tiers?features=a,b,c&runtimes=x,y
