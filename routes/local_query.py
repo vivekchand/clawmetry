@@ -776,6 +776,12 @@ _DAEMON_METHODS = frozenset({
     # sessions + heartbeats; routed through the daemon proxy so the
     # dashboard process never opens DuckDB writable.
     "query_version_health",
+    # Issue #3302 — security threat events. ingest_ is a write (called from
+    # /api/security/threats after each scan); query_ is read-only (serves
+    # /api/security-threats on the Health tab). Both routed through the daemon
+    # proxy so the dashboard process never opens DuckDB writable.
+    "ingest_security_event",
+    "query_security_events",
 })
 
 

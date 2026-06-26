@@ -1516,6 +1516,31 @@ def api_security_threats():
                 channels=["banner", "telegram"],
             )
 
+    # Persist to DuckDB so /api/security-threats has a history to serve.
+    if threats:
+        try:
+            from routes.local_query import local_store_via_daemon
+            from clawmetry import local_store as _ls_mod
+            for t in threats:
+                ts_key = (t.get("time") or "").replace(":", "").replace("-", "")[:15]
+                src_key = (t.get("source") or "").replace("/", "_")[:32]
+                ev_id = f"sec_{t.get('rule_id', 'x')}_{src_key}_{ts_key}"
+                ev = {
+                    "id": ev_id,
+                    "ts": t.get("time") or "",
+                    "type": t.get("event_type"),
+                    "severity": t.get("severity"),
+                    "session_id": t.get("source"),
+                    "rule_id": t.get("rule_id"),
+                    "description": t.get("description"),
+                    "snippet": t.get("detail", "")[:200],
+                }
+                result = local_store_via_daemon("ingest_security_event", event=ev)
+                if result is None:
+                    _ls_mod.get_store().ingest_security_event(ev)
+        except Exception:
+            pass
+
     return jsonify(
         {"threats": threats, "counts": counts, "scanned_events": len(events)}
     )

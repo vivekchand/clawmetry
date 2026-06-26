@@ -620,6 +620,23 @@ _DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_authority_violations_ts      ON authority_violations(ts)",
     "CREATE INDEX IF NOT EXISTS idx_authority_violations_session ON authority_violations(session_id, ts)",
+    # Issue #3302 — security threat events. Written by /api/security/threats
+    # when it detects hits; read by /api/security-threats on the Health tab.
+    # Idempotent (CREATE TABLE IF NOT EXISTS).
+    """
+    CREATE TABLE IF NOT EXISTS security_events (
+        id          VARCHAR PRIMARY KEY,
+        ts          VARCHAR NOT NULL,
+        type        VARCHAR,
+        severity    VARCHAR,
+        session_id  VARCHAR,
+        rule_id     VARCHAR,
+        description VARCHAR,
+        snippet     VARCHAR
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_security_events_ts      ON security_events(ts)",
+    "CREATE INDEX IF NOT EXISTS idx_security_events_session ON security_events(session_id, ts)",
     # Issue #2201 — asset registry. Evidence + review layer that turns
     # individual agent discoveries (Self-Evolve findings, useful prompts,
     # improved skills) into reviewable, reusable assets without auto-promoting
@@ -7391,6 +7408,64 @@ class LocalStore:
         params.append(int(limit))
         cols = ["id", "session_id", "ts", "tool", "violation_type",
                 "declared_tools", "allowed_tools"]
+        return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
+
+    def ingest_security_event(self, event: dict[str, Any]) -> None:
+        """Upsert one security-threat event row. Required: ``id``."""
+        eid = event.get("id")
+        if not eid:
+            raise ValueError("security event must include 'id'")
+        ts = event.get("ts") or datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO security_events (
+                    id, ts, type, severity, session_id, rule_id, description, snippet
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET
+                    severity    = COALESCE(excluded.severity,    security_events.severity),
+                    description = COALESCE(excluded.description, security_events.description),
+                    snippet     = COALESCE(excluded.snippet,     security_events.snippet)
+            """, [
+                str(eid),
+                ts,
+                event.get("type"),
+                event.get("severity"),
+                event.get("session_id"),
+                event.get("rule_id"),
+                event.get("description"),
+                event.get("snippet"),
+            ])
+
+    def query_security_events(
+        self,
+        *,
+        session_id: str | None = None,
+        severity: str | None = None,
+        since: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Read security-event rows, most-recent first."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if session_id:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        if severity:
+            clauses.append("severity = ?")
+            params.append(severity)
+        if since:
+            clauses.append("ts >= ?")
+            params.append(since)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT id, ts, type, severity, session_id, rule_id, description, snippet
+            FROM security_events
+            {where}
+            ORDER BY ts DESC, id
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["id", "ts", "type", "severity", "session_id", "rule_id", "description", "snippet"]
         return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
 
     def query_nemoclaw_metrics(
