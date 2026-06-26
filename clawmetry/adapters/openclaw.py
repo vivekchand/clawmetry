@@ -992,6 +992,16 @@ class OpenClawAdapter(AgentAdapter):
             _idt = s.get("target") or s.get("identityTarget")
             if _idt is not None:
                 extra["identityTarget"] = _idt
+            # Cron delivery awareness (#3342): PR #93580 stamps a
+            # cronDeliveryTarget marker on sessions that are delivery targets
+            # of a cron job so they can be correlated with the originating
+            # cron. Without this, cron-triggered sessions are indistinguishable
+            # from direct sessions in the dashboard.
+            _cdt = s.get("cronDeliveryTarget")
+            if _cdt is None:
+                _cdt = s.get("isCronDeliveryTarget") or s.get("cronTarget")
+            if _cdt is not None:
+                extra["cronDeliveryTarget"] = bool(_cdt)
             tok_total = int(s.get("totalTokens") or 0)
             tok_in = int(s.get("inputTokens") or 0)
             tok_out = int(s.get("outputTokens") or 0)
