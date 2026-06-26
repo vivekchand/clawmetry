@@ -719,6 +719,70 @@ class Entitlement:
             logger.warning("entitlements: previous_tier_unlocks failed: %s", exc)
             return None
 
+    def next_tier_locks(self) -> dict | None:
+        """One-rung-up locks row in :func:`tier_locks` shape.
+
+        Marginal-loss companion to :meth:`next_tier_unlocks` and the fourth
+        member of the ``next_tier_*`` family alongside :meth:`next_tier_diff`
+        (full ``upgrade_diff`` shape), :meth:`next_tier_unlocks` (marginal
+        grants in ``tier_unlocks`` shape), and :meth:`next_tier_capacity_diff`
+        (capacity-only marginal).
+
+        Convenience for ``tier_locks(self.next_purchasable_tier())`` -- the
+        marginal-locks row of the rung immediately above current as a
+        tier-property (``lost_features`` / ``lost_runtimes`` are what that
+        rung first loses vs the rung above *it*, NOT vs the caller). Useful
+        as a symmetric detail row alongside :meth:`next_tier_unlocks` on a
+        pricing-table cell so the rung above carries both its first-grant
+        and first-loss copy off ONE entitlement round-trip; collapses to
+        empty loss lists at the ladder's ceiling (Enterprise's
+        :func:`tier_locks` row has no rung above to step down from).
+
+        Returns ``None`` at the resolver's ceiling (no next purchasable
+        rung to look up) and never raises -- a resolver failure
+        short-circuits to ``None`` so the CTA surface keeps rendering
+        instead of 500-ing.
+        """
+        try:
+            target = self.next_purchasable_tier()
+            if target is None:
+                return None
+            return tier_locks(target)
+        except Exception as exc:
+            logger.warning("entitlements: next_tier_locks failed: %s", exc)
+            return None
+
+    def previous_tier_locks(self) -> dict | None:
+        """One-rung-down locks row in :func:`tier_locks` shape.
+
+        Symmetric companion to :meth:`previous_tier_unlocks` -- where the
+        unlocks form returns the rung-below's *first-grant* row (a tier
+        property), this returns the rung-below's *first-loss* row.
+
+        Convenience for ``tier_locks(self.previous_purchasable_tier())``;
+        the row's ``lost_features`` / ``lost_runtimes`` are what the rung
+        below first loses vs the rung above it -- and since "the rung
+        above" the previous purchasable tier is *exactly the caller's
+        current tier* in the simple single-step downgrade case, this
+        row's loss lists byte-equal the caller's marginal loss when
+        stepping down by one rung. Pair with :meth:`previous_tier_diff`
+        (which carries the same marginal in ``downgrade_diff`` shape) on
+        a step-down confirmation card.
+
+        Returns ``None`` at the resolver's floor (no previous purchasable
+        rung to look up) and never raises -- a resolver failure
+        short-circuits to ``None`` so the confirmation surface keeps
+        rendering instead of 500-ing.
+        """
+        try:
+            target = self.previous_purchasable_tier()
+            if target is None:
+                return None
+            return tier_locks(target)
+        except Exception as exc:
+            logger.warning("entitlements: previous_tier_locks failed: %s", exc)
+            return None
+
     def grace_remaining_days(self) -> int | None:
         at = enforce_at_epoch()
         if at is None:
@@ -967,6 +1031,8 @@ class Entitlement:
             "prev_tier_capacity_diff": self.previous_tier_capacity_diff(),
             "next_tier_unlocks": self.next_tier_unlocks(),
             "prev_tier_unlocks": self.previous_tier_unlocks(),
+            "next_tier_locks": self.next_tier_locks(),
+            "prev_tier_locks": self.previous_tier_locks(),
         }
 
 
@@ -1400,6 +1466,26 @@ def previous_tier_unlocks() -> dict | None:
         return get_entitlement().previous_tier_unlocks()
     except Exception as exc:
         logger.warning("entitlements: previous_tier_unlocks (module) failed: %s", exc)
+        return None
+
+
+def next_tier_locks() -> dict | None:
+    """Module-level :meth:`Entitlement.next_tier_locks` against the resolved
+    entitlement. Never raises."""
+    try:
+        return get_entitlement().next_tier_locks()
+    except Exception as exc:
+        logger.warning("entitlements: next_tier_locks (module) failed: %s", exc)
+        return None
+
+
+def previous_tier_locks() -> dict | None:
+    """Module-level :meth:`Entitlement.previous_tier_locks` against the
+    resolved entitlement. Never raises."""
+    try:
+        return get_entitlement().previous_tier_locks()
+    except Exception as exc:
+        logger.warning("entitlements: previous_tier_locks (module) failed: %s", exc)
         return None
 
 

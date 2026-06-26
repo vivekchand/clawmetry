@@ -1427,6 +1427,96 @@ def api_entitlement_previous_tier_unlocks():
         )
 
 
+@bp_entitlement.route("/api/entitlement/next-tier-locks")
+def api_entitlement_next_tier_locks():
+    """``GET /api/entitlement/next-tier-locks`` -- marginal locks row for the
+    rung immediately above the resolved entitlement, in
+    :func:`clawmetry.entitlements.tier_locks` shape (``tier``,
+    ``tier_label``, ``tier_rank``, ``next_tier``, ``next_tier_label``,
+    ``next_tier_rank``, ``lost_features``, ``lost_runtimes``).
+
+    Symmetric companion to ``/api/entitlement/next-tier-unlocks``: that
+    endpoint carries the rung-above's first-grant row, this carries its
+    first-loss row -- a pricing-table cell can render both off ONE
+    entitlement round-trip. ``locks`` is ``null`` at the ladder's
+    ceiling (no rung above). Never 5xxs: a resolver failure
+    short-circuits to the grace-shape envelope so the dashboard CTA
+    keeps rendering instead of disappearing.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        body = ent.next_tier_locks()
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "locks": body,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_next_tier_locks: error: %s", exc)
+        return jsonify(
+            {
+                "current_tier": "oss",
+                "current_tier_label": "OSS",
+                "current_tier_rank": 0,
+                "locks": None,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-locks")
+def api_entitlement_previous_tier_locks():
+    """``GET /api/entitlement/previous-tier-locks`` -- marginal locks row for
+    the rung immediately below the resolved entitlement, in
+    :func:`clawmetry.entitlements.tier_locks` shape.
+
+    The step-down confirmation detail row paired with
+    ``/api/entitlement/previous-tier-diff`` (which carries the same
+    marginal in ``downgrade_diff`` shape). ``lost_features`` /
+    ``lost_runtimes`` here are what the rung below first loses vs the
+    rung above it -- and since "the rung above" the previous purchasable
+    tier *is* the caller's current tier in the simple single-step
+    downgrade case, these lists byte-equal the caller's marginal loss
+    when stepping down by one rung. ``locks`` is ``null`` at the
+    ladder's floor (no rung below). Never 5xxs.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        body = ent.previous_tier_locks()
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "locks": body,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_previous_tier_locks: error: %s", exc)
+        return jsonify(
+            {
+                "current_tier": "oss",
+                "current_tier_label": "OSS",
+                "current_tier_rank": 0,
+                "locks": None,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/tier-locks")
 def api_entitlement_tier_locks():
     """``GET /api/entitlement/tier-locks?tier=<id>`` -- marginal locks for
