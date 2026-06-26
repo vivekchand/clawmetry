@@ -2991,6 +2991,175 @@ def api_entitlement_tier_locks_at():
         )
 
 
+@bp_entitlement.route("/api/entitlement/tier-unlocks-at-batch")
+def api_entitlement_tier_unlocks_at_batch():
+    """``GET /api/entitlement/tier-unlocks-at-batch?tier=<source>`` --
+    what-if + batch sibling of ``/api/entitlement/tier-unlocks-batch``:
+    marginal-unlocks rows for every purchasable tier as a target,
+    computed against the caller-supplied ``tier`` rather than the
+    global next-lower-purchasable-tier anchor ``/tier-unlocks-batch``
+    uses.
+
+    Composes the scalar what-if (``/tier-unlocks-at``) and the live
+    batch (``/tier-unlocks-batch``) -- same row shape and ordering as
+    the live batch, same hypothetical perspective as the ``_at``
+    endpoint. Lets a pricing-comparison matrix UI render the "marginal
+    unlocks vs <hypothetical-tier>" column for every rung off **one**
+    round-trip instead of N calls to ``/tier-unlocks-at``.
+
+    Accepts any tier id in :data:`entitlements._TIER_ORDER` on the
+    ``tier`` arg (including ``trial``), matching the other ``_at``
+    family endpoints. The target list mirrors ``/tier-unlocks-batch``
+    (purchasable tiers only -- trial excluded), so the rows match the
+    live batch's target axis byte-for-byte and the response can be
+    folded into the same pricing-page table.
+
+    Response shape::
+
+        {
+          "tier":              "<source tier id>",
+          "tiers":             [<row>, ...],
+          "current_tier":      "<resolved tier id>",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<row>`` matches ``/api/entitlement/tier-unlocks-at`` for the
+    same ``(tier, target)`` pair exactly (``tier``, ``tier_label``,
+    ``tier_rank``, ``previous_tier``, ``previous_tier_label``,
+    ``previous_tier_rank``, ``features``, ``runtimes``) -- with
+    ``previous_tier`` carrying the caller-supplied ``tier`` arg, NOT
+    the global next-lower-purchasable anchor.
+
+    - **400** when ``tier=`` is missing / blank.
+    - **404** when ``tier`` is unknown. The body carries ``which=tier``
+      so a caller can render the right "unknown tier" message.
+    - **Never 5xxs**: a resolver failure yields an empty ``tiers`` list
+      and the grace-shape envelope so the matrix keeps rendering.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        rows = _ent.tier_unlocks_at_batch(tier_in) or []
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tiers": rows,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_tier_unlocks_at_batch: error: %s", exc)
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/tier-locks-at-batch")
+def api_entitlement_tier_locks_at_batch():
+    """``GET /api/entitlement/tier-locks-at-batch?tier=<source>`` --
+    what-if + batch sibling of ``/api/entitlement/tier-locks-batch``:
+    marginal-loss rows for every purchasable tier as a target, computed
+    against the caller-supplied ``tier`` rather than the global next-
+    higher-purchasable-tier anchor ``/tier-locks-batch`` uses.
+
+    Marginal-loss mirror of ``/tier-unlocks-at-batch`` and pairs with
+    ``/tier-locks-batch`` the same way ``/tier-unlocks-at-batch`` pairs
+    with ``/tier-unlocks-batch``. Pair the two ``_at_batch`` endpoints
+    to render the upgrade-CTA + downgrade-warning columns of a
+    "compared against any hypothetical perspective" pricing matrix in
+    two round-trips.
+
+    Accepts any tier id in :data:`entitlements._TIER_ORDER` on the
+    ``tier`` arg (including ``trial``). The target list mirrors
+    ``/tier-locks-batch`` (purchasable tiers only -- trial excluded).
+
+    Response shape::
+
+        {
+          "tier":              "<source tier id>",
+          "tiers":             [<row>, ...],
+          "current_tier":      "<resolved tier id>",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<row>`` matches ``/api/entitlement/tier-locks-at`` for the
+    same ``(tier, target)`` pair exactly (``tier``, ``tier_label``,
+    ``tier_rank``, ``next_tier``, ``next_tier_label``,
+    ``next_tier_rank``, ``lost_features``, ``lost_runtimes``) -- with
+    ``next_tier`` carrying the caller-supplied ``tier`` arg (the rung
+    you'd be stepping FROM).
+
+    - **400** when ``tier=`` is missing / blank.
+    - **404** when ``tier`` is unknown. The body carries ``which=tier``.
+    - **Never 5xxs**: a resolver failure yields an empty ``tiers`` list
+      and the grace-shape envelope so the matrix keeps rendering.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        rows = _ent.tier_locks_at_batch(tier_in) or []
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tiers": rows,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_tier_locks_at_batch: error: %s", exc)
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/affordable-tiers")
 def api_entitlement_affordable_tiers():
     """``GET /api/entitlement/affordable-tiers?features=a,b,c&runtimes=x,y
