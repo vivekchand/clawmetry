@@ -4494,3 +4494,112 @@ def tier_locks_at(tier: str, target: str) -> dict | None:
     except Exception as exc:
         logger.warning("entitlements: tier_locks_at failed: %s", exc)
         return None
+
+
+def tier_unlocks_at_batch(tier: str) -> list[dict] | None:
+    """What-if + batch sibling of :func:`tier_unlocks_batch`: marginal
+    unlocks against the caller-supplied ``tier`` for every purchasable
+    tier as a target, in one pass.
+
+    Composes :func:`tier_unlocks_at` (scalar what-if) and
+    :func:`tier_unlocks_batch` (live batch): same row shape and ordering
+    as the live batch helper, same hypothetical perspective as the
+    ``_at`` helper. Lets a pricing-comparison matrix UI render the
+    "marginal unlocks vs <hypothetical-tier>" column for every rung off
+    **one** round-trip instead of N calls to
+    :func:`tier_unlocks_at`.
+
+    Each row is byte-identical to ``tier_unlocks_at(tier, target)`` for
+    the same ``(tier, target)`` pair -- a parity test pins this so the
+    batch what-if cannot drift from the scalar what-if (the same
+    invariant ``feature_spec_at_batch`` / ``runtime_spec_at_batch``
+    enforce against their scalar siblings).
+
+    Rows are sorted by ``(tier_rank, tier_id)`` ascending -- byte-
+    stable against :func:`tier_unlocks_batch`'s ordering so a UI can
+    swap the live anchor for a hypothetical perspective without
+    re-sorting client-side. Same-rank sibling tiers (``cloud_pro`` /
+    ``pro`` both at rank 2) are both returned.
+
+    Target list is :data:`_PURCHASABLE_TIERS` (trial excluded), matching
+    :func:`tier_unlocks_batch`. The source ``tier`` accepts any id in
+    :data:`_TIER_ORDER` including :data:`TIER_TRIAL` -- the lenient
+    ``_at`` posture, since the source is hypothetical and may legitimately
+    answer "what would Cloud Pro unlock vs a trial install?".
+
+    Returns ``None`` for empty / unknown source ``tier`` (caller renders
+    "unknown tier" / 404). Never raises: a builder failure short-circuits
+    to ``[]`` so the matrix keeps rendering instead of breaking.
+    """
+    try:
+        a = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not a or a not in _TIER_ORDER:
+        return None
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            row = _unlocks_row(a, tid)
+            if row is not None:
+                out.append(row)
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: tier_unlocks_at_batch failed: %s", exc)
+        return []
+
+
+def tier_locks_at_batch(tier: str) -> list[dict] | None:
+    """What-if + batch sibling of :func:`tier_locks_batch`: marginal
+    losses against the caller-supplied ``tier`` for every purchasable
+    tier as a target, in one pass.
+
+    Marginal-loss mirror of :func:`tier_unlocks_at_batch` and pairs
+    with :func:`tier_locks_batch` the same way
+    :func:`tier_unlocks_at_batch` pairs with :func:`tier_unlocks_batch`
+    -- the downgrade-warning column on the same matrix the unlocks
+    batch renders the upgrade-CTA column for, pivoted around a
+    hypothetical perspective tier.
+
+    Each row is byte-identical to ``tier_locks_at(tier, target)`` for
+    the same ``(tier, target)`` pair -- a parity test pins this so the
+    batch what-if cannot drift from the scalar what-if.
+
+    Rows are sorted by ``(tier_rank, tier_id)`` ascending -- byte-
+    stable against :func:`tier_locks_batch`'s ordering and against
+    :func:`tier_unlocks_at_batch` for the same source tier so a UI can
+    fold the two responses into an "if you upgrade / if you downgrade"
+    matrix without re-sorting client-side. Same-rank sibling tiers are
+    both returned.
+
+    Target list is :data:`_PURCHASABLE_TIERS` (trial excluded), matching
+    :func:`tier_locks_batch`. The source ``tier`` accepts any id in
+    :data:`_TIER_ORDER` including :data:`TIER_TRIAL` -- the lenient
+    ``_at`` posture.
+
+    Returns ``None`` for empty / unknown source ``tier``. Never raises:
+    a builder failure short-circuits to ``[]`` so the matrix keeps
+    rendering.
+    """
+    try:
+        a = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not a or a not in _TIER_ORDER:
+        return None
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            row = _locks_row(a, tid)
+            if row is not None:
+                out.append(row)
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: tier_locks_at_batch failed: %s", exc)
+        return []
