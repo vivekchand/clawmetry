@@ -1002,6 +1002,23 @@ class OpenClawAdapter(AgentAdapter):
                 _cdt = s.get("isCronDeliveryTarget") or s.get("cronTarget")
             if _cdt is not None:
                 extra["cronDeliveryTarget"] = bool(_cdt)
+            # GLM/Zhipu overload classification (#3343): PR #93241 classifies
+            # Zhipu GLM overload as a distinct overload state for failover;
+            # surface the tag so session views can indicate failover routing.
+            _ovl = s.get("overloadClassification") or s.get("glmOverloadState")
+            if _ovl is not None:
+                extra["overloadClassification"] = _ovl
+            # Failover model reference (#3343): PR #93241 also emits the model
+            # name used when the primary GLM endpoint is overloaded.
+            _glm_fov = s.get("failoverModel") or s.get("failoverModelRef")
+            if _glm_fov is not None:
+                extra["failoverModel"] = _glm_fov
+            # Zai synthesized-model baseUrl (#3343): PR #94461 falls back to
+            # the manifest baseUrl for synthesized GLM-5 models -- a distinct
+            # URL from inferenceBaseUrl in sandboxInferenceConfigs.
+            _zai = s.get("zaiBaseUrl") or s.get("synthesizedModelBaseUrl") or s.get("glm5BaseUrl")
+            if _zai is not None:
+                extra["zaiBaseUrl"] = _zai
             tok_total = int(s.get("totalTokens") or 0)
             tok_in = int(s.get("inputTokens") or 0)
             tok_out = int(s.get("outputTokens") or 0)
@@ -1199,6 +1216,19 @@ class OpenClawAdapter(AgentAdapter):
                             _tl = obj.get("thinkLevel") or obj.get("reasoningLevel")
                             if _tl is not None:
                                 extra["thinkLevel"] = _tl
+                            # GLM/Zhipu overload classification (#3343): PR #93241
+                            # emits overload state tags on event blobs; surface
+                            # both the classification and any failover model ref.
+                            _ovl = obj.get("overloadClassification") or obj.get("glmOverloadState")
+                            if _ovl is not None:
+                                extra["overloadClassification"] = _ovl
+                            _glm_fov = obj.get("failoverModel") or obj.get("failoverModelRef")
+                            if _glm_fov is not None:
+                                extra["failoverModel"] = _glm_fov
+                            # Zai synthesized-model baseUrl (#3343): PR #94461.
+                            _zai = obj.get("zaiBaseUrl") or obj.get("synthesizedModelBaseUrl") or obj.get("glm5BaseUrl")
+                            if _zai is not None:
+                                extra["zaiBaseUrl"] = _zai
                             # Normalized TTFR keys (#3054): also write ttfr_ms /
                             # slow_reply so callers that read the normalized form
                             # don't need to know the original key spellings.
