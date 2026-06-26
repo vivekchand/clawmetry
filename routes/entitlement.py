@@ -113,6 +113,65 @@ def api_runtimes():
         )
 
 
+@bp_entitlement.route("/api/entitlement/tier-catalog")
+def api_entitlement_tier_catalog():
+    """Return the full tier ladder with each tier's features, runtimes,
+    retention and a ``current`` flag set on the resolved tier.
+
+    Companion to :func:`api_runtimes` (per-runtime locked/free flags) — the
+    pricing page reads this to render an upgrade-CTA card off ONE round-trip
+    instead of stitching per-feature gate calls together. Catalogue-derived:
+    flipping enforcement on does NOT change the body. Only the ``current``
+    flag depends on the resolver.
+
+    Shape::
+
+        {
+          "tiers": [
+            {
+              "id":              "<tier>",
+              "label":           "<Display>",
+              "rank":            <int>,
+              "paid":            true | false,
+              "current":         true | false,
+              "features":        ["..."],
+              "runtimes":        ["..."],
+              "retention_days":  <int> | null
+            },
+            ...
+          ],
+          "current":  "<resolved tier id>",
+          "grace":    true | false,   # mirrors /api/entitlement.grace
+          "enforced": true | false
+        }
+
+    Side-effect-free and never-raise: any resolution error falls back to an
+    OSS-free shape so the UI still has something safe to render.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": _ent.tier_catalog(),
+                "current": ent.tier,
+                "grace": ent.grace,
+                "enforced": not ent.grace,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_tier_catalog: falling back to OSS-free: %s", exc)
+        return jsonify(
+            {
+                "tiers": [],
+                "current": "oss",
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route("/api/license/status")
 def api_license_status():
     """Return the current self-hosted license info as JSON.

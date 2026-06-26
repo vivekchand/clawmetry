@@ -65,6 +65,49 @@ _PAID_TIERS = frozenset(
     {TIER_TRIAL, TIER_CLOUD_STARTER, TIER_CLOUD_PRO, TIER_PRO, TIER_ENTERPRISE}
 )
 
+# Display labels for every known tier. The frontend pricing/upgrade card and
+# the locked-runtime tooltip both read these so the API and the UI agree on
+# what to call each tier in human copy. Falls back to a Title-cased id when a
+# label is missing so an unknown tier still renders with *something*.
+TIER_LABELS = {
+    TIER_OSS: "OSS",
+    TIER_CLOUD_FREE: "Cloud Free",
+    TIER_TRIAL: "Trial",
+    TIER_CLOUD_STARTER: "Cloud Starter",
+    TIER_CLOUD_PRO: "Cloud Pro",
+    TIER_PRO: "Pro (Self-hosted)",
+    TIER_ENTERPRISE: "Enterprise",
+}
+
+# Stable ladder rank for every known tier — lower-rank tier is strictly "less
+# than" a higher-rank tier on the open-core ladder. Same-rank entries are
+# cloud/self-hosted siblings of the equivalent tier (rank 0 = Free, rank 1 =
+# Starter, rank 2 = Pro/Trial, rank 3 = Enterprise). The pricing-comparison
+# UI uses this to sort tiers deterministically; the gate never decides on
+# rank alone — feature/runtime grants do.
+_TIER_RANK = {
+    TIER_OSS: 0,
+    TIER_CLOUD_FREE: 0,
+    TIER_CLOUD_STARTER: 1,
+    TIER_TRIAL: 2,
+    TIER_CLOUD_PRO: 2,
+    TIER_PRO: 2,
+    TIER_ENTERPRISE: 3,
+}
+
+# Deterministic listing order for the catalog: ladder ascending, with
+# cloud/self-hosted siblings clustered. Pinned so the UI dropdown is
+# byte-stable across releases — adding a new tier MUST add a row here.
+_TIER_ORDER = (
+    TIER_OSS,
+    TIER_CLOUD_FREE,
+    TIER_CLOUD_STARTER,
+    TIER_TRIAL,
+    TIER_CLOUD_PRO,
+    TIER_PRO,
+    TIER_ENTERPRISE,
+)
+
 # ── Runtime catalogue ───────────────────────────────────────────────────────
 # FREE: the OpenClaw and NVIDIA NemoClaw runtimes. NeMo *governance* (policy
 # enforcement) is a separate free feature; ``nemoclaw`` here is the agent
@@ -464,6 +507,95 @@ def runtime_catalog() -> list[dict]:
                 "free": False,
                 "allowed": allowed,
                 "locked": not allowed,
+            }
+        )
+    return out
+
+
+def tier_label(tier: str) -> str:
+    """Human-readable label for ``tier``. Falls back to a Title-cased id when
+    unknown so an unknown tier still renders with *something*. Mirrors
+    :func:`runtime_label` for the tier ladder. Never raises -- non-string
+    input returns ``""``."""
+    try:
+        tid = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return ""
+    if not tid:
+        return ""
+    return TIER_LABELS.get(tid, tid.replace("_", " ").title())
+
+
+def tier_rank(tier: str) -> int:
+    """Stable ladder rank for ``tier``. Returns ``-1`` for empty / unknown.
+
+    Same-rank entries (e.g. ``cloud_pro`` and ``pro``) are cloud/self-hosted
+    siblings of one another and not strictly ordered against each other. The
+    pricing UI uses ``(rank, id)`` to sort; never use the rank alone to decide
+    a gate — feature/runtime membership is the source of truth. Never raises
+    -- non-string input returns ``-1``.
+    """
+    try:
+        tid = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return -1
+    if not tid:
+        return -1
+    return _TIER_RANK.get(tid, -1)
+
+
+def tier_catalog() -> list[dict]:
+    """The full tier ladder with the entitlement-derived ``current`` flag set
+    on the row matching the resolved tier. Single source of truth the pricing
+    page reads to render *every* tier in the ladder — including ones the
+    install isn't on — so the upgrade-CTA card has data without monkey-
+    patching the entitlement context.
+
+    Each entry::
+
+        {
+          "id":              "<tier>",         # canonical key
+          "label":           "<Display>",      # falls back to title-cased id
+          "rank":            <int>,            # 0 = Free, 3 = Enterprise
+          "paid":            True | False,     # _PAID_TIERS membership
+          "current":         True | False,     # matches the resolved tier
+          "features":        ["..."],          # sorted, includes free
+          "runtimes":        ["..."],          # sorted, includes free
+          "retention_days":  <int> | null,     # null = unlimited / custom
+        }
+
+    Ordering: :data:`_TIER_ORDER` — ladder ascending, cloud/self-hosted
+    siblings clustered. Pinned so the UI is byte-stable across releases.
+
+    Never raises; on any resolution error every row is reported with
+    ``current=False`` and the OSS-free row is still surfaced first so the UI
+    has something safe to render. The catalog is catalogue-derived (off the
+    static per-tier grants) — flipping enforcement on does NOT change the
+    body. Only the ``current`` flag depends on the resolver.
+    """
+    try:
+        ent = get_entitlement()
+        current = (ent.tier or "").strip().lower()
+    except Exception as exc:
+        logger.warning("entitlements: tier_catalog falling back to grace: %s", exc)
+        current = TIER_OSS
+    out: list[dict] = []
+    for tid in _TIER_ORDER:
+        paid_feats = _TIER_FEATURES.get(tid, frozenset())
+        feats = sorted(FREE_FEATURES | paid_feats)
+        runtimes = sorted(
+            FREE_RUNTIMES | PAID_RUNTIMES if tid in _TIER_PAID_RUNTIMES else FREE_RUNTIMES
+        )
+        out.append(
+            {
+                "id": tid,
+                "label": tier_label(tid),
+                "rank": tier_rank(tid),
+                "paid": tid in _PAID_TIERS,
+                "current": tid == current,
+                "features": feats,
+                "runtimes": runtimes,
+                "retention_days": _TIER_RETENTION_DAYS.get(tid, 7),
             }
         )
     return out
