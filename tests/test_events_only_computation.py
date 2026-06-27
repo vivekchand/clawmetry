@@ -267,3 +267,214 @@ def test_recent_evals_falls_back_to_stored_when_no_events(store):
     assert len(rows) == 1
     assert rows[0]["total_tokens"] == 5000
     assert rows[0]["cost_usd"] == 0.25
+
+
+# ──────────────────────────────────────────────────────────────────────
+# query_subagents — events bridge (#1743 / #1755)
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _ingest_subagent_event(
+    s, subagent_id, *, tokens, cost, ts="2026-05-19T10:00:00Z",
+    agent_type="openclaw",
+):
+    """Ingest a brain event scoped to a subagent (session_id=subagent_id)."""
+    s.ingest({
+        "id": str(uuid.uuid4()),
+        "node_id": "agent+test",
+        "agent_id": "main",
+        "agent_type": agent_type,
+        "session_id": subagent_id,
+        "event_type": "brain",
+        "ts": ts,
+        "token_count": int(tokens),
+        "cost_usd": float(cost),
+        "data": {"type": "model.completed", "data": {"text": "x"}},
+    })
+
+
+def test_subagent_cost_computed_from_events_when_stored_is_zero(store):
+    """Daemon SIGKILL between event ingest and aggregate update leaves
+    subagents.cost_usd=0. Events are the source of truth (#1743/#1755)."""
+    sa_id = "sa-test-1"
+    store.ingest_subagent({
+        "subagent_id": sa_id,
+        "agent_type": "openclaw",
+        "parent_session_id": "parent-1",
+        "spawned_at": "2026-05-19T10:00:00Z",
+        "status": "completed",
+        "cost_usd": 0.0,
+        "token_count": 0,
+    })
+    _ingest_subagent_event(store, sa_id, tokens=1200, cost=0.009,
+                           ts="2026-05-19T10:00:01Z")
+    _ingest_subagent_event(store, sa_id, tokens=800, cost=0.006,
+                           ts="2026-05-19T10:00:02Z")
+    _wait(store)
+
+    rows = store.query_subagents()
+    assert len(rows) == 1
+    assert rows[0]["subagent_id"] == sa_id
+    assert rows[0]["token_count"] == 2000
+    assert abs(rows[0]["cost_usd"] - 0.015) < 1e-9
+
+
+def test_subagent_aggregates_fall_back_to_stored_when_no_events(store):
+    """Cloud-sync path writes stored aggregates without events — stored
+    value must win when no events exist for that subagent."""
+    sa_id = "sa-stored-only"
+    store.ingest_subagent({
+        "subagent_id": sa_id,
+        "agent_type": "openclaw",
+        "parent_session_id": "parent-2",
+        "spawned_at": "2026-05-19T11:00:00Z",
+        "status": "completed",
+        "cost_usd": 0.05,
+        "token_count": 3500,
+    })
+    _wait(store)
+
+    rows = store.query_subagents()
+    assert len(rows) == 1
+    assert rows[0]["token_count"] == 3500
+    assert abs(rows[0]["cost_usd"] - 0.05) < 1e-9
+
+
+def test_subagent_events_dont_cross_pollinate(store):
+    """Events scoped to subagent-A must not inflate subagent-B's totals."""
+    store.ingest_subagent({
+        "subagent_id": "sa-A",
+        "agent_type": "openclaw",
+        "parent_session_id": "parent-x",
+        "spawned_at": "2026-05-19T10:00:00Z",
+        "status": "completed",
+        "cost_usd": 0.0, "token_count": 0,
+    })
+    store.ingest_subagent({
+        "subagent_id": "sa-B",
+        "agent_type": "openclaw",
+        "parent_session_id": "parent-x",
+        "spawned_at": "2026-05-19T10:00:01Z",
+        "status": "completed",
+        "cost_usd": 0.0, "token_count": 0,
+    })
+    _ingest_subagent_event(store, "sa-A", tokens=500, cost=0.004,
+                           ts="2026-05-19T10:00:10Z")
+    _wait(store)
+
+    rows = {r["subagent_id"]: r for r in store.query_subagents()}
+    assert rows["sa-A"]["token_count"] == 500
+    assert rows["sa-B"]["token_count"] == 0
+    assert rows["sa-B"]["cost_usd"] == 0.0
+
+
+# ──────────────────────────────────────────────────────────────────────
+# query_cron_runs — events bridge (#1743 / #1756)
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _ingest_cron_event(
+    s, job_id, *, tokens, cost, ts, agent_type="openclaw",
+):
+    """Ingest a cron_run event (event_type='cron_run', agent_id=job_id)."""
+    s.ingest({
+        "id": str(uuid.uuid4()),
+        "node_id": "agent+test",
+        "agent_id": job_id,
+        "agent_type": agent_type,
+        "session_id": str(uuid.uuid4()),
+        "event_type": "cron_run",
+        "ts": ts,
+        "token_count": int(tokens),
+        "cost_usd": float(cost),
+        "data": {},
+    })
+
+
+def test_cron_run_cost_computed_from_events_when_stored_is_zero(store):
+    """Older gateway versions emit cron-run JSONL without a usage field,
+    leaving token_count=0. Events have the correct totals (#1743/#1756)."""
+    run_id = "cr-test-1"
+    job_id = "daily-report"
+    store.ingest_cron_run({
+        "id": run_id,
+        "job_id": job_id,
+        "agent_type": "openclaw",
+        "started_at": "2026-05-19T06:00:00Z",
+        "ended_at":   "2026-05-19T06:01:00Z",
+        "status": "success",
+        "token_count": 0,
+        "cost_usd": 0.0,
+    })
+    _ingest_cron_event(store, job_id, tokens=900, cost=0.007,
+                       ts="2026-05-19T06:00:15Z")
+    _ingest_cron_event(store, job_id, tokens=600, cost=0.004,
+                       ts="2026-05-19T06:00:45Z")
+    _wait(store)
+
+    rows = store.query_cron_runs(job_id=job_id)
+    assert len(rows) == 1
+    assert rows[0]["token_count"] == 1500
+    assert abs(rows[0]["cost_usd"] - 0.011) < 1e-9
+
+
+def test_cron_run_aggregates_fall_back_to_stored_when_no_events(store):
+    """When a cron run has stored aggregates and no matching events,
+    the stored values must be returned."""
+    run_id = "cr-stored-only"
+    job_id = "weekly-summary"
+    store.ingest_cron_run({
+        "id": run_id,
+        "job_id": job_id,
+        "agent_type": "openclaw",
+        "started_at": "2026-05-19T08:00:00Z",
+        "ended_at":   "2026-05-19T08:02:00Z",
+        "status": "success",
+        "token_count": 4200,
+        "cost_usd": 0.033,
+    })
+    _wait(store)
+
+    rows = store.query_cron_runs(job_id=job_id)
+    assert len(rows) == 1
+    assert rows[0]["token_count"] == 4200
+    assert abs(rows[0]["cost_usd"] - 0.033) < 1e-9
+
+
+def test_cron_run_time_window_isolates_consecutive_runs(store):
+    """Two consecutive runs of the same job must not cross-pollinate.
+    The time-window filter [started_at, ended_at] is the disambiguator."""
+    job_id = "hourly-ping"
+    # First run: 09:00–09:01
+    store.ingest_cron_run({
+        "id": "cr-run1",
+        "job_id": job_id,
+        "agent_type": "openclaw",
+        "started_at": "2026-05-19T09:00:00Z",
+        "ended_at":   "2026-05-19T09:01:00Z",
+        "status": "success",
+        "token_count": 0, "cost_usd": 0.0,
+    })
+    # Second run: 10:00–10:01
+    store.ingest_cron_run({
+        "id": "cr-run2",
+        "job_id": job_id,
+        "agent_type": "openclaw",
+        "started_at": "2026-05-19T10:00:00Z",
+        "ended_at":   "2026-05-19T10:01:00Z",
+        "status": "success",
+        "token_count": 0, "cost_usd": 0.0,
+    })
+    # Event inside run1's window only
+    _ingest_cron_event(store, job_id, tokens=300, cost=0.002,
+                       ts="2026-05-19T09:00:30Z")
+    # Event inside run2's window only
+    _ingest_cron_event(store, job_id, tokens=700, cost=0.005,
+                       ts="2026-05-19T10:00:30Z")
+    _wait(store)
+
+    rows = {r["id"]: r for r in store.query_cron_runs(job_id=job_id)}
+    assert rows["cr-run1"]["token_count"] == 300
+    assert rows["cr-run2"]["token_count"] == 700
+    assert abs(rows["cr-run1"]["cost_usd"] - 0.002) < 1e-9
+    assert abs(rows["cr-run2"]["cost_usd"] - 0.005) < 1e-9
