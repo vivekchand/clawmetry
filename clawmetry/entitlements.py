@@ -1,4 +1,3 @@
-"""
 clawmetry/entitlements.py — open-core entitlement resolution.
 
 Single source of truth for "what is this install allowed to do". Everything
@@ -5333,4 +5332,159 @@ def next_tier_locks_at_batch() -> list[dict]:
         return out
     except Exception as exc:
         logger.warning("entitlements: next_tier_locks_at_batch failed: %s", exc)
+        return []
+
+
+def _previous_at_envelope(source: str, builder) -> dict:
+    """Private builder for the ``previous_tier_*_at_batch`` rows.
+
+    Mirror of :func:`_next_at_envelope` (next-tier batch) pivoted to the
+    rung *below* the source. Resolves
+    ``target = _previous_purchasable_tier_before(source)`` and pairs the
+    source/target tier metadata with the row produced by ``builder``
+    (one of :func:`tier_unlocks` / :func:`tier_locks`) into the same
+    envelope shape the scalar ``/previous-tier-*-at`` endpoints surface:
+
+        ``{tier, tier_label, tier_rank, target, target_label, target_rank, row}``
+
+    ``row`` collapses to ``None`` at the floor of the source axis (oss
+    / cloud_free -- no rung strictly below), matching the scalar
+    helpers. A builder failure short-circuits to ``row=None`` on the
+    populated envelope so the batch keeps the per-source row visible
+    instead of dropping it -- the same posture
+    :func:`tier_unlocks_at_batch` / :func:`tier_locks_at_batch` apply
+    to their per-row failures.
+
+    Never raises: every fallback collapses to a fully-populated
+    envelope with ``row=None`` so a pricing-matrix UI can render the
+    source rung even when its target row could not be built.
+    """
+    src = (source or "").strip().lower()
+    target = _previous_purchasable_tier_before(src) if src in _TIER_ORDER else None
+    row: dict | None = None
+    if target is not None:
+        try:
+            row = builder(target)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: _previous_at_envelope builder failed for %s: %s",
+                target,
+                exc,
+            )
+            row = None
+    return {
+        "tier": src,
+        "tier_label": tier_label(src) if src in _TIER_ORDER else None,
+        "tier_rank": tier_rank(src) if src in _TIER_ORDER else -1,
+        "target": target,
+        "target_label": tier_label(target) if target else None,
+        "target_rank": tier_rank(target) if target else None,
+        "row": row,
+    }
+
+
+def previous_tier_unlocks_at_batch() -> list[dict]:
+    """Batch sibling of :func:`previous_tier_unlocks_at`: one
+    ``previous-tier-unlocks-at`` envelope per purchasable source tier,
+    in one pass.
+
+    Source-anchored downgrade-side mirror of
+    :func:`next_tier_unlocks_at_batch`. Composes
+    :func:`previous_tier_unlocks_at` (scalar what-if) and
+    :func:`tier_unlocks_batch` (live batch): same envelope shape per
+    row as the scalar ``/api/entitlement/previous-tier-unlocks-at``
+    endpoint surfaces, same source axis as :func:`tier_unlocks_batch`.
+    Lets a pricing-comparison matrix UI render the "what would still
+    be granted at the rung below each rung" downgrade-CTA column off
+    **one** round-trip instead of N calls to
+    :func:`previous_tier_unlocks_at`.
+
+    Each envelope is byte-equal to the scalar
+    ``/api/entitlement/previous-tier-unlocks-at?tier=<source>``
+    response body for the same source (sans the resolver-context
+    fields the route adds around the helper output) -- a parity test
+    pins this so the batch what-if cannot drift from the scalar
+    what-if (the same invariant :func:`tier_unlocks_at_batch` enforces
+    against :func:`tier_unlocks_at`).
+
+    Envelopes are sorted by source ``(tier_rank, tier_id)`` ascending
+    -- byte-stable against :func:`tier_unlocks_batch`'s ordering and
+    against :func:`previous_tier_locks_at_batch` for the same source so
+    a UI can fold the two responses into a downgrade-CTA column without
+    re-sorting client-side. Same-rank sibling tiers (``cloud_pro`` /
+    ``pro`` both at rank 2) are both returned.
+
+    Source list is :data:`_PURCHASABLE_TIERS` (trial excluded),
+    matching :func:`tier_unlocks_batch`. The source-side floor
+    (``oss`` / ``cloud_free`` as source -- no rung strictly below)
+    surfaces with ``target=None`` and ``row=None`` rather than being
+    dropped, so the matrix keeps a row for every purchasable rung.
+
+    Never raises: a per-source builder failure collapses to
+    ``row=None`` on the populated envelope so the surrounding envelope
+    stays visible; an unexpected top-level failure short-circuits to
+    ``[]`` so the matrix keeps rendering instead of breaking.
+    """
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            out.append(_previous_at_envelope(tid, tier_unlocks))
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: previous_tier_unlocks_at_batch failed: %s", exc)
+        return []
+
+
+def previous_tier_locks_at_batch() -> list[dict]:
+    """Batch sibling of :func:`previous_tier_locks_at`: one
+    ``previous-tier-locks-at`` envelope per purchasable source tier,
+    in one pass.
+
+    Marginal-loss mirror of :func:`previous_tier_unlocks_at_batch` and
+    pairs with :func:`tier_locks_batch` the same way
+    :func:`previous_tier_unlocks_at_batch` pairs with
+    :func:`tier_unlocks_batch` -- the downgrade-warning column on the
+    same matrix the previous-unlocks batch renders the downgrade-CTA
+    column for, pivoted around the natural next-below rung for each
+    source.
+
+    Each envelope is byte-equal to the scalar
+    ``/api/entitlement/previous-tier-locks-at?tier=<source>`` response
+    body for the same source (sans the resolver-context fields the
+    route adds around the helper output) -- a parity test pins this so
+    the batch what-if cannot drift from the scalar what-if.
+
+    Envelopes are sorted by source ``(tier_rank, tier_id)`` ascending
+    -- byte-stable against :func:`previous_tier_unlocks_at_batch` for
+    the same source so a UI can fold the two responses into a
+    downgrade-CTA + downgrade-warning matrix without re-sorting
+    client-side.
+
+    Source list is :data:`_PURCHASABLE_TIERS` (trial excluded). The
+    source-side floor (``oss`` / ``cloud_free`` as source -- no rung
+    strictly below) surfaces with ``target=None`` and ``row=None``.
+
+    At a source rung whose next-below IS the ladder floor
+    (``cloud_starter`` -> ``oss``) the row carries populated
+    ``lost_features`` / ``lost_runtimes`` lists -- :func:`tier_locks`
+    shape against the floor's next-above rung -- NOT ``None`` on the
+    envelope.
+
+    Never raises: a per-source builder failure collapses to
+    ``row=None`` on the populated envelope; an unexpected top-level
+    failure short-circuits to ``[]``.
+    """
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            out.append(_previous_at_envelope(tid, tier_locks))
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: previous_tier_locks_at_batch failed: %s", exc)
         return []
