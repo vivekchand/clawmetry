@@ -5489,3 +5489,115 @@ def previous_tier_locks_at_batch() -> list[dict]:
     except Exception as exc:
         logger.warning("entitlements: previous_tier_locks_at_batch failed: %s", exc)
         return []
+
+
+def next_tier_diff_at(tier: str) -> dict | None:
+    """Scalar what-if sibling of :meth:`Entitlement.next_tier_diff`:
+    full :func:`tier_diff` row from the caller-supplied ``tier`` to the
+    next rung above it.
+
+    Source-anchored equivalent of :meth:`Entitlement.next_tier_diff`,
+    which pins ``from`` to the resolved entitlement. Convenience for
+    ``tier_diff(tier, _next_purchasable_tier_after(tier))`` so a pricing-
+    comparison or upgrade-CTA card can render the full upgrade payload
+    (``added_*``, ``lost_*``, ``capacity_changes``, ``direction``) for
+    any hypothetical source rung without first asking the resolver and
+    without monkey-patching the entitlement context. Pairs with
+    :func:`next_tier_unlocks_at` / :func:`next_tier_locks_at` (the
+    marginal-grant / marginal-loss views of the same step) on a
+    hypothetical pricing matrix cell.
+
+    Unlike :func:`next_tier_unlocks_at` -- which surfaces the target's
+    own ``tier_unlocks`` row (target-anchored, ``previous_tier`` is the
+    target's natural next-lower purchasable, NOT the caller-supplied
+    source) -- this helper pins **both** endpoints, so the row's
+    ``from`` is byte-equal to the caller-supplied ``tier``. That mirrors
+    the live :meth:`Entitlement.next_tier_diff` posture
+    (``upgrade_diff(self.tier, next_purchasable_tier())``) and is the
+    natural shape for a two-endpoint diff.
+
+    Row shape matches :func:`tier_diff` exactly -- ``from``,
+    ``from_label``, ``from_rank``, ``to``, ``to_label``, ``to_rank``,
+    ``direction``, ``added_features``, ``lost_features``,
+    ``added_runtimes``, ``lost_runtimes``, ``capacity_changes``.
+    ``direction`` is always ``"upgrade"`` for any purchasable source
+    that has a strictly-higher rung above (the floor-to-step is always
+    an upgrade); from ``trial`` (rank 2) ``direction`` is ``"upgrade"``
+    too since the next strictly-higher purchasable resolves to
+    enterprise (rank 3).
+
+    Accepts any id in :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`)
+    -- the lenient ``_at`` posture, since the source is hypothetical
+    and may legitimately answer "what would step Trial -> Enterprise
+    diff to?".
+
+    Returns ``None`` for empty / unknown ``tier`` and at the ceiling
+    (no rung strictly above). Never raises: a builder failure short-
+    circuits to ``None`` so the CTA surface stays mute instead of
+    breaking.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        target = _next_purchasable_tier_after(src)
+        if target is None:
+            return None
+        return tier_diff(src, target)
+    except Exception as exc:
+        logger.warning("entitlements: next_tier_diff_at failed: %s", exc)
+        return None
+
+
+def previous_tier_diff_at(tier: str) -> dict | None:
+    """Scalar what-if sibling of :meth:`Entitlement.previous_tier_diff`:
+    full :func:`tier_diff` row from the caller-supplied ``tier`` to the
+    next rung below it.
+
+    Source-anchored mirror of :func:`next_tier_diff_at` and downgrade-
+    side counterpart of the live :meth:`Entitlement.previous_tier_diff`
+    (which pins ``from`` to the resolved entitlement). Convenience for
+    ``tier_diff(tier, _previous_purchasable_tier_before(tier))`` so a
+    downgrade-confirmation card or pricing-comparison cell can render
+    the full step-down payload for any hypothetical source rung without
+    first asking the resolver.
+
+    Like :func:`next_tier_diff_at` (and unlike
+    :func:`previous_tier_unlocks_at`, which surfaces the target's own
+    ``tier_unlocks`` row), this helper pins **both** endpoints, so the
+    row's ``from`` is byte-equal to the caller-supplied ``tier``. That
+    mirrors the live :meth:`Entitlement.previous_tier_diff` posture
+    (``downgrade_diff(self.tier, previous_purchasable_tier())``) and
+    is the natural shape for a two-endpoint diff.
+
+    Row shape matches :func:`tier_diff` exactly. ``direction`` is
+    always ``"downgrade"`` for any purchasable source that has a
+    strictly-lower rung below; from ``trial`` (rank 2) ``direction``
+    is ``"downgrade"`` since the next strictly-lower purchasable
+    resolves to cloud_starter (rank 1).
+
+    Accepts any id in :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`)
+    -- the lenient ``_at`` posture.
+
+    Returns ``None`` for empty / unknown ``tier`` and at the floor
+    (oss / cloud_free -- no rung strictly below). Never raises: a
+    builder failure short-circuits to ``None`` so the CTA surface stays
+    mute instead of breaking.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        target = _previous_purchasable_tier_before(src)
+        if target is None:
+            return None
+        return tier_diff(src, target)
+    except Exception as exc:
+        logger.warning("entitlements: previous_tier_diff_at failed: %s", exc)
+        return None

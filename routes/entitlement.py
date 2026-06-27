@@ -4980,3 +4980,192 @@ def api_entitlement_previous_tier_locks_at_batch():
                 "enforced": False,
             }
         )
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-diff-at")
+def api_entitlement_next_tier_diff_at():
+    """``GET /api/entitlement/next-tier-diff-at?tier=<source>`` --
+    scalar what-if sibling of the live ``Entitlement.next_tier_diff``:
+    full :func:`clawmetry.entitlements.tier_diff` row from the caller-
+    supplied ``tier`` to the rung above it.
+
+    Lets a pricing-comparison or upgrade-CTA card render the full
+    upgrade payload (``added_*``, ``lost_*``, ``capacity_changes``,
+    ``direction``) for any hypothetical source rung off **one** round-
+    trip, without first hitting ``/api/entitlement`` and without
+    monkey-patching the entitlement context. Pairs with
+    ``/api/entitlement/next-tier-unlocks-at`` and
+    ``/api/entitlement/next-tier-locks-at`` (the marginal-grant /
+    marginal-loss views of the same step) on a hypothetical pricing
+    matrix cell.
+
+    Response shape::
+
+        {
+          "tier":           "<source tier id>",
+          "tier_label":     "<source label>",
+          "tier_rank":      <source rank>,
+          "target":         "<next-above tier id>" | null,
+          "target_label":   "<next-above label>" | null,
+          "target_rank":    <next-above rank> | null,
+          "row":            {<tier_diff row>} | null,
+        }
+
+    Unlike ``/api/entitlement/next-tier-unlocks-at`` -- which surfaces
+    the target's own ``tier_unlocks`` row (target-anchored,
+    ``previous_tier`` is the target's natural next-lower purchasable,
+    NOT the caller-supplied source) -- this endpoint pins **both**
+    endpoints, so ``row.from`` is byte-equal to ``tier``. That mirrors
+    the live ``Entitlement.next_tier_diff`` posture and is the natural
+    shape for a two-endpoint diff. ``row.direction`` is always
+    ``"upgrade"`` for any purchasable source that has a strictly-higher
+    rung above; from ``trial`` ``row.direction`` is ``"upgrade"`` too
+    (next strictly-higher purchasable resolves to enterprise).
+
+    Accepts any tier id in :data:`entitlements._TIER_ORDER` (including
+    ``trial``), matching the other ``_at`` family endpoints. ``target``
+    / ``row`` collapse to ``null`` at the ceiling (no rung strictly
+    above the source -- enterprise as source) -- the surface stays 200
+    with a populated envelope so callers can render "you're at the top"
+    copy without a status-code branch.
+
+    - **400** when ``tier=`` is missing / blank
+    - **404** when ``tier`` is unknown. The body carries ``which`` so a
+      caller can render the right "unknown ..." message.
+    - **Never 5xxs**: builder failure short-circuits to ``row=null``
+      on the same 200 envelope so the CTA surface stays mute.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        target = _ent._next_purchasable_tier_after(tier_in)
+        row = _ent.next_tier_diff_at(tier_in)
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": _ent.tier_label(tier_in),
+                "tier_rank": _ent.tier_rank(tier_in),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "row": row,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_next_tier_diff_at: error: %s", exc)
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": None,
+                "tier_rank": -1,
+                "target": None,
+                "target_label": None,
+                "target_rank": None,
+                "row": None,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-diff-at")
+def api_entitlement_previous_tier_diff_at():
+    """``GET /api/entitlement/previous-tier-diff-at?tier=<source>`` --
+    scalar what-if sibling of the live
+    ``Entitlement.previous_tier_diff``: full
+    :func:`clawmetry.entitlements.tier_diff` row from the caller-
+    supplied ``tier`` to the rung below it.
+
+    Source-anchored mirror of ``/api/entitlement/next-tier-diff-at``
+    and downgrade-side counterpart of the live
+    ``Entitlement.previous_tier_diff``. Lets a downgrade-confirmation
+    card or pricing-comparison cell render the full step-down payload
+    for any hypothetical source rung off **one** round-trip.
+
+    Response shape::
+
+        {
+          "tier":           "<source tier id>",
+          "tier_label":     "<source label>",
+          "tier_rank":      <source rank>,
+          "target":         "<rung-below tier id>" | null,
+          "target_label":   "<rung-below label>" | null,
+          "target_rank":    <rung-below rank> | null,
+          "row":            {<tier_diff row>} | null,
+        }
+
+    Like ``/api/entitlement/next-tier-diff-at`` (and unlike
+    ``/api/entitlement/previous-tier-unlocks-at`` which surfaces the
+    target's own ``tier_unlocks`` row), this endpoint pins **both**
+    endpoints, so ``row.from`` is byte-equal to ``tier``. That mirrors
+    the live ``Entitlement.previous_tier_diff`` posture and is the
+    natural shape for a two-endpoint diff. ``row.direction`` is always
+    ``"downgrade"`` for any purchasable source that has a strictly-
+    lower rung below; from ``trial`` ``row.direction`` is
+    ``"downgrade"`` (next strictly-lower purchasable resolves to
+    cloud_starter).
+
+    Accepts any tier id in :data:`entitlements._TIER_ORDER` (including
+    ``trial``), matching the other ``_at`` family endpoints. ``target``
+    / ``row`` collapse to ``null`` at the floor (no rung strictly
+    below the source -- oss / cloud_free) -- the surface stays 200
+    with a populated envelope so callers can render "you're at the
+    bottom" copy without a status-code branch.
+
+    - **400** when ``tier=`` is missing / blank
+    - **404** when ``tier`` is unknown. The body carries ``which`` so a
+      caller can render the right "unknown ..." message.
+    - **Never 5xxs**: builder failure short-circuits to ``row=null``
+      on the same 200 envelope so the CTA surface stays mute.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        target = _ent._previous_purchasable_tier_before(tier_in)
+        row = _ent.previous_tier_diff_at(tier_in)
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": _ent.tier_label(tier_in),
+                "tier_rank": _ent.tier_rank(tier_in),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "row": row,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_diff_at: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": None,
+                "tier_rank": -1,
+                "target": None,
+                "target_label": None,
+                "target_rank": None,
+                "row": None,
+            }
+        )
