@@ -4528,3 +4528,177 @@ def api_entitlement_next_tier_locks_at():
                 "row": None,
             }
         )
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-unlocks-at")
+def api_entitlement_previous_tier_unlocks_at():
+    """``GET /api/entitlement/previous-tier-unlocks-at?tier=<source>`` --
+    scalar what-if sibling of ``/api/entitlement/previous-tier-unlocks``:
+    marginal unlocks row at the rung below the caller-supplied
+    ``tier``, in :func:`clawmetry.entitlements.tier_unlocks` shape.
+
+    Source-anchored mirror of ``/api/entitlement/next-tier-unlocks-at``
+    and downgrade-side counterpart of the live
+    ``/api/entitlement/previous-tier-unlocks`` endpoint. Lets a pricing
+    page render the "what would still be granted at the rung below X"
+    downgrade-CTA cell for any hypothetical ``X`` without first asking
+    the resolver and without monkey-patching the entitlement context.
+
+    Response shape::
+
+        {
+          "tier":           "<source tier id>",
+          "tier_label":     "<source label>",
+          "tier_rank":      <source rank>,
+          "target":         "<rung-below tier id>" | null,
+          "target_label":   "<rung-below label>" | null,
+          "target_rank":    <rung-below rank> | null,
+          "row":            {<tier_unlocks row>} | null,
+        }
+
+    The inner ``row`` matches the live ``/previous-tier-unlocks`` row
+    shape (``tier``, ``tier_label``, ``tier_rank``, ``previous_tier``,
+    ``previous_tier_label``, ``previous_tier_rank``, ``features``,
+    ``runtimes``). The row IS the tier-property row of the rung below
+    (its ``previous_tier`` is that rung's natural next-lower
+    purchasable, NOT the caller-supplied ``tier``). Callers who want
+    the source-anchored ``previous_tier`` should use ``/tier-unlocks-at``
+    with the explicit ``(tier, target)`` pair.
+
+    Accepts any tier id in :data:`entitlements._TIER_ORDER` (including
+    ``trial``), matching the other ``_at`` family endpoints. ``target``
+    / ``row`` collapse to ``null`` at the floor (no rung strictly below
+    the source -- oss / cloud_free) -- the surface stays 200 with a
+    populated envelope so callers can render "you're at the bottom"
+    copy without a status-code branch.
+
+    - **400** when ``tier=`` is missing / blank
+    - **404** when ``tier`` is unknown. The body carries ``which`` so a
+      caller can render the right "unknown ..." message.
+    - **Never 5xxs**: builder failure short-circuits to ``row=null``
+      on the same 200 envelope so the CTA surface stays mute.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        target = _ent._previous_purchasable_tier_before(tier_in)
+        row = _ent.previous_tier_unlocks_at(tier_in)
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": _ent.tier_label(tier_in),
+                "tier_rank": _ent.tier_rank(tier_in),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "row": row,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_previous_tier_unlocks_at: error: %s", exc)
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": None,
+                "tier_rank": -1,
+                "target": None,
+                "target_label": None,
+                "target_rank": None,
+                "row": None,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-locks-at")
+def api_entitlement_previous_tier_locks_at():
+    """``GET /api/entitlement/previous-tier-locks-at?tier=<source>`` --
+    scalar what-if sibling of ``/api/entitlement/previous-tier-locks``:
+    marginal locks row at the rung below the caller-supplied ``tier``,
+    in :func:`clawmetry.entitlements.tier_locks` shape.
+
+    Source-anchored mirror of ``/api/entitlement/next-tier-locks-at``.
+    Marginal-loss companion to ``/previous-tier-unlocks-at`` on a
+    hypothetical pricing matrix cell -- where the unlocks form shows
+    "what the rung below still grants" the locks form shows "what the
+    rung below first loses vs the rung above IT".
+
+    Response shape::
+
+        {
+          "tier":           "<source tier id>",
+          "tier_label":     "<source label>",
+          "tier_rank":      <source rank>,
+          "target":         "<rung-below tier id>" | null,
+          "target_label":   "<rung-below label>" | null,
+          "target_rank":    <rung-below rank> | null,
+          "row":            {<tier_locks row>} | null,
+        }
+
+    The inner ``row`` matches the live ``/previous-tier-locks`` row
+    shape (``tier``, ``tier_label``, ``tier_rank``, ``next_tier``,
+    ``next_tier_label``, ``next_tier_rank``, ``lost_features``,
+    ``lost_runtimes``). The row's ``next_tier`` is the rung-below's
+    natural next-higher purchasable, NOT the caller-supplied source.
+
+    Accepts any tier id in :data:`entitlements._TIER_ORDER` (including
+    ``trial``). ``target`` / ``row`` collapse to ``null`` at the floor
+    (no rung strictly below the source -- oss / cloud_free) -- the
+    surface stays 200 with a populated envelope.
+
+    - **400** when ``tier=`` is missing / blank
+    - **404** when ``tier`` is unknown. The body carries ``which`` so a
+      caller can render the right "unknown ..." message.
+    - **Never 5xxs**: builder failure short-circuits to ``row=null``
+      on the same 200 envelope so the CTA surface stays mute.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        target = _ent._previous_purchasable_tier_before(tier_in)
+        row = _ent.previous_tier_locks_at(tier_in)
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": _ent.tier_label(tier_in),
+                "tier_rank": _ent.tier_rank(tier_in),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "row": row,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_previous_tier_locks_at: error: %s", exc)
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": None,
+                "tier_rank": -1,
+                "target": None,
+                "target_label": None,
+                "target_rank": None,
+                "row": None,
+            }
+        )
