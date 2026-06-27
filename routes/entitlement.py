@@ -4702,3 +4702,141 @@ def api_entitlement_previous_tier_locks_at():
                 "row": None,
             }
         )
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-unlocks-at-batch")
+def api_entitlement_next_tier_unlocks_at_batch():
+    """``GET /api/entitlement/next-tier-unlocks-at-batch`` -- batch
+    sibling of ``/api/entitlement/next-tier-unlocks-at``: one
+    ``next-tier-unlocks-at`` envelope per purchasable source tier, in
+    one round-trip.
+
+    Composes the scalar what-if (``/next-tier-unlocks-at``) and the
+    live batch (``/tier-unlocks-batch``) -- same envelope shape per row
+    as the scalar what-if, same source axis as the live batch. Lets a
+    pricing-comparison matrix UI render the "what's new at the rung
+    above each rung" upgrade-CTA column off **one** call instead of N
+    calls to ``/next-tier-unlocks-at``.
+
+    No query params. The source list is :data:`entitlements._PURCHASABLE_TIERS`
+    (trial excluded), matching the live ``/tier-unlocks-batch``
+    endpoint, so the envelopes fold into the same pricing-page table
+    byte-for-byte on the source axis.
+
+    Response shape::
+
+        {
+          "tiers":             [<envelope>, ...],
+          "current_tier":      "<resolved tier id>",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<envelope>`` matches ``/api/entitlement/next-tier-unlocks-at?tier=<source>``
+    for that source exactly (``tier``, ``tier_label``, ``tier_rank``,
+    ``target``, ``target_label``, ``target_rank``, ``row``). At the
+    source-side ceiling (``enterprise`` as source -- no rung strictly
+    above) the envelope carries ``target=null`` and ``row=null`` rather
+    than being dropped, so the matrix keeps a row for every purchasable
+    rung.
+
+    - **Never 5xxs**: a resolver failure yields an empty ``tiers``
+      list and the grace-shape envelope so the matrix keeps rendering.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.next_tier_unlocks_at_batch() or []
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": rows,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_unlocks_at_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-locks-at-batch")
+def api_entitlement_next_tier_locks_at_batch():
+    """``GET /api/entitlement/next-tier-locks-at-batch`` -- batch
+    sibling of ``/api/entitlement/next-tier-locks-at``: one
+    ``next-tier-locks-at`` envelope per purchasable source tier, in one
+    round-trip.
+
+    Marginal-loss mirror of ``/next-tier-unlocks-at-batch`` and pairs
+    with ``/tier-locks-batch`` the same way
+    ``/next-tier-unlocks-at-batch`` pairs with ``/tier-unlocks-batch``.
+    Pair the two ``_at_batch`` endpoints to render the upgrade-CTA +
+    downgrade-warning columns of an "above each rung" pricing matrix
+    in two round-trips.
+
+    No query params. The source list is :data:`entitlements._PURCHASABLE_TIERS`
+    (trial excluded), matching the live ``/tier-locks-batch`` endpoint.
+
+    Response shape::
+
+        {
+          "tiers":             [<envelope>, ...],
+          "current_tier":      "<resolved tier id>",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<envelope>`` matches ``/api/entitlement/next-tier-locks-at?tier=<source>``
+    for that source exactly (``tier``, ``tier_label``, ``tier_rank``,
+    ``target``, ``target_label``, ``target_rank``, ``row``). At the
+    source-side ceiling (``enterprise`` as source) the envelope
+    carries ``target=null`` and ``row=null``. At a source rung whose
+    next-above IS the ladder ceiling (``cloud_pro`` / ``pro`` ->
+    ``enterprise``) the row carries ``next_tier=null`` and empty
+    ``lost_*`` lists -- :func:`tier_locks` shape for "the target has no
+    rung above to step down from", NOT ``null`` on the envelope.
+
+    - **Never 5xxs**: a resolver failure yields an empty ``tiers``
+      list and the grace-shape envelope so the matrix keeps rendering.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.next_tier_locks_at_batch() or []
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": rows,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_locks_at_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
