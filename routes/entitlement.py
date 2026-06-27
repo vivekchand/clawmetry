@@ -1,3 +1,4 @@
+"""
 routes/entitlement.py -- ``bp_entitlement``.
 
 Exposes the resolved open-core entitlement so the frontend knows which

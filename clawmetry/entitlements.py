@@ -1,3 +1,4 @@
+"""
 clawmetry/entitlements.py — open-core entitlement resolution.
 
 Single source of truth for "what is this install allowed to do". Everything
