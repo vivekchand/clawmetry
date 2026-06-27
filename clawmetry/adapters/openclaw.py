@@ -959,7 +959,7 @@ class OpenClawAdapter(AgentAdapter):
             # Fast-mode state (#3322): PR #85104 added fastMode to session records.
             _fm = s.get("fastMode") if s.get("fastMode") is not None else s.get("isFastMode")
             if _fm is not None:
-                extra["fastMode"] = bool(_fm)
+                extra["fastMode"] = _fm if isinstance(_fm, str) else bool(_fm)
             # Fast-mode fallback/cutoff metadata (#3341): PR #85104 also emits
             # cutoff state, reason, transition count, delivery mode, and fallback
             # model for sessions where fast-mode reverts to normal mode.
@@ -1187,7 +1187,7 @@ class OpenClawAdapter(AgentAdapter):
                             for _fmkey in ("fastMode", "isFastMode", "talkFastMode"):
                                 _fmval = obj.get(_fmkey)
                                 if _fmval is not None:
-                                    extra["fastMode"] = bool(_fmval)
+                                    extra["fastMode"] = _fmval if isinstance(_fmval, str) else bool(_fmval)
                                     break
                             # Fast-mode fallback/cutoff metadata (#3341): PR #85104
                             # also emits cutoff state on event blobs; extract reason,
