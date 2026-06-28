@@ -8259,6 +8259,9 @@ class LocalStore:
             "WHERE parent_session_id IS NOT NULL AND parent_session_id != ''"
             ")"
         )
+        # Filter NemoClaw harness warm-up sessions that were written during
+        # harness onboarding — they are not real agent sessions (#3366).
+        clauses.append("s.session_id NOT LIKE 'nemoclaw-onboard-warmup-%'")
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         # ``sessions.message_count`` is only populated by the typed-session
         # ingest path (sync.py + claude_code adapter). The OpenClaw events
