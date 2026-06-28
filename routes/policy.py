@@ -52,6 +52,23 @@ def _coerce_rows(rows) -> list[dict]:
     return rows if isinstance(rows, list) else []
 
 
+def _arg_preview(args) -> str:
+    """Short single-line preview of tool-call arguments — never the full body."""
+    if args is None:
+        return ""
+    if isinstance(args, dict):
+        for k in ("command", "cmd", "tool", "path", "url"):
+            v = args.get(k)
+            if v:
+                return str(v)[:160]
+        try:
+            import json as _json
+            return _json.dumps(args, separators=(",", ":"))[:160]
+        except Exception:
+            return str(args)[:160]
+    return str(args)[:160]
+
+
 @bp_policy.route("/api/tool-policy")
 def api_tool_policy():
     """Per-agent effective sandbox mode + tool allow/deny.
@@ -123,29 +140,41 @@ def api_approvals_audit():
     return jsonify(_approvals_audit_payload(status=status, limit=limit))
 
 
+@bp_policy.route("/api/approvals")
+def api_approvals_queue():
+    """Pending approvals queue — compact format for mobile/remote clients.
+
+    Returns {approvals:[...], count:int, _source}. Each entry carries
+    action_token (the id a remote client uses to POST an approve/deny decision
+    to the cloud) plus a short args_preview so mobile UI can show context.
+
+    Query params: limit (<=100, default 50).
+    """
+    try:
+        limit = max(1, min(100, int(request.args.get("limit", 50))))
+    except (TypeError, ValueError):
+        limit = 50
+    rows = _coerce_rows(_ls_call("query_approvals", status="pending", limit=limit))
+    approvals = [
+        {
+            "id":                   r.get("id"),
+            "action_token":         r.get("id"),
+            "action":               r.get("action"),
+            "status":               r.get("status") or "pending",
+            "created_at":           r.get("created_at"),
+            "requestor_session_id": r.get("requestor_session_id"),
+            "args_preview":         _arg_preview(r.get("args")),
+        }
+        for r in rows
+    ]
+    return jsonify({"approvals": approvals, "count": len(approvals), "_source": "local_store"})
+
+
 def _approvals_audit_payload(status=None, limit=100):
     """Exec-approval decision audit payload, shared by the HTTP route and the
     cloud snapshot builder (trial-bug #22: the Policy tab audit was blank on the
     hosted dashboard). Returns {decisions, summary, _source}."""
     rows = _coerce_rows(_ls_call("query_approvals", status=status, limit=limit))
-
-    def _arg_preview(args) -> str:
-        """A short, single-line preview of the tool-call arguments — never the
-        full body (avoids snapshot/response bloat)."""
-        if args is None:
-            return ""
-        if isinstance(args, dict):
-            # exec-style calls usually carry a command; surface it first.
-            for k in ("command", "cmd", "tool", "path", "url"):
-                v = args.get(k)
-                if v:
-                    return str(v)[:160]
-            try:
-                import json as _json
-                return _json.dumps(args, separators=(",", ":"))[:160]
-            except Exception:
-                return str(args)[:160]
-        return str(args)[:160]
 
     decisions = []
     pending = approved = denied = simulated = 0
