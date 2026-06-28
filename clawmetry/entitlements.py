@@ -5801,3 +5801,293 @@ def previous_tier_diff_at_batch() -> list[dict]:
             "entitlements: previous_tier_diff_at_batch failed: %s", exc
         )
         return []
+
+
+def next_tier_capacity_diff_at(tier: str) -> dict | None:
+    """Scalar what-if sibling of :meth:`Entitlement.next_tier_capacity_diff`:
+    per-axis capacity transition (channels / retention / nodes) from the
+    caller-supplied ``tier`` to the rung above it.
+
+    Capacity-only narrow lens of :func:`next_tier_diff_at` -- the latter
+    returns the FULL :func:`tier_diff` payload (``added_*`` + ``lost_*``
+    + ``capacity_changes`` + ``direction``) for the same step; this
+    helper returns only the capacity slice (the
+    ``{target, channel_limit, retention_days, node_limit}`` shape
+    :func:`capacity_diff` / :func:`capacity_diff_at` already publish).
+    Source-anchored equivalent of the live
+    :meth:`Entitlement.next_tier_capacity_diff` instance method which
+    pins the source to the resolved entitlement -- convenience for
+    ``capacity_diff_at(tier, _next_purchasable_tier_after(tier))`` so a
+    capacity-only tooltip on a pricing-comparison cell can render the
+    upgrade-side capacity delta for any hypothetical source rung off
+    **one** round-trip, without first hitting ``/api/entitlement`` and
+    without monkey-patching the entitlement context.
+
+    Row shape matches :func:`capacity_diff_at` exactly -- ``target``,
+    ``channel_limit``, ``retention_days``, ``node_limit`` where each
+    capacity axis is the ``{before, after, delta, unlocked, locked}``
+    triple :func:`_capacity_transition` builds. ``before`` comes off the
+    static per-tier caps anchored at the caller-supplied ``tier`` (NOT
+    the resolved entitlement), so the helper is independent of grace
+    mode and the per-axis caps do NOT collapse to the unlimited sentinel
+    the way live :func:`capacity_diff` does under grace -- the ``_at``
+    posture is "if I were at A, what's the capacity at the next rung",
+    not "from where I am now".
+
+    Each row is byte-identical to ``capacity_diff_at(tier,
+    _next_purchasable_tier_after(tier))`` for the same source -- pinned
+    in the test suite so the singular helper cannot drift from the
+    explicit composition.
+
+    Accepts any id in :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`)
+    -- the lenient ``_at`` posture, since the source is hypothetical
+    and may legitimately answer "what would step Trial -> Enterprise
+    cost in capacity?".
+
+    Returns ``None`` for empty / unknown ``tier`` and at the ceiling
+    (no rung strictly above -- enterprise as source). Never raises: a
+    builder failure short-circuits to ``None`` so the tooltip surface
+    stays mute instead of breaking.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        target = _next_purchasable_tier_after(src)
+        if target is None:
+            return None
+        return capacity_diff_at(src, target)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_capacity_diff_at failed: %s", exc
+        )
+        return None
+
+
+def previous_tier_capacity_diff_at(tier: str) -> dict | None:
+    """Scalar what-if sibling of
+    :meth:`Entitlement.previous_tier_capacity_diff`: per-axis capacity
+    transition from the caller-supplied ``tier`` to the rung below it.
+
+    Capacity-only narrow lens of :func:`previous_tier_diff_at` and
+    source-anchored downgrade-side mirror of
+    :func:`next_tier_capacity_diff_at`. Convenience for
+    ``capacity_diff_at(tier, _previous_purchasable_tier_before(tier))``
+    so a downgrade-confirmation tooltip can render the step-down
+    capacity delta for any hypothetical source rung off **one** round-
+    trip, without first hitting ``/api/entitlement``.
+
+    Row shape matches :func:`capacity_diff_at` exactly. Like
+    :func:`next_tier_capacity_diff_at` the ``before`` side comes off
+    the static per-tier caps anchored at the caller-supplied ``tier``
+    (NOT the resolved entitlement) -- the helper is independent of
+    grace mode and never returns the unlimited sentinel.
+
+    Each row is byte-identical to ``capacity_diff_at(tier,
+    _previous_purchasable_tier_before(tier))`` for the same source --
+    pinned in the test suite so the singular helper cannot drift from
+    the explicit composition.
+
+    Accepts any id in :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`)
+    -- the lenient ``_at`` posture.
+
+    Returns ``None`` for empty / unknown ``tier`` and at the floor
+    (no rung strictly below -- oss / cloud_free as source). Never
+    raises: a builder failure short-circuits to ``None``.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        target = _previous_purchasable_tier_before(src)
+        if target is None:
+            return None
+        return capacity_diff_at(src, target)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_capacity_diff_at failed: %s", exc
+        )
+        return None
+
+
+def _capacity_diff_at_envelope(source: str, target: str | None) -> dict:
+    """Private builder for the ``{next,previous}_tier_capacity_diff_at_batch``
+    rows.
+
+    Capacity-only narrow-lens mirror of :func:`_diff_at_envelope`:
+    where that builder carries the full :func:`tier_diff` row, this
+    one carries the capacity-only :func:`_capacity_row` shape
+    (``target``, ``channel_limit``, ``retention_days``, ``node_limit``)
+    pinned on both ``source`` and ``target``.
+
+    Envelope shape matches :func:`_diff_at_envelope` byte-for-byte on
+    the source/target metadata so a UI can fold the diff batch and the
+    capacity batch into one pricing-comparison matrix without
+    re-keying::
+
+        ``{tier, tier_label, tier_rank, target, target_label, target_rank, row}``
+
+    ``row`` collapses to ``None`` at the ladder ceiling / floor of the
+    source axis (``target is None``) and on a builder failure,
+    matching the diff envelope's posture. Never raises -- every
+    fallback collapses to a fully-populated envelope with ``row=None``
+    so the batch keeps the per-source row visible even when its
+    per-pair capacity row could not be built.
+    """
+    src = (source or "").strip().lower()
+    row: dict | None = None
+    if target is not None:
+        try:
+            row = capacity_diff_at(src, target)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: _capacity_diff_at_envelope builder failed for %s->%s: %s",
+                src,
+                target,
+                exc,
+            )
+            row = None
+    return {
+        "tier": src,
+        "tier_label": tier_label(src) if src in _TIER_ORDER else None,
+        "tier_rank": tier_rank(src) if src in _TIER_ORDER else -1,
+        "target": target,
+        "target_label": tier_label(target) if target else None,
+        "target_rank": tier_rank(target) if target else None,
+        "row": row,
+    }
+
+
+def next_tier_capacity_diff_at_batch() -> list[dict]:
+    """Batch sibling of :func:`next_tier_capacity_diff_at`: one
+    ``next-tier-capacity-diff-at`` envelope per purchasable source
+    tier, in one pass.
+
+    Capacity-only narrow-lens mirror of :func:`next_tier_diff_at_batch`:
+    where that batch returns the full :func:`tier_diff` payload for
+    each ``source -> next-above-source`` pair, this batch returns only
+    the capacity slice (the ``{target, channel_limit, retention_days,
+    node_limit}`` shape :func:`capacity_diff_at` publishes). Lets a
+    pricing-comparison matrix UI render the "capacity at the rung
+    above each rung" upgrade tooltip column off **one** round-trip
+    instead of N calls to :func:`next_tier_capacity_diff_at`.
+
+    Each envelope is byte-equal to the scalar
+    ``/api/entitlement/next-tier-capacity-diff-at?tier=<source>``
+    response body for the same source (sans the resolver-context
+    fields the route adds around the helper output) -- a parity test
+    pins this so the batch what-if cannot drift from the scalar
+    what-if (the same invariant :func:`next_tier_diff_at_batch`
+    enforces against :func:`next_tier_diff_at`).
+
+    Per-slice parity with :func:`next_tier_diff_at_batch`: each
+    envelope's ``row`` byte-equals the corresponding diff batch
+    envelope's ``row.capacity_changes`` for the same source -- pinned
+    so the capacity batch cannot silently desync from the full diff
+    batch as the catalogue evolves.
+
+    Envelopes are sorted by source ``(tier_rank, tier_id)`` ascending
+    -- byte-stable against :func:`next_tier_diff_at_batch` /
+    :func:`next_tier_unlocks_at_batch` / :func:`next_tier_locks_at_batch`
+    so a UI can fold the four responses into one matrix without
+    re-sorting client-side. Same-rank sibling tiers (``cloud_pro`` /
+    ``pro`` both at rank 2) are both returned.
+
+    Source list is :data:`_PURCHASABLE_TIERS` (trial excluded),
+    matching :func:`next_tier_diff_at_batch`. The source-side ceiling
+    (``enterprise`` as source -- no rung strictly above) surfaces with
+    ``target=None`` and ``row=None`` rather than being dropped, so the
+    matrix keeps a row for every purchasable rung.
+
+    Decoupled from the resolved entitlement (walks the static
+    catalogue), so grace vs enforce yields identical rows.
+
+    Never raises: a per-source builder failure collapses to
+    ``row=None`` on the populated envelope so the surrounding envelope
+    stays visible; an unexpected top-level failure short-circuits to
+    ``[]`` so the matrix keeps rendering instead of breaking.
+    """
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            target = _next_purchasable_tier_after(tid)
+            out.append(_capacity_diff_at_envelope(tid, target))
+        return out
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_capacity_diff_at_batch failed: %s", exc
+        )
+        return []
+
+
+def previous_tier_capacity_diff_at_batch() -> list[dict]:
+    """Batch sibling of :func:`previous_tier_capacity_diff_at`: one
+    ``previous-tier-capacity-diff-at`` envelope per purchasable source
+    tier, in one pass.
+
+    Source-anchored downgrade-side mirror of
+    :func:`next_tier_capacity_diff_at_batch` and capacity-only narrow
+    lens of :func:`previous_tier_diff_at_batch`. Lets a pricing-
+    comparison matrix UI render the "capacity at the rung below each
+    rung" downgrade tooltip column off **one** round-trip instead of N
+    calls to :func:`previous_tier_capacity_diff_at`.
+
+    Each envelope is byte-equal to the scalar
+    ``/api/entitlement/previous-tier-capacity-diff-at?tier=<source>``
+    response body for the same source (sans the resolver-context
+    fields the route adds around the helper output) -- a parity test
+    pins this so the batch what-if cannot drift from the scalar
+    what-if.
+
+    Per-slice parity with :func:`previous_tier_diff_at_batch`: each
+    envelope's ``row`` byte-equals the corresponding diff batch
+    envelope's ``row.capacity_changes`` for the same source -- pinned
+    so the capacity batch cannot silently desync from the full diff
+    batch.
+
+    Envelopes are sorted by source ``(tier_rank, tier_id)`` ascending
+    -- byte-stable against :func:`previous_tier_diff_at_batch` /
+    :func:`previous_tier_unlocks_at_batch` /
+    :func:`previous_tier_locks_at_batch` so a UI can fold the four
+    responses into one matrix without re-sorting client-side. Same-
+    rank sibling tiers are both returned.
+
+    Source list is :data:`_PURCHASABLE_TIERS` (trial excluded),
+    matching :func:`previous_tier_diff_at_batch`. The source-side
+    floor (``oss`` / ``cloud_free`` as source -- no rung strictly
+    below) surfaces with ``target=None`` and ``row=None`` rather than
+    being dropped, so the matrix keeps a row for every purchasable
+    rung.
+
+    Decoupled from the resolved entitlement (walks the static
+    catalogue), so grace vs enforce yields identical rows.
+
+    Never raises: a per-source builder failure collapses to
+    ``row=None`` on the populated envelope so the surrounding envelope
+    stays visible; an unexpected top-level failure short-circuits to
+    ``[]`` so the matrix keeps rendering instead of breaking.
+    """
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            target = _previous_purchasable_tier_before(tid)
+            out.append(_capacity_diff_at_envelope(tid, target))
+        return out
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_capacity_diff_at_batch failed: %s",
+            exc,
+        )
+        return []

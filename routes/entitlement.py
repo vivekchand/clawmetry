@@ -5327,3 +5327,323 @@ def api_entitlement_previous_tier_diff_at_batch():
                 "enforced": False,
             }
         )
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-capacity-diff-at")
+def api_entitlement_next_tier_capacity_diff_at():
+    """``GET /api/entitlement/next-tier-capacity-diff-at?tier=<source>`` --
+    scalar what-if sibling of the live
+    ``Entitlement.next_tier_capacity_diff``: per-axis capacity
+    transition from the caller-supplied ``tier`` to the rung above it.
+
+    Capacity-only narrow lens of
+    ``/api/entitlement/next-tier-diff-at`` -- the latter returns the
+    full :func:`tier_diff` payload for the same step; this endpoint
+    returns only the capacity slice
+    (``{target, channel_limit, retention_days, node_limit}``) so a
+    capacity-only tooltip on a pricing-comparison cell can render the
+    upgrade-side capacity delta for any hypothetical source rung off
+    **one** round-trip.
+
+    Response shape::
+
+        {
+          "tier":           "<source tier id>",
+          "tier_label":     "<source label>",
+          "tier_rank":      <source rank>,
+          "target":         "<next-above tier id>" | null,
+          "target_label":   "<next-above label>" | null,
+          "target_rank":    <next-above rank> | null,
+          "row":            {<capacity_diff_at row>} | null,
+        }
+
+    ``row`` is byte-equal to
+    ``/api/entitlement/next-tier-diff-at?tier=<source>``'s
+    ``row.capacity_changes`` for the same source (modulo the outer
+    :func:`_capacity_row` ``target`` key the diff row does not carry).
+    The ``before`` side of each axis comes off the static per-tier
+    caps anchored at the caller-supplied ``tier`` (NOT the resolved
+    entitlement), so the endpoint is independent of grace mode.
+
+    Accepts any tier id in :data:`entitlements._TIER_ORDER` (including
+    ``trial``), matching the other ``_at`` family endpoints. ``target``
+    / ``row`` collapse to ``null`` at the ceiling (no rung strictly
+    above the source -- enterprise as source) -- the surface stays 200
+    with a populated envelope so callers can render "you're at the top"
+    copy without a status-code branch.
+
+    - **400** when ``tier=`` is missing / blank
+    - **404** when ``tier`` is unknown. The body carries ``which`` so a
+      caller can render the right "unknown ..." message.
+    - **Never 5xxs**: builder failure short-circuits to ``row=null``
+      on the same 200 envelope so the tooltip surface stays mute.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        target = _ent._next_purchasable_tier_after(tier_in)
+        row = _ent.next_tier_capacity_diff_at(tier_in)
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": _ent.tier_label(tier_in),
+                "tier_rank": _ent.tier_rank(tier_in),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "row": row,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_capacity_diff_at: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": None,
+                "tier_rank": -1,
+                "target": None,
+                "target_label": None,
+                "target_rank": None,
+                "row": None,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-capacity-diff-at")
+def api_entitlement_previous_tier_capacity_diff_at():
+    """``GET /api/entitlement/previous-tier-capacity-diff-at?tier=<source>``
+    -- scalar what-if sibling of the live
+    ``Entitlement.previous_tier_capacity_diff``: per-axis capacity
+    transition from the caller-supplied ``tier`` to the rung below it.
+
+    Source-anchored downgrade-side mirror of
+    ``/api/entitlement/next-tier-capacity-diff-at`` and capacity-only
+    narrow lens of ``/api/entitlement/previous-tier-diff-at``. Lets a
+    downgrade-confirmation tooltip render the step-down capacity
+    delta for any hypothetical source rung off **one** round-trip.
+
+    Response shape::
+
+        {
+          "tier":           "<source tier id>",
+          "tier_label":     "<source label>",
+          "tier_rank":      <source rank>,
+          "target":         "<rung-below tier id>" | null,
+          "target_label":   "<rung-below label>" | null,
+          "target_rank":    <rung-below rank> | null,
+          "row":            {<capacity_diff_at row>} | null,
+        }
+
+    ``row`` is byte-equal to
+    ``/api/entitlement/previous-tier-diff-at?tier=<source>``'s
+    ``row.capacity_changes`` for the same source (modulo the outer
+    :func:`_capacity_row` ``target`` key the diff row does not carry).
+
+    Accepts any tier id in :data:`entitlements._TIER_ORDER` (including
+    ``trial``), matching the other ``_at`` family endpoints. ``target``
+    / ``row`` collapse to ``null`` at the floor (no rung strictly
+    below the source -- oss / cloud_free) -- the surface stays 200
+    with a populated envelope so callers can render "you're at the
+    bottom" copy without a status-code branch.
+
+    - **400** when ``tier=`` is missing / blank
+    - **404** when ``tier`` is unknown. The body carries ``which`` so a
+      caller can render the right "unknown ..." message.
+    - **Never 5xxs**: builder failure short-circuits to ``row=null``
+      on the same 200 envelope so the tooltip surface stays mute.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        target = _ent._previous_purchasable_tier_before(tier_in)
+        row = _ent.previous_tier_capacity_diff_at(tier_in)
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": _ent.tier_label(tier_in),
+                "tier_rank": _ent.tier_rank(tier_in),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "row": row,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_capacity_diff_at: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": None,
+                "tier_rank": -1,
+                "target": None,
+                "target_label": None,
+                "target_rank": None,
+                "row": None,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-capacity-diff-at-batch")
+def api_entitlement_next_tier_capacity_diff_at_batch():
+    """``GET /api/entitlement/next-tier-capacity-diff-at-batch`` --
+    batch sibling of ``/api/entitlement/next-tier-capacity-diff-at``:
+    one ``next-tier-capacity-diff-at`` envelope per purchasable source
+    tier, in one round-trip.
+
+    Capacity-only narrow lens of
+    ``/api/entitlement/next-tier-diff-at-batch``. Lets a pricing-
+    comparison matrix UI render the "capacity at the rung above each
+    rung" upgrade-tooltip column off **one** call instead of N calls
+    to ``/next-tier-capacity-diff-at``.
+
+    No query params. The source list is :data:`entitlements._PURCHASABLE_TIERS`
+    (trial excluded), matching the live ``/tier-diff-batch`` endpoint
+    and the sibling diff / unlocks / locks ``_at_batch`` endpoints, so
+    the four batches fold into the same pricing-page table byte-for-
+    byte on the source axis.
+
+    Response shape::
+
+        {
+          "tiers":             [<envelope>, ...],
+          "current_tier":      "<resolved tier id>",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<envelope>`` matches
+    ``/api/entitlement/next-tier-capacity-diff-at?tier=<source>`` for
+    that source exactly (``tier``, ``tier_label``, ``tier_rank``,
+    ``target``, ``target_label``, ``target_rank``, ``row``). The
+    ``row`` carries the :func:`capacity_diff_at` row pinned on both
+    endpoints. At the source-side ceiling (``enterprise`` as source --
+    no rung strictly above) the envelope carries ``target=null`` and
+    ``row=null`` rather than being dropped, so the matrix keeps a row
+    for every purchasable rung.
+
+    - **Never 5xxs**: a resolver failure yields an empty ``tiers``
+      list and the grace-shape envelope so the matrix keeps rendering.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.next_tier_capacity_diff_at_batch() or []
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": rows,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_capacity_diff_at_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-capacity-diff-at-batch")
+def api_entitlement_previous_tier_capacity_diff_at_batch():
+    """``GET /api/entitlement/previous-tier-capacity-diff-at-batch`` --
+    batch sibling of ``/api/entitlement/previous-tier-capacity-diff-at``:
+    one ``previous-tier-capacity-diff-at`` envelope per purchasable
+    source tier, in one round-trip.
+
+    Source-anchored downgrade-side mirror of
+    ``/api/entitlement/next-tier-capacity-diff-at-batch`` and capacity-
+    only narrow lens of
+    ``/api/entitlement/previous-tier-diff-at-batch``. Lets a pricing-
+    comparison matrix UI render the "capacity at the rung below each
+    rung" downgrade-tooltip column off **one** call instead of N calls
+    to ``/previous-tier-capacity-diff-at``.
+
+    No query params. The source list is :data:`entitlements._PURCHASABLE_TIERS`
+    (trial excluded), matching the live ``/tier-diff-batch`` endpoint
+    and the sibling diff / unlocks / locks ``_at_batch`` endpoints.
+
+    Response shape::
+
+        {
+          "tiers":             [<envelope>, ...],
+          "current_tier":      "<resolved tier id>",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<envelope>`` matches
+    ``/api/entitlement/previous-tier-capacity-diff-at?tier=<source>``
+    for that source exactly. At the source-side floor (``oss`` /
+    ``cloud_free`` as source -- no rung strictly below) the envelope
+    carries ``target=null`` and ``row=null`` rather than being
+    dropped, so the matrix keeps a row for every purchasable rung.
+
+    - **Never 5xxs**: a resolver failure yields an empty ``tiers``
+      list and the grace-shape envelope so the matrix keeps rendering.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.previous_tier_capacity_diff_at_batch() or []
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": rows,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_capacity_diff_at_batch: error: %s",
+            exc,
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
