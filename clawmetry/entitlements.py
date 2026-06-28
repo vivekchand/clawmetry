@@ -5601,3 +5601,203 @@ def previous_tier_diff_at(tier: str) -> dict | None:
     except Exception as exc:
         logger.warning("entitlements: previous_tier_diff_at failed: %s", exc)
         return None
+
+
+def _diff_at_envelope(source: str, target: str | None) -> dict:
+    """Private builder for the ``{next,previous}_tier_diff_at_batch`` rows.
+
+    Two-endpoint counterpart of :func:`_next_at_envelope` /
+    :func:`_previous_at_envelope`: those carry a single-endpoint row
+    (the target's own ``tier_unlocks`` / ``tier_locks``); this one
+    carries a two-endpoint row pinned on both ``source`` and ``target``
+    via :func:`tier_diff` -- the "all-slices-in-one-row" shape the
+    scalar ``next_tier_diff_at`` / ``previous_tier_diff_at`` helpers
+    surface.
+
+    Envelope shape matches the unlocks / locks ``_at`` envelopes
+    byte-for-byte so a UI can fold the three batches into one
+    pricing-comparison matrix without re-keying::
+
+        ``{tier, tier_label, tier_rank, target, target_label, target_rank, row}``
+
+    ``row`` collapses to ``None`` at the ladder ceiling / floor of the
+    source axis (``target is None``) and on a :func:`tier_diff` builder
+    failure, matching the scalar diff helpers. Never raises -- every
+    fallback collapses to a fully-populated envelope with ``row=None``
+    so the batch keeps the per-source row visible even when its
+    target row could not be built.
+    """
+    src = (source or "").strip().lower()
+    row: dict | None = None
+    if target is not None:
+        try:
+            row = tier_diff(src, target)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: _diff_at_envelope builder failed for %s->%s: %s",
+                src,
+                target,
+                exc,
+            )
+            row = None
+    return {
+        "tier": src,
+        "tier_label": tier_label(src) if src in _TIER_ORDER else None,
+        "tier_rank": tier_rank(src) if src in _TIER_ORDER else -1,
+        "target": target,
+        "target_label": tier_label(target) if target else None,
+        "target_rank": tier_rank(target) if target else None,
+        "row": row,
+    }
+
+
+def next_tier_diff_at_batch() -> list[dict]:
+    """Batch sibling of :func:`next_tier_diff_at`: one
+    ``next-tier-diff-at`` envelope per purchasable source tier, in one
+    pass.
+
+    Composes :func:`next_tier_diff_at` (scalar what-if) and
+    :func:`tier_diff_batch` (live batch) -- same envelope shape per row
+    as the scalar ``/api/entitlement/next-tier-diff-at`` endpoint
+    surfaces, same source axis as :func:`tier_diff_batch`. Lets a
+    pricing-comparison matrix UI render the "full marginal vs the rung
+    above each rung" upgrade-CTA column off **one** round-trip instead
+    of N calls to :func:`next_tier_diff_at`.
+
+    The "all-slices-in-one-row" member of the ``next_tier_*_at_batch``
+    family alongside :func:`next_tier_unlocks_at_batch` (feature /
+    runtime grant slice) and :func:`next_tier_locks_at_batch`
+    (feature / runtime loss slice). Where each of those siblings
+    carries a single slice of the per-rung transition, this batch
+    carries ALL slices (``added_features`` + ``lost_features`` +
+    ``added_runtimes`` + ``lost_runtimes`` + ``capacity_changes``) in
+    one row so a UI can render the whole upgrade matrix off one call
+    instead of two.
+
+    Each envelope is byte-equal to the scalar
+    ``/api/entitlement/next-tier-diff-at?tier=<source>`` response body
+    for the same source (sans the resolver-context fields the route
+    adds around the helper output) -- a parity test pins this so the
+    batch what-if cannot drift from the scalar what-if (the same
+    invariant :func:`next_tier_unlocks_at_batch` enforces against
+    :func:`next_tier_unlocks_at`).
+
+    Per-slice parity with the other ``next_*_at_batch`` siblings:
+    each envelope's ``row.added_features`` byte-equals
+    :func:`next_tier_unlocks_at_batch`'s ``row.features`` slot for the
+    same source (and ditto for ``added_runtimes``); each envelope's
+    ``row.lost_features`` byte-equals :func:`next_tier_locks_at_batch`'s
+    ``row.lost_features`` slot for the same source (and ditto for
+    ``lost_runtimes``). Pinned in the test suite so the three
+    ``next_*_at_batch`` siblings can never silently drift apart.
+
+    Envelopes are sorted by source ``(tier_rank, tier_id)`` ascending
+    -- byte-stable against :func:`next_tier_unlocks_at_batch` /
+    :func:`next_tier_locks_at_batch` so a UI can fold the three
+    responses into one matrix without re-sorting client-side.
+    Same-rank sibling tiers (``cloud_pro`` / ``pro`` both at rank 2)
+    are both returned.
+
+    Source list is :data:`_PURCHASABLE_TIERS` (trial excluded),
+    matching :func:`tier_diff_batch`. The source-side ceiling
+    (``enterprise`` as source -- no rung strictly above) surfaces with
+    ``target=None`` and ``row=None`` rather than being dropped, so the
+    matrix keeps a row for every purchasable rung.
+
+    Decoupled from the resolved entitlement (walks the static
+    catalogue), so grace vs enforce yields identical rows.
+
+    Never raises: a per-source builder failure collapses to
+    ``row=None`` on the populated envelope so the surrounding envelope
+    stays visible; an unexpected top-level failure short-circuits to
+    ``[]`` so the matrix keeps rendering instead of breaking.
+    """
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            target = _next_purchasable_tier_after(tid)
+            out.append(_diff_at_envelope(tid, target))
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: next_tier_diff_at_batch failed: %s", exc)
+        return []
+
+
+def previous_tier_diff_at_batch() -> list[dict]:
+    """Batch sibling of :func:`previous_tier_diff_at`: one
+    ``previous-tier-diff-at`` envelope per purchasable source tier, in
+    one pass.
+
+    Source-anchored downgrade-side mirror of
+    :func:`next_tier_diff_at_batch`. Composes
+    :func:`previous_tier_diff_at` (scalar what-if) and
+    :func:`tier_diff_batch` (live batch) -- same envelope shape per row
+    as the scalar ``/api/entitlement/previous-tier-diff-at`` endpoint
+    surfaces, same source axis as :func:`tier_diff_batch`. Lets a
+    pricing-comparison matrix UI render the "full marginal vs the rung
+    below each rung" downgrade-CTA column off **one** round-trip
+    instead of N calls to :func:`previous_tier_diff_at`.
+
+    The "all-slices-in-one-row" member of the
+    ``previous_tier_*_at_batch`` family alongside
+    :func:`previous_tier_unlocks_at_batch` (feature / runtime grant
+    slice on a downgrade) and :func:`previous_tier_locks_at_batch`
+    (feature / runtime loss slice on a downgrade). Where each of those
+    siblings carries a single slice of the per-rung transition, this
+    batch carries ALL slices in one row so a UI can render the whole
+    downgrade matrix off one call instead of two.
+
+    Each envelope is byte-equal to the scalar
+    ``/api/entitlement/previous-tier-diff-at?tier=<source>`` response
+    body for the same source (sans the resolver-context fields the
+    route adds around the helper output) -- a parity test pins this so
+    the batch what-if cannot drift from the scalar what-if.
+
+    Per-slice parity with the other ``previous_*_at_batch`` siblings:
+    each envelope's ``row.added_features`` byte-equals
+    :func:`previous_tier_unlocks_at_batch`'s ``row.features`` slot for
+    the same source (and ditto for ``added_runtimes``); each
+    envelope's ``row.lost_features`` byte-equals
+    :func:`previous_tier_locks_at_batch`'s ``row.lost_features`` slot
+    for the same source (and ditto for ``lost_runtimes``). Pinned in
+    the test suite so the three ``previous_*_at_batch`` siblings can
+    never silently drift apart.
+
+    Envelopes are sorted by source ``(tier_rank, tier_id)`` ascending
+    -- byte-stable against :func:`previous_tier_unlocks_at_batch` /
+    :func:`previous_tier_locks_at_batch` so a UI can fold the three
+    responses into one matrix without re-sorting client-side.
+    Same-rank sibling tiers (``cloud_pro`` / ``pro`` both at rank 2)
+    are both returned.
+
+    Source list is :data:`_PURCHASABLE_TIERS` (trial excluded),
+    matching :func:`tier_diff_batch`. The source-side floor
+    (``oss`` / ``cloud_free`` as source -- no rung strictly below)
+    surfaces with ``target=None`` and ``row=None`` rather than being
+    dropped, so the matrix keeps a row for every purchasable rung.
+
+    Decoupled from the resolved entitlement (walks the static
+    catalogue), so grace vs enforce yields identical rows.
+
+    Never raises: a per-source builder failure collapses to
+    ``row=None`` on the populated envelope so the surrounding envelope
+    stays visible; an unexpected top-level failure short-circuits to
+    ``[]`` so the matrix keeps rendering instead of breaking.
+    """
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            target = _previous_purchasable_tier_before(tid)
+            out.append(_diff_at_envelope(tid, target))
+        return out
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_diff_at_batch failed: %s", exc
+        )
+        return []
