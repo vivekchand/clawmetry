@@ -465,15 +465,6 @@ def start_update_check_thread(role=None):
     log.info("Update check thread started")
 
 
-def stop_update_check_thread():
-    """Stop the background update check thread."""
-    global _update_check_thread, _update_check_stop_event
-    if _update_check_stop_event:
-        _update_check_stop_event.set()
-    if _update_check_thread:
-        _update_check_thread.join(timeout=5)
-
-
 # ── API Endpoints ─────────────────────────────────────────────────────────────
 
 
