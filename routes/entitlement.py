@@ -5899,3 +5899,147 @@ def api_entitlement_previous_tier_spec_at():
                 "row": None,
             }
         )
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-spec-at-batch")
+def api_entitlement_next_tier_spec_at_batch():
+    """``GET /api/entitlement/next-tier-spec-at-batch`` -- batch sibling
+    of ``/api/entitlement/next-tier-spec-at``: one ``next-tier-spec-at``
+    envelope per purchasable source tier, in one round-trip.
+
+    Spec-shaped sibling of ``/api/entitlement/next-tier-diff-at-batch``,
+    ``/next-tier-unlocks-at-batch``, ``/next-tier-locks-at-batch``, and
+    ``/next-tier-capacity-diff-at-batch``. Lets a pricing-comparison
+    matrix UI render the "full descriptor of the rung above each rung"
+    upgrade-CTA column off **one** call instead of N calls to
+    ``/next-tier-spec-at``.
+
+    No query params. The source list is :data:`entitlements._PURCHASABLE_TIERS`
+    (trial excluded), matching the live ``/tier-diff-batch`` endpoint
+    and the sibling diff / unlocks / locks / capacity ``_at_batch``
+    endpoints, so the five batches fold into the same pricing-page
+    table byte-for-byte on the source axis.
+
+    Response shape::
+
+        {
+          "tiers":             [<envelope>, ...],
+          "current_tier":      "<resolved tier id>",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<envelope>`` matches
+    ``/api/entitlement/next-tier-spec-at?tier=<source>`` for that
+    source exactly (``tier``, ``tier_label``, ``tier_rank``,
+    ``target``, ``target_label``, ``target_rank``, ``row``). The
+    ``row`` carries the :func:`tier_spec_at` row pinned on both
+    endpoints; ``is_current`` is always ``False`` on populated rows
+    (target is strictly above source). At the source-side ceiling
+    (``enterprise`` as source) the envelope carries ``target=null``
+    and ``row=null`` rather than being dropped.
+
+    - **Never 5xxs**: a resolver failure yields an empty ``tiers``
+      list and the grace-shape envelope so the matrix keeps rendering.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.next_tier_spec_at_batch() or []
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": rows,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_spec_at_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-spec-at-batch")
+def api_entitlement_previous_tier_spec_at_batch():
+    """``GET /api/entitlement/previous-tier-spec-at-batch`` -- batch
+    sibling of ``/api/entitlement/previous-tier-spec-at``: one
+    ``previous-tier-spec-at`` envelope per purchasable source tier, in
+    one round-trip.
+
+    Source-anchored downgrade-side mirror of
+    ``/api/entitlement/next-tier-spec-at-batch`` and spec-shaped
+    sibling of ``/previous-tier-diff-at-batch``,
+    ``/previous-tier-unlocks-at-batch``,
+    ``/previous-tier-locks-at-batch``, and
+    ``/previous-tier-capacity-diff-at-batch``. Lets a pricing-
+    comparison matrix UI render the "full descriptor of the rung below
+    each rung" downgrade-confirmation column off **one** call instead
+    of N calls to ``/previous-tier-spec-at``.
+
+    No query params. The source list is :data:`entitlements._PURCHASABLE_TIERS`
+    (trial excluded), matching the sibling ``_at_batch`` endpoints, so
+    the five batches fold into the same pricing-page table byte-for-
+    byte on the source axis.
+
+    Response shape::
+
+        {
+          "tiers":             [<envelope>, ...],
+          "current_tier":      "<resolved tier id>",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<envelope>`` matches
+    ``/api/entitlement/previous-tier-spec-at?tier=<source>`` for that
+    source exactly. The ``row`` carries the :func:`tier_spec_at` row
+    pinned on both endpoints; ``is_current`` is always ``False`` on
+    populated rows (target is strictly below source). At the
+    source-side floor (``oss`` / ``cloud_free`` as source) the
+    envelope carries ``target=null`` and ``row=null`` rather than
+    being dropped.
+
+    - **Never 5xxs**: a resolver failure yields an empty ``tiers``
+      list and the grace-shape envelope so the matrix keeps rendering.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.previous_tier_spec_at_batch() or []
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": rows,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_spec_at_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
