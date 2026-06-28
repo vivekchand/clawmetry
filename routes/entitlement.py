@@ -188,6 +188,25 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                          hypothetical perspective in one
                                          round-trip instead of fetching the
                                          full ``/tier-catalog-at`` payload.
+  GET  /api/entitlement/tier-spec-path -- arbitrary-endpoint stepwise spec-
+                                         shaped path between any two tiers
+                                         (``?from=&to=``); path-shaped
+                                         sibling of ``/tier-spec-at-batch``
+                                         and spec-shaped sibling of
+                                         ``/tier-path`` / ``/capacity-diff-
+                                         path`` / ``/tier-unlocks-path`` /
+                                         ``/tier-locks-path`` / ``/preview-
+                                         path``. Each row is a
+                                         ``tier_spec_at`` row pinned on
+                                         ``from=`` for ``target=<rung>``, so
+                                         the marketing-shaped descriptor
+                                         (``label``, ``is_paid``,
+                                         ``unlocks_paid_runtimes``,
+                                         ``retention_days``,
+                                         ``channel_limit``, ``node_limit``,
+                                         ``features``, ``runtimes``) hydrates
+                                         at every rung between two tiers
+                                         off one round-trip.
 """
 
 from __future__ import annotations
@@ -6042,4 +6061,110 @@ def api_entitlement_previous_tier_spec_at_batch():
                 "grace": True,
                 "enforced": False,
             }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/tier-spec-path")
+def api_entitlement_tier_spec_path():
+    """``GET /api/entitlement/tier-spec-path?from=<id>&to=<id>`` --
+    arbitrary-endpoint stepwise spec-shaped path between any two
+    tiers; the spec-shaped sibling of ``/tier-path`` (full
+    ``tier_diff`` per rung), ``/capacity-diff-path`` (capacity-only per
+    rung), ``/tier-unlocks-path`` (marginal grants per rung),
+    ``/tier-locks-path`` (marginal losses per rung) and
+    ``/preview-path`` (cumulative ``Entitlement.to_dict`` per rung) --
+    the spec-shaped member of the ``_path`` family, the path-shaped
+    sibling of ``/tier-spec-at-batch`` and the bulk what-if cousin of
+    ``/tier-spec-at``. Lets a pricing-comparison "compare A vs B"
+    surface render the slim catalogue-shaped descriptor (``label``,
+    ``is_paid``, ``unlocks_paid_runtimes``, ``retention_days``,
+    ``channel_limit``, ``node_limit``, ``features``, ``runtimes``) at
+    every rung between any two tiers off ONE round-trip, without
+    folding marketing fields back in from a separate
+    ``/tier-catalog`` lookup the way a ``/preview-path`` row forces.
+
+    Each row in ``path`` matches the ``/tier-spec-at?tier=<from>&target=<rung>``
+    payload exactly -- the same key set with ``is_current=False`` on
+    every walked rung (``from`` is excluded from the walked rungs) --
+    so a UI that already renders ``/tier-spec-at`` needs zero new
+    shape code to render a per-rung row off this path. Rung walk is
+    byte-stable against ``/tier-path``, ``/capacity-diff-path``,
+    ``/tier-unlocks-path``, ``/tier-locks-path`` and ``/preview-path``
+    (same ``_PURCHASABLE_TIERS`` filter + same sort + same
+    destination-sibling exclusion), so the six paths line up rung-for-
+    rung.
+
+    Response shape::
+
+        {
+          "from":       "<tier id>",
+          "from_label": "...",
+          "from_rank":  <int>,
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<tier-spec-at row>, ...],
+        }
+
+    Direction semantics:
+
+    * ``upgrade`` (ascending) -- rows climb cumulatively rung by rung
+      from the rung above ``from`` toward ``to``.
+    * ``downgrade`` (descending) -- rows shrink cumulatively rung by
+      rung; the cancellation-walkthrough counterpart.
+    * ``lateral`` (same rank, different id) -- single-row path; row
+      carries the cumulative spec at ``to``.
+    * ``identity`` (``from == to``) -- empty path; no rungs to walk.
+
+    Same-rank siblings strictly between the endpoints are both
+    included; same-rank siblings of the destination are excluded so
+    the path terminates exactly at ``to``. ``400`` when ``from=`` or
+    ``to=`` is missing; ``404`` when either id is unknown. ``trial``
+    IS accepted as an endpoint -- it is excluded from the walked
+    intermediate rungs (not purchasable) but is a valid endpoint via
+    the lateral branch. Never 5xxs: a resolver failure short-circuits
+    to ``404`` so a pricing-comparison surface keeps rendering
+    instead of breaking.
+    """
+    f = (request.args.get("from") or "").strip().lower()
+    t = (request.args.get("to") or "").strip().lower()
+    if not f or not t:
+        return jsonify({"error": "missing from or to"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        path = _ent.tier_spec_path(f, t)
+        if path is None:
+            return (
+                jsonify({"error": "unknown tier", "from": f, "to": t}),
+                404,
+            )
+        from_rank = _ent.tier_rank(f)
+        to_rank = _ent.tier_rank(t)
+        if f == t:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        return jsonify(
+            {
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": from_rank,
+                "to": t,
+                "to_label": _ent.tier_label(t),
+                "to_rank": to_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_tier_spec_path: error: %s", exc)
+        return (
+            jsonify({"error": "unknown tier", "from": f, "to": t}),
+            404,
         )
