@@ -1272,8 +1272,8 @@ class OpenClawAdapter(AgentAdapter):
                             usage = src.get("usage") if isinstance(src.get("usage"), dict) else {}
                             if usage:
                                 for dst, *keys in [
-                                    ("inputTokens", "input_tokens", "inputTokens"),
-                                    ("outputTokens", "output_tokens", "outputTokens"),
+                                    ("inputTokens", "input_tokens", "inputTokens", "input"),
+                                    ("outputTokens", "output_tokens", "outputTokens", "output"),
                                     ("cacheReadTokens", "cache_read_input_tokens", "cacheReadInputTokens", "cacheRead"),
                                     ("cacheWriteTokens", "cache_creation_input_tokens", "cacheCreationInputTokens", "cacheWrite"),
                                     ("totalTokens", "totalTokens", "total_tokens"),
@@ -1516,8 +1516,8 @@ class OpenClawAdapter(AgentAdapter):
                     continue
                 model = msg.get("model") or ""
                 usage = msg.get("usage") or {}
-                tok_in = int(usage.get("input_tokens") or usage.get("inputTokens") or 0)
-                tok_out = int(usage.get("output_tokens") or usage.get("outputTokens") or 0)
+                tok_in = int(usage.get("input_tokens") or usage.get("inputTokens") or usage.get("input") or 0)
+                tok_out = int(usage.get("output_tokens") or usage.get("outputTokens") or usage.get("output") or 0)
                 # Reasoning/thinking tokens (#2876) are billed but not part of
                 # input/output; fold them into token_count so LLM-span cost
                 # totals are not systematically under-reported.
@@ -1729,8 +1729,8 @@ class OpenClawAdapter(AgentAdapter):
                 comp_usage = obj.get("usage")
                 if isinstance(comp_usage, dict):
                     tok_total = int(comp_usage.get("totalTokens") or comp_usage.get("total_tokens") or 0)
-                    tok_in = int(comp_usage.get("input_tokens") or comp_usage.get("inputTokens") or 0)
-                    tok_out = int(comp_usage.get("output_tokens") or comp_usage.get("outputTokens") or 0)
+                    tok_in = int(comp_usage.get("input_tokens") or comp_usage.get("inputTokens") or comp_usage.get("input") or 0)
+                    tok_out = int(comp_usage.get("output_tokens") or comp_usage.get("outputTokens") or comp_usage.get("output") or 0)
                     effective = tok_total or (tok_in + tok_out)
                     if effective:
                         comp_attrs["compaction.usage.total_tokens"] = effective
