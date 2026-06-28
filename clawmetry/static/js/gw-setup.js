@@ -128,13 +128,92 @@ function openCloudModal() {
   document.getElementById('cloud-step-email').style.display = '';
   document.getElementById('cloud-step-otp').style.display = 'none';
   document.getElementById('cloud-step-done').style.display = 'none';
+  var _w = document.getElementById('cloud-step-wait'); if (_w) _w.style.display = 'none';
   document.getElementById('cloud-email-error').style.display = 'none';
   setTimeout(function(){ var el = document.getElementById('cloud-email-input'); if(el) el.focus(); }, 100);
 }
 function closeCloudModal() {
+  _cloudStopOauthPoll();
   document.getElementById('cloud-modal-overlay').style.display = 'none';
 }
 document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeCloudModal(); });
+
+// One-click cloud sign-up + node connect via GitHub/Google OAuth.
+// The local dashboard opens the cloud OAuth flow with a loopback bridge (cli_port);
+// when the user authorizes, the cloud redirects the freshly-minted cm_ key back to
+// a one-shot 127.0.0.1 listener the daemon started, which registers the node and
+// starts the sync daemon. The key never leaves this machine over the network.
+var _cloudOauthTimer = null;
+function _cloudStopOauthPoll() { if (_cloudOauthTimer) { clearInterval(_cloudOauthTimer); _cloudOauthTimer = null; } }
+function cloudOauth(provider) {
+  fetch('/api/cloud-cta/oauth-start', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({provider: provider})})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d.ok && d.url) {
+        window.open(d.url, '_blank');
+        document.getElementById('cloud-step-email').style.display = 'none';
+        document.getElementById('cloud-step-otp').style.display = 'none';
+        document.getElementById('cloud-step-done').style.display = 'none';
+        var w = document.getElementById('cloud-step-wait'); if (w) w.style.display = '';
+        var we = document.getElementById('cloud-wait-error'); if (we) we.style.display = 'none';
+        _cloudPollOauth();
+      } else {
+        var err = document.getElementById('cloud-email-error');
+        err.textContent = d.error || 'Sign-in is unavailable right now. Use email instead.';
+        err.style.display = '';
+      }
+    })
+    .catch(function(){ var err = document.getElementById('cloud-email-error'); err.textContent = 'Network error. Try again.'; err.style.display = ''; });
+}
+function _cloudPollOauth() {
+  _cloudStopOauthPoll();
+  var tries = 0;
+  _cloudOauthTimer = setInterval(function(){
+    tries++;
+    fetch('/api/cloud-cta/oauth-status').then(function(r){ return r.json(); }).then(function(d){
+      if (d.status === 'connected') {
+        _cloudStopOauthPoll();
+        _cloudShowConnected(d.enc_key || '');
+        _updateCloudStatus();
+      } else if (d.status === 'error') {
+        _cloudStopOauthPoll();
+        var we = document.getElementById('cloud-wait-error');
+        if (we) { we.textContent = d.error || 'Sign-in did not complete. Please try again.'; we.style.display = ''; }
+      } else if (tries > 150) {  // ~5 min at 2s
+        _cloudStopOauthPoll();
+        var we2 = document.getElementById('cloud-wait-error');
+        if (we2) { we2.textContent = 'Timed out waiting for sign-in. Please try again.'; we2.style.display = ''; }
+      }
+    }).catch(function(){});
+  }, 2000);
+}
+function _cloudShowConnected(encKey) {
+  document.getElementById('cloud-step-email').style.display = 'none';
+  document.getElementById('cloud-step-otp').style.display = 'none';
+  var w = document.getElementById('cloud-step-wait'); if (w) w.style.display = 'none';
+  document.getElementById('cloud-step-done').style.display = '';
+  if (encKey) {
+    var box = document.getElementById('cloud-done-enckey');
+    var msg = document.getElementById('cloud-done-msg');
+    if (msg) msg.textContent = 'Your node is now syncing to ClawMetry Cloud.';
+    var code = document.getElementById('cloud-enc-key');
+    if (code) code.textContent = encKey;
+    if (box) box.style.display = '';
+  }
+}
+function cloudCopyEncKey() {
+  var code = document.getElementById('cloud-enc-key');
+  if (!code) return;
+  var txt = code.textContent || '';
+  try {
+    navigator.clipboard.writeText(txt);
+  } catch (e) {
+    var r = document.createRange(); r.selectNode(code);
+    var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    try { document.execCommand('copy'); } catch (e2) {}
+    sel.removeAllRanges();
+  }
+}
 function cloudSendOtp() {
   var email = document.getElementById('cloud-email-input').value.trim();
   if (!email || !email.includes('@')) {

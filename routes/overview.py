@@ -1762,6 +1762,44 @@ def cloud_proxy(cloud_path):
         return jsonify({"error": "proxy_failed", "detail": str(e)[:200]}), 502
 
 
+@bp_overview.route("/api/cloud-cta/oauth-start", methods=["POST"])
+def cloud_cta_oauth_start():
+    """One-click cloud sign-up + node connect via GitHub/Google OAuth.
+
+    Starts a loopback browser-bridge and returns the cloud OAuth start URL for
+    the dashboard to open in a new tab. The cm_ key the cloud mints rides back
+    over 127.0.0.1 only; the bridge thread then registers this node and starts
+    the sync daemon. The dashboard polls /api/cloud-cta/oauth-status.
+    """
+    import dashboard as _d
+
+    data = request.get_json(silent=True) or {}
+    provider = (data.get("provider") or "").strip().lower()
+    if provider not in ("github", "google"):
+        return jsonify({"ok": False, "error": "Unsupported provider"}), 400
+    url = _d._start_oauth_bridge(provider)
+    if not url:
+        err = (_d._OAUTH_BRIDGE or {}).get("error") or "Could not start sign-in"
+        return jsonify({"ok": False, "error": err}), 500
+    return jsonify({"ok": True, "url": url})
+
+
+@bp_overview.route("/api/cloud-cta/oauth-status")
+def cloud_cta_oauth_status():
+    import dashboard as _d
+
+    st = dict(_d._OAUTH_BRIDGE or {})
+    return jsonify(
+        {
+            "status": st.get("status", "idle"),
+            "provider": st.get("provider", ""),
+            "node_id": st.get("node_id", ""),
+            "enc_key": st.get("enc_key", ""),
+            "error": st.get("error", ""),
+        }
+    )
+
+
 @bp_overview.route("/api/cloud-cta/send-otp", methods=["POST"])
 def cloud_cta_send_otp():
     import urllib.request as _ur
