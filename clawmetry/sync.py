@@ -2330,6 +2330,10 @@ def sync_sandbox_sessions_openshell(config: dict, state: dict) -> int:
             continue
 
         for fname in fnames:
+            # Warmup sessions (nemoclaw-onboard-warmup-*) are harness
+            # onboarding artefacts — skip so they never reach DuckDB (#3366).
+            if fname.startswith("nemoclaw-onboard-warmup-"):
+                continue
             cursor_key = f"{sb_name}/{fname}"
             last_line = cursors.get(cursor_key, 0)
             try:

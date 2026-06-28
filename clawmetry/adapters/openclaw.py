@@ -1002,6 +1002,24 @@ class OpenClawAdapter(AgentAdapter):
                 _cdt = s.get("isCronDeliveryTarget") or s.get("cronTarget")
             if _cdt is not None:
                 extra["cronDeliveryTarget"] = bool(_cdt)
+            # Cron delivery outcome (#3365): PR #93580 also stamps the delivery
+            # result (success/failure), failure reason, and delivered-content
+            # reference on the session so the next turn can see what happened.
+            _cds = s.get("cronDeliverySuccess")
+            if _cds is None:
+                _cds = s.get("cronDelivered") or s.get("deliverySuccess")
+            if _cds is not None:
+                extra["cronDeliverySuccess"] = bool(_cds)
+            _cdfr = (
+                s.get("cronDeliveryFailureReason")
+                or s.get("deliveryFailureReason")
+                or s.get("cronFailureReason")
+            )
+            if _cdfr is not None:
+                extra["cronDeliveryFailureReason"] = str(_cdfr)
+            _cdcont = s.get("cronDeliveredContent") or s.get("deliveredContent")
+            if _cdcont is not None:
+                extra["cronDeliveredContent"] = str(_cdcont)
             # GLM/Zhipu overload classification (#3343): PR #93241 classifies
             # Zhipu GLM overload as a distinct overload state for failover;
             # surface the tag so session views can indicate failover routing.
