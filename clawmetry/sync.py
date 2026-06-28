@@ -7037,6 +7037,14 @@ def send_heartbeat(config: dict) -> bool:
             payload.setdefault("cache_pushes", []).extend(ap_pushes)
     except Exception as _ap_e2:
         log.debug("approvals cache_push build failed (continuing): %s", _ap_e2)
+    # Plaintext pending count so cloud can trigger push notifications without
+    # decrypting the encrypted cache blob above (issue #3303).
+    try:
+        _ap_ct = _pending_approvals_count(config)
+        if _ap_ct:
+            payload["pending_approvals_count"] = _ap_ct
+    except Exception as _ap_ct_e:
+        log.debug("pending_approvals_count failed (continuing): %s", _ap_ct_e)
     # Memory tab (epic #1032): proactively push the user's memory-file
     # snapshot so the cloud Node Detail → Memory tab paints from cache.
     # Without this push the cloud handler returns `{blob: None}` and the
@@ -9097,6 +9105,28 @@ def _build_approvals_cache_pushes(config: dict) -> list:
         "ttl_s":  APPROVALS_CACHE_TTL_SEC,
         "blob":   blob,
     }]
+
+
+def _pending_approvals_count(config: dict) -> int:
+    """Return count of pending approvals for this node's owner token.
+
+    Added as a plaintext top-level heartbeat field (issue #3303) so the cloud
+    can decide whether to push an FCM/APNs notification without decrypting the
+    E2E-encrypted cache blob. Returns 0 on any error (best-effort)."""
+    api_key = config.get("api_key", "")
+    if not api_key:
+        return 0
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store(read_only=True)
+        rows = store.query_approvals(
+            owner_hash=_owner_hash_for_token(api_key),
+            status="pending",
+            limit=APPROVALS_CACHE_LIMIT,
+        )
+        return len(rows) if rows else 0
+    except Exception:
+        return 0
 
 
 # ── Phase 6: proactive cron-runs cache_push (issue #1640) ────────────────────
