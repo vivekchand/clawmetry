@@ -6444,3 +6444,116 @@ def previous_tier_spec_at_batch() -> list[dict]:
             "entitlements: previous_tier_spec_at_batch failed: %s", exc
         )
         return []
+
+
+def tier_spec_path(from_tier: str, to_tier: str) -> list[dict] | None:
+    """Arbitrary-endpoint stepwise spec-shaped path between two tiers.
+
+    Spec-shaped sibling of :func:`tier_path` (full ``tier_diff`` per
+    rung), :func:`capacity_diff_path` (capacity-only per rung),
+    :func:`tier_unlocks_path` (marginal grants per rung),
+    :func:`tier_locks_path` (marginal losses per rung), and
+    :func:`preview_path` (cumulative ``Entitlement.to_dict`` per rung)
+    -- the spec-shaped member of the ``_path`` family, the path-shaped
+    sibling of :func:`tier_spec_at_batch` (which is a fixed-source what-
+    if matrix over many targets) and the bulk what-if cousin of
+    :func:`tier_spec_at`. Lets a pricing-comparison "compare A vs B"
+    surface render the slim catalogue-shaped descriptor
+    (``id``, ``label``, ``is_paid``, ``is_current``, ``rank``,
+    ``unlocks_paid_runtimes``, ``retention_days``, ``channel_limit``,
+    ``node_limit``, ``features``, ``runtimes``) at every rung between
+    any two tiers off ONE round-trip, without folding marketing fields
+    (``is_paid``, ``label``, ``unlocks_paid_runtimes``) back in from a
+    separate ``/tier-catalog`` lookup the way a ``/preview-path`` row
+    forces.
+
+    Per-rung row shape matches :func:`tier_spec_at` exactly -- the same
+    key set with ``is_current`` always ``False`` on walked rungs
+    (``from_tier`` is excluded from the walked set, so the rung-equals-
+    from-tier perspective never appears) -- so a UI that already
+    renders a ``/tier-spec-at`` row needs zero new shape code to render
+    a per-rung row off this path. A parity test pins this so the
+    scalar what-if and path what-if cannot drift.
+
+    Walk semantics mirror :func:`tier_path` / :func:`capacity_diff_path`
+    / :func:`tier_unlocks_path` / :func:`tier_locks_path` /
+    :func:`preview_path` byte-for-byte (same ``_PURCHASABLE_TIERS``
+    filter + same sort key + same destination-sibling exclusion), so
+    the rung ``id`` ids from this helper line up rung-for-rung against
+    the rung ``tier`` ids from those five helpers -- the six paths
+    walk the same rungs in the same order. Same-rank siblings strictly
+    between the endpoints are both included (matching :func:`tier_path`
+    's ladder shape); same-rank siblings of the destination are
+    excluded so the path terminates exactly at ``to_tier`` and not at
+    one of its rank peers.
+
+    Direction semantics (all rows share the same cumulative spec
+    shape; only the sequence changes):
+
+    * ``upgrade`` (ascending) -- rows climb cumulatively from the rung
+      above ``from_tier`` toward ``to_tier``; the natural "what does
+      each rung above me look like" walkthrough.
+    * ``downgrade`` (descending) -- rows shrink cumulatively rung by
+      rung; the cancellation-walkthrough counterpart.
+    * ``lateral`` (same rank, different id) -- single-row path; row
+      carries the cumulative spec at ``to_tier``.
+    * ``identity`` (``from == to``) -- empty path; no rungs to walk.
+
+    Endpoint semantics match :func:`tier_path` / :func:`tier_diff`:
+    both ids accept any entry in :data:`_TIER_FEATURES` (including
+    :data:`TIER_TRIAL`, which is not purchasable -- it is excluded
+    from the walked intermediate rungs but is a valid endpoint via the
+    lateral branch). Unknown ids on either side short-circuit to
+    ``None``.
+
+    Resolver-independent: walks the static per-tier maps via
+    :func:`tier_spec_at` (which pins ``is_current`` to the hypothetical
+    perspective of ``from_tier``, not the live resolved entitlement),
+    so flipping enforce on yields byte-identical rows -- same property
+    the rest of the ``_path`` family guarantees.
+
+    Never raises: a resolver failure logs a warning and returns
+    ``None`` so a pricing-page surface keeps rendering instead of
+    breaking.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+        if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+            return None
+        if f == t:
+            return []
+        from_rank = _TIER_RANK.get(f, -1)
+        to_rank = _TIER_RANK.get(t, -1)
+        if from_rank == to_rank:
+            row = tier_spec_at(f, t)
+            return [row] if row is not None else []
+        ascending = to_rank > from_rank
+        if ascending:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (_TIER_RANK.get(x, -1), x),
+            )
+        else:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (-_TIER_RANK.get(x, -1), x),
+            )
+        path: list[dict] = []
+        for tid in ordered:
+            r = _TIER_RANK.get(tid, -1)
+            if ascending:
+                if r <= from_rank or r > to_rank:
+                    continue
+            else:
+                if r >= from_rank or r < to_rank:
+                    continue
+            if r == to_rank and tid != t:
+                continue
+            row = tier_spec_at(f, tid)
+            if row is not None:
+                path.append(row)
+        return path
+    except Exception as exc:
+        logger.warning("entitlements: tier_spec_path failed: %s", exc)
+        return None
