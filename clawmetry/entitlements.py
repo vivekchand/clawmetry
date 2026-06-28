@@ -783,6 +783,66 @@ class Entitlement:
             logger.warning("entitlements: previous_tier_locks failed: %s", exc)
             return None
 
+    def next_tier_spec(self) -> dict | None:
+        """One-rung-up full :func:`tier_spec_at`-shape descriptor.
+
+        Convenience for ``tier_spec_at(self.tier, self.next_purchasable_tier())``
+        so a pricing-table cell or upgrade-CTA card can render the full
+        tier-row (``id``, ``label``, ``is_paid``, ``is_current``, ``rank``,
+        ``unlocks_paid_runtimes``, ``retention_days``, ``channel_limit``,
+        ``node_limit``, ``features``, ``runtimes``) for the rung above
+        current off ONE entitlement round-trip, alongside :meth:`next_tier_diff`
+        (full ``upgrade_diff`` row), :meth:`next_tier_unlocks` (marginal
+        grants), :meth:`next_tier_locks` (marginal losses), and
+        :meth:`next_tier_capacity_diff` (capacity-only marginal).
+
+        Delegates to :func:`tier_spec_at` (not :func:`tier_spec`) so the
+        ``is_current`` field is anchored on ``self.tier`` rather than the
+        live resolver -- and since the target is by definition strictly
+        above ``self.tier``, ``is_current`` is always ``False`` on the
+        returned row. Returns ``None`` at the resolver's ceiling (no next
+        purchasable rung) and never raises: a resolver failure short-
+        circuits to ``None`` so the CTA surface keeps rendering instead
+        of 500-ing.
+        """
+        try:
+            target = self.next_purchasable_tier()
+            if target is None:
+                return None
+            return tier_spec_at(self.tier, target)
+        except Exception as exc:
+            logger.warning("entitlements: next_tier_spec failed: %s", exc)
+            return None
+
+    def previous_tier_spec(self) -> dict | None:
+        """One-rung-down full :func:`tier_spec_at`-shape descriptor.
+
+        Symmetric companion to :meth:`next_tier_spec`. Convenience for
+        ``tier_spec_at(self.tier, self.previous_purchasable_tier())`` --
+        the full row of the rung immediately below current, useful on a
+        downgrade-confirmation card alongside :meth:`previous_tier_diff`
+        (full ``downgrade_diff`` row), :meth:`previous_tier_unlocks` (what
+        that rung first granted), :meth:`previous_tier_locks` (what that
+        rung first lost), and :meth:`previous_tier_capacity_diff`
+        (capacity-only marginal).
+
+        Delegates to :func:`tier_spec_at` so the ``is_current`` field is
+        anchored on ``self.tier`` rather than the live resolver -- and
+        since the target is by definition strictly below ``self.tier``,
+        ``is_current`` is always ``False`` on the returned row. Returns
+        ``None`` at the resolver's floor (no previous purchasable rung)
+        and never raises -- a resolver failure short-circuits to ``None``
+        so the confirmation surface keeps rendering instead of 500-ing.
+        """
+        try:
+            target = self.previous_purchasable_tier()
+            if target is None:
+                return None
+            return tier_spec_at(self.tier, target)
+        except Exception as exc:
+            logger.warning("entitlements: previous_tier_spec failed: %s", exc)
+            return None
+
     def grace_remaining_days(self) -> int | None:
         at = enforce_at_epoch()
         if at is None:
@@ -1486,6 +1546,26 @@ def previous_tier_locks() -> dict | None:
         return get_entitlement().previous_tier_locks()
     except Exception as exc:
         logger.warning("entitlements: previous_tier_locks (module) failed: %s", exc)
+        return None
+
+
+def next_tier_spec() -> dict | None:
+    """Module-level :meth:`Entitlement.next_tier_spec` against the resolved
+    entitlement. Never raises."""
+    try:
+        return get_entitlement().next_tier_spec()
+    except Exception as exc:
+        logger.warning("entitlements: next_tier_spec (module) failed: %s", exc)
+        return None
+
+
+def previous_tier_spec() -> dict | None:
+    """Module-level :meth:`Entitlement.previous_tier_spec` against the
+    resolved entitlement. Never raises."""
+    try:
+        return get_entitlement().previous_tier_spec()
+    except Exception as exc:
+        logger.warning("entitlements: previous_tier_spec (module) failed: %s", exc)
         return None
 
 
@@ -6091,3 +6171,96 @@ def previous_tier_capacity_diff_at_batch() -> list[dict]:
             exc,
         )
         return []
+
+
+def next_tier_spec_at(tier: str) -> dict | None:
+    """Scalar what-if sibling of :meth:`Entitlement.next_tier_spec`:
+    full :func:`tier_spec_at`-shape descriptor of the rung above the
+    caller-supplied ``tier``, with ``is_current`` computed as if the
+    install were on ``tier``.
+
+    Source-anchored equivalent of :meth:`Entitlement.next_tier_spec`,
+    which pins the perspective to the resolved entitlement. Convenience
+    for ``tier_spec_at(tier, _next_purchasable_tier_after(tier))`` so a
+    pricing-table cell can render the full tier-row of the rung above
+    any hypothetical source rung without first asking the resolver and
+    without monkey-patching the entitlement context. Pairs with
+    :func:`next_tier_diff_at` (full ``upgrade_diff`` payload),
+    :func:`next_tier_unlocks_at` / :func:`next_tier_locks_at` (the
+    marginal-grant / marginal-loss views), and
+    :func:`next_tier_capacity_diff_at` (capacity-only) on the same
+    hypothetical pricing-matrix cell.
+
+    The returned row matches :func:`tier_spec_at(tier, target)` for the
+    resolved ``target = _next_purchasable_tier_after(tier)`` exactly --
+    a parity test pins this so the scalar accessors cannot drift. The
+    ``is_current`` field is always ``False`` (target is by definition
+    strictly above source, so it cannot equal it).
+
+    Accepts any id in :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`)
+    -- the lenient ``_at`` posture, matching the other ``next_*_at``
+    helpers.
+
+    Returns ``None`` for empty / unknown ``tier`` and at the ceiling
+    (no rung strictly above -- enterprise as source). Never raises:
+    a builder failure short-circuits to ``None`` so the CTA surface
+    stays mute instead of breaking.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        target = _next_purchasable_tier_after(src)
+        if target is None:
+            return None
+        return tier_spec_at(src, target)
+    except Exception as exc:
+        logger.warning("entitlements: next_tier_spec_at failed: %s", exc)
+        return None
+
+
+def previous_tier_spec_at(tier: str) -> dict | None:
+    """Scalar what-if sibling of :meth:`Entitlement.previous_tier_spec`:
+    full :func:`tier_spec_at`-shape descriptor of the rung below the
+    caller-supplied ``tier``, with ``is_current`` computed as if the
+    install were on ``tier``.
+
+    Source-anchored mirror of :func:`next_tier_spec_at` and downgrade-
+    side counterpart of the live :meth:`Entitlement.previous_tier_spec`
+    (which pins the perspective to the resolved entitlement).
+    Convenience for ``tier_spec_at(tier, _previous_purchasable_tier_before(tier))``
+    so a downgrade-confirmation card or pricing-comparison cell can
+    render the full tier-row of the rung below any hypothetical source
+    rung without first asking the resolver.
+
+    Like :func:`next_tier_spec_at` the row matches
+    :func:`tier_spec_at(tier, target)` for the resolved
+    ``target = _previous_purchasable_tier_before(tier)`` exactly, and
+    the ``is_current`` field is always ``False`` (target is by definition
+    strictly below source, so it cannot equal it).
+
+    Accepts any id in :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`)
+    -- the lenient ``_at`` posture.
+
+    Returns ``None`` for empty / unknown ``tier`` and at the floor
+    (oss / cloud_free as source -- no rung strictly below). Never
+    raises: a builder failure short-circuits to ``None`` so the
+    confirmation surface stays mute instead of breaking.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        target = _previous_purchasable_tier_before(src)
+        if target is None:
+            return None
+        return tier_spec_at(src, target)
+    except Exception as exc:
+        logger.warning("entitlements: previous_tier_spec_at failed: %s", exc)
+        return None

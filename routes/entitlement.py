@@ -5647,3 +5647,255 @@ def api_entitlement_previous_tier_capacity_diff_at_batch():
                 "enforced": False,
             }
         )
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-spec")
+def api_entitlement_next_tier_spec():
+    """``GET /api/entitlement/next-tier-spec`` -- full
+    :func:`clawmetry.entitlements.tier_spec` descriptor for the rung
+    immediately above the resolved entitlement.
+
+    Current-relative convenience for
+    ``/api/entitlement/tier-spec?tier=<next_purchasable_tier>``; the
+    upgrade-CTA companion to ``/api/entitlement/next-tier-diff``
+    (full ``upgrade_diff`` shape), ``/next-tier-unlocks`` (marginal
+    grants), ``/next-tier-locks`` (marginal losses), and
+    ``/next-tier-capacity-diff`` (capacity-only). Returns
+    ``{"spec": null, ...}`` at the ceiling (no rung above to upgrade
+    to). Never 5xxs: a resolver failure short-circuits to the
+    grace-shape envelope so the dashboard CTA keeps rendering
+    instead of disappearing.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        body = ent.next_tier_spec()
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "spec": body,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_next_tier_spec: error: %s", exc)
+        return jsonify(
+            {
+                "current_tier": "oss",
+                "current_tier_label": "OSS",
+                "current_tier_rank": 0,
+                "spec": None,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-spec")
+def api_entitlement_previous_tier_spec():
+    """``GET /api/entitlement/previous-tier-spec`` -- full
+    :func:`clawmetry.entitlements.tier_spec` descriptor for the rung
+    immediately below the resolved entitlement.
+
+    Symmetric companion to ``/api/entitlement/next-tier-spec`` -- the
+    full tier-row of the rung below current, useful on a downgrade-
+    confirmation card alongside ``/previous-tier-diff``,
+    ``/previous-tier-unlocks``, ``/previous-tier-locks``, and
+    ``/previous-tier-capacity-diff``. ``spec`` collapses to ``null`` at
+    the floor (no rung below). Never 5xxs: a resolver failure
+    short-circuits to the grace-shape envelope so the confirmation
+    surface keeps rendering instead of disappearing.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        body = ent.previous_tier_spec()
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "spec": body,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_previous_tier_spec: error: %s", exc)
+        return jsonify(
+            {
+                "current_tier": "oss",
+                "current_tier_label": "OSS",
+                "current_tier_rank": 0,
+                "spec": None,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-spec-at")
+def api_entitlement_next_tier_spec_at():
+    """``GET /api/entitlement/next-tier-spec-at?tier=<source>`` -- scalar
+    what-if sibling of ``/api/entitlement/next-tier-spec``: full
+    :func:`clawmetry.entitlements.tier_spec_at`-shape descriptor of the
+    rung above the caller-supplied ``tier``.
+
+    Lets a pricing page render the "full descriptor of the rung above X"
+    upgrade-CTA cell for any hypothetical ``X`` without first asking the
+    resolver -- the scalar what-if the live ``/next-tier-spec`` endpoint
+    surfaces against the resolved entitlement, parameterised over the
+    source.
+
+    Response shape::
+
+        {
+          "tier":           "<source tier id>",
+          "tier_label":     "<source label>",
+          "tier_rank":      <source rank>,
+          "target":         "<next-above tier id>" | null,
+          "target_label":   "<next-above label>" | null,
+          "target_rank":    <next-above rank> | null,
+          "row":            {<tier_spec_at row>} | null,
+        }
+
+    The inner ``row`` matches the live ``/tier-spec-at?tier=<source>
+    &target=<next-above>`` row exactly -- catalogue-derived fields
+    (``id``, ``label``, ``is_paid``, ``rank``, ``unlocks_paid_runtimes``,
+    ``retention_days``, ``channel_limit``, ``node_limit``, ``features``,
+    ``runtimes``) come straight from the static per-tier maps; the
+    ``is_current`` boolean is always ``False`` (target is by definition
+    strictly above source).
+
+    Accepts any tier id in :data:`entitlements._TIER_ORDER` (including
+    ``trial``), matching the other ``_at`` family endpoints. ``target``
+    / ``row`` collapse to ``null`` at the ceiling (no rung strictly
+    above the source) -- the surface stays 200 with a populated
+    envelope so callers can render "you're at the top" copy without
+    a status-code branch.
+
+    - **400** when ``tier=`` is missing / blank
+    - **404** when ``tier`` is unknown. The body carries ``which`` so a
+      caller can render the right "unknown ..." message.
+    - **Never 5xxs**: builder failure short-circuits to ``row=null``
+      on the same 200 envelope so the CTA surface stays mute.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        target = _ent._next_purchasable_tier_after(tier_in)
+        row = _ent.next_tier_spec_at(tier_in)
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": _ent.tier_label(tier_in),
+                "tier_rank": _ent.tier_rank(tier_in),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "row": row,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_next_tier_spec_at: error: %s", exc)
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": None,
+                "tier_rank": -1,
+                "target": None,
+                "target_label": None,
+                "target_rank": None,
+                "row": None,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-spec-at")
+def api_entitlement_previous_tier_spec_at():
+    """``GET /api/entitlement/previous-tier-spec-at?tier=<source>`` --
+    scalar what-if sibling of ``/api/entitlement/previous-tier-spec``:
+    full :func:`clawmetry.entitlements.tier_spec_at`-shape descriptor of
+    the rung below the caller-supplied ``tier``.
+
+    Source-anchored mirror of ``/next-tier-spec-at`` and downgrade-side
+    counterpart of the live ``/previous-tier-spec`` (source pinned to
+    the resolver). Lets a pricing page render the "full descriptor of
+    the rung below X" downgrade-confirmation detail cell for any
+    hypothetical ``X`` without asking the resolver.
+
+    Response shape matches ``/next-tier-spec-at`` byte-for-byte
+    (``tier``, ``tier_label``, ``tier_rank``, ``target``, ``target_label``,
+    ``target_rank``, ``row``). Inner ``row`` matches
+    ``/tier-spec-at?tier=<source>&target=<previous-below>`` exactly; the
+    ``is_current`` boolean is always ``False`` (target is by definition
+    strictly below source).
+
+    Accepts any tier id in :data:`entitlements._TIER_ORDER` (including
+    ``trial``). ``target`` / ``row`` collapse to ``null`` at the floor
+    (no rung strictly below the source -- ``oss`` / ``cloud_free`` as
+    source) -- the surface stays 200 with a populated envelope so
+    callers can render "you're at the floor" copy without a status-
+    code branch.
+
+    - **400** when ``tier=`` is missing / blank
+    - **404** when ``tier`` is unknown.
+    - **Never 5xxs**: builder failure short-circuits to ``row=null``
+      on the same 200 envelope.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        target = _ent._previous_purchasable_tier_before(tier_in)
+        row = _ent.previous_tier_spec_at(tier_in)
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": _ent.tier_label(tier_in),
+                "tier_rank": _ent.tier_rank(tier_in),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "row": row,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_previous_tier_spec_at: error: %s", exc)
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": None,
+                "tier_rank": -1,
+                "target": None,
+                "target_label": None,
+                "target_rank": None,
+                "row": None,
+            }
+        )
