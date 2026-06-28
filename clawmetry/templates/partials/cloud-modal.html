@@ -44,6 +44,49 @@
       line-height:1.5;
       " data-i18n="cloud.tagline">Monitor your agents from anywhere. Encrypted, real-time, accessible from any browser or as a Mac app.</p>
     <div id="cloud-step-email">
+      <div id="cloud-oauth-row" style="display:flex;flex-direction:column;gap:8px;margin-bottom:18px;">
+        <button onclick="cloudOauth('github')" style="
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          gap:10px;
+          width:100%;
+          padding:11px 14px;
+          background:#1a2235;
+          border:1px solid rgba(255,255,255,0.12);
+          border-radius:8px;
+          color:#fff;
+          font-size:14px;
+          font-weight:600;
+          cursor:pointer;
+          " onmouseover="this.style.background='#222c44'" onmouseout="this.style.background='#1a2235'">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.37.5 0 5.87 0 12.5c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58 0-.29-.01-1.04-.02-2.05-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.49.99.11-.78.42-1.3.76-1.6-2.66-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.31-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.87.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.62-5.49 5.92.43.37.81 1.1.81 2.22 0 1.6-.01 2.89-.01 3.29 0 .32.22.7.83.58A12.01 12.01 0 0 0 24 12.5C24 5.87 18.63.5 12 .5z"/></svg>
+          <span data-i18n="cloud.continue_github">Continue with GitHub</span>
+        </button>
+        <button onclick="cloudOauth('google')" style="
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          gap:10px;
+          width:100%;
+          padding:11px 14px;
+          background:#fff;
+          border:1px solid rgba(255,255,255,0.12);
+          border-radius:8px;
+          color:#1f2937;
+          font-size:14px;
+          font-weight:600;
+          cursor:pointer;
+          " onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='#fff'">
+          <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.27-4.74 3.27-8.1z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.99.66-2.26 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23z"/><path fill="#FBBC05" d="M5.84 14.1a6.6 6.6 0 0 1 0-4.2V7.06H2.18a11 11 0 0 0 0 9.88l3.66-2.84z"/><path fill="#EA4335" d="M12 4.75c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 1.4 14.97.5 12 .5A11 11 0 0 0 2.18 7.06l3.66 2.84C6.71 6.68 9.14 4.75 12 4.75z"/></svg>
+          <span data-i18n="cloud.continue_google">Continue with Google</span>
+        </button>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
+          <div style="flex:1;height:1px;background:rgba(255,255,255,0.08);"></div>
+          <span style="color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;" data-i18n="cloud.or">or</span>
+          <div style="flex:1;height:1px;background:rgba(255,255,255,0.08);"></div>
+        </div>
+      </div>
       <label style="font-size:12px;font-weight:600;color:#94a3b8;display:block;margin-bottom:6px;" data-i18n="cloud.your_email">YOUR EMAIL</label>
       <div style="display:flex;gap:8px;">
         <input id="cloud-email-input" type="email" placeholder="you@example.com" style="
@@ -108,10 +151,25 @@
         cursor:pointer;
         " onclick="cloudResendOtp()" data-i18n="cloud.resend_code">Resend code</p>
     </div>
+    <div id="cloud-step-wait" style="display:none;text-align:center;padding:16px 0;">
+      <div class="cloud-spinner" style="width:32px;height:32px;border:3px solid rgba(255,255,255,0.15);border-top-color:#60a5fa;border-radius:50%;margin:0 auto 14px;animation:cloudspin 0.8s linear infinite;"></div>
+      <p style="color:#cbd5e1;font-size:14px;font-weight:600;margin:0 0 6px;" data-i18n="cloud.finish_in_browser">Finish sign-in in the new browser tab</p>
+      <p style="color:#64748b;font-size:12px;margin:0;" data-i18n="cloud.waiting_oauth">Waiting for you to authorize. This window updates automatically.</p>
+      <p id="cloud-wait-error" style="color:#E5443A;font-size:12px;margin:10px 0 0;display:none;"></p>
+      <style>@keyframes cloudspin{to{transform:rotate(360deg)}}</style>
+    </div>
     <div id="cloud-step-done" style="display:none;text-align:center;padding:16px 0;">
       <div style="font-size:36px;margin-bottom:12px;">✓</div>
       <p style="color:#22c55e;font-size:16px;font-weight:600;margin:0 0 6px;" data-i18n="cloud.connected">Connected!</p>
-      <p style="color:#94a3b8;font-size:13px;margin:0;" data-i18n="cloud.opening">Opening ClawMetry Cloud...</p>
+      <p id="cloud-done-msg" style="color:#94a3b8;font-size:13px;margin:0;" data-i18n="cloud.opening">Opening ClawMetry Cloud...</p>
+      <div id="cloud-done-enckey" style="display:none;margin-top:16px;text-align:left;">
+        <p style="color:#94a3b8;font-size:12px;margin:0 0 6px;" data-i18n="cloud.enc_key_hint">Your data is end-to-end encrypted. Save this key, you will paste it once in the browser to unlock your view:</p>
+        <div style="display:flex;gap:8px;align-items:stretch;">
+          <code id="cloud-enc-key" style="flex:1;color:#e2e8f0;font-size:12px;background:#1a2235;border:1px solid rgba(255,255,255,0.1);padding:8px 10px;border-radius:8px;word-break:break-all;"></code>
+          <button onclick="cloudCopyEncKey()" style="padding:8px 12px;background:#1a2235;border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#94a3b8;font-size:12px;cursor:pointer;white-space:nowrap;" data-i18n="cloud.copy">Copy</button>
+        </div>
+        <a id="cloud-open-link" href="https://app.clawmetry.com/" target="_blank" rel="noopener" style="display:block;margin-top:14px;text-align:center;padding:10px 14px;background:#E5443A;color:#fff;border-radius:8px;font-size:14px;font-weight:600;text-decoration:none;" data-i18n="cloud.open_cloud">Open ClawMetry Cloud</a>
+      </div>
     </div>
   </div>
 </div>

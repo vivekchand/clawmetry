@@ -17840,6 +17840,159 @@ def _write_cloud_token(token):
         json.dump(data, f, indent=2)
 
 
+# ── One-click cloud connect via GitHub/Google OAuth (dashboard CTA) ────────────
+# The local "Enable Cloud Sync" modal can sign the user up AND connect this node
+# in one click. We reuse the same loopback browser-bridge as `clawmetry connect`:
+# start a one-shot 127.0.0.1 listener, hand the cloud OAuth flow our port via
+# cli_port=<port>, and the cloud callback redirects the freshly-minted cm_ key
+# back to loopback. The key only ever travels over 127.0.0.1. On capture we run
+# the full connect (register node -> ~/.clawmetry/config.json -> start daemon).
+# The dashboard polls _OAUTH_BRIDGE for status.
+_OAUTH_BRIDGE = {"status": "idle", "provider": "", "node_id": "", "enc_key": "", "error": ""}
+
+
+def _full_connect_with_key(api_key):
+    """Register this node with a verified cm_ key and start syncing.
+
+    Mirrors the non-interactive parts of `clawmetry connect`: validate/register
+    the node, preserve or auto-generate the E2E encryption key, write
+    ~/.clawmetry/config.json, mirror the token into openclaw.json (so the
+    dashboard cloud-proxy works), and ensure the sync daemon is running.
+    Returns (node_id, enc_key). Never raises for non-fatal issues.
+    """
+    import platform
+    import socket
+    from clawmetry.sync import validate_key, save_config, generate_encryption_key
+
+    cfg_path = os.path.expanduser("~/.clawmetry/config.json")
+    saved_node_id, saved_enc = "", ""
+    try:
+        with open(cfg_path) as _f:
+            _c = json.load(_f)
+        saved_node_id = _c.get("node_id", "")
+        saved_enc = _c.get("encryption_key", "")
+    except Exception:
+        pass
+
+    hostname = socket.gethostname()
+    try:
+        result = validate_key(api_key, hostname=hostname, existing_node_id=saved_node_id)
+        node_id = result.get("node_id") or saved_node_id or hostname
+    except Exception:
+        # Network/server hiccup: save config anyway so it syncs once reachable.
+        node_id = saved_node_id or hostname
+
+    enc_key = saved_enc or generate_encryption_key()
+    config = {
+        "api_key": api_key,
+        "node_id": node_id,
+        "platform": platform.system(),
+        "connected_at": __import__("datetime").datetime.now().isoformat(),
+        "encryption_key": enc_key,
+    }
+    save_config(config)
+    try:
+        _write_cloud_token(api_key)
+    except Exception:
+        pass
+
+    # Start the sync daemon if it is not already running.
+    try:
+        if not _is_sync_running():
+            if _is_macos() and os.path.exists(SYNC_LAUNCHD_PLIST):
+                subprocess.run(["launchctl", "load", SYNC_LAUNCHD_PLIST], capture_output=True)
+                subprocess.run(["launchctl", "start", SYNC_LAUNCHD_LABEL], capture_output=True)
+            elif _is_linux():
+                _ensure_systemd_service()
+                subprocess.run(_systemctl_cmd("restart", "clawmetry-sync"), capture_output=True)
+            else:
+                _start_daemon_background()
+    except Exception:
+        pass
+
+    return node_id, enc_key
+
+
+def _start_oauth_bridge(provider):
+    """Start the loopback OAuth bridge and return the cloud start URL (or None).
+
+    The caller (dashboard JS) opens the returned URL in a new browser tab. A
+    background thread captures the loopback callback, runs _full_connect_with_key,
+    and updates the module-level _OAUTH_BRIDGE the status route reports.
+    """
+    import http.server
+    import threading
+    import time as _time
+    import urllib.parse as _uparse
+
+    global _OAUTH_BRIDGE
+    provider = (provider or "").lower()
+    if provider not in ("github", "google"):
+        _OAUTH_BRIDGE = {"status": "error", "provider": provider,
+                         "node_id": "", "enc_key": "", "error": "Unsupported provider"}
+        return None
+
+    app_base = os.environ.get("CLAWMETRY_APP_BASE", "https://app.clawmetry.com").rstrip("/")
+    captured = {}
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            params = _uparse.parse_qs(_uparse.urlparse(self.path).query)
+            captured["token"] = (params.get("token") or [""])[0]
+            ok = captured["token"].startswith("cm_")
+            msg = ("You're connected. Return to the ClawMetry dashboard."
+                   if ok else "Sign-in failed. Return to the dashboard and use email instead.")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(
+                ("<!DOCTYPE html><html><head><meta charset='utf-8'><title>ClawMetry</title></head>"
+                 "<body style='font-family:sans-serif;background:#0b0f1a;color:#e2e8f0;display:flex;"
+                 "align-items:center;justify-content:center;height:100vh;margin:0'>"
+                 "<div style='text-align:center'><div style='font-size:40px'>\U0001F99E</div>"
+                 "<h2 style='font-weight:700'>" + msg + "</h2></div></body></html>").encode("utf-8")
+            )
+
+        def log_message(self, *args):  # silence default stderr request logging
+            pass
+
+    try:
+        srv = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+    except OSError:
+        _OAUTH_BRIDGE = {"status": "error", "provider": provider,
+                         "node_id": "", "enc_key": "", "error": "Could not start local listener"}
+        return None
+
+    port = srv.server_address[1]
+    _OAUTH_BRIDGE = {"status": "waiting", "provider": provider,
+                     "node_id": "", "enc_key": "", "error": ""}
+
+    def _run():
+        global _OAUTH_BRIDGE
+        srv.timeout = 1
+        deadline = _time.time() + 300
+        try:
+            while "token" not in captured and _time.time() < deadline:
+                srv.handle_request()
+        finally:
+            srv.server_close()
+        tok = captured.get("token", "")
+        if not tok.startswith("cm_"):
+            _OAUTH_BRIDGE = {"status": "error", "provider": provider, "node_id": "",
+                             "enc_key": "", "error": "Sign-in was not completed."}
+            return
+        try:
+            node_id, enc_key = _full_connect_with_key(tok)
+            _OAUTH_BRIDGE = {"status": "connected", "provider": provider,
+                             "node_id": node_id, "enc_key": enc_key, "error": ""}
+        except Exception as e:  # pragma: no cover - defensive
+            _OAUTH_BRIDGE = {"status": "error", "provider": provider, "node_id": "",
+                             "enc_key": "", "error": str(e)[:200]}
+
+    threading.Thread(target=_run, daemon=True).start()
+    return f"{app_base}/api/oauth/{provider}/start?cli_port={port}"
+
+
 def _build_plist(python_exe, script_path, port, host, log_path="/tmp/clawmetry.log"):
     extra = []
     if host != "127.0.0.1":
