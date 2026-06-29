@@ -6446,6 +6446,196 @@ def previous_tier_spec_at_batch() -> list[dict]:
         return []
 
 
+def next_tier_feature_spec_at(tier: str, feature: str) -> dict | None:
+    """Scalar what-if sibling of :func:`next_tier_spec_at` projected onto a
+    SINGLE feature: the :func:`feature_spec_at`-shape catalogue row for
+    ``feature`` evaluated on the rung above the caller-supplied ``tier``.
+
+    Feature-axis projection of :func:`next_tier_spec_at` (full tier-row
+    descriptor of the rung above the source) and feature-side mirror of
+    :func:`next_tier_runtime_spec_at`. Convenience for
+    ``feature_spec_at(_next_purchasable_tier_after(tier), feature)`` so a
+    pricing-table cell can ask "does THIS feature unlock at my next
+    rung?" off ONE round-trip without first walking the catalogue or
+    asking the resolver. Pairs with :func:`previous_tier_feature_spec_at`
+    on the downgrade side and with :func:`next_tier_runtime_spec_at` /
+    :func:`previous_tier_runtime_spec_at` on the runtime axis.
+
+    The returned row matches :func:`feature_spec_at(target, feature)` for
+    the resolved ``target = _next_purchasable_tier_after(tier)`` exactly
+    -- a parity test pins this so the scalar projection cannot drift
+    from the full-row sibling.
+
+    Accepts any id in :data:`_TIER_ORDER` for ``tier`` (including
+    :data:`TIER_TRIAL`) -- the lenient ``_at`` posture, matching the
+    other ``next_*_at`` helpers.
+
+    Returns ``None`` for empty / unknown ``tier`` or ``feature`` and at
+    the ceiling (no rung strictly above -- enterprise as source). Never
+    raises: a builder failure short-circuits to ``None`` so the CTA
+    surface stays mute instead of breaking.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        f = (feature or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not f or f not in ALL_FEATURES:
+        return None
+    try:
+        target = _next_purchasable_tier_after(src)
+        if target is None:
+            return None
+        return feature_spec_at(target, f)
+    except Exception as exc:
+        logger.warning("entitlements: next_tier_feature_spec_at failed: %s", exc)
+        return None
+
+
+def previous_tier_feature_spec_at(tier: str, feature: str) -> dict | None:
+    """Scalar what-if sibling of :func:`previous_tier_spec_at` projected
+    onto a SINGLE feature: the :func:`feature_spec_at`-shape catalogue
+    row for ``feature`` evaluated on the rung below the caller-supplied
+    ``tier``.
+
+    Source-anchored mirror of :func:`next_tier_feature_spec_at` and
+    downgrade-confirmation counterpart on the feature axis. Convenience
+    for ``feature_spec_at(_previous_purchasable_tier_before(tier),
+    feature)`` so a downgrade-confirmation card can ask "does THIS
+    feature still unlock at my previous rung?" off ONE round-trip
+    without re-walking the catalogue.
+
+    Like :func:`next_tier_feature_spec_at` the row matches
+    :func:`feature_spec_at(target, feature)` for the resolved
+    ``target = _previous_purchasable_tier_before(tier)`` exactly.
+
+    Accepts any id in :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`)
+    -- the lenient ``_at`` posture.
+
+    Returns ``None`` for empty / unknown ``tier`` or ``feature`` and at
+    the floor (``oss`` / ``cloud_free`` as source -- no rung strictly
+    below). Never raises: a builder failure short-circuits to ``None``
+    so the confirmation surface stays mute instead of breaking.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        f = (feature or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not f or f not in ALL_FEATURES:
+        return None
+    try:
+        target = _previous_purchasable_tier_before(src)
+        if target is None:
+            return None
+        return feature_spec_at(target, f)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_feature_spec_at failed: %s", exc
+        )
+        return None
+
+
+def next_tier_runtime_spec_at(tier: str, runtime: str) -> dict | None:
+    """Scalar what-if sibling of :func:`next_tier_spec_at` projected onto a
+    SINGLE runtime: the :func:`runtime_spec_at`-shape catalogue row for
+    ``runtime`` evaluated on the rung above the caller-supplied ``tier``.
+
+    Runtime-axis projection of :func:`next_tier_spec_at` and runtime-side
+    mirror of :func:`next_tier_feature_spec_at`. Convenience for
+    ``runtime_spec_at(_next_purchasable_tier_after(tier), runtime)`` so a
+    pricing-table cell can ask "does THIS runtime unlock at my next
+    rung?" off ONE round-trip without first walking the catalogue.
+
+    Accepts aliases (``claude-code`` -> ``claude_code``) via
+    :func:`canonical_runtime` so the URL surface matches what callers
+    already pass to ``/api/entitlement/required-tier`` and
+    ``/runtime-spec-at``.
+
+    The returned row matches :func:`runtime_spec_at(target, runtime)`
+    for the resolved ``target = _next_purchasable_tier_after(tier)``
+    exactly -- a parity test pins this so the scalar projection cannot
+    drift from the full-row sibling.
+
+    Accepts any id in :data:`_TIER_ORDER` for ``tier`` (including
+    :data:`TIER_TRIAL`).
+
+    Returns ``None`` for empty / unknown ``tier`` or ``runtime`` and at
+    the ceiling (no rung strictly above). Never raises.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    rt = canonical_runtime(runtime)
+    if not rt or rt not in ALL_RUNTIMES:
+        return None
+    try:
+        target = _next_purchasable_tier_after(src)
+        if target is None:
+            return None
+        return runtime_spec_at(target, rt)
+    except Exception as exc:
+        logger.warning("entitlements: next_tier_runtime_spec_at failed: %s", exc)
+        return None
+
+
+def previous_tier_runtime_spec_at(tier: str, runtime: str) -> dict | None:
+    """Scalar what-if sibling of :func:`previous_tier_spec_at` projected
+    onto a SINGLE runtime: the :func:`runtime_spec_at`-shape catalogue
+    row for ``runtime`` evaluated on the rung below the caller-supplied
+    ``tier``.
+
+    Source-anchored mirror of :func:`next_tier_runtime_spec_at` and
+    downgrade-confirmation counterpart on the runtime axis. Convenience
+    for ``runtime_spec_at(_previous_purchasable_tier_before(tier),
+    runtime)``.
+
+    Accepts aliases (``claude-code`` -> ``claude_code``) via
+    :func:`canonical_runtime`.
+
+    Like :func:`next_tier_runtime_spec_at` the row matches
+    :func:`runtime_spec_at(target, runtime)` for the resolved
+    ``target = _previous_purchasable_tier_before(tier)`` exactly.
+
+    Accepts any id in :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`).
+
+    Returns ``None`` for empty / unknown ``tier`` or ``runtime`` and at
+    the floor (``oss`` / ``cloud_free`` as source). Never raises.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    rt = canonical_runtime(runtime)
+    if not rt or rt not in ALL_RUNTIMES:
+        return None
+    try:
+        target = _previous_purchasable_tier_before(src)
+        if target is None:
+            return None
+        return runtime_spec_at(target, rt)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_runtime_spec_at failed: %s", exc
+        )
+        return None
+
+
 def tier_spec_path(from_tier: str, to_tier: str) -> list[dict] | None:
     """Arbitrary-endpoint stepwise spec-shaped path between two tiers.
 
