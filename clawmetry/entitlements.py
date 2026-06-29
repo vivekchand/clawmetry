@@ -6557,3 +6557,223 @@ def tier_spec_path(from_tier: str, to_tier: str) -> list[dict] | None:
     except Exception as exc:
         logger.warning("entitlements: tier_spec_path failed: %s", exc)
         return None
+
+
+def feature_spec_path(
+    from_tier: str, to_tier: str, feature: str
+) -> list[dict] | None:
+    """Arbitrary-endpoint stepwise single-feature spec path between two tiers.
+
+    Single-feature sibling of :func:`tier_spec_path` (full slim spec per
+    rung) and perspective-walked sibling of :func:`feature_spec_at`. Lets a
+    paywall "how does THIS one feature unlock as I climb the ladder" UI
+    render every rung's ``allowed`` / ``locked`` / ``entitled`` status off
+    ONE round-trip without fetching the full :func:`feature_catalog_at` at
+    every rung.
+
+    Walks the same ``_PURCHASABLE_TIERS`` rungs by the same sort key and
+    same destination-sibling exclusion as :func:`tier_path`,
+    :func:`tier_spec_path`, :func:`capacity_diff_path`,
+    :func:`tier_unlocks_path`, :func:`tier_locks_path` and
+    :func:`preview_path` -- rung-for-rung byte-stable against the six
+    existing ``_path`` helpers, so a UI that walks one helper's rows can
+    line them up index-for-index with another helper's rows without
+    re-deriving the rung sequence.
+
+    Per-rung row shape: each row is the :func:`feature_spec_at` body
+    (``id``, ``label``, ``tier``, ``tiers``, ``free``, ``allowed``,
+    ``locked``, ``entitled``, ``alias``) augmented with three rung-
+    identification keys -- ``rung``, ``rung_label``, ``rung_rank`` --
+    naming the perspective tier the row was computed at. Dropping the
+    three ``rung*`` keys yields exact byte-equality with
+    :func:`feature_spec_at(rung, feature)` -- a parity test pins this so
+    the scalar what-if and the path what-if cannot drift. The static
+    feature-property fields (``id``, ``label``, ``tier``, ``tiers``,
+    ``free``, ``alias``) stay constant across all rows; only the
+    perspective-dependent fields (``allowed``, ``locked``, ``entitled``)
+    vary rung by rung -- the visible "unlock boundary" the UI renders.
+
+    Direction semantics mirror :func:`tier_spec_path` / :func:`tier_path`:
+
+    * ``upgrade`` (ascending) -- rows climb rung by rung from the rung
+      above ``from_tier`` toward ``to_tier``; the natural "what does this
+      feature look like at each rung I'd climb through" walkthrough.
+    * ``downgrade`` (descending) -- rows shrink rung by rung; the
+      cancellation-walkthrough counterpart showing when the feature
+      becomes locked again.
+    * ``lateral`` (same rank, different id) -- single-row path; row
+      carries the spec at ``to_tier``.
+    * ``identity`` (``from == to``) -- empty path; no rungs to walk.
+
+    Endpoint semantics match :func:`tier_path` / :func:`tier_spec_path`:
+    both tier ids accept any entry in :data:`_TIER_FEATURES` (including
+    :data:`TIER_TRIAL`, which is not purchasable -- excluded from the
+    walked intermediate rungs but a valid endpoint via the lateral
+    branch). Unknown tier or feature ids on either side short-circuit to
+    ``None``.
+
+    Resolver-independent: walks the static per-tier maps via
+    :func:`feature_spec_at` so grace vs enforce yields byte-identical
+    rows -- same property the rest of the ``_path`` family guarantees.
+
+    Never raises: a resolver failure logs a warning and returns ``None``
+    so a paywall surface keeps rendering instead of breaking.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+        if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+            return None
+        fid = (feature or "").strip().lower()
+        if not fid or fid not in ALL_FEATURES:
+            return None
+        if f == t:
+            return []
+        from_rank = _TIER_RANK.get(f, -1)
+        to_rank = _TIER_RANK.get(t, -1)
+
+        def _row(rung: str) -> dict | None:
+            body = feature_spec_at(rung, fid)
+            if body is None:
+                return None
+            return {
+                "rung": rung,
+                "rung_label": tier_label(rung),
+                "rung_rank": _TIER_RANK.get(rung, -1),
+                **body,
+            }
+
+        if from_rank == to_rank:
+            row = _row(t)
+            return [row] if row is not None else []
+        ascending = to_rank > from_rank
+        if ascending:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (_TIER_RANK.get(x, -1), x),
+            )
+        else:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (-_TIER_RANK.get(x, -1), x),
+            )
+        path: list[dict] = []
+        for tid in ordered:
+            r = _TIER_RANK.get(tid, -1)
+            if ascending:
+                if r <= from_rank or r > to_rank:
+                    continue
+            else:
+                if r >= from_rank or r < to_rank:
+                    continue
+            if r == to_rank and tid != t:
+                continue
+            row = _row(tid)
+            if row is not None:
+                path.append(row)
+        return path
+    except Exception as exc:
+        logger.warning("entitlements: feature_spec_path failed: %s", exc)
+        return None
+
+
+def runtime_spec_path(
+    from_tier: str, to_tier: str, runtime: str
+) -> list[dict] | None:
+    """Arbitrary-endpoint stepwise single-runtime spec path between two tiers.
+
+    Runtime-axis twin of :func:`feature_spec_path` -- the single-runtime
+    sibling of :func:`tier_spec_path` and perspective-walked sibling of
+    :func:`runtime_spec_at`. Lets a paywall "how does THIS one runtime
+    unlock as I climb the ladder" UI render every rung's ``allowed`` /
+    ``locked`` / ``entitled`` status off ONE round-trip without fetching
+    the full :func:`runtime_catalog_at` at every rung.
+
+    Accepts runtime aliases (``claude-code`` -> ``claude_code``) via
+    :func:`canonical_runtime` so the URL surface matches what callers
+    already pass to ``/api/entitlement/required-tier``.
+
+    Walks the same ``_PURCHASABLE_TIERS`` rungs by the same sort key and
+    same destination-sibling exclusion as the rest of the ``_path``
+    family -- rung-for-rung byte-stable against
+    :func:`feature_spec_path`, :func:`tier_path`, :func:`tier_spec_path`,
+    :func:`capacity_diff_path`, :func:`tier_unlocks_path`,
+    :func:`tier_locks_path` and :func:`preview_path`.
+
+    Per-rung row shape: each row is the :func:`runtime_spec_at` body
+    (``id``, ``label``, ``free``, ``tier``, ``tiers``, ``allowed``,
+    ``locked``, ``entitled``) augmented with three rung-identification
+    keys -- ``rung``, ``rung_label``, ``rung_rank`` -- naming the
+    perspective tier the row was computed at. Dropping the three
+    ``rung*`` keys yields exact byte-equality with
+    :func:`runtime_spec_at(rung, runtime)` -- a parity test pins this so
+    the scalar what-if and the path what-if cannot drift.
+
+    Direction semantics mirror :func:`feature_spec_path` /
+    :func:`tier_spec_path`. Endpoint semantics match :func:`tier_path`:
+    both tier ids accept any entry in :data:`_TIER_FEATURES`. Unknown
+    tier or runtime ids short-circuit to ``None``. Empty / whitespace
+    runtime short-circuits to ``None``.
+
+    Resolver-independent: walks the static per-tier maps via
+    :func:`runtime_spec_at` so grace vs enforce yields byte-identical
+    rows.
+
+    Never raises: a resolver failure logs a warning and returns ``None``.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+        if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+            return None
+        rt = canonical_runtime(runtime)
+        if not rt or rt not in ALL_RUNTIMES:
+            return None
+        if f == t:
+            return []
+        from_rank = _TIER_RANK.get(f, -1)
+        to_rank = _TIER_RANK.get(t, -1)
+
+        def _row(rung: str) -> dict | None:
+            body = runtime_spec_at(rung, rt)
+            if body is None:
+                return None
+            return {
+                "rung": rung,
+                "rung_label": tier_label(rung),
+                "rung_rank": _TIER_RANK.get(rung, -1),
+                **body,
+            }
+
+        if from_rank == to_rank:
+            row = _row(t)
+            return [row] if row is not None else []
+        ascending = to_rank > from_rank
+        if ascending:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (_TIER_RANK.get(x, -1), x),
+            )
+        else:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (-_TIER_RANK.get(x, -1), x),
+            )
+        path: list[dict] = []
+        for tid in ordered:
+            r = _TIER_RANK.get(tid, -1)
+            if ascending:
+                if r <= from_rank or r > to_rank:
+                    continue
+            else:
+                if r >= from_rank or r < to_rank:
+                    continue
+            if r == to_rank and tid != t:
+                continue
+            row = _row(tid)
+            if row is not None:
+                path.append(row)
+        return path
+    except Exception as exc:
+        logger.warning("entitlements: runtime_spec_path failed: %s", exc)
+        return None

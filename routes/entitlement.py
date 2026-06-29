@@ -6168,3 +6168,212 @@ def api_entitlement_tier_spec_path():
             jsonify({"error": "unknown tier", "from": f, "to": t}),
             404,
         )
+
+
+@bp_entitlement.route("/api/entitlement/feature-spec-path")
+def api_entitlement_feature_spec_path():
+    """``GET /api/entitlement/feature-spec-path?from=<id>&to=<id>&feature=<id>``
+
+    Arbitrary-endpoint stepwise single-feature spec path between any two
+    tiers; the single-feature sibling of ``/tier-spec-path`` (full slim
+    spec per rung) and the perspective-walked sibling of
+    ``/feature-spec-at``. Lets a paywall surface render every rung's
+    ``allowed`` / ``locked`` / ``entitled`` status for a SINGLE feature
+    off ONE round-trip without fetching the full
+    ``/feature-catalog-at`` at every rung.
+
+    Rung walk is byte-stable against ``/tier-path``,
+    ``/capacity-diff-path``, ``/tier-unlocks-path``,
+    ``/tier-locks-path``, ``/preview-path`` and ``/tier-spec-path``
+    (same ``_PURCHASABLE_TIERS`` filter + same sort + same destination-
+    sibling exclusion), so the seven paths line up rung-for-rung.
+
+    Each row in ``path`` is the ``/feature-spec-at?tier=<rung>&feature=<feature>``
+    body augmented with three rung-identification keys -- ``rung``,
+    ``rung_label``, ``rung_rank`` -- naming the perspective tier the
+    row was computed at. Dropping the three ``rung*`` keys yields exact
+    byte-equality with ``/feature-spec-at?tier=<rung>&feature=<feature>``
+    (a parity test pins this).
+
+    Response shape::
+
+        {
+          "from":       "<tier id>",
+          "from_label": "...",
+          "from_rank":  <int>,
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "feature":    "<feature id>",
+          "path":       [<augmented feature-spec-at row>, ...],
+        }
+
+    Direction semantics:
+
+    * ``upgrade`` (ascending) -- rows climb rung by rung from the rung
+      above ``from`` toward ``to``.
+    * ``downgrade`` (descending) -- rows shrink rung by rung.
+    * ``lateral`` (same rank, different id) -- single-row path; row
+      carries the spec at ``to``.
+    * ``identity`` (``from == to``) -- empty path; no rungs to walk.
+
+    Same-rank siblings strictly between the endpoints are both included;
+    same-rank siblings of the destination are excluded so the path
+    terminates exactly at ``to``. ``400`` when ``from=``, ``to=`` or
+    ``feature=`` is missing; ``404`` when any id is unknown. ``trial``
+    IS accepted as an endpoint -- it is excluded from the walked
+    intermediate rungs (not purchasable) but is a valid endpoint via
+    the lateral branch. Never 5xxs: a resolver failure short-circuits
+    to ``404`` so a paywall surface keeps rendering instead of
+    breaking.
+    """
+    f = (request.args.get("from") or "").strip().lower()
+    t = (request.args.get("to") or "").strip().lower()
+    feat = (request.args.get("feature") or "").strip().lower()
+    if not f or not t:
+        return jsonify({"error": "missing from or to"}), 400
+    if not feat:
+        return jsonify({"error": "missing feature"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        path = _ent.feature_spec_path(f, t, feat)
+        if path is None:
+            return (
+                jsonify(
+                    {
+                        "error": "unknown tier or feature",
+                        "from": f,
+                        "to": t,
+                        "feature": feat,
+                    }
+                ),
+                404,
+            )
+        from_rank = _ent.tier_rank(f)
+        to_rank = _ent.tier_rank(t)
+        if f == t:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        return jsonify(
+            {
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": from_rank,
+                "to": t,
+                "to_label": _ent.tier_label(t),
+                "to_rank": to_rank,
+                "direction": direction,
+                "feature": feat,
+                "path": path,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_feature_spec_path: error: %s", exc)
+        return (
+            jsonify(
+                {
+                    "error": "unknown tier or feature",
+                    "from": f,
+                    "to": t,
+                    "feature": feat,
+                }
+            ),
+            404,
+        )
+
+
+@bp_entitlement.route("/api/entitlement/runtime-spec-path")
+def api_entitlement_runtime_spec_path():
+    """``GET /api/entitlement/runtime-spec-path?from=<id>&to=<id>&runtime=<id>``
+
+    Runtime-axis twin of ``/feature-spec-path`` -- the single-runtime
+    sibling of ``/tier-spec-path`` and perspective-walked sibling of
+    ``/runtime-spec-at``. Lets a paywall surface render every rung's
+    ``allowed`` / ``locked`` / ``entitled`` status for a SINGLE runtime
+    off ONE round-trip without fetching the full
+    ``/runtime-catalog-at`` at every rung.
+
+    Accepts runtime aliases (``claude-code`` -> ``claude_code``) via
+    :func:`clawmetry.entitlements.canonical_runtime` so the URL surface
+    matches what callers already pass to
+    ``/api/entitlement/required-tier``.
+
+    Rung walk is byte-stable against the other ``_path`` helpers. Each
+    row in ``path`` is the ``/runtime-spec-at?tier=<rung>&runtime=<runtime>``
+    body augmented with the ``rung`` / ``rung_label`` / ``rung_rank``
+    keys; dropping the three ``rung*`` keys yields exact byte-equality
+    with the singular ``/runtime-spec-at`` (a parity test pins this).
+
+    Response shape mirrors ``/feature-spec-path`` with ``"runtime"`` in
+    place of ``"feature"`` in the envelope.
+
+    ``400`` when ``from=``, ``to=`` or ``runtime=`` is missing; ``404``
+    when any id is unknown. Never 5xxs.
+    """
+    f = (request.args.get("from") or "").strip().lower()
+    t = (request.args.get("to") or "").strip().lower()
+    rt_raw = (request.args.get("runtime") or "").strip()
+    if not f or not t:
+        return jsonify({"error": "missing from or to"}), 400
+    if not rt_raw:
+        return jsonify({"error": "missing runtime"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        rt = _ent.canonical_runtime(rt_raw)
+        path = _ent.runtime_spec_path(f, t, rt_raw)
+        if path is None:
+            return (
+                jsonify(
+                    {
+                        "error": "unknown tier or runtime",
+                        "from": f,
+                        "to": t,
+                        "runtime": rt or rt_raw.lower(),
+                    }
+                ),
+                404,
+            )
+        from_rank = _ent.tier_rank(f)
+        to_rank = _ent.tier_rank(t)
+        if f == t:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        return jsonify(
+            {
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": from_rank,
+                "to": t,
+                "to_label": _ent.tier_label(t),
+                "to_rank": to_rank,
+                "direction": direction,
+                "runtime": rt or rt_raw.lower(),
+                "path": path,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_runtime_spec_path: error: %s", exc)
+        return (
+            jsonify(
+                {
+                    "error": "unknown tier or runtime",
+                    "from": f,
+                    "to": t,
+                    "runtime": rt_raw.lower(),
+                }
+            ),
+            404,
+        )
