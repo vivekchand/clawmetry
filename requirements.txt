@@ -4,7 +4,7 @@ duckdb>=1.4.5  # local event store (epic #964 phase 1)
 # Testing dependencies
 pytest>=8.4.2
 pytest-playwright>=0.7.1
-requests>=2.32.5
+requests>=2.34.2
 
 # Optional: enables real-time OTLP metrics from OpenClaw
 # Install with: pip install clawmetry[otel]
