@@ -7150,3 +7150,167 @@ def lock_reason_path(
     except Exception as exc:
         logger.warning("entitlements: lock_reason_path failed: %s", exc)
         return None
+
+
+def feature_spec_path_batch(
+    from_tier: str, to_tier: str, features
+) -> dict | None:
+    """Batch sibling of :func:`feature_spec_path`: per-rung spec rows for a
+    caller-supplied subset of feature ids walked between two tiers in ONE
+    round-trip.
+
+    Composes :func:`feature_spec_path` (scalar single-feature path) and
+    :func:`feature_spec_at_batch` (batch what-if scalar) -- same rung
+    walk as the path helper, same per-feature shape as the batch helper.
+    Lets a pricing-comparison "compare A vs B, here are the 6 features I
+    care about" surface render every rung for every feature off ONE call
+    instead of N calls to :func:`feature_spec_path`.
+
+    Per-feature row shape::
+
+        {"feature": "<id>", "path": [<feature_spec_path row>, ...]}
+
+    Each ``path`` row is byte-identical to a row from
+    :func:`feature_spec_path` for the same ``(from, to, feature)`` triple
+    -- a parity test pins this so the scalar and batch path helpers
+    cannot drift. The rungs walked are feature-agnostic (matches
+    :func:`feature_spec_path`'s ``rung_walk_invariant_across_features``
+    pin), so every per-feature ``path`` has the same length and rung
+    sequence.
+
+    Shape::
+
+        {
+          "features": [
+            {"feature": "<id>", "path": [<augmented row>, ...]},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Supplied feature ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen
+    order preserved). Unknown ids are echoed in ``unknown[]`` instead of
+    short-circuiting -- a partially-bad caller still gets paths back for
+    the valid ids alongside a list of what was dropped, matching
+    :func:`feature_spec_at_batch`'s posture.
+
+    Returns ``None`` for empty / unknown ``from_tier`` / ``to_tier``
+    (caller renders "unknown tier" / 404). Identity ``from == to`` yields
+    ``{"features": [...empty path per feature...], "unknown": [...]}``
+    matching the singular helper's identity branch.
+
+    Resolver-independent: delegates per-feature to
+    :func:`feature_spec_path`, which walks the static per-tier maps via
+    :func:`feature_spec_at` -- so grace vs enforce yields byte-identical
+    rows. Never raises: per-feature failures short-circuit that feature
+    into ``unknown[]`` and the rest of the batch keeps building.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+        return None
+    feats = _normalise_csv(features)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    for fid in feats:
+        if fid not in ALL_FEATURES:
+            unknown.append(fid)
+            continue
+        try:
+            path = feature_spec_path(f, t, fid)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: feature_spec_path_batch row %r failed: %s",
+                fid,
+                exc,
+            )
+            unknown.append(fid)
+            continue
+        if path is None:
+            unknown.append(fid)
+            continue
+        rows.append({"feature": fid, "path": path})
+    return {"features": rows, "unknown": unknown}
+
+
+def runtime_spec_path_batch(
+    from_tier: str, to_tier: str, runtimes
+) -> dict | None:
+    """Runtime-axis twin of :func:`feature_spec_path_batch` -- batch
+    sibling of :func:`runtime_spec_path` and runtime cousin of
+    :func:`runtime_spec_at_batch`.
+
+    Per-runtime row shape::
+
+        {"runtime": "<canonical id>", "path": [<runtime_spec_path row>, ...]}
+
+    Each ``path`` row is byte-identical to a row from
+    :func:`runtime_spec_path` for the same ``(from, to, runtime)`` triple
+    -- a parity test pins this. Rungs walked are runtime-agnostic, so
+    every per-runtime ``path`` has the same length and rung sequence.
+
+    Aliases are canonicalised via :func:`canonical_runtime`
+    (``claude-code`` -> ``claude_code``) and aliases that collapse to a
+    canonical id already in the response are silently de-duplicated --
+    same behaviour as :func:`runtime_spec_at_batch`. The per-row
+    ``runtime`` value carries the canonical id, never the supplied
+    alias.
+
+    Shape::
+
+        {
+          "runtimes": [
+            {"runtime": "<canonical id>", "path": [<augmented row>, ...]},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Returns ``None`` for empty / unknown ``from_tier`` / ``to_tier``.
+    Identity ``from == to`` yields ``{"runtimes": [...empty path per
+    runtime...], "unknown": [...]}`` matching the singular helper's
+    identity branch.
+
+    Never raises: per-runtime failures short-circuit that runtime into
+    ``unknown[]`` (carrying the supplied alias, not a canonical id, so
+    the caller can correlate against what was sent) and the rest of the
+    batch keeps building.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+        return None
+    rts = _normalise_csv(runtimes)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    seen: set[str] = set()
+    for raw in rts:
+        canon = canonical_runtime(raw)
+        if not canon or canon not in ALL_RUNTIMES:
+            unknown.append(raw)
+            continue
+        if canon in seen:
+            continue
+        try:
+            path = runtime_spec_path(f, t, raw)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: runtime_spec_path_batch row %r failed: %s",
+                raw,
+                exc,
+            )
+            unknown.append(raw)
+            continue
+        if path is None:
+            unknown.append(raw)
+            continue
+        seen.add(canon)
+        rows.append({"runtime": canon, "path": path})
+    return {"runtimes": rows, "unknown": unknown}
