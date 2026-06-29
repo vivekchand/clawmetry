@@ -92,7 +92,7 @@ def client(ent):
     return app.test_client()
 
 
-# ── next_tier_feature_spec_at ────────────────────────────────────────────
+# ── next_tier_feature_spec_at ────────────────────────────────────────────────
 
 
 def test_next_tier_feature_spec_at_byte_equals_feature_spec_at(ent):
@@ -234,7 +234,7 @@ def test_previous_tier_feature_spec_at_never_raises_on_builder_failure(
     )
 
 
-# ── next_tier_runtime_spec_at ────────────────────────────────────────────
+# ── next_tier_runtime_spec_at ────────────────────────────────────────────────
 
 
 def test_next_tier_runtime_spec_at_byte_equals_runtime_spec_at(ent):
@@ -347,7 +347,7 @@ def test_previous_tier_runtime_spec_at_never_raises_on_builder_failure(
     )
 
 
-# ── /api/entitlement/next-tier-feature-spec-at ───────────────────────────────────
+# ── /api/entitlement/next-tier-feature-spec-at ───────────────────────────────
 
 
 def test_api_next_tier_feature_spec_at_happy_path(client, ent):
@@ -421,7 +421,7 @@ def test_api_next_tier_feature_spec_at_trial_endpoint(client, ent):
     assert body["row"] == ent.feature_spec_at(ent.TIER_ENTERPRISE, "custom_alerts")
 
 
-# ── /api/entitlement/previous-tier-feature-spec-at ───────────────────────────────
+# ── /api/entitlement/previous-tier-feature-spec-at ───────────────────────────
 
 
 def test_api_previous_tier_feature_spec_at_happy_path(client, ent):
@@ -480,7 +480,7 @@ def test_api_previous_tier_feature_spec_at_400s_and_404s(client):
     )
 
 
-# ── /api/entitlement/next-tier-runtime-spec-at ─────────────────────────────────
+# ── /api/entitlement/next-tier-runtime-spec-at ───────────────────────────────
 
 
 def test_api_next_tier_runtime_spec_at_happy_path(client, ent):
@@ -549,7 +549,7 @@ def test_api_next_tier_runtime_spec_at_400s_and_404s(client):
     )
 
 
-# ── /api/entitlement/previous-tier-runtime-spec-at ──────────────────────────────
+# ── /api/entitlement/previous-tier-runtime-spec-at ───────────────────────────
 
 
 def test_api_previous_tier_runtime_spec_at_happy_path(client, ent):
