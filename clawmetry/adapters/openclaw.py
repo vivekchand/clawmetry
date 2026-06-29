@@ -101,6 +101,25 @@ def _gateway_live() -> bool:
         return False
 
 
+def _is_docker_runtime_down() -> Optional[bool]:
+    """True when Docker daemon is present but not responding, False when
+    healthy, None when docker CLI is absent (not a Docker-backed environment).
+    Never raises.
+    """
+    try:
+        import shutil as _sh
+        if not _sh.which("docker"):
+            return None
+        import subprocess as _sp
+        rc = _sp.run(
+            ["docker", "info"],
+            capture_output=True, timeout=3,
+        ).returncode
+        return rc != 0
+    except Exception:
+        return None
+
+
 def _real_install(sessions_dir: str) -> bool:
     """A genuine OpenClaw install signal, NOT the bare ~/.openclaw dir that
     ClawMetry itself creates as a scratch workspace. Any one of: the openclaw
@@ -917,6 +936,13 @@ class OpenClawAdapter(AgentAdapter):
             # Only meaningful — and safe to query — when the gateway is live.
             if running:
                 meta.update(_gateway_plugin_health())
+            # Docker runtime health (#3390): the NemoClaw harness treats Docker
+            # daemon liveness as a distinct signal from gateway liveness. Only
+            # written when docker CLI is present so non-Docker environments are
+            # unaffected.
+            _docker_down = _is_docker_runtime_down()
+            if _docker_down is not None:
+                meta["dockerRuntimeDown"] = _docker_down
             return DetectResult(
                 name=self.name,
                 display_name=self.display_name,
