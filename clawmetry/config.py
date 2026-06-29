@@ -111,6 +111,27 @@ def is_cloud_disabled() -> bool:
         return False
 
 
+def enable_cloud() -> bool:
+    """Clear the local-only marker so the daemon resumes cloud sync.
+
+    A local-only install (or `clawmetry disconnect`) writes the
+    ``~/.clawmetry/nocloud`` marker, which `is_cloud_disabled()` honours. Any
+    explicit opt-in to cloud (the dashboard "Enable Cloud Sync" CTA,
+    `clawmetry connect`) MUST call this, or the connect silently no-ops: the
+    token is written but the daemon keeps running local-only and never pushes.
+    Returns True if a marker was present and removed. Note: this does NOT
+    override the env var ``CLAWMETRY_NO_CLOUD`` (that is an explicit per-run
+    opt-out the operator set on purpose).
+    """
+    try:
+        if os.path.isfile(NOCLOUD_MARKER_PATH):
+            os.remove(NOCLOUD_MARKER_PATH)
+            return True
+    except Exception:
+        pass
+    return False
+
+
 @dataclass
 class ClawMetryConfig:
     """

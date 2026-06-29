@@ -741,6 +741,16 @@ def _cmd_connect(args) -> None:
     }
     save_config(config)
 
+    # Explicit connect is an opt-in to cloud: clear any local-only marker so the
+    # daemon actually pushes (otherwise a prior local-only install / disconnect
+    # leaves it ingesting to DuckDB only and the node never appears in cloud).
+    try:
+        from clawmetry.config import enable_cloud as _enable_cloud
+        if _enable_cloud():
+            print("  Re-enabled cloud sync (was local-only)")
+    except Exception:
+        pass
+
     print()
     print(f"  Connected as: {node_id}")
 
