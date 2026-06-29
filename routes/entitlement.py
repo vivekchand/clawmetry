@@ -6377,3 +6377,260 @@ def api_entitlement_runtime_spec_path():
             ),
             404,
         )
+
+
+@bp_entitlement.route("/api/entitlement/lock-reason-path")
+def api_entitlement_lock_reason_path():
+    """``GET /api/entitlement/lock-reason-path?from=<id>&to=<id>&<axis>=<id>``
+
+    Arbitrary-endpoint stepwise lock-row path between any two tiers; the
+    lock-row analogue of ``/feature-spec-path`` / ``/runtime-spec-path``
+    and the path-walking sibling of ``/lock-reason-at``. Lets a paywall
+    surface render every rung's ``locked`` / ``allowed`` / ``reason``
+    sentence for a SINGLE item off ONE round-trip without fetching the
+    full ``/lock-reasons-at-batch`` payload at every rung.
+
+    Exactly one of ``feature=`` / ``runtime=`` / ``channels=`` /
+    ``retention_days=`` / ``nodes=`` must be supplied -- the same axis
+    dispatcher as ``/lock-reason`` and ``/lock-reason-at``.
+
+    Rung walk is byte-stable against ``/tier-path``,
+    ``/capacity-diff-path``, ``/tier-unlocks-path``,
+    ``/tier-locks-path``, ``/preview-path``, ``/tier-spec-path``,
+    ``/feature-spec-path`` and ``/runtime-spec-path`` (same
+    ``_PURCHASABLE_TIERS`` filter + same sort + same destination-sibling
+    exclusion), so the nine paths line up rung-for-rung.
+
+    Each row in ``path`` is the same 8-key lock-row shape ``/lock-reason``
+    / ``/lock-reason-at`` / ``/lock-reasons-at-batch`` already emit
+    (``key``, ``kind``, ``reason``, ``locked``, ``allowed``,
+    ``required_tier``, ``required_tier_label``, ``required_tier_rank``)
+    augmented with three rung-identification keys -- ``rung``,
+    ``rung_label``, ``rung_rank`` -- naming the perspective tier the row
+    was computed at. Dropping the three ``rung*`` keys yields exact
+    byte-equality with the corresponding axis row of
+    ``/lock-reasons-at-batch?perspective_tier=<rung>``.
+
+    Response shape::
+
+        {
+          "from":       "<tier id>",
+          "from_label": "...",
+          "from_rank":  <int>,
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "key":        "<echoed item id>",
+          "kind":       "feature" | "runtime" | "channels" |
+                        "retention_days" | "nodes",
+          "path":       [<rung-augmented lock-row>, ...],
+        }
+
+    Direction semantics mirror ``/feature-spec-path``:
+
+    * ``upgrade`` (ascending) -- rows climb rung by rung from the rung
+      above ``from`` toward ``to``.
+    * ``downgrade`` (descending) -- rows shrink rung by rung.
+    * ``lateral`` (same rank, different id) -- single-row path; row
+      carries the lock-row at ``to``.
+    * ``identity`` (``from == to``) -- empty path; no rungs to walk.
+
+    Runtime ids accept aliases (``claude-code`` -> ``claude_code``) via
+    :func:`clawmetry.entitlements.canonical_runtime` so the URL surface
+    matches ``/api/entitlement/required-tier``.
+
+    ``400`` when ``from=`` / ``to=`` is missing, when no axis is
+    supplied, or when more than one axis is supplied. ``404`` when any
+    tier id is unknown, when a feature/runtime id is unknown, or when a
+    capacity value is missing / non-int / non-positive (the helper
+    short-circuits to ``None``). ``trial`` IS accepted as an endpoint --
+    it is excluded from the walked intermediate rungs (not purchasable)
+    but is a valid endpoint via the lateral branch. Never 5xxs: a
+    resolver failure short-circuits to ``404`` so a paywall surface
+    keeps rendering instead of breaking.
+    """
+    f = (request.args.get("from") or "").strip().lower()
+    t = (request.args.get("to") or "").strip().lower()
+    if not f or not t:
+        return jsonify({"error": "missing from or to"}), 400
+
+    feature = (request.args.get("feature") or "").strip().lower()
+    runtime_in = (request.args.get("runtime") or "").strip().lower()
+    (
+        channels_present,
+        channels_ok,
+        channels_n,
+        channels_raw,
+    ) = _parse_capacity_arg("channels")
+    (
+        retention_present,
+        retention_ok,
+        retention_n,
+        retention_raw,
+    ) = _parse_capacity_arg("retention_days")
+    (
+        nodes_present,
+        nodes_ok,
+        nodes_n,
+        nodes_raw,
+    ) = _parse_capacity_arg("nodes")
+
+    supplied = [
+        bool(feature),
+        bool(runtime_in),
+        channels_present,
+        retention_present,
+        nodes_present,
+    ]
+    n_supplied = sum(1 for s in supplied if s)
+    if n_supplied == 0:
+        return (
+            jsonify(
+                {
+                    "error": (
+                        "supply exactly one of feature=<id>, runtime=<id>, "
+                        "channels=<int>, retention_days=<int>, or "
+                        "nodes=<int>"
+                    )
+                }
+            ),
+            400,
+        )
+    if n_supplied > 1:
+        return (
+            jsonify(
+                {
+                    "error": (
+                        "supply only one of feature=, runtime=, channels=, "
+                        "retention_days=, or nodes="
+                    )
+                }
+            ),
+            400,
+        )
+
+    try:
+        from clawmetry import entitlements as _ent
+
+        if feature:
+            item, kind, echoed_key = feature, "feature", feature
+        elif runtime_in:
+            canon = _ent.canonical_runtime(runtime_in)
+            item, kind, echoed_key = (
+                canon or runtime_in,
+                "runtime",
+                canon or runtime_in,
+            )
+        elif channels_present:
+            if not channels_ok:
+                return (
+                    jsonify(
+                        {
+                            "error": "unknown tier or item",
+                            "from": f,
+                            "to": t,
+                            "key": channels_raw,
+                            "kind": "channels",
+                        }
+                    ),
+                    404,
+                )
+            item, kind, echoed_key = str(channels_n), "channels", str(channels_n)
+        elif retention_present:
+            if not retention_ok:
+                return (
+                    jsonify(
+                        {
+                            "error": "unknown tier or item",
+                            "from": f,
+                            "to": t,
+                            "key": retention_raw,
+                            "kind": "retention_days",
+                        }
+                    ),
+                    404,
+                )
+            item, kind, echoed_key = (
+                str(retention_n),
+                "retention_days",
+                str(retention_n),
+            )
+        else:
+            if not nodes_ok:
+                return (
+                    jsonify(
+                        {
+                            "error": "unknown tier or item",
+                            "from": f,
+                            "to": t,
+                            "key": nodes_raw,
+                            "kind": "nodes",
+                        }
+                    ),
+                    404,
+                )
+            item, kind, echoed_key = str(nodes_n), "nodes", str(nodes_n)
+
+        path = _ent.lock_reason_path(f, t, item, kind=kind)
+        if path is None:
+            return (
+                jsonify(
+                    {
+                        "error": "unknown tier or item",
+                        "from": f,
+                        "to": t,
+                        "key": echoed_key,
+                        "kind": kind,
+                    }
+                ),
+                404,
+            )
+        from_rank = _ent.tier_rank(f)
+        to_rank = _ent.tier_rank(t)
+        if f == t:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        return jsonify(
+            {
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": from_rank,
+                "to": t,
+                "to_label": _ent.tier_label(t),
+                "to_rank": to_rank,
+                "direction": direction,
+                "key": echoed_key,
+                "kind": kind,
+                "path": path,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_lock_reason_path: error: %s", exc)
+        if feature:
+            echoed_key, kind = feature, "feature"
+        elif runtime_in:
+            echoed_key, kind = runtime_in, "runtime"
+        elif channels_present:
+            echoed_key, kind = channels_raw, "channels"
+        elif retention_present:
+            echoed_key, kind = retention_raw, "retention_days"
+        else:
+            echoed_key, kind = nodes_raw, "nodes"
+        return (
+            jsonify(
+                {
+                    "error": "unknown tier or item",
+                    "from": f,
+                    "to": t,
+                    "key": echoed_key,
+                    "kind": kind,
+                }
+            ),
+            404,
+        )
