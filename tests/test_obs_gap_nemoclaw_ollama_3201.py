@@ -127,6 +127,29 @@ def test_list_ollama_models_returns_empty_on_both_failures(monkeypatch):
     assert _list_ollama_models("http://localhost:11434") == []
 
 
+def test_list_ollama_models_non_loopback_skips_cli_fallback(monkeypatch):
+    """Docker-internal host must not fall back to CLI on HTTP failure (#3391)."""
+    def _fail_urlopen(url, timeout=None):
+        raise urllib.error.URLError("refused")
+
+    monkeypatch.setattr("urllib.request.urlopen", _fail_urlopen)
+
+    import subprocess as _sp
+    cli_calls = []
+
+    def _spy_run(*a, **kw):
+        cli_calls.append(a)
+        class _Res:
+            stdout = "NAME\nllama3:latest\n"
+        return _Res()
+
+    monkeypatch.setattr(_sp, "run", _spy_run)
+
+    result = _list_ollama_models("http://172.17.0.1:11434")
+    assert result == [], "non-loopback host should return [] when HTTP fails"
+    assert cli_calls == [], "CLI must not be invoked for non-loopback Ollama hosts"
+
+
 # ---------------------------------------------------------------------------
 # _sandbox_inference_configs — Ollama sandbox
 # ---------------------------------------------------------------------------
