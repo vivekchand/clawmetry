@@ -183,11 +183,14 @@ def _resolve_minimax_base_url() -> str:
 def _list_ollama_models(host: str) -> list:
     """Return available Ollama model names. Never raises; returns [] on failure.
 
-    Tries GET {host}/api/tags first (same as the harness HTTP path), then falls
-    back to `ollama list` CLI (same fallback the harness uses). Both failures
-    are silenced so a missing/offline Ollama doesn't error detection.
+    Tries GET {host}/api/tags first (same as the harness HTTP path). For
+    loopback hosts only, also falls back to ``ollama list`` CLI on HTTP
+    failure — matching the harness's getOllamaModelOptions() which skips the
+    CLI fallback when OLLAMA_HOST_DOCKER_INTERNAL is set, so ollamaModels is
+    never populated from the local workstation daemon for Docker-internal hosts.
     """
     import urllib.request
+    from urllib.parse import urlparse
     try:
         url = host.rstrip("/") + "/api/tags"
         with urllib.request.urlopen(url, timeout=2) as resp:  # noqa: S310
@@ -195,6 +198,10 @@ def _list_ollama_models(host: str) -> list:
             return [m["name"] for m in data.get("models", []) if m.get("name")]
     except Exception:
         pass
+    # CLI fallback only for loopback hosts (#3391: harness parity)
+    _hostname = urlparse(host).hostname or ""
+    if _hostname not in ("localhost", "127.0.0.1", "::1"):
+        return []
     try:
         import subprocess
         result = subprocess.run(
