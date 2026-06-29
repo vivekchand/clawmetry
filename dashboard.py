@@ -17888,17 +17888,34 @@ def _full_connect_with_key(api_key):
     except Exception:
         pass
 
-    # Start the sync daemon if it is not already running.
+    # Clear the local-only marker so the daemon actually pushes to cloud. A
+    # local-only install writes ~/.clawmetry/nocloud; without this the connect
+    # succeeds but the daemon keeps running LOCAL-ONLY and nothing reaches the
+    # cloud (the "0 nodes after Enable Cloud Sync" bug).
     try:
-        if not _is_sync_running():
-            if _is_macos() and os.path.exists(SYNC_LAUNCHD_PLIST):
-                subprocess.run(["launchctl", "load", SYNC_LAUNCHD_PLIST], capture_output=True)
-                subprocess.run(["launchctl", "start", SYNC_LAUNCHD_LABEL], capture_output=True)
-            elif _is_linux():
-                _ensure_systemd_service()
-                subprocess.run(_systemctl_cmd("restart", "clawmetry-sync"), capture_output=True)
+        from clawmetry.config import enable_cloud as _enable_cloud
+        _enable_cloud()
+    except Exception:
+        pass
+
+    # (Re)start the sync daemon so it re-reads the new key AND re-evaluates
+    # cloud mode. If it is already running in local-only mode, merely "starting
+    # if absent" would leave it local-only forever, so we restart unconditionally.
+    try:
+        if _is_macos():
+            if os.path.exists(SYNC_LAUNCHD_PLIST):
+                subprocess.run(["launchctl", "kickstart", "-k",
+                                f"gui/{os.getuid()}/{SYNC_LAUNCHD_LABEL}"],
+                               capture_output=True)
             else:
                 _start_daemon_background()
+        elif _is_linux():
+            _ensure_systemd_service()
+            subprocess.run(_systemctl_cmd("restart", "clawmetry-sync"), capture_output=True)
+        else:
+            if _is_sync_running():
+                _kill_all_sync_procs()
+            _start_daemon_background()
     except Exception:
         pass
 
@@ -18416,6 +18433,13 @@ def cmd_connect(args):
         print("  Cleared previous sync state")
 
     _write_cloud_token(token)
+    # Opt-in to cloud: clear any local-only marker so the daemon pushes.
+    try:
+        from clawmetry.config import enable_cloud as _enable_cloud
+        if _enable_cloud():
+            print("  Re-enabled cloud sync (was local-only)")
+    except Exception:
+        pass
     print()
     print(
         f"  Connected! View your fleet at: https://app.clawmetry.com/fleet/?token={token}"

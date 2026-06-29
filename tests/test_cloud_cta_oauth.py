@@ -78,22 +78,35 @@ def test_start_oauth_bridge_rejects_bad_provider():
     assert _d._OAUTH_BRIDGE["status"] == "error"
 
 
-def test_full_connect_writes_config(tmp_path, monkeypatch):
+def test_full_connect_writes_config_and_clears_nocloud(tmp_path, monkeypatch):
+    """Connecting must (a) write config and (b) clear the local-only marker.
+
+    The 'enabled Cloud Sync but 0 nodes' bug: a local-only install leaves
+    ~/.clawmetry/nocloud in place, so the daemon never pushes. Connect must
+    remove it.
+    """
     import dashboard as _d
     from clawmetry import sync as _sync
+    from clawmetry import config as _cfg
 
     home = tmp_path / "home"
-    home.mkdir()
+    (home / ".clawmetry").mkdir(parents=True)
+    nocloud = home / ".clawmetry" / "nocloud"
+    nocloud.write_text("")  # simulate a local-only install
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(_d.os.path, "expanduser",
                         lambda p: p.replace("~", str(home)))
 
-    # Point the sync config at the temp home and stub the network bits.
     monkeypatch.setattr(_sync, "CONFIG_DIR", home / ".clawmetry")
     monkeypatch.setattr(_sync, "CONFIG_FILE", home / ".clawmetry" / "config.json")
     monkeypatch.setattr(_sync, "validate_key", lambda *a, **k: {"node_id": "node-xyz"})
+    monkeypatch.setattr(_cfg, "NOCLOUD_MARKER_PATH", str(nocloud))
     monkeypatch.setattr(_d, "_write_cloud_token", lambda tok: None)
-    monkeypatch.setattr(_d, "_is_sync_running", lambda: True)  # don't spawn a daemon
+    monkeypatch.setattr(_d, "_is_sync_running", lambda: True)
+    # Neutralize the daemon (re)start side effect in tests.
+    monkeypatch.setattr(_d, "_is_macos", lambda: False)
+    monkeypatch.setattr(_d, "_is_linux", lambda: False)
+    monkeypatch.setattr(_d, "_start_daemon_background", lambda: None)
 
     node_id, enc_key = _d._full_connect_with_key("cm_testkey123")
     assert node_id == "node-xyz"
@@ -103,3 +116,18 @@ def test_full_connect_writes_config(tmp_path, monkeypatch):
     assert cfg["api_key"] == "cm_testkey123"
     assert cfg["node_id"] == "node-xyz"
     assert cfg["encryption_key"] == enc_key
+    assert not nocloud.exists(), "connect must clear the local-only nocloud marker"
+
+
+def test_enable_cloud_removes_marker(tmp_path, monkeypatch):
+    from clawmetry import config as _cfg
+
+    marker = tmp_path / "nocloud"
+    marker.write_text("")
+    monkeypatch.setattr(_cfg, "NOCLOUD_MARKER_PATH", str(marker))
+    monkeypatch.delenv("CLAWMETRY_NO_CLOUD", raising=False)
+
+    assert _cfg.is_cloud_disabled() is True
+    assert _cfg.enable_cloud() is True
+    assert _cfg.is_cloud_disabled() is False
+    assert _cfg.enable_cloud() is False  # idempotent: nothing left to remove
