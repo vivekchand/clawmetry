@@ -7243,3 +7243,187 @@ def api_entitlement_runtime_spec_path_batch():
                 "unknown": [],
             }
         )
+
+
+@bp_entitlement.route("/api/entitlement/lock-reason-path-batch")
+def api_entitlement_lock_reason_path_batch():
+    """``GET /api/entitlement/lock-reason-path-batch?from=<id>&to=<id>
+    &features=a,b,c&runtimes=x,y&channels=N&retention_days=K&nodes=M``
+    -- multi-axis batch sibling of
+    ``/api/entitlement/lock-reason-path``.
+
+    Where ``/lock-reason-path`` walks ONE item across the rungs between
+    two tiers, this walks N items across all 5 axes (features +
+    runtimes + 3 capacity axes) across the same rungs in ONE
+    round-trip. Pairs with ``/lock-reason-path`` the same way
+    ``/lock-reasons-at-batch`` pairs with ``/lock-reason-at``: scalar
+    what-if -> matrix what-if.
+
+    Use case: a paywall comparison surface ("here are the 6 features +
+    2 runtimes + my channel count + my retention window, walk each one
+    from OSS to Enterprise") hydrates the full matrix off ONE call
+    instead of N calls to ``/lock-reason-path`` per item. Rung walk is
+    item-agnostic, so all per-item paths share the same length and
+    rung sequence -- the client can render the matrix as rows = items
+    x cols = rungs without re-deriving the column headers per item.
+
+    At least one of ``features=`` / ``runtimes=`` / ``channels=`` /
+    ``retention_days=`` / ``nodes=`` must be supplied (matches
+    ``/lock-reasons-at-batch``); supply as many as you like.
+    ``features=`` / ``runtimes=`` take comma-separated tokens
+    (whitespace + duplicates are normalised away; unknown ids are
+    echoed in ``unknown[]`` instead of 404'ing the call). The three
+    capacity axes take a single int each; blank / non-int / non-
+    positive values render that axis as ``None`` (matches
+    ``/lock-reason-path``'s short-circuit posture).
+
+    Each row in ``features[].path`` / ``runtimes[].path`` /
+    ``channels.path`` / ``retention_days.path`` / ``nodes.path`` is
+    byte-identical to a row from ``/lock-reason-path?from=<from>
+    &to=<to>&<axis>=<id>`` -- pinned by the parity tests so the scalar
+    and batch path accessors cannot drift.
+
+    Response shape (mirrors ``/feature-spec-path-batch`` envelope plus
+    the 5-axis body from ``/lock-reasons-at-batch``)::
+
+        {
+          "from":       "<tier id>",
+          "from_label": "...",
+          "from_rank":  <int>,
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "features": [{"key": "<id>", "path": [<augmented row>, ...]}, ...],
+          "runtimes": [{"key": "<canonical id>", "path": [...]}, ...],
+          "channels":       {"key": "<n>", "path": [...]} | None,
+          "retention_days": {"key": "<n>", "path": [...]} | None,
+          "nodes":          {"key": "<n>", "path": [...]} | None,
+          "unknown": {"features": [...], "runtimes": [...]},
+        }
+
+    - **400** when ``from=`` / ``to=`` is missing / blank, or no axis
+      is supplied
+    - **404** when ``from`` or ``to`` is unknown (body carries
+      ``which: "tier"``)
+    - **Never 5xxs**: a synthesis failure short-circuits to an envelope
+      with empty rows so the matrix keeps rendering.
+    """
+    f = (request.args.get("from") or "").strip().lower()
+    t = (request.args.get("to") or "").strip().lower()
+    if not f or not t:
+        return jsonify({"error": "missing from or to"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if f not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": f}
+                ),
+                404,
+            )
+        if t not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": t}
+                ),
+                404,
+            )
+
+        features = _parse_csv_arg("features")
+        runtimes = _parse_csv_arg("runtimes")
+        (_, channels_ok, channels_n, _) = _parse_capacity_arg("channels")
+        (_, retention_ok, retention_n, _) = _parse_capacity_arg(
+            "retention_days"
+        )
+        (_, nodes_ok, nodes_n, _) = _parse_capacity_arg("nodes")
+
+        if (
+            not features
+            and not runtimes
+            and not channels_ok
+            and not retention_ok
+            and not nodes_ok
+        ):
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply at least one of features=<csv>, "
+                            "runtimes=<csv>, channels=<int>, "
+                            "retention_days=<int>, or nodes=<int>"
+                        )
+                    }
+                ),
+                400,
+            )
+
+        batch = _ent.lock_reason_path_batch(
+            f,
+            t,
+            features=features or None,
+            runtimes=runtimes or None,
+            channels=channels_n if channels_ok else None,
+            retention_days=retention_n if retention_ok else None,
+            nodes=nodes_n if nodes_ok else None,
+        )
+        if batch is None:
+            batch = {
+                "features": [],
+                "runtimes": [],
+                "channels": None,
+                "retention_days": None,
+                "nodes": None,
+                "unknown": {"features": [], "runtimes": []},
+            }
+        from_rank = _ent.tier_rank(f)
+        to_rank = _ent.tier_rank(t)
+        if f == t:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        return jsonify(
+            {
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": from_rank,
+                "to": t,
+                "to_label": _ent.tier_label(t),
+                "to_rank": to_rank,
+                "direction": direction,
+                "features": batch.get("features", []),
+                "runtimes": batch.get("runtimes", []),
+                "channels": batch.get("channels"),
+                "retention_days": batch.get("retention_days"),
+                "nodes": batch.get("nodes"),
+                "unknown": batch.get(
+                    "unknown", {"features": [], "runtimes": []}
+                ),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_lock_reason_path_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "from": f,
+                "from_label": None,
+                "from_rank": -1,
+                "to": t,
+                "to_label": None,
+                "to_rank": -1,
+                "direction": "identity" if f == t else "upgrade",
+                "features": [],
+                "runtimes": [],
+                "channels": None,
+                "retention_days": None,
+                "nodes": None,
+                "unknown": {"features": [], "runtimes": []},
+            }
+        )
