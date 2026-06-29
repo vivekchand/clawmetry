@@ -263,6 +263,79 @@ def _extract_brain_detail_raw(row: dict) -> str:
     return ""
 
 
+def _collapse_duplicate_brain_events(events):
+    """Collapse the multiple brain rows OpenClaw emits for ONE assistant turn.
+
+    A single assistant turn lands as an ``assistant``/``message`` row PLUS one
+    or two ``model.completed`` siblings a second or two apart, all carrying the
+    same text (one is a tokens=0 ``model: delivery-mirror`` echo). They have
+    different timestamps and ids, so the exact-tuple dedupe misses them and the
+    Brain feed shows the same paragraph two or three times (founder report,
+    2026-06-29).
+
+    Within one source (session) and one identical, substantial ``detail``, keep
+    the single richest row (a real assistant/message/agent row over a slim
+    model.completed; more tokens over fewer) and drop the rest. A time window
+    keeps a genuine re-utterance of the same text in a later turn intact.
+    """
+    import datetime as _dt
+
+    WINDOW_S = 120.0
+    MIN_DETAIL = 40
+    _PRIO = {"MESSAGE": 3, "ASSISTANT": 3, "AGENT": 3, "USER": 3, "RESULT": 3,
+             "THINK": 2, "MODEL.COMPLETED": 1, "MODEL": 1}
+
+    def _src(ev):
+        return ev.get("src") or ev.get("source") or ev.get("sessionId") or ""
+
+    def _parse(ev):
+        ts = ev.get("time") or ""
+        try:
+            return _dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    def _richness(ev):
+        return (_PRIO.get((ev.get("type") or "").upper(), 2), ev.get("tokens") or 0)
+
+    groups = {}
+    for ev in events:
+        detail = (ev.get("detail") or "").strip()
+        if len(detail) < MIN_DETAIL:
+            continue
+        groups.setdefault((_src(ev), detail), []).append(ev)
+
+    drop = set()
+    for evs in groups.values():
+        if len(evs) < 2:
+            continue
+        # Cluster copies that fall within WINDOW_S of each other; collapse each
+        # cluster to its richest row. Rows with no parseable time still cluster
+        # together (same content, same session) so a missing timestamp can't
+        # smuggle a duplicate through.
+        ordered = sorted(evs, key=lambda e: (_parse(e) or _dt.datetime.min))
+        cluster = [ordered[0]]
+        clusters = [cluster]
+        for prev, cur in zip(ordered, ordered[1:]):
+            tp, tc = _parse(prev), _parse(cur)
+            if tp is None or tc is None or abs((tc - tp).total_seconds()) <= WINDOW_S:
+                cluster.append(cur)
+            else:
+                cluster = [cur]
+                clusters.append(cluster)
+        for cl in clusters:
+            if len(cl) < 2:
+                continue
+            best = max(cl, key=_richness)
+            for e in cl:
+                if e is not best:
+                    drop.add(id(e))
+
+    if not drop:
+        return events
+    return [ev for ev in events if id(ev) not in drop]
+
+
 def _try_local_store_brain(limit, include_artifacts, since=None):
     """Epic #964 phase 1b fast path. Returns a brain-history-shaped dict
     when CLAWMETRY_LOCAL_STORE_READ=1 AND the local DuckDB store has
@@ -419,6 +492,7 @@ def _try_local_store_brain(limit, include_artifacts, since=None):
         except Exception:
             pass
         out.append(row)
+    out = _collapse_duplicate_brain_events(out)
     return {
         "events":        out,
         "count":         len(out),
@@ -1013,6 +1087,9 @@ def api_brain_history():
         seen_keys.add(key)
         deduped.append(ev)
     events = deduped
+    # Collapse the assistant + model.completed (+ delivery-mirror) siblings that
+    # the exact-tuple dedupe above misses because their timestamps differ.
+    events = _collapse_duplicate_brain_events(events)
 
     events.sort(
         key=lambda ev: ev.get("time", "") or "", reverse=True
