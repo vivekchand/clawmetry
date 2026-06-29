@@ -7026,3 +7026,220 @@ def api_entitlement_previous_tier_runtime_spec_at():
                 "row": None,
             }
         )
+
+
+@bp_entitlement.route("/api/entitlement/feature-spec-path-batch")
+def api_entitlement_feature_spec_path_batch():
+    """``GET /api/entitlement/feature-spec-path-batch?from=<id>&to=<id>
+    &features=a,b,c`` -- batch sibling of
+    ``/api/entitlement/feature-spec-path``.
+
+    Where ``/feature-spec-path`` walks ONE feature across the rungs
+    between two tiers, this walks N features across the same rungs in
+    ONE round-trip. Pairs with ``/feature-spec-path`` the same way
+    ``/feature-spec-at-batch`` pairs with ``/feature-spec-at``: scalar
+    -> matrix in one call.
+
+    Use case: a pricing-comparison "compare A vs B, here are the 6
+    features I care about" surface hydrates every rung for every
+    feature off ONE call instead of N calls to ``/feature-spec-path``.
+    Rung walk is feature-agnostic, so all per-feature paths share the
+    same length and rung sequence -- the client can render the matrix
+    as rows = features x cols = rungs without re-deriving the column
+    headers per feature.
+
+    Each row in ``features[].path`` is byte-identical to a row from
+    ``/feature-spec-path?from=<from>&to=<to>&feature=<id>`` -- pinned
+    by the parity tests so the scalar and batch path accessors cannot
+    drift. Supplied feature ids are normalised (whitespace stripped,
+    lowercased, duplicates dropped, first-seen order preserved).
+    Unknown ids do not 404 the call -- they are echoed in ``unknown[]``
+    so a partially-bad caller still gets paths back for the valid ids.
+
+    Response shape::
+
+        {
+          "from":       "<tier id>",
+          "from_label": "...",
+          "from_rank":  <int>,
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "features": [
+            {"feature": "<id>", "path": [<augmented row>, ...]},
+            ...
+          ],
+          "unknown":    ["bogus_id", ...],
+        }
+
+    - **400** when ``from=``, ``to=`` is missing / blank, or ``features=``
+      is missing / empty after normalisation
+    - **404** when ``from`` or ``to`` is unknown (body carries
+      ``which: "tier"``)
+    - **Never 5xxs**: a synthesis failure short-circuits to an envelope
+      with empty rows so the matrix keeps rendering.
+    """
+    f = (request.args.get("from") or "").strip().lower()
+    t = (request.args.get("to") or "").strip().lower()
+    if not f or not t:
+        return jsonify({"error": "missing from or to"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if f not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": f}
+                ),
+                404,
+            )
+        if t not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": t}
+                ),
+                404,
+            )
+        features = _parse_csv_arg("features")
+        if not features:
+            return jsonify({"error": "supply features=<csv>"}), 400
+        batch = _ent.feature_spec_path_batch(f, t, features)
+        if batch is None:
+            batch = {"features": [], "unknown": []}
+        from_rank = _ent.tier_rank(f)
+        to_rank = _ent.tier_rank(t)
+        if f == t:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        return jsonify(
+            {
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": from_rank,
+                "to": t,
+                "to_label": _ent.tier_label(t),
+                "to_rank": to_rank,
+                "direction": direction,
+                "features": batch.get("features", []),
+                "unknown": batch.get("unknown", []),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_feature_spec_path_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "from": f,
+                "from_label": None,
+                "from_rank": -1,
+                "to": t,
+                "to_label": None,
+                "to_rank": -1,
+                "direction": "identity" if f == t else "upgrade",
+                "features": [],
+                "unknown": [],
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/runtime-spec-path-batch")
+def api_entitlement_runtime_spec_path_batch():
+    """``GET /api/entitlement/runtime-spec-path-batch?from=<id>&to=<id>
+    &runtimes=a,b,c`` -- batch sibling of
+    ``/api/entitlement/runtime-spec-path``.
+
+    Runtime-axis twin of ``/feature-spec-path-batch``. Aliases are
+    canonicalised the same way ``/runtime-spec-path`` already does
+    (``claude-code`` -> ``claude_code``), and aliases that collapse to a
+    canonical id already in the response are silently de-duplicated so
+    the row count matches the unique-canonical-id count.
+
+    Each row in ``runtimes[].path`` is byte-identical to a row from
+    ``/runtime-spec-path?from=<from>&to=<to>&runtime=<id>``. Unknown
+    ids do not 404 the call -- they are echoed in ``unknown[]`` carrying
+    the supplied alias so the caller can correlate against what was
+    sent.
+
+    Response shape mirrors ``/feature-spec-path-batch`` with
+    ``"runtimes"`` in place of ``"features"`` and a per-row
+    ``"runtime"`` key in place of ``"feature"``.
+
+    - **400** when ``from=`` / ``to=`` is missing or ``runtimes=`` is
+      missing / empty after normalisation
+    - **404** when ``from`` or ``to`` is unknown
+    - **Never 5xxs**.
+    """
+    f = (request.args.get("from") or "").strip().lower()
+    t = (request.args.get("to") or "").strip().lower()
+    if not f or not t:
+        return jsonify({"error": "missing from or to"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if f not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": f}
+                ),
+                404,
+            )
+        if t not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": t}
+                ),
+                404,
+            )
+        runtimes = _parse_csv_arg("runtimes")
+        if not runtimes:
+            return jsonify({"error": "supply runtimes=<csv>"}), 400
+        batch = _ent.runtime_spec_path_batch(f, t, runtimes)
+        if batch is None:
+            batch = {"runtimes": [], "unknown": []}
+        from_rank = _ent.tier_rank(f)
+        to_rank = _ent.tier_rank(t)
+        if f == t:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        return jsonify(
+            {
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": from_rank,
+                "to": t,
+                "to_label": _ent.tier_label(t),
+                "to_rank": to_rank,
+                "direction": direction,
+                "runtimes": batch.get("runtimes", []),
+                "unknown": batch.get("unknown", []),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_runtime_spec_path_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "from": f,
+                "from_label": None,
+                "from_rank": -1,
+                "to": t,
+                "to_label": None,
+                "to_rank": -1,
+                "direction": "identity" if f == t else "upgrade",
+                "runtimes": [],
+                "unknown": [],
+            }
+        )
