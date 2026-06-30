@@ -7872,64 +7872,6 @@ def previous_tier_runtime_spec_at_batch(tier: str, runtimes) -> dict | None:
         seen.add(canon)
         rows.append({"runtime": canon, "row": row})
     return {"runtimes": rows, "unknown": unknown}
-    At the ceiling every ``row`` is ``None`` while the per-runtime
-    envelope entries still render so the matrix's row count stays
-    stable.
-
-    Shape::
-
-        {
-          "runtimes": [
-            {"runtime": "<canonical id>", "row": <row> | None},
-            ...
-          ],
-          "unknown": ["bogus_id", ...],
-        }
-
-    Returns ``None`` for empty / unknown ``tier``. Never raises: per-
-    runtime failures short-circuit that runtime into ``unknown[]``
-    (carrying the supplied alias, not the canonical id, so the caller
-    can correlate against what was sent) and the rest of the batch keeps
-    building.
-    """
-    try:
-        src = (tier or "").strip().lower()
-    except (AttributeError, TypeError):
-        return None
-    if not src or src not in _TIER_ORDER:
-        return None
-    rts = _normalise_csv(runtimes)
-    try:
-        target = _next_purchasable_tier_after(src)
-    except Exception as exc:
-        logger.warning(
-            "entitlements: next_tier_runtime_spec_at_batch target resolve failed: %s",
-            exc,
-        )
-        target = None
-    rows: list[dict] = []
-    unknown: list[str] = []
-    seen: set[str] = set()
-    for raw in rts:
-        canon = canonical_runtime(raw)
-        if not canon or canon not in ALL_RUNTIMES:
-            unknown.append(raw)
-            continue
-        if canon in seen:
-            continue
-        try:
-            row = runtime_spec_at(target, canon) if target else None
-        except Exception as exc:
-            logger.warning(
-                "entitlements: next_tier_runtime_spec_at_batch row %r failed: %s",
-                raw,
-                exc,
-            )
-            unknown.append(raw)
-            continue
-        seen.add(canon)
-        rows.append({"runtime": canon, "row": row})
-    return {"runtimes": rows, "unknown": unknown}
 
 
 def previous_tier_runtime_spec_at_batch(tier: str, runtimes) -> dict | None:
