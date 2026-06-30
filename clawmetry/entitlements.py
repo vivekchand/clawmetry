@@ -7973,6 +7973,131 @@ def previous_tier_runtime_spec_at_batch(tier: str, runtimes) -> dict | None:
     return {"runtimes": rows, "unknown": unknown}
 
 
+def tier_path_batch(from_tier: str, to_tiers) -> dict | None:
+    """Batch sibling of :func:`tier_path`: per-rung marginal ``tier_diff``
+    rows for a caller-supplied subset of destination tiers all walked
+    from a single ``from_tier`` in ONE round-trip.
+
+    Composes :func:`tier_path` (scalar single-destination path) and
+    :func:`tier_diff_at_batch` (batch what-if scalar) -- same per-rung
+    body as the path helper (a full marginal :func:`tier_diff` payload
+    between consecutive rungs), same multi-destination axis as the
+    other ``*_path_batch`` siblings. Lets a pricing-comparison "from my
+    current rung, here are the 3 tiers I'm considering -- show me the
+    full marginal step diff (added + lost features, added + lost
+    runtimes, capacity changes) at every rung walked to each" surface
+    render every rung for every candidate destination off ONE call
+    instead of N calls to :func:`tier_path`. Pairs with the existing
+    path-batch grid (``tier_spec_path_batch``, ``capacity_diff_path_
+    batch``, ``tier_unlocks_path_batch``, ``tier_locks_path_batch``,
+    ``preview_path_batch``) as the all-slices-in-one-row member -- each
+    per-rung row carries every marginal slice in one body so a UI that
+    already renders a ``/tier-diff`` row can render a per-rung body
+    here with zero new shape code.
+
+    Per-destination row shape::
+
+        {
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<tier_diff row>, ...],
+        }
+
+    Each ``path`` row is byte-identical to a row from :func:`tier_path`
+    for the same ``(from_tier, to)`` pair -- a parity test pins this so
+    the scalar and batch path helpers cannot drift. Per-row body is the
+    full :func:`tier_diff` envelope (``from`` / ``from_label`` /
+    ``from_rank`` / ``to`` / ``to_label`` / ``to_rank`` / ``direction``
+    / ``added_features`` / ``lost_features`` / ``added_runtimes`` /
+    ``lost_runtimes`` / ``capacity_changes``), and the per-step ``from``
+    chains across the path: ``row[i]["to"] == row[i+1]["from"]``. The
+    walked rungs are destination-specific (the path's rung set depends
+    on ``to``), so per-destination ``path`` lengths can legitimately
+    differ -- matching :func:`tier_spec_path_batch` /
+    :func:`capacity_diff_path_batch`'s posture and differing from
+    :func:`feature_spec_path_batch` / :func:`runtime_spec_path_batch`
+    whose rungs are axis-id-agnostic.
+
+    Shape::
+
+        {
+          "tiers": [
+            {"to": "<id>", "to_label": ..., "to_rank": ..., "direction": ..., "path": [...]},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Supplied destination ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen
+    order preserved). Unknown ids are echoed in ``unknown[]`` instead
+    of short-circuiting -- a partially-bad caller still gets paths
+    back for the valid ids alongside a list of what was dropped,
+    matching :func:`tier_spec_path_batch` /
+    :func:`capacity_diff_path_batch`'s posture. ``trial`` IS accepted
+    as a destination (it is excluded from the walked intermediate
+    rungs the way :func:`tier_path` already excludes it, but is a
+    valid endpoint via the lateral / identity branches).
+
+    Returns ``None`` for empty / unknown ``from_tier`` (caller renders
+    "unknown tier" / 404).
+
+    Resolver-independent: delegates per-destination to :func:`tier_path`,
+    which walks the static per-tier maps via :func:`tier_diff` -- so
+    grace vs enforce yields byte-identical rows. Never raises: per-
+    destination failures short-circuit that id into ``unknown[]`` and
+    the rest of the batch keeps building.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if f not in _TIER_FEATURES:
+        return None
+    candidates = _normalise_csv(to_tiers)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    from_rank = _TIER_RANK.get(f, -1)
+    for tid in candidates:
+        if tid not in _TIER_FEATURES:
+            unknown.append(tid)
+            continue
+        try:
+            path = tier_path(f, tid)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: tier_path_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        if path is None:
+            unknown.append(tid)
+            continue
+        to_rank = _TIER_RANK.get(tid, -1)
+        if f == tid:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        rows.append(
+            {
+                "to": tid,
+                "to_label": tier_label(tid),
+                "to_rank": to_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}
+
+
 def capacity_diff_path_batch(
     from_tier: str, to_tiers
 ) -> dict | None:
