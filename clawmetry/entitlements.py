@@ -6636,6 +6636,105 @@ def previous_tier_runtime_spec_at(tier: str, runtime: str) -> dict | None:
         return None
 
 
+def next_tier_lock_reason_at(
+    tier: str, item, *, kind: str | None = None
+) -> str | None:
+    """Scalar what-if sibling of :func:`lock_reason_at` projected onto the
+    rung above the caller-supplied ``tier``.
+
+    Lock-reason-axis projection of :func:`next_tier_spec_at` and
+    lock-reason sibling of :func:`next_tier_feature_spec_at` /
+    :func:`next_tier_runtime_spec_at` -- where those return the catalog
+    row at the rung above, this returns the human-readable lock sentence
+    the paywall surface would render. Convenience for
+    ``lock_reason_at(_next_purchasable_tier_after(tier), item, kind=kind)``
+    so a paywall "what does the lock copy for THIS item look like at my
+    next rung?" tooltip hydrates off ONE round-trip without the caller
+    walking the ladder or asking the resolver.
+
+    The returned string matches :func:`lock_reason_at(target, item, kind=kind)`
+    for the resolved ``target = _next_purchasable_tier_after(tier)``
+    exactly -- a parity test pins this so the projection cannot drift
+    from the full helper.
+
+    ``kind`` follows :meth:`Entitlement.lock_reason`: ``"feature"`` /
+    ``"runtime"`` / ``"channels"`` / ``"retention_days"`` / ``"nodes"``
+    explicitly; ``None`` lets the inner method infer ``feature`` vs
+    ``runtime`` from the id (capacity axes can't be inferred, so pass
+    ``kind=`` for those).
+
+    Accepts any id in :data:`_TIER_ORDER` for ``tier`` (including
+    :data:`TIER_TRIAL`) -- the lenient ``_at`` posture, matching the
+    other ``next_*_at`` helpers.
+
+    Returns ``None`` for empty / unknown ``tier``, at the ceiling (no
+    rung strictly above -- enterprise as source), and for any item the
+    inner method considers unlockable at the resolved target (free
+    features / runtimes, empty keys, malformed capacity counts). Never
+    raises: a builder failure short-circuits to ``None`` so the CTA
+    surface stays mute instead of breaking.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        target = _next_purchasable_tier_after(src)
+        if target is None:
+            return None
+        return lock_reason_at(target, item, kind=kind)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_lock_reason_at failed: %s", exc
+        )
+        return None
+
+
+def previous_tier_lock_reason_at(
+    tier: str, item, *, kind: str | None = None
+) -> str | None:
+    """Scalar what-if sibling of :func:`lock_reason_at` projected onto the
+    rung below the caller-supplied ``tier``.
+
+    Source-anchored mirror of :func:`next_tier_lock_reason_at` and
+    downgrade-confirmation counterpart on the lock-reason axis.
+    Convenience for ``lock_reason_at(_previous_purchasable_tier_before(tier),
+    item, kind=kind)`` so a downgrade-confirmation card can ask "what
+    lock sentence would surface if I drop one rung?" without recomputing
+    the target tier client-side.
+
+    Like :func:`next_tier_lock_reason_at` the returned string matches
+    :func:`lock_reason_at(target, item, kind=kind)` for the resolved
+    ``target = _previous_purchasable_tier_before(tier)`` exactly.
+
+    Accepts any id in :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`)
+    -- the lenient ``_at`` posture.
+
+    Returns ``None`` for empty / unknown ``tier``, at the floor (``oss``
+    / ``cloud_free`` as source -- no rung strictly below), and for any
+    item the inner method considers unlockable at the resolved target.
+    Never raises.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        target = _previous_purchasable_tier_before(src)
+        if target is None:
+            return None
+        return lock_reason_at(target, item, kind=kind)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_lock_reason_at failed: %s", exc
+        )
+        return None
+
+
 def tier_spec_path(from_tier: str, to_tier: str) -> list[dict] | None:
     """Arbitrary-endpoint stepwise spec-shaped path between two tiers.
 

@@ -7028,6 +7028,314 @@ def api_entitlement_previous_tier_runtime_spec_at():
         )
 
 
+
+
+def _next_prev_lock_reason_at(direction: str):
+    """Shared handler body for ``/{next,previous}-tier-lock-reason-at``.
+
+    Mirrors the axis-parsing contract of ``/api/entitlement/lock-reason-at``
+    (exactly one of ``feature=`` / ``runtime=`` / ``channels=`` /
+    ``retention_days=`` / ``nodes=``) and the ceiling/floor envelope shape of
+    ``/next-tier-feature-spec-at`` / ``/previous-tier-feature-spec-at``
+    (``target`` / ``target_label`` / ``target_rank`` collapse to ``null``
+    at the rung edge, lock fields collapse to the grace-shape unlocked
+    row so the surface keeps rendering).
+
+    ``direction`` is ``"next"`` or ``"previous"``: picks
+    :func:`entitlements._next_purchasable_tier_after` vs
+    :func:`entitlements._previous_purchasable_tier_before` and the matching
+    log-name. Never 5xxs: synthesis failure short-circuits to the
+    grace-shape envelope with ``target=null`` so the paywall surface stays
+    mute.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    log_name = f"api_entitlement_{direction}_tier_lock_reason_at"
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        feature = (request.args.get("feature") or "").strip().lower()
+        runtime_in = (request.args.get("runtime") or "").strip().lower()
+        (
+            channels_present,
+            channels_ok,
+            channels_n,
+            channels_raw,
+        ) = _parse_capacity_arg("channels")
+        (
+            retention_present,
+            retention_ok,
+            retention_n,
+            retention_raw,
+        ) = _parse_capacity_arg("retention_days")
+        (
+            nodes_present,
+            nodes_ok,
+            nodes_n,
+            nodes_raw,
+        ) = _parse_capacity_arg("nodes")
+
+        supplied = [
+            bool(feature),
+            bool(runtime_in),
+            channels_present,
+            retention_present,
+            nodes_present,
+        ]
+        n_supplied = sum(1 for s in supplied if s)
+        if n_supplied == 0:
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply exactly one of feature=<id>, runtime=<id>, "
+                            "channels=<int>, retention_days=<int>, or "
+                            "nodes=<int>"
+                        )
+                    }
+                ),
+                400,
+            )
+        if n_supplied > 1:
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply only one of feature=, runtime=, channels=, "
+                            "retention_days=, or nodes="
+                        )
+                    }
+                ),
+                400,
+            )
+
+        if direction == "next":
+            target = _ent._next_purchasable_tier_after(tier_in)
+            walk = _ent.next_tier_lock_reason_at
+        else:
+            target = _ent._previous_purchasable_tier_before(tier_in)
+            walk = _ent.previous_tier_lock_reason_at
+
+        if feature:
+            key, kind = feature, "feature"
+            required = _ent.min_tier_for_feature(feature)
+            reason = walk(tier_in, feature, kind=kind) if target else None
+            allowed = reason is None
+        elif runtime_in:
+            rt = _ent.canonical_runtime(runtime_in)
+            key, kind = rt or runtime_in, "runtime"
+            required = _ent.min_tier_for_runtime(rt) if rt else None
+            reason = (
+                walk(tier_in, rt or runtime_in, kind=kind) if target else None
+            )
+            allowed = reason is None
+        elif channels_present:
+            key, kind = channels_raw, "channels"
+            if channels_ok and target:
+                required = _ent.min_tier_for_channel_count(channels_n)
+                reason = walk(tier_in, str(channels_n), kind=kind)
+                allowed = reason is None
+            else:
+                required = (
+                    _ent.min_tier_for_channel_count(channels_n)
+                    if channels_ok
+                    else None
+                )
+                reason = None
+                allowed = True
+        elif retention_present:
+            key, kind = retention_raw, "retention_days"
+            if retention_ok and target:
+                required = _ent.min_tier_for_retention_window(retention_n)
+                reason = walk(tier_in, str(retention_n), kind=kind)
+                allowed = reason is None
+            else:
+                required = (
+                    _ent.min_tier_for_retention_window(retention_n)
+                    if retention_ok
+                    else None
+                )
+                reason = None
+                allowed = True
+        else:
+            key, kind = nodes_raw, "nodes"
+            if nodes_ok and target:
+                required = _ent.min_tier_for_node_count(nodes_n)
+                reason = walk(tier_in, str(nodes_n), kind=kind)
+                allowed = reason is None
+            else:
+                required = (
+                    _ent.min_tier_for_node_count(nodes_n)
+                    if nodes_ok
+                    else None
+                )
+                reason = None
+                allowed = True
+
+        cur_rank = _ent.tier_rank(tier_in)
+        req_rank = _ent.tier_rank(required) if required else -1
+        required_label = _ent.tier_label(required) if required else None
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": _ent.tier_label(tier_in),
+                "tier_rank": cur_rank,
+                "key": key,
+                "kind": kind,
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": (
+                    _ent.tier_rank(target) if target else None
+                ),
+                "reason": reason,
+                "locked": reason is not None,
+                "allowed": allowed,
+                "required_tier": required,
+                "required_tier_label": required_label,
+                "required_tier_rank": req_rank,
+                "upgrade_required": bool(required) and req_rank > cur_rank,
+            }
+        )
+    except Exception as exc:
+        logger.warning("%s: error: %s", log_name, exc)
+        feature = (request.args.get("feature") or "").strip().lower()
+        runtime_in = (request.args.get("runtime") or "").strip().lower()
+        channels_raw = (request.args.get("channels") or "").strip()
+        retention_raw = (request.args.get("retention_days") or "").strip()
+        nodes_raw = (request.args.get("nodes") or "").strip()
+        if feature:
+            key, kind = feature, "feature"
+        elif runtime_in:
+            key, kind = runtime_in, "runtime"
+        elif channels_raw:
+            key, kind = channels_raw, "channels"
+        elif retention_raw:
+            key, kind = retention_raw, "retention_days"
+        elif nodes_raw:
+            key, kind = nodes_raw, "nodes"
+        else:
+            key, kind = "", ""
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": None,
+                "tier_rank": -1,
+                "key": key,
+                "kind": kind,
+                "target": None,
+                "target_label": None,
+                "target_rank": None,
+                "reason": None,
+                "locked": False,
+                "allowed": True,
+                "required_tier": None,
+                "required_tier_label": None,
+                "required_tier_rank": -1,
+                "upgrade_required": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-lock-reason-at")
+def api_entitlement_next_tier_lock_reason_at():
+    """``GET /api/entitlement/next-tier-lock-reason-at?tier=<source>&<axis>=<id>``
+    -- scalar what-if sibling of ``/api/entitlement/lock-reason-at``
+    projected onto the rung above the caller-supplied ``tier``.
+
+    Lock-reason-axis projection of ``/next-tier-spec-at`` and lock-reason
+    sibling of ``/next-tier-feature-spec-at`` / ``/next-tier-runtime-spec-at``
+    -- where those return the catalog row at the rung above, this returns
+    the lock sentence the paywall surface would render there. Lets a
+    paywall "what's the lock copy for THIS item at my next rung?"
+    tooltip hydrate off ONE round-trip without the caller computing the
+    target tier.
+
+    Exactly one of ``feature=`` / ``runtime=`` / ``channels=`` /
+    ``retention_days=`` / ``nodes=`` must be supplied. Response shape::
+
+        {
+          "tier":                 "<source tier id>",
+          "tier_label":           "<source label>",
+          "tier_rank":            <source rank>,
+          "key":                  "<id-as-passed>",
+          "kind":                 "feature|runtime|channels|retention_days|nodes",
+          "target":               "<next-above tier id>" | null,
+          "target_label":         "<next-above label>" | null,
+          "target_rank":          <next-above rank> | null,
+          "reason":               "<lock sentence>" | null,
+          "locked":               <bool>,
+          "allowed":              <bool>,
+          "required_tier":        "<min purchasable tier>" | null,
+          "required_tier_label":  "<label>" | null,
+          "required_tier_rank":   <rank>,
+          "upgrade_required":     <bool>,
+        }
+
+    The ``reason`` field matches
+    ``/lock-reason-at?tier=<target>&<axis>=<id>`` byte-for-byte when
+    ``target`` is populated -- a parity test pins this so the projection
+    cannot drift from the full ``/lock-reason-at`` sibling.
+
+    Accepts any tier id in :data:`entitlements._TIER_ORDER` (including
+    ``trial``). ``target`` / ``reason`` collapse to ``null`` (with
+    ``locked=false`` / ``allowed=true``) at the ceiling -- the surface
+    stays 200 with a populated envelope so callers can render "you're at
+    the top" copy without a status-code branch.
+
+    - **400** when ``tier=`` is missing / blank, when no axis is
+      supplied, or when more than one axis is supplied
+    - **404** when ``tier`` is unknown (body carries ``which: "tier"``)
+    - **Never 5xxs**: builder failure short-circuits to the grace-shape
+      envelope with ``target=null`` so the paywall surface stays mute.
+    """
+    return _next_prev_lock_reason_at("next")
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-lock-reason-at")
+def api_entitlement_previous_tier_lock_reason_at():
+    """``GET /api/entitlement/previous-tier-lock-reason-at?tier=<source>&<axis>=<id>``
+    -- scalar what-if sibling of ``/api/entitlement/lock-reason-at``
+    projected onto the rung below the caller-supplied ``tier``.
+
+    Source-anchored mirror of ``/next-tier-lock-reason-at`` and
+    downgrade-confirmation counterpart on the lock-reason axis. Lets a
+    downgrade-confirmation card render "what lock sentence would surface
+    for THIS item if I drop one rung?" without recomputing the target
+    tier.
+
+    Response shape matches ``/next-tier-lock-reason-at`` byte-for-byte
+    (``tier``, ``tier_label``, ``tier_rank``, ``key``, ``kind``,
+    ``target``, ``target_label``, ``target_rank``, ``reason``,
+    ``locked``, ``allowed``, ``required_tier``, ``required_tier_label``,
+    ``required_tier_rank``, ``upgrade_required``). The ``reason`` field
+    matches ``/lock-reason-at?tier=<target>&<axis>=<id>`` byte-for-byte
+    when ``target`` is populated.
+
+    Accepts any tier id in :data:`entitlements._TIER_ORDER` (including
+    ``trial``). ``target`` / ``reason`` collapse to ``null`` (with
+    ``locked=false`` / ``allowed=true``) at the floor (``oss`` /
+    ``cloud_free`` as source).
+
+    - **400** when ``tier=`` is missing / blank, when no axis is
+      supplied, or when more than one axis is supplied
+    - **404** when ``tier`` is unknown (body carries ``which: "tier"``)
+    - **Never 5xxs**: builder failure short-circuits to the grace-shape
+      envelope with ``target=null``.
+    """
+    return _next_prev_lock_reason_at("previous")
+
+
+
+
 @bp_entitlement.route("/api/entitlement/tier-spec-path-batch")
 def api_entitlement_tier_spec_path_batch():
     """``GET /api/entitlement/tier-spec-path-batch?from=<id>&to=a,b,c``
