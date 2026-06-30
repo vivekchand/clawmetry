@@ -105,3 +105,43 @@ def test_empty_enter_defaults_to_local(onboard_env, monkeypatch):
     cli._cmd_onboard(_args())
     assert state["instant_register"] == 0
     assert marker.exists()
+
+
+# ── `clawmetry onboard` always shows the options (founder ask 2026-06-30) ────
+
+def _make_connected(home):
+    """Write a config that looks already-connected (has an api_key)."""
+    import json
+    (home / ".clawmetry").mkdir(parents=True, exist_ok=True)
+    (home / ".clawmetry" / "config.json").write_text(
+        json.dumps({"api_key": "cm_existing", "node_id": "n1"}))
+
+
+def test_already_connected_empty_enter_keeps_current(onboard_env, monkeypatch, tmp_path):
+    state, marker = onboard_env
+    _make_connected(tmp_path / "home")
+    # Empty Enter while already connected -> keep current, change nothing.
+    monkeypatch.setattr("builtins.input", lambda _p="": "")
+    cli._cmd_onboard(_args())
+    assert state["instant_register"] == 0
+    assert state["start_daemon"] == 0
+    assert not marker.exists(), "must NOT switch a connected user to local on empty Enter"
+
+
+def test_already_connected_shows_options_and_choice_1_goes_local(onboard_env, monkeypatch, tmp_path, capsys):
+    state, marker = onboard_env
+    _make_connected(tmp_path / "home")
+    monkeypatch.setattr("builtins.input", lambda _p="": "1")
+    cli._cmd_onboard(_args())
+    out = capsys.readouterr().out
+    assert "[1] Local only" in out and "[2] Cloud" in out and "[3] License key" in out
+    assert marker.exists(), "explicit [1] reconfigures a connected user to local"
+
+
+def test_already_connected_choice_2_reaches_cloud(onboard_env, monkeypatch, tmp_path):
+    state, _marker = onboard_env
+    _make_connected(tmp_path / "home")
+    answers = iter(["2", "n"])  # [2] Cloud, then "no existing account" -> instant register
+    monkeypatch.setattr("builtins.input", lambda _p="": next(answers))
+    cli._cmd_onboard(_args())
+    assert state["instant_register"] == 1

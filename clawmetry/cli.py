@@ -2137,11 +2137,14 @@ def _cmd_onboard(args) -> None:
     if _os.environ.get("CLAWMETRY_API_KEY") or _os.environ.get("CLAWMETRY_NODE_ID"):
         already_connected = True
 
+    # NOTE: we no longer early-return when already connected. `clawmetry onboard`
+    # is the setup wizard, so it ALWAYS shows the [1]/[2]/[3] options and lets the
+    # user switch how ClawMetry runs (e.g. cloud -> local, or add a license). When
+    # already connected, an empty Enter keeps the current setup (handled in the
+    # choice logic below) so re-running never silently changes anything.
     if already_connected:
-        print(f"\n  {GREEN(BOLD('Already connected to ClawMetry Cloud'))}")
-        _maybe_apply_nemoclaw_preset(_input, BOLD, CYAN, DIM)
-        print(f"  {DIM('Run  clawmetry status  to check sync health.')}\n")
-        return
+        print(f"\n  {GREEN(BOLD('Already connected to ClawMetry.'))}")
+        print(f"  {DIM('Pick an option below to change how ClawMetry runs, or press Enter to keep your current setup.')}")
 
     # Get version for banner
     try:
@@ -2151,7 +2154,8 @@ def _cmd_onboard(args) -> None:
         _ver = ""
     _ver_str = f" {_ver}" if _ver else ""
 
-    print(f"\n  {BOLD(f'ClawMetry{_ver_str} installed!')}")
+    if not already_connected:
+        print(f"\n  {BOLD(f'ClawMetry{_ver_str} installed!')}")
     print()
     print(f"  {BOLD('How do you want to run ClawMetry?')}")
     print()
@@ -2216,11 +2220,21 @@ def _cmd_onboard(args) -> None:
     elif getattr(args, "cloud", False):
         choice = "2"
     else:
+        # When already connected, the default on an empty Enter is "keep current
+        # setup" (return without changes) so re-running onboard never silently
+        # switches a connected user to local. A fresh install defaults to [1].
+        _prompt = ("  Choose an option, or press Enter to keep your current setup: "
+                   if already_connected else "  Choose [1]: ")
         try:
-            choice = _input("  Choose [1]: ").strip() or "1"
+            choice = _input(_prompt).strip()
         except (EOFError, KeyboardInterrupt):
-            choice = "1"
+            choice = ""
             print()
+        if not choice:
+            if already_connected:
+                print(f"\n  {DIM('Keeping your current setup. Run  clawmetry status  to check sync health.')}\n")
+                return
+            choice = "1"
 
     print()
 
