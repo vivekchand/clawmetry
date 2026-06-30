@@ -3544,3 +3544,55 @@ def api_security_threats_history():
             rows = []
 
     return jsonify({"threats": rows or [], "total": len(rows or [])})
+
+
+@bp_health.route("/api/audit-log")
+def api_audit_log():
+    """Return operator audit-log entries from DuckDB (#3306).
+
+    Records human actions (approve, deny, kill_session, config_change, etc.)
+    written via ``ingest_audit_log_entry``. Auth / RBAC enforcement is
+    cloud-side; this endpoint is the OSS read surface.
+
+    Query params:
+      actor      — filter by actor identity
+      action     — filter by action type
+      session_id — narrow to one session
+      since      — ISO timestamp lower bound
+      limit      — max rows (default 200)
+    """
+    actor = (request.args.get("actor") or "").strip() or None
+    action = (request.args.get("action") or "").strip() or None
+    session_id = (request.args.get("session_id") or "").strip() or None
+    since = (request.args.get("since") or "").strip() or None
+    try:
+        limit = max(1, min(1000, int(request.args.get("limit", 200))))
+    except (TypeError, ValueError):
+        limit = 200
+
+    rows = None
+    if is_local_store_read_enabled():
+        try:
+            from routes.local_query import local_store_via_daemon
+            rows = local_store_via_daemon(
+                "query_audit_log",
+                actor=actor,
+                action=action,
+                session_id=session_id,
+                since=since,
+                limit=limit,
+            )
+        except Exception:
+            rows = None
+
+    if rows is None:
+        try:
+            from clawmetry import local_store as _ls
+            rows = _ls.get_store().query_audit_log(
+                actor=actor, action=action, session_id=session_id,
+                since=since, limit=limit,
+            )
+        except Exception:
+            rows = []
+
+    return jsonify({"entries": rows or [], "total": len(rows or [])})

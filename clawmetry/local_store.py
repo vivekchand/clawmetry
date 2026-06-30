@@ -637,6 +637,25 @@ _DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_security_events_ts      ON security_events(ts)",
     "CREATE INDEX IF NOT EXISTS idx_security_events_session ON security_events(session_id, ts)",
+    # Issue #3306 — operator audit log. Persistent record of human actions
+    # (approve, deny, kill_session, config_change, etc.) for the OSS data layer
+    # that the cloud relay reads. Auth / RBAC enforcement is cloud-side; this
+    # table is the append-only source-of-truth for the local operator trail.
+    # Idempotent (CREATE TABLE IF NOT EXISTS).
+    """
+    CREATE TABLE IF NOT EXISTS audit_log (
+        id         VARCHAR PRIMARY KEY,
+        ts         VARCHAR NOT NULL,
+        actor      VARCHAR,
+        action     VARCHAR NOT NULL,
+        target     VARCHAR,
+        session_id VARCHAR,
+        result     VARCHAR
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_audit_log_ts     ON audit_log(ts)",
+    "CREATE INDEX IF NOT EXISTS idx_audit_log_actor  ON audit_log(actor, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action, ts)",
     # Issue #2201 — asset registry. Evidence + review layer that turns
     # individual agent discoveries (Self-Evolve findings, useful prompts,
     # improved skills) into reviewable, reusable assets without auto-promoting
@@ -7466,6 +7485,68 @@ class LocalStore:
         """
         params.append(int(limit))
         cols = ["id", "ts", "type", "severity", "session_id", "rule_id", "description", "snippet"]
+        return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
+
+    # ------------------------------------------------------------------
+    # Audit log (#3306) — persistent operator action trail
+    # ------------------------------------------------------------------
+
+    def ingest_audit_log_entry(self, entry: dict[str, Any]) -> None:
+        """Upsert one audit-log entry. Required: ``id``, ``action``."""
+        eid = entry.get("id")
+        if not eid:
+            raise ValueError("audit log entry must include 'id'")
+        ts = entry.get("ts") or datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO audit_log (id, ts, actor, action, target, session_id, result)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET
+                    result = COALESCE(excluded.result, audit_log.result)
+            """, [
+                str(eid),
+                ts,
+                entry.get("actor"),
+                entry.get("action", ""),
+                entry.get("target"),
+                entry.get("session_id"),
+                entry.get("result"),
+            ])
+
+    def query_audit_log(
+        self,
+        *,
+        actor: str | None = None,
+        action: str | None = None,
+        session_id: str | None = None,
+        since: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Read audit-log entries, most-recent first."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if actor:
+            clauses.append("actor = ?")
+            params.append(actor)
+        if action:
+            clauses.append("action = ?")
+            params.append(action)
+        if session_id:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        if since:
+            clauses.append("ts >= ?")
+            params.append(since)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT id, ts, actor, action, target, session_id, result
+            FROM audit_log
+            {where}
+            ORDER BY ts DESC, id
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["id", "ts", "actor", "action", "target", "session_id", "result"]
         return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
 
     def query_nemoclaw_metrics(
