@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Fix: paid runtimes now sync as soon as you upgrade to Trial or Pro (2026-06-30)
+- **After upgrading from Free to a Trial or Pro plan, paid runtimes like Claude Code could keep showing "NOT syncing" and `clawmetry status` could still say "FREE plan" (#3414).** The plan a node knows about was only refreshed by the background daemon on a heartbeat, so if the daemon was down or had not checked in since you upgraded, the local copy stayed stale. Now `clawmetry status` reads your live plan from your account and updates the local copy on the spot, and the daemon re-checks your plan on every heartbeat, so paid runtimes start syncing right after you upgrade, with no restart needed.
+
 ### Change: `clawmetry onboard` always shows the run options now (2026-06-30)
 - **Re-running the setup wizard always shows the Local / Cloud / License key options, even if you are already connected (#3410).** It used to say "Already connected" and skip the menu, so you could not re-run it to switch how ClawMetry runs. Now you can switch any time. If you are already connected and just press Enter, it keeps your current setup and changes nothing, so re-running is always safe.
 
