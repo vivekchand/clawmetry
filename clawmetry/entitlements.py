@@ -1,1 +1,1 @@
-PLACEHOLDER_ENTITLEMENTS
+{{READ_FILE:/tmp/claude-0/-home-user/a72a18f6-dcb1-5784-903a-2bd853d7179b/scratchpad/merged_entitlements.py}}
