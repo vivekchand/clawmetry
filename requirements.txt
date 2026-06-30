@@ -3,7 +3,7 @@ duckdb>=1.5.4  # local event store (epic #964 phase 1)
 
 # Testing dependencies
 pytest>=9.1.1
-pytest-playwright>=0.7.1
+pytest-playwright>=0.8.0
 requests>=2.34.2
 
 # Optional: enables real-time OTLP metrics from OpenClaw
