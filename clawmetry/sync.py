@@ -1209,6 +1209,24 @@ def _persist_cloud_plan_to_disk(plan: str | None, trial_days_left=None) -> None:
     tier = _HEARTBEAT_PLAN_TO_TIER.get(str(plan or "").strip().lower())
     # Entitled plan → keep this node current automatically (opt-out + 48h rail).
     _sync_auto_update_with_plan(tier)
+    # Idempotent reconcile: this is now called on EVERY heartbeat (not just on a
+    # plan change), so short-circuit when the on-disk cache already reflects this
+    # tier. We compare only the ``plan`` field (the entitlement-relevant part) so
+    # the trial ``expiry`` countdown doesn't churn a write + entitlement
+    # invalidation every cycle. Only an actual tier transition re-writes + flips
+    # the resolver, so paid runtimes start syncing the moment the plan upgrades.
+    try:
+        _existing_plan = None
+        if os.path.isfile(_CLOUD_PLAN_CACHE_PATH):
+            with open(_CLOUD_PLAN_CACHE_PATH, encoding="utf-8") as _fh:
+                _existing_plan = (json.load(_fh) or {}).get("plan")
+        if tier is None:
+            if _existing_plan is None and not os.path.isfile(_CLOUD_PLAN_CACHE_PATH):
+                return  # already absent; nothing to reconcile
+        elif _existing_plan == tier:
+            return  # cache already matches the live tier; no write, no invalidate
+    except Exception:
+        pass  # any read trouble -> fall through and (re)write below
     try:
         if tier is None:
             if os.path.isfile(_CLOUD_PLAN_CACHE_PATH):
@@ -1252,7 +1270,13 @@ def _update_trial_state(resp: dict) -> None:
         _TRIAL_STATE["trial_days_left"] = resp.get("trial_days_left")
     if resp.get("upgrade_url"):
         _TRIAL_STATE["upgrade_url"] = resp["upgrade_url"]
-    if _TRIAL_STATE.get("plan") != prev_plan or _TRIAL_STATE.get("trial_days_left") != prev_days:
+    # Reconcile the on-disk plan cache on EVERY heartbeat (the founder ask:
+    # "check & start sync at every heartbeat, for which plan it is in"). The
+    # call is idempotent (a no-op when the cache already matches the live tier),
+    # so this is cheap, but it self-heals a cache that drifted for any reason
+    # (deleted file, a daemon that started while free then the plan upgraded,
+    # etc.) and flips paid runtimes on the moment the plan becomes entitled.
+    if "plan" in resp or "trial_days_left" in resp:
         _persist_cloud_plan_to_disk(
             _TRIAL_STATE.get("plan"), _TRIAL_STATE.get("trial_days_left")
         )

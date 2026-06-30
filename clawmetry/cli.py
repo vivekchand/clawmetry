@@ -1733,6 +1733,21 @@ def _cmd_status(args) -> None:
             print("  Cloud sync:  ✅  Connected")
             print(f"  API key:     {masked_api}")
             _acct_email, _acct_plan = _resolve_account_email(api_key)
+            # Self-heal the local plan cache from the LIVE account. The runtime
+            # entitlement gate below (and the daemon + dashboard) read
+            # ~/.clawmetry/cloud_plan.json, which only the daemon refreshes on a
+            # heartbeat. If the daemon is down, or hasn't heartbeated since the
+            # user upgraded (free -> trial/pro), that cache is stale and status
+            # contradicts itself ("trial" in the header, "FREE plan" in the gate).
+            # Mirroring the live plan here makes the gate reflect the real plan
+            # immediately and seeds the entitlement resolver so paid runtimes
+            # flip on without waiting for the daemon. Best-effort; never raises.
+            if _acct_plan:
+                try:
+                    from clawmetry.sync import _persist_cloud_plan_to_disk as _pcp
+                    _pcp(_acct_plan)
+                except Exception:
+                    pass
             if _acct_email:
                 _plan_suffix = f"  ({_acct_plan})" if _acct_plan else ""
                 _acct_note = "  ⚠ temporary, not linked" if _is_placeholder_account(_acct_email) else ""
