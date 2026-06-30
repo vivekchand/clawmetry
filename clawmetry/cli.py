@@ -283,20 +283,78 @@ def _stop_existing_daemon() -> None:
         LOG_FILE.write_text("")
 
 
-def _oauth_browser_login(provider: str) -> str:
-    """Browser-bridge OAuth for `clawmetry connect`.
+def _is_headless() -> bool:
+    """True when webbrowser.open() almost certainly can't reach a GUI on THIS host.
 
-    Spins up a one-shot loopback server on 127.0.0.1, opens the cloud OAuth flow
-    with cli_port=<our port>, and captures the cm_ key that the callback redirects
-    back to loopback. Returns "" on timeout/error so the caller falls back to email
-    OTP. The key only ever travels over 127.0.0.1 — nothing is exposed off-host.
+    Used only to ORDER the auth flows, never as a hard gate: the headless path is
+    an interactive paste prompt (not a timed wait), so a wrong guess can never
+    hang the CLI. macOS/Windows always have a usable browser. On Linux, no
+    DISPLAY/WAYLAND or an SSH session means the browser would open on a DIFFERENT
+    machine (the loopback callback can't reach this box). CLAWMETRY_NO_BROWSER=1
+    forces it (for users who know their box, and for the live test).
+    """
+    if os.environ.get("CLAWMETRY_NO_BROWSER") == "1":
+        return True
+    if sys.platform in ("darwin", "win32"):
+        return False
+    no_display = not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY")
+    ssh = bool(os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY") or os.environ.get("SSH_CLIENT"))
+    return no_display or ssh
+
+
+def _oauth_browser_login(provider: str, input_fn=input, api_call=None) -> str:
+    """OAuth sign-in for `clawmetry connect` (GitHub / Google).
+
+    Desktop: a one-shot 127.0.0.1 loopback server captures the cm_ key the cloud
+    callback redirects back (the key never leaves 127.0.0.1). Headless/remote
+    (SSH/VPS, no GUI): the loopback can't be reached by a browser on another
+    machine, so we use a Claude-Code-style paste-code path instead. The CLI
+    generates a PKCE verifier (kept in memory; only its SHA256 challenge leaves
+    the process), the cloud shows a short single-use code, the user pastes it,
+    and the CLI redeems code+verifier at /api/oauth/cli/exchange over INGEST_URL.
+    Returns "" on timeout/skip/error so the caller falls back to email OTP.
     """
     import http.server
     import urllib.parse
     import webbrowser
     import time as _time
+    import secrets as _secrets
+    import hashlib as _hashlib
+    import base64 as _base64
 
     app_base = os.environ.get("CLAWMETRY_APP_BASE", "https://app.clawmetry.com").rstrip("/")
+
+    # PKCE: the verifier stays in CLI memory only; only its SHA256 (the
+    # challenge) ever leaves this process, in the start URL.
+    verifier = _base64.urlsafe_b64encode(_secrets.token_bytes(32)).rstrip(b"=").decode()
+    challenge = _base64.urlsafe_b64encode(
+        _hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+
+    def _paste_path() -> str:
+        """Headless paste-code path. No loopback; redeem over INGEST_URL."""
+        url = f"{app_base}/api/oauth/{provider}/start?cli_paste=1&cc={challenge}"
+        print(f"\n  Browser didn't open? Use the url below to sign in with {provider.title()}:\n  {url}\n")
+        try:
+            webbrowser.open(url)  # best-effort; no-ops on a headless box
+        except Exception:
+            pass
+        code = input_fn("  Paste code here if prompted > ").strip()
+        if not code or api_call is None:
+            return ""
+        resp = api_call("/api/oauth/cli/exchange", {"code": code, "verifier": verifier})
+        if isinstance(resp, dict) and str(resp.get("api_key", "")).startswith("cm_"):
+            print("  Account created. Welcome to ClawMetry." if resp.get("is_new")
+                  else "  Welcome back.")
+            return resp["api_key"]
+        err = (resp or {}).get("error", "that code did not work") if isinstance(resp, dict) else "network error"
+        print(f"  Sign-in could not be completed ({err}).")
+        return ""
+
+    # Headless/remote: skip loopback entirely and use the interactive paste path.
+    if _is_headless():
+        return _paste_path()
+
+    # Desktop: one-shot loopback fast-path.
     captured = {}
 
     class _Handler(http.server.BaseHTTPRequestHandler):
@@ -304,7 +362,7 @@ def _oauth_browser_login(provider: str) -> str:
             params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             captured["token"] = (params.get("token") or [""])[0]
             ok = captured["token"].startswith("cm_")
-            msg = ("You're connected — return to your terminal."
+            msg = ("You're connected. Return to your terminal."
                    if ok else "Sign-in failed. Return to your terminal and use email instead.")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -323,11 +381,12 @@ def _oauth_browser_login(provider: str) -> str:
     try:
         srv = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
     except OSError:
-        return ""
+        # Can't bind loopback -> fall through to the paste path rather than fail.
+        return _paste_path()
     port = srv.server_address[1]
     url = f"{app_base}/api/oauth/{provider}/start?cli_port={port}"
-    print(f"\n  🌐 Opening your browser to sign in with {provider.title()}…")
-    print(f"  If it doesn't open, paste this into your browser:\n  {url}\n")
+    print(f"\n  Opening your browser to sign in with {provider.title()}.")
+    print(f"  Browser didn't open? Use the url below to sign in:\n  {url}\n")
     try:
         webbrowser.open(url)
     except Exception:
@@ -379,14 +438,17 @@ def _get_api_key_interactive() -> str:
 
     print()
     print("  Sign in with:")
-    print("    [1] GitHub      [2] Google      (opens your browser)")
+    print("    [1] GitHub      [2] Google")
     print("    …or type your email to get a 6-digit code.")
     entry = _input("  > ").strip()
 
-    # Browser-bridge OAuth (GitHub / Google). Falls back to email on failure.
+    # OAuth (GitHub / Google). Desktop uses a loopback browser hand-off; a
+    # headless/remote box (SSH/VPS) uses a paste-code path. Falls back to email
+    # on failure. _input is /dev/tty-aware (piped installs) and _api_call talks
+    # to INGEST_URL, both required by the headless exchange.
     _provider = {"1": "github", "github": "github", "2": "google", "google": "google"}.get(entry.lower())
     if _provider:
-        _key = _oauth_browser_login(_provider)
+        _key = _oauth_browser_login(_provider, input_fn=_input, api_call=_api_call)
         if _key:
             return _key
         print("  Couldn't complete browser sign-in. Let's use email instead.")
