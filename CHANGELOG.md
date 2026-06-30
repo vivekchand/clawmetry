@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Change: `clawmetry onboard` always shows the run options now (2026-06-30)
+- **Re-running the setup wizard always shows the Local / Cloud / License key options, even if you are already connected (#3410).** It used to say "Already connected" and skip the menu, so you could not re-run it to switch how ClawMetry runs. Now you can switch any time. If you are already connected and just press Enter, it keeps your current setup and changes nothing, so re-running is always safe.
+
 ### Fix: Google and GitHub sign-in now works on a remote or headless server (2026-06-30)
 - **`clawmetry connect` with Google or GitHub used to hang on a machine with no local browser, like a VPS you reach over SSH (#3407).** The old flow waited for the browser to redirect back to the machine running the CLI, which never happens when the browser is on your laptop and the CLI is on a remote box. ClawMetry now detects a headless or remote box and switches to a paste-code sign-in (the same style as the Claude Code CLI): it prints a sign-in link, you open it on any device, and after you approve it shows a short one-time code that you paste back into the terminal. Desktop sign-in is unchanged, and email one-time codes still work as before. Force the paste flow anywhere with `CLAWMETRY_NO_BROWSER=1`.
 
