@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Fix: Google and GitHub sign-in now works on a remote or headless server (2026-06-30)
+- **`clawmetry connect` with Google or GitHub used to hang on a machine with no local browser, like a VPS you reach over SSH (#3407).** The old flow waited for the browser to redirect back to the machine running the CLI, which never happens when the browser is on your laptop and the CLI is on a remote box. ClawMetry now detects a headless or remote box and switches to a paste-code sign-in (the same style as the Claude Code CLI): it prints a sign-in link, you open it on any device, and after you approve it shows a short one-time code that you paste back into the terminal. Desktop sign-in is unchanged, and email one-time codes still work as before. Force the paste flow anywhere with `CLAWMETRY_NO_BROWSER=1`.
+
 ### Fix: the Brain feed no longer shows the same message two or three times (2026-06-29)
 - **One assistant turn was rendering as duplicate rows in the Brain "Live event stream" (#3383).** A single OpenClaw turn lands as an `assistant` row plus one or two `model.completed` siblings a second or two apart (one a zero-token `delivery-mirror` echo), all carrying the same text. Because their timestamps and ids differ, the existing exact-match dedupe missed them, so the same paragraph appeared two or three times in the feed. The Brain feed now collapses these siblings to the single richest row per session and message (within a short time window), so each turn shows once. A genuine repeat of the same text in a later turn, a different session, and short repeated phrases are all left untouched. Verified on live data: a paragraph that showed three times now shows once, with 14 duplicate rows removed from a 110-event feed.
 
