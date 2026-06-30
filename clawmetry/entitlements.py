@@ -7314,3 +7314,180 @@ def runtime_spec_path_batch(
         seen.add(canon)
         rows.append({"runtime": canon, "path": path})
     return {"runtimes": rows, "unknown": unknown}
+
+
+def lock_reason_path_batch(
+    from_tier: str,
+    to_tier: str,
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict | None:
+    """Multi-axis batch sibling of :func:`lock_reason_path`: per-item
+    stepwise lock-row paths between two tiers across all 5 axes in ONE
+    round-trip.
+
+    Pairs with :func:`lock_reason_path` the same way
+    :func:`lock_reasons_at_batch` pairs with :func:`lock_reason_at`:
+    scalar what-if -> matrix what-if. Lets a paywall comparison surface
+    ("here are the 6 features + 2 runtimes + my channel count + my
+    retention window, walk each one from OSS to Enterprise") render the
+    full matrix off ONE call instead of N calls to
+    :func:`lock_reason_path` per item.
+
+    Composes :func:`lock_reason_path` (scalar single-item path) and
+    :func:`lock_reasons_at_batch` (matrix what-if scalar) -- same rung
+    walk as the scalar path helper, same multi-axis envelope as the
+    matrix what-if helper. The two top-level capacity axes
+    (``channels`` / ``retention_days`` / ``nodes``) are *single-item*
+    just like :func:`lock_reasons_at_batch`, since each is a single
+    integer rather than a CSV.
+
+    Shape (mirrors :func:`lock_reasons_at_batch` plus per-row paths)::
+
+        {
+          "features": [{"key": "<id>", "path": [<augmented row>, ...]}, ...],
+          "runtimes": [{"key": "<canonical id>", "path": [...]}, ...],
+          "channels":       {"key": "<n>", "path": [...]} | None,
+          "retention_days": {"key": "<n>", "path": [...]} | None,
+          "nodes":          {"key": "<n>", "path": [...]} | None,
+          "unknown": {"features": [...], "runtimes": [...]},
+        }
+
+    Each ``path`` row is byte-identical to a row from
+    :func:`lock_reason_path` for the same ``(from, to, item, kind)``
+    tuple -- a parity test pins this so the scalar and batch path
+    helpers cannot drift. Rungs walked are item-agnostic (matches
+    :func:`feature_spec_path_batch` / :func:`runtime_spec_path_batch`),
+    so every per-item ``path`` has the same length and rung sequence.
+
+    Supplied feature/runtime ids are normalised via
+    :func:`_normalise_csv` (whitespace stripped, lowercased, duplicates
+    dropped, first-seen order preserved). Runtime aliases are
+    canonicalised via :func:`canonical_runtime` (``claude-code`` ->
+    ``claude_code``); aliases that collapse to a canonical id already
+    in the response are silently de-duplicated -- same behaviour as
+    :func:`runtime_spec_path_batch`. Unknown ids are echoed in
+    ``unknown.features`` / ``unknown.runtimes`` instead of
+    short-circuiting -- a partially-bad caller still gets paths back
+    for the valid ids alongside a list of what was dropped, matching
+    :func:`feature_spec_path_batch`'s posture.
+
+    Capacity axes use ``None`` as the "axis not supplied" sentinel:
+    ``retention_days=None`` here means *unset*, NOT *unlimited* --
+    matches :func:`lock_reasons_at_batch`. A non-positive / non-int
+    capacity value yields a ``None`` axis row (the scalar
+    :func:`lock_reason_path` short-circuits in that case).
+
+    Returns ``None`` for empty / unknown ``from_tier`` / ``to_tier``
+    (caller renders 404). Identity ``from == to`` yields a payload with
+    one entry per supplied id whose ``path`` is ``[]``, matching the
+    singular helper's identity branch.
+
+    Resolver-independent: delegates per-item to
+    :func:`lock_reason_path`, which synthesises a fresh
+    :class:`Entitlement` per rung with ``grace=False`` -- so grace vs
+    enforce yields byte-identical rows. Never raises: per-item failures
+    short-circuit that item into ``unknown[]`` and the rest of the
+    batch keeps building.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+        return None
+
+    feats = _normalise_csv(features)
+    rts = _normalise_csv(runtimes)
+
+    feature_rows: list[dict] = []
+    runtime_rows: list[dict] = []
+    unknown_features: list[str] = []
+    unknown_runtimes: list[str] = []
+    seen_runtimes: set[str] = set()
+
+    for fid in feats:
+        if fid not in ALL_FEATURES:
+            unknown_features.append(fid)
+            continue
+        try:
+            path = lock_reason_path(f, t, fid, kind="feature")
+        except Exception as exc:
+            logger.warning(
+                "entitlements: lock_reason_path_batch feature %r failed: %s",
+                fid,
+                exc,
+            )
+            unknown_features.append(fid)
+            continue
+        if path is None:
+            unknown_features.append(fid)
+            continue
+        feature_rows.append({"key": fid, "path": path})
+
+    for raw in rts:
+        canon = canonical_runtime(raw)
+        if not canon or canon not in ALL_RUNTIMES:
+            unknown_runtimes.append(raw)
+            continue
+        if canon in seen_runtimes:
+            continue
+        try:
+            path = lock_reason_path(f, t, raw, kind="runtime")
+        except Exception as exc:
+            logger.warning(
+                "entitlements: lock_reason_path_batch runtime %r failed: %s",
+                raw,
+                exc,
+            )
+            unknown_runtimes.append(raw)
+            continue
+        if path is None:
+            unknown_runtimes.append(raw)
+            continue
+        seen_runtimes.add(canon)
+        runtime_rows.append({"runtime": canon, "path": path})
+
+    def _capacity(value, kind: str) -> dict | None:
+        if value is None:
+            return None
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            return None
+        if n <= 0:
+            return None
+        try:
+            p = lock_reason_path(f, t, str(n), kind=kind)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: lock_reason_path_batch %s %r failed: %s",
+                kind,
+                value,
+                exc,
+            )
+            return None
+        if p is None:
+            return None
+        return {"key": str(n), "path": p}
+
+    # Map runtime rows to the {"key", "path"} shape used by every
+    # other axis in this envelope; the canonical id lives in ``key``.
+    runtime_rows = [{"key": r["runtime"], "path": r["path"]} for r in runtime_rows]
+
+    return {
+        "features": feature_rows,
+        "runtimes": runtime_rows,
+        "channels": _capacity(channels, "channels"),
+        "retention_days": _capacity(retention_days, "retention_days"),
+        "nodes": _capacity(nodes, "nodes"),
+        "unknown": {
+            "features": unknown_features,
+            "runtimes": unknown_runtimes,
+        },
+    }
