@@ -12,7 +12,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 echo ""
-echo -e "  ${BOLD}🦞 ClawMetry${NC}  ${DIM}AI Observability for OpenClaw${NC}"
+echo -e "  ${BOLD}🦞 ClawMetry${NC}  ${DIM}Observability for your AI agents${NC}"
 echo -e "  $(printf '%.0s─' {1..50})"
 echo ""
 
