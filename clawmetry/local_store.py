@@ -7549,6 +7549,76 @@ class LocalStore:
         cols = ["id", "ts", "actor", "action", "target", "session_id", "result"]
         return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
 
+    def query_routing_savings(
+        self,
+        *,
+        days: int = 30,
+    ) -> dict[str, Any]:
+        """Aggregate smart-routing savings from ``auto_downgraded`` proxy events.
+
+        Returns ``{total_savings_usd, total_substitutions, by_pair}`` where
+        ``by_pair`` is a list of ``{from_model, to_model, count, saved_usd}``
+        sorted by saved_usd descending. Drives the routing-attribution fields
+        added to ``/api/usage`` (issue #3438).
+        """
+        from datetime import datetime, timedelta, timezone
+        try:
+            d = max(1, min(365, int(days)))
+        except (TypeError, ValueError):
+            d = 30
+        since = (datetime.now(timezone.utc) - timedelta(days=d)).isoformat(timespec="seconds")
+        sql = """
+            SELECT data
+            FROM events
+            WHERE event_type = 'auto_downgraded'
+              AND ts >= ?
+        """
+        rows = self._fetch(sql, [since])
+
+        total_savings = 0.0
+        total_count = 0
+        pair_stats: dict[tuple, dict] = {}
+
+        for (raw,) in rows:
+            if raw is None:
+                continue
+            try:
+                raw = _ccr.maybe_decompress(raw)
+                text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                data = json.loads(text) if text else {}
+            except (ValueError, TypeError, UnicodeDecodeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+
+            from_model = str(data.get("from_model") or "")
+            to_model = str(data.get("to_model") or "")
+            saved = float(data.get("estimated_saved_usd") or 0.0)
+
+            total_savings += saved
+            total_count += 1
+
+            key = (from_model, to_model)
+            if key not in pair_stats:
+                pair_stats[key] = {
+                    "from_model": from_model,
+                    "to_model": to_model,
+                    "count": 0,
+                    "saved_usd": 0.0,
+                }
+            pair_stats[key]["count"] += 1
+            pair_stats[key]["saved_usd"] += saved
+
+        by_pair = sorted(pair_stats.values(), key=lambda x: -x["saved_usd"])
+        for p in by_pair:
+            p["saved_usd"] = round(p["saved_usd"], 6)
+
+        return {
+            "total_savings_usd": round(total_savings, 6),
+            "total_substitutions": total_count,
+            "by_pair": by_pair,
+        }
+
     def query_nemoclaw_metrics(
         self,
         *,
