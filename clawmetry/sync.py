@@ -9600,6 +9600,107 @@ def _get_version() -> str:
 CRON_STATE_HEARTBEAT_SEC = 300  # 5 minutes
 
 
+def _openclaw_state_sqlite() -> Path:
+    """Path to OpenClaw v2026.6.5+ consolidated state DB."""
+    return Path(_get_openclaw_dir()) / "state" / "openclaw.sqlite"
+
+
+def _load_jobs_from_state_sqlite() -> list | None:
+    """Read cron job definitions from OpenClaw v2026.6.5+ state/openclaw.sqlite.
+
+    Returns a list of job dicts in the same shape as the legacy jobs.json
+    ``jobs`` array, or None when the DB is absent or unreadable.
+    """
+    db = _openclaw_state_sqlite()
+    if not db.exists():
+        return None
+    try:
+        import sqlite3
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        try:
+            rows = conn.execute("SELECT job_json, state_json FROM cron_jobs").fetchall()
+        finally:
+            conn.close()
+        jobs: list = []
+        for job_json_str, state_json_str in rows:
+            try:
+                j = json.loads(job_json_str) if job_json_str else {}
+            except Exception:
+                continue
+            if not isinstance(j, dict):
+                continue
+            try:
+                j_state = json.loads(state_json_str) if state_json_str else {}
+            except Exception:
+                j_state = {}
+            # Merge runtime state into top-level dict to match flat-file shape
+            if isinstance(j_state, dict) and j_state and "state" not in j:
+                j["state"] = j_state
+            jobs.append(j)
+        return jobs
+    except Exception as e:
+        log.debug("sync_crons: SQLite fallback load error: %s", e)
+        return None
+
+
+def _sync_cron_runs_from_state_sqlite(config: dict, state: dict, store) -> int:
+    """Ingest new cron_run_logs rows from OpenClaw v2026.6.5+ state/openclaw.sqlite.
+
+    Uses rowid as an append-only cursor (persisted in
+    state["cron_sqlite_run_last_rowid"]) so each daemon cycle only processes
+    rows it hasn't seen yet. Returns the count of newly ingested rows.
+    """
+    db = _openclaw_state_sqlite()
+    if not db.exists():
+        return 0
+    node_id = config.get("node_id", "") if isinstance(config, dict) else ""
+    last_rowid = int(state.get("cron_sqlite_run_last_rowid", 0))
+    try:
+        import sqlite3
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        try:
+            rows = conn.execute(
+                "SELECT rowid, entry_json FROM cron_run_logs"
+                " WHERE rowid > ? ORDER BY rowid",
+                (last_rowid,),
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception as e:
+        log.debug("sync_cron_runs: SQLite fallback error: %s", e)
+        return 0
+    n_ingested = 0
+    max_rowid = last_rowid
+    for rowid, entry_json_str in rows:
+        max_rowid = max(max_rowid, rowid)
+        try:
+            entry = json.loads(entry_json_str) if entry_json_str else {}
+        except Exception:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        job_id = str(
+            entry.get("job_id") or entry.get("jobId")
+            or entry.get("cron_job_id") or entry.get("cronJobId")
+            or ""
+        )
+        run = _parse_cron_run_line(json.dumps(entry), job_id, node_id)
+        if run is None:
+            continue
+        try:
+            store.ingest_cron_run(run)
+            n_ingested += 1
+        except Exception as e_in:
+            log.debug(
+                "sync_cron_runs: sqlite ingest failed for rowid %d: %s", rowid, e_in
+            )
+    if max_rowid > last_rowid:
+        state["cron_sqlite_run_last_rowid"] = max_rowid
+    if n_ingested:
+        log.debug("sync_cron_runs: SQLite fallback ingested %d rows", n_ingested)
+    return n_ingested
+
+
 def sync_crons(config: dict, state: dict, paths: dict) -> int:
     """Sync cron job definitions to cloud.
 
@@ -9622,25 +9723,31 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
     # Stored as list (not tuple) because JSON round-trip turns tuples into lists.
     job_dedup: dict = state.setdefault("cron_state_dedup", {})
 
-    # Find cron jobs.json
+    # Find cron jobs.json; fall back to state/openclaw.sqlite for OpenClaw v2026.6.5+
     Path.home()
     cron_candidates = [
         Path(_get_openclaw_dir()) / "cron" / "jobs.json",
         Path(_get_openclaw_dir()) / "agents" / "main" / "cron" / "jobs.json",
     ]
     cron_file = next((str(p) for p in cron_candidates if p.exists()), None)
+    _sqlite_jobs: list | None = None
     if not cron_file:
-        _record_sync_progress("crons", 0, 0)  # terminal: no cron file, nothing to sync
-        return 0
+        _sqlite_jobs = _load_jobs_from_state_sqlite()
+        if _sqlite_jobs is None:
+            _record_sync_progress("crons", 0, 0)
+            return 0
 
     try:
-        import hashlib
-
-        raw = open(cron_file, "rb").read()
-        h = hashlib.md5(raw).hexdigest()
-        file_unchanged = h == last_hash
-        data = json.loads(raw)
-        jobs = data.get("jobs", []) if isinstance(data, dict) else data
+        if _sqlite_jobs is not None:
+            jobs = _sqlite_jobs
+            h, file_unchanged = "", False
+        else:
+            import hashlib
+            raw = open(cron_file, "rb").read()
+            h = hashlib.md5(raw).hexdigest()
+            file_unchanged = h == last_hash
+            data = json.loads(raw)
+            jobs = data.get("jobs", []) if isinstance(data, dict) else data
 
         now_ts = time.time()
         events = []
@@ -9906,17 +10013,18 @@ def sync_cron_runs(config: dict, state: dict, paths: dict) -> int:
         log.debug("sync_cron_runs: local_store unavailable: %s", e)
         return 0
 
-    node_id = config.get("node_id", "") if isinstance(config, dict) else ""
-    offsets: dict = state.setdefault("cron_run_offsets", {})
-    runs_dirs = _cron_run_dirs()
-    if not runs_dirs:
-        return 0
-
     try:
         store = _ls.get_store()
     except Exception as e:
         log.debug("sync_cron_runs: get_store failed: %s", e)
         return 0
+
+    node_id = config.get("node_id", "") if isinstance(config, dict) else ""
+    offsets: dict = state.setdefault("cron_run_offsets", {})
+    runs_dirs = _cron_run_dirs()
+    if not runs_dirs:
+        # OpenClaw v2026.6.5+ stores run logs in state/openclaw.sqlite
+        return _sync_cron_runs_from_state_sqlite(config, state, store)
 
     n_ingested = 0
     for runs_dir in runs_dirs:
