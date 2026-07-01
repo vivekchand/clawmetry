@@ -8450,3 +8450,123 @@ def tier_locks_path_batch(
             }
         )
     return {"tiers": rows, "unknown": unknown}
+
+
+def preview_path_batch(from_tier: str, to_tiers) -> dict | None:
+    """Batch sibling of :func:`preview_path`: per-rung cumulative
+    ``Entitlement.to_dict`` snapshots for a caller-supplied subset of
+    destination tiers all walked from a single ``from_tier`` in ONE
+    round-trip.
+
+    Composes :func:`preview_path` (scalar single-destination cumulative
+    path) and :func:`preview_batch` (batch cumulative-state at every
+    purchasable rung) -- same per-rung body as the scalar path helper (a
+    full :func:`preview` row per intermediate rung), same
+    multi-destination axis as :func:`tier_path_batch` /
+    :func:`tier_spec_path_batch` / :func:`capacity_diff_path_batch`. Lets
+    an upgrade-walkthrough surface render "from my current rung, here
+    are the 3 tiers I'm considering -- show me the resulting Entitlement
+    snapshot at every rung walked to each" off ONE call instead of N
+    calls to :func:`preview_path`. Cumulative-state member of the
+    path-batch grid alongside :func:`tier_path_batch` (all-slices
+    marginal), :func:`tier_spec_path_batch` (spec envelope),
+    :func:`capacity_diff_path_batch` (capacity slice),
+    :func:`tier_unlocks_path_batch` (grants slice) and
+    :func:`tier_locks_path_batch` (losses slice).
+
+    Per-destination row shape::
+
+        {
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<preview row>, ...],
+        }
+
+    Each ``path`` row is byte-identical to a row from :func:`preview_path`
+    for the same ``(from_tier, to)`` pair -- the same
+    ``_PURCHASABLE_TIERS`` filter + sort + destination-sibling exclusion
+    the sibling path-batch helpers use. Per-row body is the full
+    :func:`preview` cumulative snapshot (``source="preview"``,
+    ``grace=False``). Rung walks are destination-specific (the rung set
+    depends on ``to``), so per-destination ``path`` lengths can
+    legitimately differ -- matching :func:`tier_spec_path_batch` /
+    :func:`capacity_diff_path_batch` / :func:`tier_path_batch`'s
+    posture.
+
+    Shape::
+
+        {
+          "tiers": [
+            {"to": "<id>", "to_label": ..., "to_rank": ..., "direction": ..., "path": [...]},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Supplied destination ids are normalised (whitespace stripped,
+    lowercased, duplicates dropped, first-seen order preserved). Unknown
+    ids are echoed in ``unknown[]`` instead of short-circuiting -- a
+    partially-bad caller still gets paths back for the valid ids
+    alongside a list of what was dropped, matching every other
+    ``*_path_batch`` sibling's posture. ``trial`` IS accepted as a
+    destination (excluded from the walked intermediate rungs the way
+    :func:`preview_path` already excludes it, but a valid endpoint via
+    the lateral / identity branches).
+
+    Returns ``None`` for empty / unknown ``from_tier`` (caller renders
+    "unknown tier" / 404).
+
+    Resolver-independent: delegates per-destination to
+    :func:`preview_path`, which walks the static per-tier maps via
+    :func:`_preview_row` -- so grace vs enforce yields byte-identical
+    rows. Never raises: per-destination failures short-circuit that id
+    into ``unknown[]`` and the rest of the batch keeps building.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if f not in _TIER_FEATURES:
+        return None
+    candidates = _normalise_csv(to_tiers)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    from_rank = _TIER_RANK.get(f, -1)
+    for tid in candidates:
+        if tid not in _TIER_FEATURES:
+            unknown.append(tid)
+            continue
+        try:
+            path = preview_path(f, tid)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: preview_path_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        if path is None:
+            unknown.append(tid)
+            continue
+        to_rank = _TIER_RANK.get(tid, -1)
+        if f == tid:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        rows.append(
+            {
+                "to": tid,
+                "to_label": tier_label(tid),
+                "to_rank": to_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}

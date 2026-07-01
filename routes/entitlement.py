@@ -8527,3 +8527,144 @@ def api_entitlement_tier_path_batch():
                 "unknown": [],
             }
         )
+
+
+@bp_entitlement.route("/api/entitlement/preview-path-batch", methods=["POST"])
+def api_entitlement_preview_path_batch():
+    """``POST /api/entitlement/preview-path-batch`` -- batch sibling of
+    ``/api/entitlement/preview-path``.
+
+    Where ``/preview-path`` walks the cumulative-state rungs between
+    ONE ``(from, to)`` pair, this walks the cumulative-state rungs
+    between ONE ``from`` and N candidate ``to`` tiers in ONE round-trip
+    -- the cumulative-state member of the path-batch grid alongside
+    ``/tier-path-batch`` (all-slices marginal),
+    ``/tier-spec-path-batch`` (spec envelope),
+    ``/capacity-diff-path-batch`` (capacity slice),
+    ``/tier-unlocks-path-batch`` (grants slice) and
+    ``/tier-locks-path-batch`` (losses slice).
+
+    Use case: an upgrade-walkthrough surface hydrates the per-rung
+    ``Entitlement`` snapshot to every candidate destination off ONE
+    call instead of N calls to ``/preview-path``. Per-destination path
+    lengths can legitimately differ (the rungs walked depend on the
+    destination), matching every other ``*_path_batch`` sibling's
+    posture.
+
+    Request body::
+
+        {
+          "from": "<tier id>",
+          "to":   ["<tier id>", ...]
+        }
+
+    Response shape::
+
+        {
+          "from":         "<tier id>",
+          "from_label":   "...",
+          "from_rank":    <int>,
+          "tiers": [
+            {
+              "to":        "<tier id>",
+              "to_label":  "...",
+              "to_rank":   <int>,
+              "direction": "upgrade" | "downgrade" | "lateral" | "identity",
+              "path":      [<preview row>, ...],
+            },
+            ...
+          ],
+          "unknown":       ["bogus_id", ...],
+          "current_tier":  "<tier id>",
+          "grace":         <bool>,
+          "enforced":      <bool>,
+        }
+
+    Each row in ``tiers[].path`` is byte-identical to a row from
+    ``/preview-path?from=<from>&to=<to>``. Supplied destination ids are
+    normalised (whitespace stripped, lowercased, duplicates dropped,
+    first-seen order preserved). Unknown destination ids do NOT 404 the
+    call -- they are echoed in ``unknown[]`` so a partially-bad caller
+    still gets paths back for the valid ids.
+
+    - **400** when ``from`` is missing / blank, or ``to`` is missing /
+      empty
+    - **404** when ``from`` is unknown (body carries ``which: "from"``)
+    - **200** with bucketed unknowns for unknown destination ids --
+      does NOT 404 the call, matching every other batch sibling
+    - **Never 5xxs**: a synthesis failure short-circuits to an envelope
+      with empty rows so the matrix keeps rendering.
+
+    POST rather than GET because ``to`` is a list of tier ids that may
+    grow past a comfortable query-string length; the sibling
+    ``/tier-path-batch`` uses GET+CSV where the list is expected to
+    stay small. Both response envelopes carry the same shape so a
+    single UI walker can consume either family.
+    """
+    body = request.get_json(silent=True) or {}
+    try:
+        f_raw = body.get("from")
+        f = str(f_raw or "").strip().lower()
+    except Exception:
+        f = ""
+    if not f:
+        return jsonify({"error": "missing from"}), 400
+    to_raw = body.get("to")
+    if to_raw is None or (isinstance(to_raw, (list, tuple)) and not to_raw):
+        return jsonify({"error": "missing or empty to"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if f not in _ent._TIER_FEATURES:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "from", "from": f}
+                ),
+                404,
+            )
+        try:
+            candidates = [str(t) for t in (to_raw or [])]
+        except TypeError:
+            return jsonify({"error": "to must be a list"}), 400
+        batch = _ent.preview_path_batch(f, candidates)
+        if batch is None:
+            batch = {"tiers": [], "unknown": []}
+        try:
+            ent = _ent.get_entitlement()
+            current_tier = getattr(ent, "tier", "oss") or "oss"
+            grace = bool(getattr(ent, "grace", True))
+        except Exception:
+            current_tier = "oss"
+            grace = True
+        try:
+            enforced = bool(_ent.is_enforced())
+        except Exception:
+            enforced = False
+        return jsonify(
+            {
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": _ent.tier_rank(f),
+                "tiers": batch.get("tiers", []),
+                "unknown": batch.get("unknown", []),
+                "current_tier": current_tier,
+                "grace": grace,
+                "enforced": enforced,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_preview_path_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "from": f,
+                "from_label": None,
+                "from_rank": -1,
+                "tiers": [],
+                "unknown": [],
+                "current_tier": "oss",
+                "grace": True,
+                "enforced": False,
+            }
+        )
