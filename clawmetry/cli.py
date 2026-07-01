@@ -247,13 +247,15 @@ def _stop_existing_daemon() -> None:
         )
     elif system == "Linux":
         if __import__("shutil").which("systemctl"):
-            subprocess.run(
-                ["systemctl", "--user", "stop", "clawmetry-sync"],
-                check=False,
-                capture_output=True,
-            )
-        else:
-            _kill_sync_daemon()
+            # Stop whichever scope owns it: --user (non-root) or system (root).
+            for _scope in (["--user"], []):
+                subprocess.run(
+                    ["systemctl", *_scope, "stop", "clawmetry-sync"],
+                    check=False,
+                    capture_output=True,
+                )
+        # Belt-and-braces: also kill any bare background subprocess daemon.
+        _kill_sync_daemon()
 
     # Send offline heartbeat for old node to deregister it from cloud
     if old_node_id and old_api_key:
@@ -1121,13 +1123,33 @@ def _register_launchd(config: dict) -> None:
 def _register_systemd(config: dict) -> None:
     from clawmetry.sync import LOG_FILE
     import subprocess
+    import shutil
+    import os as _os
+    from pathlib import Path as _Path
 
     label = "clawmetry-sync"
-    service_dir = __import__("pathlib").Path.home() / ".config" / "systemd" / "user"
-    service_dir.mkdir(parents=True, exist_ok=True)
-    service_path = service_dir / f"{label}.service"
-    # Use the current interpreter (venv-aware) so the daemon finds clawmetry
-    python = sys.executable
+    python = sys.executable  # current interpreter (venv-aware)
+    # `systemctl --user` needs a per-user D-Bus session, which root over SSH on a
+    # VPS usually does NOT have (enable --now then fails with "Failed to connect
+    # to bus" and the daemon silently never starts). So for root we install a
+    # SYSTEM service (persists across reboots + actually starts); non-root uses a
+    # --user service. Either way we VERIFY it came up and fall back to a detached
+    # background subprocess if systemd is unavailable / failed.
+    try:
+        _is_root = _os.geteuid() == 0
+    except Exception:
+        _is_root = False
+
+    if _is_root:
+        service_dir = _Path("/etc/systemd/system")
+        wanted_by = "multi-user.target"
+        scope = []            # system scope: `systemctl ...`
+        extra_unit = "User=root\n"
+    else:
+        service_dir = _Path.home() / ".config" / "systemd" / "user"
+        wanted_by = "default.target"
+        scope = ["--user"]    # user scope: `systemctl --user ...`
+        extra_unit = ""
 
     unit = f"""[Unit]
 Description=ClawMetry Cloud Sync Daemon
@@ -1138,27 +1160,42 @@ ExecStart={python} -m clawmetry.sync
 # Issue #1310 — gateway WS tap default-on so Telegram/Signal/Slack
 # channel messages reach DuckDB. Tap silently no-ops on scope rejection.
 Environment=CLAWMETRY_ENABLE_WS_TAP=1
-Restart=always
+{extra_unit}Restart=always
 RestartSec=30
 StandardOutput=append:{LOG_FILE}
 StandardError=append:{LOG_FILE}
 
 [Install]
-WantedBy=default.target
+WantedBy={wanted_by}
 """
-    service_path.write_text(unit)
-    # Check if systemctl is available (not in Docker/containers without systemd)
-    import shutil
 
+    _installed = False
     if shutil.which("systemctl"):
-        subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
-        subprocess.run(["systemctl", "--user", "enable", "--now", label], check=False)
-        print("  Running in the background. Your data is syncing to the cloud.")
+        try:
+            service_dir.mkdir(parents=True, exist_ok=True)
+            (service_dir / f"{label}.service").write_text(unit)
+            subprocess.run(["systemctl", *scope, "daemon-reload"],
+                           check=False, capture_output=True)
+            subprocess.run(["systemctl", *scope, "enable", "--now", label],
+                           check=False, capture_output=True)
+            # Verify it actually started (systemd may have refused, e.g. no
+            # --user bus). Give it a moment, then check active OR the process.
+            import time as _t
+            _t.sleep(1.0)
+            _chk = subprocess.run(["systemctl", *scope, "is-active", label],
+                                  capture_output=True, text=True)
+            _installed = _chk.stdout.strip() == "active" or _is_sync_running()
+        except Exception:
+            _installed = False
+
+    if _installed:
+        _how = "system service" if _is_root else "user service"
+        print(f"  Running in the background as a systemd {_how}. Your data is syncing to the cloud.")
         print("  To stop: clawmetry disconnect")
     else:
         if sys.stdout.isatty():
-            print("  ⚠️  systemctl not available (container/Docker?).")
-            print("  Falling back to background subprocess…")
+            print("  systemd unavailable here (container, or root with no --user session)")
+            print("  — starting a background process instead…")
         _start_subprocess()
 
 
@@ -1209,24 +1246,27 @@ def _cmd_disconnect(args) -> None:
         print(f"✅  Stopped launchd daemon ({label})")
     elif system == "Linux":
         if __import__("shutil").which("systemctl"):
-            subprocess.run(
-                ["systemctl", "--user", "disable", "--now", "clawmetry-sync"],
-                check=False,
-                capture_output=True,
-            )
-            svc = (
-                __import__("pathlib").Path.home()
-                / ".config"
-                / "systemd"
-                / "user"
-                / "clawmetry-sync.service"
-            )
-            if svc.exists():
-                svc.unlink()
-            print("✅  Stopped systemd daemon (clawmetry-sync)")
-        else:
-            _kill_sync_daemon()
-            print("✅  Stopped sync daemon")
+            # Disable + stop whichever scope owns it (--user for non-root, system
+            # for root) so Restart=always can't bring it back, then remove the
+            # unit file from both possible locations.
+            from pathlib import Path as _P2
+            for _scope in (["--user"], []):
+                subprocess.run(
+                    ["systemctl", *_scope, "disable", "--now", "clawmetry-sync"],
+                    check=False,
+                    capture_output=True,
+                )
+            for _svc in (_P2.home() / ".config" / "systemd" / "user" / "clawmetry-sync.service",
+                         _P2("/etc/systemd/system/clawmetry-sync.service")):
+                try:
+                    if _svc.exists():
+                        _svc.unlink()
+                except Exception:
+                    pass
+            subprocess.run(["systemctl", "--user", "daemon-reload"], check=False, capture_output=True)
+            subprocess.run(["systemctl", "daemon-reload"], check=False, capture_output=True)
+        _kill_sync_daemon()  # also kill any bare subprocess daemon
+        print("✅  Stopped sync daemon")
 
     if CONFIG_FILE.exists():
         CONFIG_FILE.unlink()
@@ -1510,17 +1550,23 @@ def _cmd_uninstall() -> None:
             _kill_sync_daemon()
             print(f"  ✅  Killed {_stray} stray sync process(es)")
     elif system == "Linux":
-        svc = home / ".config" / "systemd" / "user" / "clawmetry-sync.service"
+        _svcs = [home / ".config" / "systemd" / "user" / "clawmetry-sync.service",
+                 __import__("pathlib").Path("/etc/systemd/system/clawmetry-sync.service")]
         if shutil.which("systemctl"):
-            subprocess.run(
-                ["systemctl", "--user", "disable", "--now", "clawmetry-sync"],
-                check=False,
-                capture_output=True,
-            )
+            for _scope in (["--user"], []):  # --user (non-root) + system (root)
+                subprocess.run(
+                    ["systemctl", *_scope, "disable", "--now", "clawmetry-sync"],
+                    check=False,
+                    capture_output=True,
+                )
         _stray = _count_sync_daemons()
         _kill_sync_daemon()
-        if svc.exists():
-            svc.unlink()
+        for svc in _svcs:
+            try:
+                if svc.exists():
+                    svc.unlink()
+            except Exception:
+                pass
         print("  ✅  Stopped and removed sync daemon" + (f" + {_stray} stray process(es)" if _stray else ""))
 
     # 2. Pip uninstall (BEFORE removing venv, since sys.executable may live there)
@@ -1719,6 +1765,17 @@ def _cmd_status(args) -> None:
 
     print("ClawMetry Status\n" + "─" * 40)
 
+    # Installed version — so it's obvious at a glance whether this box is on the
+    # latest (the #1 "why is my node behaving like an old build" clue). Uses the
+    # lightweight package metadata, not the heavy dashboard import.
+    try:
+        import importlib.metadata as _md
+        _cm_ver = _md.version("clawmetry")
+    except Exception:
+        _cm_ver = ""
+    if _cm_ver:
+        print(f"  Version:     {_cm_ver}")
+
     # Config
     if CONFIG_FILE.exists():
         try:
@@ -1860,21 +1917,31 @@ def _cmd_status(args) -> None:
         import subprocess
         import shutil
 
-        if shutil.which("systemctl"):
-            r = subprocess.run(
-                ["systemctl", "--user", "is-active", "clawmetry-sync"],
-                capture_output=True,
-                text=True,
-            )
-            running = r.stdout.strip() == "active"
-            print(
-                f"  Daemon:      {'✅  Running (systemd)' if running else '○  Not running'}"
-            )
-        else:
-            running = _is_sync_running()
-            print(
-                f"  Daemon:      {'✅  Running (subprocess)' if running else '○  Not running'}"
-            )
+        # The actual process check is the source of truth: the daemon can run as
+        # a `systemctl --user` service, a system service (root/VPS), or a bare
+        # background subprocess. Reporting "Not running" off `systemctl --user`
+        # alone false-negatives on a root VPS (no --user D-Bus session) even
+        # when the daemon is up. Check the process first, then label how it's
+        # managed for a helpful hint.
+        running = _is_sync_running()
+        _how = ""
+        if running and shutil.which("systemctl"):
+            for _scope in (["--user"], []):  # user service, then system service
+                try:
+                    _a = subprocess.run(
+                        ["systemctl", *_scope, "is-active", "clawmetry-sync"],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    if _a.stdout.strip() == "active":
+                        _how = " (systemd)" if _scope == [] else " (systemd --user)"
+                        break
+                except Exception:
+                    pass
+            if not _how:
+                _how = " (background process)"
+        print(
+            f"  Daemon:      {'✅  Running' + _how if running else '○  Not running'}"
+        )
 
     if LOG_FILE.exists():
         print(f"  Log:         {LOG_FILE}")

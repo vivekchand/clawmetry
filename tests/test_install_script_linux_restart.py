@@ -41,8 +41,11 @@ def test_install_sh_syntax_is_valid() -> None:
     assert result.returncode == 0, f"bash -n failed: {result.stderr}"
 
 
-def test_linux_branch_restarts_systemd_user_unit() -> None:
-    """The Linux branch must attempt to restart the clawmetry-sync user unit."""
+def test_linux_branch_restarts_systemd_unit() -> None:
+    """The Linux branch must attempt to restart the clawmetry-sync unit, in the
+    right scope: a SYSTEM service for root (no --user D-Bus session over SSH),
+    the --user service otherwise. Both use --no-block so install.sh doesn't
+    stall on daemon startup (#1215)."""
     body = _read_install_sh()
     assert 'if [ "$OS" = "Linux" ]; then' in body, "Linux branch missing"
     # The systemd unit name is fixed by clawmetry/cli.py::_register_systemd
@@ -51,11 +54,15 @@ def test_linux_branch_restarts_systemd_user_unit() -> None:
         "install.sh must reference clawmetry-sync.service "
         "(see clawmetry/cli.py::_register_systemd)"
     )
-    assert "systemctl --user" in body, "must use --user (no root systemd)"
+    assert "systemctl --user" in body, "must handle the --user service (non-root)"
     assert "list-unit-files" in body, (
         "must check the unit is installed before restart"
     )
-    assert "systemctl --user restart clawmetry-sync.service" in body
+    # --user service restart (non-root) and a root/system branch, both non-blocking.
+    assert "systemctl --user restart --no-block clawmetry-sync.service" in body
+    assert 'id -u' in body and "systemctl restart --no-block clawmetry-sync.service" in body, (
+        "must restart the SYSTEM service for root (see _register_systemd root branch)"
+    )
 
 
 def test_wsl_detection_via_proc_version() -> None:
