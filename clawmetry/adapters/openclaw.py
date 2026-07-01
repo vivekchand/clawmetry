@@ -797,7 +797,9 @@ def _scan_openclaw_selection_runtime() -> tuple[bool, bool, bool]:
     return patched, native_base, native_enforcement
 
 
-def _nemoclaw_tool_catalog_state() -> Optional[bool]:
+def _nemoclaw_tool_catalog_state(
+    tools_present: Optional[bool] = None,
+) -> Optional[bool]:
     """Whether the NemoClaw compact tool-catalog wrapper is active for this
     runtime (#2683).
 
@@ -812,14 +814,28 @@ def _nemoclaw_tool_catalog_state() -> Optional[bool]:
     (the patch marker is present in the openclaw dist, or the env var is
     explicitly set); returns ``None`` on plain OpenClaw so we never assert a
     catalog state that doesn't exist. Never raises.
+
+    Args:
+        tools_present: When the caller knows whether the turn/session had any
+            registered tools, pass ``True`` or ``False`` to mirror the
+            tools-count half of the harness gate
+            (``effectiveTools.length > 0 || clientTools?.length > 0``,
+            #3432).  ``None`` (default) skips the tools-present check and
+            falls back to the env-var-only gate — safe when the caller cannot
+            determine tool count.
     """
     env = os.environ.get("NEMOCLAW_TOOL_CATALOG")
     patched, _native, _native_enf = _scan_openclaw_selection_runtime()
     if not patched and env is None:
         # No NemoClaw signal at all -> don't claim a catalog state.
         return None
-    # Mirror the harness gate exactly: enabled unless explicitly "0".
-    return env != "0"
+    # Mirror the harness gate exactly: disabled when env var is "0" OR when
+    # the caller knows no tools were registered for this turn/session (#3432).
+    if env == "0":
+        return False
+    if tools_present is False:
+        return False
+    return True
 
 
 def _openclaw_tool_catalog_kind() -> Optional[str]:
@@ -989,10 +1005,6 @@ class OpenClawAdapter(AgentAdapter):
         except Exception as exc:
             logger.warning(f"OpenClaw list_sessions() failed: {exc}")
             return []
-        # Runtime-level NemoClaw tool-catalog state (#2683): whether the
-        # compact tool-catalog wrapper is active for this install. None on
-        # plain OpenClaw (no NemoClaw signal) — we don't stamp a state then.
-        _tc_enabled = _nemoclaw_tool_catalog_state()
         # Catalog provenance (#2732): "nemoclaw" or "native" when either
         # signal is present, so native-tool-search OpenClaw builds are no
         # longer indistinguishable from "no catalog at all".
@@ -1006,6 +1018,18 @@ class OpenClawAdapter(AgentAdapter):
                 "contextTokens": s.get("contextTokens"),
                 "agentId": s.get("agent") or "main",
             }
+            # Runtime-level NemoClaw tool-catalog state (#2683 / #3432): mirror
+            # the full harness gate — env var AND tools-present. Derive
+            # tools_present from whichever tool-count alias the session record
+            # carries; fall back to None (unknown) when absent so existing
+            # gateway records that lack the field keep today's behaviour.
+            _raw_tc = (
+                s.get("toolCallCount")
+                or s.get("totalToolCalls")
+                or s.get("toolCount")
+            )
+            _tools_present = bool(_raw_tc) if _raw_tc is not None else None
+            _tc_enabled = _nemoclaw_tool_catalog_state(tools_present=_tools_present)
             if _tc_enabled is not None:
                 extra["nemoclawToolCatalogEnabled"] = _tc_enabled
             if _tc_kind is not None:
