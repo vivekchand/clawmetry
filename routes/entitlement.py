@@ -3156,6 +3156,104 @@ def api_entitlement_runtime_spec_batch():
         )
 
 
+@bp_entitlement.route("/api/entitlement/tier-spec-at-batch")
+def api_entitlement_tier_spec_at_batch():
+    """``GET /api/entitlement/tier-spec-at-batch?tier=<perspective>
+    &targets=a,b,c`` -- what-if + batch sibling of
+    ``/api/entitlement/tier-spec-at``.
+
+    Where ``/tier-spec-at`` hydrates ONE tier descriptor from a
+    hypothetical perspective, this hydrates N descriptor rows for a
+    caller-supplied subset of target tiers off a single round-trip.
+    Fixed-source multi-target companion of ``/tier-spec-at`` and
+    tier-axis sibling of ``/feature-spec-at-batch`` /
+    ``/runtime-spec-at-batch`` (which fix the source and batch across
+    the feature / runtime axis instead).
+
+    Use case: a pricing-comparison matrix UI ("from my perspective tier,
+    render the descriptor rows for OSS, Cloud Starter, Cloud Pro and
+    Enterprise") hydrates every column off ONE call instead of N calls
+    to ``/tier-spec-at``.
+
+    Each ``tiers[]`` entry is byte-identical to a row from
+    :func:`entitlements.tier_spec_at` for the same ``target`` -- pinned
+    by the parity tests so the scalar / batch what-if accessors cannot
+    drift. Supplied ids are normalised (whitespace stripped, lowercased,
+    duplicates dropped, first-seen order preserved). Unknown ids do not
+    404 the call -- they are echoed in ``unknown[]`` so a partially-bad
+    caller still gets rows back for the valid ids alongside a list of
+    what was dropped.
+
+    Response shape (mirrors ``/feature-spec-at-batch`` /
+    ``/runtime-spec-at-batch`` plus a ``perspective_tier`` echo)::
+
+        {
+          "tiers":                 [<tier_spec_at row>, ...],
+          "unknown":               ["bogus_id", ...],
+          "perspective_tier":      "...",
+          "perspective_tier_rank": <int>,
+          "current_tier":          "...",
+          "current_tier_rank":     <int>,
+          "grace":                 <bool>,
+          "enforced":              <bool>,
+        }
+
+    - **400** when ``tier=`` is missing / blank or ``targets=`` is
+      missing / empty after normalisation
+    - **404** when ``tier`` is unknown (body carries ``which: "tier"``)
+    - **Never 5xxs**: a resolver failure short-circuits to the OSS-free
+      shape (empty rows, ``current_tier=oss``, ``grace=true``) with the
+      perspective tier echoed so the UI keeps rendering.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        targets = _parse_csv_arg("targets")
+        if not targets:
+            return (
+                jsonify({"error": "supply targets=<csv>"}),
+                400,
+            )
+        batch = _ent.tier_spec_at_batch(tier_in, targets)
+        if batch is None:
+            batch = {"tiers": [], "unknown": []}
+        ent = _ent.get_entitlement()
+        batch["perspective_tier"] = tier_in
+        batch["perspective_tier_rank"] = _ent.tier_rank(tier_in)
+        batch["current_tier"] = ent.tier
+        batch["current_tier_rank"] = _ent.tier_rank(ent.tier)
+        batch["grace"] = bool(ent.grace)
+        batch["enforced"] = _ent.is_enforced()
+        return jsonify(batch)
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tier_spec_at_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "unknown": [],
+                "perspective_tier": tier_in,
+                "perspective_tier_rank": 0,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/feature-spec-at-batch")
 def api_entitlement_feature_spec_at_batch():
     """``GET /api/entitlement/feature-spec-at-batch?tier=<perspective>
