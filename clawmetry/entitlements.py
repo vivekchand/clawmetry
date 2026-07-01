@@ -8098,6 +8098,236 @@ def tier_path_batch(from_tier: str, to_tiers) -> dict | None:
     return {"tiers": rows, "unknown": unknown}
 
 
+def _empty_lock_reasons_at_batch(features, runtimes, channels, retention_days, nodes):
+    """Grace-shape sibling of :func:`lock_reasons_at_batch` used when the
+    resolved target tier is ``None`` (ceiling for ``next``, floor for
+    ``previous``). Preserves the 5-axis shape and per-item row counts so
+    a paywall matrix UI never sees a shape-change at the edges -- every
+    row carries ``reason=None`` / ``locked=False`` / ``allowed=True``.
+    """
+    feats = _normalise_csv(features)
+    rts_norm = _normalise_csv(runtimes)
+    seen_rt: set[str] = set()
+    rt_rows: list[dict] = []
+    for raw in rts_norm:
+        canon = canonical_runtime(raw) or raw
+        if canon in seen_rt:
+            continue
+        seen_rt.add(canon)
+        rt_rows.append(
+            {
+                "key": canon,
+                "kind": "runtime",
+                "reason": None,
+                "locked": False,
+                "allowed": True,
+                "required_tier": None,
+                "required_tier_label": None,
+                "required_tier_rank": -1,
+            }
+        )
+    feat_rows = [
+        {
+            "key": fid,
+            "kind": "feature",
+            "reason": None,
+            "locked": False,
+            "allowed": True,
+            "required_tier": None,
+            "required_tier_label": None,
+            "required_tier_rank": -1,
+        }
+        for fid in feats
+    ]
+
+    def _cap_row(kind: str, raw) -> dict | None:
+        if raw is None:
+            return None
+        try:
+            n = int(raw)
+            key = str(n)
+        except (TypeError, ValueError):
+            key = str(raw)
+        return {
+            "key": key,
+            "kind": kind,
+            "reason": None,
+            "locked": False,
+            "allowed": True,
+            "required_tier": None,
+            "required_tier_label": None,
+            "required_tier_rank": -1,
+        }
+
+    return {
+        "features": feat_rows,
+        "runtimes": rt_rows,
+        "channels": _cap_row("channels", channels),
+        "retention_days": _cap_row("retention_days", retention_days),
+        "nodes": _cap_row("nodes", nodes),
+    }
+
+
+def next_tier_lock_reason_at_batch(
+    tier: str,
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict | None:
+    """Batch sibling of :func:`next_tier_lock_reason_at`: per-item lock-
+    reason rows for every supplied item across all 5 axes, evaluated on
+    the rung above the caller-supplied source ``tier`` in ONE round-trip.
+
+    Composes :func:`next_tier_lock_reason_at` (scalar projection) and
+    :func:`lock_reasons_at_batch` (5-axis matrix what-if) -- same target
+    (``_next_purchasable_tier_after(tier)``) as the scalar, same
+    per-item row shape as the batch helper. Lets a paywall "does THIS
+    column of items unlock at my next rung?" matrix surface render every
+    row off ONE call instead of N calls to
+    :func:`next_tier_lock_reason_at` per axis.
+
+    Body is byte-identical to
+    :func:`lock_reasons_at_batch(target, ...)` for the resolved
+    ``target = _next_purchasable_tier_after(tier)`` -- pinned by parity
+    tests so the scalar what-if and batch what-if cannot drift from the
+    full helper.
+
+    Shape (byte-identical to :func:`lock_reasons_at_batch`)::
+
+        {
+          "features":       [<row>, ...],
+          "runtimes":       [<row>, ...],
+          "channels":       <row> | None,
+          "retention_days": <row> | None,
+          "nodes":          <row> | None,
+        }
+
+    Each ``<row>`` carries the same 8 keys :func:`_lock_row` emits
+    (``key``, ``kind``, ``reason``, ``locked``, ``allowed``,
+    ``required_tier``, ``required_tier_label``, ``required_tier_rank``).
+
+    At the ceiling (enterprise as source, no rung above) rows still
+    render for every supplied item with ``reason=None`` /
+    ``locked=False`` / ``allowed=True`` so the matrix's row count stays
+    stable and the caller doesn't need a special shape branch.
+
+    Accepts any tier id in :data:`_TIER_ORDER` (including
+    :data:`TIER_TRIAL`) -- the lenient ``_at`` posture. Returns ``None``
+    for empty / unknown ``tier`` (caller renders "unknown tier" / 404).
+
+    Resolver-independent: delegates to :func:`lock_reasons_at_batch`
+    against the synthesised hypothetical entitlement -- grace vs enforce
+    yields byte-identical rows. Never raises: a per-axis failure short-
+    circuits to the grace-shape rows so the matrix keeps rendering.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        target = _next_purchasable_tier_after(src)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_lock_reason_at_batch target resolve failed: %s",
+            exc,
+        )
+        target = None
+    if target is None:
+        return _empty_lock_reasons_at_batch(
+            features, runtimes, channels, retention_days, nodes
+        )
+    try:
+        out = lock_reasons_at_batch(
+            target,
+            features=features,
+            runtimes=runtimes,
+            channels=channels,
+            retention_days=retention_days,
+            nodes=nodes,
+        )
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_lock_reason_at_batch failed: %s", exc
+        )
+        out = None
+    if out is None:
+        return _empty_lock_reasons_at_batch(
+            features, runtimes, channels, retention_days, nodes
+        )
+    return out
+
+
+def previous_tier_lock_reason_at_batch(
+    tier: str,
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict | None:
+    """Source-anchored mirror of :func:`next_tier_lock_reason_at_batch`
+    -- batch sibling of :func:`previous_tier_lock_reason_at` sweeping N
+    items across all 5 axes against the rung BELOW the caller-supplied
+    ``tier`` in ONE round-trip.
+
+    Same per-item row shape and 5-axis envelope as
+    :func:`next_tier_lock_reason_at_batch`. At the floor (``oss`` /
+    ``cloud_free`` as source, no rung below) rows still render for every
+    supplied item with ``reason=None`` / ``locked=False`` /
+    ``allowed=True`` so the downgrade-confirmation matrix's row count
+    stays stable.
+
+    Body is byte-identical to
+    :func:`lock_reasons_at_batch(target, ...)` for the resolved
+    ``target = _previous_purchasable_tier_before(tier)``.
+
+    Returns ``None`` for empty / unknown ``tier``. Never raises.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        target = _previous_purchasable_tier_before(src)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_lock_reason_at_batch target resolve failed: %s",
+            exc,
+        )
+        target = None
+    if target is None:
+        return _empty_lock_reasons_at_batch(
+            features, runtimes, channels, retention_days, nodes
+        )
+    try:
+        out = lock_reasons_at_batch(
+            target,
+            features=features,
+            runtimes=runtimes,
+            channels=channels,
+            retention_days=retention_days,
+            nodes=nodes,
+        )
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_lock_reason_at_batch failed: %s", exc
+        )
+        out = None
+    if out is None:
+        return _empty_lock_reasons_at_batch(
+            features, runtimes, channels, retention_days, nodes
+        )
+    return out
+
+
 def capacity_diff_path_batch(
     from_tier: str, to_tiers
 ) -> dict | None:
