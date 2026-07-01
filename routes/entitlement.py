@@ -7334,6 +7334,224 @@ def api_entitlement_previous_tier_lock_reason_at():
     return _next_prev_lock_reason_at("previous")
 
 
+def _next_prev_lock_reason_at_batch(direction: str):
+    """Shared body for the ``/next-tier-lock-reason-at-batch`` and
+    ``/previous-tier-lock-reason-at-batch`` endpoints. ``direction`` is
+    ``"next"`` or ``"previous"``.
+    """
+    log_name = f"api_entitlement_{direction}_tier_lock_reason_at_batch"
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+
+        features = _parse_csv_arg("features")
+        runtimes = _parse_csv_arg("runtimes")
+        (_, channels_ok, channels_n, _) = _parse_capacity_arg("channels")
+        (_, retention_ok, retention_n, _) = _parse_capacity_arg(
+            "retention_days"
+        )
+        (_, nodes_ok, nodes_n, _) = _parse_capacity_arg("nodes")
+
+        if (
+            not features
+            and not runtimes
+            and not channels_ok
+            and not retention_ok
+            and not nodes_ok
+        ):
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply at least one of features=<csv>, "
+                            "runtimes=<csv>, channels=<int>, "
+                            "retention_days=<int>, or nodes=<int>"
+                        )
+                    }
+                ),
+                400,
+            )
+
+        if direction == "next":
+            target = _ent._next_purchasable_tier_after(tier_in)
+            batch = _ent.next_tier_lock_reason_at_batch(
+                tier_in,
+                features=features or None,
+                runtimes=runtimes or None,
+                channels=channels_n if channels_ok else None,
+                retention_days=retention_n if retention_ok else None,
+                nodes=nodes_n if nodes_ok else None,
+            )
+        else:
+            target = _ent._previous_purchasable_tier_before(tier_in)
+            batch = _ent.previous_tier_lock_reason_at_batch(
+                tier_in,
+                features=features or None,
+                runtimes=runtimes or None,
+                channels=channels_n if channels_ok else None,
+                retention_days=retention_n if retention_ok else None,
+                nodes=nodes_n if nodes_ok else None,
+            )
+        if batch is None:
+            batch = {
+                "features": [],
+                "runtimes": [],
+                "channels": None,
+                "retention_days": None,
+                "nodes": None,
+            }
+        ent = _ent.get_entitlement()
+        batch["tier"] = tier_in
+        batch["tier_label"] = _ent.tier_label(tier_in)
+        batch["tier_rank"] = _ent.tier_rank(tier_in)
+        batch["target"] = target
+        batch["target_label"] = _ent.tier_label(target) if target else None
+        batch["target_rank"] = _ent.tier_rank(target) if target else None
+        batch["current_tier"] = ent.tier
+        batch["current_tier_rank"] = _ent.tier_rank(ent.tier)
+        batch["grace"] = bool(ent.grace)
+        batch["enforced"] = _ent.is_enforced()
+        return jsonify(batch)
+    except Exception as exc:
+        logger.warning("%s: error: %s", log_name, exc)
+        return jsonify(
+            {
+                "features": [],
+                "runtimes": [],
+                "channels": None,
+                "retention_days": None,
+                "nodes": None,
+                "tier": tier_in,
+                "tier_label": None,
+                "tier_rank": -1,
+                "target": None,
+                "target_label": None,
+                "target_rank": None,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-lock-reason-at-batch")
+def api_entitlement_next_tier_lock_reason_at_batch():
+    """``GET /api/entitlement/next-tier-lock-reason-at-batch?tier=<source>
+    &features=a,b&runtimes=x,y&channels=N&retention_days=K&nodes=M`` --
+    batch sibling of ``/api/entitlement/next-tier-lock-reason-at``.
+
+    Where ``/next-tier-lock-reason-at`` returns ONE lock sentence for
+    ONE item at the rung above ``tier``, this returns per-item rows for
+    every supplied item across all 5 axes in ONE round-trip. Pairs with
+    ``/next-tier-lock-reason-at`` the same way
+    ``/lock-reasons-at-batch`` pairs with ``/lock-reason-at``: scalar ->
+    matrix in one call. Fills the lock-reason-axis batch member of the
+    ``next_*_at_batch`` family alongside
+    ``/next-tier-feature-spec-at-batch`` and
+    ``/next-tier-runtime-spec-at-batch``.
+
+    Use case: a paywall "does THIS column of features / runtimes /
+    capacity axes unlock at my next rung?" matrix surface hydrates every
+    row off ONE call instead of N calls to ``/next-tier-lock-reason-at``
+    per axis.
+
+    Body is byte-identical to
+    ``/lock-reasons-at-batch?tier=<target>&...`` for the resolved
+    ``target = _next_purchasable_tier_after(tier)`` plus a ``tier`` /
+    ``target`` echo -- a parity test pins this so the two batch surfaces
+    cannot drift.
+
+    At least one of ``features=`` / ``runtimes=`` / ``channels=`` /
+    ``retention_days=`` / ``nodes=`` must be supplied (matches
+    ``/lock-reasons-at-batch``); supply as many as you like.
+    ``features=`` / ``runtimes=`` take comma-separated tokens
+    (whitespace + duplicates are normalised away; unknown ids contribute
+    a grace-shape row). The three capacity axes take a single int each;
+    blank / non-int values are treated as "not supplied".
+
+    Response shape::
+
+        {
+          "features":       [<row>, ...],
+          "runtimes":       [<row>, ...],
+          "channels":       <row> | None,
+          "retention_days": <row> | None,
+          "nodes":          <row> | None,
+          "tier":                 "<source tier id>",
+          "tier_label":           "<source label>",
+          "tier_rank":            <source rank>,
+          "target":               "<next-above tier id>" | null,
+          "target_label":         "<next-above label>" | null,
+          "target_rank":          <next-above rank> | null,
+          "current_tier":         "<live resolved tier>",
+          "current_tier_rank":    <int>,
+          "grace":                <bool>,
+          "enforced":             <bool>,
+        }
+
+    Each ``<row>`` carries ``key``, ``kind``, ``reason``, ``locked``,
+    ``allowed``, ``required_tier``, ``required_tier_label``,
+    ``required_tier_rank`` -- the same 8 keys ``/lock-reasons-at-batch``
+    returns.
+
+    Accepts any tier id in :data:`entitlements._TIER_ORDER` (including
+    ``trial``). At the ceiling (enterprise as source) ``target`` is
+    ``null`` and rows still render for every supplied item with
+    ``reason=null`` / ``locked=false`` / ``allowed=true`` so callers can
+    render "you're at the top" copy without a status-code branch.
+
+    - **400** when ``tier=`` is missing / blank or no axis is supplied
+    - **404** when ``tier`` is unknown (body carries ``which: "tier"``)
+    - **Never 5xxs**: builder failure short-circuits to the grace-shape
+      envelope with ``target=null`` so the paywall surface stays mute.
+    """
+    return _next_prev_lock_reason_at_batch("next")
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-lock-reason-at-batch")
+def api_entitlement_previous_tier_lock_reason_at_batch():
+    """``GET /api/entitlement/previous-tier-lock-reason-at-batch?tier=<source>
+    &features=a,b&runtimes=x,y&channels=N&retention_days=K&nodes=M`` --
+    batch sibling of ``/api/entitlement/previous-tier-lock-reason-at``.
+
+    Source-anchored mirror of ``/next-tier-lock-reason-at-batch`` and
+    downgrade-confirmation counterpart on the lock-reason axis. Lets a
+    downgrade-confirmation matrix surface render "what lock sentences
+    would surface for THIS column of items if I drop one rung?" without
+    recomputing the target tier client-side.
+
+    Response shape matches ``/next-tier-lock-reason-at-batch`` byte-for-
+    byte (``features``, ``runtimes``, ``channels``, ``retention_days``,
+    ``nodes``, ``tier``, ``tier_label``, ``tier_rank``, ``target``,
+    ``target_label``, ``target_rank``, ``current_tier``,
+    ``current_tier_rank``, ``grace``, ``enforced``). Body is
+    byte-identical to ``/lock-reasons-at-batch?tier=<target>&...`` for
+    the resolved
+    ``target = _previous_purchasable_tier_before(tier)``.
+
+    Accepts any tier id in :data:`entitlements._TIER_ORDER` (including
+    ``trial``). At the floor (``oss`` / ``cloud_free`` as source)
+    ``target`` is ``null`` and rows still render for every supplied item
+    with ``reason=null`` / ``locked=false`` / ``allowed=true``.
+
+    - **400** when ``tier=`` is missing / blank or no axis is supplied
+    - **404** when ``tier`` is unknown (body carries ``which: "tier"``)
+    - **Never 5xxs**: builder failure short-circuits to the grace-shape
+      envelope with ``target=null``.
+    """
+    return _next_prev_lock_reason_at_batch("previous")
 
 
 @bp_entitlement.route("/api/entitlement/tier-spec-path-batch")
