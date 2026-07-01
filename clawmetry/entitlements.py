@@ -4528,6 +4528,91 @@ def runtime_spec_at_batch(tier: str, runtimes) -> dict | None:
     return {"runtimes": rows, "unknown": unknown}
 
 
+def tier_spec_at_batch(tier: str, targets) -> dict | None:
+    """What-if + batch sibling of :func:`tier_spec_at`: return single-tier
+    descriptor rows for a caller-supplied subset of target tiers, all
+    computed from the perspective of a fixed hypothetical ``tier``.
+
+    Fixed-source multi-target companion to :func:`tier_spec_at` (scalar
+    what-if scalar) and cross-tier axis of :func:`feature_spec_at_batch` /
+    :func:`runtime_spec_at_batch` (which fix the source and batch across
+    the feature / runtime axis). Also the caller-supplied-targets sibling
+    of :func:`next_tier_spec_at_batch` /
+    :func:`previous_tier_spec_at_batch` (which walk the ladder from the
+    resolved tier and pin the destination to the adjacent purchasable
+    rung). Lets a pricing-comparison matrix UI ("from my perspective
+    tier, show me the descriptor rows for OSS, Cloud Starter, Cloud Pro,
+    Enterprise") hydrate every column off ONE round-trip instead of N
+    calls to :func:`tier_spec_at`.
+
+    Per-row body is byte-identical to :func:`tier_spec_at(tier, target)`
+    for the same ``target`` -- a parity test pins this so the scalar and
+    batch what-if accessors cannot drift. Only the ``is_current`` boolean
+    varies row by row (``True`` iff ``target == tier``); every other
+    catalogue-derived field comes straight from the static per-tier maps.
+
+    Shape (mirrors :func:`feature_catalog_at_batch` /
+    :func:`runtime_catalog_at_batch`'s ``{tiers, unknown}`` envelope --
+    the ``tiers`` axis IS the batch axis here, so the envelope key stays
+    ``tiers`` even though every row IS a tier)::
+
+        {
+          "tiers": [<tier_spec_at row>, ...],   # one per known target, first-seen order
+          "unknown": ["bogus_id", ...],         # supplied ids not in _TIER_ORDER
+        }
+
+    Returns ``None`` for empty / unknown perspective ``tier`` (caller
+    renders "unknown tier" / 404). Supplied target ids are normalised via
+    :func:`_normalise_csv` (whitespace stripped, lowercased, duplicates
+    dropped, first-seen order preserved). Unknown ids are echoed in
+    ``unknown[]`` instead of short-circuiting -- a partially-bad caller
+    still gets rows back for the valid ids alongside a list of what was
+    dropped, matching :func:`feature_spec_at_batch` /
+    :func:`runtime_spec_at_batch` /
+    :func:`feature_catalog_at_batch` /
+    :func:`runtime_catalog_at_batch`'s posture. ``trial`` IS accepted as
+    both perspective and target (it lives in :data:`_TIER_ORDER` and the
+    scalar helper resolves it).
+
+    Empty / ``None`` targets returns ``{"tiers": [], "unknown": []}`` --
+    the HTTP wrapper turns that into a 400, this helper does not raise.
+
+    Resolver-independent: delegates per-row to :func:`tier_spec_at`,
+    which reads only the static per-tier maps -- so grace vs enforce
+    yields byte-identical rows. Never raises: a per-row failure
+    short-circuits that id into ``unknown[]`` and the rest of the batch
+    keeps building.
+    """
+    try:
+        t = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not t or t not in _TIER_ORDER:
+        return None
+    ids = _normalise_csv(targets)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    for tid in ids:
+        if tid not in _TIER_ORDER:
+            unknown.append(tid)
+            continue
+        try:
+            row = tier_spec_at(t, tid)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: tier_spec_at_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        if row is None:
+            unknown.append(tid)
+            continue
+        rows.append(row)
+    return {"tiers": rows, "unknown": unknown}
+
+
 def lock_reason_at(
     perspective_tier: str, item: str, *, kind: str | None = None
 ) -> str | None:
