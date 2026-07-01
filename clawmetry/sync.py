@@ -9738,11 +9738,11 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
             return 0
 
     try:
+        import hashlib
         if _sqlite_jobs is not None:
             jobs = _sqlite_jobs
             h, file_unchanged = "", False
         else:
-            import hashlib
             raw = open(cron_file, "rb").read()
             h = hashlib.md5(raw).hexdigest()
             file_unchanged = h == last_hash
