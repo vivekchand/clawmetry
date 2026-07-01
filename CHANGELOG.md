@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Fix: the sync daemon now starts and is detected correctly on a root server or VPS (2026-07-01)
+- **On a server you run as root (a VPS reached over SSH), the background sync daemon could fail to start and `clawmetry status` would always say "Daemon: Not running" (#3423).** Root usually has no per-user service session, so the old startup silently did nothing and status only knew how to look for a per-user service. ClawMetry now installs a proper system service for root (which starts and survives reboots), falls back to a plain background process if needed, and detects the daemon by looking for the actual running process. `clawmetry status` also shows the installed ClawMetry version now, so it is obvious at a glance whether a machine is up to date.
+
 ### Fix: paid runtimes now sync as soon as you upgrade to Trial or Pro (2026-06-30)
 - **After upgrading from Free to a Trial or Pro plan, paid runtimes like Claude Code could keep showing "NOT syncing" and `clawmetry status` could still say "FREE plan" (#3414).** The plan a node knows about was only refreshed by the background daemon on a heartbeat, so if the daemon was down or had not checked in since you upgraded, the local copy stayed stale. Now `clawmetry status` reads your live plan from your account and updates the local copy on the spot, and the daemon re-checks your plan on every heartbeat, so paid runtimes start syncing right after you upgrade, with no restart needed.
 
