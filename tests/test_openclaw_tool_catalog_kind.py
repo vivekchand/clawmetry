@@ -164,3 +164,52 @@ def test_env_var_without_dist_marker_keeps_state_but_no_kind(monkeypatch, tmp_pa
     assert oc._nemoclaw_tool_catalog_state() is True
     # But there's no on-disk wrapper, so no provenance to stamp.
     assert oc._openclaw_tool_catalog_kind() is None
+
+
+# ── tools-present gate (#3432) ────────────────────────────────────────────────
+
+
+def test_tools_present_false_with_patch_returns_false(monkeypatch, tmp_path):
+    # Harness gate: catalog inactive when no tools registered, even if patched.
+    home = _make_dist(tmp_path, PATCH_MARKER)
+    monkeypatch.setenv("OPENCLAW_HOME", str(home))
+    assert oc._nemoclaw_tool_catalog_state(tools_present=False) is False
+
+
+def test_tools_present_none_with_patch_returns_true(monkeypatch, tmp_path):
+    # tools_present=None (unknown) must not change the existing contract.
+    home = _make_dist(tmp_path, PATCH_MARKER)
+    monkeypatch.setenv("OPENCLAW_HOME", str(home))
+    assert oc._nemoclaw_tool_catalog_state(tools_present=None) is True
+
+
+def test_tools_present_true_with_patch_returns_true(monkeypatch, tmp_path):
+    home = _make_dist(tmp_path, PATCH_MARKER)
+    monkeypatch.setenv("OPENCLAW_HOME", str(home))
+    assert oc._nemoclaw_tool_catalog_state(tools_present=True) is True
+
+
+def test_tools_present_false_with_env_only_returns_false(monkeypatch, tmp_path):
+    # Env-var-only (no patch marker) + zero tools → catalog inactive.
+    home = tmp_path / ".openclaw"
+    home.mkdir()
+    monkeypatch.setenv("OPENCLAW_HOME", str(home))
+    monkeypatch.setenv("NEMOCLAW_TOOL_CATALOG", "1")
+    assert oc._nemoclaw_tool_catalog_state(tools_present=False) is False
+
+
+def test_tools_present_false_no_nemoclaw_signal_still_none(monkeypatch, tmp_path):
+    # When there is no NemoClaw signal at all, tools_present is irrelevant —
+    # the function must return None (plain OpenClaw).
+    home = tmp_path / ".openclaw"
+    home.mkdir()
+    monkeypatch.setenv("OPENCLAW_HOME", str(home))
+    assert oc._nemoclaw_tool_catalog_state(tools_present=False) is None
+
+
+def test_env_var_zero_takes_precedence_over_tools_present(monkeypatch, tmp_path):
+    # NEMOCLAW_TOOL_CATALOG=0 disables regardless of tools_present value.
+    home = _make_dist(tmp_path, PATCH_MARKER)
+    monkeypatch.setenv("OPENCLAW_HOME", str(home))
+    monkeypatch.setenv("NEMOCLAW_TOOL_CATALOG", "0")
+    assert oc._nemoclaw_tool_catalog_state(tools_present=True) is False
