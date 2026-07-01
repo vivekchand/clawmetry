@@ -2610,6 +2610,149 @@ def api_entitlement_tier_catalog_at():
         return jsonify({"error": "tier-catalog-at failed"}), 500
 
 
+@bp_entitlement.route("/api/entitlement/feature-catalog-at-batch")
+def api_entitlement_feature_catalog_at_batch():
+    """``GET /api/entitlement/feature-catalog-at-batch?tiers=a,b,c`` --
+    batch what-if sibling of ``/api/entitlement/feature-catalog-at``.
+
+    Where ``/feature-catalog-at`` hydrates the full feature catalog for
+    ONE hypothetical tier, this hydrates it for N hypothetical tiers in
+    ONE round-trip. Pairs with ``/feature-catalog-at`` the same way
+    ``/feature-spec-at-batch`` pairs with ``/feature-spec-at``: scalar
+    what-if -> matrix what-if across the perspective-tier axis rather
+    than the feature-id axis.
+
+    Use case: a pricing-comparison matrix UI ("show me the full feature
+    catalog at OSS vs Cloud Starter vs Cloud Pro vs Enterprise")
+    hydrates every column off ONE call instead of N calls to
+    ``/feature-catalog-at``.
+
+    Each ``tiers[].features`` list is byte-identical to the body of
+    ``/feature-catalog-at?tier=<tier>`` for the same tier -- pinned by
+    the parity tests so the scalar and batch what-if catalog helpers
+    cannot drift. Supplied tier ids are normalised (whitespace
+    stripped, lowercased, duplicates dropped, first-seen order
+    preserved). Unknown ids do not 404 the call -- they are echoed in
+    ``unknown[]`` so a partially-bad caller still gets rows back for
+    the valid ids alongside a list of what was dropped, matching every
+    other ``_at_batch`` sibling's posture.
+
+    Response shape::
+
+        {
+          "tiers": [
+            {
+              "tier":       "<id>",
+              "tier_label": "...",
+              "tier_rank":  <int>,
+              "features":   [<feature-catalog-at row>, ...],
+            },
+            ...
+          ],
+          "unknown":    ["bogus_id", ...],
+          "current_tier":      "...",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    - **400** when ``tiers=`` is missing / empty after normalisation
+    - **200** with bucketed unknowns for unknown tier ids -- does NOT
+      404 the call, matching every other batch sibling
+    - **Never 5xxs**: a synthesis failure short-circuits to an envelope
+      with empty rows so the matrix keeps rendering.
+    """
+    tiers = _parse_csv_arg("tiers")
+    if not tiers:
+        return jsonify({"error": "supply tiers=<csv>"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        batch = _ent.feature_catalog_at_batch(tiers)
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": batch.get("tiers", []),
+                "unknown": batch.get("unknown", []),
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_feature_catalog_at_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "unknown": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/runtime-catalog-at-batch")
+def api_entitlement_runtime_catalog_at_batch():
+    """``GET /api/entitlement/runtime-catalog-at-batch?tiers=a,b,c`` --
+    batch what-if sibling of ``/api/entitlement/runtime-catalog-at``.
+
+    Runtime-axis twin of ``/feature-catalog-at-batch``: same shape, same
+    normalisation semantics, same unknown-echo posture. Together the
+    two batches let a pricing-comparison matrix UI hydrate every
+    feature + runtime column at every hypothetical rung off TWO calls
+    instead of 2 * N calls to the scalar what-if catalog endpoints.
+
+    Each ``tiers[].runtimes`` list is byte-identical to the body of
+    ``/runtime-catalog-at?tier=<tier>`` for the same tier -- pinned by
+    the parity tests.
+
+    Response shape mirrors ``/feature-catalog-at-batch`` with
+    ``features`` renamed to ``runtimes``.
+
+    - **400** when ``tiers=`` is missing / empty after normalisation
+    - **200** with bucketed unknowns for unknown tier ids
+    - **Never 5xxs**: a synthesis failure short-circuits to an envelope
+      with empty rows so the matrix keeps rendering.
+    """
+    tiers = _parse_csv_arg("tiers")
+    if not tiers:
+        return jsonify({"error": "supply tiers=<csv>"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        batch = _ent.runtime_catalog_at_batch(tiers)
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": batch.get("tiers", []),
+                "unknown": batch.get("unknown", []),
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_runtime_catalog_at_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "unknown": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/tier-spec-at")
 def api_entitlement_tier_spec_at():
     """``GET /api/entitlement/tier-spec-at?tier=<id>&target=<id>`` -- scalar
