@@ -118,6 +118,21 @@ _SHUTDOWN_FLUSH_TIMEOUT_SECS = 5.0
 _shutdown_flushed = threading.Event()
 _shutdown_lock = threading.Lock()
 
+# sb_name → Popen handle for long-lived `openshell logs --tail` processes
+_ocsf_tail_procs: dict = {}
+_OCSF_TAIL_DRAIN_LIMIT = 200  # max lines drained per sync tick
+
+
+def _ocsf_tail_shutdown() -> None:
+    """Terminate all held openshell sandbox tail processes on daemon exit."""
+    for proc in list(_ocsf_tail_procs.values()):
+        try:
+            proc.terminate()
+            proc.wait(timeout=3)
+        except Exception:
+            pass
+    _ocsf_tail_procs.clear()
+
 
 def _drain_local_store_now() -> tuple[int, float]:
     """Synchronously drain the LocalStore ring → DuckDB. Returns
@@ -192,6 +207,8 @@ def _graceful_shutdown(reason: str, *, force_exit: bool) -> None:
         log.info(
             "graceful shutdown: flushed %s row(s) in %.3fs", rows, elapsed
         )
+
+    _ocsf_tail_shutdown()
 
     if force_exit:
         # sys.exit raises SystemExit which other threads can swallow;
@@ -2391,20 +2408,46 @@ def sync_sandbox_sessions_openshell(config: dict, state: dict) -> int:
                     sb_name, fname, _ce,
                 )
 
-        # OCSF audit log ingest — gap #3299.
-        # Only attempt when the sandbox has OCSF JSON output armed.
+        # OCSF audit log ingest — gap #3299 / fix #3389.
+        # Uses a long-lived tail process (Popen) so events emitted between
+        # polling cycles are not dropped. Falls back to one-shot snapshot
+        # if the tail process cannot be started.
         try:
             from clawmetry.adapters.openclaw import (
                 _openshell_sandbox_ocsf_enabled,
                 _openshell_sandbox_logs,
+                _openshell_sandbox_logs_tail,
             )
             if _openshell_sandbox_ocsf_enabled(sb_name).get("sandboxOcsfJsonEnabled"):
-                ocsf_events = _openshell_sandbox_logs(sb_name)
-                if ocsf_events:
-                    from clawmetry import local_store as _ls
-                    _store_obj = _ls.get_store()
-                    for idx, ev in enumerate(ocsf_events):
-                        uid = ev.get("uid") or ev.get("activity_id") or str(idx)
+                from clawmetry import local_store as _ls
+                _store_obj = _ls.get_store()
+
+                # Ensure the tail process for this sandbox is running.
+                proc = _ocsf_tail_procs.get(sb_name)
+                if proc is None or proc.poll() is not None:
+                    proc = _openshell_sandbox_logs_tail(sb_name)
+                    if proc is not None:
+                        _ocsf_tail_procs[sb_name] = proc
+
+                if proc is not None:
+                    # Non-blocking drain: read only lines already buffered.
+                    import select as _select
+                    ingested = 0
+                    for _ in range(_OCSF_TAIL_DRAIN_LIMIT):
+                        ready, _, _ = _select.select([proc.stdout], [], [], 0)
+                        if not ready:
+                            break
+                        line = proc.stdout.readline()
+                        if not line:
+                            break
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            ev = json.loads(line)
+                        except Exception:
+                            continue
+                        uid = ev.get("uid") or ev.get("activity_id") or str(ingested)
                         ts_val = ev.get("time")
                         ts_iso = (
                             datetime.fromtimestamp(ts_val, tz=timezone.utc).isoformat()
@@ -2421,8 +2464,34 @@ def sync_sandbox_sessions_openshell(config: dict, state: dict) -> int:
                             "ts": ts_iso,
                             "data": ev,
                         })
-                    _store_obj.flush()
-                    log.debug("nemoclaw OCSF: ingested %d events for %s", len(ocsf_events), sb_name)
+                        ingested += 1
+                    if ingested:
+                        _store_obj.flush()
+                        log.debug("nemoclaw OCSF: ingested %d events for %s", ingested, sb_name)
+                else:
+                    # Fallback: one-shot snapshot when Popen is unavailable.
+                    ocsf_events = _openshell_sandbox_logs(sb_name)
+                    if ocsf_events:
+                        for idx, ev in enumerate(ocsf_events):
+                            uid = ev.get("uid") or ev.get("activity_id") or str(idx)
+                            ts_val = ev.get("time")
+                            ts_iso = (
+                                datetime.fromtimestamp(ts_val, tz=timezone.utc).isoformat()
+                                if isinstance(ts_val, (int, float))
+                                else datetime.now(timezone.utc).isoformat()
+                            )
+                            _store_obj.ingest({
+                                "id": f"nemoclaw-ocsf:{sb_name}:{uid}",
+                                "node_id": node_id,
+                                "agent_type": "nemoclaw",
+                                "agent_id": sb_name,
+                                "session_id": sb_name,
+                                "event_type": "sandbox.audit_log",
+                                "ts": ts_iso,
+                                "data": ev,
+                            })
+                        _store_obj.flush()
+                        log.debug("nemoclaw OCSF: ingested %d events for %s (one-shot)", len(ocsf_events), sb_name)
         except Exception as _oe:
             log.debug("nemoclaw OCSF ingest failed (non-fatal): %s", _oe)
 

@@ -325,6 +325,27 @@ def _openshell_sandbox_logs(name: str, count: int = 20) -> list:
         return []
 
 
+def _openshell_sandbox_logs_tail(name: str):
+    """Spawn ``openshell logs <name> --source all --tail`` as a long-lived child
+    process and return the ``subprocess.Popen`` handle.
+
+    The caller owns process lifetime — drain stdout non-blockingly each sync
+    tick and call ``proc.terminate()`` + ``proc.wait()`` on daemon shutdown.
+    Returns ``None`` when openshell is absent or the spawn fails; never raises.
+    """
+    try:
+        import shutil as _sh
+        if not _sh.which("openshell"):
+            return None
+        import subprocess as _sp
+        return _sp.Popen(
+            ["openshell", "logs", name, "--source", "all", "--tail"],
+            stdout=_sp.PIPE, stderr=_sp.DEVNULL, text=True, bufsize=1,
+        )
+    except Exception:
+        return None
+
+
 def _sandbox_inference_configs() -> list:
     """Read per-sandbox inference config from ~/.nemoclaw/sandboxes.json.
 
