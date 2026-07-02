@@ -843,6 +843,138 @@ class Entitlement:
             logger.warning("entitlements: previous_tier_spec failed: %s", exc)
             return None
 
+    def next_tier_feature_spec(self, feature: str) -> dict | None:
+        """Feature-axis projection of :meth:`next_tier_spec`: the
+        :func:`feature_spec_at`-shape catalogue row for ``feature``
+        evaluated on the rung above the resolved entitlement.
+
+        Current-relative sibling of :func:`next_tier_feature_spec_at`
+        (which takes an explicit source ``tier``). Convenience for
+        ``feature_spec_at(self.next_purchasable_tier(), feature)`` so a
+        paywall tooltip can ask "does THIS feature unlock at my next
+        rung?" off ONE round-trip without threading the current tier
+        through query args or first fetching :meth:`next_tier_spec` /
+        :func:`feature_catalog_at` at the target rung.
+
+        Anchored on :meth:`next_purchasable_tier` (source-aware -- picks
+        the ``cloud_*`` sibling when :attr:`source` is ``"cloud"``, the
+        self-hosted sibling otherwise), matching :meth:`next_tier_spec`.
+        The ``_at`` variant walks the source-agnostic
+        :func:`_next_purchasable_tier_after` instead -- both resolve to
+        the same rung for every source except at the free/starter
+        boundary where source-aware and source-agnostic diverge.
+
+        Returns ``None`` for empty / unknown ``feature`` and at the
+        resolver's ceiling (no rung above current). Never raises: a
+        builder failure short-circuits to ``None`` so the tooltip stays
+        mute instead of breaking.
+        """
+        try:
+            f = (feature or "").strip().lower()
+        except (AttributeError, TypeError):
+            return None
+        if not f or f not in ALL_FEATURES:
+            return None
+        try:
+            target = self.next_purchasable_tier()
+            if target is None:
+                return None
+            return feature_spec_at(target, f)
+        except Exception as exc:
+            logger.warning("entitlements: next_tier_feature_spec failed: %s", exc)
+            return None
+
+    def previous_tier_feature_spec(self, feature: str) -> dict | None:
+        """Feature-axis projection of :meth:`previous_tier_spec`: the
+        :func:`feature_spec_at`-shape catalogue row for ``feature``
+        evaluated on the rung below the resolved entitlement.
+
+        Symmetric mirror of :meth:`next_tier_feature_spec` and
+        downgrade-confirmation companion. Convenience for
+        ``feature_spec_at(self.previous_purchasable_tier(), feature)``.
+
+        Anchored on :meth:`previous_purchasable_tier` (source-aware),
+        matching :meth:`previous_tier_spec`.
+
+        Returns ``None`` for empty / unknown ``feature`` and at the
+        resolver's floor. Never raises.
+        """
+        try:
+            f = (feature or "").strip().lower()
+        except (AttributeError, TypeError):
+            return None
+        if not f or f not in ALL_FEATURES:
+            return None
+        try:
+            target = self.previous_purchasable_tier()
+            if target is None:
+                return None
+            return feature_spec_at(target, f)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: previous_tier_feature_spec failed: %s", exc
+            )
+            return None
+
+    def next_tier_runtime_spec(self, runtime: str) -> dict | None:
+        """Runtime-axis projection of :meth:`next_tier_spec`: the
+        :func:`runtime_spec_at`-shape catalogue row for ``runtime``
+        evaluated on the rung above the resolved entitlement.
+
+        Current-relative sibling of :func:`next_tier_runtime_spec_at`.
+        Convenience for ``runtime_spec_at(self.next_purchasable_tier(),
+        runtime)`` so a paywall tooltip can ask "does THIS runtime
+        unlock at my next rung?" off ONE round-trip.
+
+        Accepts aliases (``claude-code`` -> ``claude_code``) via
+        :func:`canonical_runtime` so the input surface matches
+        ``/api/entitlement/required-tier`` and the sibling
+        ``/next-tier-runtime-spec-at``.
+
+        Returns ``None`` for empty / unknown ``runtime`` and at the
+        resolver's ceiling. Never raises.
+        """
+        rt = canonical_runtime(runtime)
+        if not rt or rt not in ALL_RUNTIMES:
+            return None
+        try:
+            target = self.next_purchasable_tier()
+            if target is None:
+                return None
+            return runtime_spec_at(target, rt)
+        except Exception as exc:
+            logger.warning("entitlements: next_tier_runtime_spec failed: %s", exc)
+            return None
+
+    def previous_tier_runtime_spec(self, runtime: str) -> dict | None:
+        """Runtime-axis projection of :meth:`previous_tier_spec`: the
+        :func:`runtime_spec_at`-shape catalogue row for ``runtime``
+        evaluated on the rung below the resolved entitlement.
+
+        Symmetric mirror of :meth:`next_tier_runtime_spec` and
+        downgrade-confirmation companion. Convenience for
+        ``runtime_spec_at(self.previous_purchasable_tier(), runtime)``.
+
+        Accepts aliases (``claude-code`` -> ``claude_code``) via
+        :func:`canonical_runtime`.
+
+        Returns ``None`` for empty / unknown ``runtime`` and at the
+        resolver's floor. Never raises.
+        """
+        rt = canonical_runtime(runtime)
+        if not rt or rt not in ALL_RUNTIMES:
+            return None
+        try:
+            target = self.previous_purchasable_tier()
+            if target is None:
+                return None
+            return runtime_spec_at(target, rt)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: previous_tier_runtime_spec failed: %s", exc
+            )
+            return None
+
     def grace_remaining_days(self) -> int | None:
         at = enforce_at_epoch()
         if at is None:
@@ -1566,6 +1698,54 @@ def previous_tier_spec() -> dict | None:
         return get_entitlement().previous_tier_spec()
     except Exception as exc:
         logger.warning("entitlements: previous_tier_spec (module) failed: %s", exc)
+        return None
+
+
+def next_tier_feature_spec(feature: str) -> dict | None:
+    """Module-level :meth:`Entitlement.next_tier_feature_spec` against
+    the resolved entitlement. Never raises."""
+    try:
+        return get_entitlement().next_tier_feature_spec(feature)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_feature_spec (module) failed: %s", exc
+        )
+        return None
+
+
+def previous_tier_feature_spec(feature: str) -> dict | None:
+    """Module-level :meth:`Entitlement.previous_tier_feature_spec`
+    against the resolved entitlement. Never raises."""
+    try:
+        return get_entitlement().previous_tier_feature_spec(feature)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_feature_spec (module) failed: %s", exc
+        )
+        return None
+
+
+def next_tier_runtime_spec(runtime: str) -> dict | None:
+    """Module-level :meth:`Entitlement.next_tier_runtime_spec` against
+    the resolved entitlement. Never raises."""
+    try:
+        return get_entitlement().next_tier_runtime_spec(runtime)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_runtime_spec (module) failed: %s", exc
+        )
+        return None
+
+
+def previous_tier_runtime_spec(runtime: str) -> dict | None:
+    """Module-level :meth:`Entitlement.previous_tier_runtime_spec`
+    against the resolved entitlement. Never raises."""
+    try:
+        return get_entitlement().previous_tier_runtime_spec(runtime)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_runtime_spec (module) failed: %s", exc
+        )
         return None
 
 
