@@ -1155,6 +1155,15 @@ class OpenClawAdapter(AgentAdapter):
             _zai = s.get("zaiBaseUrl") or s.get("synthesizedModelBaseUrl") or s.get("glm5BaseUrl")
             if _zai is not None:
                 extra["zaiBaseUrl"] = _zai
+            # Per-conversation capability profile (#3469): PR #98536 adds
+            # capabilityProfile / conversationCapability to session records
+            # (OpenClaw harness 2026.7.1, "Safer scoped conversations").
+            _cap_profile = (
+                s.get("capabilityProfile")
+                or s.get("conversationCapability")
+            )
+            if _cap_profile is not None:
+                extra["capabilityProfile"] = _cap_profile
             tok_total = int(s.get("totalTokens") or 0)
             tok_in = int(s.get("inputTokens") or 0)
             tok_out = int(s.get("outputTokens") or 0)
@@ -1365,6 +1374,13 @@ class OpenClawAdapter(AgentAdapter):
                             _zai = obj.get("zaiBaseUrl") or obj.get("synthesizedModelBaseUrl") or obj.get("glm5BaseUrl")
                             if _zai is not None:
                                 extra["zaiBaseUrl"] = _zai
+                            # Per-conversation capability profile (#3469): PR #98536.
+                            _cap_profile = (
+                                obj.get("capabilityProfile")
+                                or obj.get("conversationCapability")
+                            )
+                            if _cap_profile is not None:
+                                extra["capabilityProfile"] = _cap_profile
                             # Normalized TTFR keys (#3054): also write ttfr_ms /
                             # slow_reply so callers that read the normalized form
                             # don't need to know the original key spellings.

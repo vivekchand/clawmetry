@@ -16487,6 +16487,7 @@ def _get_sessions():
                     "title": s.get("title") or "",
                     "costStatus": s.get("costStatus") or "",
                     "target": s.get("target") or s.get("identityTarget"),
+                    "capabilityProfile": s.get("capabilityProfile") or s.get("conversationCapability"),
                 }
             )
         _sessions_cache["data"] = sessions
