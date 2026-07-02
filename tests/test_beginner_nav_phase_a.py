@@ -73,9 +73,12 @@ def test_no_tab_lost_in_restructure():
         # Tier-1
         "overview", "inventory", "brain", "usage", "transcripts",
         "approvals", "alerts",
-        # Developer drawer
-        "flow", "models", "context", "tracing", "agents", "turn-anatomy",
-        "tool-catalog", "context-economics", "harness", "swimlane", "dives",
+        # Developer drawer. Phase B (UX_AUDIT.md) deliberately moved the
+        # session-scoped views (tracing, turn-anatomy, swimlane) OUT of the
+        # nav and into the session drill-down - their pages and switchTab ids
+        # still work; tests/test_session_deep_dive.py guards that entry point.
+        "flow", "models", "context", "agents",
+        "tool-catalog", "context-economics", "harness", "dives",
         # Advanced
         "crons", "memory", "notifications", "security", "policy", "skills",
         "selfevolve", "version-impact", "nemoclaw",
@@ -95,8 +98,8 @@ def test_developer_drawer_membership():
     drawer = nav[start:end]
     got = set(_ordered_tabs(drawer))
     assert got == {
-        "flow", "models", "context", "tracing", "agents", "turn-anatomy",
-        "tool-catalog", "context-economics", "harness", "swimlane", "dives",
+        "flow", "models", "context", "agents",
+        "tool-catalog", "context-economics", "harness", "dives",
     }, f"Developer drawer membership drifted: {sorted(got)}"
 
 
