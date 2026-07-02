@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Fix: per-runtime cost is accurate again (family spend was booked as OpenClaw) (2026-07-02)
+- **The Cost tab could show OpenClaw carrying the whole machine's spend while Claude Code showed today's cost but $0 for the week and month (#3490).** One event mapper stamped every transcript event as OpenClaw, so the daily cost rollup booked all family-runtime spend (Claude Code, Codex, and friends) under OpenClaw. On a real node, OpenClaw showed $2,005 for the month when its true total was $4.37.
+- Events are now attributed by their session's runtime (the same rule every other view uses), and on update the store rebuilds its cost history once so past spend moves to the right runtime automatically - no reinstall, nothing to run. Verified on a live node: after the rebuild, OpenClaw and Qwen Code match their roster lifetimes exactly, and Claude Code's week and month are consistent with its today.
+
 ### Fix: the Agents roster no longer looks like it changes on every runtime switch (2026-07-02)
 - **Switching the runtime dropdown made the Agents tab appear to show different data each time (#3482).** The roster is one node-wide list, and the selected runtime's row is deliberately kept visible instead of folding under "Show N inactive". But the promoted row landed in an arbitrary position and nothing said why an idle runtime suddenly appeared, so the list read as random. Now the selected runtime is always the first row, and a small "selected" tag (with a plain-words tooltip) marks a row that is only visible because it is selected. The numbers were always identical across selections; this makes the behavior visible and predictable.
 
