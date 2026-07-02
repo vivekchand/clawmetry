@@ -1864,6 +1864,160 @@ def api_entitlement_downgrade_path():
         )
 
 
+@bp_entitlement.route("/api/entitlement/upgrade-path-at")
+def api_entitlement_upgrade_path_at():
+    """``GET /api/entitlement/upgrade-path-at?tier=<source>`` -- scalar
+    what-if sibling of ``/api/entitlement/upgrade-path``: ordered
+    marginal-unlock ladder from the caller-supplied ``tier`` upward.
+
+    Source-anchored equivalent of ``/upgrade-path`` (which pins the
+    walk's starting point to the resolver) -- the ``_at`` sibling in
+    the ladder-walk family alongside ``/next-tier-spec-at``,
+    ``/next-tier-unlocks-at``, ``/next-tier-locks-at``,
+    ``/next-tier-diff-at`` and ``/next-tier-capacity-diff-at``.
+    Lets a pricing-page "from tier X" wizard render the full upgrade
+    ladder for any hypothetical source rung without first switching
+    the resolver.
+
+    Response shape mirrors ``/upgrade-path`` with the ``current_tier`` /
+    ``current_tier_rank`` echo replaced by the caller-supplied ``tier``::
+
+        {
+          "tier":              "<source>",
+          "tier_label":        "<display>",
+          "tier_rank":         <int>,
+          "path":              [<row>, ...],
+          "current_tier":      "<resolved tier>",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<row>`` matches ``/api/entitlement/tier-unlocks`` exactly
+    (``tier``, ``tier_label``, ``tier_rank``, ``previous_tier``, ...),
+    byte-identical to the corresponding row in ``/upgrade-path`` when
+    ``tier`` equals the resolved entitlement -- pinned by parity tests so
+    the source-anchored and live variants cannot drift.
+
+    Missing / empty ``tier`` -> 400. Unknown ``tier`` -> 404. Enterprise
+    source -> 200 with ``path: []`` (already at the top). Never 5xxs: a
+    resolver failure yields the grace-shape envelope so the wizard keeps
+    rendering.
+    """
+    tier = (request.args.get("tier") or "").strip().lower()
+    if not tier:
+        return jsonify({"error": "tier query parameter is required"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier not in _ent._TIER_ORDER:
+            return jsonify({"error": "unknown tier", "tier": tier}), 404
+        path = _ent.upgrade_path_at(tier) or []
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tier": tier,
+                "tier_label": _ent.tier_label(tier),
+                "tier_rank": _ent.tier_rank(tier),
+                "path": path,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_upgrade_path_at: error: %s", exc)
+        return jsonify(
+            {
+                "tier": tier,
+                "tier_label": tier,
+                "tier_rank": -1,
+                "path": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/downgrade-path-at")
+def api_entitlement_downgrade_path_at():
+    """``GET /api/entitlement/downgrade-path-at?tier=<source>`` -- scalar
+    what-if sibling of ``/api/entitlement/downgrade-path``: ordered
+    cumulative-loss ladder from the caller-supplied ``tier`` downward.
+
+    Source-anchored mirror of ``/api/entitlement/upgrade-path-at`` and
+    downgrade-side counterpart of the live ``/downgrade-path`` (source
+    pinned to the resolver). Lets a "compare from tier X" downgrade-
+    warning surface render every rung's loss list for any hypothetical
+    source without first asking the resolver.
+
+    Response shape mirrors ``/downgrade-path`` with the ``current_tier`` /
+    ``current_tier_rank`` echo replaced by the caller-supplied ``tier``::
+
+        {
+          "tier":              "<source>",
+          "tier_label":        "<display>",
+          "tier_rank":         <int>,
+          "path":              [<row>, ...],
+          "current_tier":      "<resolved tier>",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<row>`` carries the destination tier metadata + the walk's
+    source echo (``current_tier`` / ``current_tier_label`` /
+    ``current_tier_rank`` retain their :func:`downgrade_path` names for
+    byte-shape parity, and carry the ``_at`` source in this variant) +
+    ``lost_features`` / ``lost_runtimes`` cumulative over the gap (see
+    :func:`clawmetry.entitlements.downgrade_path_at`).
+
+    Missing / empty ``tier`` -> 400. Unknown ``tier`` -> 404. Floor
+    source (oss / cloud_free) -> 200 with ``path: []`` (no rung strictly
+    below). Never 5xxs: a resolver failure yields the grace-shape
+    envelope so the surface keeps rendering.
+    """
+    tier = (request.args.get("tier") or "").strip().lower()
+    if not tier:
+        return jsonify({"error": "tier query parameter is required"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier not in _ent._TIER_ORDER:
+            return jsonify({"error": "unknown tier", "tier": tier}), 404
+        path = _ent.downgrade_path_at(tier) or []
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tier": tier,
+                "tier_label": _ent.tier_label(tier),
+                "tier_rank": _ent.tier_rank(tier),
+                "path": path,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_downgrade_path_at: error: %s", exc)
+        return jsonify(
+            {
+                "tier": tier,
+                "tier_label": tier,
+                "tier_rank": -1,
+                "path": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 _CAPACITY_PARAMS = ("channels", "retention_days", "nodes")
 
 
