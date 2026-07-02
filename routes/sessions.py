@@ -4212,6 +4212,22 @@ def _try_local_store_transcript(session_id: str, _events=None):
             duration = f"{dur_sec / 60:.0f}m"
         else:
             duration = f"{dur_sec / 3600:.1f}h"
+    # Fetch external HTTP calls logged by the interceptor for this session.
+    # Routes through the daemon proxy (same pattern as query_events above);
+    # falls back to a direct read-only open in single-process installs / tests.
+    ext_calls: list = []
+    try:
+        _ext = local_store_via_daemon(
+            "query_external_calls", session_id=session_id, limit=200
+        )
+        if _ext is None:
+            from clawmetry import local_store as _ls
+            _ext = _ls.get_store(read_only=True).query_external_calls(
+                session_id=session_id, limit=200
+            )
+        ext_calls = _ext or []
+    except Exception:
+        ext_calls = []
     return {
         "name": session_id[:40],
         "messageCount": len(messages),
@@ -4219,6 +4235,7 @@ def _try_local_store_transcript(session_id: str, _events=None):
         "totalTokens": total_tokens,
         "duration": duration,
         "messages": messages[:500],
+        "external_api_calls": ext_calls,
         "_source": "local_store",
     }
 

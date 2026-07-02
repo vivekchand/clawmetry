@@ -145,3 +145,42 @@ def test_transcript_fast_path_off_when_flag_unset(app, monkeypatch):
     assert r.status_code == 404
     body = r.get_json() or {}
     assert body.get("_source") != "local_store"
+
+
+def test_transcript_includes_external_api_calls(app):
+    """External HTTP calls recorded by the interceptor appear in the transcript response."""
+    a, ls = app
+    store = ls.get_store()
+    sid = "sess-ext-api-calls"
+    # Seed a session row so query_external_calls(session_id=…) JOIN resolves.
+    # updated_at is a far-future epoch-ms value so any call ts within the
+    # session window satisfies (e.ts <= epoch_ms(updated_at * 1000)::VARCHAR).
+    store.ingest_session({
+        "session_id": sid,
+        "started_at": "2026-05-12T10:00:00Z",
+        "updated_at": 9_999_999_999_999,
+    })
+    # Seed one event so the fast-path returns a non-empty session.
+    store.ingest(_ev("extapi-e1", sid, "user", "call github api", "2026-05-12T10:00:01Z"))
+    # Seed one external API call within the session time window.
+    store.ingest_external_call({
+        "ts": "2026-05-12T10:00:05Z",
+        "host": "api.github.com",
+        "url": "https://api.github.com/repos/owner/repo",
+        "method": "GET",
+        "status_code": 200,
+        "latency_ms": 42.0,
+        "library": "requests",
+    }, node_id="node-test")
+    _drain(store)
+
+    c = a.test_client()
+    r = c.get(f"/api/transcript/{sid}")
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body.get("_source") == "local_store"
+    calls = body.get("external_api_calls", [])
+    assert len(calls) == 1
+    assert calls[0]["host"] == "api.github.com"
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["status_code"] == 200
