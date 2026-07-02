@@ -315,14 +315,21 @@ async function testNormalUser() {
     { label: 'Crons',         key: 'crons' },
     { label: 'Memory',        key: 'memory' },
   ];
-  // Open the Advanced drawer up front (new IA). Safe no-op on legacy.
+  // Open the Advanced + Developer drawers up front (new IA; the Developer
+  // drawer is collapsed by default since the Phase A beginner restructure).
+  // Safe no-op on legacy.
   await page.evaluate(() => {
     try {
-      const list = document.getElementById('left-nav-advanced-list');
-      const btn = document.getElementById('left-nav-advanced-toggle');
-      if (list && list.hasAttribute('hidden')) {
-        list.removeAttribute('hidden');
-        if (btn) btn.setAttribute('aria-expanded', 'true');
+      for (const [listId, btnId] of [
+        ['left-nav-advanced-list', 'left-nav-advanced-toggle'],
+        ['left-nav-live-list', 'left-nav-live-toggle'],
+      ]) {
+        const list = document.getElementById(listId);
+        const btn = document.getElementById(btnId);
+        if (list && list.hasAttribute('hidden')) {
+          list.removeAttribute('hidden');
+          if (btn) btn.setAttribute('aria-expanded', 'true');
+        }
       }
     } catch (e) { /* legacy nav, no drawer */ }
   });
