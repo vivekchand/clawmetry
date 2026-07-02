@@ -3596,3 +3596,22 @@ def api_audit_log():
             rows = []
 
     return jsonify({"entries": rows or [], "total": len(rows or [])})
+
+
+@bp_health.route("/api/doctor-findings")
+def api_doctor_findings():
+    """Return structured ``openclaw doctor`` diagnostic findings (#3468).
+
+    Runs ``openclaw doctor --json`` and surfaces the categorised findings
+    (auth-profile, workspace, device-pairing, channel-plugin, memory-provider,
+    systemd-exhaustion, Windows LAN-firewall) so the dashboard can show
+    misconfiguration alerts without the user having to run the CLI manually.
+    Returns ``{"findings": [], "count": 0}`` when openclaw is absent or the
+    harness version pre-dates the ``--json`` flag.
+    """
+    try:
+        from clawmetry.adapters.openclaw import _openclaw_doctor_findings
+        findings = _openclaw_doctor_findings()
+    except Exception:
+        findings = []
+    return jsonify({"findings": findings, "count": len(findings)})
