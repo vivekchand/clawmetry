@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### A simpler sidebar: seven plain items, expert views one click away (2026-07-02)
+- **The dashboard sidebar is now beginner-first (#3458).** A first-time user used to face about 27 navigation entries, many named in insider vocabulary, with an 11-item expert group expanded by default. The sidebar now shows seven plain-words items: Home (the landing screen finally has its own name), Agents, Activity (was Brain), Cost, Conversations (was Session replay), Approvals, and Alerts. Every deep-dive view lives in a collapsed "Developer" section: Flow, Models, LLM Context, Tracing, Agent Graph, Turn timing, Tools, Context usage, Runtime extras, Compare sessions, and Ask (was Dives). Schedules (was Crons) and Memory moved under Advanced.
+- **Nothing was removed and nothing breaks.** Every screen keeps its internal id, so bookmarks, deep links, and per-runtime tab visibility work unchanged. Opening a link to a Developer view automatically reveals the section so you can see where you are. If you had the expert group open before, it stays open for you.
+- **Verified:** live browser walk on a fresh profile (seven items, section toggle, tab switching, deep-link reveal, Advanced click-through) plus eight new structural guards in tests/test_beginner_nav_phase_a.py.
+
 ### Fix: the Cost tab no longer hangs on "Loading..." (2026-07-02)
 - **Every card on the Cost tab (Top Sessions by Cost, Cost By Plugin/Skill, Trace Clusters, Activity Heatmap, Cost Comparison) could sit on "Loading..." forever (#3453).** When a node did not yet have enough history, the usage API returned an empty trend object, and the trend renderer tried to read a property off it and threw. Because that renderer runs early while the Cost tab is loading, the error stopped every card after it from drawing. The trend card now handles an empty trend cleanly, and the Cost tab is hardened so a single card can never block the rest of the page. Verified live: all cards render again.
 
