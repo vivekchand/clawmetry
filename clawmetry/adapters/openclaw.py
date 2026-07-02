@@ -120,6 +120,39 @@ def _is_docker_runtime_down() -> Optional[bool]:
         return None
 
 
+def _openclaw_doctor_findings() -> list:
+    """Run ``openclaw doctor --json`` and return the list of structured
+    diagnostic findings (auth-profile, workspace, device-pairing,
+    channel-plugin, memory-provider, systemd-exhaustion, LAN-firewall).
+    Available since OpenClaw harness 2026.7.1 (#97125+). Returns [] when
+    openclaw is absent, the --json flag is unsupported, or output is not
+    valid JSON. Never raises.
+    """
+    try:
+        import shutil as _sh
+        if not _sh.which("openclaw"):
+            return []
+        import subprocess as _sp
+        res = _sp.run(
+            ["openclaw", "doctor", "--json"],
+            capture_output=True, text=True, timeout=15,
+        )
+        raw = (res.stdout or "").strip()
+        if not raw:
+            return []
+        import json as _json
+        data = _json.loads(raw)
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            for _key in ("findings", "results", "diagnostics"):
+                if isinstance(data.get(_key), list):
+                    return data[_key]
+        return []
+    except Exception:
+        return []
+
+
 def _real_install(sessions_dir: str) -> bool:
     """A genuine OpenClaw install signal, NOT the bare ~/.openclaw dir that
     ClawMetry itself creates as a scratch workspace. Any one of: the openclaw
@@ -980,6 +1013,13 @@ class OpenClawAdapter(AgentAdapter):
             _docker_down = _is_docker_runtime_down()
             if _docker_down is not None:
                 meta["dockerRuntimeDown"] = _docker_down
+            # Doctor findings (#3468): structured diagnostic findings from
+            # `openclaw doctor --json` (harness 2026.7.1). Categories:
+            # auth-profile, workspace, device-pairing, channel-plugin,
+            # memory-provider, systemd-exhaustion, Windows LAN-firewall.
+            _doctor = _openclaw_doctor_findings()
+            if _doctor:
+                meta["doctorFindings"] = _doctor
             return DetectResult(
                 name=self.name,
                 display_name=self.display_name,

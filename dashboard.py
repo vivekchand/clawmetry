@@ -258,7 +258,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.536"
+__version__ = "0.12.539"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -6712,7 +6712,10 @@ function switchTab(name) {
   if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
   if (name === 'selfconfig') loadSelfConfig();
   if (name === 'review') loadReview();
-  if (name === 'agents') loadAgentGraph();
+  // NOTE: this is the DEAD first DASHBOARD_HTML - it never renders. The Agent
+  // Graph wiring was mistakenly added here by #3315 (so the tab sat on
+  // "Loading..." forever); the live wiring lives in static/js/app.js
+  // switchTab. Do not add tab wiring here.
 }
 
 // ── Review tab (issue #1615) ─────────────────────────────────────────────
@@ -12026,52 +12029,31 @@ DASHBOARD_HTML = r"""
 <div class="app-shell">
   <aside id="left-nav" role="navigation" aria-label="Primary">
     <div class="left-nav-section">
+      {# Phase A of the beginner-IA restructure (UX_AUDIT.md): seven plain-words
+         Tier-1 items, every expert view inside the default-collapsed Developer
+         group below, config-ish tabs under Advanced. data-tab ids are STABLE -
+         only labels and grouping changed. #}
+      <div class="left-nav-item active" data-tab="overview" onclick="switchTab('overview')" data-i18n-title="nav.home_tooltip" title="Is everything OK, at a glance">
+        <span class="left-nav-icon" aria-hidden="true">&#8962;</span>
+        <span class="left-nav-label" data-i18n="nav.home">Home</span>
+        <span id="nav-stuck-badge" class="left-nav-badge" style="display:none;">0</span>
+      </div>
       <div class="left-nav-item" data-tab="inventory" onclick="switchTab('inventory')" data-i18n-title="nav.inventory_tooltip" title="Every agent on this machine: what it runs, what it costs, is it alive, who owns it">
         <span class="left-nav-icon" aria-hidden="true">&#9783;</span>
         <span class="left-nav-label" data-i18n="nav.inventory">Agents</span>
       </div>
-      <div class="left-nav-item left-nav-item-group active" data-tab="overview" onclick="switchTab('overview')" data-i18n-title="nav.live_trace_tooltip" title="Live view of every running agent">
+      <div class="left-nav-item" data-tab="brain" onclick="switchTab('brain')" data-i18n-title="nav.activity_tooltip" title="What your agents are doing right now, step by step">
         <span class="left-nav-icon" aria-hidden="true">&#9679;</span>
-        <span class="left-nav-label" data-i18n="nav.live_trace">Live trace</span>
-        <span id="nav-stuck-badge" class="left-nav-badge" style="display:none;">0</span>
-        <button type="button" class="left-nav-group-chevron" id="left-nav-live-toggle" aria-expanded="true" aria-controls="left-nav-live-list" aria-label="Toggle Live trace sub-items" onclick="event.stopPropagation(); toggleLiveDrawer();">&#9662;</button>
+        <span class="left-nav-label" data-i18n="nav.brain">Activity</span>
       </div>
-      <div class="left-nav-group-list" id="left-nav-live-list">
-        <div class="left-nav-item left-nav-item-sub" data-tab="flow" onclick="switchTab('flow')">
-          <span class="left-nav-label" data-i18n="nav.flow">Flow</span>
-        </div>
-        <div class="left-nav-item left-nav-item-sub" data-tab="brain" onclick="switchTab('brain')">
-          <span class="left-nav-label" data-i18n="nav.brain">Brain</span>
-        </div>
-        <div class="left-nav-item left-nav-item-sub" data-tab="models" onclick="switchTab('models')">
-          <span class="left-nav-label" data-i18n="nav.models">Models</span>
-        </div>
-        <div class="left-nav-item left-nav-item-sub" data-tab="context" onclick="switchTab('context')" data-i18n-title="nav.llm_context_tooltip" title="What the LLM sees on each turn">
-          <span class="left-nav-label" data-i18n="nav.llm_context">LLM Context</span>
-        </div>
-        <div class="left-nav-item left-nav-item-sub" id="left-nav-tracing" data-tab="tracing" onclick="switchTab('tracing')" data-i18n-title="nav.tracing_tooltip" title="Every trace: span waterfall, tree, and agent graph">
-          <span class="left-nav-label" data-i18n="nav.tracing">Tracing</span>
-        </div>
-        <div class="left-nav-item left-nav-item-sub" id="left-nav-agents" data-tab="agents" onclick="switchTab('agents')" title="Cross-session agent spawn topology from span data">
-          <span class="left-nav-label">Agent Graph</span>
-        </div>
-        <div class="left-nav-item left-nav-item-sub" id="left-nav-turn-anatomy" data-tab="turn-anatomy" onclick="switchTab('turn-anatomy')" title="Decompose a turn into prompt, model, tools, compaction and reply">
-          <span class="left-nav-label">Turn anatomy</span>
-        </div>
-        <div class="left-nav-item left-nav-item-sub" id="left-nav-tool-catalog" data-tab="tool-catalog" onclick="switchTab('tool-catalog')" title="Every tool the agent uses by provenance, with call count and p50/p95 latency">
-          <span class="left-nav-label">Tool catalog</span>
-        </div>
-        <div class="left-nav-item left-nav-item-sub" id="left-nav-context-economics" data-tab="context-economics" onclick="switchTab('context-economics')" title="Context-window utilization over time, compaction triggers and tokens reclaimed">
-          <span class="left-nav-label">Context economics</span>
-        </div>
-        <div class="left-nav-item left-nav-item-sub" id="left-nav-harness" data-tab="harness" onclick="switchTab('harness')" title="What the selected runtime uniquely exposes — beyond the generic tabs" style="display:none">
-          <span class="left-nav-label">Harness</span>
-        </div>
-        <div class="left-nav-item left-nav-item-sub" id="left-nav-swimlane" data-tab="swimlane" onclick="switchTab('swimlane')" title="Compare up to 4 sessions or runtimes side by side as parallel live lanes">
-          <span class="left-nav-label">Swimlane</span>
-        </div>
+      <div class="left-nav-item" data-tab="usage" onclick="switchTab('usage')" data-i18n-title="nav.cost_tooltip" title="Token spend &amp; cost analytics">
+        <span class="left-nav-icon" aria-hidden="true">&#36;</span>
+        <span class="left-nav-label" data-i18n="nav.cost">Cost</span>
       </div>
-
+      <div class="left-nav-item" data-tab="transcripts" onclick="switchTab('transcripts')" data-i18n-title="nav.session_replay_tooltip" title="Conversations across channels (Telegram, Signal, WhatsApp, &hellip;)">
+        <span class="left-nav-icon" aria-hidden="true">&#9787;</span>
+        <span class="left-nav-label"><span data-i18n="nav.session_replay">Conversations</span> <span class="left-nav-beta" data-i18n="nav.beta">(beta)</span></span>
+      </div>
       <div class="left-nav-item" data-tab="approvals" onclick="switchTab('approvals')" data-i18n-title="nav.approvals_tooltip" title="Cloud-mediated approval queue">
         <span class="left-nav-icon" aria-hidden="true">&#10003;</span>
         <span class="left-nav-label" data-i18n="nav.approvals">Approvals</span>
@@ -12082,25 +12064,45 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-label" data-i18n="nav.alerts">Alerts</span>
         <span id="nav-alerts-badge" class="left-nav-badge" style="display:none;">0</span>
       </div>
-      <div class="left-nav-item" data-tab="usage" onclick="switchTab('usage')" data-i18n-title="nav.cost_tooltip" title="Token spend &amp; cost analytics">
-        <span class="left-nav-icon" aria-hidden="true">&#36;</span>
-        <span class="left-nav-label" data-i18n="nav.cost">Cost</span>
+
+      {# Developer drawer: the deep-dive views. Pure toggle (no data-tab: the
+         header must not steal the overview highlight from Home). Collapsed by
+         default; a stored cm_live_open=1 re-opens it. #}
+      <div class="left-nav-item left-nav-item-group" onclick="toggleLiveDrawer()" data-i18n-title="nav.developer_tooltip" title="Deep-dive views for debugging your agents">
+        <span class="left-nav-icon" aria-hidden="true">&#9881;</span>
+        <span class="left-nav-label" data-i18n="nav.developer">Developer</span>
+        <button type="button" class="left-nav-group-chevron" id="left-nav-live-toggle" aria-expanded="false" aria-controls="left-nav-live-list" aria-label="Toggle Developer sub-items" onclick="event.stopPropagation(); toggleLiveDrawer();">&#9662;</button>
       </div>
-      <div class="left-nav-item" data-tab="dives" onclick="switchTab('dives')" title="Ask questions about your AI usage in plain English">
-        <span class="left-nav-icon" aria-hidden="true">&#128270;</span>
-        <span class="left-nav-label">Dives</span>
-      </div>
-      <div class="left-nav-item" data-tab="transcripts" onclick="switchTab('transcripts')" data-i18n-title="nav.session_replay_tooltip" title="Conversations across channels (Telegram, Signal, WhatsApp, &hellip;)">
-        <span class="left-nav-icon" aria-hidden="true">&#9787;</span>
-        <span class="left-nav-label"><span data-i18n="nav.session_replay">Session replay</span> <span class="left-nav-beta" data-i18n="nav.beta">(beta)</span></span>
-      </div>
-      <div class="left-nav-item" data-tab="crons" id="crons-tab" onclick="switchTab('crons')" data-i18n-title="nav.crons_tooltip" title="Scheduled agent jobs">
-        <span class="left-nav-icon" aria-hidden="true">&#9202;</span>
-        <span class="left-nav-label" data-i18n="nav.crons">Crons</span>
-      </div>
-      <div class="left-nav-item" data-tab="memory" onclick="switchTab('memory')" data-i18n-title="nav.memory_tooltip" title="Persistent memory files the agent reads on boot">
-        <span class="left-nav-icon" aria-hidden="true">&#9873;</span>
-        <span class="left-nav-label" data-i18n="nav.memory">Memory</span>
+      <div class="left-nav-group-list" id="left-nav-live-list" hidden>
+        <div class="left-nav-item left-nav-item-sub" data-tab="flow" onclick="switchTab('flow')">
+          <span class="left-nav-label" data-i18n="nav.flow">Flow</span>
+        </div>
+        <div class="left-nav-item left-nav-item-sub" data-tab="models" onclick="switchTab('models')">
+          <span class="left-nav-label" data-i18n="nav.models">Models</span>
+        </div>
+        <div class="left-nav-item left-nav-item-sub" data-tab="context" onclick="switchTab('context')" data-i18n-title="nav.llm_context_tooltip" title="What the LLM sees on each turn">
+          <span class="left-nav-label" data-i18n="nav.llm_context">LLM Context</span>
+        </div>
+        {# Phase B (UX_AUDIT.md): Tracing, Turn timing and Compare sessions are
+           SESSION-scoped, so they left the global nav and are reached from a
+           session drill-down (openSessionDeepDive in app.js, wired into the
+           Conversations viewer). Their pages + data-tab ids stay: deep links
+           and switchTab('tracing'|'turn-anatomy'|'swimlane') still work. #}
+        <div class="left-nav-item left-nav-item-sub" id="left-nav-agents" data-tab="agents" onclick="switchTab('agents')" title="Cross-session agent spawn topology from span data">
+          <span class="left-nav-label" data-i18n="nav.agent_graph">Agent Graph</span>
+        </div>
+        <div class="left-nav-item left-nav-item-sub" id="left-nav-tool-catalog" data-tab="tool-catalog" onclick="switchTab('tool-catalog')" title="Every tool the agent uses by provenance, with call count and p50/p95 latency">
+          <span class="left-nav-label" data-i18n="nav.tools">Tools</span>
+        </div>
+        <div class="left-nav-item left-nav-item-sub" id="left-nav-context-economics" data-tab="context-economics" onclick="switchTab('context-economics')" title="Context-window utilization over time, compaction triggers and tokens reclaimed">
+          <span class="left-nav-label" data-i18n="nav.context_usage">Context usage</span>
+        </div>
+        <div class="left-nav-item left-nav-item-sub" id="left-nav-harness" data-tab="harness" onclick="switchTab('harness')" title="What the selected runtime uniquely exposes — beyond the generic tabs" style="display:none">
+          <span class="left-nav-label" data-i18n="nav.runtime_extras">Runtime extras</span>
+        </div>
+        <div class="left-nav-item left-nav-item-sub" data-tab="dives" onclick="switchTab('dives')" title="Ask questions about your AI usage in plain English">
+          <span class="left-nav-label" data-i18n="nav.ask">Ask</span>
+        </div>
       </div>
     </div>
 
@@ -12109,6 +12111,12 @@ DASHBOARD_HTML = r"""
       <span class="left-nav-advanced-chevron" aria-hidden="true">&#9662;</span>
     </button>
     <div class="left-nav-advanced-list" id="left-nav-advanced-list" hidden>
+      <div class="left-nav-item left-nav-item-sub" data-tab="crons" id="crons-tab" onclick="switchTab('crons')" data-i18n-title="nav.crons_tooltip" title="Scheduled agent jobs">
+        <span class="left-nav-label" data-i18n="nav.crons">Schedules</span>
+      </div>
+      <div class="left-nav-item left-nav-item-sub" data-tab="memory" onclick="switchTab('memory')" data-i18n-title="nav.memory_tooltip" title="Persistent memory files the agent reads on boot">
+        <span class="left-nav-label" data-i18n="nav.memory">Memory</span>
+      </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="notifications" onclick="switchTab('notifications')">
         <span class="left-nav-label" data-i18n="nav.notifications">Notifications</span>
       </div>
@@ -12116,7 +12124,7 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-label" data-i18n="nav.security">Security</span>
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="policy" onclick="switchTab('policy')" title="Which tools each agent can run, where they run, and what got approved or blocked">
-        <span class="left-nav-label" data-i18n="nav.tool_policy">Tool Policy</span>
+        <span class="left-nav-label" data-i18n="nav.tool_policy">Tool permissions</span>
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="skills" onclick="switchTab('skills')">
         <span class="left-nav-label" data-i18n="nav.skills">Skills</span>

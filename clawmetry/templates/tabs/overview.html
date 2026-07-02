@@ -27,11 +27,11 @@
   <div id="activity-today-strip" style="display:none;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:10px;padding:10px 16px;margin-bottom:10px;box-shadow:var(--card-shadow);">
     <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;">
       <span style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.2px;">Today</span>
-      <span style="font-size:13px;color:var(--text-secondary);">&#128296; <b id="at-tool-calls" style="color:var(--text-primary);">0</b> tool calls</span>
-      <span style="font-size:13px;color:var(--text-secondary);">&#9889; <b id="at-exec-calls" style="color:var(--text-primary);">0</b> exec</span>
-      <span style="font-size:13px;color:var(--text-secondary);">&#127760; <b id="at-browser-actions" style="color:var(--text-primary);">0</b> browser</span>
-      <span style="font-size:13px;color:var(--text-secondary);">&#128172; <b id="at-messages" style="color:var(--text-primary);">0</b> messages</span>
-      <span style="font-size:13px;color:var(--text-secondary);">&#128295; <b id="at-unique-tools" style="color:var(--text-primary);">0</b> unique tools</span>
+      <span style="font-size:13px;color:var(--text-secondary);">🔨 <b id="at-tool-calls" style="color:var(--text-primary);">0</b> tool calls</span>
+      <span style="font-size:13px;color:var(--text-secondary);">⚡ <b id="at-exec-calls" style="color:var(--text-primary);">0</b> exec</span>
+      <span style="font-size:13px;color:var(--text-secondary);">🌐 <b id="at-browser-actions" style="color:var(--text-primary);">0</b> browser</span>
+      <span style="font-size:13px;color:var(--text-secondary);">💬 <b id="at-messages" style="color:var(--text-primary);">0</b> messages</span>
+      <span style="font-size:13px;color:var(--text-secondary);">🔧 <b id="at-unique-tools" style="color:var(--text-primary);">0</b> unique tools</span>
     </div>
   </div>
 
@@ -68,7 +68,7 @@
       <div id="eval-regression-line" style="font-size:12px;color:var(--text-muted);margin-top:6px;"></div>
     </div>
     <!-- QW7: setup lives behind a small gear icon; the title keeps the old label. -->
-    <button onclick="openEvalRubricModal()" title="Judge key &amp; rubric" data-i18n-title="overview.eval_setup" aria-label="Judge key &amp; rubric" style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:6px 10px;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap;">&#9881;</button>
+    <button onclick="openEvalRubricModal()" title="Judge key &amp; rubric" data-i18n-title="overview.eval_setup" aria-label="Judge key &amp; rubric" style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:6px 10px;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap;">⚙</button>
   </div>
 
   <!-- Named evaluator library. Brands ClawMetry's shipped quality / reliability
@@ -77,7 +77,7 @@
        catalogue is static data /api/evaluators returns with or without a store. -->
   <div id="evaluators-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:18px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);">
     <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:4px;">
-      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;">&#128300; <span data-i18n="evaluators.title">Evaluators on your agent</span></div>
+      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;">🔬 <span data-i18n="evaluators.title">Evaluators on your agent</span></div>
       <div id="evaluators-count" style="font-size:11px;color:var(--text-muted);"></div>
     </div>
     <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;" data-i18n="evaluators.subtitle">Named checks ClawMetry runs to tell you if your agent is doing good work. Each one answers a plain question.</div>
