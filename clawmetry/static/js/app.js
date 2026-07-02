@@ -1168,6 +1168,19 @@ function switchTab(name) {
   tabs.forEach(function(t) { if (t.getAttribute('onclick') && t.getAttribute('onclick').indexOf("'" + name + "'") !== -1) t.classList.add('active'); });
   var leftItems = document.querySelectorAll('.left-nav-item[data-tab="' + name + '"]');
   leftItems.forEach(function(t) { t.classList.add('active'); });
+  // Phase A beginner IA: if the selected tab lives inside a collapsed drawer
+  // (Developer / Advanced), reveal that drawer so the active item is visible.
+  // Reveal only - do NOT persist, so the drawer stays collapsed-by-default on
+  // the next visit unless the user opened it themselves.
+  leftItems.forEach(function(t) {
+    var drawer = t.closest('#left-nav-live-list, #left-nav-advanced-list');
+    if (drawer && drawer.hasAttribute('hidden')) {
+      drawer.removeAttribute('hidden');
+      var toggleId = drawer.id === 'left-nav-live-list' ? 'left-nav-live-toggle' : 'left-nav-advanced-toggle';
+      var btn = document.getElementById(toggleId);
+      if (btn) btn.setAttribute('aria-expanded', 'true');
+    }
+  });
   if (!document.querySelector('.nav-tab.active') && !document.querySelector('.left-nav-item.active') && typeof event !== 'undefined' && event && event.target) event.target.classList.add('active');
   // Auto-close mobile drawer when a nav item is picked.
   var leftNav = document.getElementById('left-nav');
@@ -1232,8 +1245,8 @@ function toggleLeftNavMobile() {
   leftNav.classList.toggle('open');
 }
 
-// Live trace expandable group (IA regroup: Flow/Brain/Logs/Models/LLM Context).
-// Default-expanded; remembers user collapse via localStorage.
+// Developer expandable group (Phase A beginner IA, UX_AUDIT.md).
+// Default-collapsed; remembers an explicit user open via localStorage.
 function toggleLiveDrawer() {
   var btn = document.getElementById('left-nav-live-toggle');
   var list = document.getElementById('left-nav-live-list');
@@ -1266,16 +1279,20 @@ function toggleLiveDrawer() {
         advBtn.setAttribute('aria-expanded', 'true');
       }
     }
-    // Live trace drawer (default-expanded; collapse only if user explicitly closed).
+    // Developer drawer (Phase A beginner IA, UX_AUDIT.md: default-COLLAPSED so
+    // a first-timer sees seven plain items; re-opens only if the user
+    // explicitly opened it before).
     var liveBtn = document.getElementById('left-nav-live-toggle');
     var liveList = document.getElementById('left-nav-live-list');
     if (liveBtn && liveList) {
-      var liveOpen = true;
+      var liveOpen = false;
       try {
-        var v = localStorage.getItem('cm_live_open');
-        if (v === '0') liveOpen = false;
+        if (localStorage.getItem('cm_live_open') === '1') liveOpen = true;
       } catch (e) { /* localStorage blocked */ }
-      if (!liveOpen) {
+      if (liveOpen) {
+        liveList.removeAttribute('hidden');
+        liveBtn.setAttribute('aria-expanded', 'true');
+      } else {
         liveList.setAttribute('hidden', '');
         liveBtn.setAttribute('aria-expanded', 'false');
       }
