@@ -258,7 +258,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.538"
+__version__ = "0.12.539"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -12083,14 +12083,13 @@ DASHBOARD_HTML = r"""
         <div class="left-nav-item left-nav-item-sub" data-tab="context" onclick="switchTab('context')" data-i18n-title="nav.llm_context_tooltip" title="What the LLM sees on each turn">
           <span class="left-nav-label" data-i18n="nav.llm_context">LLM Context</span>
         </div>
-        <div class="left-nav-item left-nav-item-sub" id="left-nav-tracing" data-tab="tracing" onclick="switchTab('tracing')" data-i18n-title="nav.tracing_tooltip" title="Every trace: span waterfall, tree, and agent graph">
-          <span class="left-nav-label" data-i18n="nav.tracing">Tracing</span>
-        </div>
+        {# Phase B (UX_AUDIT.md): Tracing, Turn timing and Compare sessions are
+           SESSION-scoped, so they left the global nav and are reached from a
+           session drill-down (openSessionDeepDive in app.js, wired into the
+           Conversations viewer). Their pages + data-tab ids stay: deep links
+           and switchTab('tracing'|'turn-anatomy'|'swimlane') still work. #}
         <div class="left-nav-item left-nav-item-sub" id="left-nav-agents" data-tab="agents" onclick="switchTab('agents')" title="Cross-session agent spawn topology from span data">
           <span class="left-nav-label" data-i18n="nav.agent_graph">Agent Graph</span>
-        </div>
-        <div class="left-nav-item left-nav-item-sub" id="left-nav-turn-anatomy" data-tab="turn-anatomy" onclick="switchTab('turn-anatomy')" title="Decompose a turn into prompt, model, tools, compaction and reply">
-          <span class="left-nav-label" data-i18n="nav.turn_timing">Turn timing</span>
         </div>
         <div class="left-nav-item left-nav-item-sub" id="left-nav-tool-catalog" data-tab="tool-catalog" onclick="switchTab('tool-catalog')" title="Every tool the agent uses by provenance, with call count and p50/p95 latency">
           <span class="left-nav-label" data-i18n="nav.tools">Tools</span>
@@ -12100,9 +12099,6 @@ DASHBOARD_HTML = r"""
         </div>
         <div class="left-nav-item left-nav-item-sub" id="left-nav-harness" data-tab="harness" onclick="switchTab('harness')" title="What the selected runtime uniquely exposes — beyond the generic tabs" style="display:none">
           <span class="left-nav-label" data-i18n="nav.runtime_extras">Runtime extras</span>
-        </div>
-        <div class="left-nav-item left-nav-item-sub" id="left-nav-swimlane" data-tab="swimlane" onclick="switchTab('swimlane')" title="Compare up to 4 sessions or runtimes side by side as parallel live lanes">
-          <span class="left-nav-label" data-i18n="nav.compare_sessions">Compare sessions</span>
         </div>
         <div class="left-nav-item left-nav-item-sub" data-tab="dives" onclick="switchTab('dives')" title="Ask questions about your AI usage in plain English">
           <span class="left-nav-label" data-i18n="nav.ask">Ask</span>
