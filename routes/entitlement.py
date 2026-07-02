@@ -5758,6 +5758,288 @@ def api_entitlement_previous_tier_spec():
         )
 
 
+def _next_prev_tier_axis_spec_grace_body(
+    axis: str, item: str | None
+) -> dict:
+    """Fallback envelope shared by the four bare next/previous per-axis
+    spec routes. Keeps the shape identical to the happy path so a
+    resolver failure never breaks a paywall tooltip client-side."""
+    return {
+        "current_tier": "oss",
+        "current_tier_label": "OSS",
+        "current_tier_rank": 0,
+        axis: item or "",
+        "target": None,
+        "target_label": None,
+        "target_rank": None,
+        "row": None,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-feature-spec")
+def api_entitlement_next_tier_feature_spec():
+    """``GET /api/entitlement/next-tier-feature-spec?feature=<id>`` --
+    current-relative sibling of ``/api/entitlement/next-tier-feature-spec-at``:
+    the :func:`feature_spec_at`-shape row for ``feature`` at the rung
+    above the resolved entitlement.
+
+    Feature-axis projection of ``/api/entitlement/next-tier-spec``. Lets
+    a paywall tooltip ask "does THIS feature unlock at my next rung?"
+    off ONE round-trip without threading the current tier through the
+    query args or first fetching ``/feature-catalog-at`` at the target
+    rung and filtering client-side. Companion to ``/next-tier-spec``,
+    ``/next-tier-unlocks``, ``/next-tier-diff``, and
+    ``/next-tier-capacity-diff`` on the feature axis.
+
+    Response shape::
+
+        {
+          "current_tier":       "<resolved tier id>",
+          "current_tier_label": "<resolved label>",
+          "current_tier_rank":  <resolved rank>,
+          "feature":            "<feature id>",
+          "target":             "<next-above tier id>" | null,
+          "target_label":       "<next-above label>" | null,
+          "target_rank":        <next-above rank> | null,
+          "row":                {<feature_spec_at row>} | null,
+          "grace":              <bool>,
+          "enforced":           <bool>,
+        }
+
+    ``target`` and ``row`` collapse to ``null`` at the ceiling (resolved
+    entitlement already at enterprise -- no rung above to upgrade to);
+    the surface stays 200 so callers render "you're at the top" copy
+    without a status-code branch.
+
+    - **400** on missing / blank ``feature=``
+    - **404** on unknown ``feature`` (not in ``ALL_FEATURES``)
+    - **Never 5xxs**: a resolver failure short-circuits to the grace-
+      shape envelope with ``row=null`` so the tooltip stays mute.
+    """
+    raw_feature = request.args.get("feature")
+    feature = (raw_feature or "").strip().lower()
+    if not feature:
+        return jsonify({"error": "missing feature"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if feature not in _ent.ALL_FEATURES:
+            return (
+                jsonify(
+                    {
+                        "error": "unknown feature",
+                        "which": "feature",
+                        "feature": feature,
+                    }
+                ),
+                404,
+            )
+        ent = _ent.get_entitlement()
+        target = ent.next_purchasable_tier()
+        row = ent.next_tier_feature_spec(feature)
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "feature": feature,
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "row": row,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_feature_spec: error: %s", exc
+        )
+        return jsonify(_next_prev_tier_axis_spec_grace_body("feature", feature))
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-feature-spec")
+def api_entitlement_previous_tier_feature_spec():
+    """``GET /api/entitlement/previous-tier-feature-spec?feature=<id>``
+    -- symmetric downgrade-side companion of
+    ``/next-tier-feature-spec``: the :func:`feature_spec_at`-shape row
+    for ``feature`` at the rung below the resolved entitlement.
+
+    Same envelope as ``/next-tier-feature-spec``; ``target`` and ``row``
+    collapse to ``null`` at the floor (resolved entitlement at
+    ``oss`` / ``cloud_free`` -- no rung below).
+
+    - **400** on missing / blank ``feature=``
+    - **404** on unknown ``feature``
+    - **Never 5xxs**: grace-shape envelope on resolver failure.
+    """
+    raw_feature = request.args.get("feature")
+    feature = (raw_feature or "").strip().lower()
+    if not feature:
+        return jsonify({"error": "missing feature"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if feature not in _ent.ALL_FEATURES:
+            return (
+                jsonify(
+                    {
+                        "error": "unknown feature",
+                        "which": "feature",
+                        "feature": feature,
+                    }
+                ),
+                404,
+            )
+        ent = _ent.get_entitlement()
+        target = ent.previous_purchasable_tier()
+        row = ent.previous_tier_feature_spec(feature)
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "feature": feature,
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "row": row,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_feature_spec: error: %s", exc
+        )
+        return jsonify(_next_prev_tier_axis_spec_grace_body("feature", feature))
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-runtime-spec")
+def api_entitlement_next_tier_runtime_spec():
+    """``GET /api/entitlement/next-tier-runtime-spec?runtime=<id>`` --
+    runtime-axis mirror of ``/next-tier-feature-spec``: the
+    :func:`runtime_spec_at`-shape row for ``runtime`` at the rung above
+    the resolved entitlement.
+
+    Accepts aliases (``claude-code`` -> ``claude_code``) via
+    :func:`canonical_runtime`, matching ``/next-tier-runtime-spec-at``
+    and ``/api/entitlement/required-tier``. The canonical id is echoed
+    back in the ``runtime`` field so callers can compare.
+
+    Envelope matches ``/next-tier-feature-spec`` with ``feature`` swapped
+    for ``runtime``.
+
+    - **400** on missing / blank ``runtime=``
+    - **404** on unknown ``runtime`` (not in ``ALL_RUNTIMES`` after
+      alias canonicalisation). The body echoes the original supplied
+      alias so callers can render "unknown runtime <alias>" copy.
+    - **Never 5xxs**: grace-shape envelope on resolver failure.
+    """
+    raw_runtime = request.args.get("runtime")
+    supplied = (raw_runtime or "").strip().lower()
+    if not supplied:
+        return jsonify({"error": "missing runtime"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        rt = _ent.canonical_runtime(supplied)
+        if not rt or rt not in _ent.ALL_RUNTIMES:
+            return (
+                jsonify(
+                    {
+                        "error": "unknown runtime",
+                        "which": "runtime",
+                        "runtime": supplied,
+                    }
+                ),
+                404,
+            )
+        ent = _ent.get_entitlement()
+        target = ent.next_purchasable_tier()
+        row = ent.next_tier_runtime_spec(rt)
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "runtime": rt,
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "row": row,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_runtime_spec: error: %s", exc
+        )
+        return jsonify(_next_prev_tier_axis_spec_grace_body("runtime", supplied))
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-runtime-spec")
+def api_entitlement_previous_tier_runtime_spec():
+    """``GET /api/entitlement/previous-tier-runtime-spec?runtime=<id>``
+    -- symmetric downgrade-side companion of
+    ``/next-tier-runtime-spec``: the :func:`runtime_spec_at`-shape row
+    for ``runtime`` at the rung below the resolved entitlement.
+
+    Accepts aliases via :func:`canonical_runtime`.
+
+    Same envelope as ``/next-tier-runtime-spec``; ``target`` and ``row``
+    collapse to ``null`` at the floor.
+
+    - **400** on missing / blank ``runtime=``
+    - **404** on unknown ``runtime``
+    - **Never 5xxs**: grace-shape envelope on resolver failure.
+    """
+    raw_runtime = request.args.get("runtime")
+    supplied = (raw_runtime or "").strip().lower()
+    if not supplied:
+        return jsonify({"error": "missing runtime"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        rt = _ent.canonical_runtime(supplied)
+        if not rt or rt not in _ent.ALL_RUNTIMES:
+            return (
+                jsonify(
+                    {
+                        "error": "unknown runtime",
+                        "which": "runtime",
+                        "runtime": supplied,
+                    }
+                ),
+                404,
+            )
+        ent = _ent.get_entitlement()
+        target = ent.previous_purchasable_tier()
+        row = ent.previous_tier_runtime_spec(rt)
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "runtime": rt,
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "row": row,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_runtime_spec: error: %s", exc
+        )
+        return jsonify(_next_prev_tier_axis_spec_grace_body("runtime", supplied))
+
+
 @bp_entitlement.route("/api/entitlement/next-tier-spec-at")
 def api_entitlement_next_tier_spec_at():
     """``GET /api/entitlement/next-tier-spec-at?tier=<source>`` -- scalar
