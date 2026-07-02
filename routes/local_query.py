@@ -782,6 +782,15 @@ _DAEMON_METHODS = frozenset({
     # proxy so the dashboard process never opens DuckDB writable.
     "ingest_security_event",
     "query_security_events",
+    # Issue #3306 — audit log read path. ingest_ is called from operator
+    # actions; query_ serves /api/audit-log. Both routed through the daemon
+    # proxy so the dashboard process never opens DuckDB writable.
+    "ingest_audit_log_entry",
+    "query_audit_log",
+    # Issue #3438 — smart model routing savings attribution. Read-only
+    # aggregation of auto_downgraded events; routed through the daemon
+    # proxy so the dashboard process never opens DuckDB writable.
+    "query_routing_savings",
 })
 
 

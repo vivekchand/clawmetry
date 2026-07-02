@@ -118,6 +118,21 @@ _SHUTDOWN_FLUSH_TIMEOUT_SECS = 5.0
 _shutdown_flushed = threading.Event()
 _shutdown_lock = threading.Lock()
 
+# sb_name → Popen handle for long-lived `openshell logs --tail` processes
+_ocsf_tail_procs: dict = {}
+_OCSF_TAIL_DRAIN_LIMIT = 200  # max lines drained per sync tick
+
+
+def _ocsf_tail_shutdown() -> None:
+    """Terminate all held openshell sandbox tail processes on daemon exit."""
+    for proc in list(_ocsf_tail_procs.values()):
+        try:
+            proc.terminate()
+            proc.wait(timeout=3)
+        except Exception:
+            pass
+    _ocsf_tail_procs.clear()
+
 
 def _drain_local_store_now() -> tuple[int, float]:
     """Synchronously drain the LocalStore ring → DuckDB. Returns
@@ -192,6 +207,8 @@ def _graceful_shutdown(reason: str, *, force_exit: bool) -> None:
         log.info(
             "graceful shutdown: flushed %s row(s) in %.3fs", rows, elapsed
         )
+
+    _ocsf_tail_shutdown()
 
     if force_exit:
         # sys.exit raises SystemExit which other threads can swallow;
@@ -1209,6 +1226,24 @@ def _persist_cloud_plan_to_disk(plan: str | None, trial_days_left=None) -> None:
     tier = _HEARTBEAT_PLAN_TO_TIER.get(str(plan or "").strip().lower())
     # Entitled plan → keep this node current automatically (opt-out + 48h rail).
     _sync_auto_update_with_plan(tier)
+    # Idempotent reconcile: this is now called on EVERY heartbeat (not just on a
+    # plan change), so short-circuit when the on-disk cache already reflects this
+    # tier. We compare only the ``plan`` field (the entitlement-relevant part) so
+    # the trial ``expiry`` countdown doesn't churn a write + entitlement
+    # invalidation every cycle. Only an actual tier transition re-writes + flips
+    # the resolver, so paid runtimes start syncing the moment the plan upgrades.
+    try:
+        _existing_plan = None
+        if os.path.isfile(_CLOUD_PLAN_CACHE_PATH):
+            with open(_CLOUD_PLAN_CACHE_PATH, encoding="utf-8") as _fh:
+                _existing_plan = (json.load(_fh) or {}).get("plan")
+        if tier is None:
+            if _existing_plan is None and not os.path.isfile(_CLOUD_PLAN_CACHE_PATH):
+                return  # already absent; nothing to reconcile
+        elif _existing_plan == tier:
+            return  # cache already matches the live tier; no write, no invalidate
+    except Exception:
+        pass  # any read trouble -> fall through and (re)write below
     try:
         if tier is None:
             if os.path.isfile(_CLOUD_PLAN_CACHE_PATH):
@@ -1252,7 +1287,13 @@ def _update_trial_state(resp: dict) -> None:
         _TRIAL_STATE["trial_days_left"] = resp.get("trial_days_left")
     if resp.get("upgrade_url"):
         _TRIAL_STATE["upgrade_url"] = resp["upgrade_url"]
-    if _TRIAL_STATE.get("plan") != prev_plan or _TRIAL_STATE.get("trial_days_left") != prev_days:
+    # Reconcile the on-disk plan cache on EVERY heartbeat (the founder ask:
+    # "check & start sync at every heartbeat, for which plan it is in"). The
+    # call is idempotent (a no-op when the cache already matches the live tier),
+    # so this is cheap, but it self-heals a cache that drifted for any reason
+    # (deleted file, a daemon that started while free then the plan upgraded,
+    # etc.) and flips paid runtimes on the moment the plan becomes entitled.
+    if "plan" in resp or "trial_days_left" in resp:
         _persist_cloud_plan_to_disk(
             _TRIAL_STATE.get("plan"), _TRIAL_STATE.get("trial_days_left")
         )
@@ -2367,20 +2408,46 @@ def sync_sandbox_sessions_openshell(config: dict, state: dict) -> int:
                     sb_name, fname, _ce,
                 )
 
-        # OCSF audit log ingest — gap #3299.
-        # Only attempt when the sandbox has OCSF JSON output armed.
+        # OCSF audit log ingest — gap #3299 / fix #3389.
+        # Uses a long-lived tail process (Popen) so events emitted between
+        # polling cycles are not dropped. Falls back to one-shot snapshot
+        # if the tail process cannot be started.
         try:
             from clawmetry.adapters.openclaw import (
                 _openshell_sandbox_ocsf_enabled,
                 _openshell_sandbox_logs,
+                _openshell_sandbox_logs_tail,
             )
             if _openshell_sandbox_ocsf_enabled(sb_name).get("sandboxOcsfJsonEnabled"):
-                ocsf_events = _openshell_sandbox_logs(sb_name)
-                if ocsf_events:
-                    from clawmetry import local_store as _ls
-                    _store_obj = _ls.get_store()
-                    for idx, ev in enumerate(ocsf_events):
-                        uid = ev.get("uid") or ev.get("activity_id") or str(idx)
+                from clawmetry import local_store as _ls
+                _store_obj = _ls.get_store()
+
+                # Ensure the tail process for this sandbox is running.
+                proc = _ocsf_tail_procs.get(sb_name)
+                if proc is None or proc.poll() is not None:
+                    proc = _openshell_sandbox_logs_tail(sb_name)
+                    if proc is not None:
+                        _ocsf_tail_procs[sb_name] = proc
+
+                if proc is not None:
+                    # Non-blocking drain: read only lines already buffered.
+                    import select as _select
+                    ingested = 0
+                    for _ in range(_OCSF_TAIL_DRAIN_LIMIT):
+                        ready, _, _ = _select.select([proc.stdout], [], [], 0)
+                        if not ready:
+                            break
+                        line = proc.stdout.readline()
+                        if not line:
+                            break
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            ev = json.loads(line)
+                        except Exception:
+                            continue
+                        uid = ev.get("uid") or ev.get("activity_id") or str(ingested)
                         ts_val = ev.get("time")
                         ts_iso = (
                             datetime.fromtimestamp(ts_val, tz=timezone.utc).isoformat()
@@ -2397,8 +2464,34 @@ def sync_sandbox_sessions_openshell(config: dict, state: dict) -> int:
                             "ts": ts_iso,
                             "data": ev,
                         })
-                    _store_obj.flush()
-                    log.debug("nemoclaw OCSF: ingested %d events for %s", len(ocsf_events), sb_name)
+                        ingested += 1
+                    if ingested:
+                        _store_obj.flush()
+                        log.debug("nemoclaw OCSF: ingested %d events for %s", ingested, sb_name)
+                else:
+                    # Fallback: one-shot snapshot when Popen is unavailable.
+                    ocsf_events = _openshell_sandbox_logs(sb_name)
+                    if ocsf_events:
+                        for idx, ev in enumerate(ocsf_events):
+                            uid = ev.get("uid") or ev.get("activity_id") or str(idx)
+                            ts_val = ev.get("time")
+                            ts_iso = (
+                                datetime.fromtimestamp(ts_val, tz=timezone.utc).isoformat()
+                                if isinstance(ts_val, (int, float))
+                                else datetime.now(timezone.utc).isoformat()
+                            )
+                            _store_obj.ingest({
+                                "id": f"nemoclaw-ocsf:{sb_name}:{uid}",
+                                "node_id": node_id,
+                                "agent_type": "nemoclaw",
+                                "agent_id": sb_name,
+                                "session_id": sb_name,
+                                "event_type": "sandbox.audit_log",
+                                "ts": ts_iso,
+                                "data": ev,
+                            })
+                        _store_obj.flush()
+                        log.debug("nemoclaw OCSF: ingested %d events for %s (one-shot)", len(ocsf_events), sb_name)
         except Exception as _oe:
             log.debug("nemoclaw OCSF ingest failed (non-fatal): %s", _oe)
 
@@ -9507,6 +9600,107 @@ def _get_version() -> str:
 CRON_STATE_HEARTBEAT_SEC = 300  # 5 minutes
 
 
+def _openclaw_state_sqlite() -> Path:
+    """Path to OpenClaw v2026.6.5+ consolidated state DB."""
+    return Path(_get_openclaw_dir()) / "state" / "openclaw.sqlite"
+
+
+def _load_jobs_from_state_sqlite() -> list | None:
+    """Read cron job definitions from OpenClaw v2026.6.5+ state/openclaw.sqlite.
+
+    Returns a list of job dicts in the same shape as the legacy jobs.json
+    ``jobs`` array, or None when the DB is absent or unreadable.
+    """
+    db = _openclaw_state_sqlite()
+    if not db.exists():
+        return None
+    try:
+        import sqlite3
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        try:
+            rows = conn.execute("SELECT job_json, state_json FROM cron_jobs").fetchall()
+        finally:
+            conn.close()
+        jobs: list = []
+        for job_json_str, state_json_str in rows:
+            try:
+                j = json.loads(job_json_str) if job_json_str else {}
+            except Exception:
+                continue
+            if not isinstance(j, dict):
+                continue
+            try:
+                j_state = json.loads(state_json_str) if state_json_str else {}
+            except Exception:
+                j_state = {}
+            # Merge runtime state into top-level dict to match flat-file shape
+            if isinstance(j_state, dict) and j_state and "state" not in j:
+                j["state"] = j_state
+            jobs.append(j)
+        return jobs
+    except Exception as e:
+        log.debug("sync_crons: SQLite fallback load error: %s", e)
+        return None
+
+
+def _sync_cron_runs_from_state_sqlite(config: dict, state: dict, store) -> int:
+    """Ingest new cron_run_logs rows from OpenClaw v2026.6.5+ state/openclaw.sqlite.
+
+    Uses rowid as an append-only cursor (persisted in
+    state["cron_sqlite_run_last_rowid"]) so each daemon cycle only processes
+    rows it hasn't seen yet. Returns the count of newly ingested rows.
+    """
+    db = _openclaw_state_sqlite()
+    if not db.exists():
+        return 0
+    node_id = config.get("node_id", "") if isinstance(config, dict) else ""
+    last_rowid = int(state.get("cron_sqlite_run_last_rowid", 0))
+    try:
+        import sqlite3
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        try:
+            rows = conn.execute(
+                "SELECT rowid, entry_json FROM cron_run_logs"
+                " WHERE rowid > ? ORDER BY rowid",
+                (last_rowid,),
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception as e:
+        log.debug("sync_cron_runs: SQLite fallback error: %s", e)
+        return 0
+    n_ingested = 0
+    max_rowid = last_rowid
+    for rowid, entry_json_str in rows:
+        max_rowid = max(max_rowid, rowid)
+        try:
+            entry = json.loads(entry_json_str) if entry_json_str else {}
+        except Exception:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        job_id = str(
+            entry.get("job_id") or entry.get("jobId")
+            or entry.get("cron_job_id") or entry.get("cronJobId")
+            or ""
+        )
+        run = _parse_cron_run_line(json.dumps(entry), job_id, node_id)
+        if run is None:
+            continue
+        try:
+            store.ingest_cron_run(run)
+            n_ingested += 1
+        except Exception as e_in:
+            log.debug(
+                "sync_cron_runs: sqlite ingest failed for rowid %d: %s", rowid, e_in
+            )
+    if max_rowid > last_rowid:
+        state["cron_sqlite_run_last_rowid"] = max_rowid
+    if n_ingested:
+        log.debug("sync_cron_runs: SQLite fallback ingested %d rows", n_ingested)
+    return n_ingested
+
+
 def sync_crons(config: dict, state: dict, paths: dict) -> int:
     """Sync cron job definitions to cloud.
 
@@ -9529,25 +9723,31 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
     # Stored as list (not tuple) because JSON round-trip turns tuples into lists.
     job_dedup: dict = state.setdefault("cron_state_dedup", {})
 
-    # Find cron jobs.json
+    # Find cron jobs.json; fall back to state/openclaw.sqlite for OpenClaw v2026.6.5+
     Path.home()
     cron_candidates = [
         Path(_get_openclaw_dir()) / "cron" / "jobs.json",
         Path(_get_openclaw_dir()) / "agents" / "main" / "cron" / "jobs.json",
     ]
     cron_file = next((str(p) for p in cron_candidates if p.exists()), None)
+    _sqlite_jobs: list | None = None
     if not cron_file:
-        _record_sync_progress("crons", 0, 0)  # terminal: no cron file, nothing to sync
-        return 0
+        _sqlite_jobs = _load_jobs_from_state_sqlite()
+        if _sqlite_jobs is None:
+            _record_sync_progress("crons", 0, 0)
+            return 0
 
     try:
         import hashlib
-
-        raw = open(cron_file, "rb").read()
-        h = hashlib.md5(raw).hexdigest()
-        file_unchanged = h == last_hash
-        data = json.loads(raw)
-        jobs = data.get("jobs", []) if isinstance(data, dict) else data
+        if _sqlite_jobs is not None:
+            jobs = _sqlite_jobs
+            h, file_unchanged = "", False
+        else:
+            raw = open(cron_file, "rb").read()
+            h = hashlib.md5(raw).hexdigest()
+            file_unchanged = h == last_hash
+            data = json.loads(raw)
+            jobs = data.get("jobs", []) if isinstance(data, dict) else data
 
         now_ts = time.time()
         events = []
@@ -9813,17 +10013,18 @@ def sync_cron_runs(config: dict, state: dict, paths: dict) -> int:
         log.debug("sync_cron_runs: local_store unavailable: %s", e)
         return 0
 
-    node_id = config.get("node_id", "") if isinstance(config, dict) else ""
-    offsets: dict = state.setdefault("cron_run_offsets", {})
-    runs_dirs = _cron_run_dirs()
-    if not runs_dirs:
-        return 0
-
     try:
         store = _ls.get_store()
     except Exception as e:
         log.debug("sync_cron_runs: get_store failed: %s", e)
         return 0
+
+    node_id = config.get("node_id", "") if isinstance(config, dict) else ""
+    offsets: dict = state.setdefault("cron_run_offsets", {})
+    runs_dirs = _cron_run_dirs()
+    if not runs_dirs:
+        # OpenClaw v2026.6.5+ stores run logs in state/openclaw.sqlite
+        return _sync_cron_runs_from_state_sqlite(config, state, store)
 
     n_ingested = 0
     for runs_dir in runs_dirs:

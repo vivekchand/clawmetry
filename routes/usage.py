@@ -352,6 +352,11 @@ def _try_local_store_usage(runtime: Optional[str] = None):
         if v > 0
     ]
 
+    # Issue #3438: routing savings attribution. Reads auto_downgraded events
+    # written by the proxy into DuckDB and surfaces per-pair savings so the
+    # usage tab can show "X substitutions saved $Y this month."
+    routing_data = _ls_call("query_routing_savings") or {}
+
     return {
         "source": "local_store",
         "_source": "local_store",
@@ -371,6 +376,8 @@ def _try_local_store_usage(runtime: Optional[str] = None):
         "anomalySessionIds": [],
         "trend": {},
         "warnings": [],
+        "routing_savings_usd": round(float(routing_data.get("total_savings_usd") or 0.0), 6),
+        "routing_substitutions": routing_data.get("by_pair") or [],
     }
 
 

@@ -135,18 +135,20 @@ def test_update_trial_state_clears_cache_on_expiry(sync):
     assert not os.path.isfile(sync._CLOUD_PLAN_CACHE_PATH)
 
 
-def test_update_trial_state_skips_persist_when_plan_unchanged(sync, monkeypatch):
+def test_update_trial_state_reconciles_persist_each_heartbeat(sync, monkeypatch):
+    """Every heartbeat carrying a plan now RECONCILES the cache (calls persist),
+    so a stale/drifted cache self-heals. Redundant disk writes are avoided
+    inside _persist_cloud_plan_to_disk itself, which is idempotent (see
+    test_persist_is_idempotent_when_tier_unchanged), NOT by skipping the call."""
     calls = {"n": 0}
 
     def _spy(plan, trial_days_left=None):
         calls["n"] += 1
 
-    sync._update_trial_state({"sync_allowed": True, "plan": "pro"})
     monkeypatch.setattr(sync, "_persist_cloud_plan_to_disk", _spy)
-    # Same plan repeated → no extra disk writes.
     sync._update_trial_state({"sync_allowed": True, "plan": "pro"})
     sync._update_trial_state({"sync_allowed": True, "plan": "pro"})
-    assert calls["n"] == 0
+    assert calls["n"] == 2  # reconciles each heartbeat; persist no-ops when unchanged
 
 
 # ── integration: dashboard sees the cloud plan after persist ────────────────
@@ -178,3 +180,58 @@ def test_entitlements_falls_back_to_oss_after_trial_expiry(sync, monkeypatch):
     en = e.get_entitlement(force=True)
     assert en.tier == e.TIER_OSS
     assert en.allows_runtime("claude_code") is False
+
+
+# ── reconcile-every-heartbeat + idempotency (founder ask 2026-06-30) ─────────
+
+def test_persist_is_idempotent_when_tier_unchanged(sync, monkeypatch):
+    """Calling _persist with the same tier twice must not re-write the file or
+    re-invalidate entitlements (it now runs on every heartbeat)."""
+    import clawmetry.entitlements as e
+    calls = {"n": 0}
+    monkeypatch.setattr(e, "invalidate", lambda *a, **k: calls.__setitem__("n", calls["n"] + 1))
+
+    sync._persist_cloud_plan_to_disk("trial")
+    assert calls["n"] == 1
+    mtime1 = os.path.getmtime(sync._CLOUD_PLAN_CACHE_PATH)
+    plan1 = json.loads(open(sync._CLOUD_PLAN_CACHE_PATH).read())["plan"]
+    assert plan1 == "trial"
+
+    time.sleep(0.02)
+    sync._persist_cloud_plan_to_disk("trial")  # same tier -> no-op
+    assert calls["n"] == 1, "must NOT re-invalidate when the tier is unchanged"
+    assert os.path.getmtime(sync._CLOUD_PLAN_CACHE_PATH) == mtime1, "must NOT re-write"
+
+
+def test_persist_rewrites_on_tier_change(sync, monkeypatch):
+    import clawmetry.entitlements as e
+    calls = {"n": 0}
+    monkeypatch.setattr(e, "invalidate", lambda *a, **k: calls.__setitem__("n", calls["n"] + 1))
+    sync._persist_cloud_plan_to_disk("free")
+    assert json.loads(open(sync._CLOUD_PLAN_CACHE_PATH).read())["plan"] == "cloud_free"
+    sync._persist_cloud_plan_to_disk("pro")  # upgrade -> rewrite + invalidate
+    assert json.loads(open(sync._CLOUD_PLAN_CACHE_PATH).read())["plan"] == "cloud_pro"
+    assert calls["n"] == 2
+
+
+def test_update_trial_state_reconciles_when_cache_drifts(sync):
+    """The reconcile fires every heartbeat: even when _TRIAL_STATE['plan']
+    didn't 'change', a deleted/stale cache is re-written from the live plan.
+    This is the user's case: daemon cached free, account upgraded, the cache
+    must self-heal on the next heartbeat."""
+    sync._TRIAL_STATE["plan"] = "trial"  # state already thinks trial (no "change")
+    if os.path.isfile(sync._CLOUD_PLAN_CACHE_PATH):
+        os.remove(sync._CLOUD_PLAN_CACHE_PATH)
+    # A heartbeat carrying the plan -> reconcile rewrites the missing cache.
+    sync._update_trial_state({"sync_allowed": True, "plan": "trial", "trial_days_left": 6})
+    assert os.path.isfile(sync._CLOUD_PLAN_CACHE_PATH)
+    assert json.loads(open(sync._CLOUD_PLAN_CACHE_PATH).read())["plan"] == "trial"
+
+
+def test_update_trial_state_upgrade_free_to_trial_flips_cache(sync):
+    """free -> trial within one heartbeat writes the entitled tier so paid
+    runtimes flip on without a daemon restart."""
+    sync._update_trial_state({"sync_allowed": True, "plan": "free"})
+    assert json.loads(open(sync._CLOUD_PLAN_CACHE_PATH).read())["plan"] == "cloud_free"
+    sync._update_trial_state({"sync_allowed": True, "plan": "trial", "trial_days_left": 7})
+    assert json.loads(open(sync._CLOUD_PLAN_CACHE_PATH).read())["plan"] == "trial"

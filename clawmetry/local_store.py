@@ -637,6 +637,25 @@ _DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_security_events_ts      ON security_events(ts)",
     "CREATE INDEX IF NOT EXISTS idx_security_events_session ON security_events(session_id, ts)",
+    # Issue #3306 — operator audit log. Persistent record of human actions
+    # (approve, deny, kill_session, config_change, etc.) for the OSS data layer
+    # that the cloud relay reads. Auth / RBAC enforcement is cloud-side; this
+    # table is the append-only source-of-truth for the local operator trail.
+    # Idempotent (CREATE TABLE IF NOT EXISTS).
+    """
+    CREATE TABLE IF NOT EXISTS audit_log (
+        id         VARCHAR PRIMARY KEY,
+        ts         VARCHAR NOT NULL,
+        actor      VARCHAR,
+        action     VARCHAR NOT NULL,
+        target     VARCHAR,
+        session_id VARCHAR,
+        result     VARCHAR
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_audit_log_ts     ON audit_log(ts)",
+    "CREATE INDEX IF NOT EXISTS idx_audit_log_actor  ON audit_log(actor, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action, ts)",
     # Issue #2201 — asset registry. Evidence + review layer that turns
     # individual agent discoveries (Self-Evolve findings, useful prompts,
     # improved skills) into reviewable, reusable assets without auto-promoting
@@ -7467,6 +7486,138 @@ class LocalStore:
         params.append(int(limit))
         cols = ["id", "ts", "type", "severity", "session_id", "rule_id", "description", "snippet"]
         return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
+
+    # ------------------------------------------------------------------
+    # Audit log (#3306) — persistent operator action trail
+    # ------------------------------------------------------------------
+
+    def ingest_audit_log_entry(self, entry: dict[str, Any]) -> None:
+        """Upsert one audit-log entry. Required: ``id``, ``action``."""
+        eid = entry.get("id")
+        if not eid:
+            raise ValueError("audit log entry must include 'id'")
+        ts = entry.get("ts") or datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO audit_log (id, ts, actor, action, target, session_id, result)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET
+                    result = COALESCE(excluded.result, audit_log.result)
+            """, [
+                str(eid),
+                ts,
+                entry.get("actor"),
+                entry.get("action", ""),
+                entry.get("target"),
+                entry.get("session_id"),
+                entry.get("result"),
+            ])
+
+    def query_audit_log(
+        self,
+        *,
+        actor: str | None = None,
+        action: str | None = None,
+        session_id: str | None = None,
+        since: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Read audit-log entries, most-recent first."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if actor:
+            clauses.append("actor = ?")
+            params.append(actor)
+        if action:
+            clauses.append("action = ?")
+            params.append(action)
+        if session_id:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        if since:
+            clauses.append("ts >= ?")
+            params.append(since)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT id, ts, actor, action, target, session_id, result
+            FROM audit_log
+            {where}
+            ORDER BY ts DESC, id
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["id", "ts", "actor", "action", "target", "session_id", "result"]
+        return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
+
+    def query_routing_savings(
+        self,
+        *,
+        days: int = 30,
+    ) -> dict[str, Any]:
+        """Aggregate smart-routing savings from ``auto_downgraded`` proxy events.
+
+        Returns ``{total_savings_usd, total_substitutions, by_pair}`` where
+        ``by_pair`` is a list of ``{from_model, to_model, count, saved_usd}``
+        sorted by saved_usd descending. Drives the routing-attribution fields
+        added to ``/api/usage`` (issue #3438).
+        """
+        from datetime import datetime, timedelta, timezone
+        try:
+            d = max(1, min(365, int(days)))
+        except (TypeError, ValueError):
+            d = 30
+        since = (datetime.now(timezone.utc) - timedelta(days=d)).isoformat(timespec="seconds")
+        sql = """
+            SELECT data
+            FROM events
+            WHERE event_type = 'auto_downgraded'
+              AND ts >= ?
+        """
+        rows = self._fetch(sql, [since])
+
+        total_savings = 0.0
+        total_count = 0
+        pair_stats: dict[tuple, dict] = {}
+
+        for (raw,) in rows:
+            if raw is None:
+                continue
+            try:
+                raw = _ccr.maybe_decompress(raw)
+                text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                data = json.loads(text) if text else {}
+            except (ValueError, TypeError, UnicodeDecodeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+
+            from_model = str(data.get("from_model") or "")
+            to_model = str(data.get("to_model") or "")
+            saved = float(data.get("estimated_saved_usd") or 0.0)
+
+            total_savings += saved
+            total_count += 1
+
+            key = (from_model, to_model)
+            if key not in pair_stats:
+                pair_stats[key] = {
+                    "from_model": from_model,
+                    "to_model": to_model,
+                    "count": 0,
+                    "saved_usd": 0.0,
+                }
+            pair_stats[key]["count"] += 1
+            pair_stats[key]["saved_usd"] += saved
+
+        by_pair = sorted(pair_stats.values(), key=lambda x: -x["saved_usd"])
+        for p in by_pair:
+            p["saved_usd"] = round(p["saved_usd"], 6)
+
+        return {
+            "total_savings_usd": round(total_savings, 6),
+            "total_substitutions": total_count,
+            "by_pair": by_pair,
+        }
 
     def query_nemoclaw_metrics(
         self,

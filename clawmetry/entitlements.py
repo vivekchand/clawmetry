@@ -4166,6 +4166,158 @@ def runtime_catalog_at(tier: str) -> list[dict] | None:
     return out
 
 
+def feature_catalog_at_batch(tiers) -> dict:
+    """Batch what-if sibling of :func:`feature_catalog_at`: full feature
+    catalog rows for a caller-supplied set of hypothetical tiers in ONE
+    round-trip.
+
+    Composes :func:`feature_catalog_at` (scalar what-if catalog) and
+    :func:`feature_spec_at_batch` (batch what-if scalar) -- same per-row
+    body as the scalar catalog helper, batched across the perspective-
+    tier axis instead of the feature-id axis. Lets a pricing-comparison
+    matrix UI ("show me the full feature catalog at OSS vs Cloud Starter
+    vs Cloud Pro vs Enterprise") hydrate every column off ONE call
+    instead of N calls to :func:`feature_catalog_at`.
+
+    Per-tier row shape::
+
+        {
+          "tier":       "<id>",
+          "tier_label": "...",
+          "tier_rank":  <int>,
+          "features":   [<feature_catalog_at row>, ...],
+        }
+
+    Each ``features`` list is byte-identical to the list
+    :func:`feature_catalog_at` returns for the same tier -- a parity
+    test pins this so the scalar and batch what-if catalog helpers
+    cannot drift.
+
+    Shape::
+
+        {
+          "tiers": [
+            {"tier": "<id>", "tier_label": ..., "tier_rank": ..., "features": [...]},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Supplied tier ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen
+    order preserved). Unknown ids are echoed in ``unknown[]`` instead of
+    short-circuiting -- a partially-bad caller still gets rows back for
+    the valid ids alongside a list of what was dropped, matching
+    :func:`feature_spec_at_batch`'s posture. ``trial`` IS accepted (it
+    lives in :data:`_TIER_ORDER` and the scalar helper resolves it).
+
+    Empty / ``None`` input returns ``{"tiers": [], "unknown": []}`` --
+    the HTTP wrapper turns that into a 400, this helper does not raise.
+
+    Resolver-independent: delegates per-tier to
+    :func:`feature_catalog_at`, which synthesises a fresh
+    :class:`Entitlement` per rung -- so grace vs enforce yields
+    byte-identical rows. Never raises: a per-tier failure short-circuits
+    that id into ``unknown[]`` and the rest of the batch keeps building.
+    """
+    ids = _normalise_csv(tiers)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    for tid in ids:
+        if tid not in _TIER_ORDER:
+            unknown.append(tid)
+            continue
+        try:
+            catalog = feature_catalog_at(tid)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: feature_catalog_at_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        if catalog is None:
+            unknown.append(tid)
+            continue
+        rows.append(
+            {
+                "tier": tid,
+                "tier_label": tier_label(tid),
+                "tier_rank": _TIER_RANK.get(tid, -1),
+                "features": catalog,
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}
+
+
+def runtime_catalog_at_batch(tiers) -> dict:
+    """Runtime-axis twin of :func:`feature_catalog_at_batch`: full runtime
+    catalog rows for a caller-supplied set of hypothetical tiers in ONE
+    round-trip.
+
+    Pairs with :func:`feature_catalog_at_batch` the same way
+    :func:`runtime_catalog_at` pairs with :func:`feature_catalog_at`.
+    Together they let a pricing-comparison matrix UI hydrate every
+    feature + runtime column at every hypothetical rung off TWO calls
+    instead of 2 * N calls to the scalar what-if catalog helpers.
+
+    Per-tier row shape::
+
+        {
+          "tier":       "<id>",
+          "tier_label": "...",
+          "tier_rank":  <int>,
+          "runtimes":   [<runtime_catalog_at row>, ...],
+        }
+
+    Each ``runtimes`` list is byte-identical to the list
+    :func:`runtime_catalog_at` returns for the same tier -- a parity
+    test pins this so the scalar and batch what-if catalog helpers
+    cannot drift.
+
+    Shape mirrors :func:`feature_catalog_at_batch` (top-level ``tiers``
+    array + ``unknown`` echo). Supplied ids are normalised via
+    :func:`_normalise_csv`; unknown ids are echoed instead of short-
+    circuiting the batch. ``trial`` is accepted.
+
+    Resolver-independent: delegates per-tier to
+    :func:`runtime_catalog_at`, which synthesises a fresh
+    :class:`Entitlement` per rung -- so grace vs enforce yields
+    byte-identical rows. Never raises: per-tier failures short-circuit
+    that id into ``unknown[]`` and the rest of the batch keeps building.
+    """
+    ids = _normalise_csv(tiers)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    for tid in ids:
+        if tid not in _TIER_ORDER:
+            unknown.append(tid)
+            continue
+        try:
+            catalog = runtime_catalog_at(tid)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: runtime_catalog_at_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        if catalog is None:
+            unknown.append(tid)
+            continue
+        rows.append(
+            {
+                "tier": tid,
+                "tier_label": tier_label(tid),
+                "tier_rank": _TIER_RANK.get(tid, -1),
+                "runtimes": catalog,
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}
+
+
 def tier_spec(tier: str) -> dict | None:
     """Scalar variant of :func:`tier_catalog`: full descriptor for a single
     tier in one shot.
@@ -4554,6 +4706,91 @@ def runtime_spec_at_batch(tier: str, runtimes) -> dict | None:
         else:
             unknown.append(raw)
     return {"runtimes": rows, "unknown": unknown}
+
+
+def tier_spec_at_batch(tier: str, targets) -> dict | None:
+    """What-if + batch sibling of :func:`tier_spec_at`: return single-tier
+    descriptor rows for a caller-supplied subset of target tiers, all
+    computed from the perspective of a fixed hypothetical ``tier``.
+
+    Fixed-source multi-target companion to :func:`tier_spec_at` (scalar
+    what-if scalar) and cross-tier axis of :func:`feature_spec_at_batch` /
+    :func:`runtime_spec_at_batch` (which fix the source and batch across
+    the feature / runtime axis). Also the caller-supplied-targets sibling
+    of :func:`next_tier_spec_at_batch` /
+    :func:`previous_tier_spec_at_batch` (which walk the ladder from the
+    resolved tier and pin the destination to the adjacent purchasable
+    rung). Lets a pricing-comparison matrix UI ("from my perspective
+    tier, show me the descriptor rows for OSS, Cloud Starter, Cloud Pro,
+    Enterprise") hydrate every column off ONE round-trip instead of N
+    calls to :func:`tier_spec_at`.
+
+    Per-row body is byte-identical to :func:`tier_spec_at(tier, target)`
+    for the same ``target`` -- a parity test pins this so the scalar and
+    batch what-if accessors cannot drift. Only the ``is_current`` boolean
+    varies row by row (``True`` iff ``target == tier``); every other
+    catalogue-derived field comes straight from the static per-tier maps.
+
+    Shape (mirrors :func:`feature_catalog_at_batch` /
+    :func:`runtime_catalog_at_batch`'s ``{tiers, unknown}`` envelope --
+    the ``tiers`` axis IS the batch axis here, so the envelope key stays
+    ``tiers`` even though every row IS a tier)::
+
+        {
+          "tiers": [<tier_spec_at row>, ...],   # one per known target, first-seen order
+          "unknown": ["bogus_id", ...],         # supplied ids not in _TIER_ORDER
+        }
+
+    Returns ``None`` for empty / unknown perspective ``tier`` (caller
+    renders "unknown tier" / 404). Supplied target ids are normalised via
+    :func:`_normalise_csv` (whitespace stripped, lowercased, duplicates
+    dropped, first-seen order preserved). Unknown ids are echoed in
+    ``unknown[]`` instead of short-circuiting -- a partially-bad caller
+    still gets rows back for the valid ids alongside a list of what was
+    dropped, matching :func:`feature_spec_at_batch` /
+    :func:`runtime_spec_at_batch` /
+    :func:`feature_catalog_at_batch` /
+    :func:`runtime_catalog_at_batch`'s posture. ``trial`` IS accepted as
+    both perspective and target (it lives in :data:`_TIER_ORDER` and the
+    scalar helper resolves it).
+
+    Empty / ``None`` targets returns ``{"tiers": [], "unknown": []}`` --
+    the HTTP wrapper turns that into a 400, this helper does not raise.
+
+    Resolver-independent: delegates per-row to :func:`tier_spec_at`,
+    which reads only the static per-tier maps -- so grace vs enforce
+    yields byte-identical rows. Never raises: a per-row failure
+    short-circuits that id into ``unknown[]`` and the rest of the batch
+    keeps building.
+    """
+    try:
+        t = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not t or t not in _TIER_ORDER:
+        return None
+    ids = _normalise_csv(targets)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    for tid in ids:
+        if tid not in _TIER_ORDER:
+            unknown.append(tid)
+            continue
+        try:
+            row = tier_spec_at(t, tid)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: tier_spec_at_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        if row is None:
+            unknown.append(tid)
+            continue
+        rows.append(row)
+    return {"tiers": rows, "unknown": unknown}
 
 
 def lock_reason_at(
@@ -6816,6 +7053,105 @@ def previous_tier_runtime_spec_at(tier: str, runtime: str) -> dict | None:
         return None
 
 
+def next_tier_lock_reason_at(
+    tier: str, item, *, kind: str | None = None
+) -> str | None:
+    """Scalar what-if sibling of :func:`lock_reason_at` projected onto the
+    rung above the caller-supplied ``tier``.
+
+    Lock-reason-axis projection of :func:`next_tier_spec_at` and
+    lock-reason sibling of :func:`next_tier_feature_spec_at` /
+    :func:`next_tier_runtime_spec_at` -- where those return the catalog
+    row at the rung above, this returns the human-readable lock sentence
+    the paywall surface would render. Convenience for
+    ``lock_reason_at(_next_purchasable_tier_after(tier), item, kind=kind)``
+    so a paywall "what does the lock copy for THIS item look like at my
+    next rung?" tooltip hydrates off ONE round-trip without the caller
+    walking the ladder or asking the resolver.
+
+    The returned string matches :func:`lock_reason_at(target, item, kind=kind)`
+    for the resolved ``target = _next_purchasable_tier_after(tier)``
+    exactly -- a parity test pins this so the projection cannot drift
+    from the full helper.
+
+    ``kind`` follows :meth:`Entitlement.lock_reason`: ``"feature"`` /
+    ``"runtime"`` / ``"channels"`` / ``"retention_days"`` / ``"nodes"``
+    explicitly; ``None`` lets the inner method infer ``feature`` vs
+    ``runtime`` from the id (capacity axes can't be inferred, so pass
+    ``kind=`` for those).
+
+    Accepts any id in :data:`_TIER_ORDER` for ``tier`` (including
+    :data:`TIER_TRIAL`) -- the lenient ``_at`` posture, matching the
+    other ``next_*_at`` helpers.
+
+    Returns ``None`` for empty / unknown ``tier``, at the ceiling (no
+    rung strictly above -- enterprise as source), and for any item the
+    inner method considers unlockable at the resolved target (free
+    features / runtimes, empty keys, malformed capacity counts). Never
+    raises: a builder failure short-circuits to ``None`` so the CTA
+    surface stays mute instead of breaking.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        target = _next_purchasable_tier_after(src)
+        if target is None:
+            return None
+        return lock_reason_at(target, item, kind=kind)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_lock_reason_at failed: %s", exc
+        )
+        return None
+
+
+def previous_tier_lock_reason_at(
+    tier: str, item, *, kind: str | None = None
+) -> str | None:
+    """Scalar what-if sibling of :func:`lock_reason_at` projected onto the
+    rung below the caller-supplied ``tier``.
+
+    Source-anchored mirror of :func:`next_tier_lock_reason_at` and
+    downgrade-confirmation counterpart on the lock-reason axis.
+    Convenience for ``lock_reason_at(_previous_purchasable_tier_before(tier),
+    item, kind=kind)`` so a downgrade-confirmation card can ask "what
+    lock sentence would surface if I drop one rung?" without recomputing
+    the target tier client-side.
+
+    Like :func:`next_tier_lock_reason_at` the returned string matches
+    :func:`lock_reason_at(target, item, kind=kind)` for the resolved
+    ``target = _previous_purchasable_tier_before(tier)`` exactly.
+
+    Accepts any id in :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`)
+    -- the lenient ``_at`` posture.
+
+    Returns ``None`` for empty / unknown ``tier``, at the floor (``oss``
+    / ``cloud_free`` as source -- no rung strictly below), and for any
+    item the inner method considers unlockable at the resolved target.
+    Never raises.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        target = _previous_purchasable_tier_before(src)
+        if target is None:
+            return None
+        return lock_reason_at(target, item, kind=kind)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_lock_reason_at failed: %s", exc
+        )
+        return None
+
+
 def tier_spec_path(from_tier: str, to_tier: str) -> list[dict] | None:
     """Arbitrary-endpoint stepwise spec-shaped path between two tiers.
 
@@ -7149,6 +7485,213 @@ def runtime_spec_path(
         return None
 
 
+def feature_catalog_path(from_tier: str, to_tier: str) -> list[dict] | None:
+    """Arbitrary-endpoint stepwise feature-catalog path between two tiers.
+
+    Full-catalog path sibling of :func:`feature_spec_path` (single-feature
+    per rung), :func:`tier_spec_path` (slim tier descriptor per rung) and
+    :func:`preview_path` (cumulative ``Entitlement.to_dict`` per rung) --
+    the catalog-shaped member of the ``_path`` family, the path-shaped
+    sibling of :func:`feature_catalog_at_batch` (which is a multi-source
+    what-if matrix over a caller-supplied tier list) and the bulk what-if
+    cousin of :func:`feature_catalog_at`. Lets an upgrade-walkthrough UI
+    render the full feature catalogue at every rung between any two
+    tiers off ONE round-trip, without first calling :func:`tier_path` to
+    get the rung list and then N calls to :func:`feature_catalog_at`.
+
+    Per-rung row shape matches :func:`feature_catalog_at_batch` exactly::
+
+        {
+          "tier":       "<id>",
+          "tier_label": "...",
+          "tier_rank":  <int>,
+          "features":   [<feature_catalog_at row>, ...],
+        }
+
+    Each ``features`` list byte-equals :func:`feature_catalog_at` for the
+    same rung id -- a parity test pins this so the scalar, batch and
+    path what-if catalog helpers cannot drift.
+
+    Walk semantics mirror :func:`tier_path` / :func:`capacity_diff_path`
+    / :func:`tier_unlocks_path` / :func:`tier_locks_path` /
+    :func:`preview_path` / :func:`tier_spec_path` byte-for-byte (same
+    ``_PURCHASABLE_TIERS`` filter + same sort key + same destination-
+    sibling exclusion), so the rung ``tier`` ids from this helper line
+    up rung-for-rung against the rung ``tier`` / ``to`` / ``target``
+    ids from those six helpers. Same-rank siblings strictly between the
+    endpoints are both included; same-rank siblings of the destination
+    are excluded so the path terminates exactly at ``to_tier``.
+
+    Direction semantics (all rows share the same catalog shape; only the
+    sequence changes):
+
+    * ``upgrade`` (ascending) -- rows climb cumulatively from the rung
+      above ``from_tier`` toward ``to_tier``.
+    * ``downgrade`` (descending) -- rows shrink cumulatively rung by
+      rung; the cancellation-walkthrough counterpart.
+    * ``lateral`` (same rank, different id) -- single-row path; row
+      carries the catalog at ``to_tier``.
+    * ``identity`` (``from == to``) -- empty path; no rungs to walk.
+
+    Endpoint semantics match :func:`tier_path` / :func:`tier_diff`: both
+    ids accept any entry in :data:`_TIER_FEATURES` (including
+    :data:`TIER_TRIAL`, which is not purchasable -- it is excluded from
+    the walked intermediate rungs but is a valid endpoint via the
+    lateral branch). Unknown ids on either side short-circuit to
+    ``None``.
+
+    Resolver-independent: delegates per-rung to
+    :func:`feature_catalog_at`, which synthesises a fresh
+    :class:`Entitlement` per rung -- so grace vs enforce yields byte-
+    identical rows, same property the rest of the ``_path`` family
+    guarantees.
+
+    Never raises: a resolver failure logs a warning and returns ``None``
+    so a pricing-page surface keeps rendering instead of breaking.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+        if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+            return None
+        if f == t:
+            return []
+        from_rank = _TIER_RANK.get(f, -1)
+        to_rank = _TIER_RANK.get(t, -1)
+
+        def _row(rung: str) -> dict | None:
+            catalog = feature_catalog_at(rung)
+            if catalog is None:
+                return None
+            return {
+                "tier": rung,
+                "tier_label": tier_label(rung),
+                "tier_rank": _TIER_RANK.get(rung, -1),
+                "features": catalog,
+            }
+
+        if from_rank == to_rank:
+            row = _row(t)
+            return [row] if row is not None else []
+        ascending = to_rank > from_rank
+        if ascending:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (_TIER_RANK.get(x, -1), x),
+            )
+        else:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (-_TIER_RANK.get(x, -1), x),
+            )
+        path: list[dict] = []
+        for tid in ordered:
+            r = _TIER_RANK.get(tid, -1)
+            if ascending:
+                if r <= from_rank or r > to_rank:
+                    continue
+            else:
+                if r >= from_rank or r < to_rank:
+                    continue
+            if r == to_rank and tid != t:
+                continue
+            row = _row(tid)
+            if row is not None:
+                path.append(row)
+        return path
+    except Exception as exc:
+        logger.warning("entitlements: feature_catalog_path failed: %s", exc)
+        return None
+
+
+def runtime_catalog_path(from_tier: str, to_tier: str) -> list[dict] | None:
+    """Arbitrary-endpoint stepwise runtime-catalog path between two tiers.
+
+    Runtime-axis twin of :func:`feature_catalog_path`: full runtime
+    catalogue at every rung between any two tiers off ONE round-trip.
+    Pairs with :func:`feature_catalog_path` the same way
+    :func:`runtime_catalog_at_batch` pairs with
+    :func:`feature_catalog_at_batch`. Together the two path helpers let
+    an upgrade-walkthrough UI render every feature + runtime column at
+    every rung off TWO calls instead of first calling :func:`tier_path`
+    and then 2 * N calls to the scalar what-if catalog helpers.
+
+    Per-rung row shape mirrors :func:`runtime_catalog_at_batch` with
+    ``features`` renamed to ``runtimes``::
+
+        {
+          "tier":       "<id>",
+          "tier_label": "...",
+          "tier_rank":  <int>,
+          "runtimes":   [<runtime_catalog_at row>, ...],
+        }
+
+    Each ``runtimes`` list byte-equals :func:`runtime_catalog_at` for
+    the same rung id -- a parity test pins this so the scalar, batch
+    and path what-if catalog helpers cannot drift.
+
+    Walk semantics, direction semantics, endpoint semantics and
+    resolver-independence all match :func:`feature_catalog_path` -- see
+    that helper's docstring. Rung walk is byte-stable against the rest
+    of the ``_path`` family.
+
+    Never raises: a resolver failure logs a warning and returns ``None``.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+        if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+            return None
+        if f == t:
+            return []
+        from_rank = _TIER_RANK.get(f, -1)
+        to_rank = _TIER_RANK.get(t, -1)
+
+        def _row(rung: str) -> dict | None:
+            catalog = runtime_catalog_at(rung)
+            if catalog is None:
+                return None
+            return {
+                "tier": rung,
+                "tier_label": tier_label(rung),
+                "tier_rank": _TIER_RANK.get(rung, -1),
+                "runtimes": catalog,
+            }
+
+        if from_rank == to_rank:
+            row = _row(t)
+            return [row] if row is not None else []
+        ascending = to_rank > from_rank
+        if ascending:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (_TIER_RANK.get(x, -1), x),
+            )
+        else:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (-_TIER_RANK.get(x, -1), x),
+            )
+        path: list[dict] = []
+        for tid in ordered:
+            r = _TIER_RANK.get(tid, -1)
+            if ascending:
+                if r <= from_rank or r > to_rank:
+                    continue
+            else:
+                if r >= from_rank or r < to_rank:
+                    continue
+            if r == to_rank and tid != t:
+                continue
+            row = _row(tid)
+            if row is not None:
+                path.append(row)
+        return path
+    except Exception as exc:
+        logger.warning("entitlements: runtime_catalog_path failed: %s", exc)
+        return None
+
+
 def lock_reason_path(
     from_tier: str, to_tier: str, item, *, kind: str | None = None
 ) -> list[dict] | None:
@@ -7332,6 +7875,115 @@ def lock_reason_path(
         return None
 
 
+def tier_spec_path_batch(from_tier: str, to_tiers) -> dict | None:
+    """Batch sibling of :func:`tier_spec_path`: per-rung spec-shaped path
+    rows for a caller-supplied subset of destination tiers all walked
+    from a single ``from_tier`` in ONE round-trip.
+
+    Composes :func:`tier_spec_path` (scalar single-destination path) and
+    :func:`tier_spec_at_batch` (batch what-if scalar) -- same per-rung
+    body as the path helper, same multi-destination axis as the batch
+    helper. Lets a pricing-comparison "from my current rung, here are
+    the 3 tiers I'm considering" surface render every rung for every
+    candidate destination off ONE call instead of N calls to
+    :func:`tier_spec_path`.
+
+    Per-destination row shape::
+
+        {
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<tier_spec_path row>, ...],
+        }
+
+    Each ``path`` row is byte-identical to a row from
+    :func:`tier_spec_path` for the same ``(from_tier, to)`` pair -- a
+    parity test pins this so the scalar and batch path helpers cannot
+    drift. The walked rungs are destination-specific (the path's rung
+    set depends on ``to``), so per-destination ``path`` lengths can
+    legitimately differ -- this differs from
+    :func:`feature_spec_path_batch` whose rungs are feature-agnostic.
+
+    Shape::
+
+        {
+          "tiers": [
+            {"to": "<id>", "to_label": ..., "to_rank": ..., "direction": ..., "path": [...]},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Supplied destination ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen
+    order preserved). Unknown ids are echoed in ``unknown[]`` instead
+    of short-circuiting -- a partially-bad caller still gets paths
+    back for the valid ids alongside a list of what was dropped,
+    matching :func:`feature_spec_path_batch` /
+    :func:`runtime_spec_path_batch`'s posture. ``trial`` IS accepted
+    as a destination (it is excluded from the walked intermediate
+    rungs the way :func:`tier_spec_path` already excludes it, but is
+    a valid endpoint via the lateral / identity branches).
+
+    Returns ``None`` for empty / unknown ``from_tier`` (caller renders
+    "unknown tier" / 404).
+
+    Resolver-independent: delegates per-destination to
+    :func:`tier_spec_path`, which walks the static per-tier maps via
+    :func:`tier_spec_at` -- so grace vs enforce yields byte-identical
+    rows. Never raises: per-destination failures short-circuit that id
+    into ``unknown[]`` and the rest of the batch keeps building.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if f not in _TIER_FEATURES:
+        return None
+    candidates = _normalise_csv(to_tiers)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    from_rank = _TIER_RANK.get(f, -1)
+    for tid in candidates:
+        if tid not in _TIER_FEATURES:
+            unknown.append(tid)
+            continue
+        try:
+            path = tier_spec_path(f, tid)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: tier_spec_path_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        if path is None:
+            unknown.append(tid)
+            continue
+        to_rank = _TIER_RANK.get(tid, -1)
+        if f == tid:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        rows.append(
+            {
+                "to": tid,
+                "to_label": tier_label(tid),
+                "to_rank": to_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}
+
+
 def feature_spec_path_batch(
     from_tier: str, to_tier: str, features
 ) -> dict | None:
@@ -7494,3 +8146,1502 @@ def runtime_spec_path_batch(
         seen.add(canon)
         rows.append({"runtime": canon, "path": path})
     return {"runtimes": rows, "unknown": unknown}
+
+
+def lock_reason_path_batch(
+    from_tier: str,
+    to_tier: str,
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict | None:
+    """Multi-axis batch sibling of :func:`lock_reason_path`: per-item
+    stepwise lock-row paths between two tiers across all 5 axes in ONE
+    round-trip.
+
+    Pairs with :func:`lock_reason_path` the same way
+    :func:`lock_reasons_at_batch` pairs with :func:`lock_reason_at`:
+    scalar what-if -> matrix what-if. Lets a paywall comparison surface
+    ("here are the 6 features + 2 runtimes + my channel count + my
+    retention window, walk each one from OSS to Enterprise") render the
+    full matrix off ONE call instead of N calls to
+    :func:`lock_reason_path` per item.
+
+    Composes :func:`lock_reason_path` (scalar single-item path) and
+    :func:`lock_reasons_at_batch` (matrix what-if scalar) -- same rung
+    walk as the scalar path helper, same multi-axis envelope as the
+    matrix what-if helper. The two top-level capacity axes
+    (``channels`` / ``retention_days`` / ``nodes``) are *single-item*
+    just like :func:`lock_reasons_at_batch`, since each is a single
+    integer rather than a CSV.
+
+    Shape (mirrors :func:`lock_reasons_at_batch` plus per-row paths)::
+
+        {
+          "features": [{"key": "<id>", "path": [<augmented row>, ...]}, ...],
+          "runtimes": [{"key": "<canonical id>", "path": [...]}, ...],
+          "channels":       {"key": "<n>", "path": [...]} | None,
+          "retention_days": {"key": "<n>", "path": [...]} | None,
+          "nodes":          {"key": "<n>", "path": [...]} | None,
+          "unknown": {"features": [...], "runtimes": [...]},
+        }
+
+    Each ``path`` row is byte-identical to a row from
+    :func:`lock_reason_path` for the same ``(from, to, item, kind)``
+    tuple -- a parity test pins this so the scalar and batch path
+    helpers cannot drift. Rungs walked are item-agnostic (matches
+    :func:`feature_spec_path_batch` / :func:`runtime_spec_path_batch`),
+    so every per-item ``path`` has the same length and rung sequence.
+
+    Supplied feature/runtime ids are normalised via
+    :func:`_normalise_csv` (whitespace stripped, lowercased, duplicates
+    dropped, first-seen order preserved). Runtime aliases are
+    canonicalised via :func:`canonical_runtime` (``claude-code`` ->
+    ``claude_code``); aliases that collapse to a canonical id already
+    in the response are silently de-duplicated -- same behaviour as
+    :func:`runtime_spec_path_batch`. Unknown ids are echoed in
+    ``unknown.features`` / ``unknown.runtimes`` instead of
+    short-circuiting -- a partially-bad caller still gets paths back
+    for the valid ids alongside a list of what was dropped, matching
+    :func:`feature_spec_path_batch`'s posture.
+
+    Capacity axes use ``None`` as the "axis not supplied" sentinel:
+    ``retention_days=None`` here means *unset*, NOT *unlimited* --
+    matches :func:`lock_reasons_at_batch`. A non-positive / non-int
+    capacity value yields a ``None`` axis row (the scalar
+    :func:`lock_reason_path` short-circuits in that case).
+
+    Returns ``None`` for empty / unknown ``from_tier`` / ``to_tier``
+    (caller renders 404). Identity ``from == to`` yields a payload with
+    one entry per supplied id whose ``path`` is ``[]``, matching the
+    singular helper's identity branch.
+
+    Resolver-independent: delegates per-item to
+    :func:`lock_reason_path`, which synthesises a fresh
+    :class:`Entitlement` per rung with ``grace=False`` -- so grace vs
+    enforce yields byte-identical rows. Never raises: per-item failures
+    short-circuit that item into ``unknown[]`` and the rest of the
+    batch keeps building.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+        return None
+
+    feats = _normalise_csv(features)
+    rts = _normalise_csv(runtimes)
+
+    feature_rows: list[dict] = []
+    runtime_rows: list[dict] = []
+    unknown_features: list[str] = []
+    unknown_runtimes: list[str] = []
+    seen_runtimes: set[str] = set()
+
+    for fid in feats:
+        if fid not in ALL_FEATURES:
+            unknown_features.append(fid)
+            continue
+        try:
+            path = lock_reason_path(f, t, fid, kind="feature")
+        except Exception as exc:
+            logger.warning(
+                "entitlements: lock_reason_path_batch feature %r failed: %s",
+                fid,
+                exc,
+            )
+            unknown_features.append(fid)
+            continue
+        if path is None:
+            unknown_features.append(fid)
+            continue
+        feature_rows.append({"key": fid, "path": path})
+
+    for raw in rts:
+        canon = canonical_runtime(raw)
+        if not canon or canon not in ALL_RUNTIMES:
+            unknown_runtimes.append(raw)
+            continue
+        if canon in seen_runtimes:
+            continue
+        try:
+            path = lock_reason_path(f, t, raw, kind="runtime")
+        except Exception as exc:
+            logger.warning(
+                "entitlements: lock_reason_path_batch runtime %r failed: %s",
+                raw,
+                exc,
+            )
+            unknown_runtimes.append(raw)
+            continue
+        if path is None:
+            unknown_runtimes.append(raw)
+            continue
+        seen_runtimes.add(canon)
+        runtime_rows.append({"runtime": canon, "path": path})
+
+    def _capacity(value, kind: str) -> dict | None:
+        if value is None:
+            return None
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            return None
+        if n <= 0:
+            return None
+        try:
+            p = lock_reason_path(f, t, str(n), kind=kind)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: lock_reason_path_batch %s %r failed: %s",
+                kind,
+                value,
+                exc,
+            )
+            return None
+        if p is None:
+            return None
+        return {"key": str(n), "path": p}
+
+    # Map runtime rows to the {"key", "path"} shape used by every
+    # other axis in this envelope; the canonical id lives in ``key``.
+    runtime_rows = [{"key": r["runtime"], "path": r["path"]} for r in runtime_rows]
+
+    return {
+        "features": feature_rows,
+        "runtimes": runtime_rows,
+        "channels": _capacity(channels, "channels"),
+        "retention_days": _capacity(retention_days, "retention_days"),
+        "nodes": _capacity(nodes, "nodes"),
+        "unknown": {
+            "features": unknown_features,
+            "runtimes": unknown_runtimes,
+        },
+    }
+
+
+def next_tier_feature_spec_at_batch(tier: str, features) -> dict | None:
+    """Batch sibling of :func:`next_tier_feature_spec_at`: per-feature
+    ``feature_spec_at``-shape rows evaluated on the rung above the caller-
+    supplied source ``tier`` for N features in ONE round-trip.
+
+    Composes :func:`next_tier_feature_spec_at` (scalar projection) and
+    :func:`feature_spec_at_batch` (batch what-if) -- same target
+    (`_next_purchasable_tier_after(tier)`) as the scalar, same per-feature
+    shape as the batch helper. Lets a paywall "does THIS column of
+    features unlock at my next rung?" pricing-comparison surface render
+    every feature off ONE call instead of N calls to
+    :func:`next_tier_feature_spec_at`.
+
+    Per-feature row shape::
+
+        {"feature": "<id>", "row": <feature_spec_at row> | None}
+
+    Each ``row`` is byte-identical to
+    :func:`next_tier_feature_spec_at(tier, feature)` (which itself equals
+    :func:`feature_spec_at(target, feature)` byte-for-byte at the
+    resolved target) -- pinned by parity tests so the scalar and batch
+    accessors cannot drift. At the ceiling (enterprise as source, no rung
+    above) every ``row`` is ``None`` while the per-feature envelope
+    entries still render so the matrix's row count stays stable.
+
+    Shape::
+
+        {
+          "features": [
+            {"feature": "<id>", "row": <row> | None},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Supplied feature ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen
+    order preserved). Unknown ids are echoed in ``unknown[]`` rather
+    than short-circuiting -- a partially-bad caller still gets rows
+    back for the valid ids alongside a list of what was dropped,
+    matching :func:`feature_spec_at_batch`'s posture.
+
+    Returns ``None`` for empty / unknown ``tier`` (caller renders
+    "unknown tier" / 404). Resolver-independent: delegates to
+    :func:`feature_spec_at` against the synthesised hypothetical
+    entitlement -- grace vs enforce yields byte-identical rows. Never
+    raises: a per-feature failure short-circuits that feature into
+    ``unknown[]`` and the rest of the batch keeps building.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    feats = _normalise_csv(features)
+    try:
+        target = _next_purchasable_tier_after(src)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_feature_spec_at_batch target resolve failed: %s",
+            exc,
+        )
+        target = None
+    rows: list[dict] = []
+    unknown: list[str] = []
+    for fid in feats:
+        if fid not in ALL_FEATURES:
+            unknown.append(fid)
+            continue
+        try:
+            row = feature_spec_at(target, fid) if target else None
+        except Exception as exc:
+            logger.warning(
+                "entitlements: next_tier_feature_spec_at_batch row %r failed: %s",
+                fid,
+                exc,
+            )
+            unknown.append(fid)
+            continue
+        rows.append({"feature": fid, "row": row})
+    return {"features": rows, "unknown": unknown}
+
+
+def previous_tier_feature_spec_at_batch(tier: str, features) -> dict | None:
+    """Source-anchored mirror of :func:`next_tier_feature_spec_at_batch`
+    -- batch sibling of :func:`previous_tier_feature_spec_at` walking N
+    features against the rung BELOW the caller-supplied ``tier`` in ONE
+    round-trip.
+
+    Same per-feature row shape and same normalisation / unknown-bucket
+    posture as :func:`next_tier_feature_spec_at_batch`. At the floor
+    (``oss`` / ``cloud_free`` as source, no rung below) every ``row`` is
+    ``None`` while per-feature entries still render so the downgrade-
+    confirmation surface's row count stays stable.
+
+    Each ``row`` is byte-identical to
+    :func:`previous_tier_feature_spec_at(tier, feature)` (which itself
+    equals :func:`feature_spec_at(target, feature)` byte-for-byte at the
+    resolved target).
+
+    Returns ``None`` for empty / unknown ``tier``. Never raises.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    feats = _normalise_csv(features)
+    try:
+        target = _previous_purchasable_tier_before(src)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_feature_spec_at_batch target resolve failed: %s",
+            exc,
+        )
+        target = None
+    rows: list[dict] = []
+    unknown: list[str] = []
+    for fid in feats:
+        if fid not in ALL_FEATURES:
+            unknown.append(fid)
+            continue
+        try:
+            row = feature_spec_at(target, fid) if target else None
+        except Exception as exc:
+            logger.warning(
+                "entitlements: previous_tier_feature_spec_at_batch row %r failed: %s",
+                fid,
+                exc,
+            )
+            unknown.append(fid)
+            continue
+        rows.append({"feature": fid, "row": row})
+    return {"features": rows, "unknown": unknown}
+
+
+def next_tier_runtime_spec_at_batch(tier: str, runtimes) -> dict | None:
+    """Runtime-axis twin of :func:`next_tier_feature_spec_at_batch` --
+    batch sibling of :func:`next_tier_runtime_spec_at` walking N runtimes
+    against the rung ABOVE the caller-supplied ``tier`` in ONE
+    round-trip.
+
+    Per-runtime row shape::
+
+        {"runtime": "<canonical id>", "row": <runtime_spec_at row> | None}
+
+    Each ``row`` is byte-identical to
+    :func:`next_tier_runtime_spec_at(tier, runtime)`. Aliases are
+    canonicalised via :func:`canonical_runtime` (``claude-code`` ->
+    ``claude_code``) and aliases that collapse to a canonical id already
+    in the response are silently de-duplicated -- same behaviour as
+    :func:`runtime_spec_at_batch`. The per-row ``runtime`` value carries
+    the canonical id, never the supplied alias.
+
+    At the ceiling every ``row`` is ``None`` while the per-runtime
+    envelope entries still render so the matrix's row count stays
+    stable.
+
+    Shape::
+
+        {
+          "runtimes": [
+            {"runtime": "<canonical id>", "row": <row> | None},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Returns ``None`` for empty / unknown ``tier``. Never raises: per-
+    runtime failures short-circuit that runtime into ``unknown[]``
+    (carrying the supplied alias, not the canonical id, so the caller
+    can correlate against what was sent) and the rest of the batch keeps
+    building.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    rts = _normalise_csv(runtimes)
+    try:
+        target = _next_purchasable_tier_after(src)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_runtime_spec_at_batch target resolve failed: %s",
+            exc,
+        )
+        target = None
+    rows: list[dict] = []
+    unknown: list[str] = []
+    seen: set[str] = set()
+    for raw in rts:
+        canon = canonical_runtime(raw)
+        if not canon or canon not in ALL_RUNTIMES:
+            unknown.append(raw)
+            continue
+        if canon in seen:
+            continue
+        try:
+            row = runtime_spec_at(target, canon) if target else None
+        except Exception as exc:
+            logger.warning(
+                "entitlements: next_tier_runtime_spec_at_batch row %r failed: %s",
+                raw,
+                exc,
+            )
+            unknown.append(raw)
+            continue
+        seen.add(canon)
+        rows.append({"runtime": canon, "row": row})
+    return {"runtimes": rows, "unknown": unknown}
+
+
+def previous_tier_runtime_spec_at_batch(tier: str, runtimes) -> dict | None:
+    """Source-anchored mirror of :func:`next_tier_runtime_spec_at_batch`
+    -- batch sibling of :func:`previous_tier_runtime_spec_at` walking N
+    runtimes against the rung BELOW the caller-supplied ``tier`` in ONE
+    round-trip.
+
+    Same per-runtime row shape, alias canonicalisation, alias collapse,
+    and ``unknown[]``-carries-supplied-alias posture as
+    :func:`next_tier_runtime_spec_at_batch`. At the floor every ``row``
+    is ``None`` while per-runtime entries still render.
+
+    Each ``row`` is byte-identical to
+    :func:`previous_tier_runtime_spec_at(tier, runtime)`.
+
+    Returns ``None`` for empty / unknown ``tier``. Never raises.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    rts = _normalise_csv(runtimes)
+    try:
+        target = _previous_purchasable_tier_before(src)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_runtime_spec_at_batch target resolve failed: %s",
+            exc,
+        )
+        target = None
+    rows: list[dict] = []
+    unknown: list[str] = []
+    seen: set[str] = set()
+    for raw in rts:
+        canon = canonical_runtime(raw)
+        if not canon or canon not in ALL_RUNTIMES:
+            unknown.append(raw)
+            continue
+        if canon in seen:
+            continue
+        try:
+            row = runtime_spec_at(target, canon) if target else None
+        except Exception as exc:
+            logger.warning(
+                "entitlements: previous_tier_runtime_spec_at_batch row %r failed: %s",
+                raw,
+                exc,
+            )
+            unknown.append(raw)
+            continue
+        seen.add(canon)
+        rows.append({"runtime": canon, "row": row})
+    return {"runtimes": rows, "unknown": unknown}
+
+
+def tier_path_batch(from_tier: str, to_tiers) -> dict | None:
+    """Batch sibling of :func:`tier_path`: per-rung marginal ``tier_diff``
+    rows for a caller-supplied subset of destination tiers all walked
+    from a single ``from_tier`` in ONE round-trip.
+
+    Composes :func:`tier_path` (scalar single-destination path) and
+    :func:`tier_diff_at_batch` (batch what-if scalar) -- same per-rung
+    body as the path helper (a full marginal :func:`tier_diff` payload
+    between consecutive rungs), same multi-destination axis as the
+    other ``*_path_batch`` siblings. Lets a pricing-comparison "from my
+    current rung, here are the 3 tiers I'm considering -- show me the
+    full marginal step diff (added + lost features, added + lost
+    runtimes, capacity changes) at every rung walked to each" surface
+    render every rung for every candidate destination off ONE call
+    instead of N calls to :func:`tier_path`. Pairs with the existing
+    path-batch grid (``tier_spec_path_batch``, ``capacity_diff_path_
+    batch``, ``tier_unlocks_path_batch``, ``tier_locks_path_batch``,
+    ``preview_path_batch``) as the all-slices-in-one-row member -- each
+    per-rung row carries every marginal slice in one body so a UI that
+    already renders a ``/tier-diff`` row can render a per-rung body
+    here with zero new shape code.
+
+    Per-destination row shape::
+
+        {
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<tier_diff row>, ...],
+        }
+
+    Each ``path`` row is byte-identical to a row from :func:`tier_path`
+    for the same ``(from_tier, to)`` pair -- a parity test pins this so
+    the scalar and batch path helpers cannot drift. Per-row body is the
+    full :func:`tier_diff` envelope (``from`` / ``from_label`` /
+    ``from_rank`` / ``to`` / ``to_label`` / ``to_rank`` / ``direction``
+    / ``added_features`` / ``lost_features`` / ``added_runtimes`` /
+    ``lost_runtimes`` / ``capacity_changes``), and the per-step ``from``
+    chains across the path: ``row[i]["to"] == row[i+1]["from"]``. The
+    walked rungs are destination-specific (the path's rung set depends
+    on ``to``), so per-destination ``path`` lengths can legitimately
+    differ -- matching :func:`tier_spec_path_batch` /
+    :func:`capacity_diff_path_batch`'s posture and differing from
+    :func:`feature_spec_path_batch` / :func:`runtime_spec_path_batch`
+    whose rungs are axis-id-agnostic.
+
+    Shape::
+
+        {
+          "tiers": [
+            {"to": "<id>", "to_label": ..., "to_rank": ..., "direction": ..., "path": [...]},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Supplied destination ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen
+    order preserved). Unknown ids are echoed in ``unknown[]`` instead
+    of short-circuiting -- a partially-bad caller still gets paths
+    back for the valid ids alongside a list of what was dropped,
+    matching :func:`tier_spec_path_batch` /
+    :func:`capacity_diff_path_batch`'s posture. ``trial`` IS accepted
+    as a destination (it is excluded from the walked intermediate
+    rungs the way :func:`tier_path` already excludes it, but is a
+    valid endpoint via the lateral / identity branches).
+
+    Returns ``None`` for empty / unknown ``from_tier`` (caller renders
+    "unknown tier" / 404).
+
+    Resolver-independent: delegates per-destination to :func:`tier_path`,
+    which walks the static per-tier maps via :func:`tier_diff` -- so
+    grace vs enforce yields byte-identical rows. Never raises: per-
+    destination failures short-circuit that id into ``unknown[]`` and
+    the rest of the batch keeps building.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if f not in _TIER_FEATURES:
+        return None
+    candidates = _normalise_csv(to_tiers)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    from_rank = _TIER_RANK.get(f, -1)
+    for tid in candidates:
+        if tid not in _TIER_FEATURES:
+            unknown.append(tid)
+            continue
+        try:
+            path = tier_path(f, tid)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: tier_path_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        if path is None:
+            unknown.append(tid)
+            continue
+        to_rank = _TIER_RANK.get(tid, -1)
+        if f == tid:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        rows.append(
+            {
+                "to": tid,
+                "to_label": tier_label(tid),
+                "to_rank": to_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}
+
+
+def _empty_lock_reasons_at_batch(features, runtimes, channels, retention_days, nodes):
+    """Grace-shape sibling of :func:`lock_reasons_at_batch` used when the
+    resolved target tier is ``None`` (ceiling for ``next``, floor for
+    ``previous``). Preserves the 5-axis shape and per-item row counts so
+    a paywall matrix UI never sees a shape-change at the edges -- every
+    row carries ``reason=None`` / ``locked=False`` / ``allowed=True``.
+    """
+    feats = _normalise_csv(features)
+    rts_norm = _normalise_csv(runtimes)
+    seen_rt: set[str] = set()
+    rt_rows: list[dict] = []
+    for raw in rts_norm:
+        canon = canonical_runtime(raw) or raw
+        if canon in seen_rt:
+            continue
+        seen_rt.add(canon)
+        rt_rows.append(
+            {
+                "key": canon,
+                "kind": "runtime",
+                "reason": None,
+                "locked": False,
+                "allowed": True,
+                "required_tier": None,
+                "required_tier_label": None,
+                "required_tier_rank": -1,
+            }
+        )
+    feat_rows = [
+        {
+            "key": fid,
+            "kind": "feature",
+            "reason": None,
+            "locked": False,
+            "allowed": True,
+            "required_tier": None,
+            "required_tier_label": None,
+            "required_tier_rank": -1,
+        }
+        for fid in feats
+    ]
+
+    def _cap_row(kind: str, raw) -> dict | None:
+        if raw is None:
+            return None
+        try:
+            n = int(raw)
+            key = str(n)
+        except (TypeError, ValueError):
+            key = str(raw)
+        return {
+            "key": key,
+            "kind": kind,
+            "reason": None,
+            "locked": False,
+            "allowed": True,
+            "required_tier": None,
+            "required_tier_label": None,
+            "required_tier_rank": -1,
+        }
+
+    return {
+        "features": feat_rows,
+        "runtimes": rt_rows,
+        "channels": _cap_row("channels", channels),
+        "retention_days": _cap_row("retention_days", retention_days),
+        "nodes": _cap_row("nodes", nodes),
+    }
+
+
+def next_tier_lock_reason_at_batch(
+    tier: str,
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict | None:
+    """Batch sibling of :func:`next_tier_lock_reason_at`: per-item lock-
+    reason rows for every supplied item across all 5 axes, evaluated on
+    the rung above the caller-supplied source ``tier`` in ONE round-trip.
+
+    Composes :func:`next_tier_lock_reason_at` (scalar projection) and
+    :func:`lock_reasons_at_batch` (5-axis matrix what-if) -- same target
+    (``_next_purchasable_tier_after(tier)``) as the scalar, same
+    per-item row shape as the batch helper. Lets a paywall "does THIS
+    column of items unlock at my next rung?" matrix surface render every
+    row off ONE call instead of N calls to
+    :func:`next_tier_lock_reason_at` per axis.
+
+    Body is byte-identical to
+    :func:`lock_reasons_at_batch(target, ...)` for the resolved
+    ``target = _next_purchasable_tier_after(tier)`` -- pinned by parity
+    tests so the scalar what-if and batch what-if cannot drift from the
+    full helper.
+
+    Shape (byte-identical to :func:`lock_reasons_at_batch`)::
+
+        {
+          "features":       [<row>, ...],
+          "runtimes":       [<row>, ...],
+          "channels":       <row> | None,
+          "retention_days": <row> | None,
+          "nodes":          <row> | None,
+        }
+
+    Each ``<row>`` carries the same 8 keys :func:`_lock_row` emits
+    (``key``, ``kind``, ``reason``, ``locked``, ``allowed``,
+    ``required_tier``, ``required_tier_label``, ``required_tier_rank``).
+
+    At the ceiling (enterprise as source, no rung above) rows still
+    render for every supplied item with ``reason=None`` /
+    ``locked=False`` / ``allowed=True`` so the matrix's row count stays
+    stable and the caller doesn't need a special shape branch.
+
+    Accepts any tier id in :data:`_TIER_ORDER` (including
+    :data:`TIER_TRIAL`) -- the lenient ``_at`` posture. Returns ``None``
+    for empty / unknown ``tier`` (caller renders "unknown tier" / 404).
+
+    Resolver-independent: delegates to :func:`lock_reasons_at_batch`
+    against the synthesised hypothetical entitlement -- grace vs enforce
+    yields byte-identical rows. Never raises: a per-axis failure short-
+    circuits to the grace-shape rows so the matrix keeps rendering.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        target = _next_purchasable_tier_after(src)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_lock_reason_at_batch target resolve failed: %s",
+            exc,
+        )
+        target = None
+    if target is None:
+        return _empty_lock_reasons_at_batch(
+            features, runtimes, channels, retention_days, nodes
+        )
+    try:
+        out = lock_reasons_at_batch(
+            target,
+            features=features,
+            runtimes=runtimes,
+            channels=channels,
+            retention_days=retention_days,
+            nodes=nodes,
+        )
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_lock_reason_at_batch failed: %s", exc
+        )
+        out = None
+    if out is None:
+        return _empty_lock_reasons_at_batch(
+            features, runtimes, channels, retention_days, nodes
+        )
+    return out
+
+
+def previous_tier_lock_reason_at_batch(
+    tier: str,
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict | None:
+    """Source-anchored mirror of :func:`next_tier_lock_reason_at_batch`
+    -- batch sibling of :func:`previous_tier_lock_reason_at` sweeping N
+    items across all 5 axes against the rung BELOW the caller-supplied
+    ``tier`` in ONE round-trip.
+
+    Same per-item row shape and 5-axis envelope as
+    :func:`next_tier_lock_reason_at_batch`. At the floor (``oss`` /
+    ``cloud_free`` as source, no rung below) rows still render for every
+    supplied item with ``reason=None`` / ``locked=False`` /
+    ``allowed=True`` so the downgrade-confirmation matrix's row count
+    stays stable.
+
+    Body is byte-identical to
+    :func:`lock_reasons_at_batch(target, ...)` for the resolved
+    ``target = _previous_purchasable_tier_before(tier)``.
+
+    Returns ``None`` for empty / unknown ``tier``. Never raises.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        target = _previous_purchasable_tier_before(src)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_lock_reason_at_batch target resolve failed: %s",
+            exc,
+        )
+        target = None
+    if target is None:
+        return _empty_lock_reasons_at_batch(
+            features, runtimes, channels, retention_days, nodes
+        )
+    try:
+        out = lock_reasons_at_batch(
+            target,
+            features=features,
+            runtimes=runtimes,
+            channels=channels,
+            retention_days=retention_days,
+            nodes=nodes,
+        )
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_lock_reason_at_batch failed: %s", exc
+        )
+        out = None
+    if out is None:
+        return _empty_lock_reasons_at_batch(
+            features, runtimes, channels, retention_days, nodes
+        )
+    return out
+
+
+def capacity_diff_path_batch(
+    from_tier: str, to_tiers
+) -> dict | None:
+    """Batch sibling of :func:`capacity_diff_path`: per-rung capacity
+    transition rows for a caller-supplied subset of destination tiers
+    all walked from a single ``from_tier`` in ONE round-trip.
+
+    Composes :func:`capacity_diff_path` (scalar single-destination
+    capacity walk) and :func:`tier_spec_path_batch` (multi-destination
+    path batch) -- same per-rung capacity body as the path helper, same
+    multi-destination axis as the tier-spec batch helper. Lets a
+    capacity-only pricing-comparison "from my current rung, here are
+    the 3 tiers I'm considering -- show me the channels / retention /
+    nodes bumps to each" surface render every rung for every candidate
+    destination off ONE call instead of N calls to
+    :func:`capacity_diff_path`.
+
+    Per-destination row shape::
+
+        {
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<capacity_diff_path row>, ...],
+        }
+
+    Each ``path`` row is byte-identical to a row from
+    :func:`capacity_diff_path` for the same ``(from_tier, to)`` pair --
+    a parity test pins this so the scalar and batch path helpers
+    cannot drift. The walked rungs are destination-specific (the
+    path's rung set depends on ``to``), so per-destination ``path``
+    lengths can legitimately differ -- this matches
+    :func:`tier_spec_path_batch`'s posture and differs from
+    :func:`feature_spec_path_batch` / :func:`runtime_spec_path_batch`
+    whose rungs are axis-id-agnostic.
+
+    Shape::
+
+        {
+          "tiers": [
+            {"to": "<id>", "to_label": ..., "to_rank": ..., "direction": ..., "path": [...]},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Supplied destination ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen
+    order preserved). Unknown ids are echoed in ``unknown[]`` instead
+    of short-circuiting -- a partially-bad caller still gets paths
+    back for the valid ids alongside a list of what was dropped,
+    matching :func:`tier_spec_path_batch` /
+    :func:`feature_spec_path_batch` / :func:`runtime_spec_path_batch`'s
+    posture. ``trial`` IS accepted as a destination (it is excluded
+    from the walked intermediate rungs the way
+    :func:`capacity_diff_path` already excludes it, but is a valid
+    endpoint via the lateral / identity branches).
+
+    Returns ``None`` for empty / unknown ``from_tier`` (caller renders
+    "unknown tier" / 404).
+
+    Resolver-independent: delegates per-destination to
+    :func:`capacity_diff_path`, which walks the static per-tier caps
+    via :func:`_capacity_row` -- so grace vs enforce yields
+    byte-identical rows. Never raises: per-destination failures
+    short-circuit that id into ``unknown[]`` and the rest of the
+    batch keeps building.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if f not in _TIER_FEATURES:
+        return None
+    candidates = _normalise_csv(to_tiers)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    from_rank = _TIER_RANK.get(f, -1)
+    for tid in candidates:
+        if tid not in _TIER_FEATURES:
+            unknown.append(tid)
+            continue
+        try:
+            path = capacity_diff_path(f, tid)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: capacity_diff_path_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        if path is None:
+            unknown.append(tid)
+            continue
+        to_rank = _TIER_RANK.get(tid, -1)
+        if f == tid:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        rows.append(
+            {
+                "to": tid,
+                "to_label": tier_label(tid),
+                "to_rank": to_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}
+
+
+def tier_unlocks_path_batch(
+    from_tier: str, to_tiers
+) -> dict | None:
+    """Batch sibling of :func:`tier_unlocks_path`: per-rung marginal-
+    unlocks rows for a caller-supplied subset of destination tiers all
+    walked from a single ``from_tier`` in ONE round-trip.
+
+    Multi-destination twin of :func:`capacity_diff_path_batch` (same
+    fan-out shape, unlocks-only per-rung body) and unlocks-only sibling
+    of :func:`tier_spec_path_batch` (same multi-destination axis,
+    marginal-grant body instead of full per-rung spec). Lets an
+    upgrade-comparison surface render "from my current rung, here are
+    the 3 tiers I'm considering -- show me the newly-unlocked features
+    + runtimes at every rung climbed to reach each" off ONE call
+    instead of N calls to :func:`tier_unlocks_path`.
+
+    Per-destination row shape::
+
+        {
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<tier_unlocks_path row>, ...],
+        }
+
+    Each ``path`` row is byte-identical to a row from
+    :func:`tier_unlocks_path` for the same ``(from_tier, to)`` pair --
+    a parity test pins this so the scalar and batch path helpers
+    cannot drift. The walked rungs are destination-specific (the
+    path's rung set depends on ``to``), so per-destination ``path``
+    lengths can legitimately differ -- this matches
+    :func:`capacity_diff_path_batch` and :func:`tier_spec_path_batch`'s
+    posture and differs from :func:`feature_spec_path_batch` /
+    :func:`runtime_spec_path_batch` whose rungs are axis-id-agnostic.
+
+    Shape::
+
+        {
+          "tiers": [
+            {"to": "<id>", "to_label": ..., "to_rank": ..., "direction": ..., "path": [...]},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Supplied destination ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen
+    order preserved). Unknown ids are echoed in ``unknown[]`` instead
+    of short-circuiting -- a partially-bad caller still gets paths
+    back for the valid ids alongside a list of what was dropped,
+    matching :func:`capacity_diff_path_batch` /
+    :func:`tier_spec_path_batch` / :func:`feature_spec_path_batch` /
+    :func:`runtime_spec_path_batch`'s posture. ``trial`` IS accepted
+    as a destination (it is excluded from the walked intermediate
+    rungs the way :func:`tier_unlocks_path` already excludes it, but
+    is a valid endpoint via the lateral / identity branches).
+
+    Returns ``None`` for empty / unknown ``from_tier`` (caller renders
+    "unknown tier" / 404).
+
+    Resolver-independent: delegates per-destination to
+    :func:`tier_unlocks_path`, which walks the static
+    :data:`_PURCHASABLE_TIERS` ladder and folds per-rung marginal
+    grants via :func:`_unlocks_row` -- so grace vs enforce yields
+    byte-identical rows. Never raises: per-destination failures
+    short-circuit that id into ``unknown[]`` and the rest of the
+    batch keeps building.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if f not in _TIER_FEATURES:
+        return None
+    candidates = _normalise_csv(to_tiers)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    from_rank = _TIER_RANK.get(f, -1)
+    for tid in candidates:
+        if tid not in _TIER_FEATURES:
+            unknown.append(tid)
+            continue
+        try:
+            path = tier_unlocks_path(f, tid)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: tier_unlocks_path_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        if path is None:
+            unknown.append(tid)
+            continue
+        to_rank = _TIER_RANK.get(tid, -1)
+        if f == tid:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        rows.append(
+            {
+                "to": tid,
+                "to_label": tier_label(tid),
+                "to_rank": to_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}
+
+
+def tier_locks_path_batch(
+    from_tier: str, to_tiers
+) -> dict | None:
+    """Batch sibling of :func:`tier_locks_path`: per-rung marginal-locks
+    rows for a caller-supplied subset of destination tiers all walked
+    from a single ``from_tier`` in ONE round-trip.
+
+    Marginal-loss mirror of :func:`tier_unlocks_path_batch` and multi-
+    destination twin of :func:`capacity_diff_path_batch` (same fan-out
+    shape, locks-only per-rung body) / :func:`tier_spec_path_batch`
+    (same multi-destination axis, marginal-loss body instead of full
+    per-rung spec). Lets a downgrade-walkthrough surface render "from
+    my current rung, here are the 3 tiers I'm considering dropping to
+    -- show me the newly-lost features + runtimes at every rung walked
+    to reach each" off ONE call instead of N calls to
+    :func:`tier_locks_path`.
+
+    Per-destination row shape::
+
+        {
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<tier_locks_path row>, ...],
+        }
+
+    Each ``path`` row is byte-identical to a row from
+    :func:`tier_locks_path` for the same ``(from_tier, to)`` pair --
+    a parity test pins this so the scalar and batch path helpers
+    cannot drift. The walked rungs are destination-specific (the
+    path's rung set depends on ``to``), so per-destination ``path``
+    lengths can legitimately differ -- this matches
+    :func:`tier_unlocks_path_batch`, :func:`capacity_diff_path_batch`
+    and :func:`tier_spec_path_batch`'s posture and differs from
+    :func:`feature_spec_path_batch` / :func:`runtime_spec_path_batch`
+    whose rungs are axis-id-agnostic.
+
+    Shape::
+
+        {
+          "tiers": [
+            {"to": "<id>", "to_label": ..., "to_rank": ..., "direction": ..., "path": [...]},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Supplied destination ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen
+    order preserved). Unknown ids are echoed in ``unknown[]`` instead
+    of short-circuiting -- a partially-bad caller still gets paths
+    back for the valid ids alongside a list of what was dropped,
+    matching :func:`tier_unlocks_path_batch` /
+    :func:`capacity_diff_path_batch` / :func:`tier_spec_path_batch` /
+    :func:`feature_spec_path_batch` / :func:`runtime_spec_path_batch`'s
+    posture. ``trial`` IS accepted as a destination (it is excluded
+    from the walked intermediate rungs the way :func:`tier_locks_path`
+    already excludes it, but is a valid endpoint via the lateral /
+    identity branches).
+
+    Returns ``None`` for empty / unknown ``from_tier`` (caller renders
+    "unknown tier" / 404).
+
+    Resolver-independent: delegates per-destination to
+    :func:`tier_locks_path`, which walks the static
+    :data:`_PURCHASABLE_TIERS` ladder and folds per-rung marginal
+    losses via :func:`_locks_row` -- so grace vs enforce yields
+    byte-identical rows. Never raises: per-destination failures
+    short-circuit that id into ``unknown[]`` and the rest of the
+    batch keeps building.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if f not in _TIER_FEATURES:
+        return None
+    candidates = _normalise_csv(to_tiers)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    from_rank = _TIER_RANK.get(f, -1)
+    for tid in candidates:
+        if tid not in _TIER_FEATURES:
+            unknown.append(tid)
+            continue
+        try:
+            path = tier_locks_path(f, tid)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: tier_locks_path_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        if path is None:
+            unknown.append(tid)
+            continue
+        to_rank = _TIER_RANK.get(tid, -1)
+        if f == tid:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        rows.append(
+            {
+                "to": tid,
+                "to_label": tier_label(tid),
+                "to_rank": to_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}
+
+
+def preview_path_batch(from_tier: str, to_tiers) -> dict | None:
+    """Batch sibling of :func:`preview_path`: per-rung cumulative
+    ``Entitlement.to_dict`` snapshots for a caller-supplied subset of
+    destination tiers all walked from a single ``from_tier`` in ONE
+    round-trip.
+
+    Composes :func:`preview_path` (scalar single-destination cumulative
+    path) and :func:`preview_batch` (batch cumulative-state at every
+    purchasable rung) -- same per-rung body as the scalar path helper (a
+    full :func:`preview` row per intermediate rung), same
+    multi-destination axis as :func:`tier_path_batch` /
+    :func:`tier_spec_path_batch` / :func:`capacity_diff_path_batch`. Lets
+    an upgrade-walkthrough surface render "from my current rung, here
+    are the 3 tiers I'm considering -- show me the resulting Entitlement
+    snapshot at every rung walked to each" off ONE call instead of N
+    calls to :func:`preview_path`. Cumulative-state member of the
+    path-batch grid alongside :func:`tier_path_batch` (all-slices
+    marginal), :func:`tier_spec_path_batch` (spec envelope),
+    :func:`capacity_diff_path_batch` (capacity slice),
+    :func:`tier_unlocks_path_batch` (grants slice) and
+    :func:`tier_locks_path_batch` (losses slice).
+
+    Per-destination row shape::
+
+        {
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<preview row>, ...],
+        }
+
+    Each ``path`` row is byte-identical to a row from :func:`preview_path`
+    for the same ``(from_tier, to)`` pair -- the same
+    ``_PURCHASABLE_TIERS`` filter + sort + destination-sibling exclusion
+    the sibling path-batch helpers use. Per-row body is the full
+    :func:`preview` cumulative snapshot (``source="preview"``,
+    ``grace=False``). Rung walks are destination-specific (the rung set
+    depends on ``to``), so per-destination ``path`` lengths can
+    legitimately differ -- matching :func:`tier_spec_path_batch` /
+    :func:`capacity_diff_path_batch` / :func:`tier_path_batch`'s
+    posture.
+
+    Shape::
+
+        {
+          "tiers": [
+            {"to": "<id>", "to_label": ..., "to_rank": ..., "direction": ..., "path": [...]},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Supplied destination ids are normalised (whitespace stripped,
+    lowercased, duplicates dropped, first-seen order preserved). Unknown
+    ids are echoed in ``unknown[]`` instead of short-circuiting -- a
+    partially-bad caller still gets paths back for the valid ids
+    alongside a list of what was dropped, matching every other
+    ``*_path_batch`` sibling's posture. ``trial`` IS accepted as a
+    destination (excluded from the walked intermediate rungs the way
+    :func:`preview_path` already excludes it, but a valid endpoint via
+    the lateral / identity branches).
+
+    Returns ``None`` for empty / unknown ``from_tier`` (caller renders
+    "unknown tier" / 404).
+
+    Resolver-independent: delegates per-destination to
+    :func:`preview_path`, which walks the static per-tier maps via
+    :func:`_preview_row` -- so grace vs enforce yields byte-identical
+    rows. Never raises: per-destination failures short-circuit that id
+    into ``unknown[]`` and the rest of the batch keeps building.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if f not in _TIER_FEATURES:
+        return None
+    candidates = _normalise_csv(to_tiers)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    from_rank = _TIER_RANK.get(f, -1)
+    for tid in candidates:
+        if tid not in _TIER_FEATURES:
+            unknown.append(tid)
+            continue
+        try:
+            path = preview_path(f, tid)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: preview_path_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        if path is None:
+            unknown.append(tid)
+            continue
+        to_rank = _TIER_RANK.get(tid, -1)
+        if f == tid:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        rows.append(
+            {
+                "to": tid,
+                "to_label": tier_label(tid),
+                "to_rank": to_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}
+
+
+def feature_catalog_path_batch(
+    from_tier: str, to_tiers
+) -> dict | None:
+    """Batch sibling of :func:`feature_catalog_path`: per-rung feature-catalog
+    rows for a caller-supplied subset of destination tiers all walked from a
+    single ``from_tier`` in ONE round-trip.
+
+    Composes :func:`feature_catalog_path` (scalar single-destination catalog
+    path) and :func:`feature_catalog_at_batch` (multi-source what-if catalog
+    matrix) -- same per-rung catalog body as the scalar path helper, same
+    multi-destination axis as :func:`tier_spec_path_batch` /
+    :func:`capacity_diff_path_batch` / :func:`preview_path_batch`. Lets an
+    upgrade-comparison walkthrough surface render "from my current rung,
+    here are the 3 tiers I'm considering -- show me the full feature
+    catalogue at every rung walked to each" off ONE call instead of N calls
+    to :func:`feature_catalog_path`. Full-catalog member of the path-batch
+    grid alongside :func:`tier_path_batch` (all-slices marginal),
+    :func:`tier_spec_path_batch` (spec envelope),
+    :func:`capacity_diff_path_batch` (capacity slice),
+    :func:`tier_unlocks_path_batch` (grants slice),
+    :func:`tier_locks_path_batch` (losses slice) and
+    :func:`preview_path_batch` (cumulative snapshot).
+
+    Per-destination row shape::
+
+        {
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<feature_catalog_path row>, ...],
+        }
+
+    Each ``path`` row is byte-identical to a row from
+    :func:`feature_catalog_path` for the same ``(from_tier, to)`` pair --
+    a parity test pins this so the scalar and batch path helpers cannot
+    drift. Per-rung ``features`` payload byte-equals
+    :func:`feature_catalog_at` for the same rung, the same guarantee the
+    scalar path helper carries. The walked rungs are destination-specific
+    (the path's rung set depends on ``to``), so per-destination ``path``
+    lengths can legitimately differ -- matching :func:`tier_spec_path_batch`
+    / :func:`capacity_diff_path_batch` / :func:`preview_path_batch` /
+    :func:`tier_path_batch`'s posture and differing from
+    :func:`feature_spec_path_batch` / :func:`runtime_spec_path_batch` whose
+    rungs are axis-id-agnostic.
+
+    Shape::
+
+        {
+          "tiers": [
+            {"to": "<id>", "to_label": ..., "to_rank": ..., "direction": ..., "path": [...]},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Supplied destination ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen order
+    preserved). Unknown ids are echoed in ``unknown[]`` instead of short-
+    circuiting -- a partially-bad caller still gets paths back for the
+    valid ids alongside a list of what was dropped, matching every other
+    ``*_path_batch`` sibling's posture. ``trial`` IS accepted as a
+    destination (excluded from the walked intermediate rungs the way
+    :func:`feature_catalog_path` already excludes it, but a valid endpoint
+    via the lateral / identity branches).
+
+    Returns ``None`` for empty / unknown ``from_tier`` (caller renders
+    "unknown tier" / 404).
+
+    Resolver-independent: delegates per-destination to
+    :func:`feature_catalog_path`, which walks via :func:`feature_catalog_at`
+    over freshly-synthesised hypothetical :class:`Entitlement` objects --
+    so grace vs enforce yields byte-identical rows. Never raises: per-
+    destination failures short-circuit that id into ``unknown[]`` and the
+    rest of the batch keeps building.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if f not in _TIER_FEATURES:
+        return None
+    candidates = _normalise_csv(to_tiers)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    from_rank = _TIER_RANK.get(f, -1)
+    for tid in candidates:
+        if tid not in _TIER_FEATURES:
+            unknown.append(tid)
+            continue
+        try:
+            path = feature_catalog_path(f, tid)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: feature_catalog_path_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        if path is None:
+            unknown.append(tid)
+            continue
+        to_rank = _TIER_RANK.get(tid, -1)
+        if f == tid:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        rows.append(
+            {
+                "to": tid,
+                "to_label": tier_label(tid),
+                "to_rank": to_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}
+
+
+def runtime_catalog_path_batch(
+    from_tier: str, to_tiers
+) -> dict | None:
+    """Runtime-axis twin of :func:`feature_catalog_path_batch`: per-rung
+    runtime-catalog rows for a caller-supplied subset of destination tiers
+    all walked from a single ``from_tier`` in ONE round-trip.
+
+    Pairs with :func:`feature_catalog_path_batch` the same way
+    :func:`runtime_catalog_at_batch` pairs with
+    :func:`feature_catalog_at_batch` and :func:`runtime_catalog_path` pairs
+    with :func:`feature_catalog_path`. Together the two batch path helpers
+    let an upgrade-comparison walkthrough surface render every feature +
+    runtime column at every rung walked to N candidate destinations off
+    TWO calls instead of first calling :func:`tier_path_batch` (or
+    :func:`tier_path` per destination) and then 2 * N calls to the scalar
+    what-if catalog helpers.
+
+    Per-destination row shape::
+
+        {
+          "to":         "<canonical tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<runtime_catalog_path row>, ...],
+        }
+
+    Each ``path`` row is byte-identical to a row from
+    :func:`runtime_catalog_path` for the same ``(from_tier, to)`` pair --
+    pinned by the parity tests. Per-rung ``runtimes`` payload byte-equals
+    :func:`runtime_catalog_at` for the same rung. Per-destination ``path``
+    lengths can legitimately differ (rung set depends on ``to``), matching
+    :func:`feature_catalog_path_batch`'s posture.
+
+    Shape mirrors :func:`feature_catalog_path_batch` (top-level ``tiers``
+    array + ``unknown`` echo). Supplied ids are normalised via
+    :func:`_normalise_csv`; unknown ids are echoed instead of short-
+    circuiting the batch. ``trial`` is accepted as a destination.
+
+    Returns ``None`` for empty / unknown ``from_tier`` (caller renders
+    "unknown tier" / 404).
+
+    Resolver-independent: delegates per-destination to
+    :func:`runtime_catalog_path`, which walks via :func:`runtime_catalog_at`
+    over freshly-synthesised hypothetical :class:`Entitlement` objects --
+    so grace vs enforce yields byte-identical rows. Never raises: per-
+    destination failures short-circuit that id into ``unknown[]`` and the
+    rest of the batch keeps building.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if f not in _TIER_FEATURES:
+        return None
+    candidates = _normalise_csv(to_tiers)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    from_rank = _TIER_RANK.get(f, -1)
+    for tid in candidates:
+        if tid not in _TIER_FEATURES:
+            unknown.append(tid)
+            continue
+        try:
+            path = runtime_catalog_path(f, tid)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: runtime_catalog_path_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        if path is None:
+            unknown.append(tid)
+            continue
+        to_rank = _TIER_RANK.get(tid, -1)
+        if f == tid:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        rows.append(
+            {
+                "to": tid,
+                "to_label": tier_label(tid),
+                "to_rank": to_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}

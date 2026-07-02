@@ -76,6 +76,7 @@ PROXY_DB_FILE = CONFIG_DIR / "proxy.db"
 PROXY_PID_FILE = CONFIG_DIR / "proxy.pid"
 PROXY_LOG_FILE = CONFIG_DIR / "proxy.log"
 _HITL_DIR = CONFIG_DIR / "hitl"
+_ESTOP_FLAG = _HITL_DIR / "emergency_stop"
 
 
 # Auto-backoff escalation ladder (#2818): minutes of cool-off by repeat count.
@@ -134,6 +135,17 @@ def _is_session_hitl_paused(session_id: str) -> bool:
     # after _BACKOFF_RESET_SECS of quiet). _prune_backoff_pauses removes
     # long-expired files in the maintenance loop.
     return False
+
+
+def _is_emergency_stopped() -> bool:
+    """Return True if the global emergency stop flag is active (#3439).
+
+    Written by POST /api/emergency-stop in routes/alerts.py and removed by
+    POST /api/emergency-stop/clear. File-based so the proxy and Flask processes
+    share state across process boundaries without IPC. A missing or corrupt
+    flag file is treated as inactive (fail-open: don't block when safe).
+    """
+    return _ESTOP_FLAG.exists()
 
 
 def _prune_backoff_pauses() -> int:
@@ -2385,6 +2397,28 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                 )
                 logger.warning(f"Velocity exceeded: {spike_reason}")
                 return _error_response(429, "velocity_exceeded", spike_reason, provider)
+
+            # ── Global emergency stop (#3439) ──────────────────────────────
+            # Checked before per-session HITL so a global halt can't be
+            # bypassed by creating a new session that lacks a pause file.
+            if _is_emergency_stopped():
+                with _stats_lock:
+                    _stats["blocked"] += 1
+                db.record_event(
+                    "emergency_stop",
+                    "Request blocked: global emergency stop is active",
+                    severity="critical",
+                    details={"model": model, "session_id": session_id},
+                )
+                logger.warning(
+                    "Request blocked for session '%s': emergency stop active", session_id
+                )
+                return _error_response(
+                    503,
+                    "emergency_stop",
+                    "Emergency stop is active. Resume via POST /api/emergency-stop/clear.",
+                    provider,
+                )
 
             # ── HITL / auto-backoff pause check ────────────────────────────
             # Honors both legacy operator pauses (manual resume) and auto-backoff
