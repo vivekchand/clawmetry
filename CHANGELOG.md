@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Fix: the Cost tab no longer hangs on "Loading..." (2026-07-02)
+- **Every card on the Cost tab (Top Sessions by Cost, Cost By Plugin/Skill, Trace Clusters, Activity Heatmap, Cost Comparison) could sit on "Loading..." forever (#3453).** When a node did not yet have enough history, the usage API returned an empty trend object, and the trend renderer tried to read a property off it and threw. Because that renderer runs early while the Cost tab is loading, the error stopped every card after it from drawing. The trend card now handles an empty trend cleanly, and the Cost tab is hardened so a single card can never block the rest of the page. Verified live: all cards render again.
+
 ### Fix: the sync daemon now starts and is detected correctly on a root server or VPS (2026-07-01)
 - **On a server you run as root (a VPS reached over SSH), the background sync daemon could fail to start and `clawmetry status` would always say "Daemon: Not running" (#3423).** Root usually has no per-user service session, so the old startup silently did nothing and status only knew how to look for a per-user service. ClawMetry now installs a proper system service for root (which starts and survives reboots), falls back to a plain background process if needed, and detects the daemon by looking for the actual running process. `clawmetry status` also shows the installed ClawMetry version now, so it is obvious at a glance whether a machine is up to date.
 
