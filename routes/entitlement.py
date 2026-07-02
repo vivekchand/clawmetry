@@ -10467,3 +10467,63 @@ def api_entitlement_previous_tier_capacity_diff():
                 "enforced": False,
             }
         )
+
+@bp_entitlement.route("/api/entitlement/next-tier-diff")
+def api_entitlement_next_tier_diff():
+    """GET /api/entitlement/next-tier-diff -- marginal
+    :func:`clawmetry.entitlements.upgrade_diff` row from the resolved
+    entitlement to the rung immediately above.
+
+    Current-relative convenience for
+    ``/api/entitlement/upgrade-diff?target=<next_purchasable_tier>``; the
+    upgrade-CTA companion to ``/api/entitlement/next-tier-unlocks``
+    (same marginal, ``tier_unlocks`` shape), ``/next-tier-locks``
+    (marginal losses), and ``/next-tier-spec`` (full tier row). ``row``
+    collapses to ``null`` at the ceiling (resolved entitlement already at
+    enterprise -- no rung above to upgrade to). Never 5xxs: a resolver
+    failure short-circuits to the grace-shape envelope so the dashboard
+    CTA keeps rendering instead of disappearing.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+        ent = _ent.get_entitlement()
+        body = ent.next_tier_diff()
+        return jsonify({
+            "current_tier": ent.tier,
+            "current_tier_label": _ent.tier_label(ent.tier),
+            "current_tier_rank": _ent.tier_rank(ent.tier),
+            "row": body,
+            "grace": bool(ent.grace),
+            "enforced": _ent.is_enforced(),
+        })
+    except Exception as exc:
+        logger.warning("api_entitlement_next_tier_diff: error: %s", exc)
+        return jsonify({"current_tier": "oss", "current_tier_label": "OSS",
+                        "current_tier_rank": 0, "row": None, "grace": True, "enforced": False})
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-diff")
+def api_entitlement_previous_tier_diff():
+    """GET /api/entitlement/previous-tier-diff -- marginal
+    :func:`clawmetry.entitlements.downgrade_diff` row from the resolved
+    entitlement to the rung immediately below.
+
+    Symmetric companion to ``/api/entitlement/next-tier-diff``. ``row``
+    collapses to ``null`` at the floor. Never 5xxs.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+        ent = _ent.get_entitlement()
+        body = ent.previous_tier_diff()
+        return jsonify({
+            "current_tier": ent.tier,
+            "current_tier_label": _ent.tier_label(ent.tier),
+            "current_tier_rank": _ent.tier_rank(ent.tier),
+            "row": body,
+            "grace": bool(ent.grace),
+            "enforced": _ent.is_enforced(),
+        })
+    except Exception as exc:
+        logger.warning("api_entitlement_previous_tier_diff: error: %s", exc)
+        return jsonify({"current_tier": "oss", "current_tier_label": "OSS",
+                        "current_tier_rank": 0, "row": None, "grace": True, "enforced": False})
