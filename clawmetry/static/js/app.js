@@ -12910,11 +12910,11 @@ async function loadUsage() {
       if (_uEmptyEl) _uEmptyEl.remove();
     }
 
-    // Display cost warnings
-    displayCostWarnings(data.warnings || []);
-    
-    // Display trend analysis
-    displayTrendAnalysis(data.trend || {}, data);
+    // Display cost warnings + trend. Wrapped so a render bug in either card
+    // cannot abort the rest of loadUsage and leave every card below stuck on
+    // "Loading…" (the Cost-tab-blank regression).
+    try { displayCostWarnings(data.warnings || []); } catch (_eCW) { console.error('displayCostWarnings failed', _eCW); }
+    try { displayTrendAnalysis(data.trend || {}, data); } catch (_eTA) { console.error('displayTrendAnalysis failed', _eTA); }
     // Bar chart — QW4: with no data at all, hide the whole section (title +
     // card) instead of an empty box; render as before when data exists.
     var _uDays = Array.isArray(data.days) ? data.days : [];
@@ -13764,8 +13764,12 @@ function displayCostWarnings(warnings) {
 
 function displayTrendAnalysis(trend, usageData) {
   var card = document.getElementById('trend-card');
-  if (!trend || trend.trend === 'insufficient_data') {
-    card.style.display = 'none';
+  // Guard an empty/partial trend object ({}), not just null. When /api/usage
+  // returns trend:{} (no history yet), trend.trend is undefined; reaching the
+  // `trend.trend.charAt(0)` below threw and, since this runs early inside
+  // loadUsage's try, aborted every Cost card after it (all stuck on "Loading…").
+  if (!trend || !trend.trend || trend.trend === 'insufficient_data') {
+    if (card) card.style.display = 'none';
     return;
   }
   
