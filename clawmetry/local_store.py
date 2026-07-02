@@ -180,7 +180,7 @@ def _on_disk_bytes() -> int:
         pass
     return total
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # ── Two-layer schema (multi-agent) ──────────────────────────────────────────
 #
@@ -1786,6 +1786,32 @@ class LocalStore:
                     except Exception as exc:
                         log.exception(
                             "local store: v7 dedup migration FAILED — schema "
+                            "version will NOT be stamped; next boot will retry"
+                        )
+                        migration_failed = True
+                        _migration_err = str(exc)
+                if not migration_failed and current < 11:
+                    # v10 -> v11: rollup runtime RE-ATTRIBUTION. The v3 event
+                    # mapper stamped agent_type='openclaw' on family-runtime
+                    # events, so every claude_code/codex/... token rolled up
+                    # under openclaw (openclaw week/month showed the node-wide
+                    # spend; the family runtimes showed $0 despite a non-zero
+                    # today). _rollup_deltas now attributes by the session-id
+                    # prefix, so wiping the rollups here lets the standard
+                    # startup backfill (backfill_rollups, right after
+                    # _migrate) rebuild all three tables correctly from the
+                    # stored events + sessions.
+                    try:
+                        self._conn.execute("DELETE FROM rollup_model_daily")
+                        self._conn.execute("DELETE FROM rollup_runtime_daily")
+                        self._conn.execute("DELETE FROM rollup_session")
+                        log.info(
+                            "local store: v11 wiped rollup tables for runtime "
+                            "re-attribution; startup backfill rebuilds them"
+                        )
+                    except Exception as exc:
+                        log.exception(
+                            "local store: v11 rollup wipe FAILED — schema "
                             "version will NOT be stamped; next boot will retry"
                         )
                         migration_failed = True
@@ -5125,7 +5151,7 @@ class LocalStore:
                 while True:
                     cur = self._conn.execute(
                         """
-                        SELECT rowid, agent_type, ts, data,
+                        SELECT rowid, agent_type, session_id, ts, data,
                                cost_usd, token_count, model
                         FROM events WHERE rowid > ?
                         ORDER BY rowid LIMIT ?
@@ -5137,7 +5163,7 @@ class LocalStore:
                         break
                     last_rowid = rows[-1][0]
                     pairs = []
-                    for (_rid, atype, ts, blob, cost, tokens, model) in rows:
+                    for (_rid, atype, sid, ts, blob, cost, tokens, model) in rows:
                         data = None
                         if blob is not None:
                             try:
@@ -5153,7 +5179,7 @@ class LocalStore:
                         # top-level keys win inside _extract_event_usage, so
                         # only the in/out/cache splits are re-read from data.
                         pseudo = {
-                            "agent_type": atype, "ts": ts,
+                            "agent_type": atype, "session_id": sid, "ts": ts,
                             "cost_usd": cost, "token_count": tokens,
                             "model": model,
                             "data": data if isinstance(data, dict) else None,
@@ -10792,7 +10818,20 @@ def _rollup_deltas(
         day = _event_day(e.get("ts"))
         if day is None:
             continue
-        runtime = str(e.get("agent_type") or "openclaw")
+        # Runtime attribution: the session-id PREFIX is the canonical runtime
+        # key (mirrors _runtime_of_session / _runtime_session_id_clause) and
+        # WINS over the stored agent_type. The v3 event mapper used to stamp
+        # agent_type='openclaw' on family-runtime events, so a month of
+        # claude_code spend rolled up under openclaw while claude_code's own
+        # week/month showed $0 (founder report 2026-07-02). Prefix-less events
+        # (bare OpenClaw ids, nemoclaw's stamped rows) keep agent_type.
+        runtime = None
+        _sid = str(e.get("session_id") or "")
+        _ci = _sid.find(":")
+        if _ci > 0 and _sid[:_ci].lower() in _NON_OPENCLAW_RUNTIME_PREFIXES:
+            runtime = _sid[:_ci].lower()
+        if not runtime:
+            runtime = str(e.get("agent_type") or "openclaw")
         tokens = int(u["tokens"] or 0)
         cost = float(u["cost"] or 0.0)
         rk = (day, runtime)

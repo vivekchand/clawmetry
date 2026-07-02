@@ -2992,6 +2992,7 @@ def _parse_v3_event(
     obj: dict,
     session_id: str,
     node_id: str,
+    agent_type: str = "openclaw",
 ) -> dict | None:
     """Map ONE v3 underscore-schema event to a normalised local-store row.
 
@@ -3216,7 +3217,11 @@ def _parse_v3_event(
 
     return {
         "id": str(eid),
-        "agent_type": "openclaw",
+        # The runtime this batch belongs to. Hardcoding "openclaw" here was
+        # the rollup mis-attribution bug: family adapters route their
+        # v3-schema transcripts through this mapper, so a month of
+        # claude_code spend was booked as openclaw (2026-07-02).
+        "agent_type": agent_type,
         "node_id": node_id,
         "agent_id": obj.get("agent_id") or "main",
         "session_id": session_id,
@@ -3278,7 +3283,7 @@ def _local_ingest_session_batch(
         # the trajectory parser (which would stamp event_type="message"
         # etc. and re-introduce the bug).
         if _is_v3_event(obj):
-            row = _parse_v3_event(obj, session_id, node_id)
+            row = _parse_v3_event(obj, session_id, node_id, agent_type)
             if row is not None:
                 rows.append(row)
             continue
