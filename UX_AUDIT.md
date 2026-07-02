@@ -5,17 +5,20 @@
 > context can't understand a screen in five seconds, it's not done. Power tools
 > demoted and progressively disclosed, never the first thing a beginner sees").
 > This file audits whether the dashboard lives up to that, and proposes a
-> minimal, two-tier IA. Grounded in the real nav (`dashboard.py` ~12036-12152)
-> and all 30 tab templates; no business numbers (public repo).
+> minimal, two-tier IA. Grounded in the real nav (`dashboard.py` ~12036-12160,
+> re-verified against origin/main @ ea77faca on second pass; a first draft was
+> built from a stale checkout and missed Agent Graph) and all 30 tab templates;
+> no business numbers (public repo).
 
 ## The one-line verdict
-A first-time user lands on **~26 nav items** (9 primary + an 11-item "Live trace"
-group that is **expanded by default** + a 7-item Advanced section), most named in
-insider vocabulary (span, topology, turn anatomy, context economics, swimlane,
-harness, provenance, waterfall, autonomy score). This is an **expert tool wearing
-a beginner's promise.** The fix is not to delete power, it is to **default to a
-tiny beginner surface and move the depth behind progressive disclosure** (a
-collapsed "Developer" section + session drill-downs + a Settings home).
+A first-time user lands on **~27 nav destinations** (9 primary + a "Live trace"
+group with **11 sub-items, expanded by default**, whose header itself opens a
+12th screen + a 7-item Advanced section), most named in insider vocabulary
+(span, topology, turn anatomy, context economics, swimlane, harness, provenance,
+waterfall, autonomy score). This is an **expert tool wearing a beginner's
+promise.** The fix is not to delete power, it is to **default to a tiny beginner
+surface and move the depth behind progressive disclosure** (a collapsed
+"Developer" section + session drill-downs + a Settings home).
 
 ---
 
@@ -26,6 +29,8 @@ Rating = who understands it in 5 seconds. 🟢 anyone · 🟡 needs a hint · �
 | Nav label | Screen | Rating | Why / jargon |
 |---|---|---|---|
 | Agents | inventory | 🟢 | "Every agent, is it alive, what it costs." Clear. Good beginner home. |
+| Live trace (group header) | overview | 🟡 | **The default landing screen has no nav item of its own**: clicking the "Live trace" group label opens `overview`. A beginner cannot find "home" by name; the label describes the group, not the screen. |
+| Agent Graph | agents | 🔴 | "Who spawned whom - cross-session agent topology from span data." Topology/span jargon; also currently stuck on "Loading..." (bug, see §5). |
 | Flow | flow | 🟡 | "How your messages get answered" is friendly; the rail still assumes channel/gateway/tool mental model. |
 | Brain | brain | 🔴 | Name is a metaphor; content is a raw event stream (span, loop detection, "plumbing"). Powerful, not beginner-legible. |
 | Models | models | 🟡 | "fallback rate", "model diversity" are analyst terms. |
@@ -54,7 +59,7 @@ Rating = who understands it in 5 seconds. 🟢 anyone · 🟡 needs a hint · �
 | (hidden) logs | logs | 🟡 | Raw daemon logs. Not in nav. |
 | (hidden) subagents | subagents | 🔴 | "orchestration", "queue lanes", "run ledger". Not in nav. |
 
-**Score: of 26 nav-visible screens, ~5 are 🟢 beginner-safe, ~10 are 🟡, ~11 are 🔴 expert-only, and 11 of the expert ones are surfaced at the top level by default.**
+**Score: of ~27 nav destinations, ~5 are 🟢 beginner-safe, ~11 are 🟡, ~12 are 🔴 expert-only, and most of the expert ones are surfaced at the top level by default.**
 
 ---
 
@@ -64,12 +69,19 @@ No two screens are byte-identical, but there are **clusters of screens that answ
 the same user question in different vocabulary**, which reads as repetition to a
 newcomer:
 
-- **"What is my agent doing / what happened?"** is answered SIX ways:
-  **Flow, Brain, Tracing, Agent Graph, Turn anatomy, Swimlane.** Flow (journey
-  rail) and Brain (event stream) are the two live/global views; **Tracing, Turn
-  anatomy, Agent Graph, and Swimlane are all SESSION-SCOPED detail views** that
-  happen to sit in the global nav. Six top-level "activity" entries is the single
-  biggest source of overwhelm.
+- **"What is my agent doing / what happened?"** is answered SEVEN ways:
+  **Overview (as "Live trace"), Flow, Brain, Tracing, Agent Graph, Turn anatomy,
+  Swimlane.** Flow (journey rail) and Brain (event stream) are the two live/global
+  views; **Tracing, Turn anatomy, Agent Graph, and Swimlane are session/topology
+  detail views** that sit in the global nav. Seven "activity" entries in one group
+  is the single biggest source of overwhelm. Bonus confusion: Tracing's own
+  drill-down ALSO contains an agent graph, so the concept appears twice.
+- **The internal ids collide with the labels:** the tab whose id is `agents` is
+  labeled **"Agent Graph"**, while the tab labeled **"Agents"** has id
+  `inventory`. Same word, two different screens, depending on whether you read
+  the code or the UI (also: Cost=`usage`, Session replay=`transcripts`, Tool
+  Policy=`policy`, Live trace header=`overview`). Align ids with labels when
+  renaming, or drift like this keeps re-emerging.
 - **"What is this costing / how are tokens used?"** is answered FOUR ways:
   **Cost, Models, LLM Context, Context economics.** Different angles ($ vs
   by-model vs per-turn-context vs window-utilization), but a beginner sees four
@@ -77,10 +89,8 @@ newcomer:
 - **"What is allowed / how am I notified?"** spans FIVE:
   **Approvals, Alerts, Notifications, Security, Tool Policy** (rule vs gate vs
   routing vs posture vs allowlist). All "guardrails," scattered.
-- **Naming collisions:** "Live **trace**" (group) contains "**Trac**ing" and
-  "Flow" - three trace-ish names for one idea. "Session replay" (nav) == internal
-  `transcripts`; "Agents" == `inventory`; "Cost" == `usage`; "Tool Policy" ==
-  `policy` (external vs internal names drift, a maintenance smell).
+- **Trace-ish naming pile-up:** the group "Live **trace**" contains "**Trac**ing"
+  (and Flow) - three trace-flavored names for one idea.
 - **Genuine near-duplicate to resolve:** the hidden **history** tab (token/cost
   over time) duplicates the trend charts already on **Cost**. Fold or drop.
 
@@ -91,6 +101,7 @@ newcomer:
 ### Tier 1 - the beginner home (what shows by default). The 5-second questions.
 | Item | Answers | Built from |
 |---|---|---|
+| **Home** | Is everything OK, at a glance? | overview (today it hides behind the "Live trace" group header - give the landing screen its own named nav item) |
 | **Agents** | Is it on? what does it cost? who owns it? | inventory |
 | **Activity** (rename **Brain**) | What is it doing right now? | brain (+ Flow as a view toggle inside it) |
 | **Cost** | What am I paying? | usage (absorbs Models / Context as sub-sections) |
@@ -98,13 +109,32 @@ newcomer:
 | **Approvals** | Anything waiting on me? | approvals |
 | **Alerts** | Tell me when something breaks | alerts (+ Notifications as its "delivery" sub-tab) |
 
-Six clear items. Every one passes the 5-second test.
+Seven clear items. Every one passes the 5-second test.
 
 ### Tier 2 - "Developer" section (one collapsed group, closed by default)
 Flow (if not merged), **Tracing, Turn anatomy, Agent Graph, Swimlane** (ideally
 these four move to be **tabs inside a session drill-down**, not global nav),
 Tool catalog, LLM Context, Context economics, Models (if not absorbed by Cost),
 Dives (rename **"Ask"**), Harness, Version impact, clusters, subagents, logs.
+
+### Execution risk register (so the restructure ships safely)
+- **Keep `data-tab` ids stable.** Deep links, localStorage state, tests, and the
+  capability-derived visibility map (`_CM_RT_CAPS`) key off ids. Rename LABELS
+  (i18n `en.json`) freely; change ids only with redirects.
+- **Respect existing users' drawer state.** The Live-trace drawer persists
+  open/closed in localStorage; flipping the default to collapsed must only apply
+  when no stored preference exists, so power users are not disrupted.
+- **i18n:** all renames go through `en.json` keys; autotranslate fans out the
+  other 35 locales. Never hand-edit non-English locales.
+- **Per-runtime tab gating must survive.** Tabs show/hide by the runtime's
+  declared Capability enum; moving items between groups must not detach them
+  from that derivation.
+- **Cloud parity:** the nav ships in the OSS wheel, so the restructure reaches
+  app.clawmetry.com only after an OSS release + cloud pin bump. Verify the tab
+  switcher e2e on BOTH surfaces before calling it done.
+- **Phasing:** Phase A = regroup + rename + collapse (nav-only, low risk).
+  Phase B = move the four session-scoped views into the session drill-down
+  (real UX work: they need a session-picker context). Do not bundle them.
 
 ### Tier 3 - Settings / gear (rarely-touched config + governance)
 Crons, Memory, Security, Tool Policy, Skills, Self-Evolve, NemoClaw, and node/account config.
@@ -114,7 +144,7 @@ Crons, Memory, Security, Tool Policy, Skills, Self-Evolve, NemoClaw, and node/ac
 Swimlane) out of the global sidebar and into the session detail** a user opens
 from Activity/Conversations. They are meaningless without a selected session, so
 they should not compete for top-level attention. This alone cuts the sidebar from
-~26 to ~12 and removes most of the 🔴 jargon from first contact.
+~27 to ~13 and removes most of the 🔴 jargon from first contact.
 
 ---
 
