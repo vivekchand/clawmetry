@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Session deep-dive: Trace, Turn timing and Compare live with the session now (2026-07-02)
+- **The three session-scoped expert views moved out of the sidebar and into the session itself (#3473).** Tracing, Turn timing and Compare sessions only make sense for a specific session, so they no longer take up global navigation space. Open any conversation and use the new "Deep dive" row to jump straight into that session's trace, its per-turn timing, or a side-by-side comparison, with the session already selected. Old bookmarks and links to those pages keep working. The Developer section now holds just the fleet-wide tools: Flow, Models, LLM Context, Agent Graph, Tools, Context usage, Runtime extras, and Ask.
+- **Verified:** live browser walk against real data (all three deep-dives open with the session preselected, no list bleeding under the detail) plus seven new guards in tests/test_session_deep_dive.py.
+
 ### Fix: the Agent Graph tab loads instead of sitting on "Loading..." (2026-07-02)
 - **Clicking Agent Graph showed "Loading..." forever, locally and on the hosted dashboard (#3462).** The tab's loader was wired into a leftover, never-rendered copy of the page markup, so it simply never ran. It is now wired into the live page: the graph draws when there is span data, an honest "no data in this window" note shows when there is none, and the hosted dashboard now explains that the agent graph is built from your local data store rather than showing a misleading empty state. A new class-level guard fails CI if any tab's loader is ever wired only into the dead markup again.
 
