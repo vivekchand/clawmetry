@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Fix: the Agent Graph tab loads instead of sitting on "Loading..." (2026-07-02)
+- **Clicking Agent Graph showed "Loading..." forever, locally and on the hosted dashboard (#3462).** The tab's loader was wired into a leftover, never-rendered copy of the page markup, so it simply never ran. It is now wired into the live page: the graph draws when there is span data, an honest "no data in this window" note shows when there is none, and the hosted dashboard now explains that the agent graph is built from your local data store rather than showing a misleading empty state. A new class-level guard fails CI if any tab's loader is ever wired only into the dead markup again.
+
 ### A simpler sidebar: seven plain items, expert views one click away (2026-07-02)
 - **The dashboard sidebar is now beginner-first (#3458).** A first-time user used to face about 27 navigation entries, many named in insider vocabulary, with an 11-item expert group expanded by default. The sidebar now shows seven plain-words items: Home (the landing screen finally has its own name), Agents, Activity (was Brain), Cost, Conversations (was Session replay), Approvals, and Alerts. Every deep-dive view lives in a collapsed "Developer" section: Flow, Models, LLM Context, Tracing, Agent Graph, Turn timing, Tools, Context usage, Runtime extras, Compare sessions, and Ask (was Dives). Schedules (was Crons) and Memory moved under Advanced.
 - **Nothing was removed and nothing breaks.** Every screen keeps its internal id, so bookmarks, deep links, and per-runtime tab visibility work unchanged. Opening a link to a Developer view automatically reveals the section so you can see where you are. If you had the expert group open before, it stays open for you.
