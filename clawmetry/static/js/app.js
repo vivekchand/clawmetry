@@ -1191,6 +1191,11 @@ function switchTab(name) {
   if (name === 'overview') loadAll();
   if (name === 'overview') { if (typeof _velocityPollTimer !== 'undefined' && _velocityPollTimer) clearInterval(_velocityPollTimer); if (typeof loadTokenVelocity === 'function') _velocityPollTimer = visibilitySetInterval(function() { if (!_cmIsOverviewTab()) return; loadTokenVelocity(); }, 30000); }
   if (name === 'usage') loadUsage();
+  // Agent Graph (#3315): the original wiring landed in the DEAD first
+  // DASHBOARD_HTML's inline switchTab in dashboard.py, so the loader never
+  // fired and the tab sat on its static "Loading..." forever (founder
+  // report 2026-07-02). The LIVE switchTab is this one.
+  if (name === 'agents') loadAgentGraph();
   if (name === 'skills') loadSkills();
   if (name === 'crons') loadCrons();
   if (name === 'memory') loadMemory();
@@ -22286,13 +22291,24 @@ function loadAgentGraph() {
   var now   = Math.floor(Date.now() / 1000);
   var since = now - win;
   fetch('/api/local/agent-graph?since=' + since + '&until=' + now)
-    .then(function(r) { return r.ok ? r.json() : {nodes: [], edges: []}; })
+    .then(function(r) {
+      // The cloud disables /api/local/* (no local DuckDB) with HTTP 410.
+      // Say so honestly instead of pretending there is no data.
+      if (r.status === 410) return {_cloud_disabled: true};
+      return r.ok ? r.json() : {nodes: [], edges: []};
+    })
     .then(function(data) {
+      if (data && data._cloud_disabled) {
+        statusEl.style.display = 'block';
+        statusEl.textContent = t('app.agent_graph_local_only', null,
+          'The agent graph is built from your local data store, so it is only available on the dashboard running on your machine (http://localhost:8900).');
+        return;
+      }
       statusEl.style.display = 'none';
       _renderAgentGraph(data.nodes || [], data.edges || []);
     })
     .catch(function() {
-      statusEl.textContent = 'Could not load agent graph — is the daemon running?';
+      statusEl.textContent = 'Could not load agent graph. Is the daemon running?';
     });
 }
 

@@ -6712,7 +6712,10 @@ function switchTab(name) {
   if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
   if (name === 'selfconfig') loadSelfConfig();
   if (name === 'review') loadReview();
-  if (name === 'agents') loadAgentGraph();
+  // NOTE: this is the DEAD first DASHBOARD_HTML - it never renders. The Agent
+  // Graph wiring was mistakenly added here by #3315 (so the tab sat on
+  // "Loading..." forever); the live wiring lives in static/js/app.js
+  // switchTab. Do not add tab wiring here.
 }
 
 // ── Review tab (issue #1615) ─────────────────────────────────────────────
