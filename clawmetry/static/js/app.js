@@ -10934,6 +10934,14 @@ function _taFmtCost(c) { c = Number(c) || 0; return c >= 0.01 ? '$' + c.toFixed(
 window._taSession = null;
 
 async function loadTurnAnatomy() {
+  // Session deep-dive handoff (Phase B): a pending session skips the list and
+  // opens the per-session detail directly.
+  if (window._pendingTurnSession) {
+    var _pts = window._pendingTurnSession;
+    window._pendingTurnSession = null;
+    viewTurnAnatomy(_pts);
+    return;
+  }
   turnAnatomyShowList();
   _taLoadStalled();
   var el = document.getElementById('ta-list');
@@ -11096,6 +11104,14 @@ function _taRenderTurn(t) {
 }
 
 async function loadTracing() {
+  // Session deep-dive handoff (Phase B): a pending session skips the list and
+  // opens the per-session detail directly.
+  if (window._pendingTraceSession) {
+    var _pds = window._pendingTraceSession;
+    window._pendingTraceSession = null;
+    viewTrace(_pds);
+    return;
+  }
   tracingShowList();
   var el = document.getElementById('trace-list');
   if (!el) return;
@@ -14476,6 +14492,29 @@ function replayTogglePlay() {
   }
 }
 
+// Phase B (UX_AUDIT.md): open a session-scoped deep-dive view with the session
+// preselected. Tracing / Turn timing / Compare sessions left the global nav
+// (they are meaningless without a session); this is their entry point from any
+// session drill-down. switchTab keeps working for old bookmarks regardless.
+function openSessionDeepDive(kind, sessionId) {
+  if (!sessionId) return;
+  // The tab loaders (loadTracing/loadTurnAnatomy) render their LIST view and
+  // their async continuation resets the list's style.cssText, which would wipe
+  // a display:none set here (list bleeding under the detail). So instead of
+  // racing them, hand the session over: the loader itself opens the detail
+  // when a pending deep-dive session is set.
+  if (kind === 'trace') {
+    window._pendingTraceSession = sessionId;
+    switchTab('tracing');
+  } else if (kind === 'turns') {
+    window._pendingTurnSession = sessionId;
+    switchTab('turn-anatomy');
+  } else if (kind === 'compare') {
+    switchTab('swimlane');
+    swimlaneAddLane(sessionId);
+  }
+}
+
 async function viewTranscript(sessionId) {
   document.getElementById('transcript-list').style.display = 'none';
   document.getElementById('transcript-viewer').style.display = '';
@@ -14541,6 +14580,16 @@ async function viewTranscript(sessionId) {
       metaHtml += '🔒 <strong>Policy events:</strong> ' + parts.join(' · ') + '. <a href="#" onclick="switchTab(\'security\');return false;" style="color:inherit;text-decoration:underline;">View in Security tab</a>';
       metaHtml += '</div>';
     }
+    // Phase B (UX_AUDIT.md): the session-scoped deep-dive views (Tracing,
+    // Turn timing, Compare sessions) left the global nav; this row is how a
+    // user reaches them, WITH the session already selected.
+    var _ddSid = JSON.stringify(String(sessionId)).replace(/"/g, '&quot;');
+    metaHtml += '<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border-secondary);display:flex;gap:8px;flex-wrap:wrap;align-items:center;">'
+      + '<span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-muted);">' + t('transcript.deep_dive', null, 'Deep dive') + '</span>'
+      + '<button class="refresh-btn" onclick="openSessionDeepDive(\'trace\', ' + _ddSid + ')" title="Span tree + waterfall for this session">' + t('transcript.view_trace', null, 'Trace') + '</button>'
+      + '<button class="refresh-btn" onclick="openSessionDeepDive(\'turns\', ' + _ddSid + ')" title="Per-turn timing breakdown for this session">' + t('transcript.turn_timing', null, 'Turn timing') + '</button>'
+      + '<button class="refresh-btn" onclick="openSessionDeepDive(\'compare\', ' + _ddSid + ')" title="Compare this session side by side with others">' + t('transcript.compare', null, 'Compare') + '</button>'
+      + '</div>';
     document.getElementById('transcript-meta').innerHTML = metaHtml;
     _loadAuthorityPanel(sessionId);
     // Build replay events array - include compaction markers as special events
