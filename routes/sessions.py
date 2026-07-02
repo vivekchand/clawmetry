@@ -90,6 +90,8 @@ def _infer_session_type(session):
         return "heartbeat"
     if kind == "subagent" or "subagent" in name:
         return "sub-agent"
+    if kind in ("attached", "external"):
+        return "attached"
     if channel and channel not in _GENERIC_CHANNELS:
         return "user"
     return "main"
