@@ -658,6 +658,8 @@
   "history.to": "to",
   "history.token_usage_over_time": "Token Usage Over Time",
   "i18n.language": "Language",
+  "inventory.selected_chip": "selected",
+  "inventory.selected_chip_tip": "Shown because this runtime is selected in the switcher. No activity in the last 24h.",
   "inventory.title": "Your agents",
   "inventory.story": "A calm, one-glance view of every agent on this machine: what it runs, what it costs, and whether it is alive.",
   "inventory.tile_alive": "Alive",
