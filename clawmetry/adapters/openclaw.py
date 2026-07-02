@@ -1110,6 +1110,15 @@ class OpenClawAdapter(AgentAdapter):
             _idt = s.get("target") or s.get("identityTarget")
             if _idt is not None:
                 extra["identityTarget"] = _idt
+            # External-harness attachment (#3470): `openclaw attach` resumes an
+            # existing gateway session via an external harness (PR #96454).  The
+            # gateway stamps kind='attached' and/or an externalHarness boolean.
+            # Surface a typed flag so the frontend can distinguish these sessions.
+            _ext = s.get("externalHarness") or (
+                s.get("kind", "").lower() in ("attached", "external")
+            )
+            if _ext:
+                extra["externalHarness"] = True
             # Cron delivery awareness (#3342): PR #93580 stamps a
             # cronDeliveryTarget marker on sessions that are delivery targets
             # of a cron job so they can be correlated with the originating
