@@ -258,7 +258,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.540"
+__version__ = "0.12.541"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -16487,6 +16487,7 @@ def _get_sessions():
                     "title": s.get("title") or "",
                     "costStatus": s.get("costStatus") or "",
                     "target": s.get("target") or s.get("identityTarget"),
+                    "capabilityProfile": s.get("capabilityProfile") or s.get("conversationCapability"),
                 }
             )
         _sessions_cache["data"] = sessions

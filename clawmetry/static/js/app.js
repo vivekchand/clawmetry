@@ -8671,12 +8671,23 @@ function _invRosterRow(a, rtFilter) {
   var work = (a.sessions || 0) + ((a.sessions === 1) ? ' conversation' : ' conversations');
   var model = a.primaryModel || '--';
   var highlight = (rtFilter !== 'all' && rt === rtFilter) ? ' inv-row-active' : '';
+  // When the row is only visible BECAUSE it is the selected runtime (it had no
+  // activity in 24h and would otherwise sit in the inactive fold), say so.
+  // Without this chip the roster looks like it shows different data on every
+  // switcher change (founder report 2026-07-02).
+  var selectedChip = '';
+  if (rtFilter !== 'all' && rt === rtFilter && !_invIsRecentlyActive(a, 'all')) {
+    selectedChip = ' <span class="inv-selected-chip" '
+      + 'title="' + t('inventory.selected_chip_tip', null, 'Shown because this runtime is selected in the switcher. No activity in the last 24h.') + '" '
+      + 'style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;padding:2px 7px;border-radius:9px;background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.4);color:#818cf8;vertical-align:middle;">'
+      + t('inventory.selected_chip', null, 'selected') + '</span>';
+  }
   var pencil = window.CLOUD_MODE
     ? ''
     : '<span class="inv-owner-pencil" title="Rename owner" onclick="event.stopPropagation();_invStartOwnerEdit(this,\'' + escHtml(rt) + '\')">&#9998;</span>';
   return ''
     + '<tr class="inv-row' + highlight + '" data-rt="' + escHtml(rt) + '" onclick="_invToggleRow(this,\'' + escHtml(rt) + '\')">'
-    +   '<td class="inv-c-agent"><span class="inv-dot" style="background:' + dot.color + '"></span>' + escHtml(label) + '</td>'
+    +   '<td class="inv-c-agent"><span class="inv-dot" style="background:' + dot.color + '"></span>' + escHtml(label) + selectedChip + '</td>'
     +   '<td class="inv-c-owner"><span class="inv-owner-chip" data-rt="' + escHtml(rt) + '"><span class="inv-owner-name">' + escHtml(owner) + '</span>' + pencil + '</span></td>'
     +   '<td class="inv-c-doing"><span class="inv-doing ' + doing.cls + '">' + doing.txt + '</span></td>'
     +   '<td class="inv-c-alive"><span class="inv-dot" style="background:' + dot.color + '"></span>'
@@ -8701,6 +8712,15 @@ function _invRenderRoster(inv) {
   // Never end up with an empty roster: if nothing is "active" right now, show
   // everything rather than an empty table.
   if (!active.length && inactive.length) { active = inactive; inactive = []; }
+  // Consistent ordering: the selected runtime is always the FIRST row. Without
+  // this the promoted row lands wherever the roster order puts it (OpenClaw
+  // above Claude Code, Hermes below), which reads as the list changing
+  // arbitrarily on every switcher change.
+  if (rtFilter !== 'all') {
+    active.sort(function (a, b) {
+      return (b.agentKey === rtFilter ? 1 : 0) - (a.agentKey === rtFilter ? 1 : 0);
+    });
+  }
   var rows = active.map(function (a) { return _invRosterRow(a, rtFilter); }).join('');
   var foldRows = '';
   if (inactive.length) {
