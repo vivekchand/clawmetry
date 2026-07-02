@@ -975,91 +975,233 @@ class Entitlement:
             )
             return None
 
-    def next_tier_lock_reason(
-        self, item, *, kind: str | None = None
-    ) -> str | None:
-        """Lock-reason-axis projection of :meth:`next_tier_spec`: the
-        :func:`lock_reason_at` sentence for ``item`` (interpreted as
-        ``kind``) evaluated on the rung above the resolved entitlement.
+    def next_tier_feature_spec_batch(self, features) -> dict:
+        """Batch sibling of :meth:`next_tier_feature_spec`: per-feature
+        :func:`feature_spec_at`-shape rows for N features evaluated on
+        the rung above the resolved entitlement in ONE round-trip.
 
-        Current-relative sibling of :func:`next_tier_lock_reason_at`
-        (which takes an explicit source ``tier``) and lock-reason
-        companion of :meth:`next_tier_feature_spec` /
-        :meth:`next_tier_runtime_spec` -- where those return the catalog
-        row at the rung above, this returns the human-readable lock
-        sentence the paywall surface would render there. Convenience for
-        ``lock_reason_at(self.next_purchasable_tier(), item, kind=kind)``
-        so a paywall "what's the lock copy for THIS item at my next
-        rung?" tooltip hydrates off ONE round-trip without threading the
-        current tier through query args.
+        Current-relative sibling of
+        :func:`next_tier_feature_spec_at_batch` (which takes an explicit
+        source ``tier``). Convenience for one call that walks every
+        supplied feature against
+        ``self.next_purchasable_tier()`` instead of N calls to
+        :meth:`next_tier_feature_spec`. Each row is byte-identical to
+        :meth:`next_tier_feature_spec(feature)` for the same feature --
+        pinned by parity tests so the scalar and batch accessors cannot
+        drift.
+
+        Shape mirrors :func:`next_tier_feature_spec_at_batch`::
+
+            {
+              "features": [
+                {"feature": "<id>", "row": <feature_spec_at row> | None},
+                ...
+              ],
+              "unknown": ["bogus_id", ...],
+            }
+
+        Supplied feature ids are normalised via :func:`_normalise_csv`
+        (whitespace stripped, lowercased, duplicates dropped, first-seen
+        order preserved). Unknown ids are echoed in ``unknown[]`` rather
+        than short-circuiting -- a partially-bad caller still gets rows
+        back for the valid ids alongside a list of what was dropped.
 
         Anchored on :meth:`next_purchasable_tier` (source-aware -- picks
         the ``cloud_*`` sibling when :attr:`source` is ``"cloud"``, the
-        self-hosted sibling otherwise), matching :meth:`next_tier_spec`.
-        The ``_at`` variant walks the source-agnostic
-        :func:`_next_purchasable_tier_after` instead -- both resolve to
-        the same rung for every source except at the free/starter
-        boundary where source-aware and source-agnostic diverge.
+        self-hosted sibling otherwise), matching :meth:`next_tier_spec`
+        / :meth:`next_tier_feature_spec`. At the resolver's ceiling
+        every ``row`` collapses to ``None`` while per-feature envelope
+        entries still render so the matrix's row count stays stable.
 
-        ``kind`` follows :meth:`lock_reason`: ``"feature"`` /
-        ``"runtime"`` / ``"channels"`` / ``"retention_days"`` /
-        ``"nodes"`` explicitly; ``None`` lets the inner method infer
-        ``feature`` vs ``runtime`` from the id (capacity axes can't be
-        inferred, so pass ``kind=`` for those).
-
-        Returns ``None`` at the resolver's ceiling (no rung above
-        current) and for any item the inner method considers unlockable
-        at the resolved target (free features / runtimes, empty keys,
-        malformed capacity counts). Never raises: a builder failure
-        short-circuits to ``None`` so the CTA surface stays mute instead
-        of breaking.
+        Never raises: a per-feature builder failure short-circuits that
+        feature into ``unknown[]`` and the rest of the batch keeps
+        building.
         """
+        feats = _normalise_csv(features)
         try:
             target = self.next_purchasable_tier()
-            if target is None:
-                return None
-            return lock_reason_at(target, item, kind=kind)
         except Exception as exc:
             logger.warning(
-                "entitlements: next_tier_lock_reason failed: %s", exc
+                "entitlements: next_tier_feature_spec_batch target resolve failed: %s",
+                exc,
             )
-            return None
+            target = None
+        rows: list[dict] = []
+        unknown: list[str] = []
+        for fid in feats:
+            if fid not in ALL_FEATURES:
+                unknown.append(fid)
+                continue
+            try:
+                row = feature_spec_at(target, fid) if target else None
+            except Exception as exc:
+                logger.warning(
+                    "entitlements: next_tier_feature_spec_batch row %r failed: %s",
+                    fid,
+                    exc,
+                )
+                unknown.append(fid)
+                continue
+            rows.append({"feature": fid, "row": row})
+        return {"features": rows, "unknown": unknown}
 
-    def previous_tier_lock_reason(
-        self, item, *, kind: str | None = None
-    ) -> str | None:
-        """Lock-reason-axis projection of :meth:`previous_tier_spec`: the
-        :func:`lock_reason_at` sentence for ``item`` evaluated on the
-        rung below the resolved entitlement.
+    def previous_tier_feature_spec_batch(self, features) -> dict:
+        """Source-anchored mirror of
+        :meth:`next_tier_feature_spec_batch` -- batch sibling of
+        :meth:`previous_tier_feature_spec` walking N features against
+        the rung BELOW the resolved entitlement in ONE round-trip.
 
-        Symmetric downgrade-confirmation mirror of
-        :meth:`next_tier_lock_reason` and lock-reason companion of
-        :meth:`previous_tier_feature_spec` /
-        :meth:`previous_tier_runtime_spec`. Convenience for
-        ``lock_reason_at(self.previous_purchasable_tier(), item,
-        kind=kind)`` so a downgrade-confirmation card can ask "what lock
-        sentence would surface for THIS item if I drop one rung?"
-        without recomputing the target tier client-side.
+        Same per-feature row shape and same normalisation /
+        ``unknown[]``-bucket posture as
+        :meth:`next_tier_feature_spec_batch`. At the resolver's floor
+        every ``row`` is ``None`` while per-feature entries still render
+        so the downgrade-confirmation surface's row count stays stable.
 
-        Anchored on :meth:`previous_purchasable_tier` (source-aware),
-        matching :meth:`previous_tier_spec`.
+        Each ``row`` is byte-identical to
+        :meth:`previous_tier_feature_spec(feature)` for the same
+        feature.
 
-        ``kind`` follows :meth:`lock_reason`.
-
-        Returns ``None`` at the resolver's floor and for any item the
-        inner method considers unlockable at the resolved target. Never
-        raises.
+        Never raises.
         """
+        feats = _normalise_csv(features)
         try:
             target = self.previous_purchasable_tier()
-            if target is None:
-                return None
-            return lock_reason_at(target, item, kind=kind)
         except Exception as exc:
             logger.warning(
-                "entitlements: previous_tier_lock_reason failed: %s", exc
+                "entitlements: previous_tier_feature_spec_batch target resolve failed: %s",
+                exc,
             )
-            return None
+            target = None
+        rows: list[dict] = []
+        unknown: list[str] = []
+        for fid in feats:
+            if fid not in ALL_FEATURES:
+                unknown.append(fid)
+                continue
+            try:
+                row = feature_spec_at(target, fid) if target else None
+            except Exception as exc:
+                logger.warning(
+                    "entitlements: previous_tier_feature_spec_batch row %r failed: %s",
+                    fid,
+                    exc,
+                )
+                unknown.append(fid)
+                continue
+            rows.append({"feature": fid, "row": row})
+        return {"features": rows, "unknown": unknown}
+
+    def next_tier_runtime_spec_batch(self, runtimes) -> dict:
+        """Runtime-axis twin of :meth:`next_tier_feature_spec_batch` --
+        per-runtime :func:`runtime_spec_at`-shape rows for N runtimes
+        evaluated on the rung above the resolved entitlement in ONE
+        round-trip.
+
+        Per-runtime row shape::
+
+            {"runtime": "<canonical id>", "row": <runtime_spec_at row> | None}
+
+        Each ``row`` is byte-identical to
+        :meth:`next_tier_runtime_spec(runtime)` for the same runtime.
+        Aliases are canonicalised via :func:`canonical_runtime`
+        (``claude-code`` -> ``claude_code``) and aliases that collapse
+        to a canonical id already in the response are silently de-
+        duplicated -- same behaviour as
+        :func:`next_tier_runtime_spec_at_batch`. The per-row ``runtime``
+        value carries the canonical id, never the supplied alias.
+
+        At the resolver's ceiling every ``row`` is ``None`` while per-
+        runtime envelope entries still render so the matrix's row count
+        stays stable.
+
+        Never raises: per-runtime failures short-circuit that runtime
+        into ``unknown[]`` (carrying the supplied alias, not the
+        canonical id, so the caller can correlate against what was
+        sent) and the rest of the batch keeps building.
+        """
+        rts = _normalise_csv(runtimes)
+        try:
+            target = self.next_purchasable_tier()
+        except Exception as exc:
+            logger.warning(
+                "entitlements: next_tier_runtime_spec_batch target resolve failed: %s",
+                exc,
+            )
+            target = None
+        rows: list[dict] = []
+        unknown: list[str] = []
+        seen: set[str] = set()
+        for raw in rts:
+            canon = canonical_runtime(raw)
+            if not canon or canon not in ALL_RUNTIMES:
+                unknown.append(raw)
+                continue
+            if canon in seen:
+                continue
+            try:
+                row = runtime_spec_at(target, canon) if target else None
+            except Exception as exc:
+                logger.warning(
+                    "entitlements: next_tier_runtime_spec_batch row %r failed: %s",
+                    raw,
+                    exc,
+                )
+                unknown.append(raw)
+                continue
+            seen.add(canon)
+            rows.append({"runtime": canon, "row": row})
+        return {"runtimes": rows, "unknown": unknown}
+
+    def previous_tier_runtime_spec_batch(self, runtimes) -> dict:
+        """Source-anchored mirror of
+        :meth:`next_tier_runtime_spec_batch` -- batch sibling of
+        :meth:`previous_tier_runtime_spec` walking N runtimes against
+        the rung BELOW the resolved entitlement in ONE round-trip.
+
+        Same per-runtime row shape, alias canonicalisation, alias
+        collapse, and ``unknown[]``-carries-supplied-alias posture as
+        :meth:`next_tier_runtime_spec_batch`. At the resolver's floor
+        every ``row`` is ``None`` while per-runtime entries still
+        render.
+
+        Each ``row`` is byte-identical to
+        :meth:`previous_tier_runtime_spec(runtime)` for the same
+        runtime.
+
+        Never raises.
+        """
+        rts = _normalise_csv(runtimes)
+        try:
+            target = self.previous_purchasable_tier()
+        except Exception as exc:
+            logger.warning(
+                "entitlements: previous_tier_runtime_spec_batch target resolve failed: %s",
+                exc,
+            )
+            target = None
+        rows: list[dict] = []
+        unknown: list[str] = []
+        seen: set[str] = set()
+        for raw in rts:
+            canon = canonical_runtime(raw)
+            if not canon or canon not in ALL_RUNTIMES:
+                unknown.append(raw)
+                continue
+            if canon in seen:
+                continue
+            try:
+                row = runtime_spec_at(target, canon) if target else None
+            except Exception as exc:
+                logger.warning(
+                    "entitlements: previous_tier_runtime_spec_batch row %r failed: %s",
+                    raw,
+                    exc,
+                )
+                unknown.append(raw)
+                continue
+            seen.add(canon)
+            rows.append({"runtime": canon, "row": row})
+        return {"runtimes": rows, "unknown": unknown}
 
     def next_tier_lock_reason(
         self, item, *, kind: str | None = None
@@ -1921,30 +2063,58 @@ def previous_tier_runtime_spec(runtime: str) -> dict | None:
         return None
 
 
-def next_tier_lock_reason(item, *, kind: str | None = None) -> str | None:
-    """Module-level :meth:`Entitlement.next_tier_lock_reason` against the
-    resolved entitlement. Never raises."""
+def next_tier_feature_spec_batch(features) -> dict:
+    """Module-level :meth:`Entitlement.next_tier_feature_spec_batch`
+    against the resolved entitlement. Never raises: a resolver failure
+    short-circuits to an envelope with ``features=[]`` /
+    ``unknown=[]`` so a paywall matrix keeps rendering."""
     try:
-        return get_entitlement().next_tier_lock_reason(item, kind=kind)
+        return get_entitlement().next_tier_feature_spec_batch(features)
     except Exception as exc:
         logger.warning(
-            "entitlements: next_tier_lock_reason (module) failed: %s", exc
+            "entitlements: next_tier_feature_spec_batch (module) failed: %s",
+            exc,
         )
-        return None
+        return {"features": [], "unknown": []}
 
 
-def previous_tier_lock_reason(
-    item, *, kind: str | None = None
-) -> str | None:
-    """Module-level :meth:`Entitlement.previous_tier_lock_reason` against
-    the resolved entitlement. Never raises."""
+def previous_tier_feature_spec_batch(features) -> dict:
+    """Module-level :meth:`Entitlement.previous_tier_feature_spec_batch`
+    against the resolved entitlement. Never raises."""
     try:
-        return get_entitlement().previous_tier_lock_reason(item, kind=kind)
+        return get_entitlement().previous_tier_feature_spec_batch(features)
     except Exception as exc:
         logger.warning(
-            "entitlements: previous_tier_lock_reason (module) failed: %s", exc
+            "entitlements: previous_tier_feature_spec_batch (module) failed: %s",
+            exc,
         )
-        return None
+        return {"features": [], "unknown": []}
+
+
+def next_tier_runtime_spec_batch(runtimes) -> dict:
+    """Module-level :meth:`Entitlement.next_tier_runtime_spec_batch`
+    against the resolved entitlement. Never raises."""
+    try:
+        return get_entitlement().next_tier_runtime_spec_batch(runtimes)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_runtime_spec_batch (module) failed: %s",
+            exc,
+        )
+        return {"runtimes": [], "unknown": []}
+
+
+def previous_tier_runtime_spec_batch(runtimes) -> dict:
+    """Module-level :meth:`Entitlement.previous_tier_runtime_spec_batch`
+    against the resolved entitlement. Never raises."""
+    try:
+        return get_entitlement().previous_tier_runtime_spec_batch(runtimes)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_runtime_spec_batch (module) failed: %s",
+            exc,
+        )
+        return {"runtimes": [], "unknown": []}
 
 
 def next_tier_lock_reason(item, *, kind: str | None = None) -> str | None:

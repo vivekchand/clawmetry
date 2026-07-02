@@ -6301,335 +6301,259 @@ def api_entitlement_previous_tier_runtime_spec():
         return jsonify(_next_prev_tier_axis_spec_grace_body("runtime", supplied))
 
 
-def _next_prev_lock_reason_grace_body(key: str, kind: str) -> dict:
-    """Fallback envelope shared by the bare next/previous lock-reason
-    routes. Keeps the shape identical to the happy path so a resolver
-    failure never breaks a paywall tooltip client-side."""
+def _next_prev_tier_axis_spec_batch_grace_body(axis: str) -> dict:
+    """Fallback envelope shared by the four bare next/previous per-axis
+    spec-batch routes. Keeps the shape identical to the happy path so a
+    resolver failure never breaks a paywall matrix client-side."""
     return {
         "current_tier": "oss",
         "current_tier_label": "OSS",
         "current_tier_rank": 0,
-        "key": key,
-        "kind": kind,
         "target": None,
         "target_label": None,
         "target_rank": None,
-        "reason": None,
-        "locked": False,
-        "allowed": True,
-        "required_tier": None,
-        "required_tier_label": None,
-        "required_tier_rank": -1,
-        "upgrade_required": False,
+        axis: [],
+        "unknown": [],
         "grace": True,
         "enforced": False,
     }
 
 
-def _next_prev_lock_reason(direction: str):
-    """Shared handler body for ``/{next,previous}-tier-lock-reason``.
+@bp_entitlement.route("/api/entitlement/next-tier-feature-spec-batch")
+def api_entitlement_next_tier_feature_spec_batch():
+    """``GET /api/entitlement/next-tier-feature-spec-batch?features=a,b,c``
+    -- current-relative sibling of
+    ``/api/entitlement/next-tier-feature-spec-at-batch`` and batch
+    sibling of ``/api/entitlement/next-tier-feature-spec``.
 
-    Current-relative sibling of the ``_next_prev_lock_reason_at`` handler
-    -- takes no ``tier=`` (the source is the resolved entitlement) and
-    walks :meth:`Entitlement.next_tier_lock_reason` /
-    :meth:`Entitlement.previous_tier_lock_reason` instead of the source-
-    parameterised ``_at`` module helpers, matching the pattern of
-    ``/next-tier-feature-spec`` vs ``/next-tier-feature-spec-at``.
+    Where ``/next-tier-feature-spec`` projects ONE feature onto the
+    rung above the resolved entitlement, this projects N features onto
+    that same rung in ONE round-trip. Pairs with
+    ``/next-tier-feature-spec`` the same way
+    ``/feature-spec-at-batch`` pairs with ``/feature-spec-at``: scalar
+    what-if -> batch what-if -- but source-aware (anchored on the
+    resolved entitlement's ``next_purchasable_tier``) rather than
+    caller-supplied ``tier=``.
 
-    Mirrors the axis-parsing contract of ``/lock-reason`` /
-    ``/lock-reason-at`` (exactly one of ``feature=`` / ``runtime=`` /
-    ``channels=`` / ``retention_days=`` / ``nodes=``). ``target`` /
-    ``reason`` collapse to ``null`` at the rung edge (ceiling for
-    ``next``, floor for ``previous``) so the surface stays 200.
+    Use case: a pricing-comparison tooltip that walks a fixed column
+    of N features and asks "do these unlock at MY next rung?" without
+    threading the current tier through the query args or first
+    fetching ``/next-tier-feature-spec`` N times.
 
-    ``direction`` is ``"next"`` or ``"previous"``. Never 5xxs: resolver
-    failure short-circuits to the grace-shape envelope so the paywall
-    surface stays mute.
-    """
-    log_name = f"api_entitlement_{direction}_tier_lock_reason"
-    try:
-        from clawmetry import entitlements as _ent
+    Each row in ``features[].row`` is byte-identical to the body of
+    ``/next-tier-feature-spec?feature=<id>`` ``.row`` -- pinned by
+    parity tests so the scalar and batch accessors cannot drift.
+    Supplied feature ids are normalised (whitespace stripped,
+    lowercased, duplicates dropped, first-seen order preserved).
+    Unknown ids do not 404 the call -- they are echoed in ``unknown[]``
+    so a partially-bad caller still gets rows back for the valid ids,
+    matching the ``_at`` sibling.
 
-        feature = (request.args.get("feature") or "").strip().lower()
-        runtime_in = (request.args.get("runtime") or "").strip().lower()
-        (
-            channels_present,
-            channels_ok,
-            channels_n,
-            channels_raw,
-        ) = _parse_capacity_arg("channels")
-        (
-            retention_present,
-            retention_ok,
-            retention_n,
-            retention_raw,
-        ) = _parse_capacity_arg("retention_days")
-        (
-            nodes_present,
-            nodes_ok,
-            nodes_n,
-            nodes_raw,
-        ) = _parse_capacity_arg("nodes")
+    At the ceiling (resolved entitlement already at enterprise -- no
+    rung above) every per-feature ``row`` is ``null`` while
+    ``target`` / ``target_label`` / ``target_rank`` collapse to
+    ``null``; the surface stays 200 so callers can render "you're at
+    the top" copy without a status-code branch.
 
-        supplied = [
-            bool(feature),
-            bool(runtime_in),
-            channels_present,
-            retention_present,
-            nodes_present,
-        ]
-        n_supplied = sum(1 for s in supplied if s)
-        if n_supplied == 0:
-            return (
-                jsonify(
-                    {
-                        "error": (
-                            "supply exactly one of feature=<id>, runtime=<id>, "
-                            "channels=<int>, retention_days=<int>, or "
-                            "nodes=<int>"
-                        )
-                    }
-                ),
-                400,
-            )
-        if n_supplied > 1:
-            return (
-                jsonify(
-                    {
-                        "error": (
-                            "supply only one of feature=, runtime=, channels=, "
-                            "retention_days=, or nodes="
-                        )
-                    }
-                ),
-                400,
-            )
-
-        if feature and feature not in _ent.ALL_FEATURES:
-            return (
-                jsonify(
-                    {
-                        "error": "unknown feature",
-                        "which": "feature",
-                        "feature": feature,
-                    }
-                ),
-                404,
-            )
-        canonical_rt = None
-        if runtime_in:
-            canonical_rt = _ent.canonical_runtime(runtime_in)
-            if not canonical_rt or canonical_rt not in _ent.ALL_RUNTIMES:
-                return (
-                    jsonify(
-                        {
-                            "error": "unknown runtime",
-                            "which": "runtime",
-                            "runtime": runtime_in,
-                        }
-                    ),
-                    404,
-                )
-
-        ent = _ent.get_entitlement()
-        if direction == "next":
-            target = ent.next_purchasable_tier()
-            walk = ent.next_tier_lock_reason
-        else:
-            target = ent.previous_purchasable_tier()
-            walk = ent.previous_tier_lock_reason
-
-        if feature:
-            key, kind = feature, "feature"
-            required = _ent.min_tier_for_feature(feature)
-            reason = walk(feature, kind=kind) if target else None
-            allowed = reason is None
-        elif runtime_in:
-            key, kind = canonical_rt, "runtime"
-            required = _ent.min_tier_for_runtime(canonical_rt)
-            reason = walk(canonical_rt, kind=kind) if target else None
-            allowed = reason is None
-        elif channels_present:
-            key, kind = channels_raw, "channels"
-            if channels_ok and target:
-                required = _ent.min_tier_for_channel_count(channels_n)
-                reason = walk(str(channels_n), kind=kind)
-                allowed = reason is None
-            else:
-                required = (
-                    _ent.min_tier_for_channel_count(channels_n)
-                    if channels_ok
-                    else None
-                )
-                reason = None
-                allowed = True
-        elif retention_present:
-            key, kind = retention_raw, "retention_days"
-            if retention_ok and target:
-                required = _ent.min_tier_for_retention_window(retention_n)
-                reason = walk(str(retention_n), kind=kind)
-                allowed = reason is None
-            else:
-                required = (
-                    _ent.min_tier_for_retention_window(retention_n)
-                    if retention_ok
-                    else None
-                )
-                reason = None
-                allowed = True
-        else:
-            key, kind = nodes_raw, "nodes"
-            if nodes_ok and target:
-                required = _ent.min_tier_for_node_count(nodes_n)
-                reason = walk(str(nodes_n), kind=kind)
-                allowed = reason is None
-            else:
-                required = (
-                    _ent.min_tier_for_node_count(nodes_n)
-                    if nodes_ok
-                    else None
-                )
-                reason = None
-                allowed = True
-
-        cur_rank = _ent.tier_rank(ent.tier)
-        req_rank = _ent.tier_rank(required) if required else -1
-        required_label = _ent.tier_label(required) if required else None
-        return jsonify(
-            {
-                "current_tier": ent.tier,
-                "current_tier_label": _ent.tier_label(ent.tier),
-                "current_tier_rank": cur_rank,
-                "key": key,
-                "kind": kind,
-                "target": target,
-                "target_label": _ent.tier_label(target) if target else None,
-                "target_rank": _ent.tier_rank(target) if target else None,
-                "reason": reason,
-                "locked": reason is not None,
-                "allowed": allowed,
-                "required_tier": required,
-                "required_tier_label": required_label,
-                "required_tier_rank": req_rank,
-                "upgrade_required": bool(required) and req_rank > cur_rank,
-                "grace": bool(ent.grace),
-                "enforced": _ent.is_enforced(),
-            }
-        )
-    except Exception as exc:
-        logger.warning("%s: error: %s", log_name, exc)
-        feature = (request.args.get("feature") or "").strip().lower()
-        runtime_in = (request.args.get("runtime") or "").strip().lower()
-        channels_raw = (request.args.get("channels") or "").strip()
-        retention_raw = (request.args.get("retention_days") or "").strip()
-        nodes_raw = (request.args.get("nodes") or "").strip()
-        if feature:
-            key, kind = feature, "feature"
-        elif runtime_in:
-            key, kind = runtime_in, "runtime"
-        elif channels_raw:
-            key, kind = channels_raw, "channels"
-        elif retention_raw:
-            key, kind = retention_raw, "retention_days"
-        elif nodes_raw:
-            key, kind = nodes_raw, "nodes"
-        else:
-            key, kind = "", ""
-        return jsonify(_next_prev_lock_reason_grace_body(key, kind))
-
-
-@bp_entitlement.route("/api/entitlement/next-tier-lock-reason")
-def api_entitlement_next_tier_lock_reason():
-    """``GET /api/entitlement/next-tier-lock-reason?<axis>=<id>`` --
-    current-relative sibling of ``/api/entitlement/next-tier-lock-reason-at``:
-    the lock-reason sentence for one item (interpreted as ``kind``)
-    projected onto the rung above the resolved entitlement.
-
-    Lock-reason-axis projection of ``/api/entitlement/next-tier-spec``
-    and lock-reason companion of ``/next-tier-feature-spec`` /
-    ``/next-tier-runtime-spec``. Where those return the catalog row at
-    the rung above, this returns the human-readable lock sentence the
-    paywall surface would render there. Lets a paywall "what's the lock
-    copy for THIS item at my next rung?" tooltip hydrate off ONE round-
-    trip without the caller threading the current tier through query
-    args or first fetching ``/lock-reason-at`` at the target rung.
-
-    Exactly one of ``feature=`` / ``runtime=`` / ``channels=`` /
-    ``retention_days=`` / ``nodes=`` must be supplied. Response shape::
+    Response shape::
 
         {
           "current_tier":       "<resolved tier id>",
           "current_tier_label": "<resolved label>",
           "current_tier_rank":  <resolved rank>,
-          "key":                "<id-as-passed | canonical runtime>",
-          "kind":               "feature|runtime|channels|retention_days|nodes",
           "target":             "<next-above tier id>" | null,
           "target_label":       "<next-above label>" | null,
           "target_rank":        <next-above rank> | null,
-          "reason":             "<lock sentence>" | null,
-          "locked":             <bool>,
-          "allowed":            <bool>,
-          "required_tier":      "<min purchasable tier>" | null,
-          "required_tier_label":"<label>" | null,
-          "required_tier_rank": <rank>,
-          "upgrade_required":   <bool>,
+          "features": [
+            {"feature": "<id>", "row": {<feature_spec_at row>} | null},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
           "grace":              <bool>,
           "enforced":           <bool>,
         }
 
-    The ``reason`` field matches
-    ``/lock-reason-at?tier=<target>&<axis>=<id>`` byte-for-byte when
-    ``target`` is populated -- a parity test pins this so the projection
-    cannot drift from the full ``/lock-reason-at`` sibling.
-
-    ``target`` and ``reason`` collapse to ``null`` at the ceiling
-    (resolved entitlement already at enterprise -- no rung above); the
-    surface stays 200 with a populated envelope so callers can render
-    "you're at the top" copy without a status-code branch.
-
-    - **400** when no axis is supplied, or when more than one axis is
-      supplied
-    - **404** when ``feature=`` is unknown (not in ``ALL_FEATURES``) or
-      ``runtime=`` is unknown (not in ``ALL_RUNTIMES`` after alias
-      canonicalisation). The body echoes the original supplied id so
-      callers can render "unknown ..." copy.
+    - **400** when ``features=`` is missing / empty after normalisation
     - **Never 5xxs**: a resolver failure short-circuits to the grace-
-      shape envelope with ``target=null`` and ``reason=null`` so the
-      paywall surface stays mute.
+      shape envelope with empty rows so the matrix keeps rendering.
     """
-    return _next_prev_lock_reason("next")
+    try:
+        features = _parse_csv_arg("features")
+        if not features:
+            return jsonify({"error": "supply features=<csv>"}), 400
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        target = ent.next_purchasable_tier()
+        batch = ent.next_tier_feature_spec_batch(features)
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "features": batch.get("features", []),
+                "unknown": batch.get("unknown", []),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_feature_spec_batch: error: %s", exc
+        )
+        return jsonify(_next_prev_tier_axis_spec_batch_grace_body("features"))
 
 
-@bp_entitlement.route("/api/entitlement/previous-tier-lock-reason")
-def api_entitlement_previous_tier_lock_reason():
-    """``GET /api/entitlement/previous-tier-lock-reason?<axis>=<id>`` --
-    symmetric downgrade-side companion of ``/next-tier-lock-reason``:
-    the lock-reason sentence for one item projected onto the rung below
-    the resolved entitlement.
+@bp_entitlement.route("/api/entitlement/previous-tier-feature-spec-batch")
+def api_entitlement_previous_tier_feature_spec_batch():
+    """``GET /api/entitlement/previous-tier-feature-spec-batch
+    ?features=a,b,c`` -- symmetric downgrade-side companion of
+    ``/next-tier-feature-spec-batch``.
 
-    Downgrade-confirmation counterpart on the lock-reason axis. Lets a
-    downgrade-confirmation card render "what lock sentence would surface
-    for THIS item if I drop one rung?" without recomputing the target
-    tier client-side.
+    Same envelope as ``/next-tier-feature-spec-batch``; ``target`` and
+    every per-feature ``row`` collapse to ``null`` at the floor
+    (resolved entitlement at ``oss`` / ``cloud_free`` -- no rung
+    below).
 
-    Response shape matches ``/next-tier-lock-reason`` byte-for-byte
-    (``current_tier``, ``current_tier_label``, ``current_tier_rank``,
-    ``key``, ``kind``, ``target``, ``target_label``, ``target_rank``,
-    ``reason``, ``locked``, ``allowed``, ``required_tier``,
-    ``required_tier_label``, ``required_tier_rank``,
-    ``upgrade_required``, ``grace``, ``enforced``). The ``reason`` field
-    matches ``/lock-reason-at?tier=<target>&<axis>=<id>`` byte-for-byte
-    when ``target`` is populated.
+    Each row in ``features[].row`` is byte-identical to
+    ``/previous-tier-feature-spec?feature=<id>`` ``.row``.
 
-    ``target`` and ``reason`` collapse to ``null`` at the floor
-    (resolved entitlement at ``oss`` / ``cloud_free`` -- no rung below).
-
-    - **400** when no axis is supplied, or when more than one axis is
-      supplied
-    - **404** when ``feature=`` / ``runtime=`` is unknown
+    - **400** when ``features=`` is missing / empty after normalisation
     - **Never 5xxs**: grace-shape envelope on resolver failure.
     """
-    return _next_prev_lock_reason("previous")
+    try:
+        features = _parse_csv_arg("features")
+        if not features:
+            return jsonify({"error": "supply features=<csv>"}), 400
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        target = ent.previous_purchasable_tier()
+        batch = ent.previous_tier_feature_spec_batch(features)
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "features": batch.get("features", []),
+                "unknown": batch.get("unknown", []),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_feature_spec_batch: error: %s", exc
+        )
+        return jsonify(_next_prev_tier_axis_spec_batch_grace_body("features"))
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-runtime-spec-batch")
+def api_entitlement_next_tier_runtime_spec_batch():
+    """``GET /api/entitlement/next-tier-runtime-spec-batch?runtimes=a,b,c``
+    -- runtime-axis mirror of ``/next-tier-feature-spec-batch`` and
+    batch sibling of ``/next-tier-runtime-spec``.
+
+    Aliases are canonicalised the same way ``/next-tier-runtime-spec``
+    already does (``claude-code`` -> ``claude_code``), and aliases
+    that collapse to a canonical id already in the response are
+    silently de-duplicated so the row count matches the unique-
+    canonical-id count.
+
+    Each row in ``runtimes[].row`` is byte-identical to the body of
+    ``/next-tier-runtime-spec?runtime=<id>`` ``.row``. Unknown ids do
+    not 404 the call -- they are echoed in ``unknown[]`` carrying the
+    supplied alias so the caller can correlate against what was sent.
+
+    At the ceiling every per-runtime ``row`` is ``null`` while
+    ``target`` / ``target_label`` / ``target_rank`` collapse to
+    ``null``.
+
+    Response shape mirrors ``/next-tier-feature-spec-batch`` with
+    ``"runtimes"`` in place of ``"features"`` and a per-row
+    ``"runtime"`` key (canonical id) in place of ``"feature"``.
+
+    - **400** when ``runtimes=`` is missing / empty after normalisation
+    - **Never 5xxs**.
+    """
+    try:
+        runtimes = _parse_csv_arg("runtimes")
+        if not runtimes:
+            return jsonify({"error": "supply runtimes=<csv>"}), 400
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        target = ent.next_purchasable_tier()
+        batch = ent.next_tier_runtime_spec_batch(runtimes)
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "runtimes": batch.get("runtimes", []),
+                "unknown": batch.get("unknown", []),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_runtime_spec_batch: error: %s", exc
+        )
+        return jsonify(_next_prev_tier_axis_spec_batch_grace_body("runtimes"))
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-runtime-spec-batch")
+def api_entitlement_previous_tier_runtime_spec_batch():
+    """``GET /api/entitlement/previous-tier-runtime-spec-batch
+    ?runtimes=a,b,c`` -- source-anchored mirror of
+    ``/next-tier-runtime-spec-batch`` and batch sibling of
+    ``/previous-tier-runtime-spec``.
+
+    Each row in ``runtimes[].row`` is byte-identical to
+    ``/previous-tier-runtime-spec?runtime=<id>`` ``.row``. At the
+    floor every per-runtime ``row`` is ``null``.
+
+    Response shape, alias handling, validation, and never-5xx posture
+    are identical to ``/next-tier-runtime-spec-batch``.
+    """
+    try:
+        runtimes = _parse_csv_arg("runtimes")
+        if not runtimes:
+            return jsonify({"error": "supply runtimes=<csv>"}), 400
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        target = ent.previous_purchasable_tier()
+        batch = ent.previous_tier_runtime_spec_batch(runtimes)
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "runtimes": batch.get("runtimes", []),
+                "unknown": batch.get("unknown", []),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_runtime_spec_batch: error: %s", exc
+        )
+        return jsonify(_next_prev_tier_axis_spec_batch_grace_body("runtimes"))
 
 
 def _next_prev_lock_reason_grace_body(key: str, kind: str) -> dict:
@@ -10416,5 +10340,130 @@ def api_entitlement_runtime_catalog_path_batch():
                 "from_rank": -1,
                 "tiers": [],
                 "unknown": [],
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-capacity-diff")
+def api_entitlement_next_tier_capacity_diff():
+    """``GET /api/entitlement/next-tier-capacity-diff`` -- capacity-only
+    marginal row for the rung immediately above the resolved
+    entitlement, in :func:`clawmetry.entitlements.capacity_diff` shape
+    (``target``, ``channel_limit``, ``retention_days``, ``node_limit``
+    where each capacity axis is the
+    ``{before, after, delta, unlocked, locked}`` triple
+    :func:`_capacity_transition` builds).
+
+    Current-relative convenience for
+    ``/api/entitlement/next-tier-capacity-diff-at?tier=<current>``; the
+    upgrade-CTA capacity-only companion to
+    ``/api/entitlement/next-tier-diff`` (full ``upgrade_diff`` shape),
+    ``/next-tier-unlocks`` (marginal grants), ``/next-tier-locks``
+    (marginal losses), and ``/next-tier-spec`` (full tier row). Fills
+    the bare-directional slot the family was missing next to the
+    already-shipped source-parameterised ``_at`` variant.
+
+    Response shape::
+
+        {
+          "current_tier":       "<resolved tier id>",
+          "current_tier_label": "<resolved label>",
+          "current_tier_rank":  <resolved rank>,
+          "row":                {<capacity_diff row>} | null,
+          "grace":              <bool>,
+          "enforced":           <bool>,
+        }
+
+    ``row`` collapses to ``null`` at the ceiling (no rung above -- the
+    resolved entitlement is already at Enterprise). Never 5xxs: a
+    resolver failure short-circuits to the grace-shape envelope so the
+    dashboard CTA keeps rendering instead of disappearing.
+
+    Unlike the ``_at`` variant, the resolved entitlement drives the
+    ``before`` side of each capacity axis -- so under grace mode where
+    the live :func:`capacity_diff` reports the unlimited-sentinel caps,
+    the ``before`` triple carries the grace-shape values. Callers that
+    want the strict per-tier caps regardless of grace should use
+    ``/api/entitlement/next-tier-capacity-diff-at?tier=<current>``
+    instead.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        body = ent.next_tier_capacity_diff()
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "row": body,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_capacity_diff: error: %s", exc
+        )
+        return jsonify(
+            {
+                "current_tier": "oss",
+                "current_tier_label": "OSS",
+                "current_tier_rank": 0,
+                "row": None,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-capacity-diff")
+def api_entitlement_previous_tier_capacity_diff():
+    """``GET /api/entitlement/previous-tier-capacity-diff`` --
+    capacity-only marginal row for the rung immediately below the
+    resolved entitlement, in :func:`clawmetry.entitlements.capacity_diff`
+    shape.
+
+    Symmetric companion to
+    ``/api/entitlement/next-tier-capacity-diff``: that endpoint carries
+    the rung-above's capacity delta (upgrade side), this carries the
+    rung-below's capacity delta (downgrade side). Useful on a
+    downgrade-confirmation card alongside ``/previous-tier-diff``,
+    ``/previous-tier-unlocks``, ``/previous-tier-locks``, and
+    ``/previous-tier-spec``.
+
+    ``row`` collapses to ``null`` at the floor (no rung below -- the
+    resolved entitlement is already at OSS or cloud_free). Never 5xxs:
+    a resolver failure short-circuits to the grace-shape envelope so
+    the confirmation surface keeps rendering instead of disappearing.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        body = ent.previous_tier_capacity_diff()
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "row": body,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_capacity_diff: error: %s", exc
+        )
+        return jsonify(
+            {
+                "current_tier": "oss",
+                "current_tier_label": "OSS",
+                "current_tier_rank": 0,
+                "row": None,
+                "grace": True,
+                "enforced": False,
             }
         )
