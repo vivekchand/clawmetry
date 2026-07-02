@@ -10029,3 +10029,128 @@ def api_entitlement_runtime_catalog_path_batch():
                 "unknown": [],
             }
         )
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-capacity-diff")
+def api_entitlement_next_tier_capacity_diff():
+    """``GET /api/entitlement/next-tier-capacity-diff`` -- capacity-only
+    marginal row for the rung immediately above the resolved
+    entitlement, in :func:`clawmetry.entitlements.capacity_diff` shape
+    (``target``, ``channel_limit``, ``retention_days``, ``node_limit``
+    where each capacity axis is the
+    ``{before, after, delta, unlocked, locked}`` triple
+    :func:`_capacity_transition` builds).
+
+    Current-relative convenience for
+    ``/api/entitlement/next-tier-capacity-diff-at?tier=<current>``; the
+    upgrade-CTA capacity-only companion to
+    ``/api/entitlement/next-tier-diff`` (full ``upgrade_diff`` shape),
+    ``/next-tier-unlocks`` (marginal grants), ``/next-tier-locks``
+    (marginal losses), and ``/next-tier-spec`` (full tier row). Fills
+    the bare-directional slot the family was missing next to the
+    already-shipped source-parameterised ``_at`` variant.
+
+    Response shape::
+
+        {
+          "current_tier":       "<resolved tier id>",
+          "current_tier_label": "<resolved label>",
+          "current_tier_rank":  <resolved rank>,
+          "row":                {<capacity_diff row>} | null,
+          "grace":              <bool>,
+          "enforced":           <bool>,
+        }
+
+    ``row`` collapses to ``null`` at the ceiling (no rung above -- the
+    resolved entitlement is already at Enterprise). Never 5xxs: a
+    resolver failure short-circuits to the grace-shape envelope so the
+    dashboard CTA keeps rendering instead of disappearing.
+
+    Unlike the ``_at`` variant, the resolved entitlement drives the
+    ``before`` side of each capacity axis -- so under grace mode where
+    the live :func:`capacity_diff` reports the unlimited-sentinel caps,
+    the ``before`` triple carries the grace-shape values. Callers that
+    want the strict per-tier caps regardless of grace should use
+    ``/api/entitlement/next-tier-capacity-diff-at?tier=<current>``
+    instead.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        body = ent.next_tier_capacity_diff()
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "row": body,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_capacity_diff: error: %s", exc
+        )
+        return jsonify(
+            {
+                "current_tier": "oss",
+                "current_tier_label": "OSS",
+                "current_tier_rank": 0,
+                "row": None,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-capacity-diff")
+def api_entitlement_previous_tier_capacity_diff():
+    """``GET /api/entitlement/previous-tier-capacity-diff`` --
+    capacity-only marginal row for the rung immediately below the
+    resolved entitlement, in :func:`clawmetry.entitlements.capacity_diff`
+    shape.
+
+    Symmetric companion to
+    ``/api/entitlement/next-tier-capacity-diff``: that endpoint carries
+    the rung-above's capacity delta (upgrade side), this carries the
+    rung-below's capacity delta (downgrade side). Useful on a
+    downgrade-confirmation card alongside ``/previous-tier-diff``,
+    ``/previous-tier-unlocks``, ``/previous-tier-locks``, and
+    ``/previous-tier-spec``.
+
+    ``row`` collapses to ``null`` at the floor (no rung below -- the
+    resolved entitlement is already at OSS or cloud_free). Never 5xxs:
+    a resolver failure short-circuits to the grace-shape envelope so
+    the confirmation surface keeps rendering instead of disappearing.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        body = ent.previous_tier_capacity_diff()
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "row": body,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_capacity_diff: error: %s", exc
+        )
+        return jsonify(
+            {
+                "current_tier": "oss",
+                "current_tier_label": "OSS",
+                "current_tier_rank": 0,
+                "row": None,
+                "grace": True,
+                "enforced": False,
+            }
+        )
