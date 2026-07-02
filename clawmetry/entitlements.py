@@ -1203,6 +1203,92 @@ class Entitlement:
             rows.append({"runtime": canon, "row": row})
         return {"runtimes": rows, "unknown": unknown}
 
+    def next_tier_lock_reason(
+        self, item, *, kind: str | None = None
+    ) -> str | None:
+        """Lock-reason-axis projection of :meth:`next_tier_spec`: the
+        :func:`lock_reason_at` sentence for ``item`` (interpreted as
+        ``kind``) evaluated on the rung above the resolved entitlement.
+
+        Current-relative sibling of :func:`next_tier_lock_reason_at`
+        (which takes an explicit source ``tier``) and lock-reason
+        companion of :meth:`next_tier_feature_spec` /
+        :meth:`next_tier_runtime_spec` -- where those return the catalog
+        row at the rung above, this returns the human-readable lock
+        sentence the paywall surface would render there. Convenience for
+        ``lock_reason_at(self.next_purchasable_tier(), item, kind=kind)``
+        so a paywall "what's the lock copy for THIS item at my next
+        rung?" tooltip hydrates off ONE round-trip without threading the
+        current tier through query args.
+
+        Anchored on :meth:`next_purchasable_tier` (source-aware -- picks
+        the ``cloud_*`` sibling when :attr:`source` is ``"cloud"``, the
+        self-hosted sibling otherwise), matching :meth:`next_tier_spec`.
+        The ``_at`` variant walks the source-agnostic
+        :func:`_next_purchasable_tier_after` instead -- both resolve to
+        the same rung for every source except at the free/starter
+        boundary where source-aware and source-agnostic diverge.
+
+        ``kind`` follows :meth:`lock_reason`: ``"feature"`` /
+        ``"runtime"`` / ``"channels"`` / ``"retention_days"`` /
+        ``"nodes"`` explicitly; ``None`` lets the inner method infer
+        ``feature`` vs ``runtime`` from the id (capacity axes can't be
+        inferred, so pass ``kind=`` for those).
+
+        Returns ``None`` at the resolver's ceiling (no rung above
+        current) and for any item the inner method considers unlockable
+        at the resolved target (free features / runtimes, empty keys,
+        malformed capacity counts). Never raises: a builder failure
+        short-circuits to ``None`` so the CTA surface stays mute instead
+        of breaking.
+        """
+        try:
+            target = self.next_purchasable_tier()
+            if target is None:
+                return None
+            return lock_reason_at(target, item, kind=kind)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: next_tier_lock_reason failed: %s", exc
+            )
+            return None
+
+    def previous_tier_lock_reason(
+        self, item, *, kind: str | None = None
+    ) -> str | None:
+        """Lock-reason-axis projection of :meth:`previous_tier_spec`: the
+        :func:`lock_reason_at` sentence for ``item`` evaluated on the
+        rung below the resolved entitlement.
+
+        Symmetric downgrade-confirmation mirror of
+        :meth:`next_tier_lock_reason` and lock-reason companion of
+        :meth:`previous_tier_feature_spec` /
+        :meth:`previous_tier_runtime_spec`. Convenience for
+        ``lock_reason_at(self.previous_purchasable_tier(), item,
+        kind=kind)`` so a downgrade-confirmation card can ask "what lock
+        sentence would surface for THIS item if I drop one rung?"
+        without recomputing the target tier client-side.
+
+        Anchored on :meth:`previous_purchasable_tier` (source-aware),
+        matching :meth:`previous_tier_spec`.
+
+        ``kind`` follows :meth:`lock_reason`.
+
+        Returns ``None`` at the resolver's floor and for any item the
+        inner method considers unlockable at the resolved target. Never
+        raises.
+        """
+        try:
+            target = self.previous_purchasable_tier()
+            if target is None:
+                return None
+            return lock_reason_at(target, item, kind=kind)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: previous_tier_lock_reason failed: %s", exc
+            )
+            return None
+
     def grace_remaining_days(self) -> int | None:
         at = enforce_at_epoch()
         if at is None:
@@ -2029,6 +2115,32 @@ def previous_tier_runtime_spec_batch(runtimes) -> dict:
             exc,
         )
         return {"runtimes": [], "unknown": []}
+
+
+def next_tier_lock_reason(item, *, kind: str | None = None) -> str | None:
+    """Module-level :meth:`Entitlement.next_tier_lock_reason` against the
+    resolved entitlement. Never raises."""
+    try:
+        return get_entitlement().next_tier_lock_reason(item, kind=kind)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_lock_reason (module) failed: %s", exc
+        )
+        return None
+
+
+def previous_tier_lock_reason(
+    item, *, kind: str | None = None
+) -> str | None:
+    """Module-level :meth:`Entitlement.previous_tier_lock_reason` against
+    the resolved entitlement. Never raises."""
+    try:
+        return get_entitlement().previous_tier_lock_reason(item, kind=kind)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_lock_reason (module) failed: %s", exc
+        )
+        return None
 
 
 def capacity_diff(target_tier: str) -> dict:
