@@ -1289,6 +1289,151 @@ class Entitlement:
             )
             return None
 
+    def next_tier_lock_reason_batch(
+        self,
+        *,
+        features=None,
+        runtimes=None,
+        channels: int | None = None,
+        retention_days: int | None = None,
+        nodes: int | None = None,
+    ) -> dict:
+        """Batch sibling of :meth:`next_tier_lock_reason`: per-item lock-
+        reason rows for every supplied item across all 5 axes, evaluated
+        on the rung above the resolved entitlement in ONE round-trip.
+
+        Current-relative sibling of
+        :func:`next_tier_lock_reason_at_batch` (which takes an explicit
+        source ``tier``) and lock-reason-axis batch companion of
+        :meth:`next_tier_feature_spec_batch` /
+        :meth:`next_tier_runtime_spec_batch`. Body is byte-identical to
+        :func:`lock_reasons_at_batch(target, ...)` for the resolved
+        ``target = self.next_purchasable_tier()`` -- pinned by parity
+        tests so the source-aware batch here and the source-agnostic
+        ``_at_batch`` sibling cannot drift from the full matrix helper.
+
+        Anchored on :meth:`next_purchasable_tier` (source-aware -- picks
+        the ``cloud_*`` sibling when :attr:`source` is ``"cloud"``, the
+        self-hosted sibling otherwise), matching
+        :meth:`next_tier_feature_spec_batch`. The ``_at_batch`` variant
+        walks the source-agnostic :func:`_next_purchasable_tier_after`
+        instead -- both resolve to the same rung for every source except
+        at the free/starter boundary where source-aware and source-
+        agnostic diverge.
+
+        Shape (byte-identical to :func:`lock_reasons_at_batch`)::
+
+            {
+              "features":       [<row>, ...],
+              "runtimes":       [<row>, ...],
+              "channels":       <row> | None,
+              "retention_days": <row> | None,
+              "nodes":          <row> | None,
+            }
+
+        Each ``<row>`` carries the same 8 keys :func:`_lock_row` emits
+        (``key``, ``kind``, ``reason``, ``locked``, ``allowed``,
+        ``required_tier``, ``required_tier_label``,
+        ``required_tier_rank``).
+
+        At the resolver's ceiling (no rung above) rows still render for
+        every supplied item with ``reason=None`` / ``locked=False`` /
+        ``allowed=True`` so the matrix's row count stays stable and the
+        caller doesn't need a special shape branch -- same posture as
+        :func:`next_tier_lock_reason_at_batch`.
+
+        Never raises: a resolver failure short-circuits to the grace-
+        shape rows so the paywall matrix keeps rendering.
+        """
+        try:
+            target = self.next_purchasable_tier()
+        except Exception as exc:
+            logger.warning(
+                "entitlements: next_tier_lock_reason_batch target resolve failed: %s",
+                exc,
+            )
+            target = None
+        if target is None:
+            return _empty_lock_reasons_at_batch(
+                features, runtimes, channels, retention_days, nodes
+            )
+        try:
+            out = lock_reasons_at_batch(
+                target,
+                features=features,
+                runtimes=runtimes,
+                channels=channels,
+                retention_days=retention_days,
+                nodes=nodes,
+            )
+        except Exception as exc:
+            logger.warning(
+                "entitlements: next_tier_lock_reason_batch failed: %s", exc
+            )
+            out = None
+        if out is None:
+            return _empty_lock_reasons_at_batch(
+                features, runtimes, channels, retention_days, nodes
+            )
+        return out
+
+    def previous_tier_lock_reason_batch(
+        self,
+        *,
+        features=None,
+        runtimes=None,
+        channels: int | None = None,
+        retention_days: int | None = None,
+        nodes: int | None = None,
+    ) -> dict:
+        """Symmetric downgrade-side companion of
+        :meth:`next_tier_lock_reason_batch`: per-item lock-reason rows
+        evaluated on the rung below the resolved entitlement.
+
+        Anchored on :meth:`previous_purchasable_tier` (source-aware),
+        matching :meth:`previous_tier_feature_spec_batch`.
+
+        Response shape matches :meth:`next_tier_lock_reason_batch`
+        byte-for-byte. At the floor (resolved entitlement at ``oss`` /
+        ``cloud_free`` -- no rung below) rows still render for every
+        supplied item with ``reason=None`` / ``locked=False`` /
+        ``allowed=True`` so the row count stays stable.
+
+        Never raises.
+        """
+        try:
+            target = self.previous_purchasable_tier()
+        except Exception as exc:
+            logger.warning(
+                "entitlements: previous_tier_lock_reason_batch target resolve failed: %s",
+                exc,
+            )
+            target = None
+        if target is None:
+            return _empty_lock_reasons_at_batch(
+                features, runtimes, channels, retention_days, nodes
+            )
+        try:
+            out = lock_reasons_at_batch(
+                target,
+                features=features,
+                runtimes=runtimes,
+                channels=channels,
+                retention_days=retention_days,
+                nodes=nodes,
+            )
+        except Exception as exc:
+            logger.warning(
+                "entitlements: previous_tier_lock_reason_batch failed: %s",
+                exc,
+            )
+            out = None
+        if out is None:
+            return _empty_lock_reasons_at_batch(
+                features, runtimes, channels, retention_days, nodes
+            )
+        return out
+
     def grace_remaining_days(self) -> int | None:
         at = enforce_at_epoch()
         if at is None:
@@ -2141,6 +2286,64 @@ def previous_tier_lock_reason(
             "entitlements: previous_tier_lock_reason (module) failed: %s", exc
         )
         return None
+
+
+def next_tier_lock_reason_batch(
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict:
+    """Module-level :meth:`Entitlement.next_tier_lock_reason_batch`
+    against the resolved entitlement. Never raises: a resolver failure
+    short-circuits to the grace-shape 5-axis envelope so a paywall
+    matrix keeps rendering."""
+    try:
+        return get_entitlement().next_tier_lock_reason_batch(
+            features=features,
+            runtimes=runtimes,
+            channels=channels,
+            retention_days=retention_days,
+            nodes=nodes,
+        )
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_lock_reason_batch (module) failed: %s",
+            exc,
+        )
+        return _empty_lock_reasons_at_batch(
+            features, runtimes, channels, retention_days, nodes
+        )
+
+
+def previous_tier_lock_reason_batch(
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict:
+    """Module-level :meth:`Entitlement.previous_tier_lock_reason_batch`
+    against the resolved entitlement. Never raises."""
+    try:
+        return get_entitlement().previous_tier_lock_reason_batch(
+            features=features,
+            runtimes=runtimes,
+            channels=channels,
+            retention_days=retention_days,
+            nodes=nodes,
+        )
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_lock_reason_batch (module) failed: %s",
+            exc,
+        )
+        return _empty_lock_reasons_at_batch(
+            features, runtimes, channels, retention_days, nodes
+        )
 
 
 def capacity_diff(target_tier: str) -> dict:
