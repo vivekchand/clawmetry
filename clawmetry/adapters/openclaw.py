@@ -518,6 +518,75 @@ def _sandbox_inference_configs() -> list:
             out.append(entry)
         except Exception:
             continue
+
+    # -- gap #3503: terminal/agent-execution sandboxes not in sandboxes.json --
+    # agents.yaml carries the *intent* roster; terminal-kind coding-agent
+    # sandboxes (e.g. deepagents-code) have no inference-routing entry and are
+    # invisible to the loop above. Discover them from agents.yaml and probe
+    # each with the openshell helpers so Phase/Policy/Runtime/OCSF/egress data
+    # reaches the dashboard exactly as it does for inference-routing sandboxes.
+    _seen = {e["sandbox"] for e in out}
+    try:
+        _home2 = os.environ.get("HOME") or os.path.expanduser("~")
+        _manifest = os.path.join(_home2, ".nemoclaw", "agents.yaml")
+        if os.path.isfile(_manifest):
+            with open(_manifest, "r", encoding="utf-8") as _fh:
+                _mc = _fh.read()
+            _agents: list = []
+            try:
+                import yaml as _yaml  # type: ignore[import]
+                _md = _yaml.safe_load(_mc)
+                if isinstance(_md, dict):
+                    _raw = _md.get("agents", [])
+                    if isinstance(_raw, list):
+                        _agents = [a for a in _raw if isinstance(a, dict)]
+                    elif isinstance(_raw, dict):
+                        _agents = [
+                            {"name": k, **(v if isinstance(v, dict) else {})}
+                            for k, v in _raw.items()
+                        ]
+                elif isinstance(_md, list):
+                    _agents = [a for a in _md if isinstance(a, dict)]
+            except ImportError:
+                # yaml unavailable: line-scan for sandbox:/name: entries
+                for _line in _mc.splitlines():
+                    _s = _line.strip()
+                    for _pfx in ("sandbox:", "- sandbox:"):
+                        if _s.startswith(_pfx):
+                            _v = _s[len(_pfx):].strip().strip("\"'")
+                            if _v:
+                                _agents.append({"sandbox": _v})
+                            break
+                    else:
+                        if _s.startswith("- name:"):
+                            _, _, _v2 = _s.partition(":")
+                            _v2 = _v2.strip().strip("\"'")
+                            if _v2:
+                                _agents.append({"name": _v2})
+            except Exception:
+                _agents = []
+            for _agent in _agents:
+                if not isinstance(_agent, dict):
+                    continue
+                _sb = (_agent.get("sandbox") or _agent.get("name") or "").strip()
+                if not _sb or _sb in _seen:
+                    continue
+                _seen.add(_sb)
+                _te: dict = {
+                    "sandbox": _sb,
+                    "isDefault": False,
+                    "provider": "terminal",
+                    "providerKey": "terminal",
+                    "primaryModelRef": "",
+                    "sandboxSource": "agents.yaml",
+                }
+                _te.update(_openshell_sandbox_phase_policy(_sb))
+                _te.update(_openshell_sandbox_ocsf_enabled(_sb))
+                _te.update(_sandbox_egress_denied_count(_sb))
+                out.append(_te)
+    except Exception:
+        pass
+
     return out
 
 
