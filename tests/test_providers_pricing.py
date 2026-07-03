@@ -66,3 +66,12 @@ def test_unknown_provider_conservative_default():
 def test_local_models_are_free():
     assert _get_rates("ollama", "llama3.2:3b") == (0.0, 0.0)
     assert _get_rates("", "ollama/llama3.2") == (0.0, 0.0)
+
+
+def test_gpt5_6_priced_explicitly():
+    # GPT-5.x must not fall through to the gpt-4o baseline ($2.50/$10). #3502
+    assert _get_rates("openai", "gpt-5.6") == (10.00, 40.00)
+    assert _get_rates("openai", "gpt-5.4") == (10.00, 40.00)
+    assert _get_rates("openai", "gpt-5") == (10.00, 40.00)
+    # gpt-5.6 prefix wins over the broader gpt-5 prefix
+    assert _get_rates("openai", "gpt-5.6-turbo") == (10.00, 40.00)
