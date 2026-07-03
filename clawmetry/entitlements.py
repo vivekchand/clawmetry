@@ -3602,6 +3602,185 @@ def downgrade_path_at(tier: str) -> list[dict] | None:
         return []
 
 
+def upgrade_path_at_batch(tiers) -> dict:
+    """Batch what-if sibling of :func:`upgrade_path_at`: ordered
+    marginal-unlock ladder ABOVE each caller-supplied source tier in ONE
+    round-trip.
+
+    Composes :func:`upgrade_path_at` across the perspective-tier axis
+    the same way :func:`tier_catalog_at_batch` composes
+    :func:`tier_catalog_at` and :func:`feature_catalog_at_batch` composes
+    :func:`feature_catalog_at`. Lets a pricing-comparison matrix UI
+    ("show me the upgrade ladder from OSS, Cloud Starter, Cloud Pro, and
+    Enterprise -- side by side") hydrate every column off ONE call
+    instead of N calls to :func:`upgrade_path_at`.
+
+    Per-source row shape::
+
+        {
+          "tier":       "<id>",
+          "tier_label": "...",
+          "tier_rank":  <int>,
+          "path":       [<upgrade_path_at row>, ...],
+        }
+
+    Each ``path`` list is byte-identical to the list
+    :func:`upgrade_path_at` returns for the same source tier -- pinned
+    by a parity test so the scalar and batch what-if upgrade-path
+    helpers cannot drift.
+
+    Shape::
+
+        {
+          "tiers": [
+            {"tier": "<id>", "tier_label": ..., "tier_rank": ..., "path": [...]},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Supplied tier ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen
+    order preserved). Unknown ids are echoed in ``unknown[]`` instead of
+    short-circuiting -- a partially-bad caller still gets rows back for
+    the valid ids alongside a list of what was dropped, matching every
+    other ``_at_batch`` sibling's posture. ``trial`` IS accepted (it
+    lives in :data:`_TIER_ORDER` and the scalar helper resolves it).
+
+    A source at the ceiling of the purchasable ladder (Enterprise)
+    still yields a valid row with an empty ``path`` list -- the ceiling
+    is NOT ``unknown``. Only ids not in :data:`_TIER_ORDER` (or where
+    the scalar returns ``None``) land in ``unknown[]``.
+
+    Empty / ``None`` input returns ``{"tiers": [], "unknown": []}`` --
+    the HTTP wrapper turns that into a 400, this helper does not raise.
+
+    Resolver-independent: delegates per-tier to :func:`upgrade_path_at`,
+    which folds :func:`tier_unlocks` (catalogue-derived) over each
+    strictly-higher rung -- so grace vs enforce yields byte-identical
+    rows. Never raises: a per-tier failure short-circuits that id into
+    ``unknown[]`` and the rest of the batch keeps building.
+    """
+    ids = _normalise_csv(tiers)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    for tid in ids:
+        if tid not in _TIER_ORDER:
+            unknown.append(tid)
+            continue
+        try:
+            path = upgrade_path_at(tid)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: upgrade_path_at_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        if path is None:
+            unknown.append(tid)
+            continue
+        rows.append(
+            {
+                "tier": tid,
+                "tier_label": tier_label(tid),
+                "tier_rank": _TIER_RANK.get(tid, -1),
+                "path": path,
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}
+
+
+def downgrade_path_at_batch(tiers) -> dict:
+    """Batch what-if sibling of :func:`downgrade_path_at`: ordered
+    cumulative-loss ladder BELOW each caller-supplied source tier in
+    ONE round-trip.
+
+    Direction-flipped twin of :func:`upgrade_path_at_batch`: where the
+    upgrade batch hydrates the marginal-unlock ladder strictly above
+    each source, this hydrates the cumulative-loss ladder strictly
+    below each source. Same envelope, same per-source row shape, same
+    unknown-bucketing posture -- only the inner ``path`` list changes
+    direction.
+
+    Per-source row shape::
+
+        {
+          "tier":       "<id>",
+          "tier_label": "...",
+          "tier_rank":  <int>,
+          "path":       [<downgrade_path_at row>, ...],
+        }
+
+    Each ``path`` list is byte-identical to the list
+    :func:`downgrade_path_at` returns for the same source tier --
+    pinned by a parity test so the scalar and batch what-if
+    downgrade-path helpers cannot drift.
+
+    Shape::
+
+        {
+          "tiers": [
+            {"tier": "<id>", "tier_label": ..., "tier_rank": ..., "path": [...]},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Supplied tier ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen
+    order preserved). Unknown ids are echoed in ``unknown[]`` instead
+    of short-circuiting. ``trial`` IS accepted.
+
+    A source at the floor of the purchasable ladder (``oss`` /
+    ``cloud_free``) still yields a valid row with an empty ``path``
+    list -- the floor is NOT ``unknown``. Only ids not in
+    :data:`_TIER_ORDER` (or where the scalar returns ``None``) land in
+    ``unknown[]``.
+
+    Empty / ``None`` input returns ``{"tiers": [], "unknown": []}`` --
+    the HTTP wrapper turns that into a 400, this helper does not
+    raise.
+
+    Resolver-independent: delegates per-tier to
+    :func:`downgrade_path_at`, which folds :func:`tier_diff`
+    (catalogue-derived) over each strictly-lower rung -- so grace vs
+    enforce yields byte-identical rows. Never raises: a per-tier
+    failure short-circuits that id into ``unknown[]`` and the rest of
+    the batch keeps building.
+    """
+    ids = _normalise_csv(tiers)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    for tid in ids:
+        if tid not in _TIER_ORDER:
+            unknown.append(tid)
+            continue
+        try:
+            path = downgrade_path_at(tid)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: downgrade_path_at_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        if path is None:
+            unknown.append(tid)
+            continue
+        rows.append(
+            {
+                "tier": tid,
+                "tier_label": tier_label(tid),
+                "tier_rank": _TIER_RANK.get(tid, -1),
+                "path": path,
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}
+
+
 def resolution_diagnostic() -> dict:
     out: dict = {
         "license_path": _LICENSE_PATH,

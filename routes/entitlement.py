@@ -2031,6 +2031,186 @@ def api_entitlement_downgrade_path_at():
         )
 
 
+@bp_entitlement.route("/api/entitlement/upgrade-path-at-batch")
+def api_entitlement_upgrade_path_at_batch():
+    """``GET /api/entitlement/upgrade-path-at-batch?tiers=a,b,c`` -- batch
+    what-if sibling of ``/api/entitlement/upgrade-path-at``.
+
+    Where ``/upgrade-path-at`` hydrates the marginal-unlock ladder above
+    ONE hypothetical source tier, this hydrates it for N hypothetical
+    sources in ONE round-trip. Pairs with ``/upgrade-path-at`` the same
+    way ``/tier-catalog-at-batch`` pairs with ``/tier-catalog-at``:
+    scalar what-if -> matrix what-if across the perspective-tier axis.
+
+    Use case: a pricing-comparison matrix UI ("show me the upgrade
+    ladder as if I were on OSS vs Cloud Starter vs Cloud Pro vs
+    Enterprise -- side by side") hydrates every column off ONE call
+    instead of N calls to ``/upgrade-path-at``.
+
+    Each ``tiers[].path`` list is byte-identical to the body of
+    ``/upgrade-path-at?tier=<tier>`` (its ``path`` field) for the same
+    source tier -- pinned by parity tests so the scalar and batch
+    what-if upgrade-path helpers cannot drift. Supplied tier ids are
+    normalised (whitespace stripped, lowercased, duplicates dropped,
+    first-seen order preserved). Unknown ids do not 404 the call --
+    they are echoed in ``unknown[]`` so a partially-bad caller still
+    gets rows back for the valid ids alongside a list of what was
+    dropped, matching every other ``_at_batch`` sibling's posture.
+
+    A source at the ceiling of the purchasable ladder (Enterprise)
+    still yields a valid row with an empty ``path`` list -- the
+    ceiling is NOT ``unknown``. Only ids not in :data:`_TIER_ORDER`
+    (or where the scalar returns ``None``) land in ``unknown[]``.
+
+    Response shape::
+
+        {
+          "tiers": [
+            {
+              "tier":       "<id>",
+              "tier_label": "...",
+              "tier_rank":  <int>,
+              "path":       [<upgrade-path-at row>, ...],
+            },
+            ...
+          ],
+          "unknown":    ["bogus_id", ...],
+          "current_tier":      "...",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    - **400** when ``tiers=`` is missing / empty after normalisation
+    - **200** with bucketed unknowns for unknown tier ids -- does NOT
+      404 the call, matching every other batch sibling
+    - **Never 5xxs**: a synthesis failure short-circuits to an envelope
+      with empty rows so the matrix keeps rendering.
+    """
+    tiers = _parse_csv_arg("tiers")
+    if not tiers:
+        return jsonify({"error": "supply tiers=<csv>"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        batch = _ent.upgrade_path_at_batch(tiers)
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": batch.get("tiers", []),
+                "unknown": batch.get("unknown", []),
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_upgrade_path_at_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "unknown": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/downgrade-path-at-batch")
+def api_entitlement_downgrade_path_at_batch():
+    """``GET /api/entitlement/downgrade-path-at-batch?tiers=a,b,c`` --
+    batch what-if sibling of ``/api/entitlement/downgrade-path-at``.
+
+    Direction-flipped twin of ``/api/entitlement/upgrade-path-at-batch``:
+    where the upgrade batch hydrates the marginal-unlock ladder strictly
+    above each source, this hydrates the cumulative-loss ladder strictly
+    below each source. Same envelope, same per-source row shape, same
+    unknown-bucketing posture -- only the inner ``path`` list changes
+    direction.
+
+    Use case: a "compare from tier X" downgrade-warning matrix UI ("show
+    me the cumulative-loss ladder as if I were on OSS vs Cloud Starter
+    vs Cloud Pro vs Enterprise -- side by side") hydrates every column
+    off ONE call instead of N calls to ``/downgrade-path-at``.
+
+    Each ``tiers[].path`` list is byte-identical to the body of
+    ``/downgrade-path-at?tier=<tier>`` (its ``path`` field) for the same
+    source tier -- pinned by parity tests so the scalar and batch
+    what-if downgrade-path helpers cannot drift. Supplied tier ids are
+    normalised (whitespace stripped, lowercased, duplicates dropped,
+    first-seen order preserved). Unknown ids do not 404 the call --
+    they are echoed in ``unknown[]``.
+
+    A source at the floor of the purchasable ladder (``oss`` /
+    ``cloud_free``) still yields a valid row with an empty ``path``
+    list -- the floor is NOT ``unknown``. Only ids not in
+    :data:`_TIER_ORDER` (or where the scalar returns ``None``) land in
+    ``unknown[]``.
+
+    Response shape::
+
+        {
+          "tiers": [
+            {
+              "tier":       "<id>",
+              "tier_label": "...",
+              "tier_rank":  <int>,
+              "path":       [<downgrade-path-at row>, ...],
+            },
+            ...
+          ],
+          "unknown":    ["bogus_id", ...],
+          "current_tier":      "...",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    - **400** when ``tiers=`` is missing / empty after normalisation
+    - **200** with bucketed unknowns for unknown tier ids -- does NOT
+      404 the call, matching every other batch sibling
+    - **Never 5xxs**: a synthesis failure short-circuits to an envelope
+      with empty rows so the matrix keeps rendering.
+    """
+    tiers = _parse_csv_arg("tiers")
+    if not tiers:
+        return jsonify({"error": "supply tiers=<csv>"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        batch = _ent.downgrade_path_at_batch(tiers)
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": batch.get("tiers", []),
+                "unknown": batch.get("unknown", []),
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_downgrade_path_at_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "unknown": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 _CAPACITY_PARAMS = ("channels", "retention_days", "nodes")
 
 
