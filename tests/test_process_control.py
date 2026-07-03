@@ -496,3 +496,85 @@ def test_pause_does_not_freeze_group_sharing_orchestrator():
             orch.wait(timeout=5)
         except Exception:
             pass
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# locale-independent ps start-time reading (non-English macOS, no psutil)
+# ──────────────────────────────────────────────────────────────────────────
+_EN_LSTART = "Thu Jul  2 04:26:55 2026"       # C-locale `ps -o lstart=`
+_DE_LSTART = "Do  2. Jul 04:26:55 2026"       # German-locale `ps -o lstart=`
+
+
+def _is_c_locale_env(env) -> bool:
+    """True when the subprocess env forces the C locale the way _run must."""
+    if not env or env.get("LC_ALL") != "C":
+        return False
+    if "LANG" in env or "LANGUAGE" in env:
+        return False
+    return not any(k.startswith("LC_") and k != "LC_ALL" for k in env)
+
+
+def _fake_localized_ps(cmd, **kwargs):
+    """Simulate `ps -o lstart=` on a German-locale host: localized month/day
+    names UNLESS the caller forces the C locale via the subprocess env."""
+    assert "lstart=" in cmd, f"unexpected subprocess call in test: {cmd}"
+    out = _EN_LSTART if _is_c_locale_env(kwargs.get("env")) else _DE_LSTART
+    return subprocess.CompletedProcess(cmd, 0, stdout=out + "\n", stderr="")
+
+
+def test_guard_verifies_on_non_english_locale_host(monkeypatch):
+    """THE regression (follow-up to the TZ fix): on a non-English-locale Mac
+    without psutil, `ps -o lstart=` prints localized month/day names, the
+    ctime parse (%a %b) failed, and the guard failed CLOSED, so kill/pause/
+    resume refused for those users. _run now forces LC_ALL=C on the ps
+    subprocess, so lstart is always English and the guard verifies.
+
+    Revert-proof: without the _run env fix the fake ps below returns the
+    German rendering, _ctime_epoch_candidates yields no candidates, and
+    verify_pid refuses (RED); with the fix it sees English and verifies."""
+    monkeypatch.setattr(pc, "_psutil", None)
+    monkeypatch.setattr(pc, "_IS_MACOS", True)
+    monkeypatch.setattr(pc, "_IS_LINUX", False)
+    # The host is a German-locale machine.
+    monkeypatch.setenv("LANG", "de_DE.UTF-8")
+    monkeypatch.setenv("LC_TIME", "de_DE.UTF-8")
+    monkeypatch.setattr(pc.subprocess, "run", _fake_localized_ps)
+    # claude_code records procStart as an English ctime regardless of locale.
+    ok, reason = pc.verify_pid(os.getpid(), recorded_start=_EN_LSTART)
+    assert ok is True, reason
+    assert reason in ("verified", "verified_tz_normalized")
+
+
+def test_run_forces_c_locale_on_subprocess(monkeypatch):
+    """_run must pass an env that forces the C locale and strips every other
+    locale variable, while preserving the rest of the environment (PATH)."""
+    captured = {}
+
+    def spy(cmd, **kwargs):
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(cmd, 0, stdout="x\n", stderr="")
+
+    monkeypatch.setenv("LANG", "fr_FR.UTF-8")
+    monkeypatch.setenv("LC_TIME", "fr_FR.UTF-8")
+    monkeypatch.setenv("LANGUAGE", "fr")
+    monkeypatch.setattr(pc.subprocess, "run", spy)
+    assert pc._run(["ps", "-o", "lstart=", "-p", "1"]) == "x\n"
+    env = captured.get("env")
+    assert _is_c_locale_env(env), f"subprocess env does not force C locale: {env}"
+    assert "PATH" in env  # non-locale environment is preserved
+
+
+def test_guard_still_fails_closed_on_unparseable_ps_output(monkeypatch):
+    """Fail-closed semantics survive the locale fix: if ps emits something
+    genuinely unparseable even under the C locale, the guard must refuse."""
+    monkeypatch.setattr(pc, "_psutil", None)
+    monkeypatch.setattr(pc, "_IS_MACOS", True)
+    monkeypatch.setattr(pc, "_IS_LINUX", False)
+
+    def broken_ps(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout="not a date\n", stderr="")
+
+    monkeypatch.setattr(pc.subprocess, "run", broken_ps)
+    ok, reason = pc.verify_pid(os.getpid(), recorded_start=_EN_LSTART)
+    assert ok is False
+    assert reason.startswith("start_mismatch"), reason
