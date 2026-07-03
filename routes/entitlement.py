@@ -240,6 +240,21 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                          instead of first walking
                                          ``/tier-path`` and then hydrating
                                          each rung individually.
+  GET  /api/entitlement/tier-catalog-path -- tier-axis twin of
+                                         ``/feature-catalog-path`` /
+                                         ``/runtime-catalog-path``. Each row
+                                         is a ``/tier-catalog-at`` payload at
+                                         ``rung=<tier>`` so an upgrade-
+                                         walkthrough surface hydrates the
+                                         full pricing ladder at every rung
+                                         between two tiers off one round-
+                                         trip. Together the three
+                                         ``_catalog_path`` endpoints render
+                                         every tier + feature + runtime
+                                         column at every rung off three calls
+                                         instead of walking ``/tier-path``
+                                         and hydrating each rung
+                                         individually.
 """
 
 from __future__ import annotations
@@ -7908,6 +7923,98 @@ def api_entitlement_runtime_catalog_path():
     except Exception as exc:
         logger.warning(
             "api_entitlement_runtime_catalog_path: error: %s", exc
+        )
+        return (
+            jsonify({"error": "unknown tier", "from": f, "to": t}),
+            404,
+        )
+
+
+@bp_entitlement.route("/api/entitlement/tier-catalog-path")
+def api_entitlement_tier_catalog_path():
+    """``GET /api/entitlement/tier-catalog-path?from=<id>&to=<id>`` --
+    tier-axis twin of ``/feature-catalog-path`` and
+    ``/runtime-catalog-path``: the FULL tier ladder at every rung
+    between any two tiers off ONE round-trip, with each rung's inner
+    ``tiers`` list carrying the ladder from the perspective of that
+    rung (``is_current`` pinned on the rung id).
+
+    Pairs with the two sibling ``_catalog_path`` endpoints the same
+    way ``/tier-catalog-at`` pairs with ``/feature-catalog-at`` /
+    ``/runtime-catalog-at``. Together the three ``_catalog_path``
+    endpoints let an upgrade-walkthrough UI render every tier +
+    feature + runtime column at every rung off THREE calls instead
+    of first calling ``/tier-path`` and then 3 * N calls to the
+    scalar what-if catalog endpoints.
+
+    Each row in ``path`` mirrors the ``/feature-catalog-path`` /
+    ``/runtime-catalog-path`` row shape with ``features`` /
+    ``runtimes`` renamed to ``tiers`` (``tier``, ``tier_label``,
+    ``tier_rank``, ``tiers``); the inner ``tiers`` list byte-equals
+    ``/tier-catalog-at?tier=<rung>`` for the same rung -- pinned by
+    the parity tests so the scalar and path what-if tier-ladder
+    surfaces cannot drift.
+
+    Response shape::
+
+        {
+          "from":       "<tier id>",
+          "from_label": "...",
+          "from_rank":  <int>,
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<per-rung row>, ...],
+        }
+
+    Rung walk, direction semantics and error posture match
+    ``/feature-catalog-path`` (byte-stable against the rest of the
+    ``_path`` family). ``400`` when ``from=`` or ``to=`` is missing;
+    ``404`` when either id is unknown. ``trial`` IS accepted as an
+    endpoint -- excluded from the walked intermediate rungs (not
+    purchasable) but valid via the lateral branch. Never 5xxs: a
+    resolver failure short-circuits to ``404`` so a pricing-page
+    surface keeps rendering.
+    """
+    f = (request.args.get("from") or "").strip().lower()
+    t = (request.args.get("to") or "").strip().lower()
+    if not f or not t:
+        return jsonify({"error": "missing from or to"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        path = _ent.tier_catalog_path(f, t)
+        if path is None:
+            return (
+                jsonify({"error": "unknown tier", "from": f, "to": t}),
+                404,
+            )
+        from_rank = _ent.tier_rank(f)
+        to_rank = _ent.tier_rank(t)
+        if f == t:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        return jsonify(
+            {
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": from_rank,
+                "to": t,
+                "to_label": _ent.tier_label(t),
+                "to_rank": to_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tier_catalog_path: error: %s", exc
         )
         return (
             jsonify({"error": "unknown tier", "from": f, "to": t}),
