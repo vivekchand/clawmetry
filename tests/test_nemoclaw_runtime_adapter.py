@@ -364,3 +364,60 @@ def test_detect_meta_includes_ollama_inference(isolated_store, monkeypatch):
     assert "ollama_inference" in meta
     assert "ollama_host" in meta["ollama_inference"]
     assert "ollama_host_mode" in meta["ollama_inference"]
+
+
+# ── runtime_kind (issue #3367) ─────────────────────────────────────────────
+
+
+def test_list_sessions_exposes_runtime_kind(isolated_store):
+    """list_sessions() returns runtimeKind in extra when runtime_kind column is populated."""
+    import uuid
+    store = isolated_store
+    store.ingest({
+        "id": str(uuid.uuid4()),
+        "node_id": "n1",
+        "agent_type": "nemoclaw",
+        "agent_id": "main",
+        "session_id": "rk-sess-terminal",
+        "event_type": "session.started",
+        "ts": "1700000000",
+        "runtime_kind": "terminal",
+    })
+    _wait_flush(store)
+    from clawmetry.adapters.nemo import NemoClawAdapter
+    sessions = NemoClawAdapter().list_sessions()
+    sess = next((s for s in sessions if s.id == "rk-sess-terminal"), None)
+    assert sess is not None
+    assert sess.extra.get("runtimeKind") == "terminal"
+
+
+def test_list_events_exposes_runtime_kind(isolated_store):
+    """list_events() returns runtimeKind in extra when runtime_kind column is populated."""
+    import uuid
+    store = isolated_store
+    store.ingest({
+        "id": str(uuid.uuid4()),
+        "node_id": "n1",
+        "agent_type": "nemoclaw",
+        "agent_id": "main",
+        "session_id": "rk-sess-docker",
+        "event_type": "tool.called",
+        "ts": "1700000001",
+        "runtime_kind": "docker",
+    })
+    _wait_flush(store)
+    from clawmetry.adapters.nemo import NemoClawAdapter
+    events = NemoClawAdapter().list_events("rk-sess-docker")
+    assert len(events) == 1
+    assert events[0].extra.get("runtimeKind") == "docker"
+
+
+def test_list_sessions_no_runtime_kind_when_absent(isolated_store):
+    """list_sessions() omits runtimeKind from extra when no runtime_kind was stored."""
+    _seed_nemoclaw_event(isolated_store, session_id="rk-sess-none")
+    _wait_flush(isolated_store)
+    from clawmetry.adapters.nemo import NemoClawAdapter
+    sessions = NemoClawAdapter().list_sessions()
+    sess = next((s for s in sessions if s.id == "rk-sess-none"), None)
+    assert sess is not None
+    assert "runtimeKind" not in sess.extra
