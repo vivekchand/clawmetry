@@ -218,6 +218,11 @@ def _ctime_epoch_candidates(s: str) -> Set[int]:
     non-UTC host the two strings for the same instant never match textually, so
     we parse to epochs under both interpretations and let the caller intersect.
     An unparseable string yields an empty set (the guard then fails closed).
+
+    The ``%a %b`` names here are English: safe, because ``_run`` forces the C
+    locale on every ``ps`` invocation (see ``_c_locale_env``), so ``lstart``
+    output is English even on a non-English-locale host, and claude_code's
+    recorded ``procStart`` ctime is always English too.
     """
     import calendar
     import datetime as _dt
@@ -312,11 +317,41 @@ def verify_pid(pid: int, recorded_start: Any = None) -> Tuple[bool, str]:
 # ──────────────────────────────────────────────────────────────────────────
 # Shell fallbacks (used only when psutil is absent)
 # ──────────────────────────────────────────────────────────────────────────
+def _c_locale_env() -> Dict[str, str]:
+    """A copy of ``os.environ`` with the C locale forced (``LC_ALL=C``) and
+    every other locale variable stripped (``LANG``, ``LANGUAGE``, ``LC_*``).
+
+    Why: the no-psutil pid-reuse guard parses ``ps -o lstart=`` output with
+    English month/day abbreviations (``_ctime_epoch_candidates`` uses
+    ``%a %b``). On a non-English-locale host, ``ps`` localizes those names
+    (e.g. "Do 2. Jul ..." on a German Mac), the parse fails, and the guard
+    fails CLOSED: kill/pause/resume refuse for those users. Forcing the C
+    locale on the SUBPROCESS makes every ps/lsof invocation emit stable
+    English output regardless of the user's locale, so the existing parser
+    always works. POSIX gives ``LC_ALL`` precedence over all other locale
+    vars; stripping the rest is belt-and-braces for tools that consult
+    ``LANG``/``LANGUAGE`` directly.
+    """
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("LANG", "LANGUAGE") and not k.startswith("LC_")
+    }
+    env["LC_ALL"] = "C"
+    return env
+
+
 def _run(cmd: List[str], timeout: float = 10) -> Optional[str]:
-    """Run a short command, return stdout or None. Never raises, always bounded."""
+    """Run a short command, return stdout or None. Never raises, always bounded.
+
+    The child always runs under the C locale (``_c_locale_env``) so output we
+    parse — notably ``ps -o lstart=`` for the pid-reuse guard — is
+    locale-independent.
+    """
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout
+            cmd, capture_output=True, text=True, timeout=timeout,
+            env=_c_locale_env(),
         )
         if proc.returncode != 0 and not proc.stdout:
             return None
