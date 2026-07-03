@@ -6884,6 +6884,144 @@ def api_session_intent_divergence(session_id):
     return jsonify(result)
 
 
+def _detect_intent_drift_from_events(events: list) -> dict:
+    """Run intent-drift analysis on DuckDB event dicts (issue #3442).
+
+    Accepts the list returned by ``query_events`` — each element has
+    ``event_type``, ``ts``, and a decoded ``data`` dict — and runs the same
+    state machine as :func:`_detect_intent_divergence`.  The two helpers
+    (:func:`_extract_assistant_text`, :func:`_extract_tool_names_from_obj`)
+    expect a flat dict that looks like a raw JSONL line; we produce that by
+    merging ``data`` with the top-level ``event_type``/``ts`` keys.
+
+    Returns ``{has_drift, drift_count, flags}`` — parallel to the filesystem
+    variant's ``{has_divergence, divergence_count, flags}`` but with shorter
+    keys so the two endpoints are clearly distinct.
+    """
+    flags: list = []
+    last_text = ""
+    last_ts = ""
+    last_turn = 0
+    turn = 0
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        et = ev.get("event_type") or ""
+        ts = ev.get("ts") or ""
+        data = ev.get("data") or {}
+        if not isinstance(data, dict):
+            data = {}
+        # Merge data into a flat dict so existing helpers work unchanged.
+        obj = {**data, "event_type": et, "ts": ts}
+        role = data.get("role") or ""
+        if role == "user" or et in ("prompt.submitted", "user"):
+            last_text = ""
+            continue
+        text = _extract_assistant_text(obj)
+        if text:
+            turn += 1
+            last_text = text
+            last_ts = ts
+            last_turn = turn
+        if not last_text:
+            continue
+        for tool_name in _extract_tool_names_from_obj(obj):
+            for rule in _INTENT_DIVERGENCE_RULES:
+                if not any(p.search(last_text) for p in rule["compiled"]):
+                    continue
+                if not any(sub in tool_name for sub in rule["mismatched_substrings"]):
+                    continue
+                flags.append({
+                    "turn": last_turn,
+                    "ts": last_ts or ts,
+                    "check_id": rule["id"],
+                    "description": rule["description"],
+                    "severity": rule["severity"],
+                    "intent_evidence": last_text[:300],
+                    "actual_tool": tool_name,
+                })
+    return {"has_drift": bool(flags), "drift_count": len(flags), "flags": flags}
+
+
+@bp_sessions.route("/api/sessions/<session_id>/intent-drift")
+def api_session_intent_drift(session_id):
+    """Intent vs. execution drift for a session — DuckDB-backed (issue #3442).
+
+    DuckDB-first variant of /intent-divergence that works in cloud and
+    multi-process installs where the container has no ~/.openclaw.  Falls back
+    to the filesystem scanner when DuckDB is unavailable.
+
+    Query params: none.
+
+    Response shape::
+
+        {
+          "sessionId": str,
+          "has_drift": bool,
+          "drift_count": int,
+          "flags": [
+            {
+              "turn": int,
+              "ts": str,
+              "check_id": str,       # INT-001 / INT-002 / INT-003
+              "description": str,
+              "severity": str,       # "medium" | "high"
+              "intent_evidence": str,
+              "actual_tool": str
+            }
+          ],
+          "_source": "duckdb" | "filesystem" | "unavailable"
+        }
+    """
+    if not session_id or any(c in session_id for c in ("/", "\\", "..")):
+        return jsonify({"error": "invalid session id"}), 400
+
+    if is_local_store_read_enabled():
+        try:
+            from routes.local_query import local_store_via_daemon
+            raw = local_store_via_daemon(
+                "query_events", session_id=session_id, limit=500
+            )
+            if raw is not None:
+                ordered = sorted(
+                    raw,
+                    key=lambda e: (e.get("ts") or "", e.get("id") or 0),
+                )
+                result = _detect_intent_drift_from_events(ordered)
+                result["sessionId"] = session_id
+                result["_source"] = "duckdb"
+                return jsonify(result)
+        except Exception:
+            pass
+
+    # Filesystem fallback for local-only installs without a running daemon.
+    try:
+        import dashboard as _d
+        sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
+            "~/.openclaw/agents/main/sessions"
+        )
+        path = os.path.normpath(os.path.join(sessions_dir, session_id + ".jsonl"))
+        if path.startswith(os.path.normpath(sessions_dir)) and os.path.isfile(path):
+            fs = _detect_intent_divergence(path)
+            return jsonify({
+                "sessionId": session_id,
+                "has_drift": fs.get("has_divergence", False),
+                "drift_count": fs.get("divergence_count", 0),
+                "flags": fs.get("flags", []),
+                "_source": "filesystem",
+            })
+    except Exception:
+        pass
+
+    return jsonify({
+        "sessionId": session_id,
+        "has_drift": False,
+        "drift_count": 0,
+        "flags": [],
+        "_source": "unavailable",
+    })
+
+
 # ── Per-run A/B compare (#2196 item #2) ───────────────────────────────────────
 # Pick two runs, get the side-by-side stats + signed deltas. Stats are
 # computed from the same primitives the snapshot uses (#2215 waste-flags
