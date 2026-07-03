@@ -5179,6 +5179,92 @@ def tier_catalog_at(tier: str) -> list[dict] | None:
     return out
 
 
+def tier_catalog_at_batch(tiers) -> dict:
+    """Batch what-if sibling of :func:`tier_catalog_at`: full tier-catalog
+    rows for a caller-supplied set of hypothetical source tiers in ONE
+    round-trip.
+
+    Composes :func:`tier_catalog_at` across the perspective-tier axis the
+    same way :func:`feature_catalog_at_batch` composes
+    :func:`feature_catalog_at` and :func:`runtime_catalog_at_batch`
+    composes :func:`runtime_catalog_at`. Lets a pricing-comparison matrix
+    UI ("show me the tier ladder as if the install were on OSS, Cloud
+    Starter, Cloud Pro, and Enterprise -- side by side") hydrate every
+    column off ONE call instead of N calls to :func:`tier_catalog_at`.
+
+    Per-source row shape::
+
+        {
+          "tier":       "<id>",
+          "tier_label": "...",
+          "tier_rank":  <int>,
+          "tiers":      [<tier_catalog_at row>, ...],
+        }
+
+    Each ``tiers`` list is byte-identical to the list
+    :func:`tier_catalog_at` returns for the same source tier -- pinned by
+    a parity test so the scalar and batch what-if catalog helpers cannot
+    drift.
+
+    Shape::
+
+        {
+          "tiers": [
+            {"tier": "<id>", "tier_label": ..., "tier_rank": ..., "tiers": [...]},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Supplied tier ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen
+    order preserved). Unknown ids are echoed in ``unknown[]`` instead of
+    short-circuiting -- a partially-bad caller still gets rows back for
+    the valid ids alongside a list of what was dropped, matching
+    :func:`feature_catalog_at_batch` /
+    :func:`runtime_catalog_at_batch`'s posture. ``trial`` IS accepted
+    (it lives in :data:`_TIER_ORDER` and the scalar helper resolves it).
+
+    Empty / ``None`` input returns ``{"tiers": [], "unknown": []}`` --
+    the HTTP wrapper turns that into a 400, this helper does not raise.
+
+    Resolver-independent: delegates per-tier to :func:`tier_catalog_at`,
+    which only walks the static per-tier maps (no fresh
+    :class:`Entitlement` synthesis needed) -- so grace vs enforce yields
+    byte-identical rows. Never raises: a per-tier failure short-circuits
+    that id into ``unknown[]`` and the rest of the batch keeps building.
+    """
+    ids = _normalise_csv(tiers)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    for tid in ids:
+        if tid not in _TIER_ORDER:
+            unknown.append(tid)
+            continue
+        try:
+            catalog = tier_catalog_at(tid)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: tier_catalog_at_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        if catalog is None:
+            unknown.append(tid)
+            continue
+        rows.append(
+            {
+                "tier": tid,
+                "tier_label": tier_label(tid),
+                "tier_rank": _TIER_RANK.get(tid, -1),
+                "tiers": catalog,
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}
+
+
 def tier_spec_at(tier: str, target: str) -> dict | None:
     """Scalar what-if sibling of :func:`tier_catalog_at`: the single tier
     descriptor for ``target`` with ``is_current`` computed as if the install

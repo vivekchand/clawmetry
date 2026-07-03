@@ -219,13 +219,14 @@ def test_watcher_queries_tool_call_event_type(monkeypatch):
     seen: list = []
 
     class _QStub:
-        def query_events(self, *, event_type=None, since=None, limit=0):
-            seen.append(event_type)
+        def query_events_by_ingest(self, *, created_after=0, after_id=None,
+                                   event_types=(), limit=0):
+            seen.extend(event_types)
             return []
 
     import clawmetry.local_store as _ls
     monkeypatch.setattr(_ls, "get_store", lambda *a, **k: _QStub())
-    approvals._query_new_events(None, 10)
+    approvals._query_new_events(0, None, 10)
     assert set(seen) == {"message", "assistant", "tool_call"}
 
 
