@@ -109,6 +109,11 @@ MODEL_OVERRIDES: dict[tuple[str, str], tuple[float, float]] = {
     ("openai", "o1-mini"): (3.00, 12.00),
     ("openai", "o1"): (15.00, 60.00),
     ("openai", "o3-mini"): (1.10, 4.40),
+    # GPT-5 family (gpt-5.4, gpt-5.6, …). Official prices not yet published —
+    # $10/$40 per 1M is a best-effort estimate; update once OpenAI confirms.
+    # gpt-5.6 entry beats the broad prefix via longest-prefix matching in _get_rates.
+    ("openai", "gpt-5"): (10.00, 40.00),
+    ("openai", "gpt-5.6"): (10.00, 40.00),
     ("gemini", "gemini-2.0-flash"): (0.10, 0.40),
     ("gemini", "gemini-1.5-pro"): (1.25, 5.00),
     ("gemini", "gemini-1.5-flash"): (0.075, 0.30),
