@@ -1126,6 +1126,193 @@ def api_entitlement_preview_batch():
         )
 
 
+@bp_entitlement.route("/api/entitlement/preview-at")
+def api_entitlement_preview_at():
+    """``GET /api/entitlement/preview-at?tier=<perspective>&target=<id>`` --
+    what-if sibling of ``/api/entitlement/preview``: the full
+    :meth:`Entitlement.to_dict` snapshot at ``target`` rendered from the
+    perspective of a hypothetical ``tier``.
+
+    Fills the ``_at`` slot in the preview family alongside
+    ``/api/entitlement/tier-spec-at``,
+    ``/api/entitlement/feature-spec-at``,
+    ``/api/entitlement/runtime-spec-at``,
+    ``/api/entitlement/capacity-diff-at``,
+    ``/api/entitlement/tier-unlocks-at``,
+    ``/api/entitlement/tier-locks-at`` and
+    ``/api/entitlement/lock-reason-at``. Lets a pricing-comparison
+    tooltip hydrate one cumulative-state row from a hypothetical
+    perspective in ONE round-trip using the uniform
+    ``X_at(perspective, target)`` request shape the rest of the ``_at``
+    family already exposes.
+
+    Unlike ``/api/entitlement/preview`` (which 404s the non-purchasable
+    :data:`TIER_TRIAL`), ``/preview-at`` accepts trial as a target and
+    returns the trial preview row -- lenient ``_at`` posture matching
+    ``/tier-spec-at`` / ``/feature-spec-at`` / ``/runtime-spec-at``. The
+    perspective tier is validated but does not shape the returned row
+    (byte-parity with :func:`entitlements._preview_row` holds for every
+    perspective / target combination).
+
+    Row shape matches ``/api/entitlement/preview`` exactly -- the full
+    ``Entitlement.to_dict`` payload with ``source="preview"`` and
+    ``grace=False`` so concrete per-tier capacity surfaces.
+
+    - **400** when ``tier=`` or ``target=`` is missing / blank
+    - **404** when ``tier`` is not in :data:`entitlements._TIER_ORDER`
+      or ``target`` is not in :data:`entitlements._TIER_FEATURES`; the
+      body carries ``which`` so a caller can render the right
+      "unknown ..." message
+    - **Never 5xxs**: the helper reads only the static per-tier maps, so
+      a resolver failure short-circuits to ``404`` instead of 500
+    """
+    raw_tier = request.args.get("tier")
+    tier = (raw_tier or "").strip().lower()
+    if not tier:
+        return jsonify({"error": "missing tier"}), 400
+    raw_target = request.args.get("target")
+    target = (raw_target or "").strip().lower()
+    if not target:
+        return jsonify({"error": "missing target"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier not in _ent._TIER_ORDER:
+            return (
+                jsonify({"error": "unknown tier", "which": "tier", "tier": tier}),
+                404,
+            )
+        if target not in _ent._TIER_FEATURES:
+            return (
+                jsonify(
+                    {
+                        "error": "unknown target",
+                        "which": "target",
+                        "target": target,
+                    }
+                ),
+                404,
+            )
+        body = _ent.preview_at(tier, target)
+        if body is None:
+            return (
+                jsonify(
+                    {
+                        "error": "preview-at failed",
+                        "tier": tier,
+                        "target": target,
+                    }
+                ),
+                404,
+            )
+        return jsonify({"tier": tier, "target": target, "preview": body})
+    except Exception as exc:
+        logger.warning("api_entitlement_preview_at: error: %s", exc)
+        return jsonify({"error": "preview-at failed"}), 500
+
+
+@bp_entitlement.route("/api/entitlement/preview-at-batch")
+def api_entitlement_preview_at_batch():
+    """``GET /api/entitlement/preview-at-batch?tier=<perspective>
+    &targets=a,b,c`` -- what-if + batch sibling of
+    ``/api/entitlement/preview-at``.
+
+    Where ``/preview-at`` hydrates ONE cumulative-state row from a
+    hypothetical perspective, this hydrates N rows for a caller-supplied
+    subset of target tiers off a single round-trip. Fixed-perspective
+    multi-target companion of ``/preview-at`` and
+    caller-supplied-targets sibling of ``/preview-batch`` (which walks
+    :data:`_PURCHASABLE_TIERS` unconditionally). Fills the ``_at_batch``
+    slot alongside ``/api/entitlement/tier-spec-at-batch``,
+    ``/api/entitlement/feature-spec-at-batch``,
+    ``/api/entitlement/runtime-spec-at-batch``.
+
+    Use case: a pricing-comparison matrix UI ("from my perspective tier,
+    render the cumulative-state row for OSS, Cloud Starter, Cloud Pro
+    and Enterprise") hydrates every column off ONE call instead of N
+    calls to ``/preview-at``.
+
+    Each ``tiers[]`` entry is byte-identical to a row from
+    :func:`entitlements.preview_at` (and therefore
+    :func:`entitlements._preview_row`) for the same target -- pinned by
+    the parity tests so the scalar / batch what-if accessors cannot
+    drift. Supplied ids are normalised (whitespace stripped, lowercased,
+    duplicates dropped, first-seen order preserved). Unknown ids do not
+    404 the call -- they are echoed in ``unknown[]`` so a partially-bad
+    caller still gets rows back for the valid ids alongside a list of
+    what was dropped.
+
+    Response shape (mirrors ``/tier-spec-at-batch`` /
+    ``/feature-spec-at-batch`` / ``/runtime-spec-at-batch`` plus a
+    ``perspective_tier`` echo)::
+
+        {
+          "tiers":                 [<preview_at row>, ...],
+          "unknown":               ["bogus_id", ...],
+          "perspective_tier":      "...",
+          "perspective_tier_rank": <int>,
+          "current_tier":          "...",
+          "current_tier_rank":     <int>,
+          "grace":                 <bool>,
+          "enforced":              <bool>,
+        }
+
+    - **400** when ``tier=`` is missing / blank or ``targets=`` is
+      missing / empty after normalisation
+    - **404** when ``tier`` is unknown (body carries ``which: "tier"``)
+    - **Never 5xxs**: a resolver failure short-circuits to the OSS-free
+      shape (empty rows, ``current_tier=oss``, ``grace=true``) with the
+      perspective tier echoed so the UI keeps rendering.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        targets = _parse_csv_arg("targets")
+        if not targets:
+            return (
+                jsonify({"error": "supply targets=<csv>"}),
+                400,
+            )
+        batch = _ent.preview_at_batch(tier_in, targets)
+        if batch is None:
+            batch = {"tiers": [], "unknown": []}
+        ent = _ent.get_entitlement()
+        batch["perspective_tier"] = tier_in
+        batch["perspective_tier_rank"] = _ent.tier_rank(tier_in)
+        batch["current_tier"] = ent.tier
+        batch["current_tier_rank"] = _ent.tier_rank(ent.tier)
+        batch["grace"] = bool(ent.grace)
+        batch["enforced"] = _ent.is_enforced()
+        return jsonify(batch)
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_preview_at_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "unknown": [],
+                "perspective_tier": tier_in,
+                "perspective_tier_rank": 0,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/preview-path")
 def api_entitlement_preview_path():
     """``GET /api/entitlement/preview-path?from=<id>&to=<id>`` --
