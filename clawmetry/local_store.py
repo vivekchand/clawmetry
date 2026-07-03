@@ -226,6 +226,12 @@ _DDL = [
     # query that wants to scan a single session's timeline by event_type
     # without hitting the full ts index.
     "CREATE INDEX IF NOT EXISTS idx_events_session_ts_type ON events(session_id, ts, event_type)",
+    # Ingest-order scans: the approvals watcher advances its watermark on
+    # created_at (the INSERT stamp) rather than the event's own ts, so a
+    # session ingested minutes after its events' timestamps is still
+    # evaluated (the 2026-07-02 watermark race). Without this index every
+    # watcher poll would be a full-table scan on created_at.
+    "CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at)",
     """
     CREATE TABLE IF NOT EXISTS sessions (
         agent_type      VARCHAR NOT NULL DEFAULT 'openclaw',
@@ -5551,6 +5557,61 @@ class LocalStore:
         """
         params.append(int(limit))
         return [_row_to_event(r, _EVENT_COLS) for r in self._fetch(sql, params)]
+
+    def query_events_by_ingest(
+        self,
+        *,
+        created_after: int,
+        after_id: str | None = None,
+        event_types: "tuple[str, ...] | list[str]" = (),
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Read events by INGEST order (``created_at``, epoch-ms stamped at
+        insert time) instead of the event's own ``ts``.
+
+        This is the approvals-watcher cursor primitive: family adapters
+        (claude_code / codex / cursor / ...) can ingest a session MINUTES
+        after its events' timestamps, so a ``ts``-based watermark that other
+        events already advanced skips those rows forever (the 2026-07-02
+        approvals watermark race). ``created_at`` is monotone with insertion
+        (up to flush-retry skew of a few seconds), so a cursor on it sees
+        every row exactly when it lands regardless of how stale its ``ts`` is.
+
+        Semantics:
+          * ``after_id is None``  -> ``created_at >= created_after`` (inclusive
+            window start, for a bounded lookback re-scan).
+          * ``after_id`` given    -> strict keyset continuation:
+            ``created_at > created_after OR (created_at = created_after AND
+            id > after_id)`` so callers can page forward even when many rows
+            share one millisecond stamp (a single flush batch does).
+
+        Rows come back oldest-ingested first (``created_at ASC, id ASC``) and
+        include the ``created_at`` column. Uses ``idx_events_created_at`` —
+        never a full-table scan.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if after_id is None:
+            clauses.append("created_at >= ?")
+            params.append(int(created_after))
+        else:
+            clauses.append("(created_at > ? OR (created_at = ? AND id > ?))")
+            params.extend([int(created_after), int(created_after), str(after_id)])
+        if event_types:
+            placeholders = ",".join("?" for _ in event_types)
+            clauses.append(f"event_type IN ({placeholders})")
+            params.extend(str(t) for t in event_types)
+        sql = f"""
+            SELECT id, agent_type, node_id, agent_id, session_id, workspace_id,
+                   event_type, ts, data, cost_usd, token_count, model, created_at
+            FROM events
+            WHERE {' AND '.join(clauses)}
+            ORDER BY created_at ASC, id ASC
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = _EVENT_COLS + ["created_at"]
+        return [_row_to_event(r, cols) for r in self._fetch(sql, params)]
 
     # ── Issue #2200: integrity hash chain ────────────────────────────────────
 
