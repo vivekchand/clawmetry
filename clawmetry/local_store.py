@@ -213,7 +213,8 @@ _DDL = [
         model           VARCHAR,
         created_at      BIGINT NOT NULL,
         chain_prev_hash VARCHAR,
-        chain_hash      VARCHAR
+        chain_hash      VARCHAR,
+        runtime_kind    VARCHAR
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_events_ts          ON events(ts)",
@@ -1097,6 +1098,9 @@ _MIGRATIONS_V2 = [
     # existing rows and populated on new events when CLAWMETRY_INTEGRITY=1.
     ("events",   "chain_prev_hash",   "VARCHAR"),
     ("events",   "chain_hash",        "VARCHAR"),
+    # Issue #3367 — expose NemoClaw sandbox runtime kind (terminal vs docker)
+    # on session and event rows. Stamped at ingest time from sandbox config.
+    ("events",   "runtime_kind",      "VARCHAR"),
 ]
 
 # ── Integrity / hash-chain (Issue #2200) ────────────────────────────────────
@@ -4853,8 +4857,9 @@ class LocalStore:
                             """
                             INSERT OR IGNORE INTO events
                               (id, agent_type, node_id, agent_id, session_id, workspace_id,
-                               event_type, ts, data, cost_usd, token_count, model, created_at)
-                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                               event_type, ts, data, cost_usd, token_count, model, created_at,
+                               runtime_kind)
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                             """,
                             rows,
                         )
@@ -10950,6 +10955,7 @@ def _event_to_row(e: dict[str, Any], usage: dict[str, Any] | None = None) -> tup
         int(tokens) if tokens is not None else None,
         model,
         int(time.time() * 1000),
+        e.get("runtime_kind") or None,
     )
 
 
