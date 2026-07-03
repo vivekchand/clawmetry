@@ -774,6 +774,15 @@ def _cmd_connect(args) -> None:
 
     from clawmetry.sync import generate_encryption_key, _derive_key_for_storage
 
+    # Accept CM_KEY=scroll://<mnemonic> env var — v5 node pairing flow (#1522).
+    # Strip the scroll:// URI prefix; the bare mnemonic/key material then feeds
+    # into the existing _derive_key_for_storage path just like --enc-key does.
+    _cm_key_env = os.environ.get("CM_KEY", "")
+    if _cm_key_env.startswith("scroll://"):
+        _cm_key_env = _cm_key_env[len("scroll://"):]
+    if _cm_key_env and not getattr(args, "enc_key", None):
+        setattr(args, "enc_key", _cm_key_env)
+
     # Always prompt for encryption key — be transparent.
     # A typed passphrase is run through a strong salted KDF (scrypt) and we store
     # the DERIVED key, never the raw passphrase. A pasted real key is kept as-is.
