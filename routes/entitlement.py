@@ -10681,3 +10681,230 @@ def api_entitlement_previous_tier_diff():
         logger.warning("api_entitlement_previous_tier_diff: error: %s", exc)
         return jsonify({"current_tier": "oss", "current_tier_label": "OSS",
                         "current_tier_rank": 0, "row": None, "grace": True, "enforced": False})
+
+
+def _next_prev_lock_reason_batch_grace_body() -> dict:
+    """Fallback envelope for the resolved-tier lock-reason batch routes.
+    Shape mirrors the happy path (5-axis empty rows + tier / target
+    echo) so a resolver failure never breaks a paywall matrix client-
+    side."""
+    return {
+        "features": [],
+        "runtimes": [],
+        "channels": None,
+        "retention_days": None,
+        "nodes": None,
+        "current_tier": "oss",
+        "current_tier_label": "OSS",
+        "current_tier_rank": 0,
+        "target": None,
+        "target_label": None,
+        "target_rank": None,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+def _next_prev_lock_reason_batch(direction: str):
+    """Shared handler body for
+    ``/api/entitlement/{next,previous}-tier-lock-reason-batch``.
+
+    Current-relative sibling of the ``_next_prev_lock_reason_at_batch``
+    handler -- takes no ``tier=`` (the source is the resolved
+    entitlement) and walks
+    :meth:`Entitlement.next_tier_lock_reason_batch` /
+    :meth:`Entitlement.previous_tier_lock_reason_batch` instead of the
+    source-parameterised ``_at_batch`` module helpers, matching the
+    pattern of ``/next-tier-feature-spec-batch`` vs
+    ``/next-tier-feature-spec-at-batch``.
+
+    Mirrors the axis-parsing contract of the ``_at_batch`` handler (at
+    least one of ``features=`` / ``runtimes=`` / ``channels=`` /
+    ``retention_days=`` / ``nodes=``). Body is byte-identical to
+    ``/lock-reasons-at-batch?tier=<target>&...`` for the resolved
+    ``target = ent.next_purchasable_tier()`` (or
+    ``previous_purchasable_tier()``), same as
+    ``/next-tier-lock-reason-at-batch`` is byte-identical for
+    caller-supplied ``tier``. ``target`` collapses to ``null`` at the
+    rung edge (ceiling for ``next``, floor for ``previous``) while
+    every supplied item still renders a grace-shape row so the paywall
+    matrix's row count stays stable.
+
+    ``direction`` is ``"next"`` or ``"previous"``. Never 5xxs: resolver
+    failure short-circuits to the grace-shape envelope so the paywall
+    surface stays mute.
+    """
+    log_name = f"api_entitlement_{direction}_tier_lock_reason_batch"
+    try:
+        from clawmetry import entitlements as _ent
+
+        features = _parse_csv_arg("features")
+        runtimes = _parse_csv_arg("runtimes")
+        (_, channels_ok, channels_n, _) = _parse_capacity_arg("channels")
+        (_, retention_ok, retention_n, _) = _parse_capacity_arg(
+            "retention_days"
+        )
+        (_, nodes_ok, nodes_n, _) = _parse_capacity_arg("nodes")
+
+        if (
+            not features
+            and not runtimes
+            and not channels_ok
+            and not retention_ok
+            and not nodes_ok
+        ):
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply at least one of features=<csv>, "
+                            "runtimes=<csv>, channels=<int>, "
+                            "retention_days=<int>, or nodes=<int>"
+                        )
+                    }
+                ),
+                400,
+            )
+
+        ent = _ent.get_entitlement()
+        if direction == "next":
+            target = ent.next_purchasable_tier()
+            batch = ent.next_tier_lock_reason_batch(
+                features=features or None,
+                runtimes=runtimes or None,
+                channels=channels_n if channels_ok else None,
+                retention_days=retention_n if retention_ok else None,
+                nodes=nodes_n if nodes_ok else None,
+            )
+        else:
+            target = ent.previous_purchasable_tier()
+            batch = ent.previous_tier_lock_reason_batch(
+                features=features or None,
+                runtimes=runtimes or None,
+                channels=channels_n if channels_ok else None,
+                retention_days=retention_n if retention_ok else None,
+                nodes=nodes_n if nodes_ok else None,
+            )
+        if batch is None:
+            batch = {
+                "features": [],
+                "runtimes": [],
+                "channels": None,
+                "retention_days": None,
+                "nodes": None,
+            }
+        batch["current_tier"] = ent.tier
+        batch["current_tier_label"] = _ent.tier_label(ent.tier)
+        batch["current_tier_rank"] = _ent.tier_rank(ent.tier)
+        batch["target"] = target
+        batch["target_label"] = _ent.tier_label(target) if target else None
+        batch["target_rank"] = _ent.tier_rank(target) if target else None
+        batch["grace"] = bool(ent.grace)
+        batch["enforced"] = _ent.is_enforced()
+        return jsonify(batch)
+    except Exception as exc:
+        logger.warning("%s: error: %s", log_name, exc)
+        return jsonify(_next_prev_lock_reason_batch_grace_body())
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-lock-reason-batch")
+def api_entitlement_next_tier_lock_reason_batch():
+    """``GET /api/entitlement/next-tier-lock-reason-batch?features=a,b
+    &runtimes=x,y&channels=N&retention_days=K&nodes=M`` -- current-
+    relative sibling of
+    ``/api/entitlement/next-tier-lock-reason-at-batch`` and batch
+    sibling of ``/api/entitlement/next-tier-lock-reason``.
+
+    Where ``/next-tier-lock-reason`` returns ONE lock sentence for ONE
+    item at the rung above the resolved entitlement, this returns per-
+    item rows for every supplied item across all 5 axes in ONE round-
+    trip. Pairs with ``/next-tier-lock-reason`` the same way
+    ``/lock-reasons-batch`` pairs with ``/lock-reason``: scalar ->
+    matrix in one call. Fills the lock-reason-axis batch member of the
+    resolved-tier ``next_*_batch`` family alongside
+    ``/next-tier-feature-spec-batch`` and
+    ``/next-tier-runtime-spec-batch``.
+
+    Use case: a paywall "does THIS column of features / runtimes /
+    capacity axes unlock at MY next rung?" matrix surface hydrates
+    every row off ONE call instead of N calls to
+    ``/next-tier-lock-reason`` per axis, without threading the current
+    tier through the query args.
+
+    Body is byte-identical to
+    ``/next-tier-lock-reason-at-batch?tier=<current>&...`` for every
+    source EXCEPT at the free/starter boundary where source-aware
+    (``ent.next_purchasable_tier()``) and source-agnostic
+    (``_next_purchasable_tier_after(tier)``) diverge -- matches
+    ``/next-tier-feature-spec-batch`` vs
+    ``/next-tier-feature-spec-at-batch``. Pinned by parity tests so
+    the two batch surfaces cannot drift outside that boundary.
+
+    At least one of ``features=`` / ``runtimes=`` / ``channels=`` /
+    ``retention_days=`` / ``nodes=`` must be supplied; supply as many
+    as you like. ``features=`` / ``runtimes=`` take comma-separated
+    tokens (whitespace + duplicates are normalised away; unknown ids
+    contribute a grace-shape row). The three capacity axes take a
+    single int each; blank / non-int values are treated as "not
+    supplied".
+
+    Response shape::
+
+        {
+          "features":       [<row>, ...],
+          "runtimes":       [<row>, ...],
+          "channels":       <row> | None,
+          "retention_days": <row> | None,
+          "nodes":          <row> | None,
+          "current_tier":       "<resolved tier id>",
+          "current_tier_label": "<resolved label>",
+          "current_tier_rank":  <resolved rank>,
+          "target":             "<next-above tier id>" | null,
+          "target_label":       "<next-above label>" | null,
+          "target_rank":        <next-above rank> | null,
+          "grace":              <bool>,
+          "enforced":           <bool>,
+        }
+
+    Each ``<row>`` carries ``key``, ``kind``, ``reason``, ``locked``,
+    ``allowed``, ``required_tier``, ``required_tier_label``,
+    ``required_tier_rank`` -- the same 8 keys ``/lock-reasons-batch``
+    returns.
+
+    At the ceiling (resolved entitlement already at enterprise -- no
+    rung above) ``target`` is ``null`` and rows still render for every
+    supplied item with ``reason=null`` / ``locked=false`` /
+    ``allowed=true`` so callers can render "you're at the top" copy
+    without a status-code branch.
+
+    - **400** when no axis is supplied
+    - **Never 5xxs**: resolver failure short-circuits to the grace-
+      shape envelope with ``target=null`` so the paywall surface stays
+      mute.
+    """
+    return _next_prev_lock_reason_batch("next")
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-lock-reason-batch")
+def api_entitlement_previous_tier_lock_reason_batch():
+    """``GET /api/entitlement/previous-tier-lock-reason-batch?features=a,b
+    &runtimes=x,y&channels=N&retention_days=K&nodes=M`` -- symmetric
+    downgrade-side companion of ``/next-tier-lock-reason-batch``.
+
+    Same envelope as ``/next-tier-lock-reason-batch``. ``target``
+    collapses to ``null`` at the floor (resolved entitlement at
+    ``oss`` / ``cloud_free`` -- no rung below) while every supplied
+    item still renders a grace-shape row so the downgrade-confirmation
+    matrix's row count stays stable.
+
+    Body is byte-identical to
+    ``/previous-tier-lock-reason-at-batch?tier=<current>&...`` for
+    every source except at the free/starter boundary where source-
+    aware and source-agnostic diverge -- matches
+    ``/previous-tier-feature-spec-batch`` vs
+    ``/previous-tier-feature-spec-at-batch``.
+
+    - **400** when no axis is supplied
+    - **Never 5xxs**: grace-shape envelope on resolver failure.
+    """
+    return _next_prev_lock_reason_batch("previous")
