@@ -3452,6 +3452,156 @@ def downgrade_path() -> list[dict]:
         return []
 
 
+def upgrade_path_at(tier: str) -> list[dict] | None:
+    """Source-anchored what-if sibling of :func:`upgrade_path`: ordered
+    marginal-unlock ladder from the caller-supplied ``tier`` upward.
+
+    Where :func:`upgrade_path` pins the walk's starting point to the
+    resolved entitlement, this walks strictly above the caller-supplied
+    ``tier`` -- the same what-if pattern :func:`next_tier_spec_at` /
+    :func:`next_tier_unlocks_at` / :func:`next_tier_diff_at` apply to
+    the scalar rung above. Lets a "compare from tier X" pricing wizard
+    render the sequenced upgrade ladder for any hypothetical source
+    without monkey-patching the entitlement context.
+
+    Row shape matches :func:`upgrade_path` byte-for-byte -- each row is
+    :func:`tier_unlocks` for the destination rung, whose ``previous_tier``
+    is that rung's natural next-lower purchasable (NOT the caller-
+    supplied ``tier``). Callers that want a source-anchored
+    ``previous_tier`` echo should compose :func:`tier_unlocks_at`
+    directly. Same-rank siblings of the ceiling are both included; same-
+    rank siblings of the source are excluded (only strictly-higher-rank
+    rungs walk), matching :func:`upgrade_path` and :func:`tier_path`.
+
+    Accepts any id in :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`)
+    -- the lenient ``_at`` posture, matching the other ``*_at`` helpers.
+    Byte-parity contract: when ``tier`` equals the resolved entitlement's
+    tier, ``upgrade_path_at(tier)`` is byte-identical to
+    :func:`upgrade_path` (pinned by tests so the scalar and what-if
+    accessors cannot drift).
+
+    Returns ``None`` for empty / unknown ``tier``, and an empty list at
+    the ceiling (enterprise -- nothing strictly above). Never raises:
+    a builder failure short-circuits to ``[]`` so a pricing-wizard
+    surface keeps rendering instead of breaking.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        src_rank = _TIER_RANK.get(src, -1)
+        ordered = sorted(
+            _PURCHASABLE_TIERS,
+            key=lambda t: (_TIER_RANK.get(t, -1), t),
+        )
+        path: list[dict] = []
+        for tid in ordered:
+            cand_rank = _TIER_RANK.get(tid, -1)
+            if cand_rank <= src_rank:
+                continue
+            row = tier_unlocks(tid)
+            if row is not None:
+                path.append(row)
+        return path
+    except Exception as exc:
+        logger.warning("entitlements: upgrade_path_at failed: %s", exc)
+        return []
+
+
+def downgrade_path_at(tier: str) -> list[dict] | None:
+    """Source-anchored what-if sibling of :func:`downgrade_path`: ordered
+    cumulative-loss ladder from the caller-supplied ``tier`` downward.
+
+    Direction-flipped mirror of :func:`upgrade_path_at` and source-
+    anchored equivalent of :func:`downgrade_path` (which pins the walk's
+    starting point to the resolved entitlement). Convenience for a
+    "compare from tier X" downgrade-warning surface: renders "if a caller
+    on ``tier`` dropped to each rung below, here's what they'd lose"
+    without monkey-patching the entitlement context.
+
+    Row shape matches :func:`downgrade_path` field-for-field, with the
+    what-if source substituted for the live resolver in ``current_tier`` /
+    ``current_tier_label`` / ``current_tier_rank`` (the field names are
+    retained for byte-shape parity with :func:`downgrade_path`, and mean
+    "the source of the walk" in the ``_at`` variant)::
+
+        {
+          "target":             "<tier id>",
+          "target_label":       "<display>",
+          "target_rank":        <int>,
+          "current_tier":       "<source tier id>",
+          "current_tier_label": "<display>",
+          "current_tier_rank":  <int>,
+          "lost_features":      [...],
+          "lost_runtimes":      [...],
+        }
+
+    Cumulative not marginal, matching :func:`downgrade_path`:
+    ``lost_features`` / ``lost_runtimes`` on each row reflect the *full*
+    delta between ``tier`` and that row's destination -- so the lists
+    strictly grow as the path descends. The deltas are computed from the
+    catalogue against ``tier`` directly (via :func:`tier_diff`), NOT via
+    the resolver's :meth:`Entitlement.downgrade_diff`, so a caller with a
+    resolved entitlement wider than the catalogue's static grant (e.g. an
+    enterprise entitlement mid-tier walk) still gets a stable what-if
+    answer.
+
+    Accepts any id in :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`)
+    -- the lenient ``_at`` posture. Byte-parity contract: when ``tier``
+    equals the resolved entitlement's tier AND the caller's entitlement
+    is a plain catalogue tier (no bespoke feature/runtime overrides),
+    ``downgrade_path_at(tier)`` is byte-identical to
+    :func:`downgrade_path` (pinned by tests so the scalar and what-if
+    accessors cannot drift on catalogue-shaped entitlements).
+
+    Rows are sorted by ``(-tier_rank, tier_id)`` so the closest-to-source
+    rung sits first, matching :func:`downgrade_path`.
+
+    Returns ``None`` for empty / unknown ``tier``, and an empty list at
+    the floor (oss / cloud_free -- no rung strictly below). Never raises:
+    a builder failure short-circuits to ``[]`` so a downgrade-warning
+    surface keeps rendering instead of breaking.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        src_rank = _TIER_RANK.get(src, -1)
+        src_label = tier_label(src)
+        ordered = sorted(
+            _PURCHASABLE_TIERS,
+            key=lambda t: (-_TIER_RANK.get(t, -1), t),
+        )
+        path: list[dict] = []
+        for tid in ordered:
+            cand_rank = _TIER_RANK.get(tid, -1)
+            if cand_rank < 0 or cand_rank >= src_rank:
+                continue
+            diff = tier_diff(src, tid) or {}
+            path.append(
+                {
+                    "target": tid,
+                    "target_label": tier_label(tid),
+                    "target_rank": cand_rank,
+                    "current_tier": src,
+                    "current_tier_label": src_label,
+                    "current_tier_rank": src_rank,
+                    "lost_features": list(diff.get("lost_features") or []),
+                    "lost_runtimes": list(diff.get("lost_runtimes") or []),
+                }
+            )
+        return path
+    except Exception as exc:
+        logger.warning("entitlements: downgrade_path_at failed: %s", exc)
+        return []
+
+
 def resolution_diagnostic() -> dict:
     out: dict = {
         "license_path": _LICENSE_PATH,
