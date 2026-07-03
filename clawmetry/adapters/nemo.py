@@ -958,7 +958,8 @@ class NemoClawAdapter(AgentAdapter):
             rows = store._fetch(
                 "SELECT session_id, MIN(ts) AS started, MAX(ts) AS ended, "
                 "COUNT(*) AS n_events, SUM(token_count) AS tokens, "
-                "SUM(cost_usd) AS cost FROM events "
+                "SUM(cost_usd) AS cost, ANY_VALUE(runtime_kind) AS runtime_kind "
+                "FROM events "
                 "WHERE agent_type = ? AND session_id IS NOT NULL "
                 "GROUP BY session_id ORDER BY started DESC LIMIT ?",
                 ["nemoclaw", int(limit)],
@@ -980,6 +981,10 @@ class NemoClawAdapter(AgentAdapter):
                 n_ev = int(r[3] or 0)
                 tokens = int(r[4] or 0)
                 cost = float(r[5] or 0.0)
+                rk = str(r[6]) if r[6] else ""
+                extra: dict = {}
+                if rk:
+                    extra["runtimeKind"] = rk
                 sessions.append(Session(
                     agent=self.name,
                     id=str(sid),
@@ -989,6 +994,7 @@ class NemoClawAdapter(AgentAdapter):
                     message_count=n_ev,
                     total_tokens=tokens,
                     cost_usd=cost,
+                    extra=extra,
                 ))
         except Exception as exc:
             logger.debug("nemoclaw list_sessions read failed: %s", exc)
@@ -1000,7 +1006,7 @@ class NemoClawAdapter(AgentAdapter):
             from clawmetry import local_store as _ls
             store = _ls.get_store(read_only=True)
             rows = store._fetch(
-                "SELECT id, event_type, ts, model, token_count, data "
+                "SELECT id, event_type, ts, model, token_count, data, runtime_kind "
                 "FROM events WHERE agent_type = ? AND session_id = ? "
                 "ORDER BY ts ASC LIMIT ?",
                 ["nemoclaw", str(session_id), int(limit)],
@@ -1014,6 +1020,8 @@ class NemoClawAdapter(AgentAdapter):
                 extra: dict = {}
                 if r[3]:
                     extra["model"] = r[3]
+                if r[6]:
+                    extra["runtimeKind"] = str(r[6])
                 raw_data = r[5]
                 if raw_data is not None and r[1] == "sandbox.audit_log":
                     try:
