@@ -2678,6 +2678,143 @@ def _preview_row(tier: str) -> dict | None:
         return None
 
 
+def preview_at(perspective_tier: str, target_tier: str) -> dict | None:
+    """What-if sibling of :func:`preview`: the full
+    :meth:`Entitlement.to_dict` snapshot at ``target_tier`` rendered from
+    the perspective of a hypothetical ``perspective_tier``.
+
+    Fills the ``_at`` slot in the preview family alongside
+    :func:`tier_spec_at`, :func:`feature_spec_at`, :func:`runtime_spec_at`,
+    :func:`capacity_diff_at`, :func:`tier_unlocks_at`, :func:`tier_locks_at`
+    and :func:`lock_reason_at`. Byte-identical to the internal
+    :func:`_preview_row(target_tier)` -- the cumulative preview state is
+    catalogue-derived so it does not depend on the perspective -- but
+    exposes the perspective-aware naming a pricing-comparison UI wants
+    when it uniformly calls ``X_at(perspective, target)`` across the
+    whole ``_at`` family off ONE request shape.
+
+    Unlike singular :func:`preview` (which returns ``None`` for the
+    non-purchasable :data:`TIER_TRIAL`), ``preview_at`` accepts trial as a
+    target and returns the trial preview row -- the lenient ``_at``
+    posture matching :func:`tier_spec_at` / :func:`feature_spec_at` /
+    :func:`runtime_spec_at`. The perspective tier is validated but does
+    not shape the returned row (byte-parity with :func:`_preview_row`
+    holds for every perspective / target combination).
+
+    Callers pair the result with :func:`tier_diff` /
+    :func:`tier_unlocks_at` / :func:`capacity_diff_at` to render "from
+    your perspective X, tier Y looks like this and the delta is Z"
+    walkthroughs off a uniform API.
+
+    Row shape matches :func:`preview` / :func:`_preview_row` /
+    :func:`preview_batch` / :func:`preview_path` exactly (full
+    :meth:`Entitlement.to_dict` with ``source="preview"`` and
+    ``grace=False`` so concrete per-tier capacity surfaces).
+
+    Returns ``None`` for empty / unknown perspective or target ids
+    (either side ``not in _TIER_ORDER`` / ``_TIER_FEATURES``
+    short-circuits). Resolver-independent: reads only the static per-tier
+    maps, so grace vs enforce yields byte-identical rows. Never raises: a
+    builder failure logs a warning and returns ``None``.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+        t = (target_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    if not t or t not in _TIER_FEATURES:
+        return None
+    try:
+        return _preview_row(t)
+    except Exception as exc:
+        logger.warning("entitlements: preview_at failed: %s", exc)
+        return None
+
+
+def preview_at_batch(perspective_tier: str, targets) -> dict | None:
+    """What-if + batch sibling of :func:`preview_at`: return the full
+    :meth:`Entitlement.to_dict` snapshot rows for a caller-supplied subset
+    of target tiers, all computed from the perspective of one fixed
+    hypothetical ``perspective_tier``.
+
+    Fixed-perspective multi-target companion to :func:`preview_at`
+    (scalar what-if scalar) and caller-supplied-targets sibling of
+    :func:`preview_batch` (which walks :data:`_PURCHASABLE_TIERS`
+    unconditionally). Fills the ``_at_batch`` slot in the preview family
+    alongside :func:`tier_spec_at_batch`, :func:`feature_spec_at_batch`,
+    :func:`runtime_spec_at_batch`. Lets a pricing-comparison matrix UI
+    ("from my perspective tier, render the cumulative-state row for
+    OSS, Cloud Starter, Cloud Pro and Enterprise") hydrate every column
+    off ONE round-trip instead of N calls to :func:`preview_at`.
+
+    Per-row body is byte-identical to :func:`preview_at(perspective,
+    target)` for the same target (which is byte-identical to
+    :func:`_preview_row(target)`) -- a parity test pins this so the
+    scalar and batch what-if accessors cannot drift.
+
+    Shape (mirrors :func:`tier_spec_at_batch` / :func:`feature_spec_at_batch`
+    / :func:`runtime_spec_at_batch` ``{tiers, unknown}`` envelope --
+    the ``tiers`` axis IS the batch axis here, so the envelope key stays
+    ``tiers`` even though every row IS a tier)::
+
+        {
+          "tiers": [<preview_at row>, ...],   # one per known target, first-seen order
+          "unknown": ["bogus_id", ...],        # supplied ids not in _TIER_FEATURES
+        }
+
+    Returns ``None`` for empty / unknown perspective ``perspective_tier``
+    (caller renders "unknown tier" / 404). Supplied target ids are
+    normalised via :func:`_normalise_csv` (whitespace stripped,
+    lowercased, duplicates dropped, first-seen order preserved).
+    Unknown ids are echoed in ``unknown[]`` instead of short-circuiting
+    -- a partially-bad caller still gets rows back for the valid ids
+    alongside a list of what was dropped, matching
+    :func:`tier_spec_at_batch` / :func:`feature_spec_at_batch` /
+    :func:`runtime_spec_at_batch`. ``trial`` IS accepted as both
+    perspective (any id in :data:`_TIER_ORDER`) and target (any id in
+    :data:`_TIER_FEATURES`, which is a superset of
+    :data:`_PURCHASABLE_TIERS` -- includes trial).
+
+    Empty / ``None`` targets returns ``{"tiers": [], "unknown": []}``
+    -- the HTTP wrapper turns that into a 400, this helper does not
+    raise.
+
+    Resolver-independent: delegates per-row to :func:`_preview_row`,
+    which reads only the static per-tier maps -- so grace vs enforce
+    yields byte-identical rows. Never raises: a per-row failure
+    short-circuits that id into ``unknown[]`` and the rest of the batch
+    keeps building.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    ids = _normalise_csv(targets)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    for tid in ids:
+        if tid not in _TIER_FEATURES:
+            unknown.append(tid)
+            continue
+        try:
+            row = _preview_row(tid)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: preview_at_batch row %r failed: %s", tid, exc
+            )
+            unknown.append(tid)
+            continue
+        if row is None:
+            unknown.append(tid)
+            continue
+        rows.append(row)
+    return {"tiers": rows, "unknown": unknown}
+
+
 def preview_path(from_tier: str, to_tier: str) -> list[dict] | None:
     """Arbitrary-endpoint stepwise cumulative-state path between two tiers.
 
