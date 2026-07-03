@@ -2343,6 +2343,26 @@ def sync_sandbox_sessions_openshell(config: dict, state: dict) -> int:
     cursors: dict = state.setdefault("sandbox_session_cursors", {})
     total = 0
 
+    # Build sandbox→runtimeKind map once from sandboxes.json so we can stamp
+    # each ingested event without a subprocess call per event (#3367).
+    _sb_rk_map: dict = {}
+    try:
+        import os as _os
+        _reg = _os.path.join(_os.environ.get("HOME", ""), ".nemoclaw", "sandboxes.json")
+        with open(_reg) as _f:
+            _sb_data = json.load(_f)
+        for _n, _e in (_sb_data.get("sandboxes") or {}).items():
+            if isinstance(_e, dict):
+                _rk = (
+                    _e.get("runtimeKind")
+                    or (_e.get("runtime") or {}).get("kind")
+                    or ""
+                )
+                if _rk:
+                    _sb_rk_map[_n] = str(_rk)
+    except Exception:
+        pass
+
     for sb in sandboxes:
         if not isinstance(sb, dict):
             continue
@@ -2398,6 +2418,13 @@ def sync_sandbox_sessions_openshell(config: dict, state: dict) -> int:
                     if isinstance(obj, dict):
                         batch.append(obj)
                 if batch:
+                    # Stamp sandbox runtimeKind on each event so the adapter
+                    # can expose it in list_sessions/list_events (#3367).
+                    _rk = _sb_rk_map.get(sb_name, "")
+                    if _rk:
+                        for _ev in batch:
+                            if isinstance(_ev, dict):
+                                _ev["_nemo_rk"] = _rk
                     _flush_session_batch(batch, fname, api_key, enc_key, node_id, None,
                                          agent_type="nemoclaw")
                     total += len(batch)
@@ -3285,6 +3312,8 @@ def _local_ingest_session_batch(
         if _is_v3_event(obj):
             row = _parse_v3_event(obj, session_id, node_id, agent_type)
             if row is not None:
+                if obj.get("_nemo_rk"):
+                    row["runtime_kind"] = str(obj["_nemo_rk"])
                 rows.append(row)
             continue
 
@@ -3316,10 +3345,11 @@ def _local_ingest_session_batch(
         # ``tokens`` only appear in synthesised events (e.g. our own tests).
         # See MOAT_E2E_REPORT_2026-05-13 root-cause #4.
         cost_usd, token_count, model = _extract_cost_tokens_model(obj)
-        # Strip the internal _cc_source marker so it never reaches the
-        # stored ``data`` BLOB (it's a routing hint, not part of the event).
-        if obj.get("_cc_source"):
-            data_payload = {k: v for k, v in obj.items() if k != "_cc_source"}
+        # Strip private routing markers (_cc_source, _nemo_rk) so they never
+        # reach the stored data BLOB.
+        _private = {k for k in ("_cc_source", "_nemo_rk") if obj.get(k)}
+        if _private:
+            data_payload = {k: v for k, v in obj.items() if k not in _private}
         else:
             data_payload = obj
         rows.append({
@@ -3335,6 +3365,7 @@ def _local_ingest_session_batch(
             "cost_usd": cost_usd,
             "token_count": token_count,
             "model": model,
+            "runtime_kind": obj.get("_nemo_rk") or None,
         })
     if rows:
         store.ingest_many(rows)
