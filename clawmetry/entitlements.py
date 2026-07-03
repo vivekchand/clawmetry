@@ -11270,3 +11270,97 @@ def runtime_catalog_path_batch(
             }
         )
     return {"tiers": rows, "unknown": unknown}
+
+
+def feature_spec_at_path(
+    perspective_tier: str, from_tier: str, to_tier: str, feature: str
+) -> list[dict] | None:
+    """Perspective-validated what-if wrapper around :func:`feature_spec_path`.
+
+    Fills the ``_at_path`` slot of the ``feature_spec`` family, matching the
+    already-shipping ``preview_at_path`` / ``tier_catalog_at_path`` pattern
+    on the ``preview`` / ``tier_catalog`` axes. The perspective is
+    validated (empty / unknown ids short-circuit to ``None``) but does
+    NOT shape the rows -- the body is byte-identical to
+    :func:`feature_spec_path` for every ``(from, to, feature)`` triple,
+    so a pricing-comparison walkthrough UI can call
+    ``X_at_path(perspective, from, to, feature)`` uniformly across the
+    whole ``_at_path`` family without worrying that the perspective is
+    silently changing which rungs get walked.
+
+    Pins a parity test so the scalar ``_at_path`` can never drift from
+    :func:`feature_spec_path` (which itself walks per-rung via
+    :func:`feature_spec_at`).
+
+    Endpoint semantics match :func:`feature_spec_path`: perspective, from
+    and to accept any id in :data:`_TIER_FEATURES` (``trial`` accepted,
+    excluded from the walked intermediate rungs, valid endpoint via the
+    lateral / identity branch). ``feature`` accepts any id in
+    :data:`ALL_FEATURES`.
+
+    Never raises: a delegation failure logs a warning and returns
+    ``None`` so a paywall surface keeps rendering instead of breaking.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_FEATURES:
+        return None
+    try:
+        return feature_spec_path(from_tier, to_tier, feature)
+    except Exception as exc:
+        logger.warning("entitlements: feature_spec_at_path failed: %s", exc)
+        return None
+
+
+def feature_spec_at_path_batch(
+    perspective_tier: str, from_tier: str, to_tier: str, features
+) -> dict | None:
+    """Perspective-validated what-if wrapper around
+    :func:`feature_spec_path_batch`.
+
+    Fixed-perspective, fixed-from, fixed-to, multi-feature companion of
+    :func:`feature_spec_at_path`. Fills the ``_at_path_batch`` slot of
+    the ``feature_spec`` family, matching the already-shipping
+    ``preview_at_path_batch`` / ``tier_catalog_at_path_batch`` pattern.
+
+    Per-feature body byte-identical to :func:`feature_spec_path_batch`
+    for the same ``(from, to, features)`` triple -- scalar / batch
+    no-drift contract (the batch delegates to the same underlying
+    :func:`feature_spec_path` per feature that the scalar
+    :func:`feature_spec_at_path` delegates to).
+
+    Shape mirrors :func:`feature_spec_path_batch`::
+
+        {
+          "features": [{"feature": "<id>", "path": [...]}, ...],
+          "unknown":  ["bogus_id", ...],
+        }
+
+    Supplied feature ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen
+    order preserved). Unknown ids are echoed in ``unknown[]`` instead of
+    short-circuiting -- a partially-bad caller still gets paths back for
+    the valid ids alongside a list of what was dropped, matching every
+    other ``*_path_batch`` sibling's posture.
+
+    Returns ``None`` for empty / unknown ``perspective_tier`` /
+    ``from_tier`` / ``to_tier`` (caller renders "unknown tier" / 404).
+    Never raises: per-feature failures short-circuit that feature into
+    ``unknown[]``; a top-level delegation failure short-circuits to
+    ``None``.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_FEATURES:
+        return None
+    try:
+        return feature_spec_path_batch(from_tier, to_tier, features)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: feature_spec_at_path_batch failed: %s", exc
+        )
+        return None
