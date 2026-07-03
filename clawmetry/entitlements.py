@@ -10805,6 +10805,126 @@ def preview_path_batch(from_tier: str, to_tiers) -> dict | None:
     return {"tiers": rows, "unknown": unknown}
 
 
+def preview_at_path(
+    perspective_tier: str, from_tier: str, to_tier: str
+) -> list[dict] | None:
+    """What-if sibling of :func:`preview_path`: cumulative-state stepwise
+    path between ``from_tier`` and ``to_tier`` rendered from a hypothetical
+    ``perspective_tier``.
+
+    Companion to :func:`preview_at` (scalar single-tier what-if snapshot):
+    where ``preview_at`` renders the cumulative :meth:`Entitlement.to_dict`
+    row at ONE hypothetical destination, ``preview_at_path`` walks the
+    full rung path between any two endpoints. Fills the ``_at_path`` slot
+    for the preview family alongside :func:`preview` (scalar current),
+    :func:`preview_batch` (batch current), :func:`preview_path` (path
+    current), :func:`preview_path_batch` (batch path), :func:`preview_at`
+    (scalar what-if) and :func:`preview_at_batch` (batch what-if) so a
+    pricing-comparison walkthrough can call ``X_at_path(perspective,
+    from, to)`` uniformly across the family.
+
+    Body posture matches :func:`preview_at`: perspective is validated
+    against :data:`_TIER_ORDER` but does NOT shape the rows. The per-rung
+    body is byte-identical to a row from :func:`preview_path` for the
+    same ``(from_tier, to_tier)`` pair -- pinned by parity tests so the
+    what-if path helper cannot drift from the current-perspective sibling
+    that also backs :func:`preview_at`.
+
+    Perspective acceptance is lenient (matches :func:`preview_at`): any id
+    in :data:`_TIER_ORDER` is accepted, including :data:`TIER_TRIAL`
+    (which the scalar :func:`preview` rejects because it is not
+    purchasable). Endpoint acceptance mirrors :func:`preview_path`: both
+    ``from_tier`` and ``to_tier`` accept any id in :data:`_TIER_FEATURES`
+    (trial included as an endpoint via the lateral branch).
+
+    Returns ``None`` if any of the three ids is unknown; empty list for
+    identity (``from == to``). Resolver-independent: delegates to
+    :func:`preview_path`, which walks the static per-tier maps, so grace
+    vs enforce yields byte-identical rows -- same property the rest of
+    the ``_path`` family guarantees.
+
+    Never raises: a delegate failure logs a warning and returns ``None``
+    so an upgrade-walkthrough surface keeps rendering instead of
+    breaking.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if p not in _TIER_ORDER:
+        return None
+    try:
+        return preview_path(from_tier, to_tier)
+    except Exception as exc:
+        logger.warning("entitlements: preview_at_path failed: %s", exc)
+        return None
+
+
+def preview_at_path_batch(
+    perspective_tier: str, from_tier: str, to_tiers
+) -> dict | None:
+    """Batch sibling of :func:`preview_at_path`: per-rung cumulative
+    snapshots for a caller-supplied subset of destination tiers all
+    walked from a single ``from_tier`` from a hypothetical
+    ``perspective_tier`` in ONE round-trip.
+
+    Composes :func:`preview_at_path` (scalar what-if path) and
+    :func:`preview_path_batch` (multi-destination current-perspective
+    path). Fills the ``_at_path_batch`` slot for the preview family
+    alongside :func:`preview_at` / :func:`preview_at_batch` /
+    :func:`preview_at_path` so a pricing-comparison walkthrough can call
+    ``X_at_path_batch(perspective, from, to_tiers)`` uniformly.
+
+    Per-destination row shape (mirrors :func:`preview_path_batch`)::
+
+        {
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<preview row>, ...],
+        }
+
+    Envelope::
+
+        {
+          "tiers":   [<row>, ...],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Body posture matches :func:`preview_at`: perspective is validated
+    against :data:`_TIER_ORDER` but does NOT shape rows. Each row is
+    byte-identical to a row from :func:`preview_path_batch` for the same
+    ``(from_tier, to_tiers)`` pair -- pinned by parity tests so the
+    batch what-if path helper cannot drift from the current-perspective
+    sibling.
+
+    Supplied destination ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen
+    order preserved). Unknown destination ids land in ``unknown[]``
+    instead of short-circuiting the batch, matching every other
+    ``*_path_batch`` sibling's posture. ``trial`` IS accepted as a
+    destination via the lateral / identity branches, matching
+    :func:`preview_path_batch`.
+
+    Returns ``None`` for empty / unknown ``perspective_tier`` or
+    ``from_tier`` (caller renders "unknown tier" / 404). Never raises: a
+    per-destination failure short-circuits that id into ``unknown[]`` and
+    the rest of the batch keeps building.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if p not in _TIER_ORDER:
+        return None
+    try:
+        return preview_path_batch(from_tier, to_tiers)
+    except Exception as exc:
+        logger.warning("entitlements: preview_at_path_batch failed: %s", exc)
+        return None
+
+
 def feature_catalog_path_batch(
     from_tier: str, to_tiers
 ) -> dict | None:
