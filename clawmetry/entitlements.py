@@ -8439,6 +8439,112 @@ def runtime_catalog_path(from_tier: str, to_tier: str) -> list[dict] | None:
         return None
 
 
+def tier_catalog_path(from_tier: str, to_tier: str) -> list[dict] | None:
+    """Arbitrary-endpoint stepwise tier-catalog path between two tiers.
+
+    Tier-axis twin of :func:`feature_catalog_path` and
+    :func:`runtime_catalog_path`: the FULL tier ladder at every rung
+    between any two tiers off ONE round-trip, with each rung's inner
+    ``tiers`` list carrying the ladder from the perspective of that
+    rung (``is_current`` pinned on the rung id). Lets an upgrade-
+    walkthrough UI render the full pricing ladder at every step
+    between two tiers without first calling :func:`tier_path` to get
+    the rung list and then N calls to :func:`tier_catalog_at`.
+
+    Pairs with :func:`feature_catalog_path` / :func:`runtime_catalog_path`
+    the same way :func:`tier_catalog_at` pairs with
+    :func:`feature_catalog_at` / :func:`runtime_catalog_at`. Together
+    the three ``_catalog_path`` helpers let an upgrade-walkthrough UI
+    render every tier + feature + runtime column at every rung off
+    THREE calls instead of first calling :func:`tier_path` and then
+    3 * N calls to the scalar what-if catalog helpers.
+
+    Per-rung row shape mirrors :func:`feature_catalog_path` /
+    :func:`runtime_catalog_path` with ``features`` / ``runtimes``
+    renamed to ``tiers``::
+
+        {
+          "tier":       "<rung id>",
+          "tier_label": "...",
+          "tier_rank":  <int>,
+          "tiers":      [<tier_catalog_at row>, ...],
+        }
+
+    Each rung's inner ``tiers`` list byte-equals
+    :func:`tier_catalog_at` for the same rung id -- a parity test
+    pins this so the scalar and path what-if tier-ladder surfaces
+    cannot drift.
+
+    Walk semantics, direction semantics, endpoint semantics and
+    resolver-independence all match :func:`feature_catalog_path` --
+    see that helper's docstring. Rung walk is byte-stable against
+    :func:`tier_path`, :func:`tier_spec_path`,
+    :func:`capacity_diff_path`, :func:`tier_unlocks_path`,
+    :func:`tier_locks_path`, :func:`preview_path`,
+    :func:`feature_spec_path`, :func:`runtime_spec_path`,
+    :func:`feature_catalog_path` and :func:`runtime_catalog_path`
+    (same ``_PURCHASABLE_TIERS`` filter + same sort key + same
+    destination-sibling exclusion), so the paths line up rung-for-rung.
+
+    Never raises: a resolver failure logs a warning and returns
+    ``None`` so a pricing-page surface keeps rendering instead of
+    breaking.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+        if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+            return None
+        if f == t:
+            return []
+        from_rank = _TIER_RANK.get(f, -1)
+        to_rank = _TIER_RANK.get(t, -1)
+
+        def _row(rung: str) -> dict | None:
+            catalog = tier_catalog_at(rung)
+            if catalog is None:
+                return None
+            return {
+                "tier": rung,
+                "tier_label": tier_label(rung),
+                "tier_rank": _TIER_RANK.get(rung, -1),
+                "tiers": catalog,
+            }
+
+        if from_rank == to_rank:
+            row = _row(t)
+            return [row] if row is not None else []
+        ascending = to_rank > from_rank
+        if ascending:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (_TIER_RANK.get(x, -1), x),
+            )
+        else:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (-_TIER_RANK.get(x, -1), x),
+            )
+        path: list[dict] = []
+        for tid in ordered:
+            r = _TIER_RANK.get(tid, -1)
+            if ascending:
+                if r <= from_rank or r > to_rank:
+                    continue
+            else:
+                if r >= from_rank or r < to_rank:
+                    continue
+            if r == to_rank and tid != t:
+                continue
+            row = _row(tid)
+            if row is not None:
+                path.append(row)
+        return path
+    except Exception as exc:
+        logger.warning("entitlements: tier_catalog_path failed: %s", exc)
+        return None
+
+
 def lock_reason_path(
     from_tier: str, to_tier: str, item, *, kind: str | None = None
 ) -> list[dict] | None:
