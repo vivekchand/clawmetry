@@ -9821,6 +9821,11 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
                     "lastDurationMs": job_state.get("lastDurationMs"),
                     "lastError": job_state.get("lastError"),
                     "consecutiveFailures": job_state.get("consecutiveFailures"),
+                    # on-exit trigger / detached-run metadata (openclaw #92037 / #98755)
+                    "watchedCommand":  job_state.get("watchedCommand"),
+                    "lastExitCode":    job_state.get("lastExitCode") or job_state.get("exitCode"),
+                    "targetSessionId": job_state.get("targetSessionId"),
+                    "detachedAt":      job_state.get("detachedAt"),
                 },
             }
 
@@ -9873,6 +9878,11 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
                     "lastDurationMs":      job_state.get("lastDurationMs"),
                     "lastError":           job_state.get("lastError"),
                     "consecutiveFailures": job_state.get("consecutiveFailures"),
+                    # on-exit trigger / detached-run metadata (openclaw #92037 / #98755)
+                    "watchedCommand":      job_state.get("watchedCommand"),
+                    "lastExitCode":        job_state.get("lastExitCode") or job_state.get("exitCode"),
+                    "targetSessionId":     job_state.get("targetSessionId"),
+                    "detachedAt":          job_state.get("detachedAt"),
                 })
             except Exception as _e:
                 log.debug("local_store: ingest_cron failed for %s: %s",
