@@ -334,3 +334,70 @@ def test_cron_health_disabled_without_env_flag(no_flag_app):
     _seed_two_crons(ls.get_store())
     body = app.test_client().get("/api/cron-health").get_json()
     assert body.get("_source") != "local_store"
+
+
+# ── on-exit / detached-run metadata (issue #3501) ──────────────────────────
+
+
+def _seed_on_exit_cron(store):
+    """Insert an on-exit cron with trigger + detach metadata."""
+    import time
+    now_ms = int(time.time() * 1000)
+    store.ingest_cron({
+        "cron_id": "watch-build",
+        "name": "Watch Build Exit",
+        "schedule": '{"kind":"on-exit"}',
+        "enabled": True,
+        "last_run_at": "",
+        "last_status": "success",
+        "next_run_at": "",
+        "createdAtMs": now_ms - 3600000,
+        "lastDurationMs": 800,
+        # on-exit trigger / detached-run fields
+        "watchedCommand": "make build",
+        "lastExitCode": 0,
+        "targetSessionId": "sess-abc123",
+        "detachedAt": now_ms - 60000,
+    })
+
+
+def test_on_exit_cron_metadata_in_jobs_response(fast_path_app):
+    """on-exit trigger fields must round-trip through _row_to_cron_job into
+    job.state (issue #3501 — Gap 1)."""
+    app, ls, _cr = fast_path_app
+    _seed_on_exit_cron(ls.get_store())
+
+    body = app.test_client().get("/api/crons").get_json()
+    assert body.get("_source") == "local_store"
+    jobs = body.get("jobs", [])
+    by_id = {j["id"]: j for j in jobs}
+    assert "watch-build" in by_id, f"on-exit job missing from response: {list(by_id)}"
+
+    job = by_id["watch-build"]
+    state = job.get("state", {})
+    assert state.get("watchedCommand") == "make build", f"watchedCommand missing from state: {state}"
+    assert state.get("lastExitCode") == 0, f"lastExitCode missing from state: {state}"
+    assert state.get("targetSessionId") == "sess-abc123", f"targetSessionId missing from state: {state}"
+    assert state.get("detachedAt") is not None, f"detachedAt missing from state: {state}"
+    # Must NOT also appear at the top level (carry-through excluded them)
+    assert "watchedCommand" not in job, f"watchedCommand leaked to top-level: {job}"
+
+
+def test_on_exit_cron_appears_in_agent_intentions(fast_path_app):
+    """on-exit cron with no nextRunAtMs must still appear in /api/agent-intentions
+    (issue #3501 — Gap 2). The job is surfaced at window_end so it's visible."""
+    app, ls, _cr = fast_path_app
+    _seed_on_exit_cron(ls.get_store())
+
+    body = app.test_client().get("/api/agent-intentions").get_json()
+    intentions = body.get("intentions", [])
+    on_exit_entries = [i for i in intentions if i.get("jobId") == "watch-build"]
+    assert on_exit_entries, (
+        f"on-exit job 'watch-build' missing from intentions; got jobIds: "
+        f"{[i.get('jobId') for i in intentions]}"
+    )
+    entry = on_exit_entries[0]
+    assert entry.get("scheduleKind") == "on-exit"
+    # Trigger metadata must be forwarded into the intention entry
+    assert entry.get("watchedCommand") == "make build", f"watchedCommand missing from intention: {entry}"
+    assert entry.get("lastExitCode") == 0, f"lastExitCode missing from intention: {entry}"
