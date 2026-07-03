@@ -178,6 +178,19 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                          hypothetical "current tier"
                                          without first switching the live
                                          resolver.
+  GET  /api/entitlement/tier-catalog-at-batch -- batch what-if sibling
+                                         of ``/tier-catalog-at``: full tier
+                                         ladders for N hypothetical source
+                                         tiers (``?tiers=a,b,c``) off ONE
+                                         call, each with ``is_current``
+                                         flipped to its own source. Mirrors
+                                         ``/feature-catalog-at-batch`` and
+                                         ``/runtime-catalog-at-batch`` on the
+                                         tier axis so a pricing-comparison
+                                         matrix UI can render the ladder
+                                         side-by-side from every hypothetical
+                                         perspective off ONE round-trip
+                                         instead of N calls.
   GET  /api/entitlement/tier-spec-at  -- scalar what-if sibling of
                                          ``/tier-catalog-at``: the single
                                          tier descriptor for ``target=`` with
@@ -2628,6 +2641,94 @@ def api_entitlement_tier_catalog_at():
     except Exception as exc:
         logger.warning("api_entitlement_tier_catalog_at: error: %s", exc)
         return jsonify({"error": "tier-catalog-at failed"}), 500
+
+
+@bp_entitlement.route("/api/entitlement/tier-catalog-at-batch")
+def api_entitlement_tier_catalog_at_batch():
+    """``GET /api/entitlement/tier-catalog-at-batch?tiers=a,b,c`` -- batch
+    what-if sibling of ``/api/entitlement/tier-catalog-at``.
+
+    Where ``/tier-catalog-at`` hydrates the full tier ladder for ONE
+    hypothetical source tier (with ``is_current`` flipped to that
+    source), this hydrates it for N hypothetical sources in ONE
+    round-trip. Pairs with ``/tier-catalog-at`` the same way
+    ``/feature-catalog-at-batch`` pairs with ``/feature-catalog-at`` and
+    ``/runtime-catalog-at-batch`` pairs with ``/runtime-catalog-at``:
+    scalar what-if -> matrix what-if across the perspective-tier axis
+    rather than the feature-id / runtime-id axis.
+
+    Use case: a pricing-comparison matrix UI ("show me the tier ladder
+    as if I were on OSS vs Cloud Starter vs Cloud Pro vs Enterprise --
+    side by side") hydrates every column off ONE call instead of N
+    calls to ``/tier-catalog-at``.
+
+    Each ``tiers[].tiers`` list is byte-identical to the body of
+    ``/tier-catalog-at?tier=<tier>`` for the same source tier -- pinned
+    by parity tests so the scalar and batch what-if catalog helpers
+    cannot drift. Supplied tier ids are normalised (whitespace
+    stripped, lowercased, duplicates dropped, first-seen order
+    preserved). Unknown ids do not 404 the call -- they are echoed in
+    ``unknown[]`` so a partially-bad caller still gets rows back for
+    the valid ids alongside a list of what was dropped, matching every
+    other ``_at_batch`` sibling's posture.
+
+    Response shape::
+
+        {
+          "tiers": [
+            {
+              "tier":       "<id>",
+              "tier_label": "...",
+              "tier_rank":  <int>,
+              "tiers":      [<tier-catalog-at row>, ...],
+            },
+            ...
+          ],
+          "unknown":    ["bogus_id", ...],
+          "current_tier":      "...",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    - **400** when ``tiers=`` is missing / empty after normalisation
+    - **200** with bucketed unknowns for unknown tier ids -- does NOT
+      404 the call, matching every other batch sibling
+    - **Never 5xxs**: a synthesis failure short-circuits to an envelope
+      with empty rows so the matrix keeps rendering.
+    """
+    tiers = _parse_csv_arg("tiers")
+    if not tiers:
+        return jsonify({"error": "supply tiers=<csv>"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        batch = _ent.tier_catalog_at_batch(tiers)
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": batch.get("tiers", []),
+                "unknown": batch.get("unknown", []),
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tier_catalog_at_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "unknown": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
 
 
 @bp_entitlement.route("/api/entitlement/feature-catalog-at-batch")
