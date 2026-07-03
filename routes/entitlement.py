@@ -9667,6 +9667,124 @@ def api_entitlement_tier_spec_path_batch():
         )
 
 
+@bp_entitlement.route("/api/entitlement/tier-catalog-path-batch")
+def api_entitlement_tier_catalog_path_batch():
+    """``GET /api/entitlement/tier-catalog-path-batch?from=<id>&to=a,b,c``
+    -- batch sibling of ``/api/entitlement/tier-catalog-path`` and
+    tier-axis member of the ``_catalog-path-batch`` family alongside
+    ``/feature-catalog-path-batch`` and ``/runtime-catalog-path-batch``.
+
+    Where ``/tier-catalog-path`` walks the rungs between ONE
+    ``(from, to)`` pair and hydrates the full tier ladder at each rung,
+    this walks the rungs between ONE ``from`` and N candidate ``to``
+    tiers in ONE round-trip. Pairs with ``/tier-catalog-path`` the same
+    way ``/tier-spec-path-batch`` pairs with ``/tier-spec-path``:
+    scalar -> matrix in one call. Mirrors the multi-destination axis
+    of ``/tier-catalog-at-batch`` (which fans the same perspective
+    axis across many candidates one-rung-at-a-time) -- this batch fans
+    the same source across many targets ALL-rungs-at-a-time.
+
+    Use case: an upgrade-walkthrough / pricing-comparison "from my
+    current rung, here are the 3 tiers I'm considering" surface
+    hydrates the FULL tier ladder at every rung for every candidate
+    off ONE call instead of first calling ``/tier-catalog-path`` N
+    times (once per destination). Together with
+    ``/feature-catalog-path-batch`` and ``/runtime-catalog-path-batch``
+    the three ``_catalog-path-batch`` endpoints let the same surface
+    hydrate every tier + feature + runtime column at every rung for
+    every candidate off THREE calls instead of first calling
+    ``/tier-path`` and then 3 * N calls to the scalar
+    ``_catalog-path`` endpoints. Same-rank siblings strictly between
+    the endpoints are included for each per-destination path;
+    same-rank siblings of each destination are excluded so the
+    per-destination path terminates exactly at its own ``to``.
+    Per-destination path lengths can legitimately differ (the rungs
+    walked depend on the destination), matching
+    ``/tier-spec-path-batch`` / ``/feature-catalog-path-batch`` /
+    ``/runtime-catalog-path-batch`` -- unlike
+    ``/feature-spec-path-batch`` / ``/runtime-spec-path-batch`` whose
+    rungs are item-agnostic across the supplied feature / runtime set.
+
+    Each row in ``tiers[].path`` is byte-identical to a row from
+    ``/tier-catalog-path?from=<from>&to=<to>`` -- pinned by the parity
+    tests so the scalar and batch path accessors cannot drift.
+    Supplied destination ids are normalised (whitespace stripped,
+    lowercased, duplicates dropped, first-seen order preserved).
+    Unknown ids do not 404 the call -- they are echoed in ``unknown[]``
+    so a partially-bad caller still gets paths back for the valid ids.
+
+    Response shape (mirrors ``/tier-spec-path-batch`` envelope with
+    per-rung ``path`` rows carrying the full tier ladder rather than a
+    single spec row)::
+
+        {
+          "from":       "<tier id>",
+          "from_label": "...",
+          "from_rank":  <int>,
+          "tiers": [
+            {
+              "to":        "<tier id>",
+              "to_label":  "...",
+              "to_rank":   <int>,
+              "direction": "upgrade" | "downgrade" | "lateral" | "identity",
+              "path":      [<tier-catalog-path row>, ...],
+            },
+            ...
+          ],
+          "unknown":    ["bogus_id", ...],
+        }
+
+    - **400** when ``from=`` is missing / blank, or ``to=`` is missing
+      / empty after normalisation
+    - **404** when ``from`` is unknown (body carries ``which: "tier"``)
+    - **200** with bucketed unknowns for unknown destination ids --
+      does NOT 404 the call, matching every other batch sibling
+    - **Never 5xxs**: a synthesis failure short-circuits to an envelope
+      with empty rows so the matrix keeps rendering.
+    """
+    f = (request.args.get("from") or "").strip().lower()
+    if not f:
+        return jsonify({"error": "missing from"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if f not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": f}
+                ),
+                404,
+            )
+        targets = _parse_csv_arg("to")
+        if not targets:
+            return jsonify({"error": "supply to=<csv>"}), 400
+        batch = _ent.tier_catalog_path_batch(f, targets)
+        if batch is None:
+            batch = {"tiers": [], "unknown": []}
+        return jsonify(
+            {
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": _ent.tier_rank(f),
+                "tiers": batch.get("tiers", []),
+                "unknown": batch.get("unknown", []),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tier_catalog_path_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "from": f,
+                "from_label": None,
+                "from_rank": -1,
+                "tiers": [],
+                "unknown": [],
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/feature-spec-path-batch")
 def api_entitlement_feature_spec_path_batch():
     """``GET /api/entitlement/feature-spec-path-batch?from=<id>&to=<id>
