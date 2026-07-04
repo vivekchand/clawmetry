@@ -199,6 +199,36 @@ def _decorate_with_channel_context(sessions):
     return sessions
 
 
+def _decorate_with_authority_counts(sessions):
+    """Stamp ``unauthorized_call_count`` onto each session row from the
+    authority_violations table.  Always a no-op when the proxy is disabled
+    or the table is empty — stamps 0 in that case rather than omitting the key.
+    """
+    if not sessions:
+        return sessions
+    ids = [s.get("session_id") or s.get("sessionId") for s in sessions]
+    counts = {}
+    try:
+        from routes.local_query import local_store_via_daemon
+        result = local_store_via_daemon("query_session_authority_counts",
+                                        session_ids=ids)
+        if isinstance(result, dict):
+            counts = result
+    except Exception:
+        pass
+    if not counts:
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            counts = store.query_session_authority_counts(ids)
+        except Exception:
+            counts = {}
+    for s in sessions:
+        sid = s.get("session_id") or s.get("sessionId")
+        s["unauthorized_call_count"] = counts.get(sid, 0)
+    return sessions
+
+
 def _session_last_active_epoch(s: dict):
     """Extract a unix-second timestamp for a session row, tolerant of the
     many shapes the gateway / local-store / JSONL paths produce.
@@ -286,6 +316,7 @@ def api_sessions():
     # subject without waiting for the full session-table cutover.
     if is_local_store_read_enabled():
         _decorate_with_channel_context(sessions)
+        _decorate_with_authority_counts(sessions)
     for s in sessions:
         if "session_type" not in s:
             s["session_type"] = _infer_session_type(s)
@@ -475,6 +506,7 @@ def _try_local_store_sessions():
     # Decorate with channel context from the typed openclaw_channels table.
     # No-op when the table is empty; overrides only blank fields when present.
     _decorate_with_channel_context(out)
+    _decorate_with_authority_counts(out)
     return {"sessions": out, "_source": "local_store"}
 
 
@@ -591,6 +623,7 @@ def _try_local_store_sessions_by_type(type_filter: str = ""):
     # channel=telegram (typed table) classifies as "user" even if the metadata
     # blob never carried a channel field.
     _decorate_with_channel_context(sessions)
+    _decorate_with_authority_counts(sessions)
     for s in sessions:
         # Honour explicit metadata.session_type when present; otherwise
         # classify with the same _infer_session_type() the legacy path uses.
