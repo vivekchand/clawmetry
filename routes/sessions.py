@@ -220,7 +220,7 @@ def _decorate_with_authority_counts(sessions):
         try:
             from clawmetry import local_store
             store = local_store.get_store(read_only=True)
-            counts = store.query_session_authority_counts(ids)
+            counts = store.query_session_authority_counts(ids) or {}
         except Exception:
             counts = {}
     for s in sessions:
