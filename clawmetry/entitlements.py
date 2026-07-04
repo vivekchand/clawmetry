@@ -11958,3 +11958,137 @@ def feature_catalog_at_path_batch(
             "entitlements: feature_catalog_at_path_batch failed: %s", exc
         )
         return None
+
+
+def lock_reason_at_path(
+    perspective_tier: str,
+    from_tier: str,
+    to_tier: str,
+    item,
+    *,
+    kind: str | None = None,
+) -> list[dict] | None:
+    """Perspective-validated what-if wrapper around :func:`lock_reason_path`.
+
+    Fills the ``_at_path`` slot of the ``lock_reason`` family, matching the
+    already-shipping ``feature_spec_at_path`` / ``runtime_spec_at_path`` /
+    ``tier_spec_at_path`` / ``feature_catalog_at_path`` /
+    ``runtime_catalog_at_path`` / ``tier_catalog_at_path`` /
+    ``capacity_diff_at_path`` / ``preview_at_path`` pattern on the eight
+    other axes -- so every ``*_path`` helper now has a perspective-validated
+    ``_at_path`` sibling and a paywall walkthrough UI can call
+    ``X_at_path(perspective, from, to, ...)`` uniformly across the whole
+    ``_at_path`` family without special-casing the lock-reason axis.
+
+    The perspective is validated (empty / unknown ids short-circuit to
+    ``None``) but does NOT shape the rows -- the body is byte-identical to
+    :func:`lock_reason_path` for every ``(from, to, item, kind)`` tuple.
+    Pins a parity test so the scalar ``_at_path`` can never drift from
+    :func:`lock_reason_path` (which itself walks per-rung by synthesising
+    a fresh :class:`Entitlement` with ``grace=False``).
+
+    Endpoint semantics match :func:`lock_reason_path`: perspective, from
+    and to accept any id in :data:`_TIER_FEATURES` (``trial`` accepted,
+    excluded from the walked intermediate rungs, valid endpoint via the
+    lateral / identity branch). ``item`` is either a feature id (auto-
+    detected when ``kind`` is None and the id is in :data:`ALL_FEATURES`),
+    a runtime id (auto-detected via :func:`canonical_runtime` on
+    :data:`ALL_RUNTIMES`), or a positive integer capacity value with
+    ``kind`` set explicitly to ``"channels"`` / ``"retention_days"`` /
+    ``"nodes"``.
+
+    Never raises: a delegation failure logs a warning and returns
+    ``None`` so a paywall surface keeps rendering instead of breaking.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_FEATURES:
+        return None
+    try:
+        return lock_reason_path(from_tier, to_tier, item, kind=kind)
+    except Exception as exc:
+        logger.warning("entitlements: lock_reason_at_path failed: %s", exc)
+        return None
+
+
+def lock_reason_at_path_batch(
+    perspective_tier: str,
+    from_tier: str,
+    to_tier: str,
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict | None:
+    """Perspective-validated what-if wrapper around
+    :func:`lock_reason_path_batch`.
+
+    Fixed-perspective, fixed-from, fixed-to, multi-axis companion of
+    :func:`lock_reason_at_path`. Fills the ``_at_path_batch`` slot of
+    the ``lock_reason`` family, matching the already-shipping
+    ``feature_spec_at_path_batch`` / ``runtime_spec_at_path_batch`` /
+    ``tier_spec_at_path_batch`` / ``feature_catalog_at_path_batch`` /
+    ``runtime_catalog_at_path_batch`` / ``tier_catalog_at_path_batch`` /
+    ``capacity_diff_at_path_batch`` / ``preview_at_path_batch`` pattern.
+
+    Per-axis body byte-identical to :func:`lock_reason_path_batch` for
+    the same ``(from, to, features, runtimes, channels, retention_days,
+    nodes)`` tuple -- scalar / batch no-drift contract (the batch
+    delegates to the same underlying :func:`lock_reason_path` per item
+    that the scalar :func:`lock_reason_at_path` delegates to).
+
+    Shape mirrors :func:`lock_reason_path_batch`::
+
+        {
+          "features": [{"key": "<id>", "path": [...]}, ...],
+          "runtimes": [{"key": "<canonical id>", "path": [...]}, ...],
+          "channels":       {"key": "<n>", "path": [...]} | None,
+          "retention_days": {"key": "<n>", "path": [...]} | None,
+          "nodes":          {"key": "<n>", "path": [...]} | None,
+          "unknown": {"features": [...], "runtimes": [...]},
+        }
+
+    Supplied feature / runtime ids are normalised via
+    :func:`_normalise_csv` (whitespace stripped, lowercased, duplicates
+    dropped, first-seen order preserved). Runtime aliases are
+    canonicalised (``claude-code`` -> ``claude_code``). Unknown ids
+    are echoed in ``unknown.features`` / ``unknown.runtimes`` instead
+    of short-circuiting -- a partially-bad caller still gets paths back
+    for the valid ids alongside a list of what was dropped, matching
+    every other ``*_path_batch`` sibling's posture.
+
+    Capacity axes use ``None`` as the "axis not supplied" sentinel:
+    ``retention_days=None`` here means *unset*, NOT *unlimited* --
+    matches :func:`lock_reason_path_batch`. A non-positive / non-int
+    capacity value yields a ``None`` axis row.
+
+    Returns ``None`` for empty / unknown ``perspective_tier`` /
+    ``from_tier`` / ``to_tier`` (caller renders "unknown tier" / 404).
+    Never raises: a top-level delegation failure short-circuits to
+    ``None``.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_FEATURES:
+        return None
+    try:
+        return lock_reason_path_batch(
+            from_tier,
+            to_tier,
+            features=features,
+            runtimes=runtimes,
+            channels=channels,
+            retention_days=retention_days,
+            nodes=nodes,
+        )
+    except Exception as exc:
+        logger.warning(
+            "entitlements: lock_reason_at_path_batch failed: %s", exc
+        )
+        return None
