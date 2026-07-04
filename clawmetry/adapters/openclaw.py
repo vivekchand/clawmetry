@@ -153,6 +153,74 @@ def _openclaw_doctor_findings() -> list:
         return []
 
 
+def _clawrouter_detect() -> dict:
+    """Detect the ClawRouter bundled provider plugin (OpenClaw 2026.7.1, #99658).
+
+    ClawRouter adds credential-scoped dynamic model discovery,
+    OpenAI-compatible + native Anthropic/Gemini transports, and managed
+    budget/quota reporting across OpenClaw usage surfaces. Config and quota
+    data are written to ``~/.openclaw/clawrouter/`` by the harness onboarding
+    step (override with ``OPENCLAW_CLAWROUTER_HOME``).
+
+    Returns a dict with zero or more of:
+    - ``clawRouterEnabled`` (bool)
+    - ``clawRouterVersion`` (str)
+    - ``clawRouterTransports`` (list[str])
+    - ``clawRouterModels`` (list[str])
+    - ``clawRouterBudgetUsd`` (float) — aggregate managed budget in USD
+    - ``clawRouterQuotaCredentials`` (int) — number of credential scopes
+
+    Returns ``{}`` when the plugin is absent (pre-2026.7.1 or unconfigured).
+    Read-only, never raises.
+    """
+    import json as _json
+
+    home = os.environ.get("OPENCLAW_CLAWROUTER_HOME") or os.path.expanduser(
+        os.path.join("~", ".openclaw", "clawrouter"))
+    config_path = os.path.join(home, "config.json")
+    quota_path = os.path.join(home, "quota.json")
+
+    out: dict = {}
+
+    # Main config: enabled flag, version, transport list, model catalog
+    try:
+        with open(config_path, encoding="utf-8") as _fh:
+            cfg = _json.load(_fh)
+        out["clawRouterEnabled"] = bool(cfg.get("enabled", True))
+        version = cfg.get("version") or cfg.get("pluginVersion")
+        if version:
+            out["clawRouterVersion"] = str(version)
+        transports = cfg.get("transports") or cfg.get("transport") or []
+        if isinstance(transports, list) and transports:
+            out["clawRouterTransports"] = [str(t) for t in transports if t]
+        models = cfg.get("models") or cfg.get("modelCatalog") or []
+        if isinstance(models, list) and models:
+            out["clawRouterModels"] = [
+                str(m.get("name") or m) if isinstance(m, dict) else str(m)
+                for m in models if m
+            ]
+    except (OSError, ValueError, KeyError):
+        pass
+
+    # Quota file: aggregate managed budget + credential-scope count
+    try:
+        with open(quota_path, encoding="utf-8") as _fh:
+            quota = _json.load(_fh)
+        budget = quota.get("totalBudgetUsd") or quota.get("budgetUsd")
+        if budget is not None:
+            try:
+                out["clawRouterBudgetUsd"] = float(budget)
+            except (TypeError, ValueError):
+                pass
+        creds = quota.get("credentials") or quota.get("credentialScopes") or []
+        if isinstance(creds, list) and creds:
+            out["clawRouterQuotaCredentials"] = len(creds)
+    except (OSError, ValueError, KeyError):
+        pass
+
+    return out
+
+
 def _real_install(sessions_dir: str) -> bool:
     """A genuine OpenClaw install signal, NOT the bare ~/.openclaw dir that
     ClawMetry itself creates as a scratch workspace. Any one of: the openclaw
@@ -1132,6 +1200,13 @@ class OpenClawAdapter(AgentAdapter):
             _doctor = _openclaw_doctor_findings()
             if _doctor:
                 meta["doctorFindings"] = _doctor
+            # ClawRouter bundled provider plugin (#3524, OpenClaw 2026.7.1
+            # #99658). Credential-scoped dynamic model discovery, multi-transport
+            # routing, and managed budget/quota reporting across OpenClaw usage
+            # surfaces. Returns {} on pre-2026.7.1 installs.
+            _cr = _clawrouter_detect()
+            if _cr:
+                meta.update(_cr)
             return DetectResult(
                 name=self.name,
                 display_name=self.display_name,
