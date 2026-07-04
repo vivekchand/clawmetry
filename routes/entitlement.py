@@ -7243,3 +7243,334 @@ def api_entitlement_runtime_spec_path_batch():
                 "unknown": [],
             }
         )
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-feature-spec-at-batch")
+def api_entitlement_next_tier_feature_spec_at_batch():
+    """``GET /api/entitlement/next-tier-feature-spec-at-batch?tier=<source>
+    &features=a,b,c`` -- batch sibling of
+    ``/api/entitlement/next-tier-feature-spec-at``.
+
+    Where ``/next-tier-feature-spec-at`` projects the rung above
+    ``tier`` onto ONE feature, this walks N features onto the same
+    rung-above in ONE round-trip. Pairs with
+    ``/next-tier-feature-spec-at`` the same way
+    ``/feature-spec-at-batch`` pairs with ``/feature-spec-at``: scalar
+    -> matrix in one call.
+
+    Use case: a paywall "does each of THESE 6 features unlock at my
+    next rung?" surface hydrates the visible cells off ONE call instead
+    of N calls to ``/next-tier-feature-spec-at``.
+
+    Each row in ``features[]`` is byte-identical to a row from
+    ``/feature-spec-at-batch?tier=<target>&features=<...>`` for the
+    resolved ``target = _next_purchasable_tier_after(tier)`` -- pinned
+    by the parity tests so the scalar what-if and the batch what-if
+    cannot drift. Supplied feature ids are normalised (whitespace
+    stripped, lowercased, duplicates dropped, first-seen order
+    preserved). Unknown ids do not 404 the call -- they are echoed in
+    ``unknown[]`` so a partially-bad caller still gets rows back for
+    the valid ids.
+
+    Response shape::
+
+        {
+          "tier":         "<source tier id>",
+          "tier_label":   "<source label>",
+          "tier_rank":    <source rank>,
+          "target":       "<next-above tier id>" | null,
+          "target_label": "<next-above label>" | null,
+          "target_rank":  <next-above rank> | null,
+          "features":     [<feature_spec_at row>, ...],
+          "unknown":      ["bogus_id", ...],
+        }
+
+    ``target`` / ``target_label`` / ``target_rank`` collapse to
+    ``null`` at the ceiling (no rung strictly above the source --
+    enterprise as source); ``features`` is empty in that branch. The
+    surface stays 200 so callers can render "you're at the top" copy
+    without a status-code branch.
+
+    - **400** when ``tier=`` or ``features=`` is missing / blank / empty
+      after normalisation
+    - **404** when ``tier`` is unknown (body carries ``which: "tier"``)
+    - **Never 5xxs**: a synthesis failure short-circuits to the
+      grace-shape envelope so the surface keeps rendering.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        features = _parse_csv_arg("features")
+        if not features:
+            return jsonify({"error": "supply features=<csv>"}), 400
+        batch = _ent.next_tier_feature_spec_at_batch(tier_in, features)
+        if batch is None:
+            batch = {"target": None, "features": [], "unknown": []}
+        target = batch.get("target")
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": _ent.tier_label(tier_in),
+                "tier_rank": _ent.tier_rank(tier_in),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "features": batch.get("features", []),
+                "unknown": batch.get("unknown", []),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_feature_spec_at_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": None,
+                "tier_rank": -1,
+                "target": None,
+                "target_label": None,
+                "target_rank": None,
+                "features": [],
+                "unknown": [],
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-feature-spec-at-batch")
+def api_entitlement_previous_tier_feature_spec_at_batch():
+    """``GET /api/entitlement/previous-tier-feature-spec-at-batch?tier=<source>
+    &features=a,b,c`` -- batch sibling of
+    ``/api/entitlement/previous-tier-feature-spec-at``.
+
+    Source-anchored mirror of
+    ``/next-tier-feature-spec-at-batch`` and downgrade-confirmation
+    counterpart on the feature axis. Lets a downgrade-confirmation
+    card render "does each of THESE 6 features still unlock one rung
+    down?" off ONE call instead of N calls to
+    ``/previous-tier-feature-spec-at``.
+
+    Response shape matches ``/next-tier-feature-spec-at-batch``
+    byte-for-byte (``tier``, ``tier_label``, ``tier_rank``, ``target``,
+    ``target_label``, ``target_rank``, ``features``, ``unknown``).
+    ``target`` collapses to ``null`` at the floor (``oss`` /
+    ``cloud_free`` as source); ``features`` is empty in that branch.
+
+    - **400** when ``tier=`` or ``features=`` is missing / blank / empty
+      after normalisation
+    - **404** when ``tier`` is unknown.
+    - **Never 5xxs**.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        features = _parse_csv_arg("features")
+        if not features:
+            return jsonify({"error": "supply features=<csv>"}), 400
+        batch = _ent.previous_tier_feature_spec_at_batch(tier_in, features)
+        if batch is None:
+            batch = {"target": None, "features": [], "unknown": []}
+        target = batch.get("target")
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": _ent.tier_label(tier_in),
+                "tier_rank": _ent.tier_rank(tier_in),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "features": batch.get("features", []),
+                "unknown": batch.get("unknown", []),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_feature_spec_at_batch: error: %s",
+            exc,
+        )
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": None,
+                "tier_rank": -1,
+                "target": None,
+                "target_label": None,
+                "target_rank": None,
+                "features": [],
+                "unknown": [],
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-runtime-spec-at-batch")
+def api_entitlement_next_tier_runtime_spec_at_batch():
+    """``GET /api/entitlement/next-tier-runtime-spec-at-batch?tier=<source>
+    &runtimes=a,b,c`` -- batch sibling of
+    ``/api/entitlement/next-tier-runtime-spec-at``.
+
+    Runtime-axis twin of ``/next-tier-feature-spec-at-batch``.
+    Aliases are canonicalised (``claude-code`` -> ``claude_code``) and
+    aliases that collapse to a canonical id already in the response
+    are silently de-duplicated so the row count matches the
+    unique-canonical-id count.
+
+    Each row in ``runtimes[]`` is byte-identical to a row from
+    ``/runtime-spec-at-batch?tier=<target>&runtimes=<...>`` for the
+    resolved ``target = _next_purchasable_tier_after(tier)``. Unknown
+    ids do not 404 the call -- they are echoed in ``unknown[]``
+    carrying the supplied alias so the caller can correlate against
+    what was sent.
+
+    Response shape mirrors ``/next-tier-feature-spec-at-batch`` with
+    ``"runtimes"`` in place of ``"features"``.
+
+    - **400** when ``tier=`` or ``runtimes=`` is missing / blank / empty
+      after normalisation
+    - **404** when ``tier`` is unknown.
+    - **Never 5xxs**.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        runtimes = _parse_csv_arg("runtimes")
+        if not runtimes:
+            return jsonify({"error": "supply runtimes=<csv>"}), 400
+        batch = _ent.next_tier_runtime_spec_at_batch(tier_in, runtimes)
+        if batch is None:
+            batch = {"target": None, "runtimes": [], "unknown": []}
+        target = batch.get("target")
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": _ent.tier_label(tier_in),
+                "tier_rank": _ent.tier_rank(tier_in),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "runtimes": batch.get("runtimes", []),
+                "unknown": batch.get("unknown", []),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_runtime_spec_at_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": None,
+                "tier_rank": -1,
+                "target": None,
+                "target_label": None,
+                "target_rank": None,
+                "runtimes": [],
+                "unknown": [],
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-runtime-spec-at-batch")
+def api_entitlement_previous_tier_runtime_spec_at_batch():
+    """``GET /api/entitlement/previous-tier-runtime-spec-at-batch?tier=<source>
+    &runtimes=a,b,c`` -- batch sibling of
+    ``/api/entitlement/previous-tier-runtime-spec-at``.
+
+    Source-anchored mirror of
+    ``/next-tier-runtime-spec-at-batch`` and downgrade-confirmation
+    counterpart on the runtime axis. Aliases are canonicalised the
+    same way ``/next-tier-runtime-spec-at-batch`` already does.
+
+    Response shape matches ``/next-tier-runtime-spec-at-batch``
+    byte-for-byte (``tier``, ``tier_label``, ``tier_rank``, ``target``,
+    ``target_label``, ``target_rank``, ``runtimes``, ``unknown``).
+    ``target`` collapses to ``null`` at the floor; ``runtimes`` is
+    empty in that branch.
+
+    - **400** when ``tier=`` or ``runtimes=`` is missing / blank / empty
+      after normalisation
+    - **404** when ``tier`` is unknown.
+    - **Never 5xxs**.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        runtimes = _parse_csv_arg("runtimes")
+        if not runtimes:
+            return jsonify({"error": "supply runtimes=<csv>"}), 400
+        batch = _ent.previous_tier_runtime_spec_at_batch(tier_in, runtimes)
+        if batch is None:
+            batch = {"target": None, "runtimes": [], "unknown": []}
+        target = batch.get("target")
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": _ent.tier_label(tier_in),
+                "tier_rank": _ent.tier_rank(tier_in),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "runtimes": batch.get("runtimes", []),
+                "unknown": batch.get("unknown", []),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_runtime_spec_at_batch: error: %s",
+            exc,
+        )
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": None,
+                "tier_rank": -1,
+                "target": None,
+                "target_label": None,
+                "target_rank": None,
+                "runtimes": [],
+                "unknown": [],
+            }
+        )
