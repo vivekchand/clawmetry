@@ -1259,6 +1259,21 @@ class OpenClawAdapter(AgentAdapter):
             _cdcont = s.get("cronDeliveredContent") or s.get("deliveredContent")
             if _cdcont is not None:
                 extra["cronDeliveredContent"] = str(_cdcont)
+            # On-exit cron trigger kind (#3526): OpenClaw 2026.7.1 (#92037)
+            # stamps the schedule kind that triggered this session delivery
+            # ("on-exit", "every", "interval", "cron", …) so callers can
+            # distinguish exit-triggered runs from ordinary scheduled ones.
+            _csk = s.get("cronScheduleKind") or s.get("cronTriggerKind")
+            if _csk is not None:
+                extra["cronScheduleKind"] = str(_csk)
+            # Detached-run marker (#3526): OpenClaw 2026.7.1 (#98755) stamps
+            # cronDetachedRun on sessions that were spawned as a detached
+            # run (independent of the triggering session).
+            _cdr = s.get("cronDetachedRun")
+            if _cdr is None:
+                _cdr = s.get("cronDetached")
+            if _cdr is not None:
+                extra["cronDetachedRun"] = bool(_cdr)
             # GLM/Zhipu overload classification (#3343): PR #93241 classifies
             # Zhipu GLM overload as a distinct overload state for failover;
             # surface the tag so session views can indicate failover routing.
