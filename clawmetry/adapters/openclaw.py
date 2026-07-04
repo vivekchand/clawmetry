@@ -120,6 +120,107 @@ def _is_docker_runtime_down() -> Optional[bool]:
         return None
 
 
+def _openclaw_doctor_findings() -> list:
+    """Run ``openclaw doctor --json`` and return the list of structured
+    diagnostic findings (auth-profile, workspace, device-pairing,
+    channel-plugin, memory-provider, systemd-exhaustion, LAN-firewall).
+    Available since OpenClaw harness 2026.7.1 (#97125+). Returns [] when
+    openclaw is absent, the --json flag is unsupported, or output is not
+    valid JSON. Never raises.
+    """
+    try:
+        import shutil as _sh
+        if not _sh.which("openclaw"):
+            return []
+        import subprocess as _sp
+        res = _sp.run(
+            ["openclaw", "doctor", "--json"],
+            capture_output=True, text=True, timeout=15,
+        )
+        raw = (res.stdout or "").strip()
+        if not raw:
+            return []
+        import json as _json
+        data = _json.loads(raw)
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            for _key in ("findings", "results", "diagnostics"):
+                if isinstance(data.get(_key), list):
+                    return data[_key]
+        return []
+    except Exception:
+        return []
+
+
+def _clawrouter_detect() -> dict:
+    """Detect the ClawRouter bundled provider plugin (OpenClaw 2026.7.1, #99658).
+
+    ClawRouter adds credential-scoped dynamic model discovery,
+    OpenAI-compatible + native Anthropic/Gemini transports, and managed
+    budget/quota reporting across OpenClaw usage surfaces. Config and quota
+    data are written to ``~/.openclaw/clawrouter/`` by the harness onboarding
+    step (override with ``OPENCLAW_CLAWROUTER_HOME``).
+
+    Returns a dict with zero or more of:
+    - ``clawRouterEnabled`` (bool)
+    - ``clawRouterVersion`` (str)
+    - ``clawRouterTransports`` (list[str])
+    - ``clawRouterModels`` (list[str])
+    - ``clawRouterBudgetUsd`` (float) — aggregate managed budget in USD
+    - ``clawRouterQuotaCredentials`` (int) — number of credential scopes
+
+    Returns ``{}`` when the plugin is absent (pre-2026.7.1 or unconfigured).
+    Read-only, never raises.
+    """
+    import json as _json
+
+    home = os.environ.get("OPENCLAW_CLAWROUTER_HOME") or os.path.expanduser(
+        os.path.join("~", ".openclaw", "clawrouter"))
+    config_path = os.path.join(home, "config.json")
+    quota_path = os.path.join(home, "quota.json")
+
+    out: dict = {}
+
+    # Main config: enabled flag, version, transport list, model catalog
+    try:
+        with open(config_path, encoding="utf-8") as _fh:
+            cfg = _json.load(_fh)
+        out["clawRouterEnabled"] = bool(cfg.get("enabled", True))
+        version = cfg.get("version") or cfg.get("pluginVersion")
+        if version:
+            out["clawRouterVersion"] = str(version)
+        transports = cfg.get("transports") or cfg.get("transport") or []
+        if isinstance(transports, list) and transports:
+            out["clawRouterTransports"] = [str(t) for t in transports if t]
+        models = cfg.get("models") or cfg.get("modelCatalog") or []
+        if isinstance(models, list) and models:
+            out["clawRouterModels"] = [
+                str(m.get("name") or m) if isinstance(m, dict) else str(m)
+                for m in models if m
+            ]
+    except (OSError, ValueError, KeyError):
+        pass
+
+    # Quota file: aggregate managed budget + credential-scope count
+    try:
+        with open(quota_path, encoding="utf-8") as _fh:
+            quota = _json.load(_fh)
+        budget = quota.get("totalBudgetUsd") or quota.get("budgetUsd")
+        if budget is not None:
+            try:
+                out["clawRouterBudgetUsd"] = float(budget)
+            except (TypeError, ValueError):
+                pass
+        creds = quota.get("credentials") or quota.get("credentialScopes") or []
+        if isinstance(creds, list) and creds:
+            out["clawRouterQuotaCredentials"] = len(creds)
+    except (OSError, ValueError, KeyError):
+        pass
+
+    return out
+
+
 def _real_install(sessions_dir: str) -> bool:
     """A genuine OpenClaw install signal, NOT the bare ~/.openclaw dir that
     ClawMetry itself creates as a scratch workspace. Any one of: the openclaw
@@ -325,6 +426,59 @@ def _openshell_sandbox_logs(name: str, count: int = 20) -> list:
         return []
 
 
+def _sandbox_egress_denied_count(name: str, count: int = 100) -> dict:
+    """Count DNS-backed HTTPS fail-closed denial events in recent sandbox OCSF logs.
+
+    Fetches the <count> most-recent OCSF audit events for sandbox <name> and
+    counts those with verdict=='deny' that carry a network-egress context:
+    either an OCSF network-activity class_uid (4001-4004) or the presence of
+    endpoint fields (dst_endpoint / src_endpoint) that imply a connection
+    attempt.  Returns {"egressDeniedCount": N} when N>0 so callers can
+    .update() a sandbox entry dict directly; returns {} otherwise -- identical
+    to the _openshell_sandbox_ocsf_enabled() contract.  Never raises.
+    """
+    _NETWORK_CLASS_UIDS = frozenset([4001, 4002, 4003, 4004])
+    try:
+        events = _openshell_sandbox_logs(name, count=count)
+        denied = 0
+        for evt in events:
+            if not isinstance(evt, dict):
+                continue
+            if evt.get("verdict") != "deny":
+                continue
+            class_uid = evt.get("class_uid")
+            if class_uid in _NETWORK_CLASS_UIDS:
+                denied += 1
+            elif "dst_endpoint" in evt or "src_endpoint" in evt:
+                denied += 1
+        if denied:
+            return {"egressDeniedCount": denied}
+        return {}
+    except Exception:
+        return {}
+
+
+def _openshell_sandbox_logs_tail(name: str):
+    """Spawn ``openshell logs <name> --source all --tail`` as a long-lived child
+    process and return the ``subprocess.Popen`` handle.
+
+    The caller owns process lifetime — drain stdout non-blockingly each sync
+    tick and call ``proc.terminate()`` + ``proc.wait()`` on daemon shutdown.
+    Returns ``None`` when openshell is absent or the spawn fails; never raises.
+    """
+    try:
+        import shutil as _sh
+        if not _sh.which("openshell"):
+            return None
+        import subprocess as _sp
+        return _sp.Popen(
+            ["openshell", "logs", name, "--source", "all", "--tail"],
+            stdout=_sp.PIPE, stderr=_sp.DEVNULL, text=True, bufsize=1,
+        )
+    except Exception:
+        return None
+
+
 def _sandbox_inference_configs() -> list:
     """Read per-sandbox inference config from ~/.nemoclaw/sandboxes.json.
 
@@ -399,6 +553,7 @@ def _sandbox_inference_configs() -> list:
                 }
                 entry.update(_openshell_sandbox_phase_policy(name))
                 entry.update(_openshell_sandbox_ocsf_enabled(name))
+                entry.update(_sandbox_egress_denied_count(name))
                 if json_runtime_kind and "sandboxRuntimeKind" not in entry:
                     entry["sandboxRuntimeKind"] = json_runtime_kind
                 out.append(entry)
@@ -425,11 +580,81 @@ def _sandbox_inference_configs() -> list:
             }
             entry.update(_openshell_sandbox_phase_policy(name))
             entry.update(_openshell_sandbox_ocsf_enabled(name))
+            entry.update(_sandbox_egress_denied_count(name))
             if json_runtime_kind and "sandboxRuntimeKind" not in entry:
                 entry["sandboxRuntimeKind"] = json_runtime_kind
             out.append(entry)
         except Exception:
             continue
+
+    # -- gap #3503: terminal/agent-execution sandboxes not in sandboxes.json --
+    # agents.yaml carries the *intent* roster; terminal-kind coding-agent
+    # sandboxes (e.g. deepagents-code) have no inference-routing entry and are
+    # invisible to the loop above. Discover them from agents.yaml and probe
+    # each with the openshell helpers so Phase/Policy/Runtime/OCSF/egress data
+    # reaches the dashboard exactly as it does for inference-routing sandboxes.
+    _seen = {e["sandbox"] for e in out}
+    try:
+        _home2 = os.environ.get("HOME") or os.path.expanduser("~")
+        _manifest = os.path.join(_home2, ".nemoclaw", "agents.yaml")
+        if os.path.isfile(_manifest):
+            with open(_manifest, "r", encoding="utf-8") as _fh:
+                _mc = _fh.read()
+            _agents: list = []
+            try:
+                import yaml as _yaml  # type: ignore[import]
+                _md = _yaml.safe_load(_mc)
+                if isinstance(_md, dict):
+                    _raw = _md.get("agents", [])
+                    if isinstance(_raw, list):
+                        _agents = [a for a in _raw if isinstance(a, dict)]
+                    elif isinstance(_raw, dict):
+                        _agents = [
+                            {"name": k, **(v if isinstance(v, dict) else {})}
+                            for k, v in _raw.items()
+                        ]
+                elif isinstance(_md, list):
+                    _agents = [a for a in _md if isinstance(a, dict)]
+            except ImportError:
+                # yaml unavailable: line-scan for sandbox:/name: entries
+                for _line in _mc.splitlines():
+                    _s = _line.strip()
+                    for _pfx in ("sandbox:", "- sandbox:"):
+                        if _s.startswith(_pfx):
+                            _v = _s[len(_pfx):].strip().strip("\"'")
+                            if _v:
+                                _agents.append({"sandbox": _v})
+                            break
+                    else:
+                        if _s.startswith("- name:"):
+                            _, _, _v2 = _s.partition(":")
+                            _v2 = _v2.strip().strip("\"'")
+                            if _v2:
+                                _agents.append({"name": _v2})
+            except Exception:
+                _agents = []
+            for _agent in _agents:
+                if not isinstance(_agent, dict):
+                    continue
+                _sb = (_agent.get("sandbox") or _agent.get("name") or "").strip()
+                if not _sb or _sb in _seen:
+                    continue
+                _seen.add(_sb)
+                _te: dict = {
+                    "sandbox": _sb,
+                    "isDefault": False,
+                    "provider": "terminal",
+                    "providerKey": "terminal",
+                    "primaryModelRef": "",
+                    "sandboxSource": "agents.yaml",
+                }
+                _te.update(_openshell_sandbox_phase_policy(_sb))
+                _te.update(_openshell_sandbox_ocsf_enabled(_sb))
+                _te.update(_sandbox_egress_denied_count(_sb))
+                out.append(_te)
+    except Exception:
+        pass
+
     return out
 
 
@@ -776,7 +1001,9 @@ def _scan_openclaw_selection_runtime() -> tuple[bool, bool, bool]:
     return patched, native_base, native_enforcement
 
 
-def _nemoclaw_tool_catalog_state() -> Optional[bool]:
+def _nemoclaw_tool_catalog_state(
+    tools_present: Optional[bool] = None,
+) -> Optional[bool]:
     """Whether the NemoClaw compact tool-catalog wrapper is active for this
     runtime (#2683).
 
@@ -791,14 +1018,28 @@ def _nemoclaw_tool_catalog_state() -> Optional[bool]:
     (the patch marker is present in the openclaw dist, or the env var is
     explicitly set); returns ``None`` on plain OpenClaw so we never assert a
     catalog state that doesn't exist. Never raises.
+
+    Args:
+        tools_present: When the caller knows whether the turn/session had any
+            registered tools, pass ``True`` or ``False`` to mirror the
+            tools-count half of the harness gate
+            (``effectiveTools.length > 0 || clientTools?.length > 0``,
+            #3432).  ``None`` (default) skips the tools-present check and
+            falls back to the env-var-only gate — safe when the caller cannot
+            determine tool count.
     """
     env = os.environ.get("NEMOCLAW_TOOL_CATALOG")
     patched, _native, _native_enf = _scan_openclaw_selection_runtime()
     if not patched and env is None:
         # No NemoClaw signal at all -> don't claim a catalog state.
         return None
-    # Mirror the harness gate exactly: enabled unless explicitly "0".
-    return env != "0"
+    # Mirror the harness gate exactly: disabled when env var is "0" OR when
+    # the caller knows no tools were registered for this turn/session (#3432).
+    if env == "0":
+        return False
+    if tools_present is False:
+        return False
+    return True
 
 
 def _openclaw_tool_catalog_kind() -> Optional[str]:
@@ -927,6 +1168,15 @@ class OpenClawAdapter(AgentAdapter):
             _sb_configs = _sandbox_inference_configs()
             if _sb_configs:
                 meta["sandboxInferenceConfigs"] = _sb_configs
+            # DNS-backed HTTPS fail-closed enforcement (#3471): aggregate denial
+            # events across all known sandboxes.  Only written when >0 denials
+            # so absence of the key on plain OpenClaw installs is unambiguous.
+            _dns_denied_total = sum(
+                c.get("egressDeniedCount", 0) for c in _sb_configs
+            ) if _sb_configs else 0
+            if _dns_denied_total:
+                meta["dnsFailClosedCount"] = _dns_denied_total
+                meta["networkEgressDenied"] = True
             # Agents manifest (#3185): agent roster + per-agent sandbox/config
             # from ~/.nemoclaw/agents.yaml (written by harness onboarding,
             # commit 01e5525).
@@ -943,6 +1193,20 @@ class OpenClawAdapter(AgentAdapter):
             _docker_down = _is_docker_runtime_down()
             if _docker_down is not None:
                 meta["dockerRuntimeDown"] = _docker_down
+            # Doctor findings (#3468): structured diagnostic findings from
+            # `openclaw doctor --json` (harness 2026.7.1). Categories:
+            # auth-profile, workspace, device-pairing, channel-plugin,
+            # memory-provider, systemd-exhaustion, Windows LAN-firewall.
+            _doctor = _openclaw_doctor_findings()
+            if _doctor:
+                meta["doctorFindings"] = _doctor
+            # ClawRouter bundled provider plugin (#3524, OpenClaw 2026.7.1
+            # #99658). Credential-scoped dynamic model discovery, multi-transport
+            # routing, and managed budget/quota reporting across OpenClaw usage
+            # surfaces. Returns {} on pre-2026.7.1 installs.
+            _cr = _clawrouter_detect()
+            if _cr:
+                meta.update(_cr)
             return DetectResult(
                 name=self.name,
                 display_name=self.display_name,
@@ -968,10 +1232,6 @@ class OpenClawAdapter(AgentAdapter):
         except Exception as exc:
             logger.warning(f"OpenClaw list_sessions() failed: {exc}")
             return []
-        # Runtime-level NemoClaw tool-catalog state (#2683): whether the
-        # compact tool-catalog wrapper is active for this install. None on
-        # plain OpenClaw (no NemoClaw signal) — we don't stamp a state then.
-        _tc_enabled = _nemoclaw_tool_catalog_state()
         # Catalog provenance (#2732): "nemoclaw" or "native" when either
         # signal is present, so native-tool-search OpenClaw builds are no
         # longer indistinguishable from "no catalog at all".
@@ -985,6 +1245,18 @@ class OpenClawAdapter(AgentAdapter):
                 "contextTokens": s.get("contextTokens"),
                 "agentId": s.get("agent") or "main",
             }
+            # Runtime-level NemoClaw tool-catalog state (#2683 / #3432): mirror
+            # the full harness gate — env var AND tools-present. Derive
+            # tools_present from whichever tool-count alias the session record
+            # carries; fall back to None (unknown) when absent so existing
+            # gateway records that lack the field keep today's behaviour.
+            _raw_tc = (
+                s.get("toolCallCount")
+                or s.get("totalToolCalls")
+                or s.get("toolCount")
+            )
+            _tools_present = bool(_raw_tc) if _raw_tc is not None else None
+            _tc_enabled = _nemoclaw_tool_catalog_state(tools_present=_tools_present)
             if _tc_enabled is not None:
                 extra["nemoclawToolCatalogEnabled"] = _tc_enabled
             if _tc_kind is not None:
@@ -1025,6 +1297,15 @@ class OpenClawAdapter(AgentAdapter):
             _idt = s.get("target") or s.get("identityTarget")
             if _idt is not None:
                 extra["identityTarget"] = _idt
+            # External-harness attachment (#3470): `openclaw attach` resumes an
+            # existing gateway session via an external harness (PR #96454).  The
+            # gateway stamps kind='attached' and/or an externalHarness boolean.
+            # Surface a typed flag so the frontend can distinguish these sessions.
+            _ext = s.get("externalHarness") or (
+                s.get("kind", "").lower() in ("attached", "external")
+            )
+            if _ext:
+                extra["externalHarness"] = True
             # Cron delivery awareness (#3342): PR #93580 stamps a
             # cronDeliveryTarget marker on sessions that are delivery targets
             # of a cron job so they can be correlated with the originating
@@ -1053,6 +1334,21 @@ class OpenClawAdapter(AgentAdapter):
             _cdcont = s.get("cronDeliveredContent") or s.get("deliveredContent")
             if _cdcont is not None:
                 extra["cronDeliveredContent"] = str(_cdcont)
+            # On-exit cron trigger kind (#3526): OpenClaw 2026.7.1 (#92037)
+            # stamps the schedule kind that triggered this session delivery
+            # ("on-exit", "every", "interval", "cron", …) so callers can
+            # distinguish exit-triggered runs from ordinary scheduled ones.
+            _csk = s.get("cronScheduleKind") or s.get("cronTriggerKind")
+            if _csk is not None:
+                extra["cronScheduleKind"] = str(_csk)
+            # Detached-run marker (#3526): OpenClaw 2026.7.1 (#98755) stamps
+            # cronDetachedRun on sessions that were spawned as a detached
+            # run (independent of the triggering session).
+            _cdr = s.get("cronDetachedRun")
+            if _cdr is None:
+                _cdr = s.get("cronDetached")
+            if _cdr is not None:
+                extra["cronDetachedRun"] = bool(_cdr)
             # GLM/Zhipu overload classification (#3343): PR #93241 classifies
             # Zhipu GLM overload as a distinct overload state for failover;
             # surface the tag so session views can indicate failover routing.
@@ -1070,6 +1366,15 @@ class OpenClawAdapter(AgentAdapter):
             _zai = s.get("zaiBaseUrl") or s.get("synthesizedModelBaseUrl") or s.get("glm5BaseUrl")
             if _zai is not None:
                 extra["zaiBaseUrl"] = _zai
+            # Per-conversation capability profile (#3469): PR #98536 adds
+            # capabilityProfile / conversationCapability to session records
+            # (OpenClaw harness 2026.7.1, "Safer scoped conversations").
+            _cap_profile = (
+                s.get("capabilityProfile")
+                or s.get("conversationCapability")
+            )
+            if _cap_profile is not None:
+                extra["capabilityProfile"] = _cap_profile
             tok_total = int(s.get("totalTokens") or 0)
             tok_in = int(s.get("inputTokens") or 0)
             tok_out = int(s.get("outputTokens") or 0)
@@ -1280,6 +1585,13 @@ class OpenClawAdapter(AgentAdapter):
                             _zai = obj.get("zaiBaseUrl") or obj.get("synthesizedModelBaseUrl") or obj.get("glm5BaseUrl")
                             if _zai is not None:
                                 extra["zaiBaseUrl"] = _zai
+                            # Per-conversation capability profile (#3469): PR #98536.
+                            _cap_profile = (
+                                obj.get("capabilityProfile")
+                                or obj.get("conversationCapability")
+                            )
+                            if _cap_profile is not None:
+                                extra["capabilityProfile"] = _cap_profile
                             # Normalized TTFR keys (#3054): also write ttfr_ms /
                             # slow_reply so callers that read the normalized form
                             # don't need to know the original key spellings.

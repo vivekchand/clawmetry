@@ -118,6 +118,16 @@ def click_tab(page: Page, tab_label: str):
     `.nav-tab` text match, then skips cleanly.
     """
     key = _TAB_KEY.get(tab_label, tab_label.lower())
+    # Phase A beginner IA: sub-tabs live inside collapsed drawers (Developer +
+    # Advanced, both [hidden] by default). Expand them so the item is clickable.
+    page.evaluate(
+        """() => {
+          for (const id of ['left-nav-live-list', 'left-nav-advanced-list']) {
+            const el = document.getElementById(id);
+            if (el && el.hasAttribute('hidden')) el.removeAttribute('hidden');
+          }
+        }"""
+    )
     by_key = page.locator(f"[data-tab='{key}']")
     if by_key.count() > 0:
         by_key.first.click()

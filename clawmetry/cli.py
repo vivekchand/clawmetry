@@ -247,13 +247,15 @@ def _stop_existing_daemon() -> None:
         )
     elif system == "Linux":
         if __import__("shutil").which("systemctl"):
-            subprocess.run(
-                ["systemctl", "--user", "stop", "clawmetry-sync"],
-                check=False,
-                capture_output=True,
-            )
-        else:
-            _kill_sync_daemon()
+            # Stop whichever scope owns it: --user (non-root) or system (root).
+            for _scope in (["--user"], []):
+                subprocess.run(
+                    ["systemctl", *_scope, "stop", "clawmetry-sync"],
+                    check=False,
+                    capture_output=True,
+                )
+        # Belt-and-braces: also kill any bare background subprocess daemon.
+        _kill_sync_daemon()
 
     # Send offline heartbeat for old node to deregister it from cloud
     if old_node_id and old_api_key:
@@ -283,20 +285,78 @@ def _stop_existing_daemon() -> None:
         LOG_FILE.write_text("")
 
 
-def _oauth_browser_login(provider: str) -> str:
-    """Browser-bridge OAuth for `clawmetry connect`.
+def _is_headless() -> bool:
+    """True when webbrowser.open() almost certainly can't reach a GUI on THIS host.
 
-    Spins up a one-shot loopback server on 127.0.0.1, opens the cloud OAuth flow
-    with cli_port=<our port>, and captures the cm_ key that the callback redirects
-    back to loopback. Returns "" on timeout/error so the caller falls back to email
-    OTP. The key only ever travels over 127.0.0.1 — nothing is exposed off-host.
+    Used only to ORDER the auth flows, never as a hard gate: the headless path is
+    an interactive paste prompt (not a timed wait), so a wrong guess can never
+    hang the CLI. macOS/Windows always have a usable browser. On Linux, no
+    DISPLAY/WAYLAND or an SSH session means the browser would open on a DIFFERENT
+    machine (the loopback callback can't reach this box). CLAWMETRY_NO_BROWSER=1
+    forces it (for users who know their box, and for the live test).
+    """
+    if os.environ.get("CLAWMETRY_NO_BROWSER") == "1":
+        return True
+    if sys.platform in ("darwin", "win32"):
+        return False
+    no_display = not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY")
+    ssh = bool(os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY") or os.environ.get("SSH_CLIENT"))
+    return no_display or ssh
+
+
+def _oauth_browser_login(provider: str, input_fn=input, api_call=None) -> str:
+    """OAuth sign-in for `clawmetry connect` (GitHub / Google).
+
+    Desktop: a one-shot 127.0.0.1 loopback server captures the cm_ key the cloud
+    callback redirects back (the key never leaves 127.0.0.1). Headless/remote
+    (SSH/VPS, no GUI): the loopback can't be reached by a browser on another
+    machine, so we use a Claude-Code-style paste-code path instead. The CLI
+    generates a PKCE verifier (kept in memory; only its SHA256 challenge leaves
+    the process), the cloud shows a short single-use code, the user pastes it,
+    and the CLI redeems code+verifier at /api/oauth/cli/exchange over INGEST_URL.
+    Returns "" on timeout/skip/error so the caller falls back to email OTP.
     """
     import http.server
     import urllib.parse
     import webbrowser
     import time as _time
+    import secrets as _secrets
+    import hashlib as _hashlib
+    import base64 as _base64
 
     app_base = os.environ.get("CLAWMETRY_APP_BASE", "https://app.clawmetry.com").rstrip("/")
+
+    # PKCE: the verifier stays in CLI memory only; only its SHA256 (the
+    # challenge) ever leaves this process, in the start URL.
+    verifier = _base64.urlsafe_b64encode(_secrets.token_bytes(32)).rstrip(b"=").decode()
+    challenge = _base64.urlsafe_b64encode(
+        _hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+
+    def _paste_path() -> str:
+        """Headless paste-code path. No loopback; redeem over INGEST_URL."""
+        url = f"{app_base}/api/oauth/{provider}/start?cli_paste=1&cc={challenge}"
+        print(f"\n  Browser didn't open? Use the url below to sign in with {provider.title()}:\n  {url}\n")
+        try:
+            webbrowser.open(url)  # best-effort; no-ops on a headless box
+        except Exception:
+            pass
+        code = input_fn("  Paste code here if prompted > ").strip()
+        if not code or api_call is None:
+            return ""
+        resp = api_call("/api/oauth/cli/exchange", {"code": code, "verifier": verifier})
+        if isinstance(resp, dict) and str(resp.get("api_key", "")).startswith("cm_"):
+            print("  Account created. Welcome to ClawMetry." if resp.get("is_new")
+                  else "  Welcome back.")
+            return resp["api_key"]
+        err = (resp or {}).get("error", "that code did not work") if isinstance(resp, dict) else "network error"
+        print(f"  Sign-in could not be completed ({err}).")
+        return ""
+
+    # Headless/remote: skip loopback entirely and use the interactive paste path.
+    if _is_headless():
+        return _paste_path()
+
+    # Desktop: one-shot loopback fast-path.
     captured = {}
 
     class _Handler(http.server.BaseHTTPRequestHandler):
@@ -304,7 +364,7 @@ def _oauth_browser_login(provider: str) -> str:
             params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             captured["token"] = (params.get("token") or [""])[0]
             ok = captured["token"].startswith("cm_")
-            msg = ("You're connected — return to your terminal."
+            msg = ("You're connected. Return to your terminal."
                    if ok else "Sign-in failed. Return to your terminal and use email instead.")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -323,11 +383,12 @@ def _oauth_browser_login(provider: str) -> str:
     try:
         srv = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
     except OSError:
-        return ""
+        # Can't bind loopback -> fall through to the paste path rather than fail.
+        return _paste_path()
     port = srv.server_address[1]
     url = f"{app_base}/api/oauth/{provider}/start?cli_port={port}"
-    print(f"\n  🌐 Opening your browser to sign in with {provider.title()}…")
-    print(f"  If it doesn't open, paste this into your browser:\n  {url}\n")
+    print(f"\n  Opening your browser to sign in with {provider.title()}.")
+    print(f"  Browser didn't open? Use the url below to sign in:\n  {url}\n")
     try:
         webbrowser.open(url)
     except Exception:
@@ -379,14 +440,17 @@ def _get_api_key_interactive() -> str:
 
     print()
     print("  Sign in with:")
-    print("    [1] GitHub      [2] Google      (opens your browser)")
+    print("    [1] GitHub      [2] Google")
     print("    …or type your email to get a 6-digit code.")
     entry = _input("  > ").strip()
 
-    # Browser-bridge OAuth (GitHub / Google). Falls back to email on failure.
+    # OAuth (GitHub / Google). Desktop uses a loopback browser hand-off; a
+    # headless/remote box (SSH/VPS) uses a paste-code path. Falls back to email
+    # on failure. _input is /dev/tty-aware (piped installs) and _api_call talks
+    # to INGEST_URL, both required by the headless exchange.
     _provider = {"1": "github", "github": "github", "2": "google", "google": "google"}.get(entry.lower())
     if _provider:
-        _key = _oauth_browser_login(_provider)
+        _key = _oauth_browser_login(_provider, input_fn=_input, api_call=_api_call)
         if _key:
             return _key
         print("  Couldn't complete browser sign-in. Let's use email instead.")
@@ -709,6 +773,15 @@ def _cmd_connect(args) -> None:
             sys.exit(1)
 
     from clawmetry.sync import generate_encryption_key, _derive_key_for_storage
+
+    # Accept CM_KEY=scroll://<mnemonic> env var — v5 node pairing flow (#1522).
+    # Strip the scroll:// URI prefix; the bare mnemonic/key material then feeds
+    # into the existing _derive_key_for_storage path just like --enc-key does.
+    _cm_key_env = os.environ.get("CM_KEY", "")
+    if _cm_key_env.startswith("scroll://"):
+        _cm_key_env = _cm_key_env[len("scroll://"):]
+    if _cm_key_env and not getattr(args, "enc_key", None):
+        setattr(args, "enc_key", _cm_key_env)
 
     # Always prompt for encryption key — be transparent.
     # A typed passphrase is run through a strong salted KDF (scrypt) and we store
@@ -1059,13 +1132,33 @@ def _register_launchd(config: dict) -> None:
 def _register_systemd(config: dict) -> None:
     from clawmetry.sync import LOG_FILE
     import subprocess
+    import shutil
+    import os as _os
+    from pathlib import Path as _Path
 
     label = "clawmetry-sync"
-    service_dir = __import__("pathlib").Path.home() / ".config" / "systemd" / "user"
-    service_dir.mkdir(parents=True, exist_ok=True)
-    service_path = service_dir / f"{label}.service"
-    # Use the current interpreter (venv-aware) so the daemon finds clawmetry
-    python = sys.executable
+    python = sys.executable  # current interpreter (venv-aware)
+    # `systemctl --user` needs a per-user D-Bus session, which root over SSH on a
+    # VPS usually does NOT have (enable --now then fails with "Failed to connect
+    # to bus" and the daemon silently never starts). So for root we install a
+    # SYSTEM service (persists across reboots + actually starts); non-root uses a
+    # --user service. Either way we VERIFY it came up and fall back to a detached
+    # background subprocess if systemd is unavailable / failed.
+    try:
+        _is_root = _os.geteuid() == 0
+    except Exception:
+        _is_root = False
+
+    if _is_root:
+        service_dir = _Path("/etc/systemd/system")
+        wanted_by = "multi-user.target"
+        scope = []            # system scope: `systemctl ...`
+        extra_unit = "User=root\n"
+    else:
+        service_dir = _Path.home() / ".config" / "systemd" / "user"
+        wanted_by = "default.target"
+        scope = ["--user"]    # user scope: `systemctl --user ...`
+        extra_unit = ""
 
     unit = f"""[Unit]
 Description=ClawMetry Cloud Sync Daemon
@@ -1076,27 +1169,42 @@ ExecStart={python} -m clawmetry.sync
 # Issue #1310 — gateway WS tap default-on so Telegram/Signal/Slack
 # channel messages reach DuckDB. Tap silently no-ops on scope rejection.
 Environment=CLAWMETRY_ENABLE_WS_TAP=1
-Restart=always
+{extra_unit}Restart=always
 RestartSec=30
 StandardOutput=append:{LOG_FILE}
 StandardError=append:{LOG_FILE}
 
 [Install]
-WantedBy=default.target
+WantedBy={wanted_by}
 """
-    service_path.write_text(unit)
-    # Check if systemctl is available (not in Docker/containers without systemd)
-    import shutil
 
+    _installed = False
     if shutil.which("systemctl"):
-        subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
-        subprocess.run(["systemctl", "--user", "enable", "--now", label], check=False)
-        print("  Running in the background. Your data is syncing to the cloud.")
+        try:
+            service_dir.mkdir(parents=True, exist_ok=True)
+            (service_dir / f"{label}.service").write_text(unit)
+            subprocess.run(["systemctl", *scope, "daemon-reload"],
+                           check=False, capture_output=True)
+            subprocess.run(["systemctl", *scope, "enable", "--now", label],
+                           check=False, capture_output=True)
+            # Verify it actually started (systemd may have refused, e.g. no
+            # --user bus). Give it a moment, then check active OR the process.
+            import time as _t
+            _t.sleep(1.0)
+            _chk = subprocess.run(["systemctl", *scope, "is-active", label],
+                                  capture_output=True, text=True)
+            _installed = _chk.stdout.strip() == "active" or _is_sync_running()
+        except Exception:
+            _installed = False
+
+    if _installed:
+        _how = "system service" if _is_root else "user service"
+        print(f"  Running in the background as a systemd {_how}. Your data is syncing to the cloud.")
         print("  To stop: clawmetry disconnect")
     else:
         if sys.stdout.isatty():
-            print("  ⚠️  systemctl not available (container/Docker?).")
-            print("  Falling back to background subprocess…")
+            print("  systemd unavailable here (container, or root with no --user session)")
+            print("  — starting a background process instead…")
         _start_subprocess()
 
 
@@ -1147,24 +1255,27 @@ def _cmd_disconnect(args) -> None:
         print(f"✅  Stopped launchd daemon ({label})")
     elif system == "Linux":
         if __import__("shutil").which("systemctl"):
-            subprocess.run(
-                ["systemctl", "--user", "disable", "--now", "clawmetry-sync"],
-                check=False,
-                capture_output=True,
-            )
-            svc = (
-                __import__("pathlib").Path.home()
-                / ".config"
-                / "systemd"
-                / "user"
-                / "clawmetry-sync.service"
-            )
-            if svc.exists():
-                svc.unlink()
-            print("✅  Stopped systemd daemon (clawmetry-sync)")
-        else:
-            _kill_sync_daemon()
-            print("✅  Stopped sync daemon")
+            # Disable + stop whichever scope owns it (--user for non-root, system
+            # for root) so Restart=always can't bring it back, then remove the
+            # unit file from both possible locations.
+            from pathlib import Path as _P2
+            for _scope in (["--user"], []):
+                subprocess.run(
+                    ["systemctl", *_scope, "disable", "--now", "clawmetry-sync"],
+                    check=False,
+                    capture_output=True,
+                )
+            for _svc in (_P2.home() / ".config" / "systemd" / "user" / "clawmetry-sync.service",
+                         _P2("/etc/systemd/system/clawmetry-sync.service")):
+                try:
+                    if _svc.exists():
+                        _svc.unlink()
+                except Exception:
+                    pass
+            subprocess.run(["systemctl", "--user", "daemon-reload"], check=False, capture_output=True)
+            subprocess.run(["systemctl", "daemon-reload"], check=False, capture_output=True)
+        _kill_sync_daemon()  # also kill any bare subprocess daemon
+        print("✅  Stopped sync daemon")
 
     if CONFIG_FILE.exists():
         CONFIG_FILE.unlink()
@@ -1448,17 +1559,23 @@ def _cmd_uninstall() -> None:
             _kill_sync_daemon()
             print(f"  ✅  Killed {_stray} stray sync process(es)")
     elif system == "Linux":
-        svc = home / ".config" / "systemd" / "user" / "clawmetry-sync.service"
+        _svcs = [home / ".config" / "systemd" / "user" / "clawmetry-sync.service",
+                 __import__("pathlib").Path("/etc/systemd/system/clawmetry-sync.service")]
         if shutil.which("systemctl"):
-            subprocess.run(
-                ["systemctl", "--user", "disable", "--now", "clawmetry-sync"],
-                check=False,
-                capture_output=True,
-            )
+            for _scope in (["--user"], []):  # --user (non-root) + system (root)
+                subprocess.run(
+                    ["systemctl", *_scope, "disable", "--now", "clawmetry-sync"],
+                    check=False,
+                    capture_output=True,
+                )
         _stray = _count_sync_daemons()
         _kill_sync_daemon()
-        if svc.exists():
-            svc.unlink()
+        for svc in _svcs:
+            try:
+                if svc.exists():
+                    svc.unlink()
+            except Exception:
+                pass
         print("  ✅  Stopped and removed sync daemon" + (f" + {_stray} stray process(es)" if _stray else ""))
 
     # 2. Pip uninstall (BEFORE removing venv, since sys.executable may live there)
@@ -1657,6 +1774,17 @@ def _cmd_status(args) -> None:
 
     print("ClawMetry Status\n" + "─" * 40)
 
+    # Installed version — so it's obvious at a glance whether this box is on the
+    # latest (the #1 "why is my node behaving like an old build" clue). Uses the
+    # lightweight package metadata, not the heavy dashboard import.
+    try:
+        import importlib.metadata as _md
+        _cm_ver = _md.version("clawmetry")
+    except Exception:
+        _cm_ver = ""
+    if _cm_ver:
+        print(f"  Version:     {_cm_ver}")
+
     # Config
     if CONFIG_FILE.exists():
         try:
@@ -1671,6 +1799,21 @@ def _cmd_status(args) -> None:
             print("  Cloud sync:  ✅  Connected")
             print(f"  API key:     {masked_api}")
             _acct_email, _acct_plan = _resolve_account_email(api_key)
+            # Self-heal the local plan cache from the LIVE account. The runtime
+            # entitlement gate below (and the daemon + dashboard) read
+            # ~/.clawmetry/cloud_plan.json, which only the daemon refreshes on a
+            # heartbeat. If the daemon is down, or hasn't heartbeated since the
+            # user upgraded (free -> trial/pro), that cache is stale and status
+            # contradicts itself ("trial" in the header, "FREE plan" in the gate).
+            # Mirroring the live plan here makes the gate reflect the real plan
+            # immediately and seeds the entitlement resolver so paid runtimes
+            # flip on without waiting for the daemon. Best-effort; never raises.
+            if _acct_plan:
+                try:
+                    from clawmetry.sync import _persist_cloud_plan_to_disk as _pcp
+                    _pcp(_acct_plan)
+                except Exception:
+                    pass
             if _acct_email:
                 _plan_suffix = f"  ({_acct_plan})" if _acct_plan else ""
                 _acct_note = "  ⚠ temporary, not linked" if _is_placeholder_account(_acct_email) else ""
@@ -1783,21 +1926,31 @@ def _cmd_status(args) -> None:
         import subprocess
         import shutil
 
-        if shutil.which("systemctl"):
-            r = subprocess.run(
-                ["systemctl", "--user", "is-active", "clawmetry-sync"],
-                capture_output=True,
-                text=True,
-            )
-            running = r.stdout.strip() == "active"
-            print(
-                f"  Daemon:      {'✅  Running (systemd)' if running else '○  Not running'}"
-            )
-        else:
-            running = _is_sync_running()
-            print(
-                f"  Daemon:      {'✅  Running (subprocess)' if running else '○  Not running'}"
-            )
+        # The actual process check is the source of truth: the daemon can run as
+        # a `systemctl --user` service, a system service (root/VPS), or a bare
+        # background subprocess. Reporting "Not running" off `systemctl --user`
+        # alone false-negatives on a root VPS (no --user D-Bus session) even
+        # when the daemon is up. Check the process first, then label how it's
+        # managed for a helpful hint.
+        running = _is_sync_running()
+        _how = ""
+        if running and shutil.which("systemctl"):
+            for _scope in (["--user"], []):  # user service, then system service
+                try:
+                    _a = subprocess.run(
+                        ["systemctl", *_scope, "is-active", "clawmetry-sync"],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    if _a.stdout.strip() == "active":
+                        _how = " (systemd)" if _scope == [] else " (systemd --user)"
+                        break
+                except Exception:
+                    pass
+            if not _how:
+                _how = " (background process)"
+        print(
+            f"  Daemon:      {'✅  Running' + _how if running else '○  Not running'}"
+        )
 
     if LOG_FILE.exists():
         print(f"  Log:         {LOG_FILE}")
@@ -2075,11 +2228,14 @@ def _cmd_onboard(args) -> None:
     if _os.environ.get("CLAWMETRY_API_KEY") or _os.environ.get("CLAWMETRY_NODE_ID"):
         already_connected = True
 
+    # NOTE: we no longer early-return when already connected. `clawmetry onboard`
+    # is the setup wizard, so it ALWAYS shows the [1]/[2]/[3] options and lets the
+    # user switch how ClawMetry runs (e.g. cloud -> local, or add a license). When
+    # already connected, an empty Enter keeps the current setup (handled in the
+    # choice logic below) so re-running never silently changes anything.
     if already_connected:
-        print(f"\n  {GREEN(BOLD('Already connected to ClawMetry Cloud'))}")
-        _maybe_apply_nemoclaw_preset(_input, BOLD, CYAN, DIM)
-        print(f"  {DIM('Run  clawmetry status  to check sync health.')}\n")
-        return
+        print(f"\n  {GREEN(BOLD('Already connected to ClawMetry.'))}")
+        print(f"  {DIM('Pick an option below to change how ClawMetry runs, or press Enter to keep your current setup.')}")
 
     # Get version for banner
     try:
@@ -2089,7 +2245,8 @@ def _cmd_onboard(args) -> None:
         _ver = ""
     _ver_str = f" {_ver}" if _ver else ""
 
-    print(f"\n  {BOLD(f'ClawMetry{_ver_str} installed!')}")
+    if not already_connected:
+        print(f"\n  {BOLD(f'ClawMetry{_ver_str} installed!')}")
     print()
     print(f"  {BOLD('How do you want to run ClawMetry?')}")
     print()
@@ -2154,11 +2311,21 @@ def _cmd_onboard(args) -> None:
     elif getattr(args, "cloud", False):
         choice = "2"
     else:
+        # When already connected, the default on an empty Enter is "keep current
+        # setup" (return without changes) so re-running onboard never silently
+        # switches a connected user to local. A fresh install defaults to [1].
+        _prompt = ("  Choose an option, or press Enter to keep your current setup: "
+                   if already_connected else "  Choose [1]: ")
         try:
-            choice = _input("  Choose [1]: ").strip() or "1"
+            choice = _input(_prompt).strip()
         except (EOFError, KeyboardInterrupt):
-            choice = "1"
+            choice = ""
             print()
+        if not choice:
+            if already_connected:
+                print(f"\n  {DIM('Keeping your current setup. Run  clawmetry status  to check sync health.')}\n")
+                return
+            choice = "1"
 
     print()
 

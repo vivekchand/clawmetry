@@ -339,3 +339,242 @@ def test_stop_turn_sends_sigint(spawned):
     # Default SIGINT handler raises KeyboardInterrupt -> the child exits. Reap.
     assert _reaped(p), res
     assert p.returncode is not None
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# TZ-safe start-time guard (macOS-without-psutil bug, found in mobile E2E)
+# ──────────────────────────────────────────────────────────────────────────
+@pytest.fixture
+def berlin_tz():
+    """Run the test in a non-UTC timezone (Europe/Berlin) so the UTC-vs-local
+    ctime rendering skew actually manifests, then restore the original TZ."""
+    if not hasattr(time, "tzset"):
+        pytest.skip("time.tzset required (POSIX only)")
+    old = os.environ.get("TZ")
+    os.environ["TZ"] = "Europe/Berlin"
+    time.tzset()
+    yield
+    if old is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = old
+    time.tzset()
+
+
+def test_verify_pid_tz_normalized_ctime(berlin_tz, monkeypatch):
+    """THE regression: claude_code records procStart as a UTC ctime string,
+    while macOS `ps -o lstart=` (the no-psutil fallback) prints LOCAL time.
+    On any non-UTC Mac the raw tokens can never be equal, so the pid-reuse
+    guard refused every pause/kill/resume. Same instant must now verify."""
+    epoch = 1751430415  # fixed instant (2026-07-02, DST active in Berlin)
+    recorded = time.asctime(time.gmtime(epoch))            # what claude_code writes
+    live = "lstart:" + time.asctime(time.localtime(epoch))  # what ps prints
+    assert recorded not in live  # sanity: the strings really do differ in Berlin
+    monkeypatch.setattr(pc, "_proc_start_token", lambda _pid: live)
+    ok, reason = pc.verify_pid(os.getpid(), recorded_start=recorded)
+    assert ok is True, reason
+    assert reason == "verified_tz_normalized"
+
+
+def test_verify_pid_tz_guard_still_refuses_different_start(berlin_tz, monkeypatch):
+    """A genuinely different process start (offset that is NOT a whole timezone
+    offset) must still REFUSE — the TZ bridge must not weaken the reuse guard."""
+    epoch = 1751430415
+    recorded = time.asctime(time.gmtime(epoch))
+    live = "lstart:" + time.asctime(time.localtime(epoch - 12345))
+    monkeypatch.setattr(pc, "_proc_start_token", lambda _pid: live)
+    ok, reason = pc.verify_pid(os.getpid(), recorded_start=recorded)
+    assert ok is False
+    assert reason.startswith("start_mismatch"), reason
+
+
+def test_start_tokens_unparseable_fail_closed():
+    # Garbage on either side yields no epoch candidates -> never equivalent.
+    assert pc._start_tokens_equivalent("raw:garbage", "lstart:also garbage") is False
+    assert pc._start_tokens_equivalent("", "") is False
+    assert pc._start_tokens_equivalent("epoch:notanumber", "epoch:123") is False
+    # Plain epoch tokens still compare within tolerance.
+    assert pc._start_tokens_equivalent("epoch:1000", "epoch:1002") is True
+    assert pc._start_tokens_equivalent("epoch:1000", "epoch:1010") is False
+
+
+def test_claude_session_map_prefers_started_at_epoch(tmp_path, monkeypatch):
+    """When claude_code provides startedAt (epoch ms, timezone-unambiguous) the
+    map must prefer it over the ambiguous procStart ctime string."""
+    import json
+
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    (sessions_dir / "12345.json").write_text(json.dumps({
+        "pid": 12345,
+        "sessionId": "sid-startedat",
+        "startedAt": 1751430415123,  # ms
+        "procStart": "Thu Jul  2 04:26:55 2026",
+        "status": "running",
+    }))
+    (sessions_dir / "12346.json").write_text(json.dumps({
+        "pid": 12346,
+        "sessionId": "sid-ctime-only",
+        "procStart": "Thu Jul  2 04:26:55 2026",
+        "status": "running",
+    }))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    m = pc.claude_code_session_map()
+    assert m["sid-startedat"]["procStart"] == pytest.approx(1751430415.123)
+    # Without startedAt the ctime string still flows through (TZ bridge handles it).
+    assert m["sid-ctime-only"]["procStart"] == "Thu Jul  2 04:26:55 2026"
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# pause must not freeze a process group shared with the caller
+# ──────────────────────────────────────────────────────────────────────────
+def _read_until(proc, marker: str, timeout: float) -> str:
+    """Accumulate proc.stdout (non-blocking) until ``marker`` appears or the
+    deadline passes. Bounded; never hangs the test runner."""
+    import select
+
+    fd = proc.stdout.fileno()
+    buf = ""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if marker in buf:
+            return buf
+        r, _, _ = select.select([fd], [], [], 0.1)
+        if r:
+            chunk = os.read(fd, 4096)
+            if not chunk:
+                break
+            buf += chunk.decode("utf-8", "replace")
+    return buf
+
+
+@posix_only
+def test_pause_does_not_freeze_group_sharing_orchestrator():
+    """Second mobile-E2E finding: pause() SIGSTOP'd the target's whole process
+    GROUP, freezing a parent orchestrator that shared the group. An orchestrator
+    that spawns the agent WITHOUT a new session (same pgid) must survive its own
+    pause() call; the child must still stop."""
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    script = (
+        "import os, subprocess, sys, time\n"
+        f"sys.path.insert(0, {repo_root!r})\n"
+        "import clawmetry.process_control as pc\n"
+        "# child shares OUR pgid (no start_new_session) — the E2E topology\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+        "time.sleep(0.3)\n"
+        "print('CHILD', child.pid, flush=True)\n"
+        "res = pc.pause(child.pid)\n"
+        "print('SURVIVED', res.get('ok'), flush=True)\n"
+        "time.sleep(120)\n"
+    )
+    orch = subprocess.Popen(
+        [sys.executable, "-c", script],
+        start_new_session=True,  # isolate from pytest's own group
+        stdout=subprocess.PIPE,
+    )
+    try:
+        out = _read_until(orch, "SURVIVED", timeout=15.0)
+        assert "CHILD " in out, f"orchestrator never spawned a child: {out!r}"
+        child_pid = int(out.split("CHILD", 1)[1].split()[0])
+        # Un-fixed code SIGSTOPs the shared group, freezing the orchestrator
+        # mid-call, so SURVIVED never prints and its state goes to T.
+        assert "SURVIVED" in out, (
+            f"orchestrator froze during its own pause() call "
+            f"(state={_proc_state(orch.pid)!r}, out={out!r})"
+        )
+        assert _proc_state(orch.pid) != "T", "orchestrator was SIGSTOP'd"
+        # The actual target must still be frozen.
+        assert _wait_state(child_pid, "T", timeout=3.0) == "T"
+    finally:
+        # Wake + tear down the whole orchestrator group (covers the child too).
+        for sig_ in (signal.SIGCONT, signal.SIGKILL):
+            try:
+                os.killpg(os.getpgid(orch.pid), sig_)
+            except Exception:
+                pass
+        try:
+            orch.wait(timeout=5)
+        except Exception:
+            pass
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# locale-independent ps start-time reading (non-English macOS, no psutil)
+# ──────────────────────────────────────────────────────────────────────────
+_EN_LSTART = "Thu Jul  2 04:26:55 2026"       # C-locale `ps -o lstart=`
+_DE_LSTART = "Do  2. Jul 04:26:55 2026"       # German-locale `ps -o lstart=`
+
+
+def _is_c_locale_env(env) -> bool:
+    """True when the subprocess env forces the C locale the way _run must."""
+    if not env or env.get("LC_ALL") != "C":
+        return False
+    if "LANG" in env or "LANGUAGE" in env:
+        return False
+    return not any(k.startswith("LC_") and k != "LC_ALL" for k in env)
+
+
+def _fake_localized_ps(cmd, **kwargs):
+    """Simulate `ps -o lstart=` on a German-locale host: localized month/day
+    names UNLESS the caller forces the C locale via the subprocess env."""
+    assert "lstart=" in cmd, f"unexpected subprocess call in test: {cmd}"
+    out = _EN_LSTART if _is_c_locale_env(kwargs.get("env")) else _DE_LSTART
+    return subprocess.CompletedProcess(cmd, 0, stdout=out + "\n", stderr="")
+
+
+def test_guard_verifies_on_non_english_locale_host(monkeypatch):
+    """THE regression (follow-up to the TZ fix): on a non-English-locale Mac
+    without psutil, `ps -o lstart=` prints localized month/day names, the
+    ctime parse (%a %b) failed, and the guard failed CLOSED, so kill/pause/
+    resume refused for those users. _run now forces LC_ALL=C on the ps
+    subprocess, so lstart is always English and the guard verifies.
+
+    Revert-proof: without the _run env fix the fake ps below returns the
+    German rendering, _ctime_epoch_candidates yields no candidates, and
+    verify_pid refuses (RED); with the fix it sees English and verifies."""
+    monkeypatch.setattr(pc, "_psutil", None)
+    monkeypatch.setattr(pc, "_IS_MACOS", True)
+    monkeypatch.setattr(pc, "_IS_LINUX", False)
+    # The host is a German-locale machine.
+    monkeypatch.setenv("LANG", "de_DE.UTF-8")
+    monkeypatch.setenv("LC_TIME", "de_DE.UTF-8")
+    monkeypatch.setattr(pc.subprocess, "run", _fake_localized_ps)
+    # claude_code records procStart as an English ctime regardless of locale.
+    ok, reason = pc.verify_pid(os.getpid(), recorded_start=_EN_LSTART)
+    assert ok is True, reason
+    assert reason in ("verified", "verified_tz_normalized")
+
+
+def test_run_forces_c_locale_on_subprocess(monkeypatch):
+    """_run must pass an env that forces the C locale and strips every other
+    locale variable, while preserving the rest of the environment (PATH)."""
+    captured = {}
+
+    def spy(cmd, **kwargs):
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(cmd, 0, stdout="x\n", stderr="")
+
+    monkeypatch.setenv("LANG", "fr_FR.UTF-8")
+    monkeypatch.setenv("LC_TIME", "fr_FR.UTF-8")
+    monkeypatch.setenv("LANGUAGE", "fr")
+    monkeypatch.setattr(pc.subprocess, "run", spy)
+    assert pc._run(["ps", "-o", "lstart=", "-p", "1"]) == "x\n"
+    env = captured.get("env")
+    assert _is_c_locale_env(env), f"subprocess env does not force C locale: {env}"
+    assert "PATH" in env  # non-locale environment is preserved
+
+
+def test_guard_still_fails_closed_on_unparseable_ps_output(monkeypatch):
+    """Fail-closed semantics survive the locale fix: if ps emits something
+    genuinely unparseable even under the C locale, the guard must refuse."""
+    monkeypatch.setattr(pc, "_psutil", None)
+    monkeypatch.setattr(pc, "_IS_MACOS", True)
+    monkeypatch.setattr(pc, "_IS_LINUX", False)
+
+    def broken_ps(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout="not a date\n", stderr="")
+
+    monkeypatch.setattr(pc.subprocess, "run", broken_ps)
+    ok, reason = pc.verify_pid(os.getpid(), recorded_start=_EN_LSTART)
+    assert ok is False
+    assert reason.startswith("start_mismatch"), reason

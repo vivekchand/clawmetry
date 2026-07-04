@@ -36,9 +36,9 @@
     "url": "/api/flow-events?limit=200"
   },
   "gateway_health": {
-    "captured_at": "2026-05-20",
-    "captured_sha": "e77c721",
-    "fast_path_ms_p50": 5.634,
+    "captured_at": "2026-07-02",
+    "captured_sha": "28a2a9d",
+    "fast_path_ms_p50": 12.48,
     "url": "/api/gateway-health"
   },
   "model_transitions": {

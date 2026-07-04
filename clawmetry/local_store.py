@@ -180,7 +180,7 @@ def _on_disk_bytes() -> int:
         pass
     return total
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # ── Two-layer schema (multi-agent) ──────────────────────────────────────────
 #
@@ -213,7 +213,8 @@ _DDL = [
         model           VARCHAR,
         created_at      BIGINT NOT NULL,
         chain_prev_hash VARCHAR,
-        chain_hash      VARCHAR
+        chain_hash      VARCHAR,
+        runtime_kind    VARCHAR
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_events_ts          ON events(ts)",
@@ -225,6 +226,12 @@ _DDL = [
     # query that wants to scan a single session's timeline by event_type
     # without hitting the full ts index.
     "CREATE INDEX IF NOT EXISTS idx_events_session_ts_type ON events(session_id, ts, event_type)",
+    # Ingest-order scans: the approvals watcher advances its watermark on
+    # created_at (the INSERT stamp) rather than the event's own ts, so a
+    # session ingested minutes after its events' timestamps is still
+    # evaluated (the 2026-07-02 watermark race). Without this index every
+    # watcher poll would be a full-table scan on created_at.
+    "CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at)",
     """
     CREATE TABLE IF NOT EXISTS sessions (
         agent_type      VARCHAR NOT NULL DEFAULT 'openclaw',
@@ -637,6 +644,25 @@ _DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_security_events_ts      ON security_events(ts)",
     "CREATE INDEX IF NOT EXISTS idx_security_events_session ON security_events(session_id, ts)",
+    # Issue #3306 — operator audit log. Persistent record of human actions
+    # (approve, deny, kill_session, config_change, etc.) for the OSS data layer
+    # that the cloud relay reads. Auth / RBAC enforcement is cloud-side; this
+    # table is the append-only source-of-truth for the local operator trail.
+    # Idempotent (CREATE TABLE IF NOT EXISTS).
+    """
+    CREATE TABLE IF NOT EXISTS audit_log (
+        id         VARCHAR PRIMARY KEY,
+        ts         VARCHAR NOT NULL,
+        actor      VARCHAR,
+        action     VARCHAR NOT NULL,
+        target     VARCHAR,
+        session_id VARCHAR,
+        result     VARCHAR
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_audit_log_ts     ON audit_log(ts)",
+    "CREATE INDEX IF NOT EXISTS idx_audit_log_actor  ON audit_log(actor, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action, ts)",
     # Issue #2201 — asset registry. Evidence + review layer that turns
     # individual agent discoveries (Self-Evolve findings, useful prompts,
     # improved skills) into reviewable, reusable assets without auto-promoting
@@ -1072,6 +1098,9 @@ _MIGRATIONS_V2 = [
     # existing rows and populated on new events when CLAWMETRY_INTEGRITY=1.
     ("events",   "chain_prev_hash",   "VARCHAR"),
     ("events",   "chain_hash",        "VARCHAR"),
+    # Issue #3367 — expose NemoClaw sandbox runtime kind (terminal vs docker)
+    # on session and event rows. Stamped at ingest time from sandbox config.
+    ("events",   "runtime_kind",      "VARCHAR"),
 ]
 
 # ── Integrity / hash-chain (Issue #2200) ────────────────────────────────────
@@ -1767,6 +1796,32 @@ class LocalStore:
                     except Exception as exc:
                         log.exception(
                             "local store: v7 dedup migration FAILED — schema "
+                            "version will NOT be stamped; next boot will retry"
+                        )
+                        migration_failed = True
+                        _migration_err = str(exc)
+                if not migration_failed and current < 11:
+                    # v10 -> v11: rollup runtime RE-ATTRIBUTION. The v3 event
+                    # mapper stamped agent_type='openclaw' on family-runtime
+                    # events, so every claude_code/codex/... token rolled up
+                    # under openclaw (openclaw week/month showed the node-wide
+                    # spend; the family runtimes showed $0 despite a non-zero
+                    # today). _rollup_deltas now attributes by the session-id
+                    # prefix, so wiping the rollups here lets the standard
+                    # startup backfill (backfill_rollups, right after
+                    # _migrate) rebuild all three tables correctly from the
+                    # stored events + sessions.
+                    try:
+                        self._conn.execute("DELETE FROM rollup_model_daily")
+                        self._conn.execute("DELETE FROM rollup_runtime_daily")
+                        self._conn.execute("DELETE FROM rollup_session")
+                        log.info(
+                            "local store: v11 wiped rollup tables for runtime "
+                            "re-attribution; startup backfill rebuilds them"
+                        )
+                    except Exception as exc:
+                        log.exception(
+                            "local store: v11 rollup wipe FAILED — schema "
                             "version will NOT be stamped; next boot will retry"
                         )
                         migration_failed = True
@@ -4802,8 +4857,9 @@ class LocalStore:
                             """
                             INSERT OR IGNORE INTO events
                               (id, agent_type, node_id, agent_id, session_id, workspace_id,
-                               event_type, ts, data, cost_usd, token_count, model, created_at)
-                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                               event_type, ts, data, cost_usd, token_count, model, created_at,
+                               runtime_kind)
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                             """,
                             rows,
                         )
@@ -5106,7 +5162,7 @@ class LocalStore:
                 while True:
                     cur = self._conn.execute(
                         """
-                        SELECT rowid, agent_type, ts, data,
+                        SELECT rowid, agent_type, session_id, ts, data,
                                cost_usd, token_count, model
                         FROM events WHERE rowid > ?
                         ORDER BY rowid LIMIT ?
@@ -5118,7 +5174,7 @@ class LocalStore:
                         break
                     last_rowid = rows[-1][0]
                     pairs = []
-                    for (_rid, atype, ts, blob, cost, tokens, model) in rows:
+                    for (_rid, atype, sid, ts, blob, cost, tokens, model) in rows:
                         data = None
                         if blob is not None:
                             try:
@@ -5134,7 +5190,7 @@ class LocalStore:
                         # top-level keys win inside _extract_event_usage, so
                         # only the in/out/cache splits are re-read from data.
                         pseudo = {
-                            "agent_type": atype, "ts": ts,
+                            "agent_type": atype, "session_id": sid, "ts": ts,
                             "cost_usd": cost, "token_count": tokens,
                             "model": model,
                             "data": data if isinstance(data, dict) else None,
@@ -5501,6 +5557,61 @@ class LocalStore:
         """
         params.append(int(limit))
         return [_row_to_event(r, _EVENT_COLS) for r in self._fetch(sql, params)]
+
+    def query_events_by_ingest(
+        self,
+        *,
+        created_after: int,
+        after_id: str | None = None,
+        event_types: "tuple[str, ...] | list[str]" = (),
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Read events by INGEST order (``created_at``, epoch-ms stamped at
+        insert time) instead of the event's own ``ts``.
+
+        This is the approvals-watcher cursor primitive: family adapters
+        (claude_code / codex / cursor / ...) can ingest a session MINUTES
+        after its events' timestamps, so a ``ts``-based watermark that other
+        events already advanced skips those rows forever (the 2026-07-02
+        approvals watermark race). ``created_at`` is monotone with insertion
+        (up to flush-retry skew of a few seconds), so a cursor on it sees
+        every row exactly when it lands regardless of how stale its ``ts`` is.
+
+        Semantics:
+          * ``after_id is None``  -> ``created_at >= created_after`` (inclusive
+            window start, for a bounded lookback re-scan).
+          * ``after_id`` given    -> strict keyset continuation:
+            ``created_at > created_after OR (created_at = created_after AND
+            id > after_id)`` so callers can page forward even when many rows
+            share one millisecond stamp (a single flush batch does).
+
+        Rows come back oldest-ingested first (``created_at ASC, id ASC``) and
+        include the ``created_at`` column. Uses ``idx_events_created_at`` —
+        never a full-table scan.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if after_id is None:
+            clauses.append("created_at >= ?")
+            params.append(int(created_after))
+        else:
+            clauses.append("(created_at > ? OR (created_at = ? AND id > ?))")
+            params.extend([int(created_after), int(created_after), str(after_id)])
+        if event_types:
+            placeholders = ",".join("?" for _ in event_types)
+            clauses.append(f"event_type IN ({placeholders})")
+            params.extend(str(t) for t in event_types)
+        sql = f"""
+            SELECT id, agent_type, node_id, agent_id, session_id, workspace_id,
+                   event_type, ts, data, cost_usd, token_count, model, created_at
+            FROM events
+            WHERE {' AND '.join(clauses)}
+            ORDER BY created_at ASC, id ASC
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = _EVENT_COLS + ["created_at"]
+        return [_row_to_event(r, cols) for r in self._fetch(sql, params)]
 
     # ── Issue #2200: integrity hash chain ────────────────────────────────────
 
@@ -7410,6 +7521,30 @@ class LocalStore:
                 "declared_tools", "allowed_tools"]
         return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
 
+    def query_session_authority_counts(
+        self,
+        session_ids: "Iterable[str]",
+    ) -> "dict[str, int]":
+        """Return {session_id: violation_count} for the given session IDs.
+
+        Missing session IDs (no violations) are omitted from the result.
+        Empty input returns {} without touching the database.
+        """
+        try:
+            ids = [str(s) for s in session_ids if s]
+            if not ids:
+                return {}
+            placeholders = ", ".join(["?"] * len(ids))
+            sql = f"""
+                SELECT session_id, COUNT(*) AS cnt
+                FROM authority_violations
+                WHERE session_id IN ({placeholders})
+                GROUP BY session_id
+            """
+            return {r[0]: int(r[1]) for r in self._fetch(sql, ids)}
+        except Exception:
+            return {}
+
     def ingest_security_event(self, event: dict[str, Any]) -> None:
         """Upsert one security-threat event row. Required: ``id``."""
         eid = event.get("id")
@@ -7467,6 +7602,138 @@ class LocalStore:
         params.append(int(limit))
         cols = ["id", "ts", "type", "severity", "session_id", "rule_id", "description", "snippet"]
         return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
+
+    # ------------------------------------------------------------------
+    # Audit log (#3306) — persistent operator action trail
+    # ------------------------------------------------------------------
+
+    def ingest_audit_log_entry(self, entry: dict[str, Any]) -> None:
+        """Upsert one audit-log entry. Required: ``id``, ``action``."""
+        eid = entry.get("id")
+        if not eid:
+            raise ValueError("audit log entry must include 'id'")
+        ts = entry.get("ts") or datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO audit_log (id, ts, actor, action, target, session_id, result)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET
+                    result = COALESCE(excluded.result, audit_log.result)
+            """, [
+                str(eid),
+                ts,
+                entry.get("actor"),
+                entry.get("action", ""),
+                entry.get("target"),
+                entry.get("session_id"),
+                entry.get("result"),
+            ])
+
+    def query_audit_log(
+        self,
+        *,
+        actor: str | None = None,
+        action: str | None = None,
+        session_id: str | None = None,
+        since: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Read audit-log entries, most-recent first."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if actor:
+            clauses.append("actor = ?")
+            params.append(actor)
+        if action:
+            clauses.append("action = ?")
+            params.append(action)
+        if session_id:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        if since:
+            clauses.append("ts >= ?")
+            params.append(since)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT id, ts, actor, action, target, session_id, result
+            FROM audit_log
+            {where}
+            ORDER BY ts DESC, id
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["id", "ts", "actor", "action", "target", "session_id", "result"]
+        return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
+
+    def query_routing_savings(
+        self,
+        *,
+        days: int = 30,
+    ) -> dict[str, Any]:
+        """Aggregate smart-routing savings from ``auto_downgraded`` proxy events.
+
+        Returns ``{total_savings_usd, total_substitutions, by_pair}`` where
+        ``by_pair`` is a list of ``{from_model, to_model, count, saved_usd}``
+        sorted by saved_usd descending. Drives the routing-attribution fields
+        added to ``/api/usage`` (issue #3438).
+        """
+        from datetime import datetime, timedelta, timezone
+        try:
+            d = max(1, min(365, int(days)))
+        except (TypeError, ValueError):
+            d = 30
+        since = (datetime.now(timezone.utc) - timedelta(days=d)).isoformat(timespec="seconds")
+        sql = """
+            SELECT data
+            FROM events
+            WHERE event_type = 'auto_downgraded'
+              AND ts >= ?
+        """
+        rows = self._fetch(sql, [since])
+
+        total_savings = 0.0
+        total_count = 0
+        pair_stats: dict[tuple, dict] = {}
+
+        for (raw,) in rows:
+            if raw is None:
+                continue
+            try:
+                raw = _ccr.maybe_decompress(raw)
+                text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                data = json.loads(text) if text else {}
+            except (ValueError, TypeError, UnicodeDecodeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+
+            from_model = str(data.get("from_model") or "")
+            to_model = str(data.get("to_model") or "")
+            saved = float(data.get("estimated_saved_usd") or 0.0)
+
+            total_savings += saved
+            total_count += 1
+
+            key = (from_model, to_model)
+            if key not in pair_stats:
+                pair_stats[key] = {
+                    "from_model": from_model,
+                    "to_model": to_model,
+                    "count": 0,
+                    "saved_usd": 0.0,
+                }
+            pair_stats[key]["count"] += 1
+            pair_stats[key]["saved_usd"] += saved
+
+        by_pair = sorted(pair_stats.values(), key=lambda x: -x["saved_usd"])
+        for p in by_pair:
+            p["saved_usd"] = round(p["saved_usd"], 6)
+
+        return {
+            "total_savings_usd": round(total_savings, 6),
+            "total_substitutions": total_count,
+            "by_pair": by_pair,
+        }
 
     def query_nemoclaw_metrics(
         self,
@@ -10641,7 +10908,20 @@ def _rollup_deltas(
         day = _event_day(e.get("ts"))
         if day is None:
             continue
-        runtime = str(e.get("agent_type") or "openclaw")
+        # Runtime attribution: the session-id PREFIX is the canonical runtime
+        # key (mirrors _runtime_of_session / _runtime_session_id_clause) and
+        # WINS over the stored agent_type. The v3 event mapper used to stamp
+        # agent_type='openclaw' on family-runtime events, so a month of
+        # claude_code spend rolled up under openclaw while claude_code's own
+        # week/month showed $0 (founder report 2026-07-02). Prefix-less events
+        # (bare OpenClaw ids, nemoclaw's stamped rows) keep agent_type.
+        runtime = None
+        _sid = str(e.get("session_id") or "")
+        _ci = _sid.find(":")
+        if _ci > 0 and _sid[:_ci].lower() in _NON_OPENCLAW_RUNTIME_PREFIXES:
+            runtime = _sid[:_ci].lower()
+        if not runtime:
+            runtime = str(e.get("agent_type") or "openclaw")
         tokens = int(u["tokens"] or 0)
         cost = float(u["cost"] or 0.0)
         rk = (day, runtime)
@@ -10699,6 +10979,7 @@ def _event_to_row(e: dict[str, Any], usage: dict[str, Any] | None = None) -> tup
         int(tokens) if tokens is not None else None,
         model,
         int(time.time() * 1000),
+        e.get("runtime_kind") or None,
     )
 
 

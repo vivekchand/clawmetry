@@ -39,6 +39,7 @@ zero behaviour change.
 import json
 import os
 import time
+from pathlib import Path
 
 from flask import Blueprint, jsonify, request
 from clawmetry.config import is_local_store_read_enabled
@@ -448,6 +449,50 @@ def api_budget_resume_gateway():
     _audit("gateway.resume", actor=_actor(), target="gateway",
            result="resumed", source="dashboard")
     return jsonify({"ok": True, "paused": False})
+
+
+# ── Emergency stop (issue #3439) ──────────────────────────────────────────
+# Global halt: writes a flag file that proxy.py reads on every request.
+# File-based (matching the HITL pause pattern) so the proxy and Flask
+# processes share state without IPC even across restarts.
+
+_ESTOP_FLAG = Path.home() / ".clawmetry" / "hitl" / "emergency_stop"
+
+
+@bp_budget.route("/api/emergency-stop/status", methods=["GET"])
+def api_emergency_stop_status():
+    """Return whether the global emergency stop is currently active."""
+    active = _ESTOP_FLAG.exists()
+    activated_at = None
+    if active:
+        try:
+            activated_at = json.loads(_ESTOP_FLAG.read_text()).get("activated_at")
+        except Exception:  # noqa: BLE001 — missing/corrupt flag: report active, no ts
+            pass
+    return jsonify({"active": active, "activated_at": activated_at})
+
+
+@bp_budget.route("/api/emergency-stop", methods=["POST"])
+def api_emergency_stop():
+    """Activate global emergency stop — all proxy requests return 503 immediately."""
+    _ESTOP_FLAG.parent.mkdir(parents=True, exist_ok=True)
+    meta = {"activated_at": time.time(), "actor": _actor()}
+    _ESTOP_FLAG.write_text(json.dumps(meta))
+    _audit("emergency_stop.activate", actor=_actor(), target="all_sessions",
+           result="stopped", source="dashboard")
+    return jsonify({"ok": True, "active": True, "activated_at": meta["activated_at"]})
+
+
+@bp_budget.route("/api/emergency-stop/clear", methods=["POST"])
+def api_emergency_stop_clear():
+    """Deactivate emergency stop — proxy resumes forwarding requests."""
+    try:
+        _ESTOP_FLAG.unlink(missing_ok=True)
+    except OSError:
+        pass
+    _audit("emergency_stop.clear", actor=_actor(), target="all_sessions",
+           result="cleared", source="dashboard")
+    return jsonify({"ok": True, "active": False})
 
 
 @bp_budget.route("/api/budget/is-over-cap")
