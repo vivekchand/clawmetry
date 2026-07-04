@@ -7521,6 +7521,30 @@ class LocalStore:
                 "declared_tools", "allowed_tools"]
         return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
 
+    def query_session_authority_counts(
+        self,
+        session_ids: "Iterable[str]",
+    ) -> "dict[str, int]":
+        """Return {session_id: violation_count} for the given session IDs.
+
+        Missing session IDs (no violations) are omitted from the result.
+        Empty input returns {} without touching the database.
+        """
+        try:
+            ids = [str(s) for s in session_ids if s]
+            if not ids:
+                return {}
+            placeholders = ", ".join(["?"] * len(ids))
+            sql = f"""
+                SELECT session_id, COUNT(*) AS cnt
+                FROM authority_violations
+                WHERE session_id IN ({placeholders})
+                GROUP BY session_id
+            """
+            return {r[0]: int(r[1]) for r in self._fetch(sql, ids)}
+        except Exception:
+            return {}
+
     def ingest_security_event(self, event: dict[str, Any]) -> None:
         """Upsert one security-threat event row. Required: ``id``."""
         eid = event.get("id")

@@ -791,6 +791,11 @@ _DAEMON_METHODS = frozenset({
     # aggregation of auto_downgraded events; routed through the daemon
     # proxy so the dashboard process never opens DuckDB writable.
     "query_routing_savings",
+    # Issue #3443 — authority-violation counts per session. Also adds
+    # query_authority_violations which was missing (causing /api/authority-violations
+    # to silently fall back to direct DuckDB open on multi-process installs).
+    "query_authority_violations",
+    "query_session_authority_counts",
 })
 
 
