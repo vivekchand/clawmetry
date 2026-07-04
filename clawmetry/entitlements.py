@@ -11463,3 +11463,102 @@ def feature_spec_at_path_batch(
             "entitlements: feature_spec_at_path_batch failed: %s", exc
         )
         return None
+
+
+def tier_spec_at_path(
+    perspective_tier: str, from_tier: str, to_tier: str
+) -> list[dict] | None:
+    """Perspective-validated what-if wrapper around :func:`tier_spec_path`.
+
+    Fills the ``_at_path`` slot of the ``tier_spec`` family, matching the
+    already-shipping ``preview_at_path`` / ``tier_catalog_at_path`` /
+    ``feature_spec_at_path`` / ``runtime_spec_at_path`` pattern on the
+    ``preview`` / ``tier_catalog`` / ``feature_spec`` / ``runtime_spec``
+    axes. The perspective is validated (empty / unknown ids short-
+    circuit to ``None``) but does NOT shape the rows -- the body is
+    byte-identical to :func:`tier_spec_path` for every
+    ``(from, to)`` pair, so a pricing-comparison walkthrough UI can
+    call ``X_at_path(perspective, from, to)`` uniformly across the
+    whole ``_at_path`` family without worrying that the perspective is
+    silently changing which rungs get walked.
+
+    Pins a parity test so the scalar ``_at_path`` can never drift from
+    :func:`tier_spec_path` (which itself walks per-rung via
+    :func:`tier_spec_at`).
+
+    Endpoint semantics match :func:`tier_spec_path`: perspective, from
+    and to accept any id in :data:`_TIER_FEATURES` (``trial`` accepted,
+    excluded from the walked intermediate rungs, valid endpoint via
+    the lateral / identity branch).
+
+    Never raises: a delegation failure logs a warning and returns
+    ``None`` so a paywall surface keeps rendering instead of breaking.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_FEATURES:
+        return None
+    try:
+        return tier_spec_path(from_tier, to_tier)
+    except Exception as exc:
+        logger.warning("entitlements: tier_spec_at_path failed: %s", exc)
+        return None
+
+
+def tier_spec_at_path_batch(
+    perspective_tier: str, from_tier: str, to_tiers
+) -> dict | None:
+    """Perspective-validated what-if wrapper around
+    :func:`tier_spec_path_batch`.
+
+    Fixed-perspective, fixed-from, multi-destination companion of
+    :func:`tier_spec_at_path`. Fills the ``_at_path_batch`` slot of the
+    ``tier_spec`` family, matching the already-shipping
+    ``preview_at_path_batch`` / ``tier_catalog_at_path_batch`` /
+    ``feature_spec_at_path_batch`` / ``runtime_spec_at_path_batch``
+    pattern.
+
+    Per-destination body byte-identical to :func:`tier_spec_path_batch`
+    for the same ``(from, to_tiers)`` pair -- scalar / batch no-drift
+    contract (the batch delegates to the same underlying
+    :func:`tier_spec_path` per destination that the scalar
+    :func:`tier_spec_at_path` delegates to).
+
+    Shape mirrors :func:`tier_spec_path_batch`::
+
+        {
+          "tiers": [
+            {"to": "<id>", "to_label": ..., "to_rank": ..., "direction": ..., "path": [...]},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Supplied destination ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen
+    order preserved). Unknown ids are echoed in ``unknown[]`` instead
+    of short-circuiting -- a partially-bad caller still gets paths
+    back for the valid ids alongside a list of what was dropped,
+    matching every other ``*_at_path_batch`` sibling's posture.
+
+    Returns ``None`` for empty / unknown ``perspective_tier`` /
+    ``from_tier`` (caller renders "unknown tier" / 404). Never raises:
+    per-destination failures short-circuit that destination into
+    ``unknown[]``; a top-level delegation failure short-circuits to
+    ``None``.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_FEATURES:
+        return None
+    try:
+        return tier_spec_path_batch(from_tier, to_tiers)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: tier_spec_at_path_batch failed: %s", exc
+        )
+        return None
