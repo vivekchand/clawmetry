@@ -9403,6 +9403,105 @@ def runtime_spec_path_batch(
     return {"runtimes": rows, "unknown": unknown}
 
 
+def runtime_spec_at_path(
+    perspective_tier: str, from_tier: str, to_tier: str, runtime: str
+) -> list[dict] | None:
+    """Perspective-validated what-if wrapper around :func:`runtime_spec_path`.
+
+    Runtime-axis twin of :func:`feature_spec_at_path`; fills the
+    ``_at_path`` slot of the ``runtime_spec`` family, matching the
+    already-shipping ``preview_at_path`` / ``tier_catalog_at_path``
+    pattern on the ``preview`` / ``tier_catalog`` axes. The perspective
+    is validated (empty / unknown ids short-circuit to ``None``) but
+    does NOT shape the rows -- the body is byte-identical to
+    :func:`runtime_spec_path` for every ``(from, to, runtime)`` triple,
+    so a paywall walkthrough UI can call
+    ``X_at_path(perspective, from, to, ...)`` uniformly across the
+    whole ``_at_path`` family without worrying that the perspective is
+    silently changing which rungs get walked.
+
+    Pins a parity test so the scalar ``_at_path`` can never drift from
+    :func:`runtime_spec_path` (which itself walks per-rung via
+    :func:`runtime_spec_at`).
+
+    Endpoint semantics match :func:`runtime_spec_path`: perspective,
+    from and to accept any id in :data:`_TIER_FEATURES` (``trial``
+    accepted, excluded from the walked intermediate rungs, valid
+    endpoint via the lateral / identity branch). ``runtime`` accepts
+    any id in :data:`ALL_RUNTIMES` after canonicalisation via
+    :func:`canonical_runtime` (``claude-code`` -> ``claude_code``).
+
+    Never raises: a delegation failure logs a warning and returns
+    ``None`` so a paywall surface keeps rendering instead of breaking.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_FEATURES:
+        return None
+    try:
+        return runtime_spec_path(from_tier, to_tier, runtime)
+    except Exception as exc:
+        logger.warning("entitlements: runtime_spec_at_path failed: %s", exc)
+        return None
+
+
+def runtime_spec_at_path_batch(
+    perspective_tier: str, from_tier: str, to_tier: str, runtimes
+) -> dict | None:
+    """Perspective-validated what-if wrapper around
+    :func:`runtime_spec_path_batch`.
+
+    Fixed-perspective, fixed-from, fixed-to, multi-runtime companion of
+    :func:`runtime_spec_at_path`. Fills the ``_at_path_batch`` slot of
+    the ``runtime_spec`` family, matching the already-shipping
+    ``preview_at_path_batch`` / ``tier_catalog_at_path_batch`` pattern
+    on the ``preview`` / ``tier_catalog`` axes, and pairs one-to-one
+    with :func:`feature_spec_at_path_batch` on the ``feature_spec`` axis.
+
+    Per-runtime body byte-identical to :func:`runtime_spec_path_batch`
+    for the same ``(from, to, runtimes)`` triple -- scalar / batch
+    no-drift contract (the batch delegates to the same underlying
+    :func:`runtime_spec_path` per runtime that the scalar
+    :func:`runtime_spec_at_path` delegates to).
+
+    Shape mirrors :func:`runtime_spec_path_batch`::
+
+        {
+          "runtimes": [{"runtime": "<canonical id>", "path": [...]}, ...],
+          "unknown":  ["bogus_id", ...],
+        }
+
+    Supplied runtime ids are canonicalised via
+    :func:`canonical_runtime` (``claude-code`` -> ``claude_code``) and
+    aliases that collapse to a canonical id already in the response are
+    silently de-duplicated. Unknown ids are echoed in ``unknown[]``
+    carrying the supplied alias (not the canonical id) so the caller
+    can correlate against what was sent, matching every other
+    ``*_path_batch`` sibling's posture.
+
+    Returns ``None`` for empty / unknown ``perspective_tier`` /
+    ``from_tier`` / ``to_tier`` (caller renders "unknown tier" / 404).
+    Never raises: per-runtime failures short-circuit that id into
+    ``unknown[]``; a top-level delegation failure short-circuits to
+    ``None``.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_FEATURES:
+        return None
+    try:
+        return runtime_spec_path_batch(from_tier, to_tier, runtimes)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: runtime_spec_at_path_batch failed: %s", exc
+        )
+        return None
+
+
 def tier_catalog_path_batch(from_tier: str, to_tiers) -> dict | None:
     """Batch sibling of :func:`tier_catalog_path`: per-rung tier-ladder
     path rows for a caller-supplied subset of destination tiers all
