@@ -4710,14 +4710,27 @@ def api_entitlement_affordable_tiers():
 
 @bp_entitlement.route("/api/entitlement/min-tier")
 def api_entitlement_min_tier():
-    """``GET /api/entitlement/min-tier?feature=<f>`` or ``?runtime=<r>`` --
-    cheapest purchasable tier that unlocks the named feature or runtime.
+    """``GET /api/entitlement/min-tier?<axis>=<value>`` -- cheapest purchasable
+    tier that admits the supplied constraint on ONE of the five capacity axes
+    (``feature``, ``runtime``, ``channels``, ``retention_days``, ``nodes``).
+
+    Singular sibling of :func:`api_entitlement_min_tier_batch`, closing the
+    axis-symmetry gap: previously the singular endpoint accepted only
+    ``feature=`` / ``runtime=``, while the batch already accepted all five.
+    Same reverse-lookup contract as ``/required-tier`` (``feature``,
+    ``runtime``, ``channels``, ``retention_days``, ``nodes``), rendered as
+    the cheapest qualifying tier instead of the current-vs-required
+    upgrade view -- so a pricing-page cell rendering "N nodes -- Available
+    in Starter" can hit the same endpoint the feature / runtime lock
+    affordances already use, and per-row parity with the plural
+    ``/min-tier-batch`` shape is pinned in the test suite.
 
     Catalogue-derived, so the answer is identical in grace and enforce mode.
     Response shape::
 
         {
-          "key":        "feature" | "runtime",
+          "key":        "feature" | "runtime" | "channels"
+                        | "retention_days" | "nodes",
           "value":      "<input>",
           "free":       <bool>,           # true when min_tier == OSS
           "min_tier":   "<tier id>" | null,
@@ -4725,19 +4738,81 @@ def api_entitlement_min_tier():
           "tier_rank":  <int> | null,
         }
 
-    400 when neither ``feature`` nor ``runtime`` is supplied (or both are).
-    404 when the input id is unknown -- the caller can show a neutral
-    "not available" hint rather than pointing at a nonsense tier. Never 5xxs.
+    400 when zero or more than one axis is supplied, or when a capacity
+    axis value is non-int. 404 when the ``feature`` / ``runtime`` id is
+    unknown -- the caller can show a neutral "not available" hint rather
+    than pointing at a nonsense tier. Never 5xxs. The three capacity
+    axes never 404: any parseable int (including zero / negative --
+    which collapses to :data:`TIER_OSS` matching the helpers' contract)
+    resolves to a real tier, so the ``error`` key never appears on a
+    capacity response.
     """
     feature = (request.args.get("feature") or "").strip()
     runtime = (request.args.get("runtime") or "").strip().lower()
-    if bool(feature) == bool(runtime):
+    (
+        channels_present,
+        channels_ok,
+        channels_n,
+        channels_raw,
+    ) = _parse_capacity_arg("channels")
+    (
+        retention_present,
+        retention_ok,
+        retention_n,
+        retention_raw,
+    ) = _parse_capacity_arg("retention_days")
+    (
+        nodes_present,
+        nodes_ok,
+        nodes_n,
+        nodes_raw,
+    ) = _parse_capacity_arg("nodes")
+    supplied = [
+        bool(feature),
+        bool(runtime),
+        channels_present,
+        retention_present,
+        nodes_present,
+    ]
+    n_supplied = sum(1 for s in supplied if s)
+    if n_supplied == 0:
         return (
             jsonify(
                 {
-                    "error": "exactly one of feature= or runtime= is required",
+                    "error": (
+                        "supply exactly one of feature=<id>, runtime=<id>, "
+                        "channels=<int>, retention_days=<int>, or "
+                        "nodes=<int>"
+                    ),
                 }
             ),
+            400,
+        )
+    if n_supplied > 1:
+        return (
+            jsonify(
+                {
+                    "error": (
+                        "supply only one of feature=, runtime=, channels=, "
+                        "retention_days=, or nodes="
+                    ),
+                }
+            ),
+            400,
+        )
+    if channels_present and not channels_ok:
+        return (
+            jsonify({"error": "channels= must be an integer"}),
+            400,
+        )
+    if retention_present and not retention_ok:
+        return (
+            jsonify({"error": "retention_days= must be an integer"}),
+            400,
+        )
+    if nodes_present and not nodes_ok:
+        return (
+            jsonify({"error": "nodes= must be an integer"}),
             400,
         )
     try:
@@ -4747,10 +4822,22 @@ def api_entitlement_min_tier():
             min_t = _ent.min_tier_for_feature(feature)
             key, value = "feature", feature
             known = feature in _ent.ALL_FEATURES
-        else:
+        elif runtime:
             min_t = _ent.min_tier_for_runtime(runtime)
             key, value = "runtime", runtime
             known = runtime in _ent.ALL_RUNTIMES
+        elif channels_present:
+            min_t = _ent.min_tier_for_channel_count(channels_n)
+            key, value = "channels", str(channels_n)
+            known = True
+        elif retention_present:
+            min_t = _ent.min_tier_for_retention_window(retention_n)
+            key, value = "retention_days", str(retention_n)
+            known = True
+        else:
+            min_t = _ent.min_tier_for_node_count(nodes_n)
+            key, value = "nodes", str(nodes_n)
+            known = True
         if not known:
             return (
                 jsonify(
@@ -4778,10 +4865,20 @@ def api_entitlement_min_tier():
         )
     except Exception as exc:
         logger.warning("api_entitlement_min_tier: error: %s", exc)
+        if feature:
+            key, value = "feature", feature
+        elif runtime:
+            key, value = "runtime", runtime
+        elif channels_present:
+            key, value = "channels", channels_raw
+        elif retention_present:
+            key, value = "retention_days", retention_raw
+        else:
+            key, value = "nodes", nodes_raw
         return jsonify(
             {
-                "key": "feature" if feature else "runtime",
-                "value": feature or runtime,
+                "key": key,
+                "value": value,
                 "free": False,
                 "min_tier": None,
                 "tier_label": None,
