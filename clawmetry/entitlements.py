@@ -12344,3 +12344,129 @@ def tier_locks_at_path_batch(
             "entitlements: tier_locks_at_path_batch failed: %s", exc
         )
         return None
+
+
+
+
+def tier_path_at(
+    perspective_tier: str, from_tier: str, to_tier: str
+) -> list[dict] | None:
+    """What-if sibling of :func:`tier_path`: arbitrary-endpoint stepwise
+    marginal ``tier_diff`` path between ``from_tier`` and ``to_tier``
+    rendered from a hypothetical ``perspective_tier``.
+
+    Fills the ``_at`` slot for the ``tier_path`` (per-rung marginal
+    ``tier_diff``) family alongside :func:`tier_path` (current-
+    perspective path) and :func:`tier_path_batch` (multi-destination
+    current-perspective path). All-slices companion of
+    :func:`capacity_diff_at_path` (capacity-only), :func:`tier_unlocks_at_path`
+    / :func:`tier_locks_at_path` (grant / loss slice) so a pricing-
+    comparison walkthrough surface can call ``X_at(perspective, from,
+    to)`` uniformly across the whole family.
+
+    Body posture matches :func:`capacity_diff_at_path` and every other
+    ``_at_path`` helper: perspective is validated against
+    :data:`_TIER_ORDER` but does NOT shape rows. Each row is byte-
+    identical to a row from :func:`tier_path` for the same
+    ``(from_tier, to_tier)`` pair -- pinned by parity tests so the
+    what-if path helper cannot drift from the current-perspective
+    sibling that also backs :func:`tier_path_batch`.
+
+    Perspective acceptance is lenient (matches every other ``_at``
+    helper): any id in :data:`_TIER_ORDER` is accepted, including
+    :data:`TIER_TRIAL`. Endpoint acceptance mirrors :func:`tier_path`:
+    both ``from_tier`` and ``to_tier`` accept any id in
+    :data:`_TIER_FEATURES` (trial is a valid endpoint via the lateral /
+    identity branches even though the walked intermediate rungs exclude
+    it -- it is not purchasable).
+
+    Returns ``None`` when any of the three ids is unknown; empty list
+    for identity (``from == to``); single-row path for lateral
+    (same-rank, different id). Resolver-independent: delegates to
+    :func:`tier_path`, which walks the static per-tier maps via
+    :func:`tier_diff`, so grace vs enforce yields byte-identical rows
+    -- same property the rest of the ``_path`` family guarantees.
+
+    Never raises: a delegate failure logs a warning and returns
+    ``None`` so an upgrade-walkthrough surface keeps rendering instead
+    of breaking.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if p not in _TIER_ORDER:
+        return None
+    try:
+        return tier_path(from_tier, to_tier)
+    except Exception as exc:
+        logger.warning("entitlements: tier_path_at failed: %s", exc)
+        return None
+
+
+def tier_path_at_batch(
+    perspective_tier: str, from_tier: str, to_tiers
+) -> dict | None:
+    """Batch sibling of :func:`tier_path_at`: per-rung marginal
+    ``tier_diff`` paths for a caller-supplied subset of destination
+    tiers all walked from a single ``from_tier`` from a hypothetical
+    ``perspective_tier`` in ONE round-trip.
+
+    Composes :func:`tier_path_at` (scalar what-if path) and
+    :func:`tier_path_batch` (multi-destination current-perspective
+    path). Fills the ``_at_batch`` slot for the ``tier_path`` family
+    alongside :func:`tier_path` / :func:`tier_path_at` /
+    :func:`tier_path_batch` so a pricing-comparison walkthrough surface
+    can call ``X_at_batch(perspective, from, to_tiers)`` uniformly
+    across the whole family.
+
+    Per-destination row shape mirrors :func:`tier_path_batch`::
+
+        {
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<tier_diff row>, ...],
+        }
+
+    Envelope::
+
+        {
+          "tiers":   [<row>, ...],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Body posture matches :func:`tier_path_at`: perspective is
+    validated against :data:`_TIER_ORDER` but does NOT shape rows. Each
+    row is byte-identical to a row from :func:`tier_path_batch` for
+    the same ``(from_tier, to_tiers)`` pair -- pinned by parity tests
+    so the batch what-if path helper cannot drift from the current-
+    perspective sibling.
+
+    Supplied destination ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen
+    order preserved). Unknown destination ids land in ``unknown[]``
+    instead of short-circuiting the batch, matching every other
+    ``*_path_batch`` sibling's posture. ``trial`` IS accepted as a
+    destination via the lateral / identity branches, matching
+    :func:`tier_path_batch`.
+
+    Returns ``None`` for empty / unknown ``perspective_tier`` or
+    ``from_tier`` (caller renders "unknown tier" / 404). Never raises:
+    a per-destination failure short-circuits that id into ``unknown[]``
+    and the rest of the batch keeps building.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if p not in _TIER_ORDER:
+        return None
+    try:
+        return tier_path_batch(from_tier, to_tiers)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: tier_path_at_batch failed: %s", exc
+        )
+        return None
