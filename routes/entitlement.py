@@ -856,6 +856,128 @@ def api_entitlement_capacity_diff_at_batch():
         )
 
 
+@bp_entitlement.route("/api/entitlement/tier-diff-at")
+def api_entitlement_tier_diff_at():
+    """``GET /api/entitlement/tier-diff-at?tier=<perspective>&from=<from>
+    &to=<to>`` -- arbitrary-endpoint diff between two tiers, rendered
+    from a hypothetical ``perspective_tier``.
+
+    What-if sibling of ``/tier-diff``: same payload shape, plus a
+    ``perspective_tier`` echo so a pricing-comparison tooltip surface
+    can call ``X_at(perspective, from, to)`` uniformly across the whole
+    ``_at`` scalar family (alongside ``/capacity-diff-at``,
+    ``/tier-unlocks-at``, ``/tier-locks-at``, ``/tier-catalog-at`` and
+    the ``_at_path`` walk siblings). Closes the ``_at`` slot of the
+    ``tier_diff`` family alongside the existing ``/tier-diff-at-batch``
+    (walk every purchasable target from one source) and the
+    ``/tier-path-at`` walk-shape sibling in the open ``tier_path_at``
+    PR.
+
+    Body posture matches ``/tier-catalog-at-path``: perspective is
+    validated against :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`)
+    but does NOT shape rows -- the diff is anchored to ``from`` /
+    ``to``. A parity test pins the response body against
+    ``/tier-diff?from=<from>&to=<to>`` for every valid perspective so
+    the ``_at`` prefix cannot silently drift into shaping rows.
+
+    Response body extends the ``/tier-diff`` shape with three extra
+    fields at the top so a consumer can echo the perspective in a
+    "Comparing A vs B from perspective P" tooltip without a second
+    round-trip::
+
+        {
+          "perspective_tier":      "<tier id>",
+          "perspective_tier_rank": <int>,
+          "perspective_tier_label":"...",
+          "from":                  "<tier id>",
+          "from_label":            "...",
+          "from_rank":             <int>,
+          "to":                    "<tier id>",
+          "to_label":              "...",
+          "to_rank":               <int>,
+          "direction":             "upgrade" | "downgrade" | "lateral" | "identity",
+          "added_features":        [...],
+          "lost_features":         [...],
+          "added_runtimes":        [...],
+          "lost_runtimes":         [...],
+          "capacity_changes":      {...},
+        }
+
+    - **400** when ``tier=``, ``from=`` or ``to=`` is missing / blank.
+    - **404** when any id is unknown (body carries ``which: "tier" |
+      "from" | "to"`` so the caller can point at the offender).
+    - **200** on the happy path with the shape above.
+    - Never 5xxs: a resolver failure short-circuits to 404 so a
+      pricing-comparison tooltip keeps rendering instead of breaking.
+    """
+    p = (request.args.get("tier") or "").strip().lower()
+    f = (request.args.get("from") or "").strip().lower()
+    t = (request.args.get("to") or "").strip().lower()
+    if not p:
+        return jsonify({"error": "missing tier"}), 400
+    if not f:
+        return jsonify({"error": "missing from"}), 400
+    if not t:
+        return jsonify({"error": "missing to"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if p not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": p}
+                ),
+                404,
+            )
+        if f not in _ent._TIER_FEATURES:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "from", "from": f}
+                ),
+                404,
+            )
+        if t not in _ent._TIER_FEATURES:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "to", "to": t}
+                ),
+                404,
+            )
+        body = _ent.tier_diff_at(p, f, t)
+        if body is None:
+            return (
+                jsonify(
+                    {
+                        "error": "unknown tier",
+                        "tier": p,
+                        "from": f,
+                        "to": t,
+                    }
+                ),
+                404,
+            )
+        out = {
+            "perspective_tier": p,
+            "perspective_tier_rank": _ent.tier_rank(p),
+            "perspective_tier_label": _ent.tier_label(p),
+        }
+        out.update(body)
+        return jsonify(out)
+    except Exception as exc:
+        logger.warning("api_entitlement_tier_diff_at: error: %s", exc)
+        return (
+            jsonify(
+                {
+                    "error": "unknown tier",
+                    "tier": p,
+                    "from": f,
+                    "to": t,
+                }
+            ),
+            404,
+        )
+
+
 @bp_entitlement.route("/api/entitlement/tier-diff-at-batch")
 def api_entitlement_tier_diff_at_batch():
     """``GET /api/entitlement/tier-diff-at-batch?tier=<source>`` --

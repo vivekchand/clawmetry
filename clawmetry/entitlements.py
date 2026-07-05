@@ -6554,6 +6554,69 @@ def tier_diff_at_batch(tier: str) -> list[dict] | None:
         return []
 
 
+def tier_diff_at(
+    perspective: str, from_tier: str, to_tier: str
+) -> dict | None:
+    """Hypothetical-perspective sibling of :func:`tier_diff`: full marginal
+    diff between two tiers, scoped by a caller-supplied ``perspective`` tier.
+
+    Same relationship to :func:`tier_diff` that :func:`tier_path_at` has to
+    :func:`tier_path`: the ``perspective`` argument tells the helper which
+    resolver / plan the caller is answering from so an ``_at`` endpoint URL
+    can be uniform across the whole ``_at`` family (every ``_at`` sibling
+    accepts a ``tier=<perspective>`` query arg), even though the underlying
+    diff is inherently perspective-independent -- ``tier_diff`` is already
+    arbitrary-endpoint, so the row shape does not depend on where the caller
+    is standing.
+
+    Perspective is validated against :data:`_TIER_ORDER` (including
+    :data:`TIER_TRIAL`) but does NOT shape rows -- the diff is anchored to
+    ``from_tier`` / ``to_tier``, exactly the way :func:`tier_path_at` and
+    the ``_at_path`` family anchor to their ``from`` / ``to`` endpoints.
+    A parity test pins ``tier_diff_at(p, f, t) == tier_diff(f, t)`` for
+    every ``p`` in :data:`_TIER_ORDER` so the ``_at`` prefix cannot
+    silently drift into shaping rows.
+
+    Scalar what-if companion of the existing ``_at_batch`` /
+    ``_at_path`` / ``_at_path_batch`` siblings in the ``tier_diff`` family:
+    :func:`tier_diff_at_batch` walks every purchasable target for one
+    source ``tier``; :func:`tier_path_at` and its batch walk the per-rung
+    marginal diff along a ``from -> to`` segment; this scalar closes the
+    ``_at`` slot so a pricing-comparison tooltip can hit the same helper
+    for "A vs B under perspective P" as the other ``_at`` scalars
+    (:func:`capacity_diff_at`, :func:`tier_unlocks_at`,
+    :func:`tier_locks_at`) surface.
+
+    Per-row shape delegates to :func:`tier_diff` -- ``from``, ``from_label``,
+    ``from_rank``, ``to``, ``to_label``, ``to_rank``, ``direction``,
+    ``added_features``, ``lost_features``, ``added_runtimes``,
+    ``lost_runtimes``, ``capacity_changes``. Identity (``from == to``)
+    collapses to ``direction="identity"`` with empty marginal lists and
+    no-op capacity triples, matching the singular helper's identity
+    branch.
+
+    Returns ``None`` for empty / unknown ``perspective`` / ``from_tier`` /
+    ``to_tier`` ids (caller renders "unknown tier" / 404). Decoupled from
+    the resolved entitlement (delegates to :func:`tier_diff`, which walks
+    the static per-tier maps), so grace vs enforce yields byte-identical
+    rows.
+
+    Never raises: a builder failure short-circuits to ``None`` so a
+    pricing-comparison tooltip stays mute instead of breaking.
+    """
+    try:
+        p = (perspective or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        return tier_diff(from_tier, to_tier)
+    except Exception as exc:
+        logger.warning("entitlements: tier_diff_at failed: %s", exc)
+        return None
+
+
 def _next_purchasable_tier_after(tier: str) -> str | None:
     """Pure helper: next strictly-higher-rank entry in
     :data:`_PURCHASABLE_TIERS` after ``tier``, ties broken by the order
