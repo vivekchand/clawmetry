@@ -13935,3 +13935,514 @@ def api_entitlement_runtime_catalog_at_path_batch():
                 "enforced": False,
             }
         )
+
+
+@bp_entitlement.route("/api/entitlement/lock-reason-at-path")
+def api_entitlement_lock_reason_at_path():
+    """``GET /api/entitlement/lock-reason-at-path?tier=<perspective>
+    &from=<id>&to=<id>&<axis>=<id>`` -- perspective-validated what-if
+    sibling of ``/api/entitlement/lock-reason-path``.
+
+    Fills the ``_at_path`` slot of the ``lock-reason`` family, matching
+    the already-shipping ``feature-spec-at-path`` /
+    ``runtime-spec-at-path`` / ``tier-spec-at-path`` /
+    ``feature-catalog-at-path`` / ``runtime-catalog-at-path`` /
+    ``tier-catalog-at-path`` / ``capacity-diff-at-path`` /
+    ``preview-at-path`` pattern on the eight other axes -- so every
+    ``*-path`` endpoint now has a perspective-validated ``_at_path``
+    sibling and a paywall walkthrough UI can call
+    ``.../X-at-path?tier=<perspective>&from=<f>&to=<t>&...`` uniformly
+    across the whole ``_at_path`` family without special-casing the
+    lock-reason axis.
+
+    The perspective is validated (400 on missing, 404 on unknown) but
+    does NOT shape the ``path`` rows -- the body is byte-identical to
+    ``/lock-reason-path?from=<f>&to=<t>&<axis>=<id>`` for every
+    perspective. Pinned by parity tests so the ``_at_path`` and
+    ``_path`` endpoints cannot drift.
+
+    Exactly one of ``feature=`` / ``runtime=`` / ``channels=`` /
+    ``retention_days=`` / ``nodes=`` must be supplied -- the same axis
+    dispatcher as ``/lock-reason-path``. Runtime aliases
+    (``claude-code`` -> ``claude_code``) are canonicalised via
+    :func:`clawmetry.entitlements.canonical_runtime`.
+
+    Response shape (mirrors ``/lock-reason-path`` plus a
+    ``perspective_tier`` echo and the standard ``_at*`` resolver-context
+    tail so a paywall matrix UI can render "at Cloud Pro this lock-row
+    unlocks at Starter" without a second call to ``/entitlement``)::
+
+        {
+          "perspective_tier":      "<id>",
+          "perspective_tier_rank": <int>,
+          "from":                  "<tier id>",
+          "from_label":            "...",
+          "from_rank":             <int>,
+          "to":                    "<tier id>",
+          "to_label":              "...",
+          "to_rank":               <int>,
+          "direction":             "upgrade" | "downgrade" | "lateral" | "identity",
+          "key":                   "<echoed item id>",
+          "kind":                  "feature" | "runtime" | "channels" |
+                                   "retention_days" | "nodes",
+          "path":                  [<lock_reason_path row>, ...],
+          "current_tier":          "...",
+          "current_tier_rank":     <int>,
+          "grace":                 <bool>,
+          "enforced":              <bool>,
+        }
+
+    - **400** when ``tier=``, ``from=`` or ``to=`` is missing / blank,
+      when no axis is supplied, or when more than one axis is supplied
+    - **404** when any tier id is unknown (body carries
+      ``which: "tier" | "from" | "to"``), or when a feature / runtime
+      id is unknown, or when a capacity value is missing / non-int /
+      non-positive
+    - **Never 5xxs**: a resolver failure short-circuits to the grace-
+      shape envelope with the perspective echoed.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    f = (request.args.get("from") or "").strip().lower()
+    t = (request.args.get("to") or "").strip().lower()
+    if not f:
+        return jsonify({"error": "missing from"}), 400
+    if not t:
+        return jsonify({"error": "missing to"}), 400
+
+    feature = (request.args.get("feature") or "").strip().lower()
+    runtime_in = (request.args.get("runtime") or "").strip().lower()
+    (
+        channels_present,
+        channels_ok,
+        channels_n,
+        channels_raw,
+    ) = _parse_capacity_arg("channels")
+    (
+        retention_present,
+        retention_ok,
+        retention_n,
+        retention_raw,
+    ) = _parse_capacity_arg("retention_days")
+    (
+        nodes_present,
+        nodes_ok,
+        nodes_n,
+        nodes_raw,
+    ) = _parse_capacity_arg("nodes")
+
+    supplied = [
+        bool(feature),
+        bool(runtime_in),
+        channels_present,
+        retention_present,
+        nodes_present,
+    ]
+    n_supplied = sum(1 for s in supplied if s)
+    if n_supplied == 0:
+        return (
+            jsonify(
+                {
+                    "error": (
+                        "supply exactly one of feature=<id>, runtime=<id>, "
+                        "channels=<int>, retention_days=<int>, or "
+                        "nodes=<int>"
+                    )
+                }
+            ),
+            400,
+        )
+    if n_supplied > 1:
+        return (
+            jsonify(
+                {
+                    "error": (
+                        "supply only one of feature=, runtime=, channels=, "
+                        "retention_days=, or nodes="
+                    )
+                }
+            ),
+            400,
+        )
+
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_FEATURES:
+            return (
+                jsonify(
+                    {
+                        "error": "unknown tier",
+                        "which": "tier",
+                        "tier": tier_in,
+                    }
+                ),
+                404,
+            )
+        if f not in _ent._TIER_FEATURES:
+            return (
+                jsonify(
+                    {"error": "unknown from", "which": "from", "from": f}
+                ),
+                404,
+            )
+        if t not in _ent._TIER_FEATURES:
+            return (
+                jsonify({"error": "unknown to", "which": "to", "to": t}),
+                404,
+            )
+
+        if feature:
+            item, kind, echoed_key = feature, "feature", feature
+        elif runtime_in:
+            canon = _ent.canonical_runtime(runtime_in)
+            item, kind, echoed_key = (
+                canon or runtime_in,
+                "runtime",
+                canon or runtime_in,
+            )
+        elif channels_present:
+            if not channels_ok:
+                return (
+                    jsonify(
+                        {
+                            "error": "unknown tier or item",
+                            "which": "item",
+                            "from": f,
+                            "to": t,
+                            "key": channels_raw,
+                            "kind": "channels",
+                        }
+                    ),
+                    404,
+                )
+            item, kind, echoed_key = (
+                str(channels_n),
+                "channels",
+                str(channels_n),
+            )
+        elif retention_present:
+            if not retention_ok:
+                return (
+                    jsonify(
+                        {
+                            "error": "unknown tier or item",
+                            "which": "item",
+                            "from": f,
+                            "to": t,
+                            "key": retention_raw,
+                            "kind": "retention_days",
+                        }
+                    ),
+                    404,
+                )
+            item, kind, echoed_key = (
+                str(retention_n),
+                "retention_days",
+                str(retention_n),
+            )
+        else:
+            if not nodes_ok:
+                return (
+                    jsonify(
+                        {
+                            "error": "unknown tier or item",
+                            "which": "item",
+                            "from": f,
+                            "to": t,
+                            "key": nodes_raw,
+                            "kind": "nodes",
+                        }
+                    ),
+                    404,
+                )
+            item, kind, echoed_key = str(nodes_n), "nodes", str(nodes_n)
+
+        path = _ent.lock_reason_at_path(tier_in, f, t, item, kind=kind)
+        if path is None:
+            return (
+                jsonify(
+                    {
+                        "error": "unknown tier or item",
+                        "which": "item",
+                        "from": f,
+                        "to": t,
+                        "key": echoed_key,
+                        "kind": kind,
+                    }
+                ),
+                404,
+            )
+        from_rank = _ent.tier_rank(f)
+        to_rank = _ent.tier_rank(t)
+        if f == t:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "perspective_tier": tier_in,
+                "perspective_tier_rank": _ent.tier_rank(tier_in),
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": from_rank,
+                "to": t,
+                "to_label": _ent.tier_label(t),
+                "to_rank": to_rank,
+                "direction": direction,
+                "key": echoed_key,
+                "kind": kind,
+                "path": path,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_lock_reason_at_path: error: %s", exc)
+        if feature:
+            echoed_key, kind = feature, "feature"
+        elif runtime_in:
+            echoed_key, kind = runtime_in, "runtime"
+        elif channels_present:
+            echoed_key, kind = channels_raw, "channels"
+        elif retention_present:
+            echoed_key, kind = retention_raw, "retention_days"
+        else:
+            echoed_key, kind = nodes_raw, "nodes"
+        return jsonify(
+            {
+                "perspective_tier": tier_in,
+                "perspective_tier_rank": 0,
+                "from": f,
+                "from_label": None,
+                "from_rank": -1,
+                "to": t,
+                "to_label": None,
+                "to_rank": -1,
+                "direction": "identity" if f == t else "upgrade",
+                "key": echoed_key,
+                "kind": kind,
+                "path": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/lock-reason-at-path-batch")
+def api_entitlement_lock_reason_at_path_batch():
+    """``GET /api/entitlement/lock-reason-at-path-batch?tier=<perspective>
+    &from=<id>&to=<id>&features=a,b,c&runtimes=x,y&channels=N
+    &retention_days=K&nodes=M`` -- perspective-validated what-if batch
+    sibling of ``/api/entitlement/lock-reason-path-batch``.
+
+    Fills the ``_at_path_batch`` slot of the ``lock-reason`` family;
+    fixed-perspective, fixed-from, fixed-to, multi-axis companion of
+    ``/lock-reason-at-path``. Per-axis body byte-identical to
+    ``/lock-reason-path-batch`` for the same ``(from, to, features,
+    runtimes, channels, retention_days, nodes)`` tuple -- scalar / batch
+    no-drift contract.
+
+    At least one of ``features=`` / ``runtimes=`` / ``channels=`` /
+    ``retention_days=`` / ``nodes=`` must be supplied (matches
+    ``/lock-reason-path-batch``); supply as many as you like. Runtime
+    aliases are canonicalised (``claude-code`` -> ``claude_code``) and
+    aliases that collapse to a canonical id already in the response are
+    silently de-duplicated. Unknown ids do NOT 404 the call -- they are
+    echoed in ``unknown.features`` / ``unknown.runtimes`` carrying the
+    supplied alias.
+
+    Response shape (mirrors ``/lock-reason-path-batch`` plus a
+    ``perspective_tier`` echo and the standard ``_at*`` resolver-context
+    tail)::
+
+        {
+          "perspective_tier":      "<id>",
+          "perspective_tier_rank": <int>,
+          "from":                  "<tier id>",
+          "from_label":            "...",
+          "from_rank":             <int>,
+          "to":                    "<tier id>",
+          "to_label":              "...",
+          "to_rank":               <int>,
+          "direction":             "upgrade" | "downgrade" | "lateral" | "identity",
+          "features": [{"key": "<id>", "path": [...]}, ...],
+          "runtimes": [{"key": "<canonical id>", "path": [...]}, ...],
+          "channels":       {"key": "<n>", "path": [...]} | None,
+          "retention_days": {"key": "<n>", "path": [...]} | None,
+          "nodes":          {"key": "<n>", "path": [...]} | None,
+          "unknown": {"features": [...], "runtimes": [...]},
+          "current_tier":          "...",
+          "current_tier_rank":     <int>,
+          "grace":                 <bool>,
+          "enforced":              <bool>,
+        }
+
+    - **400** when ``tier=`` / ``from=`` / ``to=`` is missing / blank,
+      or when no axis is supplied
+    - **404** when any tier id is unknown (body carries
+      ``which: "tier" | "from" | "to"``)
+    - Unknown feature / runtime ids do NOT 404 the call -- they are
+      echoed in ``unknown[]`` so a partially-bad caller still gets paths
+      back for the valid ids alongside a list of what was dropped
+    - **Never 5xxs**: a synthesis failure short-circuits to a grace-
+      shape envelope with the perspective echoed.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    f = (request.args.get("from") or "").strip().lower()
+    t = (request.args.get("to") or "").strip().lower()
+    if not f:
+        return jsonify({"error": "missing from"}), 400
+    if not t:
+        return jsonify({"error": "missing to"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_FEATURES:
+            return (
+                jsonify(
+                    {
+                        "error": "unknown tier",
+                        "which": "tier",
+                        "tier": tier_in,
+                    }
+                ),
+                404,
+            )
+        if f not in _ent._TIER_FEATURES:
+            return (
+                jsonify(
+                    {"error": "unknown from", "which": "from", "from": f}
+                ),
+                404,
+            )
+        if t not in _ent._TIER_FEATURES:
+            return (
+                jsonify({"error": "unknown to", "which": "to", "to": t}),
+                404,
+            )
+
+        features = _parse_csv_arg("features")
+        runtimes = _parse_csv_arg("runtimes")
+        (_, channels_ok, channels_n, _) = _parse_capacity_arg("channels")
+        (_, retention_ok, retention_n, _) = _parse_capacity_arg(
+            "retention_days"
+        )
+        (_, nodes_ok, nodes_n, _) = _parse_capacity_arg("nodes")
+
+        if (
+            not features
+            and not runtimes
+            and not channels_ok
+            and not retention_ok
+            and not nodes_ok
+        ):
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply at least one of features=<csv>, "
+                            "runtimes=<csv>, channels=<int>, "
+                            "retention_days=<int>, or nodes=<int>"
+                        )
+                    }
+                ),
+                400,
+            )
+
+        batch = _ent.lock_reason_at_path_batch(
+            tier_in,
+            f,
+            t,
+            features=features or None,
+            runtimes=runtimes or None,
+            channels=channels_n if channels_ok else None,
+            retention_days=retention_n if retention_ok else None,
+            nodes=nodes_n if nodes_ok else None,
+        )
+        if batch is None:
+            batch = {
+                "features": [],
+                "runtimes": [],
+                "channels": None,
+                "retention_days": None,
+                "nodes": None,
+                "unknown": {"features": [], "runtimes": []},
+            }
+        from_rank = _ent.tier_rank(f)
+        to_rank = _ent.tier_rank(t)
+        if f == t:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "perspective_tier": tier_in,
+                "perspective_tier_rank": _ent.tier_rank(tier_in),
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": from_rank,
+                "to": t,
+                "to_label": _ent.tier_label(t),
+                "to_rank": to_rank,
+                "direction": direction,
+                "features": batch.get("features", []),
+                "runtimes": batch.get("runtimes", []),
+                "channels": batch.get("channels"),
+                "retention_days": batch.get("retention_days"),
+                "nodes": batch.get("nodes"),
+                "unknown": batch.get(
+                    "unknown", {"features": [], "runtimes": []}
+                ),
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_lock_reason_at_path_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "perspective_tier": tier_in,
+                "perspective_tier_rank": 0,
+                "from": f,
+                "from_label": None,
+                "from_rank": -1,
+                "to": t,
+                "to_label": None,
+                "to_rank": -1,
+                "direction": "identity" if f == t else "upgrade",
+                "features": [],
+                "runtimes": [],
+                "channels": None,
+                "retention_days": None,
+                "nodes": None,
+                "unknown": {"features": [], "runtimes": []},
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
