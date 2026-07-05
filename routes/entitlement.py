@@ -155,6 +155,26 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                          row or feature tooltip needs).
   GET  /api/runtimes                  -- the full runtime catalog.
   GET  /api/tiers                     -- the full tier ladder with per-tier metadata.
+  GET  /api/entitlement/feature-catalog  -- bare sibling of
+                                         ``/feature-catalog-at``: the resolved
+                                         feature catalogue wrapped in the same
+                                         ``{tier, features, grace, enforced}``
+                                         envelope the ``-at`` sibling uses, so
+                                         a client hydrating every catalog
+                                         variant (bare, ``-at``,
+                                         ``-at-batch``, ``-path``, ...) can do
+                                         it off one prefix instead of mixing
+                                         ``/api/features`` with
+                                         ``/api/entitlement/feature-catalog-at``.
+  GET  /api/entitlement/runtime-catalog  -- bare sibling of
+                                         ``/runtime-catalog-at`` for the
+                                         runtime axis; same envelope shape.
+  GET  /api/entitlement/tier-catalog  -- bare sibling of
+                                         ``/tier-catalog-at`` for the tier
+                                         ladder; same envelope shape (with
+                                         the resolved tier mirrored into the
+                                         ``tier`` key to match the ``-at``
+                                         sibling).
   GET  /api/entitlement/tier-spec     -- scalar sibling of ``/api/tiers``:
                                          full per-tier descriptor for one
                                          ``tier=`` key (label, rank,
@@ -15486,6 +15506,153 @@ def api_entitlement_tier_path_at_batch():
                 "unknown": [],
                 "current_tier": "oss",
                 "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/feature-catalog")
+def api_entitlement_feature_catalog():
+    """``GET /api/entitlement/feature-catalog`` -- bare sibling of
+    ``/api/entitlement/feature-catalog-at``: returns the full feature
+    catalogue for the *resolved* entitlement, wrapped with the same
+    envelope keys the ``-at`` sibling uses so a pricing UI can swap
+    between "current" and "hypothetical" without reshaping.
+
+    Same rows as ``/api/features``; this alias lives under
+    ``/api/entitlement/`` so a client hydrating every catalog variant
+    (bare, ``-at``, ``-at-batch``, ``-path``, ...) can do it off one
+    prefix instead of mixing ``/api/features`` with
+    ``/api/entitlement/feature-catalog-at``.
+
+    Response shape::
+
+        {
+          "tier":     "<resolved tier id>",
+          "features": [<catalog_row>, ...],   # from feature_catalog()
+          "grace":    <bool>,                 # resolver is in grace mode
+          "enforced": <bool>,                 # negation of grace, for symmetry
+        }
+
+    - **Never 5xxs**: helper failures short-circuit to the OSS-free
+      envelope so the pricing UI keeps rendering.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tier": ent.tier,
+                "features": _ent.feature_catalog(),
+                "grace": ent.grace,
+                "enforced": not ent.grace,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_feature_catalog: error: %s", exc)
+        return jsonify(
+            {
+                "tier": "oss",
+                "features": [],
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/runtime-catalog")
+def api_entitlement_runtime_catalog():
+    """``GET /api/entitlement/runtime-catalog`` -- bare sibling of
+    ``/api/entitlement/runtime-catalog-at``: returns the full runtime
+    catalogue for the *resolved* entitlement, wrapped with the same
+    envelope keys the ``-at`` sibling uses so a pricing UI can swap
+    between "current" and "hypothetical" without reshaping.
+
+    Same rows as ``/api/runtimes``; this alias lives under
+    ``/api/entitlement/`` so a client hydrating every catalog variant
+    can do it off one prefix.
+
+    Response shape::
+
+        {
+          "tier":     "<resolved tier id>",
+          "runtimes": [<catalog_row>, ...],   # from runtime_catalog()
+          "grace":    <bool>,
+          "enforced": <bool>,
+        }
+
+    - **Never 5xxs**: helper failures short-circuit to the OSS-free
+      envelope so the pricing UI keeps rendering.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tier": ent.tier,
+                "runtimes": _ent.runtime_catalog(),
+                "grace": ent.grace,
+                "enforced": not ent.grace,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_runtime_catalog: error: %s", exc)
+        return jsonify(
+            {
+                "tier": "oss",
+                "runtimes": [],
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/tier-catalog")
+def api_entitlement_tier_catalog():
+    """``GET /api/entitlement/tier-catalog`` -- bare sibling of
+    ``/api/entitlement/tier-catalog-at``: returns the full tier ladder
+    for the *resolved* entitlement, wrapped with the same envelope
+    keys the ``-at`` sibling uses so a pricing UI can swap between
+    "current" and "hypothetical" without reshaping.
+
+    Same rows as ``/api/tiers`` (with ``current`` mirrored into
+    ``tier`` to match the ``-at`` sibling); this alias lives under
+    ``/api/entitlement/`` so a client hydrating every catalog variant
+    can do it off one prefix.
+
+    Response shape::
+
+        {
+          "tier":     "<resolved tier id>",   # matches _at sibling key
+          "tiers":    [<catalog_row>, ...],   # from tier_catalog()
+          "grace":    <bool>,
+          "enforced": <bool>,
+        }
+
+    - **Never 5xxs**: helper failures short-circuit to the OSS-floor
+      envelope so the pricing UI keeps rendering.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tier": ent.tier,
+                "tiers": _ent.tier_catalog(),
+                "grace": ent.grace,
+                "enforced": not ent.grace,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_tier_catalog: error: %s", exc)
+        return jsonify(
+            {
+                "tier": "oss",
+                "tiers": [],
                 "grace": True,
                 "enforced": False,
             }
