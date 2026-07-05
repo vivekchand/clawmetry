@@ -158,6 +158,8 @@ def _row_to_cron_job(row):
     for k in (
         "lastDurationMs", "consecutiveFailures", "lastError",
         "runHistory", "lastCostUsd",
+        # on-exit trigger / detached-run metadata (openclaw #92037 / #98755)
+        "watchedCommand", "lastExitCode", "targetSessionId", "detachedAt",
     ):
         if k in extras:
             state_extras[k] = extras[k]
@@ -192,7 +194,8 @@ def _row_to_cron_job(row):
     for k, v in extras.items():
         if k not in {"createdAtMs", "schedule", "lastDurationMs",
                      "consecutiveFailures", "lastError", "runHistory",
-                     "lastCostUsd"}:
+                     "lastCostUsd",
+                     "watchedCommand", "lastExitCode", "targetSessionId", "detachedAt"}:
             job.setdefault(k, v)
     return job
 
@@ -1343,10 +1346,16 @@ def _project_intentions(jobs, days: int, include_disabled: bool, max_events: int
             while t <= window_end_ms and len(firings) < 100:
                 firings.append(t)
                 t += every_ms
+        elif sched_kind == "on-exit":
+            # Event-triggered: fires when the watched command exits; no
+            # predictable next-run time. Use nextRunAtMs when the gateway
+            # provides one, otherwise pin to window_end so the job still
+            # appears in the timeline.
+            firings.append(int(next_run_ms) if next_run_ms else window_end_ms)
         elif next_run_ms and now_ms <= next_run_ms <= window_end_ms:
             firings.append(int(next_run_ms))
         for ts in firings:
-            intentions.append({
+            entry = {
                 "jobId":           job_id,
                 "name":            job_name,
                 "scheduledForMs":  ts,
@@ -1355,7 +1364,13 @@ def _project_intentions(jobs, days: int, include_disabled: bool, max_events: int
                 "lastRunAtMs":     last_run_ms,
                 "isRecentlyAdded": is_recently_added,
                 "enabled":         enabled,
-            })
+            }
+            if sched_kind == "on-exit":
+                for k in ("watchedCommand", "lastExitCode", "targetSessionId", "detachedAt"):
+                    v = state.get(k)
+                    if v is not None:
+                        entry[k] = v
+            intentions.append(entry)
             if len(intentions) >= max_events:
                 break
         if len(intentions) >= max_events:

@@ -403,7 +403,7 @@ def test_http_unlocks_bad_from_404(client):
     )
     assert r.status_code == 404
     body = r.get_json()
-    assert body["which"] == "from"
+    assert body["which"] == "tier"
 
 
 def test_http_unlocks_unknown_to_bucketed_200(client, ent):
@@ -488,7 +488,7 @@ def test_http_locks_bad_from_404(client):
     )
     assert r.status_code == 404
     body = r.get_json()
-    assert body["which"] == "from"
+    assert body["which"] == "tier"
 
 
 def test_http_locks_unknown_to_bucketed_200(client, ent):

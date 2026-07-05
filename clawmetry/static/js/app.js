@@ -1168,6 +1168,19 @@ function switchTab(name) {
   tabs.forEach(function(t) { if (t.getAttribute('onclick') && t.getAttribute('onclick').indexOf("'" + name + "'") !== -1) t.classList.add('active'); });
   var leftItems = document.querySelectorAll('.left-nav-item[data-tab="' + name + '"]');
   leftItems.forEach(function(t) { t.classList.add('active'); });
+  // Phase A beginner IA: if the selected tab lives inside a collapsed drawer
+  // (Developer / Advanced), reveal that drawer so the active item is visible.
+  // Reveal only - do NOT persist, so the drawer stays collapsed-by-default on
+  // the next visit unless the user opened it themselves.
+  leftItems.forEach(function(t) {
+    var drawer = t.closest('#left-nav-live-list, #left-nav-advanced-list');
+    if (drawer && drawer.hasAttribute('hidden')) {
+      drawer.removeAttribute('hidden');
+      var toggleId = drawer.id === 'left-nav-live-list' ? 'left-nav-live-toggle' : 'left-nav-advanced-toggle';
+      var btn = document.getElementById(toggleId);
+      if (btn) btn.setAttribute('aria-expanded', 'true');
+    }
+  });
   if (!document.querySelector('.nav-tab.active') && !document.querySelector('.left-nav-item.active') && typeof event !== 'undefined' && event && event.target) event.target.classList.add('active');
   // Auto-close mobile drawer when a nav item is picked.
   var leftNav = document.getElementById('left-nav');
@@ -1178,6 +1191,11 @@ function switchTab(name) {
   if (name === 'overview') loadAll();
   if (name === 'overview') { if (typeof _velocityPollTimer !== 'undefined' && _velocityPollTimer) clearInterval(_velocityPollTimer); if (typeof loadTokenVelocity === 'function') _velocityPollTimer = visibilitySetInterval(function() { if (!_cmIsOverviewTab()) return; loadTokenVelocity(); }, 30000); }
   if (name === 'usage') loadUsage();
+  // Agent Graph (#3315): the original wiring landed in the DEAD first
+  // DASHBOARD_HTML's inline switchTab in dashboard.py, so the loader never
+  // fired and the tab sat on its static "Loading..." forever (founder
+  // report 2026-07-02). The LIVE switchTab is this one.
+  if (name === 'agents') loadAgentGraph();
   if (name === 'skills') loadSkills();
   if (name === 'crons') loadCrons();
   if (name === 'memory') loadMemory();
@@ -1232,8 +1250,8 @@ function toggleLeftNavMobile() {
   leftNav.classList.toggle('open');
 }
 
-// Live trace expandable group (IA regroup: Flow/Brain/Logs/Models/LLM Context).
-// Default-expanded; remembers user collapse via localStorage.
+// Developer expandable group (Phase A beginner IA, UX_AUDIT.md).
+// Default-collapsed; remembers an explicit user open via localStorage.
 function toggleLiveDrawer() {
   var btn = document.getElementById('left-nav-live-toggle');
   var list = document.getElementById('left-nav-live-list');
@@ -1266,16 +1284,20 @@ function toggleLiveDrawer() {
         advBtn.setAttribute('aria-expanded', 'true');
       }
     }
-    // Live trace drawer (default-expanded; collapse only if user explicitly closed).
+    // Developer drawer (Phase A beginner IA, UX_AUDIT.md: default-COLLAPSED so
+    // a first-timer sees seven plain items; re-opens only if the user
+    // explicitly opened it before).
     var liveBtn = document.getElementById('left-nav-live-toggle');
     var liveList = document.getElementById('left-nav-live-list');
     if (liveBtn && liveList) {
-      var liveOpen = true;
+      var liveOpen = false;
       try {
-        var v = localStorage.getItem('cm_live_open');
-        if (v === '0') liveOpen = false;
+        if (localStorage.getItem('cm_live_open') === '1') liveOpen = true;
       } catch (e) { /* localStorage blocked */ }
-      if (!liveOpen) {
+      if (liveOpen) {
+        liveList.removeAttribute('hidden');
+        liveBtn.setAttribute('aria-expanded', 'true');
+      } else {
         liveList.setAttribute('hidden', '');
         liveBtn.setAttribute('aria-expanded', 'false');
       }
@@ -8649,12 +8671,23 @@ function _invRosterRow(a, rtFilter) {
   var work = (a.sessions || 0) + ((a.sessions === 1) ? ' conversation' : ' conversations');
   var model = a.primaryModel || '--';
   var highlight = (rtFilter !== 'all' && rt === rtFilter) ? ' inv-row-active' : '';
+  // When the row is only visible BECAUSE it is the selected runtime (it had no
+  // activity in 24h and would otherwise sit in the inactive fold), say so.
+  // Without this chip the roster looks like it shows different data on every
+  // switcher change (founder report 2026-07-02).
+  var selectedChip = '';
+  if (rtFilter !== 'all' && rt === rtFilter && !_invIsRecentlyActive(a, 'all')) {
+    selectedChip = ' <span class="inv-selected-chip" '
+      + 'title="' + t('inventory.selected_chip_tip', null, 'Shown because this runtime is selected in the switcher. No activity in the last 24h.') + '" '
+      + 'style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;padding:2px 7px;border-radius:9px;background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.4);color:#818cf8;vertical-align:middle;">'
+      + t('inventory.selected_chip', null, 'selected') + '</span>';
+  }
   var pencil = window.CLOUD_MODE
     ? ''
     : '<span class="inv-owner-pencil" title="Rename owner" onclick="event.stopPropagation();_invStartOwnerEdit(this,\'' + escHtml(rt) + '\')">&#9998;</span>';
   return ''
     + '<tr class="inv-row' + highlight + '" data-rt="' + escHtml(rt) + '" onclick="_invToggleRow(this,\'' + escHtml(rt) + '\')">'
-    +   '<td class="inv-c-agent"><span class="inv-dot" style="background:' + dot.color + '"></span>' + escHtml(label) + '</td>'
+    +   '<td class="inv-c-agent"><span class="inv-dot" style="background:' + dot.color + '"></span>' + escHtml(label) + selectedChip + '</td>'
     +   '<td class="inv-c-owner"><span class="inv-owner-chip" data-rt="' + escHtml(rt) + '"><span class="inv-owner-name">' + escHtml(owner) + '</span>' + pencil + '</span></td>'
     +   '<td class="inv-c-doing"><span class="inv-doing ' + doing.cls + '">' + doing.txt + '</span></td>'
     +   '<td class="inv-c-alive"><span class="inv-dot" style="background:' + dot.color + '"></span>'
@@ -8679,6 +8712,15 @@ function _invRenderRoster(inv) {
   // Never end up with an empty roster: if nothing is "active" right now, show
   // everything rather than an empty table.
   if (!active.length && inactive.length) { active = inactive; inactive = []; }
+  // Consistent ordering: the selected runtime is always the FIRST row. Without
+  // this the promoted row lands wherever the roster order puts it (OpenClaw
+  // above Claude Code, Hermes below), which reads as the list changing
+  // arbitrarily on every switcher change.
+  if (rtFilter !== 'all') {
+    active.sort(function (a, b) {
+      return (b.agentKey === rtFilter ? 1 : 0) - (a.agentKey === rtFilter ? 1 : 0);
+    });
+  }
   var rows = active.map(function (a) { return _invRosterRow(a, rtFilter); }).join('');
   var foldRows = '';
   if (inactive.length) {
@@ -10912,6 +10954,14 @@ function _taFmtCost(c) { c = Number(c) || 0; return c >= 0.01 ? '$' + c.toFixed(
 window._taSession = null;
 
 async function loadTurnAnatomy() {
+  // Session deep-dive handoff (Phase B): a pending session skips the list and
+  // opens the per-session detail directly.
+  if (window._pendingTurnSession) {
+    var _pts = window._pendingTurnSession;
+    window._pendingTurnSession = null;
+    viewTurnAnatomy(_pts);
+    return;
+  }
   turnAnatomyShowList();
   _taLoadStalled();
   var el = document.getElementById('ta-list');
@@ -11074,6 +11124,14 @@ function _taRenderTurn(t) {
 }
 
 async function loadTracing() {
+  // Session deep-dive handoff (Phase B): a pending session skips the list and
+  // opens the per-session detail directly.
+  if (window._pendingTraceSession) {
+    var _pds = window._pendingTraceSession;
+    window._pendingTraceSession = null;
+    viewTrace(_pds);
+    return;
+  }
   tracingShowList();
   var el = document.getElementById('trace-list');
   if (!el) return;
@@ -12910,11 +12968,11 @@ async function loadUsage() {
       if (_uEmptyEl) _uEmptyEl.remove();
     }
 
-    // Display cost warnings
-    displayCostWarnings(data.warnings || []);
-    
-    // Display trend analysis
-    displayTrendAnalysis(data.trend || {}, data);
+    // Display cost warnings + trend. Wrapped so a render bug in either card
+    // cannot abort the rest of loadUsage and leave every card below stuck on
+    // "Loading…" (the Cost-tab-blank regression).
+    try { displayCostWarnings(data.warnings || []); } catch (_eCW) { console.error('displayCostWarnings failed', _eCW); }
+    try { displayTrendAnalysis(data.trend || {}, data); } catch (_eTA) { console.error('displayTrendAnalysis failed', _eTA); }
     // Bar chart — QW4: with no data at all, hide the whole section (title +
     // card) instead of an empty box; render as before when data exists.
     var _uDays = Array.isArray(data.days) ? data.days : [];
@@ -13764,8 +13822,12 @@ function displayCostWarnings(warnings) {
 
 function displayTrendAnalysis(trend, usageData) {
   var card = document.getElementById('trend-card');
-  if (!trend || trend.trend === 'insufficient_data') {
-    card.style.display = 'none';
+  // Guard an empty/partial trend object ({}), not just null. When /api/usage
+  // returns trend:{} (no history yet), trend.trend is undefined; reaching the
+  // `trend.trend.charAt(0)` below threw and, since this runs early inside
+  // loadUsage's try, aborted every Cost card after it (all stuck on "Loading…").
+  if (!trend || !trend.trend || trend.trend === 'insufficient_data') {
+    if (card) card.style.display = 'none';
     return;
   }
   
@@ -14450,6 +14512,29 @@ function replayTogglePlay() {
   }
 }
 
+// Phase B (UX_AUDIT.md): open a session-scoped deep-dive view with the session
+// preselected. Tracing / Turn timing / Compare sessions left the global nav
+// (they are meaningless without a session); this is their entry point from any
+// session drill-down. switchTab keeps working for old bookmarks regardless.
+function openSessionDeepDive(kind, sessionId) {
+  if (!sessionId) return;
+  // The tab loaders (loadTracing/loadTurnAnatomy) render their LIST view and
+  // their async continuation resets the list's style.cssText, which would wipe
+  // a display:none set here (list bleeding under the detail). So instead of
+  // racing them, hand the session over: the loader itself opens the detail
+  // when a pending deep-dive session is set.
+  if (kind === 'trace') {
+    window._pendingTraceSession = sessionId;
+    switchTab('tracing');
+  } else if (kind === 'turns') {
+    window._pendingTurnSession = sessionId;
+    switchTab('turn-anatomy');
+  } else if (kind === 'compare') {
+    switchTab('swimlane');
+    swimlaneAddLane(sessionId);
+  }
+}
+
 async function viewTranscript(sessionId) {
   document.getElementById('transcript-list').style.display = 'none';
   document.getElementById('transcript-viewer').style.display = '';
@@ -14515,6 +14600,16 @@ async function viewTranscript(sessionId) {
       metaHtml += '🔒 <strong>Policy events:</strong> ' + parts.join(' · ') + '. <a href="#" onclick="switchTab(\'security\');return false;" style="color:inherit;text-decoration:underline;">View in Security tab</a>';
       metaHtml += '</div>';
     }
+    // Phase B (UX_AUDIT.md): the session-scoped deep-dive views (Tracing,
+    // Turn timing, Compare sessions) left the global nav; this row is how a
+    // user reaches them, WITH the session already selected.
+    var _ddSid = JSON.stringify(String(sessionId)).replace(/"/g, '&quot;');
+    metaHtml += '<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border-secondary);display:flex;gap:8px;flex-wrap:wrap;align-items:center;">'
+      + '<span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-muted);">' + t('transcript.deep_dive', null, 'Deep dive') + '</span>'
+      + '<button class="refresh-btn" onclick="openSessionDeepDive(\'trace\', ' + _ddSid + ')" title="Span tree + waterfall for this session">' + t('transcript.view_trace', null, 'Trace') + '</button>'
+      + '<button class="refresh-btn" onclick="openSessionDeepDive(\'turns\', ' + _ddSid + ')" title="Per-turn timing breakdown for this session">' + t('transcript.turn_timing', null, 'Turn timing') + '</button>'
+      + '<button class="refresh-btn" onclick="openSessionDeepDive(\'compare\', ' + _ddSid + ')" title="Compare this session side by side with others">' + t('transcript.compare', null, 'Compare') + '</button>'
+      + '</div>';
     document.getElementById('transcript-meta').innerHTML = metaHtml;
     _loadAuthorityPanel(sessionId);
     // Build replay events array - include compaction markers as special events
@@ -22265,13 +22360,24 @@ function loadAgentGraph() {
   var now   = Math.floor(Date.now() / 1000);
   var since = now - win;
   fetch('/api/local/agent-graph?since=' + since + '&until=' + now)
-    .then(function(r) { return r.ok ? r.json() : {nodes: [], edges: []}; })
+    .then(function(r) {
+      // The cloud disables /api/local/* (no local DuckDB) with HTTP 410.
+      // Say so honestly instead of pretending there is no data.
+      if (r.status === 410) return {_cloud_disabled: true};
+      return r.ok ? r.json() : {nodes: [], edges: []};
+    })
     .then(function(data) {
+      if (data && data._cloud_disabled) {
+        statusEl.style.display = 'block';
+        statusEl.textContent = t('app.agent_graph_local_only', null,
+          'The agent graph is built from your local data store, so it is only available on the dashboard running on your machine (http://localhost:8900).');
+        return;
+      }
       statusEl.style.display = 'none';
       _renderAgentGraph(data.nodes || [], data.edges || []);
     })
     .catch(function() {
-      statusEl.textContent = 'Could not load agent graph — is the daemon running?';
+      statusEl.textContent = 'Could not load agent graph. Is the daemon running?';
     });
 }
 

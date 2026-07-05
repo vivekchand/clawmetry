@@ -27,7 +27,11 @@ The descendant walk handles a real gotcha found in recon: in-flight tool shells
 launched by a Node CLI are frequently *detached session leaders* with their OWN
 process-group id (``tty=??``). A single ``kill(-pgid, sig)`` against the parent's
 group misses them. So we enumerate the descendant tree by ``ppid`` (BFS) and
-signal each DISTINCT process group we find.
+signal each DISTINCT process group we find — but only groups OWNED EXCLUSIVELY
+by the session's tree. A pgid shared with outsiders (e.g. a parent orchestrator
+that spawned the CLI without a new session, or our own daemon) is never signaled
+wholesale; the session's pids in it are signaled individually instead. Freezing
+a shared group froze the calling orchestrator during mobile E2E (2026-07-02).
 
 cursor is explicitly UNSUPPORTED for per-session signals: one IDE process holds
 all sessions, so signaling it would freeze every session and the editor. We
@@ -157,6 +161,9 @@ def _proc_start_token(pid: int) -> Optional[str]:
         # recorded by claude_code is an ISO/epoch with sub-second jitter we must
         # not let trip the guard.
         return f"epoch:{int(round(epoch))}"
+    # NOTE: an ``lstart:``/``raw:`` token is NOT directly comparable to an
+    # ``epoch:`` token (or to a ctime string rendered in a different timezone);
+    # verify_pid additionally runs _start_tokens_equivalent to bridge the forms.
     if _IS_MACOS:
         out = _run(["ps", "-o", "lstart=", "-p", str(int(pid))], timeout=5)
         if out is not None:
@@ -202,6 +209,66 @@ def _normalize_recorded_start(recorded: Any) -> Optional[str]:
         return f"raw:{s}"
 
 
+def _ctime_epoch_candidates(s: str) -> Set[int]:
+    """Epoch candidates for a ctime-style string ("Thu Jul  2 04:26:55 2026")
+    under BOTH a UTC and a local-time interpretation.
+
+    claude_code writes ``procStart`` as a ctime string rendered in UTC, while
+    macOS ``ps -o lstart=`` prints the process start in LOCAL time. On any
+    non-UTC host the two strings for the same instant never match textually, so
+    we parse to epochs under both interpretations and let the caller intersect.
+    An unparseable string yields an empty set (the guard then fails closed).
+
+    The ``%a %b`` names here are English: safe, because ``_run`` forces the C
+    locale on every ``ps`` invocation (see ``_c_locale_env``), so ``lstart``
+    output is English even on a non-English-locale host, and claude_code's
+    recorded ``procStart`` ctime is always English too.
+    """
+    import calendar
+    import datetime as _dt
+
+    out: Set[int] = set()
+    try:
+        # Collapse ctime's day-of-month double space so strptime is happy.
+        dt = _dt.datetime.strptime(
+            " ".join(str(s).split()), "%a %b %d %H:%M:%S %Y"
+        )
+    except Exception:  # noqa: BLE001
+        return out
+    tt = dt.timetuple()
+    out.add(int(calendar.timegm(tt)))  # UTC interpretation
+    try:
+        out.add(int(time.mktime(tt)))  # local-time interpretation
+    except Exception:  # noqa: BLE001 - mktime can overflow on exotic dates
+        pass
+    return out
+
+
+def _start_tokens_equivalent(want: str, have: str, tol: int = 3) -> bool:
+    """True when two start-time tokens plausibly denote the SAME instant even
+    though their string forms differ (``epoch:`` vs ``lstart:`` vs ``raw:``
+    ctime, UTC vs local timezone).
+
+    ``tol`` covers lstart's 1s resolution plus sub-second rounding. Tokens that
+    cannot be reduced to at least one epoch candidate never match, so the
+    pid-reuse guard still fails closed on garbage.
+    """
+
+    def cands(tok: str) -> Set[int]:
+        tok = (tok or "").strip()
+        if tok.startswith("epoch:"):
+            try:
+                return {int(round(float(tok[6:])))}
+            except ValueError:
+                return set()
+        if tok.startswith(("lstart:", "raw:")):
+            return _ctime_epoch_candidates(tok.split(":", 1)[1])
+        return set()
+
+    a, b = cands(want), cands(have)
+    return any(abs(x - y) <= tol for x in a for y in b)
+
+
 def is_alive(pid: int) -> bool:
     """True iff ``pid`` is a live process we can address. Never raises."""
     if pid is None or pid <= 0:
@@ -239,17 +306,52 @@ def verify_pid(pid: int, recorded_start: Any = None) -> Tuple[bool, str]:
         return True, "recorded_start_unparseable_but_alive"
     if want == have:
         return True, "verified"
+    if _start_tokens_equivalent(want, have):
+        # Same instant, different renderings: claude_code records procStart as
+        # a UTC ctime string while macOS `ps -o lstart=` prints local time, so
+        # on a non-UTC Mac without psutil the raw tokens NEVER compare equal.
+        return True, "verified_tz_normalized"
     return False, f"start_mismatch(recorded={want},live={have})"
 
 
 # ──────────────────────────────────────────────────────────────────────────
 # Shell fallbacks (used only when psutil is absent)
 # ──────────────────────────────────────────────────────────────────────────
+def _c_locale_env() -> Dict[str, str]:
+    """A copy of ``os.environ`` with the C locale forced (``LC_ALL=C``) and
+    every other locale variable stripped (``LANG``, ``LANGUAGE``, ``LC_*``).
+
+    Why: the no-psutil pid-reuse guard parses ``ps -o lstart=`` output with
+    English month/day abbreviations (``_ctime_epoch_candidates`` uses
+    ``%a %b``). On a non-English-locale host, ``ps`` localizes those names
+    (e.g. "Do 2. Jul ..." on a German Mac), the parse fails, and the guard
+    fails CLOSED: kill/pause/resume refuse for those users. Forcing the C
+    locale on the SUBPROCESS makes every ps/lsof invocation emit stable
+    English output regardless of the user's locale, so the existing parser
+    always works. POSIX gives ``LC_ALL`` precedence over all other locale
+    vars; stripping the rest is belt-and-braces for tools that consult
+    ``LANG``/``LANGUAGE`` directly.
+    """
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("LANG", "LANGUAGE") and not k.startswith("LC_")
+    }
+    env["LC_ALL"] = "C"
+    return env
+
+
 def _run(cmd: List[str], timeout: float = 10) -> Optional[str]:
-    """Run a short command, return stdout or None. Never raises, always bounded."""
+    """Run a short command, return stdout or None. Never raises, always bounded.
+
+    The child always runs under the C locale (``_c_locale_env``) so output we
+    parse — notably ``ps -o lstart=`` for the pid-reuse guard — is
+    locale-independent.
+    """
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout
+            cmd, capture_output=True, text=True, timeout=timeout,
+            env=_c_locale_env(),
         )
         if proc.returncode != 0 and not proc.stdout:
             return None
@@ -413,6 +515,29 @@ def _distinct_pgids(pids: List[int]) -> List[int]:
     return out
 
 
+def _pgid_member_map() -> Dict[int, Set[int]]:
+    """Map pgid -> set of member pids across the WHOLE process table (via ps).
+
+    Used to decide whether a process group is owned exclusively by a session's
+    tree before group-signaling it. Empty / missing entries mean membership is
+    UNKNOWN; callers must treat unknown as shared and signal per-pid instead.
+    """
+    members: Dict[int, Set[int]] = {}
+    for cpid, _ppid, pgid in _all_procs_ps():
+        if pgid > 0:
+            members.setdefault(pgid, set()).add(cpid)
+    return members
+
+
+def _own_pgid() -> int:
+    """The calling process's own pgid (-1 if unreadable). We must never
+    group-signal our own group: SIGSTOP would freeze the daemon itself."""
+    try:
+        return os.getpgrp()
+    except Exception:  # noqa: BLE001
+        return -1
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Signal helpers
 # ──────────────────────────────────────────────────────────────────────────
@@ -514,25 +639,37 @@ def pause(pid: int, runtime: str = "") -> Dict[str, Any]:
         return _result(False, "pause", pid, runtime, "pid_not_alive")
 
     pids = process_set(pid)  # children first, parent last
+    pid_set = set(pids)
     pgids = _distinct_pgids(pids)
+    members = _pgid_member_map()
+    own = _own_pgid()
     stopped_pgids: List[int] = []
+    shared_pgids: List[int] = []
     for g in pgids:
+        mem = members.get(g)
+        # Group-signal ONLY a pgid owned exclusively by the session's tree. A
+        # group shared with outsiders (e.g. a parent orchestrator that spawned
+        # the CLI without a new session), our own group, or a group whose
+        # membership we cannot determine must never be frozen wholesale:
+        # SIGSTOP-ing a shared group froze the calling orchestrator during
+        # mobile E2E (2026-07-02). Session pids in it are stopped per-pid below.
+        if g == own or not mem or (mem - pid_set):
+            shared_pgids.append(g)
+            continue
         if _signal_pid(-g, signal.SIGSTOP):
             stopped_pgids.append(g)
-    # Belt-and-braces: also SIGSTOP any individual pid whose pgid we couldn't
-    # resolve (e.g. ps lacked pgid), so nothing in the tree escapes the freeze.
-    covered = set()
-    for g in pgids:
-        for p in pids:
-            if _pgid_of(p) == g:
-                covered.add(p)
+    # Per-pid coverage for everything not frozen via an exclusive group: session
+    # pids inside shared groups, plus pids whose pgid we couldn't resolve.
+    covered: Set[int] = set()
+    for g in stopped_pgids:
+        covered |= members.get(g, set())
     for p in pids:
         if p not in covered and is_alive(p):
             _signal_pid(p, signal.SIGSTOP)
     ok = bool(stopped_pgids) or bool(pids)
     return _result(ok, "pause", pid, runtime,
                    "paused" if ok else "nothing_to_pause",
-                   pgids=stopped_pgids, pids=pids)
+                   pgids=stopped_pgids, pids=pids, shared_pgids=shared_pgids)
 
 
 def resume(pid: int, runtime: str = "") -> Dict[str, Any]:
@@ -544,13 +681,21 @@ def resume(pid: int, runtime: str = "") -> Dict[str, Any]:
     # Note: a SIGSTOP'd process IS still alive (os.kill(pid,0) succeeds), so the
     # alive check here is meaningful.
     pids = process_set(pid)
+    pid_set = set(pids)
     pgids = _distinct_pgids(pids)
+    members = _pgid_member_map()
+    own = _own_pgid()
     resumed_pgids: List[int] = []
     for g in reversed(pgids):  # parent group first
+        mem = members.get(g)
+        if g == own or not mem or (mem - pid_set):
+            # Shared / unknown-membership group (mirror of pause): never
+            # group-signal it; the per-pid SIGCONT below wakes the session pids.
+            continue
         if _signal_pid(-g, signal.SIGCONT):
             resumed_pgids.append(g)
     for p in reversed(pids):
-        # Cover any pid whose pgid wasn't resolvable.
+        # Cover shared groups and any pid whose pgid wasn't resolvable.
         _signal_pid(p, signal.SIGCONT)
     ok = bool(resumed_pgids) or bool(pids)
     return _result(ok, "resume", pid, runtime,
@@ -608,10 +753,18 @@ def claude_code_session_map() -> Dict[str, Dict[str, Any]]:
             pid = int(pid)
         except (TypeError, ValueError):
             continue
+        # Prefer startedAt (an epoch, timezone-unambiguous) over procStart (a
+        # ctime string claude_code renders in UTC, which cannot be compared
+        # textually against local-time `ps -o lstart=` output on non-UTC hosts).
+        start: Any = rec.get("startedAt")
+        if isinstance(start, bool) or not isinstance(start, (int, float)) or start <= 0:
+            start = None
+        elif start > 1e12:  # epoch in milliseconds
+            start = start / 1000.0
         out[str(sid)] = {
             "pid": pid,
             "cwd": rec.get("cwd"),
-            "procStart": rec.get("procStart"),
+            "procStart": start if start is not None else rec.get("procStart"),
             "status": rec.get("status"),
             "version": rec.get("version"),
         }

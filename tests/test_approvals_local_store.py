@@ -380,3 +380,70 @@ def test_dispatch_pending_queries_approval_decision_missing_id_is_noop(fast_path
     # Neither row was touched.
     for r in rows:
         assert r["status"] == "pending"
+
+
+# ── query_session_authority_counts ────────────────────────────────────────────
+
+
+def _seed_authority_violations(store):
+    """Insert two violations for session-A and one for session-B."""
+    for i, (sess, tool) in enumerate([
+        ("session-A", "write_file"),
+        ("session-A", "bash"),
+        ("session-B", "execute_command"),
+    ]):
+        store.ingest_authority_violation({
+            "id":             f"av-{i}",
+            "session_id":     sess,
+            "ts":             f"2026-07-04T10:0{i}:00",
+            "tool":           tool,
+            "violation_type": "tool_not_in_allowed_list",
+            "declared_tools": '["read_file"]',
+            "allowed_tools":  '["read_file"]',
+        })
+
+
+def test_authority_counts_returns_correct_counts(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH",
+                       str(tmp_path / "events.duckdb"))
+    import clawmetry.local_store as ls
+    importlib.reload(ls)
+    store = ls.get_store()
+    try:
+        _seed_authority_violations(store)
+        counts = store.query_session_authority_counts(["session-A", "session-B"])
+        assert counts["session-A"] == 2
+        assert counts["session-B"] == 1
+    finally:
+        store.stop(flush=True)
+
+
+def test_authority_counts_missing_session_absent(tmp_path, monkeypatch):
+    """Sessions with no violations are absent from the result (callers treat
+    absence as 0 — mirroring the query_event_totals_by_session contract)."""
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH",
+                       str(tmp_path / "events.duckdb"))
+    import clawmetry.local_store as ls
+    importlib.reload(ls)
+    store = ls.get_store()
+    try:
+        _seed_authority_violations(store)
+        counts = store.query_session_authority_counts(
+            ["session-A", "session-C"]  # session-C has no violations
+        )
+        assert counts["session-A"] == 2
+        assert "session-C" not in counts
+    finally:
+        store.stop(flush=True)
+
+
+def test_authority_counts_empty_input(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH",
+                       str(tmp_path / "events.duckdb"))
+    import clawmetry.local_store as ls
+    importlib.reload(ls)
+    store = ls.get_store()
+    try:
+        assert store.query_session_authority_counts([]) == {}
+    finally:
+        store.stop(flush=True)

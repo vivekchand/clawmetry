@@ -12,7 +12,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 echo ""
-echo -e "  ${BOLD}🦞 ClawMetry${NC}  ${DIM}AI Observability for OpenClaw${NC}"
+echo -e "  ${BOLD}🦞 ClawMetry${NC}  ${DIM}Observability for your AI agents${NC}"
 echo -e "  $(printf '%.0s─' {1..50})"
 echo ""
 
@@ -399,7 +399,16 @@ if [ "$OS" = "Linux" ]; then
   # install.sh doesn't stall on daemon startup — matches the macOS launchd
   # fire-and-forget pattern. (#1215)
   if [ "$_IS_WSL" = "0" ] && command -v systemctl >/dev/null 2>&1; then
-    if systemctl --user list-unit-files 2>/dev/null | grep -q '^clawmetry-sync\.service'; then
+    # root over SSH usually has no `systemctl --user` D-Bus session, so
+    # clawmetry/cli.py::_register_systemd installs a SYSTEM service for root.
+    # Restart that one for root; the --user unit for everyone else.
+    if [ "$(id -u)" = "0" ] && systemctl list-unit-files 2>/dev/null | grep -q '^clawmetry-sync\.service'; then
+      systemctl daemon-reload >/dev/null 2>&1 || true
+      if systemctl restart --no-block clawmetry-sync.service >/dev/null 2>&1; then
+        echo -e "  ${DIM}↺ clawmetry-sync (system) restarting in background${NC}"
+        _RESTARTED=1
+      fi
+    elif systemctl --user list-unit-files 2>/dev/null | grep -q '^clawmetry-sync\.service'; then
       systemctl --user daemon-reload >/dev/null 2>&1 || true
       if systemctl --user restart --no-block clawmetry-sync.service >/dev/null 2>&1; then
         echo -e "  ${DIM}↺ clawmetry-sync restarting in background${NC}"
