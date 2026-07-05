@@ -1737,6 +1737,191 @@ def api_entitlement_tier_locks_path():
         )
 
 
+@bp_entitlement.route("/api/entitlement/tier-unlocks-path-batch")
+def api_entitlement_tier_unlocks_path_batch():
+    """``GET /api/entitlement/tier-unlocks-path-batch?from=<id>&to=a,b,c``
+    -- batch sibling of ``/api/entitlement/tier-unlocks-path``.
+
+    Where ``/tier-unlocks-path`` walks the rungs between ONE
+    ``(from, to)`` pair, this walks ONE ``from`` to N candidate ``to``
+    tiers in ONE round-trip -- the multi-destination sibling filling the
+    ``_path_batch`` slot for the tier-unlocks family alongside
+    ``/tier-unlocks-batch`` (batch scalar) and ``/tier-unlocks-at-batch``
+    (batch what-if scalar). Multi-destination cousin of
+    ``/feature-spec-path-batch`` / ``/runtime-spec-path-batch`` -- same
+    fan-out envelope, unlocks-only per-rung body instead of a per-feature
+    / per-runtime spec body.
+
+    Use case: a pricing-comparison "from my current rung, here are the 3
+    tiers I'm considering -- show me the newly-unlocked features +
+    runtimes at every rung climbed to reach each" surface hydrates every
+    rung for every destination off ONE call instead of N calls to
+    ``/tier-unlocks-path``. The walked rungs are destination-specific
+    (the path's rung set depends on ``to``), so per-destination ``path``
+    lengths can legitimately differ -- unlike
+    ``/feature-spec-path-batch`` / ``/runtime-spec-path-batch`` whose
+    rungs are axis-id-agnostic across a single ``(from, to)`` pair.
+
+    Each row in ``tiers[].path`` is byte-identical to a row from
+    ``/tier-unlocks-path?from=<from>&to=<to>`` -- pinned by parity tests
+    so the scalar and batch path helpers cannot drift. Supplied
+    destination ids are normalised (whitespace stripped, lowercased,
+    duplicates dropped, first-seen order preserved). Unknown destination
+    ids do NOT 404 the call -- they are echoed in ``unknown[]`` so a
+    partially-bad caller still gets paths back for the valid ids
+    alongside a list of what was dropped, matching every other
+    ``*_path_batch`` sibling's posture. ``trial`` IS accepted as a
+    destination (matching ``/tier-unlocks-path``).
+
+    Response shape::
+
+        {
+          "from":       "<tier id>",
+          "from_label": "...",
+          "from_rank":  <int>,
+          "tiers": [
+            {
+              "to":        "<tier id>",
+              "to_label":  "...",
+              "to_rank":   <int>,
+              "direction": "upgrade" | "downgrade" | "lateral" | "identity",
+              "path":      [<tier-unlocks-path row>, ...],
+            },
+            ...
+          ],
+          "unknown":    ["bogus_id", ...],
+        }
+
+    - **400** when ``from=`` is missing / blank, or ``to=`` is missing /
+      empty after normalisation
+    - **404** when ``from`` is unknown (body carries ``which: "from"``)
+    - **200** with bucketed unknowns for unknown destination ids -- does
+      NOT 404 the call
+    - **Never 5xxs**: a synthesis failure short-circuits to an envelope
+      with empty rows so the matrix keeps rendering.
+    """
+    f = (request.args.get("from") or "").strip().lower()
+    if not f:
+        return jsonify({"error": "missing from"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if f not in _ent._TIER_FEATURES:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "from", "from": f}
+                ),
+                404,
+            )
+        targets = _parse_csv_arg("to")
+        if not targets:
+            return jsonify({"error": "supply to=<csv>"}), 400
+        batch = _ent.tier_unlocks_path_batch(f, targets)
+        if batch is None:
+            batch = {"tiers": [], "unknown": []}
+        return jsonify(
+            {
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": _ent.tier_rank(f),
+                "tiers": batch.get("tiers", []),
+                "unknown": batch.get("unknown", []),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tier_unlocks_path_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "from": f,
+                "from_label": None,
+                "from_rank": -1,
+                "tiers": [],
+                "unknown": [],
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/tier-locks-path-batch")
+def api_entitlement_tier_locks_path_batch():
+    """``GET /api/entitlement/tier-locks-path-batch?from=<id>&to=a,b,c``
+    -- batch sibling of ``/api/entitlement/tier-locks-path``.
+
+    Marginal-loss mirror of ``/tier-unlocks-path-batch`` and multi-
+    destination cousin of ``/feature-spec-path-batch`` /
+    ``/runtime-spec-path-batch`` -- same fan-out envelope, locks-only
+    per-rung body instead of a per-feature / per-runtime spec body.
+
+    Use case: a downgrade-walkthrough "from my current rung, here are
+    the 3 tiers I'm considering dropping to -- show me the newly-lost
+    features + runtimes at every rung walked to reach each" surface
+    hydrates every rung for every destination off ONE call instead of
+    N calls to ``/tier-locks-path``. Per-destination ``path`` lengths
+    can legitimately differ (rung set is destination-specific) --
+    matches ``/tier-unlocks-path-batch``'s posture.
+
+    Each row in ``tiers[].path`` is byte-identical to a row from
+    ``/tier-locks-path?from=<from>&to=<to>`` -- pinned by parity
+    tests. Supplied destination ids are normalised (whitespace stripped,
+    lowercased, duplicates dropped, first-seen order preserved). Unknown
+    destination ids do NOT 404 the call -- they are echoed in
+    ``unknown[]``. ``trial`` IS accepted as a destination.
+
+    Response shape mirrors ``/tier-unlocks-path-batch``, with
+    ``tiers[].path`` rows carrying ``lost_features`` / ``lost_runtimes``
+    (matching ``/tier-locks-path``) instead of ``features`` /
+    ``runtimes``.
+
+    - **400** when ``from=`` is missing / blank, or ``to=`` is missing /
+      empty after normalisation
+    - **404** when ``from`` is unknown (body carries ``which: "from"``)
+    - **200** with bucketed unknowns for unknown destination ids
+    - **Never 5xxs**.
+    """
+    f = (request.args.get("from") or "").strip().lower()
+    if not f:
+        return jsonify({"error": "missing from"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if f not in _ent._TIER_FEATURES:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "from", "from": f}
+                ),
+                404,
+            )
+        targets = _parse_csv_arg("to")
+        if not targets:
+            return jsonify({"error": "supply to=<csv>"}), 400
+        batch = _ent.tier_locks_path_batch(f, targets)
+        if batch is None:
+            batch = {"tiers": [], "unknown": []}
+        return jsonify(
+            {
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": _ent.tier_rank(f),
+                "tiers": batch.get("tiers", []),
+                "unknown": batch.get("unknown", []),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tier_locks_path_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "from": f,
+                "from_label": None,
+                "from_rank": -1,
+                "tiers": [],
+                "unknown": [],
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/upgrade-path")
 def api_entitlement_upgrade_path():
     """``GET /api/entitlement/upgrade-path`` -- ordered marginal-unlock
