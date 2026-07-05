@@ -4790,6 +4790,113 @@ def api_entitlement_min_tier():
         )
 
 
+@bp_entitlement.route("/api/entitlement/min-tier-batch")
+def api_entitlement_min_tier_batch():
+    """``GET /api/entitlement/min-tier-batch?features=a,b,c&runtimes=x,y
+    &channels=N&retention_days=K&nodes=M`` -- per-item plural sibling of
+    ``/api/entitlement/min-tier``.
+
+    Where ``/required-tier-batch`` aggregates the most-constraining axis
+    into one tier answer, this preserves the per-item detail so a
+    pricing-matrix UI ("show me each requested feature + runtime +
+    capacity row with its individual cheapest tier") renders off ONE
+    round-trip instead of N calls to ``/min-tier``. Wraps
+    :func:`clawmetry.entitlements.min_tier_batch` and appends the same
+    ``current_tier`` / ``grace`` / ``enforced`` envelope
+    ``/lock-reason-batch`` returns so a caller sees the same resolver
+    context alongside the per-item answers.
+
+    At least one of ``features=`` / ``runtimes=`` / ``channels=`` /
+    ``retention_days=`` / ``nodes=`` must be supplied (non-empty /
+    parseable after normalisation). ``features=`` / ``runtimes=`` take
+    comma-separated tokens (whitespace and duplicates are normalised
+    away; runtime aliases like ``claude-code`` canonicalise to
+    ``claude_code``; unknown ids contribute an all-``None`` row --
+    they do not error). The three capacity axes take a single int
+    each; a blank or non-int value is treated as "not supplied"
+    (matches the singular endpoint's never-crash posture rather than
+    mis-routing a typo to Enterprise). Never 5xxs: the grace-shape
+    envelope is returned on any resolver failure.
+
+    Response shape::
+
+        {
+          "features":       [<row>, ...],
+          "runtimes":       [<row>, ...],
+          "channels":       <row> | None,
+          "retention_days": <row> | None,
+          "nodes":          <row> | None,
+          "current_tier":       "...",
+          "current_tier_rank":  <int>,
+          "grace":              <bool>,
+          "enforced":           <bool>,
+        }
+
+    Each ``<row>`` carries ``key``, ``kind``, ``free``, ``min_tier``,
+    ``min_tier_label`` and ``min_tier_rank`` (``-1`` when
+    ``min_tier`` is ``None``). Per-row parity with the singular
+    ``/min-tier?feature=`` / ``?runtime=`` endpoint is pinned in the
+    test suite so the batch cannot silently drift from the scalar.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        features = _parse_csv_arg("features")
+        runtimes = _parse_csv_arg("runtimes")
+        (_, channels_ok, channels_n, _) = _parse_capacity_arg("channels")
+        (_, retention_ok, retention_n, _) = _parse_capacity_arg("retention_days")
+        (_, nodes_ok, nodes_n, _) = _parse_capacity_arg("nodes")
+
+        if (
+            not features
+            and not runtimes
+            and not channels_ok
+            and not retention_ok
+            and not nodes_ok
+        ):
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply at least one of features=<csv>, "
+                            "runtimes=<csv>, channels=<int>, "
+                            "retention_days=<int>, or nodes=<int>"
+                        )
+                    }
+                ),
+                400,
+            )
+
+        batch = _ent.min_tier_batch(
+            features=features or None,
+            runtimes=runtimes or None,
+            channels=channels_n if channels_ok else None,
+            retention_days=retention_n if retention_ok else None,
+            nodes=nodes_n if nodes_ok else None,
+        )
+        ent = _ent.get_entitlement()
+        batch["current_tier"] = ent.tier
+        batch["current_tier_rank"] = _ent.tier_rank(ent.tier)
+        batch["grace"] = bool(ent.grace)
+        batch["enforced"] = _ent.is_enforced()
+        return jsonify(batch)
+    except Exception as exc:
+        logger.warning("api_entitlement_min_tier_batch: error: %s", exc)
+        return jsonify(
+            {
+                "features": [],
+                "runtimes": [],
+                "channels": None,
+                "retention_days": None,
+                "nodes": None,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/lock-reason-batch")
 def api_entitlement_lock_reason_batch():
     """``GET /api/entitlement/lock-reason-batch?features=a,b,c&runtimes=x,y
