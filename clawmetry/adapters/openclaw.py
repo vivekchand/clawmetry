@@ -1375,6 +1375,44 @@ class OpenClawAdapter(AgentAdapter):
             )
             if _cap_profile is not None:
                 extra["capabilityProfile"] = _cap_profile
+            # Per-agent utilityModel routing (#3538): OpenClaw 2026.7.1 lets
+            # cheaper models generate session/topic/thread titles via a
+            # per-agent utilityModel setting. Surface the model name and its
+            # usage so routes/usage.py can attribute costs correctly.
+            _um = (
+                s.get("utilityModel")
+                or s.get("titleModel")
+                or s.get("sessionTitleModel")
+            )
+            if _um is not None:
+                extra["utilityModel"] = _um
+            _um_tokens = (
+                s.get("utilityModelTokens")
+                or s.get("utilityModelTotalTokens")
+            )
+            if _um_tokens is not None:
+                try:
+                    extra["utilityModelTokens"] = int(_um_tokens)
+                except (TypeError, ValueError):
+                    pass
+            _um_in = s.get("utilityModelInputTokens")
+            if _um_in is not None:
+                try:
+                    extra["utilityModelInputTokens"] = int(_um_in)
+                except (TypeError, ValueError):
+                    pass
+            _um_out = s.get("utilityModelOutputTokens")
+            if _um_out is not None:
+                try:
+                    extra["utilityModelOutputTokens"] = int(_um_out)
+                except (TypeError, ValueError):
+                    pass
+            _um_cost = s.get("utilityModelCostUsd") or s.get("utilityModelCost")
+            if _um_cost is not None:
+                try:
+                    extra["utilityModelCostUsd"] = float(_um_cost)
+                except (TypeError, ValueError):
+                    pass
             tok_total = int(s.get("totalTokens") or 0)
             tok_in = int(s.get("inputTokens") or 0)
             tok_out = int(s.get("outputTokens") or 0)
