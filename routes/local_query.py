@@ -796,6 +796,13 @@ _DAEMON_METHODS = frozenset({
     # to silently fall back to direct DuckDB open on multi-process installs).
     "query_authority_violations",
     "query_session_authority_counts",
+    # Issue #1713 — Agent Resources (AR) framework data layer. Routed through
+    # the daemon proxy so the dashboard process never grabs the DuckDB writer lock.
+    "persist_ar_rule",
+    "delete_ar_rule",
+    "log_ar_history",
+    "list_ar_rules",
+    "query_ar_history",
 })
 
 

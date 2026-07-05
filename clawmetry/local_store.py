@@ -472,6 +472,35 @@ _DDL = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_alert_rules_owner ON alert_rules(owner_hash, enabled)",
+    # Agent Resources (AR) framework — issue #1713. Data layer only; the
+    # evaluator, API routes, and UI follow in subsequent PRs once the
+    # Greenlight checklist decisions (tab name, confirmation modal, tier CTA)
+    # are signed off.
+    """
+    CREATE TABLE IF NOT EXISTS agent_resources_rules (
+        id               VARCHAR PRIMARY KEY,
+        enabled          BOOLEAN NOT NULL DEFAULT TRUE,
+        name             VARCHAR NOT NULL,
+        trigger_type     VARCHAR NOT NULL,
+        threshold        REAL,
+        window_seconds   INTEGER,
+        action_type      VARCHAR NOT NULL,
+        cooldown_seconds INTEGER NOT NULL DEFAULT 300,
+        created_at       BIGINT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS agent_resources_history (
+        id           VARCHAR PRIMARY KEY,
+        rule_id      VARCHAR NOT NULL,
+        session_id   VARCHAR,
+        triggered_at BIGINT NOT NULL,
+        action_type  VARCHAR NOT NULL,
+        detail_json  VARCHAR
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_ar_history_rule ON agent_resources_history(rule_id)",
+    "CREATE INDEX IF NOT EXISTS idx_ar_history_session ON agent_resources_history(session_id, triggered_at)",
     # Shared by OpenClaw subagents + Claude Code Task tool.
     """
     CREATE TABLE IF NOT EXISTS subagents (
@@ -3003,6 +3032,82 @@ class LocalStore:
         with self._write_lock:
             self._conn.execute("DELETE FROM alert_rules WHERE id = ?", [rid])
         return 1
+
+    # ── Agent Resources rules + history (issue #1713) ────────────────────
+
+    def persist_ar_rule(self, rule: dict) -> None:
+        """Upsert one Agent Resources rule. Required: ``id``, ``name``,
+        ``trigger_type``, ``action_type``, ``created_at``."""
+        rid = rule.get("id")
+        if not rid:
+            raise ValueError("agent_resources rule must include 'id'")
+        enabled = rule.get("enabled")
+        enabled = True if enabled is None else bool(enabled)
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO agent_resources_rules (
+                    id, enabled, name, trigger_type, threshold,
+                    window_seconds, action_type, cooldown_seconds, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET
+                    enabled          = excluded.enabled,
+                    name             = COALESCE(excluded.name, agent_resources_rules.name),
+                    trigger_type     = COALESCE(excluded.trigger_type, agent_resources_rules.trigger_type),
+                    threshold        = excluded.threshold,
+                    window_seconds   = excluded.window_seconds,
+                    action_type      = COALESCE(excluded.action_type, agent_resources_rules.action_type),
+                    cooldown_seconds = excluded.cooldown_seconds
+            """, [
+                str(rid),
+                enabled,
+                rule.get("name", ""),
+                rule.get("trigger_type", ""),
+                rule.get("threshold"),
+                rule.get("window_seconds"),
+                rule.get("action_type", ""),
+                int(rule.get("cooldown_seconds") or 300),
+                int(rule.get("created_at") or 0),
+            ])
+
+    def delete_ar_rule(self, rule_id: str) -> int:
+        """Delete one Agent Resources rule by id. Returns 1 on delete, 0 when missing."""
+        if not rule_id:
+            return 0
+        rid = str(rule_id)
+        rows_before = self._fetch(
+            "SELECT 1 FROM agent_resources_rules WHERE id = ? LIMIT 1", [rid]
+        )
+        if not rows_before:
+            return 0
+        with self._write_lock:
+            self._conn.execute("DELETE FROM agent_resources_rules WHERE id = ?", [rid])
+        return 1
+
+    def log_ar_history(self, entry: dict) -> None:
+        """Append one Agent Resources history row. Required: ``id``,
+        ``rule_id``, ``triggered_at``, ``action_type``.
+
+        ``detail_json`` may be a dict/list (serialised to JSON) or a string."""
+        eid = entry.get("id")
+        if not eid:
+            raise ValueError("agent_resources_history entry must include 'id'")
+        detail = entry.get("detail_json")
+        if isinstance(detail, (dict, list)):
+            detail = json.dumps(detail)
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO agent_resources_history (
+                    id, rule_id, session_id, triggered_at, action_type, detail_json
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO NOTHING
+            """, [
+                str(eid),
+                str(entry.get("rule_id", "")),
+                entry.get("session_id"),
+                int(entry.get("triggered_at") or 0),
+                str(entry.get("action_type", "")),
+                detail,
+            ])
 
     # ── Per-agent budgets (issue #951) ───────────────────────────────────
 
@@ -7350,6 +7455,69 @@ class LocalStore:
                         d["condition_json"] = text
                 except UnicodeDecodeError:
                     d["condition_json"] = None
+            out.append(d)
+        return out
+
+    def list_ar_rules(
+        self,
+        *,
+        enabled_only: bool = False,
+        limit: int = 200,
+    ) -> list[dict]:
+        """Read Agent Resources rules, newest first."""
+        clauses: list[str] = []
+        params: list = []
+        if enabled_only:
+            clauses.append("enabled = TRUE")
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT id, enabled, name, trigger_type, threshold,
+                   window_seconds, action_type, cooldown_seconds, created_at
+            FROM agent_resources_rules
+            {where}
+            ORDER BY created_at DESC NULLS LAST, id
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["id", "enabled", "name", "trigger_type", "threshold",
+                "window_seconds", "action_type", "cooldown_seconds", "created_at"]
+        return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
+
+    def query_ar_history(
+        self,
+        *,
+        session_id: str | None = None,
+        rule_id: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Read Agent Resources history rows, most recent first."""
+        clauses: list[str] = []
+        params: list = []
+        if session_id:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        if rule_id:
+            clauses.append("rule_id = ?")
+            params.append(rule_id)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT id, rule_id, session_id, triggered_at, action_type, detail_json
+            FROM agent_resources_history
+            {where}
+            ORDER BY triggered_at DESC NULLS LAST, id
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["id", "rule_id", "session_id", "triggered_at", "action_type", "detail_json"]
+        out: list[dict] = []
+        for r in self._fetch(sql, params):
+            d = dict(zip(cols, r))
+            raw = d.get("detail_json")
+            if raw:
+                try:
+                    d["detail_json"] = json.loads(raw)
+                except (ValueError, TypeError):
+                    pass
             out.append(d)
         return out
 
