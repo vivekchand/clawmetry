@@ -778,6 +778,7 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
 _state: dict = {
     "last_ingest_ms": None,     # Optional[int]  (epoch-ms, ingest stamp)
     "seen_recent_ids": {},      # dict[str, int]  event id -> created_at ms
+    "resume_cursor": None,      # Optional[tuple[int, Optional[str]]] — keyset after page cap
 }
 _state_lock = threading.Lock()
 
@@ -1056,15 +1057,20 @@ def watch_iteration(api_key: str, node_id: str,
             _state["seen_recent_ids"] = persisted_ids
         watermark = int(_state["last_ingest_ms"])
         seen: dict = dict(_state["seen_recent_ids"])
+        resume_cursor = _state.get("resume_cursor")
 
     processed = 0
     max_ingest = watermark
     saw_rows = False
-    # Window start: a bounded lookback behind the watermark. Rows in the
-    # window we already dispatched are skipped via ``seen``; rows that
-    # committed late (stamp older than the watermark) are caught here.
-    cursor_ca = max(0, watermark - _INGEST_LOOKBACK_MS)
-    cursor_id: Optional[str] = None  # None → inclusive window start
+    # If the previous iteration hit the page cap, resume from where it stopped
+    # so we advance past row 2,000 instead of rescanning the same first 2,000
+    # rows forever (see #3558).  Otherwise start from the lookback window.
+    if resume_cursor is not None:
+        cursor_ca, cursor_id = resume_cursor
+    else:
+        cursor_ca = max(0, watermark - _INGEST_LOOKBACK_MS)
+        cursor_id = None
+    hit_page_cap = False
     for _page in range(_MAX_PAGES_PER_ITERATION):
         # ``limit=500`` per page matches the PRD spec; the page cap bounds
         # one iteration's work (the next 2 s poll picks up the rest).
@@ -1113,8 +1119,18 @@ def watch_iteration(api_key: str, node_id: str,
         last_ca = last.get("created_at")
         cursor_ca = int(last_ca) if isinstance(last_ca, (int, float)) else cursor_ca
         cursor_id = str(last.get("id") or "")
+    else:
+        # All pages exhausted without a short final page: save the keyset
+        # cursor so the next iteration resumes here instead of restarting
+        # from the lookback window (#3558 page-cap starvation fix).
+        hit_page_cap = True
 
     if not saw_rows:
+        # Nothing to scan.  Clear any stale resume cursor so the next
+        # iteration doesn't try to pick up mid-way through an empty window.
+        if resume_cursor is not None:
+            with _state_lock:
+                _state["resume_cursor"] = None
         return 0
 
     # Advance the watermark, prune the dedup map to the new lookback window
@@ -1129,6 +1145,7 @@ def watch_iteration(api_key: str, node_id: str,
     with _state_lock:
         _state["last_ingest_ms"] = max_ingest
         _state["seen_recent_ids"] = seen
+        _state["resume_cursor"] = (cursor_ca, cursor_id) if hit_page_cap else None
         snapshot_ms = int(_state["last_ingest_ms"])
         snapshot_ids = dict(_state["seen_recent_ids"])
     _persist_watermark(snapshot_ms, snapshot_ids)

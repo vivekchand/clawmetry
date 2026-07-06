@@ -5356,6 +5356,122 @@ def channel_catalog() -> list[dict]:
     return [_channel_spec_row(ent, ch) for ch in sorted(ALL_CHANNELS)]
 
 
+def channel_catalog_at(tier: str) -> list[dict] | None:
+    """What-if sibling of :func:`channel_catalog`: catalogue rows for the
+    chat-channel axis with every row computed as if the install were on
+    ``tier``.
+
+    Mirrors :func:`feature_catalog_at` / :func:`runtime_catalog_at` for the
+    channels axis so a pricing-comparison matrix UI can swap "current
+    state" against "if I were on Cloud Pro" using the same row-renderer
+    across all three axes. Every channel is FREE (there is no paid-channel
+    tier -- the ``channels`` capacity axis governs how many concurrent
+    channels each plan admits, not which adapters unlock), so every row
+    comes back ``free=True`` / ``allowed=True`` / ``locked=False`` /
+    ``entitled=True`` regardless of the perspective tier. That parity IS
+    the answer: the UI can render "all N chat channels included at every
+    plan" without having to hard-code that posture client-side.
+
+    Row shape / ordering are byte-identical to :func:`channel_catalog` --
+    a parity test pins this so the scalar and what-if catalog helpers
+    cannot drift.
+
+    Returns ``None`` for empty / unknown tier ids (caller renders "unknown
+    tier" / 404). Never raises: a synthesis failure short-circuits to the
+    OSS-free fallback so the catalogue still renders.
+    """
+    try:
+        t = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not t or t not in _TIER_ORDER:
+        return None
+    try:
+        ent = _hypothetical_entitlement(t)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: channel_catalog_at falling back to OSS-free: %s", exc
+        )
+        ent = _oss_free()
+    return [_channel_spec_row(ent, ch) for ch in sorted(ALL_CHANNELS)]
+
+
+def channel_catalog_at_batch(tiers) -> dict:
+    """Batch what-if sibling of :func:`channel_catalog_at`: channel
+    catalogue rows for a caller-supplied set of hypothetical tiers in ONE
+    round-trip.
+
+    Composes :func:`channel_catalog_at` the same way
+    :func:`feature_catalog_at_batch` / :func:`runtime_catalog_at_batch`
+    compose their scalar siblings. Lets a pricing-comparison matrix UI
+    ("show me the full channel catalogue at OSS vs Cloud Starter vs
+    Cloud Pro vs Enterprise") hydrate every column off ONE call instead
+    of N calls to :func:`channel_catalog_at`.
+
+    Per-tier row shape mirrors :func:`feature_catalog_at_batch` /
+    :func:`runtime_catalog_at_batch` (top-level ``tiers`` array plus an
+    ``unknown[]`` echo)::
+
+        {
+          "tier":       "<id>",
+          "tier_label": "...",
+          "tier_rank":  <int>,
+          "channels":   [<channel_catalog_at row>, ...],
+        }
+
+    Each ``channels`` list is byte-identical to the list
+    :func:`channel_catalog_at` returns for the same tier -- a parity test
+    pins this so the scalar and batch what-if catalog helpers cannot
+    drift.
+
+    Supplied tier ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen
+    order preserved). Unknown ids are echoed in ``unknown[]`` instead of
+    short-circuiting -- a partially-bad caller still gets rows back for
+    the valid ids alongside a list of what was dropped. ``trial`` IS
+    accepted (it lives in :data:`_TIER_ORDER` and the scalar helper
+    resolves it).
+
+    Empty / ``None`` input returns ``{"tiers": [], "unknown": []}`` --
+    the HTTP wrapper turns that into a 400, this helper does not raise.
+
+    Resolver-independent: delegates per-tier to
+    :func:`channel_catalog_at`, which synthesises a fresh
+    :class:`Entitlement` per rung -- so grace vs enforce yields
+    byte-identical rows. Never raises: a per-tier failure short-circuits
+    that id into ``unknown[]`` and the rest of the batch keeps building.
+    """
+    ids = _normalise_csv(tiers)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    for tid in ids:
+        if tid not in _TIER_ORDER:
+            unknown.append(tid)
+            continue
+        try:
+            catalog = channel_catalog_at(tid)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: channel_catalog_at_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        if catalog is None:
+            unknown.append(tid)
+            continue
+        rows.append(
+            {
+                "tier": tid,
+                "tier_label": tier_label(tid),
+                "tier_rank": _TIER_RANK.get(tid, -1),
+                "channels": catalog,
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}
+
+
 def feature_spec(feature: str) -> dict | None:
     """Scalar sibling of :func:`feature_catalog`: return the single
     catalogue row for ``feature`` (case-insensitive, trimmed), or

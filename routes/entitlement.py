@@ -16142,6 +16142,129 @@ def api_entitlement_channel_catalog():
         )
 
 
+@bp_entitlement.route("/api/entitlement/channel-catalog-at")
+def api_entitlement_channel_catalog_at():
+    """``GET /api/entitlement/channel-catalog-at?tier=<id>`` -- what-if
+    sibling of ``/api/entitlement/channel-catalog``.
+
+    Returns the full chat-channel catalogue with every row computed as if
+    the install were on ``tier``. Mirrors
+    ``/api/entitlement/feature-catalog-at`` and
+    ``/api/entitlement/runtime-catalog-at`` for the channel axis so a
+    pricing-comparison matrix UI can swap "current state" against "if I
+    were on Cloud Pro" using ONE row-renderer across all three axes.
+
+    Every chat channel is FREE (there is no paid-channel tier -- the
+    ``channels`` capacity axis governs how many concurrent channels each
+    plan admits, not which adapters unlock), so every row comes back
+    unlocked regardless of the perspective tier. That parity IS the
+    answer: the UI can render "all N chat channels included at every
+    plan" without having to hard-code the posture client-side.
+
+    Response shape::
+
+        {
+          "tier":     "<perspective tier id>",
+          "channels": [<catalog_row>, ...],   # from channel_catalog_at()
+        }
+
+    Each ``channels`` list is byte-identical to
+    :func:`entitlements.channel_catalog_at` for the same tier -- a
+    parity test pins this so the endpoint cannot drift from the helper.
+
+    - **400** when ``tier=`` is missing / blank
+    - **404** when the id is not a known tier
+    - **Never 5xxs**: a resolver failure short-circuits to the OSS-free
+      fallback so the catalogue still renders.
+    """
+    raw = request.args.get("tier")
+    tier = (raw or "").strip().lower()
+    if not tier:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        body = _ent.channel_catalog_at(tier)
+        if body is None:
+            return jsonify({"error": "unknown tier", "tier": tier}), 404
+        return jsonify({"tier": tier, "channels": body})
+    except Exception as exc:
+        logger.warning("api_entitlement_channel_catalog_at: error: %s", exc)
+        return jsonify({"error": "channel-catalog-at failed"}), 500
+
+
+@bp_entitlement.route("/api/entitlement/channel-catalog-at-batch")
+def api_entitlement_channel_catalog_at_batch():
+    """``GET /api/entitlement/channel-catalog-at-batch?tiers=a,b,c`` --
+    batch what-if sibling of ``/api/entitlement/channel-catalog-at``.
+
+    Channel-axis twin of ``/feature-catalog-at-batch`` /
+    ``/runtime-catalog-at-batch``: same envelope shape, same
+    normalisation semantics, same unknown-echo posture. Together the
+    three batches let a pricing-comparison matrix UI hydrate every
+    feature + runtime + channel column at every hypothetical rung off
+    THREE calls instead of 3 * N calls to the scalar what-if catalog
+    endpoints.
+
+    Each ``tiers[].channels`` list is byte-identical to the body of
+    ``/channel-catalog-at?tier=<tier>`` for the same tier -- pinned by
+    the parity tests.
+
+    Response shape mirrors ``/feature-catalog-at-batch`` /
+    ``/runtime-catalog-at-batch`` with ``features`` / ``runtimes``
+    renamed to ``channels``::
+
+        {
+          "tiers": [
+            {"tier": "<id>", "tier_label": ..., "tier_rank": ..., "channels": [...]},
+            ...
+          ],
+          "unknown":           ["bogus_id", ...],
+          "current_tier":      "<resolved id>",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    - **400** when ``tiers=`` is missing / empty after normalisation
+    - **200** with bucketed unknowns for unknown tier ids
+    - **Never 5xxs**: a synthesis failure short-circuits to an envelope
+      with empty rows so the matrix keeps rendering.
+    """
+    tiers = _parse_csv_arg("tiers")
+    if not tiers:
+        return jsonify({"error": "supply tiers=<csv>"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        batch = _ent.channel_catalog_at_batch(tiers)
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": batch.get("tiers", []),
+                "unknown": batch.get("unknown", []),
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_channel_catalog_at_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "unknown": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/tier-catalog")
 def api_entitlement_tier_catalog():
     """``GET /api/entitlement/tier-catalog`` -- bare sibling of

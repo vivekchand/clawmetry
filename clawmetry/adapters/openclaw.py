@@ -1116,6 +1116,90 @@ def _gateway_plugin_health() -> dict:
         return {}
 
 
+def _gateway_host_status() -> dict:
+    """Host/system fields from the OpenClaw gateway.status RPC (#3551).
+
+    As of harness CHANGELOG #100478 the gateway.status response includes
+    host name, network address, OS, runtime, uptime, CPU, memory, and disk
+    details alongside the existing ``plugins`` list.
+
+    Returns a dict with whichever fields are present:
+    - ``"gatewayHostName"``       — machine hostname
+    - ``"gatewayNetworkAddress"`` — primary network address / IP
+    - ``"gatewayHostOS"``         — OS name or platform string
+    - ``"gatewayHostRuntime"``    — runtime identifier (e.g. Node version)
+    - ``"gatewayHostUptime"``     — uptime in seconds
+    - ``"gatewayHostCPU"``        — CPU usage value or dict
+    - ``"gatewayHostMemory"``     — memory info (bytes or dict)
+    - ``"gatewayHostDisk"``       — disk info (bytes or dict)
+
+    Returns ``{}`` when the RPC is unavailable or the response carries no
+    host fields. Never raises.
+    """
+    try:
+        d = _d()
+        rpc = getattr(d, "_gw_ws_rpc", None)
+        if rpc is None:
+            return {}
+        payload = rpc("gateway.status")
+        if not isinstance(payload, dict):
+            return {}
+        result: dict = {}
+        host_name = (
+            payload.get("hostName")
+            or payload.get("host_name")
+            or payload.get("hostname")
+            or payload.get("host")
+        )
+        if host_name:
+            result["gatewayHostName"] = str(host_name)
+        address = (
+            payload.get("networkAddress")
+            or payload.get("network_address")
+            or payload.get("address")
+            or payload.get("ip")
+        )
+        if address:
+            result["gatewayNetworkAddress"] = str(address)
+        os_val = payload.get("os") or payload.get("platform")
+        if os_val:
+            result["gatewayHostOS"] = str(os_val)
+        runtime = (
+            payload.get("runtime")
+            or payload.get("nodeVersion")
+            or payload.get("node_version")
+        )
+        if runtime:
+            result["gatewayHostRuntime"] = str(runtime)
+        uptime = (
+            payload.get("uptime")
+            or payload.get("uptimeSeconds")
+            or payload.get("uptime_seconds")
+        )
+        if uptime is not None:
+            result["gatewayHostUptime"] = uptime
+        cpu = payload.get("cpu") or payload.get("cpuUsage") or payload.get("cpu_usage")
+        if cpu is not None:
+            result["gatewayHostCPU"] = cpu
+        memory = (
+            payload.get("memory")
+            or payload.get("memoryUsage")
+            or payload.get("memory_usage")
+        )
+        if memory is not None:
+            result["gatewayHostMemory"] = memory
+        disk = (
+            payload.get("disk")
+            or payload.get("diskUsage")
+            or payload.get("disk_usage")
+        )
+        if disk is not None:
+            result["gatewayHostDisk"] = disk
+        return result
+    except Exception:
+        return {}
+
+
 class OpenClawAdapter(AgentAdapter):
     name = "openclaw"
     display_name = "OpenClaw"
@@ -1186,6 +1270,9 @@ class OpenClawAdapter(AgentAdapter):
             # Only meaningful — and safe to query — when the gateway is live.
             if running:
                 meta.update(_gateway_plugin_health())
+                # Gateway host/system status (#3551): host name, OS, runtime,
+                # uptime, CPU, memory, disk from the same gateway.status RPC.
+                meta.update(_gateway_host_status())
             # Docker runtime health (#3390): the NemoClaw harness treats Docker
             # daemon liveness as a distinct signal from gateway liveness. Only
             # written when docker CLI is present so non-Docker environments are
@@ -1240,6 +1327,7 @@ class OpenClawAdapter(AgentAdapter):
         for s in raw[:limit]:
             updated_ms = s.get("updatedAt") or 0
             started_at = (updated_ms / 1000.0) if updated_ms else 0.0
+            _sk = (s.get("kind") or "").lower()
             extra = {
                 "kind": s.get("kind") or "direct",
                 "contextTokens": s.get("contextTokens"),
@@ -1424,6 +1512,41 @@ class OpenClawAdapter(AgentAdapter):
                     extra["utilityModelCostUsd"] = float(_um_cost)
                 except (TypeError, ValueError):
                     pass
+            # Talk/Voice Call session fields (#3553): OpenClaw 'Control UI Talk
+            # controls' (harness PR #97170/#97738) stamps transcription-provider,
+            # transport, voice model, and VAD config on talk-kind sessions.
+            # Extract with multi-alias fallbacks for resilience across harness
+            # versions; guard on _sk so non-voice sessions are unaffected.
+            if _sk in ("talk", "voice", "realtime", "voice_call", "talk_call"):
+                _tp = (
+                    s.get("transcriptionProvider")
+                    or s.get("talkTranscriptionProvider")
+                    or s.get("speechProvider")
+                )
+                if _tp is not None:
+                    extra["transcriptionProvider"] = str(_tp)
+                _tt = (
+                    s.get("talkTransport")
+                    or s.get("voiceTransport")
+                    or s.get("transport")
+                )
+                if _tt is not None:
+                    extra["talkTransport"] = str(_tt)
+                _vm = (
+                    s.get("voiceModel")
+                    or s.get("talkVoiceModel")
+                    or s.get("realtimeModel")
+                    or s.get("talkModel")
+                )
+                if _vm is not None:
+                    extra["voiceModel"] = str(_vm)
+                _vad = (
+                    s.get("vadMode")
+                    or s.get("talkVadMode")
+                    or s.get("vadTimingMode")
+                )
+                if _vad is not None:
+                    extra["vadMode"] = str(_vad)
             tok_total = int(s.get("totalTokens") or 0)
             tok_in = int(s.get("inputTokens") or 0)
             tok_out = int(s.get("outputTokens") or 0)
@@ -1441,7 +1564,7 @@ class OpenClawAdapter(AgentAdapter):
                     id=s.get("sessionId") or s.get("key") or "",
                     display_name=s.get("displayName") or "",
                     model=s.get("model") or "",
-                    source=s.get("channel") or "",
+                    source=s.get("channel") or (_sk if _sk in ("talk", "voice", "realtime") else "") or "",
                     started_at=started_at,
                     total_tokens=tok_total,
                     input_tokens=tok_in,

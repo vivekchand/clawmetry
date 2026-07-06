@@ -408,3 +408,80 @@ def test_late_ingested_event_with_stale_ts_still_evaluated(watcher):
     ap._state["seen_recent_ids"] = {}
     assert ap.watch_iteration("k", "n", policies=policies) == 0
     assert len(captured) == 2
+
+
+# ── 7. page-cap cursor resumes past 2,000 rows (#3558) ───────────────────
+
+
+def test_page_cap_cursor_resumes_past_2000_rows(watcher, monkeypatch):
+    """When more than _MAX_PAGES_PER_ITERATION * 500 rows exist in the
+    lookback window, subsequent iterations must resume from the saved keyset
+    cursor rather than restarting from the window start.
+
+    Pre-fix: every poll refetched the same first 2,000 rows, all of which hit
+    seen_recent_ids and were skipped, so the watcher never advanced to row
+    2,001+.  Any approval-gated tool call in the starved suffix was silently
+    dropped forever.  Regression guard for vivekchand/clawmetry#3558.
+    """
+    ap, ls, captured, policies, _ = watcher
+
+    n_rows = ap._MAX_PAGES_PER_ITERATION * 500 + 1  # 2,001 rows
+    now_ms = 2_000_000_000_000
+
+    # All rows share the same created_at; the keyset (created_at, id) drives
+    # ordering.  The toolCall block lives only in the final row (index 2000)
+    # so we can prove the watcher eventually reaches it.
+    rows = []
+    for i in range(n_rows):
+        content = []
+        if i == n_rows - 1:
+            content = [_toolcall_block("bash", {"cmd": "rm -rf /"},
+                                       blk_id="tc-starved")]
+        rows.append({
+            "id": f"e{i:04d}",
+            "session_id": "sess-pagecap",
+            "event_type": "message",
+            "created_at": now_ms,
+            "data": {
+                "type": "message",
+                "message": {"role": "assistant", "content": content},
+            },
+        })
+
+    def _stub_query(created_after, after_id, limit):
+        eligible = [
+            r for r in rows
+            if r["created_at"] > created_after
+            or (r["created_at"] == created_after
+                and (after_id is None or r["id"] > after_id))
+        ]
+        return eligible[:limit]
+
+    monkeypatch.setattr(ap, "_query_new_events", _stub_query)
+    monkeypatch.setattr(ap, "_persist_watermark", lambda *_: None)
+
+    # Prime watermark so the lookback window covers all rows.
+    ap._state["last_ingest_ms"] = now_ms - 1
+    ap._state["seen_recent_ids"] = {}
+    ap._state["resume_cursor"] = None
+
+    # Iteration 1: consumes the first 2,000 rows (4 full pages).  The
+    # toolCall at index 2,000 has not been reached yet.
+    ap.watch_iteration("k", "n", policies=policies)
+    assert ap._state.get("resume_cursor") is not None, (
+        "page cap must store a resume cursor so the next iteration continues"
+    )
+    assert len(captured) == 0, "toolCall is beyond the page cap — not yet dispatched"
+
+    # Iteration 2: resumes from the saved cursor and reaches the final row.
+    ap.watch_iteration("k", "n", policies=policies)
+    assert len(captured) == 1, "toolCall in the starved row must be dispatched exactly once"
+    assert captured[0]["tool_call_id"] == "tc-starved"
+    assert ap._state.get("resume_cursor") is None, (
+        "cursor must be cleared after a short final page"
+    )
+
+    # Iteration 3: idempotent — nothing new dispatched.
+    captured.clear()
+    ap.watch_iteration("k", "n", policies=policies)
+    assert len(captured) == 0, "already-seen rows must not be re-dispatched"
