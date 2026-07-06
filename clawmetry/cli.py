@@ -2837,6 +2837,16 @@ def _cmd_mcp(args) -> None:
     run()
 
 
+def _cmd_reports(args) -> None:
+    """Open the reports browser (refs #1005)."""
+    import webbrowser
+    port = getattr(args, "port", None) or 8900
+    url = f"http://localhost:{port}/reports/"
+    print(f"Opening {url} …")
+    print("(Make sure `clawmetry` is running. Write .md files to ~/.clawmetry/reports/.)")
+    webbrowser.open(url)
+
+
 def _cmd_eval(args) -> None:
     """Run a golden eval suite (Phase 2 evals, refs #1619).
 
@@ -3760,6 +3770,15 @@ def main() -> None:
         "--loop-detection", choices=["on", "off"], help="Toggle loop detection"
     )
 
+    # reports — open the reports browser (refs #1005)
+    p_reports = sub.add_parser(
+        "reports",
+        help="Open the reports browser (renders ~/.clawmetry/reports/*.md + DuckDB SQL)",
+    )
+    p_reports.add_argument(
+        "--port", type=int, default=8900, help="Dashboard port (default: 8900)"
+    )
+
     # eval — run a golden test suite (Phase 2 evals, refs #1619)
     p_eval = sub.add_parser(
         "eval",
@@ -3919,6 +3938,7 @@ def main() -> None:
         "sync",
         "status",
         "proxy",
+        "reports",
         "eval",
         "mcp",
         "update",
@@ -3951,6 +3971,8 @@ def main() -> None:
             _cmd_status(args)
         elif args.cmd == "proxy":
             _cmd_proxy(args)
+        elif args.cmd == "reports":
+            _cmd_reports(args)
         elif args.cmd == "eval":
             _cmd_eval(args)
         elif args.cmd == "mcp":
