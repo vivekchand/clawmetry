@@ -7028,6 +7028,102 @@ def api_entitlement_previous_tier_runtime_spec_at():
         )
 
 
+@bp_entitlement.route("/api/entitlement/tier-spec-path-batch")
+def api_entitlement_tier_spec_path_batch():
+    """``GET /api/entitlement/tier-spec-path-batch?from=<id>&to=a,b,c`` --
+    batch sibling of ``/api/entitlement/tier-spec-path``.
+
+    Where ``/tier-spec-path`` walks the rungs between ONE ``(from, to)``
+    pair, this walks them between ONE source and N candidate destinations
+    in ONE round-trip. Multi-destination axis mirrors
+    ``/tier-spec-at-batch`` (same axis, one-rung-at-a-time -> all-rungs-
+    at-a-time) the same way ``/feature-spec-path-batch`` mirrors
+    ``/feature-spec-at-batch``: scalar -> matrix in one call along the
+    destination axis.
+
+    Use case: a pricing-comparison "from my current rung, here are the 3
+    tiers I'm considering" surface hydrates every per-rung row for every
+    candidate off ONE call instead of N calls to ``/tier-spec-path``. Per-
+    destination ``path`` rows are byte-identical to the scalar
+    ``/tier-spec-path?from=<from>&to=<to>`` payload for the same
+    ``(from, to)`` pair, so a UI that already renders scalar-shaped rows
+    needs zero new shape code to render rows off this batch.
+
+    Response shape::
+
+        {
+          "from":       "<tier id>",
+          "from_label": "...",
+          "from_rank":  <int>,
+          "tiers": [
+            {"to": "<id>", "to_label": "...", "to_rank": <int>,
+             "direction": "upgrade" | "downgrade" | "lateral" | "identity",
+             "path": [<tier-spec-at row>, ...]},
+            ...
+          ],
+          "unknown":    ["bogus_id", ...],
+        }
+
+    Per-destination ``path`` lengths can legitimately differ -- the rungs
+    walked depend on the destination, unlike ``/feature-spec-path-batch``
+    whose rungs are feature-agnostic across the supplied feature set.
+    Destination ids are normalised (whitespace stripped, lowercased,
+    duplicates dropped, first-seen order preserved). ``trial`` IS a valid
+    destination (identity / lateral branch); it is excluded from the
+    walked intermediate rungs the way ``/tier-spec-path`` already
+    excludes it. Unknown destination ids do NOT 404 the call -- they are
+    echoed in ``unknown[]`` so a partially-bad caller still gets paths
+    back for the valid ids.
+
+    - **400** when ``from=`` is missing / blank, or ``to=`` is missing /
+      empty after normalisation
+    - **404** when ``from`` is unknown (body carries ``which: "tier"``)
+    - **Never 5xxs**: a synthesis failure short-circuits to an envelope
+      with empty rows so the matrix keeps rendering.
+    """
+    f = (request.args.get("from") or "").strip().lower()
+    if not f:
+        return jsonify({"error": "missing from"}), 400
+    tos = _parse_csv_arg("to")
+    if not tos:
+        return jsonify({"error": "supply to=<csv>"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if f not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": f}
+                ),
+                404,
+            )
+        batch = _ent.tier_spec_path_batch(f, tos)
+        if batch is None:
+            batch = {"tiers": [], "unknown": []}
+        return jsonify(
+            {
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": _ent.tier_rank(f),
+                "tiers": batch.get("tiers", []),
+                "unknown": batch.get("unknown", []),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tier_spec_path_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "from": f,
+                "from_label": None,
+                "from_rank": -1,
+                "tiers": [],
+                "unknown": [],
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/feature-spec-path-batch")
 def api_entitlement_feature_spec_path_batch():
     """``GET /api/entitlement/feature-spec-path-batch?from=<id>&to=<id>

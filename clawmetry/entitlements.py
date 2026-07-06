@@ -7152,6 +7152,123 @@ def lock_reason_path(
         return None
 
 
+def tier_spec_path_batch(from_tier: str, to_tiers) -> dict | None:
+    """Batch sibling of :func:`tier_spec_path`: per-destination spec-shaped
+    paths from ONE source tier to N candidate destination tiers walked in
+    ONE round-trip.
+
+    Multi-destination axis mirrors :func:`tier_spec_at_batch` (fixed-source
+    what-if matrix over many targets) the same way
+    :func:`feature_spec_path_batch` mirrors :func:`feature_spec_at_batch`:
+    scalar -> matrix in one call along the destination axis. Lets a
+    pricing-comparison "from my current rung, here are the 3 tiers I'm
+    considering" surface hydrate every per-rung row for every candidate off
+    ONE call instead of N calls to :func:`tier_spec_path`.
+
+    Per-destination row shape::
+
+        {
+          "to":         "<id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<tier_spec_at row>, ...],
+        }
+
+    Each ``path`` list is byte-identical to :func:`tier_spec_path` for the
+    same ``(from_tier, to)`` pair -- a parity test pins this so the scalar
+    and batch path helpers cannot drift. Per-destination ``path`` lengths
+    can legitimately differ -- the rungs walked depend on the destination,
+    unlike :func:`feature_spec_path_batch` whose rungs are feature-agnostic
+    across the supplied feature set.
+
+    ``direction`` is derived from the same rank geometry
+    :func:`tier_spec_path` uses (identity / lateral / upgrade / downgrade),
+    so a UI rendering scalar-shaped rows needs zero new shape code to
+    render rows off this batch.
+
+    Shape::
+
+        {
+          "tiers": [
+            {"to": "<id>", "to_label": "...", "to_rank": <int>,
+             "direction": "upgrade" | "downgrade" | "lateral" | "identity",
+             "path": [<row>, ...]},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Destination ids are normalised via :func:`_normalise_csv` (whitespace
+    stripped, lowercased, duplicates dropped, first-seen order preserved).
+    :data:`TIER_TRIAL` IS a valid destination -- it resolves via the
+    identity / lateral branch the way :func:`tier_spec_path` already
+    handles it, and is excluded from the walked intermediate rungs the
+    same way. Unknown destination ids are echoed in ``unknown[]`` instead
+    of short-circuiting -- a partially-bad caller still gets paths back
+    for the valid ids alongside a list of what was dropped, matching
+    :func:`feature_spec_path_batch`'s posture.
+
+    Returns ``None`` for empty / unknown ``from_tier`` (caller renders
+    "unknown tier" / 404). An empty destination list yields
+    ``{"tiers": [], "unknown": []}``.
+
+    Resolver-independent: delegates per-destination to
+    :func:`tier_spec_path`, which walks the static per-tier maps via
+    :func:`tier_spec_at` -- so grace vs enforce yields byte-identical
+    rows.
+
+    Never raises: a per-destination builder failure short-circuits that
+    id into ``unknown[]`` and the rest of the batch keeps building.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if f not in _TIER_FEATURES:
+        return None
+    tos = _normalise_csv(to_tiers)
+    from_rank = _TIER_RANK.get(f, -1)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    for tid in tos:
+        if tid not in _TIER_FEATURES:
+            unknown.append(tid)
+            continue
+        try:
+            path = tier_spec_path(f, tid)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: tier_spec_path_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        if path is None:
+            unknown.append(tid)
+            continue
+        to_rank = _TIER_RANK.get(tid, -1)
+        if f == tid:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        rows.append(
+            {
+                "to": tid,
+                "to_label": tier_label(tid),
+                "to_rank": to_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}
+
+
 def feature_spec_path_batch(
     from_tier: str, to_tier: str, features
 ) -> dict | None:
