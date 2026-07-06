@@ -15707,6 +15707,59 @@ def api_entitlement_runtime_catalog():
         )
 
 
+@bp_entitlement.route("/api/entitlement/channel-catalog")
+def api_entitlement_channel_catalog():
+    """``GET /api/entitlement/channel-catalog`` -- catalogue sibling of
+    :func:`api_entitlement_feature_catalog` /
+    :func:`api_entitlement_runtime_catalog` for the chat-channel axis.
+
+    Returns every chat-channel adapter ClawMetry can observe (see
+    :data:`clawmetry.entitlements.ALL_CHANNELS`, kept in lockstep with
+    ``clawmetry.sync._CHANNEL_DIRS``). Every row is unlocked -- there is
+    no paid-channel tier; the ``channels`` capacity axis
+    (:func:`min_tier_for_channel_count` and the ``channels=`` arg on the
+    aggregate helpers) governs *how many* concurrent channels each plan
+    admits, not *which* adapters unlock. That posture lets a pricing page
+    render "all N chat channels included in every plan" off one call
+    instead of hard-coding the adapter list client-side.
+
+    Response shape mirrors ``/api/entitlement/feature-catalog`` and
+    ``/api/entitlement/runtime-catalog``::
+
+        {
+          "tier":     "<resolved tier id>",
+          "channels": [<catalog_row>, ...],   # from channel_catalog()
+          "grace":    <bool>,
+          "enforced": <bool>,
+        }
+
+    - **Never 5xxs**: helper failures short-circuit to the OSS-free
+      envelope so the pricing UI keeps rendering.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tier": ent.tier,
+                "channels": _ent.channel_catalog(),
+                "grace": ent.grace,
+                "enforced": not ent.grace,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_channel_catalog: error: %s", exc)
+        return jsonify(
+            {
+                "tier": "oss",
+                "channels": [],
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/tier-catalog")
 def api_entitlement_tier_catalog():
     """``GET /api/entitlement/tier-catalog`` -- bare sibling of
