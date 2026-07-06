@@ -16479,6 +16479,10 @@ def _get_sessions():
                         "contextTokens", 200000
                     ),
                     "kind": s.get("kind", "direct"),
+                    "transcriptionProvider": s.get("transcriptionProvider") or s.get("talkTranscriptionProvider") or s.get("speechProvider") or "",
+                    "talkTransport": s.get("talkTransport") or s.get("voiceTransport") or "",
+                    "voiceModel": s.get("voiceModel") or s.get("realtimeModel") or s.get("talkModel") or "",
+                    "vadMode": s.get("vadMode") or s.get("talkVadMode") or "",
                     "agent": s.get("agentId", "main"),
                     "parentId": s.get("parentSessionId") or s.get("parentId") or s.get("spawnedBy") or s.get("parentKey") or None,
                     "endedAt": s.get("endedAtMs") or s.get("endedAt"),

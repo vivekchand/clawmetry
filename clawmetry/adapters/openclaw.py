@@ -1240,6 +1240,7 @@ class OpenClawAdapter(AgentAdapter):
         for s in raw[:limit]:
             updated_ms = s.get("updatedAt") or 0
             started_at = (updated_ms / 1000.0) if updated_ms else 0.0
+            _sk = (s.get("kind") or "").lower()
             extra = {
                 "kind": s.get("kind") or "direct",
                 "contextTokens": s.get("contextTokens"),
@@ -1424,6 +1425,41 @@ class OpenClawAdapter(AgentAdapter):
                     extra["utilityModelCostUsd"] = float(_um_cost)
                 except (TypeError, ValueError):
                     pass
+            # Talk/Voice Call session fields (#3553): OpenClaw 'Control UI Talk
+            # controls' (harness PR #97170/#97738) stamps transcription-provider,
+            # transport, voice model, and VAD config on talk-kind sessions.
+            # Extract with multi-alias fallbacks for resilience across harness
+            # versions; guard on _sk so non-voice sessions are unaffected.
+            if _sk in ("talk", "voice", "realtime", "voice_call", "talk_call"):
+                _tp = (
+                    s.get("transcriptionProvider")
+                    or s.get("talkTranscriptionProvider")
+                    or s.get("speechProvider")
+                )
+                if _tp is not None:
+                    extra["transcriptionProvider"] = str(_tp)
+                _tt = (
+                    s.get("talkTransport")
+                    or s.get("voiceTransport")
+                    or s.get("transport")
+                )
+                if _tt is not None:
+                    extra["talkTransport"] = str(_tt)
+                _vm = (
+                    s.get("voiceModel")
+                    or s.get("talkVoiceModel")
+                    or s.get("realtimeModel")
+                    or s.get("talkModel")
+                )
+                if _vm is not None:
+                    extra["voiceModel"] = str(_vm)
+                _vad = (
+                    s.get("vadMode")
+                    or s.get("talkVadMode")
+                    or s.get("vadTimingMode")
+                )
+                if _vad is not None:
+                    extra["vadMode"] = str(_vad)
             tok_total = int(s.get("totalTokens") or 0)
             tok_in = int(s.get("inputTokens") or 0)
             tok_out = int(s.get("outputTokens") or 0)
@@ -1441,7 +1477,7 @@ class OpenClawAdapter(AgentAdapter):
                     id=s.get("sessionId") or s.get("key") or "",
                     display_name=s.get("displayName") or "",
                     model=s.get("model") or "",
-                    source=s.get("channel") or "",
+                    source=s.get("channel") or (_sk if _sk in ("talk", "voice", "realtime") else "") or "",
                     started_at=started_at,
                     total_tokens=tok_total,
                     input_tokens=tok_in,
