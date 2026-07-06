@@ -708,3 +708,88 @@ def test_sandbox_inference_configs_managed_default(tmp_path, monkeypatch):
     assert r["inferenceApi"] == "openai-completions"
     assert r["inferenceCompat"] == "openai"
     assert r["isDefault"] is True
+
+
+# -- #3553 Talk/Voice Call session fields in list_sessions() -----------------
+
+import types
+
+
+def _make_fake_dash(sessions):
+    """Return a minimal stand-in for the dashboard module used by _d()."""
+    return types.SimpleNamespace(_get_sessions=lambda: sessions)
+
+
+def test_list_sessions_voice_kind_sets_source_and_extra(monkeypatch):
+    """kind='talk' session: source falls back to 'talk'; all 4 voice fields land in extra."""
+    import clawmetry.adapters.openclaw as oc_mod
+    raw = [{
+        "kind": "talk",
+        "sessionId": "voice-sess-1",
+        "displayName": "Voice call",
+        "model": "gpt-4o-realtime-preview",
+        "channel": "",
+        "updatedAt": 1750000000000,
+        "totalTokens": 800,
+        "inputTokens": 300,
+        "outputTokens": 500,
+        "transcriptionProvider": "openai",
+        "talkTransport": "webrtc",
+        "voiceModel": "gpt-4o-realtime-preview",
+        "vadMode": "server",
+    }]
+    monkeypatch.setattr(oc_mod, "_d", lambda: _make_fake_dash(raw))
+    sessions = oc_mod.OpenClawAdapter().list_sessions()
+    assert len(sessions) == 1
+    s = sessions[0]
+    assert s.source == "talk"
+    assert s.extra["kind"] == "talk"
+    assert s.extra["transcriptionProvider"] == "openai"
+    assert s.extra["talkTransport"] == "webrtc"
+    assert s.extra["voiceModel"] == "gpt-4o-realtime-preview"
+    assert s.extra["vadMode"] == "server"
+
+
+def test_list_sessions_voice_channel_takes_priority(monkeypatch):
+    """When channel is set on a talk session, source uses channel not kind."""
+    import clawmetry.adapters.openclaw as oc_mod
+    raw = [{
+        "kind": "talk",
+        "sessionId": "voice-sess-2",
+        "displayName": "Voice via channel",
+        "model": "gpt-4o-realtime-preview",
+        "channel": "realtime",
+        "updatedAt": 1750000000000,
+        "totalTokens": 0,
+        "inputTokens": 0,
+        "outputTokens": 0,
+    }]
+    monkeypatch.setattr(oc_mod, "_d", lambda: _make_fake_dash(raw))
+    sessions = oc_mod.OpenClawAdapter().list_sessions()
+    assert len(sessions) == 1
+    assert sessions[0].source == "realtime"
+
+
+def test_list_sessions_non_voice_no_voice_keys(monkeypatch):
+    """A standard chat session (kind='direct') must not get any voice extra keys."""
+    import clawmetry.adapters.openclaw as oc_mod
+    raw = [{
+        "kind": "direct",
+        "sessionId": "chat-sess-1",
+        "displayName": "Chat session",
+        "model": "claude-opus-4",
+        "channel": "main",
+        "updatedAt": 1750000000000,
+        "totalTokens": 200,
+        "inputTokens": 100,
+        "outputTokens": 100,
+    }]
+    monkeypatch.setattr(oc_mod, "_d", lambda: _make_fake_dash(raw))
+    sessions = oc_mod.OpenClawAdapter().list_sessions()
+    assert len(sessions) == 1
+    s = sessions[0]
+    assert s.source == "main"
+    assert "transcriptionProvider" not in s.extra
+    assert "talkTransport" not in s.extra
+    assert "voiceModel" not in s.extra
+    assert "vadMode" not in s.extra
