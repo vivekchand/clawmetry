@@ -12717,6 +12717,78 @@ def feature_catalog_at_path_batch(
         return None
 
 
+def channel_catalog_at_path(
+    perspective_tier: str, from_tier: str, to_tier: str
+) -> list[dict] | None:
+    """Channel-axis twin of :func:`feature_catalog_at_path` /
+    :func:`runtime_catalog_at_path`: per-rung channel-catalog path
+    between ``from_tier`` and ``to_tier`` rendered from a hypothetical
+    ``perspective_tier``.
+
+    Path-shaped companion to :func:`channel_catalog_at`: where
+    ``channel_catalog_at`` renders the full channel catalogue at ONE
+    hypothetical rung, ``channel_catalog_at_path`` walks the full rung
+    path between two endpoints. Fills the ``_at_path`` slot for the
+    channel-catalog family alongside :func:`channel_catalog`
+    (scalar current), :func:`channel_catalog_at` (scalar what-if),
+    :func:`channel_catalog_at_batch` (batch what-if), and
+    :func:`channel_catalog_path` (path current) so a pricing-
+    comparison walkthrough surface can call
+    ``X_at_path(perspective, from, to)`` uniformly across the whole
+    ``_at_path`` family (feature / runtime / channel / tier).
+
+    Body posture matches :func:`tier_catalog_at_path` /
+    :func:`feature_catalog_at_path` / :func:`runtime_catalog_at_path`:
+    perspective is validated against :data:`_TIER_ORDER` but does NOT
+    shape the rows. The per-rung body is byte-identical to a row from
+    :func:`channel_catalog_path` for the same ``(from_tier, to_tier)``
+    pair -- pinned by parity tests so the what-if path helper cannot
+    drift from the current-perspective sibling.
+
+    Because every chat-channel adapter is FREE at every tier (the
+    ``channels`` capacity axis governs how many concurrent channels
+    each plan admits, not which adapters unlock), each rung's inner
+    ``channels`` list is byte-identical to :func:`channel_catalog`.
+    The always-free invariant is inherited from the delegate; parity
+    tests here pin it against the scalar path helper so the scalar-
+    and what-if- surfaces cannot drift.
+
+    Perspective acceptance is lenient (matches
+    :func:`channel_catalog_at` and every other ``_at`` helper): any id
+    in :data:`_TIER_ORDER` is accepted, including :data:`TIER_TRIAL`.
+    Endpoint acceptance mirrors :func:`channel_catalog_path`: both
+    ``from_tier`` and ``to_tier`` accept any id in
+    :data:`_TIER_FEATURES` (trial is a valid endpoint via the lateral
+    / identity branch even though the walked intermediate rungs
+    exclude it -- it is not purchasable).
+
+    Returns ``None`` when any of the three ids is unknown; empty list
+    for identity (``from == to``). Resolver-independent: delegates to
+    :func:`channel_catalog_path`, which walks per-rung via
+    :func:`_channel_spec_row` over freshly-synthesised hypothetical
+    :class:`Entitlement` objects, so grace vs enforce yields byte-
+    identical rows -- same property the rest of the ``_path`` family
+    guarantees.
+
+    Never raises: a delegate failure logs a warning and returns
+    ``None`` so an upgrade-walkthrough surface keeps rendering instead
+    of breaking.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if p not in _TIER_ORDER:
+        return None
+    try:
+        return channel_catalog_path(from_tier, to_tier)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: channel_catalog_at_path failed: %s", exc
+        )
+        return None
+
+
 def lock_reason_at_path(
     perspective_tier: str,
     from_tier: str,
