@@ -1349,6 +1349,17 @@ class OpenClawAdapter(AgentAdapter):
                 _cdr = s.get("cronDetached")
             if _cdr is not None:
                 extra["cronDetachedRun"] = bool(_cdr)
+            # Cron-configured agent-turn model (#3552): OpenClaw PR #95341
+            # stamps the model selected (or defaulted) for the cron job that
+            # triggered this session so usage can be attributed per scheduled
+            # job.  Key name varies across harness builds; try all known forms.
+            _cm = (
+                s.get("cronModel")
+                or s.get("cronAgentModel")
+                or s.get("cronConfiguredModel")
+            )
+            if _cm is not None:
+                extra["cronModel"] = str(_cm)
             # GLM/Zhipu overload classification (#3343): PR #93241 classifies
             # Zhipu GLM overload as a distinct overload state for failover;
             # surface the tag so session views can indicate failover routing.
