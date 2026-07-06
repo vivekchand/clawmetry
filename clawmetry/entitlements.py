@@ -9369,6 +9369,119 @@ def runtime_catalog_path(from_tier: str, to_tier: str) -> list[dict] | None:
         return None
 
 
+def channel_catalog_path(from_tier: str, to_tier: str) -> list[dict] | None:
+    """Arbitrary-endpoint stepwise channel-catalog path between two tiers.
+
+    Channel-axis twin of :func:`feature_catalog_path` and
+    :func:`runtime_catalog_path`: the full chat-channel catalogue at every
+    rung between any two tiers off ONE round-trip. Lets an upgrade-
+    walkthrough UI render the "which channels ship at every tier" column
+    alongside the feature and runtime columns without first calling
+    :func:`tier_path` and then N calls to :func:`channel_catalog`.
+
+    Per-rung row shape mirrors :func:`feature_catalog_path` /
+    :func:`runtime_catalog_path` with ``features`` / ``runtimes`` renamed
+    to ``channels``::
+
+        {
+          "tier":       "<id>",
+          "tier_label": "...",
+          "tier_rank":  <int>,
+          "channels":   [<channel_catalog row>, ...],
+        }
+
+    Every chat-channel adapter is FREE at every tier (the ``channels``
+    capacity axis governs how many concurrent channels each plan admits,
+    not which adapters unlock), so each rung's inner ``channels`` list is
+    byte-identical to :func:`channel_catalog` -- a parity test pins this
+    so the bare and path what-if channel surfaces cannot drift. Rows are
+    synthesised via :func:`_channel_spec_row` against a per-rung
+    :func:`_hypothetical_entitlement` so the helper stays resolver-
+    independent (grace vs enforce yields byte-identical rows), matching
+    the rest of the ``_path`` family.
+
+    Walk semantics, direction semantics and endpoint semantics match
+    :func:`feature_catalog_path` -- see that helper's docstring. Rung
+    walk is byte-stable against :func:`tier_path`,
+    :func:`tier_spec_path`, :func:`feature_spec_path`,
+    :func:`runtime_spec_path`, :func:`feature_catalog_path`,
+    :func:`runtime_catalog_path` and :func:`tier_catalog_path` (same
+    ``_PURCHASABLE_TIERS`` filter + same sort key + same destination-
+    sibling exclusion), so the paths line up rung-for-rung.
+
+    Never raises: a resolver failure logs a warning and returns ``None``
+    so a pricing-page surface keeps rendering instead of breaking.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+        if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+            return None
+        if f == t:
+            return []
+        from_rank = _TIER_RANK.get(f, -1)
+        to_rank = _TIER_RANK.get(t, -1)
+
+        def _row(rung: str) -> dict | None:
+            try:
+                ent = _hypothetical_entitlement(rung)
+            except Exception as exc:
+                logger.warning(
+                    "entitlements: channel_catalog_path rung %r synth failed: %s",
+                    rung,
+                    exc,
+                )
+                return None
+            try:
+                channels = [_channel_spec_row(ent, ch) for ch in sorted(ALL_CHANNELS)]
+            except Exception as exc:
+                logger.warning(
+                    "entitlements: channel_catalog_path rung %r row build failed: %s",
+                    rung,
+                    exc,
+                )
+                return None
+            return {
+                "tier": rung,
+                "tier_label": tier_label(rung),
+                "tier_rank": _TIER_RANK.get(rung, -1),
+                "channels": channels,
+            }
+
+        if from_rank == to_rank:
+            row = _row(t)
+            return [row] if row is not None else []
+        ascending = to_rank > from_rank
+        if ascending:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (_TIER_RANK.get(x, -1), x),
+            )
+        else:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (-_TIER_RANK.get(x, -1), x),
+            )
+        path: list[dict] = []
+        for tid in ordered:
+            r = _TIER_RANK.get(tid, -1)
+            if ascending:
+                if r <= from_rank or r > to_rank:
+                    continue
+            else:
+                if r >= from_rank or r < to_rank:
+                    continue
+            if r == to_rank and tid != t:
+                continue
+            row = _row(tid)
+            if row is not None:
+                path.append(row)
+        return path
+    except Exception as exc:
+        logger.warning("entitlements: channel_catalog_path failed: %s", exc)
+        return None
+
+
 def tier_catalog_path(from_tier: str, to_tier: str) -> list[dict] | None:
     """Arbitrary-endpoint stepwise tier-catalog path between two tiers.
 

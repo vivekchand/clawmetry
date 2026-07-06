@@ -8952,6 +8952,79 @@ def api_entitlement_runtime_catalog_path():
         )
 
 
+@bp_entitlement.route("/api/entitlement/channel-catalog-path")
+def api_entitlement_channel_catalog_path():
+    """``GET /api/entitlement/channel-catalog-path?from=<id>&to=<id>`` --
+    channel-axis twin of ``/feature-catalog-path`` and
+    ``/runtime-catalog-path``: the full chat-channel catalogue at every
+    rung between any two tiers off ONE round-trip.
+
+    Pairs with ``/feature-catalog-path`` and ``/runtime-catalog-path``
+    the same way ``/channel-catalog`` pairs with ``/feature-catalog``
+    and ``/runtime-catalog``. Together the three ``_catalog_path``
+    endpoints let an upgrade-walkthrough UI render every feature +
+    runtime + channel column at every rung off THREE calls instead of
+    first calling ``/tier-path`` and then N * 3 calls to the scalar
+    catalog endpoints.
+
+    Each row in ``path`` mirrors the ``/feature-catalog-path`` /
+    ``/runtime-catalog-path`` row shape with ``features`` / ``runtimes``
+    renamed to ``channels`` (``tier``, ``tier_label``, ``tier_rank``,
+    ``channels``); the ``channels`` list byte-equals
+    ``/channel-catalog`` for every rung -- pinned by the parity tests
+    (every chat-channel adapter is FREE at every tier, so the catalogue
+    is invariant across the rung walk).
+
+    Rung walk, direction semantics and error posture match
+    ``/feature-catalog-path`` (byte-stable against the rest of the
+    ``_path`` family). Never 5xxs: a resolver failure short-circuits to
+    ``404`` so a pricing-page surface keeps rendering.
+    """
+    f = (request.args.get("from") or "").strip().lower()
+    t = (request.args.get("to") or "").strip().lower()
+    if not f or not t:
+        return jsonify({"error": "missing from or to"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        path = _ent.channel_catalog_path(f, t)
+        if path is None:
+            return (
+                jsonify({"error": "unknown tier", "from": f, "to": t}),
+                404,
+            )
+        from_rank = _ent.tier_rank(f)
+        to_rank = _ent.tier_rank(t)
+        if f == t:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        return jsonify(
+            {
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": from_rank,
+                "to": t,
+                "to_label": _ent.tier_label(t),
+                "to_rank": to_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_channel_catalog_path: error: %s", exc
+        )
+        return (
+            jsonify({"error": "unknown tier", "from": f, "to": t}),
+            404,
+        )
+
+
 @bp_entitlement.route("/api/entitlement/tier-catalog-path")
 def api_entitlement_tier_catalog_path():
     """``GET /api/entitlement/tier-catalog-path?from=<id>&to=<id>`` --
