@@ -13104,6 +13104,107 @@ def api_entitlement_runtime_catalog_path_batch():
         )
 
 
+@bp_entitlement.route("/api/entitlement/channel-catalog-path-batch")
+def api_entitlement_channel_catalog_path_batch():
+    """``GET /api/entitlement/channel-catalog-path-batch?from=<id>&to=a,b,c``
+    -- batch sibling of ``/api/entitlement/channel-catalog-path``.
+
+    Where ``/channel-catalog-path`` walks the full-catalog rungs between
+    ONE ``(from, to)`` pair, this walks the full-catalog rungs between
+    ONE ``from`` and N candidate ``to`` tiers in ONE round-trip.
+    Channel-axis twin of ``/feature-catalog-path-batch`` and
+    ``/runtime-catalog-path-batch``: pairs with them the same way
+    ``/channel-catalog-at-batch`` pairs with
+    ``/feature-catalog-at-batch`` / ``/runtime-catalog-at-batch``.
+    Together the three catalog ``-path-batch`` endpoints on the feature /
+    runtime / channel axes plus the ``-path-batch`` endpoint on the tier
+    axis let an upgrade-comparison walkthrough UI render every feature +
+    runtime + channel + tier column at every rung walked to N candidate
+    destinations off FOUR calls instead of first calling
+    ``/tier-path-batch`` (or ``/tier-path`` per destination) and then 4 *
+    N calls to the scalar what-if catalog endpoints.
+
+    Each row in ``tiers[].path`` is byte-identical to a row from
+    ``/channel-catalog-path?from=<from>&to=<to>`` -- pinned by the parity
+    tests so the scalar and batch path accessors cannot drift. Per-rung
+    ``channels`` list byte-equals ``/channel-catalog`` for every rung
+    (every chat-channel adapter is FREE at every tier, so the catalogue
+    is invariant across the rung walk). Supplied destination ids are
+    normalised (whitespace stripped, lowercased, duplicates dropped,
+    first-seen order preserved). Unknown ids do not 404 the call -- they
+    are echoed in ``unknown[]`` so a partially-bad caller still gets
+    paths back for the valid ids.
+
+    Response shape::
+
+        {
+          "from":       "<tier id>",
+          "from_label": "...",
+          "from_rank":  <int>,
+          "tiers": [
+            {
+              "to":        "<tier id>",
+              "to_label":  "...",
+              "to_rank":   <int>,
+              "direction": "upgrade" | "downgrade" | "lateral" | "identity",
+              "path":      [<channel-catalog-path row>, ...],
+            },
+            ...
+          ],
+          "unknown":    ["bogus_id", ...],
+        }
+
+    - **400** when ``from=`` is missing / blank, or ``to=`` is missing
+      / empty after normalisation
+    - **404** when ``from`` is unknown (body carries ``which: "tier"``)
+    - **200** with bucketed unknowns for unknown destination ids --
+      does NOT 404 the call, matching every other batch sibling
+    - **Never 5xxs**: a synthesis failure short-circuits to an envelope
+      with empty rows so the matrix keeps rendering.
+    """
+    f = (request.args.get("from") or "").strip().lower()
+    if not f:
+        return jsonify({"error": "missing from"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if f not in _ent._TIER_FEATURES:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": f}
+                ),
+                404,
+            )
+        targets = _parse_csv_arg("to")
+        if not targets:
+            return jsonify({"error": "supply to=<csv>"}), 400
+        batch = _ent.channel_catalog_path_batch(f, targets)
+        if batch is None:
+            batch = {"tiers": [], "unknown": []}
+        return jsonify(
+            {
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": _ent.tier_rank(f),
+                "tiers": batch.get("tiers", []),
+                "unknown": batch.get("unknown", []),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_channel_catalog_path_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "from": f,
+                "from_label": None,
+                "from_rank": -1,
+                "tiers": [],
+                "unknown": [],
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/next-tier-capacity-diff")
 def api_entitlement_next_tier_capacity_diff():
     """``GET /api/entitlement/next-tier-capacity-diff`` -- capacity-only
