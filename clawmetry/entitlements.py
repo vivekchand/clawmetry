@@ -107,6 +107,66 @@ RUNTIME_LABELS = {
     "nanoclaw": "NanoClaw",
 }
 
+# Canonical list of chat-channel adapters observable by ClawMetry, in the
+# same order the sync daemon walks them (``clawmetry/sync.py``
+# ``_CHANNEL_DIRS``). Every channel is FREE -- there is no paid-channel
+# tier -- so :func:`channel_catalog` renders every row unlocked; the
+# ``channels`` capacity axis (``min_tier_for_channel_count``) governs how
+# many concurrent channels each plan admits, not which adapters unlock.
+#
+# Kept in lockstep with ``clawmetry.sync._CHANNEL_DIRS`` by a pin test in
+# ``tests/test_entitlement_channel_catalog.py`` -- adding a new adapter
+# means updating BOTH lists in the same PR; the pin fails loudly otherwise.
+ALL_CHANNELS: tuple[str, ...] = (
+    "telegram",
+    "signal",
+    "whatsapp",
+    "discord",
+    "slack",
+    "irc",
+    "imessage",
+    "webchat",
+    "googlechat",
+    "msteams",
+    "bluebubbles",
+    "matrix",
+    "mattermost",
+    "line",
+    "nostr",
+    "twitch",
+    "feishu",
+    "zalo",
+    "tlon",
+    "synologychat",
+    "nextcloudtalk",
+)
+
+# Display labels for every known chat-channel adapter. Fallback for an
+# unknown id is a title-cased echo of the id (see :func:`channel_label`).
+CHANNEL_LABELS = {
+    "telegram": "Telegram",
+    "signal": "Signal",
+    "whatsapp": "WhatsApp",
+    "discord": "Discord",
+    "slack": "Slack",
+    "irc": "IRC",
+    "imessage": "iMessage",
+    "webchat": "WebChat",
+    "googlechat": "Google Chat",
+    "msteams": "Microsoft Teams",
+    "bluebubbles": "BlueBubbles",
+    "matrix": "Matrix",
+    "mattermost": "Mattermost",
+    "line": "LINE",
+    "nostr": "Nostr",
+    "twitch": "Twitch",
+    "feishu": "Feishu",
+    "zalo": "Zalo",
+    "tlon": "Tlon",
+    "synologychat": "Synology Chat",
+    "nextcloudtalk": "Nextcloud Talk",
+}
+
 _TIER_ORDER = (
     TIER_OSS,
     TIER_CLOUD_FREE,
@@ -5227,6 +5287,73 @@ def runtime_catalog() -> list[dict]:
     for rt in sorted(PAID_RUNTIMES):
         out.append(_runtime_spec_row(ent, rt))
     return out
+
+
+def channel_label(channel: str) -> str:
+    """Display label for a chat-channel adapter id.
+
+    Falls back to a title-cased echo of the id when the id is unknown so a
+    "brand-new adapter shipped in sync.py but not yet in
+    :data:`CHANNEL_LABELS`" doesn't render as a blank cell in a pricing
+    matrix. Whitespace-trimmed and lowercased, matching
+    :func:`feature_label` / :func:`runtime_label`.
+    """
+    try:
+        ch = (channel or "").strip().lower()
+    except (AttributeError, TypeError):
+        return ""
+    if not ch:
+        return ""
+    label = CHANNEL_LABELS.get(ch)
+    if label:
+        return label
+    return ch.replace("_", " ").title()
+
+
+def _channel_spec_row(ent: "Entitlement", ch: str) -> dict:
+    """Build the single channel row shape that :func:`channel_catalog`
+    returns. Every chat channel is FREE (there is no paid-channel tier --
+    the ``channels`` capacity axis governs how many concurrent channels
+    each plan admits, not which adapters unlock), so ``free`` / ``allowed``
+    / ``entitled`` are always ``True`` and ``locked`` is always ``False``.
+    Centralised so a future scalar / batch sibling cannot drift from the
+    catalogue rows.
+    """
+    return {
+        "id": ch,
+        "label": channel_label(ch),
+        "free": True,
+        "tier": "free",
+        "allowed": True,
+        "locked": False,
+        "entitled": True,
+    }
+
+
+def channel_catalog() -> list[dict]:
+    """Full catalogue of chat-channel adapters observable by ClawMetry.
+
+    Sibling of :func:`feature_catalog` / :func:`runtime_catalog` for the
+    channel axis. One row per id in :data:`ALL_CHANNELS`, sorted
+    alphabetically so a pricing UI can render a stable table across
+    releases. Every row is unlocked -- there is no paid-channel tier --
+    which lets a pricing page render "all 21 chat channels included in
+    every plan" off a single call instead of hard-coding the adapter list
+    client-side.
+
+    Grace vs enforce yields byte-identical rows (nothing to gate). Never
+    raises: resolver failure short-circuits to the OSS-free fallback so
+    the catalogue keeps rendering; a poisoned label lookup is contained
+    inside the row builder.
+    """
+    try:
+        ent = get_entitlement()
+    except Exception as exc:
+        logger.warning(
+            "entitlements: channel_catalog falling back to grace: %s", exc
+        )
+        ent = _oss_free()
+    return [_channel_spec_row(ent, ch) for ch in sorted(ALL_CHANNELS)]
 
 
 def feature_spec(feature: str) -> dict | None:
