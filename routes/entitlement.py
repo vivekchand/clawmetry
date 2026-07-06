@@ -4728,6 +4728,315 @@ def api_entitlement_affordable_tiers():
         )
 
 
+@bp_entitlement.route("/api/entitlement/required-tier-at")
+def api_entitlement_required_tier_at():
+    """``GET /api/entitlement/required-tier-at?tier=<perspective>
+    &features=a,b,c&runtimes=x,y&channels=N&retention_days=K&nodes=M`` --
+    hypothetical-perspective sibling of ``/api/entitlement/required-tier-batch``.
+
+    Wraps :func:`entitlements.min_tier_for_all_at` so a pricing-comparison
+    tooltip can render "if I were on Starter, this bundle would need Pro"
+    off ONE round-trip without first switching the resolver. Fills the
+    ``_at`` slot for the aggregate constraint-bundle family alongside the
+    per-axis ``_at`` scalars (``/capacity-diff-at``, ``/tier-unlocks-at``,
+    ``/tier-locks-at``) so a caller can call ``X_at`` uniformly across the
+    whole ``_at`` scalar family.
+
+    Perspective is validated against :data:`entitlements._TIER_ORDER`
+    (including ``trial``) but does NOT shape the result -- the floor is
+    anchored to the constraint bundle, matching every other ``_at``
+    helper. A parity contract pinned in the test suite guarantees that
+    per-row output byte-equals ``/api/entitlement/required-tier-batch`` for
+    the same bundle regardless of perspective; the response layers
+    ``perspective_tier`` / ``perspective_tier_rank`` /
+    ``upgrade_required_from_perspective`` on top so a caller can render
+    "from <perspective> this needs Pro" copy off one call.
+
+    Args are byte-identical to ``/required-tier-batch`` except for the
+    additional ``tier=`` perspective arg: at least one of ``features=`` /
+    ``runtimes=`` / ``channels=`` / ``retention_days=`` / ``nodes=`` must
+    be supplied (non-empty / parseable after normalisation). Same CSV
+    normalisation, same capacity-axis parsing, same ``None`` = "not
+    supplied" sentinel (so ``retention_days=`` blank is "unset", NOT
+    the "unlimited" sentinel that would mis-route to Enterprise).
+
+    - **400** when ``tier=`` is missing / blank, OR when no constraint
+      axis is supplied.
+    - **404** when ``tier`` is unknown. The body carries ``which=tier``
+      so a caller can render the right "unknown tier" message.
+    - **Never 5xxs**: a resolver failure yields the OSS-free shape so the
+      pricing tooltip keeps rendering.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+
+        features = _parse_csv_arg("features")
+        runtimes = _parse_csv_arg("runtimes")
+        (_, channels_ok, channels_n, _) = _parse_capacity_arg("channels")
+        (_, retention_ok, retention_n, _) = _parse_capacity_arg(
+            "retention_days",
+        )
+        (_, nodes_ok, nodes_n, _) = _parse_capacity_arg("nodes")
+
+        if (
+            not features
+            and not runtimes
+            and not channels_ok
+            and not retention_ok
+            and not nodes_ok
+        ):
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply at least one of features=<csv>, "
+                            "runtimes=<csv>, channels=<int>, "
+                            "retention_days=<int>, or nodes=<int>"
+                        )
+                    }
+                ),
+                400,
+            )
+
+        required = _ent.min_tier_for_all_at(
+            tier_in,
+            features=features or None,
+            runtimes=runtimes or None,
+            channels=channels_n if channels_ok else None,
+            retention_days=retention_n if retention_ok else None,
+            nodes=nodes_n if nodes_ok else None,
+        )
+
+        ent = _ent.get_entitlement()
+        cur_rank = _ent.tier_rank(ent.tier)
+        persp_rank = _ent.tier_rank(tier_in)
+        req_rank = _ent.tier_rank(required) if required else -1
+        required_label = _ent.tier_label(required) if required else None
+
+        return jsonify(
+            {
+                "perspective_tier": tier_in,
+                "perspective_tier_label": _ent.tier_label(tier_in),
+                "perspective_tier_rank": persp_rank,
+                "features": features,
+                "runtimes": runtimes,
+                "channels": channels_n if channels_ok else None,
+                "retention_days": retention_n if retention_ok else None,
+                "nodes": nodes_n if nodes_ok else None,
+                "required_tier": required,
+                "required_tier_label": required_label,
+                "required_tier_rank": req_rank,
+                "current_tier": ent.tier,
+                "current_tier_rank": cur_rank,
+                "upgrade_required_from_perspective": (
+                    bool(required) and req_rank > persp_rank
+                ),
+                "upgrade_required_from_current": (
+                    bool(required) and req_rank > cur_rank
+                ),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_required_tier_at: error: %s", exc)
+        (_, channels_ok, channels_n, _) = _parse_capacity_arg("channels")
+        (_, retention_ok, retention_n, _) = _parse_capacity_arg("retention_days")
+        (_, nodes_ok, nodes_n, _) = _parse_capacity_arg("nodes")
+        return jsonify(
+            {
+                "perspective_tier": tier_in,
+                "perspective_tier_label": None,
+                "perspective_tier_rank": -1,
+                "features": _parse_csv_arg("features"),
+                "runtimes": _parse_csv_arg("runtimes"),
+                "channels": channels_n if channels_ok else None,
+                "retention_days": retention_n if retention_ok else None,
+                "nodes": nodes_n if nodes_ok else None,
+                "required_tier": None,
+                "required_tier_label": None,
+                "required_tier_rank": -1,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "upgrade_required_from_perspective": False,
+                "upgrade_required_from_current": False,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/affordable-tiers-at")
+def api_entitlement_affordable_tiers_at():
+    """``GET /api/entitlement/affordable-tiers-at?tier=<perspective>
+    &features=a,b,c&runtimes=x,y&channels=N&retention_days=K&nodes=M`` --
+    hypothetical-perspective sibling of ``/api/entitlement/affordable-tiers``.
+
+    Wraps :func:`entitlements.affordable_tiers_at` so a pricing-page
+    walkthrough can render "if I were on Starter, this bundle would
+    qualify for Pro and Enterprise" off ONE round-trip without first
+    switching the resolver. Plural what-if companion of
+    ``/required-tier-at`` (which returns only the floor).
+
+    Perspective is validated against :data:`entitlements._TIER_ORDER`
+    (including ``trial``) but does NOT shape rows -- the qualifying-tier
+    list is anchored to the constraint bundle. A parity contract pinned
+    in the test suite guarantees per-row output byte-equals
+    ``/api/entitlement/affordable-tiers`` for the same bundle regardless
+    of perspective; the response layers ``perspective_tier`` /
+    ``is_at_or_better_than_perspective`` on top so a walkthrough surface
+    can render "from <perspective> these tiers qualify" copy off one
+    call, alongside the existing ``is_current`` /
+    ``is_current_or_better`` current-resolver flags.
+
+    Args are byte-identical to ``/affordable-tiers`` except for the
+    additional ``tier=`` perspective arg. Same CSV normalisation, same
+    capacity-axis parsing, same ``None`` = "not supplied" sentinel.
+
+    - **400** when ``tier=`` is missing / blank, OR when no constraint
+      axis is supplied.
+    - **404** when ``tier`` is unknown. The body carries ``which=tier``
+      so a caller can render the right "unknown tier" message.
+    - **Never 5xxs**: a resolver failure yields the OSS-free shape
+      (empty tier list) so the pricing walkthrough keeps rendering.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+
+        features = _parse_csv_arg("features")
+        runtimes = _parse_csv_arg("runtimes")
+        (_, channels_ok, channels_n, _) = _parse_capacity_arg("channels")
+        (_, retention_ok, retention_n, _) = _parse_capacity_arg(
+            "retention_days",
+        )
+        (_, nodes_ok, nodes_n, _) = _parse_capacity_arg("nodes")
+
+        if (
+            not features
+            and not runtimes
+            and not channels_ok
+            and not retention_ok
+            and not nodes_ok
+        ):
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply at least one of features=<csv>, "
+                            "runtimes=<csv>, channels=<int>, "
+                            "retention_days=<int>, or nodes=<int>"
+                        )
+                    }
+                ),
+                400,
+            )
+
+        ent = _ent.get_entitlement()
+        rows = _ent.affordable_tiers_at(
+            tier_in,
+            features=features or None,
+            runtimes=runtimes or None,
+            channels=channels_n if channels_ok else None,
+            retention_days=retention_n if retention_ok else None,
+            nodes=nodes_n if nodes_ok else None,
+        ) or []
+
+        cur_tier = ent.tier
+        cur_rank = _ent.tier_rank(cur_tier)
+        persp_rank = _ent.tier_rank(tier_in)
+        minimum_tier = rows[0]["tier"] if rows else None
+        minimum_label = rows[0]["tier_label"] if rows else None
+        minimum_rank = rows[0]["tier_rank"] if rows else -1
+
+        augmented: list[dict] = []
+        for row in rows:
+            augmented.append(
+                {
+                    "tier": row["tier"],
+                    "tier_label": row["tier_label"],
+                    "tier_rank": row["tier_rank"],
+                    "is_minimum": row["is_minimum"],
+                    "is_current": row["tier"] == cur_tier,
+                    "is_current_or_better": row["tier_rank"] >= cur_rank,
+                    "is_perspective": row["tier"] == tier_in,
+                    "is_at_or_better_than_perspective": (
+                        row["tier_rank"] >= persp_rank
+                    ),
+                }
+            )
+
+        return jsonify(
+            {
+                "perspective_tier": tier_in,
+                "perspective_tier_label": _ent.tier_label(tier_in),
+                "perspective_tier_rank": persp_rank,
+                "features": features,
+                "runtimes": runtimes,
+                "channels": channels_n if channels_ok else None,
+                "retention_days": retention_n if retention_ok else None,
+                "nodes": nodes_n if nodes_ok else None,
+                "current_tier": cur_tier,
+                "current_tier_rank": cur_rank,
+                "minimum_tier": minimum_tier,
+                "minimum_tier_label": minimum_label,
+                "minimum_tier_rank": minimum_rank,
+                "tiers": augmented,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_affordable_tiers_at: error: %s", exc)
+        (_, channels_ok, channels_n, _) = _parse_capacity_arg("channels")
+        (_, retention_ok, retention_n, _) = _parse_capacity_arg("retention_days")
+        (_, nodes_ok, nodes_n, _) = _parse_capacity_arg("nodes")
+        return jsonify(
+            {
+                "perspective_tier": tier_in,
+                "perspective_tier_label": None,
+                "perspective_tier_rank": -1,
+                "features": _parse_csv_arg("features"),
+                "runtimes": _parse_csv_arg("runtimes"),
+                "channels": channels_n if channels_ok else None,
+                "retention_days": retention_n if retention_ok else None,
+                "nodes": nodes_n if nodes_ok else None,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "minimum_tier": None,
+                "minimum_tier_label": None,
+                "minimum_tier_rank": -1,
+                "tiers": [],
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+
 @bp_entitlement.route("/api/entitlement/min-tier")
 def api_entitlement_min_tier():
     """``GET /api/entitlement/min-tier?<axis>=<value>`` -- cheapest purchasable
