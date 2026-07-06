@@ -167,6 +167,33 @@ jobs:
             tests/test_openclaw_detection_real.py \
             -q
 
+  # ── Entitlement API test suite (~2700 hermetic tests) ─────────────────────
+  # Covers every helper in clawmetry/entitlements.py and every endpoint
+  # under routes/entitlement.py via Flask test client. No live server, no
+  # gateway, no network. Runtime ~60s. HARD-FAIL: no continue-on-error.
+  entitlement-tests:
+    name: Entitlement API tests
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install flask waitress cryptography duckdb pytest requests psutil
+      - name: Run entitlement test suite
+        run: |
+          python3 -m pytest \
+            tests/test_entitlement*.py \
+            tests/test_entitlements*.py \
+            tests/test_required_tier_canonical.py \
+            tests/test_tier_catalog.py \
+            tests/test_tier_cli.py \
+            -q
+
   # ── Compression / cache-safety eval (Tier-1, deterministic) ──────────────
   # Issue #2844 (epic #2837): port Headroom's eval rigor so we can claim
   # "compression-safe" with proof. This Tier-1 gate is pure-Python and spends
