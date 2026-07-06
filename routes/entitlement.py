@@ -3825,6 +3825,48 @@ def api_entitlement_runtime_spec():
         return jsonify({"error": "runtime-spec failed"}), 500
 
 
+@bp_entitlement.route("/api/entitlement/channel-spec")
+def api_entitlement_channel_spec():
+    """``GET /api/entitlement/channel-spec?channel=<id>`` -- scalar sibling
+    of ``/api/entitlement/channel-catalog``: the full catalogue row for one
+    chat-channel adapter id in one shot, matching exactly one row from
+    :func:`entitlements.channel_catalog`.
+
+    Channel-axis analogue of ``/feature-spec`` / ``/runtime-spec`` -- lets
+    a channel-detail page or a "which channels does this account have on"
+    tooltip hydrate against one channel without fetching the whole
+    catalogue and filtering client-side. Because every chat channel is
+    FREE at every tier (the ``channels`` capacity axis governs how many
+    concurrent channels each plan admits, not which adapters unlock), the
+    returned row is always ``free=True`` / ``allowed=True`` /
+    ``locked=False`` / ``entitled=True`` regardless of the resolved tier.
+
+    - **400** when ``channel=`` is missing / blank
+    - **404** when the id (after whitespace + case normalisation) is not
+      in :data:`entitlements.ALL_CHANNELS`
+    - **Never 5xxs**: the helper internally falls back to the OSS-free
+      shape on resolver failure, so the endpoint still returns 200 with a
+      valid row.
+    """
+    raw = request.args.get("channel")
+    channel = (raw or "").strip().lower()
+    if not channel:
+        return jsonify({"error": "missing channel"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        body = _ent.channel_spec(channel)
+        if body is None:
+            return (
+                jsonify({"error": "unknown channel", "channel": channel}),
+                404,
+            )
+        return jsonify(body)
+    except Exception as exc:
+        logger.warning("api_entitlement_channel_spec: error: %s", exc)
+        return jsonify({"error": "channel-spec failed"}), 500
+
+
 @bp_entitlement.route("/api/entitlement/feature-spec-batch")
 def api_entitlement_feature_spec_batch():
     """``GET /api/entitlement/feature-spec-batch?features=a,b,c`` -- plural

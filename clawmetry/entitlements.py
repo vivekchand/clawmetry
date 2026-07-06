@@ -5356,6 +5356,49 @@ def channel_catalog() -> list[dict]:
     return [_channel_spec_row(ent, ch) for ch in sorted(ALL_CHANNELS)]
 
 
+def channel_spec(channel: str) -> dict | None:
+    """Scalar sibling of :func:`channel_catalog`: return the single
+    catalogue row for ``channel`` (case-insensitive, trimmed), or
+    ``None`` for empty / unknown ids.
+
+    Channel-axis analogue of :func:`feature_spec` / :func:`runtime_spec`
+    -- fills the scalar slot on the channel ``spec`` family so a
+    channel-detail page or a "which channels does this account have
+    turned on" tooltip can hydrate against ONE channel in ONE round-trip
+    instead of fetching the whole :func:`channel_catalog` and filtering
+    client-side. Row shape is byte-identical to a row returned by
+    :func:`channel_catalog` for the same id -- a parity test pins this so
+    the scalar and bulk accessors cannot drift.
+
+    Every chat channel is FREE at every tier (the ``channels`` capacity
+    axis governs how many concurrent channels each plan admits, not
+    which adapters unlock), so the row always comes back
+    ``free=True`` / ``allowed=True`` / ``locked=False`` /
+    ``entitled=True`` regardless of the resolved tier. That posture is
+    inherited from :func:`_channel_spec_row`; the parity test pins it
+    against the catalog sibling.
+
+    Never raises: on resolver failure the row is still built against the
+    OSS-free fallback (matches the catalog's never-crash contract).
+    """
+    try:
+        ch = (channel or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not ch or ch not in ALL_CHANNELS:
+        return None
+    try:
+        ent = get_entitlement()
+    except Exception as exc:
+        logger.warning("entitlements: channel_spec falling back to grace: %s", exc)
+        ent = _oss_free()
+    try:
+        return _channel_spec_row(ent, ch)
+    except Exception as exc:
+        logger.warning("entitlements: channel_spec row build failed: %s", exc)
+        return None
+
+
 def channel_catalog_at(tier: str) -> list[dict] | None:
     """What-if sibling of :func:`channel_catalog`: catalogue rows for the
     chat-channel axis with every row computed as if the install were on
