@@ -22,7 +22,7 @@ _MAX_SQL_LEN = 2_000
 _BLOCK_RE = re.compile(r"<!--\s*duckdb:\s*(.*?)\s*-->", re.DOTALL | re.IGNORECASE)
 
 
-# ── Storage ───────────────────────────────────────────────────────────────────
+# ── Storage ─────────────────────────────────────────────────────────────────────────────
 
 
 def _reports_dir() -> str:
@@ -31,11 +31,11 @@ def _reports_dir() -> str:
     return d
 
 
-# ── Query helpers ─────────────────────────────────────────────────────────────
+# ── Query helpers ────────────────────────────────────────────────────────────────────────
 
 
 def _run_sql(sql: str) -> tuple[list[dict], str | None]:
-    """Run SQL via daemon proxy → direct store fallback. Returns (rows, error)."""
+    """Run SQL via daemon proxy, falling back to direct store. Returns (rows, error)."""
     sql = sql.strip()
     if len(sql) > _MAX_SQL_LEN:
         return [], f"SQL block too long (max {_MAX_SQL_LEN} chars)"
@@ -46,7 +46,7 @@ def _run_sql(sql: str) -> tuple[list[dict], str | None]:
             return [], f"SQL rejected: {reason}"
     except Exception as e:
         return [], f"SQL validator unavailable: {e}"
-    # Daemon proxy first — avoids contending on the DuckDB writer lock
+    # Daemon proxy first - avoids contending on the DuckDB writer lock
     try:
         from routes.local_query import local_store_via_daemon
         rows = local_store_via_daemon("raw_select_safe", sql=sql)
@@ -63,7 +63,7 @@ def _run_sql(sql: str) -> tuple[list[dict], str | None]:
         return [], str(e)[:200]
 
 
-# ── Rendering ─────────────────────────────────────────────────────────────────
+# ── Rendering ───────────────────────────────────────────────────────────────────────────
 
 
 def _rows_to_html_table(rows: list[dict]) -> str:
@@ -86,7 +86,7 @@ def _rows_to_html_table(rows: list[dict]) -> str:
 
 
 def _md_to_html(text: str) -> str:
-    """Minimal markdown → HTML for report prose (no SQL blocks remain here)."""
+    """Minimal markdown to HTML for report prose (no SQL blocks remain here)."""
     lines = text.split("\n")
     out: list[str] = []
     in_code = False
@@ -141,7 +141,7 @@ h3{font-size:1rem;margin-top:1.25rem}
 
 
 def _render_page(slug: str, md_content: str) -> str:
-    """Render a report .md file → full HTML page (SQL blocks replaced with tables)."""
+    """Render a report .md file to a full HTML page (SQL blocks replaced with tables)."""
     parts: list[str] = []
     last_end = 0
     for m in _BLOCK_RE.finditer(md_content):
@@ -162,7 +162,7 @@ def _render_page(slug: str, md_content: str) -> str:
     return (
         f"<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
         f"<meta charset=\"utf-8\">\n"
-        f"<title>{html.escape(slug)} — ClawMetry Reports</title>\n"
+        f"<title>{html.escape(slug)} - ClawMetry Reports</title>\n"
         f"<style>{_CSS}</style>\n</head>\n<body>\n{body}\n</body>\n</html>"
     )
 
@@ -171,12 +171,12 @@ def _safe_slug(raw: str) -> str:
     return re.sub(r"[^A-Za-z0-9_\-]", "", raw)
 
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
+# ── Endpoints ─────────────────────────────────────────────────────────────────────────────
 
 
 @bp_reports.route("/api/reports")
 def api_reports_list():
-    """GET /api/reports → {reports: [{slug, title}]}"""
+    """GET /api/reports returns {reports: [{slug, title}]}"""
     try:
         d = _reports_dir()
         items = []
@@ -202,7 +202,7 @@ def api_reports_list():
 
 @bp_reports.route("/reports/")
 def reports_index():
-    """GET /reports/ → HTML index listing all reports."""
+    """GET /reports/ returns an HTML index listing all reports."""
     data = api_reports_list().get_json(force=True) or {}
     items = data.get("reports", [])
     if not items:
@@ -222,7 +222,7 @@ def reports_index():
         body = f"<h1>Reports</h1><ul>{links}</ul>"
     page = (
         f"<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
-        f"<title>Reports — ClawMetry</title><style>{_CSS}</style></head>"
+        f"<title>ClawMetry Reports</title><style>{_CSS}</style></head>"
         f"<body>{body}</body></html>"
     )
     return Response(page, content_type="text/html; charset=utf-8")
@@ -230,7 +230,7 @@ def reports_index():
 
 @bp_reports.route("/reports/<slug>")
 def reports_render(slug: str):
-    """GET /reports/<slug> → rendered HTML report."""
+    """GET /reports/<slug> returns a rendered HTML report."""
     slug = _safe_slug(slug)
     if not slug:
         return Response("Invalid report name.", status=400)
@@ -247,7 +247,7 @@ def reports_render(slug: str):
 
 @bp_reports.route("/reports/<slug>/export.csv")
 def reports_export_csv(slug: str):
-    """GET /reports/<slug>/export.csv?block=<n> → CSV of SQL block n."""
+    """GET /reports/<slug>/export.csv?block=<n> returns CSV of SQL block n."""
     slug = _safe_slug(slug)
     if not slug:
         return Response("Invalid report name.", status=400)
