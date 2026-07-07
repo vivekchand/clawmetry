@@ -356,6 +356,43 @@ def downgrade_model_name(model: str, downgrade_map: dict[str, str] | None = None
         return ""
 
 
+# TTS provider rates in USD per 1,000 characters (#3569).
+# Source: official pricing pages as of 2026-07. These are approximate;
+# actual costs may differ by voice tier or subscription level.
+TTS_PROVIDER_RATES: dict[str, float] = {
+    "openai":     0.015,   # tts-1 standard; tts-1-hd is $0.030 but use conservative default
+    "openai-tts": 0.015,
+    "elevenlabs": 0.100,   # Starter tier (~$0.10/1K chars); higher tiers are cheaper at volume
+    "google":     0.016,   # WaveNet / Neural2; Standard voices are $0.004
+    "google-tts": 0.016,
+    "azure":      0.016,   # Azure Cognitive Services Neural TTS
+    "amazon":     0.016,   # Amazon Polly Neural voices
+    "polly":      0.016,
+}
+
+
+def estimate_tts_cost_usd(provider: str, char_count: int) -> float:
+    """Return estimated TTS cost in USD for ``char_count`` characters.
+
+    Uses ``TTS_PROVIDER_RATES`` (per 1K chars). Returns 0.0 for unknown
+    providers or on any error rather than raising.
+    """
+    try:
+        prov = (provider or "").lower().strip()
+        rate = TTS_PROVIDER_RATES.get(prov)
+        if rate is None:
+            # Try prefix match (e.g. "openai-tts-1-hd" -> "openai-tts" -> "openai")
+            for key, r in TTS_PROVIDER_RATES.items():
+                if prov.startswith(key):
+                    rate = r
+                    break
+        if rate is None or char_count <= 0:
+            return 0.0
+        return round((max(0, int(char_count)) / 1_000) * rate, 8)
+    except Exception:
+        return 0.0
+
+
 def estimate_event_cost_usd(
     model: str,
     input_tokens: int = 0,
