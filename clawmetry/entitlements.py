@@ -13279,6 +13279,65 @@ def channel_catalog_at_path(
         return None
 
 
+def channel_spec_at_path(
+    perspective_tier: str, from_tier: str, to_tier: str, channel: str
+) -> list[dict] | None:
+    """Perspective-validated what-if wrapper around :func:`channel_spec_path`.
+
+    Channel-axis twin of :func:`feature_spec_at_path` /
+    :func:`runtime_spec_at_path`; fills the ``_at_path`` slot of the
+    ``channel_spec`` family alongside :func:`channel_spec` (scalar
+    current), :func:`channel_spec_at` (scalar what-if),
+    :func:`channel_spec_batch` (batch current),
+    :func:`channel_spec_at_batch` (batch what-if), and
+    :func:`channel_spec_path` (path current) so a pricing-comparison
+    walkthrough surface can call ``X_at_path(perspective, from, to, ...)``
+    uniformly across the whole ``_at_path`` family (feature / runtime /
+    channel / tier).
+
+    The perspective is validated (empty / unknown ids short-circuit to
+    ``None``) but does NOT shape the rows -- the body is byte-identical
+    to :func:`channel_spec_path` for every ``(from, to, channel)``
+    triple. Pinned by parity tests so the scalar ``_at_path`` can never
+    drift from :func:`channel_spec_path` (which itself walks per-rung
+    via :func:`channel_spec_at`).
+
+    Because every chat-channel adapter is FREE at every tier (the
+    ``channels`` capacity axis governs how many concurrent channels
+    each plan admits, not which adapters unlock), each row's per-rung
+    body is byte-identical to the LIVE :func:`channel_spec` row after
+    dropping the three ``rung*`` keys. The always-free invariant is
+    inherited from the delegate; parity tests pin it.
+
+    Endpoint semantics match :func:`channel_spec_path`: perspective,
+    from and to accept any id in :data:`_TIER_FEATURES` (``trial``
+    accepted, excluded from the walked intermediate rungs, valid
+    endpoint via the lateral / identity branch). ``channel`` accepts
+    any id in :data:`ALL_CHANNELS`.
+
+    Resolver-independent: rows are synthesised via
+    :func:`_channel_spec_row` against per-rung
+    :func:`_hypothetical_entitlement` objects (delegated through
+    :func:`channel_spec_path`), so grace vs enforce yields byte-
+    identical rows -- same property the rest of the ``_path`` family
+    guarantees.
+
+    Never raises: a delegation failure logs a warning and returns
+    ``None`` so a paywall surface keeps rendering instead of breaking.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_FEATURES:
+        return None
+    try:
+        return channel_spec_path(from_tier, to_tier, channel)
+    except Exception as exc:
+        logger.warning("entitlements: channel_spec_at_path failed: %s", exc)
+        return None
+
+
 def lock_reason_at_path(
     perspective_tier: str,
     from_tier: str,
