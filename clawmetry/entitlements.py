@@ -5399,6 +5399,61 @@ def channel_spec(channel: str) -> dict | None:
         return None
 
 
+def channel_spec_batch(channels) -> dict:
+    """Plural sibling of :func:`channel_spec`: return spec rows for a
+    caller-supplied subset of chat-channel ids in one pass.
+
+    Mirrors :func:`feature_spec_batch` / :func:`runtime_spec_batch` for the
+    chat-channel axis. Lets a channel-picker or "which of these adapters
+    does this account have on" tooltip hydrate the N visible rows off
+    **one** round-trip instead of N calls to
+    ``/api/entitlement/channel-spec``. Each returned row is byte-identical
+    to a row from :func:`channel_catalog` for the same id -- a parity test
+    pins this so the scalar / bulk / batch accessors cannot drift.
+
+    Shape::
+
+        {
+          "channels": [<spec_row>, ...],   # one per known supplied id, in supply order
+          "unknown":  ["bogus_id", ...],   # supplied ids not in ALL_CHANNELS, in supply order
+        }
+
+    Supplied ids are normalised via :func:`_normalise_csv` (whitespace
+    stripped, lowercased, duplicates dropped while preserving first-seen
+    order) so the response is stable across repeated calls. Empty input
+    returns ``{"channels": [], "unknown": []}`` -- the HTTP wrapper turns
+    that into a 400, this helper does not raise.
+
+    Every chat channel is FREE at every tier (the ``channels`` capacity
+    axis governs how many concurrent channels each plan admits, not which
+    adapters unlock), so every row reports ``free=True`` /
+    ``allowed=True`` / ``locked=False`` / ``entitled=True`` regardless of
+    the resolved tier -- grace vs enforce yields byte-identical rows.
+    Never raises: a resolver failure short-circuits to the OSS-free
+    fallback so the matrix keeps rendering.
+    """
+    chans = _normalise_csv(channels)
+    try:
+        ent = get_entitlement()
+    except Exception as exc:
+        logger.warning("entitlements: channel_spec_batch falling back to grace: %s", exc)
+        ent = _oss_free()
+    rows: list[dict] = []
+    unknown: list[str] = []
+    for cid in chans:
+        if cid in ALL_CHANNELS:
+            try:
+                rows.append(_channel_spec_row(ent, cid))
+            except Exception as exc:
+                logger.warning(
+                    "entitlements: channel_spec_batch row %r failed: %s", cid, exc
+                )
+                unknown.append(cid)
+        else:
+            unknown.append(cid)
+    return {"channels": rows, "unknown": unknown}
+
+
 def channel_catalog_at(tier: str) -> list[dict] | None:
     """What-if sibling of :func:`channel_catalog`: catalogue rows for the
     chat-channel axis with every row computed as if the install were on

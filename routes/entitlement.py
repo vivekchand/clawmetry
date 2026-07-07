@@ -3867,6 +3867,78 @@ def api_entitlement_channel_spec():
         return jsonify({"error": "channel-spec failed"}), 500
 
 
+@bp_entitlement.route("/api/entitlement/channel-spec-batch")
+def api_entitlement_channel_spec_batch():
+    """``GET /api/entitlement/channel-spec-batch?channels=a,b,c`` -- plural
+    sibling of ``/api/entitlement/channel-spec``.
+
+    Returns the full catalogue spec row for every supplied chat-channel id
+    in one round-trip. Mirrors :func:`api_entitlement_feature_spec_batch` /
+    :func:`api_entitlement_runtime_spec_batch` for the chat-channel axis;
+    together they let a Settings or paywall matrix UI hydrate the per-row
+    state ("lock badge + required tier + entitled flag") for a viewport's
+    worth of features + runtimes + channels off THREE calls instead of N +
+    M + K.
+
+    Each ``channels[]`` entry is byte-identical to a row from
+    :func:`entitlements.channel_catalog` -- a parity test pins this so the
+    scalar / bulk / batch accessors cannot drift. Supplied ids are
+    normalised (whitespace stripped, lowercased, duplicates dropped while
+    preserving first-seen order). Unknown ids do not 404 the call -- they
+    are echoed in ``unknown[]`` so a partially-bad caller still gets rows
+    back for the valid ids alongside a list of what was dropped.
+
+    Because every chat channel is FREE at every tier (the ``channels``
+    capacity axis governs how many concurrent channels each plan admits,
+    not which adapters unlock), every returned row is ``free=True`` /
+    ``allowed=True`` / ``locked=False`` / ``entitled=True`` regardless of
+    the resolved tier.
+
+    Response shape::
+
+        {
+          "channels":          [<spec_row>, ...],
+          "unknown":           ["bogus_id", ...],
+          "current_tier":      "...",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    - **400** when ``channels=`` is missing or empty after normalisation
+    - **Never 5xxs**: a resolver crash short-circuits to the OSS-free
+      shape (empty rows, ``current_tier=oss``, ``grace=true``).
+    """
+    try:
+        channels = _parse_csv_arg("channels")
+        if not channels:
+            return (
+                jsonify({"error": "supply channels=<csv>"}),
+                400,
+            )
+        from clawmetry import entitlements as _ent
+
+        batch = _ent.channel_spec_batch(channels)
+        ent = _ent.get_entitlement()
+        batch["current_tier"] = ent.tier
+        batch["current_tier_rank"] = _ent.tier_rank(ent.tier)
+        batch["grace"] = bool(ent.grace)
+        batch["enforced"] = _ent.is_enforced()
+        return jsonify(batch)
+    except Exception as exc:
+        logger.warning("api_entitlement_channel_spec_batch: error: %s", exc)
+        return jsonify(
+            {
+                "channels": [],
+                "unknown": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/feature-spec-batch")
 def api_entitlement_feature_spec_batch():
     """``GET /api/entitlement/feature-spec-batch?features=a,b,c`` -- plural
