@@ -5628,6 +5628,85 @@ def channel_catalog_at_batch(tiers) -> dict:
     return {"tiers": rows, "unknown": unknown}
 
 
+def channel_spec_at_batch(tier: str, channels) -> dict | None:
+    """What-if + batch sibling of :func:`channel_spec_batch`: return spec
+    rows for a caller-supplied subset of chat-channel ids, with ``allowed``
+    / ``locked`` / ``entitled`` computed as if the install were on
+    ``tier``.
+
+    Composes :func:`channel_spec_at` (scalar what-if) and
+    :func:`channel_spec_batch` (live batch) -- same shape as the batch
+    helper, same hypothetical perspective as the ``_at`` helper. Channel-
+    axis analogue of :func:`feature_spec_at_batch` /
+    :func:`runtime_spec_at_batch`; together they let a pricing-comparison
+    matrix UI ("here are the N channels I want to render at Cloud Pro")
+    hydrate a viewport's worth of feature + runtime + channel rows at a
+    hypothetical tier off THREE calls instead of N + M + K.
+
+    Each returned row is byte-identical to a row from
+    :func:`channel_catalog_at` for the same perspective ``tier`` -- a
+    parity test pins this so the scalar what-if
+    (:func:`channel_spec_at`), bulk what-if (:func:`channel_catalog_at`),
+    and batch what-if accessors cannot drift. And because every chat
+    channel is FREE at every tier (the ``channels`` capacity axis governs
+    how many concurrent channels each plan admits, not which adapters
+    unlock), each row is ALSO byte-identical to the LIVE
+    :func:`channel_spec` row for the same id regardless of the
+    perspective tier -- pinned by the parity tests below.
+
+    Shape::
+
+        {
+          "channels": [<spec_row>, ...],   # one per known supplied id, in supply order
+          "unknown":  ["bogus_id", ...],   # supplied ids not in ALL_CHANNELS, in supply order
+        }
+
+    Returns ``None`` for empty / unknown ``tier`` (caller renders
+    "unknown tier" / 404). Supplied channel ids are normalised via
+    :func:`_normalise_csv` (whitespace stripped, lowercased, duplicates
+    dropped, first-seen order preserved); an empty channel list returns
+    ``{"channels": [], "unknown": []}`` -- the HTTP wrapper turns that
+    into a 400, this helper does not raise.
+
+    Resolver-independent: synthesises a fresh :class:`Entitlement` at the
+    perspective tier via :func:`_hypothetical_entitlement`, so grace vs
+    enforce yields byte-identical rows. Never raises: a synthesis
+    failure short-circuits to the OSS-free fallback and a per-channel
+    row build failure drops the id into ``unknown[]`` so the rest of the
+    batch keeps rendering.
+    """
+    try:
+        t = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not t or t not in _TIER_ORDER:
+        return None
+    chans = _normalise_csv(channels)
+    try:
+        ent = _hypothetical_entitlement(t)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: channel_spec_at_batch falling back to OSS-free: %s", exc
+        )
+        ent = _oss_free()
+    rows: list[dict] = []
+    unknown: list[str] = []
+    for cid in chans:
+        if cid in ALL_CHANNELS:
+            try:
+                rows.append(_channel_spec_row(ent, cid))
+            except Exception as exc:
+                logger.warning(
+                    "entitlements: channel_spec_at_batch row %r failed: %s",
+                    cid,
+                    exc,
+                )
+                unknown.append(cid)
+        else:
+            unknown.append(cid)
+    return {"channels": rows, "unknown": unknown}
+
+
 def feature_spec(feature: str) -> dict | None:
     """Scalar sibling of :func:`feature_catalog`: return the single
     catalogue row for ``feature`` (case-insensitive, trimmed), or
