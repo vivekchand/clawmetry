@@ -394,9 +394,13 @@ def _openshell_sandbox_logs(name: str, count: int = 20) -> list:
     """Retrieve OCSF JSON audit log lines for a NemoClaw sandbox.
 
     Arms OCSF output first (idempotent settings set), then calls
-    ``openshell logs <name> -n <count> --source all``.  Returns a list of
-    parsed OCSF event dicts; silently drops non-JSON lines.  Never raises;
-    returns ``[]`` when openshell is absent or any call fails.
+    ``openshell logs <name> -n <count> --source all``.  For container-backed
+    (non-terminal) sandboxes also merges the last ``count`` lines from the
+    OpenClaw gateway log at ``/tmp/gateway.log`` (override with
+    ``OPENSHELL_GATEWAY_LOG``), matching the harness's two-source merge in
+    ``showSandboxLogsWithDeps`` (#3571).  Returns a list of parsed OCSF event
+    dicts; silently drops non-JSON lines.  Never raises; returns ``[]`` when
+    openshell is absent or any call fails.
     """
     try:
         import shutil as _sh
@@ -420,6 +424,26 @@ def _openshell_sandbox_logs(name: str, count: int = 20) -> list:
             try:
                 events.append(json.loads(line))
             except Exception:
+                pass
+        # For container-backed (non-terminal) sandboxes the harness also tails
+        # /tmp/gateway.log (asserted in test/sandbox-logs-terminal.test.ts).
+        # Read runtime kind via the existing phase-policy helper and merge when
+        # the sandbox is not terminal-kind.
+        phase_info = _openshell_sandbox_phase_policy(name)
+        if phase_info.get("sandboxRuntimeKind", "").lower() != "terminal":
+            _gw_log = os.environ.get("OPENSHELL_GATEWAY_LOG", "/tmp/gateway.log")
+            try:
+                with open(_gw_log, "r", encoding="utf-8", errors="replace") as _gf:
+                    _gw_lines = _gf.readlines()[-count:]
+                for _gw_line in _gw_lines:
+                    _gw_line = _gw_line.strip()
+                    if not _gw_line:
+                        continue
+                    try:
+                        events.append(json.loads(_gw_line))
+                    except Exception:
+                        pass
+            except OSError:
                 pass
         return events
     except Exception:
