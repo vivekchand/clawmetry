@@ -5245,7 +5245,7 @@ def sync_logs(config: dict, state: dict, paths: dict) -> int:
 # land locally even when cloud sync is paused or the user is on the free tier.
 # Ref: docs/logging.md §"File logs (JSONL)" — Talk/realtime/managed-room records.
 
-_VOICE_EVENT_TYPE_PREFIXES = ("talk.", "realtime.", "voice.", "managed_room.")
+_VOICE_EVENT_TYPE_PREFIXES = ("talk.", "realtime.", "voice.", "managed_room.", "tts.")
 
 
 def _is_voice_lifecycle_record(obj: dict) -> bool:
@@ -5322,6 +5322,10 @@ def sync_voice_log_events(config: dict, state: dict, paths: dict) -> int:
                             "provider":    obj.get("provider"),
                             "duration_ms": obj.get("duration_ms"),
                             "size_bytes":  obj.get("size_bytes") or obj.get("size"),
+                            # TTS-specific fields (#3569): char_count and voice_id
+                            # are only present on tts.* records; None for others.
+                            "char_count":  obj.get("char_count") or obj.get("characterCount") or obj.get("text_length"),
+                            "voice_id":    obj.get("voice_id") or obj.get("voiceId"),
                         }, separators=(",", ":")),
                     })
                 offsets[fname] = f.tell()

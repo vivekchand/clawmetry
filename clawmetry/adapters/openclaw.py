@@ -1710,6 +1710,18 @@ class OpenClawAdapter(AgentAdapter):
                             _final = obj.get("talkFinal")
                             if _final is not None:
                                 extra["final"] = _final
+                            # TTS gateway RPC fields (#3569): tts.speak records
+                            # carry char_count, voice_id, and audio_bytes;
+                            # surface them so cost and identity are observable.
+                            for _field in ("char_count", "voice_id"):
+                                _val = obj.get(_field) or obj.get(
+                                    "characterCount" if _field == "char_count" else "voiceId"
+                                )
+                                if _val is not None:
+                                    extra[_field] = _val
+                            _abytes = obj.get("audio_bytes") or obj.get("audioBytes")
+                            if _abytes is not None:
+                                extra["audio_bytes"] = _abytes
                             # Fast-mode state (#3322): PR #85104 emits fastMode on
                             # event blobs; try all three spellings in precedence order.
                             for _fmkey in ("fastMode", "isFastMode", "talkFastMode"):
