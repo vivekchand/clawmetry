@@ -9603,6 +9603,129 @@ def api_entitlement_channel_spec_at_path():
         )
 
 
+@bp_entitlement.route("/api/entitlement/channel-spec-path-batch")
+def api_entitlement_channel_spec_path_batch():
+    """``GET /api/entitlement/channel-spec-path-batch?from=<id>&to=<id>
+    &channels=a,b,c`` -- batch sibling of
+    ``/api/entitlement/channel-spec-path``.
+
+    Where ``/channel-spec-path`` walks ONE channel across the rungs
+    between two tiers, this walks N channels across the same rungs in
+    ONE round-trip. Channel-axis twin of ``/feature-spec-path-batch``
+    and ``/runtime-spec-path-batch``. Pairs with ``/channel-spec-path``
+    the same way ``/feature-spec-path-batch`` pairs with
+    ``/feature-spec-path``: scalar -> matrix in one call.
+
+    Use case: a paywall / channel-picker "compare A vs B, here are the
+    6 channels I care about" surface hydrates every rung for every
+    channel off ONE call instead of N calls to ``/channel-spec-path``.
+    Rung walk is channel-agnostic (every chat-channel adapter is FREE
+    at every tier), so all per-channel paths share the same length and
+    rung sequence -- the client can render the matrix as
+    rows = channels x cols = rungs without re-deriving the column
+    headers per channel.
+
+    Each row in ``channels[].path`` is byte-identical to a row from
+    ``/channel-spec-path?from=<from>&to=<to>&channel=<id>`` -- pinned
+    by the parity tests so the scalar and batch path accessors cannot
+    drift. Supplied channel ids are normalised (whitespace stripped,
+    lowercased, duplicates dropped, first-seen order preserved).
+    Unknown ids do not 404 the call -- they are echoed in ``unknown[]``
+    so a partially-bad caller still gets paths back for the valid ids.
+
+    Response shape::
+
+        {
+          "from":       "<tier id>",
+          "from_label": "...",
+          "from_rank":  <int>,
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "channels": [
+            {"channel": "<id>", "path": [<augmented row>, ...]},
+            ...
+          ],
+          "unknown":    ["bogus_id", ...],
+        }
+
+    - **400** when ``from=``, ``to=`` is missing / blank, or ``channels=``
+      is missing / empty after normalisation
+    - **404** when ``from`` or ``to`` is unknown (body carries
+      ``which: "tier"``)
+    - **Never 5xxs**: a synthesis failure short-circuits to an envelope
+      with empty rows so the matrix keeps rendering.
+    """
+    f = (request.args.get("from") or "").strip().lower()
+    t = (request.args.get("to") or "").strip().lower()
+    if not f or not t:
+        return jsonify({"error": "missing from or to"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if f not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": f}
+                ),
+                404,
+            )
+        if t not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": t}
+                ),
+                404,
+            )
+        channels = _parse_csv_arg("channels")
+        if not channels:
+            return jsonify({"error": "supply channels=<csv>"}), 400
+        batch = _ent.channel_spec_path_batch(f, t, channels)
+        if batch is None:
+            batch = {"channels": [], "unknown": []}
+        from_rank = _ent.tier_rank(f)
+        to_rank = _ent.tier_rank(t)
+        if f == t:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        return jsonify(
+            {
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": from_rank,
+                "to": t,
+                "to_label": _ent.tier_label(t),
+                "to_rank": to_rank,
+                "direction": direction,
+                "channels": batch.get("channels", []),
+                "unknown": batch.get("unknown", []),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_channel_spec_path_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "from": f,
+                "from_label": None,
+                "from_rank": -1,
+                "to": t,
+                "to_label": None,
+                "to_rank": -1,
+                "direction": "identity" if f == t else "upgrade",
+                "channels": [],
+                "unknown": [],
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/tier-catalog-path")
 def api_entitlement_tier_catalog_path():
     """``GET /api/entitlement/tier-catalog-path?from=<id>&to=<id>`` --

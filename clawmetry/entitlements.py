@@ -10088,6 +10088,98 @@ def channel_spec_path(
         return None
 
 
+def channel_spec_path_batch(
+    from_tier: str, to_tier: str, channels
+) -> dict | None:
+    """Batch sibling of :func:`channel_spec_path`: per-rung single-channel
+    spec rows for a caller-supplied subset of channel ids walked between
+    two tiers in ONE round-trip.
+
+    Channel-axis twin of :func:`feature_spec_path_batch` and
+    :func:`runtime_spec_path_batch`. Composes :func:`channel_spec_path`
+    (scalar single-channel path) and :func:`channel_spec_at_batch`
+    (batch what-if scalar) -- same rung walk as the path helper, same
+    per-channel shape as the batch helper. Lets a paywall / channel-
+    picker "compare A vs B, here are the 6 channels I care about"
+    surface render every rung for every channel off ONE call instead of
+    N calls to :func:`channel_spec_path`.
+
+    Per-channel row shape::
+
+        {"channel": "<id>", "path": [<channel_spec_path row>, ...]}
+
+    Each ``path`` row is byte-identical to a row from
+    :func:`channel_spec_path` for the same ``(from, to, channel)``
+    triple -- a parity test pins this so the scalar and batch path
+    helpers cannot drift. The rungs walked are channel-agnostic (every
+    chat-channel adapter is FREE at every tier so the rung walk of
+    :func:`channel_spec_path` is invariant across channel ids), so
+    every per-channel ``path`` has the same length and rung sequence --
+    matches :func:`feature_spec_path_batch`'s
+    ``rung_walk_invariant_across_features`` pin on the feature axis.
+
+    Shape::
+
+        {
+          "channels": [
+            {"channel": "<id>", "path": [<augmented row>, ...]},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Supplied channel ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen
+    order preserved). Unknown ids are echoed in ``unknown[]`` instead of
+    short-circuiting -- a partially-bad caller still gets paths back for
+    the valid ids alongside a list of what was dropped, matching
+    :func:`channel_spec_at_batch` /
+    :func:`feature_spec_path_batch` /
+    :func:`runtime_spec_path_batch`'s posture.
+
+    Returns ``None`` for empty / unknown ``from_tier`` / ``to_tier``
+    (caller renders "unknown tier" / 404). Identity ``from == to`` yields
+    ``{"channels": [...empty path per channel...], "unknown": [...]}``
+    matching the singular helper's identity branch.
+
+    Resolver-independent: delegates per-channel to
+    :func:`channel_spec_path`, which walks the static per-tier maps via
+    :func:`_channel_spec_row` -- so grace vs enforce yields byte-
+    identical rows. Never raises: per-channel failures short-circuit
+    that channel into ``unknown[]`` and the rest of the batch keeps
+    building.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+        return None
+    chans = _normalise_csv(channels)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    for cid in chans:
+        if cid not in ALL_CHANNELS:
+            unknown.append(cid)
+            continue
+        try:
+            path = channel_spec_path(f, t, cid)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: channel_spec_path_batch row %r failed: %s",
+                cid,
+                exc,
+            )
+            unknown.append(cid)
+            continue
+        if path is None:
+            unknown.append(cid)
+            continue
+        rows.append({"channel": cid, "path": path})
+    return {"channels": rows, "unknown": unknown}
+
+
 def tier_catalog_path(from_tier: str, to_tier: str) -> list[dict] | None:
     """Arbitrary-endpoint stepwise tier-catalog path between two tiers.
 
