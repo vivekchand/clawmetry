@@ -218,6 +218,36 @@ def _clawrouter_detect() -> dict:
     except (OSError, ValueError, KeyError):
         pass
 
+    # Promos file: ClawHub promotional model offers (#3570, openclaw#100236)
+    promos_path = os.path.join(home, "promos.json")
+    try:
+        with open(promos_path, encoding="utf-8") as _fh:
+            promos_data = _json.load(_fh)
+        # List-of-claims format: {"claimedPromos": [...]} or {"claims": [...]}
+        claims = (
+            promos_data.get("claimedPromos")
+            or promos_data.get("claims")
+            or promos_data.get("activeClaims")
+            or []
+        )
+        if isinstance(claims, list) and claims:
+            active = [c for c in claims if isinstance(c, dict) and c.get("active", True)]
+            if active:
+                out["clawRouterPromoActive"] = True
+                out["clawRouterPromoCount"] = len(active)
+                first_model = active[0].get("modelRef") or active[0].get("model")
+                if first_model:
+                    out["clawRouterPromoModel"] = str(first_model)
+        elif isinstance(promos_data.get("active"), bool):
+            # Single-promo format: {"active": true, "modelRef": "...", ...}
+            if promos_data["active"]:
+                out["clawRouterPromoActive"] = True
+                promo_model = promos_data.get("modelRef") or promos_data.get("model")
+                if promo_model:
+                    out["clawRouterPromoModel"] = str(promo_model)
+    except (OSError, ValueError, KeyError):
+        pass
+
     return out
 
 
