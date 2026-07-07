@@ -9215,6 +9215,136 @@ def api_entitlement_channel_catalog_path():
         )
 
 
+@bp_entitlement.route("/api/entitlement/channel-spec-path")
+def api_entitlement_channel_spec_path():
+    """``GET /api/entitlement/channel-spec-path?from=<id>&to=<id>&channel=<id>``
+
+    Channel-axis twin of ``/feature-spec-path`` and
+    ``/runtime-spec-path`` -- the single-channel sibling of
+    ``/channel-catalog-path`` and perspective-walked sibling of
+    ``/channel-spec``. Lets a paywall / channel-picker "how does THIS
+    one channel look as I climb the ladder" UI render every rung's
+    ``allowed`` / ``locked`` / ``entitled`` status off ONE round-trip
+    without fetching the full ``/channel-catalog-path`` payload and
+    filtering client-side.
+
+    Rung walk is byte-stable against ``/tier-path``,
+    ``/tier-spec-path``, ``/feature-spec-path``, ``/runtime-spec-path``,
+    ``/capacity-diff-path``, ``/tier-unlocks-path``,
+    ``/tier-locks-path``, ``/preview-path`` and
+    ``/channel-catalog-path`` (same ``_PURCHASABLE_TIERS`` filter + same
+    sort + same destination-sibling exclusion).
+
+    Each row in ``path`` mirrors the ``/feature-spec-path`` /
+    ``/runtime-spec-path`` row shape with the singular ``feature`` /
+    ``runtime`` body replaced by the ``/channel-spec`` body (``id``,
+    ``label``, ``free``, ``tier``, ``allowed``, ``locked``,
+    ``entitled``) augmented with three rung-identification keys --
+    ``rung``, ``rung_label``, ``rung_rank`` -- naming the perspective
+    tier the row was computed at. Dropping the three ``rung*`` keys
+    yields exact byte-equality with the LIVE ``/channel-spec?channel=<id>``
+    row (every chat-channel adapter is FREE at every tier, so the row
+    is invariant across the rung walk). Parity tests pin this.
+
+    Response shape::
+
+        {
+          "from":       "<tier id>",
+          "from_label": "...",
+          "from_rank":  <int>,
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "channel":    "<channel id>",
+          "path":       [<augmented channel-spec row>, ...],
+        }
+
+    Direction semantics mirror ``/feature-spec-path``:
+
+    * ``upgrade`` (ascending) -- rows climb rung by rung from the rung
+      above ``from`` toward ``to``.
+    * ``downgrade`` (descending) -- rows shrink rung by rung.
+    * ``lateral`` (same rank, different id) -- single-row path; row
+      carries the spec at ``to``.
+    * ``identity`` (``from == to``) -- empty path; no rungs to walk.
+
+    ``400`` when ``from=``, ``to=`` or ``channel=`` is missing; ``404``
+    when any id is unknown -- ``which`` echoes ``tier`` or ``channel`` so
+    the caller can render the right "unknown ..." message. ``trial`` IS
+    accepted as an endpoint -- excluded from the walked intermediate
+    rungs (not purchasable) but a valid endpoint via the lateral branch.
+    Never 5xxs: a resolver failure short-circuits to ``404`` so a
+    paywall surface keeps rendering.
+    """
+    f = (request.args.get("from") or "").strip().lower()
+    t = (request.args.get("to") or "").strip().lower()
+    ch = (request.args.get("channel") or "").strip().lower()
+    if not f or not t:
+        return jsonify({"error": "missing from or to"}), 400
+    if not ch:
+        return jsonify({"error": "missing channel"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        path = _ent.channel_spec_path(f, t, ch)
+        if path is None:
+            if f not in _ent._TIER_FEATURES or t not in _ent._TIER_FEATURES:
+                which = "tier"
+            else:
+                which = "channel"
+            return (
+                jsonify(
+                    {
+                        "error": f"unknown {which}",
+                        "which": which,
+                        "from": f,
+                        "to": t,
+                        "channel": ch,
+                    }
+                ),
+                404,
+            )
+        from_rank = _ent.tier_rank(f)
+        to_rank = _ent.tier_rank(t)
+        if f == t:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        return jsonify(
+            {
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": from_rank,
+                "to": t,
+                "to_label": _ent.tier_label(t),
+                "to_rank": to_rank,
+                "direction": direction,
+                "channel": ch,
+                "path": path,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_channel_spec_path: error: %s", exc
+        )
+        return (
+            jsonify(
+                {
+                    "error": "unknown tier or channel",
+                    "from": f,
+                    "to": t,
+                    "channel": ch,
+                }
+            ),
+            404,
+        )
+
+
 @bp_entitlement.route("/api/entitlement/tier-catalog-path")
 def api_entitlement_tier_catalog_path():
     """``GET /api/entitlement/tier-catalog-path?from=<id>&to=<id>`` --
