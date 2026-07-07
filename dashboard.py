@@ -125,6 +125,7 @@ from routes.insights import bp_insights
 from routes.review import bp_review
 from routes.evals import bp_evals
 from routes.dives import bp_dives
+from routes.reports import bp_reports
 from routes.scheduler import bp_scheduler
 from routes.policy import bp_policy
 from routes.turn_anatomy import bp_turn_anatomy
@@ -11585,6 +11586,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_plugins)
     app.register_blueprint(bp_local_query)
     app.register_blueprint(bp_dives)
+    app.register_blueprint(bp_reports)
     app.register_blueprint(bp_scheduler)
     app.register_blueprint(bp_policy)
     app.register_blueprint(bp_turn_anatomy)
