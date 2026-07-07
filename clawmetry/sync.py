@@ -9814,6 +9814,7 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
                 "expr": expr,
                 "schedule": sched,
                 "task": (j.get("task") or "")[:200],
+                "model": j.get("model", ""),
                 "state": {
                     "lastStatus": job_state.get("lastStatus"),
                     "lastRunAtMs": job_state.get("lastRunAtMs"),
@@ -9875,6 +9876,7 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
                     "next_run_at": str(job_state.get("nextRunAtMs") or ""),
                     # All other freeform fields go into the BLOB
                     "task":        (j.get("task") or "")[:500],
+                    "model":       j.get("model"),
                     "lastDurationMs":      job_state.get("lastDurationMs"),
                     "lastError":           job_state.get("lastError"),
                     "consecutiveFailures": job_state.get("consecutiveFailures"),

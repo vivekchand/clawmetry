@@ -401,3 +401,71 @@ def test_on_exit_cron_appears_in_agent_intentions(fast_path_app):
     # Trigger metadata must be forwarded into the intention entry
     assert entry.get("watchedCommand") == "make build", f"watchedCommand missing from intention: {entry}"
     assert entry.get("lastExitCode") == 0, f"lastExitCode missing from intention: {entry}"
+
+
+# ── cron-level model field (issue #3568) ───────────────────────────────────
+
+
+def test_cron_model_field_surfaced_in_jobs_response(fast_path_app):
+    """Cron jobs with a per-job model field must carry it through the DuckDB
+    fast path so the dashboard can display the configured agent-turn model
+    (OpenClaw Control UI Quick Create — harness gap #3568)."""
+    import time
+    from datetime import datetime, timezone, timedelta
+
+    app, ls, _cr = fast_path_app
+    now = datetime.now(timezone.utc)
+    recent_iso = (now - timedelta(seconds=30)).isoformat()
+    next_iso = (now + timedelta(minutes=5)).isoformat()
+
+    ls.get_store().ingest_cron({
+        "cron_id":     "model-cron",
+        "name":        "Model-pinned job",
+        "schedule":    '{"kind":"cron","expr":"0 9 * * 1-5"}',
+        "enabled":     True,
+        "last_run_at": recent_iso,
+        "last_status": "success",
+        "next_run_at": next_iso,
+        "createdAtMs": int(time.time() * 1000) - 3600000,
+        "model":       "claude-haiku-4-5-20251001",
+    })
+
+    body = app.test_client().get("/api/crons").get_json()
+    jobs = body.get("jobs", [])
+    matched = [j for j in jobs if j.get("id") == "model-cron"]
+    assert matched, f"model-cron not found in response; got ids: {[j.get('id') for j in jobs]}"
+    assert matched[0].get("model") == "claude-haiku-4-5-20251001", (
+        f"model field missing or wrong in cron job; job dict: {matched[0]}"
+    )
+
+
+def test_cron_without_model_field_unaffected(fast_path_app):
+    """Crons ingested without a model field must not gain a spurious 'model' key
+    (None values are filtered by setdefault in _row_to_cron_job)."""
+    import time
+    from datetime import datetime, timezone, timedelta
+
+    app, ls, _cr = fast_path_app
+    now = datetime.now(timezone.utc)
+    recent_iso = (now - timedelta(seconds=30)).isoformat()
+    next_iso = (now + timedelta(minutes=5)).isoformat()
+
+    ls.get_store().ingest_cron({
+        "cron_id":     "no-model-cron",
+        "name":        "No-model job",
+        "schedule":    '{"kind":"every","everyMs":3600000}',
+        "enabled":     True,
+        "last_run_at": recent_iso,
+        "last_status": "success",
+        "next_run_at": next_iso,
+        "createdAtMs": int(time.time() * 1000) - 3600000,
+    })
+
+    body = app.test_client().get("/api/crons").get_json()
+    jobs = body.get("jobs", [])
+    matched = [j for j in jobs if j.get("id") == "no-model-cron"]
+    assert matched, f"no-model-cron not in response"
+    # model key should be absent (None is not set via setdefault)
+    assert "model" not in matched[0] or matched[0].get("model") is None, (
+        f"unexpected model value in cron without model field: {matched[0]}"
+    )
