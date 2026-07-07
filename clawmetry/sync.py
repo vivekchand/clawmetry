@@ -7500,6 +7500,16 @@ def _rows_to_brain_events(rows: list) -> list:
         if isinstance(data, dict):
             if not data.get("timestamp") and not data.get("time") and r.get("ts"):
                 data = {**data, "timestamp": r.get("ts")}
+            # OpenClaw v3 chat rows store the text as completionText /
+            # assistantTexts / finalPromptText (see _parse_v3_event) — a shape
+            # transformEvents' role branches don't know, so its empty-detail
+            # fallback DROPPED the whole conversation (cloud Activity showed
+            # "No brain activity events found" for a talking node). Synthesize
+            # the canonical {type:"message", message:{role, content[]}} the
+            # cloud renderer AND the device parser already understand.
+            v3msg = _v3_chat_message(data)
+            if v3msg is not None:
+                data = {**data, "type": "message", "message": v3msg}
             if enrich:
                 # Enrichment wins — the JSONL payload often carries the
                 # raw ``sender``/``from`` BLOCK under the same key name
@@ -7588,20 +7598,72 @@ _BRAIN_SKIP_TYPES = {
 }
 
 
+def _v3_chat_message(data) -> "dict | None":
+    """Project a daemon-normalised v3 chat row onto the ``{role, content[]}``
+    shape the cloud's ``transformEvents`` and the device's
+    ``brain_event_to_row`` actually render.
+
+    ``_parse_v3_event`` stores OpenClaw v3 conversations as
+    ``prompt.submitted{finalPromptText}`` / ``model.completed{completionText,
+    assistantTexts, toolMetas}`` — there is NO other message-shaped event for
+    these turns, so a brain filter that only knows ``content``/``text``/
+    ``tool_calls`` drops the ENTIRE conversation and the cloud Activity tab
+    shows "No brain activity events found" for a node that is talking all
+    day (live-confirmed 2026-07-07 on a hosted openclaw node). Detectors,
+    the outcome classifier, and the eval runner all read these keys already;
+    the brain pipeline was the holdout.
+
+    Returns ``None`` when the row isn't a v3 chat event, already carries a
+    ``message`` block, or has nothing printable.
+    """
+    if not isinstance(data, dict) or isinstance(data.get("message"), dict):
+        return None
+    text = data.get("completionText")
+    if not (isinstance(text, str) and text.strip()):
+        at = data.get("assistantTexts")
+        text = "\n".join(t for t in at if isinstance(t, str) and t) \
+            if isinstance(at, list) else ""
+    if (isinstance(text, str) and text.strip()) or data.get("toolMetas"):
+        content = []
+        if isinstance(text, str) and text.strip():
+            content.append({"type": "text", "text": text})
+        for tm in data.get("toolMetas") or []:
+            if isinstance(tm, dict):
+                content.append({"type": "tool_use", "id": tm.get("id"),
+                                "name": tm.get("name") or "tool",
+                                "input": tm.get("input") or {}})
+        if content:
+            return {"role": "assistant", "content": content}
+    fp = data.get("finalPromptText")
+    if isinstance(fp, str) and fp.strip():
+        return {"role": "user", "content": [{"type": "text", "text": fp}]}
+    return None
+
+
 def _brain_row_renderable(r: dict) -> bool:
     """True if the event row would render as a real message / tool event on the
     device + cloud Brain feed (mirrors ``summary_parse.c brain_event_to_row``).
     Skips internal plumbing so the blob's limited slots hold real activity."""
     if not isinstance(r, dict):
         return False
+    raw = r.get("data")
+    data = raw
+    unparseable = False
+    if isinstance(raw, str):
+        try:
+            data = json.loads(raw)
+        except Exception:
+            data, unparseable = None, True
+    # v3 chat turns win over the skip list: for OpenClaw v3 the user prompt
+    # IS a prompt.submitted row (finalPromptText) — skipping it as plumbing
+    # silences the whole conversation. Rows without printable v3 text still
+    # fall through to the skip list below.
+    if _v3_chat_message(data) is not None:
+        return True
     if (r.get("event_type") or "").lower() in _BRAIN_SKIP_TYPES:
         return False
-    data = r.get("data")
-    if isinstance(data, str):
-        try:
-            data = json.loads(data)
-        except Exception:
-            return bool(data.strip())
+    if unparseable:
+        return bool(raw.strip())
     if not isinstance(data, dict):
         return False
     if (data.get("type") or "").lower() in _BRAIN_SKIP_TYPES:
