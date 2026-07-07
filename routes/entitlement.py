@@ -3939,6 +3939,82 @@ def api_entitlement_channel_spec_batch():
         )
 
 
+@bp_entitlement.route("/api/entitlement/channel-spec-at")
+def api_entitlement_channel_spec_at():
+    """``GET /api/entitlement/channel-spec-at?tier=<id>&channel=<id>`` --
+    scalar what-if sibling of ``/api/entitlement/channel-catalog-at``:
+    the single catalogue row for ``channel`` with ``allowed`` /
+    ``locked`` / ``entitled`` computed as if the install were on
+    ``tier``.
+
+    Channel-axis analogue of ``/feature-spec-at`` / ``/runtime-spec-at``
+    -- lets a pricing-comparison tooltip hydrate against ONE channel at
+    a hypothetical tier in one round-trip instead of fetching the full
+    ``/api/entitlement/channel-catalog-at`` payload and filtering
+    client-side. The returned row matches exactly one row from
+    :func:`entitlements.channel_catalog_at`.
+
+    Because every chat channel is FREE at every tier (the ``channels``
+    capacity axis governs how many concurrent channels each plan admits,
+    not which adapters unlock), the returned row is always
+    ``free=True`` / ``allowed=True`` / ``locked=False`` /
+    ``entitled=True`` regardless of the perspective tier.
+
+    - **400** when either ``tier=`` or ``channel=`` is missing / blank
+    - **404** when ``tier`` is unknown (not in
+      :data:`entitlements._TIER_ORDER`) or ``channel`` (after whitespace
+      + case normalisation) is unknown (not in
+      :data:`entitlements.ALL_CHANNELS`). The body carries ``which`` so a
+      caller can render the right "unknown ..." message.
+    - **Never 5xxs**: the helper internally falls back to the OSS-free
+      shape on resolver failure, so the endpoint still returns 200 with
+      a valid row.
+    """
+    raw_tier = request.args.get("tier")
+    tier = (raw_tier or "").strip().lower()
+    if not tier:
+        return jsonify({"error": "missing tier"}), 400
+    raw_channel = request.args.get("channel")
+    channel = (raw_channel or "").strip().lower()
+    if not channel:
+        return jsonify({"error": "missing channel"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier not in _ent._TIER_ORDER:
+            return (
+                jsonify({"error": "unknown tier", "which": "tier", "tier": tier}),
+                404,
+            )
+        if channel not in _ent.ALL_CHANNELS:
+            return (
+                jsonify(
+                    {
+                        "error": "unknown channel",
+                        "which": "channel",
+                        "channel": channel,
+                    }
+                ),
+                404,
+            )
+        body = _ent.channel_spec_at(tier, channel)
+        if body is None:
+            return (
+                jsonify(
+                    {
+                        "error": "channel-spec-at failed",
+                        "tier": tier,
+                        "channel": channel,
+                    }
+                ),
+                404,
+            )
+        return jsonify({"tier": tier, "channel": channel, "spec": body})
+    except Exception as exc:
+        logger.warning("api_entitlement_channel_spec_at: error: %s", exc)
+        return jsonify({"error": "channel-spec-at failed"}), 500
+
+
 @bp_entitlement.route("/api/entitlement/feature-spec-batch")
 def api_entitlement_feature_spec_batch():
     """``GET /api/entitlement/feature-spec-batch?features=a,b,c`` -- plural
