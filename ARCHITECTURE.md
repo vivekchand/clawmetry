@@ -271,7 +271,7 @@ Secured with `CLAWMETRY_FLEET_KEY` — nodes must provide the API key to registe
 ## Technical Details
 
 ### Modular Blueprint Architecture
-ClawMetry is a Flask app organised as a small core (`dashboard.py`, ~15,000 lines) plus a `routes/` package of feature-scoped Blueprints (sessions, channels, components, usage, health, brain, infra, overview, crons, meta, alerts, fleet_history, nemoclaw). Shared helpers and the embedded HTML/CSS/JS templates still live in `dashboard.py`; route handlers reach them via a late `import dashboard as _d`.
+ClawMetry is a Flask app organised as a small core (`dashboard.py`, ~19,000 lines) plus a `routes/` package of feature-scoped Blueprints (sessions, channels, components, usage, health, brain, infra, overview, crons, meta, alerts, fleet_history, nemoclaw). Shared helpers live in `dashboard.py`; the live UI is served from `clawmetry/static/` + `clawmetry/templates/`. Route handlers reach shared helpers via a late `import dashboard as _d`.
 
 This layout keeps the install story simple while letting each feature evolve in its own module:
 - Easy to install (`pip install clawmetry`)
@@ -279,7 +279,7 @@ This layout keeps the install story simple while letting each feature evolve in 
 - Easy to deploy (pure-Python, no build step)
 - Portable (runs on a Raspberry Pi)
 
-The HTML/CSS/JS dashboard is embedded as template strings inside `dashboard.py`.
+The HTML/CSS/JS dashboard is served from `clawmetry/static/css/dashboard.css`, `clawmetry/static/js/app.js`, and `clawmetry/templates/tabs/*.html` — not embedded inline in `dashboard.py`.
 
 ### Event Data Source Contract
 OSS API routes that serve event-derived dashboard data must tag their JSON
@@ -300,7 +300,7 @@ event-data response omits `_source` or reports anything other than
 ### Dependencies
 Minimal by design:
 - **Flask** — Web server
-- **No database** — reads OpenClaw's files directly
+- **DuckDB** — local store; the sync daemon ingests all events and owns the writer lock; the dashboard reads through the daemon proxy (`/__local_query__/`)
 - **Optional**: `opentelemetry-proto` for OTLP support
 - **Optional**: `history.py` for time-series storage (SQLite-based)
 
