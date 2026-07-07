@@ -13371,6 +13371,92 @@ def channel_catalog_at_path(
         return None
 
 
+def channel_catalog_at_path_batch(
+    perspective_tier: str, from_tier: str, to_tiers
+) -> dict | None:
+    """Batch sibling of :func:`channel_catalog_at_path`: per-rung
+    channel-catalog path rows for a caller-supplied subset of
+    destination tiers all walked from a single ``from_tier`` from a
+    hypothetical ``perspective_tier`` in ONE round-trip.
+
+    Composes :func:`channel_catalog_at_path` (scalar what-if path) and
+    :func:`channel_catalog_path_batch` (multi-destination current-
+    perspective path). Fills the ``_at_path_batch`` slot for the
+    channel-catalog family alongside :func:`channel_catalog_at` /
+    :func:`channel_catalog_at_batch` / :func:`channel_catalog_at_path`
+    -- last remaining ``_at*`` cell on the channel-catalog axis, twin
+    of :func:`feature_catalog_at_path_batch` /
+    :func:`runtime_catalog_at_path_batch` on the feature / runtime
+    axes. Together the three catalog ``_at_path_batch`` helpers on the
+    feature / runtime / channel axes plus the ``_at_path_batch``
+    helper on the tier axis let a pricing-comparison walkthrough
+    surface hydrate every column at every rung to N candidate
+    destinations from any hypothetical perspective off FOUR calls
+    instead of first calling :func:`tier_path_batch` and then 4 * N
+    calls to the scalar what-if catalog helpers.
+
+    Per-destination row shape mirrors :func:`channel_catalog_path_batch`::
+
+        {
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<channel_catalog_path row>, ...],
+        }
+
+    Envelope::
+
+        {
+          "tiers":   [<row>, ...],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Body posture matches :func:`channel_catalog_at_path`: perspective
+    is validated against :data:`_TIER_ORDER` but does NOT shape rows.
+    Each row is byte-identical to a row from
+    :func:`channel_catalog_path_batch` for the same
+    ``(from_tier, to_tiers)`` pair -- pinned by parity tests so the
+    batch what-if path helper cannot drift from the current-
+    perspective sibling.
+
+    Because every chat-channel adapter is FREE at every tier (the
+    ``channels`` capacity axis governs how many concurrent channels
+    each plan admits, not which adapters unlock), each rung's inner
+    ``channels`` list is byte-identical to :func:`channel_catalog`.
+    The always-free invariant is inherited from the delegate; parity
+    tests here pin it against the current-perspective batch helper so
+    the ``_at_path_batch`` and ``_path_batch`` surfaces cannot drift.
+
+    Supplied destination ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen
+    order preserved). Unknown destination ids land in ``unknown[]``
+    instead of short-circuiting the batch, matching every other
+    ``*_path_batch`` sibling's posture. ``trial`` IS accepted as a
+    destination via the lateral / identity branches, matching
+    :func:`channel_catalog_path_batch`.
+
+    Returns ``None`` for empty / unknown ``perspective_tier`` or
+    ``from_tier`` (caller renders "unknown tier" / 404). Never raises:
+    a top-level delegate failure short-circuits to ``None``; per-
+    destination failures short-circuit that id into ``unknown[]`` and
+    the rest of the batch keeps building.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if p not in _TIER_ORDER:
+        return None
+    try:
+        return channel_catalog_path_batch(from_tier, to_tiers)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: channel_catalog_at_path_batch failed: %s", exc
+        )
+        return None
+
+
 def channel_spec_at_path(
     perspective_tier: str, from_tier: str, to_tier: str, channel: str
 ) -> list[dict] | None:
