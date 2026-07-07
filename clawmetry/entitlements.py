@@ -5494,6 +5494,64 @@ def channel_catalog_at(tier: str) -> list[dict] | None:
     return [_channel_spec_row(ent, ch) for ch in sorted(ALL_CHANNELS)]
 
 
+def channel_spec_at(tier: str, channel: str) -> dict | None:
+    """Scalar what-if sibling of :func:`channel_catalog_at`: the single
+    catalogue row for ``channel`` computed as if the install were on
+    ``tier``.
+
+    Channel-axis analogue of :func:`feature_spec_at` /
+    :func:`runtime_spec_at`. Pairs with :func:`channel_spec` (scalar
+    against the LIVE resolved entitlement) the same way
+    :func:`channel_catalog_at` pairs with :func:`channel_catalog`. Lets a
+    pricing-comparison tooltip hydrate against ONE channel at a
+    hypothetical tier in one round-trip instead of fetching the full
+    :func:`channel_catalog_at` payload and filtering client-side.
+
+    The returned row matches a row from :func:`channel_catalog_at`
+    exactly (and, because every chat channel is free at every tier, is
+    byte-identical to the LIVE :func:`channel_spec` row for the same id)
+    -- a parity test pins this so the scalar and bulk what-if accessors
+    cannot drift.
+
+    Every chat channel is FREE at every tier (the ``channels`` capacity
+    axis governs how many concurrent channels each plan admits, not
+    which adapters unlock), so the row always comes back
+    ``free=True`` / ``allowed=True`` / ``locked=False`` /
+    ``entitled=True`` regardless of the perspective tier. That parity IS
+    the answer: the tooltip can render "channel included at every plan"
+    without having to hard-code that posture client-side.
+
+    Returns ``None`` for empty / unknown tier or channel ids (caller
+    renders "unknown tier" / "unknown channel" / 404). Never raises: a
+    synthesis failure short-circuits to the OSS-free fallback so the
+    row still renders.
+    """
+    try:
+        t = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not t or t not in _TIER_ORDER:
+        return None
+    try:
+        ch = (channel or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not ch or ch not in ALL_CHANNELS:
+        return None
+    try:
+        ent = _hypothetical_entitlement(t)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: channel_spec_at falling back to OSS-free: %s", exc
+        )
+        ent = _oss_free()
+    try:
+        return _channel_spec_row(ent, ch)
+    except Exception as exc:
+        logger.warning("entitlements: channel_spec_at row build failed: %s", exc)
+        return None
+
+
 def channel_catalog_at_batch(tiers) -> dict:
     """Batch what-if sibling of :func:`channel_catalog_at`: channel
     catalogue rows for a caller-supplied set of hypothetical tiers in ONE
