@@ -4,8 +4,8 @@ name: C6 daily health check (branch-protection audit)
 # configured on clawmetry/main (github.token cannot read state on
 # clawmetry-cloud or clawmetry-landing -- those must be verified manually).
 #
-# On failure: posts a reminder comment to tracking issue #2146 at most
-# once per calendar day. On success: posts a GREEN confirmation.
+# On failure: posts a @vivekchand mention + reminder to tracking issue #2146
+# at most once per calendar day. On success: posts a GREEN confirmation.
 #
 # To close C6:
 #   1. Actions > "Apply required E2E status checks (C6 -- one-shot)" >
@@ -124,7 +124,7 @@ jobs:
               checks_block = "".join(f"  - `{c}`\n" for c in missing)
               body = (
                   f"{MARKER}\n"
-                  f"**C6 health check {today_utc}:"
+                  f"@vivekchand **C6 health check {today_utc}:"
                   f" {len(missing)}/2 required checks not yet configured on clawmetry/main.**\n\n"
                   f"Missing:\n{checks_block}\n"
                   "**Close C6 now (browser only, no local setup):**\n"
