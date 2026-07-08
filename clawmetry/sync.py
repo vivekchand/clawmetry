@@ -7435,7 +7435,10 @@ def _cap_brain_event_size(ev):
             return ev
     except (TypeError, ValueError):
         return ev
-    for limit in (400, 250, 150, 80):
+    # Gentle ladder: a chat message that overshoots the ceiling by a few
+    # bytes (unicode escapes, long model ids) should lose a sentence, not
+    # collapse from 1200 chars straight to 400 (the old first rung).
+    for limit in (1000, 700, 400, 250, 150, 80):
         ev = _truncate_brain_payload(ev, cap=limit)
         try:
             if len(json.dumps(ev, separators=(",", ":"))) <= _BRAIN_EVENT_CAP:
@@ -7509,6 +7512,19 @@ def _rows_to_brain_events(rows: list) -> list:
             # cloud renderer AND the device parser already understand.
             v3msg = _v3_chat_message(data)
             if v3msg is not None:
+                # LEAN blob event: the v3 row stores the same text up to
+                # three times (completionText, assistantTexts[0], the nested
+                # data.* copy) and the message block adds a fourth — that
+                # quadrupling blew the 1500-byte _BRAIN_EVENT_CAP, so
+                # _cap_brain_event_size squeezed every string to 150 chars
+                # and the cloud feed showed a stub of the reply (live-hit
+                # 2026-07-08). The blob's only readers are transformEvents
+                # (cloud) and brain_event_to_row (device), both of which
+                # read message.content — drop the duplicates so the actual
+                # text gets nearly the whole per-event budget.
+                data = {k: v for k, v in data.items()
+                        if k not in ("completionText", "assistantTexts",
+                                     "finalPromptText", "toolMetas", "data")}
                 data = {**data, "type": "message", "message": v3msg}
             if enrich:
                 # Enrichment wins — the JSONL payload often carries the
@@ -7525,7 +7541,13 @@ def _rows_to_brain_events(rows: list) -> list:
                 data.setdefault("type", r.get("event_type"))
             # Bound the per-event size so a burst of big tool outputs can't push
             # the blob past the device's 128 KB buffer (the "feed locked" cause).
-            data = _truncate_brain_payload(data)
+            # Chat messages get a roomier per-string cap: the lean event's only
+            # big string is the message text itself, and cutting a reply at the
+            # default 600 reads as a bug in the feed. _cap_brain_event_size
+            # still enforces the hard 1500-byte ceiling either way, so the
+            # device-buffer math is unchanged.
+            data = _truncate_brain_payload(
+                data, cap=1200 if v3msg is not None else None)
             # Stamp the CANONICAL session id from the row's top-level session_id
             # column (the BARE uuid, dropping the ``runtime:`` namespace) so
             # per-session feeds (desk device + cloud Brain filtering) attribute

@@ -104,6 +104,37 @@ def test_plumbing_rows_stay_hidden():
         assert sync._brain_row_renderable(row) is False, row["event_type"]
 
 
+def test_long_reply_survives_the_event_cap():
+    """The v3 row stores the same text up to three times and the message
+    block adds a fourth; that quadrupling blew the 1500-byte event ceiling
+    and _cap_brain_event_size squeezed the reply to a 150-char stub in the
+    cloud feed (live-hit 2026-07-08: a health-check reply cut at
+    '~2 minutes at check ti…'). The blob event must be de-duplicated so a
+    realistic ~900-char reply arrives (near-)intact."""
+    text = ("Hey - I just came online. I checked system health first. "
+            "System health: OK overall. " + "Detail line about the system. " * 27)
+    assert 850 <= len(text) <= 1000
+    row = {"id": "e9", "session_id": "openclaw:main",
+           "event_type": "model.completed", "ts": "2026-07-08T07:00:00Z",
+           "data": {"_v3_type": "message", "completionText": text,
+                    "assistantTexts": [text],
+                    "data": {"completionText": text, "assistantTexts": [text]},
+                    "modelId": "gpt-5.5", "provider": "openai",
+                    "timestamp": "2026-07-08T07:00:00Z", "stopReason": "stop"}}
+    out = sync._rows_to_brain_events([row])
+    assert len(out) == 1
+    ev = out[0]
+    got = ev["message"]["content"][0]["text"]
+    # full text survives (not a 150-char stub, not the 600 default cap)
+    assert got == text
+    # the duplicates are gone from the blob event
+    for k in ("completionText", "assistantTexts", "data"):
+        assert k not in ev
+    # and the hard device ceiling still holds
+    import json as _json
+    assert len(_json.dumps(ev, separators=(",", ":"))) <= sync._BRAIN_EVENT_CAP
+
+
 def test_blob_carries_transform_events_contract():
     """The pushed blob must hold the {type:'message', message:{role,content[]}}
     shape the cloud transformEvents role-branches render — its empty-detail
