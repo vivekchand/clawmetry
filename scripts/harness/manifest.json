@@ -1,5 +1,5 @@
 {
-  "_comment": "Single source of truth for the OSS harness-observability audit. Each entry maps a FREE agent runtime ClawMetry monitors to its upstream source repo + the OSS adapter that observes it. The daily audit (.github/workflows/harness-observability-audit.yml) clones/pulls each repo, reviews what the harness exposes that's observable, and files a GH issue for anything ClawMetry's adapter doesn't yet capture. Only the free runtimes (openclaw + nemoclaw) live here; the 10 closed pro runtimes are audited by clawmetry-pro's own private manifest + workflow.",
+  "_comment": "Single source of truth for the OSS harness-observability audit. Each entry maps a FREE agent runtime ClawMetry monitors to its upstream source repo + the OSS adapter that observes it. The daily audit (.github/workflows/harness-observability-audit.yml) clones/pulls each repo, reviews what the harness exposes that's observable, and files a GH issue for anything ClawMetry's adapter doesn't yet capture. Only the free runtimes (openclaw + nemoclaw) live here; the 12 closed pro runtimes are audited by clawmetry-pro's own private manifest + workflow.",
   "_verified": "2026-06-04 — free-only; pro runtime entries moved to clawmetry-pro to keep closed adapter paths out of the public repo.",
   "clone_dir": "../harness",
   "harnesses": [

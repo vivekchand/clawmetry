@@ -27,6 +27,7 @@ def test_oss_only_keeps_base_registry_openclaw_nemo():
     for name in (
         "claude_code", "codex", "cursor", "aider", "goose",
         "opencode", "qwen_code", "hermes", "picoclaw", "nanoclaw",
+        "pi", "deepagents",
     ):
         try:
             importlib.import_module(f"clawmetry.adapters.{name}")
@@ -43,7 +44,7 @@ def test_family_adapter_specs_target_clawmetry_pro():
     from clawmetry import sync as _s
 
     specs = _s._FAMILY_ADAPTER_SPECS
-    assert len(specs) == 10, f"expected 10 paid adapters, got {len(specs)}"
+    assert len(specs) == 12, f"expected 12 paid adapters, got {len(specs)}"
     for module_name, class_name in specs:
         assert module_name.startswith("clawmetry_pro.adapters."), (
             f"sync._FAMILY_ADAPTER_SPECS still references OSS path: "
@@ -60,6 +61,7 @@ def test_family_adapter_classes_empty_when_pro_absent(monkeypatch):
     for name in (
         "claude_code", "codex", "cursor", "aider", "goose",
         "opencode", "qwen_code", "hermes", "picoclaw", "nanoclaw",
+        "pi", "deepagents",
     ):
         monkeypatch.setitem(sys.modules, f"clawmetry_pro.adapters.{name}", None)
 

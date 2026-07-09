@@ -38,7 +38,9 @@
     "goose": "#e8e2d6",
     "hermes": "#f4b41a",
     "opencode": "#f59e0b",
-    "qwen_code": "#6d5cff"
+    "qwen_code": "#6d5cff",
+    "pi": "#4f8ef7",
+    "deepagents": "#2fa87c"
   };
   var FALLBACK_HUE = "#8b97ad";
 

@@ -20,10 +20,12 @@ each gap — so "new things to observe" get picked up instead of silently drifti
   (06:00 UTC) + on demand. Needs `CLAUDE_CODE_OAUTH_TOKEN` (model pass) and
   optionally `CLOUD_REPO_PAT` (to read the closed `clawmetry-pro` adapters).
 
-## Monitored runtimes (12)
+## Monitored runtimes (14)
 Public source synced: **openclaw, nemoclaw, claude_code, codex, goose, aider,
 opencode, qwen_code, hermes, nanoclaw, cursor** (cursor = its `agent-trace` format).
 Needs a repo URL: **picoclaw** (set `repo` in `manifest.json` when known).
+**pi** and **deepagents** are audited via clawmetry-pro's private manifest
+(closed adapters), like the other pro runtimes.
 
 ## Add / fix a runtime
 Edit `manifest.json` — set `repo` to the verified GitHub URL (HTTP-check it; never

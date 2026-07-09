@@ -4,7 +4,7 @@ Two read-only endpoints back the "Harness" tab:
 
 * ``GET /api/harness/templates`` — the registered harness templates
   (``{runtime: template}``). OSS ships openclaw + nemoclaw; clawmetry-pro
-  registers its 10 closed templates through the plugin seam, so this endpoint
+  registers its 12 closed templates through the plugin seam, so this endpoint
   returns exactly what the running node is entitled to render.
 * ``GET /api/harness/data?runtime=<rt>`` — the per-runtime data blob the
   template's ``source`` paths resolve against (summary + recent sessions, plus
@@ -29,6 +29,7 @@ bp_harness = Blueprint("harness", __name__)
 _NON_OPENCLAW_PREFIXES = frozenset({
     "picoclaw", "nanoclaw", "hermes", "nemoclaw",
     "claude_code", "codex", "cursor", "aider", "goose", "opencode", "qwen_code",
+    "pi", "deepagents",
 })
 
 

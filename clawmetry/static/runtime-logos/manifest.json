@@ -46,5 +46,13 @@
   "qwen_code": {
     "label": "Qwen Code",
     "brand": "#6d5cff"
+  },
+  "pi": {
+    "label": "Pi",
+    "brand": "#4f8ef7"
+  },
+  "deepagents": {
+    "label": "Deep Agents",
+    "brand": "#2fa87c"
   }
 }

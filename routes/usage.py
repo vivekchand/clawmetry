@@ -55,6 +55,7 @@ bp_usage = Blueprint('usage', __name__)
 _NON_OPENCLAW_RT_SET = frozenset((
     "picoclaw", "nanoclaw", "hermes",
     "claude_code", "codex", "cursor", "aider", "goose", "opencode", "qwen_code",
+    "pi", "deepagents",
 ))
 
 def _event_runtime(ev) -> str:
@@ -907,7 +908,7 @@ def _try_local_store_usage_forecast():
 # is always "openclaw"). Mirrors the frontend `_cmRuntimeOf` / `_CM_RT_LABEL`.
 _RUNTIME_PREFIXES = frozenset({
     "picoclaw", "nanoclaw", "hermes", "claude_code", "codex", "cursor",
-    "aider", "goose", "opencode", "qwen_code",
+    "aider", "goose", "opencode", "qwen_code", "pi", "deepagents",
 })
 
 

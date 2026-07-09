@@ -838,7 +838,7 @@ def _cmd_connect(args) -> None:
         from clawmetry.license import auto_provision_pro
         _pro_installed, _pro_msg = auto_provision_pro(api_key, node_id)
         if _pro_installed:
-            print("  Pro adapters installed - all 12 runtimes available.")
+            print("  Pro adapters installed - all 14 runtimes available.")
         elif _pro_msg:
             # Entitled but the wheel could not be installed right now; surface a
             # quiet hint without alarming the user (connect still succeeded).
@@ -2254,7 +2254,7 @@ def _cmd_onboard(args) -> None:
     print(f"                     {DIM('Watch OpenClaw and NeMo at http://localhost:8900.')}")
     print(f"    {BOLD('[2] Cloud')}         {DIM('Free trial. A dashboard you can open from anywhere.')}")
     print(f"                     {DIM('Creates an account for this machine. No card needed.')}")
-    print(f"    {BOLD('[3] License key')}   {DIM('Self-Hosted Pro: all 12 runtimes, offline. Paste a key.')}")
+    print(f"    {BOLD('[3] License key')}   {DIM('Self-Hosted Pro: all 14 runtimes, offline. Paste a key.')}")
     print()
 
     def _write_nocloud_marker():
@@ -2330,7 +2330,7 @@ def _cmd_onboard(args) -> None:
     print()
 
     if choice == "3":
-        # ── Self-Hosted Pro license (local, offline, all 12 runtimes) ──────
+        # ── Self-Hosted Pro license (local, offline, all 14 runtimes) ──────
         _write_nocloud_marker()
         try:
             _lic_key = _input("  Paste your license key (CLAW1...), or press Enter to do it later: ").strip()
