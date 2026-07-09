@@ -338,7 +338,7 @@ _DEVICE_PREVIEW_HTML = """<!doctype html>
         <button class="deny" onclick="decide('deny')">Deny</button>
       </div>
     </div>
-    <div class="foot">one device · <b>all 12 runtimes</b></div>
+    <div class="foot">one device · <b>all 14 runtimes</b></div>
   </div>
 <script>
 const MOODS = {

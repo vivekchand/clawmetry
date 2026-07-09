@@ -35,7 +35,7 @@ from flask import Flask
 # either drifts from this list, the no-leak tests below catch it.
 KNOWN_RUNTIMES = [
     "picoclaw", "nanoclaw", "hermes", "claude_code", "codex", "cursor",
-    "aider", "goose", "opencode", "qwen_code",
+    "aider", "goose", "opencode", "qwen_code", "pi", "deepagents",
 ]
 
 
@@ -136,6 +136,28 @@ def test_runtime_of_session_classifies_every_known_runtime():
     assert runtime_of(None) == "openclaw"
 
 
+def test_picoclaw_never_mis_buckets_to_pi():
+    """Regression guard for the pi runtime: "pi" is a leading substring of
+    "picoclaw", so a startswith-style matcher would swallow every PicoClaw
+    session into the pi bucket. The matcher exact-matches the token before the
+    first ':' (the daemon stamps ``<runtime>:<raw id>``), so picoclaw ids must
+    keep bucketing to picoclaw, and a raw un-namespaced ``pi-...`` id (no
+    colon) must fall back to openclaw, never pi."""
+    from clawmetry.sync import _runtime_of_session
+
+    for fn in (runtime_of, _runtime_of_session):
+        assert fn("picoclaw:abc") == "picoclaw", fn
+        assert fn("pi:abc") == "pi", fn
+        assert fn("deepagents:abc") == "deepagents", fn
+        # Raw adapter ids without the daemon's ``<runtime>:`` namespace carry
+        # no colon, so they take the openclaw default (never a prefix guess).
+        assert fn("pi-0a1b2c") == "openclaw", fn
+        assert fn("deepagents-0a1b2c") == "openclaw", fn
+        # And the exact-token match means neither swallows the other even if a
+        # raw id embeds a colon later in the string.
+        assert fn("picoclaw:pi:abc") == "picoclaw", fn
+
+
 # ── 2. /api/model-attribution?runtime= scopes with zero leakage ─────────────
 
 
@@ -157,6 +179,8 @@ def test_model_attribution_per_runtime_no_leak(app_and_store):
         "nanoclaw:n1":    "nano-1",
         "picoclaw:p1":    "pico-1",
         "aider:a1":       "aider-1",
+        "pi:i1":          "pi-mini",
+        "deepagents:d1":  "deep-1",
         "bareuuid-zzz":   "claude-opus-4-7",   # → openclaw bucket
     }
     for i, (sid, m) in enumerate(seeds.items()):

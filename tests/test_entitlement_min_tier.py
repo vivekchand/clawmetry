@@ -186,6 +186,8 @@ def test_min_tier_paid_runtime_is_cloud_starter(ent):
         "hermes",
         "picoclaw",
         "nanoclaw",
+        "pi",
+        "deepagents",
     ):
         assert ent.min_tier_for_runtime(rt) == ent.TIER_CLOUD_STARTER, rt
 

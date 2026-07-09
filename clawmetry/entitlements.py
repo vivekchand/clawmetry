@@ -86,6 +86,8 @@ PAID_RUNTIMES = frozenset(
         "hermes",
         "picoclaw",
         "nanoclaw",
+        "pi",
+        "deepagents",
     }
 )
 
@@ -105,6 +107,8 @@ RUNTIME_LABELS = {
     "hermes": "Hermes",
     "picoclaw": "PicoClaw",
     "nanoclaw": "NanoClaw",
+    "pi": "Pi",
+    "deepagents": "Deep Agents",
 }
 
 # Canonical list of chat-channel adapters observable by ClawMetry, in the
@@ -192,6 +196,8 @@ RUNTIME_ALIASES = {
     "pico_claw": "picoclaw",
     "nano-claw": "nanoclaw",
     "nano_claw": "nanoclaw",
+    "deep-agents": "deepagents",
+    "deep_agents": "deepagents",
 }
 
 TIER_LABELS = {

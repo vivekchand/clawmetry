@@ -11103,8 +11103,8 @@ def _build_machine_info():
 # namespaced + tagged with the runtime. To add a runtime: ship its adapter and
 # add a (module, class) row here. Import is per-adapter + defensive so a missing
 # or broken adapter (e.g. an older wheel) never blocks the others.
-# The 10 paid runtime adapters moved to the closed-source clawmetry-pro
-# package in Phase 4 of the open-core split. ``_family_adapter_classes()``
+# The 12 paid runtime adapters live in the closed-source clawmetry-pro
+# package (moved in Phase 4 of the open-core split). ``_family_adapter_classes()``
 # below imports them by absolute path; the import gracefully fails when
 # clawmetry-pro is not installed and the daemon proceeds with OpenClaw +
 # NeMo (the Free runtimes) only.
@@ -11119,6 +11119,8 @@ _FAMILY_ADAPTER_SPECS = (
     ("clawmetry_pro.adapters.goose", "GooseAdapter"),
     ("clawmetry_pro.adapters.opencode", "OpencodeAdapter"),
     ("clawmetry_pro.adapters.qwen_code", "QwenCodeAdapter"),
+    ("clawmetry_pro.adapters.pi", "PiAdapter"),
+    ("clawmetry_pro.adapters.deepagents", "DeepAgentsAdapter"),
 )
 
 
@@ -12011,7 +12013,7 @@ def _build_model_attribution():
 # session-id prefix). Keep in sync with clawmetry/static/js/app.js.
 _RUNTIME_PREFIXES = frozenset({
     "picoclaw", "nanoclaw", "hermes", "claude_code", "codex", "cursor",
-    "aider", "goose", "opencode", "qwen_code",
+    "aider", "goose", "opencode", "qwen_code", "pi", "deepagents",
 })
 
 

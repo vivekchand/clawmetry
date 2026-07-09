@@ -1,7 +1,7 @@
 """CI guard against advertised-vs-supported runtime drift.
 
 The homepage hero tooltip + the pricing-page tier bullets advertise a
-fixed list of runtimes (OpenClaw, NemoClaw, plus 10 paid). This test
+fixed list of runtimes (OpenClaw, NemoClaw, plus 12 paid). This test
 pins the entitlement catalogue to that list and asserts every
 advertised runtime has an adapter or catalogue entry, and that no
 runtime is in the catalogue without being advertised.
@@ -25,6 +25,7 @@ EXPECTED_FREE_RUNTIMES = frozenset({"openclaw", "nemoclaw"})
 EXPECTED_PAID_RUNTIMES = frozenset({
     "claude_code", "codex", "cursor", "aider", "goose",
     "opencode", "qwen_code", "hermes", "picoclaw", "nanoclaw",
+    "pi", "deepagents",
 })
 EXPECTED_ALL_RUNTIMES = EXPECTED_FREE_RUNTIMES | EXPECTED_PAID_RUNTIMES
 
@@ -50,7 +51,7 @@ def test_free_runtimes_matches_marketing():
 
 
 def test_paid_runtimes_matches_marketing():
-    """The 10 paid runtimes advertised on /pricing must match PAID_RUNTIMES."""
+    """The 12 paid runtimes advertised on /pricing must match PAID_RUNTIMES."""
     from clawmetry.entitlements import PAID_RUNTIMES
     assert PAID_RUNTIMES == EXPECTED_PAID_RUNTIMES, (
         f"PAID_RUNTIMES drift: catalogue={set(PAID_RUNTIMES)} "

@@ -633,7 +633,7 @@ def _download_and_install_pro(payload: dict) -> str:
 def auto_provision_pro(api_key: str, node_id: str | None = None) -> tuple[bool, str]:
     """CLOUD ACCOUNT path, called by ``clawmetry connect`` after the cm_ key is
     saved. Ask the cloud whether this account is ENTITLED to clawmetry-pro and,
-    if so, download+install the wheel so the node gets all 12 runtimes.
+    if so, download+install the wheel so the node gets all 14 runtimes.
 
     HARD RULES enforced here:
       * Pro is installed ONLY for an entitled plan (Starter/Pro/Trial/

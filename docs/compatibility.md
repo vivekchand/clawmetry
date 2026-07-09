@@ -24,6 +24,8 @@ This page tracks each one's real status, honestly.
 | Goose       | Beta adapter   | SQLite `~/.local/share/goose/sessions/sessions.db` (`sessions` + `messages`) | Transcripts, model, tool calls, real token totals. |
 | opencode    | Beta adapter   | SQLite `~/.local/share/opencode/opencode.db` (`session`/`message`/`part`) | Transcripts, model, tool calls, real tokens + cost. |
 | Qwen Code   | Beta adapter   | JSONL `~/.qwen/projects/<hash>/chats/<id>.jsonl` (Gemini-CLI lineage) | Transcripts, model, tool calls + thinking, real token usage. |
+| Pi          | Beta adapter   | JSONL `~/.pi/agent/sessions/` | Transcripts, model, tool calls, real tokens + cost. |
+| Deep Agents | Beta adapter   | SQLite `~/.deepagents/.state/sessions.db` | Transcripts, model, tool calls, real tokens + cost. |
 | ZeroClaw / TrustClaw / Nanobot | Not yet | unverified | Open an issue with a real session capture. |
 
 ## What "Beta adapter" means (and what it does not)

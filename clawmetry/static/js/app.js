@@ -8112,7 +8112,8 @@ var _CM_RT_LABEL = {
   openclaw: 'OpenClaw', nemoclaw: 'NemoClaw',
   picoclaw: 'PicoClaw', nanoclaw: 'NanoClaw',
   hermes: 'Hermes', claude_code: 'Claude Code', codex: 'Codex', cursor: 'Cursor',
-  aider: 'Aider', goose: 'Goose', opencode: 'opencode', qwen_code: 'Qwen Code'
+  aider: 'Aider', goose: 'Goose', opencode: 'opencode', qwen_code: 'Qwen Code',
+  pi: 'Pi', deepagents: 'Deep Agents'
 };
 // The CLOSED session-prefix runtimes (the only keys that can ride a session_id
 // prefix). Foreign OTLP / OpenLLMetry apps are NOT in here — they have no
@@ -8120,7 +8121,7 @@ var _CM_RT_LABEL = {
 // derive them from a prefix (it can't) and never mis-bucket them into openclaw.
 var _CM_RT_PREFIXES = {
   openclaw: 1, picoclaw: 1, nanoclaw: 1, hermes: 1, claude_code: 1, codex: 1,
-  cursor: 1, aider: 1, goose: 1, opencode: 1, qwen_code: 1
+  cursor: 1, aider: 1, goose: 1, opencode: 1, qwen_code: 1, pi: 1, deepagents: 1
 };
 // Dynamic registry of foreign OTLP/OpenLLMetry apps surfaced by the daemon
 // (runtimeSummary/agentInventory carry `otlp:true` + a `displayName`). These are
@@ -8241,6 +8242,8 @@ var _CM_RT_CAPS = {
   goose:       ['SESSIONS','EVENTS','COST'],
   opencode:    ['SESSIONS','EVENTS','COST'],
   qwen_code:   ['SESSIONS','EVENTS','COST'],
+  pi:          ['SESSIONS','EVENTS','COST'],
+  deepagents:  ['SESSIONS','EVENTS','COST'],
   hermes:      ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   cursor:      ['SESSIONS','EVENTS'],   // no COST
   picoclaw:    ['SESSIONS','EVENTS'],   // no COST
@@ -15427,7 +15430,7 @@ function renderToolCatalog() {
 
 // ── Harness tab: declarative per-runtime custom panels ────────────────────
 // A "harness template" (served by /api/harness/templates; OSS ships openclaw +
-// nemoclaw, clawmetry-pro registers its 10 closed ones) declares ordered
+// nemoclaw, clawmetry-pro registers its 12 closed ones) declares ordered
 // sections, each with a data `source` path and a `render` hint. This renderer is
 // generic — it never hard-codes a harness; it just interprets the template.
 var _cmHarnessTemplates = null;   // {runtime: template}, fetched once
@@ -16947,6 +16950,8 @@ var _RT_FLOW = {
   goose:       { label:'Goose',       src:['⌨️','Terminal'], accent:'#0ea5e9', stroke:'#0284c7', tools:[['📝','Edit'],['⚡','Shell'],['🔍','Search'],['🧩','Extensions']] },
   opencode:    { label:'opencode',    src:['⌨️','Terminal'], accent:'#f59e0b', stroke:'#d97706', tools:[['📝','Edit'],['📖','Read'],['⚡','Bash'],['🔍','Grep']] },
   qwen_code:   { label:'Qwen Code',   src:['⌨️','Terminal'], accent:'#7c3aed', stroke:'#6d28d9', tools:[['📝','Edit'],['📖','Read'],['⚡','Shell'],['🔍','Search']] },
+  pi:          { label:'Pi',          src:['⌨️','Terminal'], accent:'#4f8ef7', stroke:'#3b74d9', tools:[['📝','Edit'],['📖','Read'],['⚡','Bash'],['🔍','Grep']] },
+  deepagents:  { label:'Deep Agents', src:['⌨️','Terminal'], accent:'#2fa87c', stroke:'#238a64', tools:[['📝','Edit'],['📖','Read'],['⚡','Shell'],['📋','Todos']] },
   picoclaw:    { label:'PicoClaw',    src:['👤','You'],      accent:'#ec4899', stroke:'#db2777', tools:[['⚡','Exec'],['🧠','Memory'],['📋','Sessions']], minimal:true },
   nanoclaw:    { label:'NanoClaw',    src:['👤','You'],      accent:'#14b8a6', stroke:'#0d9488', tools:[['⚡','Exec'],['🧠','Memory']], minimal:true },
 };
@@ -21999,7 +22004,7 @@ function clearSwimlaneLanes() {
 }
 
 // One-click preset: most-recent session per distinct runtime (cap 4). This is
-// the headline demo path — the 12 runtimes side by side. Respects the global
+// the headline demo path — the 14 runtimes side by side. Respects the global
 // runtime switcher: when scoped to one runtime, only that runtime is picked.
 function swimlanePresetPerRuntime() {
   var rtFilter = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';

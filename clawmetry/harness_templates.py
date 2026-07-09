@@ -13,7 +13,7 @@ Open-core split (mirrors the adapter registry exactly):
 
 * This module + the renderer + the Harness tab shell + the **free** templates
   (openclaw, nemoclaw) ship in OSS clawmetry.
-* The **10 closed pro** templates live in ``clawmetry-pro`` and register
+* The **12 closed pro** templates live in ``clawmetry-pro`` and register
   themselves through the ``clawmetry.extensions`` plugin seam at startup
   (``register_all`` calls :func:`register` for each), the same way the closed
   adapters do. A FREE node only ever sees the openclaw/nemoclaw panels; a

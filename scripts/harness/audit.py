@@ -108,7 +108,7 @@ def _adapter_source(h: dict) -> str:
     'no COST').
 
     OSS audits only the FREE runtimes (openclaw + nemoclaw), whose adapters are in
-    this repo. The 10 closed pro adapters are audited by clawmetry-pro's own
+    this repo. The 12 closed pro adapters are audited by clawmetry-pro's own
     private copy of this script, so no closed adapter path is referenced here."""
     return _read(os.path.join(REPO_ROOT, h["adapter"]), 60000)
 
