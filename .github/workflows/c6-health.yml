@@ -58,6 +58,8 @@ jobs:
           }
 
           # All 3 repos and their required checks.
+          # This list must stay in sync with REQUIRED_CHECKS in
+          # scripts/apply_required_status_checks.py.
           # github.token reads clawmetry/main directly.
           # For clawmetry-cloud and clawmetry-landing we try the public
           # /branches/main endpoint; cross-repo reads may return UNKNOWN
@@ -66,6 +68,8 @@ jobs:
               "clawmetry": [
                   "OSS golden path (wheel + OpenClaw + 9 tabs)",
                   "Cross-repo handoff (C4)",
+                  "MOAT Keystone (13-endpoint bar)",
+                  "E2E Browser Tests (critical subset)",
               ],
               "clawmetry-cloud": [
                   "Cloud golden-path browser E2E",
@@ -230,7 +234,14 @@ jobs:
                   "- `pat_token` = paste the token from Step 1\n"
                   "- Click **Run workflow** -- closes all 3 repos in one run\n\n"
                   "Or from a terminal (~30s): `bash scripts/close-c6.sh` (uses existing gh CLI session)\n\n"
-                  "C1/C2/C3/C4/C5/C7 have been green for 7+ days. C6 is the sole remaining blocker."
+                  "C1/C2/C3/C4/C5/C7 have been green for 7+ days. C6 is the sole remaining blocker.\n\n"
+                  "Required checks that will be configured (all 6):\n"
+                  "- `clawmetry`: OSS golden path (wheel + OpenClaw + 9 tabs)\n"
+                  "- `clawmetry`: Cross-repo handoff (C4)\n"
+                  "- `clawmetry`: MOAT Keystone (13-endpoint bar)\n"
+                  "- `clawmetry`: E2E Browser Tests (critical subset)\n"
+                  "- `clawmetry-cloud`: Cloud golden-path browser E2E\n"
+                  "- `clawmetry-landing`: Landing golden path (C3)"
               )
 
           result_obj = post_comment(body)
