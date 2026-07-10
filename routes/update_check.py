@@ -145,11 +145,14 @@ def _get_update_check_config():
         "check_on_startup": True,
         "check_daily": True,
         # Default ON (since 0.12.494): a detected newer release is installed
-        # automatically by the background worker. Rails: only the supervised
-        # sync-daemon process acts on the default (see _maybe_auto_update),
-        # releases must age CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS (48h) on PyPI
-        # first, CLAWMETRY_AUTO_UPDATE=0 is a hard kill switch, and the boot
-        # guard (clawmetry/update_guard.py) rolls back a crash-looping wheel.
+        # automatically by the background worker. Since 2026-07-10 the daemon
+        # checks every ~60s and tracks the ABSOLUTE latest (no age gate by
+        # default; CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS restores a window).
+        # Rails: only the daemon role acts on the default
+        # (see _maybe_auto_update), CLAWMETRY_AUTO_UPDATE=0 is a hard kill
+        # switch, failed targets back off CLAWMETRY_AUTOUPDATE_RETRY_SECS,
+        # and the boot guard (clawmetry/update_guard.py) rolls back a
+        # crash-looping wheel.
         # WHY default-on: 92% of active nodes were found running months-stale
         # daemons (2026-06-09 fleet audit) — every shipped fix reached almost
         # nobody, and the hosted dashboard rendered blank cards against old
@@ -259,11 +262,45 @@ def _should_show_update_banner(config, latest_check):
 def _autoupdate_min_age_hours() -> float:
     """Stability window (hours) a release must survive on PyPI before the
     daemon will silently install it. Env override:
-    ``CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS`` (default 48)."""
+    ``CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS``.
+
+    Default 0 (founder call 2026-07-10): ClawMetry ships 20+ releases a day
+    and users must never be expected to upgrade by hand, so the fleet tracks
+    the ABSOLUTE latest within minutes. The safety net for a bad wheel is
+    the boot rollback guard (``clawmetry/update_guard.py``), not a stale
+    window — the old 48h gate meant every shipped fix took two days to
+    reach anyone. Conservative operators can set the env to restore a
+    window; the aged-in selection logic still honors it."""
     try:
-        return float(os.environ.get("CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS", "48") or 48)
+        return float(os.environ.get("CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS", "0") or 0)
     except Exception:
-        return 48.0
+        return 0.0
+
+
+def _update_check_interval_secs() -> float:
+    """How often the DAEMON role polls PyPI for a new release. Env override:
+    ``CLAWMETRY_UPDATE_CHECK_SECS`` (default 60, clamped to [30, 86400]).
+
+    A 60s poll of PyPI's JSON endpoint is one tiny CDN-cached GET per node
+    per minute — negligible for both sides — and is what turns a release
+    into a fleet-wide upgrade within minutes instead of days. The dashboard
+    role keeps its gentler startup+daily banner cadence; only the daemon
+    (the process that actually installs) runs this fast loop."""
+    try:
+        v = float(os.environ.get("CLAWMETRY_UPDATE_CHECK_SECS", "60") or 60)
+    except Exception:
+        v = 60.0
+    return max(30.0, min(v, 86400.0))
+
+
+def _autoupdate_retry_secs() -> float:
+    """Backoff before re-attempting a version whose install FAILED. Without
+    this, the 60s check loop would re-run pip against a broken target every
+    minute. Env override: ``CLAWMETRY_AUTOUPDATE_RETRY_SECS`` (default 1800)."""
+    try:
+        return float(os.environ.get("CLAWMETRY_AUTOUPDATE_RETRY_SECS", "1800") or 1800)
+    except Exception:
+        return 1800.0
 
 
 def _newest_aged_in_version(releases, current, min_age_hours):
@@ -361,6 +398,43 @@ def _check_for_update():
 # before the restart lands. Reset on failure so the next check can retry.
 _auto_update_in_progress = False
 
+# version -> monotonic timestamp of its last FAILED install attempt. With the
+# 60s check loop a persistently-broken target would otherwise re-run pip every
+# minute; failed versions wait _autoupdate_retry_secs() before a retry.
+_failed_update_attempts: dict = {}
+
+
+def _exec_restart_disabled() -> bool:
+    """Kill switch for the unsupervised-daemon re-exec:
+    ``CLAWMETRY_AUTOUPDATE_EXEC_RESTART=0``."""
+    val = os.environ.get("CLAWMETRY_AUTOUPDATE_EXEC_RESTART", "").strip().lower()
+    return val in ("0", "false", "no", "off")
+
+
+def _schedule_exec_restart(delay_secs: float = 2.0) -> None:
+    """Re-exec the current process image so an UNSUPERVISED daemon (no
+    launchd/systemd to respawn it — containers, manual `python sync.py`,
+    kubectl-exec wrappers) actually starts running the wheel it just
+    installed instead of holding the old build in memory until someone
+    restarts it by hand. ``os.execv`` keeps the pid and argv, so whatever
+    started the process sees nothing change; the boot rollback guard
+    (clawmetry/update_guard.py) still protects against a crash-looping
+    wheel. Not used on Windows (execv semantics differ) — there the
+    install stays deferred to the next manual start."""
+    def _reexec():
+        try:
+            log.info("auto-update: re-exec restart (unsupervised daemon) "
+                     "argv=%s", sys.argv)
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        except Exception as exc:  # pragma: no cover — post-exec unreachable
+            global _auto_update_in_progress
+            _auto_update_in_progress = False
+            log.warning("auto-update: re-exec failed (%s); new version "
+                        "applies on next manual start", exc)
+    t = threading.Timer(delay_secs, _reexec)
+    t.daemon = True
+    t.start()
+
 
 def _maybe_auto_update(current, target, latest=None):
     """Install ``target`` (the newest aged-in release, chosen by
@@ -389,38 +463,85 @@ def _maybe_auto_update(current, target, latest=None):
         return
     if not target or not _version_gt(target, current):
         return
-    # An UNSUPERVISED daemon (no launchd plist / systemd unit — e.g. a manual
-    # `python -m clawmetry.sync` or Windows) still installs the new wheel but
-    # keeps running: exiting would stop ingest with nothing to respawn it.
-    # The new version applies on its next start.
+    # Failed-install backoff: with the 60s check loop, a target whose pip
+    # install failed must not be retried every minute.
+    _last_fail = _failed_update_attempts.get(str(target))
+    if _last_fail is not None and \
+            (time.monotonic() - _last_fail) < _autoupdate_retry_secs():
+        return
+    # An UNSUPERVISED daemon (no launchd plist / systemd unit — containers,
+    # kubectl-exec wrappers, a manual `python -m clawmetry.sync`) installs
+    # the wheel with restart=False, then re-execs its own process image so
+    # the new build actually starts running (previously it kept the old
+    # wheel in memory indefinitely — a containerized node stayed stale until
+    # someone bounced the pod by hand). Windows keeps the old
+    # install-and-defer behavior; the env kill switch restores it anywhere.
     restart = True
+    exec_restart = False
     if _process_role == "daemon" and not _daemon_supervised():
         restart = False
+        exec_restart = (not sys.platform.startswith("win")
+                        and not _exec_restart_disabled())
     _auto_update_in_progress = True
     log.info("auto-update: upgrading clawmetry v%s -> v%s (latest available v%s, "
-             "restart=%s)", current, target, latest or target, restart)
+             "restart=%s, exec_restart=%s)",
+             current, target, latest or target, restart, exec_restart)
     try:
         from routes.meta import perform_self_update
         payload, _status = perform_self_update(
             reason="auto", restart=restart, target_version=target)
         if not (isinstance(payload, dict) and payload.get("ok")):
-            log.warning("auto-update: upgrade failed, will retry next check: %s", payload)
+            log.warning("auto-update: upgrade failed, will retry in %.0fs: %s",
+                        _autoupdate_retry_secs(), payload)
+            _failed_update_attempts[str(target)] = time.monotonic()
+            if len(_failed_update_attempts) > 64:
+                _failed_update_attempts.pop(
+                    min(_failed_update_attempts, key=_failed_update_attempts.get),
+                    None,
+                )
             _auto_update_in_progress = False  # allow retry; no restart was scheduled
+            return
+        _failed_update_attempts.pop(str(target), None)
+        if exec_restart:
+            _schedule_exec_restart()
     except Exception as exc:
         log.warning("auto-update: error during upgrade: %s", exc)
+        _failed_update_attempts[str(target)] = time.monotonic()
         _auto_update_in_progress = False
 
 
 def _update_check_worker(stop_event):
-    """Background worker thread for periodic update checks."""
-    # Initial check on startup (after 60s delay)
-    time.sleep(60)
+    """Background worker thread for periodic update checks.
+
+    DAEMON role: poll PyPI every ``_update_check_interval_secs()`` (default
+    60s) and auto-install anything newer — ClawMetry ships 20+ releases a
+    day, so a release must reach the fleet in minutes, not on a daily-9AM
+    schedule (founder call 2026-07-10; the screenshot trigger was a hosted
+    feature telling a user their node would update "within about two days").
+
+    DASHBOARD role: unchanged gentle cadence — startup check + one banner
+    check per day after 9AM. The dashboard only shows the banner; the
+    daemon is the process that installs, and on the standard install its
+    fast loop keeps the shared check-history fresh for the banner anyway.
+    """
+    # Initial check on startup (after a boot-settle delay; interruptible).
+    if stop_event.wait(60):
+        return
 
     config = _get_update_check_config()
     if config.get("check_on_startup", True):
         _check_for_update()
 
-    # Daily checks
+    if _process_role == "daemon":
+        while not stop_event.is_set():
+            if stop_event.wait(_update_check_interval_secs()):
+                return
+            config = _get_update_check_config()
+            if config.get("enabled", True):
+                _check_for_update()
+        return
+
+    # Dashboard role: daily banner checks
     last_check_day = None
     while not stop_event.is_set():
         now = datetime.now(timezone.utc)
