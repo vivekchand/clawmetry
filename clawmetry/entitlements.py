@@ -9621,6 +9621,123 @@ def previous_tier_runtime_spec_at(tier: str, runtime: str) -> dict | None:
         return None
 
 
+def next_tier_channel_spec_at(tier: str, channel: str) -> dict | None:
+    """Scalar what-if sibling of :func:`next_tier_spec_at` projected onto a
+    SINGLE chat channel: the :func:`channel_spec_at`-shape catalogue row
+    for ``channel`` evaluated on the rung above the caller-supplied
+    ``tier``.
+
+    Channel-axis projection of :func:`next_tier_spec_at` (full tier-row
+    descriptor of the rung above the source) and channel-side mirror of
+    :func:`next_tier_feature_spec_at` / :func:`next_tier_runtime_spec_at`.
+    Convenience for
+    ``channel_spec_at(_next_purchasable_tier_after(tier), channel)`` so a
+    pricing-comparison tooltip can ask "does THIS chat channel unlock at
+    my next rung?" off ONE round-trip without first walking the
+    catalogue or asking the resolver. Source-anchored companion of
+    :meth:`Entitlement.next_tier_channel_spec` (which anchors on the
+    resolved entitlement's ``next_purchasable_tier``) -- referenced by
+    that method's docstring as the explicit-source projection.
+
+    The returned row matches :func:`channel_spec_at(target, channel)`
+    for the resolved ``target = _next_purchasable_tier_after(tier)``
+    exactly -- a parity test pins this so the scalar projection cannot
+    drift from the full-row sibling.
+
+    Every chat channel is FREE at every tier (the ``channels`` capacity
+    axis governs how many concurrent channels each plan admits, not
+    which adapters unlock), so the row always comes back
+    ``free=True`` / ``locked=False`` / ``entitled=True`` regardless of
+    the target rung. That parity IS the answer: the tooltip can render
+    "channel included at every plan" off ONE call without hard-coding
+    that posture client-side.
+
+    Accepts any id in :data:`_TIER_ORDER` for ``tier`` (including
+    :data:`TIER_TRIAL`) -- the lenient ``_at`` posture, matching the
+    other ``next_*_at`` helpers.
+
+    Returns ``None`` for empty / unknown ``tier`` or ``channel`` and at
+    the ceiling (no rung strictly above -- enterprise as source). Never
+    raises: a builder failure short-circuits to ``None`` so the CTA
+    surface stays mute instead of breaking.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        ch = (channel or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not ch or ch not in ALL_CHANNELS:
+        return None
+    try:
+        target = _next_purchasable_tier_after(src)
+        if target is None:
+            return None
+        return channel_spec_at(target, ch)
+    except Exception as exc:
+        logger.warning("entitlements: next_tier_channel_spec_at failed: %s", exc)
+        return None
+
+
+def previous_tier_channel_spec_at(tier: str, channel: str) -> dict | None:
+    """Scalar what-if sibling of :func:`previous_tier_spec_at` projected
+    onto a SINGLE chat channel: the :func:`channel_spec_at`-shape
+    catalogue row for ``channel`` evaluated on the rung below the
+    caller-supplied ``tier``.
+
+    Source-anchored mirror of :func:`next_tier_channel_spec_at` and
+    downgrade-confirmation counterpart on the channel axis. Convenience
+    for ``channel_spec_at(_previous_purchasable_tier_before(tier),
+    channel)`` so a downgrade-confirmation card can ask "does THIS chat
+    channel still unlock at my previous rung?" off ONE round-trip
+    without re-walking the catalogue.
+
+    Like :func:`next_tier_channel_spec_at` the row matches
+    :func:`channel_spec_at(target, channel)` for the resolved
+    ``target = _previous_purchasable_tier_before(tier)`` exactly.
+
+    Channel-axis always-free invariant applies here as well: whenever
+    ``target`` resolves, the row comes back ``free=True`` /
+    ``locked=False`` / ``entitled=True`` regardless of the downgrade
+    target -- pinning that "chat channel included at every plan"
+    posture on both directions.
+
+    Accepts any id in :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`)
+    -- the lenient ``_at`` posture.
+
+    Returns ``None`` for empty / unknown ``tier`` or ``channel`` and at
+    the floor (``oss`` / ``cloud_free`` as source -- no rung strictly
+    below). Never raises: a builder failure short-circuits to ``None``
+    so the confirmation surface stays mute instead of breaking.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        ch = (channel or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not ch or ch not in ALL_CHANNELS:
+        return None
+    try:
+        target = _previous_purchasable_tier_before(src)
+        if target is None:
+            return None
+        return channel_spec_at(target, ch)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_channel_spec_at failed: %s", exc
+        )
+        return None
+
+
 def next_tier_lock_reason_at(
     tier: str, item, *, kind: str | None = None
 ) -> str | None:

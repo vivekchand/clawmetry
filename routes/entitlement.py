@@ -11227,6 +11227,219 @@ def api_entitlement_previous_tier_runtime_spec_at():
         )
 
 
+@bp_entitlement.route("/api/entitlement/next-tier-channel-spec-at")
+def api_entitlement_next_tier_channel_spec_at():
+    """``GET /api/entitlement/next-tier-channel-spec-at?tier=<source>&channel=<id>``
+    -- scalar what-if sibling of ``/api/entitlement/next-tier-spec-at``
+    projected onto a SINGLE chat channel: the
+    :func:`clawmetry.entitlements.channel_spec_at`-shape catalogue row
+    for ``channel`` evaluated on the rung above the caller-supplied
+    ``tier``.
+
+    Channel-axis projection of ``/next-tier-spec-at`` (full tier-row
+    descriptor of the rung above the source) and channel-side mirror of
+    ``/next-tier-feature-spec-at`` / ``/next-tier-runtime-spec-at``.
+    Source-anchored companion of
+    ``/api/entitlement/next-tier-channel-spec`` (which anchors on the
+    resolved entitlement's ``next_purchasable_tier``): where that
+    endpoint reads the live perspective off the resolver, this one takes
+    an explicit ``tier=`` so a pricing-comparison matrix can pivot the
+    "at my next rung" question across every source rung off one shape.
+
+    Response shape::
+
+        {
+          "tier":           "<source tier id>",
+          "tier_label":     "<source label>",
+          "tier_rank":      <source rank>,
+          "channel":        "<channel id>",
+          "target":         "<next-above tier id>" | null,
+          "target_label":   "<next-above label>" | null,
+          "target_rank":    <next-above rank> | null,
+          "row":            {<channel_spec_at row>} | null,
+        }
+
+    The inner ``row`` matches
+    ``/channel-spec-at?tier=<target>&channel=<channel>`` byte-for-byte
+    when ``target`` is populated -- a parity test pins this so the
+    projection cannot drift from the full-row sibling.
+
+    Every chat channel is FREE at every tier (the ``channels`` capacity
+    axis governs how many concurrent channels each plan admits, not
+    which adapters unlock), so whenever ``target`` resolves the row
+    comes back ``free=True`` / ``locked=False`` / ``entitled=True``
+    regardless of the target rung. That parity IS the answer: the
+    tooltip can render "channel included at every plan" off ONE call
+    without hard-coding that posture client-side.
+
+    Accepts any tier id in :data:`entitlements._TIER_ORDER` (including
+    ``trial``). ``target`` / ``row`` collapse to ``null`` at the ceiling
+    (no rung strictly above the source -- enterprise as source) -- the
+    surface stays 200 with a populated envelope so callers can render
+    "you're at the top" copy without a status-code branch.
+
+    - **400** when ``tier=`` or ``channel=`` is missing / blank
+    - **404** when ``tier`` is unknown or ``channel`` is unknown (not in
+      :data:`ALL_CHANNELS`). The body carries ``which`` so a caller can
+      render the right "unknown ..." message.
+    - **Never 5xxs**: builder failure short-circuits to ``row=null`` on
+      the same 200 envelope so the paywall surface stays mute.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    raw_channel = request.args.get("channel")
+    channel = (raw_channel or "").strip().lower()
+    if not channel:
+        return jsonify({"error": "missing channel"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        if channel not in _ent.ALL_CHANNELS:
+            return (
+                jsonify(
+                    {
+                        "error": "unknown channel",
+                        "which": "channel",
+                        "channel": channel,
+                    }
+                ),
+                404,
+            )
+        target = _ent._next_purchasable_tier_after(tier_in)
+        row = _ent.next_tier_channel_spec_at(tier_in, channel)
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": _ent.tier_label(tier_in),
+                "tier_rank": _ent.tier_rank(tier_in),
+                "channel": channel,
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "row": row,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_channel_spec_at: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": None,
+                "tier_rank": -1,
+                "channel": channel,
+                "target": None,
+                "target_label": None,
+                "target_rank": None,
+                "row": None,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-channel-spec-at")
+def api_entitlement_previous_tier_channel_spec_at():
+    """``GET /api/entitlement/previous-tier-channel-spec-at?tier=<source>&channel=<id>``
+    -- scalar what-if sibling of
+    ``/api/entitlement/previous-tier-spec-at`` projected onto a SINGLE
+    chat channel: the :func:`clawmetry.entitlements.channel_spec_at`-shape
+    catalogue row for ``channel`` evaluated on the rung below the
+    caller-supplied ``tier``.
+
+    Source-anchored mirror of ``/next-tier-channel-spec-at`` and
+    downgrade-confirmation counterpart on the channel axis. Lets a
+    downgrade-confirmation card render "does THIS chat channel still
+    unlock one rung down?" without re-walking the catalogue.
+
+    Response shape matches ``/next-tier-channel-spec-at`` byte-for-byte
+    (``tier``, ``tier_label``, ``tier_rank``, ``channel``, ``target``,
+    ``target_label``, ``target_rank``, ``row``). Inner ``row`` matches
+    ``/channel-spec-at?tier=<target>&channel=<channel>`` byte-for-byte
+    when ``target`` is populated.
+
+    Channel-axis always-free invariant applies on the downgrade side as
+    well: whenever ``target`` resolves the row comes back ``free=True``
+    / ``locked=False`` / ``entitled=True`` regardless of the downgrade
+    target -- pinning that "chat channel included at every plan"
+    posture on both directions.
+
+    Accepts any tier id in :data:`entitlements._TIER_ORDER` (including
+    ``trial``). ``target`` / ``row`` collapse to ``null`` at the floor
+    (``oss`` / ``cloud_free`` as source).
+
+    - **400** when ``tier=`` or ``channel=`` is missing / blank
+    - **404** when ``tier`` is unknown or ``channel`` is unknown.
+    - **Never 5xxs**: builder failure short-circuits to ``row=null`` on
+      the same 200 envelope.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    raw_channel = request.args.get("channel")
+    channel = (raw_channel or "").strip().lower()
+    if not channel:
+        return jsonify({"error": "missing channel"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        if channel not in _ent.ALL_CHANNELS:
+            return (
+                jsonify(
+                    {
+                        "error": "unknown channel",
+                        "which": "channel",
+                        "channel": channel,
+                    }
+                ),
+                404,
+            )
+        target = _ent._previous_purchasable_tier_before(tier_in)
+        row = _ent.previous_tier_channel_spec_at(tier_in, channel)
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": _ent.tier_label(tier_in),
+                "tier_rank": _ent.tier_rank(tier_in),
+                "channel": channel,
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "row": row,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_channel_spec_at: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": None,
+                "tier_rank": -1,
+                "channel": channel,
+                "target": None,
+                "target_label": None,
+                "target_rank": None,
+                "row": None,
+            }
+        )
 
 
 def _next_prev_lock_reason_at(direction: str):
