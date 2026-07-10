@@ -1317,6 +1317,133 @@ class Entitlement:
             )
             return None
 
+    def next_tier_feature_catalog(self) -> list[dict] | None:
+        """Feature-axis projection of :meth:`next_tier_spec`: the full
+        :func:`feature_catalog_at`-shape catalogue for every feature
+        evaluated on the rung above the resolved entitlement in ONE
+        round-trip.
+
+        Current-relative, no-arg sibling of :func:`feature_catalog_at`
+        and feature-axis mirror of :meth:`next_tier_channel_catalog`.
+        Convenience for ``feature_catalog_at(self.next_purchasable_tier())``
+        so a pricing / upgrade-preview surface can hydrate the whole
+        feature matrix at the next rung off ONE round-trip without
+        threading the target tier through query args or first fetching
+        :meth:`next_purchasable_tier`.
+
+        Anchored on :meth:`next_purchasable_tier` (source-aware -- picks
+        the ``cloud_*`` sibling when :attr:`source` is ``"cloud"``, the
+        self-hosted sibling otherwise), matching
+        :meth:`next_tier_feature_spec` and :meth:`next_tier_spec`.
+
+        Every row is byte-identical to
+        :meth:`next_tier_feature_spec(feature)` for the same feature at
+        that rung -- pinned by parity tests so the scalar and catalog
+        accessors cannot drift.
+
+        Returns ``None`` at the resolver's ceiling (no rung above
+        current). Never raises: a builder failure short-circuits to
+        ``None`` so the panel stays mute instead of breaking.
+        """
+        try:
+            target = self.next_purchasable_tier()
+            if target is None:
+                return None
+            return feature_catalog_at(target)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: next_tier_feature_catalog failed: %s", exc
+            )
+            return None
+
+    def previous_tier_feature_catalog(self) -> list[dict] | None:
+        """Feature-axis projection of :meth:`previous_tier_spec`: the
+        full :func:`feature_catalog_at`-shape catalogue for every
+        feature evaluated on the rung below the resolved entitlement in
+        ONE round-trip.
+
+        Symmetric mirror of :meth:`next_tier_feature_catalog` and
+        downgrade-confirmation companion. Convenience for
+        ``feature_catalog_at(self.previous_purchasable_tier())``.
+
+        Anchored on :meth:`previous_purchasable_tier` (source-aware),
+        matching :meth:`previous_tier_feature_spec` and
+        :meth:`previous_tier_spec`.
+
+        Returns ``None`` at the resolver's floor. Never raises.
+        """
+        try:
+            target = self.previous_purchasable_tier()
+            if target is None:
+                return None
+            return feature_catalog_at(target)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: previous_tier_feature_catalog failed: %s", exc
+            )
+            return None
+
+    def next_tier_runtime_catalog(self) -> list[dict] | None:
+        """Runtime-axis projection of :meth:`next_tier_spec`: the full
+        :func:`runtime_catalog_at`-shape catalogue for every runtime
+        evaluated on the rung above the resolved entitlement in ONE
+        round-trip.
+
+        Current-relative, no-arg sibling of :func:`runtime_catalog_at`
+        and runtime-axis mirror of :meth:`next_tier_channel_catalog` /
+        :meth:`next_tier_feature_catalog`. Convenience for
+        ``runtime_catalog_at(self.next_purchasable_tier())`` so a
+        pricing / upgrade-preview surface can hydrate the whole runtime
+        matrix at the next rung off ONE round-trip.
+
+        Anchored on :meth:`next_purchasable_tier` (source-aware),
+        matching :meth:`next_tier_runtime_spec` and
+        :meth:`next_tier_spec`.
+
+        Every row is byte-identical to
+        :meth:`next_tier_runtime_spec(runtime)` for the same runtime at
+        that rung -- pinned by parity tests.
+
+        Returns ``None`` at the resolver's ceiling. Never raises.
+        """
+        try:
+            target = self.next_purchasable_tier()
+            if target is None:
+                return None
+            return runtime_catalog_at(target)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: next_tier_runtime_catalog failed: %s", exc
+            )
+            return None
+
+    def previous_tier_runtime_catalog(self) -> list[dict] | None:
+        """Runtime-axis projection of :meth:`previous_tier_spec`: the
+        full :func:`runtime_catalog_at`-shape catalogue for every
+        runtime evaluated on the rung below the resolved entitlement in
+        ONE round-trip.
+
+        Symmetric mirror of :meth:`next_tier_runtime_catalog` and
+        downgrade-confirmation companion. Convenience for
+        ``runtime_catalog_at(self.previous_purchasable_tier())``.
+
+        Anchored on :meth:`previous_purchasable_tier` (source-aware),
+        matching :meth:`previous_tier_runtime_spec` and
+        :meth:`previous_tier_spec`.
+
+        Returns ``None`` at the resolver's floor. Never raises.
+        """
+        try:
+            target = self.previous_purchasable_tier()
+            if target is None:
+                return None
+            return runtime_catalog_at(target)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: previous_tier_runtime_catalog failed: %s", exc
+            )
+            return None
+
     def next_tier_feature_spec_batch(self, features) -> dict:
         """Batch sibling of :meth:`next_tier_feature_spec`: per-feature
         :func:`feature_spec_at`-shape rows for N features evaluated on
@@ -2596,6 +2723,58 @@ def previous_tier_channel_catalog() -> list[dict] | None:
     except Exception as exc:
         logger.warning(
             "entitlements: previous_tier_channel_catalog (module) failed: %s",
+            exc,
+        )
+        return None
+
+
+def next_tier_feature_catalog() -> list[dict] | None:
+    """Module-level :meth:`Entitlement.next_tier_feature_catalog`
+    against the resolved entitlement. Never raises: a resolver failure
+    short-circuits to ``None`` so an upgrade-preview panel stays mute
+    instead of breaking."""
+    try:
+        return get_entitlement().next_tier_feature_catalog()
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_feature_catalog (module) failed: %s", exc
+        )
+        return None
+
+
+def previous_tier_feature_catalog() -> list[dict] | None:
+    """Module-level :meth:`Entitlement.previous_tier_feature_catalog`
+    against the resolved entitlement. Never raises."""
+    try:
+        return get_entitlement().previous_tier_feature_catalog()
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_feature_catalog (module) failed: %s",
+            exc,
+        )
+        return None
+
+
+def next_tier_runtime_catalog() -> list[dict] | None:
+    """Module-level :meth:`Entitlement.next_tier_runtime_catalog`
+    against the resolved entitlement. Never raises."""
+    try:
+        return get_entitlement().next_tier_runtime_catalog()
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_runtime_catalog (module) failed: %s", exc
+        )
+        return None
+
+
+def previous_tier_runtime_catalog() -> list[dict] | None:
+    """Module-level :meth:`Entitlement.previous_tier_runtime_catalog`
+    against the resolved entitlement. Never raises."""
+    try:
+        return get_entitlement().previous_tier_runtime_catalog()
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_runtime_catalog (module) failed: %s",
             exc,
         )
         return None
