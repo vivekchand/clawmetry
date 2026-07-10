@@ -13622,6 +13622,73 @@ def channel_spec_at_path(
         return None
 
 
+def channel_spec_at_path_batch(
+    perspective_tier: str, from_tier: str, to_tier: str, channels
+) -> dict | None:
+    """Perspective-validated what-if wrapper around
+    :func:`channel_spec_path_batch`.
+
+    Fixed-perspective, fixed-from, fixed-to, multi-channel companion of
+    :func:`channel_spec_at_path`. Fills the ``_at_path_batch`` slot of
+    the ``channel_spec`` family alongside :func:`channel_spec` (scalar
+    current), :func:`channel_spec_at` (scalar what-if),
+    :func:`channel_spec_batch` (batch current),
+    :func:`channel_spec_at_batch` (batch what-if),
+    :func:`channel_spec_path` (path current),
+    :func:`channel_spec_path_batch` (batch path current), and
+    :func:`channel_spec_at_path` (scalar what-if path) -- channel-axis
+    twin of :func:`feature_spec_at_path_batch` and
+    :func:`runtime_spec_at_path_batch`.
+
+    Per-channel body byte-identical to :func:`channel_spec_path_batch`
+    for the same ``(from, to, channels)`` triple -- scalar / batch
+    no-drift contract (the batch delegates to the same underlying
+    :func:`channel_spec_path` per channel that the scalar
+    :func:`channel_spec_at_path` delegates to).
+
+    Shape mirrors :func:`channel_spec_path_batch`::
+
+        {
+          "channels": [{"channel": "<id>", "path": [...]}, ...],
+          "unknown":  ["bogus_id", ...],
+        }
+
+    Supplied channel ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen
+    order preserved). Unknown ids are echoed in ``unknown[]`` instead
+    of short-circuiting -- a partially-bad caller still gets paths back
+    for the valid ids alongside a list of what was dropped, matching
+    every other ``*_path_batch`` sibling's posture.
+
+    Because every chat-channel adapter is FREE at every tier (the
+    ``channels`` capacity axis governs how many concurrent channels
+    each plan admits, not which adapters unlock), each per-channel
+    ``path`` is byte-identical to the LIVE :func:`channel_spec_path`
+    output -- the always-free invariant is inherited from the delegate
+    and pinned by parity tests so the ``_at_path_batch`` surface cannot
+    drift from the scalar what-if or the current-perspective batch.
+
+    Returns ``None`` for empty / unknown ``perspective_tier`` /
+    ``from_tier`` / ``to_tier`` (caller renders "unknown tier" / 404).
+    Never raises: per-channel failures short-circuit that channel into
+    ``unknown[]``; a top-level delegation failure short-circuits to
+    ``None``.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_FEATURES:
+        return None
+    try:
+        return channel_spec_path_batch(from_tier, to_tier, channels)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: channel_spec_at_path_batch failed: %s", exc
+        )
+        return None
+
+
 def lock_reason_at_path(
     perspective_tier: str,
     from_tier: str,
