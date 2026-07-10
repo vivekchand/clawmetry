@@ -1897,6 +1897,7 @@ class OpenClawAdapter(AgentAdapter):
                                     ("cacheReadTokens", "cache_read_input_tokens", "cacheReadInputTokens", "cacheRead"),
                                     ("cacheWriteTokens", "cache_creation_input_tokens", "cacheCreationInputTokens", "cacheWrite"),
                                     ("totalTokens", "totalTokens", "total_tokens"),
+                                    ("contextTokens", "contextTokens", "context_tokens"),
                                 ]:
                                     for k in keys:
                                         v = usage.get(k)

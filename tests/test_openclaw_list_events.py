@@ -640,3 +640,72 @@ def test_list_events_tags_top_level_catalog_tool_call(isolated_store):
     assert len(events) == 1
     ex = events[0].extra
     assert ex.get("isCatalogTool") is True
+
+
+def test_list_events_surfaces_context_tokens(isolated_store):
+    """Per-message contextTokens from usage lands in event.extra (#3614).
+
+    OpenClaw Control UI now shows context-window size per transcript turn.
+    list_events() must expose contextTokens from message.usage so callers
+    can display or alert on per-turn context utilisation.  Both camelCase
+    (contextTokens) and snake_case (context_tokens) key variants are accepted.
+    """
+    import uuid, time as _t
+    isolated_store.ingest({
+        "id": str(uuid.uuid4()),
+        "node_id": "agent+test-node",
+        "agent_id": "main",
+        "agent_type": "openclaw",
+        "session_id": "sess-CTX",
+        "event_type": "model.completed",
+        "ts": _t.time(),
+        "model": "claude-opus-4-7",
+        "token_count": 200,
+        "data": {
+            "type": "assistant",
+            "message": {
+                "model": "claude-opus-4-7",
+                "usage": {
+                    "input": 120,
+                    "output": 42,
+                    "contextTokens": 5000,
+                },
+            },
+        },
+    })
+    # snake_case variant
+    isolated_store.ingest({
+        "id": str(uuid.uuid4()),
+        "node_id": "agent+test-node",
+        "agent_id": "main",
+        "agent_type": "openclaw",
+        "session_id": "sess-CTX2",
+        "event_type": "model.completed",
+        "ts": _t.time(),
+        "model": "claude-opus-4-7",
+        "token_count": 100,
+        "data": {
+            "type": "assistant",
+            "message": {
+                "model": "claude-opus-4-7",
+                "usage": {
+                    "input": 60,
+                    "output": 20,
+                    "context_tokens": 8000,
+                },
+            },
+        },
+    })
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    events = OpenClawAdapter().list_events("sess-CTX")
+    assert len(events) == 1
+    ex = events[0].extra
+    assert ex.get("inputTokens") == 120
+    assert ex.get("outputTokens") == 42
+    assert ex.get("contextTokens") == 5000, "contextTokens must appear in extra for per-turn context-window tracking"
+
+    events2 = OpenClawAdapter().list_events("sess-CTX2")
+    assert len(events2) == 1
+    assert events2[0].extra.get("contextTokens") == 8000, "snake_case context_tokens must also map to contextTokens"
