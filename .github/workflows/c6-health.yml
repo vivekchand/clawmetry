@@ -4,7 +4,7 @@ name: C6 daily health check (branch-protection audit -- all 3 repos)
 # ALL 3 repos: clawmetry, clawmetry-cloud, clawmetry-landing.
 #
 # clawmetry/main protection is read directly via github.token.
-# clawmetry-cloud and clawmetry-landing are read via the public
+# For clawmetry-cloud and clawmetry-landing we try the public
 # /branches/main endpoint (works for public repos; falls back to
 # UNKNOWN if protection detail is not visible cross-repo).
 #
@@ -112,6 +112,8 @@ jobs:
 
               Returns (contexts: set[str], status: str) where status is:
                 'ok'          -- read succeeded, contexts is the full set
+                                 (may be empty if required checks are not yet
+                                 configured -- outer loop detects "missing")
                 'unknown'     -- branch is protected but detail not readable
                                  (cross-repo GITHUB_TOKEN limit on public repos)
                 'unprotected' -- branch has no protection configured
@@ -126,8 +128,21 @@ jobs:
               rsc = prot.get("required_status_checks") or {}
               contexts = set(rsc.get("contexts", []))
               if not contexts:
-                  # Protected but required_status_checks detail not visible.
-                  # Cross-repo reads via GITHUB_TOKEN often hit this limit.
+                  # Protected but contexts empty or not visible in /branches/main.
+                  # GITHUB_TOKEN may return a partial protection object (e.g.
+                  # when the branch was recently protected without required checks,
+                  # or when token lacks admin scope for the full detail).
+                  # Try the dedicated endpoint: GITHUB_TOKEN with push access on
+                  # the host repo can read this; cross-repo reads return 403.
+                  detail, detail_err = api_get(
+                      f"/repos/{OWNER}/{repo}/branches/main/protection/required_status_checks"
+                  )
+                  if detail is not None:
+                      # Readable -- return actual contexts (may be empty = confirmed
+                      # no required checks configured; outer loop marks as "missing").
+                      return set(detail.get("contexts", [])), "ok"
+                  # Could not read via dedicated endpoint (cross-repo 403 or no
+                  # protection at all on that path) -- genuinely unknown.
                   return set(), "unknown"
               return contexts, "ok"
 
