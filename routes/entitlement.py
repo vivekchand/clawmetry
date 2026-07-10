@@ -7947,6 +7947,93 @@ def api_entitlement_next_tier_channel_spec():
         return jsonify(_next_prev_tier_axis_spec_grace_body("channel", supplied))
 
 
+def _next_prev_tier_channel_catalog_grace_body() -> dict:
+    """Fallback envelope shared by the two next/previous channel-catalog
+    routes. Keeps the shape identical to the happy path so a resolver
+    failure never breaks an upgrade-preview panel client-side."""
+    return {
+        "current_tier": "oss",
+        "current_tier_label": "OSS",
+        "current_tier_rank": 0,
+        "target": None,
+        "target_label": None,
+        "target_rank": None,
+        "channels": [],
+        "grace": True,
+        "enforced": False,
+    }
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-channel-catalog")
+def api_entitlement_next_tier_channel_catalog():
+    """``GET /api/entitlement/next-tier-channel-catalog`` -- channel-axis
+    catalog projection of ``/next-tier-spec``: the full
+    :func:`channel_catalog_at`-shape catalogue for every chat-channel
+    adapter at the rung above the resolved entitlement.
+
+    Current-relative, no-arg sibling of
+    ``/api/entitlement/channel-catalog-at``. Convenience for
+    ``/channel-catalog-at?tier=<next_purchasable_tier>`` so an
+    upgrade-preview panel can hydrate the whole channel matrix at the
+    next rung off ONE round-trip without threading the current tier
+    through query args or first fetching ``/entitlement`` for
+    ``next_tier``.
+
+    Anchored on :meth:`Entitlement.next_purchasable_tier` (source-aware),
+    matching ``/next-tier-spec`` and ``/next-tier-channel-spec``.
+
+    Response shape::
+
+        {
+          "current_tier":       "<resolved id>",
+          "current_tier_label": ...,
+          "current_tier_rank":  <int>,
+          "target":             "<next_purchasable_tier id or null>",
+          "target_label":       ...,
+          "target_rank":        <int or null>,
+          "channels":           [<catalog_row>, ...],  # empty at ceiling
+          "grace":              <bool>,
+          "enforced":           <bool>,
+        }
+
+    ``channels`` is byte-identical to the body of
+    ``/channel-catalog-at?tier=<target>`` for the same tier -- pinned by
+    a parity test so the endpoint cannot drift from the sibling.
+
+    Every chat channel is FREE at every tier, so every row comes back
+    ``free=True`` / ``locked=False`` / ``entitled=True`` regardless of
+    the target rung.
+
+    Never 5xxs: at the ceiling ``channels`` collapses to ``[]`` (no rung
+    above to preview); a resolver failure short-circuits to the
+    grace-shape envelope.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        target = ent.next_purchasable_tier()
+        rows = ent.next_tier_channel_catalog() or []
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "channels": rows,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_channel_catalog: error: %s", exc
+        )
+        return jsonify(_next_prev_tier_channel_catalog_grace_body())
+
+
 @bp_entitlement.route("/api/entitlement/previous-tier-channel-spec")
 def api_entitlement_previous_tier_channel_spec():
     """``GET /api/entitlement/previous-tier-channel-spec?channel=<id>``
@@ -8001,6 +8088,50 @@ def api_entitlement_previous_tier_channel_spec():
             "api_entitlement_previous_tier_channel_spec: error: %s", exc
         )
         return jsonify(_next_prev_tier_axis_spec_grace_body("channel", supplied))
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-channel-catalog")
+def api_entitlement_previous_tier_channel_catalog():
+    """``GET /api/entitlement/previous-tier-channel-catalog`` --
+    symmetric downgrade-side companion of
+    ``/next-tier-channel-catalog``: the full
+    :func:`channel_catalog_at`-shape catalogue for every chat-channel
+    adapter at the rung below the resolved entitlement.
+
+    Same envelope as ``/next-tier-channel-catalog``; ``channels``
+    collapses to ``[]`` at the floor and ``target`` / ``target_label``
+    / ``target_rank`` to ``null``.
+
+    Anchored on :meth:`Entitlement.previous_purchasable_tier`
+    (source-aware), matching ``/previous-tier-spec`` and
+    ``/previous-tier-channel-spec``.
+
+    Never 5xxs: grace-shape envelope on resolver failure.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        target = ent.previous_purchasable_tier()
+        rows = ent.previous_tier_channel_catalog() or []
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "channels": rows,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_channel_catalog: error: %s", exc
+        )
+        return jsonify(_next_prev_tier_channel_catalog_grace_body())
 
 
 def _next_prev_tier_axis_spec_batch_grace_body(axis: str) -> dict:

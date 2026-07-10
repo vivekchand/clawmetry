@@ -1243,6 +1243,80 @@ class Entitlement:
             rows.append({"channel": cid, "row": row})
         return {"channels": rows, "unknown": unknown}
 
+    def next_tier_channel_catalog(self) -> list[dict] | None:
+        """Channel-axis projection of :meth:`next_tier_spec`: the full
+        :func:`channel_catalog_at`-shape catalogue for every chat-channel
+        adapter evaluated on the rung above the resolved entitlement in
+        ONE round-trip.
+
+        Current-relative, no-arg sibling of :func:`channel_catalog_at`.
+        Convenience for ``channel_catalog_at(self.next_purchasable_tier())``
+        so a pricing / upgrade-preview surface can render the whole
+        channel matrix at the next rung without threading the target tier
+        through query args or first fetching :meth:`next_purchasable_tier`.
+
+        Anchored on :meth:`next_purchasable_tier` (source-aware -- picks
+        the ``cloud_*`` sibling when :attr:`source` is ``"cloud"``, the
+        self-hosted sibling otherwise), matching
+        :meth:`next_tier_channel_spec` and :meth:`next_tier_spec`.
+
+        Every chat channel is FREE at every tier (the ``channels``
+        capacity axis governs how many concurrent channels each plan
+        admits, not which adapters unlock), so every row comes back
+        ``free=True`` / ``allowed=True`` / ``locked=False`` /
+        ``entitled=True`` regardless of the target rung. That parity IS
+        the answer: an upgrade-preview panel can render "all N chat
+        channels included at every plan" off ONE call without
+        hard-coding that posture client-side.
+
+        Returns ``None`` at the resolver's ceiling (no rung above
+        current). Never raises: a builder failure short-circuits to
+        ``None`` so the panel stays mute instead of breaking.
+        """
+        try:
+            target = self.next_purchasable_tier()
+            if target is None:
+                return None
+            return channel_catalog_at(target)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: next_tier_channel_catalog failed: %s", exc
+            )
+            return None
+
+    def previous_tier_channel_catalog(self) -> list[dict] | None:
+        """Channel-axis projection of :meth:`previous_tier_spec`: the
+        full :func:`channel_catalog_at`-shape catalogue for every
+        chat-channel adapter evaluated on the rung below the resolved
+        entitlement in ONE round-trip.
+
+        Symmetric mirror of :meth:`next_tier_channel_catalog` and
+        downgrade-confirmation companion. Convenience for
+        ``channel_catalog_at(self.previous_purchasable_tier())``.
+
+        Anchored on :meth:`previous_purchasable_tier` (source-aware),
+        matching :meth:`previous_tier_channel_spec` and
+        :meth:`previous_tier_spec`.
+
+        Every chat channel is FREE at every tier, so every row comes
+        back ``free=True`` / ``locked=False`` / ``entitled=True``
+        regardless of the target rung -- the downgrade-confirmation
+        surface can render "no channels lost on downgrade" off ONE
+        call.
+
+        Returns ``None`` at the resolver's floor. Never raises.
+        """
+        try:
+            target = self.previous_purchasable_tier()
+            if target is None:
+                return None
+            return channel_catalog_at(target)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: previous_tier_channel_catalog failed: %s", exc
+            )
+            return None
+
     def next_tier_feature_spec_batch(self, features) -> dict:
         """Batch sibling of :meth:`next_tier_feature_spec`: per-feature
         :func:`feature_spec_at`-shape rows for N features evaluated on
@@ -2496,6 +2570,33 @@ def previous_tier_channel_spec(channel: str) -> dict | None:
     except Exception as exc:
         logger.warning(
             "entitlements: previous_tier_channel_spec (module) failed: %s", exc
+        )
+        return None
+
+
+def next_tier_channel_catalog() -> list[dict] | None:
+    """Module-level :meth:`Entitlement.next_tier_channel_catalog` against
+    the resolved entitlement. Never raises: a resolver failure
+    short-circuits to ``None`` so an upgrade-preview panel stays mute
+    instead of breaking."""
+    try:
+        return get_entitlement().next_tier_channel_catalog()
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_channel_catalog (module) failed: %s", exc
+        )
+        return None
+
+
+def previous_tier_channel_catalog() -> list[dict] | None:
+    """Module-level :meth:`Entitlement.previous_tier_channel_catalog`
+    against the resolved entitlement. Never raises."""
+    try:
+        return get_entitlement().previous_tier_channel_catalog()
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_channel_catalog (module) failed: %s",
+            exc,
         )
         return None
 
