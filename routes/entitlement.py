@@ -14038,6 +14038,167 @@ def api_entitlement_previous_tier_runtime_spec_at_batch():
     return _next_prev_tier_runtime_spec_at_batch("previous")
 
 
+def _next_prev_tier_channel_spec_at_batch(
+    direction: str,
+):
+    """Shared helper for the two ``/api/entitlement/{next,previous}-tier-
+    channel-spec-at-batch`` handlers.
+
+    Channel-axis twin of :func:`_next_prev_tier_feature_spec_at_batch`
+    / :func:`_next_prev_tier_runtime_spec_at_batch`. ``direction``
+    selects the rung helper (``next`` / ``previous``). Returned
+    envelope shape is identical for both directions so the paywall
+    surface can swap one URL for the other without re-deriving the row
+    schema.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        channels = _parse_csv_arg("channels")
+        if not channels:
+            return jsonify({"error": "supply channels=<csv>"}), 400
+        if direction == "next":
+            target = _ent._next_purchasable_tier_after(tier_in)
+            batch = _ent.next_tier_channel_spec_at_batch(tier_in, channels)
+        else:
+            target = _ent._previous_purchasable_tier_before(tier_in)
+            batch = _ent.previous_tier_channel_spec_at_batch(tier_in, channels)
+        if batch is None:
+            batch = {"channels": [], "unknown": []}
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": _ent.tier_label(tier_in),
+                "tier_rank": _ent.tier_rank(tier_in),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "channels": batch.get("channels", []),
+                "unknown": batch.get("unknown", []),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_%s_tier_channel_spec_at_batch: error: %s",
+            direction,
+            exc,
+        )
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": None,
+                "tier_rank": -1,
+                "target": None,
+                "target_label": None,
+                "target_rank": None,
+                "channels": [],
+                "unknown": [],
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-channel-spec-at-batch")
+def api_entitlement_next_tier_channel_spec_at_batch():
+    """``GET /api/entitlement/next-tier-channel-spec-at-batch?tier=<source>
+    &channels=a,b,c`` -- channel-axis twin of
+    ``/api/entitlement/next-tier-feature-spec-at-batch`` /
+    ``/api/entitlement/next-tier-runtime-spec-at-batch`` and batch
+    sibling of ``/api/entitlement/next-tier-channel-spec-at``.
+
+    Where ``/next-tier-channel-spec-at`` projects ONE chat channel
+    onto the rung above the caller-supplied source, this projects N
+    channels onto that same rung in ONE round-trip. Pairs with
+    ``/next-tier-channel-spec-at`` the same way
+    ``/channel-spec-at-batch`` pairs with ``/channel-spec-at``: scalar
+    what-if -> batch what-if.
+
+    Use case: a pricing-comparison "here are the 6 chat channels I
+    care about -- what do they look like at my next rung?" surface
+    hydrates every channel off ONE call instead of N calls to
+    ``/next-tier-channel-spec-at``.
+
+    Each row in ``channels[].row`` is byte-identical to the body of
+    ``/next-tier-channel-spec-at?tier=<source>&channel=<id>`` ``.row``
+    -- pinned by parity tests so the scalar and batch accessors cannot
+    drift. Supplied channel ids are normalised (whitespace stripped,
+    lowercased, duplicates dropped, first-seen order preserved).
+    Unknown ids do not 404 the call -- they are echoed in
+    ``unknown[]`` so a partially-bad caller still gets rows back for
+    the valid ids.
+
+    Every chat channel is FREE at every tier (see
+    ``/channel-spec-at``), so whenever ``row`` is not ``null`` it
+    comes back ``free=true`` / ``locked=false`` / ``entitled=true``
+    regardless of the target rung -- the surface can render "chat
+    channel included at every plan" off ONE call without hard-coding
+    that posture client-side.
+
+    At the ceiling (enterprise as source, no rung above) every per-
+    channel ``row`` is ``null`` while the envelope's ``target`` /
+    ``target_label`` / ``target_rank`` collapse to ``null`` -- the
+    surface stays 200 so callers can render "you're at the top" copy
+    without a status-code branch.
+
+    Response shape::
+
+        {
+          "tier":         "<source tier id>",
+          "tier_label":   "<source label>",
+          "tier_rank":    <source rank>,
+          "target":       "<next-above tier id>" | null,
+          "target_label": "<next-above label>" | null,
+          "target_rank":  <next-above rank> | null,
+          "channels": [
+            {"channel": "<id>", "row": {<channel_spec_at row>} | null},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    - **400** when ``tier=`` is missing / blank, or ``channels=`` is
+      missing / empty after normalisation
+    - **404** when ``tier`` is unknown (body carries ``which: "tier"``)
+    - **Never 5xxs**: a synthesis failure short-circuits to an envelope
+      with empty rows so the matrix keeps rendering.
+    """
+    return _next_prev_tier_channel_spec_at_batch("next")
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-channel-spec-at-batch")
+def api_entitlement_previous_tier_channel_spec_at_batch():
+    """``GET /api/entitlement/previous-tier-channel-spec-at-batch
+    ?tier=<source>&channels=a,b,c`` -- source-anchored mirror of
+    ``/api/entitlement/next-tier-channel-spec-at-batch`` and batch
+    sibling of ``/api/entitlement/previous-tier-channel-spec-at``.
+
+    Lets a downgrade-confirmation card render "here are the N chat
+    channels I care about -- do they still unlock one rung down?" off
+    ONE round-trip instead of N calls to
+    ``/previous-tier-channel-spec-at``.
+
+    Each row in ``channels[].row`` is byte-identical to the body of
+    ``/previous-tier-channel-spec-at?tier=<source>&channel=<id>``
+    ``.row``. At the floor (``oss`` / ``cloud_free`` as source) every
+    per-channel ``row`` is ``null`` while ``target`` / ``target_label``
+    / ``target_rank`` collapse to ``null``.
+
+    Response shape, validation, and never-5xx posture are identical to
+    ``/next-tier-channel-spec-at-batch``.
+    """
+    return _next_prev_tier_channel_spec_at_batch("previous")
+
+
 @bp_entitlement.route("/api/entitlement/capacity-diff-path-batch")
 def api_entitlement_capacity_diff_path_batch():
     """``GET /api/entitlement/capacity-diff-path-batch?from=<id>&to=a,b,c``

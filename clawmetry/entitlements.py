@@ -12304,6 +12304,156 @@ def previous_tier_runtime_spec_at_batch(tier: str, runtimes) -> dict | None:
     return {"runtimes": rows, "unknown": unknown}
 
 
+def next_tier_channel_spec_at_batch(tier: str, channels) -> dict | None:
+    """Channel-axis twin of :func:`next_tier_feature_spec_at_batch` /
+    :func:`next_tier_runtime_spec_at_batch` -- batch sibling of
+    :func:`next_tier_channel_spec_at` walking N chat channels against
+    the rung ABOVE the caller-supplied ``tier`` in ONE round-trip.
+
+    Composes :func:`next_tier_channel_spec_at` (scalar projection) and
+    :func:`channel_spec_at_batch` (batch what-if) -- same target
+    (`_next_purchasable_tier_after(tier)`) as the scalar, same per-
+    channel envelope shape as the feature / runtime siblings. Lets a
+    paywall "does THIS column of chat channels unlock at my next rung?"
+    pricing-comparison surface render every channel off ONE call
+    instead of N calls to :func:`next_tier_channel_spec_at`.
+
+    Per-channel row shape::
+
+        {"channel": "<id>", "row": <channel_spec_at row> | None}
+
+    Each ``row`` is byte-identical to
+    :func:`next_tier_channel_spec_at(tier, channel)` (which itself
+    equals :func:`channel_spec_at(target, channel)` byte-for-byte at
+    the resolved target) -- pinned by parity tests so the scalar and
+    batch accessors cannot drift. At the ceiling (enterprise as source,
+    no rung above) every ``row`` is ``None`` while the per-channel
+    envelope entries still render so the matrix's row count stays
+    stable.
+
+    Shape::
+
+        {
+          "channels": [
+            {"channel": "<id>", "row": <row> | None},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Supplied channel ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen
+    order preserved). Unknown ids are echoed in ``unknown[]`` rather
+    than short-circuiting -- a partially-bad caller still gets rows
+    back for the valid ids alongside a list of what was dropped,
+    matching :func:`next_tier_feature_spec_at_batch` /
+    :func:`next_tier_runtime_spec_at_batch`.
+
+    Every chat channel is FREE at every tier (see
+    :func:`channel_spec_at`), so whenever ``row`` is not ``None`` it
+    comes back ``free=True`` / ``locked=False`` / ``entitled=True``
+    regardless of the target rung. That parity IS the answer: the
+    pricing surface can render "chat channel included at every plan"
+    off ONE call without hard-coding that posture client-side.
+
+    Returns ``None`` for empty / unknown ``tier`` (caller renders
+    "unknown tier" / 404). Resolver-independent: delegates to
+    :func:`channel_spec_at` against the synthesised hypothetical
+    entitlement -- grace vs enforce yields byte-identical rows. Never
+    raises: a per-channel failure short-circuits that channel into
+    ``unknown[]`` and the rest of the batch keeps building.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    chans = _normalise_csv(channels)
+    try:
+        target = _next_purchasable_tier_after(src)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_channel_spec_at_batch target resolve failed: %s",
+            exc,
+        )
+        target = None
+    rows: list[dict] = []
+    unknown: list[str] = []
+    for cid in chans:
+        if cid not in ALL_CHANNELS:
+            unknown.append(cid)
+            continue
+        try:
+            row = channel_spec_at(target, cid) if target else None
+        except Exception as exc:
+            logger.warning(
+                "entitlements: next_tier_channel_spec_at_batch row %r failed: %s",
+                cid,
+                exc,
+            )
+            unknown.append(cid)
+            continue
+        rows.append({"channel": cid, "row": row})
+    return {"channels": rows, "unknown": unknown}
+
+
+def previous_tier_channel_spec_at_batch(tier: str, channels) -> dict | None:
+    """Source-anchored mirror of :func:`next_tier_channel_spec_at_batch`
+    -- batch sibling of :func:`previous_tier_channel_spec_at` walking N
+    chat channels against the rung BELOW the caller-supplied ``tier``
+    in ONE round-trip.
+
+    Same per-channel row shape and same normalisation / unknown-bucket
+    posture as :func:`next_tier_channel_spec_at_batch`. At the floor
+    (``oss`` / ``cloud_free`` as source, no rung below) every ``row``
+    is ``None`` while per-channel envelope entries still render so the
+    downgrade-confirmation surface's row count stays stable.
+
+    Each ``row`` is byte-identical to
+    :func:`previous_tier_channel_spec_at(tier, channel)` (which itself
+    equals :func:`channel_spec_at(target, channel)` byte-for-byte at
+    the resolved target). Channel-axis always-free invariant applies
+    here as well: whenever ``row`` is not ``None`` it comes back
+    ``free=True`` / ``locked=False`` / ``entitled=True``.
+
+    Returns ``None`` for empty / unknown ``tier``. Never raises.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    chans = _normalise_csv(channels)
+    try:
+        target = _previous_purchasable_tier_before(src)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_channel_spec_at_batch target resolve failed: %s",
+            exc,
+        )
+        target = None
+    rows: list[dict] = []
+    unknown: list[str] = []
+    for cid in chans:
+        if cid not in ALL_CHANNELS:
+            unknown.append(cid)
+            continue
+        try:
+            row = channel_spec_at(target, cid) if target else None
+        except Exception as exc:
+            logger.warning(
+                "entitlements: previous_tier_channel_spec_at_batch row %r failed: %s",
+                cid,
+                exc,
+            )
+            unknown.append(cid)
+            continue
+        rows.append({"channel": cid, "row": row})
+    return {"channels": rows, "unknown": unknown}
+
+
 def tier_path_batch(from_tier: str, to_tiers) -> dict | None:
     """Batch sibling of :func:`tier_path`: per-rung marginal ``tier_diff``
     rows for a caller-supplied subset of destination tiers all walked
