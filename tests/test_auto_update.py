@@ -77,14 +77,51 @@ def test_auto_update_failure_allows_retry_after_backoff(monkeypatch):
     # A DIFFERENT (newer) target is not blocked by the failed one's backoff.
     uc._maybe_auto_update("0.12.1", "0.12.3")
     assert calls == ["auto", "auto"], "a new target must not inherit the backoff"
-    # Once the backoff expires, the original target is retryable again.
+    # Once the backoff deadline passes, the original target is retryable.
     import time as _t
-    uc._failed_update_attempts["0.12.2"] = (
-        _t.monotonic() - uc._autoupdate_retry_secs() - 1
-    )
+    uc._failed_update_attempts["0.12.2"] = _t.monotonic() - 1
     uc._maybe_auto_update("0.12.1", "0.12.2")
     assert calls == ["auto", "auto", "auto"], \
         "a failed auto-update must be retryable after the backoff"
+
+
+def test_propagation_lag_gets_short_backoff(monkeypatch):
+    """'No matching distribution' is the PyPI simple-index propagation race
+    (the JSON API advertises a release 1-3 minutes before pip can install
+    it) — it must retry in ~2 minutes, NOT the full broken-target backoff.
+    Caught live 2026-07-10: the very first fast-loop update attempt hit this
+    and sat out a 30-minute backoff for a 2-minute lag."""
+    import time as _t
+    import routes.meta as meta
+    uc = _uc()
+    _as_daemon(uc, monkeypatch)
+    monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
+
+    def _fake(reason="manual", restart=True, target_version=None):
+        return ({"ok": False,
+                 "error": "pip exit 1: No matching distribution found for "
+                          "clawmetry==0.12.551"}, 500)
+
+    monkeypatch.setattr(meta, "perform_self_update", _fake)
+    t0 = _t.monotonic()
+    uc._maybe_auto_update("0.12.550", "0.12.551")
+    deadline = uc._failed_update_attempts.get("0.12.551")
+    assert deadline is not None
+    wait = deadline - t0
+    assert wait <= uc._propagation_retry_secs() + 5, (
+        f"propagation lag backed off {wait:.0f}s; must be ~"
+        f"{uc._propagation_retry_secs():.0f}s, not the broken-target backoff"
+    )
+    # A non-propagation failure still gets the long backoff.
+    def _fake_broken(reason="manual", restart=True, target_version=None):
+        return ({"ok": False, "error": "pip exit 1: some real build error"}, 500)
+
+    monkeypatch.setattr(meta, "perform_self_update", _fake_broken)
+    uc._maybe_auto_update("0.12.550", "0.12.552")
+    deadline2 = uc._failed_update_attempts.get("0.12.552")
+    assert deadline2 is not None
+    assert (deadline2 - _t.monotonic()) > uc._propagation_retry_secs() + 60, \
+        "a real install failure must keep the long backoff"
 
 
 def test_auto_update_in_allowed_config_keys(monkeypatch):
