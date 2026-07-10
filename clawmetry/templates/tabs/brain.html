@@ -141,9 +141,9 @@
       </div>
       <div id="brain-custom-range" style="display:none;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px;font-size:11px;color:var(--text-muted);">
         <span data-i18n="brain.range_from">From</span>
-        <input type="datetime-local" id="brain-range-from" step="60" style="padding:4px 6px;background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:11px;font-family:inherit;">
+        <input type="datetime-local" class="brain-dtl" id="brain-range-from" step="60" onclick="_brainOpenPicker(this)" style="padding:4px 6px;background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:11px;font-family:inherit;">
         <span data-i18n="brain.range_to">to</span>
-        <input type="datetime-local" id="brain-range-to" step="60" style="padding:4px 6px;background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:11px;font-family:inherit;">
+        <input type="datetime-local" class="brain-dtl" id="brain-range-to" step="60" onclick="_brainOpenPicker(this)" style="padding:4px 6px;background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:11px;font-family:inherit;">
         <button class="refresh-btn" onclick="applyBrainCustomRange()" style="font-weight:600;" data-i18n="brain.range_apply">Show this window</button>
       </div>
       <div id="brain-history-banner" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.35);border-radius:6px;padding:6px 10px;margin-bottom:8px;font-size:12px;color:#f59e0b;">
@@ -151,7 +151,7 @@
         <span id="brain-history-banner-status" style="color:var(--text-muted);font-size:11px;"></span>
         <button class="refresh-btn" onclick="setBrainTimeRange('live')" style="margin-left:auto;font-weight:600;" data-i18n="brain.back_to_live">● Back to live</button>
       </div>
-      <canvas id="brain-density-chart" height="60" style="width:100%;display:block;"></canvas>
+      <canvas id="brain-density-chart" height="100" style="width:100%;display:block;"></canvas>
     </div>
     <!-- Sessions-at-risk card (issue #2008): surfaces the existing
          /api/outcomes/impact endpoint in a visible UI summary. Hidden when
