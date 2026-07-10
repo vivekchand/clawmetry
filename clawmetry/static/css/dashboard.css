@@ -133,6 +133,15 @@
   .time-btn { padding: 4px 12px; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-primary); color: var(--text-tertiary); cursor: pointer; font-size: 12px; font-weight: 600; transition: all 0.2s; }
   .time-btn:hover { background: var(--bg-hover); color: var(--text-secondary); }
   .time-btn.active { background: var(--bg-accent); color: #fff; border-color: var(--bg-accent); }
+  /* Brain custom-range datetime inputs. color-scheme drives the palette of
+     the native calendar popup AND the picker indicator icon: without the
+     dark override Chrome paints a near-black icon on the dark input
+     background, so the picker looks like it does not exist. Clicking
+     anywhere in the field opens the popup via _brainOpenPicker (app.js). */
+  input.brain-dtl { color-scheme: light; cursor: pointer; }
+  [data-theme="dark"] input.brain-dtl { color-scheme: dark; }
+  input.brain-dtl::-webkit-calendar-picker-indicator { cursor: pointer; opacity: 0.75; }
+  input.brain-dtl::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 
   .page { display: none; padding: 16px 20px; max-width: 1200px; margin: 0 auto; }
   #page-flow { padding: 0; max-width: 100%; }

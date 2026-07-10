@@ -4332,6 +4332,16 @@ function toggleBrainCustomRange(el) {
   }
 }
 
+function _brainOpenPicker(inp) {
+  // Open the native calendar popup on a click anywhere in the field, not
+  // just the tiny indicator icon (which is easy to miss on the dark theme).
+  // showPicker needs a user gesture and does not exist on Safari, so any
+  // failure is non-fatal: the field still accepts typed input.
+  try {
+    if (inp && typeof inp.showPicker === 'function') inp.showPicker();
+  } catch (e) {}
+}
+
 function applyBrainCustomRange() {
   var from = document.getElementById('brain-range-from');
   var to = document.getElementById('brain-range-to');
@@ -5696,8 +5706,8 @@ function renderBrainChart(events) {
   var ctx = canvas.getContext('2d');
   var W = canvas.parentElement ? canvas.parentElement.offsetWidth : (canvas.offsetWidth || 800);
   canvas.width = W;
-  canvas.height = 80;
-  ctx.clearRect(0, 0, W, 80);
+  canvas.height = 100; // 80px bars + 20px time axis strip
+  ctx.clearRect(0, 0, W, 100);
 
   // Adaptive window: pick the shortest window that contains the events so the
   // chart actually renders bars instead of an empty 60-min background. The
@@ -5767,6 +5777,64 @@ function renderBrainChart(events) {
     });
   }
   ctx.globalAlpha = 1;
+
+  // Time axis: label the window the bars actually span, in local wall time.
+  // The window is derived (adaptive in Live mode, explicit in history mode),
+  // so without labels the same bars could mean "last hour" or "last day".
+  var axis = _brainAxisTicks(now - numBuckets * bucketMs, now, W);
+  var _axCs = null;
+  try { _axCs = getComputedStyle(document.body); } catch (e) {}
+  var _axVar = function(name, fb) {
+    var v = _axCs && _axCs.getPropertyValue(name);
+    return (v && v.trim()) || fb;
+  };
+  ctx.strokeStyle = _axVar('--border-primary', '#273243');
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, 80.5);
+  ctx.lineTo(W, 80.5);
+  axis.ticks.forEach(function(tk) {
+    var x = Math.round(tk.frac * W) + 0.5;
+    ctx.moveTo(Math.min(x, W - 0.5), 80.5);
+    ctx.lineTo(Math.min(x, W - 0.5), 84.5);
+  });
+  ctx.stroke();
+  ctx.fillStyle = _axVar('--text-faint', '#98a2b3');
+  ctx.font = '10px -apple-system, "Segoe UI", sans-serif';
+  ctx.textBaseline = 'alphabetic';
+  axis.ticks.forEach(function(tk, ti) {
+    ctx.textAlign = ti === 0 ? 'left' : (ti === axis.ticks.length - 1 ? 'right' : 'center');
+    ctx.fillText(tk.label, tk.frac * W + (ti === 0 ? 1 : (ti === axis.ticks.length - 1 ? -1 : 0)), 96);
+  });
+}
+
+// Tick positions + labels for the density chart's time axis. Pure function
+// (unit-tested via the extraction pattern in tests/test_brain_axis_ticks.js).
+// Returns {withDate, ticks: [{frac, label}]} where frac is 0..1 across the
+// chart width. Labels include the day/month whenever the window is longer
+// than ~20h or crosses midnight, so "03:00" can't be mistaken for today.
+function _brainAxisTicks(startMs, endMs, width) {
+  var span = endMs - startMs;
+  if (!isFinite(span) || span <= 0 || !(width > 0)) return { withDate: false, ticks: [] };
+  var withDate = span > 72000000 ||
+    (new Date(startMs).toDateString() !== new Date(endMs).toDateString());
+  // Date-bearing labels are ~2x wider; space ticks so labels never collide.
+  var n = Math.max(2, Math.min(withDate ? 5 : 7, Math.floor(width / (withDate ? 170 : 110)) + 1));
+  var ticks = [];
+  for (var i = 0; i < n; i++) {
+    var frac = i / (n - 1);
+    var t = new Date(startMs + span * frac);
+    var label;
+    try {
+      label = withDate
+        ? t.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+        : t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch (e) {
+      label = t.toISOString().slice(11, 16);
+    }
+    ticks.push({ frac: frac, label: label });
+  }
+  return { withDate: withDate, ticks: ticks };
 }
 
 // ── Brain Graph (neural-net visualization, refs #53) ──────────────────────
