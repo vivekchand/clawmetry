@@ -1181,8 +1181,8 @@ def _sync_auto_update_with_plan(tier: str | None) -> None:
             _succ({"auto_update": True})
             log.info(
                 "auto-update enabled for entitled plan (%s) — this node will keep "
-                "itself current (48h stability window). Opt out any time with "
-                "CLAWMETRY_AUTO_UPDATE=0.", tier,
+                "itself current within minutes of each release. Opt out any time "
+                "with CLAWMETRY_AUTO_UPDATE=0.", tier,
             )
     except Exception as exc:
         log.debug("auto-update plan sync skipped: %s", exc)

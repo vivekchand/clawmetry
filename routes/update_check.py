@@ -398,10 +398,40 @@ def _check_for_update():
 # before the restart lands. Reset on failure so the next check can retry.
 _auto_update_in_progress = False
 
-# version -> monotonic timestamp of its last FAILED install attempt. With the
-# 60s check loop a persistently-broken target would otherwise re-run pip every
-# minute; failed versions wait _autoupdate_retry_secs() before a retry.
+# version -> monotonic DEADLINE before which a FAILED install must not be
+# retried. With the 60s check loop a persistently-broken target would
+# otherwise re-run pip every minute. The deadline length depends on WHY the
+# install failed — see _retry_backoff_for_error.
 _failed_update_attempts: dict = {}
+
+# pip stderr signatures of "the release exists but this mirror hasn't seen it
+# yet" — the PyPI simple-index/CDN propagation race. The JSON API (which the
+# checker polls) routinely advertises a version 1-3 minutes before pip can
+# install it. Caught live 2026-07-10: the very first fast-loop update attempt
+# hit this and backed off a full 30 minutes for what was a 2-minute lag.
+_PROPAGATION_ERR_SIGNS = (
+    "No matching distribution",
+    "Could not find a version",
+)
+
+
+def _propagation_retry_secs() -> float:
+    """Short retry for index-propagation failures. Env override:
+    ``CLAWMETRY_AUTOUPDATE_PROPAGATION_RETRY_SECS`` (default 120)."""
+    try:
+        return float(os.environ.get(
+            "CLAWMETRY_AUTOUPDATE_PROPAGATION_RETRY_SECS", "120") or 120)
+    except Exception:
+        return 120.0
+
+
+def _retry_backoff_for_error(error_text: str) -> float:
+    """Backoff for a failed install: propagation lag retries in ~2 minutes,
+    anything else (a genuinely broken target / env) waits the full backoff."""
+    txt = str(error_text or "")
+    if any(sig in txt for sig in _PROPAGATION_ERR_SIGNS):
+        return _propagation_retry_secs()
+    return _autoupdate_retry_secs()
 
 
 def _exec_restart_disabled() -> bool:
@@ -464,10 +494,10 @@ def _maybe_auto_update(current, target, latest=None):
     if not target or not _version_gt(target, current):
         return
     # Failed-install backoff: with the 60s check loop, a target whose pip
-    # install failed must not be retried every minute.
-    _last_fail = _failed_update_attempts.get(str(target))
-    if _last_fail is not None and \
-            (time.monotonic() - _last_fail) < _autoupdate_retry_secs():
+    # install failed must not be retried every minute. The stored value is
+    # the DEADLINE (propagation lag ~2 min, real failures 30 min).
+    _retry_at = _failed_update_attempts.get(str(target))
+    if _retry_at is not None and time.monotonic() < _retry_at:
         return
     # An UNSUPERVISED daemon (no launchd plist / systemd unit — containers,
     # kubectl-exec wrappers, a manual `python -m clawmetry.sync`) installs
@@ -491,9 +521,11 @@ def _maybe_auto_update(current, target, latest=None):
         payload, _status = perform_self_update(
             reason="auto", restart=restart, target_version=target)
         if not (isinstance(payload, dict) and payload.get("ok")):
+            _err = payload.get("error", "") if isinstance(payload, dict) else ""
+            _backoff = _retry_backoff_for_error(_err)
             log.warning("auto-update: upgrade failed, will retry in %.0fs: %s",
-                        _autoupdate_retry_secs(), payload)
-            _failed_update_attempts[str(target)] = time.monotonic()
+                        _backoff, payload)
+            _failed_update_attempts[str(target)] = time.monotonic() + _backoff
             if len(_failed_update_attempts) > 64:
                 _failed_update_attempts.pop(
                     min(_failed_update_attempts, key=_failed_update_attempts.get),
@@ -506,7 +538,9 @@ def _maybe_auto_update(current, target, latest=None):
             _schedule_exec_restart()
     except Exception as exc:
         log.warning("auto-update: error during upgrade: %s", exc)
-        _failed_update_attempts[str(target)] = time.monotonic()
+        _failed_update_attempts[str(target)] = (
+            time.monotonic() + _autoupdate_retry_secs()
+        )
         _auto_update_in_progress = False
 
 
