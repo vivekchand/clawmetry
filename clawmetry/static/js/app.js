@@ -4242,6 +4242,124 @@ var _brainChannelFilter = 'all';
 var _brainAllEvents = [];
 var _brainSSEEverConnected = false;
 
+// ── Date-time range filter ("what happened at 3AM?") ────────────────────
+// null = Live (streaming default). Otherwise {since, until, label} with
+// since/until as UTC ISO strings the server compares against event ts.
+// While a range is active the SSE stream is stopped and every live-refresh
+// path (SSE reconnect flush, poll fallback) is gated so the historical
+// view can't be clobbered by new events.
+var _brainRange = null;
+var _brainRangeRetries = 0; // relay_pending poll budget (hosted dashboards)
+
+function _brainRangeIso(d) {
+  // Second-precision UTC ISO ("2026-07-10T03:00:00Z") — matches the
+  // lexicographic ts compare in the store; ms would also work but this
+  // keeps URLs and cache keys tidy.
+  return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+function _brainRangeHuman(sinceIso, untilIso) {
+  try {
+    var opts = {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'};
+    var s = new Date(sinceIso), u = new Date(untilIso);
+    return s.toLocaleString([], opts) + ' → ' + u.toLocaleString([], opts);
+  } catch (e) { return sinceIso + ' → ' + untilIso; }
+}
+
+function _brainSetRangeActiveBtn(key) {
+  document.querySelectorAll('#brain-range-bar .brain-range-btn').forEach(function(b) {
+    b.classList.toggle('active', b.getAttribute('data-range') === String(key));
+  });
+}
+
+function _brainUpdateRangeUI() {
+  var banner = document.getElementById('brain-history-banner');
+  var bannerText = document.getElementById('brain-history-banner-text');
+  var label = document.getElementById('brain-density-label');
+  var feedLabel = document.querySelector('#brain-feed [data-i18n="brain.live_event_stream"]');
+  if (_brainRange) {
+    if (banner) banner.style.display = 'flex';
+    if (bannerText) bannerText.textContent = _brainRangeHuman(_brainRange.since, _brainRange.until);
+    if (label) label.textContent = t('brain.activity_density_window', null, 'Activity density · selected window');
+    if (feedLabel) feedLabel.textContent = t('brain.history_event_stream', null, 'Events in this window (newest first)');
+  } else {
+    if (banner) banner.style.display = 'none';
+    if (label) label.textContent = t('brain.activity_density', null, 'Activity density · last 60 min (30s buckets)');
+    if (feedLabel) feedLabel.textContent = t('brain.live_event_stream', null, 'Live event stream (newest first)');
+  }
+  if (typeof _updateBrainLiveIndicator === 'function') _updateBrainLiveIndicator();
+}
+
+function setBrainTimeRange(secondsOrLive, el) {
+  var custom = document.getElementById('brain-custom-range');
+  if (custom) custom.style.display = 'none';
+  _brainRangeRetries = 0;
+  if (secondsOrLive === 'live') {
+    _brainRange = null;
+    _brainSetRangeActiveBtn('live');
+    _brainUpdateRangeUI();
+    loadBrainPage(); // restarts SSE via the dwell hook
+    return;
+  }
+  var secs = parseInt(secondsOrLive, 10) || 3600;
+  var now = new Date();
+  _brainRange = {
+    since: _brainRangeIso(new Date(now.getTime() - secs * 1000)),
+    until: _brainRangeIso(now),
+  };
+  _brainSetRangeActiveBtn(secs);
+  _enterBrainHistoryMode();
+}
+
+function toggleBrainCustomRange(el) {
+  var custom = document.getElementById('brain-custom-range');
+  if (!custom) return;
+  var showing = custom.style.display !== 'none';
+  custom.style.display = showing ? 'none' : 'flex';
+  if (!showing) {
+    // Prefill a sensible investigation window: the last hour, in the
+    // user's local time (datetime-local inputs are local wall time).
+    var to = document.getElementById('brain-range-to');
+    var from = document.getElementById('brain-range-from');
+    var pad = function(n) { return (n < 10 ? '0' : '') + n; };
+    var fmt = function(d) {
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+             'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+    };
+    var now = new Date();
+    if (to && !to.value) to.value = fmt(now);
+    if (from && !from.value) from.value = fmt(new Date(now.getTime() - 3600 * 1000));
+  }
+}
+
+function applyBrainCustomRange() {
+  var from = document.getElementById('brain-range-from');
+  var to = document.getElementById('brain-range-to');
+  if (!from || !from.value || !to || !to.value) return;
+  // new Date(<datetime-local value>) parses as LOCAL time; toISOString
+  // converts to the UTC instant the server's ts compare expects.
+  var s = new Date(from.value), u = new Date(to.value);
+  if (isNaN(s.getTime()) || isNaN(u.getTime())) return;
+  if (s.getTime() > u.getTime()) { var tmp = s; s = u; u = tmp; }
+  _brainRange = {since: _brainRangeIso(s), until: _brainRangeIso(u)};
+  _brainRangeRetries = 0;
+  _brainSetRangeActiveBtn('custom');
+  _enterBrainHistoryMode();
+}
+
+function _enterBrainHistoryMode() {
+  // Freeze the live machinery, then fetch the window.
+  try { if (typeof _stopBrainSSE === 'function') _stopBrainSSE(); } catch (e) {}
+  if (typeof _brainRefreshTimer !== 'undefined' && _brainRefreshTimer) {
+    clearTimeout(_brainRefreshTimer);
+    _brainRefreshTimer = null;
+  }
+  _brainUpdateRangeUI();
+  var streamEl = document.getElementById('brain-stream');
+  if (streamEl) streamEl.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:13px;">' + t('brain.loading_window', null, 'Loading this time window…') + '</div>';
+  loadBrainPage();
+}
+
 // Provider → emoji + display name. Mirrors routes/brain.py `_CHANNEL_ICON`
 // and clawmetry/sync.py `_CHANNEL_DIRS` (the canonical 21-adapter list).
 // Keep these three in sync when a new adapter ships.
@@ -5585,26 +5703,42 @@ function renderBrainChart(events) {
   // chart actually renders bars instead of an empty 60-min background. The
   // previous hard-coded 60-min window meant any event older than an hour
   // (~typical for /api/brain-history?limit=300) was dropped silently.
+  //
+  // Historical range active: anchor the chart to the SELECTED window instead
+  // of "now" — buckets span [since, until] so a 3AM investigation paints its
+  // bars across the full chart width rather than falling off the left edge.
   var now = Date.now();
-  var WINDOWS = [
-    { ms: 3600000,   bucketMs: 30000   },  // 1h  / 30s  = 120 buckets
-    { ms: 21600000,  bucketMs: 180000  },  // 6h  / 3m   = 120 buckets
-    { ms: 86400000,  bucketMs: 720000  }   // 24h / 12m  = 120 buckets
-  ];
-  var oldestAge = 0;
-  for (var ei = 0; ei < events.length; ei++) {
-    try {
-      var ageE = now - new Date(events[ei].time).getTime();
-      if (ageE > oldestAge && ageE < 86400000 * 2) oldestAge = ageE;
-    } catch(e) {}
+  var bucketMs, numBuckets;
+  if (_brainRange) {
+    var _rs = new Date(_brainRange.since).getTime();
+    var _ru = new Date(_brainRange.until).getTime();
+    if (isFinite(_rs) && isFinite(_ru) && _ru > _rs) {
+      now = _ru; // bucket ages are measured back from the window END
+      numBuckets = 120;
+      bucketMs = Math.max(1000, Math.ceil((_ru - _rs) / numBuckets));
+    }
   }
-  var win = WINDOWS[0];
-  for (var wi = 0; wi < WINDOWS.length; wi++) {
-    if (oldestAge <= WINDOWS[wi].ms) { win = WINDOWS[wi]; break; }
-    win = WINDOWS[wi];
+  if (!bucketMs) {
+    var WINDOWS = [
+      { ms: 3600000,   bucketMs: 30000   },  // 1h  / 30s  = 120 buckets
+      { ms: 21600000,  bucketMs: 180000  },  // 6h  / 3m   = 120 buckets
+      { ms: 86400000,  bucketMs: 720000  }   // 24h / 12m  = 120 buckets
+    ];
+    var oldestAge = 0;
+    for (var ei = 0; ei < events.length; ei++) {
+      try {
+        var ageE = now - new Date(events[ei].time).getTime();
+        if (ageE > oldestAge && ageE < 86400000 * 2) oldestAge = ageE;
+      } catch(e) {}
+    }
+    var win = WINDOWS[0];
+    for (var wi = 0; wi < WINDOWS.length; wi++) {
+      if (oldestAge <= WINDOWS[wi].ms) { win = WINDOWS[wi]; break; }
+      win = WINDOWS[wi];
+    }
+    bucketMs = win.bucketMs;
+    numBuckets = Math.floor(win.ms / bucketMs);
   }
-  var bucketMs = win.bucketMs;
-  var numBuckets = Math.floor(win.ms / bucketMs);
   var buckets = {};
   events.forEach(function(ev) {
     try {
@@ -6011,10 +6145,16 @@ var _BRAIN_SSE_BACKOFF_MAX_MS = 30000;
 var _BRAIN_SSE_BANNER_THRESHOLD_MS = 30000;
 
 function _updateBrainLiveIndicator(connected) {
-  _brainSSEConnected = connected;
+  // Called with no argument from the range-picker UI refresh: repaint the
+  // pill without mutating the SSE connection state.
+  if (connected !== undefined) _brainSSEConnected = connected;
   var el = document.getElementById('brain-live-indicator');
   if (!el) return;
-  if (connected) {
+  if (_brainRange) {
+    el.innerHTML = '<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(245,158,11,0.15);color:#f59e0b;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:700;">🕰 ' + t('brain.indicator_history', null, 'HISTORY') + '</span>';
+    return;
+  }
+  if (_brainSSEConnected) {
     el.innerHTML = '<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(34,197,94,0.15);color:#22c55e;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:700;"><span style="width:7px;height:7px;border-radius:50%;background:#22c55e;animation:livePulse 1.5s ease-in-out infinite;"></span> LIVE</span>';
   } else {
     el.innerHTML = '<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(100,100,100,0.15);color:#888;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:600;">' + t("app.polling", null, "● POLLING") + '</span>';
@@ -6068,6 +6208,9 @@ function _scheduleBrainSSEReconnect() {
     clearTimeout(_brainSSERetryTimer);
     _brainSSERetryTimer = null;
   }
+  // Historical window active: the live stream is deliberately stopped —
+  // do not reconnect until the user returns to Live.
+  if (_brainRange) return;
   // Only retry while the user is actually on the brain page; otherwise
   // the next loadBrainPage() call will kick off a fresh _startBrainSSE.
   var page = document.getElementById('page-brain');
@@ -6101,6 +6244,9 @@ function _resetBrainSSEReconnectState() {
 }
 
 function _startBrainSSE() {
+  // Never open the live stream while a historical window is active — the
+  // frozen view must not be clobbered by incoming events.
+  if (_brainRange) return;
   if (_brainSSE) { try { _brainSSE.close(); } catch(e){} }
   _brainSSE = null;
   _brainSSEConnected = false;
@@ -6122,7 +6268,7 @@ function _startBrainSSE() {
       // Issue #1606 — on reconnect (not first connect), the server may have
       // restarted with a changed event shape. Flush the stale cache and
       // reload so chip filters don't compute against a mixed old+new array.
-      if (_brainSSEEverConnected) {
+      if (_brainSSEEverConnected && !_brainRange) {
         _brainAllEvents = [];
         _brainFilter = 'all';
         _brainTypeFilter = 'all';
@@ -6133,6 +6279,9 @@ function _startBrainSSE() {
 
     es.onmessage = function(e) {
       try {
+        // Historical window active (race: range applied while a message
+        // was in flight): drop live events, the view is frozen.
+        if (_brainRange) return;
         var ev = JSON.parse(e.data);
         if (!ev || !ev.time) return;
         // QW5: stamp the last live-feed event so the red "feed stopped" banner
@@ -6176,7 +6325,7 @@ function _startBrainSSE() {
       // Belt-and-braces poll fallback so the feed at least gets one
       // hydration even if SSE stays broken — but on TOP of the SSE
       // retry chain, not instead of it.
-      if (document.getElementById('page-brain') && document.getElementById('page-brain').classList.contains('active')) {
+      if (!_brainRange && document.getElementById('page-brain') && document.getElementById('page-brain').classList.contains('active')) {
         if (_brainRefreshTimer) clearTimeout(_brainRefreshTimer);
         _brainRefreshTimer = setTimeout(function() { loadBrainPage(true); }, 5000);
       }
@@ -6733,27 +6882,64 @@ async function loadBrainPage(silent) {
   // (P0 follow-up to #1235). Replace the spinner with an explicit
   // empty-state so cloud users understand the surface is local-only and
   // the spinner stops misrepresenting the load state.
-  if (window.CLOUD_MODE) {
+  // Date-time range investigations DO run on the hosted dashboard: the
+  // cloud intercepts the ranged /api/brain-history fetch and answers it
+  // via the node relay (encrypted end-to-end, decrypted in this browser).
+  // Only the LIVE stream stays local-only.
+  if (window.CLOUD_MODE && !_brainRange) {
     var cloudEl = document.getElementById('brain-stream');
     if (cloudEl && /Loading/i.test(cloudEl.innerText || '')) {
       cloudEl.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:13px;">' +
   '<div style="font-size:15px;font-weight:600;margin-bottom:6px;">🔒 Brain activity stays local — by design.</div>' +
   '<div style="margin-bottom:8px;">Your prompts, tool calls, and reasoning never leave your machine. We only see aggregated counts.</div>' +
-  '<a href="#local-first" style="color:var(--text-link, #60a5fa);text-decoration:none;">Why local-first →</a>' + 
+  '<a href="#local-first" style="color:var(--text-link, #60a5fa);text-decoration:none;">Why local-first →</a>' +
   '</div>';
     }
     return;
   }
-  if (!silent) { advisorProbe(); selfevolveProbe(); }
+  // Snapshot the active range so an async response for a STALE range (the
+  // user clicked Back-to-live or picked a new window mid-flight) is dropped
+  // instead of clobbering the current view.
+  var _bhRange = _brainRange;
+  if (!silent && !_bhRange) { advisorProbe(); selfevolveProbe(); }
   try {
     // Issue #1804: use raw fetch so response.status is preserved; a 503
     // ingest-outage shows a banner instead of falling to the error handler.
     var _bhCtrl = new AbortController();
-    var _bhTimer = setTimeout(function(){_bhCtrl.abort('timeout');}, 20000);
+    // A ranged query on the hosted dashboard rides the node relay (one
+    // heartbeat round-trip), so give it more headroom than the local 20s.
+    var _bhTimeoutMs = _bhRange ? 45000 : 20000;
+    var _bhTimer = setTimeout(function(){_bhCtrl.abort('timeout');}, _bhTimeoutMs);
+    var _bhUrl = '/api/brain-history?limit=' + (_bhRange ? 500 : 300);
+    if (_bhRange) {
+      _bhUrl += '&since=' + encodeURIComponent(_bhRange.since) +
+                '&until=' + encodeURIComponent(_bhRange.until);
+    }
     var _bhRaw;
-    try { _bhRaw = await fetch('/api/brain-history?limit=300', {signal: _bhCtrl.signal}); }
+    try { _bhRaw = await fetch(_bhUrl, {signal: _bhCtrl.signal}); }
     finally { clearTimeout(_bhTimer); }
     var data = await _bhRaw.json();
+    if (_bhRange !== _brainRange) return; // stale response for an old range
+    // Hosted relay warm-up: the cloud answered "asked your node, poll me
+    // again" — show an honest status and retry a few times (the node
+    // answers within one heartbeat when it is online).
+    if (_bhRange && data && data._source === 'relay_pending') {
+      var stEl = document.getElementById('brain-history-banner-status');
+      if (stEl) stEl.textContent = t('brain.window_fetching', null, 'Fetching this window from your node…');
+      if (_brainRangeRetries++ < 12) {
+        setTimeout(function() {
+          if (_bhRange === _brainRange) loadBrainPage(true);
+        }, Math.max(2000, (data.eta_sec || 3) * 1000));
+      } else {
+        var sEl2 = document.getElementById('brain-stream');
+        if (sEl2) sEl2.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:13px;">' + t('brain.window_node_offline', null, 'Could not reach your node for this window. Check that the machine is online, then retry.') + '</div>';
+        if (stEl) stEl.textContent = '';
+      }
+      return;
+    }
+    _brainRangeRetries = 0;
+    var _bhStatusEl = document.getElementById('brain-history-banner-status');
+    if (_bhStatusEl) _bhStatusEl.textContent = '';
     if (_bhRaw.status === 503 && data && data.error === 'local_store ingest is offline') {
       var _bhEl = document.getElementById('brain-stream');
       if (_bhEl) _bhEl.innerHTML = '<div style="background:#fff7ed;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:6px;margin:12px;"><strong>' + t("app.ingest_temporarily_offline", null, "Ingest temporarily offline.") + '</strong> Brain history unavailable; the local_store writer is not responding. New events will appear once the daemon recovers.</div>';
@@ -6813,6 +6999,9 @@ async function loadBrainPage(silent) {
       }
     }
   }
+  // Historical window active: the view is frozen — no SSE, no fallback
+  // poll. "Back to live" re-enters the streaming path below.
+  if (_brainRange) return;
   // After initial load, start SSE for live updates instead of polling.
   // Phase 3 (#1252): defer the handshake until the user dwells on the
   // Brain tab for ≥2 s — switching away cancels the pending open.
