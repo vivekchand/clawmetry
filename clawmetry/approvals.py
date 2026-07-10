@@ -1170,6 +1170,19 @@ def watch_iteration(api_key: str, node_id: str,
 # the one who changed it (tracked in a small state file), so we never clobber
 # a posture the operator set by hand. Best-effort; never raises into the loop.
 _EXEC_POLICY_STATE = Path.home() / ".clawmetry" / "exec_policy_applied"
+# Backoff between FAILED preset applies. Live-hit 2026-07-10 (agent-builder
+# shared-cpu-1x box): `openclaw` is a wrapper whose node child can outlive
+# the 60 s timeout on a busy 1-core host; subprocess.run's kill reaped only
+# the wrapper, the ~200 MB node grandchild survived as an orphan, and the
+# watcher retried every ~62 s forever (the state file is only written on
+# success) — one orphan per minute until the VM OOM/throttle-wedged. The
+# process-group kill in _apply_openclaw_exec_preset stops the leak; this
+# backoff stops the hot retry so a host that can't apply the preset degrades
+# to an occasional attempt instead of a permanent CPU tax.
+_EXEC_POLICY_APPLY_TIMEOUT_S = 60
+_EXEC_POLICY_BACKOFF_BASE_S = 300      # first retry 5 min after a failure
+_EXEC_POLICY_BACKOFF_MAX_S = 3600     # never back off longer than an hour
+_EXEC_POLICY_BACKOFF = {"fails": 0, "until": 0.0}
 
 
 def _openclaw_env_and_bin():
@@ -1202,17 +1215,34 @@ def _policies_want_exec_gate(policies) -> bool:
 
 def _apply_openclaw_exec_preset(preset: str) -> bool:
     """Run `openclaw exec-policy preset <preset>` locally. Returns True on a
-    clean apply. Never raises."""
+    clean apply. Never raises. The CLI runs in its own process group and the
+    whole GROUP is killed on timeout — `openclaw` is a wrapper whose node
+    child otherwise survives the wrapper's death as a CPU/RAM-burning orphan
+    (live-hit 2026-07-10, see _EXEC_POLICY_BACKOFF)."""
+    import signal
     import subprocess
     ocbin, env = _openclaw_env_and_bin()
     if not ocbin:
         return False
     try:
-        r = subprocess.run([ocbin, "exec-policy", "preset", preset, "--json"],
-                           capture_output=True, text=True, timeout=60, env=env)
-        if r.returncode != 0:
+        p = subprocess.Popen([ocbin, "exec-policy", "preset", preset, "--json"],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, env=env, start_new_session=True)
+        try:
+            _, err = p.communicate(timeout=_EXEC_POLICY_APPLY_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)  # pgid == pid (new session)
+            except Exception:
+                p.kill()
+            p.wait(timeout=10)
+            log.warning("openclaw exec-policy preset %s timed out after %ss "
+                        "(process group killed)", preset,
+                        _EXEC_POLICY_APPLY_TIMEOUT_S)
+            return False
+        if p.returncode != 0:
             log.warning("openclaw exec-policy preset %s failed: %s",
-                        preset, (r.stderr or "")[-300:])
+                        preset, (err or "")[-300:])
             return False
         log.info("openclaw exec-policy → %s (native pre-exec gate)", preset)
         return True
@@ -1242,12 +1272,25 @@ def sync_openclaw_exec_policy(policies) -> None:
     # onto an operator who may have set deny-all by hand.)
     if want == "yolo" and prev != "cautious":
         return
+    now = time.time()
+    if now < _EXEC_POLICY_BACKOFF["until"]:
+        return  # last apply failed; wait out the backoff before retrying
     if _apply_openclaw_exec_preset(want):
+        _EXEC_POLICY_BACKOFF["fails"] = 0
+        _EXEC_POLICY_BACKOFF["until"] = 0.0
         try:
             _EXEC_POLICY_STATE.parent.mkdir(parents=True, exist_ok=True)
             _EXEC_POLICY_STATE.write_text(want)
         except Exception:
             pass
+    else:
+        _EXEC_POLICY_BACKOFF["fails"] += 1
+        delay = min(_EXEC_POLICY_BACKOFF_MAX_S,
+                    _EXEC_POLICY_BACKOFF_BASE_S
+                    * (2 ** (_EXEC_POLICY_BACKOFF["fails"] - 1)))
+        _EXEC_POLICY_BACKOFF["until"] = now + delay
+        log.warning("openclaw exec-policy apply failed (%d in a row); "
+                    "next retry in %ds", _EXEC_POLICY_BACKOFF["fails"], delay)
 
 
 def watcher_loop(api_key: str, node_id: str,
