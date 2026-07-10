@@ -238,3 +238,24 @@ def test_status_endpoint_reports_updater_posture(monkeypatch):
     assert upd["check_interval_secs"] == 60.0
     assert upd["min_age_hours"] == 0.0
     assert upd["env_disabled"] is False
+
+
+# ── 6. both processes restart onto the new wheel ─────────────────────────────
+
+
+def test_self_update_restart_covers_both_processes():
+    """perform_self_update's restart must kick BOTH long-running services
+    (dashboard + sync), other-service-first: kickstart -k of our OWN service
+    kills the process mid-function, so self restarts last via _exit. Found
+    live 2026-07-10: the daemon self-updated to 0.12.552 while the dashboard
+    kept serving 0.12.549 from memory."""
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "routes", "meta.py"), encoding="utf-8").read()
+    body = src.split("def _restart():", 1)[1].split("_ulog.info", 1)[0]
+    assert "com.clawmetry.dashboard" in body, \
+        "restart must also kick the dashboard service (stale-UI-in-memory bug)"
+    assert "com.clawmetry.sync" in body
+    assert "_process_role" in body, \
+        "restart must be role-aware so it never kickstart-kills itself first"
+    assert "clawmetry-dashboard.service" in body and \
+           "clawmetry-sync.service" in body, "Linux units must be covered too"
