@@ -1041,6 +1041,82 @@ class Entitlement:
             )
             return None
 
+    def next_tier_channel_spec(self, channel: str) -> dict | None:
+        """Channel-axis projection of :meth:`next_tier_spec`: the
+        :func:`channel_spec_at`-shape catalogue row for ``channel``
+        evaluated on the rung above the resolved entitlement.
+
+        Current-relative sibling of :func:`next_tier_channel_spec_at`
+        (which takes an explicit source ``tier``). Convenience for
+        ``channel_spec_at(self.next_purchasable_tier(), channel)`` so a
+        pricing tooltip can ask "does THIS chat channel unlock at my
+        next rung?" off ONE round-trip.
+
+        Anchored on :meth:`next_purchasable_tier` (source-aware),
+        matching :meth:`next_tier_spec` /
+        :meth:`next_tier_feature_spec` / :meth:`next_tier_runtime_spec`.
+
+        Every chat channel is FREE at every tier -- see
+        :func:`channel_spec_at` -- so the row always comes back
+        ``free=True`` / ``locked=False`` regardless of the target rung.
+        That parity IS the answer: the tooltip can render "channel
+        included at every plan" off ONE call without hard-coding that
+        posture client-side.
+
+        Returns ``None`` for empty / unknown ``channel`` and at the
+        resolver's ceiling. Never raises: a builder failure
+        short-circuits to ``None`` so the tooltip stays mute instead of
+        breaking.
+        """
+        try:
+            ch = (channel or "").strip().lower()
+        except (AttributeError, TypeError):
+            return None
+        if not ch or ch not in ALL_CHANNELS:
+            return None
+        try:
+            target = self.next_purchasable_tier()
+            if target is None:
+                return None
+            return channel_spec_at(target, ch)
+        except Exception as exc:
+            logger.warning("entitlements: next_tier_channel_spec failed: %s", exc)
+            return None
+
+    def previous_tier_channel_spec(self, channel: str) -> dict | None:
+        """Channel-axis projection of :meth:`previous_tier_spec`: the
+        :func:`channel_spec_at`-shape catalogue row for ``channel``
+        evaluated on the rung below the resolved entitlement.
+
+        Symmetric mirror of :meth:`next_tier_channel_spec` and
+        downgrade-confirmation companion. Convenience for
+        ``channel_spec_at(self.previous_purchasable_tier(), channel)``.
+
+        Anchored on :meth:`previous_purchasable_tier` (source-aware),
+        matching :meth:`previous_tier_spec` /
+        :meth:`previous_tier_feature_spec` /
+        :meth:`previous_tier_runtime_spec`.
+
+        Returns ``None`` for empty / unknown ``channel`` and at the
+        resolver's floor. Never raises.
+        """
+        try:
+            ch = (channel or "").strip().lower()
+        except (AttributeError, TypeError):
+            return None
+        if not ch or ch not in ALL_CHANNELS:
+            return None
+        try:
+            target = self.previous_purchasable_tier()
+            if target is None:
+                return None
+            return channel_spec_at(target, ch)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: previous_tier_channel_spec failed: %s", exc
+            )
+            return None
+
     def next_tier_feature_spec_batch(self, features) -> dict:
         """Batch sibling of :meth:`next_tier_feature_spec`: per-feature
         :func:`feature_spec_at`-shape rows for N features evaluated on
@@ -2270,6 +2346,30 @@ def previous_tier_runtime_spec(runtime: str) -> dict | None:
     except Exception as exc:
         logger.warning(
             "entitlements: previous_tier_runtime_spec (module) failed: %s", exc
+        )
+        return None
+
+
+def next_tier_channel_spec(channel: str) -> dict | None:
+    """Module-level :meth:`Entitlement.next_tier_channel_spec` against
+    the resolved entitlement. Never raises."""
+    try:
+        return get_entitlement().next_tier_channel_spec(channel)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_channel_spec (module) failed: %s", exc
+        )
+        return None
+
+
+def previous_tier_channel_spec(channel: str) -> dict | None:
+    """Module-level :meth:`Entitlement.previous_tier_channel_spec`
+    against the resolved entitlement. Never raises."""
+    try:
+        return get_entitlement().previous_tier_channel_spec(channel)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_channel_spec (module) failed: %s", exc
         )
         return None
 

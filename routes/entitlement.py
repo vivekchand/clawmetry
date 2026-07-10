@@ -7883,6 +7883,126 @@ def api_entitlement_previous_tier_runtime_spec():
         return jsonify(_next_prev_tier_axis_spec_grace_body("runtime", supplied))
 
 
+@bp_entitlement.route("/api/entitlement/next-tier-channel-spec")
+def api_entitlement_next_tier_channel_spec():
+    """``GET /api/entitlement/next-tier-channel-spec?channel=<id>`` --
+    channel-axis mirror of ``/next-tier-feature-spec`` and
+    ``/next-tier-runtime-spec``: the :func:`channel_spec_at`-shape row
+    for ``channel`` at the rung above the resolved entitlement.
+
+    Envelope matches ``/next-tier-runtime-spec`` with ``runtime``
+    swapped for ``channel``.
+
+    Every chat channel is FREE at every tier -- see
+    :func:`channel_spec_at` -- so ``row`` always comes back
+    ``free=True`` / ``locked=False`` regardless of the target rung.
+    That parity IS the answer: pricing tooltips can render "chat
+    channel included at every plan" off ONE call.
+
+    - **400** on missing / blank ``channel=``
+    - **404** on unknown ``channel`` (not in ``ALL_CHANNELS``). The
+      body echoes the original supplied id so callers can render
+      "unknown channel <id>" copy.
+    - **Never 5xxs**: grace-shape envelope on resolver failure.
+    """
+    raw_channel = request.args.get("channel")
+    supplied = (raw_channel or "").strip().lower()
+    if not supplied:
+        return jsonify({"error": "missing channel"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if supplied not in _ent.ALL_CHANNELS:
+            return (
+                jsonify(
+                    {
+                        "error": "unknown channel",
+                        "which": "channel",
+                        "channel": supplied,
+                    }
+                ),
+                404,
+            )
+        ent = _ent.get_entitlement()
+        target = ent.next_purchasable_tier()
+        row = ent.next_tier_channel_spec(supplied)
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "channel": supplied,
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "row": row,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_channel_spec: error: %s", exc
+        )
+        return jsonify(_next_prev_tier_axis_spec_grace_body("channel", supplied))
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-channel-spec")
+def api_entitlement_previous_tier_channel_spec():
+    """``GET /api/entitlement/previous-tier-channel-spec?channel=<id>``
+    -- symmetric downgrade-side companion of
+    ``/next-tier-channel-spec``: the :func:`channel_spec_at`-shape row
+    for ``channel`` at the rung below the resolved entitlement.
+
+    Same envelope as ``/next-tier-channel-spec``; ``target`` and ``row``
+    collapse to ``null`` at the floor.
+
+    - **400** on missing / blank ``channel=``
+    - **404** on unknown ``channel``
+    - **Never 5xxs**: grace-shape envelope on resolver failure.
+    """
+    raw_channel = request.args.get("channel")
+    supplied = (raw_channel or "").strip().lower()
+    if not supplied:
+        return jsonify({"error": "missing channel"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if supplied not in _ent.ALL_CHANNELS:
+            return (
+                jsonify(
+                    {
+                        "error": "unknown channel",
+                        "which": "channel",
+                        "channel": supplied,
+                    }
+                ),
+                404,
+            )
+        ent = _ent.get_entitlement()
+        target = ent.previous_purchasable_tier()
+        row = ent.previous_tier_channel_spec(supplied)
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "channel": supplied,
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "row": row,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_channel_spec: error: %s", exc
+        )
+        return jsonify(_next_prev_tier_axis_spec_grace_body("channel", supplied))
+
+
 def _next_prev_tier_axis_spec_batch_grace_body(axis: str) -> dict:
     """Fallback envelope shared by the four bare next/previous per-axis
     spec-batch routes. Keeps the shape identical to the happy path so a
