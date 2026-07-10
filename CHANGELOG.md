@@ -1,5 +1,23 @@
 ## [Unreleased]
 
+### Fix: auto-update retries a just-published release in about 2 minutes (#3630) (2026-07-10)
+- **Why:** the live verification of the fast update loop caught its own first bug: PyPI's JSON API advertises a release 1 to 3 minutes before pip's index can serve it, and that "no matching distribution" failure was treated as a broken wheel, sitting out the full 30-minute backoff for a 2-minute propagation lag. At 20+ releases a day that race is routine.
+- **What:** distribution-not-found failures now retry within `CLAWMETRY_AUTOUPDATE_PROPAGATION_RETRY_SECS` (default 120); every other install failure keeps the long broken-target backoff. Backoff bookkeeping moved to explicit per-target deadlines. Also updates the plan-sync log line that still promised a "48h stability window".
+- **Verified:** new guard red on the un-fixed code; auto-update suite 30/30.
+
+
+### Feature: updater posture on the status API (#3627) (2026-07-10)
+- **Why:** with the fleet now tracking releases within minutes, "is this node actually on the fast update loop?" must be answerable from the API, not by reading env vars and logs on the box.
+- **What:** `/api/update-check/status` gains an `updater` block: role, effective check interval, age gate, and kill-switch state.
+- **Verified:** endpoint test (suite 11/11); this release doubles as the live hands-off verification of the fast auto-update loop.
+
+
+### Feature: auto-update now keeps every install on the latest release within minutes (#3624) (2026-07-10)
+- **Why:** ClawMetry ships 20+ releases a day, and a user found their node promising to self-update "within about two days". Worse, the checker was started without the daemon role, so the default-on auto-update policy never acted on free or local-only installs at all; only trial and paid nodes (whose plan sync explicitly wrote the flag) ever self-updated.
+- **What:** the sync daemon now starts the update checker with the daemon role (the root-cause fix), polls PyPI every 60 seconds (`CLAWMETRY_UPDATE_CHECK_SECS`, clamped 30s to 1 day), and installs the absolute latest release by default (`CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS` now defaults to 0; set it to restore a stability window). Unsupervised daemons (containers, kubectl-exec wrappers, manual runs) re-exec their own process after installing instead of running the old wheel in memory until someone restarts them; Windows keeps the defer-to-next-start behavior and `CLAWMETRY_AUTOUPDATE_EXEC_RESTART=0` disables the re-exec. Failed installs back off 30 minutes so the fast loop never hammers pip on a broken target. The bad-wheel safety net is the existing boot rollback guard, plus the `CLAWMETRY_AUTO_UPDATE=0` kill switch.
+- **Verified:** 28 tests green including 10 new guards (cadence, worker loop per-tick behavior, dashboard cadence preserved, age-gate default, sync.py role wiring, re-exec gating), revert-proven 8/10 red on the un-fixed code.
+
+
 ### Feature: date-time range filter on the Brain Activity stream (#3610) (2026-07-10)
 - **Why:** the Activity stream only ever showed the newest events, so the most common incident question, "what happened at 3AM last night?", was unanswerable. A time window turns the Brain tab into an investigation tool.
 - **What:** `/api/brain-history` accepts `since`/`until` (ISO-8601 or epoch; aliases `start`/`end`; bad values degrade to no bound, reversed bounds swap) served from the indexed DuckDB `ts` column, with the window echoed back and the response cache keyed per range. The Brain tab gains a range bar (Live, 1h, 6h, 24h, Custom from/to) with a Viewing-history banner, a HISTORY pill, and a density chart that re-anchors its buckets to the selected window. History mode freezes the live machinery (SSE, reconnects, poll fallbacks) so the frozen view can never be clobbered by incoming events. For hosted dashboards, the daemon's brain relay now honors window args (it used to discard them and answer with the newest-50), returning a windowed, brain-shaped, E2E-encrypted blob; the paired cloud change gives window requests their own relay cache key and decrypts client-side.

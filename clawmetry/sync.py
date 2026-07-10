@@ -1181,8 +1181,8 @@ def _sync_auto_update_with_plan(tier: str | None) -> None:
             _succ({"auto_update": True})
             log.info(
                 "auto-update enabled for entitled plan (%s) — this node will keep "
-                "itself current (48h stability window). Opt out any time with "
-                "CLAWMETRY_AUTO_UPDATE=0.", tier,
+                "itself current within minutes of each release. Opt out any time "
+                "with CLAWMETRY_AUTO_UPDATE=0.", tier,
             )
     except Exception as exc:
         log.debug("auto-update plan sync skipped: %s", exc)
@@ -17652,18 +17652,21 @@ def run_daemon() -> None:
     except Exception as _e:
         log.warning(f"pro-entitlement watcher failed to start: {_e}")
 
-    # ── Opt-in auto-update worker ────────────────────────────────────────
-    # routes/update_check.py runs a background checker that self-updates ONLY
-    # when the `auto_update` config is on (default OFF → no behaviour change
-    # for anyone who hasn't opted in), via the same vetted pip+restart path as
-    # the manual "Update now". It was started only in the DASHBOARD process —
-    # but a headless / cloud-synced node runs only this daemon, so auto-update
-    # never fired where it's most needed. Start it here too (idempotent: the
-    # module guards against a double-started thread). Never blocks/raises.
+    # ── Auto-update worker (default ON for this daemon) ─────────────────
+    # routes/update_check.py self-updates via the same vetted pip+restart
+    # path as the manual "Update now". role="daemon" is LOAD-BEARING: the
+    # default-on policy only acts in the daemon role. This call site started
+    # the thread with no role for months, so every node whose plan sync
+    # never explicitly wrote auto_update (free / local-only installs) NEVER
+    # self-updated — the 2026-07-10 "my node is days stale" root cause. The
+    # daemon role also enables the fast check loop (every ~60s; we ship 20+
+    # releases a day) and the unsupervised re-exec restart. Never
+    # blocks/raises.
     try:
         from routes.update_check import start_update_check_thread as _start_uc
-        _start_uc()
-        log.info("update-check thread started (auto-update honours the opt-in flag)")
+        _start_uc(role="daemon")
+        log.info("update-check thread started (daemon role: default-on "
+                 "auto-update, fast check loop)")
     except Exception as _e:
         log.warning(f"update-check thread failed to start: {_e}")
 
