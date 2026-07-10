@@ -9737,6 +9737,113 @@ def previous_tier_channel_spec_at(tier: str, channel: str) -> dict | None:
         )
         return None
 
+def next_tier_channel_catalog_at(tier: str) -> list[dict] | None:
+    """Source-anchored channel-axis catalog sibling of
+    :func:`next_tier_spec_at`: the full :func:`channel_catalog_at`-shape
+    catalogue for every chat-channel adapter evaluated on the rung above
+    the caller-supplied ``tier``.
+
+    Source-anchored companion of :meth:`Entitlement.next_tier_channel_catalog`
+    (resolver-anchored, no-arg) and channel-axis catalog analogue of
+    :func:`next_tier_feature_spec_at` / :func:`next_tier_runtime_spec_at`
+    (which project onto a single feature / runtime). Convenience for
+    ``channel_catalog_at(_next_purchasable_tier_after(tier))`` so an
+    upgrade-preview panel walking an explicit source rung (a pricing
+    table cell, an "at each rung" comparison matrix) can hydrate the
+    whole channel matrix at the next rung off ONE round-trip without
+    threading the target tier through query args or asking the resolver.
+
+    The returned list matches :func:`channel_catalog_at(target)` for the
+    resolved ``target = _next_purchasable_tier_after(tier)`` exactly --
+    a parity test pins this so the source-anchored projection cannot
+    drift from the sibling helper. At the resolver's live source the
+    result also byte-matches :meth:`Entitlement.next_tier_channel_catalog`
+    (both compose ``channel_catalog_at`` at the same ``next_purchasable_tier``).
+
+    Every chat channel is FREE at every tier (the ``channels`` capacity
+    axis governs how many concurrent channels each plan admits, not
+    which adapters unlock), so every row comes back ``free=True`` /
+    ``allowed=True`` / ``locked=False`` / ``entitled=True`` regardless
+    of the source or target rung. That parity IS the answer: the panel
+    can render "all N chat channels included at every plan" off ONE
+    call without hard-coding that posture client-side.
+
+    Accepts any id in :data:`_TIER_ORDER` for ``tier`` (including
+    :data:`TIER_TRIAL`) -- the lenient ``_at`` posture, matching the
+    other ``next_*_at`` helpers.
+
+    Returns ``None`` for empty / unknown ``tier`` and at the ceiling
+    (no rung strictly above -- enterprise as source). Never raises: a
+    builder failure short-circuits to ``None`` so the preview surface
+    stays mute instead of breaking.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        target = _next_purchasable_tier_after(src)
+        if target is None:
+            return None
+        return channel_catalog_at(target)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_channel_catalog_at failed: %s", exc
+        )
+        return None
+
+
+def previous_tier_channel_catalog_at(tier: str) -> list[dict] | None:
+    """Source-anchored channel-axis catalog sibling of
+    :func:`previous_tier_spec_at`: the full
+    :func:`channel_catalog_at`-shape catalogue for every chat-channel
+    adapter evaluated on the rung below the caller-supplied ``tier``.
+
+    Symmetric mirror of :func:`next_tier_channel_catalog_at` and
+    downgrade-confirmation counterpart. Source-anchored companion of
+    :meth:`Entitlement.previous_tier_channel_catalog` (resolver-anchored,
+    no-arg). Convenience for
+    ``channel_catalog_at(_previous_purchasable_tier_before(tier))`` so a
+    downgrade-confirmation card walking an explicit source rung can
+    render "which channels stay when I step down from THIS tier?" off
+    ONE round-trip.
+
+    Like :func:`next_tier_channel_catalog_at`, the returned list matches
+    :func:`channel_catalog_at(target)` for the resolved
+    ``target = _previous_purchasable_tier_before(tier)`` exactly, and at
+    the live source byte-matches
+    :meth:`Entitlement.previous_tier_channel_catalog`.
+
+    Every chat channel is FREE at every tier, so every row comes back
+    ``free=True`` / ``allowed=True`` / ``locked=False`` /
+    ``entitled=True`` regardless of the source or target rung -- the
+    downgrade-confirmation card can render "no channels lost on
+    downgrade" off ONE call.
+
+    Accepts any id in :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`).
+
+    Returns ``None`` for empty / unknown ``tier`` and at the floor
+    (``oss`` / ``cloud_free`` as source -- no rung strictly below).
+    Never raises.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        target = _previous_purchasable_tier_before(src)
+        if target is None:
+            return None
+        return channel_catalog_at(target)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_channel_catalog_at failed: %s", exc
+        )
+        return None
 
 def next_tier_lock_reason_at(
     tier: str, item, *, kind: str | None = None
