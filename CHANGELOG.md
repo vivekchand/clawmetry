@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Fix: auto-update restarts both the dashboard and the daemon onto the new wheel (#3634) (2026-07-10)
+- **Why:** the live hands-off verification showed the daemon self-updating cleanly while the local dashboard kept serving the previous build from memory; the unattended path only ever restarted the sync daemon.
+- **What:** the shared restart helper is now role-aware: it restarts the other long-running service first (launchctl on macOS, systemctl --user on Linux, best-effort) and itself last, so both processes come back on the freshly installed wheel.
+- **Verified:** source-level guard red on the un-fixed code; auto-update suite 26/26. This release is also the first full minutes-fresh cycle on the new updater (the 0.12.552 daemon should install it within about 3 minutes of publish).
+
+
 ### Fix: auto-update retries a just-published release in about 2 minutes (#3630) (2026-07-10)
 - **Why:** the live verification of the fast update loop caught its own first bug: PyPI's JSON API advertises a release 1 to 3 minutes before pip's index can serve it, and that "no matching distribution" failure was treated as a broken wheel, sitting out the full 30-minute backoff for a 2-minute propagation lag. At 20+ releases a day that race is routine.
 - **What:** distribution-not-found failures now retry within `CLAWMETRY_AUTOUPDATE_PROPAGATION_RETRY_SECS` (default 120); every other install failure keeps the long broken-target backoff. Backoff bookkeeping moved to explicit per-target deadlines. Also updates the plan-sync log line that still promised a "48h stability window".
