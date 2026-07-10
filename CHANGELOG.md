@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Feature: updater posture on the status API (#3627) (2026-07-10)
+- **Why:** with the fleet now tracking releases within minutes, "is this node actually on the fast update loop?" must be answerable from the API, not by reading env vars and logs on the box.
+- **What:** `/api/update-check/status` gains an `updater` block: role, effective check interval, age gate, and kill-switch state.
+- **Verified:** endpoint test (suite 11/11); this release doubles as the live hands-off verification of the fast auto-update loop.
+
+
 ### Feature: auto-update now keeps every install on the latest release within minutes (#3624) (2026-07-10)
 - **Why:** ClawMetry ships 20+ releases a day, and a user found their node promising to self-update "within about two days". Worse, the checker was started without the daemon role, so the default-on auto-update policy never acted on free or local-only installs at all; only trial and paid nodes (whose plan sync explicitly wrote the flag) ever self-updated.
 - **What:** the sync daemon now starts the update checker with the daemon role (the root-cause fix), polls PyPI every 60 seconds (`CLAWMETRY_UPDATE_CHECK_SECS`, clamped 30s to 1 day), and installs the absolute latest release by default (`CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS` now defaults to 0; set it to restore a stability window). Unsupervised daemons (containers, kubectl-exec wrappers, manual runs) re-exec their own process after installing instead of running the old wheel in memory until someone restarts them; Windows keeps the defer-to-next-start behavior and `CLAWMETRY_AUTOUPDATE_EXEC_RESTART=0` disables the re-exec. Failed installs back off 30 minutes so the fast loop never hammers pip on a broken target. The bad-wheel safety net is the existing boot rollback guard, plus the `CLAWMETRY_AUTO_UPDATE=0` kill switch.
