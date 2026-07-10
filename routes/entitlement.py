@@ -7964,6 +7964,23 @@ def _next_prev_tier_channel_catalog_grace_body() -> dict:
     }
 
 
+def _next_prev_tier_axis_catalog_grace_body(axis: str) -> dict:
+    """Fallback envelope shared by the next/previous feature- and
+    runtime-catalog routes. Same shape as the happy path so a resolver
+    failure never breaks an upgrade-preview matrix client-side."""
+    return {
+        "current_tier": "oss",
+        "current_tier_label": "OSS",
+        "current_tier_rank": 0,
+        "target": None,
+        "target_label": None,
+        "target_rank": None,
+        axis: [],
+        "grace": True,
+        "enforced": False,
+    }
+
+
 @bp_entitlement.route("/api/entitlement/next-tier-channel-catalog")
 def api_entitlement_next_tier_channel_catalog():
     """``GET /api/entitlement/next-tier-channel-catalog`` -- channel-axis
@@ -8132,6 +8149,222 @@ def api_entitlement_previous_tier_channel_catalog():
             "api_entitlement_previous_tier_channel_catalog: error: %s", exc
         )
         return jsonify(_next_prev_tier_channel_catalog_grace_body())
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-feature-catalog")
+def api_entitlement_next_tier_feature_catalog():
+    """``GET /api/entitlement/next-tier-feature-catalog`` -- feature-axis
+    catalog projection of ``/next-tier-spec``: the full
+    :func:`feature_catalog_at`-shape catalogue for every feature at the
+    rung above the resolved entitlement.
+
+    Current-relative, no-arg sibling of
+    ``/api/entitlement/feature-catalog-at`` and feature-axis mirror of
+    ``/api/entitlement/next-tier-channel-catalog``. Convenience for
+    ``/feature-catalog-at?tier=<next_purchasable_tier>`` so a pricing /
+    upgrade-preview panel can hydrate the whole feature matrix at the
+    next rung off ONE round-trip without threading the current tier
+    through query args or first fetching ``/entitlement`` for
+    ``next_tier``.
+
+    Anchored on :meth:`Entitlement.next_purchasable_tier` (source-aware),
+    matching ``/next-tier-spec`` and ``/next-tier-feature-spec``.
+
+    Response shape::
+
+        {
+          "current_tier":       "<resolved id>",
+          "current_tier_label": ...,
+          "current_tier_rank":  <int>,
+          "target":             "<next_purchasable_tier id or null>",
+          "target_label":       ...,
+          "target_rank":        <int or null>,
+          "features":           [<catalog_row>, ...],  # empty at ceiling
+          "grace":              <bool>,
+          "enforced":           <bool>,
+        }
+
+    ``features`` is byte-identical to the body of
+    ``/feature-catalog-at?tier=<target>`` for the same tier -- pinned by
+    a parity test so the endpoint cannot drift from the sibling.
+
+    Never 5xxs: at the ceiling ``features`` collapses to ``[]`` (no rung
+    above to preview); a resolver failure short-circuits to the
+    grace-shape envelope.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        target = ent.next_purchasable_tier()
+        rows = ent.next_tier_feature_catalog() or []
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "features": rows,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_feature_catalog: error: %s", exc
+        )
+        return jsonify(_next_prev_tier_axis_catalog_grace_body("features"))
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-feature-catalog")
+def api_entitlement_previous_tier_feature_catalog():
+    """``GET /api/entitlement/previous-tier-feature-catalog`` --
+    symmetric downgrade-side companion of
+    ``/next-tier-feature-catalog``: the full
+    :func:`feature_catalog_at`-shape catalogue for every feature at the
+    rung below the resolved entitlement.
+
+    Same envelope as ``/next-tier-feature-catalog``; ``features``
+    collapses to ``[]`` at the floor and ``target`` / ``target_label``
+    / ``target_rank`` to ``null``.
+
+    Anchored on :meth:`Entitlement.previous_purchasable_tier`
+    (source-aware), matching ``/previous-tier-spec`` and
+    ``/previous-tier-feature-spec``.
+
+    Never 5xxs: grace-shape envelope on resolver failure.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        target = ent.previous_purchasable_tier()
+        rows = ent.previous_tier_feature_catalog() or []
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "features": rows,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_feature_catalog: error: %s", exc
+        )
+        return jsonify(_next_prev_tier_axis_catalog_grace_body("features"))
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-runtime-catalog")
+def api_entitlement_next_tier_runtime_catalog():
+    """``GET /api/entitlement/next-tier-runtime-catalog`` -- runtime-axis
+    catalog projection of ``/next-tier-spec``: the full
+    :func:`runtime_catalog_at`-shape catalogue for every runtime at the
+    rung above the resolved entitlement.
+
+    Current-relative, no-arg sibling of
+    ``/api/entitlement/runtime-catalog-at`` and runtime-axis mirror of
+    ``/api/entitlement/next-tier-channel-catalog`` /
+    ``/next-tier-feature-catalog``. Convenience for
+    ``/runtime-catalog-at?tier=<next_purchasable_tier>``.
+
+    Anchored on :meth:`Entitlement.next_purchasable_tier` (source-aware),
+    matching ``/next-tier-spec`` and ``/next-tier-runtime-spec``.
+
+    Response shape::
+
+        {
+          "current_tier":       "<resolved id>",
+          "current_tier_label": ...,
+          "current_tier_rank":  <int>,
+          "target":             "<next_purchasable_tier id or null>",
+          "target_label":       ...,
+          "target_rank":        <int or null>,
+          "runtimes":           [<catalog_row>, ...],  # empty at ceiling
+          "grace":              <bool>,
+          "enforced":           <bool>,
+        }
+
+    ``runtimes`` is byte-identical to the body of
+    ``/runtime-catalog-at?tier=<target>`` -- pinned by a parity test.
+
+    Never 5xxs: grace-shape envelope on resolver failure.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        target = ent.next_purchasable_tier()
+        rows = ent.next_tier_runtime_catalog() or []
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "runtimes": rows,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_runtime_catalog: error: %s", exc
+        )
+        return jsonify(_next_prev_tier_axis_catalog_grace_body("runtimes"))
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-runtime-catalog")
+def api_entitlement_previous_tier_runtime_catalog():
+    """``GET /api/entitlement/previous-tier-runtime-catalog`` --
+    symmetric downgrade-side companion of
+    ``/next-tier-runtime-catalog``: the full
+    :func:`runtime_catalog_at`-shape catalogue for every runtime at the
+    rung below the resolved entitlement.
+
+    Same envelope as ``/next-tier-runtime-catalog``; ``runtimes``
+    collapses to ``[]`` at the floor and ``target`` / ``target_label``
+    / ``target_rank`` to ``null``.
+
+    Anchored on :meth:`Entitlement.previous_purchasable_tier`
+    (source-aware), matching ``/previous-tier-spec`` and
+    ``/previous-tier-runtime-spec``.
+
+    Never 5xxs: grace-shape envelope on resolver failure.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        target = ent.previous_purchasable_tier()
+        rows = ent.previous_tier_runtime_catalog() or []
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "runtimes": rows,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_runtime_catalog: error: %s", exc
+        )
+        return jsonify(_next_prev_tier_axis_catalog_grace_body("runtimes"))
 
 
 def _next_prev_tier_axis_spec_batch_grace_body(axis: str) -> dict:
