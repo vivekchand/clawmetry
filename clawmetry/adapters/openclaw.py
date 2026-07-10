@@ -1161,7 +1161,7 @@ def _gateway_plugin_health() -> dict:
             ptype = entry.get("type") or entry.get("kind") or None
             if not name or not state:
                 continue
-            plugins.append({"name": name, "state": state, **({{"type": ptype}} if ptype else {})})
+            plugins.append({"name": name, "state": state, **({"type": ptype} if ptype else {})})
             summary[state] = summary.get(state, 0) + 1
         if not plugins:
             return {}
@@ -1878,6 +1878,7 @@ class OpenClawAdapter(AgentAdapter):
                                     ("cacheReadTokens", "cache_read_input_tokens", "cacheReadInputTokens", "cacheRead"),
                                     ("cacheWriteTokens", "cache_creation_input_tokens", "cacheCreationInputTokens", "cacheWrite"),
                                     ("totalTokens", "totalTokens", "total_tokens"),
+                                    ("contextTokens", "contextTokens", "context_tokens"),
                                 ]:
                                     for k in keys:
                                         v = usage.get(k)
