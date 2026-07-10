@@ -452,19 +452,57 @@ def perform_self_update(reason: str = "manual", restart: bool = True,
         import os as _os
         import platform as _pl
 
+        # BOTH long-running processes must restart onto the new wheel or one
+        # keeps serving the old build from memory (the classic "daemon
+        # updated but the dashboard UI is stale" gotcha — see
+        # feedback_restart_both_processes_after_upgrade.md; found again live
+        # 2026-07-10 when the daemon self-updated to 0.12.552 while the
+        # dashboard kept 0.12.549 in memory). Ordering is load-bearing:
+        # `kickstart -k` on our OWN service kills us mid-function, so kick
+        # the OTHER service(s) first and restart ourselves last via _exit
+        # (the supervisor respawns us).
+        try:
+            from routes.update_check import _process_role as _role
+        except Exception:
+            _role = "dashboard"
+        _own = ("com.clawmetry.sync" if _role == "daemon"
+                else "com.clawmetry.dashboard")
         if _pl.system() == "Darwin":
+            uid = None
             try:
                 uid = _os.getuid()
-                _sp.run(
-                    ["launchctl", "kickstart", "-k",
-                     f"gui/{uid}/com.clawmetry.sync"],
-                    timeout=5,
-                    stdout=_sp.DEVNULL,
-                    stderr=_sp.DEVNULL,
-                    check=False,
-                )
             except Exception:
-                pass  # daemon may not be running; dashboard restart is enough
+                pass
+            for _svc in ("com.clawmetry.dashboard", "com.clawmetry.sync"):
+                if _svc == _own or uid is None:
+                    continue
+                try:
+                    _sp.run(
+                        ["launchctl", "kickstart", "-k", f"gui/{uid}/{_svc}"],
+                        timeout=5,
+                        stdout=_sp.DEVNULL,
+                        stderr=_sp.DEVNULL,
+                        check=False,
+                    )
+                except Exception:
+                    pass  # service may not exist; self-restart still happens
+        elif _pl.system() == "Linux":
+            _own_unit = ("clawmetry-sync.service" if _role == "daemon"
+                         else "clawmetry-dashboard.service")
+            for _unit in ("clawmetry-dashboard.service",
+                          "clawmetry-sync.service"):
+                if _unit == _own_unit:
+                    continue
+                try:
+                    _sp.run(
+                        ["systemctl", "--user", "restart", _unit],
+                        timeout=5,
+                        stdout=_sp.DEVNULL,
+                        stderr=_sp.DEVNULL,
+                        check=False,
+                    )
+                except Exception:
+                    pass
         _os._exit(0)
 
     _ulog.info("self-update (%s): upgraded v%s -> v%s; restarting in 2s",
