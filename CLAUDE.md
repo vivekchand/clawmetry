@@ -165,6 +165,9 @@ CLAWMETRY_PROVIDER=local|turso         # Data backend (default: local)
 CLAWMETRY_INTERCEPT=1                  # Enable HTTP interceptor
 CLAWMETRY_FLEET_KEY=...               # Multi-node fleet auth key
 CLAWMETRY_FAMILY_SESSION_LIMIT=50      # Max sessions/runtime to ingest for Claude Code/Codex/Cursor/… (most-recent N; raise for deeper history)
+CLAWMETRY_UPDATE_CHECK_SECS=60         # Daemon PyPI update-check cadence (default 60s; fleet tracks the latest release within minutes)
+CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS=0   # Stability window before a silent install (default 0 = absolute latest; raise to be conservative)
+CLAWMETRY_AUTO_UPDATE=0                # Hard kill switch for unattended upgrades
 DEBUG=1                                # Enable debug logging
 ```
 

@@ -60,7 +60,10 @@ def test_auto_update_on_upgrades_once(monkeypatch):
     assert calls == ["auto"], "must not re-trigger while a restart is pending"
 
 
-def test_auto_update_failure_allows_retry(monkeypatch):
+def test_auto_update_failure_allows_retry_after_backoff(monkeypatch):
+    """A failed install is retryable, but only after the failure backoff —
+    with the 60s check loop an immediately-retryable failure would re-run
+    pip against a broken target every minute."""
     uc = _uc()
     _as_daemon(uc, monkeypatch)
     monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
@@ -68,9 +71,20 @@ def test_auto_update_failure_allows_retry(monkeypatch):
     _mock_self_update(monkeypatch, calls, ok=False)
     uc._maybe_auto_update("0.12.1", "0.12.2")
     assert calls == ["auto"]
-    # The upgrade failed (no restart scheduled) → the next check may retry.
+    # Within the backoff window the same target is NOT retried.
     uc._maybe_auto_update("0.12.1", "0.12.2")
-    assert calls == ["auto", "auto"], "a failed auto-update must be retryable"
+    assert calls == ["auto"], "failed target must back off, not retry every check"
+    # A DIFFERENT (newer) target is not blocked by the failed one's backoff.
+    uc._maybe_auto_update("0.12.1", "0.12.3")
+    assert calls == ["auto", "auto"], "a new target must not inherit the backoff"
+    # Once the backoff expires, the original target is retryable again.
+    import time as _t
+    uc._failed_update_attempts["0.12.2"] = (
+        _t.monotonic() - uc._autoupdate_retry_secs() - 1
+    )
+    uc._maybe_auto_update("0.12.1", "0.12.2")
+    assert calls == ["auto", "auto", "auto"], \
+        "a failed auto-update must be retryable after the backoff"
 
 
 def test_auto_update_in_allowed_config_keys(monkeypatch):
