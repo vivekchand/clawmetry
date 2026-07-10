@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Fix: auto-update retries a just-published release in about 2 minutes (#3630) (2026-07-10)
+- **Why:** the live verification of the fast update loop caught its own first bug: PyPI's JSON API advertises a release 1 to 3 minutes before pip's index can serve it, and that "no matching distribution" failure was treated as a broken wheel, sitting out the full 30-minute backoff for a 2-minute propagation lag. At 20+ releases a day that race is routine.
+- **What:** distribution-not-found failures now retry within `CLAWMETRY_AUTOUPDATE_PROPAGATION_RETRY_SECS` (default 120); every other install failure keeps the long broken-target backoff. Backoff bookkeeping moved to explicit per-target deadlines. Also updates the plan-sync log line that still promised a "48h stability window".
+- **Verified:** new guard red on the un-fixed code; auto-update suite 30/30.
+
+
 ### Feature: updater posture on the status API (#3627) (2026-07-10)
 - **Why:** with the fleet now tracking releases within minutes, "is this node actually on the fast update loop?" must be answerable from the API, not by reading env vars and logs on the box.
 - **What:** `/api/update-check/status` gains an `updater` block: role, effective check interval, age gate, and kill-switch state.
