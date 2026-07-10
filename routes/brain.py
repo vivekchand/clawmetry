@@ -104,6 +104,44 @@ def _brain_history_bool_arg(value):
     return str(value or "").strip().lower() in {"1", "true", "yes", "on", "all"}
 
 
+def _brain_history_time_arg(value):
+    """Parse a ``since``/``until`` query arg into a normalized UTC ISO string
+    (``YYYY-MM-DDTHH:MM:SSZ``) suitable for lexicographic comparison against
+    the store's ``ts`` column. Accepts ISO-8601 (with or without seconds,
+    ``Z`` or a numeric offset) and epoch seconds/milliseconds. Returns None
+    for anything unparseable — a bad time filter degrades to "no filter",
+    never a 500 (the never-crash-on-bad-input rule).
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    from datetime import datetime, timezone
+    # Epoch seconds / milliseconds (all-digits, optional fraction).
+    try:
+        num = float(raw)
+        if num > 1e12:  # epoch-ms
+            num /= 1000.0
+        if num > 1e8:   # sanity: after ~1973, so bare years don't match
+            return datetime.fromtimestamp(num, tz=timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+    except (TypeError, ValueError, OverflowError, OSError):
+        pass
+    iso = raw.replace(" ", "T")
+    if iso.endswith(("Z", "z")):
+        iso = iso[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(iso)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        # Naive input (e.g. a raw <input type=datetime-local> value that
+        # skipped client-side UTC conversion): treat as UTC rather than
+        # guessing the server's zone.
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 import re as _re
 
 _TASK_NOTIF_SUMMARY_RE = _re.compile(r"<summary>([\s\S]*?)</summary>", _re.IGNORECASE)
@@ -336,7 +374,7 @@ def _collapse_duplicate_brain_events(events):
     return [ev for ev in events if id(ev) not in drop]
 
 
-def _try_local_store_brain(limit, include_artifacts, since=None):
+def _try_local_store_brain(limit, include_artifacts, since=None, until=None):
     """Epic #964 phase 1b fast path. Returns a brain-history-shaped dict
     when CLAWMETRY_LOCAL_STORE_READ=1 AND the local DuckDB store has
     enough events to be useful. Returns ``None`` to defer to the JSONL
@@ -348,8 +386,10 @@ def _try_local_store_brain(limit, include_artifacts, since=None):
     is a measurable proof that the local store is the right answer for
     the simple list-of-events case.
 
-    ``since`` is forwarded to ``query_events`` so the OSS 24h retention
-    cap (issue #1448) is enforced at the SQL layer.
+    ``since``/``until`` are forwarded to ``query_events`` so both the OSS
+    retention cap (issue #1448, currently off) and the user-facing
+    date-time range filter ("what happened at 3AM") are enforced at the
+    SQL layer, riding the ``idx_events_ts`` index.
     """
     rows = None
     # exclude_daemon: drop ClawMetry's own daemon diagnostics at the SQL level
@@ -358,6 +398,8 @@ def _try_local_store_brain(limit, include_artifacts, since=None):
     qkwargs = {"limit": limit, "exclude_daemon": True}
     if since:
         qkwargs["since"] = since
+    if until:
+        qkwargs["until"] = until
     # Issue #1088: cross-process fast-path. The standard install runs daemon
     # + dashboard as separate processes and DuckDB's exclusive writer lock
     # blocks the dashboard from opening the file even read-only. Ask the
@@ -382,16 +424,19 @@ def _try_local_store_brain(limit, include_artifacts, since=None):
     if not rows:
         # Empty store → fall through to JSONL parser so a fresh install
         # without a populated local DB still gets a useful brain feed.
-        # Exception: when the OSS 24h cap (issue #1448) is active we MUST
-        # NOT fall through, otherwise the JSONL parser would happily serve
-        # unbounded history and defeat the retention gate.
-        if since:
+        # Exception: when a time bound is active (a user's date-time range
+        # query, or the legacy #1448 retention cap) we MUST NOT fall
+        # through — the JSONL parser can't range-filter at source, so it
+        # would answer a "3AM last night" question with unbounded history.
+        # An honest empty window beats a wrong full feed.
+        if since or until:
             return {
                 "events":        [],
                 "count":         0,
                 "_source":       "local_store",
                 "_shape":        "brain_history",
-                "capped_at_24h": True,
+                "capped_at_24h": False,
+                "window":        {"since": since, "until": until},
             }
         return None
     # Translate the local-store row shape (id/node_id/agent_id/session_id/
@@ -493,13 +538,19 @@ def _try_local_store_brain(limit, include_artifacts, since=None):
             pass
         out.append(row)
     out = _collapse_duplicate_brain_events(out)
-    return {
+    payload = {
         "events":        out,
         "count":         len(out),
         "_source":       "local_store",
         "_shape":        "brain_history",
-        "capped_at_24h": bool(since),
+        # The #1448 retention cap is off (founder call 2026-06-23); since/
+        # until now carry the user's investigation window, which must never
+        # trip the upgrade CTA the cap flag drives in the UI.
+        "capped_at_24h": False,
     }
+    if since or until:
+        payload["window"] = {"since": since, "until": until}
+    return payload
 
 
 def _brain_history_is_artifact(path):
@@ -553,15 +604,31 @@ def api_brain_history():
     # Brain from the encrypted snapshot, where retention is enforced separately.
     # (Was issue #1448's 24h cap, which only ever gated a user's own local data.)
     cap_since = None
+    # Date-time range filter ("what happened at 3AM"): optional since/until
+    # (aliases start/end) bound the window. Bad values parse to None and
+    # degrade to "no bound" rather than erroring.
+    rng_since = _brain_history_time_arg(
+        request.args.get("since") or request.args.get("start")
+    )
+    rng_until = _brain_history_time_arg(
+        request.args.get("until") or request.args.get("end")
+    )
+    if rng_since and rng_until and rng_since > rng_until:
+        rng_since, rng_until = rng_until, rng_since
     # Epic #964 phase 1b: opt-in local-store fast path. Skip the JSONL
     # parser entirely when CLAWMETRY_LOCAL_STORE_READ=1 AND the store
     # has data. Falls through to the full parser otherwise (so a fresh
     # install with an empty store still gets the rich brain feed).
     if is_local_store_read_enabled():
-        fast = _try_local_store_brain(limit, include_artifacts, since=cap_since)
+        fast = _try_local_store_brain(
+            limit, include_artifacts, since=rng_since or cap_since, until=rng_until
+        )
         if fast is not None:
             return jsonify(fast)
-    cache_key = (limit, include_artifacts, bool(cap_since))
+    cache_key = (
+        limit, include_artifacts, bool(cap_since),
+        rng_since or "", rng_until or "",
+    )
     cached = _BRAIN_HISTORY_CACHE.get(cache_key)
     now_cache = time.time()
     if cached and now_cache - cached[0] < _BRAIN_HISTORY_CACHE_TTL_SECONDS:
@@ -1158,6 +1225,14 @@ def api_brain_history():
             if ev.get("type") == "CONTEXT" or (ev.get("time") or "") >= cap_since
         ]
 
+    # Date-time range filter (JSONL slow path): the fast path bounds at the
+    # SQL layer; here we post-filter on the same lexicographic ISO compare.
+    # CONTEXT pseudo-events are NOT exempt — a window means a window.
+    if rng_since:
+        events = [ev for ev in events if (ev.get("time") or "") >= rng_since]
+    if rng_until:
+        events = [ev for ev in events if (ev.get("time") or "") <= rng_until]
+
     # Build channel summary for filter chips
     channel_counts = {}
     for ev in events:
@@ -1206,6 +1281,8 @@ def api_brain_history():
         "channels":      channel_counts,
         "capped_at_24h": bool(cap_since),
     }
+    if rng_since or rng_until:
+        payload["window"] = {"since": rng_since, "until": rng_until}
     _BRAIN_HISTORY_CACHE[cache_key] = (time.time(), payload)
     if len(_BRAIN_HISTORY_CACHE) > 8:
         oldest_key = min(_BRAIN_HISTORY_CACHE, key=lambda k: _BRAIN_HISTORY_CACHE[k][0])

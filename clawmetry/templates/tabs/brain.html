@@ -114,7 +114,7 @@
       </div>
     </div>
 
-    <!-- Activity density chart -->
+    <!-- Activity density chart + time range picker -->
     <div class="brain-density-wrap" style="
       background:var(--bg-secondary);
       border:1px solid var(--border);
@@ -122,11 +122,35 @@
       padding:10px 14px;
       margin-bottom:12px;
       ">
-      <div style="
-        font-size:11px;
-        color:var(--text-muted);
-        margin-bottom:6px;
-        " data-i18n="brain.activity_density">Activity density · last 60 min (30s buckets)</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+        <div id="brain-density-label" style="
+          font-size:11px;
+          color:var(--text-muted);
+          " data-i18n="brain.activity_density">Activity density · last 60 min (30s buckets)</div>
+        <!-- Date-time range picker: investigate any window ("what happened
+             at 3AM?"). Live = streaming default; presets freeze a window
+             ending now; Custom takes an explicit from/to. Handlers in
+             app.js (setBrainTimeRange / applyBrainCustomRange). -->
+        <div id="brain-range-bar" style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;" data-i18n-title="brain.range_tooltip" title="Show activity from a specific time window">
+          <button class="brain-range-btn time-btn active" data-range="live" onclick="setBrainTimeRange('live',this)" data-i18n="brain.range_live">● Live</button>
+          <button class="brain-range-btn time-btn" data-range="3600" onclick="setBrainTimeRange(3600,this)">1h</button>
+          <button class="brain-range-btn time-btn" data-range="21600" onclick="setBrainTimeRange(21600,this)">6h</button>
+          <button class="brain-range-btn time-btn" data-range="86400" onclick="setBrainTimeRange(86400,this)">24h</button>
+          <button class="brain-range-btn time-btn" data-range="custom" id="brain-range-custom-btn" onclick="toggleBrainCustomRange(this)" data-i18n="brain.range_custom">Custom…</button>
+        </div>
+      </div>
+      <div id="brain-custom-range" style="display:none;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px;font-size:11px;color:var(--text-muted);">
+        <span data-i18n="brain.range_from">From</span>
+        <input type="datetime-local" id="brain-range-from" step="60" style="padding:4px 6px;background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:11px;font-family:inherit;">
+        <span data-i18n="brain.range_to">to</span>
+        <input type="datetime-local" id="brain-range-to" step="60" style="padding:4px 6px;background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:11px;font-family:inherit;">
+        <button class="refresh-btn" onclick="applyBrainCustomRange()" style="font-weight:600;" data-i18n="brain.range_apply">Show this window</button>
+      </div>
+      <div id="brain-history-banner" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.35);border-radius:6px;padding:6px 10px;margin-bottom:8px;font-size:12px;color:#f59e0b;">
+        <span>🕰 <span data-i18n="brain.viewing_history">Viewing history</span> · <span id="brain-history-banner-text" style="font-weight:600;"></span></span>
+        <span id="brain-history-banner-status" style="color:var(--text-muted);font-size:11px;"></span>
+        <button class="refresh-btn" onclick="setBrainTimeRange('live')" style="margin-left:auto;font-weight:600;" data-i18n="brain.back_to_live">● Back to live</button>
+      </div>
       <canvas id="brain-density-chart" height="60" style="width:100%;display:block;"></canvas>
     </div>
     <!-- Sessions-at-risk card (issue #2008): surfaces the existing

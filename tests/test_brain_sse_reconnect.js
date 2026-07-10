@@ -74,6 +74,9 @@ function buildSandbox(opts) {
     'var _BRAIN_SSE_BACKOFF_MAX_MS = ',
     'var _BRAIN_SSE_BANNER_THRESHOLD_MS = ',
     'var _brainRefreshTimer = null;',
+    // Date-time range filter: the reconnect chain is gated on !_brainRange
+    // (history mode must never reopen the live stream).
+    'var _brainRange = null;',
   ];
   const varLines = [];
   wantedVars.forEach(function(prefix) {
