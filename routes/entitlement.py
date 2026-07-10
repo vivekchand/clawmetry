@@ -18727,3 +18727,325 @@ def api_entitlement_previous_tier_channel_catalog_at():
                 "channels": [],
             }
         )
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-feature-catalog-at")
+def api_entitlement_next_tier_feature_catalog_at():
+    """``GET /api/entitlement/next-tier-feature-catalog-at?tier=<source>``
+    -- source-anchored feature-axis catalog sibling of
+    ``/api/entitlement/next-tier-spec-at``: the full
+    :func:`clawmetry.entitlements.feature_catalog_at`-shape catalogue for
+    every feature evaluated on the rung above the caller-supplied
+    ``tier``.
+
+    Source-anchored companion of ``/next-tier-feature-catalog``
+    (resolver-anchored, no-arg) and feature-axis catalog analogue of
+    ``/next-tier-channel-catalog-at`` / ``/next-tier-runtime-catalog-at``.
+    Lets an upgrade-preview panel walking an explicit source rung (a
+    pricing comparison matrix, an "at each rung" table) hydrate the whole
+    feature matrix at the next rung off ONE round-trip without threading
+    the target tier through query args or first fetching
+    ``/entitlement`` for ``next_tier``.
+
+    Response shape::
+
+        {
+          "tier":         "<source tier id>",
+          "tier_label":   "<source label>",
+          "tier_rank":    <source rank>,
+          "target":       "<next-above tier id>" | null,
+          "target_label": "<next-above label>" | null,
+          "target_rank":  <next-above rank> | null,
+          "features":     [<catalog_row>, ...],   # empty at ceiling
+        }
+
+    Inner ``features`` matches
+    ``/feature-catalog-at?tier=<target>`` byte-for-byte when ``target``
+    is populated -- a parity test pins this so the projection cannot
+    drift from the sibling.
+
+    Accepts any tier id in :data:`entitlements._TIER_ORDER` (including
+    ``trial``). ``features`` collapses to ``[]`` at the ceiling (no rung
+    strictly above -- enterprise as source) -- the surface stays 200 so
+    callers can render "you're at the top" copy without a status-code
+    branch.
+
+    - **400** when ``tier=`` is missing / blank
+    - **404** when ``tier`` is unknown
+    - **Never 5xxs**: builder failure short-circuits to ``features=[]``
+      on the same 200 envelope so the preview surface stays mute.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        target = _ent._next_purchasable_tier_after(tier_in)
+        rows = _ent.next_tier_feature_catalog_at(tier_in) or []
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": _ent.tier_label(tier_in),
+                "tier_rank": _ent.tier_rank(tier_in),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "features": rows,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_feature_catalog_at: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": None,
+                "tier_rank": -1,
+                "target": None,
+                "target_label": None,
+                "target_rank": None,
+                "features": [],
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-feature-catalog-at")
+def api_entitlement_previous_tier_feature_catalog_at():
+    """``GET /api/entitlement/previous-tier-feature-catalog-at?tier=<source>``
+    -- symmetric downgrade-side companion of
+    ``/next-tier-feature-catalog-at``: the full
+    :func:`clawmetry.entitlements.feature_catalog_at`-shape catalogue for
+    every feature evaluated on the rung below the caller-supplied
+    ``tier``.
+
+    Source-anchored companion of ``/previous-tier-feature-catalog``
+    (resolver-anchored, no-arg). Lets a downgrade-confirmation card
+    walking an explicit source rung render "which features stay when I
+    step down from THIS tier?" off ONE round-trip.
+
+    Response shape matches ``/next-tier-feature-catalog-at``
+    byte-for-byte (``tier``, ``tier_label``, ``tier_rank``, ``target``,
+    ``target_label``, ``target_rank``, ``features``). Inner ``features``
+    matches ``/feature-catalog-at?tier=<target>`` byte-for-byte when
+    ``target`` is populated.
+
+    Accepts any tier id in :data:`entitlements._TIER_ORDER` (including
+    ``trial``). ``features`` collapses to ``[]`` at the floor (``oss`` /
+    ``cloud_free`` as source) and ``target`` / ``target_label`` /
+    ``target_rank`` to ``null``.
+
+    - **400** when ``tier=`` is missing / blank
+    - **404** when ``tier`` is unknown
+    - **Never 5xxs**: builder failure short-circuits to ``features=[]``
+      on the same 200 envelope.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        target = _ent._previous_purchasable_tier_before(tier_in)
+        rows = _ent.previous_tier_feature_catalog_at(tier_in) or []
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": _ent.tier_label(tier_in),
+                "tier_rank": _ent.tier_rank(tier_in),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "features": rows,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_feature_catalog_at: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": None,
+                "tier_rank": -1,
+                "target": None,
+                "target_label": None,
+                "target_rank": None,
+                "features": [],
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-runtime-catalog-at")
+def api_entitlement_next_tier_runtime_catalog_at():
+    """``GET /api/entitlement/next-tier-runtime-catalog-at?tier=<source>``
+    -- source-anchored runtime-axis catalog sibling of
+    ``/api/entitlement/next-tier-spec-at``: the full
+    :func:`clawmetry.entitlements.runtime_catalog_at`-shape catalogue for
+    every runtime evaluated on the rung above the caller-supplied
+    ``tier``.
+
+    Source-anchored companion of ``/next-tier-runtime-catalog``
+    (resolver-anchored, no-arg) and runtime-axis catalog analogue of
+    ``/next-tier-channel-catalog-at`` / ``/next-tier-feature-catalog-at``.
+    Lets an upgrade-preview panel walking an explicit source rung
+    hydrate the whole runtime matrix at the next rung off ONE
+    round-trip.
+
+    Response shape::
+
+        {
+          "tier":         "<source tier id>",
+          "tier_label":   "<source label>",
+          "tier_rank":    <source rank>,
+          "target":       "<next-above tier id>" | null,
+          "target_label": "<next-above label>" | null,
+          "target_rank":  <next-above rank> | null,
+          "runtimes":     [<catalog_row>, ...],   # empty at ceiling
+        }
+
+    Inner ``runtimes`` matches ``/runtime-catalog-at?tier=<target>``
+    byte-for-byte when ``target`` is populated -- pinned by a parity
+    test.
+
+    Accepts any tier id in :data:`entitlements._TIER_ORDER` (including
+    ``trial``). ``runtimes`` collapses to ``[]`` at the ceiling.
+
+    - **400** when ``tier=`` is missing / blank
+    - **404** when ``tier`` is unknown
+    - **Never 5xxs**: builder failure short-circuits to ``runtimes=[]``
+      on the same 200 envelope.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        target = _ent._next_purchasable_tier_after(tier_in)
+        rows = _ent.next_tier_runtime_catalog_at(tier_in) or []
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": _ent.tier_label(tier_in),
+                "tier_rank": _ent.tier_rank(tier_in),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "runtimes": rows,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_runtime_catalog_at: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": None,
+                "tier_rank": -1,
+                "target": None,
+                "target_label": None,
+                "target_rank": None,
+                "runtimes": [],
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-runtime-catalog-at")
+def api_entitlement_previous_tier_runtime_catalog_at():
+    """``GET /api/entitlement/previous-tier-runtime-catalog-at?tier=<source>``
+    -- symmetric downgrade-side companion of
+    ``/next-tier-runtime-catalog-at``: the full
+    :func:`clawmetry.entitlements.runtime_catalog_at`-shape catalogue for
+    every runtime evaluated on the rung below the caller-supplied
+    ``tier``.
+
+    Source-anchored companion of ``/previous-tier-runtime-catalog``
+    (resolver-anchored, no-arg). Lets a downgrade-confirmation card
+    walking an explicit source rung render "which runtimes stay when I
+    step down from THIS tier?" off ONE round-trip.
+
+    Response shape matches ``/next-tier-runtime-catalog-at``
+    byte-for-byte (``tier``, ``tier_label``, ``tier_rank``, ``target``,
+    ``target_label``, ``target_rank``, ``runtimes``). Inner ``runtimes``
+    matches ``/runtime-catalog-at?tier=<target>`` byte-for-byte when
+    ``target`` is populated.
+
+    Accepts any tier id in :data:`entitlements._TIER_ORDER` (including
+    ``trial``). ``runtimes`` collapses to ``[]`` at the floor
+    (``oss`` / ``cloud_free`` as source) and ``target`` /
+    ``target_label`` / ``target_rank`` to ``null``.
+
+    - **400** when ``tier=`` is missing / blank
+    - **404** when ``tier`` is unknown
+    - **Never 5xxs**: builder failure short-circuits to ``runtimes=[]``
+      on the same 200 envelope.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        target = _ent._previous_purchasable_tier_before(tier_in)
+        rows = _ent.previous_tier_runtime_catalog_at(tier_in) or []
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": _ent.tier_label(tier_in),
+                "tier_rank": _ent.tier_rank(tier_in),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "runtimes": rows,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_runtime_catalog_at: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": None,
+                "tier_rank": -1,
+                "target": None,
+                "target_label": None,
+                "target_rank": None,
+                "runtimes": [],
+            }
+        )
