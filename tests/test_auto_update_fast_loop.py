@@ -210,3 +210,31 @@ def test_exec_restart_kill_switch(monkeypatch):
     uc._maybe_auto_update("0.12.1", "0.12.2")
     assert restarts == [False]
     assert execs == [], "CLAWMETRY_AUTOUPDATE_EXEC_RESTART=0 must disable re-exec"
+
+
+# ── 5. status endpoint introspection ─────────────────────────────────────────
+
+
+def test_status_endpoint_reports_updater_posture(monkeypatch):
+    """/api/update-check/status must expose the effective auto-update
+    posture (role, cadence, age gate, kill switch) so a stale node is
+    diagnosable from the API."""
+    from flask import Flask
+    uc = _uc()
+    uc._process_role = "daemon"
+    monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
+    monkeypatch.delenv("CLAWMETRY_UPDATE_CHECK_SECS", raising=False)
+    monkeypatch.delenv("CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS", raising=False)
+    monkeypatch.setattr(uc, "_get_update_check_config",
+                        lambda: {"enabled": True, "auto_update": True,
+                                 "dismissed_version": ""})
+    monkeypatch.setattr(uc, "_get_latest_update_check", lambda: None)
+    a = Flask(__name__)
+    a.register_blueprint(uc.bp_update_check)
+    body = a.test_client().get("/api/update-check/status").get_json()
+    upd = body.get("updater")
+    assert upd, "status response must carry the updater block"
+    assert upd["role"] == "daemon"
+    assert upd["check_interval_secs"] == 60.0
+    assert upd["min_age_hours"] == 0.0
+    assert upd["env_disabled"] is False

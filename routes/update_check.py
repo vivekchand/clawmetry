@@ -608,7 +608,15 @@ def api_update_check_config_post():
 
 @bp_update_check.route("/api/update-check/status", methods=["GET"])
 def api_update_check_status():
-    """Get the current update check status."""
+    """Get the current update check status.
+
+    ``updater`` describes THIS process's effective auto-update posture
+    (role, cadence, age gate, kill switch) so "is this node actually on
+    the fast update loop?" is answerable from the API instead of by
+    reading env vars and logs on the box. Note the dashboard process
+    reports role=dashboard; the installing fast loop lives in the sync
+    daemon (see the same endpoint there / the sync log line).
+    """
     config = _get_update_check_config()
     latest = _get_latest_update_check()
 
@@ -616,6 +624,15 @@ def api_update_check_status():
         "config": config,
         "latest_check": latest,
         "show_banner": _should_show_update_banner(config, latest),
+        "updater": {
+            "role": _process_role,
+            "check_interval_secs": (
+                _update_check_interval_secs()
+                if _process_role == "daemon" else None
+            ),
+            "min_age_hours": _autoupdate_min_age_hours(),
+            "env_disabled": _env_auto_update_disabled(),
+        },
     }
 
     return jsonify(result)
