@@ -115,7 +115,8 @@ jobs:
                                  (may be empty if required checks are not yet
                                  configured -- outer loop detects "missing")
                 'unknown'     -- branch is protected but detail not readable
-                                 (cross-repo GITHUB_TOKEN limit on public repos)
+                                 (cross-repo GITHUB_TOKEN limit on public repos:
+                                 /branches/main returns protection=None)
                 'unprotected' -- branch has no protection configured
                 'error'       -- API error / repo not reachable
               """
@@ -124,26 +125,15 @@ jobs:
                   return set(), "error"
               if not data.get("protected"):
                   return set(), "unprotected"
-              prot = (data.get("protection") or {})
-              rsc = prot.get("required_status_checks") or {}
-              contexts = set(rsc.get("contexts", []))
-              if not contexts:
-                  # Protected but contexts empty or not visible in /branches/main.
-                  # GITHUB_TOKEN may return a partial protection object (e.g.
-                  # when the branch was recently protected without required checks,
-                  # or when token lacks admin scope for the full detail).
-                  # Try the dedicated endpoint: GITHUB_TOKEN with push access on
-                  # the host repo can read this; cross-repo reads return 403.
-                  detail, detail_err = api_get(
-                      f"/repos/{OWNER}/{repo}/branches/main/protection/required_status_checks"
-                  )
-                  if detail is not None:
-                      # Readable -- return actual contexts (may be empty = confirmed
-                      # no required checks configured; outer loop marks as "missing").
-                      return set(detail.get("contexts", [])), "ok"
-                  # Could not read via dedicated endpoint (cross-repo 403 or no
-                  # protection at all on that path) -- genuinely unknown.
+              # "protection" key present in response = token can read details.
+              # Returns None when cross-repo read limits apply (public repos,
+              # different owner scope). Empty contexts in a readable dict is
+              # definitive: branch is protected but no required checks yet.
+              prot = data.get("protection")
+              if prot is None:
                   return set(), "unknown"
+              rsc = (prot.get("required_status_checks") or {})
+              contexts = set(rsc.get("contexts", []))
               return contexts, "ok"
 
           # Audit all repos.
@@ -261,7 +251,8 @@ jobs:
 
           result_obj = post_comment(body)
           print(f"Posted: {result_obj['html_url']}")
-          # Exit 1 when clawmetry checks are confirmed missing (we can always read this).
-          # Exit 0 for unknown (can't verify cross-repo) to avoid spurious red badges.
+          # Exit 1 when any repo has confirmed missing/unprotected checks
+          # (detectable without admin scope). Exit 0 only for unknown
+          # (cross-repo read limit) to avoid spurious red CI badges.
           sys.exit(1 if has_confirmed_missing else 0)
           PYEOF
