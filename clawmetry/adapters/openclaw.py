@@ -481,33 +481,52 @@ def _openshell_sandbox_logs(name: str, count: int = 20) -> list:
 
 
 def _sandbox_egress_denied_count(name: str, count: int = 100) -> dict:
-    """Count DNS-backed HTTPS fail-closed denial events in recent sandbox OCSF logs.
+    """Summarise OCSF audit events from recent sandbox logs (#3616).
 
     Fetches the <count> most-recent OCSF audit events for sandbox <name> and
-    counts those with verdict=='deny' that carry a network-egress context:
-    either an OCSF network-activity class_uid (4001-4004) or the presence of
-    endpoint fields (dst_endpoint / src_endpoint) that imply a connection
-    attempt.  Returns {"egressDeniedCount": N} when N>0 so callers can
-    .update() a sandbox entry dict directly; returns {} otherwise -- identical
-    to the _openshell_sandbox_ocsf_enabled() contract.  Never raises.
+    classifies every event into one of three buckets:
+
+    - Network-egress denied  (class_uid 4001-4004 or endpoint fields, verdict==deny)
+      → ``egressDeniedCount``
+    - Network-egress allowed (class_uid 4001-4004 or endpoint fields, verdict==allow)
+      → ``egressAllowedCount``
+    - Non-network audit      (process-activity, file-activity, auth events, …)
+      → ``processFileAuthAuditCount``
+
+    Each key is omitted when its count is zero, preserving the .update()-friendly
+    contract used by callers.  Never raises.
     """
     _NETWORK_CLASS_UIDS = frozenset([4001, 4002, 4003, 4004])
     try:
         events = _openshell_sandbox_logs(name, count=count)
         denied = 0
+        allowed = 0
+        non_network = 0
         for evt in events:
             if not isinstance(evt, dict):
                 continue
-            if evt.get("verdict") != "deny":
-                continue
             class_uid = evt.get("class_uid")
-            if class_uid in _NETWORK_CLASS_UIDS:
-                denied += 1
-            elif "dst_endpoint" in evt or "src_endpoint" in evt:
-                denied += 1
+            is_network = (
+                class_uid in _NETWORK_CLASS_UIDS
+                or "dst_endpoint" in evt
+                or "src_endpoint" in evt
+            )
+            if is_network:
+                verdict = evt.get("verdict")
+                if verdict == "deny":
+                    denied += 1
+                elif verdict == "allow":
+                    allowed += 1
+            else:
+                non_network += 1
+        result: dict = {}
         if denied:
-            return {"egressDeniedCount": denied}
-        return {}
+            result["egressDeniedCount"] = denied
+        if allowed:
+            result["egressAllowedCount"] = allowed
+        if non_network:
+            result["processFileAuthAuditCount"] = non_network
+        return result
     except Exception:
         return {}
 
