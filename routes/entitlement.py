@@ -8258,6 +8258,135 @@ def api_entitlement_previous_tier_runtime_spec_batch():
         return jsonify(_next_prev_tier_axis_spec_batch_grace_body("runtimes"))
 
 
+@bp_entitlement.route("/api/entitlement/next-tier-channel-spec-batch")
+def api_entitlement_next_tier_channel_spec_batch():
+    """``GET /api/entitlement/next-tier-channel-spec-batch?channels=a,b,c``
+    -- channel-axis mirror of ``/next-tier-feature-spec-batch`` and
+    ``/next-tier-runtime-spec-batch``; batch sibling of
+    ``/next-tier-channel-spec``.
+
+    Where ``/next-tier-channel-spec`` projects ONE channel onto the rung
+    above the resolved entitlement, this projects N channels onto that
+    same rung in ONE round-trip. Pairs with ``/next-tier-channel-spec``
+    the same way ``/channel-spec-at-batch`` pairs with
+    ``/channel-spec-at``: scalar what-if -> batch what-if -- but source-
+    aware (anchored on the resolved entitlement's
+    ``next_purchasable_tier``) rather than caller-supplied ``tier=``.
+
+    Use case: an upgrade-preview panel walking a channel picker of N
+    chat adapters and asking "do these unlock at MY next rung?" without
+    threading the current tier through the query args or first fetching
+    ``/next-tier-channel-spec`` N times.
+
+    Each row in ``channels[].row`` is byte-identical to the body of
+    ``/next-tier-channel-spec?channel=<id>`` ``.row`` -- pinned by
+    parity tests so the scalar and batch accessors cannot drift.
+    Supplied channel ids are normalised (whitespace stripped,
+    lowercased, duplicates dropped, first-seen order preserved).
+    Unknown ids do not 404 the call -- they are echoed in ``unknown[]``
+    so a partially-bad caller still gets rows back for the valid ids,
+    matching the feature/runtime siblings.
+
+    At the ceiling (resolved entitlement already at enterprise -- no
+    rung above) every per-channel ``row`` is ``null`` while ``target``
+    / ``target_label`` / ``target_rank`` collapse to ``null``; the
+    surface stays 200 so callers can render "you're at the top" copy
+    without a status-code branch.
+
+    Every chat channel is FREE at every tier, so whenever ``row`` is
+    not ``null`` it comes back ``free=True`` / ``locked=False`` /
+    ``entitled=True`` -- pricing tooltips can render "chat channels
+    included at every plan" off ONE call.
+
+    Response shape mirrors ``/next-tier-feature-spec-batch`` with
+    ``"channels"`` in place of ``"features"`` and a per-row
+    ``"channel"`` key in place of ``"feature"``.
+
+    - **400** when ``channels=`` is missing / empty after normalisation
+    - **Never 5xxs**: a resolver failure short-circuits to the grace-
+      shape envelope with empty rows so the matrix keeps rendering.
+    """
+    try:
+        channels = _parse_csv_arg("channels")
+        if not channels:
+            return jsonify({"error": "supply channels=<csv>"}), 400
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        target = ent.next_purchasable_tier()
+        batch = ent.next_tier_channel_spec_batch(channels)
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "channels": batch.get("channels", []),
+                "unknown": batch.get("unknown", []),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_channel_spec_batch: error: %s", exc
+        )
+        return jsonify(_next_prev_tier_axis_spec_batch_grace_body("channels"))
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-channel-spec-batch")
+def api_entitlement_previous_tier_channel_spec_batch():
+    """``GET /api/entitlement/previous-tier-channel-spec-batch
+    ?channels=a,b,c`` -- symmetric downgrade-side companion of
+    ``/next-tier-channel-spec-batch``.
+
+    Same envelope as ``/next-tier-channel-spec-batch``; ``target`` and
+    every per-channel ``row`` collapse to ``null`` at the floor
+    (resolved entitlement at ``oss`` / ``cloud_free`` -- no rung
+    below).
+
+    Each row in ``channels[].row`` is byte-identical to
+    ``/previous-tier-channel-spec?channel=<id>`` ``.row``.
+
+    The channel-axis always-free invariant holds here too: whenever
+    ``row`` is not ``null`` it comes back ``free=True`` /
+    ``locked=False`` / ``entitled=True``.
+
+    - **400** when ``channels=`` is missing / empty after normalisation
+    - **Never 5xxs**: grace-shape envelope on resolver failure.
+    """
+    try:
+        channels = _parse_csv_arg("channels")
+        if not channels:
+            return jsonify({"error": "supply channels=<csv>"}), 400
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        target = ent.previous_purchasable_tier()
+        batch = ent.previous_tier_channel_spec_batch(channels)
+        return jsonify(
+            {
+                "current_tier": ent.tier,
+                "current_tier_label": _ent.tier_label(ent.tier),
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "channels": batch.get("channels", []),
+                "unknown": batch.get("unknown", []),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_channel_spec_batch: error: %s", exc
+        )
+        return jsonify(_next_prev_tier_axis_spec_batch_grace_body("channels"))
+
+
 def _next_prev_lock_reason_grace_body(key: str, kind: str) -> dict:
     """Fallback envelope shared by the bare next/previous lock-reason
     routes. Keeps the shape identical to the happy path so a resolver
