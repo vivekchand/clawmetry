@@ -1023,7 +1023,7 @@ class NemoClawAdapter(AgentAdapter):
                 if r[6]:
                     extra["runtimeKind"] = str(r[6])
                 raw_data = r[5]
-                if raw_data is not None and r[1] == "sandbox.audit_log":
+                if raw_data is not None:
                     try:
                         if isinstance(raw_data, (bytes, bytearray)):
                             raw_data = bytes(raw_data).decode("utf-8", "replace")
@@ -1031,14 +1031,42 @@ class NemoClawAdapter(AgentAdapter):
                             json.loads(raw_data) if isinstance(raw_data, str) else raw_data
                         )
                         if isinstance(obj, dict):
-                            for _field in (
-                                "class_uid", "type_uid", "activity_name",
-                                "verdict", "rule_name",
-                            ):
-                                _val = obj.get(_field)
-                                if _val is not None:
-                                    extra[_field] = _val
-                            extra["ocsf"] = True
+                            if r[1] == "sandbox.audit_log":
+                                for _field in (
+                                    "class_uid", "type_uid", "activity_name",
+                                    "verdict", "rule_name",
+                                ):
+                                    _val = obj.get(_field)
+                                    if _val is not None:
+                                        extra[_field] = _val
+                                extra["ocsf"] = True
+                            # Advisor-session tool-execution retry/exhaustion
+                            # lifecycle (#3650): tool_execution_start /
+                            # tool_execution_end events carry attempt number,
+                            # per-attempt error flag, and resolved retry outcome
+                            # so the dashboard can distinguish a single clean
+                            # call from fail-then-success or exhaustion.
+                            # isError uses is-not-None (False is meaningful).
+                            _attempt = (
+                                obj.get("attemptNumber")
+                                or obj.get("attempt_number")
+                            )
+                            if _attempt is not None:
+                                try:
+                                    extra["attempt_number"] = int(_attempt)
+                                except (TypeError, ValueError):
+                                    pass
+                            _is_err = obj.get("isError")
+                            if _is_err is None:
+                                _is_err = obj.get("is_error")
+                            if _is_err is not None:
+                                extra["is_error"] = bool(_is_err)
+                            _rr = (
+                                obj.get("retryResponse")
+                                or obj.get("retry_response")
+                            )
+                            if _rr:
+                                extra["retry_response"] = _rr
                     except Exception:
                         pass
                 events.append(Event(
