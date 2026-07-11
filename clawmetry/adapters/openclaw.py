@@ -1447,6 +1447,16 @@ class OpenClawAdapter(AgentAdapter):
             _fm_fallback = s.get("fallbackModel") or s.get("fastModeFallbackModel")
             if _fm_fallback is not None:
                 extra["fallbackModel"] = _fm_fallback
+            # Runtime-engine fallback dimension (#3649): CHANGELOG #98021 added
+            # an atomic runtime (engine) selection alongside model and thinking;
+            # capture it so engine switches (OpenClaw↔Codex) are distinguishable.
+            _fb_runtime = (
+                s.get("fallbackRuntime")
+                or s.get("fallbackRuntimeEngine")
+                or s.get("runtimeEngine")
+            )
+            if _fb_runtime is not None:
+                extra["fallbackRuntime"] = _fb_runtime
             # /think reasoning-level tier (#3324): PR #94067 stores the active
             # level (light/medium/deep) on session records; surface when present.
             _think_level = s.get("thinkLevel") or s.get("reasoningLevel")
@@ -1823,6 +1833,15 @@ class OpenClawAdapter(AgentAdapter):
                             _fm_fallback = obj.get("fallbackModel") or obj.get("fastModeFallbackModel")
                             if _fm_fallback is not None:
                                 extra["fallbackModel"] = _fm_fallback
+                            # Runtime-engine fallback dimension (#3649): same
+                            # atomic engine field captured at the event level.
+                            _fb_runtime = (
+                                obj.get("fallbackRuntime")
+                                or obj.get("fallbackRuntimeEngine")
+                                or obj.get("runtimeEngine")
+                            )
+                            if _fb_runtime is not None:
+                                extra["fallbackRuntime"] = _fb_runtime
                             # /think reasoning-level tier (#3324): PR #94067 stores
                             # the active level (light/medium/deep) on model-turn
                             # records; try camelCase then snake_case.
