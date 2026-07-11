@@ -19197,3 +19197,267 @@ def api_entitlement_previous_tier_runtime_catalog_at():
                 "runtimes": [],
             }
         )
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-feature-catalog-at-batch")
+def api_entitlement_next_tier_feature_catalog_at_batch():
+    """``GET /api/entitlement/next-tier-feature-catalog-at-batch`` --
+    batch sibling of ``/api/entitlement/next-tier-feature-catalog-at``:
+    one ``next-tier-feature-catalog-at`` envelope per purchasable source
+    tier, in one round-trip.
+
+    Feature-axis catalog analogue of
+    ``/api/entitlement/next-tier-capacity-diff-at-batch`` (capacity-only
+    narrow lens) / ``/api/entitlement/next-tier-diff-at-batch`` (full
+    diff). Lets a pricing-comparison matrix UI render the "features at
+    the rung above each rung" upgrade-preview column off **one** call
+    instead of N calls to ``/next-tier-feature-catalog-at``.
+
+    No query params. The source list is
+    :data:`entitlements._PURCHASABLE_TIERS` (trial excluded), matching
+    the sibling diff / unlocks / locks / capacity ``_at_batch``
+    endpoints, so the batches fold into the same pricing-page table
+    byte-for-byte on the source axis.
+
+    Response shape::
+
+        {
+          "tiers":             [<envelope>, ...],
+          "current_tier":      "<resolved tier id>",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<envelope>`` matches
+    ``/api/entitlement/next-tier-feature-catalog-at?tier=<source>`` for
+    that source exactly (``tier``, ``tier_label``, ``tier_rank``,
+    ``target``, ``target_label``, ``target_rank``, ``features``). The
+    inner ``features`` list carries the :func:`feature_catalog_at` rows
+    for the resolved target and is pinned byte-for-byte across both
+    endpoints. At the source-side ceiling (``enterprise`` as source --
+    no rung strictly above) the envelope carries ``target=null`` and
+    ``features=[]`` rather than being dropped, so the matrix keeps a
+    row for every purchasable rung.
+
+    - **Never 5xxs**: a resolver failure yields an empty ``tiers`` list
+      and the grace-shape envelope so the matrix keeps rendering.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.next_tier_feature_catalog_at_batch() or []
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": rows,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_feature_catalog_at_batch: error: %s",
+            exc,
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-feature-catalog-at-batch")
+def api_entitlement_previous_tier_feature_catalog_at_batch():
+    """``GET /api/entitlement/previous-tier-feature-catalog-at-batch`` --
+    batch sibling of ``/api/entitlement/previous-tier-feature-catalog-at``:
+    one ``previous-tier-feature-catalog-at`` envelope per purchasable
+    source tier, in one round-trip.
+
+    Source-anchored downgrade-side mirror of
+    ``/api/entitlement/next-tier-feature-catalog-at-batch`` and
+    feature-axis catalog analogue of
+    ``/api/entitlement/previous-tier-capacity-diff-at-batch``. Lets a
+    pricing-comparison matrix UI render the "features at the rung below
+    each rung" downgrade-preview column off **one** call.
+
+    No query params. Source list is
+    :data:`entitlements._PURCHASABLE_TIERS` (trial excluded).
+
+    Response shape::
+
+        {
+          "tiers":             [<envelope>, ...],
+          "current_tier":      "<resolved tier id>",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<envelope>`` matches
+    ``/api/entitlement/previous-tier-feature-catalog-at?tier=<source>``
+    for that source exactly. At the source-side floor (``oss`` /
+    ``cloud_free`` as source -- no rung strictly below) the envelope
+    carries ``target=null`` and ``features=[]`` rather than being
+    dropped.
+
+    - **Never 5xxs**: resolver failure yields an empty ``tiers`` list
+      and the grace-shape envelope.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.previous_tier_feature_catalog_at_batch() or []
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": rows,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_feature_catalog_at_batch: error: %s",
+            exc,
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-runtime-catalog-at-batch")
+def api_entitlement_next_tier_runtime_catalog_at_batch():
+    """``GET /api/entitlement/next-tier-runtime-catalog-at-batch`` --
+    batch sibling of ``/api/entitlement/next-tier-runtime-catalog-at``:
+    one ``next-tier-runtime-catalog-at`` envelope per purchasable source
+    tier, in one round-trip.
+
+    Runtime-axis catalog analogue of
+    ``/api/entitlement/next-tier-feature-catalog-at-batch`` (feature
+    axis) and ``/api/entitlement/next-tier-capacity-diff-at-batch``
+    (capacity axis). Lets a pricing-comparison matrix UI render the
+    "runtimes at the rung above each rung" upgrade-preview column off
+    **one** call.
+
+    No query params. Source list is
+    :data:`entitlements._PURCHASABLE_TIERS` (trial excluded).
+
+    Response shape::
+
+        {
+          "tiers":             [<envelope>, ...],
+          "current_tier":      "<resolved tier id>",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<envelope>`` matches
+    ``/api/entitlement/next-tier-runtime-catalog-at?tier=<source>`` for
+    that source exactly (``tier``, ``tier_label``, ``tier_rank``,
+    ``target``, ``target_label``, ``target_rank``, ``runtimes``). At the
+    source-side ceiling the envelope carries ``target=null`` and
+    ``runtimes=[]`` rather than being dropped.
+
+    - **Never 5xxs**: resolver failure yields an empty ``tiers`` list
+      and the grace-shape envelope.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.next_tier_runtime_catalog_at_batch() or []
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": rows,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_runtime_catalog_at_batch: error: %s",
+            exc,
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-runtime-catalog-at-batch")
+def api_entitlement_previous_tier_runtime_catalog_at_batch():
+    """``GET /api/entitlement/previous-tier-runtime-catalog-at-batch`` --
+    batch sibling of ``/api/entitlement/previous-tier-runtime-catalog-at``:
+    one ``previous-tier-runtime-catalog-at`` envelope per purchasable
+    source tier, in one round-trip.
+
+    Source-anchored downgrade-side mirror of
+    ``/api/entitlement/next-tier-runtime-catalog-at-batch`` and
+    runtime-axis catalog analogue of
+    ``/api/entitlement/previous-tier-feature-catalog-at-batch``.
+
+    No query params. Source list is
+    :data:`entitlements._PURCHASABLE_TIERS` (trial excluded).
+
+    Response shape mirrors
+    ``/api/entitlement/next-tier-runtime-catalog-at-batch`` byte-for-byte
+    on the envelope keys. Each ``<envelope>`` matches
+    ``/api/entitlement/previous-tier-runtime-catalog-at?tier=<source>``
+    for that source exactly. At the source-side floor (``oss`` /
+    ``cloud_free`` as source) the envelope carries ``target=null`` and
+    ``runtimes=[]``.
+
+    - **Never 5xxs**: resolver failure yields an empty ``tiers`` list
+      and the grace-shape envelope.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.previous_tier_runtime_catalog_at_batch() or []
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": rows,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_runtime_catalog_at_batch: error: %s",
+            exc,
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )

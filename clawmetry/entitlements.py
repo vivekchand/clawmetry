@@ -10240,6 +10240,291 @@ def previous_tier_runtime_catalog_at(tier: str) -> list[dict] | None:
         return None
 
 
+def _feature_catalog_at_envelope(source: str, target: str | None) -> dict:
+    """Private builder for the ``{next,previous}_tier_feature_catalog_at_batch``
+    rows.
+
+    Feature-axis catalog mirror of :func:`_capacity_diff_at_envelope` and
+    :func:`_diff_at_envelope`: envelope shape matches the scalar
+    ``/api/entitlement/{next,previous}-tier-feature-catalog-at`` endpoint
+    (``tier``, ``tier_label``, ``tier_rank``, ``target``, ``target_label``,
+    ``target_rank``, ``features``) so a UI can fold the scalar and batch
+    responses without re-keying. ``features`` collapses to ``[]`` at the
+    ladder ceiling / floor of the source axis (``target is None``) and on
+    a builder failure -- the batch keeps the per-source envelope visible
+    even when its per-pair catalogue could not be built. Never raises --
+    every fallback yields a fully-populated envelope with ``features=[]``.
+    """
+    src = (source or "").strip().lower()
+    rows: list[dict] = []
+    if target is not None:
+        try:
+            rows = feature_catalog_at(target) or []
+        except Exception as exc:
+            logger.warning(
+                "entitlements: _feature_catalog_at_envelope builder failed for %s->%s: %s",
+                src,
+                target,
+                exc,
+            )
+            rows = []
+    return {
+        "tier": src,
+        "tier_label": tier_label(src) if src in _TIER_ORDER else None,
+        "tier_rank": tier_rank(src) if src in _TIER_ORDER else -1,
+        "target": target,
+        "target_label": tier_label(target) if target else None,
+        "target_rank": tier_rank(target) if target else None,
+        "features": rows,
+    }
+
+
+def next_tier_feature_catalog_at_batch() -> list[dict]:
+    """Batch sibling of :func:`next_tier_feature_catalog_at`: one
+    ``next-tier-feature-catalog-at`` envelope per purchasable source
+    tier, in one pass.
+
+    Feature-axis catalog analogue of :func:`next_tier_capacity_diff_at_batch`
+    (capacity-only narrow lens) / :func:`next_tier_diff_at_batch` (full
+    diff): walks the source axis and returns the full
+    :func:`feature_catalog_at` catalogue for the rung above each
+    purchasable source. Lets a pricing-comparison matrix UI render the
+    "features at the rung above each rung" upgrade-preview column off
+    **one** round-trip instead of N calls to
+    :func:`next_tier_feature_catalog_at`.
+
+    Per-envelope shape matches the source-anchored scalar endpoint
+    ``/api/entitlement/next-tier-feature-catalog-at?tier=<source>``
+    (``tier``, ``tier_label``, ``tier_rank``, ``target``, ``target_label``,
+    ``target_rank``, ``features``) -- a parity test pins this so the
+    batch what-if cannot drift from the scalar what-if (the same
+    invariant :func:`next_tier_capacity_diff_at_batch` enforces against
+    :func:`next_tier_capacity_diff_at`). Inner ``features`` byte-equals
+    :func:`feature_catalog_at(target)` for the resolved target.
+
+    Envelopes are sorted by source ``(tier_rank, tier_id)`` ascending
+    -- byte-stable against :func:`next_tier_diff_at_batch` /
+    :func:`next_tier_unlocks_at_batch` / :func:`next_tier_locks_at_batch`
+    / :func:`next_tier_capacity_diff_at_batch` so a UI can fold the
+    responses into one matrix without re-sorting client-side.
+    Same-rank sibling tiers (``cloud_pro`` / ``pro`` both at rank 2) are
+    both returned.
+
+    Source list is :data:`_PURCHASABLE_TIERS` (trial excluded),
+    matching the sibling ``_at_batch`` helpers. The source-side ceiling
+    (``enterprise`` as source -- no rung strictly above) surfaces with
+    ``target=None`` and ``features=[]`` rather than being dropped, so
+    the matrix keeps a row for every purchasable rung.
+
+    Decoupled from the resolved entitlement (walks the static
+    catalogue), so grace vs enforce yields identical rows.
+
+    Never raises: a per-source builder failure collapses to
+    ``features=[]`` on the populated envelope so the surrounding
+    envelope stays visible; an unexpected top-level failure short-
+    circuits to ``[]`` so the matrix keeps rendering instead of
+    breaking.
+    """
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            target = _next_purchasable_tier_after(tid)
+            out.append(_feature_catalog_at_envelope(tid, target))
+        return out
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_feature_catalog_at_batch failed: %s", exc
+        )
+        return []
+
+
+def previous_tier_feature_catalog_at_batch() -> list[dict]:
+    """Batch sibling of :func:`previous_tier_feature_catalog_at`: one
+    ``previous-tier-feature-catalog-at`` envelope per purchasable source
+    tier, in one pass.
+
+    Source-anchored downgrade-side mirror of
+    :func:`next_tier_feature_catalog_at_batch` and feature-axis catalog
+    analogue of :func:`previous_tier_capacity_diff_at_batch`. Lets a
+    pricing-comparison matrix UI render the "features at the rung below
+    each rung" downgrade-preview column off **one** round-trip instead
+    of N calls to :func:`previous_tier_feature_catalog_at`.
+
+    Per-envelope shape matches the source-anchored scalar endpoint
+    ``/api/entitlement/previous-tier-feature-catalog-at?tier=<source>``
+    byte-for-byte -- a parity test pins this so the batch what-if
+    cannot drift from the scalar what-if. Inner ``features`` byte-equals
+    :func:`feature_catalog_at(target)` for the resolved target.
+
+    Envelopes are sorted by source ``(tier_rank, tier_id)`` ascending
+    -- byte-stable against :func:`previous_tier_diff_at_batch` /
+    :func:`previous_tier_unlocks_at_batch` /
+    :func:`previous_tier_locks_at_batch` /
+    :func:`previous_tier_capacity_diff_at_batch` so a UI can fold the
+    responses into one matrix without re-sorting client-side.
+
+    Source list is :data:`_PURCHASABLE_TIERS` (trial excluded). The
+    source-side floor (``oss`` / ``cloud_free`` as source -- no rung
+    strictly below) surfaces with ``target=None`` and ``features=[]``
+    rather than being dropped, so the matrix keeps a row for every
+    purchasable rung.
+
+    Decoupled from the resolved entitlement (walks the static
+    catalogue), so grace vs enforce yields identical rows.
+
+    Never raises: a per-source builder failure collapses to
+    ``features=[]`` on the populated envelope so the surrounding
+    envelope stays visible; an unexpected top-level failure short-
+    circuits to ``[]`` so the matrix keeps rendering.
+    """
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            target = _previous_purchasable_tier_before(tid)
+            out.append(_feature_catalog_at_envelope(tid, target))
+        return out
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_feature_catalog_at_batch failed: %s",
+            exc,
+        )
+        return []
+
+
+def _runtime_catalog_at_envelope(source: str, target: str | None) -> dict:
+    """Private builder for the ``{next,previous}_tier_runtime_catalog_at_batch``
+    rows.
+
+    Runtime-axis catalog mirror of :func:`_feature_catalog_at_envelope`:
+    envelope shape matches the scalar
+    ``/api/entitlement/{next,previous}-tier-runtime-catalog-at`` endpoint
+    (``tier``, ``tier_label``, ``tier_rank``, ``target``, ``target_label``,
+    ``target_rank``, ``runtimes``) so a UI can fold the scalar and batch
+    responses without re-keying. ``runtimes`` collapses to ``[]`` at the
+    ladder ceiling / floor of the source axis (``target is None``) and on
+    a builder failure. Never raises.
+    """
+    src = (source or "").strip().lower()
+    rows: list[dict] = []
+    if target is not None:
+        try:
+            rows = runtime_catalog_at(target) or []
+        except Exception as exc:
+            logger.warning(
+                "entitlements: _runtime_catalog_at_envelope builder failed for %s->%s: %s",
+                src,
+                target,
+                exc,
+            )
+            rows = []
+    return {
+        "tier": src,
+        "tier_label": tier_label(src) if src in _TIER_ORDER else None,
+        "tier_rank": tier_rank(src) if src in _TIER_ORDER else -1,
+        "target": target,
+        "target_label": tier_label(target) if target else None,
+        "target_rank": tier_rank(target) if target else None,
+        "runtimes": rows,
+    }
+
+
+def next_tier_runtime_catalog_at_batch() -> list[dict]:
+    """Batch sibling of :func:`next_tier_runtime_catalog_at`: one
+    ``next-tier-runtime-catalog-at`` envelope per purchasable source
+    tier, in one pass.
+
+    Runtime-axis catalog analogue of
+    :func:`next_tier_feature_catalog_at_batch` (feature axis) and
+    :func:`next_tier_capacity_diff_at_batch` (capacity axis): walks the
+    source axis and returns the full :func:`runtime_catalog_at`
+    catalogue for the rung above each purchasable source. Lets a
+    pricing-comparison matrix UI render the "runtimes at the rung above
+    each rung" upgrade-preview column off **one** round-trip instead of
+    N calls to :func:`next_tier_runtime_catalog_at`.
+
+    Per-envelope shape matches the source-anchored scalar endpoint
+    ``/api/entitlement/next-tier-runtime-catalog-at?tier=<source>``
+    (``tier``, ``tier_label``, ``tier_rank``, ``target``, ``target_label``,
+    ``target_rank``, ``runtimes``) -- pinned by a parity test. Inner
+    ``runtimes`` byte-equals :func:`runtime_catalog_at(target)` for the
+    resolved target.
+
+    Envelopes are sorted by source ``(tier_rank, tier_id)`` ascending
+    -- byte-stable against every other ``next_*_at_batch`` sibling so a
+    UI can fold responses into one matrix without re-sorting.
+
+    Source list is :data:`_PURCHASABLE_TIERS` (trial excluded). The
+    source-side ceiling (``enterprise`` as source) surfaces with
+    ``target=None`` / ``runtimes=[]`` rather than being dropped.
+
+    Decoupled from the resolved entitlement, so grace vs enforce yields
+    identical rows. Never raises: per-source builder failure collapses
+    to ``runtimes=[]``; top-level failure short-circuits to ``[]``.
+    """
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            target = _next_purchasable_tier_after(tid)
+            out.append(_runtime_catalog_at_envelope(tid, target))
+        return out
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_runtime_catalog_at_batch failed: %s", exc
+        )
+        return []
+
+
+def previous_tier_runtime_catalog_at_batch() -> list[dict]:
+    """Batch sibling of :func:`previous_tier_runtime_catalog_at`: one
+    ``previous-tier-runtime-catalog-at`` envelope per purchasable source
+    tier, in one pass.
+
+    Source-anchored downgrade-side mirror of
+    :func:`next_tier_runtime_catalog_at_batch` and runtime-axis catalog
+    analogue of :func:`previous_tier_feature_catalog_at_batch`. Lets a
+    pricing-comparison matrix UI render the "runtimes at the rung below
+    each rung" downgrade-preview column off **one** round-trip.
+
+    Per-envelope shape matches
+    ``/api/entitlement/previous-tier-runtime-catalog-at?tier=<source>``
+    byte-for-byte -- pinned by a parity test. Envelopes sorted by
+    source ``(tier_rank, tier_id)`` ascending, matching the sibling
+    ``previous_*_at_batch`` helpers.
+
+    Source list is :data:`_PURCHASABLE_TIERS` (trial excluded). The
+    source-side floor (``oss`` / ``cloud_free`` as source) surfaces
+    with ``target=None`` / ``runtimes=[]``.
+
+    Decoupled from the resolved entitlement, so grace vs enforce yields
+    identical rows. Never raises: per-source builder failure collapses
+    to ``runtimes=[]``; top-level failure short-circuits to ``[]``.
+    """
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            target = _previous_purchasable_tier_before(tid)
+            out.append(_runtime_catalog_at_envelope(tid, target))
+        return out
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_runtime_catalog_at_batch failed: %s",
+            exc,
+        )
+        return []
+
+
 def next_tier_lock_reason_at(
     tier: str, item, *, kind: str | None = None
 ) -> str | None:
