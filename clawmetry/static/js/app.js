@@ -8694,6 +8694,12 @@ var _cmGlobalRtCounts = {};
 // AND the install lacks the paid entitlement — then locked runtimes appear in
 // the dropdown with a 🔒 affordance regardless of session count.
 var _cmLockedRuntimes = {};
+// Free-tier runtimes from /api/runtimes (openclaw, nemoclaw): id -> 1. These
+// are ALWAYS listed in the switcher, even with 0 recent sessions — otherwise a
+// node whose only OpenClaw session went idle past the 24h retention cap shows
+// nothing but the locked Pro catalog, which reads as "your free runtime is
+// gone" (issue observed live 2026-07-11).
+var _cmFreeRuntimes = {};
 // Runtimes actually DETECTED on this machine (from the daemon's
 // `detectedRuntimes` snapshot slice / overview): id -> {running:bool}. Lets the
 // switcher flag a locked runtime the user is genuinely running ("detected here
@@ -8734,10 +8740,12 @@ function _cmPopulateGlobalRuntime(counts) {
   var wrap = document.getElementById('cm-global-runtime-wrap');
   var sel = document.getElementById('cm-global-runtime');
   if (!wrap || !sel) return;
-  // Observed runtimes (have local sessions) ∪ locked-but-visible runtimes.
-  // _cmLockedRuntimes is empty in grace mode, so this collapses to the
-  // previous behaviour (observed-only) by default.
-  var observedAll = Object.keys(_CM_RT_LABEL).filter(function(k) { return counts[k]; });
+  // Observed runtimes (have local sessions) ∪ always-visible free runtimes ∪
+  // locked-but-visible runtimes. Free runtimes render even at 0 sessions so
+  // the 24h retention cap can't make OpenClaw vanish from its own switcher.
+  var observedAll = Object.keys(_CM_RT_LABEL).filter(function(k) {
+    return counts[k] || _cmFreeRuntimes[k];
+  });
   // Split native session-prefix runtimes from foreign OTLP apps: the OTLP apps
   // get their own optgroup and their count is traces, not sessions, so they
   // must not inflate the "All runtimes · N sessions" total.
@@ -8747,10 +8755,15 @@ function _cmPopulateGlobalRuntime(counts) {
   observedAll.forEach(function(k) { seen[k] = 1; });
   var locked = Object.keys(_cmLockedRuntimes).filter(function(k) { return !seen[k]; });
   var order = observed.concat(otlpApps).concat(locked);
-  if (order.length < 2) { wrap.style.display = 'none'; return; }
+  // Visibility gate: zero-count free runtimes render when the switcher is
+  // shown but must not summon it by themselves — a plain single-runtime
+  // install (openclaw only, nothing locked) keeps its switcher-free header.
+  var gate = observed.filter(function(k) { return counts[k]; }).length +
+    otlpApps.length + locked.length;
+  if (gate < 2) { wrap.style.display = 'none'; return; }
   var active = _cmRuntimeFilter();
-  if (active !== 'all' && !counts[active] && !_cmLockedRuntimes[active]) active = 'all';
-  var total = observed.reduce(function(a, k) { return a + counts[k]; }, 0);
+  if (active !== 'all' && !counts[active] && !_cmLockedRuntimes[active] && !_cmFreeRuntimes[active]) active = 'all';
+  var total = observed.reduce(function(a, k) { return a + (counts[k] || 0); }, 0);
   // The count is the number of SESSIONS for that runtime — spell it out so the
   // chip doesn't read as "22 Claude Code runtimes" (there's one runtime, many
   // sessions). Singular/plural for the "1 session" case.
@@ -8777,7 +8790,7 @@ function _cmPopulateGlobalRuntime(counts) {
       }
       return '<option value="' + k + '">🔒 ' + escHtml(lbl) + ' · Upgrade</option>';
     }
-    return '<option value="' + k + '">' + escHtml(lbl) + ' · ' + _sessLabel(counts[k]) + '</option>';
+    return '<option value="' + k + '">' + escHtml(lbl) + ' · ' + _sessLabel(counts[k] || 0) + '</option>';
   }
   var lockedRunning = locked.filter(function(k) { return _cmRunningRuntimes[k]; });
   var lockedOther = locked.filter(function(k) { return !_cmRunningRuntimes[k]; });
@@ -9281,12 +9294,17 @@ async function _cmLoadRuntimeCatalog() {
       }
     } catch (e) { teaserOk = false; }
     var locked = {};
+    var free = {};
     cat.runtimes.forEach(function(r) {
       if (!r || !r.id) return;
       if ((cat.enforced && r.locked) ||
           (teaserOk && r.free === false && r.entitled === false)) locked[r.id] = 1;
+      // Free runtimes stay in the switcher even at 0 recent sessions (the
+      // 24h session cap must never make OpenClaw itself disappear).
+      if (r.free === true && r.entitled !== false && !locked[r.id]) free[r.id] = 1;
     });
     _cmLockedRuntimes = locked;
+    _cmFreeRuntimes = free;
     if (window.CLOUD_MODE && !window._cmRtCatalogRecheck) {
       window._cmRtCatalogRecheck = 1;
       setTimeout(_cmLoadRuntimeCatalog, 4000);
@@ -9307,18 +9325,42 @@ async function _cmInitGlobalRuntimeSwitcher() {
     await _cmLoadDetectedRuntimes();
   } catch (e) { /* non-fatal */ }
   try {
-    var data = await fetch('/api/sessions', { credentials: 'same-origin' }).then(function(r) { return r.json(); });
-    var counts = {};
-    ((data && data.sessions) || []).forEach(function(s) {
-      var rt = _cmRuntimeOf(s);
-      counts[rt] = (counts[rt] || 0) + 1;
-    });
-    _cmPopulateGlobalRuntime(counts);
+    await _cmRefreshRuntimeCounts(true);
   } catch (e) { /* non-fatal — the switcher just stays hidden */ }
   // Surface foreign OTLP / OpenLLMetry apps (no session prefix, so absent from
   // /api/sessions). The Agent Inventory roster carries them with otlp:true; one
   // read registers each so the dropdown lists 'My App (OTel)'.
   try { await _cmLoadOtlpRuntimes(); } catch (e) { /* non-fatal */ }
+  // Keep the counts live: a session that becomes active mid-visit (e.g. the
+  // only OpenClaw session waking up after the 24h retention cap hid it) must
+  // appear without a manual page reload. The refresher only re-renders when a
+  // count actually rises, so an open dropdown is never yanked shut.
+  if (!window._cmRtCountsTimer) {
+    window._cmRtCountsTimer = setInterval(function() {
+      if (document.hidden) return; // no polling for a tab nobody is looking at
+      _cmRefreshRuntimeCounts(false).catch(function() {});
+    }, 60000);
+  }
+}
+
+// Fetch /api/sessions, derive per-runtime session counts and (re)render the
+// switcher. `force` renders unconditionally (first paint); otherwise skip the
+// re-render when nothing increased — _cmGlobalRtCounts merges MAX so a count
+// can only ever rise, and re-rendering a native <select> closes it if open.
+async function _cmRefreshRuntimeCounts(force) {
+  var data = await fetch('/api/sessions', { credentials: 'same-origin' }).then(function(r) { return r.json(); });
+  var counts = {};
+  ((data && data.sessions) || []).forEach(function(s) {
+    var rt = _cmRuntimeOf(s);
+    counts[rt] = (counts[rt] || 0) + 1;
+  });
+  if (!force) {
+    var changed = Object.keys(counts).some(function(k) {
+      return counts[k] > (_cmGlobalRtCounts[k] || 0);
+    });
+    if (!changed) return;
+  }
+  _cmPopulateGlobalRuntime(counts);
 }
 
 // Pull the OTLP/custom apps the daemon folded into the inventory roster and
@@ -22092,7 +22134,11 @@ setTimeout(checkUpdateStatus, 5000);
   function _openMenu(anchor) {
     _closeMenu();
     var counts = _counts(), locked = _cmLockedRuntimes || {}, labels = _labels();
-    var observed = Object.keys(labels).filter(function (k) { return counts[k]; });
+    var free = {};
+    try { free = (typeof _cmFreeRuntimes !== 'undefined' && _cmFreeRuntimes) || {}; } catch (e) {}
+    // Free runtimes (openclaw/nemoclaw) always list, even at 0 recent sessions
+    // — mirrors the header dropdown so the two switch points agree.
+    var observed = Object.keys(labels).filter(function (k) { return counts[k] || free[k]; });
     var lockedKeys = Object.keys(locked).filter(function (k) { return observed.indexOf(k) < 0; });
     var order = observed.concat(lockedKeys);
     var cur = _rt();
