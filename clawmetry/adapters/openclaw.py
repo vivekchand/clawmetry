@@ -301,6 +301,35 @@ def _model_router_fingerprint() -> dict:
         return {}
 
 
+def _model_router_currency() -> dict:
+    """Compute the NemoClaw model-router currency verdict (#3652).
+
+    Mirrors ``isManagedModelRouterCurrent()`` from harness
+    ``src/lib/onboard/model-router.ts``: compares the installed fingerprint
+    (``<venv>/.nemoclaw-source-fingerprint``) against the expected/current
+    source pin (``<venv>/.nemoclaw-expected-fingerprint``) written by the
+    harness during onboarding to record the SHA the current NemoClaw version
+    pins its model-router to.
+
+    Returns ``{"modelRouterCurrent": bool}`` when both files are present and
+    readable; ``{}`` when either is absent (plain OpenClaw, old NemoClaw
+    installs that pre-date the expected-pin file, or no venv at all).
+    Never raises.
+    """
+    venv = os.environ.get("NEMOCLAW_MODEL_ROUTER_VENV") or os.path.expanduser(
+        os.path.join("~", ".nemoclaw", "model-router-venv"))
+    try:
+        with open(os.path.join(venv, ".nemoclaw-source-fingerprint"), encoding="utf-8") as fh:
+            installed = (fh.read() or "").strip()
+        with open(os.path.join(venv, ".nemoclaw-expected-fingerprint"), encoding="utf-8") as fh:
+            expected = (fh.read() or "").strip()
+        if not installed or not expected:
+            return {}
+        return {"modelRouterCurrent": installed == expected}
+    except (OSError, ValueError):
+        return {}
+
+
 def _resolve_ollama_host() -> str:
     """Return the active Ollama base URL from env vars or the default.
 
@@ -1304,6 +1333,10 @@ class OpenClawAdapter(AgentAdapter):
             # OpenClaw, so meta is unchanged there. (#2610 skill-catalog deferred
             # — see note above: no host-readable on-disk location.)
             meta.update(_model_router_fingerprint())
+            # Currency verdict (#3652): is the installed router up-to-date?
+            # Distinct from liveness (crashed vs alive); this catches the case
+            # where NemoClaw upgraded but the router wasn't reinstalled.
+            meta.update(_model_router_currency())
             meta.update(_model_router_proxy_config_models())
             # Runtime liveness (#2795). The fingerprint above only proves the
             # router was INSTALLED; probe /health so a crashed router is no
