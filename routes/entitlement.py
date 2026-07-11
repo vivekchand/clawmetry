@@ -18729,6 +18729,154 @@ def api_entitlement_previous_tier_channel_catalog_at():
         )
 
 
+@bp_entitlement.route("/api/entitlement/next-tier-channel-catalog-at-batch")
+def api_entitlement_next_tier_channel_catalog_at_batch():
+    """``GET /api/entitlement/next-tier-channel-catalog-at-batch`` --
+    batch sibling of ``/api/entitlement/next-tier-channel-catalog-at``:
+    one ``next-tier-channel-catalog-at`` envelope per purchasable source
+    tier, in one round-trip.
+
+    Channel-axis catalog analogue of
+    ``/api/entitlement/next-tier-spec-at-batch`` (full
+    :func:`tier_spec_at` row per source),
+    ``/next-tier-diff-at-batch`` (marginal :func:`tier_diff` per
+    source), and the sibling ``/next-tier-feature-spec-at-batch`` /
+    ``/next-tier-runtime-spec-at-batch`` axes. Lets a pricing-
+    comparison matrix UI render the "chat channels included at the
+    rung above each rung" column off **one** call instead of N calls
+    to ``/next-tier-channel-catalog-at``.
+
+    No query params. The source list is
+    :data:`entitlements._PURCHASABLE_TIERS` (trial excluded), matching
+    the sibling ``_at_batch`` endpoints, so the batches fold into the
+    same pricing-page table byte-for-byte on the source axis.
+
+    Response shape::
+
+        {
+          "tiers":             [<envelope>, ...],
+          "current_tier":      "<resolved tier id>",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<envelope>`` matches
+    ``/api/entitlement/next-tier-channel-catalog-at?tier=<source>`` for
+    that source exactly (``tier``, ``tier_label``, ``tier_rank``,
+    ``target``, ``target_label``, ``target_rank``, ``channels``). The
+    inner ``channels`` matches
+    ``/channel-catalog-at?tier=<target>`` byte-for-byte when
+    ``target`` is populated. At the source-side ceiling (``enterprise``
+    as source) the envelope carries ``target=null`` and
+    ``channels=[]`` rather than being dropped.
+
+    Every chat channel is FREE at every tier, so every populated
+    ``channels`` row comes back ``free=True`` / ``locked=False`` /
+    ``entitled=True`` regardless of the source or target rung -- the
+    pricing surface can render "all N chat channels included at every
+    plan" off ONE call without hard-coding the posture client-side.
+
+    - **Never 5xxs**: a resolver failure yields an empty ``tiers``
+      list and the grace-shape envelope so the matrix keeps rendering.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.next_tier_channel_catalog_at_batch() or []
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": rows,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_channel_catalog_at_batch: error: %s",
+            exc,
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-channel-catalog-at-batch")
+def api_entitlement_previous_tier_channel_catalog_at_batch():
+    """``GET /api/entitlement/previous-tier-channel-catalog-at-batch``
+    -- batch sibling of
+    ``/api/entitlement/previous-tier-channel-catalog-at``: one
+    ``previous-tier-channel-catalog-at`` envelope per purchasable source
+    tier, in one round-trip.
+
+    Source-anchored downgrade-side mirror of
+    ``/api/entitlement/next-tier-channel-catalog-at-batch`` and
+    channel-axis catalog analogue of
+    ``/api/entitlement/previous-tier-spec-at-batch``. Lets a
+    downgrade-confirmation matrix UI render the "chat channels that
+    stay when I step down from each rung" column off **one** call
+    instead of N calls to ``/previous-tier-channel-catalog-at``.
+
+    No query params. The source list is
+    :data:`entitlements._PURCHASABLE_TIERS` (trial excluded), matching
+    the sibling ``_at_batch`` endpoints, so the batches fold into the
+    same pricing-page table byte-for-byte on the source axis.
+
+    Response shape matches
+    ``/api/entitlement/next-tier-channel-catalog-at-batch`` byte-for-
+    byte (``tiers`` / ``current_tier`` / ``current_tier_rank`` /
+    ``grace`` / ``enforced``); each envelope in ``tiers`` matches
+    ``/api/entitlement/previous-tier-channel-catalog-at?tier=<source>``
+    for that source exactly. At the source-side floor (``oss`` /
+    ``cloud_free`` as source) the envelope carries ``target=null`` and
+    ``channels=[]`` rather than being dropped.
+
+    Channel-axis always-free invariant applies here as well: every
+    populated ``channels`` row comes back ``free=True`` /
+    ``locked=False`` / ``entitled=True``.
+
+    - **Never 5xxs**: a resolver failure yields an empty ``tiers``
+      list and the grace-shape envelope.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.previous_tier_channel_catalog_at_batch() or []
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": rows,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_channel_catalog_at_batch: error: %s",
+            exc,
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/next-tier-feature-catalog-at")
 def api_entitlement_next_tier_feature_catalog_at():
     """``GET /api/entitlement/next-tier-feature-catalog-at?tier=<source>``
