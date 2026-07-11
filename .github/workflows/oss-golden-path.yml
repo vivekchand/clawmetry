@@ -2,9 +2,15 @@ name: OSS Golden Path (C1)
 
 # C1 gate: wheel install + real OpenClaw + synthetic session + 9 tabs render
 # without auth errors. Hard gate on every PR, no continue-on-error.
-# Budget: 8 minutes wall-clock (raised from 5; Playwright chromium download
-# ~100 MB takes up to 4.5 min on a cold runner -- cache hit drops it to ~30 s).
-# Tracking: vivekchand/clawmetry#1646 (C1)
+# C5 gate (added 2026-07-11): all 33 canonical OSS dashboard tabs render
+# without auth overlay when the gateway token is correctly passed. Closes
+# the user-reported bug (2026-05-17): "gateway token not passed for OSS,
+# never displays other screens." test_e2e_oss_all_tabs.py covers all 33
+# tabs; this is the first time it runs as a hard per-PR gate.
+# Budget: 12 minutes wall-clock (raised from 8; Playwright chromium download
+# ~100 MB takes up to 4.5 min on a cold runner -- cache hit drops it to ~30 s;
+# C5 33-tab Playwright sweep adds ~90 s on top of the C1 9-tab sweep).
+# Tracking: vivekchand/clawmetry#1646 (C1), #3666 (C5)
 
 on:
   pull_request:
@@ -19,7 +25,7 @@ jobs:
   oss-golden-path:
     name: OSS golden path (wheel + OpenClaw + 9 tabs)
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 12
 
     steps:
       - uses: actions/checkout@v7
@@ -166,17 +172,34 @@ jobs:
             sleep 1
           done
 
-      # Step 6 -- Playwright tab sweep across all 9 C1 tabs.
+      # Step 6 -- Playwright tab sweeps.
       - name: Install Playwright browsers
         run: /tmp/oss-golden/bin/python -m playwright install chromium --with-deps
 
-      - name: Run OSS golden path test
+      # C1: 9 core tabs (Sessions, Brain, Tokens, Crons, Flow, Memory,
+      # Security, Subagents, Health) plus session data DOM verification.
+      - name: Run C1 OSS golden path test (9 tabs)
         env:
           CLAWMETRY_URL: http://localhost:8920
           CLAWMETRY_TOKEN: ci-golden-token
         run: |
           /tmp/oss-golden/bin/python -m pytest \
             tests/test_e2e_oss_golden_path.py \
+            -v --tb=short
+
+      # C5: all 33 canonical dashboard tabs must render without any
+      # auth-blocking overlay after the gateway token is injected into
+      # localStorage. This is the direct fix for the user-reported bug
+      # (2026-05-17): "gateway token not passed for OSS, never displays
+      # other screens." Previously this test existed but was never run in
+      # CI; now it is a hard gate that blocks PR merges on auth failures.
+      - name: Run C5 all-tabs post-auth sweep (33 tabs)
+        env:
+          CLAWMETRY_URL: http://localhost:8920
+          CLAWMETRY_TOKEN: ci-golden-token
+        run: |
+          /tmp/oss-golden/bin/python -m pytest \
+            tests/test_e2e_oss_all_tabs.py \
             -v --tb=short
 
       - name: Dashboard and gateway logs on failure
@@ -191,7 +214,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: c1-golden-path-logs
+          name: c1-c5-golden-path-logs
           path: |
             /tmp/oss-golden-dashboard.log
             /tmp/openclaw-logs/
