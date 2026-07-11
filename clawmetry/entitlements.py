@@ -9845,6 +9845,189 @@ def previous_tier_channel_catalog_at(tier: str) -> list[dict] | None:
         )
         return None
 
+
+def next_tier_feature_catalog_at(tier: str) -> list[dict] | None:
+    """Source-anchored feature-axis catalog sibling of
+    :func:`next_tier_spec_at`: the full :func:`feature_catalog_at`-shape
+    catalogue for every feature evaluated on the rung above the
+    caller-supplied ``tier``.
+
+    Source-anchored companion of
+    :meth:`Entitlement.next_tier_feature_catalog` (resolver-anchored,
+    no-arg) and feature-axis catalog analogue of
+    :func:`next_tier_channel_catalog_at` /
+    :func:`next_tier_runtime_catalog_at`. Convenience for
+    ``feature_catalog_at(_next_purchasable_tier_after(tier))`` so an
+    upgrade-preview panel walking an explicit source rung (a pricing
+    comparison matrix, an "at each rung" table) can hydrate the whole
+    feature matrix at the next rung off ONE round-trip without threading
+    the target tier through query args or asking the resolver.
+
+    The returned list matches :func:`feature_catalog_at(target)` for the
+    resolved ``target = _next_purchasable_tier_after(tier)`` exactly --
+    a parity test pins this so the source-anchored projection cannot
+    drift from the sibling helper. At the resolver's live source the
+    result also byte-matches :meth:`Entitlement.next_tier_feature_catalog`
+    (both compose ``feature_catalog_at`` at the same
+    ``next_purchasable_tier``).
+
+    Accepts any id in :data:`_TIER_ORDER` for ``tier`` (including
+    :data:`TIER_TRIAL`) -- the lenient ``_at`` posture, matching the
+    other ``next_*_at`` helpers.
+
+    Returns ``None`` for empty / unknown ``tier`` and at the ceiling
+    (no rung strictly above -- enterprise as source). Never raises: a
+    builder failure short-circuits to ``None`` so the preview surface
+    stays mute instead of breaking.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        target = _next_purchasable_tier_after(src)
+        if target is None:
+            return None
+        return feature_catalog_at(target)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_feature_catalog_at failed: %s", exc
+        )
+        return None
+
+
+def previous_tier_feature_catalog_at(tier: str) -> list[dict] | None:
+    """Source-anchored feature-axis catalog sibling of
+    :func:`previous_tier_spec_at`: the full
+    :func:`feature_catalog_at`-shape catalogue for every feature
+    evaluated on the rung below the caller-supplied ``tier``.
+
+    Symmetric mirror of :func:`next_tier_feature_catalog_at` and
+    downgrade-confirmation counterpart. Source-anchored companion of
+    :meth:`Entitlement.previous_tier_feature_catalog` (resolver-anchored,
+    no-arg). Convenience for
+    ``feature_catalog_at(_previous_purchasable_tier_before(tier))`` so a
+    downgrade-confirmation card walking an explicit source rung can
+    render "which features stay when I step down from THIS tier?" off
+    ONE round-trip.
+
+    Like :func:`next_tier_feature_catalog_at`, the returned list matches
+    :func:`feature_catalog_at(target)` for the resolved
+    ``target = _previous_purchasable_tier_before(tier)`` exactly, and at
+    the live source byte-matches
+    :meth:`Entitlement.previous_tier_feature_catalog`.
+
+    Accepts any id in :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`).
+
+    Returns ``None`` for empty / unknown ``tier`` and at the floor
+    (``oss`` / ``cloud_free`` as source -- no rung strictly below).
+    Never raises.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        target = _previous_purchasable_tier_before(src)
+        if target is None:
+            return None
+        return feature_catalog_at(target)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_feature_catalog_at failed: %s", exc
+        )
+        return None
+
+
+def next_tier_runtime_catalog_at(tier: str) -> list[dict] | None:
+    """Source-anchored runtime-axis catalog sibling of
+    :func:`next_tier_spec_at`: the full :func:`runtime_catalog_at`-shape
+    catalogue for every runtime evaluated on the rung above the
+    caller-supplied ``tier``.
+
+    Source-anchored companion of
+    :meth:`Entitlement.next_tier_runtime_catalog` (resolver-anchored,
+    no-arg) and runtime-axis catalog analogue of
+    :func:`next_tier_channel_catalog_at` /
+    :func:`next_tier_feature_catalog_at`. Convenience for
+    ``runtime_catalog_at(_next_purchasable_tier_after(tier))`` so an
+    upgrade-preview panel walking an explicit source rung can hydrate
+    the whole runtime matrix at the next rung off ONE round-trip.
+
+    The returned list matches :func:`runtime_catalog_at(target)` for the
+    resolved ``target = _next_purchasable_tier_after(tier)`` exactly --
+    parity pinned by tests. At the resolver's live source the result
+    byte-matches :meth:`Entitlement.next_tier_runtime_catalog` (both
+    compose ``runtime_catalog_at`` at the same ``next_purchasable_tier``).
+
+    Accepts any id in :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`).
+
+    Returns ``None`` for empty / unknown ``tier`` and at the ceiling.
+    Never raises.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        target = _next_purchasable_tier_after(src)
+        if target is None:
+            return None
+        return runtime_catalog_at(target)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_runtime_catalog_at failed: %s", exc
+        )
+        return None
+
+
+def previous_tier_runtime_catalog_at(tier: str) -> list[dict] | None:
+    """Source-anchored runtime-axis catalog sibling of
+    :func:`previous_tier_spec_at`: the full
+    :func:`runtime_catalog_at`-shape catalogue for every runtime
+    evaluated on the rung below the caller-supplied ``tier``.
+
+    Symmetric mirror of :func:`next_tier_runtime_catalog_at` and
+    downgrade-confirmation counterpart. Source-anchored companion of
+    :meth:`Entitlement.previous_tier_runtime_catalog` (resolver-anchored,
+    no-arg). Convenience for
+    ``runtime_catalog_at(_previous_purchasable_tier_before(tier))``.
+
+    Like :func:`next_tier_runtime_catalog_at`, the returned list matches
+    :func:`runtime_catalog_at(target)` for the resolved
+    ``target = _previous_purchasable_tier_before(tier)`` exactly, and at
+    the live source byte-matches
+    :meth:`Entitlement.previous_tier_runtime_catalog`.
+
+    Accepts any id in :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`).
+
+    Returns ``None`` for empty / unknown ``tier`` and at the floor.
+    Never raises.
+    """
+    try:
+        src = (tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        target = _previous_purchasable_tier_before(src)
+        if target is None:
+            return None
+        return runtime_catalog_at(target)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_runtime_catalog_at failed: %s", exc
+        )
+        return None
+
+
 def next_tier_lock_reason_at(
     tier: str, item, *, kind: str | None = None
 ) -> str | None:
