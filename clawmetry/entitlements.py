@@ -9846,6 +9846,218 @@ def previous_tier_channel_catalog_at(tier: str) -> list[dict] | None:
         return None
 
 
+def next_tier_channel_catalog_at_batch() -> list[dict]:
+    """Batch sibling of :func:`next_tier_channel_catalog_at`: one
+    envelope per purchasable source tier carrying the full
+    :func:`channel_catalog_at`-shape catalogue at the rung above each
+    source, in one pass.
+
+    Channel-axis catalog analogue of :func:`next_tier_spec_at_batch`
+    (full :func:`tier_spec_at` row per source), :func:`next_tier_diff_at_batch`
+    (marginal :func:`tier_diff` per source), and the sibling
+    :func:`next_tier_feature_spec_at_batch` / :func:`next_tier_runtime_spec_at_batch`
+    (scalar projection axis). Where the scalar
+    :func:`next_tier_channel_catalog_at` returns one source's channel
+    matrix at its next rung, this batch returns every purchasable
+    source's channel matrix at ITS next rung in ONE round-trip -- the
+    catalog-shaped, channel-axis member of the ``next_tier_*_at_batch``
+    family so a pricing-comparison matrix UI can render the full
+    "chat channels included at the rung above each rung" column off
+    one call instead of N calls to :func:`next_tier_channel_catalog_at`.
+
+    Per-envelope row shape byte-matches the scalar
+    ``/api/entitlement/next-tier-channel-catalog-at`` response body for
+    the same source (sans the resolver-context fields the outer route
+    adds around the helper output)::
+
+        {
+          "tier":         "<source tier id>",
+          "tier_label":   "...",
+          "tier_rank":    <int>,
+          "target":       "<next-above tier id>" | None,
+          "target_label": "..." | None,
+          "target_rank":  <int> | None,
+          "channels":     [<channel_catalog_at row>, ...],
+        }
+
+    Each populated ``channels`` list is byte-identical to
+    :func:`next_tier_channel_catalog_at(source)` (and, at the resolved
+    target, to :func:`channel_catalog_at(target)`) -- a parity test
+    pins this so the scalar and batch what-if catalog helpers cannot
+    drift. Envelopes are sorted by source ``(tier_rank, tier_id)``
+    ascending -- byte-stable against
+    :func:`next_tier_spec_at_batch` / :func:`next_tier_diff_at_batch`
+    / :func:`next_tier_unlocks_at_batch` / :func:`next_tier_locks_at_batch`
+    / :func:`next_tier_capacity_diff_at_batch` so a UI can fold the
+    six responses into one matrix without re-sorting client-side.
+    Same-rank sibling tiers (``cloud_pro`` / ``pro`` both at rank 2)
+    are both returned.
+
+    Source list is :data:`_PURCHASABLE_TIERS` (trial excluded),
+    matching the sibling ``next_*_at_batch`` helpers. The source-side
+    ceiling (``enterprise`` as source -- no rung strictly above)
+    surfaces with ``target=None`` and ``channels=[]`` rather than
+    being dropped, so the matrix keeps a row for every purchasable
+    rung.
+
+    Every chat channel is FREE at every tier (see
+    :func:`channel_catalog_at`), so every populated ``channels`` row
+    comes back ``free=True`` / ``allowed=True`` / ``locked=False`` /
+    ``entitled=True`` regardless of the source or target rung. That
+    parity IS the answer: the batch surface can render "all N chat
+    channels included at every plan" off ONE call without hard-coding
+    that posture client-side.
+
+    Decoupled from the resolved entitlement (walks the static
+    catalogue), so grace vs enforce yields identical envelopes.
+
+    Never raises: a per-source builder failure collapses to
+    ``channels=[]`` on the populated envelope so the surrounding
+    envelope stays visible; an unexpected top-level failure
+    short-circuits to ``[]`` so the matrix keeps rendering instead of
+    breaking.
+    """
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            try:
+                target = _next_purchasable_tier_after(tid)
+            except Exception as exc:
+                logger.warning(
+                    "entitlements: next_tier_channel_catalog_at_batch target %r failed: %s",
+                    tid,
+                    exc,
+                )
+                target = None
+            channels: list[dict] = []
+            if target is not None:
+                try:
+                    channels = channel_catalog_at(target) or []
+                except Exception as exc:
+                    logger.warning(
+                        "entitlements: next_tier_channel_catalog_at_batch row %r failed: %s",
+                        tid,
+                        exc,
+                    )
+                    channels = []
+            out.append(
+                {
+                    "tier": tid,
+                    "tier_label": tier_label(tid),
+                    "tier_rank": tier_rank(tid),
+                    "target": target,
+                    "target_label": tier_label(target) if target else None,
+                    "target_rank": tier_rank(target) if target else None,
+                    "channels": channels,
+                }
+            )
+        return out
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_channel_catalog_at_batch failed: %s", exc
+        )
+        return []
+
+
+def previous_tier_channel_catalog_at_batch() -> list[dict]:
+    """Batch sibling of :func:`previous_tier_channel_catalog_at`: one
+    envelope per purchasable source tier carrying the full
+    :func:`channel_catalog_at`-shape catalogue at the rung below each
+    source, in one pass.
+
+    Source-anchored downgrade-side mirror of
+    :func:`next_tier_channel_catalog_at_batch` and channel-axis catalog
+    analogue of :func:`previous_tier_spec_at_batch`. Lets a
+    downgrade-confirmation matrix UI render the "chat channels that
+    stay when I step down from each rung" column off **one** call
+    instead of N calls to :func:`previous_tier_channel_catalog_at`.
+
+    Per-envelope row shape byte-matches the scalar
+    ``/api/entitlement/previous-tier-channel-catalog-at`` response
+    body for the same source (sans the resolver-context fields the
+    outer route adds). Same envelope keys as
+    :func:`next_tier_channel_catalog_at_batch`: ``tier``,
+    ``tier_label``, ``tier_rank``, ``target``, ``target_label``,
+    ``target_rank``, ``channels``.
+
+    Each populated ``channels`` list is byte-identical to
+    :func:`previous_tier_channel_catalog_at(source)` (and, at the
+    resolved target, to :func:`channel_catalog_at(target)`) -- pinned
+    by parity tests so the scalar and batch what-if catalog helpers
+    cannot drift.
+
+    Envelopes are sorted by source ``(tier_rank, tier_id)`` ascending
+    -- byte-stable against the sibling ``previous_*_at_batch``
+    helpers so a UI can fold the responses into one matrix without
+    re-sorting client-side.
+
+    Source list is :data:`_PURCHASABLE_TIERS` (trial excluded). The
+    source-side floor (``oss`` / ``cloud_free`` as source -- no rung
+    strictly below) surfaces with ``target=None`` and ``channels=[]``
+    rather than being dropped, so the matrix keeps a row for every
+    purchasable rung.
+
+    Channel-axis always-free invariant applies here as well: every
+    populated ``channels`` row comes back ``free=True`` /
+    ``allowed=True`` / ``locked=False`` / ``entitled=True`` regardless
+    of the source or target rung.
+
+    Decoupled from the resolved entitlement (walks the static
+    catalogue), so grace vs enforce yields identical envelopes.
+
+    Never raises: a per-source builder failure collapses to
+    ``channels=[]`` on the populated envelope; an unexpected
+    top-level failure short-circuits to ``[]``.
+    """
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            try:
+                target = _previous_purchasable_tier_before(tid)
+            except Exception as exc:
+                logger.warning(
+                    "entitlements: previous_tier_channel_catalog_at_batch target %r failed: %s",
+                    tid,
+                    exc,
+                )
+                target = None
+            channels: list[dict] = []
+            if target is not None:
+                try:
+                    channels = channel_catalog_at(target) or []
+                except Exception as exc:
+                    logger.warning(
+                        "entitlements: previous_tier_channel_catalog_at_batch row %r failed: %s",
+                        tid,
+                        exc,
+                    )
+                    channels = []
+            out.append(
+                {
+                    "tier": tid,
+                    "tier_label": tier_label(tid),
+                    "tier_rank": tier_rank(tid),
+                    "target": target,
+                    "target_label": tier_label(target) if target else None,
+                    "target_rank": tier_rank(target) if target else None,
+                    "channels": channels,
+                }
+            )
+        return out
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_channel_catalog_at_batch failed: %s",
+            exc,
+        )
+        return []
+
+
 def next_tier_feature_catalog_at(tier: str) -> list[dict] | None:
     """Source-anchored feature-axis catalog sibling of
     :func:`next_tier_spec_at`: the full :func:`feature_catalog_at`-shape
