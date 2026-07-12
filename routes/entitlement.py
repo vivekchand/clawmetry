@@ -6080,6 +6080,74 @@ def api_entitlement_tier_spec():
         return jsonify({"error": "tier-spec failed"}), 500
 
 
+@bp_entitlement.route("/api/entitlement/tier-spec-batch")
+def api_entitlement_tier_spec_batch():
+    """``GET /api/entitlement/tier-spec-batch?tiers=a,b,c`` -- plural
+    sibling of ``/api/entitlement/tier-spec``.
+
+    Returns the full catalogue spec row for every supplied tier id in
+    one round-trip. Mirrors the scalar / batch pair
+    :func:`api_entitlement_feature_spec_batch` and
+    :func:`api_entitlement_runtime_spec_batch` establish on the feature
+    / runtime axes, so a pricing-comparison matrix UI hydrates the N
+    visible tier rows off one call instead of N calls to
+    ``/tier-spec``.
+
+    Each ``tiers[]`` entry is byte-identical to a row from
+    :func:`entitlements.tier_catalog` (and to the scalar
+    :func:`entitlements.tier_spec` for the same id) -- a parity test
+    pins this so the scalar / bulk / batch accessors cannot drift.
+    Supplied ids are normalised (whitespace stripped, lowercased,
+    duplicates dropped while preserving first-seen order). Unknown ids
+    do not 404 the call -- they are echoed in ``unknown[]`` so a
+    partially-bad caller still gets rows back for the valid ids
+    alongside a list of what was dropped.
+
+    Response shape::
+
+        {
+          "tiers":             [<spec_row>, ...],
+          "unknown":           ["bogus_id", ...],
+          "current_tier":      "...",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    - **400** when ``tiers=`` is missing or empty after normalisation
+    - **Never 5xxs**: a resolver crash short-circuits to the OSS-free
+      shape (empty rows, ``current_tier=oss``, ``grace=true``).
+    """
+    try:
+        tiers = _parse_csv_arg("tiers")
+        if not tiers:
+            return (
+                jsonify({"error": "supply tiers=<csv>"}),
+                400,
+            )
+        from clawmetry import entitlements as _ent
+
+        batch = _ent.tier_spec_batch(tiers)
+        ent = _ent.get_entitlement()
+        batch["current_tier"] = ent.tier
+        batch["current_tier_rank"] = _ent.tier_rank(ent.tier)
+        batch["grace"] = bool(ent.grace)
+        batch["enforced"] = _ent.is_enforced()
+        return jsonify(batch)
+    except Exception as exc:
+        logger.warning("api_entitlement_tier_spec_batch: error: %s", exc)
+        return jsonify(
+            {
+                "tiers": [],
+                "unknown": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route("/api/features")
 def api_features():
     try:
