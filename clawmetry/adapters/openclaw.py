@@ -753,6 +753,19 @@ def _sandbox_inference_configs() -> list:
                 _te.update(_openshell_sandbox_phase_policy(_sb))
                 _te.update(_openshell_sandbox_ocsf_enabled(_sb))
                 _te.update(_sandbox_egress_denied_count(_sb))
+                # dcode session-supervisor feasibility (#3675): the supervisor
+                # (dcode-session-supervisor.py) requires Linux + an OpenShell
+                # sandbox and exits immediately with a fail-closed diagnostic
+                # otherwise.  Surface a flag so unsupervised dcode sessions are
+                # distinguishable from healthy ones.  True means both conditions
+                # are met (Linux platform AND openshell phase data present),
+                # matching the supervisor's own gate exactly.
+                if "deepagents-code" in _sb.lower() or _sb.lower() == "dcode":
+                    import sys as _sys
+                    _te["dcodeSupervisionFeasible"] = (
+                        _sys.platform.startswith("linux")
+                        and bool(_te.get("sandboxPhase"))
+                    )
                 out.append(_te)
     except Exception:
         pass
