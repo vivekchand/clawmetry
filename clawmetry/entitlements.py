@@ -6798,6 +6798,87 @@ def tier_spec(tier: str) -> dict | None:
     }
 
 
+def tier_spec_batch(tiers) -> dict:
+    """Plural sibling of :func:`tier_spec`: return spec rows for a
+    caller-supplied subset of tier ids in one pass.
+
+    Mirrors :func:`feature_spec_batch` / :func:`runtime_spec_batch` /
+    :func:`channel_spec_batch` on the tier axis. Where :func:`tier_catalog`
+    returns rows for *every* known tier, this lets a pricing-comparison
+    matrix UI hydrate only the N rows it is about to render off **one**
+    round-trip instead of N calls to ``/api/entitlement/tier-spec``. Each
+    returned row is byte-identical to the corresponding row from
+    :func:`tier_catalog` (and to the scalar :func:`tier_spec` for the same
+    id) -- a parity test pins this so the scalar / bulk / batch accessors
+    cannot drift.
+
+    Shape::
+
+        {
+          "tiers":   [<spec_row>, ...],   # one per known supplied id, in supply order
+          "unknown": ["bogus_id", ...],   # supplied ids not in _TIER_ORDER, in supply order
+        }
+
+    Supplied ids are normalised via :func:`_normalise_csv` (whitespace
+    stripped, lowercased, duplicates dropped while preserving first-seen
+    order) so the response is stable across repeated calls. ``trial`` IS
+    accepted (it lives in :data:`_TIER_ORDER` and the scalar helper
+    resolves it). Empty / ``None`` input returns
+    ``{"tiers": [], "unknown": []}`` -- the HTTP wrapper turns that into
+    a 400, this helper does not raise.
+
+    Resolver-independent for every catalogue field: only the
+    ``is_current`` flag on each row depends on the resolved entitlement,
+    so grace vs enforce yields byte-identical rows apart from that flag.
+    Never raises: a resolver failure short-circuits to the OSS-free
+    fallback (``is_current`` degrades to False for non-OSS rows) so the
+    matrix keeps rendering, and a per-tier row-build failure drops that
+    id into ``unknown[]`` while the rest of the batch keeps going.
+    """
+    ids = _normalise_csv(tiers)
+    try:
+        ent = get_entitlement()
+        current = ent.tier
+    except Exception as exc:
+        logger.warning(
+            "entitlements: tier_spec_batch falling back to OSS-free: %s", exc
+        )
+        current = TIER_OSS
+    paid_runtimes_sorted = sorted(PAID_RUNTIMES)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    for tid in ids:
+        if tid not in _TIER_ORDER:
+            unknown.append(tid)
+            continue
+        try:
+            paid_feats = _TIER_FEATURES.get(tid, frozenset())
+            unlocks_paid = tid in _TIER_PAID_RUNTIMES
+            rows.append(
+                {
+                    "id": tid,
+                    "label": tier_label(tid),
+                    "is_paid": tid in _PAID_TIERS,
+                    "is_current": tid == current,
+                    "rank": _TIER_ORDER.index(tid),
+                    "unlocks_paid_runtimes": unlocks_paid,
+                    "retention_days": _TIER_RETENTION_DAYS.get(tid, 7),
+                    "channel_limit": _TIER_CHANNEL_LIMIT.get(
+                        tid, _FREE_CHANNEL_LIMIT
+                    ),
+                    "node_limit": _TIER_NODE_LIMIT.get(tid, _FREE_NODE_LIMIT),
+                    "features": sorted(paid_feats),
+                    "runtimes": list(paid_runtimes_sorted) if unlocks_paid else [],
+                }
+            )
+        except Exception as exc:
+            logger.warning(
+                "entitlements: tier_spec_batch row %r failed: %s", tid, exc
+            )
+            unknown.append(tid)
+    return {"tiers": rows, "unknown": unknown}
+
+
 def tier_catalog_at(tier: str) -> list[dict] | None:
     """What-if sibling of :func:`tier_catalog`: the full tier ladder with
     ``is_current`` recomputed as if the install were on ``tier`` instead of
