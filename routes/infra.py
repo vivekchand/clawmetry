@@ -874,21 +874,96 @@ def api_flow_lanes():
     })
 
 
+def _generate_openclaw_json_logs(started_at, sse_max_seconds, release_fn):
+    """Yield SSE events from ``openclaw logs --follow --json``.
+
+    OpenClaw's JSON log stream emits type-tagged records that include
+    rotation/truncation notices (type ``notice``), file/service metadata
+    (type ``meta``), parsed log entries (type ``log``), raw unparsed lines
+    (type ``raw``), and gateway errors (type ``error``).  Surfacing the
+    ``notice`` records lets the UI warn users when lines were dropped due
+    to log rotation — something ``tail -f`` on a fixed path cannot detect.
+
+    Non-JSON lines are forwarded as-is (forward-compat with future plain
+    text output).  Callers must check ``shutil.which("openclaw")`` before
+    calling; this generator assumes the binary is available.
+    """
+    proc = subprocess.Popen(
+        ["openclaw", "logs", "--follow", "--json"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        while True:
+            if time.time() - started_at > sse_max_seconds:
+                yield 'event: done\ndata: {"reason":"max_duration_reached"}\n\n'
+                break
+            ready, _, _ = select.select([proc.stdout], [], [], 1.0)
+            if not ready:
+                continue
+            raw_line = proc.stdout.readline()
+            if not raw_line:
+                continue
+            raw = raw_line.rstrip()
+            try:
+                record = json.loads(raw)
+            except (json.JSONDecodeError, ValueError):
+                yield f"data: {json.dumps({'line': raw})}\n\n"
+                continue
+            rec_type = record.get("type", "")
+            if rec_type == "notice":
+                # Rotation / truncation hint — emit as a named event so the
+                # frontend can surface "log rotated — some lines may be missing"
+                yield f"event: log-notice\ndata: {json.dumps(record)}\n\n"
+            elif rec_type == "meta":
+                # File/service metadata (file, source, sourceKind, service …)
+                yield f"event: log-meta\ndata: {json.dumps(record)}\n\n"
+            elif rec_type == "error":
+                msg = record.get("message") or record.get("error") or raw
+                yield f"data: {json.dumps({'line': msg, 'error': True})}\n\n"
+            else:
+                # log, raw, unknown — forward the human-readable message field
+                msg = record.get("message") or record.get("line") or raw
+                yield f"data: {json.dumps({'line': msg})}\n\n"
+    except GeneratorExit:
+        pass
+    finally:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        release_fn()
+
+
 @bp_logs.route("/api/logs-stream")
 def api_logs_stream():
     """SSE endpoint - streams new log lines in real-time."""
+    import shutil
     import dashboard as _d
     if not _d._acquire_stream_slot("log"):
         return jsonify({"error": "Too many active log streams"}), 429
 
+    started_at = time.time()
+    release = lambda: _d._release_stream_slot("log")  # noqa: E731
+
+    # Prefer the structured JSON stream when the openclaw CLI is available;
+    # it handles log rotation transparently and surfaces truncation notices.
+    if shutil.which("openclaw"):
+        return Response(
+            _generate_openclaw_json_logs(started_at, _d.SSE_MAX_SECONDS, release),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    # Fallback: tail the log file directly (no JSON framing, no rotation signal)
     today = datetime.now().strftime("%Y-%m-%d")
     log_file = _d._find_log_file(today)
 
     def generate():
-        started_at = time.time()
         if not log_file:
             yield 'data: {"line":"No log file found"}\n\n'
-            _d._release_stream_slot("log")
+            release()
             return
         proc = subprocess.Popen(
             ["tail", "-f", "-n", "0", log_file],
@@ -914,7 +989,7 @@ def api_logs_stream():
                 proc.kill()
             except Exception:
                 pass
-            _d._release_stream_slot("log")
+            release()
 
     return Response(
         generate(),
