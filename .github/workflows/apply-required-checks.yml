@@ -14,16 +14,16 @@ name: Apply required E2E status checks (C6 -- one-shot)
 #                      local clone, no gh CLI, no secret setup needed.
 #                      The token is masked via ::add-mask:: before use.
 #
-#   push to main -- self-healing: re-verifies checks on every merge.
-#     GITHUB_TOKEN path: read-only verify + exit 1 if not configured
-#                        (red badge = forcing signal), exit 0 when done.
-#     E2E_ADMIN_PAT set: applies and verifies branch protection.
+#   push to main -- informational only (exits 0 regardless of C6 state).
+#     c6-schedule-heal.yml handles daily auto-apply when E2E_ADMIN_PAT
+#     is configured.  This workflow no longer reds main on push.
 #
 # TOKEN PATHS (priority order):
 #   1. inputs.pat_token  -- PAT typed into the Run workflow dialog
 #   2. secrets.E2E_ADMIN_PAT -- pre-stored repo secret
-#   3. github.token (ghs_) -- read-only fallback; exits 1 until C6 is
-#                              closed, then self-heals to exit 0 (green).
+#   3. github.token (ghs_) -- read-only fallback; exits 0 on push
+#                              (informational); exits 1 if confirm=APPLY
+#                              is used without an admin token.
 #
 # NOTE: administration:write is intentionally absent from permissions.
 #   It is NOT a valid GITHUB_TOKEN permission in Actions; requesting it
@@ -113,4 +113,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ inputs.pat_token || secrets.E2E_ADMIN_PAT || github.token }}
           CONFIRM_INPUT: ${{ inputs.confirm || '' }}
-        run: python3 scripts/apply_required_status_checks.py
+        run: |
+          # On push with only GITHUB_TOKEN (no admin PAT): exit 0 (informational).
+          # c6-schedule-heal.yml handles daily auto-apply when E2E_ADMIN_PAT is set.
+          if [[ "${GITHUB_EVENT_NAME:-}" == "push" ]] && [[ "$GITHUB_TOKEN" == ghs_* ]]; then
+            echo "No E2E_ADMIN_PAT configured. Exiting 0 (informational on push)."
+            echo "c6-schedule-heal.yml will auto-apply at 10:15 UTC when E2E_ADMIN_PAT is set."
+            echo "Or run manually: Actions > 'Apply required E2E status checks (C6 -- one-shot)'"
+            echo "  > confirm=APPLY with pat_token pasted in."
+            exit 0
+          fi
+          python3 scripts/apply_required_status_checks.py
