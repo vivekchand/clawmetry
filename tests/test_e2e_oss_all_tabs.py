@@ -145,7 +145,10 @@ class TestAllTabsPostAuth:
     def test_tab_loads_without_auth_overlay(self, _overlay_page, tab):
         """Tab must be reachable and must NOT show an auth-blocking overlay."""
         page = _overlay_page
-        page.goto(BASE_URL + "/", wait_until="domcontentloaded", timeout=15000)
+        # 30s timeout: the waitress server can briefly back up its task queue
+        # when 33 tabs run back-to-back after C1's 9-tab sweep. 15s was too
+        # tight; 30s absorbs transient saturation without masking real failures.
+        page.goto(BASE_URL + "/", wait_until="domcontentloaded", timeout=30000)
 
         if tab != "overview":
             page.evaluate(

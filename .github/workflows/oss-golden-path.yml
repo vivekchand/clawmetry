@@ -187,6 +187,21 @@ jobs:
             tests/test_e2e_oss_golden_path.py \
             -v --tb=short
 
+      # Cooldown: give the waitress server time to drain its task queue after
+      # C1's 9 rapid page-loads before C5 fires 33 more. Without this pause,
+      # the queue backs up to depth 12+ and C5's page.goto() calls time out.
+      - name: Server cooldown before C5 sweep
+        run: |
+          echo "Waiting for server to settle after C1..."
+          sleep 5
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "Authorization: Bearer ci-golden-token" \
+              http://localhost:8920/api/health 2>/dev/null || echo "000")
+            if [ "$code" = "200" ]; then echo "Server ready after ${i}s"; break; fi
+            sleep 1
+          done
+
       # C5: all 33 canonical dashboard tabs must render without any
       # auth-blocking overlay after the gateway token is injected into
       # localStorage. This is the direct fix for the user-reported bug
