@@ -33,10 +33,20 @@ BASE_URL = os.environ.get("CLAWMETRY_URL", "http://localhost:8900")
 TOKEN = os.environ.get("CLAWMETRY_TOKEN", "ci-test-token")
 
 
-# Per-test page off the session-shared Chromium (defined in conftest.py).
-# sync_playwright() can only be entered once per process, so we reuse the
-# shared browser rather than calling sync_playwright() here.
-@pytest.fixture
+# Class-scoped page shared across all 33 parametrized tab tests.
+#
+# Why class-scoped instead of function-scoped:
+#   The original fixture created a fresh browser context per test
+#   (function scope). With 33 parametrized tab cases each doing
+#   page.goto("/"), auth-bootstrap.js + gw-setup.js + ~5 API calls
+#   per page load overwhelmed the single-threaded waitress WSGI server
+#   (queue depth spiked to 5-12) and the last ~10 page.goto() calls
+#   timed out with TimeoutError (not auth failures).
+#
+#   Sharing one context + one page load across the whole class reduces
+#   33 page loads to 1. Auth runs once in the fixture; each test just
+#   calls switchTab() and checks overlays on the already-loaded page.
+@pytest.fixture(scope="class")
 def _overlay_page(_shared_chromium):
     ctx = _shared_chromium.new_context(viewport={"width": 1280, "height": 720})
     # Seed the gateway token into localStorage before any page script runs.
@@ -48,6 +58,11 @@ def _overlay_page(_shared_chromium):
         "} catch(e) {}"
     )
     page = ctx.new_page()
+    # One page load for the entire 33-tab suite.
+    page.goto(BASE_URL + "/", wait_until="domcontentloaded", timeout=15000)
+    # Let auth-bootstrap.js fetch /api/auth/check and gw-setup.js fetch
+    # /api/gw/config settle before any tab test checks for overlays.
+    page.wait_for_timeout(2000)
     yield page
     ctx.close()
 
@@ -143,12 +158,14 @@ class TestAllTabsPostAuth:
 
     @pytest.mark.parametrize("tab", CANONICAL_TABS)
     def test_tab_loads_without_auth_overlay(self, _overlay_page, tab):
-        """Tab must be reachable and must NOT show an auth-blocking overlay."""
+        """Tab must NOT show an auth-blocking overlay after token injection.
+
+        The page is loaded once per class (class-scoped fixture); this test
+        only calls switchTab() and checks the overlay state. Re-navigating
+        to "/" per test caused 33 sequential page loads that saturated the
+        waitress WSGI queue and produced spurious TimeoutErrors.
+        """
         page = _overlay_page
-        # 30s timeout: the waitress server can briefly back up its task queue
-        # when 33 tabs run back-to-back after C1's 9-tab sweep. 15s was too
-        # tight; 30s absorbs transient saturation without masking real failures.
-        page.goto(BASE_URL + "/", wait_until="domcontentloaded", timeout=30000)
 
         if tab != "overview":
             page.evaluate(
@@ -156,7 +173,7 @@ class TestAllTabsPostAuth:
                 f"window.switchTab({json.dumps(tab)})"
             )
 
-        page.wait_for_timeout(1000)
+        page.wait_for_timeout(500)
 
         blocking = []
         for oid in _BLOCKING_OVERLAY_IDS:
