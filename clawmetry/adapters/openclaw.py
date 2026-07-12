@@ -1503,6 +1503,31 @@ class OpenClawAdapter(AgentAdapter):
             )
             if _fb_runtime is not None:
                 extra["fallbackRuntime"] = _fb_runtime
+            # Atomic runtime alias (#3672): CHANGELOG #98021 "GPT-5.6 Ultra
+            # and runtime switching" added Sol/Terra/Luna as named runtime
+            # variants switched atomically with model and thinking via /model
+            # and fallback.  Capture the selected alias so cost/model
+            # attribution can distinguish which variant served the session.
+            _rt_alias = (
+                s.get("runtimeAlias")
+                or s.get("selectedRuntimeAlias")
+                or s.get("modelRuntimeAlias")
+            )
+            if _rt_alias is not None:
+                extra["runtimeAlias"] = _rt_alias
+            # Thinking-mode selection (#3672): atomic alongside runtimeAlias;
+            # surface as-is (bool or string) so the dashboard can show whether
+            # extended thinking was active.  Use is-not-None guards so
+            # thinkingMode=False (thinking disabled) is never silently dropped.
+            _thinking_mode = s.get("thinkingMode")
+            if _thinking_mode is None:
+                _thinking_mode = s.get("isThinkingEnabled")
+            if _thinking_mode is None:
+                _thinking_mode = s.get("thinkingEnabled")
+            if _thinking_mode is not None:
+                extra["thinkingMode"] = (
+                    _thinking_mode if isinstance(_thinking_mode, str) else bool(_thinking_mode)
+                )
             # /think reasoning-level tier (#3324): PR #94067 stores the active
             # level (light/medium/deep) on session records; surface when present.
             _think_level = s.get("thinkLevel") or s.get("reasoningLevel")
