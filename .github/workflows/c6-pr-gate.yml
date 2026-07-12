@@ -1,0 +1,69 @@
+name: C6 Required-status-checks gate (PR audit)
+
+# Runs on every pull request to surface whether C6 (required-status-checks)
+# is configured on main. Fails visibly on every PR until the admin closes C6.
+#
+# The daily c6-health.yml posts to issue #2146 but the admin may not check
+# that issue between merges. This check appears directly in the PR status
+# list alongside OSS golden path, E2E Browser Tests, etc. -- impossible to
+# miss when reviewing a PR.
+#
+# The job is NOT in REQUIRED_CHECKS (it cannot block merges by itself --
+# that would be circular: C6 is what adds required checks). Its purpose
+# is visibility only. Once C6 is closed, this check is permanently green.
+#
+# To close C6 (any of these paths -- all take under 2 minutes):
+#
+#   Option A (browser, no local setup):
+#     1. Create fine-grained PAT: github.com/settings/personal-access-tokens/new
+#        Resource owner: vivekchand
+#        Repos: clawmetry, clawmetry-cloud, clawmetry-landing
+#        Permission: Administration -- read+write
+#     2. Actions > "Apply required E2E status checks (C6 -- one-shot)" > Run workflow
+#        confirm: APPLY
+#        pat_token: <paste PAT from step 1>
+#        Click Run workflow
+#
+#   Option B (auto, set-and-forget):
+#     Settings > Secrets > Actions > New secret
+#       Name: E2E_ADMIN_PAT
+#       Value: same fine-grained PAT as Option A
+#     c6-schedule-heal.yml picks it up at 10:15am UTC and closes C6 automatically.
+#
+#   Option C (terminal, 30 seconds):
+#     bash scripts/close-c6.sh
+#     (uses your existing gh CLI session -- no PAT creation needed)
+#
+# Tracking: vivekchand/clawmetry#2146 (C6)
+
+on:
+  pull_request:
+
+concurrency:
+  group: c6-pr-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  c6-pr-gate:
+    name: C6 Required-status-checks gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # Read-only audit: verify clawmetry/main has the required E2E status
+      # checks configured. The script detects the ghs_ GITHUB_TOKEN prefix,
+      # takes the read-only path, and exits 1 (FAIL) if any required check is
+      # missing. It exits 0 (PASS) once C6 is fully configured.
+      #
+      # On failure the log shows the exact missing checks and all three paths
+      # to close C6. The "Details" link in the PR check list takes the admin
+      # directly here.
+      - name: Audit C6 -- required-status-checks on clawmetry/main
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/apply_required_status_checks.py
