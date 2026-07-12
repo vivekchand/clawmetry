@@ -162,7 +162,7 @@ jobs:
             count=$(
               curl -s -H "Authorization: Bearer ci-golden-token" \
                 http://localhost:8920/api/sessions \
-                | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('sessions', [])))" \
+                | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('sessions', [])))"
                 2>/dev/null || echo 0
             )
             if [ "${count:-0}" -ge 1 ]; then
@@ -187,18 +187,25 @@ jobs:
             tests/test_e2e_oss_golden_path.py \
             -v --tb=short
 
-      # Cooldown: give the waitress server time to drain its task queue after
-      # C1's 9 rapid page-loads before C5 fires 33 more. Without this pause,
-      # the queue backs up to depth 12+ and C5's page.goto() calls time out.
-      - name: Server cooldown before C5 sweep
+      # Restart the dashboard so C5 starts with a clean server that has no
+      # accumulated SSE streams or WebSocket reconnect loops from C1. Each
+      # Playwright page load opens SSE connections (/api/brain-stream,
+      # /api/health-stream) that may outlive their browser context; after 9
+      # C1 tab loads the waitress thread pool fills up, causing page.goto
+      # timeouts for later C5 tabs. A fresh process clears all stale threads.
+      - name: Restart dashboard (clean state for C5 sweep)
         run: |
-          echo "Waiting for server to settle after C1..."
-          sleep 5
-          for i in $(seq 1 10); do
-            code=$(curl -s -o /dev/null -w "%{http_code}" \
-              -H "Authorization: Bearer ci-golden-token" \
-              http://localhost:8920/api/health 2>/dev/null || echo "000")
-            if [ "$code" = "200" ]; then echo "Server ready after ${i}s"; break; fi
+          kill "$DASHBOARD_PID" 2>/dev/null || true
+          sleep 3
+          OPENCLAW_GATEWAY_TOKEN=ci-golden-token \
+          /tmp/oss-golden/bin/python -c "import dashboard; dashboard.main()" \
+            --port 8920 --no-debug \
+            >> /tmp/oss-golden-dashboard.log 2>&1 &
+          NEW_PID=$!
+          echo "DASHBOARD_PID=$NEW_PID" >> "$GITHUB_ENV"
+          for i in $(seq 1 30); do
+            curl -sf -H "Authorization: Bearer ci-golden-token" \
+              http://localhost:8920/api/health && echo "Dashboard ready (fresh) after ${i}s" && break
             sleep 1
           done
 
