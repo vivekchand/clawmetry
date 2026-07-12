@@ -18,10 +18,9 @@ Token types
 GITHUB_TOKEN from Actions (prefix ghs_):
   Can read branch protection state but CANNOT write it. The script detects
   this automatically: it verifies current state (read-only, scoped to the
-  current repo only) and exits 0 with actionable instructions. Push-triggered
-  runs are always informational (exit 0): closing C6 is an explicit admin
-  action via scripts/close-c6.sh, never a red-main gate. A perpetually-red
-  main from an unconfigured-but-optional C6 hides real failures.
+  current repo only) and exits 1 if not configured (red badge = forcing
+  signal), exits 0 when already configured (self-heals to green on the
+  next push after admin action). Push-triggered runs use this path.
   Note: requesting administration:write in the workflow permissions block is
   invalid for GITHUB_TOKEN and causes 0-job workflow failures -- do not add it.
 
@@ -411,11 +410,13 @@ def main() -> None:
         print("Action needed (takes ~30 seconds) to make these checks required on main:")
         print("  bash scripts/close-c6.sh")
         print("  (Or: Actions > 'Apply required E2E status checks (C6 -- one-shot)' > Run workflow)")
-        # Push-triggered runs are informational only and must NEVER block main.
-        # Closing C6 (configuring branch protection) is an explicit admin action
-        # via the instructions above, not a gate that reds every merge. A
-        # perpetually-red main hides real failures, so exit 0 here.
-        return  # exit 0 on push; C6 stays actionable, just non-blocking
+        # Exit 1 so the apply-required-checks.yml workflow shows RED in the GitHub
+        # Actions UI until C6 is configured. The module-level docstring specifies
+        # this: "exit 1 if not configured (red badge = forcing signal)". Once the
+        # admin runs scripts/close-c6.sh, the next push to main goes green and
+        # stays green permanently. This workflow is NOT in REQUIRED_CHECKS, so
+        # it cannot block PR merges; it only creates a visible badge on main.
+        sys.exit(1)
 
     # PAT / OAuth path: full apply + verify across all repos.
     checks = _checks_to_apply()
