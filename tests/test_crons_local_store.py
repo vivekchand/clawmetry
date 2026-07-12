@@ -469,3 +469,73 @@ def test_cron_without_model_field_unaffected(fast_path_app):
     assert "model" not in matched[0] or matched[0].get("model") is None, (
         f"unexpected model value in cron without model field: {matched[0]}"
     )
+
+
+# ── cron-level model field in health-summary (issue #3673) ─────────────────
+
+
+def test_health_summary_model_field_surfaced(fast_path_app):
+    """Per-cron model must appear in /api/cron/health-summary job entries so
+    the health view can display which model each job is pinned to (OpenClaw
+    CHANGELOG #95341 — harness gap #3673)."""
+    import time
+    from datetime import datetime, timezone, timedelta
+
+    app, ls, _cr = fast_path_app
+    now = datetime.now(timezone.utc)
+    recent_iso = (now - timedelta(seconds=30)).isoformat()
+    next_iso = (now + timedelta(minutes=5)).isoformat()
+
+    ls.get_store().ingest_cron({
+        "cron_id":     "model-health-cron",
+        "name":        "Model-pinned health job",
+        "schedule":    '{"kind":"cron","expr":"0 9 * * 1-5"}',
+        "enabled":     True,
+        "last_run_at": recent_iso,
+        "last_status": "success",
+        "next_run_at": next_iso,
+        "createdAtMs": int(time.time() * 1000) - 3600000,
+        "model":       "claude-haiku-4-5-20251001",
+    })
+
+    body = app.test_client().get("/api/cron/health-summary").get_json()
+    assert body.get("_source") == "local_store"
+    jobs = body.get("jobs", [])
+    matched = [j for j in jobs if j.get("id") == "model-health-cron"]
+    assert matched, f"model-health-cron not found in health-summary; got ids: {[j.get('id') for j in jobs]}"
+    assert matched[0].get("model") == "claude-haiku-4-5-20251001", (
+        f"model field missing or wrong in health-summary job; got: {matched[0]}"
+    )
+
+
+def test_health_summary_cron_without_model_gets_empty_string(fast_path_app):
+    """Crons without a model field must surface 'model': '' in health-summary
+    (not a missing key) so the JS layer can use a uniform `job.model || ''`
+    pattern."""
+    import time
+    from datetime import datetime, timezone, timedelta
+
+    app, ls, _cr = fast_path_app
+    now = datetime.now(timezone.utc)
+    recent_iso = (now - timedelta(seconds=30)).isoformat()
+    next_iso = (now + timedelta(minutes=5)).isoformat()
+
+    ls.get_store().ingest_cron({
+        "cron_id":     "no-model-health-cron",
+        "name":        "No-model health job",
+        "schedule":    '{"kind":"every","everyMs":3600000}',
+        "enabled":     True,
+        "last_run_at": recent_iso,
+        "last_status": "success",
+        "next_run_at": next_iso,
+        "createdAtMs": int(time.time() * 1000) - 3600000,
+    })
+
+    body = app.test_client().get("/api/cron/health-summary").get_json()
+    assert body.get("_source") == "local_store"
+    jobs = body.get("jobs", [])
+    matched = [j for j in jobs if j.get("id") == "no-model-health-cron"]
+    assert matched, f"no-model-health-cron not found in health-summary"
+    assert matched[0].get("model") == "", (
+        f"expected empty string for model-less cron in health-summary; got: {matched[0].get('model')!r}"
+    )
