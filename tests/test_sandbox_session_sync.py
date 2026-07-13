@@ -34,8 +34,9 @@ def test_happy_path_flushes_events_and_advances_cursor():
 
     side_effects = [
         _run(0, sandbox_list),
-        _run(0, ls_output),
-        _run(0, cat_output),
+        _run(0, ls_output),   # ls agents/main/sessions
+        _run(0, cat_output),  # cat main/abc123.jsonl
+        _run(1, ""),          # ls agents/advisor/sessions (absent — nonzero)
     ]
 
     state = {}
@@ -48,7 +49,8 @@ def test_happy_path_flushes_events_and_advances_cursor():
 
     assert count == 2
     assert len(flushed) == 2
-    assert state["sandbox_session_cursors"]["my-sandbox/abc123.jsonl"] == 2
+    # cursor key now includes agent_dir (#3698)
+    assert state["sandbox_session_cursors"]["my-sandbox/main/abc123.jsonl"] == 2
 
 
 def test_sidecar_files_excluded():
@@ -59,8 +61,9 @@ def test_sidecar_files_excluded():
     # Only abc.jsonl should be read (1 cat call); sidecars produce no cat call
     side_effects = [
         _run(0, sandbox_list),
-        _run(0, ls_output),
-        _run(0, cat_output),
+        _run(0, ls_output),   # ls agents/main/sessions
+        _run(0, cat_output),  # cat main/abc.jsonl (only non-sidecar)
+        _run(1, ""),          # ls agents/advisor/sessions (absent)
     ]
     flushed = []
     with patch("clawmetry.sync._find_openshell_bin", return_value="/usr/bin/openshell"), \
@@ -81,7 +84,12 @@ def test_sandbox_sessions_tagged_as_nemoclaw():
     ls_output = "sess.jsonl\n"
     cat_output = "\n".join(events) + "\n"
 
-    side_effects = [_run(0, sandbox_list), _run(0, ls_output), _run(0, cat_output)]
+    side_effects = [
+        _run(0, sandbox_list),
+        _run(0, ls_output),   # ls agents/main/sessions
+        _run(0, cat_output),  # cat main/sess.jsonl
+        _run(1, ""),          # ls agents/advisor/sessions (absent)
+    ]
 
     flush_kwargs = []
     with patch("clawmetry.sync._find_openshell_bin", return_value="/usr/bin/openshell"), \
@@ -107,7 +115,12 @@ def test_cursor_skips_already_seen_lines_on_second_call():
     flushed = []
 
     def make_effects():
-        return [_run(0, sandbox_list), _run(0, ls_output), _run(0, cat_output)]
+        return [
+            _run(0, sandbox_list),
+            _run(0, ls_output),  # ls agents/main/sessions
+            _run(0, cat_output), # cat main/sess.jsonl
+            _run(1, ""),         # ls agents/advisor/sessions (absent)
+        ]
 
     with patch("clawmetry.sync._find_openshell_bin", return_value="/usr/bin/openshell"), \
          patch("subprocess.run", side_effect=make_effects()), \
@@ -116,7 +129,8 @@ def test_cursor_skips_already_seen_lines_on_second_call():
         sync_sandbox_sessions_openshell(CONFIG, state)
 
     assert len(flushed) == 1
-    assert state["sandbox_session_cursors"]["sb/sess.jsonl"] == 1
+    # cursor key now includes agent_dir (#3698)
+    assert state["sandbox_session_cursors"]["sb/main/sess.jsonl"] == 1
 
     flushed.clear()
     with patch("clawmetry.sync._find_openshell_bin", return_value="/usr/bin/openshell"), \

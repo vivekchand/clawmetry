@@ -501,6 +501,7 @@ def _try_local_store_sessions():
             "subject":        title or meta.get("subject", ""),
             "session_type":   meta.get("session_type", "main"),
             "runtime":        meta.get("runtime", ""),
+            "thinking_level": meta.get("thinking_level", ""),
             "_source":        "local_store",
         })
     # Decorate with channel context from the typed openclaw_channels table.
