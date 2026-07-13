@@ -15768,3 +15768,239 @@ def tier_path_at_batch(
             "entitlements: tier_path_at_batch failed: %s", exc
         )
         return None
+
+
+# ── capacity-axis tiers_for helpers ──────────────────────────────────────────
+#
+# Inverse siblings of ``min_tier_for_channel_count`` /
+# ``min_tier_for_retention_window`` / ``min_tier_for_node_count``. Where the
+# scalar ``min_tier_for_*`` helpers return the *cheapest* purchasable tier that
+# admits a capacity value (one id the upgrade-CTA uses), the ``tiers_for_*``
+# helpers below return the **full** ladder of tiers that admit the same value.
+# Closes the feature/runtime symmetry gap: ``tiers_for_feature`` /
+# ``tiers_for_runtime`` already exist for the two grant axes, but the three
+# capacity axes only expose the scalar side. A pricing-page row or capacity
+# tooltip ("Fits in: Starter, Cloud Pro, Self-hosted Pro, Trial, Enterprise")
+# now reads off the same shape as the feature/runtime rows.
+#
+# Row shape mirrors ``tiers_for_feature`` / ``tiers_for_runtime`` exactly:
+#
+#     {
+#       "item":           <int|None>,           # the queried capacity value
+#       "kind":           "channel_count" |     # matches the endpoint slug
+#                         "retention_window" |
+#                         "node_count",
+#       "label":          "5 channels" | "30 days" | "4 nodes",
+#       "free":           <bool>,               # OSS admits this value
+#       "min_tier":       "<tier id>" | None,   # matches min_tier_for_* scalar
+#       "min_tier_label": "<label>" | None,
+#       "min_tier_rank":  <int> | None,
+#       "tiers":          [<_tier_row>, ...],   # every tier admitting this value
+#     }
+#
+# ``tiers`` walks :data:`_TIER_ORDER` (includes the promotional ``trial`` tier
+# with ``purchasable=False``); ``min_tier`` walks :data:`_PURCHASABLE_TIERS`
+# (trial excluded) so it byte-equals the existing scalar helper. Rows sorted
+# ``(rank, id)`` for stable output. Never raises: bad input returns ``None``,
+# resolver failure logs at warning and returns ``None``.
+
+
+def tiers_for_channel_count(count: int) -> dict | None:
+    """Inverse of :func:`min_tier_for_channel_count`: list **every** tier that
+    admits ``count`` configured channel adapters.
+
+    Where ``min_tier_for_channel_count`` answers "cheapest purchasable tier
+    that admits N channels" -- one id the upgrade-CTA renders -- this helper
+    returns the full "Fits in: Starter, Cloud Pro, Self-hosted Pro, Trial,
+    Enterprise" availability list a pricing-page row or capacity tooltip
+    needs. Walks :data:`_TIER_ORDER` so the promotional ``trial`` tier
+    appears alongside the purchasable plans (each row carries ``purchasable``
+    so the UI can dim or badge it).
+
+    Semantics:
+
+    * ``count <= 0`` -- collapses to "free everywhere": every tier in
+      :data:`_TIER_ORDER` admits a zero/negative count (either "not measured
+      yet" or trivially satisfied). ``min_tier`` matches
+      :func:`min_tier_for_channel_count` (which returns :data:`TIER_OSS`).
+    * Non-int ``count`` -- returns ``None`` so a caller can distinguish
+      "free" from "couldn't parse". Never raises. Matches
+      :func:`min_tier_for_channel_count`'s posture on bad input.
+    * Otherwise -- the ladder of tiers whose ``_TIER_CHANNEL_LIMIT`` value
+      is either ``None`` (unlimited) or ``>= count``. ``min_tier`` matches
+      the existing scalar helper exactly (purchasable-only walk).
+
+    Rows sorted ``(tier_rank, tier_id)`` for stable output.
+    """
+    try:
+        try:
+            n = int(count)
+        except (TypeError, ValueError):
+            return None
+        carriers: list[str] = []
+        for tier in _TIER_ORDER:
+            cap = _TIER_CHANNEL_LIMIT.get(tier, _FREE_CHANNEL_LIMIT)
+            if n <= 0 or cap is None or n <= cap:
+                carriers.append(tier)
+        rows = [
+            _tier_row(t)
+            for t in sorted(carriers, key=lambda t: (tier_rank(t), t))
+        ]
+        min_t = min_tier_for_channel_count(n)
+        is_free = n <= _FREE_CHANNEL_LIMIT
+        label = f"{n} channel" if n == 1 else f"{n} channels"
+        return {
+            "item": n,
+            "kind": "channel_count",
+            "label": label,
+            "free": is_free,
+            "min_tier": min_t,
+            "min_tier_label": tier_label(min_t) if min_t else None,
+            "min_tier_rank": tier_rank(min_t) if min_t else None,
+            "tiers": rows,
+        }
+    except Exception as exc:
+        logger.warning(
+            "entitlements: tiers_for_channel_count failed: %s", exc
+        )
+        return None
+
+
+def tiers_for_retention_window(days: int | None) -> dict | None:
+    """Inverse of :func:`min_tier_for_retention_window`: list every tier that
+    admits a ``days`` event-retention history window.
+
+    Where ``min_tier_for_retention_window`` returns the cheapest purchasable
+    tier admitting the window -- one id the history-range toggle renders --
+    this helper returns the full "Fits in: <tier>, ..." availability list.
+
+    Semantics mirror :func:`min_tier_for_retention_window` on input parsing
+    and the ``free`` flag:
+
+    * ``days is None`` (caller asked for unlimited history) -- only tiers
+      with ``_TIER_RETENTION_DAYS[t] is None`` admit the request. On the
+      current tier table that is :data:`TIER_ENTERPRISE` alone. ``item`` is
+      ``None``, ``label`` is ``"unlimited"``, ``free`` is ``False`` (OSS
+      does not admit unlimited history).
+    * ``days <= 0`` -- collapses to "free everywhere": every tier in
+      :data:`_TIER_ORDER` admits a zero/negative window (trivially
+      satisfied). ``min_tier`` matches :func:`min_tier_for_retention_window`
+      (which returns :data:`TIER_OSS`).
+    * Non-int ``days`` (other than the explicit ``None``) -- returns
+      ``None`` so a caller can distinguish "free" from "couldn't parse".
+      Never raises.
+    * Otherwise -- the ladder of tiers whose retention cap is ``None``
+      (unlimited) or ``>= days``. ``min_tier`` matches the existing scalar
+      helper exactly (purchasable-only walk).
+
+    Rows sorted ``(tier_rank, tier_id)`` for stable output.
+    """
+    try:
+        if days is None:
+            carriers = [
+                t for t in _TIER_ORDER
+                if _TIER_RETENTION_DAYS.get(t, 7) is None
+            ]
+            rows = [
+                _tier_row(t)
+                for t in sorted(carriers, key=lambda t: (tier_rank(t), t))
+            ]
+            min_t = min_tier_for_retention_window(None)
+            return {
+                "item": None,
+                "kind": "retention_window",
+                "label": "unlimited",
+                "free": False,
+                "min_tier": min_t,
+                "min_tier_label": tier_label(min_t) if min_t else None,
+                "min_tier_rank": tier_rank(min_t) if min_t else None,
+                "tiers": rows,
+            }
+        try:
+            n = int(days)
+        except (TypeError, ValueError):
+            return None
+        carriers: list[str] = []
+        for tier in _TIER_ORDER:
+            cap = _TIER_RETENTION_DAYS.get(tier, 7)
+            if n <= 0 or cap is None or n <= cap:
+                carriers.append(tier)
+        rows = [
+            _tier_row(t)
+            for t in sorted(carriers, key=lambda t: (tier_rank(t), t))
+        ]
+        min_t = min_tier_for_retention_window(n)
+        free_cap = _TIER_RETENTION_DAYS.get(TIER_OSS, 7)
+        is_free = n <= 0 or (free_cap is not None and n <= free_cap)
+        label = f"{n} day" if n == 1 else f"{n} days"
+        return {
+            "item": n,
+            "kind": "retention_window",
+            "label": label,
+            "free": is_free,
+            "min_tier": min_t,
+            "min_tier_label": tier_label(min_t) if min_t else None,
+            "min_tier_rank": tier_rank(min_t) if min_t else None,
+            "tiers": rows,
+        }
+    except Exception as exc:
+        logger.warning(
+            "entitlements: tiers_for_retention_window failed: %s", exc
+        )
+        return None
+
+
+def tiers_for_node_count(count: int) -> dict | None:
+    """Inverse of :func:`min_tier_for_node_count`: list every tier that admits
+    ``count`` registered nodes.
+
+    Where ``min_tier_for_node_count`` returns the cheapest purchasable tier
+    admitting the node count -- one id the fleet-page upgrade affordance
+    renders -- this helper returns the full "Fits in: <tier>, ..."
+    availability list.
+
+    Semantics mirror :func:`min_tier_for_node_count`:
+
+    * ``count <= 0`` -- collapses to "free everywhere": every tier in
+      :data:`_TIER_ORDER` admits a zero/negative count. ``min_tier`` matches
+      :func:`min_tier_for_node_count` (which returns :data:`TIER_OSS`).
+    * Non-int ``count`` -- returns ``None`` so a caller can distinguish
+      "free" from "couldn't parse". Never raises.
+    * Otherwise -- the ladder of tiers whose ``_TIER_NODE_LIMIT`` value is
+      either ``None`` (unlimited) or ``>= count``. ``min_tier`` matches the
+      scalar helper exactly (purchasable-only walk).
+
+    Rows sorted ``(tier_rank, tier_id)`` for stable output.
+    """
+    try:
+        try:
+            n = int(count)
+        except (TypeError, ValueError):
+            return None
+        carriers: list[str] = []
+        for tier in _TIER_ORDER:
+            cap = _TIER_NODE_LIMIT.get(tier, _FREE_NODE_LIMIT)
+            if n <= 0 or cap is None or n <= cap:
+                carriers.append(tier)
+        rows = [
+            _tier_row(t)
+            for t in sorted(carriers, key=lambda t: (tier_rank(t), t))
+        ]
+        min_t = min_tier_for_node_count(n)
+        is_free = n <= _FREE_NODE_LIMIT
+        label = f"{n} node" if n == 1 else f"{n} nodes"
+        return {
+            "item": n,
+            "kind": "node_count",
+            "label": label,
+            "free": is_free,
+            "min_tier": min_t,
+            "min_tier_label": tier_label(min_t) if min_t else None,
+            "min_tier_rank": tier_rank(min_t) if min_t else None,
+            "tiers": rows,
+        }
+    except Exception as exc:
+        logger.warning(
+            "entitlements: tiers_for_node_count failed: %s", exc
+        )
+        return None
