@@ -34,8 +34,18 @@ _loaded = False
 # ``GET /api/extensions`` so operators can confirm clawmetry-pro is actually
 # wired in without scraping ``pip list``. A plugin that raised during load
 # is intentionally NOT recorded here — matches the warning-and-continue
-# posture of ``load_plugins`` itself.
+# posture of ``load_plugins`` itself; the failure lands in
+# :data:`_failed_plugins` instead so ``/api/extensions`` can surface it.
 _loaded_plugins: List[str] = []
+# Plugin entry points that raised during load, in attempted-load order.
+# Each entry is ``{"name": <ep.name>, "error": <str(exc)>}``. The
+# warning-and-continue posture of :func:`load_plugins` means these failures
+# never take down the host process, but an operator triaging
+# "why didn't clawmetry-pro load?" would otherwise have to tail daemon logs
+# — this mirror lets ``clawmetry status`` / ``GET /api/extensions`` report
+# the failure directly. Cleared on every :func:`load_plugins` re-entry so a
+# reloaded daemon does not report stale failures from an earlier pass.
+_failed_plugins: List[Dict[str, str]] = []
 
 
 def register(event: str, handler: Callable[[Dict[str, Any]], None]) -> None:
@@ -116,10 +126,12 @@ def load_plugins(app=None) -> None:
     if _loaded:
         return
     _loaded = True
-    # Reset the diagnostic mirror so a test that flips ``_loaded`` back to
-    # False and re-runs the loader doesn't see stale names from the prior pass.
+    # Reset the diagnostic mirrors so a test that flips ``_loaded`` back to
+    # False and re-runs the loader doesn't see stale names or stale failures
+    # from the prior pass.
     with _lock:
         _loaded_plugins.clear()
+        _failed_plugins.clear()
 
     try:
         eps = _select_entry_points("clawmetry.extensions")
@@ -153,6 +165,15 @@ def load_plugins(app=None) -> None:
             logger.info(f"Loaded ClawMetry extension plugin: {ep.name!r}")
         except Exception as exc:
             logger.warning(f"Failed to load extension plugin {ep.name!r}: {exc}")
+            # Record the failure so operators triaging "why didn't clawmetry-pro
+            # load?" can read it off ``failed_plugins()`` / ``/api/extensions``
+            # instead of tailing daemon logs. Only the exception's ``str`` is
+            # captured — no traceback, so bug-report-style paths / secrets in
+            # frames never leak into a diagnostic endpoint.
+            name = getattr(ep, "name", "") or ""
+            if name:
+                with _lock:
+                    _failed_plugins.append({"name": name, "error": str(exc)})
 
 
 def registered_events() -> List[str]:
@@ -176,7 +197,34 @@ def loaded_plugins() -> List[str]:
     in?" without scraping ``pip list`` or importing the package. Returns a
     SHALLOW COPY so callers can't mutate the registry. Names appear in load
     order; entries that raised during load are excluded — matching the
-    warning-and-continue posture of :func:`load_plugins`. Never raises.
+    warning-and-continue posture of :func:`load_plugins`. The excluded
+    entries land in :func:`failed_plugins` so an operator can still see them.
+    Never raises.
     """
     with _lock:
         return list(_loaded_plugins)
+
+
+def failed_plugins() -> List[Dict[str, str]]:
+    """Entry-point plugins that raised during load, in attempted-load order.
+
+    Diagnostic companion to :func:`loaded_plugins`. Each entry is
+    ``{"name": <ep.name>, "error": <str(exc)>}``. The
+    warning-and-continue posture of :func:`load_plugins` means a broken
+    plugin never takes down the host process, but until this helper existed
+    the only way to know a plugin had *tried and failed* was tailing daemon
+    logs — a bad experience when an operator installs ``clawmetry-pro``,
+    restarts the daemon, and sees ``loaded_plugins() == []`` with no obvious
+    signal for whether the wheel is even installed. Now the pair of
+    ``loaded_plugins()`` + ``failed_plugins()`` answers the triage question
+    directly.
+
+    Returns a SHALLOW COPY of the per-entry dicts so callers can freely
+    mutate them without corrupting the registry. Entries appear in the
+    order the loader attempted them. Cleared on every :func:`load_plugins`
+    re-entry so a reloaded daemon does not report stale failures. Only the
+    exception's ``str`` is captured — no traceback — so paths / secrets in
+    frames never leak into ``GET /api/extensions``. Never raises.
+    """
+    with _lock:
+        return [dict(entry) for entry in _failed_plugins]

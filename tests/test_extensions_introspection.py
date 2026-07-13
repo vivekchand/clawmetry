@@ -35,19 +35,22 @@ def _fake_eps(*pairs):
 
 @pytest.fixture(autouse=True)
 def _reset_loader():
-    """Drop the once-guard + the loaded-name mirror before every test so
-    monkeypatched entry points actually run. Also snapshot/restore the event
-    registry so handlers registered here can't leak into adjacent suites and
-    handlers from adjacent suites can't leak in here."""
+    """Drop the once-guard + the loaded-name mirror + the failed-name mirror
+    before every test so monkeypatched entry points actually run. Also
+    snapshot/restore the event registry so handlers registered here can't
+    leak into adjacent suites and handlers from adjacent suites can't leak
+    in here."""
     ext._loaded = False
     with ext._lock:
         ext._loaded_plugins.clear()
+        ext._failed_plugins.clear()
         prior_registry = {k: list(v) for k, v in ext._registry.items()}
         ext._registry.clear()
     yield
     ext._loaded = False
     with ext._lock:
         ext._loaded_plugins.clear()
+        ext._failed_plugins.clear()
         ext._registry.clear()
         ext._registry.update(prior_registry)
 
@@ -119,6 +122,125 @@ def test_loaded_plugins_records_app_style_plugins(monkeypatch):
     assert ext.loaded_plugins() == ["needs-app"]
 
 
+# ── failed_plugins() ─────────────────────────────────────────────────────────
+
+
+def test_failed_plugins_empty_before_load():
+    assert ext.failed_plugins() == []
+
+
+def test_failed_plugins_records_load_failures(monkeypatch):
+    def boom():
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(
+        ext, "_select_entry_points",
+        lambda group: _fake_eps((boom, "broken")),
+    )
+    ext.load_plugins()
+    failed = ext.failed_plugins()
+    assert failed == [{"name": "broken", "error": "kaboom"}]
+    # Companion mirror stays empty for the failed plugin.
+    assert ext.loaded_plugins() == []
+
+
+def test_failed_plugins_complementary_to_loaded(monkeypatch):
+    """A given entry point appears in exactly one of the two lists per load."""
+    def boom():
+        raise ValueError("nope")
+
+    def good():
+        return None
+
+    monkeypatch.setattr(
+        ext, "_select_entry_points",
+        lambda group: _fake_eps((good, "ok"), (boom, "broken")),
+    )
+    ext.load_plugins()
+    assert ext.loaded_plugins() == ["ok"]
+    assert [e["name"] for e in ext.failed_plugins()] == ["broken"]
+
+
+def test_failed_plugins_preserves_attempt_order(monkeypatch):
+    monkeypatch.setattr(
+        ext, "_select_entry_points",
+        lambda group: _fake_eps(
+            ((lambda: (_ for _ in ()).throw(RuntimeError("a"))), "first"),
+            ((lambda: (_ for _ in ()).throw(RuntimeError("b"))), "second"),
+        ),
+    )
+    ext.load_plugins()
+    assert [e["name"] for e in ext.failed_plugins()] == ["first", "second"]
+
+
+def test_failed_plugins_returns_a_copy(monkeypatch):
+    """Caller mutation of the returned list or its dicts must not corrupt
+    the registry."""
+    def boom():
+        raise RuntimeError("owned")
+
+    monkeypatch.setattr(
+        ext, "_select_entry_points",
+        lambda group: _fake_eps((boom, "broken")),
+    )
+    ext.load_plugins()
+
+    view = ext.failed_plugins()
+    view.append({"name": "ghost", "error": "phantom"})
+    view[0]["error"] = "tampered"
+
+    fresh = ext.failed_plugins()
+    assert fresh == [{"name": "broken", "error": "owned"}]
+
+
+def test_failed_plugins_resets_on_reentry(monkeypatch):
+    """A rerun of ``load_plugins`` must start with a clean failure list so a
+    reloaded daemon doesn't report stale failures from a prior pass."""
+    def boom():
+        raise RuntimeError("first-round")
+
+    monkeypatch.setattr(
+        ext, "_select_entry_points",
+        lambda group: _fake_eps((boom, "broken")),
+    )
+    ext.load_plugins()
+    assert ext.failed_plugins() == [{"name": "broken", "error": "first-round"}]
+
+    # Simulate a daemon reload where ``_loaded`` was reset; this time the
+    # plugin behaves.
+    ext._loaded = False
+    monkeypatch.setattr(
+        ext, "_select_entry_points",
+        lambda group: _fake_eps((lambda: None, "broken")),
+    )
+    ext.load_plugins()
+    assert ext.failed_plugins() == []  # stale failure did not survive
+    assert ext.loaded_plugins() == ["broken"]
+
+
+def test_failed_plugins_captures_only_str_not_traceback(monkeypatch):
+    """Only ``str(exc)`` lands in the mirror — never the traceback / frame
+    locals — so paths and secrets in frames never leak into the diagnostic
+    endpoint. Pinned so a future refactor cannot silently upgrade the
+    capture to a traceback dump.
+    """
+    def boom():
+        secret = "/Users/op/.clawmetry/license.key"  # noqa: F841
+        raise RuntimeError("plain")
+
+    monkeypatch.setattr(
+        ext, "_select_entry_points",
+        lambda group: _fake_eps((boom, "broken")),
+    )
+    ext.load_plugins()
+
+    entry = ext.failed_plugins()[0]
+    assert set(entry.keys()) == {"name", "error"}
+    assert entry["error"] == "plain"
+    assert "Traceback" not in entry["error"]
+    assert "license.key" not in entry["error"]
+
+
 # ── GET /api/extensions ──────────────────────────────────────────────────────
 
 
@@ -138,6 +260,8 @@ def test_api_extensions_shape_empty(client):
     assert body == {
         "plugins": [],
         "plugin_count": 0,
+        "failed_plugins": [],
+        "failed_plugin_count": 0,
         "events": [],
         "handler_counts": {},
     }
@@ -181,6 +305,56 @@ def test_api_extensions_never_raises(client, monkeypatch):
     assert body == {
         "plugins": [],
         "plugin_count": 0,
+        "failed_plugins": [],
+        "failed_plugin_count": 0,
         "events": [],
         "handler_counts": {},
     }
+
+
+def test_api_extensions_reports_failed_plugins(client, monkeypatch):
+    def boom():
+        raise RuntimeError("kaboom")
+
+    def good():
+        return None
+
+    monkeypatch.setattr(
+        ext, "_select_entry_points",
+        lambda group: _fake_eps((good, "clawmetry-pro"), (boom, "flaky-plugin")),
+    )
+    ext.load_plugins()
+
+    body = json.loads(client.get("/api/extensions").data)
+    assert body["plugins"] == ["clawmetry-pro"]
+    assert body["plugin_count"] == 1
+    assert body["failed_plugins"] == [
+        {"name": "flaky-plugin", "error": "kaboom"},
+    ]
+    assert body["failed_plugin_count"] == 1
+
+
+def test_api_extensions_survives_missing_failed_plugins_helper(client, monkeypatch):
+    """A mixed deploy where the routes package is new but the core ``clawmetry``
+    is old (no :func:`failed_plugins`) must still populate the loaded-plugin
+    side of the envelope instead of 5xx'ing the whole response.
+    """
+    monkeypatch.setattr(
+        ext, "_select_entry_points",
+        lambda group: _fake_eps((lambda: None, "clawmetry-pro")),
+    )
+    ext.load_plugins()
+
+    # Simulate the older wheel by making the accessor raise (an older wheel
+    # would raise ``AttributeError`` on the missing symbol; behaviourally
+    # equivalent from the route's perspective).
+    def missing():
+        raise AttributeError("failed_plugins")
+
+    monkeypatch.setattr(ext, "failed_plugins", missing)
+
+    body = json.loads(client.get("/api/extensions").data)
+    assert body["plugins"] == ["clawmetry-pro"]
+    assert body["plugin_count"] == 1
+    assert body["failed_plugins"] == []
+    assert body["failed_plugin_count"] == 0
