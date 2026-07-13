@@ -3,14 +3,9 @@ name: C6 auto-heal (daily required-checks application)
 # Applies required E2E status checks to main branch protection daily.
 # Self-heals C6 the morning after E2E_ADMIN_PAT secret is added.
 #
-# Why this is needed:
-#   apply-required-checks.yml runs on push and workflow_dispatch but its
-#   apply step condition (`push || confirm==APPLY`) is never true for a
-#   schedule trigger. Adding a schedule to that file would run the workflow
-#   but execute zero steps. This dedicated workflow avoids that confusion.
-#
 # When E2E_ADMIN_PAT is NOT set:
-#   logs a one-line hint and exits 0 -- no red badge, no noise.
+#   emits an ::error:: annotation and exits 1 -- visible red badge until
+#   the secret is configured. This makes the missing PAT impossible to ignore.
 #
 # When E2E_ADMIN_PAT IS set:
 #   runs scripts/apply_required_status_checks.py which configures required
@@ -31,7 +26,7 @@ name: C6 auto-heal (daily required-checks application)
 
 on:
   schedule:
-    - cron: '15 10 * * *'  # 10:15am UTC daily, 15 min after c6-health audit
+    - cron: '15 10 * * *'  # 10:15am UTC daily
   workflow_dispatch:
 
 permissions:
@@ -51,18 +46,27 @@ jobs:
         run: |
           if [ -z "${ADMIN_PAT}" ]; then
             echo "has_pat=false" >> "$GITHUB_OUTPUT"
-            echo "No E2E_ADMIN_PAT configured -- skipping C6 auto-heal."
+            echo "::error::E2E_ADMIN_PAT secret is not set -- C6 (required-status-checks) cannot be applied automatically."
             echo ""
-            echo "To enable automatic C6 closure:"
-            echo "  1. Create a fine-grained PAT at https://github.com/settings/personal-access-tokens/new"
-            echo "     Resource owner: vivekchand"
-            echo "     Repos: clawmetry, clawmetry-cloud, clawmetry-landing"
-            echo "     Permission: Administration -- read+write"
-            echo "  2. Add it as a repo secret: Settings > Secrets > Actions > New secret"
-            echo "     Name: E2E_ADMIN_PAT"
-            echo "  This workflow will close C6 automatically the next morning at 10:15am UTC."
+            echo "ACTION REQUIRED: Add E2E_ADMIN_PAT to close C6 (vivekchand/clawmetry#2146)."
+            echo ""
+            echo "Step 1: Create a fine-grained PAT"
+            echo "  https://github.com/settings/personal-access-tokens/new"
+            echo "  Resource owner: vivekchand"
+            echo "  Repos: clawmetry, clawmetry-cloud, clawmetry-landing"
+            echo "  Permission: Administration -- read+write"
+            echo ""
+            echo "Step 2A (automatic) -- store as repo secret:"
+            echo "  Settings > Secrets > Actions > New secret"
+            echo "  Name: E2E_ADMIN_PAT"
+            echo "  This workflow closes C6 automatically the next morning at 10:15am UTC."
+            echo ""
+            echo "Step 2B (immediate) -- apply right now:"
+            echo "  Actions > 'Apply required E2E status checks (C6 -- one-shot)'"
+            echo "  confirm=APPLY, pat_token=<paste PAT>"
             echo ""
             echo "  Tracking: https://github.com/vivekchand/clawmetry/issues/2146"
+            exit 1
           else
             echo "has_pat=true" >> "$GITHUB_OUTPUT"
             echo "E2E_ADMIN_PAT found -- applying required E2E status checks."
