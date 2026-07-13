@@ -20408,3 +20408,303 @@ def api_entitlement_tiers_for_runtimes():
                 "enforced": False,
             }
         )
+
+
+# ── capacity-axis tiers-for-*-at endpoints ───────────────────────────────────
+#
+# Hypothetical-perspective siblings of the four capacity-axis ``tiers_for_*``
+# endpoints above. Fill the ``_at`` slot on the capacity family alongside
+# ``/api/entitlement/tiers-for-at`` / ``/tiers-for-batch-at`` on the grant
+# axes, so a pricing-matrix walkthrough can call every ``/tiers-for-*-at``
+# endpoint with a uniform ``tier=<perspective>`` URL. The ladder itself is
+# perspective-independent (walks the static per-tier caps via the singular
+# helpers) so parity with the non-``_at`` sibling is pinned in the test suite.
+
+
+def _perspective_envelope(_ent, p: str) -> dict:
+    ent = _ent.get_entitlement()
+    return {
+        "perspective_tier": p,
+        "perspective_tier_label": _ent.tier_label(p),
+        "perspective_tier_rank": _ent.tier_rank(p),
+        "current_tier": ent.tier,
+        "current_tier_rank": _ent.tier_rank(ent.tier),
+        "grace": bool(ent.grace),
+        "enforced": _ent.is_enforced(),
+    }
+
+
+def _perspective_fallback(p: str) -> dict:
+    try:
+        from clawmetry import entitlements as _ent
+
+        label = _ent.tier_label(p)
+        rank = _ent.tier_rank(p)
+    except Exception:
+        label = p
+        rank = 0
+    return {
+        "perspective_tier": p,
+        "perspective_tier_label": label,
+        "perspective_tier_rank": rank,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+@bp_entitlement.route("/api/entitlement/tiers-for-channel-count-at")
+def api_entitlement_tiers_for_channel_count_at():
+    """``GET /api/entitlement/tiers-for-channel-count-at?tier=<perspective>
+    &count=<int>`` -- hypothetical-perspective sibling of
+    ``/api/entitlement/tiers-for-channel-count``: returns the full ladder
+    of tiers admitting ``count`` configured channel adapters, scoped by a
+    caller-supplied ``perspective_tier``.
+
+    Perspective is validated against ``_TIER_ORDER`` (``trial``
+    accepted) but does NOT shape rows -- the ladder is intrinsically
+    perspective-independent (walks the static per-tier channel-cap
+    table). The ``perspective_tier`` envelope keeps every ``_at`` URL
+    uniform across the ``tiers_for_*`` family.
+
+    Missing / blank ``tier=`` -> ``400``. Unknown ``tier=`` -> ``404``
+    (``which=tier``). Missing / blank / non-int ``count=`` -> ``400``.
+    Never 5xxs: a resolver failure yields empty ``tiers`` list plus the
+    perspective + grace envelope so the pricing UI keeps rendering.
+
+    Response shape mirrors ``/api/entitlement/tiers-for-channel-count``
+    plus the perspective envelope (``perspective_tier``,
+    ``perspective_tier_label``, ``perspective_tier_rank``).
+    """
+    p = (request.args.get("tier") or "").strip().lower()
+    if not p:
+        return jsonify({"error": "missing tier"}), 400
+    raw = request.args.get("count")
+    if raw is None:
+        return jsonify({"error": "missing count"}), 400
+    raw_stripped = raw.strip()
+    if not raw_stripped:
+        return jsonify({"error": "missing count"}), 400
+    try:
+        n = int(raw_stripped)
+    except (TypeError, ValueError):
+        return jsonify({"error": "count must be an integer"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if p not in _ent._TIER_ORDER:
+            return (
+                jsonify({"error": "unknown tier", "which": "tier", "tier": p}),
+                404,
+            )
+        body = _ent.tiers_for_channel_count_at(p, n)
+        env = _perspective_envelope(_ent, p)
+        if body is None:
+            return jsonify({"tiers": [], **env})
+        return jsonify({**body, **env})
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_channel_count_at: error: %s", exc
+        )
+        return jsonify({"tiers": [], **_perspective_fallback(p)})
+
+
+@bp_entitlement.route("/api/entitlement/tiers-for-retention-window-at")
+def api_entitlement_tiers_for_retention_window_at():
+    """``GET /api/entitlement/tiers-for-retention-window-at?tier=<perspective>
+    &days=<int>`` -- hypothetical-perspective sibling of
+    ``/api/entitlement/tiers-for-retention-window``.
+
+    Pass ``days=unlimited`` (case-insensitive) for the unlimited-history
+    request; the helper only accepts tiers whose retention cap is
+    ``None`` (Enterprise on the current tier table). Perspective is
+    validated but does NOT shape rows.
+
+    Missing / blank ``tier=`` -> ``400``. Unknown ``tier=`` -> ``404``.
+    Missing ``days=`` -> ``400``. Blank / non-int / non-``unlimited``
+    value -> ``400``. Never 5xxs.
+
+    Response shape mirrors
+    ``/api/entitlement/tiers-for-retention-window`` plus the perspective
+    envelope.
+    """
+    p = (request.args.get("tier") or "").strip().lower()
+    if not p:
+        return jsonify({"error": "missing tier"}), 400
+    raw = request.args.get("days")
+    if raw is None:
+        return jsonify({"error": "missing days"}), 400
+    raw_stripped = raw.strip()
+    if not raw_stripped:
+        return jsonify({"error": "missing days"}), 400
+    unlimited = raw_stripped.lower() == "unlimited"
+    if unlimited:
+        parsed: int | None = None
+    else:
+        try:
+            parsed = int(raw_stripped)
+        except (TypeError, ValueError):
+            return (
+                jsonify(
+                    {"error": "days must be an integer or 'unlimited'"}
+                ),
+                400,
+            )
+    try:
+        from clawmetry import entitlements as _ent
+
+        if p not in _ent._TIER_ORDER:
+            return (
+                jsonify({"error": "unknown tier", "which": "tier", "tier": p}),
+                404,
+            )
+        body = _ent.tiers_for_retention_window_at(p, parsed)
+        env = _perspective_envelope(_ent, p)
+        if body is None:
+            return jsonify({"tiers": [], **env})
+        return jsonify({**body, **env})
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_retention_window_at: error: %s", exc
+        )
+        return jsonify({"tiers": [], **_perspective_fallback(p)})
+
+
+@bp_entitlement.route("/api/entitlement/tiers-for-node-count-at")
+def api_entitlement_tiers_for_node_count_at():
+    """``GET /api/entitlement/tiers-for-node-count-at?tier=<perspective>
+    &count=<int>`` -- hypothetical-perspective sibling of
+    ``/api/entitlement/tiers-for-node-count``.
+
+    Perspective is validated against ``_TIER_ORDER`` (``trial``
+    accepted) but does NOT shape rows.
+
+    Missing / blank ``tier=`` -> ``400``. Unknown ``tier=`` -> ``404``.
+    Missing / blank / non-int ``count=`` -> ``400``. Never 5xxs.
+
+    Response shape mirrors ``/api/entitlement/tiers-for-node-count``
+    plus the perspective envelope.
+    """
+    p = (request.args.get("tier") or "").strip().lower()
+    if not p:
+        return jsonify({"error": "missing tier"}), 400
+    raw = request.args.get("count")
+    if raw is None:
+        return jsonify({"error": "missing count"}), 400
+    raw_stripped = raw.strip()
+    if not raw_stripped:
+        return jsonify({"error": "missing count"}), 400
+    try:
+        n = int(raw_stripped)
+    except (TypeError, ValueError):
+        return jsonify({"error": "count must be an integer"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if p not in _ent._TIER_ORDER:
+            return (
+                jsonify({"error": "unknown tier", "which": "tier", "tier": p}),
+                404,
+            )
+        body = _ent.tiers_for_node_count_at(p, n)
+        env = _perspective_envelope(_ent, p)
+        if body is None:
+            return jsonify({"tiers": [], **env})
+        return jsonify({**body, **env})
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_node_count_at: error: %s", exc
+        )
+        return jsonify({"tiers": [], **_perspective_fallback(p)})
+
+
+@bp_entitlement.route("/api/entitlement/tiers-for-capacity-batch-at")
+def api_entitlement_tiers_for_capacity_batch_at():
+    """``GET /api/entitlement/tiers-for-capacity-batch-at?tier=<perspective>
+    &channels=N&retention_days=K&nodes=M`` -- hypothetical-perspective
+    sibling of ``/api/entitlement/tiers-for-capacity-batch``.
+
+    Fills the last ``_at`` slot in the ``/tiers-for-*`` family alongside
+    ``/tiers-for-at`` / ``/tiers-for-batch-at`` on the grant axes and the
+    three per-axis capacity ``/tiers-for-*-at`` endpoints, so a pricing-
+    matrix walkthrough can call every ``/tiers-for-*-at`` endpoint with
+    a uniform ``tier=<perspective>`` URL.
+
+    Perspective is validated against ``_TIER_ORDER`` (``trial``
+    accepted) but does NOT shape rows -- the batch is identical to
+    ``/tiers-for-capacity-batch`` regardless of perspective (pinned by
+    cross-endpoint parity test).
+
+    Missing / blank ``tier=`` -> ``400``. Unknown ``tier=`` -> ``404``.
+    At least one of ``channels=`` / ``retention_days=`` / ``nodes=``
+    must parse successfully; the endpoint 400s only when *no* axis
+    parsed (matches ``/tiers-for-capacity-batch``'s never-mis-route
+    posture). Never 5xxs.
+
+    ``retention_days`` treats ``None`` (parameter omitted /
+    unparseable) as *unset* -- NOT *unlimited* (matches
+    ``/min-tier-batch``'s posture). Asking for the unlimited-retention
+    ladder at a hypothetical perspective is the singular
+    ``/tiers-for-retention-window-at?days=unlimited`` call's job.
+
+    Response shape mirrors ``/api/entitlement/tiers-for-capacity-batch``
+    plus the perspective envelope.
+    """
+    p = (request.args.get("tier") or "").strip().lower()
+    if not p:
+        return jsonify({"error": "missing tier"}), 400
+    (_, channels_ok, channels_n, _) = _parse_capacity_arg("channels")
+    (_, retention_ok, retention_n, _) = _parse_capacity_arg("retention_days")
+    (_, nodes_ok, nodes_n, _) = _parse_capacity_arg("nodes")
+
+    if not channels_ok and not retention_ok and not nodes_ok:
+        return (
+            jsonify(
+                {
+                    "error": (
+                        "supply at least one of channels=<int>, "
+                        "retention_days=<int>, or nodes=<int>"
+                    )
+                }
+            ),
+            400,
+        )
+
+    try:
+        from clawmetry import entitlements as _ent
+
+        if p not in _ent._TIER_ORDER:
+            return (
+                jsonify({"error": "unknown tier", "which": "tier", "tier": p}),
+                404,
+            )
+        body = _ent.tiers_for_capacity_batch_at(
+            p,
+            channels=channels_n if channels_ok else None,
+            retention_days=retention_n if retention_ok else None,
+            nodes=nodes_n if nodes_ok else None,
+        )
+        env = _perspective_envelope(_ent, p)
+        if body is None:
+            body = {"channels": None, "retention_days": None, "nodes": None}
+        return jsonify(
+            {
+                "channels": body.get("channels"),
+                "retention_days": body.get("retention_days"),
+                "nodes": body.get("nodes"),
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_capacity_batch_at: error: %s", exc
+        )
+        return jsonify(
+            {
+                "channels": None,
+                "retention_days": None,
+                "nodes": None,
+                **_perspective_fallback(p),
+            }
+        )
