@@ -16405,3 +16405,92 @@ def tiers_for_node_count(count: int) -> dict | None:
             "entitlements: tiers_for_node_count failed: %s", exc
         )
         return None
+
+
+def tiers_for_capacity_batch(
+    *,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict:
+    """Per-item availability ladder for every supplied capacity axis in one
+    pass.
+
+    Per-item plural sibling of :func:`tiers_for_channel_count` /
+    :func:`tiers_for_retention_window` / :func:`tiers_for_node_count`.
+    Closes the capacity-axis symmetry gap in the ``tiers_for_*`` family:
+    :func:`tiers_for_batch` collapses to the two grant axes (features +
+    runtimes) and does not accept capacity args at all -- so a pricing-page
+    that wants the full "Fits in: <tier>, ..." ladder for a caller-supplied
+    ``(channels, retention_days, nodes)`` capacity bundle either had to
+    fan out three ``/tiers-for-<axis>`` calls or build the ladder client-
+    side from ``/min-tier-batch``. This helper delivers the same
+    per-axis row shape those three singulars return, on all three axes,
+    in one round-trip.
+
+    Envelope shape mirrors :func:`min_tier_batch` on the three capacity
+    axes exactly (same "None means unset, not unlimited" posture, same
+    per-axis ``None`` "not supplied" sentinel, same never-raise
+    contract)::
+
+        {
+          "channels":       <row> | None,
+          "retention_days": <row> | None,
+          "nodes":          <row> | None,
+        }
+
+    Each ``<row>`` matches the singular ``tiers_for_<axis>`` helper
+    byte-for-byte (``item`` / ``kind`` / ``label`` / ``free`` /
+    ``min_tier`` / ``min_tier_label`` / ``min_tier_rank`` / ``tiers``)
+    so callers can pass any row through the existing ``tiers_for_*``
+    rendering components without reshaping. Per-row parity with each
+    singular helper is pinned in the test suite so the batch cannot
+    silently drift from the scalar.
+
+    Critically, ``retention_days=None`` here means *unset* -- NOT
+    *unlimited* (matches :func:`min_tier_batch` / :func:`lock_reasons_batch`
+    on the same axis). Asking for the unlimited-retention ladder is the
+    singular :func:`tiers_for_retention_window` (``days=None``) call's
+    job -- it would render an "Enterprise-only" row here otherwise and
+    a caller supplying every other axis but leaving retention off would
+    get a mis-routed Enterprise row instead of an omitted one.
+
+    A blank or non-int value on any axis short-circuits that axis to
+    ``None`` (matches the singular helpers' ``None``-on-bad-input
+    posture rather than raising -- the caller opts in per-axis by
+    supplying a value).
+
+    Decoupled from the resolved entitlement (walks the static per-tier
+    caps via the singular ``tiers_for_*`` helpers), so grace vs enforce
+    yields byte-identical rows -- pinned in the test suite via a grace
+    / enforce reload roundtrip. Never raises: if a resolver fails the
+    helper returns the all-``None`` envelope shape so the pricing UI
+    keeps rendering instead of 500-ing.
+    """
+    try:
+        return {
+            "channels": (
+                tiers_for_channel_count(channels)
+                if channels is not None
+                else None
+            ),
+            "retention_days": (
+                tiers_for_retention_window(retention_days)
+                if retention_days is not None
+                else None
+            ),
+            "nodes": (
+                tiers_for_node_count(nodes)
+                if nodes is not None
+                else None
+            ),
+        }
+    except Exception as exc:
+        logger.warning(
+            "entitlements: tiers_for_capacity_batch failed: %s", exc
+        )
+        return {
+            "channels": None,
+            "retention_days": None,
+            "nodes": None,
+        }
