@@ -3403,7 +3403,7 @@ def _local_ingest_sessions_batch(rows: list, node_id: str) -> None:
         meta_extras = {
             k: v for k, v in s.items()
             if k in ("channel", "chat_type", "subject", "recent_model",
-                     "session_key", "end_reason")
+                     "session_key", "end_reason", "runtime", "thinking_level")
             and v
         }
         store.ingest_session({
@@ -10656,6 +10656,8 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                 # pick the dominant one as the primary.
                 model_tokens: dict = {}
                 last_seen_model = ""
+                last_seen_runtime = ""
+                last_seen_thinking_level = ""
                 # event_count (= JSONL line count) is the "messages" badge
                 # the Embodied tab renders. The cloud Postgres copy of the
                 # sessions table was previously plaintext-blank for this
@@ -10690,6 +10692,12 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                         etype = ev.get("type", "")
                         if etype == "model_change" and ev.get("modelId"):
                             last_seen_model = ev["modelId"]
+                            _rt = ev.get("runtime") or ev.get("runtimeId")
+                            if _rt:
+                                last_seen_runtime = _rt
+                            _tl = ev.get("thinkingLevel") or ev.get("thinking_level")
+                            if _tl:
+                                last_seen_thinking_level = _tl
                         elif etype == "session":
                             if ev.get("label"):
                                 label = ev["label"]
@@ -10738,6 +10746,8 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                         "end_reason": end_reason,
                         "model": model,
                         "recent_model": last_seen_model or model,
+                        "runtime": last_seen_runtime,
+                        "thinking_level": last_seen_thinking_level,
                         "total_tokens": total_tokens,
                         "total_cost": total_cost,
                         "started_at": started_at,
