@@ -19975,3 +19975,108 @@ def api_entitlement_tiers_for_node_count():
                 "enforced": False,
             }
         )
+
+
+@bp_entitlement.route("/api/entitlement/tiers-for-capacity-batch")
+def api_entitlement_tiers_for_capacity_batch():
+    """``GET /api/entitlement/tiers-for-capacity-batch?channels=N
+    &retention_days=K&nodes=M`` -- per-item availability ladder for every
+    supplied capacity axis in one pass.
+
+    Per-item plural sibling of the three ``/tiers-for-<axis>`` endpoints.
+    Closes the capacity-axis symmetry gap in the ``/tiers-for-*`` family:
+    ``/tiers-for-batch`` collapses to the two grant axes (features +
+    runtimes) and does not accept capacity args at all -- so a pricing-
+    page that wants the full "Fits in: <tier>, ..." ladder for a caller-
+    supplied ``(channels, retention_days, nodes)`` capacity bundle
+    either had to fan out three ``/tiers-for-<axis>`` calls or build the
+    ladder client-side from ``/min-tier-batch``. This endpoint delivers
+    the same per-axis row shape those three singulars return, on all
+    three axes, off ONE round-trip.
+
+    At least one of ``channels=`` / ``retention_days=`` / ``nodes=``
+    must be supplied (non-empty / parseable after normalisation). A
+    blank or non-int value on an individual axis is treated as "not
+    supplied" for that axis (matches
+    ``/api/entitlement/min-tier-batch``'s never-crash posture rather
+    than mis-routing a typo to Enterprise); the endpoint 400s only when
+    *no* axis parsed successfully. Never 5xxs: the grace-shape envelope
+    is returned on any resolver failure.
+
+    Response shape::
+
+        {
+          "channels":       <row> | None,
+          "retention_days": <row> | None,
+          "nodes":          <row> | None,
+          "current_tier":       "...",
+          "current_tier_rank":  <int>,
+          "grace":              <bool>,
+          "enforced":           <bool>,
+        }
+
+    Each ``<row>`` matches the singular
+    ``/tiers-for-channel-count?count=`` /
+    ``/tiers-for-retention-window?days=`` /
+    ``/tiers-for-node-count?count=`` endpoint byte-for-byte (``item`` /
+    ``kind`` / ``label`` / ``free`` / ``min_tier`` / ``min_tier_label``
+    / ``min_tier_rank`` / ``tiers``) so a caller can pass any row
+    through the existing ``tiers_for_*`` rendering components without
+    reshaping. Per-row parity with the singular endpoints is pinned in
+    the test suite so the batch cannot silently drift from the scalars.
+
+    Critically, ``retention_days`` here treats ``None`` (parameter
+    omitted / unparseable) as *unset* -- NOT *unlimited* (matches
+    ``/min-tier-batch``'s posture on the same axis). Asking for the
+    unlimited-retention ladder is the singular
+    ``/tiers-for-retention-window?days=unlimited`` call's job.
+    """
+    (_, channels_ok, channels_n, _) = _parse_capacity_arg("channels")
+    (_, retention_ok, retention_n, _) = _parse_capacity_arg("retention_days")
+    (_, nodes_ok, nodes_n, _) = _parse_capacity_arg("nodes")
+
+    if not channels_ok and not retention_ok and not nodes_ok:
+        return (
+            jsonify(
+                {
+                    "error": (
+                        "supply at least one of channels=<int>, "
+                        "retention_days=<int>, or nodes=<int>"
+                    )
+                }
+            ),
+            400,
+        )
+
+    try:
+        from clawmetry import entitlements as _ent
+
+        body = _ent.tiers_for_capacity_batch(
+            channels=channels_n if channels_ok else None,
+            retention_days=retention_n if retention_ok else None,
+            nodes=nodes_n if nodes_ok else None,
+        )
+        env = _resolver_envelope(_ent)
+        return jsonify(
+            {
+                "channels": body.get("channels"),
+                "retention_days": body.get("retention_days"),
+                "nodes": body.get("nodes"),
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_capacity_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "channels": None,
+                "retention_days": None,
+                "nodes": None,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
