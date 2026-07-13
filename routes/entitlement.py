@@ -19529,3 +19529,193 @@ def api_entitlement_previous_tier_runtime_catalog_at_batch():
                 "enforced": False,
             }
         )
+
+
+# ── capacity-axis tiers-for endpoints ────────────────────────────────────────
+#
+# Inverse siblings of ``/api/entitlement/required-tier?channels=`` /
+# ``retention_days=`` / ``nodes=``. Where ``required-tier`` returns the
+# cheapest tier that admits a capacity value (one id used by the upgrade-CTA),
+# these return the full "Fits in: ..." availability ladder a pricing-page row
+# or capacity tooltip needs. Same relationship the existing
+# ``/api/entitlement/tiers-for?feature=|runtime=`` endpoint has to
+# ``/api/entitlement/required-tier?feature=|runtime=``, extended to the three
+# capacity axes.
+
+
+def _resolver_envelope(_ent) -> dict:
+    ent = _ent.get_entitlement()
+    return {
+        "current_tier": ent.tier,
+        "current_tier_rank": _ent.tier_rank(ent.tier),
+        "grace": bool(ent.grace),
+        "enforced": _ent.is_enforced(),
+    }
+
+
+@bp_entitlement.route("/api/entitlement/tiers-for-channel-count")
+def api_entitlement_tiers_for_channel_count():
+    """``GET /api/entitlement/tiers-for-channel-count?count=<int>`` --
+    inverse of ``/api/entitlement/required-tier?channels=<int>``: returns
+    the full ladder of tiers that admit ``count`` configured channel
+    adapters, not just the cheapest one. The "Fits in: Starter, Cloud Pro,
+    Self-hosted Pro, Trial, Enterprise" availability list a pricing-page
+    row or capacity tooltip needs.
+
+    ``count=`` is required. Missing key -> ``400``. Non-int / blank value
+    -> ``400``. Never 5xxs: a resolver failure yields empty ``tiers`` list
+    and the grace-shape envelope so the pricing UI keeps rendering.
+
+    Response shape mirrors ``/api/entitlement/tiers-for`` exactly plus the
+    resolver envelope::
+
+        {
+          "item":              <int>,
+          "kind":              "channel_count",
+          "label":             "5 channels",
+          "free":              <bool>,
+          "min_tier":          "<tier id>" | null,
+          "min_tier_label":    "<label>" | null,
+          "min_tier_rank":     <int> | null,
+          "tiers":             [<row>, ...],
+          "current_tier":      "...",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+    """
+    raw = request.args.get("count")
+    if raw is None:
+        return jsonify({"error": "missing count"}), 400
+    raw_stripped = raw.strip()
+    if not raw_stripped:
+        return jsonify({"error": "missing count"}), 400
+    try:
+        n = int(raw_stripped)
+    except (TypeError, ValueError):
+        return jsonify({"error": "count must be an integer"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        body = _ent.tiers_for_channel_count(n)
+        env = _resolver_envelope(_ent)
+        if body is None:
+            return jsonify({"tiers": [], **env})
+        return jsonify({**body, **env})
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_channel_count: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/tiers-for-retention-window")
+def api_entitlement_tiers_for_retention_window():
+    """``GET /api/entitlement/tiers-for-retention-window?days=<int>`` --
+    inverse of ``/api/entitlement/required-tier?retention_days=<int>``:
+    returns the full ladder of tiers admitting a ``days`` history window.
+
+    ``days=`` is required. Pass ``days=unlimited`` (case-insensitive) for
+    the unlimited-history request; the helper only accepts tiers whose
+    retention cap is ``None`` (Enterprise on the current tier table).
+    Missing key -> ``400``. Blank / non-int / non-``unlimited`` value ->
+    ``400``. Never 5xxs.
+
+    Response shape mirrors ``/api/entitlement/tiers-for-channel-count`` --
+    ``item`` is the parsed ``days`` value, or ``null`` for the unlimited
+    request; ``kind`` is ``"retention_window"``; ``label`` is ``"30
+    days"`` / ``"unlimited"``.
+    """
+    raw = request.args.get("days")
+    if raw is None:
+        return jsonify({"error": "missing days"}), 400
+    raw_stripped = raw.strip()
+    if not raw_stripped:
+        return jsonify({"error": "missing days"}), 400
+    unlimited = raw_stripped.lower() == "unlimited"
+    if unlimited:
+        parsed: int | None = None
+    else:
+        try:
+            parsed = int(raw_stripped)
+        except (TypeError, ValueError):
+            return (
+                jsonify(
+                    {"error": "days must be an integer or 'unlimited'"}
+                ),
+                400,
+            )
+    try:
+        from clawmetry import entitlements as _ent
+
+        body = _ent.tiers_for_retention_window(parsed)
+        env = _resolver_envelope(_ent)
+        if body is None:
+            return jsonify({"tiers": [], **env})
+        return jsonify({**body, **env})
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_retention_window: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/tiers-for-node-count")
+def api_entitlement_tiers_for_node_count():
+    """``GET /api/entitlement/tiers-for-node-count?count=<int>`` --
+    inverse of ``/api/entitlement/required-tier?nodes=<int>``: returns the
+    full ladder of tiers admitting ``count`` registered nodes.
+
+    ``count=`` is required. Missing key -> ``400``. Non-int / blank value
+    -> ``400``. Never 5xxs.
+
+    Response shape mirrors ``/api/entitlement/tiers-for-channel-count`` --
+    ``kind`` is ``"node_count"``; ``label`` is ``"4 nodes"``.
+    """
+    raw = request.args.get("count")
+    if raw is None:
+        return jsonify({"error": "missing count"}), 400
+    raw_stripped = raw.strip()
+    if not raw_stripped:
+        return jsonify({"error": "missing count"}), 400
+    try:
+        n = int(raw_stripped)
+    except (TypeError, ValueError):
+        return jsonify({"error": "count must be an integer"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        body = _ent.tiers_for_node_count(n)
+        env = _resolver_envelope(_ent)
+        if body is None:
+            return jsonify({"tiers": [], **env})
+        return jsonify({**body, **env})
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_node_count: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
