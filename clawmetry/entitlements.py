@@ -4832,6 +4832,123 @@ def tiers_for_batch() -> dict:
         return {"features": [], "runtimes": []}
 
 
+def tiers_for_feature_at(
+    perspective_tier: str, feature: str
+) -> dict | None:
+    """Hypothetical-perspective sibling of :func:`tiers_for_feature`:
+    full availability ladder for ``feature``, scoped by a caller-
+    supplied ``perspective_tier``.
+
+    Same relationship to :func:`tiers_for_feature` that
+    :func:`min_tier_for_all_at` / :func:`affordable_tiers_at` /
+    :func:`min_tier_batch_at` (when landed) have to their current-
+    perspective siblings: the ``perspective_tier`` argument tells the
+    helper which resolver / plan the caller is answering from so an
+    ``_at`` endpoint URL can be uniform across the whole ``_at`` family
+    (every ``_at`` sibling accepts a ``tier=<perspective>`` query arg),
+    even though the underlying ladder is inherently perspective-
+    independent -- :func:`tiers_for_feature` walks the static
+    :data:`_TIER_ORDER` / :data:`_TIER_FEATURES` tables, so the answer
+    does not depend on where the caller is standing.
+
+    Perspective is validated against :data:`_TIER_ORDER` (including
+    :data:`TIER_TRIAL`) but does NOT shape rows -- the ladder is
+    anchored to the requested feature, exactly the way
+    :func:`min_tier_for_all_at` anchors to its constraint bundle. A
+    parity test pins ``tiers_for_feature_at(p, f) ==
+    tiers_for_feature(f)`` for every ``p`` in :data:`_TIER_ORDER` so
+    the ``_at`` prefix cannot silently drift into shaping rows.
+
+    Row shape and ordering mirror :func:`tiers_for_feature` exactly
+    (``item`` / ``kind`` / ``label`` / ``free`` / ``min_tier`` /
+    ``min_tier_label`` / ``min_tier_rank`` / ``tiers``) so callers can
+    pass a row to existing components without reshaping.
+
+    Returns ``None`` for empty / unknown ``perspective_tier`` (caller
+    renders "unknown tier" / 404) and for empty / unknown feature ids.
+    Decoupled from the resolved entitlement (delegates to
+    :func:`tiers_for_feature`), so grace vs enforce yields byte-
+    identical rows. Never raises.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        return tiers_for_feature(feature)
+    except Exception as exc:
+        logger.warning("entitlements: tiers_for_feature_at failed: %s", exc)
+        return None
+
+
+def tiers_for_runtime_at(
+    perspective_tier: str, runtime: str
+) -> dict | None:
+    """Hypothetical-perspective sibling of :func:`tiers_for_runtime`:
+    full availability ladder for ``runtime``, scoped by a caller-
+    supplied ``perspective_tier``.
+
+    Runtime-axis twin of :func:`tiers_for_feature_at`. Perspective is
+    validated against :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`)
+    but does NOT shape rows. Row shape mirrors
+    :func:`tiers_for_runtime` exactly.
+
+    Accepts canonical runtime ids (``claude_code``) or any registered
+    alias (``claude-code``) -- delegates to :func:`tiers_for_runtime`
+    which does the canonicalisation. Returns ``None`` for empty /
+    unknown perspective, empty / unknown runtime ids. Never raises.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        return tiers_for_runtime(runtime)
+    except Exception as exc:
+        logger.warning("entitlements: tiers_for_runtime_at failed: %s", exc)
+        return None
+
+
+def tiers_for_batch_at(perspective_tier: str) -> dict | None:
+    """Hypothetical-perspective sibling of :func:`tiers_for_batch`: full
+    availability ladder for every known feature *and* runtime in one
+    pass, scoped by a caller-supplied ``perspective_tier``.
+
+    Fills the ``_at`` slot on the batch tiers-for axis alongside
+    :func:`tiers_for_feature_at` / :func:`tiers_for_runtime_at`, so a
+    pricing-matrix walkthrough can call ``X_at(perspective, ...)``
+    uniformly across every ``_at`` batch sibling.
+
+    Perspective is validated against :data:`_TIER_ORDER` (including
+    :data:`TIER_TRIAL`) but does NOT shape rows. Row shape and ordering
+    mirror :func:`tiers_for_batch` exactly (``features`` / ``runtimes``
+    lists of the same row shape as :func:`tiers_for_feature` /
+    :func:`tiers_for_runtime`). A parity test pins
+    ``tiers_for_batch_at(p) == tiers_for_batch()`` for every ``p`` in
+    :data:`_TIER_ORDER`.
+
+    Returns ``None`` for empty / unknown ``perspective_tier`` (caller
+    renders "unknown tier" / 404). Never raises: a delegate failure
+    surfaces as an empty ``{"features": [], "runtimes": []}`` batch
+    (same posture as :func:`tiers_for_batch`).
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        return tiers_for_batch()
+    except Exception as exc:
+        logger.warning("entitlements: tiers_for_batch_at failed: %s", exc)
+        return {"features": [], "runtimes": []}
+
+
 def min_tier_for_channel_count(count: int) -> str | None:
     """Return the cheapest *purchasable* tier id whose channel-adapter cap fits
     ``count`` configured channels. Closes the symmetry gap with
