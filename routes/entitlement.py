@@ -153,6 +153,16 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                          Self-hosted Pro, Trial, Enterprise"
                                          availability list a pricing-page
                                          row or feature tooltip needs).
+  GET  /api/entitlement/tiers-for-at  -- hypothetical-perspective sibling of
+                                         ``/tiers-for``: same ladder scoped
+                                         by a caller-supplied
+                                         ``tier=<perspective>`` so an ``_at``
+                                         walkthrough URL is uniform across
+                                         every ``_at`` sibling.
+  GET  /api/entitlement/tiers-for-batch-at -- hypothetical-perspective sibling
+                                         of ``/tiers-for-batch``: every
+                                         known feature + runtime in one pass
+                                         scoped by ``tier=<perspective>``.
   GET  /api/runtimes                  -- the full runtime catalog.
   GET  /api/tiers                     -- the full tier ladder with per-tier metadata.
   GET  /api/entitlement/feature-catalog  -- bare sibling of
@@ -6229,6 +6239,158 @@ def api_entitlement_tiers_for_batch():
             {
                 "features": [],
                 "runtimes": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/tiers-for-at")
+def api_entitlement_tiers_for_at():
+    """``GET /api/entitlement/tiers-for-at?tier=<perspective>&feature=<id>``
+    (or ``&runtime=<id>``) -- hypothetical-perspective sibling of
+    ``/api/entitlement/tiers-for``: returns the full ladder of tiers
+    that grant the named feature or runtime, scoped by a caller-supplied
+    ``perspective_tier``.
+
+    Perspective is validated against ``_TIER_ORDER`` (``trial``
+    accepted) but does NOT shape rows -- the ladder is intrinsically
+    perspective-independent (walks static per-tier tables). The
+    ``perspective_tier`` envelope lets an ``_at`` walkthrough URL be
+    uniform across every ``_at`` sibling (``min_tier_batch_at``,
+    ``affordable_tiers_at``, ``tiers_for_*_at``, ...).
+
+    Missing / blank ``tier=`` -> ``400``. Unknown ``tier=`` -> ``404``
+    (``which=tier``). Exactly one of ``feature=`` or ``runtime=`` must
+    be supplied -- missing both is ``400``, both at once is ``400``.
+    Unknown feature / runtime id is ``404``. Never 5xxs.
+
+    Response shape mirrors ``/api/entitlement/tiers-for`` (``item``,
+    ``kind``, ``label``, ``free``, ``min_tier``, ``min_tier_label``,
+    ``min_tier_rank``, ``tiers``) plus a perspective envelope
+    (``perspective_tier``, ``perspective_tier_label``,
+    ``perspective_tier_rank``) and the resolver envelope
+    (``current_tier``, ``current_tier_rank``, ``grace``, ``enforced``).
+    """
+    p = (request.args.get("tier") or "").strip().lower()
+    if not p:
+        return jsonify({"error": "missing tier"}), 400
+    feat = (request.args.get("feature") or "").strip().lower()
+    rt = (request.args.get("runtime") or "").strip().lower()
+    if not feat and not rt:
+        return jsonify({"error": "missing feature or runtime"}), 400
+    if feat and rt:
+        return jsonify(
+            {"error": "pass feature OR runtime, not both"}
+        ), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if p not in _ent._TIER_ORDER:
+            return jsonify({"error": "unknown tier", "which": "tier", "tier": p}), 404
+        if feat:
+            body = _ent.tiers_for_feature_at(p, feat)
+            kind = "feature"
+            item = feat
+        else:
+            body = _ent.tiers_for_runtime_at(p, rt)
+            kind = "runtime"
+            item = rt
+        if body is None:
+            return jsonify({"error": f"unknown {kind}", kind: item}), 404
+        ent = _ent.get_entitlement()
+        envelope = dict(body)
+        envelope["perspective_tier"] = p
+        envelope["perspective_tier_label"] = _ent.tier_label(p)
+        envelope["perspective_tier_rank"] = _ent.tier_rank(p)
+        envelope["current_tier"] = ent.tier
+        envelope["current_tier_rank"] = _ent.tier_rank(ent.tier)
+        envelope["grace"] = bool(ent.grace)
+        envelope["enforced"] = _ent.is_enforced()
+        return jsonify(envelope)
+    except Exception as exc:
+        logger.warning("api_entitlement_tiers_for_at: error: %s", exc)
+        return jsonify({"error": "tiers-for-at failed"}), 500
+
+
+@bp_entitlement.route("/api/entitlement/tiers-for-batch-at")
+def api_entitlement_tiers_for_batch_at():
+    """``GET /api/entitlement/tiers-for-batch-at?tier=<perspective>`` --
+    hypothetical-perspective sibling of
+    ``/api/entitlement/tiers-for-batch``: returns the full availability
+    ladder for every known feature *and* runtime in one pass, scoped by
+    a caller-supplied ``perspective_tier``.
+
+    Fills the ``_at`` slot on the batch tiers-for axis alongside
+    ``/tiers-for-at`` so a pricing-matrix walkthrough can call every
+    ``_at`` sibling with a uniform ``tier=<perspective>`` URL.
+    Perspective is validated but does NOT shape rows -- the batch is
+    identical to ``/tiers-for-batch`` regardless of perspective
+    (pinned by cross-endpoint parity test).
+
+    Missing / blank ``tier=`` -> ``400``. Unknown ``tier=`` -> ``404``.
+    Never 5xxs: a resolver failure yields empty ``features`` /
+    ``runtimes`` lists plus the perspective + grace envelope so the
+    pricing UI keeps rendering.
+
+    Response shape::
+
+        {
+          "features":               [<row>, ...],
+          "runtimes":               [<row>, ...],
+          "perspective_tier":       "...",
+          "perspective_tier_label": "...",
+          "perspective_tier_rank":  <int>,
+          "current_tier":           "...",
+          "current_tier_rank":      <int>,
+          "grace":                  <bool>,
+          "enforced":               <bool>,
+        }
+    """
+    p = (request.args.get("tier") or "").strip().lower()
+    if not p:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if p not in _ent._TIER_ORDER:
+            return jsonify({"error": "unknown tier", "which": "tier", "tier": p}), 404
+        body = _ent.tiers_for_batch_at(p)
+        if body is None:
+            body = {"features": [], "runtimes": []}
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "features": body.get("features", []),
+                "runtimes": body.get("runtimes", []),
+                "perspective_tier": p,
+                "perspective_tier_label": _ent.tier_label(p),
+                "perspective_tier_rank": _ent.tier_rank(p),
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_tiers_for_batch_at: error: %s", exc)
+        try:
+            from clawmetry import entitlements as _ent
+
+            label = _ent.tier_label(p)
+            rank = _ent.tier_rank(p)
+        except Exception:
+            label = p
+            rank = 0
+        return jsonify(
+            {
+                "features": [],
+                "runtimes": [],
+                "perspective_tier": p,
+                "perspective_tier_label": label,
+                "perspective_tier_rank": rank,
                 "current_tier": "oss",
                 "current_tier_rank": 0,
                 "grace": True,
