@@ -10235,7 +10235,7 @@ function renderCronList(jobs) {
       html += '</span>';
     }
     html += '</div>';
-    html += '<div class="cron-schedule">' + formatSchedule(j.schedule) + '</div>';
+    html += '<div class="cron-schedule">' + formatSchedule(j.schedule) + (j.model ? ' &middot; <span style="font-size:11px;opacity:.75;" title="Per-job agent-turn model">' + escHtml(j.model) + '</span>' : '') + '</div>';
     html += '<div class="cron-meta">';
     if (j.state && j.state.lastRunAtMs) html += 'Last: ' + timeAgo(j.state.lastRunAtMs);
     // Prefer the agent's reported next-run time; fall back to a client-side
@@ -10825,7 +10825,7 @@ function cronEdit(jobId) {
   }
   document.getElementById('cron-edit-prompt').value = (job.payload && (job.payload.text || job.payload.message || job.payload.prompt)) || (job.config && job.config.prompt) || '';
   document.getElementById('cron-edit-channel').value = (job.payload && job.payload.channel) || (job.config && job.config.channel) || '';
-  document.getElementById('cron-edit-model').value = (job.payload && job.payload.model) || (job.config && job.config.model) || '';
+  document.getElementById('cron-edit-model').value = (job.payload && job.payload.model) || (job.config && job.config.model) || job.model || '';
   document.getElementById('cron-edit-enabled').checked = job.enabled !== false;
   var modal = document.getElementById('cron-edit-modal');
   modal.style.display = 'flex';
