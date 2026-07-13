@@ -5601,6 +5601,207 @@ def min_tier_batch_at(
         return None
 
 
+def _affordable_row(key, kind: str) -> dict:
+    """Per-item full-list qualifying-tier row for
+    :func:`affordable_tiers_batch`.
+
+    Row-shape sibling of :func:`_min_tier_row`: mirrors the same
+    ``key`` + ``kind`` + normalised value contract and carries the
+    same floor scalar (``min_tier`` / ``free`` / label / rank), but
+    additionally carries the **full ordered list** of qualifying
+    tiers (``tiers``) so a pricing-matrix UI can render "each row's
+    cheapest qualifying tier -- and every tier above that also
+    qualifies" off ONE batch call. Same relationship to
+    :func:`_min_tier_row` that :func:`affordable_tiers` has to
+    :func:`min_tier_for_all` at the aggregate level.
+
+    Kind semantics mirror :func:`_min_tier_row` exactly:
+
+    * ``"feature"`` / ``"runtime"`` -- ``key`` is a normalised id
+      (whitespace stripped, lowercased; runtimes additionally
+      canonicalised via :func:`canonical_runtime` so
+      ``claude-code`` -> ``claude_code``). Unknown ids get
+      ``min_tier=None`` / ``free=False`` / ``min_tier_label=None`` /
+      ``min_tier_rank=-1`` / ``tiers=[]`` -- the caller distinguishes
+      "unknown" from "free" via the ``free`` flag.
+    * ``"channels"`` / ``"retention_days"`` / ``"nodes"`` -- ``key``
+      is int-parseable; non-int input collapses to the same all-None
+      shape with ``tiers=[]``. Retention passes the parsed int
+      straight through, so ``retention_days=<int>`` is treated as a
+      finite request, not the ``None`` unlimited sentinel (matches
+      every other 5-axis batch: this helper's ``None`` means "not
+      supplied").
+
+    ``tiers`` rows carry ``tier`` / ``tier_label`` / ``tier_rank`` /
+    ``is_minimum`` -- byte-identical to :func:`affordable_tiers` rows
+    for the single-axis single-item case, so a pricing UI can share
+    row renderers between the aggregate ``/affordable-tiers`` surface
+    and the per-item ``/affordable-tiers-batch`` surface.
+
+    Floor scalar (``min_tier`` / ``free`` / label / rank) is composed
+    from :func:`_min_tier_row` so the row byte-equals the matching
+    :func:`min_tier_batch` row on those fields -- a caller can drop
+    the ``tiers`` list off any row and get the exact
+    :func:`min_tier_batch` shape back. This keeps the two batches
+    internally consistent even for free items where alphabetical
+    tie-breaking among rank-0 tiers would otherwise land
+    :func:`affordable_tiers`' first row on ``cloud_free`` while
+    :func:`min_tier_for_feature` returns ``oss``.
+
+    Never raises: any resolver failure short-circuits to the all-
+    ``None`` shape (with ``tiers=[]``) so the caller keeps rendering.
+    """
+    base = _min_tier_row(key, kind)
+    try:
+        if kind == "feature":
+            fid = base["key"]
+            if fid in ALL_FEATURES:
+                tiers = affordable_tiers(features=[fid]) or []
+            else:
+                tiers = []
+        elif kind == "runtime":
+            rt = base["key"]
+            if rt in ALL_RUNTIMES:
+                tiers = affordable_tiers(runtimes=[rt]) or []
+            else:
+                tiers = []
+        elif kind in ("channels", "retention_days", "nodes"):
+            try:
+                n = int(key)
+            except (TypeError, ValueError):
+                tiers = []
+            else:
+                if kind == "channels":
+                    tiers = affordable_tiers(channels=n) or []
+                elif kind == "retention_days":
+                    tiers = affordable_tiers(retention_days=n) or []
+                else:
+                    tiers = affordable_tiers(nodes=n) or []
+        else:
+            tiers = []
+        out = dict(base)
+        out["tiers"] = tiers
+        return out
+    except Exception:
+        out = dict(base)
+        out["tiers"] = []
+        return out
+
+
+def affordable_tiers_batch(
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict:
+    """Per-item full ordered list of qualifying tiers for every supplied
+    item across all five capacity axes in one pass.
+
+    Per-item plural sibling of :func:`affordable_tiers` (which
+    aggregates across a whole constraint bundle and returns ONE
+    ordered list). Same relationship it has to :func:`affordable_tiers`
+    that :func:`min_tier_batch` has to :func:`min_tier_for_all`: the
+    aggregate helper collapses the answer to a single bundle-wide
+    view; the batch preserves the per-item detail so a pricing-matrix
+    UI ("show me each requested feature + runtime + capacity row with
+    its individual cheapest tier AND every tier above that also
+    qualifies") renders off ONE round-trip instead of N calls to
+    :func:`affordable_tiers`.
+
+    Envelope shape mirrors :func:`min_tier_batch` / :func:`lock_reasons_batch`
+    exactly (same five-axis kwargs, same per-axis ``None`` "not
+    supplied" sentinel, same never-raise contract)::
+
+        {
+          "features":       [<row>, ...],
+          "runtimes":       [<row>, ...],
+          "channels":       <row> | None,
+          "retention_days": <row> | None,
+          "nodes":          <row> | None,
+        }
+
+    Each ``<row>`` carries ``key``, ``kind``, ``free`` (True iff
+    ``min_tier == TIER_OSS``), ``min_tier`` (``None`` for unknown /
+    unparseable input), ``min_tier_label``, ``min_tier_rank``
+    (``-1`` when ``min_tier`` is ``None``), and ``tiers`` -- the
+    full ordered list of qualifying tiers for that single item, with
+    each entry carrying ``tier`` / ``tier_label`` / ``tier_rank`` /
+    ``is_minimum``. ``tiers`` is ``[]`` (not ``None``) for unknown /
+    unparseable items, matching the never-crash posture of
+    :func:`_min_tier_row`.
+
+    Per-row parity with :func:`affordable_tiers` is pinned in the
+    test suite: for every feature id ``f`` in :data:`ALL_FEATURES`,
+    ``affordable_tiers_batch(features=[f])['features'][0]['tiers']``
+    byte-equals ``affordable_tiers(features=[f])``; ditto for every id
+    in :data:`ALL_RUNTIMES` and for the three capacity axes against
+    their singular ``affordable_tiers(<axis>=n)`` call.
+
+    Feature ids are normalised via :func:`_normalise_csv` (whitespace
+    stripped, lowercased, duplicates dropped while preserving first-
+    seen order). Runtime ids additionally canonicalise via
+    :func:`canonical_runtime` so aliases (``claude-code`` ->
+    ``claude_code``) resolve the same way they do on the singular
+    ``/api/entitlement/affordable-tiers?runtimes=`` endpoint;
+    duplicates that collapse after canonicalisation only contribute
+    one row.
+
+    Critically, ``retention_days=None`` here means *unset* -- NOT
+    *unlimited*. Same posture as :func:`min_tier_batch` /
+    :func:`lock_reasons_batch`: asking for the unlimited-retention
+    tier is the singular :func:`min_tier_for_retention_window`
+    (``days=None``) call's job and would mis-route the batch to
+    Enterprise otherwise.
+
+    Decoupled from the resolved entitlement (delegates to
+    :func:`affordable_tiers`, which walks the static per-tier maps),
+    so grace vs enforce yields byte-identical rows -- pinned in the
+    test suite via a grace / enforce reload roundtrip. Never raises:
+    a per-row failure short-circuits to the all-``None`` row shape
+    with ``tiers=[]`` so the pricing UI keeps rendering.
+    """
+    try:
+        feats = _normalise_csv(features)
+        raw_rts = _normalise_csv(runtimes)
+        seen: set[str] = set()
+        rt_rows: list[dict] = []
+        for raw in raw_rts:
+            rt = canonical_runtime(raw)
+            key = rt if rt else raw
+            if key in seen:
+                continue
+            seen.add(key)
+            rt_rows.append(_affordable_row(raw, "runtime"))
+        return {
+            "features": [_affordable_row(f, "feature") for f in feats],
+            "runtimes": rt_rows,
+            "channels": (
+                _affordable_row(channels, "channels")
+                if channels is not None
+                else None
+            ),
+            "retention_days": (
+                _affordable_row(retention_days, "retention_days")
+                if retention_days is not None
+                else None
+            ),
+            "nodes": (
+                _affordable_row(nodes, "nodes") if nodes is not None else None
+            ),
+        }
+    except Exception as exc:
+        logger.warning("entitlements: affordable_tiers_batch failed: %s", exc)
+        return {
+            "features": [],
+            "runtimes": [],
+            "channels": None,
+            "retention_days": None,
+            "nodes": None,
+        }
+
+
 def lock_reason(item: str, *, kind: str | None = None) -> str | None:
     try:
         return get_entitlement().lock_reason(item, kind=kind)
