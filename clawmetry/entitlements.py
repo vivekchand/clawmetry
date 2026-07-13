@@ -5518,6 +5518,89 @@ def min_tier_batch(
         }
 
 
+def min_tier_batch_at(
+    perspective_tier: str,
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict | None:
+    """Hypothetical-perspective sibling of :func:`min_tier_batch`: per-item
+    cheapest qualifying tier for every supplied item across all five
+    capacity axes, scoped by a caller-supplied ``perspective_tier``.
+
+    Same relationship to :func:`min_tier_batch` that :func:`min_tier_for_all_at`
+    has to :func:`min_tier_for_all` and :func:`affordable_tiers_at` has to
+    :func:`affordable_tiers`: the ``perspective_tier`` argument tells the
+    helper which resolver / plan the caller is answering from so an ``_at``
+    endpoint URL can be uniform across the whole ``_at`` family (every
+    ``_at`` sibling accepts a ``tier=<perspective>`` query arg), even though
+    the underlying answer is inherently perspective-independent --
+    :func:`min_tier_batch` walks the static per-tier caps via the singular
+    ``min_tier_for_*`` helpers, so the per-row body does not depend on
+    where the caller is standing.
+
+    Perspective is validated against :data:`_TIER_ORDER` (including
+    :data:`TIER_TRIAL`) but does NOT shape rows -- the batch envelope
+    delegates to :func:`min_tier_batch` for the same ``(features, runtimes,
+    channels, retention_days, nodes)`` bundle. A parity test pins
+    ``min_tier_batch_at(p, ...) == min_tier_batch(...)`` for every ``p``
+    in :data:`_TIER_ORDER` so the ``_at`` prefix cannot silently drift into
+    shaping rows.
+
+    Plural what-if companion of :func:`min_tier_for_all_at` (which
+    collapses the answer to the single most-constraining tier) and
+    :func:`affordable_tiers_at` (which returns the full ordered list of
+    qualifying tiers). Fills the ``_at`` slot for the per-item batch
+    family alongside those siblings so a pricing-matrix walkthrough can
+    call ``X_at(perspective, ...)`` uniformly across the whole ``_at``
+    surface.
+
+    Envelope shape mirrors :func:`min_tier_batch` exactly::
+
+        {
+          "features":       [<row>, ...],
+          "runtimes":       [<row>, ...],
+          "channels":       <row> | None,
+          "retention_days": <row> | None,
+          "nodes":          <row> | None,
+        }
+
+    Each ``<row>`` carries ``key``, ``kind``, ``free``, ``min_tier``,
+    ``min_tier_label`` and ``min_tier_rank`` (``-1`` when ``min_tier`` is
+    ``None``). Per-row semantics -- runtime canonicalisation, unknown-id
+    all-``None`` row, CSV normalisation, ``retention_days=None`` = unset
+    (not unlimited) -- are inherited from :func:`min_tier_batch`.
+
+    Returns ``None`` for empty / unknown ``perspective_tier`` (caller
+    renders "unknown tier" / 404). Decoupled from the resolved entitlement
+    (delegates to :func:`min_tier_batch`, which walks the static per-tier
+    maps), so grace vs enforce yields byte-identical rows.
+
+    Never raises: a delegation failure logs a warning and returns ``None``
+    so a pricing-matrix walkthrough keeps rendering instead of breaking.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        return min_tier_batch(
+            features=features,
+            runtimes=runtimes,
+            channels=channels,
+            retention_days=retention_days,
+            nodes=nodes,
+        )
+    except Exception as exc:
+        logger.warning("entitlements: min_tier_batch_at failed: %s", exc)
+        return None
+
+
 def lock_reason(item: str, *, kind: str | None = None) -> str | None:
     try:
         return get_entitlement().lock_reason(item, kind=kind)
