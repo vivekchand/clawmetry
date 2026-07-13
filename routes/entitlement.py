@@ -20242,3 +20242,169 @@ def api_entitlement_tiers_for_capacity_batch():
                 "enforced": False,
             }
         )
+
+
+@bp_entitlement.route("/api/entitlement/tiers-for-features")
+def api_entitlement_tiers_for_features():
+    """``GET /api/entitlement/tiers-for-features?features=a,b,c`` --
+    ladder-intersection sibling of ``/api/entitlement/tiers-for``: the
+    set of tiers that grant **every** supplied feature at once, wrapped
+    in the same row shape a pricing-page component consumes off
+    ``/tiers-for?feature=<id>``.
+
+    Closes the ``tiers_for_*`` symmetry gap alongside the singular /
+    fixed-batch siblings: the caller-supplied-list shape had no plural
+    on the ladder axis, so a UI building the bundle-ladder off
+    ``/required-tier-batch?features=`` had to fan out one ``/tiers-for``
+    call per known id + intersect on the client. This wraps
+    :func:`clawmetry.entitlements.tiers_for_features` so the whole
+    "you use fleet + sso -- Available in: Enterprise" ladder lands in
+    one round-trip.
+
+    - **400** when ``features=`` is missing / blank after parsing
+      (empty string or all-empty tokens). All-unknown IS 200 with an
+      ``unknown`` list and empty ``tiers`` -- distinguishes "caller
+      asked for nothing" from "caller asked but every token was a typo"
+      so the paywall UI can render "these ids are unknown: X" instead
+      of a null.
+    - Blank / whitespace tokens are dropped; ids are lowercased and
+      de-duplicated preserving first-seen order (matches
+      ``_parse_csv_arg``).
+    - Unknown ids (not in ``ALL_FEATURES``) contribute nothing to the
+      intersection so a typo does NOT silently mis-route the ladder to
+      Enterprise. Every unknown id lands in the ``unknown`` list on the
+      response so the caller can echo them.
+    - Never 5xxs: a resolver failure yields the empty shape + the
+      grace-shape envelope so the pricing UI keeps rendering.
+
+    Response shape::
+
+        {
+          "items":             ["fleet", "sso"],
+          "unknown":           ["bogus"],
+          "kind":              "features",
+          "count":             2,
+          "min_tier":          "enterprise" | null,
+          "min_tier_label":    "Enterprise" | null,
+          "min_tier_rank":     <int> | null,
+          "tiers":             [<_tier_row>, ...],
+          "current_tier":      "...",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Where ``<_tier_row>`` matches ``/api/entitlement/tiers-for`` exactly
+    (``id`` / ``label`` / ``rank`` / ``purchasable``). ``min_tier``
+    byte-equals ``/api/entitlement/required-tier-batch?features=<same>``
+    ``.required_tier`` for the same input (parity is the answer).
+    """
+    raw = request.args.get("features")
+    if raw is None or not raw.strip():
+        return jsonify({"error": "missing features"}), 400
+    features = _parse_csv_arg("features")
+    try:
+        from clawmetry import entitlements as _ent
+
+        body = _ent.tiers_for_features(features)
+        env = _resolver_envelope(_ent)
+        if body is None:
+            return jsonify(
+                {
+                    "items": [],
+                    "unknown": features,
+                    "kind": "features",
+                    "count": 0,
+                    "min_tier": None,
+                    "min_tier_label": None,
+                    "min_tier_rank": None,
+                    "tiers": [],
+                    **env,
+                }
+            )
+        return jsonify({**body, **env})
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_features: error: %s", exc
+        )
+        return jsonify(
+            {
+                "items": [],
+                "unknown": features,
+                "kind": "features",
+                "count": 0,
+                "min_tier": None,
+                "min_tier_label": None,
+                "min_tier_rank": None,
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/tiers-for-runtimes")
+def api_entitlement_tiers_for_runtimes():
+    """``GET /api/entitlement/tiers-for-runtimes?runtimes=x,y,z`` --
+    runtime-axis twin of ``/api/entitlement/tiers-for-features``.
+
+    Wraps :func:`clawmetry.entitlements.tiers_for_runtimes`. Runtime
+    aliases (``claude-code`` -> ``claude_code``) are canonicalised
+    before intersection; input order is preserved after canonical
+    de-duplication so the response ``items`` list is stable.
+
+    - **400** when ``runtimes=`` is missing / blank after parsing.
+      All-unknown IS 200 with the ``unknown`` list populated (mirrors
+      ``/tiers-for-features``).
+    - Never 5xxs: a resolver failure yields the empty shape + the
+      grace-shape envelope.
+
+    Response shape mirrors ``/tiers-for-features`` with
+    ``kind="runtimes"``.
+    """
+    raw = request.args.get("runtimes")
+    if raw is None or not raw.strip():
+        return jsonify({"error": "missing runtimes"}), 400
+    runtimes = _parse_csv_arg("runtimes")
+    try:
+        from clawmetry import entitlements as _ent
+
+        body = _ent.tiers_for_runtimes(runtimes)
+        env = _resolver_envelope(_ent)
+        if body is None:
+            return jsonify(
+                {
+                    "items": [],
+                    "unknown": runtimes,
+                    "kind": "runtimes",
+                    "count": 0,
+                    "min_tier": None,
+                    "min_tier_label": None,
+                    "min_tier_rank": None,
+                    "tiers": [],
+                    **env,
+                }
+            )
+        return jsonify({**body, **env})
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_runtimes: error: %s", exc
+        )
+        return jsonify(
+            {
+                "items": [],
+                "unknown": runtimes,
+                "kind": "runtimes",
+                "count": 0,
+                "min_tier": None,
+                "min_tier_label": None,
+                "min_tier_rank": None,
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
