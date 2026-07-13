@@ -33,11 +33,26 @@ def api_extensions():
     Response shape::
 
         {
-          "plugins":        ["clawmetry-pro", ...],
-          "plugin_count":   1,
-          "events":         ["session.snapshot", ...],
-          "handler_counts": {"session.snapshot": 2, ...}
+          "plugins":             ["clawmetry-pro", ...],
+          "plugin_count":        1,
+          "failed_plugins":      [{"name": "clawmetry-pro", "error": "..."}],
+          "failed_plugin_count": 1,
+          "events":              ["session.snapshot", ...],
+          "handler_counts":      {"session.snapshot": 2, ...}
         }
+
+    ``plugins`` and ``failed_plugins`` are complementary — a given entry
+    point appears in exactly one of them per load attempt. The pair answers
+    the triage question an operator would otherwise tail daemon logs for:
+    *did the paid package try to load, and if so did it succeed?* Only the
+    exception's ``str`` is surfaced (no traceback) so paths / secrets from
+    frames never leak.
+
+    ``failed_plugins`` is derived from an in-memory mirror populated by
+    :func:`clawmetry.extensions.load_plugins`. On installs running an older
+    ``clawmetry`` where the mirror doesn't exist yet (or if fetching it
+    raises), the key falls back to ``[]`` / ``0`` and the rest of the
+    envelope still populates — the endpoint never 5xxs.
 
     Never raises and never returns 5xx — any introspection failure resolves to
     an empty shape so the dashboard's diagnostic panel always has something
@@ -47,11 +62,22 @@ def api_extensions():
         from clawmetry import extensions as _ext
 
         plugins = list(_ext.loaded_plugins())
+        # Older ``clawmetry`` may not ship :func:`failed_plugins` yet; degrade
+        # to an empty list instead of 5xx'ing the whole envelope so a mixed
+        # deploy (new routes, old core) still surfaces the loaded-plugin
+        # side.
+        try:
+            failed = [dict(entry) for entry in _ext.failed_plugins()]
+        except Exception as exc:
+            logger.warning("extensions: failed_plugins introspection failed: %s", exc)
+            failed = []
         events = list(_ext.registered_events())
         handler_counts = {evt: _ext.handler_count(evt) for evt in events}
         return jsonify({
             "plugins": plugins,
             "plugin_count": len(plugins),
+            "failed_plugins": failed,
+            "failed_plugin_count": len(failed),
             "events": events,
             "handler_counts": handler_counts,
         })
@@ -60,6 +86,8 @@ def api_extensions():
         return jsonify({
             "plugins": [],
             "plugin_count": 0,
+            "failed_plugins": [],
+            "failed_plugin_count": 0,
             "events": [],
             "handler_counts": {},
         })
