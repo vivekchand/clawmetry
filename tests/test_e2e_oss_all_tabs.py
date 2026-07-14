@@ -35,7 +35,7 @@ BASE_URL = os.environ.get("CLAWMETRY_URL", "http://localhost:8900")
 TOKEN = os.environ.get("CLAWMETRY_TOKEN", "ci-test-token")
 
 
-# Class-scoped page shared across all 33 parametrized tab tests.
+# Class-scoped page shared across all parametrized tab tests.
 #
 # Why class-scoped instead of function-scoped:
 #   The original fixture created a fresh browser context per test
@@ -60,7 +60,7 @@ def _overlay_page(_shared_chromium):
         "} catch(e) {}"
     )
     page = ctx.new_page()
-    # One page load for the entire 33-tab suite.
+    # One page load for the entire tab suite.
     page.goto(BASE_URL + "/", wait_until="domcontentloaded", timeout=15000)
     # Let auth-bootstrap.js fetch /api/auth/check and gw-setup.js fetch
     # /api/gw/config settle before any tab test checks for overlays.
@@ -115,6 +115,7 @@ CANONICAL_TABS = [
     "turn-anatomy",      # turn-anatomy.html: turn anatomy analysis
     "version-impact",    # version-impact.html: version impact view
     "context-economics", # context-economics.html: context economics
+    "agents",            # agents.html: multi-agent orchestration view
 ]
 
 # Overlay element IDs that signal the auth overlay is blocking the UI.
