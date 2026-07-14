@@ -186,6 +186,59 @@ def test_model_router_live_absent_returns_not_running(monkeypatch):
     assert oc._model_router_live() == {"modelRouterRunning": False}
 
 
+# -- #3721 model-router launch log ------------------------------------------
+
+def test_model_router_launch_log_read_via_env_var(tmp_path, monkeypatch):
+    log_file = tmp_path / "router.log"
+    log_file.write_text("Starting model-router\nListening on :4100\nFatal: port in use\n")
+    monkeypatch.setenv("NEMOCLAW_MODEL_ROUTER_LOG", str(log_file))
+    from clawmetry.adapters.openclaw import _model_router_launch_log
+    result = _model_router_launch_log()
+    assert result is not None
+    assert "Fatal: port in use" in result
+
+
+def test_model_router_launch_log_absent_returns_none(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEMOCLAW_MODEL_ROUTER_LOG", "")
+    monkeypatch.setenv("NEMOCLAW_MODEL_ROUTER_VENV", str(tmp_path / "venv"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from clawmetry.adapters.openclaw import _model_router_launch_log
+    assert _model_router_launch_log() is None
+
+
+def test_model_router_live_includes_launch_log_when_not_running(tmp_path, monkeypatch):
+    log_file = tmp_path / "router.log"
+    log_file.write_text("Error: failed to bind\n")
+    monkeypatch.setenv("NEMOCLAW_MODEL_ROUTER_LOG", str(log_file))
+    import clawmetry.adapters.openclaw as oc
+    monkeypatch.setattr(oc, "_discover_model_router_port", lambda: None)
+    out = oc._model_router_live()
+    assert out["modelRouterRunning"] is False
+    assert "failed to bind" in out.get("modelRouterLaunchLog", "")
+
+
+def test_model_router_live_omits_launch_log_key_when_no_log(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEMOCLAW_MODEL_ROUTER_LOG", "")
+    monkeypatch.setenv("NEMOCLAW_MODEL_ROUTER_VENV", str(tmp_path / "venv"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    import clawmetry.adapters.openclaw as oc
+    monkeypatch.setattr(oc, "_discover_model_router_port", lambda: None)
+    out = oc._model_router_live()
+    assert out == {"modelRouterRunning": False}
+
+
+def test_model_router_live_running_omits_launch_log(tmp_path, monkeypatch):
+    log_file = tmp_path / "router.log"
+    log_file.write_text("Router started\n")
+    monkeypatch.setenv("NEMOCLAW_MODEL_ROUTER_LOG", str(log_file))
+    import clawmetry.adapters.openclaw as oc
+    monkeypatch.setattr(oc, "_discover_model_router_port", lambda: 49000)
+    monkeypatch.setattr(oc, "_model_router_health_ok", lambda port: True)
+    out = oc._model_router_live()
+    assert out == {"modelRouterPort": 49000, "modelRouterRunning": True}
+    assert "modelRouterLaunchLog" not in out
+
+
 def test_model_router_health_ok_probes_real_localhost_server():
     # Spin up a tiny HTTP server that answers 200 on /health and assert the
     # probe (and its TCP fallback) report it as up.
