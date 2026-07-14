@@ -185,7 +185,7 @@ jobs:
         run: |
           /tmp/oss-golden/bin/python -m pytest \
             tests/test_e2e_oss_golden_path.py \
-            -v --tb=short
+            -v --tb=short --junitxml=/tmp/junit-c1.xml
 
       # Restart the dashboard so C5 starts with a clean server that has no
       # accumulated SSE streams or WebSocket reconnect loops from C1. Each
@@ -222,7 +222,7 @@ jobs:
         run: |
           /tmp/oss-golden/bin/python -m pytest \
             tests/test_e2e_oss_all_tabs.py \
-            -v --tb=short
+            -v --tb=short --junitxml=/tmp/junit-c5.xml
 
       - name: Dashboard and gateway logs on failure
         if: failure()
@@ -231,6 +231,15 @@ jobs:
           tail -150 /tmp/oss-golden-dashboard.log || true
           echo "==== openclaw gateway log ===="
           tail -100 /tmp/openclaw-logs/gateway.log || true
+
+      - name: Upload JUnit test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-c1c5-${{ github.run_id }}
+          path: /tmp/junit-*.xml
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Upload logs on failure
         if: failure()
