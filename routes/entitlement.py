@@ -20410,6 +20410,7 @@ def api_entitlement_tiers_for_runtimes():
         )
 
 
+
 # ── capacity-axis tiers-for-*-at endpoints ───────────────────────────────────
 #
 # Hypothetical-perspective siblings of the four capacity-axis ``tiers_for_*``
