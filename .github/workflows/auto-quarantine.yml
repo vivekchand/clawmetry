@@ -1,0 +1,117 @@
+name: Auto-quarantine (C7)
+
+# Runs daily at 04:15 UTC (1h after quarantine-sweep.yml at 02:23 UTC).
+# Detects tests that failed in an OSS Golden Path run then passed on a
+# re-run (= flaky). Opens a PR to add them to tests/quarantine.txt.
+# Tracking: vivekchand/clawmetry#3730 (C7)
+
+on:
+  schedule:
+    - cron: "15 4 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (print but do not write quarantine.txt)"
+        required: false
+        default: "true"
+        type: boolean
+      lookback:
+        description: "Number of recent workflow runs to scan"
+        required: false
+        default: "30"
+        type: string
+
+concurrency:
+  group: auto-quarantine
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  detect-and-quarantine:
+    name: Detect flaky tests and quarantine within 24h
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Detect flaky tests
+        id: detect
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO_OWNER: vivekchand
+          REPO_NAME: clawmetry
+        run: |
+          ARGS=""
+          if [ "${{ inputs.dry_run }}" = "true" ] && [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ARGS="--dry-run"
+          fi
+          if [ -n "${{ inputs.lookback }}" ]; then
+            ARGS="$ARGS --lookback ${{ inputs.lookback }}"
+          fi
+          python3 scripts/auto_quarantine.py $ARGS
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+
+      - name: Open PR for newly quarantined tests
+        if: steps.detect.outputs.exit_code == '2'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "Auto-Quarantine Bot"
+          BRANCH="auto-quarantine/$(date +%Y%m%d-%H%M%S)"
+          git checkout -b "$BRANCH"
+          git add tests/quarantine.txt
+          git commit -m "test: auto-quarantine flaky E2E tests [C7]
+
+          Flaky tests detected by auto_quarantine.py: failed in an OSS
+          Golden Path run then passed on re-run. Added to quarantine.txt
+          so they are excluded from the main PR gate and swept daily.
+
+          Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+          git push -u origin "$BRANCH"
+          gh pr create \
+            --title "test: auto-quarantine flaky E2E tests (C7)" \
+            --body "$(cat <<'EOF'
+          ## Summary
+
+          Flaky tests detected by the daily auto-quarantine sweep (C7).
+          These tests failed in a recent OSS Golden Path run then passed
+          on a re-run of the same commit -- a clear flakiness signal.
+
+          Added to \`tests/quarantine.txt\` so they are:
+          - Excluded from the per-PR gate (no more PR blocks from flakiness)
+          - Swept daily by \`quarantine-sweep.yml\` (alerts if they go from flaky to broken)
+
+          ## Test plan
+
+          - [ ] Review the quarantined test list in \`tests/quarantine.txt\`
+          - [ ] Verify the root cause of each test's flakiness is tracked separately
+          - [ ] Merge this PR to restore PR gate reliability
+
+          Tracking: vivekchand/clawmetry#3730 (C7)
+          EOF
+          )" \
+            --label "e2e,testing" \
+            --base main \
+            --head "$BRANCH"
+
+      - name: Summary
+        if: always()
+        run: |
+          code="${{ steps.detect.outputs.exit_code }}"
+          case "$code" in
+            0) echo "No new flaky tests detected." ;;
+            2) echo "New flaky tests quarantined -- PR opened." ;;
+            *) echo "Script error (exit $code) -- check logs above." ;;
+          esac
