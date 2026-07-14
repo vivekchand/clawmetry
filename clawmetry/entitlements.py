@@ -6128,6 +6128,92 @@ def affordable_tiers_batch(
         }
 
 
+def affordable_tiers_at_batch(
+    perspective_tier: str,
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict | None:
+    """Hypothetical-perspective sibling of :func:`affordable_tiers_batch`:
+    per-item full ordered list of qualifying tiers for every supplied item
+    across all five capacity axes, scoped by a caller-supplied
+    ``perspective_tier``.
+
+    Same relationship to :func:`affordable_tiers_batch` that
+    :func:`min_tier_batch_at` has to :func:`min_tier_batch` and
+    :func:`affordable_tiers_at` has to :func:`affordable_tiers`: the
+    ``perspective_tier`` argument tells the helper which resolver / plan
+    the caller is answering from so an ``_at`` endpoint URL can be uniform
+    across the whole ``_at`` family (every ``_at`` sibling accepts a
+    ``tier=<perspective>`` query arg), even though the underlying answer
+    is inherently perspective-independent -- :func:`affordable_tiers_batch`
+    walks the static per-tier caps, so the per-row body does not depend on
+    where the caller is standing.
+
+    Perspective is validated against :data:`_TIER_ORDER` (including
+    :data:`TIER_TRIAL`) but does NOT shape rows -- the batch envelope
+    delegates to :func:`affordable_tiers_batch` for the same
+    ``(features, runtimes, channels, retention_days, nodes)`` bundle. A
+    parity test pins ``affordable_tiers_at_batch(p, ...) ==
+    affordable_tiers_batch(...)`` for every ``p`` in :data:`_TIER_ORDER`
+    so the ``_at`` prefix cannot silently drift into shaping rows.
+
+    Fills the ``_at`` slot for the per-item plural family alongside
+    :func:`min_tier_batch_at` (per-item cheapest tier what-if) and
+    :func:`affordable_tiers_at` (aggregate qualifying-tier list what-if)
+    so a pricing-matrix walkthrough can call ``X_at(perspective, ...)``
+    uniformly across the whole ``_at`` surface.
+
+    Envelope shape mirrors :func:`affordable_tiers_batch` exactly::
+
+        {
+          "features":       [<row>, ...],
+          "runtimes":       [<row>, ...],
+          "channels":       <row> | None,
+          "retention_days": <row> | None,
+          "nodes":          <row> | None,
+        }
+
+    Each ``<row>`` carries ``key``, ``kind``, ``free``, ``min_tier``,
+    ``min_tier_label``, ``min_tier_rank`` (``-1`` when ``min_tier`` is
+    ``None``), and ``tiers`` -- the full ordered list of qualifying tiers
+    for that single item (each entry carrying ``tier`` / ``tier_label`` /
+    ``tier_rank`` / ``is_minimum``). ``tiers`` is ``[]`` (not ``None``)
+    for unknown / unparseable items. Per-row semantics -- runtime
+    canonicalisation, unknown-id all-``None`` row, CSV normalisation,
+    ``retention_days=None`` = unset (not unlimited) -- are inherited from
+    :func:`affordable_tiers_batch`.
+
+    Returns ``None`` for empty / unknown ``perspective_tier`` (caller
+    renders "unknown tier" / 404). Decoupled from the resolved entitlement
+    (delegates to :func:`affordable_tiers_batch`, which walks the static
+    per-tier maps), so grace vs enforce yields byte-identical rows.
+
+    Never raises: a delegation failure logs a warning and returns ``None``
+    so a pricing-matrix walkthrough keeps rendering instead of breaking.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        return affordable_tiers_batch(
+            features=features,
+            runtimes=runtimes,
+            channels=channels,
+            retention_days=retention_days,
+            nodes=nodes,
+        )
+    except Exception as exc:
+        logger.warning("entitlements: affordable_tiers_at_batch failed: %s", exc)
+        return None
+
+
 def lock_reason(item: str, *, kind: str | None = None) -> str | None:
     try:
         return get_entitlement().lock_reason(item, kind=kind)
