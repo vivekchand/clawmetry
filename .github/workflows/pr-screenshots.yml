@@ -39,7 +39,7 @@ env:
   # clawmetry/templates/tabs/*.html and be reachable via window.switchTab().
   # See routes/* for the API endpoints each tab calls.
   # Must stay in sync with CANONICAL_TABS in tests/test_e2e_oss_all_tabs.py.
-  PR_SCREENSHOT_TABS: "overview,flow,brain,usage,crons,memory,security,subagents,transcripts,logs,skills,models,approvals,alerts,notifications,context,limits,clusters,history,channels,dives,harness,inventory,nemoclaw,policy,selfevolve,swimlane,tool-catalog,tracing,turn-anatomy,version-impact,context-economics"
+  PR_SCREENSHOT_TABS: "overview,flow,brain,usage,crons,memory,security,subagents,transcripts,logs,skills,models,approvals,alerts,notifications,context,limits,clusters,history,channels,dives,harness,inventory,nemoclaw,policy,selfevolve,swimlane,tool-catalog,tracing,turn-anatomy,version-impact,context-economics,agents"
   HEAD_PORT: "8082"
   BASE_PORT: "8081"
   # Local-store fast-paths must be on so the dashboard renders the seeded

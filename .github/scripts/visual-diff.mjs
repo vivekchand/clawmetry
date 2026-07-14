@@ -55,7 +55,7 @@ const AUTH_TOKEN = process.env.CLAWMETRY_VISUAL_DIFF_TOKEN || "";
 // switchTab() name here, in CANONICAL_TABS, and in PR_SCREENSHOT_TABS.
 // `overview` is the implicit default -- listed first for a `root` baseline.
 const DEFAULT_TABS =
-  "overview,flow,brain,usage,crons,memory,security,subagents,transcripts,logs,skills,models,approvals,alerts,notifications,context,limits,clusters,history,channels,dives,harness,inventory,nemoclaw,policy,selfevolve,swimlane,tool-catalog,tracing,turn-anatomy,version-impact,context-economics";
+  "overview,flow,brain,usage,crons,memory,security,subagents,transcripts,logs,skills,models,approvals,alerts,notifications,context,limits,clusters,history,channels,dives,harness,inventory,nemoclaw,policy,selfevolve,swimlane,tool-catalog,tracing,turn-anatomy,version-impact,context-economics,agents";
 const TABS = (process.env.PR_SCREENSHOT_TABS || DEFAULT_TABS)
   .split(",")
   .map((p) => p.trim())
