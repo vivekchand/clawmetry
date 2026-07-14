@@ -56,7 +56,7 @@ All HTTP endpoints live here, organised by feature. Each module owns one or more
 | `interceptor.py` | ~630 | Zero-config HTTP monkey-patching for LLM cost tracking (patches httpx/requests) |
 | `providers_pricing.py` | ~390 | Multi-provider pricing table (Anthropic, OpenAI, Google, OpenRouter, etc.) |
 | `config.py` | ~200 | Configuration dataclass |
-| `extensions.py` | ~180 | Plugin/hook system |
+| `extensions.py` | ~230 | Plugin/hook system |
 | `track.py` | ~60 | Zero-config interceptor shorthand |
 | `providers/` | — | Pluggable data provider layer (LocalDataProvider, TursoDataProvider) |
 
@@ -146,7 +146,7 @@ Tests use `CLAWMETRY_URL` and `CLAWMETRY_TOKEN` env vars. Test matrix in CI: 3 O
 ## Deploy
 - **PyPI**: `pip install clawmetry && clawmetry`
 - **Docker**: `docker build -t clawmetry . && docker run -p 8900:8900 -v ~/.openclaw:/root/.openclaw:ro clawmetry`
-- **Current version**: `0.12.544` (in `dashboard.py` `__version__`)
+- **Current version**: `0.12.554` (in `dashboard.py` `__version__`)
 
 ## CI/CD (GitHub Actions)
 - `ci.yml` — Lint + test matrix on push/PR

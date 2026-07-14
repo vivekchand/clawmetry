@@ -38,7 +38,7 @@ clawmetry --help
 
 ```
 clawmetry/
-├── dashboard.py          # 🎯 Flask app, blueprint registration, embedded HTML/CSS/JS, shared helpers
+├── dashboard.py          # 🎯 Flask app, blueprint registration, shared helpers
 ├── routes/               # 🧩 Per-feature Blueprints (sessions, channels, brain, usage, health, …)
 ├── clawmetry/            # 📦 Installable package — CLI, sync daemon, proxy, interceptor, providers
 ├── history.py            # 📈 Optional time-series collector (SQLite)
@@ -53,7 +53,7 @@ clawmetry/
 
 See `CLAUDE.md` (`Key Files`) for the full per-module breakdown including line counts and Blueprint names.
 
-**Philosophy**: Keep it simple. The dashboard core is a Flask app in `dashboard.py` (with embedded HTML/CSS/JS) and a small `routes/` package of feature Blueprints — minimal dependencies, easy to understand, modify, and deploy.
+**Philosophy**: Keep it simple. The dashboard core is a Flask app in `dashboard.py` (shared helpers + blueprint registration; live frontend is in `clawmetry/static/` + `clawmetry/templates/`) and a small `routes/` package of feature Blueprints — minimal dependencies, easy to understand, modify, and deploy.
 
 ---
 
@@ -119,7 +119,7 @@ listed in the manifest so real OpenClaw event-shape drift is covered.
 If you want to add a new tab or major feature:
 
 1. **Open an Issue first** - describe what you want to build and why
-2. **Keep it lightweight** - remember this is a single-file app
+2. **Keep it lightweight** - minimal dependencies, no heavy frameworks
 3. **Follow the existing pattern** - look at how other tabs are implemented
 4. **Update the README** - document your new feature in the features table
 

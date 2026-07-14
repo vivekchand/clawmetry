@@ -168,7 +168,7 @@ No environment variables, no config files, no database setup. If OpenClaw is run
 
 ## The Dashboard — What You See
 
-ClawMetry serves a single-page web app (embedded HTML/CSS/JS in the Python file) with these views:
+ClawMetry serves a single-page web app (frontend in `clawmetry/static/` + `clawmetry/templates/`) with these views:
 
 ### Overview (`/api/overview`)
 The main dashboard. Aggregates:
