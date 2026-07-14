@@ -183,6 +183,7 @@ def _row_to_cron_job(row):
         "schedule": schedule or {},
         "enabled": bool(row.get("enabled", True)),
         "createdAtMs": int(extras.get("createdAtMs") or 0),
+        "model": row.get("model") or "",
         "state": {
             "lastRunAtMs": _parse_iso_to_ms(row.get("last_run_at")),
             "lastStatus": row.get("last_status") or "pending",
@@ -190,7 +191,7 @@ def _row_to_cron_job(row):
             **state_extras,
         },
     }
-    # Carry through any extra top-level fields (prompt, channel, model, ...)
+    # Carry through any extra top-level fields (prompt, channel, ...)
     for k, v in extras.items():
         if k not in {"createdAtMs", "schedule", "lastDurationMs",
                      "consecutiveFailures", "lastError", "runHistory",

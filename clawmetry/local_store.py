@@ -446,6 +446,7 @@ _DDL = [
         last_run_at    VARCHAR,
         last_status    VARCHAR,
         next_run_at    VARCHAR,
+        model          VARCHAR,
         data           BLOB,
         updated_at     BIGINT NOT NULL,
         PRIMARY KEY (agent_type, cron_id)
@@ -1130,6 +1131,9 @@ _MIGRATIONS_V2 = [
     # Issue #3367 — expose NemoClaw sandbox runtime kind (terminal vs docker)
     # on session and event rows. Stamped at ingest time from sandbox config.
     ("events",   "runtime_kind",      "VARCHAR"),
+    # Issue #3719 — per-cron-job model attribution (openclaw Quick Create
+    # lets users pick an agent-turn model; harness exposes it per job).
+    ("crons",    "model",             "VARCHAR"),
 ]
 
 # ── Integrity / hash-chain (Issue #2200) ────────────────────────────────────
@@ -2543,7 +2547,7 @@ class LocalStore:
                               if k not in {"cron_id", "agent_type", "agent_id",
                                            "name", "schedule", "enabled",
                                            "last_run_at", "last_status",
-                                           "next_run_at"}})
+                                           "next_run_at", "model"}})
         schedule = cron.get("schedule")
         if isinstance(schedule, (dict, list)):
             schedule = json.dumps(schedule, separators=(",", ":"))
@@ -2552,8 +2556,8 @@ class LocalStore:
             self._conn.execute("""
                 INSERT INTO crons (
                     agent_type, cron_id, agent_id, name, schedule, enabled,
-                    last_run_at, last_status, next_run_at, data, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    last_run_at, last_status, next_run_at, model, data, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (agent_type, cron_id) DO UPDATE SET
                     agent_id     = excluded.agent_id,
                     name         = COALESCE(excluded.name, crons.name),
@@ -2562,13 +2566,15 @@ class LocalStore:
                     last_run_at  = excluded.last_run_at,
                     last_status  = excluded.last_status,
                     next_run_at  = excluded.next_run_at,
+                    model        = COALESCE(excluded.model, crons.model),
                     data         = COALESCE(excluded.data, crons.data),
                     updated_at   = excluded.updated_at
             """, [atype, cid, cron.get("agent_id") or "main",
                   cron.get("name"), schedule,
                   bool(cron.get("enabled", True)),
                   cron.get("last_run_at"), cron.get("last_status"),
-                  cron.get("next_run_at"), data_blob, now_ms])
+                  cron.get("next_run_at"), cron.get("model") or None,
+                  data_blob, now_ms])
 
     def ingest_cron_run(self, run: dict[str, Any]) -> None:
         """Upsert one cron-run row (issue #605 DuckDB follow-up).
@@ -6691,7 +6697,7 @@ class LocalStore:
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         sql = f"""
             SELECT agent_type, cron_id, agent_id, name, schedule, enabled,
-                   last_run_at, last_status, next_run_at, data, updated_at
+                   last_run_at, last_status, next_run_at, model, data, updated_at
             FROM crons
             {where}
             ORDER BY updated_at DESC
@@ -6700,7 +6706,7 @@ class LocalStore:
         params.append(int(limit))
         cols = ["agent_type", "cron_id", "agent_id", "name", "schedule",
                 "enabled", "last_run_at", "last_status", "next_run_at",
-                "data", "updated_at"]
+                "model", "data", "updated_at"]
         return _decode_data_blob_rows(self._fetch(sql, params), cols)
 
     def query_cron_runs(
