@@ -5764,6 +5764,250 @@ def api_entitlement_min_tier_batch_at():
         )
 
 
+@bp_entitlement.route("/api/entitlement/min-tier-at")
+def api_entitlement_min_tier_at():
+    """``GET /api/entitlement/min-tier-at?tier=<perspective>&<axis>=<value>``
+    -- hypothetical-perspective sibling of ``/api/entitlement/min-tier``.
+
+    Wraps :func:`entitlements.min_tier_at` so a pricing-matrix walkthrough
+    at a hypothetical perspective can render "if I were on Starter, this
+    ONE axis constraint would land at Pro" off ONE round-trip without
+    switching the resolver. Fills the ``_at`` slot for the singular
+    scalar min-tier surface alongside :func:`api_entitlement_min_tier_batch_at`
+    (per-item batch what-if) and :func:`api_entitlement_required_tier_at`
+    (aggregate bundle what-if) so a caller can call ``X_at`` uniformly
+    across the whole ``_at`` scalar / batch / bundle surface.
+
+    Args mirror ``/api/entitlement/min-tier`` byte-for-byte -- exactly
+    one of ``feature=<id>``, ``runtime=<id>``, ``channels=<int>``,
+    ``retention_days=<int>``, or ``nodes=<int>`` must be supplied --
+    plus the additional ``tier=`` perspective arg. Perspective is
+    validated against :data:`entitlements._TIER_ORDER` (including
+    :data:`entitlements.TIER_TRIAL`) but does NOT shape the result: the
+    scalar answer is inherently perspective-independent (it walks the
+    static per-tier caps via the matching ``min_tier_for_<axis>``
+    helper), so per-row output byte-equals ``/min-tier`` for the same
+    axis regardless of perspective. A cross-endpoint parity test pins
+    this so the scalar what-if and the scalar current cannot silently
+    drift.
+
+    Response shape mirrors ``/min-tier`` (``key`` / ``value`` / ``free``
+    / ``min_tier`` / ``tier_label`` / ``tier_rank``) with the
+    ``perspective_tier`` / ``perspective_tier_label`` /
+    ``perspective_tier_rank`` envelope and the standard resolver
+    envelope (``current_tier`` / ``current_tier_rank`` / ``grace`` /
+    ``enforced``) layered on so the pricing surface reads current tier /
+    grace / enforced off the same call.
+
+    - **400** when ``tier=`` is missing / blank, or when zero / more
+      than one axis is supplied, or when a capacity axis value is
+      non-int.
+    - **404** when ``tier=`` is unknown (body carries ``which=tier``),
+      or when the ``feature=`` / ``runtime=`` id is unknown (matches
+      ``/min-tier``'s 404 posture on unknown grant ids). Capacity axes
+      never 404 -- any parseable int (including zero / negative --
+      which collapses to :data:`entitlements.TIER_OSS` matching the
+      helpers' contract) resolves to a real tier.
+    - **Never 5xxs**: a resolver failure yields the same shape with
+      ``min_tier=null`` and the perspective envelope populated so the
+      pricing walkthrough keeps rendering.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+
+        feature = (request.args.get("feature") or "").strip()
+        runtime = (request.args.get("runtime") or "").strip().lower()
+        (
+            channels_present,
+            channels_ok,
+            channels_n,
+            channels_raw,
+        ) = _parse_capacity_arg("channels")
+        (
+            retention_present,
+            retention_ok,
+            retention_n,
+            retention_raw,
+        ) = _parse_capacity_arg("retention_days")
+        (
+            nodes_present,
+            nodes_ok,
+            nodes_n,
+            nodes_raw,
+        ) = _parse_capacity_arg("nodes")
+
+        supplied = [
+            bool(feature),
+            bool(runtime),
+            channels_present,
+            retention_present,
+            nodes_present,
+        ]
+        n_supplied = sum(1 for s in supplied if s)
+        if n_supplied == 0:
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply exactly one of feature=<id>, "
+                            "runtime=<id>, channels=<int>, "
+                            "retention_days=<int>, or nodes=<int>"
+                        ),
+                    }
+                ),
+                400,
+            )
+        if n_supplied > 1:
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply only one of feature=, runtime=, "
+                            "channels=, retention_days=, or nodes="
+                        ),
+                    }
+                ),
+                400,
+            )
+        if channels_present and not channels_ok:
+            return (
+                jsonify({"error": "channels= must be an integer"}),
+                400,
+            )
+        if retention_present and not retention_ok:
+            return (
+                jsonify({"error": "retention_days= must be an integer"}),
+                400,
+            )
+        if nodes_present and not nodes_ok:
+            return (
+                jsonify({"error": "nodes= must be an integer"}),
+                400,
+            )
+
+        if feature:
+            min_t = _ent.min_tier_for_feature(feature)
+            key, value = "feature", feature
+            known = feature in _ent.ALL_FEATURES
+        elif runtime:
+            min_t = _ent.min_tier_for_runtime(runtime)
+            key, value = "runtime", runtime
+            known = runtime in _ent.ALL_RUNTIMES
+        elif channels_present:
+            min_t = _ent.min_tier_for_channel_count(channels_n)
+            key, value = "channels", str(channels_n)
+            known = True
+        elif retention_present:
+            min_t = _ent.min_tier_for_retention_window(retention_n)
+            key, value = "retention_days", str(retention_n)
+            known = True
+        else:
+            min_t = _ent.min_tier_for_node_count(nodes_n)
+            key, value = "nodes", str(nodes_n)
+            known = True
+
+        ent = _ent.get_entitlement()
+        base = {
+            "perspective_tier": tier_in,
+            "perspective_tier_label": _ent.tier_label(tier_in),
+            "perspective_tier_rank": _ent.tier_rank(tier_in),
+            "current_tier": ent.tier,
+            "current_tier_rank": _ent.tier_rank(ent.tier),
+            "grace": bool(ent.grace),
+            "enforced": _ent.is_enforced(),
+        }
+        if not known:
+            return (
+                jsonify(
+                    {
+                        "key": key,
+                        "value": value,
+                        "free": False,
+                        "min_tier": None,
+                        "tier_label": None,
+                        "tier_rank": None,
+                        "error": "unknown",
+                        **base,
+                    }
+                ),
+                404,
+            )
+        return jsonify(
+            {
+                "key": key,
+                "value": value,
+                "free": min_t == _ent.TIER_OSS,
+                "min_tier": min_t,
+                "tier_label": _ent.tier_label(min_t) if min_t else None,
+                "tier_rank": _ent.tier_rank(min_t) if min_t else None,
+                **base,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_min_tier_at: error: %s", exc)
+        feature = (request.args.get("feature") or "").strip()
+        runtime = (request.args.get("runtime") or "").strip().lower()
+        (
+            channels_present,
+            _channels_ok,
+            _channels_n,
+            channels_raw,
+        ) = _parse_capacity_arg("channels")
+        (
+            retention_present,
+            _retention_ok,
+            _retention_n,
+            retention_raw,
+        ) = _parse_capacity_arg("retention_days")
+        (
+            nodes_present,
+            _nodes_ok,
+            _nodes_n,
+            nodes_raw,
+        ) = _parse_capacity_arg("nodes")
+        if feature:
+            key, value = "feature", feature
+        elif runtime:
+            key, value = "runtime", runtime
+        elif channels_present:
+            key, value = "channels", channels_raw
+        elif retention_present:
+            key, value = "retention_days", retention_raw
+        elif nodes_present:
+            key, value = "nodes", nodes_raw
+        else:
+            key, value = "", ""
+        return jsonify(
+            {
+                "key": key,
+                "value": value,
+                "free": False,
+                "min_tier": None,
+                "tier_label": None,
+                "tier_rank": None,
+                "perspective_tier": tier_in,
+                "perspective_tier_label": None,
+                "perspective_tier_rank": -1,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/affordable-tiers-batch")
 def api_entitlement_affordable_tiers_batch():
     """``GET /api/entitlement/affordable-tiers-batch?features=a,b,c
