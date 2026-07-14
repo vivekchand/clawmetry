@@ -4913,6 +4913,215 @@ def tiers_for_runtime_at(
         return None
 
 
+def tiers_for_features(features) -> dict | None:
+    """Ladder-intersection sibling of :func:`min_tier_for_features`: the
+    set of tiers that grant **every** supplied feature at once, wrapped
+    in the same row shape a pricing-page component consumes off
+    :func:`tiers_for_feature`.
+
+    Where :func:`min_tier_for_features` collapses the caller-supplied
+    bundle to a single ``min_tier`` id (the cheapest purchasable tier
+    that admits all items), this helper returns the *full* ladder of
+    tiers that admit all items -- the ``"Available in: ...`` list a
+    "you use fleet + sso -- Available in Enterprise" tooltip renders.
+    Closes the ``tiers_for_*`` symmetry gap alongside the singular /
+    fixed-batch siblings: the caller-supplied-list shape had no plural
+    on the ladder axis, so a UI building the bundle-ladder off
+    ``min_tier_for_features`` had to fan out one ``/tiers-for`` call
+    per known id + intersect on the client.
+
+    Semantics mirror :func:`min_tier_for_features` on input handling:
+
+    * ``None`` / non-iterable -- returns ``None``. Never raises.
+    * Empty iterable -- returns the empty shape (``items=[]``,
+      ``tiers=[]``, ``min_tier=None``) rather than ``None``. Difference
+      from ``min_tier_for_features`` on purpose: the endpoint can then
+      surface a stable 200 shape when the caller supplied ``features=``
+      but every token was unknown / dropped.
+    * Unknown ids (not in :data:`ALL_FEATURES` after strip+lower) --
+      collected into ``unknown`` and dropped from the intersection so a
+      typo does not silently mis-route the ladder to Enterprise.
+    * Duplicates are de-duplicated preserving first-seen order (matches
+      :func:`_parse_csv_arg` on the endpoint side).
+    * All-known-free items -- ``tiers`` covers every tier in
+      :data:`_TIER_ORDER`, ``min_tier`` is :data:`TIER_OSS` (mirrors
+      :func:`min_tier_for_features`).
+    * Mixed -- ``tiers`` is the intersection of the per-item grant sets
+      (rank+id sorted for stable output); ``min_tier`` matches
+      :func:`min_tier_for_features` exactly.
+
+    Response shape::
+
+        {
+          "items":          ["fleet", "sso"],   # canonical known ids
+          "unknown":        ["bogus"],           # stripped+lowered ids
+          "kind":           "features",
+          "count":          <len(items)>,
+          "min_tier":       "enterprise" | None,
+          "min_tier_label": "Enterprise" | None,
+          "min_tier_rank":  <int> | None,
+          "tiers":          [<_tier_row>, ...],  # intersection ladder
+        }
+
+    Each entry in ``tiers`` matches the row shape used by
+    :func:`tiers_for_feature` (``id`` / ``label`` / ``rank`` /
+    ``purchasable``). ``min_tier`` is the cheapest *purchasable* tier
+    (trial excluded), matching :func:`min_tier_for_features`.
+
+    Never raises: a delegate failure surfaces as the empty shape so the
+    pricing UI keeps rendering.
+    """
+    try:
+        if features is None:
+            return None
+        items = list(features)
+    except TypeError:
+        return None
+    seen: set[str] = set()
+    known: list[str] = []
+    unknown: list[str] = []
+    for token in items:
+        raw = token if isinstance(token, str) else ""
+        canon = raw.strip().lower()
+        if canon and canon in ALL_FEATURES:
+            if canon not in seen:
+                seen.add(canon)
+                known.append(canon)
+        else:
+            unknown.append(canon)
+    try:
+        if not known:
+            min_t: str | None = None
+            tier_ids: list[str] = []
+        else:
+            common: set[str] | None = None
+            for fid in known:
+                carriers: set[str] = set()
+                is_free = fid in FREE_FEATURES
+                for tier in _TIER_ORDER:
+                    paid_feats = _TIER_FEATURES.get(tier, frozenset())
+                    if is_free or fid in paid_feats:
+                        carriers.add(tier)
+                common = carriers if common is None else (common & carriers)
+            tier_ids = sorted(common or set(), key=lambda t: (tier_rank(t), t))
+            min_t = min_tier_for_features(known)
+        rows = [_tier_row(t) for t in tier_ids]
+        return {
+            "items": known,
+            "unknown": unknown,
+            "kind": "features",
+            "count": len(known),
+            "min_tier": min_t,
+            "min_tier_label": tier_label(min_t) if min_t else None,
+            "min_tier_rank": tier_rank(min_t) if min_t else None,
+            "tiers": rows,
+        }
+    except Exception as exc:
+        logger.warning("entitlements: tiers_for_features failed: %s", exc)
+        return {
+            "items": known,
+            "unknown": unknown,
+            "kind": "features",
+            "count": len(known),
+            "min_tier": None,
+            "min_tier_label": None,
+            "min_tier_rank": None,
+            "tiers": [],
+        }
+
+
+def tiers_for_runtimes(runtimes) -> dict | None:
+    """Ladder-intersection sibling of :func:`min_tier_for_runtimes`:
+    the set of tiers that grant **every** supplied runtime at once,
+    wrapped in the same row shape a pricing-page component consumes off
+    :func:`tiers_for_runtime`.
+
+    Runtime-axis twin of :func:`tiers_for_features`. Semantics mirror
+    :func:`min_tier_for_runtimes` on input handling and
+    :func:`tiers_for_features` on shape:
+
+    * ``None`` / non-iterable -- returns ``None``. Never raises.
+    * Empty iterable -- returns the empty shape (``items=[]``,
+      ``tiers=[]``, ``min_tier=None``).
+    * Unknown ids (not in :data:`ALL_RUNTIMES` after
+      :func:`canonical_runtime`) -- collected into ``unknown`` and
+      dropped from the intersection.
+    * Aliases (``claude-code`` -> ``claude_code``) are canonicalised
+      through :func:`canonical_runtime` before intersection.
+    * Duplicates are de-duplicated preserving first-seen order after
+      canonicalisation.
+    * All-known-free items -- ``tiers`` covers every tier in
+      :data:`_TIER_ORDER` (:data:`FREE_RUNTIMES` are granted at every
+      tier); ``min_tier`` is :data:`TIER_OSS`.
+    * Mixed -- ``tiers`` is the intersection of the per-item grant sets;
+      ``min_tier`` matches :func:`min_tier_for_runtimes` exactly.
+
+    Response shape mirrors :func:`tiers_for_features` with
+    ``kind="runtimes"``.
+
+    Never raises: a delegate failure surfaces as the empty shape.
+    """
+    try:
+        if runtimes is None:
+            return None
+        items = list(runtimes)
+    except TypeError:
+        return None
+    seen: set[str] = set()
+    known: list[str] = []
+    unknown: list[str] = []
+    for token in items:
+        raw = token if isinstance(token, str) else ""
+        canon = canonical_runtime(raw)
+        if canon and canon in ALL_RUNTIMES:
+            if canon not in seen:
+                seen.add(canon)
+                known.append(canon)
+        else:
+            unknown.append(raw.strip().lower() if isinstance(raw, str) else "")
+    try:
+        if not known:
+            min_t: str | None = None
+            tier_ids: list[str] = []
+        else:
+            common: set[str] | None = None
+            for rt in known:
+                carriers: set[str] = set()
+                is_free = rt in FREE_RUNTIMES
+                is_paid = rt in PAID_RUNTIMES
+                for tier in _TIER_ORDER:
+                    if is_free:
+                        carriers.add(tier)
+                    elif is_paid and tier in _TIER_PAID_RUNTIMES:
+                        carriers.add(tier)
+                common = carriers if common is None else (common & carriers)
+            tier_ids = sorted(common or set(), key=lambda t: (tier_rank(t), t))
+            min_t = min_tier_for_runtimes(known)
+        rows = [_tier_row(t) for t in tier_ids]
+        return {
+            "items": known,
+            "unknown": unknown,
+            "kind": "runtimes",
+            "count": len(known),
+            "min_tier": min_t,
+            "min_tier_label": tier_label(min_t) if min_t else None,
+            "min_tier_rank": tier_rank(min_t) if min_t else None,
+            "tiers": rows,
+        }
+    except Exception as exc:
+        logger.warning("entitlements: tiers_for_runtimes failed: %s", exc)
+        return {
+            "items": known,
+            "unknown": unknown,
+            "kind": "runtimes",
+            "count": len(known),
+            "min_tier": None,
+            "min_tier_label": None,
+            "min_tier_rank": None,
+            "tiers": [],
+        }
+
+
 def tiers_for_batch_at(perspective_tier: str) -> dict | None:
     """Hypothetical-perspective sibling of :func:`tiers_for_batch`: full
     availability ladder for every known feature *and* runtime in one
