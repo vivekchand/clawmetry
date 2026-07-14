@@ -21536,3 +21536,184 @@ def api_entitlement_tiers_for_runtimes_at():
                 **_perspective_fallback(tier_in),
             }
         )
+
+
+@bp_entitlement.route("/api/entitlement/min-tier-for-features")
+def api_entitlement_min_tier_for_features():
+    """``GET /api/entitlement/min-tier-for-features?features=a,b,c`` --
+    resolver-scoped sibling of ``min_tier_for_features``: the cheapest
+    *purchasable* tier admitting every feature in the bundle.
+
+    Fills the *bare* slot for the plural grant-axis ``min_tier_for_*``
+    family alongside the singular ``/min-tier?feature=<id>`` route (which
+    resolves ONE feature at a time) and the ``_at`` sibling
+    ``/min-tier-for-features-at?tier=<perspective>&features=<csv>`` (which
+    layers a hypothetical-perspective envelope on top). A dashboard wiring
+    "you are using fleet + otel_export + sso -- Available in Enterprise"
+    can now hit ONE endpoint that folds the per-feature ``max-by-rank``
+    walk in place of N calls to ``/min-tier?feature=`` + client-side
+    aggregation.
+
+    Body byte-identical to ``/min-tier-for-features-at?tier=<p>&features=``
+    with the three ``perspective_tier`` / ``perspective_tier_label`` /
+    ``perspective_tier_rank`` envelope keys stripped -- pinned by a
+    parity test so the bare and ``_at`` bodies cannot drift.
+
+    Response shape::
+
+        {
+          "features":            ["fleet", "sso"],
+          "unknown":             ["bogus"],
+          "kind":                "features",
+          "count":               2,
+          "required_tier":       "enterprise" | null,
+          "required_tier_label": "Enterprise" | null,
+          "required_tier_rank":  <int>,
+          "free":                <bool>,
+          "current_tier":        "oss",
+          "current_tier_rank":   <int>,
+          "grace":               <bool>,
+          "enforced":            <bool>,
+        }
+
+    - **400** when ``features=`` is missing / blank after CSV
+      normalisation.
+    - **All-unknown features IS 200** with ``unknown`` populated and
+      ``required_tier=null`` -- distinguishes "caller asked for nothing"
+      from "caller asked but every token was a typo" so a paywall UI can
+      render "these ids are unknown: X" instead of a null.
+    - **Never 5xxs**: a resolver failure yields the fallback envelope
+      (empty ``features`` list, ``required_tier=null``) so the pricing
+      surface keeps rendering.
+    """
+    features_csv = _parse_csv_arg("features")
+    if not features_csv:
+        return jsonify({"error": "missing features"}), 400
+
+    try:
+        from clawmetry import entitlements as _ent
+
+        known: list[str] = []
+        unknown: list[str] = []
+        for fid in features_csv:
+            if fid in _ent.ALL_FEATURES:
+                if fid not in known:
+                    known.append(fid)
+            else:
+                if fid not in unknown:
+                    unknown.append(fid)
+
+        required = _ent.min_tier_for_features(known) if known else None
+        env = _resolver_envelope(_ent)
+        return jsonify(
+            {
+                "features": known,
+                "unknown": unknown,
+                "kind": "features",
+                "count": len(known),
+                "required_tier": required,
+                "required_tier_label": (
+                    _ent.tier_label(required) if required else None
+                ),
+                "required_tier_rank": (
+                    _ent.tier_rank(required) if required else -1
+                ),
+                "free": bool(required == _ent.TIER_OSS),
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_min_tier_for_features: error: %s", exc
+        )
+        return jsonify(
+            {
+                "features": [],
+                "unknown": features_csv,
+                "kind": "features",
+                "count": 0,
+                "required_tier": None,
+                "required_tier_label": None,
+                "required_tier_rank": -1,
+                "free": False,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/min-tier-for-runtimes")
+def api_entitlement_min_tier_for_runtimes():
+    """``GET /api/entitlement/min-tier-for-runtimes?runtimes=x,y,z`` --
+    runtime-axis twin of ``/api/entitlement/min-tier-for-features``.
+
+    Same never-5xx posture, same partial-unknown bucketing.
+    Runtime aliases (``claude-code`` -> ``claude_code``) are canonicalised
+    through :func:`clawmetry.entitlements.canonical_runtime` so a caller
+    does not need to normalise before calling; unknown ids land in
+    ``unknown`` and drop from the ``required_tier`` walk (a typo does NOT
+    silently mis-route the ladder to a higher tier).
+
+    Response shape and error paths mirror
+    ``/min-tier-for-features`` exactly, with ``kind="runtimes"`` and a
+    ``runtimes`` list in place of ``features``.
+    """
+    runtimes_csv = _parse_csv_arg("runtimes")
+    if not runtimes_csv:
+        return jsonify({"error": "missing runtimes"}), 400
+
+    try:
+        from clawmetry import entitlements as _ent
+
+        known: list[str] = []
+        unknown: list[str] = []
+        for rt in runtimes_csv:
+            canon = _ent.canonical_runtime(rt)
+            if canon and canon in _ent.ALL_RUNTIMES:
+                if canon not in known:
+                    known.append(canon)
+            else:
+                if rt not in unknown:
+                    unknown.append(rt)
+
+        required = _ent.min_tier_for_runtimes(known) if known else None
+        env = _resolver_envelope(_ent)
+        return jsonify(
+            {
+                "runtimes": known,
+                "unknown": unknown,
+                "kind": "runtimes",
+                "count": len(known),
+                "required_tier": required,
+                "required_tier_label": (
+                    _ent.tier_label(required) if required else None
+                ),
+                "required_tier_rank": (
+                    _ent.tier_rank(required) if required else -1
+                ),
+                "free": bool(required == _ent.TIER_OSS),
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_min_tier_for_runtimes: error: %s", exc
+        )
+        return jsonify(
+            {
+                "runtimes": [],
+                "unknown": runtimes_csv,
+                "kind": "runtimes",
+                "count": 0,
+                "required_tier": None,
+                "required_tier_label": None,
+                "required_tier_rank": -1,
+                "free": False,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
