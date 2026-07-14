@@ -16,8 +16,10 @@ Environment variables (mirrors tests/test_e2e.py):
     CLAWMETRY_TOKEN -- gateway token (default: ci-test-token)
 """
 
+import importlib
 import json
 import os
+import pathlib
 import urllib.request
 
 import pytest
@@ -33,7 +35,7 @@ BASE_URL = os.environ.get("CLAWMETRY_URL", "http://localhost:8900")
 TOKEN = os.environ.get("CLAWMETRY_TOKEN", "ci-test-token")
 
 
-# Class-scoped page shared across all 33 parametrized tab tests.
+# Class-scoped page shared across all parametrized tab tests.
 #
 # Why class-scoped instead of function-scoped:
 #   The original fixture created a fresh browser context per test
@@ -58,7 +60,7 @@ def _overlay_page(_shared_chromium):
         "} catch(e) {}"
     )
     page = ctx.new_page()
-    # One page load for the entire 33-tab suite.
+    # One page load for the entire tab suite.
     page.goto(BASE_URL + "/", wait_until="domcontentloaded", timeout=15000)
     # Let auth-bootstrap.js fetch /api/auth/check and gw-setup.js fetch
     # /api/gw/config settle before any tab test checks for overlays.
@@ -113,6 +115,7 @@ CANONICAL_TABS = [
     "turn-anatomy",      # turn-anatomy.html: turn anatomy analysis
     "version-impact",    # version-impact.html: version impact view
     "context-economics", # context-economics.html: context economics
+    "agents",            # agents.html: multi-agent orchestration view
 ]
 
 # Overlay element IDs that signal the auth overlay is blocking the UI.
@@ -128,6 +131,41 @@ pytestmark = pytest.mark.skipif(
     not _PLAYWRIGHT_AVAILABLE,
     reason="playwright not installed -- pip install pytest-playwright",
 )
+
+
+def test_canonical_tabs_cover_all_templates():
+    """Every clawmetry/templates/tabs/*.html stem must be in CANONICAL_TABS.
+
+    Catches the silent-drift gap: a new tab template added to
+    clawmetry/templates/tabs/ without updating CANONICAL_TABS (and
+    pr-screenshots.yml + visual-diff.mjs) would never receive the
+    post-auth overlay sweep required by C5, and could silently ship
+    with a login overlay blocking the new tab in production.
+
+    When this test fails it lists every missing stem and names the
+    three files that need to be updated.
+    """
+    try:
+        clawmetry_mod = importlib.import_module("clawmetry")
+    except ImportError:
+        pytest.skip("clawmetry package not installed -- run 'pip install -e .'")
+
+    tabs_dir = pathlib.Path(clawmetry_mod.__file__).parent / "templates" / "tabs"
+    if not tabs_dir.exists():
+        pytest.skip(f"templates/tabs/ not found at {tabs_dir} -- check package layout")
+
+    template_stems = {p.stem for p in tabs_dir.glob("*.html")}
+    canonical_set = set(CANONICAL_TABS)
+
+    uncovered = template_stems - canonical_set
+    assert not uncovered, (
+        f"Tab template(s) in clawmetry/templates/tabs/ are NOT in CANONICAL_TABS "
+        f"and will never be post-auth swept (C5 gap): {sorted(uncovered)}. "
+        f"Add each missing name to:\n"
+        f"  1. CANONICAL_TABS in tests/test_e2e_oss_all_tabs.py\n"
+        f"  2. PR_SCREENSHOT_TABS in .github/workflows/pr-screenshots.yml\n"
+        f"  3. DEFAULT_TABS in .github/scripts/visual-diff.mjs"
+    )
 
 
 class TestAllTabsPostAuth:
