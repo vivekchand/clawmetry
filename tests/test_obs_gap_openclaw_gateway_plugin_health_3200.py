@@ -11,6 +11,28 @@ import importlib
 import sys
 import types
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _restore_sys_modules():
+    """Restore sys.modules entries clobbered by _make_mock_dashboard/_reload_adapter.
+
+    Without this, the minimal stub installed for each test leaks into subsequent
+    test files, causing AttributeError on real dashboard attributes.
+    """
+    saved_dashboard = sys.modules.get("dashboard")
+    saved_adapter = sys.modules.get("clawmetry.adapters.openclaw")
+    yield
+    if saved_dashboard is None:
+        sys.modules.pop("dashboard", None)
+    else:
+        sys.modules["dashboard"] = saved_dashboard
+    if saved_adapter is None:
+        sys.modules.pop("clawmetry.adapters.openclaw", None)
+    else:
+        sys.modules["clawmetry.adapters.openclaw"] = saved_adapter
+
 
 def _make_mock_dashboard(rpc_return):
     """Return a minimal mock dashboard module with _gw_ws_rpc wired up."""

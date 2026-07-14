@@ -394,6 +394,40 @@ def test_on_event_swallows_ingest_errors(adapter, monkeypatch, caplog):
     assert any("local_store.ingest raised" in r.message for r in caplog.records)
 
 
+def test_advisor_tool_execution_start_mapped(adapter):
+    """TOOL_EXECUTION_START / tool_execution_start map to tool.call (#3720)."""
+    for raw_type in ("TOOL_EXECUTION_START", "tool_execution_start"):
+        row = adapter.map_event({
+            "event_type": raw_type,
+            "trace_id":   "adv-session-1",
+            "attributes": {"tool_name": "edit_file"},
+        })
+        assert row is not None, f"{raw_type!r} must not be dropped"
+        assert row["event_type"] == "tool.call"
+        assert row["data"]["data"]["name"] == "edit_file"
+
+
+def test_advisor_tool_execution_end_retry_outcome(adapter):
+    """TOOL_EXECUTION_END surfaces retry fields; isError=False must not be dropped (#3720)."""
+    for raw_type in ("TOOL_EXECUTION_END", "tool_execution_end"):
+        row = adapter.map_event({
+            "event_type": raw_type,
+            "trace_id":   "adv-session-2",
+            "attributes": {
+                "tool_name":     "bash",
+                "retryOutcome":  "fail-then-success",
+                "attemptNumber": 2,
+                "isError":       False,
+            },
+        })
+        assert row is not None, f"{raw_type!r} must not be dropped"
+        assert row["event_type"] == "tool.result"
+        inner = row["data"]["data"]
+        assert inner["retry_outcome"] == "fail-then-success"
+        assert inner["attempt_number"] == 2
+        assert inner["is_error"] is False  # explicit False preserved, not bool(error)
+
+
 def test_mapped_event_types_constant():
     """The public ``MAPPED_EVENT_TYPES`` tuple matches what the mapper produces."""
     from clawmetry.adapters.nemo import MAPPED_EVENT_TYPES, _EVENT_TYPE_MAP
