@@ -922,6 +922,45 @@ def _model_router_health_ok(port: int) -> bool:
         return False
 
 
+def _model_router_launch_log(tail_lines: int = 50) -> Optional[str]:
+    """Read the NemoClaw model-router launch log (#3721).
+
+    The provisioning path writes a startup log during harness onboarding
+    (``readRouterLaunchLog`` in the harness test helper). ClawMetry surfaces
+    the last ``tail_lines`` lines so a failed startup is diagnosable from the
+    dashboard rather than just showing a binary not-running verdict.
+
+    Path resolution (first match wins):
+    1. ``NEMOCLAW_MODEL_ROUTER_LOG`` env var override.
+    2. ``<venv>/model-router.log`` (same directory as fingerprint + proxy-config
+       files — the canonical NemoClaw model-router directory).
+    3. ``~/.nemoclaw/model-router.log`` (home-directory fallback).
+
+    Returns the last ``tail_lines`` as a stripped string, or ``None`` when no
+    log file is found. Never raises.
+    """
+    venv = os.environ.get("NEMOCLAW_MODEL_ROUTER_VENV") or os.path.expanduser(
+        os.path.join("~", ".nemoclaw", "model-router-venv")
+    )
+    candidates = [
+        os.environ.get("NEMOCLAW_MODEL_ROUTER_LOG", ""),
+        os.path.join(venv, "model-router.log"),
+        os.path.expanduser(os.path.join("~", ".nemoclaw", "model-router.log")),
+    ]
+    for path in candidates:
+        if not path:
+            continue
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                lines = fh.readlines()
+            return "".join(lines[-tail_lines:]).strip() or None
+        except OSError:
+            continue
+        except Exception:
+            continue
+    return None
+
+
 def _model_router_live() -> dict:
     """Runtime-liveness signal for the NemoClaw model-router proxy (#2795).
 
@@ -930,13 +969,28 @@ def _model_router_live() -> dict:
     healthy one. This discovers the live proxy and polls its ``/health``
     endpoint, surfacing the distinct liveness signal on ``DetectResult.meta``.
 
+    When the router is not running, includes ``modelRouterLaunchLog`` (last 50
+    lines of the startup log, #3721) so a failed start is diagnosable from the
+    dashboard. The key is absent when no log file exists.
+
     Returns ``{"modelRouterRunning": bool}`` (plus ``modelRouterPort`` when the
-    listening port is discoverable). Read-only, best-effort, never raises.
+    listening port is discoverable, and ``modelRouterLaunchLog`` when a log
+    file is present). Read-only, best-effort, never raises.
     """
     port = _discover_model_router_port()
     if port is None:
-        return {"modelRouterRunning": False}
-    return {"modelRouterPort": port, "modelRouterRunning": _model_router_health_ok(port)}
+        result: dict = {"modelRouterRunning": False}
+        log = _model_router_launch_log()
+        if log is not None:
+            result["modelRouterLaunchLog"] = log
+        return result
+    running = _model_router_health_ok(port)
+    result = {"modelRouterPort": port, "modelRouterRunning": running}
+    if not running:
+        log = _model_router_launch_log()
+        if log is not None:
+            result["modelRouterLaunchLog"] = log
+    return result
 
 
 def _parse_proxy_config_model_list(content: str) -> Optional[List[str]]:

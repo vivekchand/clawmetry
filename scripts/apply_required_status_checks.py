@@ -46,7 +46,7 @@ Primary repo behaviour (clawmetry):
 When run locally (GITHUB_REPOSITORY not set), the script applies all 6
 checks and requires a token with cross-repo admin access.
 
-Tracking: vivekchand/clawmetry#2146 (C6)
+Tracking: vivekchand/clawmetry#3666 (C6)
 """
 from __future__ import annotations
 
@@ -374,9 +374,9 @@ def main() -> None:
                 "  Fix: re-run the workflow and paste a fine-grained PAT into the 'pat_token' field.\n"
                 "  PAT permissions: Administration (read+write) on clawmetry, clawmetry-cloud, clawmetry-landing.\n"
                 "  Alternative: bash scripts/close-c6.sh (uses your gh CLI session, ~30 sec).\n"
-                "  Tracking: vivekchand/clawmetry#2146 (C6)"
+                "  Tracking: vivekchand/clawmetry#3666 (C6)"
             )
-        # Read-only path: GITHUB_TOKEN cannot write branch protection.
+        # Read-only path: GITHUB_TOKEN cannot write branch protection rules.
         # Scope verification to the current repo only to avoid cross-repo 403s.
         local_checks, local_deprecated = _readonly_scope()
         print("=== E2E Robustness C6: read-only verify (GITHUB_TOKEN, no write access) ===")
