@@ -5879,6 +5879,158 @@ def api_entitlement_affordable_tiers_batch():
         )
 
 
+@bp_entitlement.route("/api/entitlement/affordable-tiers-at-batch")
+def api_entitlement_affordable_tiers_at_batch():
+    """``GET /api/entitlement/affordable-tiers-at-batch?tier=<perspective>
+    &features=a,b,c&runtimes=x,y&channels=N&retention_days=K&nodes=M`` --
+    hypothetical-perspective sibling of
+    ``/api/entitlement/affordable-tiers-batch``.
+
+    Wraps :func:`clawmetry.entitlements.affordable_tiers_at_batch` so a
+    pricing-matrix walkthrough can render "if I were on Starter, each
+    requested item's cheapest tier AND every tier above that also
+    qualifies is..." off ONE round-trip without first switching the
+    resolver. Per-item plural what-if companion of ``/min-tier-batch-at``
+    (which returns only the per-item floor) and ``/affordable-tiers-at``
+    (which aggregates the answer to a single bundle-wide ordered list).
+
+    Perspective is validated against :data:`entitlements._TIER_ORDER`
+    (including ``trial``) but does NOT shape rows -- the per-item envelope
+    is anchored to the constraint bundle. A parity contract pinned in the
+    test suite guarantees per-row output byte-equals
+    ``/api/entitlement/affordable-tiers-batch`` for the same bundle
+    regardless of perspective; the response layers ``perspective_tier`` /
+    ``perspective_tier_label`` / ``perspective_tier_rank`` on top so a
+    walkthrough surface can render the "from <perspective>" copy off one
+    call alongside the existing ``current_tier`` / ``grace`` / ``enforced``
+    resolver envelope.
+
+    Args are byte-identical to ``/affordable-tiers-batch`` except for the
+    additional ``tier=`` perspective arg. Same CSV normalisation, same
+    capacity-axis parsing, same ``None`` = "not supplied" sentinel.
+
+    Response shape::
+
+        {
+          "perspective_tier":       "...",
+          "perspective_tier_label": "...",
+          "perspective_tier_rank":  <int>,
+          "features":       [<row>, ...],
+          "runtimes":       [<row>, ...],
+          "channels":       <row> | None,
+          "retention_days": <row> | None,
+          "nodes":          <row> | None,
+          "current_tier":       "...",
+          "current_tier_rank":  <int>,
+          "grace":              <bool>,
+          "enforced":           <bool>,
+        }
+
+    Each ``<row>`` carries ``key``, ``kind``, ``free``, ``min_tier``,
+    ``min_tier_label``, ``min_tier_rank`` (``-1`` when ``min_tier`` is
+    ``None``), and ``tiers`` -- the full ordered list of qualifying tiers
+    for that single item (each entry carrying ``tier`` / ``tier_label`` /
+    ``tier_rank`` / ``is_minimum``). Per-row parity with the singular
+    ``/affordable-tiers?features=<id>`` endpoint is pinned in the test
+    suite so the batch cannot silently drift from the scalar.
+
+    - **400** when ``tier=`` is missing / blank, OR when no constraint
+      axis is supplied.
+    - **404** when ``tier`` is unknown. The body carries ``which=tier``
+      so a caller can render the right "unknown tier" message.
+    - **Never 5xxs**: a resolver failure yields the grace-shape envelope
+      (empty per-axis rows) so the pricing walkthrough keeps rendering.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+
+        features = _parse_csv_arg("features")
+        runtimes = _parse_csv_arg("runtimes")
+        (_, channels_ok, channels_n, _) = _parse_capacity_arg("channels")
+        (_, retention_ok, retention_n, _) = _parse_capacity_arg(
+            "retention_days"
+        )
+        (_, nodes_ok, nodes_n, _) = _parse_capacity_arg("nodes")
+
+        if (
+            not features
+            and not runtimes
+            and not channels_ok
+            and not retention_ok
+            and not nodes_ok
+        ):
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply at least one of features=<csv>, "
+                            "runtimes=<csv>, channels=<int>, "
+                            "retention_days=<int>, or nodes=<int>"
+                        )
+                    }
+                ),
+                400,
+            )
+
+        batch = _ent.affordable_tiers_at_batch(
+            tier_in,
+            features=features or None,
+            runtimes=runtimes or None,
+            channels=channels_n if channels_ok else None,
+            retention_days=retention_n if retention_ok else None,
+            nodes=nodes_n if nodes_ok else None,
+        )
+        if batch is None:
+            batch = {
+                "features": [],
+                "runtimes": [],
+                "channels": None,
+                "retention_days": None,
+                "nodes": None,
+            }
+        ent = _ent.get_entitlement()
+        batch["perspective_tier"] = tier_in
+        batch["perspective_tier_label"] = _ent.tier_label(tier_in)
+        batch["perspective_tier_rank"] = _ent.tier_rank(tier_in)
+        batch["current_tier"] = ent.tier
+        batch["current_tier_rank"] = _ent.tier_rank(ent.tier)
+        batch["grace"] = bool(ent.grace)
+        batch["enforced"] = _ent.is_enforced()
+        return jsonify(batch)
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_affordable_tiers_at_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "perspective_tier": tier_in,
+                "perspective_tier_label": None,
+                "perspective_tier_rank": -1,
+                "features": [],
+                "runtimes": [],
+                "channels": None,
+                "retention_days": None,
+                "nodes": None,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/lock-reason-batch")
 def api_entitlement_lock_reason_batch():
     """``GET /api/entitlement/lock-reason-batch?features=a,b,c&runtimes=x,y
