@@ -8,7 +8,7 @@ name: C6 daily health check (branch-protection audit -- all 3 repos)
 # /branches/main endpoint (works for public repos; falls back to
 # UNKNOWN if protection detail is not visible cross-repo).
 #
-# On failure: posts an @-mentioned reminder to tracking issue #2146
+# On failure: posts an @-mentioned reminder to tracking issue #3666
 # at most once per calendar day. On success: posts a GREEN confirmation.
 #
 # To close C6:
@@ -18,7 +18,7 @@ name: C6 daily health check (branch-protection audit -- all 3 repos)
 #   2. Or: bash scripts/close-c6.sh
 #   3. Or: Settings > Branches > main > Required status checks (each repo)
 #
-# Tracking: vivekchand/clawmetry#2146
+# Tracking: vivekchand/clawmetry#3666
 
 on:
   schedule:
@@ -48,7 +48,7 @@ jobs:
 
           TOKEN = os.environ["GITHUB_TOKEN"]
           OWNER = "vivekchand"
-          TRACKING_ISSUE = 2146
+          TRACKING_ISSUE = 3666
           MARKER = "<!-- c6-health-check -->"
 
           HEADERS = {
@@ -168,6 +168,14 @@ jobs:
                   print(f"Health check already posted today ({today_utc}). Skipping.")
                   sys.exit(1 if results.get("clawmetry", {}).get("status") != "ok" else 0)
 
+          # Count previous health-check posts for escalation display.
+          prev_check_count = sum(
+              1
+              for c in (comments or [])
+              if (c.get("user") or {}).get("login", "") == "github-actions[bot]"
+              and MARKER in c.get("body", "")
+          )
+
           # Determine overall state.
           has_confirmed_missing = any(
               r["status"] in ("missing", "unprotected") for r in results.values()
@@ -235,7 +243,7 @@ jobs:
 
               body = (
                   f"{MARKER}\n"
-                  f"@{OWNER} **C6 health check {today_utc}: {summary}.**\n\n"
+                  f"@{OWNER} **C6 health check {today_utc} (day {prev_check_count + 1}): {summary}.**\n\n"
                   f"{table}\n\n"
                   "**Close C6 now -- 2 clicks, no local setup needed:**\n\n"
                   "**Step 1:** [Create fine-grained PAT]"
