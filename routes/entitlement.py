@@ -6275,11 +6275,26 @@ def api_entitlement_affordable_tiers_at_batch():
         )
 
 
+@bp_entitlement.route(
+    "/api/entitlement/lock-reasons-batch",
+    endpoint="api_entitlement_lock_reasons_batch",
+)
 @bp_entitlement.route("/api/entitlement/lock-reason-batch")
 def api_entitlement_lock_reason_batch():
     """``GET /api/entitlement/lock-reason-batch?features=a,b,c&runtimes=x,y
     &channels=N&retention_days=K&nodes=M`` -- per-item plural sibling of
     ``/api/entitlement/lock-reason``.
+
+    Also reachable at ``/api/entitlement/lock-reasons-batch`` (bare plural
+    URL). Both URLs dispatch to the SAME view and return byte-identical
+    JSON. The alias exists so callers can address this endpoint under the
+    plural URL naming already used by its ``_at`` sibling
+    ``/api/entitlement/lock-reasons-at-batch`` -- same bare / ``_at``
+    symmetry that ``/min-tier-for-features`` <-> ``/min-tier-for-features-at``
+    already exposes. Registering the alias with a distinct Flask endpoint
+    name (``api_entitlement_lock_reasons_batch``) keeps ``url_for`` reverse
+    lookups unambiguous while sharing one implementation. Pinned by parity
+    tests in ``tests/test_entitlement_lock_reasons_batch_alias.py``.
 
     Where ``/required-tier-batch`` aggregates the most-constraining axis into
     one tier answer, this preserves the per-item detail so a Settings or
