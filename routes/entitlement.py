@@ -21334,3 +21334,205 @@ def api_entitlement_min_tier_for_runtimes_at():
                 "enforced": False,
             }
         )
+
+
+@bp_entitlement.route("/api/entitlement/tiers-for-features-at")
+def api_entitlement_tiers_for_features_at():
+    """``GET /api/entitlement/tiers-for-features-at?tier=<perspective>
+    &features=a,b,c`` -- hypothetical-perspective sibling of
+    ``/api/entitlement/tiers-for-features``: the full ladder of tiers
+    admitting every feature in the bundle, scoped by a caller-supplied
+    ``perspective_tier``.
+
+    Fills the ``_at`` slot for the ``tiers_for_features`` ladder axis so
+    a pricing-matrix walkthrough (``?tier=<p>``) can hit
+    ``/tiers-for-features-at`` uniformly across the whole ``_at`` family
+    (alongside ``/min-tier-for-features-at`` on the scalar axis and the
+    four capacity-axis ``/tiers-for-*-at`` endpoints on the capacity
+    axis).
+
+    Perspective is validated against :data:`entitlements._TIER_ORDER`
+    (including ``trial``) but does NOT shape the answer -- the ladder id
+    list depends only on the static per-tier feature map. A parity
+    contract pinned in the test suite guarantees the six body keys
+    (``items`` / ``unknown`` / ``kind`` / ``count`` / ``min_tier`` /
+    ``min_tier_label`` / ``min_tier_rank`` / ``tiers``) byte-equal
+    ``/tiers-for-features?features=<same>`` for every perspective. The
+    response layers ``perspective_tier`` / ``perspective_tier_label`` /
+    ``perspective_tier_rank`` on top of the standard resolver envelope
+    so a walkthrough surface can render the "from <perspective>" copy
+    off one round-trip.
+
+    Response shape::
+
+        {
+          "items":                  ["fleet", "sso"],
+          "unknown":                ["bogus"],
+          "kind":                   "features",
+          "count":                  2,
+          "min_tier":               "enterprise" | null,
+          "min_tier_label":         "Enterprise" | null,
+          "min_tier_rank":          <int> | null,
+          "tiers":                  [<_tier_row>, ...],
+          "perspective_tier":       "cloud_pro",
+          "perspective_tier_label": "Cloud Pro",
+          "perspective_tier_rank":  3,
+          "current_tier":           "oss",
+          "current_tier_rank":      0,
+          "grace":                  true,
+          "enforced":               false,
+        }
+
+    - **400** when ``tier=`` is missing / blank, OR when ``features=``
+      is missing / blank after CSV normalisation.
+    - **404** when ``tier`` is unknown. The body carries ``which=tier``
+      so a caller can render the right "unknown tier" message.
+    - **All-unknown features IS 200** with ``unknown`` populated and
+      ``tiers=[]`` / ``min_tier=null`` -- distinguishes "caller asked
+      for nothing" from "caller asked but every token was a typo" so a
+      paywall UI can render "these ids are unknown: X" instead of a
+      null.
+    - **Never 5xxs**: a resolver failure yields the fallback envelope
+      (empty ``items`` / ``tiers`` list, ``min_tier=null``) so the
+      pricing walkthrough keeps rendering.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+
+    raw_features = request.args.get("features")
+    if raw_features is None or not raw_features.strip():
+        return jsonify({"error": "missing features"}), 400
+    features_csv = _parse_csv_arg("features")
+    if not features_csv:
+        return jsonify({"error": "missing features"}), 400
+
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+
+        body = _ent.tiers_for_features_at(tier_in, features_csv)
+        env = _perspective_envelope(_ent, tier_in)
+        if body is None:
+            return jsonify(
+                {
+                    "items": [],
+                    "unknown": features_csv,
+                    "kind": "features",
+                    "count": 0,
+                    "min_tier": None,
+                    "min_tier_label": None,
+                    "min_tier_rank": None,
+                    "tiers": [],
+                    **env,
+                }
+            )
+        return jsonify({**body, **env})
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_features_at: error: %s", exc
+        )
+        return jsonify(
+            {
+                "items": [],
+                "unknown": features_csv,
+                "kind": "features",
+                "count": 0,
+                "min_tier": None,
+                "min_tier_label": None,
+                "min_tier_rank": None,
+                "tiers": [],
+                **_perspective_fallback(tier_in),
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/tiers-for-runtimes-at")
+def api_entitlement_tiers_for_runtimes_at():
+    """``GET /api/entitlement/tiers-for-runtimes-at?tier=<perspective>
+    &runtimes=x,y,z`` -- runtime-axis twin of
+    ``/api/entitlement/tiers-for-features-at``.
+
+    Wraps :func:`clawmetry.entitlements.tiers_for_runtimes_at`. Runtime
+    aliases (``claude-code`` -> ``claude_code``) are canonicalised
+    before intersection; the perspective envelope layers on top of the
+    standard resolver envelope. Perspective is validated but does NOT
+    shape rows -- the ladder byte-equals
+    ``/tiers-for-runtimes?runtimes=<same>`` for every perspective
+    (pinned by the parity tests).
+
+    - **400** when ``tier=`` is missing / blank, OR when ``runtimes=``
+      is missing / blank after CSV normalisation.
+    - **404** when ``tier`` is unknown (``which=tier``).
+    - **All-unknown runtimes IS 200** with the ``unknown`` list
+      populated (mirrors ``/tiers-for-runtimes``).
+    - **Never 5xxs**: a resolver failure yields the fallback envelope.
+
+    Response shape mirrors ``/tiers-for-features-at`` with
+    ``kind="runtimes"``.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+
+    raw_runtimes = request.args.get("runtimes")
+    if raw_runtimes is None or not raw_runtimes.strip():
+        return jsonify({"error": "missing runtimes"}), 400
+    runtimes_csv = _parse_csv_arg("runtimes")
+    if not runtimes_csv:
+        return jsonify({"error": "missing runtimes"}), 400
+
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+
+        body = _ent.tiers_for_runtimes_at(tier_in, runtimes_csv)
+        env = _perspective_envelope(_ent, tier_in)
+        if body is None:
+            return jsonify(
+                {
+                    "items": [],
+                    "unknown": runtimes_csv,
+                    "kind": "runtimes",
+                    "count": 0,
+                    "min_tier": None,
+                    "min_tier_label": None,
+                    "min_tier_rank": None,
+                    "tiers": [],
+                    **env,
+                }
+            )
+        return jsonify({**body, **env})
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_runtimes_at: error: %s", exc
+        )
+        return jsonify(
+            {
+                "items": [],
+                "unknown": runtimes_csv,
+                "kind": "runtimes",
+                "count": 0,
+                "min_tier": None,
+                "min_tier_label": None,
+                "min_tier_rank": None,
+                "tiers": [],
+                **_perspective_fallback(tier_in),
+            }
+        )
