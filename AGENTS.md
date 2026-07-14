@@ -11,7 +11,7 @@ ClawMetry is open-core — there are **four repos**. Pick the right one *before*
 
 - **clawmetry** (this repo, public OSS) — OpenClaw runtime + NeMo governance + 21 chat channels + entitlement gate (`clawmetry/entitlements.py`) + license client (`clawmetry/license.py`) + Enterprise feature **endpoints** (entitlement-gated; impl may defer to clawmetry-pro). Examples: `routes/otel_export.py`, `routes/audit.py`.
 - **clawmetry-pro** (private; not on public PyPI; shipped via the license-server wheel download) — the 10 gated runtime adapters (Claude Code, Codex, Cursor, …), Pro paid CLI capabilities, advanced-feature implementations. Plugs in via `clawmetry.extensions` entry point.
-- **clawmetry-cloud** (private) — cloud SaaS app + license server (`routes/license.py`) + Stripe + admin + closed-wheel hosting (`wheels/`).
+- **clawmetry-cloud** (private) — cloud SaaS app + license server (`clawmetry-cloud/routes/license.py`) + Stripe + admin + closed-wheel hosting (`wheels/`).
 - **clawmetry-landing** (private, public site) — marketing + pricing page + Buy buttons. No gated code.
 
 Quick chooser:
