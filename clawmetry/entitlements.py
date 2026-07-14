@@ -5995,6 +5995,109 @@ def min_tier_batch_at(
         return None
 
 
+def min_tier_at(
+    perspective_tier: str,
+    *,
+    feature: str | None = None,
+    runtime: str | None = None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> str | None:
+    """Perspective-scoped scalar sibling of the five singular
+    ``min_tier_for_*`` helpers -- the cheapest purchasable tier that
+    admits a single-axis constraint, scoped by a caller-supplied
+    ``perspective_tier``.
+
+    Fills the ``_at`` slot for the singular-scalar min-tier surface
+    alongside :func:`min_tier_batch_at` (per-item batch what-if) and
+    :func:`min_tier_for_all_at` (aggregate bundle what-if). A pricing-
+    matrix walkthrough at a hypothetical perspective (``tier=<p>``) can
+    then hit ``min_tier_at`` uniformly for a single-axis scalar query,
+    matching the URL shape it already uses for the batch and bundle
+    siblings.
+
+    Same relationship to the singular ``min_tier_for_*`` helpers that
+    :func:`min_tier_batch_at` has to :func:`min_tier_batch` and
+    :func:`min_tier_for_all_at` has to :func:`min_tier_for_all`: the
+    scalar answer is inherently perspective-independent (it walks the
+    static per-tier caps via the matching ``min_tier_for_*`` helper),
+    so ``perspective_tier`` is validated but does NOT shape the result.
+    A parity test pins ``min_tier_at(p, **axis) ==
+    min_tier_for_<axis>(**axis)`` for every ``p`` in :data:`_TIER_ORDER`
+    (including :data:`TIER_TRIAL`) so the ``_at`` prefix cannot silently
+    drift into shaping the answer.
+
+    Exactly one axis must be supplied:
+
+    * ``feature=<id>`` -> delegates to :func:`min_tier_for_feature`.
+    * ``runtime=<id>`` -> delegates to :func:`min_tier_for_runtime`.
+      Aliases with hyphens (e.g. ``claude-code``) are NOT canonicalised
+      -- they land as unknown ids and return ``None``, matching the
+      ``/min-tier`` route posture and every other singular scalar
+      helper on this axis. Callers that need alias canonicalisation
+      should preprocess via :func:`canonical_runtime`.
+    * ``channels=<int>`` -> delegates to :func:`min_tier_for_channel_count`.
+    * ``retention_days=<int>`` -> delegates to :func:`min_tier_for_retention_window`.
+      ``None`` here means *unset* (zero-axes-supplied), NOT the
+      unlimited-history sentinel -- pass the unlimited request through
+      :func:`min_tier_for_retention_window` directly (matches the
+      ``/min-tier`` route, which never accepts ``None`` on this axis
+      either).
+    * ``nodes=<int>`` -> delegates to :func:`min_tier_for_node_count`.
+
+    Zero or more than one axis supplied -> ``None``. Empty / blank /
+    ``None`` / non-string / unknown ``perspective_tier`` -> ``None``.
+    Perspective is case-insensitive and whitespace-stripped (matches
+    every other ``_at`` sibling).
+
+    Decoupled from the resolved entitlement (delegates to the static
+    per-tier map through the singular ``min_tier_for_*`` helpers), so
+    grace vs enforce yields byte-identical answers.
+
+    Never raises: a delegate crash logs a warning and returns ``None``
+    so a pricing-matrix walkthrough keeps rendering instead of breaking.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+
+    def _axis_supplied(value) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return value.strip() != ""
+        return True
+
+    axes = (
+        _axis_supplied(feature),
+        _axis_supplied(runtime),
+        channels is not None,
+        retention_days is not None,
+        nodes is not None,
+    )
+    if sum(1 for a in axes if a) != 1:
+        return None
+    try:
+        if _axis_supplied(feature):
+            return min_tier_for_feature(feature)
+        if _axis_supplied(runtime):
+            return min_tier_for_runtime(runtime)
+        if channels is not None:
+            return min_tier_for_channel_count(channels)
+        if retention_days is not None:
+            return min_tier_for_retention_window(retention_days)
+        if nodes is not None:
+            return min_tier_for_node_count(nodes)
+    except Exception as exc:
+        logger.warning("entitlements: min_tier_at failed: %s", exc)
+        return None
+    return None
+
+
 def _affordable_row(key, kind: str) -> dict:
     """Per-item full-list qualifying-tier row for
     :func:`affordable_tiers_batch`.
