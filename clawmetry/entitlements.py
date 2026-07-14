@@ -5352,6 +5352,74 @@ def min_tier_for_runtimes(runtimes) -> str | None:
     return max(tiers, key=tier_rank)
 
 
+def min_tier_for_features_at(
+    perspective_tier: str, features
+) -> str | None:
+    """Hypothetical-perspective sibling of :func:`min_tier_for_features`.
+
+    Fills the ``_at`` slot for the ``min_tier_for_features`` scalar so a
+    pricing-matrix walkthrough can call ``X_at(perspective, ...)`` uniformly
+    across the whole ``_at`` family. Same relationship to
+    :func:`min_tier_for_features` that :func:`min_tier_batch_at` has to
+    :func:`min_tier_batch`: ``perspective_tier`` is validated against
+    :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`) but does NOT shape
+    the answer -- the walk still folds :func:`min_tier_for_feature` over
+    the bundle, and the resulting scalar tier id depends only on the
+    static per-tier feature map, not on the caller's live plan. A parity
+    test pins ``min_tier_for_features_at(p, ...) == min_tier_for_features(...)``
+    for every ``p`` in :data:`_TIER_ORDER` so the ``_at`` prefix cannot
+    silently drift into shaping the result.
+
+    Returns ``None`` for empty / unknown ``perspective_tier`` (caller
+    renders "unknown tier" / 404), matching the ``None`` posture the rest
+    of the ``_at`` family uses for the perspective-validation failure
+    mode. All other semantics -- empty / ``None`` iterable, unknown ids,
+    all-free bundle -> :data:`TIER_OSS`, non-iterable -> ``None`` --
+    inherit from :func:`min_tier_for_features` unchanged. Never raises: a
+    delegate failure logs a warning and returns ``None`` so a
+    pricing-matrix walkthrough keeps rendering instead of breaking.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        return min_tier_for_features(features)
+    except Exception as exc:
+        logger.warning("entitlements: min_tier_for_features_at failed: %s", exc)
+        return None
+
+
+def min_tier_for_runtimes_at(
+    perspective_tier: str, runtimes
+) -> str | None:
+    """Runtime-axis twin of :func:`min_tier_for_features_at`.
+
+    Same perspective contract, same never-raise posture, same
+    perspective-independence guarantee (pinned by a parity test in the
+    suite). Delegates to :func:`min_tier_for_runtimes`, which already
+    canonicalises runtime aliases (``claude-code`` -> ``claude_code``)
+    through :func:`canonical_runtime` so a caller does not need to
+    normalise before calling.
+
+    Returns ``None`` for empty / unknown ``perspective_tier``; all other
+    semantics inherit from :func:`min_tier_for_runtimes`.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        return min_tier_for_runtimes(runtimes)
+    except Exception as exc:
+        logger.warning("entitlements: min_tier_for_runtimes_at failed: %s", exc)
+        return None
+
+
 def min_tier_for_all(
     *,
     features=None,
