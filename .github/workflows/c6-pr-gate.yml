@@ -3,7 +3,7 @@ name: C6 Required-status-checks gate (PR audit)
 # Runs on every pull request to surface whether C6 (required-status-checks)
 # is configured on main. Fails visibly on every PR until the admin closes C6.
 #
-# The daily c6-health.yml posts to issue #3666 but the admin may not check
+# The daily c6-health.yml posts to issue #3752 but the admin may not check
 # that issue between merges. This check appears directly in the PR status
 # list alongside OSS golden path, E2E Browser Tests, etc. -- impossible to
 # miss when reviewing a PR.
@@ -34,7 +34,7 @@ name: C6 Required-status-checks gate (PR audit)
 #     bash scripts/close-c6.sh
 #     (uses your existing gh CLI session -- no PAT creation needed)
 #
-# Tracking: vivekchand/clawmetry#3666 (C6)
+# Tracking: vivekchand/clawmetry#3752 (C6)
 
 on:
   pull_request:

@@ -37,7 +37,7 @@ name: Apply required E2E status checks (C6 -- one-shot)
 #   clawmetry-landing.
 #
 # Idempotent: running multiple times is safe.
-# Tracking: vivekchand/clawmetry#3666
+# Tracking: vivekchand/clawmetry#3752
 
 on:
   workflow_dispatch:
