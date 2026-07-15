@@ -213,6 +213,39 @@ def _kill_sync_daemon() -> None:
         )
 
 
+def _kill_dashboard_processes() -> int:
+    """SIGTERM running clawmetry dashboard/server processes (best-effort).
+
+    Skips the current process and its parent so `clawmetry uninstall`
+    (which itself runs from bin/clawmetry) never kills itself mid-run.
+    Returns the number of processes signalled.
+    """
+    import signal
+    import subprocess as _sp
+
+    patterns = ("bin/clawmetry", "clawmetry/dashboard.py")
+    skip = {os.getpid(), os.getppid()}
+    killed = 0
+    try:
+        r = _sp.run(
+            ["ps", "-axo", "pid=,command="],
+            capture_output=True, text=True, check=False,
+        )
+        for line in r.stdout.splitlines():
+            pid_str, _, cmd = line.strip().partition(" ")
+            if not pid_str.isdigit() or int(pid_str) in skip:
+                continue
+            if any(p in cmd for p in patterns):
+                try:
+                    os.kill(int(pid_str), signal.SIGTERM)
+                    killed += 1
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return killed
+
+
 def _stop_existing_daemon() -> None:
     """Stop any running sync daemon, deregister old node, clear stale state."""
     import subprocess
@@ -1421,14 +1454,20 @@ def _cmd_uninstall() -> None:
     # Collect what will be removed
     items = []
 
-    # 1. Daemons
+    # 1. Daemons — every com.clawmetry.* job (sync, dashboard, sandbox.*),
+    # not just sync. The dashboard agent has KeepAlive, so missing it here
+    # leaves a launchd job that resurrects the server after uninstall.
+    daemon_plists: list = []
+    daemon_units: list = []
     if system == "Darwin":
-        plist = home / "Library" / "LaunchAgents" / "com.clawmetry.sync.plist"
-        if plist.exists():
+        la_dir = home / "Library" / "LaunchAgents"
+        daemon_plists = sorted(la_dir.glob("com.clawmetry.*.plist"))
+        for plist in daemon_plists:
             items.append(("Daemon", f"launchd service: {plist}"))
     elif system == "Linux":
-        svc = home / ".config" / "systemd" / "user" / "clawmetry-sync.service"
-        if svc.exists():
+        sysd_user = home / ".config" / "systemd" / "user"
+        daemon_units = sorted(sysd_user.glob("clawmetry*.service"))
+        for svc in daemon_units:
             items.append(("Daemon", f"systemd service: {svc}"))
         if _is_sync_running():
             items.append(("Daemon", "Running sync process"))
@@ -1540,15 +1579,24 @@ def _cmd_uninstall() -> None:
     except Exception:
         pass
 
-    # 1. Stop daemons
+    # 1. Stop daemons. Boot the launchd jobs out BEFORE deleting any files:
+    # the dashboard agent has KeepAlive, so a plist left registered restarts
+    # the server (even from a deleted ~/.clawmetry, whose files it holds open).
     if system == "Darwin":
-        plist = home / "Library" / "LaunchAgents" / "com.clawmetry.sync.plist"
-        if plist.exists():
-            subprocess.run(
-                ["launchctl", "unload", str(plist)], check=False, capture_output=True
+        uid = os.getuid()
+        for plist in daemon_plists:
+            label = plist.stem
+            r = subprocess.run(
+                ["launchctl", "bootout", f"gui/{uid}/{label}"],
+                check=False, capture_output=True,
             )
-            plist.unlink()
-            print("  ✅  Stopped and removed launchd daemon")
+            if r.returncode != 0:  # older macOS without bootout
+                subprocess.run(
+                    ["launchctl", "unload", str(plist)],
+                    check=False, capture_output=True,
+                )
+            plist.unlink(missing_ok=True)
+            print(f"  ✅  Stopped and removed launchd service: {label}")
         # Belt-and-suspenders: kill any sync daemons started by hand (not via
         # launchd). Without this, install.sh's pkill is the only thing that takes
         # them down, which surfaces to the user as "Killed stray pre-existing
@@ -1559,15 +1607,18 @@ def _cmd_uninstall() -> None:
             _kill_sync_daemon()
             print(f"  ✅  Killed {_stray} stray sync process(es)")
     elif system == "Linux":
-        _svcs = [home / ".config" / "systemd" / "user" / "clawmetry-sync.service",
-                 __import__("pathlib").Path("/etc/systemd/system/clawmetry-sync.service")]
+        _unit_names = {svc.stem for svc in daemon_units} | {"clawmetry-sync"}
+        _svcs = list(daemon_units) + [
+            __import__("pathlib").Path("/etc/systemd/system/clawmetry-sync.service")
+        ]
         if shutil.which("systemctl"):
-            for _scope in (["--user"], []):  # --user (non-root) + system (root)
-                subprocess.run(
-                    ["systemctl", *_scope, "disable", "--now", "clawmetry-sync"],
-                    check=False,
-                    capture_output=True,
-                )
+            for _unit in sorted(_unit_names):
+                for _scope in (["--user"], []):  # --user (non-root) + system (root)
+                    subprocess.run(
+                        ["systemctl", *_scope, "disable", "--now", _unit],
+                        check=False,
+                        capture_output=True,
+                    )
         _stray = _count_sync_daemons()
         _kill_sync_daemon()
         for svc in _svcs:
@@ -1577,6 +1628,11 @@ def _cmd_uninstall() -> None:
             except Exception:
                 pass
         print("  ✅  Stopped and removed sync daemon" + (f" + {_stray} stray process(es)" if _stray else ""))
+    # The bootout above kills launchd-managed processes; this sweeps up
+    # dashboards started by hand (clawmetry --port ...).
+    _stray_dash = _kill_dashboard_processes()
+    if _stray_dash:
+        print(f"  ✅  Killed {_stray_dash} dashboard process(es)")
 
     # 2. Pip uninstall (BEFORE removing venv, since sys.executable may live there)
     print("  ⏳  Uninstalling pip package...")
