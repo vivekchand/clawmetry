@@ -102,7 +102,20 @@ def _seed_rule_and_events(store, *, threshold=3, n_events=5):
 
 
 def test_evaluate_alerts_skips_when_no_cloud_account(sync_module, monkeypatch):
-    """OSS-only nodes (no cm_ key) should silently return 0."""
+    """UNLICENSED OSS-only nodes (no cm_ key) should silently return 0.
+
+    Since the local-alerting change, the no-cm branch consults the
+    entitlement resolver (licensed self-hosted nodes evaluate locally), so
+    this test pins an unlicensed enforced entitlement to stay hermetic —
+    a dev machine's real license.key / grace mode must not flip it."""
+    import clawmetry.entitlements as ent
+    monkeypatch.setattr(
+        ent, "get_entitlement",
+        lambda force=False: ent.Entitlement(
+            tier=ent.TIER_OSS, source="test", grace=False,
+            features=frozenset(), runtimes=frozenset(),
+        ),
+    )
     posted = []
     monkeypatch.setattr(sync_module, "_post",
                         lambda *a, **k: posted.append((a, k)) or {"ok": True})

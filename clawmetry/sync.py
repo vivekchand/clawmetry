@@ -19212,6 +19212,305 @@ def _alerts_quality_window_minutes(rules: list) -> int:
     return widest
 
 
+# ── Local-only alerting (licensed self-hosted nodes, no cloud account) ───────
+# A self-hosted Pro/Enterprise customer (signed CLAW1 license at
+# ~/.clawmetry/license.key, empty api_key, optional ~/.clawmetry/nocloud
+# marker) can author alert rules via POST /api/alerts/rules — but the cm_-only
+# early return in ``evaluate_alerts`` meant those rules NEVER evaluated and
+# the only delivery path was the cloud dispatch endpoint. The helpers below
+# close that gap: same DuckDB rule/event read, same
+# ``clawmetry.alert_evaluator`` walk, same cooldown/memo state keys — but
+# delivery is local:
+#   (a) an ``alert_history`` row (channel="banner") in the fleet SQLite DB —
+#       the exact table dashboard.py's ``_fire_alert`` writes and
+#       GET /api/alerts/active + /api/alerts/history read (the dashboard's
+#       ``#alert-banner`` + bell badge in clawmetry/static/js/app.js poll
+#       /api/alerts/active every tick),
+#   (b) a JSON POST to the generic webhook URL from
+#       ~/.openclaw/clawmetry-alerts.json when the rule asks for a webhook
+#       channel and the node's tier includes ``alert_webhooks``,
+#   (c) a sync-log line, always.
+# Slack/email/PagerDuty stay cloud-dispatch only. Entitlement is resolved via
+# ``clawmetry.entitlements.get_entitlement`` — the SAME resolver the routes'
+# ``@gate("custom_alerts")`` uses, so grace mode (CLAWMETRY_ENFORCE unset)
+# behaves as entitled here exactly like it does on the authoring routes, and
+# unlicensed enforced OSS nodes still get nothing (alerting is paid).
+
+# Mirrors dashboard.py's ``_ALERTS_CONFIG_FILE`` (the file the
+# GET/POST /api/alerts/webhook settings UI reads/writes).
+_LOCAL_ALERTS_WEBHOOK_CONFIG = os.path.expanduser(
+    "~/.openclaw/clawmetry-alerts.json"
+)
+
+_LOCAL_ALERTS_WEBHOOK_TIMEOUT_SEC = 10
+
+
+def _local_alerts_fleet_db_path() -> str:
+    """Path to the fleet SQLite DB the dashboard reads alerts from.
+
+    Mirrors dashboard.py's ``_fleet_db_path`` default (~/.clawmetry/fleet.db,
+    creating the directory when missing). ``CLAWMETRY_FLEET_DB`` overrides —
+    primarily for tests, also useful when the dashboard runs with a custom
+    ``--fleet-db``."""
+    env = (os.environ.get("CLAWMETRY_FLEET_DB") or "").strip()
+    if env:
+        return os.path.expanduser(env)
+    preferred_dir = os.path.expanduser("~/.clawmetry")
+    try:
+        os.makedirs(preferred_dir, exist_ok=True)
+    except OSError:
+        pass
+    if os.path.isdir(preferred_dir):
+        return os.path.join(preferred_dir, "fleet.db")
+    return os.path.expanduser("~/.clawmetry-fleet.db")
+
+
+def _persist_local_alert_banner(match: dict) -> bool:
+    """INSERT one ``alert_history`` row (channel="banner") for a match.
+
+    Same schema dashboard.py's ``_fleet_init_db`` creates, so whichever
+    process touches the fleet DB first wins and the other's CREATE TABLE
+    IF NOT EXISTS is a no-op. Never raises; returns True on success."""
+    import sqlite3
+
+    rule = match.get("rule") or {}
+    cond = rule.get("condition_json")
+    if isinstance(cond, str):
+        try:
+            cond = json.loads(cond)
+        except Exception:
+            cond = None
+    if not isinstance(cond, dict):
+        cond = {}
+    rtype = str(
+        cond.get("type") or cond.get("alert_type") or "custom_alert"
+    )
+    message = (match.get("summary") or rule.get("name") or "Alert rule fired")
+    try:
+        db = sqlite3.connect(_local_alerts_fleet_db_path(), timeout=10)
+        try:
+            db.execute("PRAGMA journal_mode=WAL")
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS alert_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    rule_id TEXT,
+                    type TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    channel TEXT NOT NULL,
+                    fired_at REAL NOT NULL,
+                    acknowledged INTEGER DEFAULT 0,
+                    ack_at REAL
+                )
+                """
+            )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_alert_history_fired "
+                "ON alert_history(fired_at DESC)"
+            )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_alert_history_rule "
+                "ON alert_history(rule_id, fired_at DESC)"
+            )
+            db.execute(
+                "INSERT INTO alert_history "
+                "(rule_id, type, message, channel, fired_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (rule.get("id"), rtype, str(message)[:500], "banner",
+                 time.time()),
+            )
+            db.commit()
+        finally:
+            db.close()
+        return True
+    except Exception as e:
+        log.warning("alerts(local): banner persist failed: %s", e)
+        return False
+
+
+def _local_alerts_webhook_url() -> str:
+    """Generic webhook URL from the dashboard's alerts webhook config file.
+
+    Only ``webhook_url`` (the generic JSON webhook) — the Slack/Discord URLs
+    in the same file are shaped payloads the dashboard sends itself; the
+    daemon's local path deliberately doesn't try to imitate them."""
+    try:
+        with open(_LOCAL_ALERTS_WEBHOOK_CONFIG, "r") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return str(data.get("webhook_url") or "").strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _rule_wants_webhook(rule: dict) -> bool:
+    """True when the rule's channels list includes a webhook channel.
+
+    Channels live either on the row itself (fleet-DB-shaped rules carry a
+    JSON-encoded ``channels`` column) or inside ``condition_json`` (the
+    DuckDB rule shape). Absent/malformed channels mean banner-only."""
+    channels = rule.get("channels")
+    if channels is None:
+        cond = rule.get("condition_json")
+        if isinstance(cond, str):
+            try:
+                cond = json.loads(cond)
+            except Exception:
+                cond = None
+        if isinstance(cond, dict):
+            channels = cond.get("channels")
+    if isinstance(channels, str):
+        try:
+            channels = json.loads(channels)
+        except Exception:
+            channels = [channels]
+    if not isinstance(channels, (list, tuple)):
+        return False
+    return any(str(c).strip().lower() == "webhook" for c in channels)
+
+
+def _post_local_alert_webhook(url: str, payload: dict) -> bool:
+    """POST the match JSON to the configured webhook. Never raises."""
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "clawmetry-daemon",
+            },
+        )
+        with urllib.request.urlopen(
+            req, timeout=_LOCAL_ALERTS_WEBHOOK_TIMEOUT_SEC
+        ) as resp:
+            status = getattr(resp, "status", None) or 200
+            return 200 <= int(status) < 300
+    except Exception as e:
+        log.warning("alerts(local): webhook POST failed: %s", e)
+        return False
+
+
+def _evaluate_alerts_local(config: dict, state: dict) -> int:
+    """Local DuckDB evaluation -> LOCAL delivery for licensed self-hosted
+    nodes (no ``cm_`` cloud token).
+
+    Same rule/event read + ``clawmetry.alert_evaluator`` walk as the cm_
+    path in :func:`evaluate_alerts`, same ``alerts_last_eval_ts`` /
+    ``alerts_eval_memo`` state keys — only the delivery differs (banner row
+    in the fleet DB, optional generic webhook, sync log; see the block
+    comment above). Rules are read WITHOUT an owner_hash filter: a no-cloud
+    node has no token to scope by, and its store only holds its own rules.
+
+    Returns the count of locally delivered matches. Returns 0 without
+    evaluating when the node's entitlement doesn't allow ``custom_alerts``
+    (unlicensed OSS in enforce mode — alerting is paid). Never raises into
+    the daemon loop."""
+    try:
+        from clawmetry import entitlements as _entitlements
+
+        ent = _entitlements.get_entitlement()
+    except Exception as e:
+        log.debug("alerts(local): entitlement read failed: %s", e)
+        return 0
+    if not ent.allows_feature("custom_alerts"):
+        return 0  # Unlicensed node: alerting is a paid feature.
+
+    try:
+        from clawmetry import local_store, alert_evaluator
+    except Exception as e:
+        log.warning("alerts(local): local_store/alert_evaluator import "
+                    "failed: %s", e)
+        return 0
+
+    try:
+        store = local_store.get_store()
+    except Exception as e:
+        log.warning("alerts(local): local store unavailable: %s", e)
+        return 0
+
+    try:
+        rules = store.query_alert_rules(enabled_only=True, limit=200)
+    except Exception as e:
+        log.warning("alerts(local): query_alert_rules failed: %s", e)
+        return 0
+    if not rules:
+        return 0
+
+    last_eval_ts = state.get("alerts_last_eval_ts")
+    since = last_eval_ts or _iso_now_minus(_ALERTS_EVENT_LOOKBACK_SEC)
+    try:
+        events = store.query_events(since=since, limit=_ALERTS_EVENT_LIMIT)
+    except Exception as e:
+        log.warning("alerts(local): query_events failed: %s", e)
+        return 0
+
+    last_eval_state = state.setdefault("alerts_eval_memo", {})
+    if not isinstance(last_eval_state, dict):
+        last_eval_state = {}
+        state["alerts_eval_memo"] = last_eval_state
+
+    quality = None
+    try:
+        quality_window = _alerts_quality_window_minutes(rules)
+    except Exception:
+        quality_window = 0
+    if quality_window > 0:
+        try:
+            quality = store.query_session_quality_window(
+                window_minutes=quality_window,
+            )
+        except Exception as e:
+            log.warning(
+                "alerts(local): query_session_quality_window failed: %s", e
+            )
+            quality = None
+
+    try:
+        matches = alert_evaluator.evaluate(
+            rules, events, last_eval_state, quality
+        )
+    except Exception as e:
+        log.warning("alerts(local): evaluator errored: %s", e)
+        state["alerts_last_eval_ts"] = _iso_now()
+        return 0
+
+    webhook_url = ""
+    try:
+        if ent.allows_feature("alert_webhooks"):
+            webhook_url = _local_alerts_webhook_url()
+    except Exception:
+        webhook_url = ""
+
+    delivered = 0
+    for m in matches:
+        rule = m.get("rule") or {}
+        evt = m.get("event") or {}
+        # (c) always log — even if both persistence and webhook fail, the
+        # operator can grep the sync log for the fire.
+        log.info("alerts(local): rule=%s fired: %s",
+                 rule.get("id"), (m.get("summary") or "")[:200])
+        ok = _persist_local_alert_banner(m)
+        if webhook_url and _rule_wants_webhook(rule):
+            payload = {
+                "rule_id":       rule.get("id"),
+                "rule_name":     rule.get("name") or "",
+                "node_id":       config.get("node_id") or "",
+                "event_id":      evt.get("id"),
+                "event_summary": (m.get("summary") or "")[:500],
+                "evaluated_at":  _iso_now(),
+                "metadata":      m.get("metadata") or {},
+                "source":        "clawmetry-local",
+            }
+            if _post_local_alert_webhook(webhook_url, payload):
+                ok = True
+        if ok:
+            delivered += 1
+
+    state["alerts_last_eval_ts"] = _iso_now()
+    return delivered
+
+
 def evaluate_alerts(config: dict, state: dict) -> int:
     """Local DuckDB evaluation -> cloud dispatch on match (PRD #779 PR-D pt2).
 
@@ -19226,7 +19525,9 @@ def evaluate_alerts(config: dict, state: dict) -> int:
     Returns the count of dispatched matches. Persists ``alerts_last_eval_ts``
     + ``alerts_eval_memo`` into ``state`` so cooldown survives daemon
     restart. Skipped silently when:
-      * the user is OSS-only (no ``cm_`` api key) — alerts is Cloud-Pro only,
+      * the user is OSS-only (no ``cm_`` api key) — the call is handed to
+        :func:`_evaluate_alerts_local`, which evaluates + delivers locally
+        for licensed self-hosted nodes and returns 0 for unlicensed ones,
       * no rules are cached locally (cloud hasn't authored or pushed any),
       * the local store is unreachable (the function never raises into the
         daemon loop — at most logs a WARNING and returns 0).
@@ -19237,7 +19538,11 @@ def evaluate_alerts(config: dict, state: dict) -> int:
     api_key = config.get("api_key", "")
     node_id = config.get("node_id", "")
     if not api_key or not api_key.startswith("cm_") or not node_id:
-        return 0  # OSS / unconfigured node: nothing to dispatch.
+        # No cloud account/token. Licensed self-hosted nodes (Pro/Enterprise
+        # via ~/.clawmetry/license.key) still evaluate + deliver LOCALLY —
+        # see _evaluate_alerts_local above. Unlicensed OSS stays a no-op
+        # (the entitlement check inside returns 0 — alerting is paid).
+        return _evaluate_alerts_local(config, state)
 
     try:
         from clawmetry import local_store, alert_evaluator
