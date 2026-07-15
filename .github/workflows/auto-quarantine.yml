@@ -84,7 +84,7 @@ jobs:
           git commit -m "test: auto-quarantine flaky E2E tests [C7]
 
           Flaky tests detected by auto_quarantine.py: failed in an OSS
-          Golden Path run then passed on re-run. Added to quarantine.txt
+          Golden Path run then passed on re-run of the same commit. Added to quarantine.txt
           so they are excluded from the main PR gate and swept daily.
 
           Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
