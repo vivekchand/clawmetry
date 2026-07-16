@@ -525,6 +525,10 @@
       <div class="tool-spark"><span>--</span></div></div>
     <div id="active-tasks-grid"></div>
     <div id="activity-stream"></div>
+    <!-- Live log stream overview target (#3761): startLogStream() appends lines
+         here via appendLogLine('ov-logs', ...). Hidden in overview; the full
+         panel lives in page-logs (tabs/logs.html). -->
+    <div id="ov-logs"></div>
   </div>
 
   <!-- old system health removed, now inside tasks pane -->

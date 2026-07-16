@@ -12176,6 +12176,9 @@ DASHBOARD_HTML = r"""
       <div class="left-nav-item left-nav-item-sub" data-tab="notifications" onclick="switchTab('notifications')">
         <span class="left-nav-label" data-i18n="nav.notifications">Notifications</span>
       </div>
+      <div class="left-nav-item left-nav-item-sub" data-tab="logs" onclick="switchTab('logs')" title="Live OpenClaw log stream">
+        <span class="left-nav-label">Logs</span>
+      </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="security" onclick="switchTab('security')">
         <span class="left-nav-label" data-i18n="nav.security">Security</span>
       </div>
@@ -12273,6 +12276,9 @@ DASHBOARD_HTML = r"""
 
 <!-- HARNESS (declarative per-runtime custom panel; #2667) -->
 {% include 'tabs/harness.html' %}
+
+<!-- LOGS (live stream + historical viewer; #3761) -->
+{% include 'tabs/logs.html' %}
 
 <!-- SWIMLANE COMPARE — N parallel live lanes (sessions / runtimes) -->
 {% include 'tabs/swimlane.html' %}

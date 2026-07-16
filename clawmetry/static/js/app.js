@@ -1216,6 +1216,7 @@ function switchTab(name) {
   if (name === 'policy') { if (typeof loadToolPolicy === 'function') loadToolPolicy(); }
   if (name === 'approvals') { if (typeof loadApprovalsTab === 'function') loadApprovalsTab(); }
   if (name === 'alerts') { if (typeof loadAlertsPage === 'function') loadAlertsPage(); }
+  if (name === 'logs') loadLogs();
   if (name === 'dives') { if (typeof loadDivesPage === 'function') loadDivesPage(); }
   if (name === 'actions') loadQAHistory();
   if (name === 'models') loadModelAttribution();
@@ -16639,6 +16640,29 @@ function startLogStream() {
     processFlowEvent(data.line);
     document.getElementById('refresh-time').textContent = 'Live \u2022 ' + new Date().toLocaleTimeString();
   };
+  // Named events emitted by _generate_openclaw_json_logs() in routes/infra.py.
+  // EventSource.onmessage only fires for unnamed data: events; named events
+  // require addEventListener or they are silently dropped (#3761).
+  logStream.addEventListener('log-meta', function(e) {
+    try {
+      var meta = JSON.parse(e.data);
+      var s = document.getElementById('log-stream-status');
+      if (s && meta.file) s.title = 'Source: ' + meta.file + (meta.size ? ' (' + meta.size + ' bytes)' : '');
+      var srcEl = document.getElementById('log-source-path');
+      if (srcEl && meta.file) srcEl.textContent = meta.file;
+    } catch(ex) {}
+  });
+  logStream.addEventListener('log-notice', function(e) {
+    try {
+      var notice = JSON.parse(e.data);
+      var msg = notice.message || notice.reason || JSON.stringify(notice);
+      var line = '[NOTICE] ' + msg;
+      streamBuffer.push(line);
+      if (streamBuffer.length > MAX_STREAM_LINES) streamBuffer.shift();
+      appendLogLine('ov-logs', line);
+      appendLogLine('logs-full', line);
+    } catch(ex) {}
+  });
   logStream.onerror = function() {
     var s = document.getElementById('log-stream-status');
     if (s) { s.textContent = t("app.dot_reconnecting", null, "\u25cf Reconnecting\u2026"); s.style.color = '#f59e0b'; }
