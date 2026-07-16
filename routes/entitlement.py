@@ -299,6 +299,71 @@ logger = logging.getLogger("clawmetry.routes.entitlement")
 bp_entitlement = Blueprint("entitlement", __name__)
 
 
+# Last-resort minimal OSS-free snapshot used only if BOTH ``get_entitlement``
+# and ``_oss_free().to_dict()`` raise (e.g. the entitlements module itself
+# fails to import). Kept in-line so this branch does not re-import the
+# possibly-broken module. Keys mirror the top-level shape of
+# :meth:`clawmetry.entitlements.Entitlement.to_dict` so a paywall UI reading
+# ``data.features`` / ``data.free_runtimes`` never KeyErrors on the error path.
+# ``features`` is populated with the canonical FREE_FEATURES set so a caller
+# that lands on this branch does not silently see an empty feature list
+# (which would look like "OSS install has no free features -- lock everything"
+# once enforcement is live).
+_MINIMAL_OSS_FREE_SNAPSHOT = {
+    "tier": "oss",
+    "tier_label": "OSS",
+    "tier_rank": 0,
+    "source": "oss",
+    "node_limit": 1,
+    "channel_limit": None,
+    "expiry": None,
+    "expired": False,
+    "days_until_expiry": None,
+    "is_paid": False,
+    "grace": True,
+    "enforced": False,
+    "enforce_at": None,
+    "enforce_at_iso": None,
+    "days_until_enforce": None,
+    "retention_days": 7,
+    "effective_retention_days": 7,
+    "runtimes": ["nemoclaw", "openclaw"],
+    "features": sorted(
+        [
+            "brain",
+            "channels",
+            "crons",
+            "flow",
+            "health",
+            "logs",
+            "nemo_governance",
+            "overview",
+            "sessions",
+            "tracing",
+            "transcripts",
+            "usage",
+        ]
+    ),
+    "free_runtimes": ["nemoclaw", "openclaw"],
+    "paid_runtimes": [],
+    "all_runtimes": ["nemoclaw", "openclaw"],
+    "locked_runtimes": [],
+    "locked_features": [],
+    "next_tier": None,
+    "next_tier_label": None,
+    "prev_tier": None,
+    "prev_tier_label": None,
+    "next_tier_diff": None,
+    "prev_tier_diff": None,
+    "next_tier_capacity_diff": None,
+    "prev_tier_capacity_diff": None,
+    "next_tier_unlocks": None,
+    "prev_tier_unlocks": None,
+    "next_tier_locks": None,
+    "prev_tier_locks": None,
+}
+
+
 @bp_entitlement.route("/api/entitlement")
 def api_entitlement():
     try:
@@ -306,33 +371,26 @@ def api_entitlement():
 
         return jsonify(_ent.get_entitlement().to_dict())
     except Exception as exc:
-        logger.warning("api_entitlement: falling back to OSS-free: %s", exc)
-        return jsonify(
-            {
-                "tier": "oss",
-                "tier_label": "OSS",
-                "tier_rank": 0,
-                "source": "oss",
-                "node_limit": 1,
-                "expiry": None,
-                "expired": False,
-                "is_paid": False,
-                "grace": True,
-                "enforced": False,
-                "enforce_at": None,
-                "enforce_at_iso": None,
-                "days_until_enforce": None,
-                "retention_days": 7,
-                "runtimes": ["nemoclaw", "openclaw"],
-                "features": [],
-                "locked_runtimes": [],
-                "locked_features": [],
-                "next_tier_diff": None,
-                "prev_tier_diff": None,
-                "next_tier_unlocks": None,
-                "prev_tier_unlocks": None,
-            }
+        logger.warning(
+            "api_entitlement: primary resolver failed, falling back to OSS-free: %s",
+            exc,
         )
+    # Preferred fallback: build the canonical OSS-free entitlement and return
+    # its ``to_dict()`` so the shape matches the healthy path exactly (30+
+    # keys including ``features``, ``free_runtimes``, ``channel_limit``,
+    # ``next_tier_capacity_diff``, ``next_tier_locks``...). Only if this ALSO
+    # fails -- typically an import failure of the entitlements module itself
+    # -- do we fall through to the in-line snapshot below.
+    try:
+        from clawmetry import entitlements as _ent
+
+        return jsonify(_ent._oss_free().to_dict())
+    except Exception as exc2:
+        logger.warning(
+            "api_entitlement: OSS-free fallback also failed, using minimal snapshot: %s",
+            exc2,
+        )
+    return jsonify(dict(_MINIMAL_OSS_FREE_SNAPSHOT))
 
 
 @bp_entitlement.route("/api/entitlement/refresh", methods=["POST"])
