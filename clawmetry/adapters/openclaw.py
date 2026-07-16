@@ -762,10 +762,20 @@ def _sandbox_inference_configs() -> list:
                 # matching the supervisor's own gate exactly.
                 if "deepagents-code" in _sb.lower() or _sb.lower() == "dcode":
                     import sys as _sys
+                    import shutil as _shutil
+                    _platform_ok = _sys.platform.startswith("linux")
+                    _openshell_ok = bool(_shutil.which("openshell"))
                     _te["dcodeSupervisionFeasible"] = (
-                        _sys.platform.startswith("linux")
-                        and bool(_te.get("sandboxPhase"))
+                        _platform_ok and bool(_te.get("sandboxPhase"))
                     )
+                    _te["dcodeSupervisionPlatformOk"] = _platform_ok
+                    _te["dcodeOpenshellAvailable"] = _openshell_ok
+                    if not _platform_ok:
+                        _te["dcodeSupervisionFailReason"] = "non-linux platform"
+                    elif not _openshell_ok:
+                        _te["dcodeSupervisionFailReason"] = "openshell absent"
+                    else:
+                        _te["dcodeSupervisionFailReason"] = None
                 out.append(_te)
     except Exception:
         pass

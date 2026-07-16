@@ -136,3 +136,70 @@ def test_non_dcode_sandbox_not_flagged(tmp_path, monkeypatch):
     assert "dcodeSupervisionFeasible" not in te, (
         f"unexpected dcodeSupervisionFeasible on non-dcode sandbox: {te}"
     )
+
+
+# ---------------------------------------------------------------------------
+# 5–7. New granular fields from #3764 (dcodeSupervisionPlatformOk,
+#       dcodeOpenshellAvailable, dcodeSupervisionFailReason)
+# ---------------------------------------------------------------------------
+
+def test_dcode_granular_fields_all_ok(tmp_path, monkeypatch):
+    """All conditions met → PlatformOk=True, OpenshellAvailable=True, FailReason=None."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _write_sandboxes_json(tmp_path, {"sandboxes": {}})
+    _write_agents_yaml(tmp_path, (
+        "agents:\n"
+        "  - name: deepagents-code\n"
+        "    sandbox: deepagents-code\n"
+    ))
+    monkeypatch.setattr(shutil, "which", lambda _cmd: "/usr/bin/openshell")
+    monkeypatch.setattr(subprocess, "run", _fake_run_with_phase)
+    monkeypatch.setattr(sys, "platform", "linux")
+
+    result = _sandbox_inference_configs()
+    te = next((r for r in result if r["sandbox"] == "deepagents-code"), None)
+    assert te is not None
+    assert te.get("dcodeSupervisionPlatformOk") is True
+    assert te.get("dcodeOpenshellAvailable") is True
+    assert te.get("dcodeSupervisionFailReason") is None
+
+
+def test_dcode_fail_reason_non_linux(tmp_path, monkeypatch):
+    """Non-Linux → PlatformOk=False, FailReason='non-linux platform'."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _write_sandboxes_json(tmp_path, {"sandboxes": {}})
+    _write_agents_yaml(tmp_path, (
+        "agents:\n"
+        "  - name: deepagents-code\n"
+        "    sandbox: deepagents-code\n"
+    ))
+    monkeypatch.setattr(shutil, "which", lambda _cmd: "/usr/bin/openshell")
+    monkeypatch.setattr(subprocess, "run", _fake_run_with_phase)
+    monkeypatch.setattr(sys, "platform", "darwin")
+
+    result = _sandbox_inference_configs()
+    te = next((r for r in result if r["sandbox"] == "deepagents-code"), None)
+    assert te is not None
+    assert te.get("dcodeSupervisionPlatformOk") is False
+    assert te.get("dcodeSupervisionFailReason") == "non-linux platform"
+
+
+def test_dcode_fail_reason_openshell_absent(tmp_path, monkeypatch):
+    """Linux but openshell not in PATH → OpenshellAvailable=False, FailReason='openshell absent'."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _write_sandboxes_json(tmp_path, {"sandboxes": {}})
+    _write_agents_yaml(tmp_path, (
+        "agents:\n"
+        "  - name: deepagents-code\n"
+        "    sandbox: deepagents-code\n"
+    ))
+    monkeypatch.setattr(shutil, "which", lambda _cmd: None)
+    monkeypatch.setattr(subprocess, "run", _fake_run_no_phase)
+    monkeypatch.setattr(sys, "platform", "linux")
+
+    result = _sandbox_inference_configs()
+    te = next((r for r in result if r["sandbox"] == "deepagents-code"), None)
+    assert te is not None
+    assert te.get("dcodeSupervisionPlatformOk") is True
+    assert te.get("dcodeOpenshellAvailable") is False
+    assert te.get("dcodeSupervisionFailReason") == "openshell absent"
