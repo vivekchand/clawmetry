@@ -7883,6 +7883,43 @@ async function ncReject(sandbox, chunkId, btn) {
   }
 }
 
+// ── Local approval decision (policy-engine pending queue) ────────────────
+// Wired into the pending rows of the exec-approval audit panel. POSTs to
+// /api/approvals/<id>/decide (routes/policy.py); the daemon's local
+// blocking watcher (approvals._poll_decision_local, 3s cadence) sees the
+// row flip and unblocks / kills the agent. On a licensed local-only node
+// this is what actually enforces a policy DENY — before it existed, a
+// blocking rule on a self-hosted install soft-failed to OPEN because
+// there was no cloud to relay the decision.
+async function approvalDecide(approvalId, decision, btn) {
+  if (!approvalId) return;
+  var label = (decision === 'approve') ? 'Approve' : 'Deny';
+  var reason = null;
+  if (decision === 'deny') {
+    reason = window.prompt('Deny reason (optional):');
+    if (reason === null) return; // cancelled
+  }
+  if (btn) { btn.disabled = true; btn.textContent = label + '...'; }
+  try {
+    var resp = await fetch('/api/approvals/' + encodeURIComponent(approvalId) + '/decide', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({decision: decision, reason: reason || undefined})
+    });
+    var data = await resp.json();
+    if (resp.ok && data.ok) {
+      // Refresh the audit panel so the row flips + buttons disappear.
+      if (typeof loadToolPolicy === 'function') setTimeout(loadToolPolicy, 300);
+    } else {
+      if (btn) { btn.disabled = false; btn.textContent = label; }
+      alert(label + ' failed: ' + (data.error || ('HTTP ' + resp.status)));
+    }
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+    console.error('approvalDecide error:', e);
+  }
+}
+
 // Security posture renderer — elevates the WARN/FAIL items that need
 // attention, collapses the passing items behind a one-line "show all"
 // disclosure, and condenses the hero card so the action items aren't
@@ -16075,13 +16112,23 @@ async function loadToolPolicy() {
       }
       var rows = head;
       decisions.forEach(function(d){
-        rows += '<div style="padding:9px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;">';
+        rows += '<div style="padding:9px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;" data-approval-id="'+escHtml(String(d.id||''))+'">';
         rows += '<div style="display:flex;align-items:center;gap:10px;">';
         rows += decPill(d.status);
         rows += '<span style="font-weight:600;color:var(--text-primary);">'+escHtml(String(d.action||'tool-call'))+'</span>';
         if (d.args_preview) rows += '<span style="flex:1;color:var(--text-muted);font-family:monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+escHtml(String(d.args_preview))+'">'+escHtml(String(d.args_preview))+'</span>';
         else rows += '<span style="flex:1;"></span>';
         if (d.resolver) rows += '<span style="font-size:11px;color:var(--text-faint);">by '+escHtml(String(d.resolver))+'</span>';
+        // Pending rows on a local (no-cloud) node get inline Approve/Deny
+        // buttons that POST /api/approvals/<id>/decide. Decided rows show
+        // no buttons — the decision is frozen server-side (idempotent
+        // update_approval_decision). Same nc-approvals visual language so
+        // the panel stays consistent with the NemoClaw queue above.
+        if (d.status === 'pending' && d.id) {
+          var aid = escHtml(String(d.id));
+          rows += '<button onclick="approvalDecide(\''+aid+'\',\'approve\',this)" style="padding:3px 10px;background:rgba(22,163,74,0.15);color:#16a34a;border:1px solid rgba(22,163,74,0.4);border-radius:5px;cursor:pointer;font-size:11px;font-weight:600;">Approve</button>';
+          rows += '<button onclick="approvalDecide(\''+aid+'\',\'deny\',this)" style="padding:3px 10px;background:rgba(239,68,68,0.1);color:#ef4444;border:1px solid rgba(239,68,68,0.3);border-radius:5px;cursor:pointer;font-size:11px;font-weight:600;">Deny</button>';
+        }
         rows += '</div>';
         if (d.decision_reason) rows += '<div style="margin-top:3px;color:var(--text-muted);font-size:11px;">'+escHtml(String(d.decision_reason))+'</div>';
         rows += '</div>';
@@ -16187,13 +16234,23 @@ async function loadToolPolicy() {
       }
       var rows = head;
       decisions.forEach(function(d){
-        rows += '<div style="padding:9px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;">';
+        rows += '<div style="padding:9px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;" data-approval-id="'+escHtml(String(d.id||''))+'">';
         rows += '<div style="display:flex;align-items:center;gap:10px;">';
         rows += decPill(d.status);
         rows += '<span style="font-weight:600;color:var(--text-primary);">'+escHtml(String(d.action||'tool-call'))+'</span>';
         if (d.args_preview) rows += '<span style="flex:1;color:var(--text-muted);font-family:monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+escHtml(String(d.args_preview))+'">'+escHtml(String(d.args_preview))+'</span>';
         else rows += '<span style="flex:1;"></span>';
         if (d.resolver) rows += '<span style="font-size:11px;color:var(--text-faint);">by '+escHtml(String(d.resolver))+'</span>';
+        // Pending rows on a local (no-cloud) node get inline Approve/Deny
+        // buttons that POST /api/approvals/<id>/decide. Decided rows show
+        // no buttons — the decision is frozen server-side (idempotent
+        // update_approval_decision). Same nc-approvals visual language so
+        // the panel stays consistent with the NemoClaw queue above.
+        if (d.status === 'pending' && d.id) {
+          var aid = escHtml(String(d.id));
+          rows += '<button onclick="approvalDecide(\''+aid+'\',\'approve\',this)" style="padding:3px 10px;background:rgba(22,163,74,0.15);color:#16a34a;border:1px solid rgba(22,163,74,0.4);border-radius:5px;cursor:pointer;font-size:11px;font-weight:600;">Approve</button>';
+          rows += '<button onclick="approvalDecide(\''+aid+'\',\'deny\',this)" style="padding:3px 10px;background:rgba(239,68,68,0.1);color:#ef4444;border:1px solid rgba(239,68,68,0.3);border-radius:5px;cursor:pointer;font-size:11px;font-weight:600;">Deny</button>';
+        }
         rows += '</div>';
         if (d.decision_reason) rows += '<div style="margin-top:3px;color:var(--text-muted);font-size:11px;">'+escHtml(String(d.decision_reason))+'</div>';
         rows += '</div>';
