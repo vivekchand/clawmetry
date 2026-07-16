@@ -9891,6 +9891,124 @@ def _sync_cron_runs_from_state_sqlite(config: dict, state: dict, store) -> int:
     return n_ingested
 
 
+def sync_backups(config: dict, state: dict, paths: dict) -> int:
+    """Ingest OpenClaw backup/snapshot records into DuckDB (issue #3696).
+
+    Probes candidate directories under the OpenClaw home in order of
+    likelihood.  If a ``manifest.jsonl`` is present, each line is a JSON
+    record; otherwise we walk ``*.sqlite`` / ``*.duckdb`` files and infer
+    metadata from the naming convention ``{type}_backup_{ts}[_{agent}].ext``
+    (e.g. ``global_backup_20260713_143000.sqlite``).  Returns early with 0
+    on any import error or when no backup directory is found — callers must
+    not crash on empty results.
+    """
+    _record_sync_progress("backups", 0)
+    openclaw_dir = _get_openclaw_dir()
+    # Try common paths; keep fallback ordering stable across OpenClaw versions.
+    candidate_dirs = [
+        os.path.join(openclaw_dir, "backups"),
+        os.path.join(openclaw_dir, "state", "backups"),
+        os.path.join(openclaw_dir, "agents", "main", "backups"),
+    ]
+    backup_dir = next((d for d in candidate_dirs if os.path.isdir(d)), None)
+    if not backup_dir:
+        _record_sync_progress("backups", 0, 0)
+        return 0
+
+    try:
+        from clawmetry import local_store as _ls
+        store = _ls.get_store()
+    except Exception as e:
+        log.debug("sync_backups: store unavailable: %s", e)
+        return 0
+
+    node_id = config.get("node_id", "")
+    n_ingested = 0
+
+    # Prefer manifest JSONL when present (authoritative, written by OpenClaw).
+    manifest_path = os.path.join(backup_dir, "manifest.jsonl")
+    if os.path.isfile(manifest_path):
+        try:
+            with open(manifest_path, "rb") as fh:
+                for raw_line in fh:
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except Exception:
+                        continue
+                    bid = rec.get("backup_id") or rec.get("id")
+                    if not bid:
+                        continue
+                    try:
+                        store.ingest_backup_record({
+                            "backup_id":      bid,
+                            "node_id":        rec.get("node_id") or node_id,
+                            "ts":             rec.get("ts") or rec.get("created_at") or "",
+                            "backup_type":    rec.get("backup_type") or rec.get("type") or "global",
+                            "agent_id":       rec.get("agent_id"),
+                            "scope":          rec.get("scope") or "sqlite",
+                            "file_path":      rec.get("file") or rec.get("file_path"),
+                            "file_size_bytes": rec.get("file_size_bytes") or rec.get("size"),
+                            "verify_status":  rec.get("verify_status") or rec.get("verify"),
+                            "verify_ts":      rec.get("verify_ts"),
+                        })
+                        n_ingested += 1
+                    except Exception as e_in:
+                        log.debug("sync_backups: ingest failed for %s: %s", bid, e_in)
+        except Exception as e_manifest:
+            log.debug("sync_backups: manifest read error: %s", e_manifest)
+    else:
+        # Fall back: walk backup files and infer metadata from naming.
+        # Expected convention: ``{type}_backup_{YYYYMMDD_HHMMSS}[_{agent_id}].{ext}``
+        # e.g. ``global_backup_20260713_143000.sqlite``
+        import re as _re
+        _pat = _re.compile(
+            r"^(?P<btype>global|agent|per_agent)_backup_"
+            r"(?P<date>\d{8})_(?P<time>\d{6})"
+            r"(?:_(?P<agent>[^.]+))?"
+            r"\.(?:sqlite|duckdb)$"
+        )
+        try:
+            for fname in sorted(os.listdir(backup_dir)):
+                m = _pat.match(fname)
+                if not m:
+                    continue
+                fpath = os.path.join(backup_dir, fname)
+                try:
+                    fsize = os.path.getsize(fpath)
+                except OSError:
+                    fsize = None
+                d, t = m.group("date"), m.group("time")
+                ts_str = f"{d[:4]}-{d[4:6]}-{d[6:8]}T{t[:2]}:{t[2:4]}:{t[4:6]}"
+                bid = fname.rsplit(".", 1)[0]
+                try:
+                    store.ingest_backup_record({
+                        "backup_id":       bid,
+                        "node_id":         node_id,
+                        "ts":              ts_str,
+                        "backup_type":     m.group("btype").replace("per_agent", "agent"),
+                        "agent_id":        m.group("agent"),
+                        "scope":           "sqlite" if fname.endswith(".sqlite") else "duckdb",
+                        "file_path":       fpath,
+                        "file_size_bytes": fsize,
+                        "verify_status":   None,
+                        "verify_ts":       None,
+                    })
+                    n_ingested += 1
+                except Exception as e_in:
+                    log.debug("sync_backups: ingest failed for %s: %s", fname, e_in)
+        except Exception as e_walk:
+            log.debug("sync_backups: directory walk error: %s", e_walk)
+
+    if n_ingested:
+        _record_sync_progress("backups", n_ingested, n_ingested)
+    else:
+        _record_sync_progress("backups", 0, 0)
+    return n_ingested
+
+
 def sync_crons(config: dict, state: dict, paths: dict) -> int:
     """Sync cron job definitions to cloud.
 
@@ -17435,6 +17553,13 @@ def run_daemon() -> None:
             log.info(f"  Cron runs: {crr} rows ingested")
     except Exception as e:
         log.warning(f"  Cron-run ingest error: {e}")
+    # Issue #3696 — OpenClaw backup/snapshot lifecycle observability.
+    try:
+        bk = sync_backups(config, state, paths)
+        if bk:
+            log.info(f"  Backups: {bk} records ingested")
+    except Exception as e:
+        log.warning(f"  Backup ingest error: {e}")
     # OpenClaw 2026.5.x run ledger (tasks/runs.sqlite) → DuckDB run_ledger.
     # Feeds the Scheduler lane monitor + sub-agent fan-out tree.
     try:
@@ -17918,6 +18043,11 @@ def run_daemon() -> None:
                 sync_run_ledger(config, state, paths)
             except Exception as _e_rl:
                 log.debug("sync_run_ledger error (non-fatal): %s", _e_rl)
+            # Issue #3696 — OpenClaw backup/snapshot lifecycle observability.
+            try:
+                sync_backups(config, state, paths)
+            except Exception as _e_bk:
+                log.debug("sync_backups error (non-fatal): %s", _e_bk)
 
             # Effective sandbox + tool policy per agent (PRD P1-1) → DuckDB
             # tool_policy. Throttled — config is near-static and each agent is
