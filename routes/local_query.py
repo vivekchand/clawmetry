@@ -803,6 +803,8 @@ _DAEMON_METHODS = frozenset({
     "log_ar_history",
     "list_ar_rules",
     "query_ar_history",
+    # Issue #3696 — OpenClaw backup/snapshot lifecycle observability.
+    "query_backups",
 })
 
 

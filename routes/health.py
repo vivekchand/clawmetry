@@ -3046,6 +3046,57 @@ def api_loop_signals():
     })
 
 
+@bp_health.route("/api/backups")
+def api_backups():
+    """Return OpenClaw backup/snapshot records (issue #3696).
+
+    Query params (all optional):
+      limit       — max rows (default 50, clamp 1..200)
+      node_id     — filter to a specific node
+      backup_type — filter to 'global' or 'agent'
+
+    Response:
+      {
+        "backups": [
+          {"backup_id": str, "node_id": str, "ts": str,
+           "backup_type": str, "agent_id": str|null,
+           "scope": str, "file_path": str|null,
+           "file_size_bytes": int|null,
+           "verify_status": str|null, "verify_ts": str|null}
+        ],
+        "count": <int>,
+        "last_backup_ts": <str|null>,
+        "last_verify_status": <str|null>
+      }
+
+    Empty-list fallback (HTTP 200) on any error or when no backups have
+    been ingested yet — this is normal for fresh installs.
+    """
+    try:
+        limit = max(1, min(200, int(request.args.get("limit", 50))))
+    except (TypeError, ValueError):
+        limit = 50
+    node_id = request.args.get("node_id") or None
+    backup_type = request.args.get("backup_type") or None
+
+    rows = _ls_call("query_backups", node_id=node_id,
+                    backup_type=backup_type, limit=limit)
+    if not rows:
+        rows = []
+
+    last_backup_ts = rows[0].get("ts") if rows else None
+    last_verify_status = next(
+        (r.get("verify_status") for r in rows if r.get("verify_status")),
+        None,
+    )
+    return jsonify({
+        "backups": rows,
+        "count": len(rows),
+        "last_backup_ts": last_backup_ts,
+        "last_verify_status": last_verify_status,
+    })
+
+
 # ---------------------------------------------------------------------------
 # MCP tool call observability (#850)
 # ---------------------------------------------------------------------------

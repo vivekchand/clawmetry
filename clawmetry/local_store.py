@@ -726,6 +726,28 @@ _DDL = [
     "CREATE INDEX IF NOT EXISTS idx_assets_status ON assets(status, updated_at)",
     "CREATE INDEX IF NOT EXISTS idx_assets_type   ON assets(asset_type, updated_at)",
     "CREATE INDEX IF NOT EXISTS idx_assets_run    ON assets(source_run_id)",
+    # Issue #3696 — OpenClaw backup/snapshot lifecycle observability.
+    # OpenClaw 2026.7+ ships `openclaw backup sqlite create|list|verify`.
+    # We ingest the backup manifest (or infer from file naming) so the
+    # dashboard can surface: last backup timestamp, verify status, and
+    # whether any backup exists at all. Graceful fallback: if no backup
+    # directory is found, query_backups() returns an empty list.
+    """
+    CREATE TABLE IF NOT EXISTS backups (
+        backup_id        VARCHAR PRIMARY KEY,
+        node_id          VARCHAR NOT NULL DEFAULT '',
+        ts               VARCHAR NOT NULL,
+        backup_type      VARCHAR NOT NULL DEFAULT 'global',
+        agent_id         VARCHAR,
+        scope            VARCHAR NOT NULL DEFAULT 'sqlite',
+        file_path        VARCHAR,
+        file_size_bytes  BIGINT,
+        verify_status    VARCHAR,
+        verify_ts        VARCHAR,
+        updated_at       BIGINT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_backups_ts   ON backups(ts DESC)",
     # Issue #1088 Phase 4 (2026-05-13) — channel-message foundation. Replaces
     # the per-provider log-grep + JSONL-scan path that the 21 routes in
     # ``routes/channels.py`` use today. Each row is one inbound or outbound
@@ -2575,6 +2597,46 @@ class LocalStore:
                   cron.get("last_run_at"), cron.get("last_status"),
                   cron.get("next_run_at"), cron.get("model") or None,
                   data_blob, now_ms])
+
+    def ingest_backup_record(self, rec: dict[str, Any]) -> None:
+        """Upsert one OpenClaw backup/snapshot row (issue #3696).
+
+        Required: ``backup_id``. All other fields are optional and default to
+        safe sentinel values. Re-ingesting the same id is idempotent — only
+        ``verify_status``, ``verify_ts``, and ``file_size_bytes`` are updated
+        on conflict so a later verify run can promote an earlier 'pending' row
+        without duplicating it.
+        """
+        bid = rec.get("backup_id")
+        if not bid:
+            raise ValueError("backup record must include 'backup_id'")
+        now_ms = int(time.time() * 1000)
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO backups (
+                    backup_id, node_id, ts, backup_type, agent_id,
+                    scope, file_path, file_size_bytes, verify_status,
+                    verify_ts, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (backup_id) DO UPDATE SET
+                    verify_status   = COALESCE(excluded.verify_status,
+                                               backups.verify_status),
+                    verify_ts       = COALESCE(excluded.verify_ts,
+                                               backups.verify_ts),
+                    file_size_bytes = COALESCE(excluded.file_size_bytes,
+                                               backups.file_size_bytes),
+                    updated_at      = excluded.updated_at
+            """, [bid,
+                  rec.get("node_id") or "",
+                  rec.get("ts") or "",
+                  rec.get("backup_type") or "global",
+                  rec.get("agent_id"),
+                  rec.get("scope") or "sqlite",
+                  rec.get("file_path"),
+                  rec.get("file_size_bytes"),
+                  rec.get("verify_status"),
+                  rec.get("verify_ts"),
+                  now_ms])
 
     def ingest_cron_run(self, run: dict[str, Any]) -> None:
         """Upsert one cron-run row (issue #605 DuckDB follow-up).
@@ -6708,6 +6770,41 @@ class LocalStore:
                 "enabled", "last_run_at", "last_status", "next_run_at",
                 "model", "data", "updated_at"]
         return _decode_data_blob_rows(self._fetch(sql, params), cols)
+
+    def query_backups(
+        self,
+        *,
+        node_id: str | None = None,
+        backup_type: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """OpenClaw backup/snapshot records (issue #3696).
+
+        Returns rows newest-first by ``ts``. Empty list when no backups have
+        been ingested yet (normal for fresh installs or installs that have
+        never run ``openclaw backup sqlite create``).
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if node_id:
+            clauses.append("node_id = ?"); params.append(node_id)
+        if backup_type:
+            clauses.append("backup_type = ?"); params.append(backup_type)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT backup_id, node_id, ts, backup_type, agent_id,
+                   scope, file_path, file_size_bytes, verify_status,
+                   verify_ts, updated_at
+            FROM backups
+            {where}
+            ORDER BY ts DESC
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["backup_id", "node_id", "ts", "backup_type", "agent_id",
+                "scope", "file_path", "file_size_bytes", "verify_status",
+                "verify_ts", "updated_at"]
+        return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
 
     def query_cron_runs(
         self,
