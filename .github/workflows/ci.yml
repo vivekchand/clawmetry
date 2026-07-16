@@ -115,7 +115,10 @@ jobs:
         env:
           CLAWMETRY_URL: http://localhost:8900
           CLAWMETRY_TOKEN: ci-test-token
-        run: python3 -m pytest tests/test_api.py -v --tb=short
+        # -m 'not quarantine': skip any tests listed in tests/quarantine.txt
+        # (marked by conftest.py:pytest_collection_modifyitems via quarantine.txt).
+        # Quarantined tests still run daily in quarantine-sweep.yml.
+        run: python3 -m pytest tests/test_api.py -v --tb=short -m 'not quarantine'
 
   # ── MOAT verifier (hermetic, hard-fail) ────────────────────────────────────────────────────
   # Issue #1491 / PRD #1133 invariant #3: "A regression in either direction
@@ -380,11 +383,16 @@ jobs:
         env:
           CLAWMETRY_URL: http://localhost:8900
           CLAWMETRY_TOKEN: ci-test-token
+        # -m 'not quarantine': skip any tests listed in tests/quarantine.txt
+        # (marked by conftest.py:pytest_collection_modifyitems). This lets
+        # a flaky test be quarantined without blocking all PRs. Quarantined
+        # tests still run daily in quarantine-sweep.yml and hard-fail if
+        # they go permanently broken (not just intermittent).
         run: |
           python3 -m pytest \
             tests/test_e2e.py::TestTabsLoad \
             tests/test_e2e_oss_all_tabs.py::TestAllTabsPostAuth \
-            -v --tb=short
+            -v --tb=short -m 'not quarantine'
 
   # ── pip install smoke test across platforms ─────────────────────────────────────────
   pip-install:

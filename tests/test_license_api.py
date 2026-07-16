@@ -52,7 +52,11 @@ def app(monkeypatch, tmp_path):
     license_path = str(tmp_path / "license.key")
     monkeypatch.setattr(_lic, "LICENSE_PATH", license_path)
     monkeypatch.delenv("CLAWMETRY_LICENSE_SERVER", raising=False)
+    monkeypatch.delenv("CLAWMETRY_INGEST_URL", raising=False)
     monkeypatch.delenv("CLAWMETRY_ENFORCE", raising=False)
+    # activate() phones home to the default cloud base now — keep API tests
+    # hermetic (no network) via the explicit offline opt-out.
+    monkeypatch.setenv("CLAWMETRY_OFFLINE", "1")
 
     from routes.entitlement import bp_entitlement
 

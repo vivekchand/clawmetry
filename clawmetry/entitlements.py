@@ -5122,6 +5122,76 @@ def tiers_for_runtimes(runtimes) -> dict | None:
         }
 
 
+def tiers_for_features_at(
+    perspective_tier: str, features
+) -> dict | None:
+    """Hypothetical-perspective sibling of :func:`tiers_for_features`.
+
+    Fills the ``_at`` slot on the ``tiers_for_features`` ladder axis
+    alongside :func:`min_tier_for_features_at`, so a pricing-matrix
+    walkthrough can call ``X_at(perspective, ...)`` uniformly across the
+    whole ``_at`` family. Same relationship to
+    :func:`tiers_for_features` that :func:`min_tier_for_features_at`
+    has to :func:`min_tier_for_features`: ``perspective_tier`` is
+    validated against :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`)
+    but does NOT shape the answer -- the ladder still intersects the
+    per-item ``tiers_for_feature`` grant sets and the result depends
+    only on the static per-tier feature map, not on the caller's live
+    plan. A parity test pins ``tiers_for_features_at(p, ...) ==
+    tiers_for_features(...)`` for every ``p`` in :data:`_TIER_ORDER` so
+    the ``_at`` prefix cannot silently drift into shaping the result.
+
+    Returns ``None`` for empty / non-string / unknown ``perspective_tier``
+    (caller renders "unknown tier" / 404), matching the ``None`` posture
+    the rest of the ``_at`` family uses for the perspective-validation
+    failure mode. All other semantics -- ``None`` / non-iterable ->
+    ``None``, empty iterable -> empty ladder shape, unknown ids echoed
+    in ``unknown``, duplicates collapsed, all-free bundle -> full
+    ladder + :data:`TIER_OSS` -- inherit from :func:`tiers_for_features`
+    unchanged. Never raises: a delegate failure logs a warning and
+    returns ``None`` so a pricing-matrix walkthrough keeps rendering.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        return tiers_for_features(features)
+    except Exception as exc:
+        logger.warning("entitlements: tiers_for_features_at failed: %s", exc)
+        return None
+
+
+def tiers_for_runtimes_at(
+    perspective_tier: str, runtimes
+) -> dict | None:
+    """Runtime-axis twin of :func:`tiers_for_features_at`.
+
+    Same perspective-validated wrapper contract: ``perspective_tier``
+    validated against :data:`_TIER_ORDER` (including
+    :data:`TIER_TRIAL`); the ladder is resolved off the static per-tier
+    runtime map via :func:`tiers_for_runtimes`, so the answer is
+    perspective-independent by design. A parity test pins
+    ``tiers_for_runtimes_at(p, ...) == tiers_for_runtimes(...)`` for
+    every ``p`` in :data:`_TIER_ORDER` (including runtime aliases like
+    ``claude-code`` which canonicalise the same way they do on the
+    non-``_at`` sibling). Never raises.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        return tiers_for_runtimes(runtimes)
+    except Exception as exc:
+        logger.warning("entitlements: tiers_for_runtimes_at failed: %s", exc)
+        return None
+
+
 def tiers_for_batch_at(perspective_tier: str) -> dict | None:
     """Hypothetical-perspective sibling of :func:`tiers_for_batch`: full
     availability ladder for every known feature *and* runtime in one

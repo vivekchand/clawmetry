@@ -72,6 +72,9 @@ def lic(monkeypatch, tmp_path):
     monkeypatch.delenv("CLAWMETRY_LICENSE_SERVER", raising=False)
     monkeypatch.delenv("CLAWMETRY_INGEST_URL", raising=False)
     monkeypatch.delenv("CLAWMETRY_ENFORCE", raising=False)
+    # activate() phones home to the default cloud base now — keep audit tests
+    # hermetic (no network) via the explicit offline opt-out.
+    monkeypatch.setenv("CLAWMETRY_OFFLINE", "1")
     # Point the entitlements resolver at the same tmp paths so a leaked
     # cloud_plan.json from another test can't override the deactivate path.
     monkeypatch.setattr(e, "_LICENSE_PATH", str(tmp_path / "license.key"))

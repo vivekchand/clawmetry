@@ -58,9 +58,35 @@ import uuid
 import logging
 import threading
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 log = logging.getLogger("clawmetry-approvals")
+
+# ── Kill-handler registry ────────────────────────────────────────────────────
+#
+# Extension seam for closed-source runtimes (clawmetry-pro packages a handful
+# of them — nanoclaw, picoclaw, hermes …). Each runtime whose "stop a session"
+# story doesn't match the openclaw gateway RPC or the family-runtime pid-based
+# ``process_control.kill_session`` can register a callable here at import
+# time; ``_kill_session`` looks it up by the ``"<runtime>:<id>"`` prefix and
+# calls it BEFORE falling through to the built-in gateway/process paths.
+#
+# The callable takes the FULL session_id (e.g. ``"nanoclaw:sess-abc"``) and
+# returns True when the kill was carried out. Anything raised inside the
+# callable is logged and swallowed — a broken handler must NEVER escape into
+# the daemon loop, so a bad third-party plugin degrades to "kill returned
+# False" instead of crashing the approvals watcher thread.
+KILL_HANDLERS: dict[str, Callable[[str], bool]] = {}
+
+
+def register_kill_handler(runtime: str, fn: Callable[[str], bool]) -> None:
+    """Register a runtime-specific kill callable. Idempotent overwrite.
+
+    ``runtime`` is the lowercase prefix of a session id
+    (e.g. ``"nanoclaw"``, ``"picoclaw"``). ``fn(session_id) -> bool``
+    returns True when the kill actually landed. Exceptions raised by ``fn``
+    are logged + swallowed by ``_kill_session``, never propagated."""
+    KILL_HANDLERS[(runtime or "").strip().lower()] = fn
 
 POLICIES_PATH = Path.home() / ".clawmetry" / "policies.yml"
 
@@ -433,6 +459,81 @@ def _post_approval_request(api_key: str, payload: dict) -> Optional[dict]:
         return None
 
 
+def _poll_decision_local(approval_id: str, timeout_s: int) -> str:
+    """Poll the LOCAL DuckDB store for a decision — used by the local-only
+    blocking-approvals path (a self-hosted node without a ``cm_`` cloud
+    token). Same cadence as :func:`_poll_decision` (3 s, 5 s grace past the
+    policy timeout). Returns one of ``approved`` / ``denied`` /
+    ``timeout`` / ``error``.
+
+    The row itself is authored by the ``ingest_approval`` call earlier in
+    ``process_tool_call``; the decision arrives from a POST to
+    ``/api/approvals/<approval_id>/decide`` (routes/policy.py) which flips
+    the row's ``status`` via ``update_approval_decision``. No network, no
+    cloud auth — the whole loop stays inside the box."""
+    deadline = time.time() + timeout_s + 5  # 5 s grace past policy expiry
+    last_status = "pending"
+    try:
+        from clawmetry import local_store as _lsm
+    except Exception as e:
+        log.warning("approvals(local): local_store import failed: %s", e)
+        return "error"
+    while time.time() < deadline:
+        try:
+            store = _lsm.get_store(read_only=True)
+            rows = store.query_approvals(limit=1) or []
+            row = None
+            for r in rows or []:
+                if r.get("id") == approval_id:
+                    row = r
+                    break
+            if row is None:
+                # ``query_approvals`` with no filters returns most-recent
+                # first — the id we just wrote should be at the top, but a
+                # bursty node might have pushed us off the first page. Fall
+                # back to a wider read one time per poll.
+                for r in store.query_approvals(limit=200) or []:
+                    if r.get("id") == approval_id:
+                        row = r
+                        break
+            if row is not None:
+                last_status = str(row.get("status") or "pending").strip()
+                if last_status in ("approved", "denied", "timeout", "expired"):
+                    return last_status
+        except Exception as e:
+            log.debug("approvals(local): poll error (will retry): %s", e)
+        time.sleep(_POLL_INTERVAL_SEC)
+    return last_status if last_status != "pending" else "timeout"
+
+
+def _local_blocking_enabled(api_key: Optional[str]) -> bool:
+    """True when the local-only blocking branch should own this approval.
+
+    Two conditions must both hold:
+      1. No ``cm_`` cloud token on this node. An empty ``api_key`` (pure
+         self-hosted) or a license-issued token (``lc_`` /
+         ``clawlic_``/...) both qualify — cloud auth is the ONE thing the
+         cm_ prefix asserts.
+      2. The resolved entitlement allows the ``approval_queue`` feature.
+         Grace mode (default) short-circuits this to True, so a fresh OSS
+         install still sees local blocking; enforce-mode unlicensed nodes
+         return False and the caller falls through to the historical
+         cloud-required behaviour (which soft-fails to OPEN when the
+         cloud is unreachable — no regression for that population).
+
+    Never raises; a flaky entitlement read collapses to False so the
+    caller keeps its existing cloud path."""
+    ak = (api_key or "").strip()
+    if ak.startswith("cm_"):
+        return False
+    try:
+        from clawmetry import entitlements as _ent
+        return _ent.get_entitlement().allows_feature("approval_queue")
+    except Exception as e:
+        log.debug("approvals(local): entitlement read failed: %s", e)
+        return False
+
+
 def _poll_decision(api_key: str, approval_id: str, timeout_s: int) -> str:
     """Poll cloud for the decision. Returns one of: approved/denied/timeout/error."""
     import urllib.request
@@ -564,6 +665,11 @@ def _kill_session(session_id: Optional[str]) -> bool:
     """Best-effort kill of a denied session, runtime-aware.
 
     * OpenClaw sessions -> gateway WebSocket RPC (the historical path).
+    * Runtimes registered via :func:`register_kill_handler` (clawmetry-pro
+      plugs nanoclaw / picoclaw / hermes here) -> the registered callable,
+      picked by the ``<runtime>:`` prefix on the session id. Exceptions
+      raised inside the handler are logged + swallowed so a bad plugin
+      degrades to "handler returned False", never crashes the watcher.
     * Family runtimes (claude_code / codex / goose / opencode / aider / ...,
       session ids like ``claude_code:UUID``) -> the pid-based
       ``process_control.kill_session`` engine the Stop button uses. The
@@ -576,12 +682,31 @@ def _kill_session(session_id: Optional[str]) -> bool:
     if not session_id:
         return False
     runtime = _session_runtime(session_id)
-    if runtime != "openclaw":
-        if _process_control_kill(session_id, runtime):
-            return True
-        # Last resort: some wrapped setups register the session with the
-        # gateway anyway. Harmless when it doesn't.
+    # OpenClaw stays on the gateway path first — the historical behaviour
+    # every existing test asserts (see tests/test_approvals_deny_kill.py).
+    if runtime == "openclaw":
         return _gateway_kill_session(session_id)
+    # Runtime-registered handler wins for anything else. This is the seam
+    # clawmetry-pro drives to kill nanoclaw/picoclaw/hermes sessions that
+    # neither the gateway nor process_control knows about.
+    handler = KILL_HANDLERS.get(runtime)
+    if handler is not None:
+        try:
+            ok = handler(session_id)
+        except Exception as e:
+            log.warning("registered kill handler for runtime=%r raised on "
+                        "%s: %s", runtime, session_id, e)
+            ok = False
+        if ok:
+            log.info("killed session %s via registered kill handler "
+                     "(runtime=%s)", session_id, runtime)
+            return True
+        # Handler returned falsy → fall through to the built-in family
+        # path (many plugins don't cover every session shape yet).
+    if _process_control_kill(session_id, runtime):
+        return True
+    # Last resort: some wrapped setups register the session with the
+    # gateway anyway. Harmless when it doesn't.
     return _gateway_kill_session(session_id)
 
 
@@ -675,11 +800,13 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
         "policy_name": policy["name"],
         "timeout": policy["timeout"],
     }
-    # Persist to local DuckDB so the daemon's heartbeat cache_push surfaces
-    # this in the cloud Approvals inbox — which reads the
-    # approvals:{owner_hash}:queue Redis key, NOT the legacy
-    # _post_approval_request endpoint. Without this the watcher fired but the
-    # inbox stayed empty ("toggled rules but never see a pending approval").
+    # Persist to local DuckDB so:
+    #   * the cloud path's next heartbeat cache_push surfaces this in the
+    #     cloud Approvals inbox (which reads the approvals:{owner_hash}:queue
+    #     Redis key, NOT the legacy _post_approval_request endpoint —
+    #     without this row the watcher fired but the inbox stayed empty),
+    #   * the LOCAL blocking-approvals path (below) has a row to poll for
+    #     the operator's decision.
     try:
         import hashlib as _hl
         from clawmetry import local_store as _lsa
@@ -694,6 +821,60 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
         })
     except Exception as _ae:
         log.debug("approval DuckDB persist failed: %s", _ae)
+
+    # ── Local-only blocking branch ──────────────────────────────────────────
+    # A licensed self-hosted node (no cm_ token) has no cloud to POST to and
+    # no cloud Approvals inbox to poll. Enforce the policy locally: poll the
+    # DuckDB row we just wrote for a decision authored by the operator via
+    # POST /api/approvals/<id>/decide (routes/policy.py). Deny → kill;
+    # timeout → apply on_timeout (default: deny → kill); approve → return.
+    # Before 2026-07-15 this population soft-failed to OPEN because
+    # _post_approval_request returned None on the missing cloud, so a
+    # $190/node/yr licensee had blocking policies that never actually
+    # blocked. Cloud-configured (``cm_``) nodes are unchanged — they still
+    # POST + poll the cloud below.
+    if _local_blocking_enabled(api_key):
+        decision = _poll_decision_local(approval_id, policy["timeout"])
+        if decision in ("timeout", "expired"):
+            decision = policy["on_timeout"]
+        killed = False
+        if decision == "denied":
+            killed = _kill_session(session_id)
+        # Mirror the resolution into the row so subsequent polls / the
+        # audit feed see the final status. update_approval_decision is
+        # idempotent — if the operator's POST already flipped the row this
+        # is a no-op (only pending rows transition).
+        try:
+            from clawmetry import local_store as _lsa3
+            _lsa3.get_store().update_approval_decision(
+                approval_id, decision, "local", None)
+        except Exception as _ue:
+            log.debug("approval(local) decision update failed: %s", _ue)
+        result = {"decision": decision, "policy": policy["name"],
+                  "killed": killed, "approval_id": approval_id}
+        try:
+            from clawmetry import audit as _audit
+            _audit.audit_event(
+                "approval.decision",
+                actor="local",
+                target=tool_name,
+                result=decision,
+                source="approvals",
+                metadata={
+                    "approval_id": approval_id,
+                    "policy": policy["name"],
+                    "session_id": session_id,
+                    "killed": killed,
+                    "command": cmd_preview,
+                },
+            )
+        except Exception:
+            pass
+        log.info(f"[approval] {approval_id} (local) → {decision}, "
+                 f"killed={killed}")
+        with _in_flight_lock:
+            _in_flight[key] = result
+        return result
 
     resp = _post_approval_request(api_key, req)
     if not resp:

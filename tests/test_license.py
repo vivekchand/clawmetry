@@ -47,11 +47,12 @@ def lic(monkeypatch, tmp_path):
     monkeypatch.setattr(L, "LICENSE_PATH", str(tmp_path / "license.key"))
     monkeypatch.setattr(L, "_CONFIG_PATH", str(tmp_path / "config.json"))
     monkeypatch.delenv("CLAWMETRY_LICENSE_SERVER", raising=False)
-    # Clear the cloud server override too so `activate` stays fully offline (no
-    # network) in unit tests — the self-hosted install path only phones home
-    # when a server is explicitly configured.
     monkeypatch.delenv("CLAWMETRY_INGEST_URL", raising=False)
     monkeypatch.delenv("CLAWMETRY_ENFORCE", raising=False)
+    # `activate` phones home to the production cloud BY DEFAULT now, so unit
+    # tests opt out via CLAWMETRY_OFFLINE. The phone-home tests below delete
+    # this and stub urllib themselves — nothing here may touch the network.
+    monkeypatch.setenv("CLAWMETRY_OFFLINE", "1")
     return SimpleNamespace(L=L, priv=priv, pub_pem=pub_pem)
 
 
@@ -108,6 +109,33 @@ def test_parse_license_enterprise(lic):
     assert en.tier == e.TIER_ENTERPRISE
 
 
+def test_parse_license_starter(lic):
+    """Self-hosted 'starter' keys ($90/node/yr) map to TIER_CLOUD_STARTER —
+    a paid tier with the Starter feature set, not a silent Pro upgrade."""
+    import clawmetry.entitlements as e
+
+    tok = lic.L._encode_token(_payload("starter", nodes=1), lic.priv)
+    en = lic.L.parse_license(tok)
+    assert en is not None
+    assert en.tier == e.TIER_CLOUD_STARTER
+    assert en.source == "license"
+    assert en.node_limit == 1
+    assert en.is_paid is True
+    # Starter carries the Starter feature set (not Pro's) + paid runtimes.
+    assert e.STARTER_FEATURES <= en.features
+    assert "claude_code" in en.runtimes
+
+
+def test_parse_license_unknown_tier_defaults_to_pro(lic):
+    """Forward compatibility: a tier this OSS build doesn't know still
+    resolves to Pro rather than bricking the license."""
+    import clawmetry.entitlements as e
+
+    tok = lic.L._encode_token(_payload("mega_future_tier"), lic.priv)
+    en = lic.L.parse_license(tok)
+    assert en is not None and en.tier == e.TIER_PRO
+
+
 def test_invalid_token_parses_to_none(lic):
     assert lic.L.parse_license("CLAW1.bogus.bogus") is None
 
@@ -135,8 +163,9 @@ def test_activate_valid_key(lic):
     assert ok is True
     assert "pro" in msg.lower()
     assert os.path.isfile(lic.L.LICENSE_PATH)
-    # deferred install message when no server configured
-    assert "deferred" in msg.lower()
+    # offline-mode skip message when CLAWMETRY_OFFLINE is set (the fixture
+    # default) — no node registration, no wheel download, activation still ok.
+    assert "offline mode" in msg.lower()
 
 
 def test_activate_invalid_key(lic):
@@ -150,6 +179,122 @@ def test_activate_expired_key(lic):
     ok, msg = lic.L.activate(tok)
     assert ok is False
     assert "expired" in msg.lower()
+
+
+# ── activation phone-home (default server / offline opt-out) ─────────────────
+#
+# `clawmetry activate <KEY>` registers the node + fetches the clawmetry-pro
+# wheel from the DEFAULT cloud base when nothing is configured — the license
+# email says only `clawmetry activate <token>`, so the default must work.
+# CLAWMETRY_OFFLINE=1 is the explicit opt-out. Every test here stubs urllib:
+# no test may ever touch the real network.
+
+
+def _stub_registration(monkeypatch, L):
+    """Stub urllib.request.urlopen for the node-registration POST and capture
+    the URL _provision_pro_wheel would be handed. Returns the capture dict."""
+    import io
+    import json as _j
+    import urllib.request
+
+    seen: dict = {"register_urls": [], "wheel_url": None}
+
+    class _Resp(io.BytesIO):
+        headers: dict = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def _fake_urlopen(req, timeout=0):
+        url = req.full_url
+        seen["register_urls"].append(url)
+        assert "/api/license/activate" in url, f"unexpected URL {url}"
+        return _Resp(_j.dumps({"ok": True, "download_url": "/api/license/download"}).encode())
+
+    def _fake_provision(url, headers=None, node_id=None):
+        seen["wheel_url"] = url
+        return "clawmetry-pro installed (test)"
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    monkeypatch.setattr(L, "_provision_pro_wheel", _fake_provision)
+    return seen
+
+
+def test_activate_no_env_phones_home_to_default_server(lic, monkeypatch):
+    """No env vars at all -> registration + wheel download go to the
+    production cloud base (this was the bug: it early-returned 'deferred'
+    and paying customers never got the pro wheel)."""
+    monkeypatch.delenv("CLAWMETRY_OFFLINE", raising=False)
+    seen = _stub_registration(monkeypatch, lic.L)
+    tok = lic.L._encode_token(_payload("pro", nodes=2), lic.priv)
+    ok, msg = lic.L.activate(tok)
+    assert ok is True
+    assert seen["register_urls"] == ["https://ingest.clawmetry.com/api/license/activate"]
+    assert seen["wheel_url"] == "https://ingest.clawmetry.com/api/license/download"
+    assert "installed" in msg
+
+
+def test_activate_license_server_env_still_wins(lic, monkeypatch):
+    """CLAWMETRY_LICENSE_SERVER beats both CLAWMETRY_INGEST_URL and the
+    default cloud base (self-hosted / air-gapped license servers)."""
+    monkeypatch.delenv("CLAWMETRY_OFFLINE", raising=False)
+    monkeypatch.setenv("CLAWMETRY_LICENSE_SERVER", "https://lic.example.test/")
+    monkeypatch.setenv("CLAWMETRY_INGEST_URL", "https://ingest.other.test")
+    seen = _stub_registration(monkeypatch, lic.L)
+    tok = lic.L._encode_token(_payload(), lic.priv)
+    ok, _msg = lic.L.activate(tok)
+    assert ok is True
+    assert seen["register_urls"] == ["https://lic.example.test/api/license/activate"]
+    assert seen["wheel_url"] == "https://lic.example.test/api/license/download"
+
+
+@pytest.mark.parametrize("truthy", ["1", "true", "YES"])
+def test_activate_offline_env_skips_phone_home(lic, monkeypatch, truthy):
+    """CLAWMETRY_OFFLINE (any truthy spelling) keeps activation fully local:
+    no network call, clear skip message, license still active on disk."""
+    import os
+    import urllib.request
+
+    monkeypatch.setenv("CLAWMETRY_OFFLINE", truthy)
+
+    def _no_network(*a, **k):
+        raise AssertionError("network touched in offline mode")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _no_network)
+    tok = lic.L._encode_token(_payload("pro", nodes=3), lic.priv)
+    ok, msg = lic.L.activate(tok)
+    assert ok is True
+    assert "offline mode" in msg
+    assert "skipping node registration" in msg
+    assert "CLAWMETRY_LICENSE_SERVER" in msg  # tells the operator the way out
+    assert os.path.isfile(lic.L.LICENSE_PATH)
+    en = lic.L.load_license(lic.L.LICENSE_PATH)
+    assert en is not None and en.is_paid  # entitlements unlocked offline
+
+
+def test_activate_survives_unreachable_default_server(lic, monkeypatch):
+    """A failed phone-home NEVER fails activation: the key is verified
+    offline and saved; the wheel install is deferred with a message."""
+    import os
+    import urllib.error
+    import urllib.request
+
+    monkeypatch.delenv("CLAWMETRY_OFFLINE", raising=False)
+
+    def _down(req, timeout=0):
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _down)
+    tok = lic.L._encode_token(_payload("pro", nodes=2), lic.priv)
+    ok, msg = lic.L.activate(tok)
+    assert ok is True
+    assert "deferred" in msg.lower()
+    assert os.path.isfile(lic.L.LICENSE_PATH)
+    en = lic.L.load_license(lic.L.LICENSE_PATH)
+    assert en is not None and en.is_paid
 
 
 def test_inspect_key_valid_returns_summary(lic):
@@ -173,6 +318,22 @@ def test_inspect_key_enterprise_tier(lic):
     info = lic.L.inspect_key(tok)
     assert info is not None and info["tier"] == "enterprise"
     assert info["nodes"] == 99
+
+
+def test_inspect_key_starter_tier(lic):
+    tok = lic.L._encode_token(_payload("starter", nodes=1), lic.priv)
+    info = lic.L.inspect_key(tok)
+    assert info is not None and info["tier"] == "starter"
+
+
+def test_current_license_info_starter(lic):
+    """`clawmetry license` status renders a starter key as 'starter'."""
+    tok = lic.L._encode_token(_payload("starter", nodes=1), lic.priv)
+    ok, _ = lic.L.activate(tok)
+    assert ok
+    info = lic.L.current_license_info()
+    assert info["valid"] is True
+    assert info["tier"] == "starter"
 
 
 def test_inspect_key_invalid_returns_none(lic):
