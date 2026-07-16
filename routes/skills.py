@@ -530,6 +530,51 @@ def compute_skills_payload():
     return {"skills": skills_out, "summary": summary}
 
 
+def _get_workshop_config():
+    """Read the skills.workshop section from the OpenClaw config file.
+
+    Returns the dict at cfg["skills"]["workshop"] or {} if absent or
+    unreadable — callers always get a dict, never raise.
+    """
+    try:
+        import dashboard as _d
+        cfg = _d._load_openclaw_config_cached()
+        if not isinstance(cfg, dict):
+            return {}
+        return (cfg.get("skills") or {}).get("workshop") or {}
+    except Exception:
+        return {}
+
+
+@bp_skills.route("/api/skills/workshop")
+def api_skills_workshop():
+    """Return Skill Workshop approval-policy config.
+
+    Surfaces ``skills.workshop.approvalPolicy`` from ``~/.openclaw/openclaw.json``
+    so the dashboard can show whether autonomous apply/reject/quarantine
+    actions are enabled without a human-approval prompt.
+
+    Response shape::
+
+        {
+          "approval_policy":     string | null,   # raw config value; null = key absent
+          "auto_actions_enabled": bool,            # True when policy != "pending"
+          "config":              dict,             # full skills.workshop object
+        }
+
+    When ``approval_policy`` is null the OpenClaw default applies (behaviour
+    depends on the installed OpenClaw version).
+    """
+    workshop = _get_workshop_config()
+    policy = workshop.get("approvalPolicy")
+    auto_actions_enabled = isinstance(policy, str) and policy != "pending"
+    return jsonify({
+        "approval_policy": policy,
+        "auto_actions_enabled": auto_actions_enabled,
+        "config": workshop,
+    })
+
+
 @bp_skills.route("/api/skills")
 def api_skills():
     """List all installed skills with fidelity stats."""
