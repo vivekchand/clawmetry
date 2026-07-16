@@ -6447,11 +6447,30 @@ def api_entitlement_lock_reason_batch():
         )
 
 
+@bp_entitlement.route(
+    "/api/entitlement/lock-reason-at-batch",
+    endpoint="api_entitlement_lock_reason_at_batch",
+)
 @bp_entitlement.route("/api/entitlement/lock-reasons-at-batch")
 def api_entitlement_lock_reasons_at_batch():
     """``GET /api/entitlement/lock-reasons-at-batch?tier=<perspective>
     &features=a,b,c&runtimes=x,y&channels=N&retention_days=K&nodes=M`` --
     what-if sibling of ``/api/entitlement/lock-reason-batch``.
+
+    Also reachable at ``/api/entitlement/lock-reason-at-batch`` (bare
+    singular URL). Both URLs dispatch to the SAME view and return
+    byte-identical JSON. The alias exists so the ``_at`` URL naming
+    matches the bare / plural pairing already registered on the LIVE
+    sibling: ``/lock-reason-batch`` was aliased to
+    ``/lock-reasons-batch`` for symmetry with this plural ``_at`` URL;
+    this reverse alias completes the 2x2
+    ({singular, plural} x {live, _at}) so callers can address either
+    what-if or live under either naming convention. Registering the
+    alias with a distinct Flask endpoint name
+    (``api_entitlement_lock_reason_at_batch``) keeps ``url_for`` reverse
+    lookups unambiguous while sharing one implementation. Pinned by
+    parity tests in
+    ``tests/test_entitlement_lock_reason_at_batch_alias.py``.
 
     Where ``/lock-reason-batch`` returns per-item lock rows against the
     LIVE resolved entitlement, this returns them against a HYPOTHETICAL
