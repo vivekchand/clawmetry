@@ -141,8 +141,11 @@ def test_denied_approval_kills_family_session(monkeypatch, spies):
     })
     assert policy is not None
 
+    # Use a ``cm_``-prefixed key so the local-blocking branch added in
+    # 2026-07-15 stays off (this test is the cloud round-trip guard —
+    # _post_approval_request + _poll_decision are what's mocked).
     result = ap.process_tool_call(
-        api_key="test-key", node_id="node-1", session_id=_FAMILY_SID,
+        api_key="cm_test", node_id="node-1", session_id=_FAMILY_SID,
         tool_call_id=uuid.uuid4().hex, tool_name="Bash",
         args={"command": "rm -rf /tmp/canary"}, policies=[policy])
 

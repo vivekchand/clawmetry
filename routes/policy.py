@@ -23,6 +23,8 @@ from __future__ import annotations
 
 from flask import Blueprint, jsonify, request
 
+from clawmetry._gate import gate
+
 bp_policy = Blueprint("policy", __name__)
 
 
@@ -121,6 +123,7 @@ def api_tool_policy():
 
 
 @bp_policy.route("/api/approvals-audit")
+@gate("approval_queue")
 def api_approvals_audit():
     """Exec-approval decision audit — what got approved / denied / is pending.
 
@@ -141,6 +144,7 @@ def api_approvals_audit():
 
 
 @bp_policy.route("/api/approvals")
+@gate("approval_queue")
 def api_approvals_queue():
     """Pending approvals queue — compact format for mobile/remote clients.
 
@@ -268,3 +272,81 @@ def api_policy_replay():
     result["days"] = days
     result["since"] = since
     return jsonify(result), (200 if result.get("ok") else 400)
+
+
+@bp_policy.route("/api/approvals/<approval_id>/decide", methods=["POST"])
+@gate("approval_queue")
+def api_approval_decide(approval_id: str):
+    """Local decision writer for the pending approvals queue.
+
+    Body: ``{"decision": "approve"|"deny", "reason": "optional string"}``.
+    Flips the row's ``status`` (approved / denied) via
+    ``update_approval_decision`` and stamps ``resolver="local"``. Returns
+    ``{"ok": True, "status": <new_status>}``. Unknown id → 404. Already-
+    decided row → 200 with the existing status (idempotent — matches the
+    store method's "first click wins" semantics so a double-click never
+    overwrites the first decision).
+
+    Wakes the LOCAL blocking watcher (``approvals._poll_decision_local``,
+    3 s poll) so a denied session is killed within ~3 s of the click, not
+    at the next policy timeout.
+
+    No auth wall — dashboard routes here are cookie-gated at the reverse-
+    proxy / bind-loopback layer, matching ``GET /api/approvals`` and
+    ``GET /api/approvals-audit``. The ``@gate("approval_queue")`` decorator
+    keeps unlicensed enforced OSS nodes from silently using a paid feature
+    (grace mode preserves today's behaviour for free users)."""
+    body = request.get_json(silent=True) or {}
+    decision = str(body.get("decision") or "").strip().lower()
+    if decision not in ("approve", "deny"):
+        return jsonify({
+            "ok":    False,
+            "error": "decision must be 'approve' or 'deny'",
+        }), 400
+    reason = body.get("reason")
+    if reason is not None:
+        reason = str(reason)[:300]
+
+    aid = (approval_id or "").strip()
+    if not aid:
+        return jsonify({"ok": False, "error": "missing approval id"}), 404
+
+    # Read current status so we can 404 on unknown id (the store method
+    # returns 0 both on "unknown" and "already decided" — those are
+    # semantically different for a REST decide endpoint).
+    rows = _coerce_rows(_ls_call("query_approvals", limit=500))
+    row = next((r for r in rows if r.get("id") == aid), None)
+    if row is None:
+        return jsonify({"ok": False, "error": "unknown approval id"}), 404
+    existing = str(row.get("status") or "pending").strip()
+    if existing in ("approved", "denied", "timeout", "expired"):
+        # Already decided — return the frozen status (idempotent). This is
+        # the same "first click wins" the store method enforces.
+        return jsonify({"ok": True, "status": existing, "already": True})
+
+    # Flip the row. Prefer the daemon proxy (owns the DuckDB writer lock
+    # — same pattern the cloud-relay decision path uses); fall back to a
+    # direct writable open when the daemon isn't running (tests, dev
+    # mode). ``_ls_call``'s read_only=True fallback is NOT usable here
+    # because update_approval_decision needs the writer.
+    wrote = None
+    try:
+        from routes.local_query import local_store_via_daemon
+        wrote = local_store_via_daemon(
+            "update_approval_decision",
+            approval_id=aid, decision=decision,
+            resolver="local", reason=reason,
+        )
+    except Exception:
+        wrote = None
+    if wrote is None:
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store()
+            store.update_approval_decision(aid, decision, "local", reason)
+        except Exception as e:
+            return jsonify({"ok": False,
+                            "error": f"decision write failed: {e}"}), 500
+
+    new_status = "approved" if decision == "approve" else "denied"
+    return jsonify({"ok": True, "status": new_status})
