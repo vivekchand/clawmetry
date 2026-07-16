@@ -2110,13 +2110,40 @@ def _budget_monitor_loop():
                     try:
                         with _fleet_db_lock:
                             db = _fleet_db()
-                            for ch in channels:
-                                db.execute(
-                                    "INSERT INTO alert_history (rule_id, type, message, channel, fired_at) "
-                                    "VALUES (?, ?, ?, ?, ?)",
-                                    (rule_id, rtype, msg, ch, now),
-                                )
-                            db.commit()
+                            # Belt-and-suspenders cross-evaluator dedup.
+                            # The sync daemon's _evaluate_alerts_local
+                            # writes to this SAME alert_history table but
+                            # holds a separate per-process cooldown memo,
+                            # so before this check the same rule_id could
+                            # land twice within a second (live repro
+                            # 2026-07-15: ids 3,4 rule 2f270a9c, both
+                            # channel=banner). Skip the INSERT when a fire
+                            # of the same rule_id already lives inside the
+                            # rule's own cooldown window; cooldown=0
+                            # disables the check so explicit no-cooldown
+                            # rules still fire every tick.
+                            skip_insert = False
+                            try:
+                                cd_int = int(cooldown or 0)
+                            except (TypeError, ValueError):
+                                cd_int = 0
+                            if cd_int > 0:
+                                cutoff = now - cd_int
+                                existing = db.execute(
+                                    "SELECT 1 FROM alert_history "
+                                    "WHERE rule_id = ? AND fired_at > ? "
+                                    "LIMIT 1",
+                                    (rule_id, cutoff),
+                                ).fetchone()
+                                skip_insert = existing is not None
+                            if not skip_insert:
+                                for ch in channels:
+                                    db.execute(
+                                        "INSERT INTO alert_history (rule_id, type, message, channel, fired_at) "
+                                        "VALUES (?, ?, ?, ?, ?)",
+                                        (rule_id, rtype, msg, ch, now),
+                                    )
+                                db.commit()
                             db.close()
                     except Exception:
                         pass
@@ -10389,13 +10416,40 @@ def _budget_monitor_loop():
                     try:
                         with _fleet_db_lock:
                             db = _fleet_db()
-                            for ch in channels:
-                                db.execute(
-                                    "INSERT INTO alert_history (rule_id, type, message, channel, fired_at) "
-                                    "VALUES (?, ?, ?, ?, ?)",
-                                    (rule_id, rtype, msg, ch, now),
-                                )
-                            db.commit()
+                            # Belt-and-suspenders cross-evaluator dedup.
+                            # The sync daemon's _evaluate_alerts_local
+                            # writes to this SAME alert_history table but
+                            # holds a separate per-process cooldown memo,
+                            # so before this check the same rule_id could
+                            # land twice within a second (live repro
+                            # 2026-07-15: ids 3,4 rule 2f270a9c, both
+                            # channel=banner). Skip the INSERT when a fire
+                            # of the same rule_id already lives inside the
+                            # rule's own cooldown window; cooldown=0
+                            # disables the check so explicit no-cooldown
+                            # rules still fire every tick.
+                            skip_insert = False
+                            try:
+                                cd_int = int(cooldown or 0)
+                            except (TypeError, ValueError):
+                                cd_int = 0
+                            if cd_int > 0:
+                                cutoff = now - cd_int
+                                existing = db.execute(
+                                    "SELECT 1 FROM alert_history "
+                                    "WHERE rule_id = ? AND fired_at > ? "
+                                    "LIMIT 1",
+                                    (rule_id, cutoff),
+                                ).fetchone()
+                                skip_insert = existing is not None
+                            if not skip_insert:
+                                for ch in channels:
+                                    db.execute(
+                                        "INSERT INTO alert_history (rule_id, type, message, channel, fired_at) "
+                                        "VALUES (?, ?, ?, ?, ?)",
+                                        (rule_id, rtype, msg, ch, now),
+                                    )
+                                db.commit()
                             db.close()
                     except Exception:
                         pass

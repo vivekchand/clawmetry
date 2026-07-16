@@ -19265,12 +19265,96 @@ def _local_alerts_fleet_db_path() -> str:
     return os.path.expanduser("~/.clawmetry-fleet.db")
 
 
+def _rule_cooldown_seconds(rule: dict, cond: dict) -> int:
+    """Cross-schema cooldown lookup for a rule.
+
+    Rules land in the fleet SQLite table with a top-level ``cooldown_min``
+    integer; DuckDB-shaped rules stash it inside ``condition_json`` as
+    ``cooldown_sec`` (the evaluator's own field). Prefer whichever is set;
+    default to 30 min to match dashboard.py's own default so this helper
+    can't accidentally shrink an existing cooldown."""
+    try:
+        cs = cond.get("cooldown_sec") if isinstance(cond, dict) else None
+        if cs is not None:
+            return max(0, int(cs))
+    except (TypeError, ValueError):
+        pass
+    try:
+        cm = rule.get("cooldown_min") if isinstance(rule, dict) else None
+        if cm is not None:
+            return max(0, int(cm)) * 60
+    except (TypeError, ValueError):
+        pass
+    return 1800  # 30 min — same default dashboard._fire_alert uses.
+
+
+def _recent_alert_fire_in_fleet(rule_id, cooldown_sec: int) -> bool:
+    """True when ``alert_history`` already has a row for ``rule_id`` inside
+    the cooldown window. Used as a belt-and-suspenders dedup between the
+    sync daemon's :func:`_evaluate_alerts_local` (2 s tick) and
+    dashboard.py's ``_budget_monitor_loop`` (60 s tick) — both write to the
+    SAME ``alert_history`` table but keep separate per-process cooldown
+    memos, so before this check the SAME rule_id could land twice within a
+    second (live repro on the licensed local-only node: alert_history ids
+    3,4, both channel=banner, same rule_id). ``cooldown_sec <= 0`` disables
+    the check (returns False), preserving explicit no-cooldown intent.
+
+    Never raises — a lookup failure returns False so the caller keeps its
+    existing "insert anyway" behaviour rather than swallowing a real fire.
+    """
+    if not rule_id or cooldown_sec <= 0:
+        return False
+    import sqlite3
+    try:
+        db = sqlite3.connect(_local_alerts_fleet_db_path(), timeout=10)
+        try:
+            db.execute("PRAGMA journal_mode=WAL")
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS alert_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    rule_id TEXT,
+                    type TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    channel TEXT NOT NULL,
+                    fired_at REAL NOT NULL,
+                    acknowledged INTEGER DEFAULT 0,
+                    ack_at REAL
+                )
+                """
+            )
+            cutoff = time.time() - cooldown_sec
+            row = db.execute(
+                "SELECT 1 FROM alert_history "
+                "WHERE rule_id = ? AND fired_at > ? LIMIT 1",
+                (str(rule_id), cutoff),
+            ).fetchone()
+            return row is not None
+        finally:
+            db.close()
+    except Exception as e:
+        log.debug("alerts(local): recent-fire lookup failed (rule=%s): %s",
+                  rule_id, e)
+        return False
+
+
 def _persist_local_alert_banner(match: dict) -> bool:
     """INSERT one ``alert_history`` row (channel="banner") for a match.
 
     Same schema dashboard.py's ``_fleet_init_db`` creates, so whichever
     process touches the fleet DB first wins and the other's CREATE TABLE
-    IF NOT EXISTS is a no-op. Never raises; returns True on success."""
+    IF NOT EXISTS is a no-op. Never raises; returns True on success.
+
+    Cross-evaluator dedup: BEFORE inserting, check ``alert_history`` for a
+    fire of the same rule_id within the rule's cooldown. This was the
+    2026-07-15 double-fire root cause on licensed local-only nodes — the
+    sync daemon here and dashboard.py's ``_budget_monitor_loop`` both
+    write to this table but hold separate cooldown memos, so the same
+    rule id could land twice within a second (E2E repro: alert_history
+    ids 3,4, rule 2f270a9c, both channel=banner). See
+    :func:`_recent_alert_fire_in_fleet`. Returns False without inserting
+    when suppressed by the cooldown — the caller treats that as
+    delivered-elsewhere, not a miss."""
     import sqlite3
 
     rule = match.get("rule") or {}
@@ -19286,6 +19370,13 @@ def _persist_local_alert_banner(match: dict) -> bool:
         cond.get("type") or cond.get("alert_type") or "custom_alert"
     )
     message = (match.get("summary") or rule.get("name") or "Alert rule fired")
+    rule_id = rule.get("id")
+    cooldown_sec = _rule_cooldown_seconds(rule, cond)
+    if _recent_alert_fire_in_fleet(rule_id, cooldown_sec):
+        log.debug("alerts(local): banner suppressed for rule=%s (within "
+                  "%ss cooldown, dashboard.py's evaluator likely fired first)",
+                  rule_id, cooldown_sec)
+        return False
     try:
         db = sqlite3.connect(_local_alerts_fleet_db_path(), timeout=10)
         try:
@@ -19316,7 +19407,7 @@ def _persist_local_alert_banner(match: dict) -> bool:
                 "INSERT INTO alert_history "
                 "(rule_id, type, message, channel, fired_at) "
                 "VALUES (?, ?, ?, ?, ?)",
-                (rule.get("id"), rtype, str(message)[:500], "banner",
+                (rule_id, rtype, str(message)[:500], "banner",
                  time.time()),
             )
             db.commit()
