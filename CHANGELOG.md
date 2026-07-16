@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Fix: uninstall removes every com.clawmetry.* launchd agent, not just sync (#3749) (2026-07-15)
+- **Why:** `clawmetry uninstall` reported "fully uninstalled" while the dashboard kept serving on localhost:8900. It only unloaded `com.clawmetry.sync.plist`; the dashboard agent (`KeepAlive=true`) and the `com.clawmetry.sandbox.*` agents stayed registered, so launchd kept the server alive off the deleted `~/.clawmetry` venv (open file handles survive the rmtree) and respawned it on every login, with the orphaned sandbox agents crash-looping at exit 78. Reproduced live on a user machine on 2026-07-15.
+- **What:** uninstall now globs every `~/Library/LaunchAgents/com.clawmetry.*.plist`, boots each out (`launchctl bootout`, falling back to `unload` on older macOS) and deletes it BEFORE removing any files, so KeepAlive can never resurrect the server; Linux gets the same broadening across `clawmetry*.service` user units. A new `_kill_dashboard_processes()` sweeps up hand-started dashboards, skipping the uninstall process itself and its parent, and never matching the ClawMetry.app desktop bundle.
+- **Verified:** 3 regression tests (all-plists removal + unrelated plists untouched, `unload` fallback when `bootout` is unavailable, self-PID skip) green on py3.9; full CI matrix green on #3749; the leftover-agent state was reproduced and cleaned on the affected machine.
+
 ### Fix: auto-update restarts both the dashboard and the daemon onto the new wheel (#3634) (2026-07-10)
 - **Why:** the live hands-off verification showed the daemon self-updating cleanly while the local dashboard kept serving the previous build from memory; the unattended path only ever restarted the sync daemon.
 - **What:** the shared restart helper is now role-aware: it restarts the other long-running service first (launchctl on macOS, systemctl --user on Linux, best-effort) and itself last, so both processes come back on the freshly installed wheel.

@@ -11,9 +11,14 @@ Trust model
 The license server holds the Ed25519 PRIVATE key and signs licenses. This OSS
 package embeds only the matching PUBLIC key, so a license verifies fully
 OFFLINE — no phone-home needed to keep a paid feature working once activated.
-``clawmetry activate`` does one online call to register this node against the
-key's node count and fetch the clawmetry-pro wheel; after that the node runs
-offline until the license expires.
+``clawmetry activate`` does one online call BY DEFAULT (to the production
+license server at ``ingest.clawmetry.com``, overridable via
+``CLAWMETRY_LICENSE_SERVER`` / ``CLAWMETRY_INGEST_URL``) to register this node
+against the key's node count and fetch the clawmetry-pro wheel; after that the
+node runs offline until the license expires. Set ``CLAWMETRY_OFFLINE=1`` to
+skip the phone-home entirely (air-gapped installs) — key VERIFICATION is
+always offline either way, and a failed/skipped phone-home never fails
+activation.
 
 Token format
 ------------
@@ -225,7 +230,14 @@ def parse_license(token: str):
         from clawmetry import entitlements as _ent
 
         tier_in = str(payload.get("tier", "")).strip().lower()
-        tier = _ent.TIER_ENTERPRISE if tier_in == "enterprise" else _ent.TIER_PRO
+        if tier_in == "enterprise":
+            tier = _ent.TIER_ENTERPRISE
+        elif tier_in == "starter":
+            # Self-hosted Starter keys ($90/node/yr) issued by the cloud.
+            tier = _ent.TIER_CLOUD_STARTER
+        else:
+            # Unknown tiers still default to Pro (forward compatibility).
+            tier = _ent.TIER_PRO
         return _ent._build(
             tier,
             "license",
@@ -286,6 +298,15 @@ def _cloud_base() -> str:
         or os.environ.get("CLAWMETRY_INGEST_URL", "").strip()
         or _DEFAULT_CLOUD_BASE
     ).rstrip("/")
+
+
+def _offline_mode() -> bool:
+    """True when ``CLAWMETRY_OFFLINE`` is truthy ("1"/"true"/"yes") — the
+    explicit opt-out that keeps ``clawmetry activate`` fully local (no node
+    registration, no clawmetry-pro download). Never raises."""
+    return os.environ.get("CLAWMETRY_OFFLINE", "").strip().lower() in (
+        "1", "true", "yes",
+    )
 
 
 def _pro_installed_version() -> str | None:
@@ -587,18 +608,22 @@ def _download_and_install_pro(payload: dict) -> str:
     registers the node against the key's node count, and returns a scoped
     download URL. We then download+install that wheel (HTTPS only).
 
-    Offline-first: this only phones home when a license server is EXPLICITLY
-    configured (``CLAWMETRY_LICENSE_SERVER``, or ``CLAWMETRY_INGEST_URL`` for the
-    cloud-hosted server). A pure-offline `clawmetry activate` with neither set is
-    a graceful no-op — the verified license is already saved on disk and unlocks
-    entitlements offline; the wheel can be fetched later. Returns a human status
+    This phones home BY DEFAULT: the server is resolved via :func:`_cloud_base`
+    (``CLAWMETRY_LICENSE_SERVER``, else ``CLAWMETRY_INGEST_URL``, else the
+    production cloud at ``ingest.clawmetry.com``) — the plain ``clawmetry
+    activate <KEY>`` from the license email gets the pro wheel with zero extra
+    configuration. Setting ``CLAWMETRY_OFFLINE=1`` (air-gapped installs) skips
+    the phone-home entirely; the verified license is already saved on disk and
+    unlocks entitlements offline, and the wheel can be fetched later. Key
+    verification never involves the network either way, and a failed
+    registration/download NEVER fails activation. Returns a human status
     string. Never raises."""
-    server = (
-        os.environ.get("CLAWMETRY_LICENSE_SERVER", "").strip()
-        or os.environ.get("CLAWMETRY_INGEST_URL", "").strip()
-    )
-    if not server:
-        return "clawmetry-pro install deferred (no license server configured)"
+    if _offline_mode():
+        return (
+            "offline mode: skipping node registration and clawmetry-pro "
+            "install (set CLAWMETRY_LICENSE_SERVER to your license server, "
+            "or unset CLAWMETRY_OFFLINE)"
+        )
     base = _cloud_base()
     node_id = _node_id() or "unknown"
     try:
@@ -841,7 +866,8 @@ def inspect_key(key: str) -> dict | None:
             days_left = int((exp - _t.time()) // 86400)
             expired = _t.time() > exp
         tier_in = str(payload.get("tier", "pro")).strip().lower()
-        tier = "enterprise" if tier_in == "enterprise" else "pro"
+        # Mirror parse_license: known tiers render as-is, unknown -> pro.
+        tier = tier_in if tier_in in ("enterprise", "starter") else "pro"
         return {
             "valid": not expired,
             "status": "expired" if expired else "active",

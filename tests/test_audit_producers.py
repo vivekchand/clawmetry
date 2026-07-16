@@ -148,8 +148,11 @@ def test_process_tool_call_records_decision(audit, monkeypatch):
     )
     monkeypatch.setitem(sys.modules, "clawmetry.local_store", fake_ls)
 
+    # Use a ``cm_``-prefixed key so the local-blocking branch added in
+    # 2026-07-15 stays off — this test guards the CLOUD dispatch path
+    # (_post_approval_request + _poll_decision are what's mocked).
     out = ap.process_tool_call(
-        api_key="k", node_id="n", session_id="sess-9",
+        api_key="cm_k", node_id="n", session_id="sess-9",
         tool_call_id="tc-1", tool_name="Bash", args={"command": "rm -rf /"},
         policies=[policy],
     )
