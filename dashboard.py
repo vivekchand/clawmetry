@@ -25,17 +25,18 @@ import sys
 # CI (issue surfaced by the bp_sessions refactor).
 sys.modules.setdefault("dashboard", sys.modules[__name__])
 
-# Force UTF-8 output on Windows (emoji in BANNER would crash with cp1252)
+# Force UTF-8 output on Windows (emoji in BANNER would crash with cp1252).
+# Must be reconfigure(), not a new TextIOWrapper around sys.stdout.buffer:
+# this block runs twice (the module header is duplicated inside this file),
+# and when the second wrapper replaces the first, the orphaned wrapper is
+# garbage-collected and closes the shared underlying buffer — leaving
+# sys.stdout closed for the rest of the process (silent --help, dead prints).
 if sys.platform == "win32":
     import io
 
     try:
-        sys.stdout = io.TextIOWrapper(
-            sys.stdout.buffer, encoding="utf-8", errors="replace"
-        )
-        sys.stderr = io.TextIOWrapper(
-            sys.stderr.buffer, encoding="utf-8", errors="replace"
-        )
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
 
@@ -8540,12 +8541,18 @@ MIT License
 import os
 import sys
 
-# Force UTF-8 output on Windows (emoji in BANNER would crash with cp1252)
+# Force UTF-8 output on Windows (emoji in BANNER would crash with cp1252).
+# reconfigure(), not a new TextIOWrapper — see the matching block at the top
+# of this file: a second wrapper orphans the first, whose GC finalizer closes
+# the shared buffer and kills sys.stdout for the whole process.
 if sys.platform == "win32":
     import io
 
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 import threading
 from datetime import timezone, timedelta
