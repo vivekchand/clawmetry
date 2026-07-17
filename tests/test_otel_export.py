@@ -1,13 +1,12 @@
-"""Tests for routes/otel_export.py — Enterprise OTLP/JSON export.
+"""Tests for routes/otel_export.py — Pro+ OTLP/JSON export.
 
-Validates the envelope shape, event→LogRecord mapping, attribute encoding, and
-the entitlement gate (allowed in grace, blocked + 402 once enforced).
+Validates the envelope shape, event→LogRecord mapping, and attribute
+encoding. The entitlement-gate contract (grace passthrough + enforce 402)
+is pinned end-to-end in ``tests/test_otel_export_route_gate.py`` now that
+the route uses the shared ``@gate("otel_export")`` decorator instead of a
+hand-rolled ``_entitlement_allows()`` helper.
 """
 from __future__ import annotations
-
-import importlib
-
-import pytest
 
 import routes.otel_export as O
 
@@ -50,25 +49,3 @@ def test_missing_fields_dont_raise():
     assert rec["timeUnixNano"] == "0"
 
 
-def test_entitlement_allows_in_grace(monkeypatch):
-    monkeypatch.delenv("CLAWMETRY_ENFORCE", raising=False)
-    import clawmetry.entitlements as e
-    importlib.reload(e)
-    e.invalidate()
-    allowed, ent = O._entitlement_allows()
-    assert allowed is True
-    assert ent["grace"] is True
-
-
-def test_entitlement_blocks_otel_for_oss_when_enforced(monkeypatch):
-    monkeypatch.setenv("CLAWMETRY_ENFORCE", "1")
-    import clawmetry.entitlements as e
-    importlib.reload(e)
-    e.invalidate()
-    allowed, ent = O._entitlement_allows()
-    assert allowed is False
-    assert ent["grace"] is False
-    # cleanup so other tests aren't poisoned
-    monkeypatch.delenv("CLAWMETRY_ENFORCE", raising=False)
-    importlib.reload(e)
-    e.invalidate()
