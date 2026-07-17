@@ -11,6 +11,13 @@ Owns the 5 routes registered on ``bp_fleet``:
     GET  /api/nodes                     — list all registered nodes
     GET  /api/nodes/<node_id>           — detail + 24h history for one node
 
+The 4 JSON API endpoints implement the ``fleet`` entitlement feature (a
+Starter+ paid capability) and are decorated with ``@gate("fleet")`` so
+enforce-mode installs on the OSS tier get a 402 ``upgrade_required``
+response instead of silently exercising a paid code path. The ``/fleet``
+HTML page is intentionally ungated — the UI itself renders the upgrade
+CTA in enforce mode so the shell stays reachable.
+
 Module-level helpers (``_fleet_db``, ``_fleet_db_lock``, ``_fleet_check_key``,
 ``_fleet_update_statuses``, ``_ext_emit``, ``FLEET_HTML``) stay in
 ``dashboard.py`` and are reached via late ``import dashboard as _d``.
@@ -21,6 +28,8 @@ import json
 import time
 
 from flask import Blueprint, jsonify, request
+
+from clawmetry._gate import gate
 
 bp_fleet = Blueprint('fleet', __name__)
 
@@ -36,6 +45,7 @@ def fleet_page():
 
 
 @bp_fleet.route("/api/nodes/register", methods=["POST"])
+@gate("fleet")
 def api_nodes_register():
     """Register or update a remote node."""
     import dashboard as _d
@@ -76,6 +86,7 @@ def api_nodes_register():
 
 
 @bp_fleet.route("/api/nodes/<node_id>/metrics", methods=["POST"])
+@gate("fleet")
 def api_nodes_push_metrics(node_id):
     """Receive metrics push from a remote node."""
     import dashboard as _d
@@ -104,6 +115,7 @@ def api_nodes_push_metrics(node_id):
 
 
 @bp_fleet.route("/api/nodes")
+@gate("fleet")
 def api_nodes_list():
     """List all registered nodes with latest metrics."""
     import dashboard as _d
@@ -193,6 +205,7 @@ def api_nodes_list():
 
 
 @bp_fleet.route("/api/nodes/<node_id>")
+@gate("fleet")
 def api_node_detail(node_id):
     """Get detailed info for a single node with metric history."""
     import dashboard as _d
