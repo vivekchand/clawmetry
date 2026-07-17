@@ -6,6 +6,40 @@ import os
 from pathlib import Path
 
 
+def _ansi_ok() -> bool:
+    """True if the attached console will render ANSI escapes.
+
+    Off-Windows, any tty renders ANSI. On Windows, the classic console
+    host (cmd.exe in conhost) ships with Virtual Terminal processing OFF,
+    so escapes print literally as ``←[1m`` garbage; enabling it via
+    SetConsoleMode fixes every ANSI emitter in this file at once. Windows
+    Terminal already has VT on, making the call a no-op there. Returns
+    False when stdout is not a tty or VT cannot be enabled -- callers
+    fall back to plain text.
+    """
+    try:
+        if not sys.stdout.isatty():
+            return False
+    except Exception:
+        return False
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+
+        k32 = ctypes.windll.kernel32
+        handle = k32.GetStdHandle(ctypes.c_uint32(-11).value)  # STD_OUTPUT_HANDLE
+        mode = ctypes.c_uint32()
+        if not k32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return False
+        _ENABLE_VT = 0x0004  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+        if mode.value & _ENABLE_VT:
+            return True
+        return bool(k32.SetConsoleMode(handle, ctypes.c_uint32(mode.value | _ENABLE_VT)))
+    except Exception:
+        return False
+
+
 def _post_json(url, body, timeout=15):
     """POST JSON and return (result_dict, status).
 
@@ -2247,7 +2281,7 @@ def _cmd_onboard(args) -> None:
     """clawmetry onboard / setup -- interactive first-time setup wizard."""
     import os as _os
 
-    _is_tty = sys.stdout.isatty()
+    _is_tty = _ansi_ok()
 
     def _c(code, text):
         return f"\033[{code}m{text}\033[0m" if _is_tty else text
@@ -2535,7 +2569,7 @@ def _cmd_account(args) -> None:
     """clawmetry account -- link email to existing account or show account info."""
     import os as _os
 
-    _is_tty = sys.stdout.isatty()
+    _is_tty = _ansi_ok()
 
     def _c(code, text):
         return f"\033[{code}m{text}\033[0m" if _is_tty else text
@@ -2692,7 +2726,7 @@ def _cmd_proxy(args) -> None:
         PROXY_CONFIG_FILE,
     )
 
-    _is_tty = sys.stdout.isatty()
+    _is_tty = _ansi_ok()
 
     def _c(code, text):
         return f"\033[{code}m{text}\033[0m" if _is_tty else text
@@ -3564,6 +3598,11 @@ def _cmd_verify_integrity(args) -> None:
 
 def main() -> None:
     import argparse
+
+    # Enable ANSI rendering on the classic Windows console before anything
+    # prints. Several commands (uninstall, account) emit escapes without a
+    # tty gate; in conhost with VT off they show as literal `←[1m` garbage.
+    _ansi_ok()
     # --v2 opt-in flag for the React SPA scaffold (see clawmetry/v2/routes.py).
     # Strip it from argv so dashboard.main's argparse doesn't choke on it.
     # Sets the env var that dashboard.py checks at blueprint registration time.
