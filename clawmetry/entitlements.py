@@ -143,6 +143,7 @@ ALL_CHANNELS: tuple[str, ...] = (
     "tlon",
     "synologychat",
     "nextcloudtalk",
+    "clickclack",
 )
 
 # Display labels for every known chat-channel adapter. Fallback for an
@@ -169,6 +170,7 @@ CHANNEL_LABELS = {
     "tlon": "Tlon",
     "synologychat": "Synology Chat",
     "nextcloudtalk": "Nextcloud Talk",
+    "clickclack": "ClickClack",
 }
 
 _TIER_ORDER = (
