@@ -2811,3 +2811,16 @@ def api_channel_nextcloud_talk():
         if fast is not None:
             return jsonify(fast)
     return _d._generic_channel_data("nextcloud-talk")
+
+
+@bp_channels.route("/api/channel/clickclack")
+def api_channel_clickclack():
+    """Issue #3781 — ingest ClickClack channel transcripts."""
+    import dashboard as _d
+    if _local_store_read_enabled():
+        fast = _try_local_store_provider_messages(
+            "clickclack", request.args.get("limit", 50, type=int),
+        )
+        if fast is not None:
+            return jsonify(fast)
+    return _d._generic_channel_data("clickclack")
