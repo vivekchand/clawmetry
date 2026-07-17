@@ -774,9 +774,18 @@ def _cmd_connect(args) -> None:
 
     # Verify ownership via OTP when key is passed directly (not from interactive flow)
     # Skip if this key is already verified (saved in config) — enables Docker restarts
+    # Skip too when --start-sync-now was passed: that is the flag the cloud
+    # dashboard's copy-paste connect command carries, and a key shown there was
+    # minted inside an already-authenticated (OTP-verified) web session, so a
+    # second OTP here is pure onboarding friction. This does not lower the
+    # actual security bar: the cm_ key is a bearer credential the server
+    # accepts directly on /auth and ingest, so the client-side OTP never
+    # stopped anyone who already holds the key.
     if args.key:
         if _saved_api_key and api_key == _saved_api_key:
             pass  # Already verified — reconnecting with same key
+        elif getattr(args, "start_sync_now", False):
+            pass  # Key from the authenticated dashboard command — already proven
         else:
             _verify_key_ownership(api_key)
 
@@ -905,9 +914,9 @@ def _cmd_connect(args) -> None:
     # default ("Sync is paused") was a confusing trap where the node never
     # heartbeated and the dashboard stayed empty. Pass `--defer-sync` to keep
     # the old behavior (e.g. provisioning a node you do not want syncing yet).
-    # `--start-sync-now` is retained as a no-op alias for back-compat (it is
-    # now the default), so existing scripts and the cloud dashboard's copy of
-    # the connect command keep working.
+    # `--start-sync-now` no longer changes anything here (sync-on-connect is
+    # the default); its remaining effect is upstream — it skips the ownership
+    # OTP for keys pasted from the authenticated dashboard command.
     if getattr(args, "defer_sync", False):
         print("  Sync is paused (--defer-sync). Start it whenever you're ready:")
         print("    clawmetry sync")
@@ -3700,7 +3709,9 @@ def main() -> None:
         "--start-sync-now",
         action="store_true",
         dest="start_sync_now",
-        help="No-op (now the default). Retained for back-compat.",
+        help="Skip the ownership OTP and start syncing immediately "
+        "(the command copied from the dashboard uses this; "
+        "sync-on-connect is otherwise already the default)",
     )
     p_connect.add_argument(
         "--defer-sync",
