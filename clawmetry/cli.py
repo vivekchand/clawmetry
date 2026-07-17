@@ -3650,6 +3650,23 @@ def main() -> None:
             try:
                 _stream.fileno()
             except (AttributeError, ValueError, OSError):
+                # A dead stream on a process that HAD a console is a bug
+                # signal, not a pythonw scenario: something closed the stream
+                # after startup (the #3791 class). The swap below keeps the
+                # CLI from crashing, but it also makes every print() vanish,
+                # so leave a breadcrumb a human can find.
+                if getattr(sys, "__%s__" % _attr, None) is not None:
+                    try:
+                        _bc = os.path.expanduser("~/.clawmetry/cli-stream-guard.log")
+                        os.makedirs(os.path.dirname(_bc), exist_ok=True)
+                        with open(_bc, "a", encoding="utf-8") as _fh:
+                            _fh.write(
+                                "sys.%s was closed at CLI startup; output is being "
+                                "discarded. This should never happen on a normal "
+                                "console run: see clawmetry#3791.\n" % _attr
+                            )
+                    except OSError:
+                        pass
                 try:
                     setattr(sys, _attr, open(os.devnull, "w", encoding="utf-8"))
                 except OSError:
