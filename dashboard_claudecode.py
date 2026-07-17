@@ -40,6 +40,8 @@ from flask import (
     request,
 )
 
+from clawmetry._gate import gate_runtime
+
 __version__ = "0.1.0"
 
 logger = logging.getLogger("clawmetry.claudecode")
@@ -631,6 +633,7 @@ def index():
 
 
 @bp_claudecode.route("/api/sessions")
+@gate_runtime("claude_code")
 def api_sessions():
     """List all Claude Code sessions with metadata."""
     sessions = _get_sessions_cached()
@@ -649,6 +652,7 @@ def api_sessions():
 
 
 @bp_claudecode.route("/api/session/<session_id>")
+@gate_runtime("claude_code")
 def api_session_detail(session_id: str):
     """Return detailed parsed transcript for a session."""
     fpath = _resolve_session_path(session_id)
@@ -662,12 +666,14 @@ def api_session_detail(session_id: str):
 
 
 @bp_claudecode.route("/api/analytics")
+@gate_runtime("claude_code")
 def api_analytics():
     """Aggregated analytics across all Claude Code sessions."""
     return jsonify(_compute_analytics())
 
 
 @bp_claudecode.route("/api/projects")
+@gate_runtime("claude_code")
 def api_projects():
     """List all detected Claude Code projects."""
     projects_dir = _get_claude_projects_dir()
