@@ -15,6 +15,8 @@ import uuid
 
 from flask import Blueprint, jsonify, request
 
+from clawmetry._gate import gate
+
 logger = logging.getLogger("clawmetry.routes.assets")
 
 bp_assets = Blueprint("assets", __name__)
@@ -54,6 +56,7 @@ def _try_store_call(method_name: str, **kwargs):
 
 
 @bp_assets.route("/api/assets", methods=["GET"])
+@gate("asset_registry")
 def list_assets():
     """List assets newest-first.
 
@@ -81,6 +84,7 @@ def list_assets():
 
 
 @bp_assets.route("/api/assets/<asset_id>", methods=["GET"])
+@gate("asset_registry")
 def get_asset(asset_id: str):
     """Return one asset by id, or 404."""
     asset = _try_store_call("get_asset", asset_id=asset_id)
@@ -90,6 +94,7 @@ def get_asset(asset_id: str):
 
 
 @bp_assets.route("/api/assets", methods=["POST"])
+@gate("asset_registry")
 def create_asset():
     """Create or upsert an asset.
 
@@ -123,6 +128,7 @@ def create_asset():
 
 
 @bp_assets.route("/api/assets/<asset_id>/review", methods=["POST"])
+@gate("asset_registry")
 def review_asset(asset_id: str):
     """Approve or reject an asset.
 
