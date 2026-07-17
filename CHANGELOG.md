@@ -1,6 +1,6 @@
 ## [Unreleased]
 
-### Fix: `connect --key … --start-sync-now` no longer demands a second OTP (2026-07-17)
+### Fix: `connect --key … --start-sync-now` no longer demands a second OTP (#3777) (2026-07-17)
 - **Why:** the connect command the cloud dashboard tells a freshly signed-in user to paste (`clawmetry connect --key cm_… --start-sync-now`) triggered ANOTHER email OTP, even though the key was just minted inside an OTP-verified web session. Onboarding asked the user to prove the same thing twice, and the gate hard-exits in non-interactive shells. Security-wise the client-side OTP never gated anything: the `cm_` key is a bearer credential the server accepts directly on `/auth` and ingest.
 - **What:** passing `--start-sync-now` alongside `--key` now skips the ownership OTP and goes straight to connect + sync. A bare `--key` connect (key obtained from anywhere else) still verifies via OTP, and re-connecting with the already-saved key still skips as before. The flag's help text now says what it does instead of "no-op".
 - **Verified:** 3 regression tests (skip with the flag, still-asks without it, saved-key reconnect skip); the skip test proven red on the un-fixed code.
