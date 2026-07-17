@@ -1303,14 +1303,16 @@ def _gateway_host_status() -> dict:
     details alongside the existing ``plugins`` list.
 
     Returns a dict with whichever fields are present:
-    - ``"gatewayHostName"``       — machine hostname
-    - ``"gatewayNetworkAddress"`` — primary network address / IP
-    - ``"gatewayHostOS"``         — OS name or platform string
-    - ``"gatewayHostRuntime"``    — runtime identifier (e.g. Node version)
-    - ``"gatewayHostUptime"``     — uptime in seconds
-    - ``"gatewayHostCPU"``        — CPU usage value or dict
-    - ``"gatewayHostMemory"``     — memory info (bytes or dict)
-    - ``"gatewayHostDisk"``       — disk info (bytes or dict)
+    - ``"gatewayHostName"``            — machine hostname
+    - ``"gatewayNetworkAddress"``      — primary network address / IP
+    - ``"gatewayHostOS"``              — OS name or platform string
+    - ``"gatewayHostRuntime"``         — runtime identifier (e.g. Node version)
+    - ``"gatewayHostUptime"``          — uptime in seconds
+    - ``"gatewayHostCPU"``             — CPU usage value or dict
+    - ``"gatewayHostMemory"``          — memory info (bytes or dict)
+    - ``"gatewayHostDisk"``            — disk info (bytes or dict)
+    - ``"gatewaySupervisorMode"``      — supervisor mode (e.g. ``"external"``)
+    - ``"gatewaySupervisorModeVersion"`` — restart-handoff contract version
 
     Returns ``{}`` when the RPC is unavailable or the response carries no
     host fields. Never raises.
@@ -1374,6 +1376,18 @@ def _gateway_host_status() -> dict:
         )
         if disk is not None:
             result["gatewayHostDisk"] = disk
+        supervisor_mode = (
+            payload.get("supervisorMode")
+            or payload.get("supervisor_mode")
+        )
+        if supervisor_mode:
+            result["gatewaySupervisorMode"] = str(supervisor_mode)
+        supervisor_mode_version = (
+            payload.get("supervisorModeVersion")
+            or payload.get("supervisor_mode_version")
+        )
+        if supervisor_mode_version:
+            result["gatewaySupervisorModeVersion"] = str(supervisor_mode_version)
         return result
     except Exception:
         return {}
