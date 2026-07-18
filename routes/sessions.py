@@ -29,6 +29,7 @@ import csv
 from datetime import timezone
 from flask import Blueprint, jsonify, request, Response
 from clawmetry.config import is_local_store_read_enabled, hide_clawmetry_session
+from clawmetry._gate import gate
 from routes._dedupe import build_sibling_bucket_max, is_sibling_dup
 
 bp_sessions = Blueprint('sessions', __name__)
@@ -7456,6 +7457,7 @@ def _err_triage_event_id():
 
 
 @bp_sessions.route("/api/error-triage/resolve", methods=["POST"])
+@gate("error_triage")
 def api_error_triage_resolve():
     """Mark an error as resolved (idempotent — re-POST refreshes the note).
 
@@ -7481,6 +7483,7 @@ def api_error_triage_resolve():
 
 
 @bp_sessions.route("/api/error-triage/resolve", methods=["DELETE"])
+@gate("error_triage")
 def api_error_triage_unresolve():
     """Remove the resolved marker for an error.
 
@@ -7500,6 +7503,7 @@ def api_error_triage_unresolve():
 
 
 @bp_sessions.route("/api/error-triage/resolved")
+@gate("error_triage")
 def api_error_triage_resolved():
     """Return the current resolved-set as ``{event_id: {resolved_at, note}}``.
 
