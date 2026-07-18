@@ -12,6 +12,17 @@ Zero coupling to ``dashboard.py``: this module only imports from
 ``clawmetry.adapters``. The adapters themselves reach into dashboard
 globals where needed (OpenClawAdapter) — that indirection stays
 contained inside the adapter.
+
+Runtime gating
+--------------
+``/api/agents/<name>/sessions`` returns per-runtime session data and is
+therefore gated with :func:`require_runtime` — mirrors what
+``dashboard_claudecode.py`` does with ``@gate_runtime("claude_code")``
+for the standalone Claude Code dashboard. The two detection endpoints
+(``/api/agents`` and ``/api/agents/<name>``) stay ungated so the UI can
+render locked runtime chips + an upgrade CTA in context (same reasoning
+``dashboard_claudecode.py`` uses to keep ``/api/health`` reachable in
+enforce mode).
 """
 from __future__ import annotations
 
@@ -21,6 +32,7 @@ from flask import Blueprint, jsonify, request
 from clawmetry.config import is_local_store_read_enabled
 
 from clawmetry.adapters import registry
+from clawmetry._gate import require_runtime
 
 bp_agents = Blueprint("agents", __name__)
 
@@ -112,6 +124,9 @@ def api_agent_detail(name: str):
 
 @bp_agents.route("/api/agents/<name>/sessions")
 def api_agent_sessions(name: str):
+    blocked = require_runtime(name)
+    if blocked is not None:
+        return blocked
     try:
         limit = max(1, min(1000, int(request.args.get("limit", 100))))
     except (TypeError, ValueError):
