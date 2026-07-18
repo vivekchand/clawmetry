@@ -72,6 +72,7 @@ def _arg_preview(args) -> str:
 
 
 @bp_policy.route("/api/tool-policy")
+@gate("tool_policy")
 def api_tool_policy():
     """Per-agent effective sandbox mode + tool allow/deny.
 
