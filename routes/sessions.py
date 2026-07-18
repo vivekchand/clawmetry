@@ -28,6 +28,7 @@ from datetime import datetime
 import csv
 from datetime import timezone
 from flask import Blueprint, jsonify, request, Response
+from clawmetry._gate import gate
 from clawmetry.config import is_local_store_read_enabled, hide_clawmetry_session
 from routes._dedupe import build_sibling_bucket_max, is_sibling_dup
 
@@ -7214,6 +7215,7 @@ def _run_compare_deltas(a, b):
 
 
 @bp_sessions.route("/api/run-compare")
+@gate("per_run_compare")
 def api_run_compare():
     """Side-by-side stats + signed deltas for two runs (#2196 item #2).
 
