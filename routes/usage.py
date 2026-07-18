@@ -39,6 +39,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from flask import Blueprint, jsonify, make_response, request
+from clawmetry._gate import gate
 from clawmetry.config import is_local_store_read_enabled
 from routes._dedupe import build_sibling_bucket_max, is_sibling_dup
 
@@ -1954,6 +1955,7 @@ def api_usage():
 
 
 @bp_usage.route("/api/usage/anomalies")
+@gate("anomaly_detection")
 def api_usage_anomalies():
     """Return session cost anomalies vs rolling 7-day baseline."""
     import dashboard as _d
@@ -1986,6 +1988,7 @@ def api_usage_anomalies():
 
 
 @bp_usage.route("/api/anomalies")
+@gate("anomaly_detection")
 def api_anomalies():
     """Rolling-baseline anomaly detection endpoint.
 
@@ -2030,6 +2033,7 @@ def api_anomalies():
 
 
 @bp_usage.route("/api/anomalies/<int:anomaly_id>/ack", methods=["POST"])
+@gate("anomaly_detection")
 def api_anomaly_ack(anomaly_id):
     """Acknowledge an anomaly so it no longer appears in the active banner."""
     import dashboard as _d
