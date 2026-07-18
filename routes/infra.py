@@ -33,6 +33,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, Response, jsonify, request
+from clawmetry._gate import gate
 from clawmetry.config import is_local_store_read_enabled, hide_clawmetry_session
 
 bp_logs = Blueprint('logs', __name__)
@@ -1848,8 +1849,16 @@ def api_llmfit():
 
 
 @bp_config.route("/api/cost-optimizer")
+@gate("cost_optimizer")
 def api_cost_optimizer():
-    """Enhanced cost optimizer: llmfit recommendations + task-level suggestions."""
+    """Enhanced cost optimizer: llmfit recommendations + task-level suggestions.
+
+    Gated on the ``cost_optimizer`` entitlement (Pro-only). In grace mode
+    the gate is transparent so free installs continue to see the current
+    behaviour; in enforce mode this route 402s with the standard
+    ``upgrade_required`` envelope shared with every other ``@gate``d paid
+    feature.
+    """
     import dashboard as _d
     import shutil
 
@@ -2056,8 +2065,15 @@ def api_cost_optimizer():
 
 
 @bp_config.route("/api/cost-optimization")
+@gate("cost_optimizer")
 def api_cost_optimization():
     """Cost optimization analysis and local model fallback recommendations.
+
+    Gated on the ``cost_optimizer`` entitlement (Pro-only). Sibling of
+    ``/api/cost-optimizer``; both endpoints render slices of the same
+    cost-optimizer surface, so they share one feature key. Grace-mode
+    default keeps the current OSS behaviour unchanged; enforce mode 402s
+    with the standard ``upgrade_required`` envelope.
 
     Tier-1 DuckDB fast path (refs #1565): the legacy ``_get_cost_summary``
     / ``_get_expensive_operations`` helpers read ``dashboard._metrics_store``
