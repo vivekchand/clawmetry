@@ -774,9 +774,18 @@ def _cmd_connect(args) -> None:
 
     # Verify ownership via OTP when key is passed directly (not from interactive flow)
     # Skip if this key is already verified (saved in config) — enables Docker restarts
+    # Skip too when --start-sync-now was passed: that is the flag the cloud
+    # dashboard's copy-paste connect command carries, and a key shown there was
+    # minted inside an already-authenticated (OTP-verified) web session, so a
+    # second OTP here is pure onboarding friction. This does not lower the
+    # actual security bar: the cm_ key is a bearer credential the server
+    # accepts directly on /auth and ingest, so the client-side OTP never
+    # stopped anyone who already holds the key.
     if args.key:
         if _saved_api_key and api_key == _saved_api_key:
             pass  # Already verified — reconnecting with same key
+        elif getattr(args, "start_sync_now", False):
+            pass  # Key from the authenticated dashboard command — already proven
         else:
             _verify_key_ownership(api_key)
 
@@ -905,9 +914,9 @@ def _cmd_connect(args) -> None:
     # default ("Sync is paused") was a confusing trap where the node never
     # heartbeated and the dashboard stayed empty. Pass `--defer-sync` to keep
     # the old behavior (e.g. provisioning a node you do not want syncing yet).
-    # `--start-sync-now` is retained as a no-op alias for back-compat (it is
-    # now the default), so existing scripts and the cloud dashboard's copy of
-    # the connect command keep working.
+    # `--start-sync-now` no longer changes anything here (sync-on-connect is
+    # the default); its remaining effect is upstream — it skips the ownership
+    # OTP for keys pasted from the authenticated dashboard command.
     if getattr(args, "defer_sync", False):
         print("  Sync is paused (--defer-sync). Start it whenever you're ready:")
         print("    clawmetry sync")
@@ -3641,6 +3650,23 @@ def main() -> None:
             try:
                 _stream.fileno()
             except (AttributeError, ValueError, OSError):
+                # A dead stream on a process that HAD a console is a bug
+                # signal, not a pythonw scenario: something closed the stream
+                # after startup (the #3791 class). The swap below keeps the
+                # CLI from crashing, but it also makes every print() vanish,
+                # so leave a breadcrumb a human can find.
+                if getattr(sys, "__%s__" % _attr, None) is not None:
+                    try:
+                        _bc = os.path.expanduser("~/.clawmetry/cli-stream-guard.log")
+                        os.makedirs(os.path.dirname(_bc), exist_ok=True)
+                        with open(_bc, "a", encoding="utf-8") as _fh:
+                            _fh.write(
+                                "sys.%s was closed at CLI startup; output is being "
+                                "discarded. This should never happen on a normal "
+                                "console run: see clawmetry#3791.\n" % _attr
+                            )
+                    except OSError:
+                        pass
                 try:
                     setattr(sys, _attr, open(os.devnull, "w", encoding="utf-8"))
                 except OSError:
@@ -3700,7 +3726,9 @@ def main() -> None:
         "--start-sync-now",
         action="store_true",
         dest="start_sync_now",
-        help="No-op (now the default). Retained for back-compat.",
+        help="Skip the ownership OTP and start syncing immediately "
+        "(the command copied from the dashboard uses this; "
+        "sync-on-connect is otherwise already the default)",
     )
     p_connect.add_argument(
         "--defer-sync",

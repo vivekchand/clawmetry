@@ -143,6 +143,7 @@ ALL_CHANNELS: tuple[str, ...] = (
     "tlon",
     "synologychat",
     "nextcloudtalk",
+    "clickclack",
 )
 
 # Display labels for every known chat-channel adapter. Fallback for an
@@ -169,6 +170,7 @@ CHANNEL_LABELS = {
     "tlon": "Tlon",
     "synologychat": "Synology Chat",
     "nextcloudtalk": "Nextcloud Talk",
+    "clickclack": "ClickClack",
 }
 
 _TIER_ORDER = (
@@ -5487,6 +5489,326 @@ def min_tier_for_runtimes_at(
         return min_tier_for_runtimes(runtimes)
     except Exception as exc:
         logger.warning("entitlements: min_tier_for_runtimes_at failed: %s", exc)
+        return None
+
+
+def _min_tier_for_features_bundle_row(bundle) -> dict:
+    """Per-bundle row shape for :func:`min_tier_for_features_batch`.
+
+    Normalises the bundle exactly the way the singular
+    ``/api/entitlement/min-tier-for-features`` endpoint does (whitespace
+    stripped, lowercased, deduplicated preserving first-seen order;
+    unknown ids bucketed into ``unknown`` instead of mis-routing the
+    ladder to a higher tier), then folds it through
+    :func:`min_tier_for_features` for the scalar answer.
+
+    Row keys mirror the bare endpoint body minus the resolver envelope
+    (``features``, ``unknown``, ``kind``, ``count``, ``min_tier``,
+    ``min_tier_label``, ``min_tier_rank``, ``free``). ``min_tier`` is
+    ``None`` when the caller supplied no known features (empty bundle
+    or all-unknown ids); the batch endpoint echoes the row unchanged so
+    a paywall UI can render "these ids are unknown: X" per bundle.
+    Never raises: a per-bundle failure returns the empty row shape so
+    the batch keeps building.
+    """
+    known: list[str] = []
+    unknown: list[str] = []
+    seen: set[str] = set()
+    try:
+        raw_items = list(bundle) if bundle is not None else []
+    except TypeError:
+        raw_items = []
+    for token in raw_items:
+        try:
+            fid = str(token).strip().lower()
+        except Exception:
+            continue
+        if not fid or fid in seen:
+            continue
+        seen.add(fid)
+        if fid in ALL_FEATURES:
+            known.append(fid)
+        else:
+            unknown.append(fid)
+    try:
+        required = min_tier_for_features(known) if known else None
+    except Exception as exc:
+        logger.warning(
+            "entitlements: _min_tier_for_features_bundle_row failed: %s", exc
+        )
+        required = None
+    return {
+        "features": known,
+        "unknown": unknown,
+        "kind": "features",
+        "count": len(known),
+        "min_tier": required,
+        "min_tier_label": tier_label(required) if required else None,
+        "min_tier_rank": tier_rank(required) if required else -1,
+        "free": bool(required == TIER_OSS),
+    }
+
+
+def _min_tier_for_runtimes_bundle_row(bundle) -> dict:
+    """Runtime-axis twin of :func:`_min_tier_for_features_bundle_row`.
+
+    Applies :func:`canonical_runtime` before the ``ALL_RUNTIMES``
+    membership check so aliases (``claude-code`` -> ``claude_code``)
+    resolve the same way they do on the singular endpoint; duplicates
+    that collapse after canonicalisation only contribute one row.
+    Unknown runtime tokens are echoed into ``unknown`` using the raw
+    lowercased id (matching the bare endpoint's fallback shape). Never
+    raises.
+    """
+    known: list[str] = []
+    unknown: list[str] = []
+    seen: set[str] = set()
+    try:
+        raw_items = list(bundle) if bundle is not None else []
+    except TypeError:
+        raw_items = []
+    for token in raw_items:
+        try:
+            raw = str(token).strip().lower()
+        except Exception:
+            continue
+        if not raw:
+            continue
+        canon = canonical_runtime(raw)
+        if canon and canon in ALL_RUNTIMES:
+            if canon in seen:
+                continue
+            seen.add(canon)
+            known.append(canon)
+        else:
+            if raw in seen:
+                continue
+            seen.add(raw)
+            unknown.append(raw)
+    try:
+        required = min_tier_for_runtimes(known) if known else None
+    except Exception as exc:
+        logger.warning(
+            "entitlements: _min_tier_for_runtimes_bundle_row failed: %s", exc
+        )
+        required = None
+    return {
+        "runtimes": known,
+        "unknown": unknown,
+        "kind": "runtimes",
+        "count": len(known),
+        "min_tier": required,
+        "min_tier_label": tier_label(required) if required else None,
+        "min_tier_rank": tier_rank(required) if required else -1,
+        "free": bool(required == TIER_OSS),
+    }
+
+
+def min_tier_for_features_batch(bundles) -> list[dict]:
+    """Per-bundle cheapest *purchasable* tier for N caller-supplied
+    feature bundles in ONE round-trip.
+
+    Bundle-axis batch sibling of :func:`min_tier_for_features` (which
+    folds ONE bundle to ONE tier). Where the singular helper answers
+    "given THIS bundle of features, what tier do I need?", this answers
+    the same question for N distinct bundles at once so a pricing-matrix
+    or upgrade-walkthrough surface comparing several hypothetical
+    configs (e.g. "starter add-ons vs pro add-ons vs enterprise add-ons")
+    renders off one call instead of N calls to :func:`min_tier_for_features`.
+
+    Distinct from :func:`min_tier_batch` (per-item cheapest tier for a
+    single flat bundle -- rows are individual feature/runtime ids) and
+    :func:`min_tier_for_all` / :func:`affordable_tiers` (aggregate across
+    the five capacity axes for ONE bundle). This helper preserves the
+    per-bundle grouping so each row is the fold-answer for that whole
+    bundle, not a fold-answer per item.
+
+    Row shape mirrors the bare
+    ``/api/entitlement/min-tier-for-features`` endpoint body minus the
+    resolver envelope::
+
+        {
+          "features":       ["fleet", "sso"],
+          "unknown":        ["bogus"],
+          "kind":           "features",
+          "count":          2,
+          "min_tier":       "enterprise" | None,
+          "min_tier_label": "Enterprise" | None,
+          "min_tier_rank":  <int>,   # -1 when min_tier is None
+          "free":           <bool>,
+        }
+
+    Per-bundle normalisation matches the singular endpoint: whitespace
+    stripped, lowercased, deduplicated preserving first-seen order;
+    unknown ids bucketed into ``unknown`` instead of mis-routing the
+    ladder to a higher tier. Empty / all-unknown bundles surface as a
+    stable row with ``min_tier=None`` (distinguishes "caller asked for
+    nothing in this slot" from "caller asked but every token was a
+    typo").
+
+    Argument handling:
+
+    * ``bundles is None`` or non-iterable -- returns ``[]``.
+    * Each bundle may itself be ``None``, non-iterable, or empty -- the
+      helper emits the empty row shape rather than raising.
+    * Non-string tokens inside a bundle are coerced via ``str(...)``
+      (matches the singular endpoint's silent-drop posture for garbage).
+
+    Decoupled from the resolved entitlement: delegates per-bundle to
+    :func:`min_tier_for_features`, which walks the static per-tier
+    feature map, so grace vs enforce yields byte-identical rows. Never
+    raises: per-bundle failures short-circuit to the empty row shape so
+    the batch keeps building.
+    """
+    try:
+        if bundles is None:
+            return []
+        items = list(bundles)
+    except TypeError:
+        return []
+    out: list[dict] = []
+    for bundle in items:
+        try:
+            out.append(_min_tier_for_features_bundle_row(bundle))
+        except Exception as exc:
+            logger.warning(
+                "entitlements: min_tier_for_features_batch row failed: %s",
+                exc,
+            )
+            out.append(
+                {
+                    "features": [],
+                    "unknown": [],
+                    "kind": "features",
+                    "count": 0,
+                    "min_tier": None,
+                    "min_tier_label": None,
+                    "min_tier_rank": -1,
+                    "free": False,
+                }
+            )
+    return out
+
+
+def min_tier_for_runtimes_batch(bundles) -> list[dict]:
+    """Per-bundle cheapest *purchasable* tier for N caller-supplied
+    runtime bundles in ONE round-trip.
+
+    Runtime-axis twin of :func:`min_tier_for_features_batch`. Same
+    per-bundle grouping (each row folds one whole bundle rather than one
+    item), same never-5xx posture, same partial-unknown bucketing.
+
+    Runtime aliases (``claude-code`` -> ``claude_code``) canonicalise
+    per bundle through :func:`canonical_runtime` before intersection
+    with :data:`ALL_RUNTIMES`, matching the singular
+    ``/api/entitlement/min-tier-for-runtimes`` endpoint; unknown tokens
+    are echoed into the per-bundle ``unknown`` using the raw lowercased
+    id and drop from the ``min_tier`` walk (a typo does NOT silently
+    mis-route the ladder to a higher tier).
+
+    Row shape mirrors the bare
+    ``/api/entitlement/min-tier-for-runtimes`` endpoint body minus the
+    resolver envelope, with ``kind="runtimes"`` and a ``runtimes`` list
+    in place of ``features``.
+
+    Never raises.
+    """
+    try:
+        if bundles is None:
+            return []
+        items = list(bundles)
+    except TypeError:
+        return []
+    out: list[dict] = []
+    for bundle in items:
+        try:
+            out.append(_min_tier_for_runtimes_bundle_row(bundle))
+        except Exception as exc:
+            logger.warning(
+                "entitlements: min_tier_for_runtimes_batch row failed: %s",
+                exc,
+            )
+            out.append(
+                {
+                    "runtimes": [],
+                    "unknown": [],
+                    "kind": "runtimes",
+                    "count": 0,
+                    "min_tier": None,
+                    "min_tier_label": None,
+                    "min_tier_rank": -1,
+                    "free": False,
+                }
+            )
+    return out
+
+
+def min_tier_for_features_at_batch(
+    perspective_tier: str, bundles
+) -> list[dict] | None:
+    """Hypothetical-perspective sibling of
+    :func:`min_tier_for_features_batch`: per-bundle cheapest purchasable
+    tier for N feature bundles in one round-trip, scoped by a caller-
+    supplied ``perspective_tier``.
+
+    Same relationship to :func:`min_tier_for_features_batch` that
+    :func:`min_tier_for_features_at` has to :func:`min_tier_for_features`
+    and :func:`affordable_tiers_at_batch` has to
+    :func:`affordable_tiers_batch`: the ``perspective_tier`` argument
+    tells the helper which resolver / plan the caller is answering from
+    so an ``_at`` endpoint URL can be uniform across the whole ``_at``
+    family, even though the underlying answer is perspective-independent
+    (each row folds the static per-tier feature map). A parity test pins
+    ``min_tier_for_features_at_batch(p, bs) ==
+    min_tier_for_features_batch(bs)`` for every ``p`` in
+    :data:`_TIER_ORDER` so the ``_at`` prefix cannot silently drift into
+    shaping rows.
+
+    Perspective is validated against :data:`_TIER_ORDER` (including
+    :data:`TIER_TRIAL`); ``None`` for empty / unknown ``perspective_tier``
+    (caller renders "unknown tier" / 404). Never raises: a delegation
+    failure logs a warning and returns ``None``.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        return min_tier_for_features_batch(bundles)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: min_tier_for_features_at_batch failed: %s", exc
+        )
+        return None
+
+
+def min_tier_for_runtimes_at_batch(
+    perspective_tier: str, bundles
+) -> list[dict] | None:
+    """Runtime-axis twin of :func:`min_tier_for_features_at_batch`.
+
+    Same perspective contract, same never-raise posture, same
+    perspective-independence guarantee (delegates to
+    :func:`min_tier_for_runtimes_batch`, which walks the static per-tier
+    runtime map).
+
+    Returns ``None`` for empty / unknown ``perspective_tier``; all other
+    semantics inherit from :func:`min_tier_for_runtimes_batch`.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        return min_tier_for_runtimes_batch(bundles)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: min_tier_for_runtimes_at_batch failed: %s", exc
+        )
         return None
 
 

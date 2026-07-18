@@ -35,6 +35,29 @@ jobs:
       - name: Lint (warnings only, don't fail)
         run: ruff check dashboard.py --select E,W --ignore E501,W503 || true
 
+      # Silent-CLI class guard (#3791): rebinding sys.stdout/sys.stderr to a
+      # new TextIOWrapper over the same buffer orphans the previous wrapper;
+      # its GC finalizer closes the SHARED buffer, and every later print(),
+      # argparse help, and wizard prompt dies silently (exit 0, zero bytes).
+      # reconfigure() is the only allowed spelling for stream re-encoding.
+      - name: Ban stdout/stderr TextIOWrapper rebinds (silent-CLI class, #3791)
+        run: |
+          python3 -c "
+          import glob, re, sys
+          pat = re.compile(r'sys\.(stdout|stderr)\s*=\s*io\.TextIOWrapper\(', re.S)
+          bad = []
+          for f in ['dashboard.py'] + glob.glob('clawmetry/**/*.py', recursive=True):
+              src = open(f, encoding='utf-8', errors='replace').read()
+              for m in pat.finditer(src):
+                  line = src[:m.start()].count(chr(10)) + 1
+                  bad.append(f'{f}:{line}: use sys.{m.group(1)}.reconfigure(...) instead of a TextIOWrapper rebind')
+          if bad:
+              print('Silent-CLI class violation (see #3791):')
+              print(chr(10).join(bad))
+              sys.exit(1)
+          print('OK: no stdout/stderr TextIOWrapper rebinds')
+          "
+
       # v0.12.165 shipped clawmetry/static/js/app.js with a missing `}`
       # (PR #753). Browsers threw "Unexpected end of input" and the whole
       # dashboard JS bundle died, stranding every user on the boot
@@ -410,12 +433,37 @@ jobs:
           python-version: "3.11"
       - name: Install from source
         run: pip install flask .
-      - name: Smoke test - help works
-        run: python3 -c "import dashboard" || python3 dashboard.py --version 2>/dev/null || echo 'import OK'
-        continue-on-error: true
-      - name: Smoke test - syntax valid
-        run: python3 -c "import dashboard; print('✅ Import OK')"
-        continue-on-error: true  # May fail if dashboard has top-level side effects
+      # These used to be continue-on-error with a `|| echo` fallback, which
+      # means they could never fail. The 5-week silent-Windows-CLI regression
+      # (#3791) sailed through them: exit code 0, zero bytes of output. The
+      # replacement asserts on stdout CONTENT via the real console script the
+      # user gets, on all 3 OS. Exit-code-only CLI checks are banned.
+      - name: Import must not kill stdout (#3791)
+        shell: python
+        run: |
+          import gc, subprocess, sys
+          code = (
+              "import gc, sys\n"
+              "import dashboard\n"
+              "gc.collect()\n"
+              "assert not sys.stdout.closed, 'dashboard import closed sys.stdout'\n"
+              "print('STDOUT_ALIVE')\n"
+          )
+          p = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=300)
+          assert p.returncode == 0, p.stderr[-2000:]
+          assert "STDOUT_ALIVE" in p.stdout, f"stdout dead after import: {p.stdout!r}"
+          print("import smoke OK")
+      - name: CLI smoke - output must not be silent (#3791)
+        shell: python
+        run: |
+          import subprocess
+          checks = [(["clawmetry", "--version"], "clawmetry"), (["clawmetry", "--help"], "usage")]
+          for cmd, must in checks:
+              p = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+              assert p.returncode == 0, (cmd, p.returncode, p.stderr[-2000:])
+              out = (p.stdout or "").lower()
+              assert must in out, f"{cmd}: expected {must!r} in stdout, got {p.stdout!r} (silent-CLI regression, see #3791)"
+          print("CLI smoke OK: --version and --help print real output")
 
   # ── Wheel-install verification: routes/, helpers/, static/, templates/ ────
   # This catches packaging regressions that source-checkout tests miss.
