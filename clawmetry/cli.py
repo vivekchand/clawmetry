@@ -3803,6 +3803,102 @@ def _cmd_channels(args) -> None:
         print(f"  {cid:<16} {label:<20} {status}")
 
 
+def _cmd_diagnose(args) -> None:
+    """clawmetry diagnose — surface the entitlement resolver inputs.
+
+    Sibling of :func:`_cmd_tier` for operators who need to answer "why is
+    my resolved tier what it is?": license file present or not, cloud
+    plan cache present or not, enforcement env var, and the in-process
+    resolver cache state. Reads
+    :func:`clawmetry.entitlements.resolution_diagnostic` -- the same
+    source ``GET /api/entitlement/diagnostic`` serves -- so the CLI and
+    the HTTP surface cannot drift on the inputs they expose.
+
+    Read-only, side-effect free. Never raises: any resolver failure
+    surfaces inline (a warning line in the human block, or an ``error``
+    key on the JSON payload with the partial dict intact) so a wrapper
+    script always sees a parseable response. Matches the never-crash
+    contract documented on :func:`get_entitlement`.
+
+    Output:
+      default -- human-readable block (license, cloud plan, enforce env,
+                 cache state) matching the aligned two-column style
+                 shared with ``clawmetry tier`` / ``features`` / ``runtimes``
+      --json  -- :func:`resolution_diagnostic` dict serialized (indent=2,
+                 sort_keys=True) so a shell wrapper can pipe it to jq
+    """
+    import json as _json
+
+    from clawmetry import entitlements as _ent
+
+    payload: dict = {}
+    err: str | None = None
+    try:
+        payload = _ent.resolution_diagnostic()
+    except Exception as exc:
+        err = str(exc)
+        print(f"⚠️  entitlement diagnostic failed: {exc}", file=sys.stderr)
+
+    if getattr(args, "as_json", False):
+        if err:
+            payload = dict(payload)
+            payload["error"] = err
+        print(_json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    print("ClawMetry Diagnose\n" + "─" * 40)
+    if err:
+        print(f"  ⚠️  diagnostic error: {err}")
+        return
+
+    def _row(label: str, value) -> None:
+        print(f"  {label:<24} {value}")
+
+    lic_present = bool(payload.get("license_present"))
+    lic_size = int(payload.get("license_size_bytes") or 0)
+    lic_path = payload.get("license_path") or "?"
+    _row("License file:", "yes" if lic_present else "no")
+    _row("  path:", lic_path)
+    if lic_present:
+        _row("  size (bytes):", lic_size)
+    if payload.get("license_error"):
+        _row("  error:", payload["license_error"])
+
+    cp_present = bool(payload.get("cloud_plan_present"))
+    cp_size = int(payload.get("cloud_plan_size_bytes") or 0)
+    cp_path = payload.get("cloud_plan_path") or "?"
+    _row("Cloud plan cache:", "yes" if cp_present else "no")
+    _row("  path:", cp_path)
+    if cp_present:
+        _row("  size (bytes):", cp_size)
+    if payload.get("cloud_plan_error"):
+        _row("  error:", payload["cloud_plan_error"])
+
+    enforce_env = payload.get("enforce_env")
+    is_enforced = bool(payload.get("is_enforced"))
+    _row("Enforce env:", enforce_env if enforce_env not in (None, "") else "(unset)")
+    _row("Enforced:", "yes" if is_enforced else "no (grace)")
+
+    ret_env_name = payload.get("retention_override_env_name") or "?"
+    ret_env_val = payload.get("retention_override_env_value")
+    _row(
+        f"{ret_env_name}:",
+        ret_env_val if ret_env_val not in (None, "") else "(unset)",
+    )
+
+    age = payload.get("cache_age_seconds")
+    ttl = payload.get("cache_ttl_seconds")
+    hit = bool(payload.get("cache_hit_next_call"))
+    cached_tier = payload.get("cache_cached_tier")
+    _row("Cache age (s):", "-" if age is None else age)
+    _row("Cache TTL (s):", "-" if ttl is None else ttl)
+    _row("Cache hit next call:", "yes" if hit else "no")
+    if cached_tier:
+        _row("Cached tier:", cached_tier)
+    if payload.get("cache_error"):
+        _row("Cache error:", payload["cache_error"])
+
+
 def _cmd_verify_integrity(args) -> None:
     """clawmetry verify-integrity — walk the hash chain and report validity."""
     from clawmetry.local_store import get_store
@@ -4340,6 +4436,26 @@ def main() -> None:
         ),
     )
 
+    # diagnose — surface the entitlement resolver inputs so an operator
+    # can answer "why did my install resolve to <tier>?" without reading
+    # ~/.clawmetry by hand. Same shape as GET /api/entitlement/diagnostic.
+    p_diagnose = sub.add_parser(
+        "diagnose",
+        help=(
+            "Show entitlement resolver inputs (license file, cloud plan "
+            "cache, enforce env, in-process cache state)"
+        ),
+    )
+    p_diagnose.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help=(
+            "Emit resolution_diagnostic() as JSON (same shape as "
+            "GET /api/entitlement/diagnostic)"
+        ),
+    )
+
     # verify-integrity — walk hash chain and report validity (Issue #2200)
     p_verify = sub.add_parser(
         "verify-integrity",
@@ -4373,6 +4489,7 @@ def main() -> None:
         "runtimes",
         "features",
         "channels",
+        "diagnose",
         "verify-integrity",
         "nemoclaw-daemons",
     )
@@ -4418,6 +4535,8 @@ def main() -> None:
             _cmd_features(args)
         elif args.cmd == "channels":
             _cmd_channels(args)
+        elif args.cmd == "diagnose":
+            _cmd_diagnose(args)
         elif args.cmd == "verify-integrity":
             _cmd_verify_integrity(args)
         elif args.cmd == "nemoclaw-daemons":
