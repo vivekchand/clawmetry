@@ -3156,17 +3156,53 @@ def _cmd_activate(args) -> None:
         sys.exit(1)
 
 
+def _license_json_dump(payload: dict) -> None:
+    """Emit ``payload`` as pretty JSON on stdout for ``clawmetry license --json``.
+
+    Isolated so tests can capture the exact serialisation shape and so the
+    ``--json`` branches stay a single line each. Uses ``sort_keys=True`` to
+    keep the envelope stable across Python versions and across whichever
+    order the caller populated the dict.
+    """
+    import json as _json
+
+    print(_json.dumps(payload, indent=2, sort_keys=True))
+
+
 def _cmd_license(args) -> None:
-    """clawmetry license [activate|status|deactivate] — manage the self-hosted license."""
+    """clawmetry license [activate|status|deactivate|fingerprint|verify] — manage
+    the self-hosted license.
+
+    Human output mirrors the pre-``--json`` block character-for-character; the
+    ``--json`` branch emits ``{action, ok, ...}`` on stdout so a wrapper script
+    can parse license state (and exit code) without screen-scraping the human
+    table. Every branch preserves the never-crash contract on
+    :func:`clawmetry.license.current_license_info` / :func:`inspect_key` /
+    :func:`pubkey_info` — a failure surfaces as ``ok=false`` on the payload
+    AND a non-zero exit so pipes still detect it.
+    """
     action = getattr(args, "license_action", None) or "status"
+    as_json = bool(getattr(args, "as_json", False))
 
     if action == "activate":
         key = getattr(args, "license_key", None) or ""
         if not key:
-            print("❌  Usage: clawmetry license activate <KEY>")
+            if as_json:
+                _license_json_dump({
+                    "action": "activate",
+                    "ok": False,
+                    "message": "Usage: clawmetry license activate <KEY>",
+                })
+            else:
+                print("❌  Usage: clawmetry license activate <KEY>")
             sys.exit(1)
         from clawmetry import license as _lic
         ok, msg = _lic.activate(key.strip(), node_id=_lic._node_id(), actor="cli")
+        if as_json:
+            _license_json_dump({"action": "activate", "ok": bool(ok), "message": msg})
+            if not ok:
+                sys.exit(1)
+            return
         if ok:
             print(f"✅  {msg}")
             print("    Run `clawmetry license status` to verify. Restart the daemon to load Pro features.")
@@ -3178,6 +3214,15 @@ def _cmd_license(args) -> None:
     elif action == "deactivate":
         from clawmetry import license as _lic
         ok, removed = _lic.deactivate(actor="cli")
+        if as_json:
+            _license_json_dump({
+                "action": "deactivate",
+                "ok": bool(ok),
+                "removed": bool(removed),
+            })
+            if not ok:
+                sys.exit(1)
+            return
         if not ok:
             print("❌  Could not remove the license file. Check filesystem permissions.")
             sys.exit(1)
@@ -3190,6 +3235,15 @@ def _cmd_license(args) -> None:
         from clawmetry import license as _lic
         info = _lic.pubkey_info()
         fp = info.get("fingerprint_sha256")
+        if as_json:
+            _license_json_dump({
+                "action": "fingerprint",
+                "ok": bool(fp),
+                "pubkey": info,
+            })
+            if not fp:
+                sys.exit(1)
+            return
         print("ClawMetry License Public Key\n" + "─" * 40)
         print(f"  Algorithm:   {info.get('algorithm', 'ed25519')}")
         print(f"  Format:      {info.get('format', '')}")
@@ -3211,10 +3265,37 @@ def _cmd_license(args) -> None:
         # WITHOUT writing anything to disk. Useful for support and pre-flight.
         key = getattr(args, "license_key", None) or ""
         if not key:
-            print("❌  Usage: clawmetry license verify <KEY>")
+            if as_json:
+                _license_json_dump({
+                    "action": "verify",
+                    "ok": False,
+                    "status": "usage",
+                    "inspection": None,
+                    "message": "Usage: clawmetry license verify <KEY>",
+                })
+            else:
+                print("❌  Usage: clawmetry license verify <KEY>")
             sys.exit(1)
         from clawmetry import license as _lic
         info = _lic.inspect_key(key.strip())
+        if as_json:
+            if info is None:
+                _license_json_dump({
+                    "action": "verify",
+                    "ok": False,
+                    "status": "invalid",
+                    "inspection": None,
+                })
+                sys.exit(1)
+            _license_json_dump({
+                "action": "verify",
+                "ok": bool(info.get("valid")),
+                "status": info.get("status", "unknown"),
+                "inspection": info,
+            })
+            if not info.get("valid"):
+                sys.exit(1)
+            return
         print("ClawMetry License Verify (dry-run)\n" + "─" * 40)
         if info is None:
             print("  Result:      ❌  Invalid or unrecognized license key")
@@ -3241,6 +3322,25 @@ def _cmd_license(args) -> None:
     else:
         from clawmetry import license as _lic
         info = _lic.current_license_info()
+        if as_json:
+            if info is None:
+                _license_json_dump({
+                    "action": "status",
+                    "ok": True,
+                    "installed": False,
+                    "plan": "oss",
+                    "license": None,
+                })
+                return
+            valid = bool(info.get("valid"))
+            _license_json_dump({
+                "action": "status",
+                "ok": valid,
+                "installed": True,
+                "plan": (str(info.get("tier", "pro")) if valid else "oss"),
+                "license": info,
+            })
+            return
         print("ClawMetry License\n" + "─" * 40)
         if not info:
             print("  Plan:        OSS (free)")
@@ -4152,6 +4252,17 @@ def main() -> None:
         nargs="?",
         default=None,
         help="License key (CLAW1.…) — required for 'activate' / 'verify'",
+    )
+    p_license.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help=(
+            "Emit {action, ok, ...} JSON (jq-friendly). Matches the sibling "
+            "flag on `tier --json` / `runtimes --json` / `features --json` / "
+            "`channels --json` so wrappers can parse license state without "
+            "screen-scraping the human-readable block."
+        ),
     )
 
     # tier — print the resolved open-core entitlement (scriptable)
