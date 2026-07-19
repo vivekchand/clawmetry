@@ -3619,6 +3619,90 @@ def _cmd_features(args) -> None:
         print("  Upgrade: clawmetry license activate <KEY>")
 
 
+def _cmd_channels(args) -> None:
+    """clawmetry channels — list every chat-channel adapter and the tier cap.
+
+    Sibling of :func:`_cmd_runtimes` / :func:`_cmd_features` for the third
+    entitlement axis. Every chat channel is FREE at every tier -- the
+    ``channels`` capacity axis governs how many concurrent channels each
+    plan admits, not which adapters unlock -- so every row surfaces as
+    available. The tier-scoped concurrent-channel cap is what upgrades
+    unlock, and it prints in the header block. Reads
+    :func:`clawmetry.entitlements.channel_catalog` -- the same source the
+    dashboard's channel-picker consumes -- so the CLI and the UI cannot
+    drift on the adapter list.
+
+    Never raises. A poisoned catalog read surfaces the error inline (a
+    warning row in the human table, or an ``error`` key on the JSON payload
+    with ``channels=[]``) so a wrapper script always sees a parseable
+    response. Matches the never-crash contract documented on
+    :func:`get_entitlement`.
+
+    Output:
+      default -- header block (tier / enforcement / channel cap) + table
+                 (id, label, status) of every adapter
+      --json  -- ``{tier, grace, enforced, channel_limit, channels: [...],
+                 error?: str}``
+    """
+    import json as _json
+
+    from clawmetry import entitlements as _ent
+
+    try:
+        ent = _ent.get_entitlement()
+        tier = ent.tier
+        grace = bool(ent.grace)
+        enforced = _ent.is_enforced()
+        channel_limit = ent.channel_limit()
+    except Exception as exc:
+        # Mirror _cmd_runtimes / _cmd_features never-crash fallback: a
+        # broken install still gets a parseable shape, with the failure
+        # surfaced to stderr so it isn't silently lost in a pipeline.
+        print(f"⚠️  entitlement resolution failed: {exc}", file=sys.stderr)
+        tier, grace, enforced, channel_limit = "oss", True, False, None
+
+    rows: list[dict] = []
+    catalog_error: str | None = None
+    try:
+        rows = list(_ent.channel_catalog())
+    except Exception as exc:
+        catalog_error = str(exc)
+
+    if getattr(args, "as_json", False):
+        payload: dict = {
+            "tier": tier,
+            "grace": grace,
+            "enforced": enforced,
+            "channel_limit": channel_limit,
+            "channels": rows,
+        }
+        if catalog_error:
+            payload["error"] = catalog_error
+        print(_json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    mode_line = "off (grace)" if not enforced else "on"
+    cap_line = "unlimited" if channel_limit in (None, 0) else str(channel_limit)
+    print("ClawMetry Channels\n" + "─" * 40)
+    print(f"  Tier:        {tier}")
+    print(f"  Enforcement: {mode_line}")
+    print(f"  Channel cap: {cap_line}  (concurrent adapters)")
+    if catalog_error:
+        print(f"  ⚠️  catalog error: {catalog_error}")
+        return
+
+    print()
+    print(f"  {'ID':<16} {'Label':<20} Status")
+    print("  " + "─" * 50)
+    for row in rows:
+        cid = str(row.get("id", ""))
+        label = str(row.get("label", cid))
+        # Every channel adapter is free at every tier; the cap is separate.
+        # Surface the row identically to a free/available runtime row.
+        status = "✅ available"
+        print(f"  {cid:<16} {label:<20} {status}")
+
+
 def _cmd_verify_integrity(args) -> None:
     """clawmetry verify-integrity — walk the hash chain and report validity."""
     from clawmetry.local_store import get_store
@@ -4127,6 +4211,24 @@ def main() -> None:
         ),
     )
 
+    # channels — list every chat-channel adapter and the tier-scoped cap.
+    # CLI sibling of `clawmetry runtimes` / `clawmetry features` for the
+    # third entitlement axis. Every adapter is FREE at every tier; the
+    # concurrent-channel cap is what the header block advertises.
+    p_channels = sub.add_parser(
+        "channels",
+        help="List every chat-channel adapter and the concurrent-channel cap",
+    )
+    p_channels.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help=(
+            "Emit {tier, grace, enforced, channel_limit, channels:[...]} "
+            "JSON (jq-friendly)"
+        ),
+    )
+
     # verify-integrity — walk hash chain and report validity (Issue #2200)
     p_verify = sub.add_parser(
         "verify-integrity",
@@ -4159,6 +4261,7 @@ def main() -> None:
         "tier",
         "runtimes",
         "features",
+        "channels",
         "verify-integrity",
         "nemoclaw-daemons",
     )
@@ -4202,6 +4305,8 @@ def main() -> None:
             _cmd_runtimes(args)
         elif args.cmd == "features":
             _cmd_features(args)
+        elif args.cmd == "channels":
+            _cmd_channels(args)
         elif args.cmd == "verify-integrity":
             _cmd_verify_integrity(args)
         elif args.cmd == "nemoclaw-daemons":
