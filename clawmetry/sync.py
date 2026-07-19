@@ -11319,6 +11319,22 @@ _FAMILY_ADAPTER_SPECS = (
 )
 
 
+def _family_ingest_rev() -> str:
+    """Installed clawmetry-pro version, stamped into family high-water marks.
+
+    The adapters live in clawmetry-pro; what they extract per session
+    (tokens, cost, model) changes across pro releases. Stamping the rev
+    means an upgrade re-ingests every session once instead of trusting a
+    mark written by older extraction code. "" when pro is absent.
+    """
+    try:
+        import importlib.metadata as _ilm
+
+        return _ilm.version("clawmetry-pro")
+    except Exception:
+        return ""
+
+
 def _family_adapter_classes():
     """Return the importable non-OpenClaw runtime adapter classes."""
     classes = []
@@ -11708,6 +11724,7 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
     # 29 of 387 ~/.claude sessions were OpenClaw-spawned.
     openclaw_spawned_claude = _openclaw_spawned_claude_ids()
 
+    _ingest_rev = _family_ingest_rev()
     for cls in _family_adapter_classes():
         try:
             adapter = cls()  # construct once (discovery globs/DB opens are not free)
@@ -11727,9 +11744,18 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 # ``ended`` (the adapter sets it to the last event ts) every turn,
                 # so they're never wrongly skipped; idle/ended sessions cost ~0.
                 _evt_hw = state.setdefault("family_event_high_water", {})
-                _hw_ts = _evt_hw.get(ns_id)
+                # The mark is "<ts>@@<ingest-rev>" (rev = installed
+                # clawmetry-pro version). A pro upgrade changes what the
+                # adapters extract (live-hit 2026-07-19: nanoclaw sessions
+                # ingested by a pre-deep-usage wheel were skipped forever,
+                # so their $0 cost could never heal) — a rev mismatch
+                # re-ingests the session once. Pre-rev marks (plain ts)
+                # mismatch "" vs the real rev and re-ingest once too.
+                _hw_raw = str(_evt_hw.get(ns_id) or "")
+                _hw_ts, _, _hw_rev = _hw_raw.partition("@@")
                 _activity = ended or started
-                if _hw_ts and _activity and _activity <= _hw_ts:
+                if (_hw_ts and _activity and _activity <= _hw_ts
+                        and _hw_rev == _ingest_rev):
                     continue
                 metadata = {
                     "runtime": runtime,
@@ -11960,13 +11986,13 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                         # again. Only on a clean ingest -- a failure leaves the
                         # mark behind so we retry the session next cycle.
                         if _activity:
-                            _evt_hw[ns_id] = _activity
+                            _evt_hw[ns_id] = _activity + "@@" + _ingest_rev
                     except Exception as _ee:
                         log.warning("family event ingest failed (%s): %s", ns_id, _ee)
                 elif _activity:
                     # No event rows (e.g. an empty/metadata-only session): still
                     # mark it seen so we don't re-scan it every cycle forever.
-                    _evt_hw[ns_id] = _activity
+                    _evt_hw[ns_id] = _activity + "@@" + _ingest_rev
         except Exception as exc:
             log.warning(
                 "family runtime ingest failed for %s: %s",
