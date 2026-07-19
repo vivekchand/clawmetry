@@ -1753,12 +1753,17 @@ def api_security_integrity():
 
 
 @bp_security.route("/api/security/audit")
+@gate("audit_logs")
 def api_security_audit():
     """Recent Enterprise audit-log activity for the Security tab.
 
-    Thin mirror of ``/api/audit-log`` (entitlement-gated there) scoped to a
-    small recent window for the tab's recent-activity feed. Never raises —
-    an empty list paints an honest "nothing recorded yet" state."""
+    Thin mirror of ``/api/audit-log`` scoped to a small recent window for
+    the tab's recent-activity feed. Gated on ``audit_logs`` because it
+    reads the same store and returns the same rows — leaving it open
+    would let a Free/Starter/Pro caller sidestep the ``@gate`` on
+    ``routes/audit.py`` by hitting the mirror URL instead. Grace mode
+    (the default) still lets the request through. Never raises — an
+    empty list paints an honest "nothing recorded yet" state."""
     try:
         from clawmetry import audit as _audit
         try:
