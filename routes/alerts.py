@@ -773,6 +773,7 @@ def api_alert_rule(rule_id):
 
 
 @bp_alerts.route("/api/alerts/history")
+@gate("custom_alerts")
 def api_alert_history():
     """Get alert history."""
     import dashboard as _d
@@ -781,6 +782,7 @@ def api_alert_history():
 
 
 @bp_alerts.route("/api/alerts/history/<int:alert_id>/ack", methods=["POST"])
+@gate("custom_alerts")
 def api_alert_ack(alert_id):
     """Acknowledge an alert."""
     import dashboard as _d
@@ -796,6 +798,7 @@ def api_alert_ack(alert_id):
 
 
 @bp_alerts.route("/api/alerts/active")
+@gate("custom_alerts")
 def api_alerts_active():
     """Get active (unacknowledged) alerts."""
     import dashboard as _d
