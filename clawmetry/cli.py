@@ -3264,6 +3264,97 @@ def _cmd_license(args) -> None:
             print(f"  Trust key:   sha256:{fp[:16]}…  (clawmetry license fingerprint)")
 
 
+def _entitlement_why_payload(kind: str, key: str) -> dict:
+    """Resolve the lock-reason payload for a single feature/runtime id.
+
+    Same shape the ``/api/entitlement/lock-reason`` HTTP endpoint emits so
+    ``clawmetry <features|runtimes> --why <id> --json`` and the dashboard
+    cannot drift on the upgrade affordance. Never raises: any resolver
+    failure returns the OSS-free "not locked, unknown" fallback so a wrapper
+    script always sees a parseable response — matches the never-crash
+    contract documented on :func:`get_entitlement`.
+    """
+    key = (key or "").strip().lower()
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        cur_tier = ent.tier
+        cur_rank = _ent.tier_rank(cur_tier)
+        if kind == "runtime":
+            allowed = ent.allows_runtime(key)
+            required = _ent.min_tier_for_runtime(key)
+            reason = ent.lock_reason(key, kind="runtime")
+        else:  # feature
+            allowed = ent.allows_feature(key)
+            required = _ent.min_tier_for_feature(key)
+            reason = ent.lock_reason(key, kind="feature")
+        req_rank = _ent.tier_rank(required) if required else -1
+        required_label = _ent.tier_label(required) if required else None
+        return {
+            "key": key,
+            "kind": kind,
+            "reason": reason,
+            "locked": reason is not None,
+            "allowed": bool(allowed),
+            "required_tier": required,
+            "required_tier_label": required_label,
+            "required_tier_rank": req_rank,
+            "current_tier": cur_tier,
+            "current_tier_rank": cur_rank,
+            "upgrade_required": bool(required) and req_rank > cur_rank,
+        }
+    except Exception as exc:
+        print(f"⚠️  entitlement resolution failed: {exc}", file=sys.stderr)
+        return {
+            "key": key,
+            "kind": kind,
+            "reason": None,
+            "locked": False,
+            "allowed": True,
+            "required_tier": None,
+            "required_tier_label": None,
+            "required_tier_rank": -1,
+            "current_tier": "oss",
+            "current_tier_rank": 0,
+            "upgrade_required": False,
+        }
+
+
+def _print_why_block(payload: dict) -> None:
+    """Human-readable render of :func:`_entitlement_why_payload`.
+
+    Mirrors the ``clawmetry tier`` / ``clawmetry features`` output style
+    (aligned two-column block, single upgrade CTA when a paid tier unlocks
+    the item) so shell operators recognise the layout across subcommands.
+    """
+    key = payload.get("key") or "(unknown)"
+    kind = payload.get("kind") or "?"
+    locked = bool(payload.get("locked"))
+    print(f'ClawMetry: why is "{key}" locked?')
+    print("─" * 40)
+    print(f"  Kind:            {kind}")
+    print(f"  Current tier:    {payload.get('current_tier', 'oss')}")
+    print(f"  Locked:          {'yes' if locked else 'no'}")
+    reason = payload.get("reason")
+    if reason:
+        print(f"  Reason:          {reason}")
+    req = payload.get("required_tier")
+    req_label = payload.get("required_tier_label")
+    if req:
+        rank = payload.get("required_tier_rank", -1)
+        rank_hint = f" (rank {rank})" if isinstance(rank, int) and rank >= 0 else ""
+        print(f"  Required tier:   {req_label or req}{rank_hint}")
+    if payload.get("upgrade_required"):
+        print("  Upgrade:         clawmetry license activate <KEY>")
+    elif not locked and not payload.get("reason"):
+        # Free/allowed or unknown id: don't dangle an upgrade CTA. Give the
+        # operator a one-line hint of which case they hit so a `--why` on a
+        # typo doesn't silently look like a "no lock" all-clear.
+        if not req:
+            print("  Note:            not a paid capability on this install")
+
+
 def _cmd_tier(args) -> None:
     """clawmetry tier — print the resolved open-core entitlement.
 
@@ -3361,6 +3452,15 @@ def _cmd_runtimes(args) -> None:
 
     from clawmetry import entitlements as _ent
 
+    why = (getattr(args, "why", None) or "").strip().lower()
+    if why:
+        payload = _entitlement_why_payload("runtime", why)
+        if getattr(args, "as_json", False):
+            print(_json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            _print_why_block(payload)
+        return
+
     try:
         ent = _ent.get_entitlement()
         tier = ent.tier
@@ -3443,6 +3543,15 @@ def _cmd_features(args) -> None:
     import json as _json
 
     from clawmetry import entitlements as _ent
+
+    why = (getattr(args, "why", None) or "").strip().lower()
+    if why:
+        payload = _entitlement_why_payload("feature", why)
+        if getattr(args, "as_json", False):
+            print(_json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            _print_why_block(payload)
+        return
 
     try:
         ent = _ent.get_entitlement()
@@ -3984,6 +4093,15 @@ def main() -> None:
         dest="as_json",
         help="Emit {tier, grace, enforced, runtimes:[...]} JSON (jq-friendly)",
     )
+    p_runtimes.add_argument(
+        "--why",
+        metavar="ID",
+        default=None,
+        help=(
+            "Print the lock-reason payload for a single runtime id "
+            "(same shape as GET /api/entitlement/lock-reason?runtime=<id>)"
+        ),
+    )
 
     # features — list every observable feature and which are unlocked.
     # CLI sibling of `clawmetry runtimes` and of the dashboard's GET
@@ -3998,6 +4116,15 @@ def main() -> None:
         action="store_true",
         dest="as_json",
         help="Emit {tier, grace, enforced, features:[...]} JSON (jq-friendly)",
+    )
+    p_features.add_argument(
+        "--why",
+        metavar="ID",
+        default=None,
+        help=(
+            "Print the lock-reason payload for a single feature id "
+            "(same shape as GET /api/entitlement/lock-reason?feature=<id>)"
+        ),
     )
 
     # verify-integrity — walk hash chain and report validity (Issue #2200)
