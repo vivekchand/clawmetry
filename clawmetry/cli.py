@@ -3395,10 +3395,24 @@ def _cmd_update() -> None:
 
 
 def _cmd_activate(args) -> None:
-    """clawmetry activate <KEY> — install a self-hosted Pro/Enterprise license."""
+    """clawmetry activate <KEY> — install a self-hosted Pro/Enterprise license.
+
+    Shortcut for ``clawmetry license activate <KEY>``. Accepts the same
+    ``--json`` flag so a wrapper script can activate a key and read the
+    outcome without screen-scraping. The JSON envelope is byte-identical to
+    what ``clawmetry license activate <KEY> --json`` emits
+    (``{action: "activate", ok, message}``) so a script that already parses
+    the license subcommand does not need to branch on which spelling ran.
+    """
     from clawmetry import license as _lic
 
+    as_json = bool(getattr(args, "as_json", False))
     ok, msg = _lic.activate(args.key, node_id=_lic._node_id(), actor="cli")
+    if as_json:
+        _license_json_dump({"action": "activate", "ok": bool(ok), "message": msg})
+        if not ok:
+            sys.exit(1)
+        return
     if ok:
         print(f"✅  {msg}")
         print("    Run `clawmetry license` to see status. Restart the daemon to load Pro features.")
@@ -4701,6 +4715,17 @@ def main() -> None:
         "activate", help="Activate a self-hosted Pro/Enterprise license key"
     )
     p_activate.add_argument("key", help="License key (CLAW1.…)")
+    p_activate.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help=(
+            "Emit {action, ok, message} JSON (jq-friendly). Byte-identical "
+            "to the envelope `clawmetry license activate <KEY> --json` "
+            "already emits so wrappers do not need to branch on the "
+            "shortcut spelling."
+        ),
+    )
 
     # license — manage the self-hosted Pro/Enterprise license
     p_license = sub.add_parser("license", help="Manage the self-hosted Pro/Enterprise license")
