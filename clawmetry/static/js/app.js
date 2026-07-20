@@ -2270,7 +2270,12 @@ async function loadSkills() {
   // fetch is safe in cloud too — no more "local-only" dead end.
   listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">' + t("app.loading", null, "Loading...") + '</div>';
   try {
-    var data = await fetch('/api/skills').then(function(r) { return r.json(); });
+    var _fetched = await Promise.all([
+      fetch('/api/skills').then(function(r) { return r.json(); }),
+      fetch('/api/skills/workshop').then(function(r) { return r.json(); }).catch(function() { return null; })
+    ]);
+    var data = _fetched[0];
+    var workshop = _fetched[1];
     var skills = data.skills || [];
     var summary = data.summary || {};
     var installed = summary.total_installed || 0;
@@ -2297,11 +2302,23 @@ async function loadSkills() {
         : card(t('skills.all_good', null, 'All good'), '\u2713', '#22c55e',
                t('skills.all_good_sub', null, 'every skill is being used'));
     }
+    var workshopCard = '';
+    if (workshop) {
+      var wPolicy = workshop.approval_policy;
+      if (wPolicy === 'pending') {
+        workshopCard = card('Workshop', '🔒', '#22c55e', 'approval gate on');
+      } else if (workshop.auto_actions_enabled) {
+        workshopCard = card('Workshop', '⚡', '#f59e0b', 'auto-apply active');
+      } else {
+        workshopCard = card('Workshop', '•', '#94a3b8', 'default behavior');
+      }
+    }
     summaryEl.innerHTML =
       card('Installed', installed, 'var(--text-primary)') +
       (dead   > 0 ? card('Safe to remove', dead,  '#ef4444', 'never used') : '') +
       (stuck  > 0 ? card('Not working',    stuck, '#f59e0b', 'broken or misdescribed') : '') +
-      verdictCard;
+      verdictCard +
+      workshopCard;
 
     if (skills.length === 0) {
       listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">' + t("app.nothing_installed_yet_skills", null, "Nothing installed yet. Skills let your agent handle specific tasks \u2014 add some to get started.") + '</div>';
