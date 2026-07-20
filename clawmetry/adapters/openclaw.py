@@ -12,6 +12,7 @@ identical to the pre-refactor dashboard.
 """
 from __future__ import annotations
 
+import glob
 import hashlib
 import json
 import logging
@@ -449,6 +450,56 @@ def _openshell_sandbox_ocsf_enabled(name: str) -> dict:
         return {}
 
 
+def _gateway_log_files() -> list:
+    """Return the newest-5 rotating gateway log files across known candidate dirs.
+
+    The gateway writes dated, rotating JSONL logs to ``{log_dir}/openclaw-YYYY-MM-DD.log``
+    (rotates at 100 MB, keeps up to 5 archives). Candidate directories mirror the
+    log_dir resolution logic in ``sync.py``'s ``_get_paths()``.
+    Never raises; returns an empty list when no log files are found.
+    """
+    openclaw_dir = os.environ.get(
+        "CLAWMETRY_OPENCLAW_DIR", os.path.expanduser("~/.openclaw")
+    )
+    candidates = [
+        "/tmp/openclaw",
+        os.path.join(openclaw_dir, "logs"),
+    ]
+    for d in candidates:
+        matches = sorted(glob.glob(os.path.join(d, "openclaw-*.log")))
+        if matches:
+            return matches[-5:]
+    return []
+
+
+def _gateway_log_meta() -> dict:
+    """Return gateway log metadata for detect(): dir, archive count, current file size.
+
+    Surfaces ``gatewayLogDir``, ``gatewayLogArchiveCount``, and
+    ``gatewayLogCurrentSizeKb`` so the dashboard can show log location and
+    rotation state for plain OpenClaw installs. Returns ``{}`` when no log
+    files are present (non-OpenClaw host or gateway never started).
+    Never raises.
+    """
+    try:
+        files = _gateway_log_files()
+        if not files:
+            return {}
+        result: dict = {
+            "gatewayLogDir": os.path.dirname(files[0]),
+            "gatewayLogArchiveCount": len(files),
+        }
+        try:
+            result["gatewayLogCurrentSizeKb"] = round(
+                os.path.getsize(files[-1]) / 1024, 1
+            )
+        except OSError:
+            pass
+        return result
+    except Exception:
+        return {}
+
+
 def _openshell_sandbox_logs(name: str, count: int = 20) -> list:
     """Retrieve OCSF JSON audit log lines for a NemoClaw sandbox.
 
@@ -485,25 +536,31 @@ def _openshell_sandbox_logs(name: str, count: int = 20) -> list:
             except Exception:
                 pass
         # For container-backed (non-terminal) sandboxes the harness also tails
-        # /tmp/gateway.log (asserted in test/sandbox-logs-terminal.test.ts).
-        # Read runtime kind via the existing phase-policy helper and merge when
-        # the sandbox is not terminal-kind.
+        # the gateway log. The gateway writes rotating dated files at
+        # {log_dir}/openclaw-YYYY-MM-DD.log, not a static /tmp/gateway.log.
+        # Use _gateway_log_files() so we find the actual current log regardless
+        # of host layout; fall back to OPENSHELL_GATEWAY_LOG for test overrides.
         phase_info = _openshell_sandbox_phase_policy(name)
         if phase_info.get("sandboxRuntimeKind", "").lower() != "terminal":
-            _gw_log = os.environ.get("OPENSHELL_GATEWAY_LOG", "/tmp/gateway.log")
-            try:
-                with open(_gw_log, "r", encoding="utf-8", errors="replace") as _gf:
-                    _gw_lines = _gf.readlines()[-count:]
-                for _gw_line in _gw_lines:
-                    _gw_line = _gw_line.strip()
-                    if not _gw_line:
-                        continue
-                    try:
-                        events.append(json.loads(_gw_line))
-                    except Exception:
-                        pass
-            except OSError:
-                pass
+            _gw_log_override = os.environ.get("OPENSHELL_GATEWAY_LOG")
+            _gw_candidates = (
+                [_gw_log_override] if _gw_log_override else _gateway_log_files()
+            )
+            _gw_log_path = _gw_candidates[-1] if _gw_candidates else None
+            if _gw_log_path:
+                try:
+                    with open(_gw_log_path, "r", encoding="utf-8", errors="replace") as _gf:
+                        _gw_lines = _gf.readlines()[-count:]
+                    for _gw_line in _gw_lines:
+                        _gw_line = _gw_line.strip()
+                        if not _gw_line:
+                            continue
+                        try:
+                            events.append(json.loads(_gw_line))
+                        except Exception:
+                            pass
+                except OSError:
+                    pass
         return events
     except Exception:
         return []
@@ -1491,6 +1548,14 @@ class OpenClawAdapter(AgentAdapter):
             _cr = _clawrouter_detect()
             if _cr:
                 meta.update(_cr)
+            # Gateway log location + rotation state (#3836): surface the
+            # rotating log directory, archive count, and current file size so
+            # the dashboard can show log presence for plain OpenClaw installs.
+            # Runs unconditionally — log files exist even when the gateway is
+            # not currently live. Returns {} gracefully when absent.
+            _gw_log = _gateway_log_meta()
+            if _gw_log:
+                meta.update(_gw_log)
             return DetectResult(
                 name=self.name,
                 display_name=self.display_name,
