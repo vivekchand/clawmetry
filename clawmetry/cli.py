@@ -3631,14 +3631,21 @@ def _cmd_license(args) -> None:
 
 
 def _entitlement_why_payload(kind: str, key: str) -> dict:
-    """Resolve the lock-reason payload for a single feature/runtime id.
+    """Resolve the lock-reason payload for a single feature/runtime/channels id.
 
     Same shape the ``/api/entitlement/lock-reason`` HTTP endpoint emits so
-    ``clawmetry <features|runtimes> --why <id> --json`` and the dashboard
-    cannot drift on the upgrade affordance. Never raises: any resolver
-    failure returns the OSS-free "not locked, unknown" fallback so a wrapper
-    script always sees a parseable response — matches the never-crash
-    contract documented on :func:`get_entitlement`.
+    ``clawmetry <features|runtimes|channels> --why <id> --json`` and the
+    dashboard cannot drift on the upgrade affordance. Never raises: any
+    resolver failure returns the OSS-free "not locked, unknown" fallback so
+    a wrapper script always sees a parseable response — matches the
+    never-crash contract documented on :func:`get_entitlement`.
+
+    ``kind="channels"`` treats ``key`` as a concurrent-adapter *count* (the
+    channels axis is capacity-scoped, every adapter itself is free) and
+    resolves against :func:`min_tier_for_channel_count` /
+    :meth:`Entitlement.allows_channel_count`, mirroring
+    :func:`_lock_row`'s "channels" branch so CLI and HTTP stay in lockstep.
+    A non-integer ``key`` collapses to the never-crash grace-shape row.
     """
     key = (key or "").strip().lower()
     try:
@@ -3651,6 +3658,32 @@ def _entitlement_why_payload(kind: str, key: str) -> dict:
             allowed = ent.allows_runtime(key)
             required = _ent.min_tier_for_runtime(key)
             reason = ent.lock_reason(key, kind="runtime")
+        elif kind == "channels":
+            # Capacity axis: ``key`` is a concurrent-adapter count. A
+            # non-int collapses to the grace-shape row so a typo (e.g.
+            # ``--why abc``) never crashes and never dangles an upgrade CTA.
+            try:
+                n = int(key)
+            except (TypeError, ValueError):
+                return {
+                    "key": key,
+                    "kind": kind,
+                    "reason": None,
+                    "locked": False,
+                    "allowed": True,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                    "current_tier": cur_tier,
+                    "current_tier_rank": cur_rank,
+                    "upgrade_required": False,
+                }
+            allowed = ent.allows_channel_count(n)
+            required = _ent.min_tier_for_channel_count(n)
+            reason = ent.lock_reason(str(n), kind="channels")
+            # Canonicalise the key in the response so a caller passing "05"
+            # or "5" sees the same string back.
+            key = str(n)
         else:  # feature
             allowed = ent.allows_feature(key)
             required = _ent.min_tier_for_feature(key)
@@ -3693,11 +3726,19 @@ def _print_why_block(payload: dict) -> None:
     Mirrors the ``clawmetry tier`` / ``clawmetry features`` output style
     (aligned two-column block, single upgrade CTA when a paid tier unlocks
     the item) so shell operators recognise the layout across subcommands.
+
+    For ``kind="channels"`` the header phrases the capacity question
+    naturally ("why do I need <tier> for N concurrent channels?") since
+    the key is a count, not an id -- otherwise the shared "why is X
+    locked?" phrasing wins.
     """
     key = payload.get("key") or "(unknown)"
     kind = payload.get("kind") or "?"
     locked = bool(payload.get("locked"))
-    print(f'ClawMetry: why is "{key}" locked?')
+    if kind == "channels":
+        print(f'ClawMetry: what tier unlocks {key} concurrent channels?')
+    else:
+        print(f'ClawMetry: why is "{key}" locked?')
     print("─" * 40)
     print(f"  Kind:            {kind}")
     print(f"  Current tier:    {payload.get('current_tier', 'oss')}")
@@ -4009,10 +4050,22 @@ def _cmd_channels(args) -> None:
                  (id, label, status) of every adapter
       --json  -- ``{tier, grace, enforced, channel_limit, channels: [...],
                  error?: str}``
+      --why N -- lock-reason payload for N concurrent channels (same shape
+                 as ``GET /api/entitlement/lock-reason?channels=N``); pair
+                 with ``--json`` for scriptable output.
     """
     import json as _json
 
     from clawmetry import entitlements as _ent
+
+    why = (getattr(args, "why", None) or "").strip().lower()
+    if why:
+        payload = _entitlement_why_payload("channels", why)
+        if getattr(args, "as_json", False):
+            print(_json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            _print_why_block(payload)
+        return
 
     try:
         ent = _ent.get_entitlement()
@@ -4826,6 +4879,17 @@ def main() -> None:
         help=(
             "Emit {tier, grace, enforced, channel_limit, channels:[...]} "
             "JSON (jq-friendly)"
+        ),
+    )
+    p_channels.add_argument(
+        "--why",
+        metavar="N",
+        default=None,
+        help=(
+            "Print the lock-reason payload for N concurrent channels "
+            "(same shape as GET /api/entitlement/lock-reason?channels=N). "
+            "The channels axis is capacity-scoped -- every adapter itself "
+            "is free -- so N is a count, not an adapter id."
         ),
     )
 

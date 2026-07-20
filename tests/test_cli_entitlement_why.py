@@ -181,15 +181,135 @@ def test_why_survives_broken_resolver(cli_mod, capsys, monkeypatch):
 
 
 def test_why_subparser_flags_registered():
-    """Both `runtimes --why` and `features --why` must be reachable from the
-    top-level parser — otherwise the human-facing docs promise a flag that
-    argparse rejects at runtime."""
+    """`runtimes --why`, `features --why`, and `channels --why` must all be
+    reachable from the top-level parser — otherwise the human-facing docs
+    promise a flag that argparse rejects at runtime."""
     import inspect
 
     import clawmetry.cli as cli
 
     src = inspect.getsource(cli.main)
-    # Only one occurrence of `"--why"` is enough — both subparsers add it
-    # inline in `main`, so grep the source for the flag name and its metavar.
+    # `--why` is registered on runtimes, features, AND channels; grep for
+    # the flag name plus both metavars so we catch a drift on either axis.
     assert '"--why"' in src
-    assert "metavar=\"ID\"" in src
+    assert "metavar=\"ID\"" in src  # runtimes / features (id-scoped)
+    assert "metavar=\"N\"" in src  # channels (count-scoped)
+
+
+# ── channels --why (capacity axis) ─────────────────────────────────────────
+#
+# The channels axis is capacity-scoped -- every adapter itself is FREE at
+# every tier; what upgrades unlock is the concurrent-channel cap. So
+# ``clawmetry channels --why N`` answers "what tier admits N concurrent
+# channels?" instead of "why is <adapter> locked?". Payload shape must
+# match the shared _EXPECTED_KEYS envelope so a wrapper script written
+# against `runtimes --why` / `features --why` also works here.
+
+
+def test_why_channels_json_matches_shared_envelope(cli_mod, capsys):
+    """The channels --why JSON must expose the same keys as the runtime /
+    feature variants so scripts written against either surface work
+    interchangeably."""
+    cli_mod._cmd_channels(_ns(as_json=True, why="5"))
+    payload = json.loads(capsys.readouterr().out)
+    assert set(payload) == _EXPECTED_KEYS
+    assert payload["kind"] == "channels"
+    assert payload["key"] == "5"
+
+
+def test_why_channels_grace_reports_upgrade_target(cli_mod, capsys):
+    """In grace mode, a count above the free cap must still surface the
+    tier that would unlock it (locked=False but required_tier=cloud_starter
+    + upgrade_required=True), matching the runtime/feature preview
+    behaviour. This is the guarantee that the CLI can preview the upgrade
+    ladder without flipping the enforce gate."""
+    import clawmetry.entitlements as ent
+
+    cli_mod._cmd_channels(_ns(as_json=True, why="5"))
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["locked"] is False  # grace mode
+    assert payload["reason"] is None
+    assert payload["current_tier"] == ent.TIER_OSS
+    assert payload["required_tier"] == ent.TIER_CLOUD_STARTER
+    assert payload["upgrade_required"] is True
+
+
+def test_why_channels_under_free_cap_reports_no_upgrade(cli_mod, capsys):
+    """A count that fits under the OSS free cap (3) resolves to
+    required_tier=oss and upgrade_required=False even under grace so the
+    CLI never dangles an upgrade CTA for a request the free floor
+    already covers."""
+    cli_mod._cmd_channels(_ns(as_json=True, why="3"))
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["locked"] is False
+    assert payload["upgrade_required"] is False
+
+
+def test_why_channels_enforce_locks_over_cap(cli_mod, capsys, monkeypatch):
+    """With CLAWMETRY_ENFORCE=1, asking for more concurrent channels than
+    the OSS cap admits reports a real lock with a non-empty reason string
+    and the upgrade CTA."""
+    import clawmetry.entitlements as ent
+
+    monkeypatch.setenv("CLAWMETRY_ENFORCE", "1")
+    ent.invalidate()
+    cli_mod._cmd_channels(_ns(as_json=True, why="5"))
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["locked"] is True
+    assert payload["reason"], "reason string must be non-empty when locked"
+    assert payload["required_tier"] == ent.TIER_CLOUD_STARTER
+    assert payload["upgrade_required"] is True
+
+
+def test_why_channels_non_int_returns_parseable_fallback(cli_mod, capsys):
+    """A typo like ``--why abc`` must not crash and must not dangle an
+    upgrade CTA -- otherwise a shell wrapper mistakes a typo for
+    "no lock, all good"."""
+    cli_mod._cmd_channels(_ns(as_json=True, why="abc"))
+    payload = json.loads(capsys.readouterr().out)
+    assert set(payload) == _EXPECTED_KEYS
+    assert payload["kind"] == "channels"
+    assert payload["locked"] is False
+    assert payload["reason"] is None
+    assert payload["required_tier"] is None
+    assert payload["upgrade_required"] is False
+
+
+def test_why_channels_human_block_uses_capacity_phrasing(
+    cli_mod, capsys, monkeypatch
+):
+    """The non-JSON path for channels uses a capacity-scoped header
+    ("what tier unlocks N concurrent channels?") since the key is a
+    count, not an adapter id. Under enforcement the reason string surfaces
+    verbatim alongside the aligned two-column block."""
+    import clawmetry.entitlements as ent
+
+    monkeypatch.setenv("CLAWMETRY_ENFORCE", "1")
+    ent.invalidate()
+    cli_mod._cmd_channels(_ns(as_json=False, why="5"))
+    out = capsys.readouterr().out
+    assert "what tier unlocks 5 concurrent channels?" in out
+    assert "Kind:" in out and "channels" in out
+    assert "Locked:" in out and "yes" in out
+    assert "Reason:" in out
+    assert "Required tier:" in out
+    assert "clawmetry license activate <KEY>" in out
+
+
+def test_why_channels_survives_broken_resolver(cli_mod, capsys, monkeypatch):
+    """A poisoned :func:`get_entitlement` must produce the OSS-free fallback
+    shape, not a stack trace -- same never-crash contract as the runtime /
+    feature variants."""
+    import clawmetry.entitlements as ent
+
+    def _boom():
+        raise RuntimeError("synthetic resolver failure")
+
+    monkeypatch.setattr(ent, "get_entitlement", _boom)
+    cli_mod._cmd_channels(_ns(as_json=True, why="5"))
+    payload = json.loads(capsys.readouterr().out)
+    assert set(payload) == _EXPECTED_KEYS
+    assert payload["kind"] == "channels"
+    assert payload["current_tier"] == "oss"
+    assert payload["locked"] is False
+    assert payload["reason"] is None
