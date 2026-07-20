@@ -1855,10 +1855,236 @@ def _resolve_account_email(api_key: str):
         return None, None
 
 
+def _status_snapshot(args) -> dict:
+    """Return a stable dict describing what ``clawmetry status`` shows.
+
+    Sibling of the JSON payloads on ``tier`` / ``license`` / ``runtimes`` /
+    ``features`` / ``channels`` / ``diagnose`` / ``verify-integrity`` — every
+    read-only CLI diagnostic emits a jq-friendly envelope so wrapper scripts
+    stop screen-scraping the human table. Called by ``_cmd_status(--json)``.
+
+    Contract (fields are stable; new ones may be added, existing ones do not
+    change shape or type):
+
+    * ``version``: installed clawmetry version, or ``null`` when the metadata
+      lookup fails (e.g. a very locked-down environment).
+    * ``cloud_sync``: config-file view, or ``null`` when no config exists yet
+      (fresh install). Carries the SAME masked identifiers the human path
+      prints; ``api_key`` / ``encryption.secret_key`` are only populated when
+      the operator passes ``--show-key`` (same policy as the human path).
+    * ``sync_state``: last-sync timestamp + event-file count, or ``null``
+      when the daemon has never written a state file.
+    * ``runtimes``: whether the account entitles paid runtimes to sync,
+      which runtimes the sync-daemon adapter detects locally, and whether
+      the ``clawmetry-pro`` wheel is installed. Shape matches what the human
+      path prints under the ``Runtimes:`` block.
+    * ``daemon``: whether the sync daemon is running + how it's supervised
+      (``launchd`` on macOS; ``systemd`` / ``systemd-user`` / ``background``
+      on Linux; ``null`` when the platform doesn't check daemon status).
+    * ``log``: log-file path + the same three-line tail the human path prints,
+      or ``null`` when the log file is absent.
+    * ``sandboxes``: reserved list-shaped placeholder — always ``[]`` in the
+      JSON payload so scripts have a stable key to iterate over. The human
+      path shells out to ``docker exec kubectl`` per NemoClaw pod, which is
+      too slow for a scriptable diagnostic; scripts that need per-pod state
+      should target that surface directly.
+
+    Best-effort throughout: every helper is wrapped so a broken corner (e.g.
+    an unreadable config file, an unavailable network) degrades to ``null``
+    or a sensible zero-shape default instead of raising — same never-crash
+    contract as every other CLI diagnostic.
+    """
+    import json as _json
+    import platform as _platform
+    from clawmetry.sync import CONFIG_FILE, STATE_FILE, LOG_FILE
+
+    show_key = bool(getattr(args, "show_key", False))
+    snap: dict = {
+        "version": None,
+        "cloud_sync": None,
+        "sync_state": None,
+        "runtimes": {
+            "entitled": False,
+            "plan": "",
+            "pro_installed_version": None,
+            "openclaw": {"detected": True, "syncing": True},
+            "nemoclaw": {"detected": False, "syncing": False},
+            "detected": [],
+        },
+        "daemon": {"running": False, "manager": None},
+        "log": None,
+        "sandboxes": [],
+    }
+
+    # Installed version (lightweight metadata read; no dashboard import).
+    try:
+        import importlib.metadata as _md
+        snap["version"] = _md.version("clawmetry") or None
+    except Exception:
+        snap["version"] = None
+
+    # Config block.
+    if CONFIG_FILE.exists():
+        cloud: dict = {
+            "connected": True,
+            "config_error": None,
+            "api_key_masked": "",
+            "api_key": None,
+            "account": {"email": None, "plan": None, "placeholder": False},
+            "node_id": None,
+            "connected_at": None,
+            "encryption": {
+                "enabled": False,
+                "secret_key_masked": None,
+                "secret_key": None,
+            },
+        }
+        try:
+            cfg = _json.loads(CONFIG_FILE.read_text())
+            api_key = str(cfg.get("api_key", "") or "")
+            enc_key = str(cfg.get("encryption_key", "") or "")
+            cloud["api_key_masked"] = (
+                api_key[:6] + "…" + api_key[-4:] if len(api_key) > 10 else api_key
+            )
+            if show_key:
+                cloud["api_key"] = api_key
+            email, plan = _resolve_account_email(api_key)
+            cloud["account"]["email"] = email or None
+            cloud["account"]["plan"] = plan or None
+            cloud["account"]["placeholder"] = _is_placeholder_account(email)
+            cloud["node_id"] = cfg.get("node_id") or None
+            _ca = cfg.get("connected_at") or ""
+            cloud["connected_at"] = (_ca[:19] or None) if _ca else None
+            if enc_key:
+                cloud["encryption"]["enabled"] = True
+                cloud["encryption"]["secret_key_masked"] = (
+                    enc_key[:6] + "…" + enc_key[-4:] if len(enc_key) > 10 else enc_key
+                )
+                if show_key:
+                    cloud["encryption"]["secret_key"] = enc_key
+        except Exception as exc:
+            cloud["config_error"] = str(exc)
+        snap["cloud_sync"] = cloud
+
+    # Sync state.
+    if STATE_FILE.exists():
+        try:
+            st = _json.loads(STATE_FILE.read_text())
+            _ls = st.get("last_sync") or ""
+            snap["sync_state"] = {
+                "last_sync": (_ls[:19] or None) if _ls else None,
+                "files_seen": len(st.get("last_event_ids") or {}),
+            }
+        except Exception:
+            snap["sync_state"] = {"last_sync": None, "files_seen": 0}
+
+    # Runtimes. Same resolution as the human path.
+    try:
+        _plan = ""
+        try:
+            _cp = Path(os.path.expanduser("~/.clawmetry/cloud_plan.json"))
+            if _cp.is_file():
+                _plan = str((_json.loads(_cp.read_text()) or {}).get("plan", "")).lower()
+        except Exception:
+            _plan = ""
+        _entitled = _plan not in ("", "cloud_free", "free")
+        snap["runtimes"]["plan"] = _plan
+        snap["runtimes"]["entitled"] = _entitled
+        try:
+            from clawmetry.license import _pro_installed_version as _pv
+            snap["runtimes"]["pro_installed_version"] = _pv() or None
+        except Exception:
+            snap["runtimes"]["pro_installed_version"] = None
+        try:
+            from clawmetry.adapters.nemo import NemoClawAdapter as _NCA
+            _nemo = _NCA().detect()
+            if getattr(_nemo, "detected", False):
+                snap["runtimes"]["nemoclaw"] = {"detected": True, "syncing": True}
+        except Exception:
+            pass
+        try:
+            from clawmetry.sync import _detect_family_runtimes as _dfr
+            _det = _dfr() or []
+        except Exception:
+            _det = []
+        snap["runtimes"]["detected"] = [
+            {
+                "name": (r.get("name") or ""),
+                "display_name": (r.get("displayName") or r.get("name") or "runtime"),
+                "session_count": int(r.get("sessionCount") or 0),
+                "syncing": bool(_entitled),
+            }
+            for r in _det
+        ]
+    except Exception:
+        pass
+
+    # Daemon.
+    system = _platform.system()
+    try:
+        if system == "Darwin":
+            import subprocess as _sp
+            r = _sp.run(
+                ["launchctl", "list", "com.clawmetry.sync"],
+                capture_output=True, text=True,
+            )
+            if r.returncode == 0:
+                snap["daemon"] = {"running": True, "manager": "launchd"}
+            else:
+                snap["daemon"] = {"running": False, "manager": "launchd"}
+        elif system == "Linux":
+            import subprocess as _sp
+            import shutil as _sh
+            running = _is_sync_running()
+            manager: str | None = None
+            if running:
+                # Default to ``background`` whenever the daemon is up but we
+                # can't identify a supervisor; only upgrade to ``systemd`` /
+                # ``systemd-user`` when systemctl confirms an active unit.
+                # A shell wrapper reading ``.daemon.manager`` expects a label
+                # once ``.daemon.running`` is true — a null there is easy to
+                # mistake for "not running".
+                manager = "background"
+                if _sh.which("systemctl"):
+                    for _scope in (["--user"], []):
+                        try:
+                            _a = _sp.run(
+                                ["systemctl", *_scope, "is-active", "clawmetry-sync"],
+                                capture_output=True, text=True, timeout=5,
+                            )
+                            if _a.stdout.strip() == "active":
+                                manager = "systemd" if _scope == [] else "systemd-user"
+                                break
+                        except Exception:
+                            pass
+            snap["daemon"] = {"running": bool(running), "manager": manager}
+        else:
+            snap["daemon"] = {"running": False, "manager": None}
+    except Exception:
+        snap["daemon"] = {"running": False, "manager": None}
+
+    # Log tail — same three-line window the human path prints.
+    if LOG_FILE.exists():
+        try:
+            lines = LOG_FILE.read_text(errors="replace").splitlines()[-3:]
+        except Exception:
+            lines = []
+        snap["log"] = {"path": str(LOG_FILE), "tail": lines}
+
+    return snap
+
+
 def _cmd_status(args) -> None:
     """clawmetry status — show local + cloud sync status."""
     if getattr(args, "live", False):
         _status_live()
+        return
+    if getattr(args, "as_json", False):
+        import json as _json
+        # Sibling of `tier --json` / `license --json` / `runtimes --json` /
+        # `features --json` / `channels --json` / `diagnose --json` /
+        # `verify-integrity --json` — one dict, no side-effect prints.
+        print(_json.dumps(_status_snapshot(args), sort_keys=True))
         return
     import platform
     from clawmetry.sync import CONFIG_FILE, STATE_FILE, LOG_FILE
@@ -4320,6 +4546,19 @@ def main() -> None:
     p_status = sub.add_parser("status", help="Show local + cloud sync status")
     p_status.add_argument("--show-key", action="store_true", help="Reveal secret key")
     p_status.add_argument("--live", action="store_true", help="Live one-line status bar (sessions · tokens · cost · model · tok/s); Ctrl-C to exit")
+    p_status.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help=(
+            "Emit the status snapshot as JSON (jq-friendly) instead of the "
+            "human table. Matches the sibling flag on `tier --json` / "
+            "`license --json` / `runtimes --json` / `features --json` / "
+            "`channels --json` / `diagnose --json` / `verify-integrity --json` "
+            "so wrappers can parse cloud-sync / daemon / runtime state without "
+            "screen-scraping. Ignored when combined with --live."
+        ),
+    )
 
     # proxy
     p_proxy = sub.add_parser(
