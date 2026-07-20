@@ -256,6 +256,11 @@ def provider_for_model(model: str) -> str:
     # treating it as free/local.
     if "mistral" in m or "mixtral" in m or "codestral" in m:
         return "mistral"
+    # Ollama `name:tag` format (e.g. qwen3:8b, deepseek-r1:latest). Hosted
+    # API ids never use colon-tag without a provider prefix; the colon with no
+    # slash is a strong signal that the model is running locally on Ollama.
+    if ":" in m and "/" not in m:
+        return "local"
     return ""
 
 

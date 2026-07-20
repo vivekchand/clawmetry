@@ -41,3 +41,14 @@ def test_genuine_local_still_free():
     assert pp.provider_for_model("ollama/llama3.1") == "local"
     assert pp.provider_for_model("llama3.1") == "local"
     assert _rates("local", "llama3.1") == (0.0, 0.0)
+
+
+def test_ollama_colon_tag_is_local():
+    # Ollama name:tag format must resolve to "local" (zero per-token cost).
+    # Hosted APIs never use colon-tag; bare name:tag is an Ollama convention.
+    for model in ("qwen3:8b", "deepseek-r1:latest", "deepseek-coder:6.7b"):
+        assert pp.provider_for_model(model) == "local", model
+        assert pp.estimate_event_cost_usd(model, input_tokens=1000, output_tokens=500) == 0.0, model
+    # Bare hosted names (no colon) must NOT be zeroed — they use paid APIs.
+    for model in ("qwen-max", "deepseek-chat"):
+        assert pp.provider_for_model(model) != "local", model
