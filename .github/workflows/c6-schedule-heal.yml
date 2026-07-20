@@ -4,13 +4,14 @@ name: C6 auto-heal (daily required-checks application)
 # Self-heals C6 the morning after E2E_ADMIN_PAT secret is added.
 #
 # When E2E_ADMIN_PAT is NOT set:
-#   emits an ::error:: annotation and exits 1 -- visible red badge until
-#   the secret is configured. This makes the missing PAT impossible to ignore.
+#   - emits an ::error:: annotation (visible red badge)
+#   - writes a formatted job summary showing current required-check state
+#     and a one-click close path (no log-reading required)
+#   - exits 1 so the badge stays red until the PAT is configured
 #
 # When E2E_ADMIN_PAT IS set:
-#   runs scripts/apply_required_status_checks.py which configures required
-#   status checks across clawmetry, clawmetry-cloud, clawmetry-landing.
-#   Idempotent: safe to re-run when already configured.
+#   - runs scripts/apply_required_status_checks.py to configure checks
+#   - writes a post-apply summary
 #
 # To close C6 without waiting for tomorrow:
 #   Actions > "Apply required E2E status checks (C6 -- one-shot)" >
@@ -22,7 +23,8 @@ name: C6 auto-heal (daily required-checks application)
 #     clawmetry, clawmetry-cloud, clawmetry-landing
 #   This workflow picks it up at 10:15am UTC and closes C6 automatically.
 #
-# Tracking: vivekchand/clawmetry#3752 (C6)
+# Tracking: vivekchand/clawmetry#3864 (E2E robustness epic)
+#           vivekchand/clawmetry#3752 (C6)
 
 on:
   schedule:
@@ -46,31 +48,99 @@ jobs:
         run: |
           if [ -z "${ADMIN_PAT}" ]; then
             echo "has_pat=false" >> "$GITHUB_OUTPUT"
-            echo "::error::E2E_ADMIN_PAT secret is not set -- C6 (required-status-checks) cannot be applied automatically."
-            echo ""
-            echo "ACTION REQUIRED: Add E2E_ADMIN_PAT to close C6 (vivekchand/clawmetry#3752)."
-            echo ""
-            echo "Step 1: Create a fine-grained PAT"
-            echo "  https://github.com/settings/personal-access-tokens/new"
-            echo "  Resource owner: vivekchand"
-            echo "  Repos: clawmetry, clawmetry-cloud, clawmetry-landing"
-            echo "  Permission: Administration -- read+write"
-            echo ""
-            echo "Step 2A (automatic) -- store as repo secret:"
-            echo "  Settings > Secrets > Actions > New secret"
-            echo "  Name: E2E_ADMIN_PAT"
-            echo "  This workflow closes C6 automatically the next morning at 10:15am UTC."
-            echo ""
-            echo "Step 2B (immediate) -- apply right now:"
-            echo "  Actions > 'Apply required E2E status checks (C6 -- one-shot)'"
-            echo "  confirm=APPLY, pat_token=<paste PAT>"
-            echo ""
-            echo "  Tracking: https://github.com/vivekchand/clawmetry/issues/3752"
-            exit 1
           else
             echo "has_pat=true" >> "$GITHUB_OUTPUT"
             echo "E2E_ADMIN_PAT found -- applying required E2E status checks."
           fi
+
+      # Read-only check: show current required-check state even without a PAT.
+      # Uses GET /repos/{owner}/{repo}/branches/main (public endpoint, no admin
+      # scope needed) to read the current protection.required_status_checks.
+      # Writes a formatted summary to GITHUB_STEP_SUMMARY so the state is
+      # visible directly in the job summary panel without reading log lines.
+      - name: Read current required-check state (read-only)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: vivekchand
+        run: |
+          set +e
+          REPOS="clawmetry clawmetry-cloud clawmetry-landing"
+
+          # Expected required checks per repo (from scripts/apply_required_status_checks.py)
+          declare -A EXPECTED
+          EXPECTED[clawmetry]="OSS golden path (wheel + OpenClaw + 9 tabs)|Cross-repo handoff (C4)|MOAT Keystone (13-endpoint bar)|E2E Browser Tests (critical subset)"
+          EXPECTED[clawmetry-cloud]="Cloud golden-path browser E2E"
+          EXPECTED[clawmetry-landing]="Landing golden path (C3)"
+
+          ALL_OK=true
+          SUMMARY_ROWS=""
+          for REPO in $REPOS; do
+            PROTECTION=$(gh api "/repos/${OWNER}/${REPO}/branches/main" \
+              --jq '.protection.required_status_checks.contexts // []' 2>/dev/null || echo "[]")
+            IFS='|' read -ra EXPECTED_CHECKS <<< "${EXPECTED[$REPO]}"
+            for CHECK in "${EXPECTED_CHECKS[@]}"; do
+              if echo "$PROTECTION" | python3 -c \
+                "import json,sys; d=json.load(sys.stdin); exit(0 if $(python3 -c "import json; print(repr('${CHECK}'))" 2>/dev/null || echo "'${CHECK}'") in d else 1)" 2>/dev/null; then
+                STATUS="ok"
+                ICON=":white_check_mark:"
+              else
+                STATUS="missing"
+                ICON=":x:"
+                ALL_OK=false
+              fi
+              SUMMARY_ROWS="${SUMMARY_ROWS}| ${REPO} | ${CHECK} | ${ICON} |\n"
+            done
+          done
+
+          # Write the job summary
+          {
+            echo "## C6: Required E2E Status Checks"
+            echo ""
+            if [ "$ALL_OK" = "true" ]; then
+              echo "> :white_check_mark: **All required checks are configured.** C6 is GREEN."
+            else
+              echo "> :x: **One or more required checks are not yet enforced on main.**"
+              echo ">"
+              echo "> E2E tests pass but PRs can still merge if they fail -- the checks are not required."
+            fi
+            echo ""
+            echo "| Repo | Check | Status |"
+            echo "|------|-------|--------|"
+            printf "%b" "$SUMMARY_ROWS"
+            echo ""
+            if [ "$ALL_OK" != "true" ]; then
+              echo "### Close C6 now (pick one)"
+              echo ""
+              echo "**Option A -- one-click from the browser (no terminal needed):**"
+              echo "1. Create a fine-grained PAT: [github.com/settings/personal-access-tokens/new](https://github.com/settings/personal-access-tokens/new)"
+              echo "   - Repos: \`clawmetry\`, \`clawmetry-cloud\`, \`clawmetry-landing\`"
+              echo "   - Permission: **Administration (read+write)**"
+              echo "2. [Run the one-shot workflow](https://github.com/vivekchand/clawmetry/actions/workflows/apply-required-checks.yml)"
+              echo "   - \`confirm = APPLY\`"
+              echo "   - \`pat_token = <paste PAT>\`"
+              echo ""
+              echo "**Option B -- store as secret (auto-heals daily at 10:15 UTC):**"
+              echo "- [Settings > Secrets > New secret](https://github.com/vivekchand/clawmetry/settings/secrets/actions/new)"
+              echo "  - Name: \`E2E_ADMIN_PAT\`, Value: \`<PAT from Option A step 1>\`"
+              echo ""
+              echo "**Option C -- terminal (uses existing gh CLI session, ~30 sec):**"
+              echo "\`\`\`bash"
+              echo "bash scripts/close-c6.sh"
+              echo "\`\`\`"
+              echo ""
+              echo "Tracking: [#3864](https://github.com/vivekchand/clawmetry/issues/3864)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Error: E2E_ADMIN_PAT not set
+        if: steps.pat-check.outputs.has_pat == 'false'
+        run: |
+          echo "::error::E2E_ADMIN_PAT secret is not set -- C6 (required-status-checks) cannot be applied automatically."
+          echo ""
+          echo "ACTION REQUIRED: Add E2E_ADMIN_PAT to close C6."
+          echo "See the job summary above for a formatted status report and close options."
+          echo "Tracking: https://github.com/vivekchand/clawmetry/issues/3864"
+          exit 1
 
       - name: Apply required E2E status checks (C6)
         if: steps.pat-check.outputs.has_pat == 'true'
@@ -78,10 +148,21 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.E2E_ADMIN_PAT }}
         run: python3 scripts/apply_required_status_checks.py
 
-      - name: Summary
+      - name: Post-apply summary
         if: steps.pat-check.outputs.has_pat == 'true'
         run: |
-          echo "C6 auto-heal complete."
-          echo "If apply_required_status_checks.py exited 0, branch protection is configured"
-          echo "on clawmetry/main, clawmetry-cloud/main, clawmetry-landing/main."
-          echo "C6 is now GREEN. Tracking: https://github.com/vivekchand/clawmetry/issues/3752"
+          {
+            echo "## C6 auto-heal: required checks applied"
+            echo ""
+            echo "> :white_check_mark: E2E_ADMIN_PAT was present. \`apply_required_status_checks.py\` ran."
+            echo "> Branch protection is now configured on \`main\` for all 3 repos."
+            echo ""
+            echo "Verify at:"
+            echo "- [clawmetry branch protection](https://github.com/vivekchand/clawmetry/settings/branches)"
+            echo "- [clawmetry-cloud branch protection](https://github.com/vivekchand/clawmetry-cloud/settings/branches)"
+            echo "- [clawmetry-landing branch protection](https://github.com/vivekchand/clawmetry-landing/settings/branches)"
+            echo ""
+            echo "Tracking: [#3864](https://github.com/vivekchand/clawmetry/issues/3864)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "C6 auto-heal complete. If apply_required_status_checks.py exited 0, branch protection"
+          echo "is configured on all 3 repos. Tracking: https://github.com/vivekchand/clawmetry/issues/3864"
