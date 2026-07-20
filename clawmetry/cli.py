@@ -639,6 +639,24 @@ def _verify_key_ownership(api_key: str) -> None:
     sys.exit(1)
 
 
+def _keychain_get(node_id: str) -> str:
+    """Return workspace enc_key from OS keychain, or '' if unavailable."""
+    try:
+        import keyring  # optional: pip install keyring
+        return keyring.get_password("clawmetry", f"workspace-key:{node_id}") or ""
+    except Exception:
+        return ""
+
+
+def _keychain_set(node_id: str, key: str) -> None:
+    """Store workspace enc_key in OS keychain; silently no-ops if keyring absent."""
+    try:
+        import keyring  # optional: pip install keyring
+        keyring.set_password("clawmetry", f"workspace-key:{node_id}", key)
+    except Exception:
+        pass
+
+
 def _cmd_connect(args) -> None:
     """clawmetry connect — validate key, save config, start daemon."""
     # #1937: respect the persistent local-only marker. If the user did
@@ -830,12 +848,18 @@ def _cmd_connect(args) -> None:
     # the DERIVED key, never the raw passphrase. A pasted real key is kept as-is.
     # Use --enc-key if provided (non-interactive sandbox/automated use).
     _enc_key_arg = getattr(args, "enc_key", None) or ""
+    _kc_key = _keychain_get(node_id)  # '' when keyring not installed
 
     print()
     print("🔐 Encryption key protects your data end-to-end.")
     if _enc_key_arg:
         enc_key = _derive_key_for_storage(_enc_key_arg)
         print("  Using provided encryption key.")
+    elif _kc_key:
+        masked = _kc_key[:6] + "…" + _kc_key[-4:]
+        print(f"  Key from OS keychain: {masked}")
+        custom_key = _input("  Press Enter to keep it, or type a new one: ").strip()
+        enc_key = _derive_key_for_storage(custom_key) if custom_key else _kc_key
     elif _saved_enc_key:
         masked = _saved_enc_key[:6] + "…" + _saved_enc_key[-4:]
         print(f"  Existing key: {masked}")
@@ -846,6 +870,8 @@ def _cmd_connect(args) -> None:
             "  Enter a custom secret key (or press Enter to auto-generate): "
         ).strip()
         enc_key = _derive_key_for_storage(custom_key) if custom_key else generate_encryption_key()
+
+    _keychain_set(node_id, enc_key)  # persist to OS keychain when available
 
     config = {
         "api_key": api_key,
