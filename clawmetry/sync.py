@@ -70,14 +70,17 @@ def _acquire_pid_lock() -> bool:
                 except OSError:
                     return False
                 continue
-            try:
-                os.kill(existing_pid, 0)
+            # os.kill(pid, 0) is not a liveness probe on Windows (never
+            # raises for dead pids -> a stale lock file would block the
+            # daemon from ever starting again). is_alive() is portable.
+            from clawmetry.process_control import is_alive as _pid_alive
+
+            if _pid_alive(existing_pid):
                 return False
-            except ProcessLookupError:
-                try:
-                    pid_path.unlink()
-                except OSError:
-                    pass
+            try:
+                pid_path.unlink()
+            except OSError:
+                pass
                 continue
 
 
@@ -821,7 +824,12 @@ def save_config(data: dict) -> None:
     tmp_fd, tmp_path = tempfile.mkstemp(dir=CONFIG_DIR, prefix=".config.tmp.")
     try:
         os.write(tmp_fd, content)
-        os.fchmod(tmp_fd, 0o600)
+        if hasattr(os, "fchmod"):
+            # POSIX only — Windows has no os.fchmod (crashed `clawmetry
+            # connect` at the final save). mkstemp already creates the file
+            # 0o600 on POSIX and owner-scoped via ACLs on Windows, so the
+            # explicit fchmod is belt-and-braces where it exists.
+            os.fchmod(tmp_fd, 0o600)
     finally:
         os.close(tmp_fd)
     os.replace(tmp_path, CONFIG_FILE)
@@ -5459,8 +5467,12 @@ def _openclaw_gateway_running() -> bool:
             with open(pid_file) as fh:
                 pid = int((fh.read() or "0").strip())
             if pid > 0:
-                os.kill(pid, 0)  # raises if the process is gone
-                return True
+                # Portable probe: os.kill(pid, 0) never raises on Windows,
+                # so a stale gateway.pid would read as "running" forever.
+                from clawmetry.process_control import is_alive as _pid_alive
+
+                if _pid_alive(pid):
+                    return True
     except (OSError, ValueError):
         pass
     try:
@@ -11317,6 +11329,156 @@ _FAMILY_ADAPTER_SPECS = (
     ("clawmetry_pro.adapters.pi", "PiAdapter"),
     ("clawmetry_pro.adapters.deepagents", "DeepAgentsAdapter"),
 )
+
+
+_VM_USAGE_DEFAULT_ALLOW = ("picoclaw", "cursor")
+
+
+def sync_vm_usage_log(config: dict, state: dict, paths: dict) -> int:
+    """Ingest the hosted-VM per-call LLM usage log into DuckDB (+ cloud).
+
+    Hosted agent VMs run a loopback LLM shim that appends one JSON line per
+    model call (ts, model, token splits, opaque session ref — numbers only,
+    never content) to CLAWMETRY_VM_USAGE_LOG. For runtimes whose own session
+    stores carry no tokens (picoclaw: flat providers.Message JSONL; cursor:
+    proprietary backend) this log is the ONLY cost source, so the Cost tab
+    read $0 forever (live-hit 2026-07-20).
+
+    Double-count invariant: ingest ONLY when CLAWMETRY_VM_USAGE_RUNTIME is
+    in the token-blind allowlist — self-reporting runtimes (openclaw,
+    nanoclaw deep usage, claude_code, ...) are structurally excluded even
+    when the provisioner exports the env vars fleet-wide. Events land with
+    top-level model + data.usage split and cost_usd=None, so ingest-time
+    extraction derives cache-aware cost once (#2049); session ids are
+    namespaced "<runtime>:vmusage:<session>" so the Cost tab's runtime
+    prefix filter attributes them correctly. Offset+inode high-water in
+    sync-state.json; deterministic ids make any replay a PK no-op.
+    """
+    log_path = os.environ.get("CLAWMETRY_VM_USAGE_LOG", "").strip()
+    runtime = os.environ.get("CLAWMETRY_VM_USAGE_RUNTIME", "").strip().lower()
+    if not log_path or not runtime:
+        return 0
+    allow = tuple(x.strip().lower() for x in os.environ.get(
+        "CLAWMETRY_VM_USAGE_ALLOW",
+        ",".join(_VM_USAGE_DEFAULT_ALLOW)).split(",") if x.strip())
+    if runtime not in allow:
+        return 0
+    if not _sync_allowed():
+        return 0
+    try:
+        from clawmetry import local_store
+    except Exception:
+        return 0
+    try:
+        st = os.stat(log_path)
+    except OSError:
+        return 0
+    node_id = config.get("node_id") or ""
+    api_key = config.get("api_key")
+    mark = state.setdefault("vm_usage_log", {})
+    if mark.get("inode") != st.st_ino or st.st_size < int(mark.get("offset") or 0):
+        mark["inode"], mark["offset"] = st.st_ino, 0
+    offset = int(mark.get("offset") or 0)
+    if st.st_size <= offset:
+        return 0
+    rows: list = []
+    sessions: dict = {}
+    with open(log_path, "rb") as fh:
+        fh.seek(offset)
+        for _ in range(5000):
+            raw = fh.readline()
+            if not raw or not raw.endswith(b"\n"):
+                break  # partial tail line: picked up next tick
+            offset = fh.tell()
+            try:
+                line = json.loads(raw)
+            except Exception:
+                continue
+            model = str(line.get("model") or "")
+            ti = int(line.get("input_tokens") or 0)
+            to = int(line.get("output_tokens") or 0)
+            cr = int(line.get("cache_read_tokens") or 0)
+            cw = int(line.get("cache_write_tokens") or 0)
+            if not model or not (ti or to or cr or cw):
+                continue
+            sess = str(line.get("session") or "").strip() or "unknown"
+            ns_sess = "%s:vmusage:%s" % (runtime, sess)
+            import hashlib
+            digest = hashlib.sha1(("%s:%s" % (
+                st.st_ino, raw.decode("utf-8", "replace"))).encode()
+            ).hexdigest()[:24]
+            ts_iso = (_epoch_to_iso(line.get("ts"))
+                      or datetime.now(timezone.utc).isoformat())
+            rows.append({
+                "id": "vmusage:" + digest,
+                "node_id": node_id,
+                "agent_id": "main",
+                "agent_type": "openclaw",
+                "session_id": ns_sess,
+                "workspace_id": None,
+                "event_type": "llm_usage",
+                "ts": ts_iso,
+                "model": model,
+                "cost_usd": None,
+                "token_count": None,
+                "data": {"_runtime": runtime, "source": "vm-usage-log",
+                         "usage": {"input_tokens": ti,
+                                   "output_tokens": to,
+                                   "cache_read_input_tokens": cr,
+                                   "cache_creation_input_tokens": cw}},
+            })
+            meta = sessions.setdefault(
+                ns_sess, {"first": ts_iso, "last": ts_iso, "n": 0,
+                          "model": model, "tokens": 0})
+            meta["first"] = min(meta["first"], ts_iso)
+            meta["last"] = max(meta["last"], ts_iso)
+            meta["n"] += 1
+            meta["tokens"] += ti + to
+            meta["model"] = model
+    if not rows:
+        mark["offset"] = offset
+        return 0
+    store = local_store.get_store()
+    cloud_session_rows = []
+    try:
+        store.ingest_many(rows)
+        for ns_sess, meta in sessions.items():
+            srow = {
+                "agent_type": "openclaw",
+                "session_id": ns_sess,
+                "node_id": node_id,
+                "agent_id": "main",
+                "title": "Model usage (%s)" % runtime,
+                "started_at": meta["first"],
+                "last_active_at": meta["last"],
+                "ended_at": meta["last"],
+                "status": "ended",
+                "total_tokens": int(meta["tokens"]),
+                "cost_usd": None,
+                "message_count": int(meta["n"]),
+                "metadata": {"runtime": runtime, "source": "vm-usage-log",
+                             "model": meta["model"],
+                             "recent_model": meta["model"]},
+            }
+            store.ingest_session(srow)
+            crow = dict(srow)
+            crow["runtime"] = runtime
+            crow["model"] = meta["model"]
+            crow.pop("metadata", None)
+            cloud_session_rows.append(crow)
+        store.flush()
+    except Exception as exc:
+        log.warning("vm-usage ingest failed (retry next tick): %s", exc)
+        return 0
+    mark["offset"] = offset   # advance ONLY after a clean ingest+flush
+    if cloud_session_rows and api_key:
+        try:
+            _post("/ingest/sessions",
+                  {"node_id": node_id, "sessions": cloud_session_rows},
+                  api_key)
+        except Exception as _pe:
+            log.debug("vm-usage cloud push failed (continuing): %s", _pe)
+    return len(rows)
 
 
 def _family_ingest_rev() -> str:
@@ -17561,6 +17723,7 @@ def run_daemon() -> None:
         log.warning(f"  Session metadata error: {e}")
     try:
         fr = sync_family_runtimes(config, state, paths)
+        fr += sync_vm_usage_log(config, state, paths)
         if fr:
             log.info(f"  Family-runtime sessions (PicoClaw/NanoClaw): {fr} events synced")
     except Exception as e:
@@ -18005,6 +18168,11 @@ def run_daemon() -> None:
             if now_fam - last_family > family_interval:
                 try:
                     ev += sync_family_runtimes(config, state, paths)
+                    try:
+                        ev += sync_vm_usage_log(config, state, paths)
+                    except Exception as _vu_e:
+                        log.warning("vm-usage ingest failed (continuing): %s",
+                                    _vu_e)
                 except Exception as _fam_e:
                     log.warning("family-runtime ingest failed (continuing): %s", _fam_e)
                 last_family = now_fam

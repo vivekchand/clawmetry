@@ -270,11 +270,46 @@ def _start_tokens_equivalent(want: str, have: str, tol: int = 3) -> bool:
 
 
 def is_alive(pid: int) -> bool:
-    """True iff ``pid`` is a live process we can address. Never raises."""
+    """True iff ``pid`` is a live process we can address. Never raises.
+
+    This is the ONLY sanctioned liveness probe. The POSIX ``os.kill(pid, 0)``
+    idiom is NOT a probe on Windows: signal 0 is ``CTRL_C_EVENT`` there, and
+    the call succeeds even for long-dead pids, so it reports everything as
+    alive (verified empirically on Windows 11 / CPython 3.12 — dead pid,
+    detached process, and group-leader all return without error). Windows
+    must ask the Win32 API instead.
+    """
     if pid is None or pid <= 0:
         return False
+    pid = int(pid)
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            STILL_ACTIVE = 259
+            ERROR_ACCESS_DENIED = 5
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+            )
+            if not handle:
+                # Access denied means the pid exists (another user/session);
+                # anything else (invalid parameter) means no such process.
+                return kernel32.GetLastError() == ERROR_ACCESS_DENIED
+            try:
+                exit_code = ctypes.c_ulong()
+                if not kernel32.GetExitCodeProcess(
+                    handle, ctypes.byref(exit_code)
+                ):
+                    return False
+                return exit_code.value == STILL_ACTIVE
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:  # noqa: BLE001
+            return False
     try:
-        os.kill(int(pid), 0)
+        os.kill(pid, 0)
         return True
     except ProcessLookupError:
         return False

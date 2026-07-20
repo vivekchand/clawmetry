@@ -126,10 +126,12 @@ def _read_discovery():
             return None
         # Cheap liveness check: PID alive? Avoids the ~5s socket
         # connect-refused wait when the daemon was killed but the file
-        # wasn't cleaned up (atexit doesn't fire on SIGKILL).
-        try:
-            _os.kill(pid, 0)
-        except OSError:
+        # wasn't cleaned up (atexit doesn't fire on SIGKILL). Uses the
+        # portable probe: os.kill(pid, 0) never raises on Windows, so it
+        # would treat every stale discovery file as a live daemon.
+        from clawmetry.process_control import is_alive as _pid_alive
+
+        if not _pid_alive(pid):
             return None
         return {"port": port, "token": token}
     except (FileNotFoundError, ValueError, OSError):
