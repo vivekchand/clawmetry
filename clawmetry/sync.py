@@ -70,14 +70,17 @@ def _acquire_pid_lock() -> bool:
                 except OSError:
                     return False
                 continue
-            try:
-                os.kill(existing_pid, 0)
+            # os.kill(pid, 0) is not a liveness probe on Windows (never
+            # raises for dead pids -> a stale lock file would block the
+            # daemon from ever starting again). is_alive() is portable.
+            from clawmetry.process_control import is_alive as _pid_alive
+
+            if _pid_alive(existing_pid):
                 return False
-            except ProcessLookupError:
-                try:
-                    pid_path.unlink()
-                except OSError:
-                    pass
+            try:
+                pid_path.unlink()
+            except OSError:
+                pass
                 continue
 
 
@@ -821,7 +824,12 @@ def save_config(data: dict) -> None:
     tmp_fd, tmp_path = tempfile.mkstemp(dir=CONFIG_DIR, prefix=".config.tmp.")
     try:
         os.write(tmp_fd, content)
-        os.fchmod(tmp_fd, 0o600)
+        if hasattr(os, "fchmod"):
+            # POSIX only — Windows has no os.fchmod (crashed `clawmetry
+            # connect` at the final save). mkstemp already creates the file
+            # 0o600 on POSIX and owner-scoped via ACLs on Windows, so the
+            # explicit fchmod is belt-and-braces where it exists.
+            os.fchmod(tmp_fd, 0o600)
     finally:
         os.close(tmp_fd)
     os.replace(tmp_path, CONFIG_FILE)
@@ -5459,8 +5467,12 @@ def _openclaw_gateway_running() -> bool:
             with open(pid_file) as fh:
                 pid = int((fh.read() or "0").strip())
             if pid > 0:
-                os.kill(pid, 0)  # raises if the process is gone
-                return True
+                # Portable probe: os.kill(pid, 0) never raises on Windows,
+                # so a stale gateway.pid would read as "running" forever.
+                from clawmetry.process_control import is_alive as _pid_alive
+
+                if _pid_alive(pid):
+                    return True
     except (OSError, ValueError):
         pass
     try:

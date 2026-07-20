@@ -2678,10 +2678,13 @@ def stop_proxy() -> bool:
 
     try:
         pid = int(PROXY_PID_FILE.read_text().strip())
-        os.kill(pid, 15)  # SIGTERM
+        # Windows raises plain OSError (winerror 87) for a dead pid, which
+        # ProcessLookupError does not catch — a stale pid file crashed
+        # stop_proxy there. OSError covers both subclasses on POSIX too.
+        os.kill(pid, 15)  # SIGTERM (TerminateProcess on Windows)
         PROXY_PID_FILE.unlink(missing_ok=True)
         return True
-    except (ValueError, ProcessLookupError, PermissionError):
+    except (ValueError, OSError):
         PROXY_PID_FILE.unlink(missing_ok=True)
         return False
 
@@ -2693,9 +2696,15 @@ def proxy_status() -> dict:
 
     try:
         pid = int(PROXY_PID_FILE.read_text().strip())
-        os.kill(pid, 0)  # Check if process exists
-        return {"running": True, "pid": pid}
-    except (ValueError, ProcessLookupError, PermissionError):
+        # Portable probe: os.kill(pid, 0) never raises on Windows, so a
+        # stale pid file reported the proxy as running forever.
+        from clawmetry.process_control import is_alive as _pid_alive
+
+        if _pid_alive(pid):
+            return {"running": True, "pid": pid}
+        PROXY_PID_FILE.unlink(missing_ok=True)
+        return {"running": False}
+    except (ValueError, OSError):
         PROXY_PID_FILE.unlink(missing_ok=True)
         return {"running": False}
 

@@ -8838,8 +8838,12 @@ def _openclaw_gateway_running():
             with open(pid_path) as fh:
                 pid = int((fh.read() or "0").strip())
             if pid > 0:
-                os.kill(pid, 0)
-                return True
+                # Portable probe: os.kill(pid, 0) never raises on Windows,
+                # so a stale gateway.pid would read as "running" forever.
+                from clawmetry.process_control import is_alive as _pid_alive
+
+                if _pid_alive(pid):
+                    return True
     except (OSError, ValueError):
         pass
     try:
@@ -15502,7 +15506,25 @@ def _scan_security_posture():
 
     # Check 7: Workspace permissions (AGENTS.md, SOUL.md not world-readable)
     oc_home = os.path.expanduser("~/.openclaw")
-    if os.path.isdir(oc_home):
+    if os.name == "nt":
+        # POSIX mode bits are meaningless on Windows: st_mode reports 0o777
+        # for every normal directory, so the world-readable branch below
+        # would warn (and dock the score) on every Windows install with a
+        # chmod remediation that cannot be run. Access there is governed by
+        # NTFS ACLs, and the user-profile dir is owner-scoped by default.
+        if os.path.isdir(oc_home):
+            checks.append(
+                {
+                    "id": "workspace_perms",
+                    "label": "Workspace permissions",
+                    "status": "pass",
+                    "detail": "Access to the OpenClaw home directory is governed by Windows ACLs (user-profile scoped).",
+                    "remediation": None,
+                    "severity": "medium",
+                    "weight": 5,
+                }
+            )
+    elif os.path.isdir(oc_home):
         try:
             mode = oct(os.stat(oc_home).st_mode)[-3:]
             if mode[-1] != "0":  # world-readable
@@ -17778,11 +17800,11 @@ def _read_pid():
 
 
 def _is_pid_running(pid):
-    try:
-        os.kill(pid, 0)
-        return True
-    except (ProcessLookupError, PermissionError):
-        return False
+    # Delegates to the portable probe: os.kill(pid, 0) never raises on
+    # Windows, so this used to report stale dashboard pids as running.
+    from clawmetry.process_control import is_alive as _pid_alive
+
+    return _pid_alive(pid)
 
 
 def _is_macos():
@@ -18410,7 +18432,9 @@ def _kill_all_sync_procs():
     pid = _read_pid()
     if pid and _is_pid_running(pid):
         try:
-            os.kill(pid, signal.SIGKILL)
+            # signal.SIGKILL does not exist on Windows (AttributeError);
+            # SIGTERM maps to TerminateProcess there, same hard-kill intent.
+            os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
         except OSError:
             pass
 
