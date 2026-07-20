@@ -11,6 +11,23 @@ import pytest
 import requests
 
 
+# On Windows, ntpath.expanduser resolves "~" from USERPROFILE (not HOME), so
+# monkeypatch.setenv("HOME", tmp_path) silently fails to sandbox the config
+# dir.  This shim restores POSIX parity for the test suite only.
+if sys.platform == "win32":
+    import ntpath as _ntpath
+
+    _nt_expanduser_orig = _ntpath.expanduser
+
+    def _nt_expanduser_home_aware(path):
+        if path[:1] == "~" and os.environ.get("HOME"):
+            return os.environ["HOME"] + path[1:]
+        return _nt_expanduser_orig(path)
+
+    _ntpath.expanduser = _nt_expanduser_home_aware
+    os.path.expanduser = _nt_expanduser_home_aware
+
+
 # Playwright's sync API can only be entered once per process. Share a single
 # browser across all E2E test modules via this session-scoped fixture; each
 # module owns its own contexts off the shared browser.
