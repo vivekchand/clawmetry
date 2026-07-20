@@ -243,6 +243,12 @@ def provider_for_model(model: str) -> str:
         h in m for h in _LOCAL_MODEL_HINTS
     ):
         return "local"
+    # Ollama colon-tag format (e.g. "qwen3:8b", "mistral:7b-instruct") has no
+    # slash and always contains a colon — a pattern no hosted API uses. Treat it
+    # as local so the per-token cost is honestly $0 rather than the conservative
+    # unknown-provider default.
+    if ":" in m and "/" not in m:
+        return "local"
     if "gpt" in m or "codex" in m or m.startswith(("o1", "o3", "o4")):
         return "openai"
     if "claude" in m:
