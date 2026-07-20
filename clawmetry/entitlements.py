@@ -22,13 +22,18 @@ Open-core model
 
 Resolution order (first hit wins), all cached
 ---------------------------------------------
-1. A local signed license file (``~/.clawmetry/license.key``)  -> self-hosted Pro/Enterprise
-2. A cloud plan cached from the last heartbeat                  -> cloud Free/Starter/Pro/Trial
+1. A local signed license file (``~/.clawmetry/license.key``)   -> self-hosted Pro/Enterprise
+2. A cloud plan cached at ``~/.clawmetry/cloud_plan.json``      -> cloud Free/Starter/Pro/Trial
 3. else                                                         -> OSS free
 
-Both (1) and (2) are stubs in this phase — (1) lands with the Ed25519 license
-client, (2) when the daemon caches the heartbeat plan. Today this always
-resolves to the OSS-free entitlement.
+(1) is Ed25519-verified offline by :mod:`clawmetry.license` (the embedded
+public key ships in this OSS package; the private key lives on the license
+server). (2) is written by the sync daemon after each successful heartbeat
+that returned a plan payload. Both readers are defensive: a missing file
+skips to the next source, and a bad/expired token or malformed JSON logs a
+warning and skips to the next source — the resolver never raises. On a
+fresh install with no license key and no cloud plan cached, resolution
+falls through to the OSS-free entitlement.
 
 Rollout: GRACE vs ENFORCE
 -------------------------
