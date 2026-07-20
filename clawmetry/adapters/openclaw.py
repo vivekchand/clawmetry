@@ -87,8 +87,12 @@ def _gateway_live() -> bool:
             with open(pid_file) as fh:
                 pid = int((fh.read() or "0").strip())
             if pid > 0:
-                os.kill(pid, 0)
-                return True
+                # Portable probe: os.kill(pid, 0) never raises on Windows,
+                # so a stale gateway.pid would read as "running" forever.
+                from clawmetry.process_control import is_alive as _pid_alive
+
+                if _pid_alive(pid):
+                    return True
     except (OSError, ValueError):
         pass
     try:
