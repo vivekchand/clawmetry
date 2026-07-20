@@ -3900,21 +3900,79 @@ def _cmd_diagnose(args) -> None:
 
 
 def _cmd_verify_integrity(args) -> None:
-    """clawmetry verify-integrity — walk the hash chain and report validity."""
+    """clawmetry verify-integrity — walk the hash chain and report validity.
+
+    ``--json`` emits a stable envelope so wrapper scripts can branch on the
+    outcome without screen-scraping the human table. The payload mirrors the
+    ``LocalStore.verify_integrity`` return shape (``status``/``checked``/
+    ``pre_chain``/``broken_at``/``error``/``node_id``) and adds two synthetic
+    statuses for the environment errors that today only surface via exit
+    code + text:
+
+      - ``store_open_failed``  — cannot open the local store (exit 1)
+      - ``daemon_too_old``     — daemon proxy returned None so ``verify_integrity``
+                                 is not in its allowlist (exit 2)
+      - ``error``              — ``verify_integrity`` itself raised (exit 1)
+
+    Exit codes are unchanged from the human path: 0 for ``valid``/``empty``,
+    1 for ``invalid``/``store_open_failed``/``error``, 2 for ``daemon_too_old``.
+    Never crashes: any unexpected shape degrades to a parseable JSON payload
+    with an ``error`` key so a shell pipeline always sees a valid response.
+
+    Sibling of :func:`_cmd_tier` / :func:`_cmd_diagnose` / :func:`_cmd_license`
+    which all carry ``--json`` for the same reason -- the CLI diagnostic
+    surface stays uniformly scriptable.
+    """
+    import json as _json
     from clawmetry.local_store import get_store
 
+    as_json = bool(getattr(args, "as_json", False))
     node_id = getattr(args, "node_id", None) or None
-    print("ClawMetry Integrity Verify\n" + "─" * 40)
+    scope_default = node_id or "all"
+
+    def _emit_json(payload: dict, exit_code: int) -> None:
+        print(_json.dumps(payload, indent=2, sort_keys=True))
+        if exit_code:
+            raise SystemExit(exit_code)
+
+    if not as_json:
+        print("ClawMetry Integrity Verify\n" + "─" * 40)
 
     try:
         store = get_store(read_only=True)
     except Exception as exc:
+        if as_json:
+            _emit_json(
+                {
+                    "status": "store_open_failed",
+                    "node_id": scope_default,
+                    "checked": 0,
+                    "pre_chain": 0,
+                    "broken_at": None,
+                    "error": str(exc),
+                },
+                1,
+            )
+            return  # unreachable — _emit_json raises when exit_code != 0
         print(f"  Error: cannot open local store — {exc}")
         raise SystemExit(1) from exc
 
     try:
         result = store.verify_integrity(node_id=node_id)
     except Exception as exc:
+        if as_json:
+            _emit_json(
+                {
+                    "status": "error",
+                    "node_id": scope_default,
+                    "checked": 0,
+                    "pre_chain": 0,
+                    "broken_at": None,
+                    "error": str(exc),
+                },
+                1,
+            )
+            return
         print(f"  Error: verification failed — {exc}")
         raise SystemExit(1) from exc
 
@@ -3923,15 +3981,62 @@ def _cmd_verify_integrity(args) -> None:
     # have ``verify_integrity`` in their method allowlist and return None.
     # Degrade gracefully instead of crashing on ``result["status"]``.
     if result is None:
+        if as_json:
+            _emit_json(
+                {
+                    "status": "daemon_too_old",
+                    "node_id": scope_default,
+                    "checked": 0,
+                    "pre_chain": 0,
+                    "broken_at": None,
+                    "error": (
+                        "daemon proxy returned None — verify_integrity is not in the"
+                        " running daemon's method allowlist. Restart the sync daemon"
+                        " to pick up the new wheel, then re-run."
+                    ),
+                },
+                2,
+            )
+            return
         print("  Result:      ?  Could not reach the running daemon's verifier.")
         print("               This usually means the daemon is older than the CLI.")
         print("               Restart the sync daemon to pick up the new wheel, then re-run.")
         raise SystemExit(2)
 
-    status = result["status"]
-    checked = result["checked"]
-    pre_chain = result["pre_chain"]
-    scope = result["node_id"]
+    status = result.get("status") if isinstance(result, dict) else None
+    checked = result.get("checked", 0) if isinstance(result, dict) else 0
+    pre_chain = result.get("pre_chain", 0) if isinstance(result, dict) else 0
+    scope = (result.get("node_id") if isinstance(result, dict) else None) or scope_default
+    broken_at = result.get("broken_at") if isinstance(result, dict) else None
+    error = result.get("error") if isinstance(result, dict) else None
+
+    if as_json:
+        exit_code = 1 if status == "invalid" else 0
+        # Emit the store's shape verbatim so scripts pinning keys never drift
+        # from what LocalStore.verify_integrity documents. Any non-dict result
+        # (shouldn't happen, but the never-crash contract still applies)
+        # collapses to a parseable error envelope.
+        if isinstance(result, dict):
+            payload = {
+                "status": status or "error",
+                "node_id": scope,
+                "checked": int(checked or 0),
+                "pre_chain": int(pre_chain or 0),
+                "broken_at": broken_at,
+                "error": error,
+            }
+        else:
+            payload = {
+                "status": "error",
+                "node_id": scope_default,
+                "checked": 0,
+                "pre_chain": 0,
+                "broken_at": None,
+                "error": f"verify_integrity returned unexpected shape: {type(result).__name__}",
+            }
+            exit_code = 1
+        _emit_json(payload, exit_code)
+        return
 
     print(f"  Scope:       {scope}")
     print(f"  Checked:     {checked} stamped event(s)")
@@ -3944,8 +4049,6 @@ def _cmd_verify_integrity(args) -> None:
     elif status == "valid":
         print(f"  Result:      ✅  VALID — chain intact across {checked} event(s)")
     else:
-        broken_at = result["broken_at"]
-        error = result["error"]
         print(f"  Result:      ❌  INVALID — {error}")
         print(f"  First break: {broken_at}")
         raise SystemExit(1)
@@ -4466,6 +4569,16 @@ def main() -> None:
         dest="node_id",
         default=None,
         help="Limit verification to a single node (default: all nodes)",
+    )
+    p_verify.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help=(
+            "Emit the verify_integrity result as JSON (mirrors the store's "
+            "return shape plus synthetic 'store_open_failed' / 'daemon_too_old'"
+            " statuses; exit codes unchanged)"
+        ),
     )
 
     # Parse just the first token to decide if it's a sub-command or dashboard flag
