@@ -1011,25 +1011,65 @@ def _is_over_cap(scope: str):
 # rule is applied consistently from any per-feature dispatch path.
 #
 # Liveness rule used by the OSS daemon (no async cloud RPC at fire-time):
-#   * No ``cm_`` token on disk           → OSS-only           → NOT pro
-#   * Has ``cm_`` token + cached plan="cloud_pro"|"pro"|"trial" → pro
-#   * Has ``cm_`` token but no cached plan, or plan="free"     → NOT pro
+#   * Signed self-hosted license on disk with a Pro-equivalent tier   → pro
+#     (``pro``/``cloud_pro``/``trial``/``enterprise``, source=license)
+#   * No ``cm_`` token on disk (and no signed license)                → NOT pro
+#   * Has ``cm_`` token + cached plan="cloud_pro"|"pro"|"trial"       → pro
+#   * Has ``cm_`` token but no cached plan, or plan="free"            → NOT pro
 #
 # The cached plan is populated by the cloud-CTA status route the dashboard
 # already polls; we read it best-effort and fall back to the conservative
 # "not pro" answer so we never accidentally fire paid dispatch on a free
 # node. This means Cloud-Free users see the same paywall OSS users do
 # until they upgrade, which matches the strategic split.
+#
+# The self-hosted signed-license branch closes the gap called out in
+# #3755 (alerts + approvals): a $190/node/yr licensee with no ``cm_``
+# cloud token is still on a paid tier — the entitlements resolver
+# reports ``source == "license"`` and a Pro-equivalent ``tier`` — so
+# they get the same paid-dispatch surface Cloud-Pro users do (auto-
+# pause, per-agent Telegram alert fan-out, ...). Starter self-hosted
+# keys (TIER_CLOUD_STARTER) stay in the free branch: Starter does not
+# unlock Pro-only features and neither should this gate.
+_PRO_EQUIVALENT_TIERS = frozenset(
+    {"pro", "cloud_pro", "trial", "enterprise"}
+)
+
+
+def _license_grants_pro():
+    """True iff the entitlement resolver reports a signed self-hosted
+    license on a Pro-equivalent tier.
+
+    Fail-closed: any exception (entitlements module unimportable, resolver
+    raises, unexpected shape) returns False so a flaky lookup never leaks a
+    paid dispatch path onto a free node.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        if getattr(ent, "source", "") != "license":
+            return False
+        return str(getattr(ent, "tier", "")).strip().lower() in _PRO_EQUIVALENT_TIERS
+    except Exception:
+        return False
+
+
 def _is_pro_user():
     """Best-effort, fail-closed Pro check used to gate paid dispatch.
 
-    Returns True only when both signals are present:
-      1. ``cm_`` cloud token resolvable on disk (user is paired), and
-      2. The cached plan tier is one of ``cloud_pro`` / ``pro`` / ``trial``.
+    Returns True when either signal is present:
+      1. A signed self-hosted license on disk resolves to a Pro-equivalent
+         tier (``pro`` / ``cloud_pro`` / ``trial`` / ``enterprise``,
+         ``source == "license"``), OR
+      2. A ``cm_`` cloud token is on disk AND the cached plan tier is one
+         of ``cloud_pro`` / ``pro`` / ``trial``.
 
     Any failure (no token, missing cache, exception) returns False so we
     never leak a Cloud-Pro dispatch path onto a free / OSS-only node.
     """
+    if _license_grants_pro():
+        return True
     try:
         token = _read_cloud_token() or ""
     except Exception:
