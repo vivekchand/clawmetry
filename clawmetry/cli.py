@@ -3646,6 +3646,14 @@ def _entitlement_why_payload(kind: str, key: str) -> dict:
     :meth:`Entitlement.allows_channel_count`, mirroring
     :func:`_lock_row`'s "channels" branch so CLI and HTTP stay in lockstep.
     A non-integer ``key`` collapses to the never-crash grace-shape row.
+
+    ``kind="nodes"`` is the capacity-axis sibling of ``"channels"`` for the
+    registered-node count (fleet size) -- ``key`` is a node count, not an
+    id, so a non-integer ``key`` follows the same grace-shape fallback as
+    the ``"channels"`` branch. Backed by :func:`min_tier_for_node_count`
+    / :meth:`Entitlement.allows_node_count`; mirrors
+    ``GET /api/entitlement/lock-reason?nodes=<int>`` byte-for-byte so
+    ``clawmetry nodes --why N`` and the HTTP surface cannot drift.
     """
     key = (key or "").strip().lower()
     try:
@@ -3683,6 +3691,30 @@ def _entitlement_why_payload(kind: str, key: str) -> dict:
             reason = ent.lock_reason(str(n), kind="channels")
             # Canonicalise the key in the response so a caller passing "05"
             # or "5" sees the same string back.
+            key = str(n)
+        elif kind == "nodes":
+            # Capacity axis: ``key`` is a registered-node count. Same
+            # never-crash posture as the ``channels`` branch above -- a
+            # typo (e.g. ``--why abc``) collapses to the grace-shape row.
+            try:
+                n = int(key)
+            except (TypeError, ValueError):
+                return {
+                    "key": key,
+                    "kind": kind,
+                    "reason": None,
+                    "locked": False,
+                    "allowed": True,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                    "current_tier": cur_tier,
+                    "current_tier_rank": cur_rank,
+                    "upgrade_required": False,
+                }
+            allowed = ent.allows_node_count(n)
+            required = _ent.min_tier_for_node_count(n)
+            reason = ent.lock_reason(str(n), kind="nodes")
             key = str(n)
         else:  # feature
             allowed = ent.allows_feature(key)
@@ -3727,16 +3759,18 @@ def _print_why_block(payload: dict) -> None:
     (aligned two-column block, single upgrade CTA when a paid tier unlocks
     the item) so shell operators recognise the layout across subcommands.
 
-    For ``kind="channels"`` the header phrases the capacity question
-    naturally ("why do I need <tier> for N concurrent channels?") since
-    the key is a count, not an id -- otherwise the shared "why is X
-    locked?" phrasing wins.
+    For ``kind="channels"`` / ``kind="nodes"`` the header phrases the
+    capacity question naturally ("what tier unlocks N concurrent channels?"
+    / "what tier unlocks N nodes?") since the key is a count, not an id --
+    otherwise the shared "why is X locked?" phrasing wins.
     """
     key = payload.get("key") or "(unknown)"
     kind = payload.get("kind") or "?"
     locked = bool(payload.get("locked"))
     if kind == "channels":
         print(f'ClawMetry: what tier unlocks {key} concurrent channels?')
+    elif kind == "nodes":
+        print(f'ClawMetry: what tier unlocks {key} nodes?')
     else:
         print(f'ClawMetry: why is "{key}" locked?')
     print("─" * 40)
@@ -4120,6 +4154,92 @@ def _cmd_channels(args) -> None:
         # Surface the row identically to a free/available runtime row.
         status = "✅ available"
         print(f"  {cid:<16} {label:<20} {status}")
+
+
+def _cmd_nodes(args) -> None:
+    """clawmetry nodes — show the resolved node-count cap for this install.
+
+    Capacity-axis sibling of :func:`_cmd_channels` for the ``nodes`` axis.
+    There is no enumerable adapter list here -- ``nodes`` is purely a
+    per-tier cap (Free / Cloud Free = 1; every paid tier is license-bound
+    to the ``nodes`` field on the payload; Enterprise is unlimited) --
+    so the default output is the header block alone. ``--why N`` answers
+    "what tier admits N registered nodes?" using the same lock-reason
+    payload ``clawmetry channels --why N`` emits so a wrapper script written
+    against either surface works interchangeably.
+
+    Reads :attr:`clawmetry.entitlements.Entitlement.node_limit` -- the same
+    field the fleet-registration path checks -- so the CLI and the runtime
+    cannot drift on the effective cap.
+
+    Never raises. A poisoned resolver surfaces the error inline (a warning
+    row in the human table, or an ``error`` key on the JSON payload with
+    ``node_limit=null``) so a wrapper script always sees a parseable
+    response. Matches the never-crash contract documented on
+    :func:`get_entitlement`.
+
+    Output:
+      default -- header block (tier / enforcement / node cap)
+      --json  -- ``{tier, grace, enforced, node_limit, error?: str}``
+      --why N -- lock-reason payload for N registered nodes (same shape
+                 as ``GET /api/entitlement/lock-reason?nodes=N``); pair
+                 with ``--json`` for scriptable output.
+    """
+    import json as _json
+
+    from clawmetry import entitlements as _ent
+
+    why = (getattr(args, "why", None) or "").strip().lower()
+    if why:
+        payload = _entitlement_why_payload("nodes", why)
+        if getattr(args, "as_json", False):
+            print(_json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            _print_why_block(payload)
+        return
+
+    resolve_error: str | None = None
+    try:
+        ent = _ent.get_entitlement()
+        tier = ent.tier
+        grace = bool(ent.grace)
+        enforced = _ent.is_enforced()
+        # ``node_limit`` is an int on the dataclass; <=0 is the unlimited
+        # sentinel licenses use for Enterprise, so surface it as ``None``
+        # (matches the ``channel_limit`` JSON convention).
+        raw_limit = getattr(ent, "node_limit", None)
+        if isinstance(raw_limit, int) and raw_limit > 0:
+            node_limit: int | None = raw_limit
+        else:
+            node_limit = None
+    except Exception as exc:
+        # Mirror _cmd_channels never-crash fallback: a broken install still
+        # gets a parseable shape, with the failure surfaced to stderr so it
+        # isn't silently lost in a pipeline.
+        print(f"⚠️  entitlement resolution failed: {exc}", file=sys.stderr)
+        tier, grace, enforced, node_limit = "oss", True, False, None
+        resolve_error = str(exc)
+
+    if getattr(args, "as_json", False):
+        payload: dict = {
+            "tier": tier,
+            "grace": grace,
+            "enforced": enforced,
+            "node_limit": node_limit,
+        }
+        if resolve_error:
+            payload["error"] = resolve_error
+        print(_json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    mode_line = "off (grace)" if not enforced else "on"
+    cap_line = "unlimited" if node_limit is None else str(node_limit)
+    print("ClawMetry Nodes\n" + "─" * 40)
+    print(f"  Tier:        {tier}")
+    print(f"  Enforcement: {mode_line}")
+    print(f"  Node cap:    {cap_line}  (registered nodes)")
+    if resolve_error:
+        print(f"  ⚠️  resolver error: {resolve_error}")
 
 
 def _cmd_diagnose(args) -> None:
@@ -4893,6 +5013,32 @@ def main() -> None:
         ),
     )
 
+    # nodes — capacity-axis sibling of `clawmetry channels` for the
+    # registered-node count. No enumerable adapter list -- ``nodes`` is
+    # purely a per-tier cap -- so the default output is the header block
+    # (tier / enforcement / node cap) alone. Fills the last capacity-axis
+    # CLI gap left open after `channels` shipped in #3820.
+    p_nodes = sub.add_parser(
+        "nodes",
+        help="Show the resolved node-count cap for this install",
+    )
+    p_nodes.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit {tier, grace, enforced, node_limit} JSON (jq-friendly)",
+    )
+    p_nodes.add_argument(
+        "--why",
+        metavar="N",
+        default=None,
+        help=(
+            "Print the lock-reason payload for N registered nodes "
+            "(same shape as GET /api/entitlement/lock-reason?nodes=N). "
+            "The nodes axis is capacity-scoped -- N is a count, not an id."
+        ),
+    )
+
     # diagnose — surface the entitlement resolver inputs so an operator
     # can answer "why did my install resolve to <tier>?" without reading
     # ~/.clawmetry by hand. Same shape as GET /api/entitlement/diagnostic.
@@ -4956,6 +5102,7 @@ def main() -> None:
         "runtimes",
         "features",
         "channels",
+        "nodes",
         "diagnose",
         "verify-integrity",
         "nemoclaw-daemons",
@@ -5002,6 +5149,8 @@ def main() -> None:
             _cmd_features(args)
         elif args.cmd == "channels":
             _cmd_channels(args)
+        elif args.cmd == "nodes":
+            _cmd_nodes(args)
         elif args.cmd == "diagnose":
             _cmd_diagnose(args)
         elif args.cmd == "verify-integrity":
