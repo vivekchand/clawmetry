@@ -22403,3 +22403,168 @@ def api_entitlement_min_tier_for_runtimes_at_batch():
                 **env,
             }
         )
+
+
+@bp_entitlement.route(
+    "/api/entitlement/tiers-for-features-at-batch",
+    methods=["POST"],
+)
+def api_entitlement_tiers_for_features_at_batch():
+    """``POST /api/entitlement/tiers-for-features-at-batch?tier=<perspective>``
+    -- what-if sibling of ``/api/entitlement/tiers-for-features-batch``.
+
+    Where the bare batch folds N feature bundles against the LIVE resolved
+    entitlement's grace/enforce envelope, this folds them under a
+    hypothetical ``perspective_tier`` supplied as the ``tier=`` query arg.
+    The per-row body remains perspective-independent -- each row delegates
+    to :func:`clawmetry.entitlements.tiers_for_features`, which walks the
+    static per-tier feature map -- but the outer envelope carries
+    ``perspective_tier`` / ``perspective_tier_label`` /
+    ``perspective_tier_rank`` alongside the live resolver keys so a
+    pricing-matrix walkthrough can hit ``X_at`` uniformly across the whole
+    ``_at`` batch surface.
+
+    Fills the ``_at_batch`` slot on the bundle-axis tiers-for family
+    alongside ``/min-tier-for-features-at-batch`` (per-bundle cheapest
+    tier what-if) and ``/affordable-tiers-at-batch`` (per-item plural
+    what-if) so a pricing-matrix / upgrade-walkthrough can render "if I
+    were on Starter, here are the tier ladders for these three
+    hypothetical feature sets" off ONE round-trip instead of N calls to
+    ``/tiers-for-features-at``.
+
+    Body parity: per-row bodies byte-identical to the bare batch's
+    per-row bodies for the same bundles -- pinned by parity tests so the
+    bare and ``_at`` bodies cannot drift.
+
+    Request body: mirrors ``/tiers-for-features-batch`` exactly. A
+    shorthand ``{"bundles": ["fleet", "sso"]}`` (bare list of strings) is
+    treated as ONE bundle, matching the singular endpoint's bare-CSV
+    posture.
+
+    Response envelope: adds ``perspective_tier`` /
+    ``perspective_tier_label`` / ``perspective_tier_rank`` on top of the
+    bare batch envelope.
+
+    - **400** when ``tier=`` is missing / blank, or when ``bundles`` is
+      missing / non-list / empty.
+    - **404** when ``tier=`` is unknown -- caller renders "unknown tier".
+    - **Never 5xxs**: a resolver failure yields the fallback envelope
+      (empty ``bundles`` list) so the pricing surface keeps rendering.
+    """
+    tier_in = (request.args.get("tier") or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify({"error": "unknown tier", "tier": tier_in}),
+                404,
+            )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_features_at_batch: error: %s", exc
+        )
+        return jsonify({"error": "unknown tier", "tier": tier_in}), 404
+
+    body = request.get_json(silent=True) or {}
+    bundles, err = _parse_bundles_body(body)
+    if err == "missing":
+        return jsonify({"error": "missing bundles"}), 400
+    if err == "empty":
+        return jsonify({"error": "empty bundles"}), 400
+    if err == "bundles_must_be_list":
+        return jsonify({"error": "bundles must be a list"}), 400
+
+    try:
+        rows = _ent.tiers_for_features_at_batch(tier_in, bundles) or []
+        env = _perspective_envelope(_ent, tier_in)
+        return jsonify(
+            {
+                "bundles": list(rows),
+                "count": len(rows),
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_features_at_batch: error: %s", exc
+        )
+        env = _perspective_fallback(tier_in)
+        return jsonify(
+            {
+                "bundles": [],
+                "count": 0,
+                **env,
+            }
+        )
+
+
+@bp_entitlement.route(
+    "/api/entitlement/tiers-for-runtimes-at-batch",
+    methods=["POST"],
+)
+def api_entitlement_tiers_for_runtimes_at_batch():
+    """``POST /api/entitlement/tiers-for-runtimes-at-batch?tier=<perspective>``
+    -- runtime-axis twin of
+    ``/api/entitlement/tiers-for-features-at-batch``.
+
+    Same perspective validation (``tier=`` must be a known member of
+    ``_TIER_ORDER``, else 404), same never-5xx posture, same partial-
+    unknown bucketing, same POST envelope shape. Runtime aliases
+    (``claude-code`` -> ``claude_code``) canonicalise per bundle so a
+    caller posting either form gets the same ladder back.
+
+    Response body per row and error paths mirror
+    ``/tiers-for-features-at-batch`` exactly, with ``kind="runtimes"``
+    per row (``items`` is the runtime list).
+    """
+    tier_in = (request.args.get("tier") or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify({"error": "unknown tier", "tier": tier_in}),
+                404,
+            )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_runtimes_at_batch: error: %s", exc
+        )
+        return jsonify({"error": "unknown tier", "tier": tier_in}), 404
+
+    body = request.get_json(silent=True) or {}
+    bundles, err = _parse_bundles_body(body)
+    if err == "missing":
+        return jsonify({"error": "missing bundles"}), 400
+    if err == "empty":
+        return jsonify({"error": "empty bundles"}), 400
+    if err == "bundles_must_be_list":
+        return jsonify({"error": "bundles must be a list"}), 400
+
+    try:
+        rows = _ent.tiers_for_runtimes_at_batch(tier_in, bundles) or []
+        env = _perspective_envelope(_ent, tier_in)
+        return jsonify(
+            {
+                "bundles": list(rows),
+                "count": len(rows),
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_runtimes_at_batch: error: %s", exc
+        )
+        env = _perspective_fallback(tier_in)
+        return jsonify(
+            {
+                "bundles": [],
+                "count": 0,
+                **env,
+            }
+        )
