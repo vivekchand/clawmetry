@@ -1,4 +1,3 @@
-"""CLI entry point for the clawmetry package."""
 
 from __future__ import annotations
 import sys
@@ -4449,6 +4448,8 @@ def _cmd_diagnose(args) -> None:
     if payload.get("cache_error"):
         _row("Cache error:", payload["cache_error"])
 
+
+
 def _cmd_extensions(args) -> None:
     """clawmetry extensions -- surface loaded/failed entry-point plugins.
 
@@ -4582,7 +4583,6 @@ def _cmd_extensions(args) -> None:
             print(f"    • {evt} ({count} {handler_word})")
     else:
         print("    (none)")
-
 
 
 def _cmd_verify_integrity(args) -> None:
@@ -5316,26 +5316,6 @@ def main() -> None:
         ),
     )
 
-    # diagnose — surface the entitlement resolver inputs so an operator
-    # can answer "why did my install resolve to <tier>?" without reading
-    # ~/.clawmetry by hand. Same shape as GET /api/entitlement/diagnostic.
-    p_diagnose = sub.add_parser(
-        "diagnose",
-        help=(
-            "Show entitlement resolver inputs (license file, cloud plan "
-            "cache, enforce env, in-process cache state)"
-        ),
-    )
-    p_diagnose.add_argument(
-        "--json",
-        action="store_true",
-        dest="as_json",
-        help=(
-            "Emit resolution_diagnostic() as JSON (same shape as "
-            "GET /api/entitlement/diagnostic)"
-        ),
-    )
-
     # extensions — surface loaded / failed entry-point plugins and event hooks
     # from the shell so an operator can answer "did clawmetry-pro actually
     # load on this node?" without curl'ing /api/extensions or tailing daemon
@@ -5354,6 +5334,27 @@ def main() -> None:
             "Emit {plugins, plugin_count, failed_plugins, failed_plugin_count, "
             "events, handler_counts} JSON (jq-friendly). Matches the response "
             "shape of GET /api/extensions byte-for-byte on shared keys."
+        ),
+    )
+
+
+    # diagnose — surface the entitlement resolver inputs so an operator
+    # can answer "why did my install resolve to <tier>?" without reading
+    # ~/.clawmetry by hand. Same shape as GET /api/entitlement/diagnostic.
+    p_diagnose = sub.add_parser(
+        "diagnose",
+        help=(
+            "Show entitlement resolver inputs (license file, cloud plan "
+            "cache, enforce env, in-process cache state)"
+        ),
+    )
+    p_diagnose.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help=(
+            "Emit resolution_diagnostic() as JSON (same shape as "
+            "GET /api/entitlement/diagnostic)"
         ),
     )
 
@@ -5402,8 +5403,8 @@ def main() -> None:
         "channels",
         "nodes",
         "retention",
-        "diagnose",
         "extensions",
+        "diagnose",
         "verify-integrity",
         "nemoclaw-daemons",
     )
@@ -5453,10 +5454,10 @@ def main() -> None:
             _cmd_nodes(args)
         elif args.cmd == "retention":
             _cmd_retention(args)
-        elif args.cmd == "diagnose":
-            _cmd_diagnose(args)
         elif args.cmd == "extensions":
             _cmd_extensions(args)
+        elif args.cmd == "diagnose":
+            _cmd_diagnose(args)
         elif args.cmd == "verify-integrity":
             _cmd_verify_integrity(args)
         elif args.cmd == "nemoclaw-daemons":
