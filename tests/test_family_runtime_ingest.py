@@ -216,3 +216,68 @@ def test_openclaw_spawned_claude_skipped(tmp_path, monkeypatch):
     assert f"claude_code:{spawned_id}" not in sids, "OpenClaw-spawned session must be skipped (dedup)"
     try: store.stop(flush=True)
     except Exception: pass
+
+
+def test_family_high_water_rev_mismatch_reingests(sync_with_isolated_store):
+    """A pro upgrade changes what adapters extract; marks written by the old
+    wheel must not suppress re-ingest (live-hit 2026-07-19: nanoclaw
+    sessions ingested pre-deep-usage stayed $0 forever)."""
+    sync, ls = sync_with_isolated_store
+    config = {"node_id": "test-node", "api_key": "test-key"}
+    state = {}
+    # Fixture-backed adapters only: the other specs (claude_code, codex, ...)
+    # would sweep the dev machine's real homes and break determinism.
+    _specs = tuple(sp for sp in sync._FAMILY_ADAPTER_SPECS
+                   if sp[0].rsplit(".", 1)[-1] in ("picoclaw", "nanoclaw"))
+
+    with patch.object(sync, "_FAMILY_ADAPTER_SPECS", _specs), \
+         patch.object(sync, "_sync_allowed", return_value=True), \
+         patch.object(sync, "_post", return_value={}), \
+         patch.object(sync, "_family_ingest_rev", return_value="0.4.0"):
+        n1 = sync.sync_family_runtimes(config, state, {})
+    assert n1 > 0
+    hw = state["family_event_high_water"]
+    assert all(v.endswith("@@0.4.0") for v in hw.values()), hw
+
+    # Same rev, no new activity: skipped.
+    with patch.object(sync, "_FAMILY_ADAPTER_SPECS", _specs), \
+         patch.object(sync, "_sync_allowed", return_value=True), \
+         patch.object(sync, "_post", return_value={}), \
+         patch.object(sync, "_family_ingest_rev", return_value="0.4.0"):
+        n2 = sync.sync_family_runtimes(config, state, {})
+    assert n2 == 0
+
+    # New rev: everything re-ingests once, marks re-stamped.
+    with patch.object(sync, "_FAMILY_ADAPTER_SPECS", _specs), \
+         patch.object(sync, "_sync_allowed", return_value=True), \
+         patch.object(sync, "_post", return_value={}), \
+         patch.object(sync, "_family_ingest_rev", return_value="0.4.1"):
+        n3 = sync.sync_family_runtimes(config, state, {})
+    assert n3 > 0
+    assert all(v.endswith("@@0.4.1")
+               for v in state["family_event_high_water"].values())
+
+
+def test_family_high_water_legacy_plain_ts_reingests_once(sync_with_isolated_store):
+    """Marks written before the rev stamp (plain ISO ts) must re-ingest once."""
+    sync, ls = sync_with_isolated_store
+    config = {"node_id": "test-node", "api_key": "test-key"}
+    state = {}
+    _specs = tuple(sp for sp in sync._FAMILY_ADAPTER_SPECS
+                   if sp[0].rsplit(".", 1)[-1] in ("picoclaw", "nanoclaw"))
+    with patch.object(sync, "_FAMILY_ADAPTER_SPECS", _specs), \
+         patch.object(sync, "_sync_allowed", return_value=True), \
+         patch.object(sync, "_post", return_value={}), \
+         patch.object(sync, "_family_ingest_rev", return_value="0.4.1"):
+        n1 = sync.sync_family_runtimes(config, state, {})
+    assert n1 > 0
+    # Rewrite marks to the legacy plain-ts format.
+    hw = state["family_event_high_water"]
+    for k in list(hw):
+        hw[k] = hw[k].split("@@")[0]
+    with patch.object(sync, "_FAMILY_ADAPTER_SPECS", _specs), \
+         patch.object(sync, "_sync_allowed", return_value=True), \
+         patch.object(sync, "_post", return_value={}), \
+         patch.object(sync, "_family_ingest_rev", return_value="0.4.1"):
+        n2 = sync.sync_family_runtimes(config, state, {})
+    assert n2 > 0, "legacy plain-ts marks must not suppress re-ingest"

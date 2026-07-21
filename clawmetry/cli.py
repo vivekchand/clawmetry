@@ -639,6 +639,24 @@ def _verify_key_ownership(api_key: str) -> None:
     sys.exit(1)
 
 
+def _keychain_get(node_id: str) -> str:
+    """Return workspace enc_key from OS keychain, or '' if unavailable."""
+    try:
+        import keyring  # optional: pip install keyring
+        return keyring.get_password("clawmetry", f"workspace-key:{node_id}") or ""
+    except Exception:
+        return ""
+
+
+def _keychain_set(node_id: str, key: str) -> None:
+    """Store workspace enc_key in OS keychain; silently no-ops if keyring absent."""
+    try:
+        import keyring  # optional: pip install keyring
+        keyring.set_password("clawmetry", f"workspace-key:{node_id}", key)
+    except Exception:
+        pass
+
+
 def _cmd_connect(args) -> None:
     """clawmetry connect — validate key, save config, start daemon."""
     # #1937: respect the persistent local-only marker. If the user did
@@ -774,9 +792,18 @@ def _cmd_connect(args) -> None:
 
     # Verify ownership via OTP when key is passed directly (not from interactive flow)
     # Skip if this key is already verified (saved in config) — enables Docker restarts
+    # Skip too when --start-sync-now was passed: that is the flag the cloud
+    # dashboard's copy-paste connect command carries, and a key shown there was
+    # minted inside an already-authenticated (OTP-verified) web session, so a
+    # second OTP here is pure onboarding friction. This does not lower the
+    # actual security bar: the cm_ key is a bearer credential the server
+    # accepts directly on /auth and ingest, so the client-side OTP never
+    # stopped anyone who already holds the key.
     if args.key:
         if _saved_api_key and api_key == _saved_api_key:
             pass  # Already verified — reconnecting with same key
+        elif getattr(args, "start_sync_now", False):
+            pass  # Key from the authenticated dashboard command — already proven
         else:
             _verify_key_ownership(api_key)
 
@@ -821,12 +848,18 @@ def _cmd_connect(args) -> None:
     # the DERIVED key, never the raw passphrase. A pasted real key is kept as-is.
     # Use --enc-key if provided (non-interactive sandbox/automated use).
     _enc_key_arg = getattr(args, "enc_key", None) or ""
+    _kc_key = _keychain_get(node_id)  # '' when keyring not installed
 
     print()
     print("🔐 Encryption key protects your data end-to-end.")
     if _enc_key_arg:
         enc_key = _derive_key_for_storage(_enc_key_arg)
         print("  Using provided encryption key.")
+    elif _kc_key:
+        masked = _kc_key[:6] + "…" + _kc_key[-4:]
+        print(f"  Key from OS keychain: {masked}")
+        custom_key = _input("  Press Enter to keep it, or type a new one: ").strip()
+        enc_key = _derive_key_for_storage(custom_key) if custom_key else _kc_key
     elif _saved_enc_key:
         masked = _saved_enc_key[:6] + "…" + _saved_enc_key[-4:]
         print(f"  Existing key: {masked}")
@@ -837,6 +870,8 @@ def _cmd_connect(args) -> None:
             "  Enter a custom secret key (or press Enter to auto-generate): "
         ).strip()
         enc_key = _derive_key_for_storage(custom_key) if custom_key else generate_encryption_key()
+
+    _keychain_set(node_id, enc_key)  # persist to OS keychain when available
 
     config = {
         "api_key": api_key,
@@ -905,9 +940,9 @@ def _cmd_connect(args) -> None:
     # default ("Sync is paused") was a confusing trap where the node never
     # heartbeated and the dashboard stayed empty. Pass `--defer-sync` to keep
     # the old behavior (e.g. provisioning a node you do not want syncing yet).
-    # `--start-sync-now` is retained as a no-op alias for back-compat (it is
-    # now the default), so existing scripts and the cloud dashboard's copy of
-    # the connect command keep working.
+    # `--start-sync-now` no longer changes anything here (sync-on-connect is
+    # the default); its remaining effect is upstream — it skips the ownership
+    # OTP for keys pasted from the authenticated dashboard command.
     if getattr(args, "defer_sync", False):
         print("  Sync is paused (--defer-sync). Start it whenever you're ready:")
         print("    clawmetry sync")
@@ -1820,10 +1855,236 @@ def _resolve_account_email(api_key: str):
         return None, None
 
 
+def _status_snapshot(args) -> dict:
+    """Return a stable dict describing what ``clawmetry status`` shows.
+
+    Sibling of the JSON payloads on ``tier`` / ``license`` / ``runtimes`` /
+    ``features`` / ``channels`` / ``diagnose`` / ``verify-integrity`` — every
+    read-only CLI diagnostic emits a jq-friendly envelope so wrapper scripts
+    stop screen-scraping the human table. Called by ``_cmd_status(--json)``.
+
+    Contract (fields are stable; new ones may be added, existing ones do not
+    change shape or type):
+
+    * ``version``: installed clawmetry version, or ``null`` when the metadata
+      lookup fails (e.g. a very locked-down environment).
+    * ``cloud_sync``: config-file view, or ``null`` when no config exists yet
+      (fresh install). Carries the SAME masked identifiers the human path
+      prints; ``api_key`` / ``encryption.secret_key`` are only populated when
+      the operator passes ``--show-key`` (same policy as the human path).
+    * ``sync_state``: last-sync timestamp + event-file count, or ``null``
+      when the daemon has never written a state file.
+    * ``runtimes``: whether the account entitles paid runtimes to sync,
+      which runtimes the sync-daemon adapter detects locally, and whether
+      the ``clawmetry-pro`` wheel is installed. Shape matches what the human
+      path prints under the ``Runtimes:`` block.
+    * ``daemon``: whether the sync daemon is running + how it's supervised
+      (``launchd`` on macOS; ``systemd`` / ``systemd-user`` / ``background``
+      on Linux; ``null`` when the platform doesn't check daemon status).
+    * ``log``: log-file path + the same three-line tail the human path prints,
+      or ``null`` when the log file is absent.
+    * ``sandboxes``: reserved list-shaped placeholder — always ``[]`` in the
+      JSON payload so scripts have a stable key to iterate over. The human
+      path shells out to ``docker exec kubectl`` per NemoClaw pod, which is
+      too slow for a scriptable diagnostic; scripts that need per-pod state
+      should target that surface directly.
+
+    Best-effort throughout: every helper is wrapped so a broken corner (e.g.
+    an unreadable config file, an unavailable network) degrades to ``null``
+    or a sensible zero-shape default instead of raising — same never-crash
+    contract as every other CLI diagnostic.
+    """
+    import json as _json
+    import platform as _platform
+    from clawmetry.sync import CONFIG_FILE, STATE_FILE, LOG_FILE
+
+    show_key = bool(getattr(args, "show_key", False))
+    snap: dict = {
+        "version": None,
+        "cloud_sync": None,
+        "sync_state": None,
+        "runtimes": {
+            "entitled": False,
+            "plan": "",
+            "pro_installed_version": None,
+            "openclaw": {"detected": True, "syncing": True},
+            "nemoclaw": {"detected": False, "syncing": False},
+            "detected": [],
+        },
+        "daemon": {"running": False, "manager": None},
+        "log": None,
+        "sandboxes": [],
+    }
+
+    # Installed version (lightweight metadata read; no dashboard import).
+    try:
+        import importlib.metadata as _md
+        snap["version"] = _md.version("clawmetry") or None
+    except Exception:
+        snap["version"] = None
+
+    # Config block.
+    if CONFIG_FILE.exists():
+        cloud: dict = {
+            "connected": True,
+            "config_error": None,
+            "api_key_masked": "",
+            "api_key": None,
+            "account": {"email": None, "plan": None, "placeholder": False},
+            "node_id": None,
+            "connected_at": None,
+            "encryption": {
+                "enabled": False,
+                "secret_key_masked": None,
+                "secret_key": None,
+            },
+        }
+        try:
+            cfg = _json.loads(CONFIG_FILE.read_text())
+            api_key = str(cfg.get("api_key", "") or "")
+            enc_key = str(cfg.get("encryption_key", "") or "")
+            cloud["api_key_masked"] = (
+                api_key[:6] + "…" + api_key[-4:] if len(api_key) > 10 else api_key
+            )
+            if show_key:
+                cloud["api_key"] = api_key
+            email, plan = _resolve_account_email(api_key)
+            cloud["account"]["email"] = email or None
+            cloud["account"]["plan"] = plan or None
+            cloud["account"]["placeholder"] = _is_placeholder_account(email)
+            cloud["node_id"] = cfg.get("node_id") or None
+            _ca = cfg.get("connected_at") or ""
+            cloud["connected_at"] = (_ca[:19] or None) if _ca else None
+            if enc_key:
+                cloud["encryption"]["enabled"] = True
+                cloud["encryption"]["secret_key_masked"] = (
+                    enc_key[:6] + "…" + enc_key[-4:] if len(enc_key) > 10 else enc_key
+                )
+                if show_key:
+                    cloud["encryption"]["secret_key"] = enc_key
+        except Exception as exc:
+            cloud["config_error"] = str(exc)
+        snap["cloud_sync"] = cloud
+
+    # Sync state.
+    if STATE_FILE.exists():
+        try:
+            st = _json.loads(STATE_FILE.read_text())
+            _ls = st.get("last_sync") or ""
+            snap["sync_state"] = {
+                "last_sync": (_ls[:19] or None) if _ls else None,
+                "files_seen": len(st.get("last_event_ids") or {}),
+            }
+        except Exception:
+            snap["sync_state"] = {"last_sync": None, "files_seen": 0}
+
+    # Runtimes. Same resolution as the human path.
+    try:
+        _plan = ""
+        try:
+            _cp = Path(os.path.expanduser("~/.clawmetry/cloud_plan.json"))
+            if _cp.is_file():
+                _plan = str((_json.loads(_cp.read_text()) or {}).get("plan", "")).lower()
+        except Exception:
+            _plan = ""
+        _entitled = _plan not in ("", "cloud_free", "free")
+        snap["runtimes"]["plan"] = _plan
+        snap["runtimes"]["entitled"] = _entitled
+        try:
+            from clawmetry.license import _pro_installed_version as _pv
+            snap["runtimes"]["pro_installed_version"] = _pv() or None
+        except Exception:
+            snap["runtimes"]["pro_installed_version"] = None
+        try:
+            from clawmetry.adapters.nemo import NemoClawAdapter as _NCA
+            _nemo = _NCA().detect()
+            if getattr(_nemo, "detected", False):
+                snap["runtimes"]["nemoclaw"] = {"detected": True, "syncing": True}
+        except Exception:
+            pass
+        try:
+            from clawmetry.sync import _detect_family_runtimes as _dfr
+            _det = _dfr() or []
+        except Exception:
+            _det = []
+        snap["runtimes"]["detected"] = [
+            {
+                "name": (r.get("name") or ""),
+                "display_name": (r.get("displayName") or r.get("name") or "runtime"),
+                "session_count": int(r.get("sessionCount") or 0),
+                "syncing": bool(_entitled),
+            }
+            for r in _det
+        ]
+    except Exception:
+        pass
+
+    # Daemon.
+    system = _platform.system()
+    try:
+        if system == "Darwin":
+            import subprocess as _sp
+            r = _sp.run(
+                ["launchctl", "list", "com.clawmetry.sync"],
+                capture_output=True, text=True,
+            )
+            if r.returncode == 0:
+                snap["daemon"] = {"running": True, "manager": "launchd"}
+            else:
+                snap["daemon"] = {"running": False, "manager": "launchd"}
+        elif system == "Linux":
+            import subprocess as _sp
+            import shutil as _sh
+            running = _is_sync_running()
+            manager: str | None = None
+            if running:
+                # Default to ``background`` whenever the daemon is up but we
+                # can't identify a supervisor; only upgrade to ``systemd`` /
+                # ``systemd-user`` when systemctl confirms an active unit.
+                # A shell wrapper reading ``.daemon.manager`` expects a label
+                # once ``.daemon.running`` is true — a null there is easy to
+                # mistake for "not running".
+                manager = "background"
+                if _sh.which("systemctl"):
+                    for _scope in (["--user"], []):
+                        try:
+                            _a = _sp.run(
+                                ["systemctl", *_scope, "is-active", "clawmetry-sync"],
+                                capture_output=True, text=True, timeout=5,
+                            )
+                            if _a.stdout.strip() == "active":
+                                manager = "systemd" if _scope == [] else "systemd-user"
+                                break
+                        except Exception:
+                            pass
+            snap["daemon"] = {"running": bool(running), "manager": manager}
+        else:
+            snap["daemon"] = {"running": False, "manager": None}
+    except Exception:
+        snap["daemon"] = {"running": False, "manager": None}
+
+    # Log tail — same three-line window the human path prints.
+    if LOG_FILE.exists():
+        try:
+            lines = LOG_FILE.read_text(errors="replace").splitlines()[-3:]
+        except Exception:
+            lines = []
+        snap["log"] = {"path": str(LOG_FILE), "tail": lines}
+
+    return snap
+
+
 def _cmd_status(args) -> None:
     """clawmetry status — show local + cloud sync status."""
     if getattr(args, "live", False):
         _status_live()
+        return
+    if getattr(args, "as_json", False):
+        import json as _json
+        # Sibling of `tier --json` / `license --json` / `runtimes --json` /
+        # `features --json` / `channels --json` / `diagnose --json` /
+        # `verify-integrity --json` — one dict, no side-effect prints.
+        print(_json.dumps(_status_snapshot(args), sort_keys=True))
         return
     import platform
     from clawmetry.sync import CONFIG_FILE, STATE_FILE, LOG_FILE
@@ -3134,10 +3395,24 @@ def _cmd_update() -> None:
 
 
 def _cmd_activate(args) -> None:
-    """clawmetry activate <KEY> — install a self-hosted Pro/Enterprise license."""
+    """clawmetry activate <KEY> — install a self-hosted Pro/Enterprise license.
+
+    Shortcut for ``clawmetry license activate <KEY>``. Accepts the same
+    ``--json`` flag so a wrapper script can activate a key and read the
+    outcome without screen-scraping. The JSON envelope is byte-identical to
+    what ``clawmetry license activate <KEY> --json`` emits
+    (``{action: "activate", ok, message}``) so a script that already parses
+    the license subcommand does not need to branch on which spelling ran.
+    """
     from clawmetry import license as _lic
 
+    as_json = bool(getattr(args, "as_json", False))
     ok, msg = _lic.activate(args.key, node_id=_lic._node_id(), actor="cli")
+    if as_json:
+        _license_json_dump({"action": "activate", "ok": bool(ok), "message": msg})
+        if not ok:
+            sys.exit(1)
+        return
     if ok:
         print(f"✅  {msg}")
         print("    Run `clawmetry license` to see status. Restart the daemon to load Pro features.")
@@ -3147,17 +3422,53 @@ def _cmd_activate(args) -> None:
         sys.exit(1)
 
 
+def _license_json_dump(payload: dict) -> None:
+    """Emit ``payload`` as pretty JSON on stdout for ``clawmetry license --json``.
+
+    Isolated so tests can capture the exact serialisation shape and so the
+    ``--json`` branches stay a single line each. Uses ``sort_keys=True`` to
+    keep the envelope stable across Python versions and across whichever
+    order the caller populated the dict.
+    """
+    import json as _json
+
+    print(_json.dumps(payload, indent=2, sort_keys=True))
+
+
 def _cmd_license(args) -> None:
-    """clawmetry license [activate|status|deactivate] — manage the self-hosted license."""
+    """clawmetry license [activate|status|deactivate|fingerprint|verify] — manage
+    the self-hosted license.
+
+    Human output mirrors the pre-``--json`` block character-for-character; the
+    ``--json`` branch emits ``{action, ok, ...}`` on stdout so a wrapper script
+    can parse license state (and exit code) without screen-scraping the human
+    table. Every branch preserves the never-crash contract on
+    :func:`clawmetry.license.current_license_info` / :func:`inspect_key` /
+    :func:`pubkey_info` — a failure surfaces as ``ok=false`` on the payload
+    AND a non-zero exit so pipes still detect it.
+    """
     action = getattr(args, "license_action", None) or "status"
+    as_json = bool(getattr(args, "as_json", False))
 
     if action == "activate":
         key = getattr(args, "license_key", None) or ""
         if not key:
-            print("❌  Usage: clawmetry license activate <KEY>")
+            if as_json:
+                _license_json_dump({
+                    "action": "activate",
+                    "ok": False,
+                    "message": "Usage: clawmetry license activate <KEY>",
+                })
+            else:
+                print("❌  Usage: clawmetry license activate <KEY>")
             sys.exit(1)
         from clawmetry import license as _lic
         ok, msg = _lic.activate(key.strip(), node_id=_lic._node_id(), actor="cli")
+        if as_json:
+            _license_json_dump({"action": "activate", "ok": bool(ok), "message": msg})
+            if not ok:
+                sys.exit(1)
+            return
         if ok:
             print(f"✅  {msg}")
             print("    Run `clawmetry license status` to verify. Restart the daemon to load Pro features.")
@@ -3169,6 +3480,15 @@ def _cmd_license(args) -> None:
     elif action == "deactivate":
         from clawmetry import license as _lic
         ok, removed = _lic.deactivate(actor="cli")
+        if as_json:
+            _license_json_dump({
+                "action": "deactivate",
+                "ok": bool(ok),
+                "removed": bool(removed),
+            })
+            if not ok:
+                sys.exit(1)
+            return
         if not ok:
             print("❌  Could not remove the license file. Check filesystem permissions.")
             sys.exit(1)
@@ -3181,6 +3501,15 @@ def _cmd_license(args) -> None:
         from clawmetry import license as _lic
         info = _lic.pubkey_info()
         fp = info.get("fingerprint_sha256")
+        if as_json:
+            _license_json_dump({
+                "action": "fingerprint",
+                "ok": bool(fp),
+                "pubkey": info,
+            })
+            if not fp:
+                sys.exit(1)
+            return
         print("ClawMetry License Public Key\n" + "─" * 40)
         print(f"  Algorithm:   {info.get('algorithm', 'ed25519')}")
         print(f"  Format:      {info.get('format', '')}")
@@ -3202,10 +3531,37 @@ def _cmd_license(args) -> None:
         # WITHOUT writing anything to disk. Useful for support and pre-flight.
         key = getattr(args, "license_key", None) or ""
         if not key:
-            print("❌  Usage: clawmetry license verify <KEY>")
+            if as_json:
+                _license_json_dump({
+                    "action": "verify",
+                    "ok": False,
+                    "status": "usage",
+                    "inspection": None,
+                    "message": "Usage: clawmetry license verify <KEY>",
+                })
+            else:
+                print("❌  Usage: clawmetry license verify <KEY>")
             sys.exit(1)
         from clawmetry import license as _lic
         info = _lic.inspect_key(key.strip())
+        if as_json:
+            if info is None:
+                _license_json_dump({
+                    "action": "verify",
+                    "ok": False,
+                    "status": "invalid",
+                    "inspection": None,
+                })
+                sys.exit(1)
+            _license_json_dump({
+                "action": "verify",
+                "ok": bool(info.get("valid")),
+                "status": info.get("status", "unknown"),
+                "inspection": info,
+            })
+            if not info.get("valid"):
+                sys.exit(1)
+            return
         print("ClawMetry License Verify (dry-run)\n" + "─" * 40)
         if info is None:
             print("  Result:      ❌  Invalid or unrecognized license key")
@@ -3232,6 +3588,25 @@ def _cmd_license(args) -> None:
     else:
         from clawmetry import license as _lic
         info = _lic.current_license_info()
+        if as_json:
+            if info is None:
+                _license_json_dump({
+                    "action": "status",
+                    "ok": True,
+                    "installed": False,
+                    "plan": "oss",
+                    "license": None,
+                })
+                return
+            valid = bool(info.get("valid"))
+            _license_json_dump({
+                "action": "status",
+                "ok": valid,
+                "installed": True,
+                "plan": (str(info.get("tier", "pro")) if valid else "oss"),
+                "license": info,
+            })
+            return
         print("ClawMetry License\n" + "─" * 40)
         if not info:
             print("  Plan:        OSS (free)")
@@ -3253,6 +3628,200 @@ def _cmd_license(args) -> None:
         fp = info.get("pubkey_fingerprint_sha256")
         if fp:
             print(f"  Trust key:   sha256:{fp[:16]}…  (clawmetry license fingerprint)")
+
+
+def _entitlement_why_payload(kind: str, key: str) -> dict:
+    """Resolve the lock-reason payload for a single feature/runtime/channels id.
+
+    Same shape the ``/api/entitlement/lock-reason`` HTTP endpoint emits so
+    ``clawmetry <features|runtimes|channels> --why <id> --json`` and the
+    dashboard cannot drift on the upgrade affordance. Never raises: any
+    resolver failure returns the OSS-free "not locked, unknown" fallback so
+    a wrapper script always sees a parseable response — matches the
+    never-crash contract documented on :func:`get_entitlement`.
+
+    ``kind="channels"`` treats ``key`` as a concurrent-adapter *count* (the
+    channels axis is capacity-scoped, every adapter itself is free) and
+    resolves against :func:`min_tier_for_channel_count` /
+    :meth:`Entitlement.allows_channel_count`, mirroring
+    :func:`_lock_row`'s "channels" branch so CLI and HTTP stay in lockstep.
+    A non-integer ``key`` collapses to the never-crash grace-shape row.
+
+    ``kind="nodes"`` is the capacity-axis sibling of ``"channels"`` for the
+    registered-node count (fleet size) -- ``key`` is a node count, not an
+    id, so a non-integer ``key`` follows the same grace-shape fallback as
+    the ``"channels"`` branch. Backed by :func:`min_tier_for_node_count`
+    / :meth:`Entitlement.allows_node_count`; mirrors
+    ``GET /api/entitlement/lock-reason?nodes=<int>`` byte-for-byte so
+    ``clawmetry nodes --why N`` and the HTTP surface cannot drift.
+    """
+    key = (key or "").strip().lower()
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        cur_tier = ent.tier
+        cur_rank = _ent.tier_rank(cur_tier)
+        if kind == "runtime":
+            allowed = ent.allows_runtime(key)
+            required = _ent.min_tier_for_runtime(key)
+            reason = ent.lock_reason(key, kind="runtime")
+        elif kind == "channels":
+            # Capacity axis: ``key`` is a concurrent-adapter count. A
+            # non-int collapses to the grace-shape row so a typo (e.g.
+            # ``--why abc``) never crashes and never dangles an upgrade CTA.
+            try:
+                n = int(key)
+            except (TypeError, ValueError):
+                return {
+                    "key": key,
+                    "kind": kind,
+                    "reason": None,
+                    "locked": False,
+                    "allowed": True,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                    "current_tier": cur_tier,
+                    "current_tier_rank": cur_rank,
+                    "upgrade_required": False,
+                }
+            allowed = ent.allows_channel_count(n)
+            required = _ent.min_tier_for_channel_count(n)
+            reason = ent.lock_reason(str(n), kind="channels")
+            # Canonicalise the key in the response so a caller passing "05"
+            # or "5" sees the same string back.
+            key = str(n)
+        elif kind == "nodes":
+            # Capacity axis: ``key`` is a registered-node count. Same
+            # never-crash posture as the ``channels`` branch above -- a
+            # typo (e.g. ``--why abc``) collapses to the grace-shape row.
+            try:
+                n = int(key)
+            except (TypeError, ValueError):
+                return {
+                    "key": key,
+                    "kind": kind,
+                    "reason": None,
+                    "locked": False,
+                    "allowed": True,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                    "current_tier": cur_tier,
+                    "current_tier_rank": cur_rank,
+                    "upgrade_required": False,
+                }
+            allowed = ent.allows_node_count(n)
+            required = _ent.min_tier_for_node_count(n)
+            reason = ent.lock_reason(str(n), kind="nodes")
+            key = str(n)
+        elif kind == "retention_days":
+            # Capacity axis: ``key`` is an event-history window in days.
+            # Sibling of the ``channels`` branch -- a non-int collapses to
+            # the grace-shape row so ``--why abc`` never crashes and never
+            # dangles an upgrade CTA the operator can't act on.
+            try:
+                n = int(key)
+            except (TypeError, ValueError):
+                return {
+                    "key": key,
+                    "kind": kind,
+                    "reason": None,
+                    "locked": False,
+                    "allowed": True,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                    "current_tier": cur_tier,
+                    "current_tier_rank": cur_rank,
+                    "upgrade_required": False,
+                }
+            allowed = ent.allows_retention_window(n)
+            required = _ent.min_tier_for_retention_window(n)
+            reason = ent.lock_reason(str(n), kind="retention_days")
+            key = str(n)
+        else:  # feature
+            allowed = ent.allows_feature(key)
+            required = _ent.min_tier_for_feature(key)
+            reason = ent.lock_reason(key, kind="feature")
+        req_rank = _ent.tier_rank(required) if required else -1
+        required_label = _ent.tier_label(required) if required else None
+        return {
+            "key": key,
+            "kind": kind,
+            "reason": reason,
+            "locked": reason is not None,
+            "allowed": bool(allowed),
+            "required_tier": required,
+            "required_tier_label": required_label,
+            "required_tier_rank": req_rank,
+            "current_tier": cur_tier,
+            "current_tier_rank": cur_rank,
+            "upgrade_required": bool(required) and req_rank > cur_rank,
+        }
+    except Exception as exc:
+        print(f"⚠️  entitlement resolution failed: {exc}", file=sys.stderr)
+        return {
+            "key": key,
+            "kind": kind,
+            "reason": None,
+            "locked": False,
+            "allowed": True,
+            "required_tier": None,
+            "required_tier_label": None,
+            "required_tier_rank": -1,
+            "current_tier": "oss",
+            "current_tier_rank": 0,
+            "upgrade_required": False,
+        }
+
+
+def _print_why_block(payload: dict) -> None:
+    """Human-readable render of :func:`_entitlement_why_payload`.
+
+    Mirrors the ``clawmetry tier`` / ``clawmetry features`` output style
+    (aligned two-column block, single upgrade CTA when a paid tier unlocks
+    the item) so shell operators recognise the layout across subcommands.
+
+    For ``kind="channels"`` / ``kind="nodes"`` / ``kind="retention_days"``
+    the header phrases the capacity question naturally ("what tier unlocks
+    N concurrent channels?" / "what tier unlocks N nodes?" / "what tier
+    unlocks N-day event retention?") since the key is a count, not an id
+    -- otherwise the shared "why is X locked?" phrasing wins.
+    """
+    key = payload.get("key") or "(unknown)"
+    kind = payload.get("kind") or "?"
+    locked = bool(payload.get("locked"))
+    if kind == "channels":
+        print(f'ClawMetry: what tier unlocks {key} concurrent channels?')
+    elif kind == "nodes":
+        print(f'ClawMetry: what tier unlocks {key} nodes?')
+    elif kind == "retention_days":
+        print(f'ClawMetry: what tier unlocks {key}-day event retention?')
+    else:
+        print(f'ClawMetry: why is "{key}" locked?')
+    print("─" * 40)
+    print(f"  Kind:            {kind}")
+    print(f"  Current tier:    {payload.get('current_tier', 'oss')}")
+    print(f"  Locked:          {'yes' if locked else 'no'}")
+    reason = payload.get("reason")
+    if reason:
+        print(f"  Reason:          {reason}")
+    req = payload.get("required_tier")
+    req_label = payload.get("required_tier_label")
+    if req:
+        rank = payload.get("required_tier_rank", -1)
+        rank_hint = f" (rank {rank})" if isinstance(rank, int) and rank >= 0 else ""
+        print(f"  Required tier:   {req_label or req}{rank_hint}")
+    if payload.get("upgrade_required"):
+        print("  Upgrade:         clawmetry license activate <KEY>")
+    elif not locked and not payload.get("reason"):
+        # Free/allowed or unknown id: don't dangle an upgrade CTA. Give the
+        # operator a one-line hint of which case they hit so a `--why` on a
+        # typo doesn't silently look like a "no lock" all-clear.
+        if not req:
+            print("  Note:            not a paid capability on this install")
 
 
 def _cmd_tier(args) -> None:
@@ -3352,6 +3921,15 @@ def _cmd_runtimes(args) -> None:
 
     from clawmetry import entitlements as _ent
 
+    why = (getattr(args, "why", None) or "").strip().lower()
+    if why:
+        payload = _entitlement_why_payload("runtime", why)
+        if getattr(args, "as_json", False):
+            print(_json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            _print_why_block(payload)
+        return
+
     try:
         ent = _ent.get_entitlement()
         tier = ent.tier
@@ -3435,6 +4013,15 @@ def _cmd_features(args) -> None:
 
     from clawmetry import entitlements as _ent
 
+    why = (getattr(args, "why", None) or "").strip().lower()
+    if why:
+        payload = _entitlement_why_payload("feature", why)
+        if getattr(args, "as_json", False):
+            print(_json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            _print_why_block(payload)
+        return
+
     try:
         ent = _ent.get_entitlement()
         tier = ent.tier
@@ -3501,22 +4088,442 @@ def _cmd_features(args) -> None:
         print("  Upgrade: clawmetry license activate <KEY>")
 
 
+def _cmd_channels(args) -> None:
+    """clawmetry channels — list every chat-channel adapter and the tier cap.
+
+    Sibling of :func:`_cmd_runtimes` / :func:`_cmd_features` for the third
+    entitlement axis. Every chat channel is FREE at every tier -- the
+    ``channels`` capacity axis governs how many concurrent channels each
+    plan admits, not which adapters unlock -- so every row surfaces as
+    available. The tier-scoped concurrent-channel cap is what upgrades
+    unlock, and it prints in the header block. Reads
+    :func:`clawmetry.entitlements.channel_catalog` -- the same source the
+    dashboard's channel-picker consumes -- so the CLI and the UI cannot
+    drift on the adapter list.
+
+    Never raises. A poisoned catalog read surfaces the error inline (a
+    warning row in the human table, or an ``error`` key on the JSON payload
+    with ``channels=[]``) so a wrapper script always sees a parseable
+    response. Matches the never-crash contract documented on
+    :func:`get_entitlement`.
+
+    Output:
+      default -- header block (tier / enforcement / channel cap) + table
+                 (id, label, status) of every adapter
+      --json  -- ``{tier, grace, enforced, channel_limit, channels: [...],
+                 error?: str}``
+      --why N -- lock-reason payload for N concurrent channels (same shape
+                 as ``GET /api/entitlement/lock-reason?channels=N``); pair
+                 with ``--json`` for scriptable output.
+    """
+    import json as _json
+
+    from clawmetry import entitlements as _ent
+
+    why = (getattr(args, "why", None) or "").strip().lower()
+    if why:
+        payload = _entitlement_why_payload("channels", why)
+        if getattr(args, "as_json", False):
+            print(_json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            _print_why_block(payload)
+        return
+
+    try:
+        ent = _ent.get_entitlement()
+        tier = ent.tier
+        grace = bool(ent.grace)
+        enforced = _ent.is_enforced()
+        channel_limit = ent.channel_limit()
+    except Exception as exc:
+        # Mirror _cmd_runtimes / _cmd_features never-crash fallback: a
+        # broken install still gets a parseable shape, with the failure
+        # surfaced to stderr so it isn't silently lost in a pipeline.
+        print(f"⚠️  entitlement resolution failed: {exc}", file=sys.stderr)
+        tier, grace, enforced, channel_limit = "oss", True, False, None
+
+    rows: list[dict] = []
+    catalog_error: str | None = None
+    try:
+        rows = list(_ent.channel_catalog())
+    except Exception as exc:
+        catalog_error = str(exc)
+
+    if getattr(args, "as_json", False):
+        payload: dict = {
+            "tier": tier,
+            "grace": grace,
+            "enforced": enforced,
+            "channel_limit": channel_limit,
+            "channels": rows,
+        }
+        if catalog_error:
+            payload["error"] = catalog_error
+        print(_json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    mode_line = "off (grace)" if not enforced else "on"
+    cap_line = "unlimited" if channel_limit in (None, 0) else str(channel_limit)
+    print("ClawMetry Channels\n" + "─" * 40)
+    print(f"  Tier:        {tier}")
+    print(f"  Enforcement: {mode_line}")
+    print(f"  Channel cap: {cap_line}  (concurrent adapters)")
+    if catalog_error:
+        print(f"  ⚠️  catalog error: {catalog_error}")
+        return
+
+    print()
+    print(f"  {'ID':<16} {'Label':<20} Status")
+    print("  " + "─" * 50)
+    for row in rows:
+        cid = str(row.get("id", ""))
+        label = str(row.get("label", cid))
+        # Every channel adapter is free at every tier; the cap is separate.
+        # Surface the row identically to a free/available runtime row.
+        status = "✅ available"
+        print(f"  {cid:<16} {label:<20} {status}")
+
+
+def _cmd_nodes(args) -> None:
+    """clawmetry nodes — show the resolved node-count cap for this install.
+
+    Capacity-axis sibling of :func:`_cmd_channels` for the ``nodes`` axis.
+    There is no enumerable adapter list here -- ``nodes`` is purely a
+    per-tier cap (Free / Cloud Free = 1; every paid tier is license-bound
+    to the ``nodes`` field on the payload; Enterprise is unlimited) --
+    so the default output is the header block alone. ``--why N`` answers
+    "what tier admits N registered nodes?" using the same lock-reason
+    payload ``clawmetry channels --why N`` emits so a wrapper script written
+    against either surface works interchangeably.
+
+    Reads :attr:`clawmetry.entitlements.Entitlement.node_limit` -- the same
+    field the fleet-registration path checks -- so the CLI and the runtime
+    cannot drift on the effective cap.
+
+    Never raises. A poisoned resolver surfaces the error inline (a warning
+    row in the human table, or an ``error`` key on the JSON payload with
+    ``node_limit=null``) so a wrapper script always sees a parseable
+    response. Matches the never-crash contract documented on
+    :func:`get_entitlement`.
+
+    Output:
+      default -- header block (tier / enforcement / node cap)
+      --json  -- ``{tier, grace, enforced, node_limit, error?: str}``
+      --why N -- lock-reason payload for N registered nodes (same shape
+                 as ``GET /api/entitlement/lock-reason?nodes=N``); pair
+                 with ``--json`` for scriptable output.
+    """
+    import json as _json
+
+    from clawmetry import entitlements as _ent
+
+    why = (getattr(args, "why", None) or "").strip().lower()
+    if why:
+        payload = _entitlement_why_payload("nodes", why)
+        if getattr(args, "as_json", False):
+            print(_json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            _print_why_block(payload)
+        return
+
+    resolve_error: str | None = None
+    try:
+        ent = _ent.get_entitlement()
+        tier = ent.tier
+        grace = bool(ent.grace)
+        enforced = _ent.is_enforced()
+        # ``node_limit`` is an int on the dataclass; <=0 is the unlimited
+        # sentinel licenses use for Enterprise, so surface it as ``None``
+        # (matches the ``channel_limit`` JSON convention).
+        raw_limit = getattr(ent, "node_limit", None)
+        if isinstance(raw_limit, int) and raw_limit > 0:
+            node_limit: int | None = raw_limit
+        else:
+            node_limit = None
+    except Exception as exc:
+        # Mirror _cmd_channels never-crash fallback: a broken install still
+        # gets a parseable shape, with the failure surfaced to stderr so it
+        # isn't silently lost in a pipeline.
+        print(f"⚠️  entitlement resolution failed: {exc}", file=sys.stderr)
+        tier, grace, enforced, node_limit = "oss", True, False, None
+        resolve_error = str(exc)
+
+    if getattr(args, "as_json", False):
+        payload: dict = {
+            "tier": tier,
+            "grace": grace,
+            "enforced": enforced,
+            "node_limit": node_limit,
+        }
+        if resolve_error:
+            payload["error"] = resolve_error
+        print(_json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    mode_line = "off (grace)" if not enforced else "on"
+    cap_line = "unlimited" if node_limit is None else str(node_limit)
+    print("ClawMetry Nodes\n" + "─" * 40)
+    print(f"  Tier:        {tier}")
+    print(f"  Enforcement: {mode_line}")
+    print(f"  Node cap:    {cap_line}  (registered nodes)")
+    if resolve_error:
+        print(f"  ⚠️  resolver error: {resolve_error}")
+
+
+def _cmd_retention(args) -> None:
+    """clawmetry retention — event-retention window (capacity axis).
+
+    Sibling of :func:`_cmd_channels` / :func:`_cmd_nodes` for the fourth
+    entitlement axis. The ``retention_days`` capacity axis governs how far
+    back in history each plan can hold event data before the store rolls
+    over. Every event-store feature itself is free at every tier; what
+    upgrades unlock is a longer window. The current tier cap prints in the
+    header block alongside the effective cap (which applies the
+    ``CLAWMETRY_RETENTION_DAYS`` env override, capped to the tier ceiling).
+
+    Never raises: any resolver failure surfaces inline (a warning row in
+    the human block, or the fields collapsed to ``null`` on the JSON
+    payload) so a wrapper script always sees a parseable response. Matches
+    the never-crash contract documented on :func:`get_entitlement`.
+
+    Output:
+      default -- header block (tier / enforcement / retention cap /
+                 effective cap / env override)
+      --json  -- ``{tier, grace, enforced, retention_days,
+                 effective_retention_days, override_env_name,
+                 override_env_value}``
+      --why N -- lock-reason payload for an N-day retention window (same
+                 shape as ``GET /api/entitlement/lock-reason?retention_days=N``);
+                 pair with ``--json`` for scriptable output.
+    """
+    import json as _json
+
+    from clawmetry import entitlements as _ent
+
+    why = (getattr(args, "why", None) or "").strip().lower()
+    if why:
+        payload = _entitlement_why_payload("retention_days", why)
+        if getattr(args, "as_json", False):
+            print(_json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            _print_why_block(payload)
+        return
+
+    override_env_name = getattr(_ent, "_RETENTION_OVERRIDE_ENV", "CLAWMETRY_RETENTION_DAYS")
+    override_env_value = os.environ.get(override_env_name)
+
+    try:
+        ent = _ent.get_entitlement()
+        tier = ent.tier
+        grace = bool(ent.grace)
+        enforced = _ent.is_enforced()
+        retention_days = ent.event_retention_days()
+        effective_days = ent.effective_retention_days()
+    except Exception as exc:
+        # Mirror the _cmd_channels never-crash fallback: a broken install
+        # still gets a parseable shape, with the failure surfaced to stderr
+        # so it isn't silently lost in a shell pipeline.
+        print(f"⚠️  entitlement resolution failed: {exc}", file=sys.stderr)
+        tier, grace, enforced = "oss", True, False
+        retention_days, effective_days = None, None
+
+    if getattr(args, "as_json", False):
+        payload = {
+            "tier": tier,
+            "grace": grace,
+            "enforced": enforced,
+            "retention_days": retention_days,
+            "effective_retention_days": effective_days,
+            "override_env_name": override_env_name,
+            "override_env_value": override_env_value,
+        }
+        print(_json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    mode_line = "off (grace)" if not enforced else "on"
+    cap_line = "unlimited" if retention_days in (None, 0) else f"{retention_days} days"
+    eff_line = (
+        "unlimited" if effective_days in (None, 0) else f"{effective_days} days"
+    )
+    print("ClawMetry Retention\n" + "─" * 40)
+    print(f"  Tier:            {tier}")
+    print(f"  Enforcement:     {mode_line}")
+    print(f"  Retention cap:   {cap_line}  (per-tier ceiling)")
+    print(f"  Effective:       {eff_line}  (after env override)")
+    env_display = override_env_value if override_env_value not in (None, "") else "(unset)"
+    print(f"  {override_env_name}: {env_display}")
+
+
+def _cmd_diagnose(args) -> None:
+    """clawmetry diagnose — surface the entitlement resolver inputs.
+
+    Sibling of :func:`_cmd_tier` for operators who need to answer "why is
+    my resolved tier what it is?": license file present or not, cloud
+    plan cache present or not, enforcement env var, and the in-process
+    resolver cache state. Reads
+    :func:`clawmetry.entitlements.resolution_diagnostic` -- the same
+    source ``GET /api/entitlement/diagnostic`` serves -- so the CLI and
+    the HTTP surface cannot drift on the inputs they expose.
+
+    Read-only, side-effect free. Never raises: any resolver failure
+    surfaces inline (a warning line in the human block, or an ``error``
+    key on the JSON payload with the partial dict intact) so a wrapper
+    script always sees a parseable response. Matches the never-crash
+    contract documented on :func:`get_entitlement`.
+
+    Output:
+      default -- human-readable block (license, cloud plan, enforce env,
+                 cache state) matching the aligned two-column style
+                 shared with ``clawmetry tier`` / ``features`` / ``runtimes``
+      --json  -- :func:`resolution_diagnostic` dict serialized (indent=2,
+                 sort_keys=True) so a shell wrapper can pipe it to jq
+    """
+    import json as _json
+
+    from clawmetry import entitlements as _ent
+
+    payload: dict = {}
+    err: str | None = None
+    try:
+        payload = _ent.resolution_diagnostic()
+    except Exception as exc:
+        err = str(exc)
+        print(f"⚠️  entitlement diagnostic failed: {exc}", file=sys.stderr)
+
+    if getattr(args, "as_json", False):
+        if err:
+            payload = dict(payload)
+            payload["error"] = err
+        print(_json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    print("ClawMetry Diagnose\n" + "─" * 40)
+    if err:
+        print(f"  ⚠️  diagnostic error: {err}")
+        return
+
+    def _row(label: str, value) -> None:
+        print(f"  {label:<24} {value}")
+
+    lic_present = bool(payload.get("license_present"))
+    lic_size = int(payload.get("license_size_bytes") or 0)
+    lic_path = payload.get("license_path") or "?"
+    _row("License file:", "yes" if lic_present else "no")
+    _row("  path:", lic_path)
+    if lic_present:
+        _row("  size (bytes):", lic_size)
+    if payload.get("license_error"):
+        _row("  error:", payload["license_error"])
+
+    cp_present = bool(payload.get("cloud_plan_present"))
+    cp_size = int(payload.get("cloud_plan_size_bytes") or 0)
+    cp_path = payload.get("cloud_plan_path") or "?"
+    _row("Cloud plan cache:", "yes" if cp_present else "no")
+    _row("  path:", cp_path)
+    if cp_present:
+        _row("  size (bytes):", cp_size)
+    if payload.get("cloud_plan_error"):
+        _row("  error:", payload["cloud_plan_error"])
+
+    enforce_env = payload.get("enforce_env")
+    is_enforced = bool(payload.get("is_enforced"))
+    _row("Enforce env:", enforce_env if enforce_env not in (None, "") else "(unset)")
+    _row("Enforced:", "yes" if is_enforced else "no (grace)")
+
+    ret_env_name = payload.get("retention_override_env_name") or "?"
+    ret_env_val = payload.get("retention_override_env_value")
+    _row(
+        f"{ret_env_name}:",
+        ret_env_val if ret_env_val not in (None, "") else "(unset)",
+    )
+
+    age = payload.get("cache_age_seconds")
+    ttl = payload.get("cache_ttl_seconds")
+    hit = bool(payload.get("cache_hit_next_call"))
+    cached_tier = payload.get("cache_cached_tier")
+    _row("Cache age (s):", "-" if age is None else age)
+    _row("Cache TTL (s):", "-" if ttl is None else ttl)
+    _row("Cache hit next call:", "yes" if hit else "no")
+    if cached_tier:
+        _row("Cached tier:", cached_tier)
+    if payload.get("cache_error"):
+        _row("Cache error:", payload["cache_error"])
+
+
 def _cmd_verify_integrity(args) -> None:
-    """clawmetry verify-integrity — walk the hash chain and report validity."""
+    """clawmetry verify-integrity — walk the hash chain and report validity.
+
+    ``--json`` emits a stable envelope so wrapper scripts can branch on the
+    outcome without screen-scraping the human table. The payload mirrors the
+    ``LocalStore.verify_integrity`` return shape (``status``/``checked``/
+    ``pre_chain``/``broken_at``/``error``/``node_id``) and adds two synthetic
+    statuses for the environment errors that today only surface via exit
+    code + text:
+
+      - ``store_open_failed``  — cannot open the local store (exit 1)
+      - ``daemon_too_old``     — daemon proxy returned None so ``verify_integrity``
+                                 is not in its allowlist (exit 2)
+      - ``error``              — ``verify_integrity`` itself raised (exit 1)
+
+    Exit codes are unchanged from the human path: 0 for ``valid``/``empty``,
+    1 for ``invalid``/``store_open_failed``/``error``, 2 for ``daemon_too_old``.
+    Never crashes: any unexpected shape degrades to a parseable JSON payload
+    with an ``error`` key so a shell pipeline always sees a valid response.
+
+    Sibling of :func:`_cmd_tier` / :func:`_cmd_diagnose` / :func:`_cmd_license`
+    which all carry ``--json`` for the same reason -- the CLI diagnostic
+    surface stays uniformly scriptable.
+    """
+    import json as _json
     from clawmetry.local_store import get_store
 
+    as_json = bool(getattr(args, "as_json", False))
     node_id = getattr(args, "node_id", None) or None
-    print("ClawMetry Integrity Verify\n" + "─" * 40)
+    scope_default = node_id or "all"
+
+    def _emit_json(payload: dict, exit_code: int) -> None:
+        print(_json.dumps(payload, indent=2, sort_keys=True))
+        if exit_code:
+            raise SystemExit(exit_code)
+
+    if not as_json:
+        print("ClawMetry Integrity Verify\n" + "─" * 40)
 
     try:
         store = get_store(read_only=True)
     except Exception as exc:
+        if as_json:
+            _emit_json(
+                {
+                    "status": "store_open_failed",
+                    "node_id": scope_default,
+                    "checked": 0,
+                    "pre_chain": 0,
+                    "broken_at": None,
+                    "error": str(exc),
+                },
+                1,
+            )
+            return  # unreachable — _emit_json raises when exit_code != 0
         print(f"  Error: cannot open local store — {exc}")
         raise SystemExit(1) from exc
 
     try:
         result = store.verify_integrity(node_id=node_id)
     except Exception as exc:
+        if as_json:
+            _emit_json(
+                {
+                    "status": "error",
+                    "node_id": scope_default,
+                    "checked": 0,
+                    "pre_chain": 0,
+                    "broken_at": None,
+                    "error": str(exc),
+                },
+                1,
+            )
+            return
         print(f"  Error: verification failed — {exc}")
         raise SystemExit(1) from exc
 
@@ -3525,15 +4532,62 @@ def _cmd_verify_integrity(args) -> None:
     # have ``verify_integrity`` in their method allowlist and return None.
     # Degrade gracefully instead of crashing on ``result["status"]``.
     if result is None:
+        if as_json:
+            _emit_json(
+                {
+                    "status": "daemon_too_old",
+                    "node_id": scope_default,
+                    "checked": 0,
+                    "pre_chain": 0,
+                    "broken_at": None,
+                    "error": (
+                        "daemon proxy returned None — verify_integrity is not in the"
+                        " running daemon's method allowlist. Restart the sync daemon"
+                        " to pick up the new wheel, then re-run."
+                    ),
+                },
+                2,
+            )
+            return
         print("  Result:      ?  Could not reach the running daemon's verifier.")
         print("               This usually means the daemon is older than the CLI.")
         print("               Restart the sync daemon to pick up the new wheel, then re-run.")
         raise SystemExit(2)
 
-    status = result["status"]
-    checked = result["checked"]
-    pre_chain = result["pre_chain"]
-    scope = result["node_id"]
+    status = result.get("status") if isinstance(result, dict) else None
+    checked = result.get("checked", 0) if isinstance(result, dict) else 0
+    pre_chain = result.get("pre_chain", 0) if isinstance(result, dict) else 0
+    scope = (result.get("node_id") if isinstance(result, dict) else None) or scope_default
+    broken_at = result.get("broken_at") if isinstance(result, dict) else None
+    error = result.get("error") if isinstance(result, dict) else None
+
+    if as_json:
+        exit_code = 1 if status == "invalid" else 0
+        # Emit the store's shape verbatim so scripts pinning keys never drift
+        # from what LocalStore.verify_integrity documents. Any non-dict result
+        # (shouldn't happen, but the never-crash contract still applies)
+        # collapses to a parseable error envelope.
+        if isinstance(result, dict):
+            payload = {
+                "status": status or "error",
+                "node_id": scope,
+                "checked": int(checked or 0),
+                "pre_chain": int(pre_chain or 0),
+                "broken_at": broken_at,
+                "error": error,
+            }
+        else:
+            payload = {
+                "status": "error",
+                "node_id": scope_default,
+                "checked": 0,
+                "pre_chain": 0,
+                "broken_at": None,
+                "error": f"verify_integrity returned unexpected shape: {type(result).__name__}",
+            }
+            exit_code = 1
+        _emit_json(payload, exit_code)
+        return
 
     print(f"  Scope:       {scope}")
     print(f"  Checked:     {checked} stamped event(s)")
@@ -3546,8 +4600,6 @@ def _cmd_verify_integrity(args) -> None:
     elif status == "valid":
         print(f"  Result:      ✅  VALID — chain intact across {checked} event(s)")
     else:
-        broken_at = result["broken_at"]
-        error = result["error"]
         print(f"  Result:      ❌  INVALID — {error}")
         print(f"  First break: {broken_at}")
         raise SystemExit(1)
@@ -3641,6 +4693,23 @@ def main() -> None:
             try:
                 _stream.fileno()
             except (AttributeError, ValueError, OSError):
+                # A dead stream on a process that HAD a console is a bug
+                # signal, not a pythonw scenario: something closed the stream
+                # after startup (the #3791 class). The swap below keeps the
+                # CLI from crashing, but it also makes every print() vanish,
+                # so leave a breadcrumb a human can find.
+                if getattr(sys, "__%s__" % _attr, None) is not None:
+                    try:
+                        _bc = os.path.expanduser("~/.clawmetry/cli-stream-guard.log")
+                        os.makedirs(os.path.dirname(_bc), exist_ok=True)
+                        with open(_bc, "a", encoding="utf-8") as _fh:
+                            _fh.write(
+                                "sys.%s was closed at CLI startup; output is being "
+                                "discarded. This should never happen on a normal "
+                                "console run: see clawmetry#3791.\n" % _attr
+                            )
+                    except OSError:
+                        pass
                 try:
                     setattr(sys, _attr, open(os.devnull, "w", encoding="utf-8"))
                 except OSError:
@@ -3700,7 +4769,9 @@ def main() -> None:
         "--start-sync-now",
         action="store_true",
         dest="start_sync_now",
-        help="No-op (now the default). Retained for back-compat.",
+        help="Skip the ownership OTP and start syncing immediately "
+        "(the command copied from the dashboard uses this; "
+        "sync-on-connect is otherwise already the default)",
     )
     p_connect.add_argument(
         "--defer-sync",
@@ -3774,6 +4845,19 @@ def main() -> None:
     p_status = sub.add_parser("status", help="Show local + cloud sync status")
     p_status.add_argument("--show-key", action="store_true", help="Reveal secret key")
     p_status.add_argument("--live", action="store_true", help="Live one-line status bar (sessions · tokens · cost · model · tok/s); Ctrl-C to exit")
+    p_status.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help=(
+            "Emit the status snapshot as JSON (jq-friendly) instead of the "
+            "human table. Matches the sibling flag on `tier --json` / "
+            "`license --json` / `runtimes --json` / `features --json` / "
+            "`channels --json` / `diagnose --json` / `verify-integrity --json` "
+            "so wrappers can parse cloud-sync / daemon / runtime state without "
+            "screen-scraping. Ignored when combined with --live."
+        ),
+    )
 
     # proxy
     p_proxy = sub.add_parser(
@@ -3916,6 +5000,17 @@ def main() -> None:
         "activate", help="Activate a self-hosted Pro/Enterprise license key"
     )
     p_activate.add_argument("key", help="License key (CLAW1.…)")
+    p_activate.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help=(
+            "Emit {action, ok, message} JSON (jq-friendly). Byte-identical "
+            "to the envelope `clawmetry license activate <KEY> --json` "
+            "already emits so wrappers do not need to branch on the "
+            "shortcut spelling."
+        ),
+    )
 
     # license — manage the self-hosted Pro/Enterprise license
     p_license = sub.add_parser("license", help="Manage the self-hosted Pro/Enterprise license")
@@ -3931,6 +5026,17 @@ def main() -> None:
         nargs="?",
         default=None,
         help="License key (CLAW1.…) — required for 'activate' / 'verify'",
+    )
+    p_license.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help=(
+            "Emit {action, ok, ...} JSON (jq-friendly). Matches the sibling "
+            "flag on `tier --json` / `runtimes --json` / `features --json` / "
+            "`channels --json` so wrappers can parse license state without "
+            "screen-scraping the human-readable block."
+        ),
     )
 
     # tier — print the resolved open-core entitlement (scriptable)
@@ -3956,6 +5062,15 @@ def main() -> None:
         dest="as_json",
         help="Emit {tier, grace, enforced, runtimes:[...]} JSON (jq-friendly)",
     )
+    p_runtimes.add_argument(
+        "--why",
+        metavar="ID",
+        default=None,
+        help=(
+            "Print the lock-reason payload for a single runtime id "
+            "(same shape as GET /api/entitlement/lock-reason?runtime=<id>)"
+        ),
+    )
 
     # features — list every observable feature and which are unlocked.
     # CLI sibling of `clawmetry runtimes` and of the dashboard's GET
@@ -3971,6 +5086,120 @@ def main() -> None:
         dest="as_json",
         help="Emit {tier, grace, enforced, features:[...]} JSON (jq-friendly)",
     )
+    p_features.add_argument(
+        "--why",
+        metavar="ID",
+        default=None,
+        help=(
+            "Print the lock-reason payload for a single feature id "
+            "(same shape as GET /api/entitlement/lock-reason?feature=<id>)"
+        ),
+    )
+
+    # channels — list every chat-channel adapter and the tier-scoped cap.
+    # CLI sibling of `clawmetry runtimes` / `clawmetry features` for the
+    # third entitlement axis. Every adapter is FREE at every tier; the
+    # concurrent-channel cap is what the header block advertises.
+    p_channels = sub.add_parser(
+        "channels",
+        help="List every chat-channel adapter and the concurrent-channel cap",
+    )
+    p_channels.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help=(
+            "Emit {tier, grace, enforced, channel_limit, channels:[...]} "
+            "JSON (jq-friendly)"
+        ),
+    )
+    p_channels.add_argument(
+        "--why",
+        metavar="N",
+        default=None,
+        help=(
+            "Print the lock-reason payload for N concurrent channels "
+            "(same shape as GET /api/entitlement/lock-reason?channels=N). "
+            "The channels axis is capacity-scoped -- every adapter itself "
+            "is free -- so N is a count, not an adapter id."
+        ),
+    )
+
+    # nodes — capacity-axis sibling of `clawmetry channels` for the
+    # registered-node count. No enumerable adapter list -- ``nodes`` is
+    # purely a per-tier cap -- so the default output is the header block
+    # (tier / enforcement / node cap) alone. Fills the last capacity-axis
+    # CLI gap left open after `channels` shipped in #3820.
+    p_nodes = sub.add_parser(
+        "nodes",
+        help="Show the resolved node-count cap for this install",
+    )
+    p_nodes.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit {tier, grace, enforced, node_limit} JSON (jq-friendly)",
+    )
+    p_nodes.add_argument(
+        "--why",
+        metavar="N",
+        default=None,
+        help=(
+            "Print the lock-reason payload for N registered nodes "
+            "(same shape as GET /api/entitlement/lock-reason?nodes=N). "
+            "The nodes axis is capacity-scoped -- N is a count, not an id."
+        ),
+    )
+
+    # retention — event-retention window cap (capacity axis sibling of
+    # `clawmetry channels` / `clawmetry nodes`). Same header/JSON/--why
+    # triad as the other capacity subcommands so the four-axis CLI surface
+    # is uniform.
+    p_retention = sub.add_parser(
+        "retention",
+        help="Show the event-retention window cap and the tier that would extend it",
+    )
+    p_retention.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help=(
+            "Emit {tier, grace, enforced, retention_days, "
+            "effective_retention_days, override_env_name, "
+            "override_env_value} JSON (jq-friendly)"
+        ),
+    )
+    p_retention.add_argument(
+        "--why",
+        metavar="N",
+        default=None,
+        help=(
+            "Print the lock-reason payload for an N-day retention window "
+            "(same shape as GET /api/entitlement/lock-reason?retention_days=N). "
+            "The retention axis is capacity-scoped, so N is a day count, "
+            "not an event-store id."
+        ),
+    )
+
+    # diagnose — surface the entitlement resolver inputs so an operator
+    # can answer "why did my install resolve to <tier>?" without reading
+    # ~/.clawmetry by hand. Same shape as GET /api/entitlement/diagnostic.
+    p_diagnose = sub.add_parser(
+        "diagnose",
+        help=(
+            "Show entitlement resolver inputs (license file, cloud plan "
+            "cache, enforce env, in-process cache state)"
+        ),
+    )
+    p_diagnose.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help=(
+            "Emit resolution_diagnostic() as JSON (same shape as "
+            "GET /api/entitlement/diagnostic)"
+        ),
+    )
 
     # verify-integrity — walk hash chain and report validity (Issue #2200)
     p_verify = sub.add_parser(
@@ -3982,6 +5211,16 @@ def main() -> None:
         dest="node_id",
         default=None,
         help="Limit verification to a single node (default: all nodes)",
+    )
+    p_verify.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help=(
+            "Emit the verify_integrity result as JSON (mirrors the store's "
+            "return shape plus synthetic 'store_open_failed' / 'daemon_too_old'"
+            " statuses; exit codes unchanged)"
+        ),
     )
 
     # Parse just the first token to decide if it's a sub-command or dashboard flag
@@ -4004,6 +5243,10 @@ def main() -> None:
         "tier",
         "runtimes",
         "features",
+        "channels",
+        "nodes",
+        "retention",
+        "diagnose",
         "verify-integrity",
         "nemoclaw-daemons",
     )
@@ -4047,6 +5290,14 @@ def main() -> None:
             _cmd_runtimes(args)
         elif args.cmd == "features":
             _cmd_features(args)
+        elif args.cmd == "channels":
+            _cmd_channels(args)
+        elif args.cmd == "nodes":
+            _cmd_nodes(args)
+        elif args.cmd == "retention":
+            _cmd_retention(args)
+        elif args.cmd == "diagnose":
+            _cmd_diagnose(args)
         elif args.cmd == "verify-integrity":
             _cmd_verify_integrity(args)
         elif args.cmd == "nemoclaw-daemons":

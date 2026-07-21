@@ -31,6 +31,7 @@ import time as _time
 from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, jsonify, request
+from clawmetry._gate import gate
 from clawmetry.config import is_local_store_read_enabled
 
 bp_overview = Blueprint('overview', __name__)
@@ -1484,6 +1485,7 @@ _health_timeline_cache_lock = threading.Lock()
 
 
 @bp_overview.route("/api/health-timeline")
+@gate("per_runtime_health_timeline")
 def api_health_timeline():
     """Per-runtime sparkline of recent sessions, severity by health (#2196 item #4).
 

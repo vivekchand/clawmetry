@@ -73,7 +73,7 @@ jobs:
           print("patched _throttle_patched: added node_id kwarg")
           EOF
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 

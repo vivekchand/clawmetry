@@ -33,6 +33,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, Response, jsonify, request
+from clawmetry._gate import gate
 from clawmetry.config import is_local_store_read_enabled, hide_clawmetry_session
 
 bp_logs = Blueprint('logs', __name__)
@@ -1752,12 +1753,17 @@ def api_security_integrity():
 
 
 @bp_security.route("/api/security/audit")
+@gate("audit_logs")
 def api_security_audit():
     """Recent Enterprise audit-log activity for the Security tab.
 
-    Thin mirror of ``/api/audit-log`` (entitlement-gated there) scoped to a
-    small recent window for the tab's recent-activity feed. Never raises —
-    an empty list paints an honest "nothing recorded yet" state."""
+    Thin mirror of ``/api/audit-log`` scoped to a small recent window for
+    the tab's recent-activity feed. Gated on ``audit_logs`` because it
+    reads the same store and returns the same rows — leaving it open
+    would let a Free/Starter/Pro caller sidestep the ``@gate`` on
+    ``routes/audit.py`` by hitting the mirror URL instead. Grace mode
+    (the default) still lets the request through. Never raises — an
+    empty list paints an honest "nothing recorded yet" state."""
     try:
         from clawmetry import audit as _audit
         try:
@@ -1848,8 +1854,16 @@ def api_llmfit():
 
 
 @bp_config.route("/api/cost-optimizer")
+@gate("cost_optimizer")
 def api_cost_optimizer():
-    """Enhanced cost optimizer: llmfit recommendations + task-level suggestions."""
+    """Enhanced cost optimizer: llmfit recommendations + task-level suggestions.
+
+    Gated on the ``cost_optimizer`` entitlement (Pro-only). In grace mode
+    the gate is transparent so free installs continue to see the current
+    behaviour; in enforce mode this route 402s with the standard
+    ``upgrade_required`` envelope shared with every other ``@gate``d paid
+    feature.
+    """
     import dashboard as _d
     import shutil
 
@@ -2056,8 +2070,15 @@ def api_cost_optimizer():
 
 
 @bp_config.route("/api/cost-optimization")
+@gate("cost_optimizer")
 def api_cost_optimization():
     """Cost optimization analysis and local model fallback recommendations.
+
+    Gated on the ``cost_optimizer`` entitlement (Pro-only). Sibling of
+    ``/api/cost-optimizer``; both endpoints render slices of the same
+    cost-optimizer surface, so they share one feature key. Grace-mode
+    default keeps the current OSS behaviour unchanged; enforce mode 402s
+    with the standard ``upgrade_required`` envelope.
 
     Tier-1 DuckDB fast path (refs #1565): the legacy ``_get_cost_summary``
     / ``_get_expensive_operations`` helpers read ``dashboard._metrics_store``

@@ -24,7 +24,13 @@ def _read_discovery() -> dict[str, Any] | None:
         pid = int(data.get("pid") or 0)
         if not (port and token and pid):
             return None
-        os.kill(pid, 0)  # raises OSError if the daemon process is dead
+        # os.kill(pid, 0) never raises on Windows, so a stale discovery
+        # file would point every query at a dead daemon. is_alive() is
+        # portable.
+        from clawmetry.process_control import is_alive as _pid_alive
+
+        if not _pid_alive(pid):
+            return None
         return {"port": port, "token": token}
     except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
         return None

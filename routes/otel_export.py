@@ -15,6 +15,12 @@ permissive, so the endpoint is reachable today for evaluation.
 The mapping is intentionally simple: one ``LogRecord`` per event, body = a
 short label, attributes = session_id / event_type / role / tool_name / model.
 Trace-tree export (events as Spans) is the next refinement.
+
+Gating: the route uses the shared :func:`clawmetry._gate.gate` decorator
+so the 402 body carries the same ``feature`` / ``tier`` / ``required_tier``
+envelope every other paid-feature route returns. Callers who used to read
+``feature`` and ``required_tier`` off other 402 responses now get the same
+shape here.
 """
 
 from __future__ import annotations
@@ -23,26 +29,11 @@ import logging
 
 from flask import Blueprint, jsonify, request
 
-from clawmetry._paywall import upgrade_required_body
+from clawmetry._gate import gate
 
 logger = logging.getLogger("clawmetry.routes.otel_export")
 
 bp_otel_export = Blueprint("otel_export", __name__)
-
-
-def _entitlement_allows() -> tuple[bool, dict]:
-    """Whether this install may use OTel export. Grace lets everyone through;
-    after enforce, only Pro+ installs do (Pro/Enterprise on clawmetry.com/pricing).
-    Kept for backward compatibility with the route handler below; new gated
-    routes use the shared :func:`clawmetry._gate.gate` decorator instead."""
-    try:
-        from clawmetry import entitlements as _ent
-
-        en = _ent.get_entitlement()
-        return en.allows_feature("otel_export"), en.to_dict()
-    except Exception as exc:  # pragma: no cover
-        logger.warning("otel_export: entitlement read failed, defaulting open: %s", exc)
-        return True, {"tier": "oss", "grace": True}
 
 
 def _event_to_log_record(ev: dict) -> dict:
@@ -122,16 +113,11 @@ def _fetch_events(limit: int) -> list[dict]:
 
 
 @bp_otel_export.route("/api/otel/export", methods=["GET"])
+@gate("otel_export")
 def api_otel_export():
-    """OTLP/JSON export of recent events. Pro+ entitlement-gated; permissive
-    during the open-core grace period. Never raises."""
-    allowed, _ent = _entitlement_allows()
-    if not allowed:
-        return jsonify(upgrade_required_body(
-            "otel_export",
-            hint="OTel export is a Pro feature on clawmetry.com/pricing",
-        )), 402
-
+    """OTLP/JSON export of recent events. Pro+ entitlement-gated via the
+    shared :func:`clawmetry._gate.gate` decorator; permissive during the
+    open-core grace period. Never raises."""
     try:
         limit = max(1, min(int(request.args.get("limit", 200) or 200), 5000))
     except Exception:

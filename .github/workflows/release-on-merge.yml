@@ -21,7 +21,7 @@ jobs:
           fetch-depth: 0
           ref: main
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
@@ -173,7 +173,7 @@ jobs:
       # this; this path (the actual [RELEASE] publish) did not, so PyPI shipped
       # whatever dist happened to be committed — which lags source whenever a
       # v2 PR lands without rebuilding the bundle.
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
 
@@ -294,7 +294,7 @@ jobs:
       # lives in one file (tests/e2e/cloud-contract.mjs) and both
       # pipelines pick it up automatically.
       - name: Set up Node for cloud-contract spec
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
 

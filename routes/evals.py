@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from flask import Blueprint, jsonify, request
 
+from clawmetry._gate import gate
+
 bp_evals = Blueprint("evals", __name__)
 
 
@@ -101,6 +103,7 @@ def evaluators_catalogue():
 
 
 @bp_evals.route("/api/evals/recent", methods=["GET"])
+@gate("eval_suite")
 def evals_recent():
     """Recent scored sessions. ``?limit=`` defaults to 50, capped at 200."""
     try:
@@ -112,6 +115,7 @@ def evals_recent():
 
 
 @bp_evals.route("/api/evals/summary", methods=["GET"])
+@gate("eval_suite")
 def evals_summary():
     """Aggregate over the recent window. ``?window=1d`` (1d, 6h, 24h ok)."""
     raw = (request.args.get("window") or "24h").strip().lower()
@@ -145,6 +149,7 @@ def evals_summary():
 
 
 @bp_evals.route("/api/evals/rescore/<session_id>", methods=["POST"])
+@gate("eval_suite")
 def evals_rescore(session_id: str):
     """Manually trigger a re-score for one session. Synchronous — returns
     the new score (or skip / failure) so the UI can flash a toast.
@@ -172,6 +177,7 @@ def evals_rescore(session_id: str):
 
 
 @bp_evals.route("/api/evals/rubric", methods=["GET"])
+@gate("eval_suite")
 def evals_rubric_get():
     """Return the raw rubric YAML text + the parsed default for reference."""
     try:
@@ -187,6 +193,7 @@ def evals_rubric_get():
 
 
 @bp_evals.route("/api/evals/regression-summary", methods=["GET"])
+@gate("eval_suite")
 def evals_regression_summary():
     """Phase 3 (refs #1619) — aggregate replay outcomes over a window.
 
@@ -224,6 +231,7 @@ def evals_regression_summary():
 
 
 @bp_evals.route("/api/evals/key", methods=["GET"])
+@gate("eval_suite")
 def evals_key_get():
     """Presence-only: which judge providers have a key (env or UI-saved).
     NEVER returns the key value itself."""
@@ -239,6 +247,7 @@ def evals_key_get():
 
 
 @bp_evals.route("/api/evals/key", methods=["POST"])
+@gate("eval_suite")
 def evals_key_save():
     """Save (or clear) a judge API key locally so evals can run without an env
     var. Body: ``{"provider": "anthropic"|"openai", "api_key": "<key>"}``. An
@@ -263,6 +272,7 @@ def evals_key_save():
 
 
 @bp_evals.route("/api/evals/rubric", methods=["POST"])
+@gate("eval_suite")
 def evals_rubric_save():
     """Replace the rubric YAML. Validates parse before writing.
 

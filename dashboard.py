@@ -25,17 +25,18 @@ import sys
 # CI (issue surfaced by the bp_sessions refactor).
 sys.modules.setdefault("dashboard", sys.modules[__name__])
 
-# Force UTF-8 output on Windows (emoji in BANNER would crash with cp1252)
+# Force UTF-8 output on Windows (emoji in BANNER would crash with cp1252).
+# Must be reconfigure(), not a new TextIOWrapper around sys.stdout.buffer:
+# this block runs twice (the module header is duplicated inside this file),
+# and when the second wrapper replaces the first, the orphaned wrapper is
+# garbage-collected and closes the shared underlying buffer — leaving
+# sys.stdout closed for the rest of the process (silent --help, dead prints).
 if sys.platform == "win32":
     import io
 
     try:
-        sys.stdout = io.TextIOWrapper(
-            sys.stdout.buffer, encoding="utf-8", errors="replace"
-        )
-        sys.stderr = io.TextIOWrapper(
-            sys.stderr.buffer, encoding="utf-8", errors="replace"
-        )
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
 
@@ -259,7 +260,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.555"
+__version__ = "0.12.565"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -8540,12 +8541,18 @@ MIT License
 import os
 import sys
 
-# Force UTF-8 output on Windows (emoji in BANNER would crash with cp1252)
+# Force UTF-8 output on Windows (emoji in BANNER would crash with cp1252).
+# reconfigure(), not a new TextIOWrapper — see the matching block at the top
+# of this file: a second wrapper orphans the first, whose GC finalizer closes
+# the shared buffer and kills sys.stdout for the whole process.
 if sys.platform == "win32":
     import io
 
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 import threading
 from datetime import timezone, timedelta
@@ -8831,8 +8838,12 @@ def _openclaw_gateway_running():
             with open(pid_path) as fh:
                 pid = int((fh.read() or "0").strip())
             if pid > 0:
-                os.kill(pid, 0)
-                return True
+                # Portable probe: os.kill(pid, 0) never raises on Windows,
+                # so a stale gateway.pid would read as "running" forever.
+                from clawmetry.process_control import is_alive as _pid_alive
+
+                if _pid_alive(pid):
+                    return True
     except (OSError, ValueError):
         pass
     try:
@@ -15495,7 +15506,25 @@ def _scan_security_posture():
 
     # Check 7: Workspace permissions (AGENTS.md, SOUL.md not world-readable)
     oc_home = os.path.expanduser("~/.openclaw")
-    if os.path.isdir(oc_home):
+    if os.name == "nt":
+        # POSIX mode bits are meaningless on Windows: st_mode reports 0o777
+        # for every normal directory, so the world-readable branch below
+        # would warn (and dock the score) on every Windows install with a
+        # chmod remediation that cannot be run. Access there is governed by
+        # NTFS ACLs, and the user-profile dir is owner-scoped by default.
+        if os.path.isdir(oc_home):
+            checks.append(
+                {
+                    "id": "workspace_perms",
+                    "label": "Workspace permissions",
+                    "status": "pass",
+                    "detail": "Access to the OpenClaw home directory is governed by Windows ACLs (user-profile scoped).",
+                    "remediation": None,
+                    "severity": "medium",
+                    "weight": 5,
+                }
+            )
+    elif os.path.isdir(oc_home):
         try:
             mode = oct(os.stat(oc_home).st_mode)[-3:]
             if mode[-1] != "0":  # world-readable
@@ -17771,11 +17800,11 @@ def _read_pid():
 
 
 def _is_pid_running(pid):
-    try:
-        os.kill(pid, 0)
-        return True
-    except (ProcessLookupError, PermissionError):
-        return False
+    # Delegates to the portable probe: os.kill(pid, 0) never raises on
+    # Windows, so this used to report stale dashboard pids as running.
+    from clawmetry.process_control import is_alive as _pid_alive
+
+    return _pid_alive(pid)
 
 
 def _is_macos():
@@ -18403,7 +18432,9 @@ def _kill_all_sync_procs():
     pid = _read_pid()
     if pid and _is_pid_running(pid):
         try:
-            os.kill(pid, signal.SIGKILL)
+            # signal.SIGKILL does not exist on Windows (AttributeError);
+            # SIGTERM maps to TerminateProcess there, same hard-kill intent.
+            os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
         except OSError:
             pass
 

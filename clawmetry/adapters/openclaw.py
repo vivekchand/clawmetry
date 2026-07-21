@@ -12,6 +12,7 @@ identical to the pre-refactor dashboard.
 """
 from __future__ import annotations
 
+import glob
 import hashlib
 import json
 import logging
@@ -86,8 +87,12 @@ def _gateway_live() -> bool:
             with open(pid_file) as fh:
                 pid = int((fh.read() or "0").strip())
             if pid > 0:
-                os.kill(pid, 0)
-                return True
+                # Portable probe: os.kill(pid, 0) never raises on Windows,
+                # so a stale gateway.pid would read as "running" forever.
+                from clawmetry.process_control import is_alive as _pid_alive
+
+                if _pid_alive(pid):
+                    return True
     except (OSError, ValueError):
         pass
     try:
@@ -449,6 +454,56 @@ def _openshell_sandbox_ocsf_enabled(name: str) -> dict:
         return {}
 
 
+def _gateway_log_files() -> list:
+    """Return the newest-5 rotating gateway log files across known candidate dirs.
+
+    The gateway writes dated, rotating JSONL logs to ``{log_dir}/openclaw-YYYY-MM-DD.log``
+    (rotates at 100 MB, keeps up to 5 archives). Candidate directories mirror the
+    log_dir resolution logic in ``sync.py``'s ``_get_paths()``.
+    Never raises; returns an empty list when no log files are found.
+    """
+    openclaw_dir = os.environ.get(
+        "CLAWMETRY_OPENCLAW_DIR", os.path.expanduser("~/.openclaw")
+    )
+    candidates = [
+        "/tmp/openclaw",
+        os.path.join(openclaw_dir, "logs"),
+    ]
+    for d in candidates:
+        matches = sorted(glob.glob(os.path.join(d, "openclaw-*.log")))
+        if matches:
+            return matches[-5:]
+    return []
+
+
+def _gateway_log_meta() -> dict:
+    """Return gateway log metadata for detect(): dir, archive count, current file size.
+
+    Surfaces ``gatewayLogDir``, ``gatewayLogArchiveCount``, and
+    ``gatewayLogCurrentSizeKb`` so the dashboard can show log location and
+    rotation state for plain OpenClaw installs. Returns ``{}`` when no log
+    files are present (non-OpenClaw host or gateway never started).
+    Never raises.
+    """
+    try:
+        files = _gateway_log_files()
+        if not files:
+            return {}
+        result: dict = {
+            "gatewayLogDir": os.path.dirname(files[0]),
+            "gatewayLogArchiveCount": len(files),
+        }
+        try:
+            result["gatewayLogCurrentSizeKb"] = round(
+                os.path.getsize(files[-1]) / 1024, 1
+            )
+        except OSError:
+            pass
+        return result
+    except Exception:
+        return {}
+
+
 def _openshell_sandbox_logs(name: str, count: int = 20) -> list:
     """Retrieve OCSF JSON audit log lines for a NemoClaw sandbox.
 
@@ -485,25 +540,31 @@ def _openshell_sandbox_logs(name: str, count: int = 20) -> list:
             except Exception:
                 pass
         # For container-backed (non-terminal) sandboxes the harness also tails
-        # /tmp/gateway.log (asserted in test/sandbox-logs-terminal.test.ts).
-        # Read runtime kind via the existing phase-policy helper and merge when
-        # the sandbox is not terminal-kind.
+        # the gateway log. The gateway writes rotating dated files at
+        # {log_dir}/openclaw-YYYY-MM-DD.log, not a static /tmp/gateway.log.
+        # Use _gateway_log_files() so we find the actual current log regardless
+        # of host layout; fall back to OPENSHELL_GATEWAY_LOG for test overrides.
         phase_info = _openshell_sandbox_phase_policy(name)
         if phase_info.get("sandboxRuntimeKind", "").lower() != "terminal":
-            _gw_log = os.environ.get("OPENSHELL_GATEWAY_LOG", "/tmp/gateway.log")
-            try:
-                with open(_gw_log, "r", encoding="utf-8", errors="replace") as _gf:
-                    _gw_lines = _gf.readlines()[-count:]
-                for _gw_line in _gw_lines:
-                    _gw_line = _gw_line.strip()
-                    if not _gw_line:
-                        continue
-                    try:
-                        events.append(json.loads(_gw_line))
-                    except Exception:
-                        pass
-            except OSError:
-                pass
+            _gw_log_override = os.environ.get("OPENSHELL_GATEWAY_LOG")
+            _gw_candidates = (
+                [_gw_log_override] if _gw_log_override else _gateway_log_files()
+            )
+            _gw_log_path = _gw_candidates[-1] if _gw_candidates else None
+            if _gw_log_path:
+                try:
+                    with open(_gw_log_path, "r", encoding="utf-8", errors="replace") as _gf:
+                        _gw_lines = _gf.readlines()[-count:]
+                    for _gw_line in _gw_lines:
+                        _gw_line = _gw_line.strip()
+                        if not _gw_line:
+                            continue
+                        try:
+                            events.append(json.loads(_gw_line))
+                        except Exception:
+                            pass
+                except OSError:
+                    pass
         return events
     except Exception:
         return []
@@ -1327,14 +1388,16 @@ def _gateway_host_status() -> dict:
     details alongside the existing ``plugins`` list.
 
     Returns a dict with whichever fields are present:
-    - ``"gatewayHostName"``       — machine hostname
-    - ``"gatewayNetworkAddress"`` — primary network address / IP
-    - ``"gatewayHostOS"``         — OS name or platform string
-    - ``"gatewayHostRuntime"``    — runtime identifier (e.g. Node version)
-    - ``"gatewayHostUptime"``     — uptime in seconds
-    - ``"gatewayHostCPU"``        — CPU usage value or dict
-    - ``"gatewayHostMemory"``     — memory info (bytes or dict)
-    - ``"gatewayHostDisk"``       — disk info (bytes or dict)
+    - ``"gatewayHostName"``            — machine hostname
+    - ``"gatewayNetworkAddress"``      — primary network address / IP
+    - ``"gatewayHostOS"``              — OS name or platform string
+    - ``"gatewayHostRuntime"``         — runtime identifier (e.g. Node version)
+    - ``"gatewayHostUptime"``          — uptime in seconds
+    - ``"gatewayHostCPU"``             — CPU usage value or dict
+    - ``"gatewayHostMemory"``          — memory info (bytes or dict)
+    - ``"gatewayHostDisk"``            — disk info (bytes or dict)
+    - ``"gatewaySupervisorMode"``      — supervisor mode (e.g. ``"external"``)
+    - ``"gatewaySupervisorModeVersion"`` — restart-handoff contract version
 
     Returns ``{}`` when the RPC is unavailable or the response carries no
     host fields. Never raises.
@@ -1398,6 +1461,18 @@ def _gateway_host_status() -> dict:
         )
         if disk is not None:
             result["gatewayHostDisk"] = disk
+        supervisor_mode = (
+            payload.get("supervisorMode")
+            or payload.get("supervisor_mode")
+        )
+        if supervisor_mode:
+            result["gatewaySupervisorMode"] = str(supervisor_mode)
+        supervisor_mode_version = (
+            payload.get("supervisorModeVersion")
+            or payload.get("supervisor_mode_version")
+        )
+        if supervisor_mode_version:
+            result["gatewaySupervisorModeVersion"] = str(supervisor_mode_version)
         return result
     except Exception:
         return {}
@@ -1501,6 +1576,14 @@ class OpenClawAdapter(AgentAdapter):
             _cr = _clawrouter_detect()
             if _cr:
                 meta.update(_cr)
+            # Gateway log location + rotation state (#3836): surface the
+            # rotating log directory, archive count, and current file size so
+            # the dashboard can show log presence for plain OpenClaw installs.
+            # Runs unconditionally — log files exist even when the gateway is
+            # not currently live. Returns {} gracefully when absent.
+            _gw_log = _gateway_log_meta()
+            if _gw_log:
+                meta.update(_gw_log)
             return DetectResult(
                 name=self.name,
                 display_name=self.display_name,
@@ -1664,6 +1747,27 @@ class OpenClawAdapter(AgentAdapter):
             _cdcont = s.get("cronDeliveredContent") or s.get("deliveredContent")
             if _cdcont is not None:
                 extra["cronDeliveredContent"] = str(_cdcont)
+            # PTY relay state (#3839): PR #107335 ('macOS paired-node terminals')
+            # and PR #107086 ('Control UI catalog terminals') stamp relay state,
+            # resume command, viewer preference, and paired-node identity on
+            # session records so the Control UI can open native terminal sessions.
+            # All four reads silently no-op when the fields are absent.
+            _pty = s.get("ptyRelayState") or s.get("ptyRelay")
+            if _pty is not None:
+                extra["ptyRelayState"] = str(_pty)
+            _rc = s.get("resumeCommand") or s.get("resumeCmd")
+            if _rc is not None:
+                extra["resumeCommand"] = str(_rc)
+            _vp = s.get("viewerPreference") or s.get("terminalPreference")
+            if _vp is not None:
+                extra["viewerPreference"] = str(_vp)
+            _pn = (
+                s.get("pairedNodeId")
+                or s.get("pairNodeId")
+                or s.get("pairedNode")
+            )
+            if _pn is not None:
+                extra["pairedNodeId"] = str(_pn)
             # On-exit cron trigger kind (#3526): OpenClaw 2026.7.1 (#92037)
             # stamps the schedule kind that triggered this session delivery
             # ("on-exit", "every", "interval", "cron", …) so callers can

@@ -28,7 +28,9 @@ from datetime import datetime
 import csv
 from datetime import timezone
 from flask import Blueprint, jsonify, request, Response
+from clawmetry._gate import gate
 from clawmetry.config import is_local_store_read_enabled, hide_clawmetry_session
+from clawmetry._gate import gate
 from routes._dedupe import build_sibling_bucket_max, is_sibling_dup
 
 bp_sessions = Blueprint('sessions', __name__)
@@ -2738,6 +2740,58 @@ def api_waste_summary():
     return jsonify(_derive_waste_summary(sessions))
 
 
+_PER_RUN_WASTE_FLAGS_FEATURE = "per_run_waste_flags"
+
+
+def _apply_per_run_waste_paywall(payload: dict) -> dict:
+    """Filter the PAID ``waste_flags`` + ``recommendations`` keys out of a
+    ``/api/session-insight/<id>`` payload when the install lacks the
+    ``per_run_waste_flags`` entitlement, and replace them with a ``paywall``
+    hint block. The FREE slice (``true_cost_usd``, ``subagent_count``,
+    ``governance``, ...) always survives.
+
+    ``/api/session-insight/<id>`` mixes FREE keys (cost, sub-agent
+    fan-out, governance decision counts) with the PAID ``waste_flags`` +
+    ``recommendations`` slice, so a whole-endpoint ``@gate`` (like the
+    ones in ``routes/infra.py``, ``routes/audit.py``, and the anomaly
+    /error-triage/run-compare endpoints on this blueprint) would blank
+    the FREE cost/governance readout too. Filter fields instead of
+    returning 402: the OSS install still sees its true cost + governance
+    counts, and the UI can render an upgrade CTA off the ``paywall``
+    block for the waste-flags slice.
+
+    Grace mode (the default until the enforce-phase release flips
+    ``CLAWMETRY_ENFORCE=1``) leaves the payload untouched -- every
+    existing OSS caller keeps seeing ``waste_flags`` + ``recommendations``
+    exactly as they do today. Defensive: any error inside the
+    entitlement lookup falls through to the full payload -- mirrors the
+    contract of :func:`clawmetry._gate.gate`, so a flaky entitlement
+    read never masks paid keys from a legitimate caller.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+        from clawmetry._gate import _required_tier
+
+        en = _ent.get_entitlement()
+        if en.allows_feature(_PER_RUN_WASTE_FLAGS_FEATURE):
+            return payload
+        payload["waste_flags"] = []
+        payload["recommendations"] = []
+        payload["paywall"] = {
+            "feature": _PER_RUN_WASTE_FLAGS_FEATURE,
+            "tier": en.tier,
+            "required_tier": _required_tier(_PER_RUN_WASTE_FLAGS_FEATURE),
+            "hint": (
+                "Per-run waste flags are a paid feature on "
+                "clawmetry.com/pricing. Upgrade or set "
+                "CLAWMETRY_ENFORCE=0 to disable enforcement."
+            ),
+        }
+    except Exception:
+        pass
+    return payload
+
+
 _WASTE_RECOMMENDATIONS = {
     "reasoning_heavy": "Reasoning is over a quarter of this session's cost — billed like output but with no visible deliverable. Lower the reasoning effort, or use a cheaper model for routine work.",
     "cache_poor": "Low cache hit — context is being re-sent at full price every turn. Keep the system prompt stable and reuse the session so the prompt cache stays warm.",
@@ -2884,6 +2938,11 @@ def api_session_insight(session_id):
         for f in out.get("waste_flags", []) if f in _WASTE_RECOMMENDATIONS
     ]
     out["session_id"] = session_id
+    # Blank the PAID waste-flags + recommendations slice under enforce so
+    # the FREE cost/governance readout above still flows. Transparent in
+    # grace mode; defensive on entitlement-lookup failure. See
+    # _apply_per_run_waste_paywall for the contract.
+    out = _apply_per_run_waste_paywall(out)
     return jsonify(out)
 
 
@@ -7214,6 +7273,7 @@ def _run_compare_deltas(a, b):
 
 
 @bp_sessions.route("/api/run-compare")
+@gate("per_run_compare")
 def api_run_compare():
     """Side-by-side stats + signed deltas for two runs (#2196 item #2).
 
@@ -7456,6 +7516,7 @@ def _err_triage_event_id():
 
 
 @bp_sessions.route("/api/error-triage/resolve", methods=["POST"])
+@gate("error_triage")
 def api_error_triage_resolve():
     """Mark an error as resolved (idempotent — re-POST refreshes the note).
 
@@ -7481,6 +7542,7 @@ def api_error_triage_resolve():
 
 
 @bp_sessions.route("/api/error-triage/resolve", methods=["DELETE"])
+@gate("error_triage")
 def api_error_triage_unresolve():
     """Remove the resolved marker for an error.
 
@@ -7500,6 +7562,7 @@ def api_error_triage_unresolve():
 
 
 @bp_sessions.route("/api/error-triage/resolved")
+@gate("error_triage")
 def api_error_triage_resolved():
     """Return the current resolved-set as ``{event_id: {resolved_at, note}}``.
 
