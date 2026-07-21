@@ -1548,6 +1548,99 @@ def _gateway_presence_roster() -> dict:
         return {}
 
 
+def _gateway_mcp_app_widgets() -> dict:
+    """Pinned MCP app dashboard widgets from the OpenClaw gateway.status RPC (#3882).
+
+    OpenClaw's Dashboard MCP apps feature (CHANGELOG.md 'Unreleased: Dashboard MCP
+    apps') lets MCP app views be pinned as persistent dashboard widgets from an
+    originating session.  Each widget has a view-lease that renews periodically and
+    tool interactivity gated behind revision-bound grants.
+
+    When the gateway exposes widget state the response carries the list under one of
+    the candidate keys below.  Each entry is normalised to:
+    - ``"widgetId"``               — stable widget identifier
+    - ``"sessionId"``              — originating session that pinned the widget
+    - ``"type"``                   — widget type / MCP app identifier (when present)
+    - ``"leaseState"``             — ``"active"``, ``"expired"``, or ``"pending"``
+    - ``"grantRevision"``          — revision token for the tool-interactivity grant
+    - ``"toolInteractivityEnabled"`` — bool; whether tool calls are currently allowed
+
+    Returns a dict with:
+    - ``"gatewayMcpAppWidgets"``    — list of normalised widget dicts
+    - ``"gatewayMcpAppWidgetCount"`` — total widget count
+    - ``"gatewayMcpAppWidgetSummary"`` — ``{leaseState: count}`` tally
+
+    Returns ``{}`` when the RPC is unavailable, carries no widget list, or the list
+    is empty.  Never raises.
+    """
+    try:
+        d = _d()
+        rpc = getattr(d, "_gw_ws_rpc", None)
+        if rpc is None:
+            return {}
+        payload = rpc("gateway.status")
+        if not isinstance(payload, dict):
+            return {}
+        raw_widgets = (
+            payload.get("mcp_app_widgets")
+            or payload.get("mcpAppWidgets")
+            or payload.get("dashboard_widgets")
+            or payload.get("dashboardWidgets")
+            or payload.get("pinned_widgets")
+            or payload.get("pinnedWidgets")
+        )
+        if not isinstance(raw_widgets, list) or not raw_widgets:
+            return {}
+        widgets = []
+        lease_summary: dict = {}
+        for entry in raw_widgets:
+            if not isinstance(entry, dict):
+                continue
+            widget_id = (
+                entry.get("widgetId")
+                or entry.get("widget_id")
+                or entry.get("id")
+            )
+            if not widget_id:
+                continue
+            widget: dict = {"widgetId": str(widget_id)}
+            session_id = entry.get("sessionId") or entry.get("session_id")
+            if session_id:
+                widget["sessionId"] = str(session_id)
+            widget_type = entry.get("type") or entry.get("appId") or entry.get("app_id")
+            if widget_type:
+                widget["type"] = str(widget_type)
+            lease_state = str(
+                entry.get("leaseState")
+                or entry.get("lease_state")
+                or entry.get("lease")
+                or ""
+            ).lower() or None
+            if lease_state:
+                widget["leaseState"] = lease_state
+                lease_summary[lease_state] = lease_summary.get(lease_state, 0) + 1
+            grant_rev = entry.get("grantRevision") or entry.get("grant_revision")
+            if grant_rev is not None:
+                widget["grantRevision"] = grant_rev
+            tool_ok = entry.get("toolInteractivityEnabled")
+            if tool_ok is None:
+                tool_ok = entry.get("tool_interactivity_enabled")
+            if tool_ok is not None:
+                widget["toolInteractivityEnabled"] = bool(tool_ok)
+            widgets.append(widget)
+        if not widgets:
+            return {}
+        result: dict = {
+            "gatewayMcpAppWidgets": widgets,
+            "gatewayMcpAppWidgetCount": len(widgets),
+        }
+        if lease_summary:
+            result["gatewayMcpAppWidgetSummary"] = lease_summary
+        return result
+    except Exception:
+        return {}
+
+
 class OpenClawAdapter(AgentAdapter):
     name = "openclaw"
     display_name = "OpenClaw"
@@ -1628,6 +1721,10 @@ class OpenClawAdapter(AgentAdapter):
                 # Who's-online presence roster (#3884): connected users from the
                 # Control UI facepile, via the same gateway.status RPC.
                 meta.update(_gateway_presence_roster())
+                # Pinned MCP app dashboard widgets (#3882): widget list, lease
+                # state, and revision-bound tool-grant status from the same RPC.
+                # Returns {} on installs predating the Dashboard MCP apps release.
+                meta.update(_gateway_mcp_app_widgets())
             # Docker runtime health (#3390): the NemoClaw harness treats Docker
             # daemon liveness as a distinct signal from gateway liveness. Only
             # written when docker CLI is present so non-Docker environments are
