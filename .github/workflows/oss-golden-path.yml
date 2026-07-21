@@ -10,7 +10,7 @@ name: OSS Golden Path (C1)
 # Budget: 12 minutes wall-clock (raised from 8; Playwright chromium download
 # ~100 MB takes up to 4.5 min on a cold runner -- cache hit drops it to ~30 s;
 # C5 33-tab Playwright sweep adds ~90 s on top of the C1 9-tab sweep).
-# Tracking: vivekchand/clawmetry#1646 (C1), #3666 (C5)
+# Tracking: vivekchand/clawmetry#1646 (C1), #3666 (C5), #3899 (E2E epic)
 
 on:
   pull_request:
@@ -140,6 +140,13 @@ jobs:
       # Step 4 -- start the dashboard from the installed wheel (NOT from the
       # source checkout). This is the key C1 invariant: the installed package
       # must serve all tabs correctly, not just the in-repo version.
+      #
+      # The health-check loop now fails the step (exit 1) if the server never
+      # becomes ready, instead of silently exiting. Without this, a startup
+      # crash (e.g. ImportError on a broken branch) caused conftest.py to
+      # launch a second server from source, which also crashed, producing
+      # confusing ERROR-at-setup failures instead of a clear "server never
+      # started" message. (Tracking: vivekchand/clawmetry#3899)
       - name: Start dashboard from installed wheel
         run: |
           OPENCLAW_GATEWAY_TOKEN=ci-golden-token \
@@ -147,11 +154,18 @@ jobs:
             --port 8920 --no-debug \
             > /tmp/oss-golden-dashboard.log 2>&1 &
           echo "DASHBOARD_PID=$!" >> "$GITHUB_ENV"
+          ok=0
           for i in $(seq 1 30); do
             curl -sf -H "Authorization: Bearer ci-golden-token" \
-              http://localhost:8920/api/health && echo "Dashboard ready after ${i}s" && break
+              http://localhost:8920/api/health && echo "Dashboard ready after ${i}s" && ok=1 && break
             sleep 1
           done
+          [ "$ok" = "1" ] || {
+            echo "::error::Dashboard never became ready after 30s -- startup crash likely."
+            echo "::error::Tail of dashboard log:"
+            tail -30 /tmp/oss-golden-dashboard.log || true
+            exit 1
+          }
 
       # Step 5 -- wait for the daemon sync thread to ingest the seeded JSONL.
       # The dashboard starts a background sync loop on boot that watches
@@ -193,7 +207,15 @@ jobs:
       # /api/health-stream) that may outlive their browser context; after 9
       # C1 tab loads the waitress thread pool fills up, causing page.goto
       # timeouts for later C5 tabs. A fresh process clears all stale threads.
+      #
+      # if: always() -- C5 must run even when C1 test assertions fail.
+      # A C1 regression (test failure) should NOT silently skip the 33-tab
+      # post-auth overlay sweep that is the direct fix for the user-reported
+      # gateway-token bug (2026-05-17). Previously, ANY C1 failure caused C5
+      # to be skipped, meaning auth regressions on broken branches were never
+      # caught. (Tracking: vivekchand/clawmetry#3899)
       - name: Restart dashboard (clean state for C5 sweep)
+        if: always()
         run: |
           kill "$DASHBOARD_PID" 2>/dev/null || true
           sleep 3
@@ -203,11 +225,18 @@ jobs:
             >> /tmp/oss-golden-dashboard.log 2>&1 &
           NEW_PID=$!
           echo "DASHBOARD_PID=$NEW_PID" >> "$GITHUB_ENV"
+          ok=0
           for i in $(seq 1 30); do
             curl -sf -H "Authorization: Bearer ci-golden-token" \
-              http://localhost:8920/api/health && echo "Dashboard ready (fresh) after ${i}s" && break
+              http://localhost:8920/api/health && echo "Dashboard ready (fresh) after ${i}s" && ok=1 && break
             sleep 1
           done
+          [ "$ok" = "1" ] || {
+            echo "::error::Dashboard did not restart cleanly after 30s."
+            echo "::error::Tail of dashboard log:"
+            tail -30 /tmp/oss-golden-dashboard.log || true
+            exit 1
+          }
 
       # C5: all 33 canonical dashboard tabs must render without any
       # auth-blocking overlay after the gateway token is injected into
@@ -215,7 +244,12 @@ jobs:
       # (2026-05-17): "gateway token not passed for OSS, never displays
       # other screens." Previously this test existed but was never run in
       # CI; now it is a hard gate that blocks PR merges on auth failures.
+      #
+      # if: always() -- run even when C1 tests fail (e.g. data regression).
+      # C5 is an independent dimension: a failing C1 session-data assertion
+      # does not imply C5's auth path is broken, so both must always gate.
       - name: Run C5 all-tabs post-auth sweep (33 tabs)
+        if: always()
         env:
           CLAWMETRY_URL: http://localhost:8920
           CLAWMETRY_TOKEN: ci-golden-token

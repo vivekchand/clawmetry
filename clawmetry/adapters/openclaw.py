@@ -1548,6 +1548,114 @@ def _gateway_presence_roster() -> dict:
         return {}
 
 
+def _gateway_trusted_proxy_devices() -> dict:
+    """Trusted-proxy device pairing state from the OpenClaw gateway (#3885).
+
+    As of OpenClaw CHANGELOG (Unreleased: 'Trusted-proxy browser pairing'),
+    devices (Control UI, WebChat) can be auto-approved from allowlisted
+    trusted-proxy identities with non-admin scope caps, distinct from
+    manually-approved existing-device upgrades.
+
+    Tries two sources in order:
+    1. ``gateway.status`` payload -- looks for a ``devices``,
+       ``trustedDevices``, ``pairedDevices``, or ``trustedProxies`` list.
+    2. A dedicated ``gateway.devices`` RPC as a fallback (anticipated in a
+       future harness release alongside the status key).
+
+    Returns a dict with keys when paired devices are present:
+    - ``"gatewayTrustedProxyDevices"`` -- list of dicts with ``id``,
+      ``autoApproved``, and optional ``label``, ``scopeCap``, ``approvedAt``.
+    - ``"gatewayTrustedProxyDeviceSummary"`` -- ``{auto: N, manual: N}`` tally.
+
+    Returns ``{}`` when the RPC is unavailable, returns no device data, or
+    the harness hasn't shipped the pairing surface yet. Never raises.
+    """
+    try:
+        d = _d()
+        rpc = getattr(d, "_gw_ws_rpc", None)
+        if rpc is None:
+            return {}
+
+        raw_devices = None
+        # Primary: gateway.status (avoids an extra round-trip)
+        payload = rpc("gateway.status")
+        if isinstance(payload, dict):
+            raw_devices = (
+                payload.get("devices")
+                or payload.get("trustedDevices")
+                or payload.get("pairedDevices")
+                or payload.get("trustedProxies")
+                or payload.get("proxyDevices")
+            )
+        # Fallback: dedicated gateway.devices RPC (future harness release)
+        if not raw_devices:
+            devices_payload = rpc("gateway.devices")
+            if isinstance(devices_payload, list):
+                raw_devices = devices_payload
+            elif isinstance(devices_payload, dict):
+                raw_devices = (
+                    devices_payload.get("devices")
+                    or devices_payload.get("items")
+                    or devices_payload.get("trustedDevices")
+                )
+
+        if not isinstance(raw_devices, list) or not raw_devices:
+            return {}
+
+        devices = []
+        summary: dict = {"auto": 0, "manual": 0}
+        for entry in raw_devices:
+            if not isinstance(entry, dict):
+                continue
+            device_id = str(
+                entry.get("id")
+                or entry.get("deviceId")
+                or entry.get("device_id")
+                or ""
+            )
+            if not device_id:
+                continue
+            auto_approved = bool(
+                entry.get("autoApproved")
+                or entry.get("auto_approved")
+                or entry.get("trustedProxy")
+                or entry.get("trusted_proxy")
+            )
+            device: dict = {"id": device_id, "autoApproved": auto_approved}
+            label = str(
+                entry.get("label")
+                or entry.get("name")
+                or entry.get("displayName")
+                or ""
+            )
+            if label:
+                device["label"] = label
+            scope_cap = entry.get("scopeCap") or entry.get("scope_cap") or entry.get("scopes")
+            if scope_cap is not None:
+                device["scopeCap"] = scope_cap
+            approved_at = (
+                entry.get("approvedAt")
+                or entry.get("approved_at")
+                or entry.get("createdAt")
+                or entry.get("created_at")
+            )
+            if approved_at is not None:
+                device["approvedAt"] = approved_at
+            devices.append(device)
+            if auto_approved:
+                summary["auto"] += 1
+            else:
+                summary["manual"] += 1
+
+        if not devices:
+            return {}
+        return {
+            "gatewayTrustedProxyDevices": devices,
+            "gatewayTrustedProxyDeviceSummary": summary,
+        }
+    except Exception:
+        return {}
+
 class OpenClawAdapter(AgentAdapter):
     name = "openclaw"
     display_name = "OpenClaw"
@@ -1628,6 +1736,9 @@ class OpenClawAdapter(AgentAdapter):
                 # Who's-online presence roster (#3884): connected users from the
                 # Control UI facepile, via the same gateway.status RPC.
                 meta.update(_gateway_presence_roster())
+                # Trusted-proxy device pairing (#3885): paired/approved devices,
+                # scope caps, and auto- vs manual-approval state.
+                meta.update(_gateway_trusted_proxy_devices())
             # Docker runtime health (#3390): the NemoClaw harness treats Docker
             # daemon liveness as a distinct signal from gateway liveness. Only
             # written when docker CLI is present so non-Docker environments are
