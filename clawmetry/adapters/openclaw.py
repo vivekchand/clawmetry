@@ -1256,11 +1256,18 @@ def _gateway_plugin_health() -> dict:
     its ``state`` (``"loaded"`` / ``"errored"`` / ``"disabled"``), and an
     optional ``type`` field (``"channel"`` / ``"provider"``).
 
-    Returns a dict with two keys when any plugin data is present:
-    - ``"gatewayPluginHealth"`` — the raw list of plugin entries
-      (``[{"name": str, "state": str, "type": str|None}, ...]``).
-    - ``"gatewayPluginHealthSummary"`` — a ``{state: count}`` tally for quick
-      health assessment (e.g. ``{"loaded": 3, "errored": 1}``).
+    As of harness 2026.7.21 (#3883), the shared plugin-SDK monitor introduces a
+    ``phase`` field per plugin entry (``"admission"``, ``"claim-identity"``,
+    ``"adoption-handoff"``, ``"pruning"``) so a plugin stuck mid-admission is
+    distinguishable from a healthy ``"loaded"`` one.  Per-step detail flags
+    (``admission``, ``claim_identity``, ``adoption_handoff``, ``pruning``) are
+    forwarded when present.
+
+    Returns a dict with keys when any plugin data is present:
+    - ``"gatewayPluginHealth"`` — the raw list of plugin entries.
+    - ``"gatewayPluginHealthSummary"`` — a ``{state: count}`` tally.
+    - ``"gatewayPluginPhaseSummary"`` — a ``{phase: count}`` tally (only present
+      when at least one entry carries a ``phase`` field).
 
     Returns ``{}`` when the gateway RPC returns nothing, the response contains
     no ``plugins`` key, or the list is empty. Never raises.
@@ -1278,6 +1285,7 @@ def _gateway_plugin_health() -> dict:
             return {}
         plugins = []
         summary: dict = {}
+        phase_summary: dict = {}
         for entry in raw_plugins:
             if not isinstance(entry, dict):
                 continue
@@ -1286,11 +1294,27 @@ def _gateway_plugin_health() -> dict:
             ptype = entry.get("type") or entry.get("kind") or None
             if not name or not state:
                 continue
-            plugins.append({"name": name, "state": state, **({"type": ptype} if ptype else {})})
+            plugin: dict = {"name": name, "state": state}
+            if ptype:
+                plugin["type"] = ptype
+            # Lifecycle phase from the shared plugin-SDK monitor (#3883)
+            phase = entry.get("phase") or None
+            if phase:
+                plugin["phase"] = str(phase).lower()
+                phase_summary[plugin["phase"]] = phase_summary.get(plugin["phase"], 0) + 1
+            # Per-step lifecycle detail flags (forwarded when present)
+            for detail_key in ("admission", "claim_identity", "adoption_handoff", "pruning"):
+                val = entry.get(detail_key)
+                if val is not None:
+                    plugin[detail_key] = val
+            plugins.append(plugin)
             summary[state] = summary.get(state, 0) + 1
         if not plugins:
             return {}
-        return {"gatewayPluginHealth": plugins, "gatewayPluginHealthSummary": summary}
+        result: dict = {"gatewayPluginHealth": plugins, "gatewayPluginHealthSummary": summary}
+        if phase_summary:
+            result["gatewayPluginPhaseSummary"] = phase_summary
+        return result
     except Exception:
         return {}
 
