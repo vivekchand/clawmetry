@@ -39,7 +39,7 @@ All HTTP endpoints live here, organised by feature. Each module owns one or more
 | `routes/infra.py` | ~2,400 | `bp_logs` + `bp_memory` + `bp_security` + `bp_config` — logs stream, memory files, security posture, cost-optimizer |
 | `routes/overview.py` | ~1,900 | `bp_overview` — main dashboard endpoint, channels list, timeline, cloud-CTA OTP |
 | `routes/crons.py` | ~1,500 | `bp_crons` — cron CRUD + run log + health summary |
-| `routes/meta.py` | ~1,600 | `bp_auth` + `bp_gateway` + `bp_otel` + `bp_version` + `bp_version_impact` + `bp_clusters` — auth, gateway proxy, OTLP ingestion, version meta |
+| `routes/meta.py` | ~1,600 | `bp_auth` + `bp_gateway` + `bp_otel` + `bp_version` + `bp_version_impact` + `bp_cloud_relay` + `bp_otlp_traces` — auth, gateway proxy, OTLP ingestion, version meta |
 | `routes/alerts.py` | ~980 | `bp_alerts` + `bp_budget` — alert rules, webhooks, velocity, budget config |
 | `routes/fleet_history.py` | ~240 | `bp_fleet` + `bp_history` — multi-node fleet + SQLite time-series |
 | `routes/nemoclaw.py` | ~125 | `bp_nemoclaw` — NeMo Guardrails governance + approval queue |
@@ -146,7 +146,7 @@ Tests use `CLAWMETRY_URL` and `CLAWMETRY_TOKEN` env vars. Test matrix in CI: 3 O
 ## Deploy
 - **PyPI**: `pip install clawmetry && clawmetry`
 - **Docker**: `docker build -t clawmetry . && docker run -p 8900:8900 -v ~/.openclaw:/root/.openclaw:ro clawmetry`
-- **Current version**: `0.12.554` (in `dashboard.py` `__version__`)
+- **Current version**: `0.12.565` (in `dashboard.py` `__version__`)
 
 ## CI/CD (GitHub Actions)
 - `ci.yml` — Lint + test matrix on push/PR
