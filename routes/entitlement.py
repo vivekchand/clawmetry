@@ -22067,6 +22067,188 @@ def api_entitlement_min_tier_for_runtimes_batch():
 
 
 @bp_entitlement.route(
+    "/api/entitlement/tiers-for-features-batch",
+    methods=["POST"],
+)
+def api_entitlement_tiers_for_features_batch():
+    """``POST /api/entitlement/tiers-for-features-batch`` -- bundle-axis
+    batch sibling of ``/api/entitlement/tiers-for-features``.
+
+    Where the singular endpoint returns ONE ladder of tiers that grant
+    a caller-supplied bundle of features, this returns N ladders for N
+    caller-supplied bundles in ONE round-trip so a pricing-matrix /
+    upgrade-walkthrough comparing several hypothetical feature sets
+    ("Starter add-ons vs Pro add-ons vs Enterprise add-ons") renders off
+    one call instead of N calls to ``/tiers-for-features``.
+
+    Distinct from ``/min-tier-for-features-batch``, which collapses each
+    bundle to a single cheapest ``required_tier``: this returns the FULL
+    ladder per bundle so an "Available in: Starter, Cloud Pro, ..."
+    tooltip renders directly off each row without a follow-up call. Same
+    relationship the singular ``/tiers-for-features`` has to
+    ``/min-tier-for-features``.
+
+    POST rather than GET because the caller-supplied set of bundles can
+    grow past a comfortable query-string length; the sibling singular
+    endpoint uses GET+CSV where the bundle is small.
+
+    Request body::
+
+        {
+          "bundles": [
+            ["fleet", "sso"],
+            ["otel_export"],
+            []
+          ]
+        }
+
+    A shorthand ``{"bundles": ["fleet", "sso"]}`` (bare list of strings)
+    is treated as ONE bundle, matching the singular endpoint's bare-CSV
+    posture; a missing / non-list ``bundles`` value is a 400. An empty
+    ``bundles=[]`` list is a 400 for the same reason the singular
+    endpoint 400s on an empty ``features=`` -- distinguishes "caller
+    asked for nothing" from "caller asked and every token was unknown".
+
+    Response shape::
+
+        {
+          "bundles": [<row>, ...],
+          "count":   <int>,        # len(bundles)
+          "current_tier":      "...",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<row>`` is byte-identical to the bare singular endpoint body
+    minus the resolver envelope::
+
+        {
+          "items":          ["fleet", "sso"],
+          "unknown":        ["bogus"],
+          "kind":           "features",
+          "count":          2,
+          "min_tier":       "enterprise" | null,
+          "min_tier_label": "Enterprise" | null,
+          "min_tier_rank":  <int> | null,
+          "tiers":          [<tier_row>, ...],
+        }
+
+    Per-bundle normalisation is delegated to
+    :func:`clawmetry.entitlements.tiers_for_features` (whitespace
+    stripped, lowercased, deduplicated preserving first-seen order;
+    unknown ids bucketed into the per-bundle ``unknown`` instead of
+    mis-routing the ladder to a higher tier). Empty / all-unknown
+    bundles surface as a stable empty-shape row (``tiers=[]``,
+    ``min_tier=null``); does NOT short-circuit the batch.
+
+    - **400** when ``bundles`` is missing / non-list / empty.
+    - **Never 5xxs**: a resolver failure yields the fallback envelope
+      (empty ``bundles`` list) so the pricing surface keeps rendering.
+    """
+    body = request.get_json(silent=True) or {}
+    bundles, err = _parse_bundles_body(body)
+    if err == "missing":
+        return jsonify({"error": "missing bundles"}), 400
+    if err == "empty":
+        return jsonify({"error": "empty bundles"}), 400
+    if err == "bundles_must_be_list":
+        return jsonify({"error": "bundles must be a list"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.tiers_for_features_batch(bundles)
+        env = _resolver_envelope(_ent)
+        return jsonify(
+            {
+                "bundles": list(rows),
+                "count": len(rows),
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_features_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "bundles": [],
+                "count": 0,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route(
+    "/api/entitlement/tiers-for-runtimes-batch",
+    methods=["POST"],
+)
+def api_entitlement_tiers_for_runtimes_batch():
+    """``POST /api/entitlement/tiers-for-runtimes-batch`` -- runtime-axis
+    twin of ``/api/entitlement/tiers-for-features-batch``.
+
+    Same never-5xx posture, same partial-unknown bucketing, same POST
+    envelope. Runtime aliases (``claude-code`` -> ``claude_code``) are
+    canonicalised per bundle through
+    :func:`clawmetry.entitlements.canonical_runtime` so a caller does
+    not need to normalise before calling; unknown ids land in the per-
+    bundle ``unknown`` and drop from the intersection (a typo does NOT
+    silently mis-route the ladder to a higher tier).
+
+    Request body::
+
+        {
+          "bundles": [
+            ["claude_code", "codex"],
+            ["openclaw"],
+            []
+          ]
+        }
+
+    Response shape and error paths mirror
+    ``/tiers-for-features-batch`` exactly, with ``kind="runtimes"`` per
+    row (``items`` is the runtime list).
+    """
+    body = request.get_json(silent=True) or {}
+    bundles, err = _parse_bundles_body(body)
+    if err == "missing":
+        return jsonify({"error": "missing bundles"}), 400
+    if err == "empty":
+        return jsonify({"error": "empty bundles"}), 400
+    if err == "bundles_must_be_list":
+        return jsonify({"error": "bundles must be a list"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.tiers_for_runtimes_batch(bundles)
+        env = _resolver_envelope(_ent)
+        return jsonify(
+            {
+                "bundles": list(rows),
+                "count": len(rows),
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_runtimes_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "bundles": [],
+                "count": 0,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route(
     "/api/entitlement/min-tier-for-features-at-batch",
     methods=["POST"],
 )
