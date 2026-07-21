@@ -168,9 +168,28 @@ def _load_anthropic_auth() -> tuple[str | None, str | None]:
                 )
             except Exception:
                 pass
-        # Only return claude_cli if the binary AND an OAuth profile exist.
-        # Without the profile `claude -p` would prompt interactively, which
-        # hangs the HTTP request.
+        if not has_profile:
+            # Standalone Claude Code nodes (no OpenClaw): the harness's own
+            # OAuth lives under ~/.claude, not the OpenClaw profile store —
+            # so the "use the default agent harness" fallback never fired on
+            # the most common runtime and the UI demanded an API key the
+            # harness never needed (live-hit 2026-07-21). Linux/hosted keeps
+            # a credentials file; macOS keeps the token in the Keychain, so
+            # a completed OAuth login marker is the signal there. Either
+            # way `claude -p` runs non-interactively.
+            if os.path.isfile(os.path.expanduser("~/.claude/.credentials.json")):
+                has_profile = True
+            else:
+                cc_cfg = os.path.expanduser("~/.claude.json")
+                if os.path.isfile(cc_cfg):
+                    try:
+                        with open(cc_cfg) as f:
+                            has_profile = bool(json.load(f).get("oauthAccount"))
+                    except Exception:
+                        pass
+        # Only return claude_cli if the binary AND an OAuth login exist.
+        # Without one `claude -p` would prompt interactively, which hangs
+        # the HTTP request.
         if has_profile:
             return "claude_cli", claude_bin
 
