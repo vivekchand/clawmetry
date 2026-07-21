@@ -1,4 +1,3 @@
-"""CLI entry point for the clawmetry package."""
 
 from __future__ import annotations
 import sys
@@ -4450,6 +4449,142 @@ def _cmd_diagnose(args) -> None:
         _row("Cache error:", payload["cache_error"])
 
 
+
+def _cmd_extensions(args) -> None:
+    """clawmetry extensions -- surface loaded/failed entry-point plugins.
+
+    Shell sibling of the always-Free, never-raise ``GET /api/extensions``
+    endpoint. Answers the triage question an operator would otherwise tail
+    daemon logs for: *did the paid package (``clawmetry-pro``) try to load,
+    and if so did it succeed?* Payload also includes registered event hooks
+    and their handler counts so a broken plugin that loaded but wired no
+    handlers is visible at a glance.
+
+    Reads :func:`clawmetry.extensions.loaded_plugins` /
+    :func:`~clawmetry.extensions.failed_plugins` /
+    :func:`~clawmetry.extensions.registered_events` /
+    :func:`~clawmetry.extensions.handler_count` -- the same in-process
+    introspection ``/api/extensions`` consumes -- so the CLI and HTTP
+    surfaces cannot drift on loaded/failed/event/handler state.
+
+    Never raises. If the extensions module itself is missing or the
+    introspection helpers themselves raise, the shape falls back to empty
+    lists / zero counts and the failure is surfaced to stderr so it isn't
+    silently lost in a pipeline. A wrapper script always sees a parseable
+    response -- matches the never-crash contract of :func:`_cmd_tier`,
+    :func:`_cmd_runtimes`, and :func:`_cmd_features`.
+
+    Output:
+      default -- header + loaded / failed / events tables
+      --json  -- ``{plugins, plugin_count, failed_plugins,
+                    failed_plugin_count, events, handler_counts,
+                    error?: str}`` (matches ``GET /api/extensions``)
+    """
+    import json as _json
+
+    plugins: list[str] = []
+    failed: list[dict] = []
+    events: list[str] = []
+    handler_counts: dict[str, int] = {}
+    introspection_error: str | None = None
+
+    try:
+        from clawmetry import extensions as _ext
+
+        try:
+            plugins = list(_ext.loaded_plugins())
+        except Exception as exc:
+            introspection_error = f"loaded_plugins: {exc}"
+
+        # ``failed_plugins`` shipped after ``loaded_plugins`` (see #33311f1)
+        # so an older in-process ``clawmetry`` may not expose it. Degrade to
+        # ``[]`` instead of crashing the whole command -- matches the
+        # `/api/extensions` fallback posture.
+        try:
+            failed = [dict(entry) for entry in _ext.failed_plugins()]
+        except AttributeError:
+            failed = []
+        except Exception as exc:
+            introspection_error = (
+                f"{introspection_error + '; ' if introspection_error else ''}"
+                f"failed_plugins: {exc}"
+            )
+
+        try:
+            events = list(_ext.registered_events())
+        except Exception as exc:
+            introspection_error = (
+                f"{introspection_error + '; ' if introspection_error else ''}"
+                f"registered_events: {exc}"
+            )
+
+        try:
+            handler_counts = {evt: _ext.handler_count(evt) for evt in events}
+        except Exception as exc:
+            introspection_error = (
+                f"{introspection_error + '; ' if introspection_error else ''}"
+                f"handler_count: {exc}"
+            )
+    except Exception as exc:
+        # Module import itself failed -- surface it to stderr but keep the
+        # empty-shape fallback so a wrapper script still sees parseable
+        # output.
+        introspection_error = f"extensions module unavailable: {exc}"
+
+    if introspection_error:
+        print(f"⚠️  {introspection_error}", file=sys.stderr)
+
+    if getattr(args, "as_json", False):
+        payload: dict = {
+            "plugins": plugins,
+            "plugin_count": len(plugins),
+            "failed_plugins": failed,
+            "failed_plugin_count": len(failed),
+            "events": events,
+            "handler_counts": handler_counts,
+        }
+        if introspection_error:
+            payload["error"] = introspection_error
+        print(_json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    print("ClawMetry Extensions\n" + "─" * 40)
+    print(f"  Loaded plugins: {len(plugins)}")
+    print(f"  Failed plugins: {len(failed)}")
+    print(f"  Event hooks:    {len(events)}")
+
+    print()
+    print("  Loaded")
+    print("  " + "─" * 30)
+    if plugins:
+        for name in plugins:
+            print(f"    ✅ {name}")
+    else:
+        print("    (none)")
+
+    print()
+    print("  Failed")
+    print("  " + "─" * 30)
+    if failed:
+        for entry in failed:
+            name = str(entry.get("name", ""))
+            error = str(entry.get("error", ""))
+            print(f"    ❌ {name}: {error}")
+    else:
+        print("    (none)")
+
+    print()
+    print("  Event hooks")
+    print("  " + "─" * 30)
+    if events:
+        for evt in events:
+            count = handler_counts.get(evt, 0)
+            handler_word = "handler" if count == 1 else "handlers"
+            print(f"    • {evt} ({count} {handler_word})")
+    else:
+        print("    (none)")
+
+
 def _cmd_verify_integrity(args) -> None:
     """clawmetry verify-integrity — walk the hash chain and report validity.
 
@@ -5181,6 +5316,28 @@ def main() -> None:
         ),
     )
 
+    # extensions — surface loaded / failed entry-point plugins and event hooks
+    # from the shell so an operator can answer "did clawmetry-pro actually
+    # load on this node?" without curl'ing /api/extensions or tailing daemon
+    # logs. In-process introspection of clawmetry.extensions state -- same
+    # source /api/extensions consumes -- so the CLI and HTTP surfaces cannot
+    # drift on loaded/failed/event/handler counts.
+    p_extensions = sub.add_parser(
+        "extensions",
+        help="Show loaded / failed entry-point plugins and event-hook counts",
+    )
+    p_extensions.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help=(
+            "Emit {plugins, plugin_count, failed_plugins, failed_plugin_count, "
+            "events, handler_counts} JSON (jq-friendly). Matches the response "
+            "shape of GET /api/extensions byte-for-byte on shared keys."
+        ),
+    )
+
+
     # diagnose — surface the entitlement resolver inputs so an operator
     # can answer "why did my install resolve to <tier>?" without reading
     # ~/.clawmetry by hand. Same shape as GET /api/entitlement/diagnostic.
@@ -5246,6 +5403,7 @@ def main() -> None:
         "channels",
         "nodes",
         "retention",
+        "extensions",
         "diagnose",
         "verify-integrity",
         "nemoclaw-daemons",
@@ -5296,6 +5454,8 @@ def main() -> None:
             _cmd_nodes(args)
         elif args.cmd == "retention":
             _cmd_retention(args)
+        elif args.cmd == "extensions":
+            _cmd_extensions(args)
         elif args.cmd == "diagnose":
             _cmd_diagnose(args)
         elif args.cmd == "verify-integrity":
