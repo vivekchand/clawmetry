@@ -28,7 +28,7 @@ jobs:
                   errors += 1
           if errors:
               sys.exit(1)
-          print(f'✅ Syntax OK ({len(glob.glob(\"clawmetry/**/*.py\", recursive=True)) + 1} files)')
+          print(f'✅ Syntax OK ({len(glob.glob("clawmetry/**/*.py", recursive=True)) + 1} files)')
           "
       - name: Install ruff (fast linter)
         run: pip install ruff
@@ -415,7 +415,17 @@ jobs:
           python3 -m pytest \
             tests/test_e2e.py::TestTabsLoad \
             tests/test_e2e_oss_all_tabs.py::TestAllTabsPostAuth \
-            -v --tb=short -m 'not quarantine'
+            -v --tb=short -m 'not quarantine' \
+            --junitxml=/tmp/junit-e2e-critical.xml
+
+      - name: Upload JUnit test report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-e2e-critical-${{ github.run_id }}
+          path: /tmp/junit-e2e-critical.xml
+          if-no-files-found: warn
+          retention-days: 7
 
   # ── pip install smoke test across platforms ─────────────────────────────────────────
   pip-install:
