@@ -2,11 +2,15 @@
 """Detect flaky E2E tests and append them to tests/quarantine.txt.
 
 A test is classified as flaky when:
-  - It failed in a recent OSS Golden Path run (junit-c1c5-<run_id> artifact), AND
+  - It failed in a recent watched CI run (junit artifact), AND
   - There exists a LATER run for the SAME head commit (SHA) that PASSED.
 
 Failed-then-passed on the same commit == flaky; add to quarantine.txt so
 the per-PR gate is not blocked by intermittent failures.
+
+Watched workflows (WATCHED_WORKFLOWS constant):
+  - oss-golden-path.yml -- uploads junit-c1c5-{run_id} (C1+C5 gate)
+  - ci.yml              -- uploads junit-e2e-critical-{run_id} (e2e-critical job)
 
 Usage
 -----
@@ -37,7 +41,21 @@ import zipfile
 
 OWNER = os.environ.get("REPO_OWNER", "vivekchand")
 REPO = os.environ.get("REPO_NAME", "clawmetry")
-WORKFLOW_FILE = "oss-golden-path.yml"
+
+# Each entry: (workflow_filename, junit_artifact_name_prefix).
+# Artifact for run {run_id} is named "{prefix}-{run_id}".
+# C7 requirement: flaky tests in ANY required-check workflow must be
+# quarantined within 24h. Previously only oss-golden-path.yml was scanned;
+# adding ci.yml closes the gap for TestTabsLoad / TestAllTabsPostAuth
+# flakiness detected in the e2e-critical job (also a required check).
+WATCHED_WORKFLOWS: list[tuple[str, str]] = [
+    # C1+C5 gate: uploads junit-c1c5-{run_id}.
+    ("oss-golden-path.yml", "junit-c1c5"),
+    # e2e-critical job in ci.yml: uploads junit-e2e-critical-{run_id}.
+    # Without this entry, flaky tests in TestTabsLoad / TestAllTabsPostAuth
+    # would block PRs without ever reaching quarantine.txt (C7 coverage gap).
+    ("ci.yml", "junit-e2e-critical"),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -198,14 +216,14 @@ def _extract_junit_from_zip(zip_bytes: bytes) -> set[str]:
 # ---------------------------------------------------------------------------
 
 
-def _get_workflow_id(token: str) -> int:
-    """Return the numeric workflow ID for WORKFLOW_FILE."""
+def _get_workflow_id(workflow_file: str, token: str) -> int:
+    """Return the numeric workflow ID for workflow_file."""
     data = _api(f"/repos/{OWNER}/{REPO}/actions/workflows", token=token)
     for wf in data.get("workflows", []):
-        if WORKFLOW_FILE in wf.get("path", ""):
+        if workflow_file in wf.get("path", ""):
             return int(wf["id"])
     raise RuntimeError(
-        f"Workflow {WORKFLOW_FILE!r} not found in {OWNER}/{REPO}. "
+        f"Workflow {workflow_file!r} not found in {OWNER}/{REPO}. "
         "Check that the workflow file exists and REPO_OWNER/REPO_NAME are correct."
     )
 
@@ -220,24 +238,37 @@ def _get_runs(workflow_id: int, lookback: int, token: str) -> list[dict]:
     return data.get("workflow_runs", [])
 
 
-def _find_artifact_id(run_id: int, token: str) -> int | None:
-    """Return the artifact ID for the junit-c1c5-<run_id> artifact, or None."""
+def _find_artifact_id(run_id: int, artifact_prefix: str, token: str) -> int | None:
+    """Return the artifact ID for {artifact_prefix}-{run_id}, or None."""
     data = _api(
         f"/repos/{OWNER}/{REPO}/actions/runs/{run_id}/artifacts",
         token=token,
     )
-    target = f"junit-c1c5-{run_id}"
+    target = f"{artifact_prefix}-{run_id}"
     for art in data.get("artifacts", []):
         if art.get("name", "") == target:
             return int(art["id"])
     return None
 
 
-def detect_flaky_tests(lookback: int, token: str) -> set[str]:
-    """Return the set of test node IDs that appear to be flaky."""
-    print(f"Scanning {lookback} recent runs of {WORKFLOW_FILE} in {OWNER}/{REPO} ...")
+def _detect_flaky_in_workflow(
+    workflow_file: str,
+    artifact_prefix: str,
+    lookback: int,
+    token: str,
+) -> set[str]:
+    """Detect flaky tests in a single workflow.
 
-    workflow_id = _get_workflow_id(token)
+    A test is flaky when it failed in one run then passed on a re-run of the
+    same commit (same head_sha, higher run_number).
+    """
+    print(f"Scanning {lookback} recent runs of {workflow_file} in {OWNER}/{REPO} ...")
+    try:
+        workflow_id = _get_workflow_id(workflow_file, token)
+    except RuntimeError as exc:
+        print(f"  WARN: {exc} -- skipping {workflow_file}")
+        return set()
+
     runs = _get_runs(workflow_id, lookback, token)
     print(f"  Fetched {len(runs)} completed run(s).")
 
@@ -285,10 +316,10 @@ def detect_flaky_tests(lookback: int, token: str) -> set[str]:
             "failed then passed on re-run -> checking JUnit XML"
         )
 
-        artifact_id = _find_artifact_id(run_id, token)
+        artifact_id = _find_artifact_id(run_id, artifact_prefix, token)
         if artifact_id is None:
             print(
-                f"    No junit-c1c5-{run_id} artifact found "
+                f"    No {artifact_prefix}-{run_id} artifact found "
                 "(run may predate JUnit XML upload step)"
             )
             continue
@@ -307,6 +338,21 @@ def detect_flaky_tests(lookback: int, token: str) -> set[str]:
             print("    No failing tests in JUnit XML (or no XML in artifact)")
 
     return flaky_tests
+
+
+def detect_flaky_tests(lookback: int, token: str) -> set[str]:
+    """Return the set of test node IDs that appear to be flaky.
+
+    Scans every workflow in WATCHED_WORKFLOWS. A test is flaky when it
+    failed in a workflow run then passed on a later re-run of the same
+    commit.
+    """
+    all_flaky: set[str] = set()
+    for workflow_file, artifact_prefix in WATCHED_WORKFLOWS:
+        all_flaky |= _detect_flaky_in_workflow(
+            workflow_file, artifact_prefix, lookback, token
+        )
+    return all_flaky
 
 
 # ---------------------------------------------------------------------------
@@ -376,7 +422,7 @@ def main() -> None:
         type=int,
         default=30,
         metavar="N",
-        help="Number of recent workflow runs to scan (default: 30)",
+        help="Number of recent workflow runs to scan per workflow (default: 30)",
     )
     args = parser.parse_args()
 
@@ -403,7 +449,7 @@ def main() -> None:
 
     if not new_flaky:
         msg = (
-            f"Scanning {args.lookback} runs... 0 new flaky tests found"
+            f"Scanning {args.lookback} runs per workflow... 0 new flaky tests found"
             + (" (dry run)." if args.dry_run else ". quarantine.txt unchanged.")
         )
         print(msg)
@@ -418,7 +464,7 @@ def main() -> None:
             f"\n--dry-run: would add {len(new_flaky)} test(s) to {quarantine_file}"
         )
         print(
-            f"Scanning {args.lookback} runs... "
+            f"Scanning {args.lookback} runs per workflow... "
             f"{len(new_flaky)} new flaky tests found (dry run)."
         )
         sys.exit(0)

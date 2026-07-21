@@ -74,7 +74,7 @@ jobs:
           done
           echo "✅ JS Syntax OK"
 
-  # ── API tests across all 3 platforms ─────────────────────────────────────────────
+  # ── API tests across all 3 platforms ─────────────────────────────────────────────────────
   api-tests:
     name: API Tests (${{ matrix.os }})
     needs: lint
@@ -143,7 +143,7 @@ jobs:
         # Quarantined tests still run daily in quarantine-sweep.yml.
         run: python3 -m pytest tests/test_api.py -v --tb=short -m 'not quarantine'
 
-  # ── MOAT verifier (hermetic, hard-fail) ────────────────────────────────────────────────────
+  # ── MOAT verifier (hermetic, hard-fail) ────────────────────────────────────────────────────────────────────────────────────────
   # Issue #1491 / PRD #1133 invariant #3: "A regression in either direction
   # is caught BEFORE merge." These files exercise the
   # OpenClaw → DuckDB → API surface contract end-to-end, plus the lint
@@ -193,7 +193,7 @@ jobs:
             tests/test_openclaw_detection_real.py \
             -q
 
-  # ── Entitlement API test suite (~2700 hermetic tests) ─────────────────────
+  # ── Entitlement API test suite (~2700 hermetic tests) ─────────────────────────
   # Covers every helper in clawmetry/entitlements.py and every endpoint
   # under routes/entitlement.py via Flask test client. No live server, no
   # gateway, no network. Runtime ~60s. HARD-FAIL: no continue-on-error.
@@ -220,7 +220,7 @@ jobs:
             tests/test_tier_cli.py \
             -q
 
-  # ── Compression / cache-safety eval (Tier-1, deterministic) ──────────────
+  # ── Compression / cache-safety eval (Tier-1, deterministic) ──────────────────
   # Issue #2844 (epic #2837): port Headroom's eval rigor so we can claim
   # "compression-safe" with proof. This Tier-1 gate is pure-Python and spends
   # ZERO API budget — it proves CCR payload compression is byte-for-byte
@@ -244,7 +244,7 @@ jobs:
       - name: Run compression/cache-safety eval suite
         run: python3 -m pytest tests/test_compression_safety_eval.py -q
 
-  # ── MOAT keystone (DuckDB-first invariant, 13-endpoint bar) ──────────────
+  # ── MOAT keystone (DuckDB-first invariant, 13-endpoint bar) ──────────────────
   # Implements `docs/MOAT_BAR.md` Section 5 acceptance criterion #1:
   # `keystone_e2e.py --no-drive` exits 0 on every PR. The keystone is the
   # canonical 13-endpoint verifier (PR #1672) that asserts every
@@ -415,9 +415,19 @@ jobs:
           python3 -m pytest \
             tests/test_e2e.py::TestTabsLoad \
             tests/test_e2e_oss_all_tabs.py::TestAllTabsPostAuth \
-            -v --tb=short -m 'not quarantine'
+            -v --tb=short -m 'not quarantine' \
+            --junitxml=/tmp/junit-e2e-critical.xml
 
-  # ── pip install smoke test across platforms ─────────────────────────────────────────
+      - name: Upload JUnit test report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-e2e-critical-${{ github.run_id }}
+          path: /tmp/junit-e2e-critical.xml
+          if-no-files-found: warn
+          retention-days: 7
+
+  # ── pip install smoke test across platforms ────────────────────────────────────────────────────
   pip-install:
     name: pip install (${{ matrix.os }})
     needs: lint
@@ -518,7 +528,7 @@ jobs:
           fi
           echo "✅ /static/js/app.js served from installed wheel"
 
-  # ── Eval suite gate (Phase 2 evals, refs #1619 / PR #1626) ──────────────
+  # ── Eval suite gate (Phase 2 evals, refs #1619 / PR #1626) ──────────────────
   # Runs ClawMetry's own golden suite (tests/data/golden_ci.yaml) through
   # the `clawmetry eval` CLI on every PR. Catches regressions in:
   #   * eval_suite_runner.py YAML parsing / runner loop
@@ -533,7 +543,7 @@ jobs:
   # community PRs) the job emits an explicit "SKIPPED" warning and exits
   # 0. The gate hard-fails only when the secret IS set AND any test
   # fails. This keeps green-checks-only test runs unblocked while still
-  # gating the merge for maintainer-owned PRs.
+  # gating the merge for maintainer-approved PRs.
   #
   # To disable the gate temporarily (e.g. during a known-broken judge
   # provider outage), set the repo variable `CLAWMETRY_EVALS_GATE` to
@@ -607,7 +617,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # ── Live OpenClaw E2E ──────────────────────────────────────────────────────
+  # ── Live OpenClaw E2E ────────────────────────────────────────────────────────────────────────────
   # Closes #1544. Boots a real openclaw gateway, sends a real message
   # through `openclaw agent --local`, drives the daemon's
   # sync_sessions_recent over the on-disk JSONL, and asserts every
