@@ -884,7 +884,19 @@ def inspect_key(key: str) -> dict | None:
 
 def current_license_info() -> dict | None:
     """Human-readable summary of the installed license, or None if there is no
-    valid one. Never raises."""
+    valid one. Never raises.
+
+    Returns ``None`` only when no license file is on disk. When a file exists,
+    every branch — active / expired / invalid-signature — returns the SAME
+    field set so a UI can render all three uniformly without special-casing
+    which keys are present. On the invalid-signature branch the payload cannot
+    be trusted (an attacker could stuff any tier/nodes into an unsigned body),
+    so ``tier``/``nodes``/``sub``/``exp``/``days_left`` collapse to ``None``;
+    the trust-anchor (``pubkey_fingerprint_sha256``) and on-disk permission
+    fields (``permissions_safe``, ``file_mode``) DO get populated in every
+    file-exists branch — those are exactly the operator-debug fields most
+    useful when a license file has been corrupted or tampered with.
+    """
     import time as _t
 
     try:
@@ -892,15 +904,8 @@ def current_license_info() -> dict | None:
             return None
         with open(LICENSE_PATH, "r", encoding="utf-8") as fh:
             payload = verify_token(fh.read().strip())
-        if payload is None:
-            return {"valid": False, "status": "invalid"}
-        exp = payload.get("exp")
-        days_left = None
-        expired = False
-        if isinstance(exp, (int, float)):
-            days_left = int((exp - _t.time()) // 86400)
-            expired = _t.time() > exp
-        # On POSIX, surface whether the on-disk key file is locked down.
+        # Trust-anchor + on-disk state are independent of the token payload,
+        # so we resolve them up-front and reuse across every branch below.
         # ``permissions_safe`` is True on Windows (mode bits don't apply) and
         # True when no group/world bits are set on the file. The UI can use
         # this to surface a "tighten file permissions" affordance without
@@ -910,6 +915,37 @@ def current_license_info() -> dict | None:
             mode = os.stat(LICENSE_PATH).st_mode & 0o777 if os.name == "posix" else None
         except Exception:
             mode = None
+        # Trust-anchor identity: a Pro/Enterprise license is only as
+        # trustworthy as the embedded public key that signed it, so we
+        # surface its fingerprint here for operator audits.
+        pubkey_fp = pubkey_fingerprint()
+        file_mode = f"{mode:04o}" if mode is not None else None
+
+        if payload is None:
+            # File exists but signature is bogus (bit-flip, tamper, key rotated
+            # server-side, wrong-environment key…). Never surface tier/nodes
+            # from an unverified body — they'd let a forger claim any tier — but
+            # keep the shape uniform so a UI can render this row like the
+            # others and lean on ``permissions_safe`` / ``file_mode`` to
+            # explain WHY (e.g. loose perms may indicate corruption).
+            return {
+                "valid": False,
+                "status": "invalid",
+                "tier": None,
+                "nodes": None,
+                "sub": None,
+                "exp": None,
+                "days_left": None,
+                "pubkey_fingerprint_sha256": pubkey_fp,
+                "permissions_safe": perms_safe,
+                "file_mode": file_mode,
+            }
+        exp = payload.get("exp")
+        days_left = None
+        expired = False
+        if isinstance(exp, (int, float)):
+            days_left = int((exp - _t.time()) // 86400)
+            expired = _t.time() > exp
         return {
             "valid": not expired,
             "status": "expired" if expired else "active",
@@ -918,12 +954,9 @@ def current_license_info() -> dict | None:
             "sub": payload.get("sub", ""),
             "exp": exp,
             "days_left": days_left,
-            # Trust-anchor identity: a Pro/Enterprise license is only as
-            # trustworthy as the embedded public key that signed it, so we
-            # surface its fingerprint here for operator audits.
-            "pubkey_fingerprint_sha256": pubkey_fingerprint(),
+            "pubkey_fingerprint_sha256": pubkey_fp,
             "permissions_safe": perms_safe,
-            "file_mode": (f"{mode:04o}" if mode is not None else None),
+            "file_mode": file_mode,
         }
     except Exception as exc:
         logger.warning("license: info read failed: %s", exc)

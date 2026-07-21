@@ -390,6 +390,102 @@ def test_current_license_info(lic):
     assert info["days_left"] > 300
 
 
+# ── current_license_info: uniform shape across active/expired/invalid ─────────
+#
+# When a license file exists, EVERY branch must return the same field set so
+# a UI can render the row without special-casing which keys are present.
+
+_EXPECTED_FILE_EXISTS_KEYS = frozenset({
+    "valid", "status", "tier", "nodes", "sub", "exp", "days_left",
+    "pubkey_fingerprint_sha256", "permissions_safe", "file_mode",
+})
+
+
+def test_current_license_info_missing_file_returns_none(lic):
+    import os
+
+    assert not os.path.isfile(lic.L.LICENSE_PATH)
+    assert lic.L.current_license_info() is None
+
+
+def test_current_license_info_invalid_signature_matches_full_shape(lic):
+    """A file with a bogus signature returns the same field set as an active
+    or expired license, so a UI never has to branch on which keys exist."""
+    import os
+
+    other_priv, _ = _keypair()
+    forged = lic.L._encode_token(_payload(), other_priv)
+    os.makedirs(os.path.dirname(lic.L.LICENSE_PATH), exist_ok=True)
+    with open(lic.L.LICENSE_PATH, "w", encoding="utf-8") as fh:
+        fh.write(forged + "\n")
+
+    info = lic.L.current_license_info()
+    assert info is not None
+    assert set(info.keys()) == _EXPECTED_FILE_EXISTS_KEYS
+    assert info["valid"] is False
+    assert info["status"] == "invalid"
+    # Untrusted payload fields must NOT leak — an attacker could put any tier
+    # into an unsigned body, so treat them as unknown.
+    assert info["tier"] is None
+    assert info["nodes"] is None
+    assert info["sub"] is None
+    assert info["exp"] is None
+    assert info["days_left"] is None
+    # Trust anchor + on-disk state are payload-independent and must be filled.
+    assert isinstance(info["pubkey_fingerprint_sha256"], str)
+    assert len(info["pubkey_fingerprint_sha256"]) == 64
+    assert info["permissions_safe"] in (True, False)
+
+
+def test_current_license_info_expired_matches_full_shape(lic):
+    """activate() refuses expired keys, so simulate the on-disk state
+    directly — this pins the 'expired-but-signature-verifies' branch of
+    current_license_info(), which is the state a live install reaches when
+    a valid key ages past its exp."""
+    import os
+
+    tok = lic.L._encode_token(_payload("pro", nodes=4, exp_delta=-7200), lic.priv)
+    os.makedirs(os.path.dirname(lic.L.LICENSE_PATH), exist_ok=True)
+    with open(lic.L.LICENSE_PATH, "w", encoding="utf-8") as fh:
+        fh.write(tok + "\n")
+
+    info = lic.L.current_license_info()
+    assert info is not None
+    assert set(info.keys()) == _EXPECTED_FILE_EXISTS_KEYS
+    assert info["valid"] is False
+    assert info["status"] == "expired"
+    assert info["tier"] == "pro"
+    assert info["nodes"] == 4
+    assert info["days_left"] is not None and info["days_left"] <= 0
+
+
+def test_current_license_info_active_matches_full_shape(lic):
+    tok = lic.L._encode_token(_payload("pro", nodes=3), lic.priv)
+    lic.L.activate(tok)
+    info = lic.L.current_license_info()
+    assert info is not None
+    assert set(info.keys()) == _EXPECTED_FILE_EXISTS_KEYS
+    assert info["valid"] is True
+    assert info["status"] == "active"
+
+
+def test_current_license_info_garbage_file_returns_uniform_invalid_shape(lic):
+    """Not even a well-formed CLAW1 token — just random bytes — still gets the
+    full shape back so a UI's 'invalid license' row renders identically."""
+    import os
+
+    os.makedirs(os.path.dirname(lic.L.LICENSE_PATH), exist_ok=True)
+    with open(lic.L.LICENSE_PATH, "w", encoding="utf-8") as fh:
+        fh.write("not-even-a-token\n")
+
+    info = lic.L.current_license_info()
+    assert info is not None
+    assert set(info.keys()) == _EXPECTED_FILE_EXISTS_KEYS
+    assert info["valid"] is False
+    assert info["status"] == "invalid"
+    assert info["tier"] is None
+
+
 # ── integration with entitlements ──────────────────────────────────────────────
 
 
