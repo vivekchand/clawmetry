@@ -351,6 +351,48 @@ def api_version():
     return {"current": current, "latest": latest, "update_available": update_available}
 
 
+def _win_cleanup_old_exe_stubs() -> None:
+    """Remove clawmetry*.exe.old stubs left by a previous Windows update attempt."""
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        import sysconfig
+        from pathlib import Path
+        scripts = Path(sysconfig.get_path("scripts"))
+        for stub in scripts.glob("clawmetry*.exe.old"):
+            try:
+                stub.unlink()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _win_rename_exe_before_pip():
+    """On Windows, rename clawmetry.exe -> clawmetry.exe.old before pip runs.
+
+    pip's uninstall-then-install tries to overwrite clawmetry.exe while it may
+    be held open by a running dashboard process, causing WinError 32. Renaming
+    an open .exe is allowed on Windows even when overwriting it is not, so pip
+    then writes the new .exe without touching the in-use file.
+
+    Returns (orig_path, renamed_path) on success, or (None, None) otherwise.
+    """
+    if not sys.platform.startswith("win"):
+        return None, None
+    try:
+        import sysconfig
+        from pathlib import Path
+        exe = Path(sysconfig.get_path("scripts")) / "clawmetry.exe"
+        if not exe.exists():
+            return None, None
+        old = exe.with_name("clawmetry.exe.old")
+        exe.rename(old)
+        return exe, old
+    except Exception:
+        return None, None
+
+
 def perform_self_update(reason: str = "manual", restart: bool = True,
                         target_version=None):
     """Core self-update: ``pip install -U clawmetry`` then schedule a process
@@ -396,6 +438,13 @@ def perform_self_update(reason: str = "manual", restart: bool = True,
         # If ensurepip itself isn't available the pip call below will surface
         # a real error message via capture_output, which we now return verbatim.
         pass
+    # Windows: rename clawmetry.exe -> clawmetry.exe.old before pip runs.
+    # pip's uninstall-then-install would otherwise try to overwrite the running
+    # .exe (WinError 32). Renaming is allowed for open .exe files on Windows;
+    # pip then writes the new launcher without touching the in-use file.
+    # Also clean up any .exe.old stubs from a prior failed attempt first.
+    _win_cleanup_old_exe_stubs()
+    _exe_orig, _exe_old = _win_rename_exe_before_pip()
     try:
         proc = _sp.run(
             # --no-cache-dir dodges the uv-cache-stale-after-[RELEASE] race
@@ -408,6 +457,23 @@ def perform_self_update(reason: str = "manual", restart: bool = True,
             # Surface pip's actual last lines so the banner is actionable —
             # the old code swallowed everything into DEVNULL.
             tail = ((proc.stdout or "") + (proc.stderr or "")).strip()[-800:]
+            # Windows: restore the renamed exe so the launcher still works,
+            # then pip-reinstall the old version so the node is never left with
+            # zero working installs after a partial uninstall-then-failed-install.
+            if _exe_old is not None:
+                try:
+                    if _exe_old.exists() and not _exe_orig.exists():
+                        _exe_old.rename(_exe_orig)
+                except Exception:
+                    pass
+            try:
+                _sp.run(
+                    [py, "-m", "pip", "install", "--no-cache-dir",
+                     f"clawmetry=={old_version}"],
+                    timeout=180, capture_output=True, text=True,
+                )
+            except Exception:
+                pass
             return {"ok": False,
                     "error": f"pip exit {proc.returncode}: {tail or '(no output)'}"}, 500
     except _sp.TimeoutExpired:
