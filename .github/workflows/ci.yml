@@ -28,7 +28,7 @@ jobs:
                   errors += 1
           if errors:
               sys.exit(1)
-          print(f'✅ Syntax OK ({len(glob.glob("clawmetry/**/*.py", recursive=True)) + 1} files)')
+          print(f'✅ Syntax OK ({len(glob.glob(\"clawmetry/**/*.py\", recursive=True)) + 1} files)')
           "
       - name: Install ruff (fast linter)
         run: pip install ruff
