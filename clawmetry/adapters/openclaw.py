@@ -1478,6 +1478,76 @@ def _gateway_host_status() -> dict:
         return {}
 
 
+def _gateway_presence_roster() -> dict:
+    """Who's-online presence roster from the OpenClaw gateway.status RPC (#3884).
+
+    As of the Control UI who's-online roster release, the gateway.status response
+    includes a list of currently-connected users under a ``connectedUsers`` (or
+    ``onlineUsers`` / ``presence``) key.  Each entry carries at minimum an
+    ``email`` field; ``displayName`` and ``avatar`` (or ``avatarUrl``) are
+    included when the user's profile is populated.
+
+    Returns a dict with:
+    - ``"gatewayPresenceRoster"`` — list of normalized user dicts, each with
+      ``email`` (str), and optionally ``displayName`` (str) and ``avatar`` (str).
+    - ``"gatewayPresenceCount"`` — number of online users.
+
+    Returns ``{}`` when the RPC is unavailable, carries no user list, or the
+    list is empty. Never raises.
+    """
+    try:
+        d = _d()
+        rpc = getattr(d, "_gw_ws_rpc", None)
+        if rpc is None:
+            return {}
+        payload = rpc("gateway.status")
+        if not isinstance(payload, dict):
+            return {}
+        raw_users = (
+            payload.get("connectedUsers")
+            or payload.get("connected_users")
+            or payload.get("onlineUsers")
+            or payload.get("online_users")
+            or payload.get("presence")
+        )
+        if not isinstance(raw_users, list) or not raw_users:
+            return {}
+        roster = []
+        for entry in raw_users:
+            if not isinstance(entry, dict):
+                continue
+            email = (
+                entry.get("email")
+                or entry.get("emailAddress")
+                or entry.get("email_address")
+            )
+            if not email:
+                continue
+            user: dict = {"email": str(email)}
+            display_name = (
+                entry.get("displayName")
+                or entry.get("display_name")
+                or entry.get("name")
+            )
+            if display_name:
+                user["displayName"] = str(display_name)
+            avatar = (
+                entry.get("avatar")
+                or entry.get("avatarUrl")
+                or entry.get("avatar_url")
+                or entry.get("photoUrl")
+                or entry.get("photo_url")
+            )
+            if avatar:
+                user["avatar"] = str(avatar)
+            roster.append(user)
+        if not roster:
+            return {}
+        return {"gatewayPresenceRoster": roster, "gatewayPresenceCount": len(roster)}
+    except Exception:
+        return {}
+
+
 class OpenClawAdapter(AgentAdapter):
     name = "openclaw"
     display_name = "OpenClaw"
@@ -1555,6 +1625,9 @@ class OpenClawAdapter(AgentAdapter):
                 # Gateway host/system status (#3551): host name, OS, runtime,
                 # uptime, CPU, memory, disk from the same gateway.status RPC.
                 meta.update(_gateway_host_status())
+                # Who's-online presence roster (#3884): connected users from the
+                # Control UI facepile, via the same gateway.status RPC.
+                meta.update(_gateway_presence_roster())
             # Docker runtime health (#3390): the NemoClaw harness treats Docker
             # daemon liveness as a distinct signal from gateway liveness. Only
             # written when docker CLI is present so non-Docker environments are
