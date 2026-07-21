@@ -1723,6 +1723,27 @@ class OpenClawAdapter(AgentAdapter):
             _cdcont = s.get("cronDeliveredContent") or s.get("deliveredContent")
             if _cdcont is not None:
                 extra["cronDeliveredContent"] = str(_cdcont)
+            # PTY relay state (#3839): PR #107335 ('macOS paired-node terminals')
+            # and PR #107086 ('Control UI catalog terminals') stamp relay state,
+            # resume command, viewer preference, and paired-node identity on
+            # session records so the Control UI can open native terminal sessions.
+            # All four reads silently no-op when the fields are absent.
+            _pty = s.get("ptyRelayState") or s.get("ptyRelay")
+            if _pty is not None:
+                extra["ptyRelayState"] = str(_pty)
+            _rc = s.get("resumeCommand") or s.get("resumeCmd")
+            if _rc is not None:
+                extra["resumeCommand"] = str(_rc)
+            _vp = s.get("viewerPreference") or s.get("terminalPreference")
+            if _vp is not None:
+                extra["viewerPreference"] = str(_vp)
+            _pn = (
+                s.get("pairedNodeId")
+                or s.get("pairNodeId")
+                or s.get("pairedNode")
+            )
+            if _pn is not None:
+                extra["pairedNodeId"] = str(_pn)
             # On-exit cron trigger kind (#3526): OpenClaw 2026.7.1 (#92037)
             # stamps the schedule kind that triggered this session delivery
             # ("on-exit", "every", "interval", "cron", …) so callers can
