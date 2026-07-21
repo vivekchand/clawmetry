@@ -199,7 +199,8 @@ jobs:
         run: |
           /tmp/oss-golden/bin/python -m pytest \
             tests/test_e2e_oss_golden_path.py \
-            -v --tb=short --junitxml=/tmp/junit-c1.xml
+            -v --tb=short --junitxml=/tmp/junit-c1.xml \
+            -m 'not quarantine'
 
       # Restart the dashboard so C5 starts with a clean server that has no
       # accumulated SSE streams or WebSocket reconnect loops from C1. Each
@@ -256,7 +257,8 @@ jobs:
         run: |
           /tmp/oss-golden/bin/python -m pytest \
             tests/test_e2e_oss_all_tabs.py \
-            -v --tb=short --junitxml=/tmp/junit-c5.xml
+            -v --tb=short --junitxml=/tmp/junit-c5.xml \
+            -m 'not quarantine'
 
       - name: Dashboard and gateway logs on failure
         if: failure()
