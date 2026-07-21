@@ -3716,6 +3716,31 @@ def _entitlement_why_payload(kind: str, key: str) -> dict:
             required = _ent.min_tier_for_node_count(n)
             reason = ent.lock_reason(str(n), kind="nodes")
             key = str(n)
+        elif kind == "retention_days":
+            # Capacity axis: ``key`` is an event-history window in days.
+            # Sibling of the ``channels`` branch -- a non-int collapses to
+            # the grace-shape row so ``--why abc`` never crashes and never
+            # dangles an upgrade CTA the operator can't act on.
+            try:
+                n = int(key)
+            except (TypeError, ValueError):
+                return {
+                    "key": key,
+                    "kind": kind,
+                    "reason": None,
+                    "locked": False,
+                    "allowed": True,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                    "current_tier": cur_tier,
+                    "current_tier_rank": cur_rank,
+                    "upgrade_required": False,
+                }
+            allowed = ent.allows_retention_window(n)
+            required = _ent.min_tier_for_retention_window(n)
+            reason = ent.lock_reason(str(n), kind="retention_days")
+            key = str(n)
         else:  # feature
             allowed = ent.allows_feature(key)
             required = _ent.min_tier_for_feature(key)
@@ -3759,10 +3784,11 @@ def _print_why_block(payload: dict) -> None:
     (aligned two-column block, single upgrade CTA when a paid tier unlocks
     the item) so shell operators recognise the layout across subcommands.
 
-    For ``kind="channels"`` / ``kind="nodes"`` the header phrases the
-    capacity question naturally ("what tier unlocks N concurrent channels?"
-    / "what tier unlocks N nodes?") since the key is a count, not an id --
-    otherwise the shared "why is X locked?" phrasing wins.
+    For ``kind="channels"`` / ``kind="nodes"`` / ``kind="retention_days"``
+    the header phrases the capacity question naturally ("what tier unlocks
+    N concurrent channels?" / "what tier unlocks N nodes?" / "what tier
+    unlocks N-day event retention?") since the key is a count, not an id
+    -- otherwise the shared "why is X locked?" phrasing wins.
     """
     key = payload.get("key") or "(unknown)"
     kind = payload.get("kind") or "?"
@@ -3771,6 +3797,8 @@ def _print_why_block(payload: dict) -> None:
         print(f'ClawMetry: what tier unlocks {key} concurrent channels?')
     elif kind == "nodes":
         print(f'ClawMetry: what tier unlocks {key} nodes?')
+    elif kind == "retention_days":
+        print(f'ClawMetry: what tier unlocks {key}-day event retention?')
     else:
         print(f'ClawMetry: why is "{key}" locked?')
     print("─" * 40)
@@ -4240,6 +4268,90 @@ def _cmd_nodes(args) -> None:
     print(f"  Node cap:    {cap_line}  (registered nodes)")
     if resolve_error:
         print(f"  ⚠️  resolver error: {resolve_error}")
+
+
+def _cmd_retention(args) -> None:
+    """clawmetry retention — event-retention window (capacity axis).
+
+    Sibling of :func:`_cmd_channels` / :func:`_cmd_nodes` for the fourth
+    entitlement axis. The ``retention_days`` capacity axis governs how far
+    back in history each plan can hold event data before the store rolls
+    over. Every event-store feature itself is free at every tier; what
+    upgrades unlock is a longer window. The current tier cap prints in the
+    header block alongside the effective cap (which applies the
+    ``CLAWMETRY_RETENTION_DAYS`` env override, capped to the tier ceiling).
+
+    Never raises: any resolver failure surfaces inline (a warning row in
+    the human block, or the fields collapsed to ``null`` on the JSON
+    payload) so a wrapper script always sees a parseable response. Matches
+    the never-crash contract documented on :func:`get_entitlement`.
+
+    Output:
+      default -- header block (tier / enforcement / retention cap /
+                 effective cap / env override)
+      --json  -- ``{tier, grace, enforced, retention_days,
+                 effective_retention_days, override_env_name,
+                 override_env_value}``
+      --why N -- lock-reason payload for an N-day retention window (same
+                 shape as ``GET /api/entitlement/lock-reason?retention_days=N``);
+                 pair with ``--json`` for scriptable output.
+    """
+    import json as _json
+
+    from clawmetry import entitlements as _ent
+
+    why = (getattr(args, "why", None) or "").strip().lower()
+    if why:
+        payload = _entitlement_why_payload("retention_days", why)
+        if getattr(args, "as_json", False):
+            print(_json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            _print_why_block(payload)
+        return
+
+    override_env_name = getattr(_ent, "_RETENTION_OVERRIDE_ENV", "CLAWMETRY_RETENTION_DAYS")
+    override_env_value = os.environ.get(override_env_name)
+
+    try:
+        ent = _ent.get_entitlement()
+        tier = ent.tier
+        grace = bool(ent.grace)
+        enforced = _ent.is_enforced()
+        retention_days = ent.event_retention_days()
+        effective_days = ent.effective_retention_days()
+    except Exception as exc:
+        # Mirror the _cmd_channels never-crash fallback: a broken install
+        # still gets a parseable shape, with the failure surfaced to stderr
+        # so it isn't silently lost in a shell pipeline.
+        print(f"⚠️  entitlement resolution failed: {exc}", file=sys.stderr)
+        tier, grace, enforced = "oss", True, False
+        retention_days, effective_days = None, None
+
+    if getattr(args, "as_json", False):
+        payload = {
+            "tier": tier,
+            "grace": grace,
+            "enforced": enforced,
+            "retention_days": retention_days,
+            "effective_retention_days": effective_days,
+            "override_env_name": override_env_name,
+            "override_env_value": override_env_value,
+        }
+        print(_json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    mode_line = "off (grace)" if not enforced else "on"
+    cap_line = "unlimited" if retention_days in (None, 0) else f"{retention_days} days"
+    eff_line = (
+        "unlimited" if effective_days in (None, 0) else f"{effective_days} days"
+    )
+    print("ClawMetry Retention\n" + "─" * 40)
+    print(f"  Tier:            {tier}")
+    print(f"  Enforcement:     {mode_line}")
+    print(f"  Retention cap:   {cap_line}  (per-tier ceiling)")
+    print(f"  Effective:       {eff_line}  (after env override)")
+    env_display = override_env_value if override_env_value not in (None, "") else "(unset)"
+    print(f"  {override_env_name}: {env_display}")
 
 
 def _cmd_diagnose(args) -> None:
@@ -5039,6 +5151,36 @@ def main() -> None:
         ),
     )
 
+    # retention — event-retention window cap (capacity axis sibling of
+    # `clawmetry channels` / `clawmetry nodes`). Same header/JSON/--why
+    # triad as the other capacity subcommands so the four-axis CLI surface
+    # is uniform.
+    p_retention = sub.add_parser(
+        "retention",
+        help="Show the event-retention window cap and the tier that would extend it",
+    )
+    p_retention.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help=(
+            "Emit {tier, grace, enforced, retention_days, "
+            "effective_retention_days, override_env_name, "
+            "override_env_value} JSON (jq-friendly)"
+        ),
+    )
+    p_retention.add_argument(
+        "--why",
+        metavar="N",
+        default=None,
+        help=(
+            "Print the lock-reason payload for an N-day retention window "
+            "(same shape as GET /api/entitlement/lock-reason?retention_days=N). "
+            "The retention axis is capacity-scoped, so N is a day count, "
+            "not an event-store id."
+        ),
+    )
+
     # diagnose — surface the entitlement resolver inputs so an operator
     # can answer "why did my install resolve to <tier>?" without reading
     # ~/.clawmetry by hand. Same shape as GET /api/entitlement/diagnostic.
@@ -5103,6 +5245,7 @@ def main() -> None:
         "features",
         "channels",
         "nodes",
+        "retention",
         "diagnose",
         "verify-integrity",
         "nemoclaw-daemons",
@@ -5151,6 +5294,8 @@ def main() -> None:
             _cmd_channels(args)
         elif args.cmd == "nodes":
             _cmd_nodes(args)
+        elif args.cmd == "retention":
+            _cmd_retention(args)
         elif args.cmd == "diagnose":
             _cmd_diagnose(args)
         elif args.cmd == "verify-integrity":
