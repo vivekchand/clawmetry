@@ -315,10 +315,21 @@ def _collapse_duplicate_brain_events(events):
     the single richest row (a real assistant/message/agent row over a slim
     model.completed; more tokens over fewer) and drop the rest. A time window
     keeps a genuine re-utterance of the same text in a later turn intact.
+
+    Pass 2 (added for #3924): a second sweep groups by ``detail`` alone within
+    a tight 10-second window to catch cross-source duplicates. The same reply
+    arrives twice when OpenClaw's own session-file ingest AND the via-index
+    claude-cli ingest both write the assistant turn under the same session UUID.
+    Because the two ingest paths use different data shapes, ``_extract_brain_detail``
+    can produce subtly different strings (e.g. thinking blocks included by one
+    path but not the other), so the ``(src, detail)`` key from pass 1 misses them.
+    A 10-second cross-source window is tight enough to avoid collapsing genuine
+    re-utterances while reliably catching the ~2s ingest gap.
     """
     import datetime as _dt
 
     WINDOW_S = 120.0
+    CROSS_SRC_WINDOW_S = 10.0
     MIN_DETAIL = 40
     _PRIO = {"MESSAGE": 3, "ASSISTANT": 3, "AGENT": 3, "USER": 3, "RESULT": 3,
              "THINK": 2, "MODEL.COMPLETED": 1, "MODEL": 1}
@@ -336,38 +347,53 @@ def _collapse_duplicate_brain_events(events):
     def _richness(ev):
         return (_PRIO.get((ev.get("type") or "").upper(), 2), ev.get("tokens") or 0)
 
-    groups = {}
+    def _collapse_groups(groups, window_s, drop):
+        for evs in groups.values():
+            if len(evs) < 2:
+                continue
+            ordered = sorted(evs, key=lambda e: (_parse(e) or _dt.datetime.min))
+            cluster = [ordered[0]]
+            clusters = [cluster]
+            for prev, cur in zip(ordered, ordered[1:]):
+                tp, tc = _parse(prev), _parse(cur)
+                if tp is None or tc is None or abs((tc - tp).total_seconds()) <= window_s:
+                    cluster.append(cur)
+                else:
+                    cluster = [cur]
+                    clusters.append(cluster)
+            for cl in clusters:
+                if len(cl) < 2:
+                    continue
+                best = max(cl, key=_richness)
+                for e in cl:
+                    if e is not best:
+                        drop.add(id(e))
+
+    # Pass 1: same-source dedup — (src, detail) key, 120s window.
+    # Collapses model.completed-vs-assistant siblings from a single ingest path.
+    groups: dict = {}
     for ev in events:
         detail = (ev.get("detail") or "").strip()
         if len(detail) < MIN_DETAIL:
             continue
         groups.setdefault((_src(ev), detail), []).append(ev)
 
-    drop = set()
-    for evs in groups.values():
-        if len(evs) < 2:
+    drop: set = set()
+    _collapse_groups(groups, WINDOW_S, drop)
+
+    # Pass 2: cross-source content dedup — detail key only, tight 10s window.
+    # Catches the session-file + via-index double-ingest of the same reply (#3924).
+    # Events already eliminated by pass 1 are skipped to avoid id() aliasing.
+    cross_groups: dict = {}
+    for ev in events:
+        if id(ev) in drop:
             continue
-        # Cluster copies that fall within WINDOW_S of each other; collapse each
-        # cluster to its richest row. Rows with no parseable time still cluster
-        # together (same content, same session) so a missing timestamp can't
-        # smuggle a duplicate through.
-        ordered = sorted(evs, key=lambda e: (_parse(e) or _dt.datetime.min))
-        cluster = [ordered[0]]
-        clusters = [cluster]
-        for prev, cur in zip(ordered, ordered[1:]):
-            tp, tc = _parse(prev), _parse(cur)
-            if tp is None or tc is None or abs((tc - tp).total_seconds()) <= WINDOW_S:
-                cluster.append(cur)
-            else:
-                cluster = [cur]
-                clusters.append(cluster)
-        for cl in clusters:
-            if len(cl) < 2:
-                continue
-            best = max(cl, key=_richness)
-            for e in cl:
-                if e is not best:
-                    drop.add(id(e))
+        detail = (ev.get("detail") or "").strip()
+        if len(detail) < MIN_DETAIL:
+            continue
+        cross_groups.setdefault(detail, []).append(ev)
+
+    _collapse_groups(cross_groups, CROSS_SRC_WINDOW_S, drop)
 
     if not drop:
         return events
