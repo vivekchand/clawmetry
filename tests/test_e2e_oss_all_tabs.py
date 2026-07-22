@@ -202,13 +202,35 @@ class TestAllTabsPostAuth:
         only calls switchTab() and checks the overlay state. Re-navigating
         to "/" per test caused 33 sequential page loads that saturated the
         waitress WSGI queue and produced spurious TimeoutErrors.
+
+        If this test fails with AssertionError containing 'window.switchTab()
+        not available', the root cause is not the overlay itself but that
+        app.js failed to load or parse (e.g. syntax error shipped in the
+        bundle) or that auth is still blocking script execution on load.
+        Check the server log and /api/auth/check before investigating tabs.
         """
         page = _overlay_page
 
         if tab != "overview":
-            page.evaluate(
-                "typeof window.switchTab === 'function' && "
-                f"window.switchTab({json.dumps(tab)})"
+            # Use an explicit return value instead of the short-circuit bool
+            # guard ("typeof ... === 'function' && switchTab()") so that a
+            # missing switchTab fails loudly rather than silently checking the
+            # overview tab for every parametrized case.
+            result = page.evaluate(
+                "(tab) => {"
+                "  if (typeof window.switchTab !== 'function') return 'no-switchtab';"
+                "  window.switchTab(tab);"
+                "  return 'ok';"
+                "}",
+                tab,
+            )
+            assert result == "ok", (
+                f"Tab '{tab}': window.switchTab() not available on the loaded page. "
+                f"Root causes: (1) app.js failed to parse or load (404/syntax error); "
+                f"(2) auth overlay is still blocking JS execution; "
+                f"(3) page has not finished initialising. "
+                f"Ensure OPENCLAW_GATEWAY_TOKEN={TOKEN!r} matches CLAWMETRY_TOKEN "
+                f"and that {BASE_URL!r} is reachable."
             )
 
         page.wait_for_timeout(500)

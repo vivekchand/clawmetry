@@ -173,13 +173,32 @@ async function shoot(browser, baseUrl, view, tab, file) {
 
     // Switch to the requested tab via the page's own router. Overview is the
     // default landing tab so we only call switchTab() for everything else.
+    //
+    // Use an explicit return string instead of the old short-circuit guard
+    //   (typeof switchTab === 'function' && switchTab(tab))
+    // so that a missing switchTab() surfaces as a logged error rather than
+    // silently screenshotting the overview tab for every non-overview case.
+    // This was the root cause of the user-reported issue (2026-05-17):
+    // "screenshots are always broken -- gateway token not passed for OSS,
+    // never displays other screens" -- the bot was always on overview.
     if (tab !== "overview") {
       try {
-        await page.evaluate((name) => {
-          if (typeof window.switchTab === "function") window.switchTab(name);
+        const switchResult = await page.evaluate((name) => {
+          if (typeof window.switchTab !== "function") return "no-switchtab";
+          window.switchTab(name);
+          return "ok";
         }, tab);
-      } catch {
+        if (switchResult !== "ok") {
+          ok = false;
+          console.error(
+            `[switch-fail] ${baseUrl} tab=${tab}: window.switchTab() not available ` +
+            `(result=${switchResult}). app.js may have failed to load or ` +
+            `auth is blocking. Ensure OPENCLAW_GATEWAY_TOKEN matches CLAWMETRY_VISUAL_DIFF_TOKEN.`
+          );
+        }
+      } catch (switchErr) {
         ok = false;
+        console.error(`[switch-fail] ${baseUrl} tab=${tab} threw: ${switchErr && switchErr.message}`);
       }
     }
 
@@ -327,11 +346,12 @@ async function main() {
             `${label} ${view.name}/${tab}: HTTP ${res.status || "no-response"} (expected 200)`
           );
         } else if (!res.ok) {
-          // HTTP 200 but ok=false: shoot() detected an auth overlay or render
-          // error. Treat as an auth gap so the workflow fails loudly instead of
-          // silently posting overlay screenshots with a green exit code.
+          // HTTP 200 but ok=false: shoot() detected an auth overlay, a
+          // switchTab() failure, or a render error. Treat as an auth gap so
+          // the workflow fails loudly instead of silently posting screenshots
+          // of the overview tab with a green exit code.
           authGaps.push(
-            `${label} ${view.name}/${tab}: auth overlay visible or render error (token not accepted)`
+            `${label} ${view.name}/${tab}: auth overlay, switchTab() failure, or render error (token not accepted or app.js not loaded)`
           );
         }
       }
