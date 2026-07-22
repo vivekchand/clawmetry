@@ -34,7 +34,7 @@ name: C6 Required-status-checks gate (PR audit)
 #     bash scripts/close-c6.sh
 #     (uses your existing gh CLI session -- no PAT creation needed)
 #
-# Tracking: vivekchand/clawmetry#3906
+# Tracking: vivekchand/clawmetry#3906 (C6)
 
 on:
   pull_request:
