@@ -6264,6 +6264,235 @@ def min_tier_for_all_at(
         return None
 
 
+def _min_tier_for_all_bundle_row(bundle) -> dict:
+    """Per-bundle row shape for :func:`min_tier_for_all_batch`.
+
+    Normalises one aggregate 5-axis bundle exactly the way
+    ``/api/entitlement/required-tier-batch`` does (CSV normalisation on
+    ``features`` / ``runtimes`` via :func:`_normalise_csv`; capacity-axis
+    values coerced through ``int(...)`` with a blank / non-int collapsing
+    to ``None`` so a typo cannot silently mis-route the aggregate to
+    Enterprise), then folds it through :func:`min_tier_for_all` for the
+    aggregate floor. ``retention_days`` follows the strict
+    :func:`min_tier_for_all` posture: a missing / unparseable value is
+    *unset* (contributes nothing), NOT the *unlimited* sentinel.
+
+    Row keys mirror the ``/required-tier-batch`` endpoint body minus the
+    resolver envelope (``features``, ``runtimes``, ``channels``,
+    ``retention_days``, ``nodes``, ``required_tier``,
+    ``required_tier_label``, ``required_tier_rank``, ``free``).
+    ``required_tier`` is ``None`` when every axis in the bundle
+    collapsed (empty bundle, empty CSVs, or non-int capacities on every
+    axis); the batch endpoint echoes the row unchanged so a paywall
+    matrix UI can render "no constraints supplied" per bundle. Never
+    raises: a per-bundle failure returns the empty row shape so the
+    batch keeps building.
+    """
+    features: list[str] = []
+    runtimes: list[str] = []
+    channels: int | None = None
+    retention_days: int | None = None
+    nodes: int | None = None
+    try:
+        raw = bundle if isinstance(bundle, dict) else {}
+        features = _normalise_csv(raw.get("features"))
+        raw_rts = _normalise_csv(raw.get("runtimes"))
+        # Runtime canonicalisation matches
+        # :func:`_min_tier_for_runtimes_bundle_row` so aliases
+        # (``claude-code`` -> ``claude_code``) resolve the same way as
+        # the singular endpoint and duplicates that collapse after
+        # canonicalisation only contribute once to the fold.
+        seen: set[str] = set()
+        for rt in raw_rts:
+            canon = canonical_runtime(rt)
+            key = canon if canon and canon in ALL_RUNTIMES else rt
+            if key in seen:
+                continue
+            seen.add(key)
+            runtimes.append(key)
+
+        def _coerce_int(val):
+            if val is None:
+                return None
+            try:
+                return int(str(val).strip())
+            except (TypeError, ValueError):
+                return None
+
+        channels = _coerce_int(raw.get("channels"))
+        retention_days = _coerce_int(raw.get("retention_days"))
+        nodes = _coerce_int(raw.get("nodes"))
+    except Exception as exc:
+        logger.warning(
+            "entitlements: _min_tier_for_all_bundle_row normalise failed: %s",
+            exc,
+        )
+    try:
+        required = min_tier_for_all(
+            features=features or None,
+            runtimes=runtimes or None,
+            channels=channels,
+            retention_days=retention_days,
+            nodes=nodes,
+        )
+    except Exception as exc:
+        logger.warning(
+            "entitlements: _min_tier_for_all_bundle_row fold failed: %s", exc
+        )
+        required = None
+    return {
+        "features": features,
+        "runtimes": runtimes,
+        "channels": channels,
+        "retention_days": retention_days,
+        "nodes": nodes,
+        "required_tier": required,
+        "required_tier_label": tier_label(required) if required else None,
+        "required_tier_rank": tier_rank(required) if required else -1,
+        "free": bool(required == TIER_OSS),
+    }
+
+
+def min_tier_for_all_batch(bundles) -> list[dict]:
+    """Per-bundle aggregate floor tier for N caller-supplied 5-axis
+    bundles in ONE round-trip.
+
+    Bundle-axis batch sibling of :func:`min_tier_for_all` (which folds
+    ONE aggregate bundle to ONE tier). Where the singular helper answers
+    "given THIS bundle across features + runtimes + channels + retention
+    + nodes, what tier covers everything?", this answers the same
+    question for N distinct bundles at once so a pricing-matrix or
+    upgrade-walkthrough surface comparing several hypothetical configs
+    (e.g. "Starter-shaped install vs Pro-shaped install vs Enterprise-
+    shaped install") renders off one call instead of N calls to
+    :func:`min_tier_for_all`.
+
+    Distinct from :func:`min_tier_for_features_batch` /
+    :func:`min_tier_for_runtimes_batch` (which batch N *single-axis*
+    bundles) and from :func:`min_tier_batch` (per-item cheapest tier for
+    a single flat bundle -- rows are individual feature/runtime ids).
+    This helper preserves the per-bundle grouping AND the cross-axis
+    aggregation: each row is the aggregate fold-answer for that whole
+    5-axis bundle, not a fold-answer per item or per single axis.
+
+    Row shape mirrors the ``/api/entitlement/required-tier-batch``
+    endpoint body minus the resolver envelope::
+
+        {
+          "features":            ["fleet"],
+          "runtimes":            ["claude_code"],
+          "channels":            5,
+          "retention_days":      30,
+          "nodes":               2,
+          "required_tier":       "pro" | None,
+          "required_tier_label": "Pro" | None,
+          "required_tier_rank":  <int>,  # -1 when required_tier is None
+          "free":                <bool>,
+        }
+
+    Per-bundle normalisation matches the singular endpoint: CSV
+    normalisation on ``features`` / ``runtimes`` (whitespace stripped,
+    lowercased, deduplicated preserving first-seen order); runtime
+    aliases (``claude-code`` -> ``claude_code``) canonicalised via
+    :func:`canonical_runtime`; ``channels`` / ``retention_days`` /
+    ``nodes`` coerced through ``int(...)`` with a blank / non-int
+    collapsing to ``None`` so a typo cannot silently mis-route the
+    aggregate to Enterprise. Empty bundles / all-``None`` axes surface
+    as a stable row with ``required_tier=None`` (distinguishes "caller
+    asked for nothing in this slot" from "caller asked but every axis
+    was a typo").
+
+    Argument handling:
+
+    * ``bundles is None`` or non-iterable -- returns ``[]``.
+    * Each bundle may itself be ``None``, non-dict, or empty -- the
+      helper emits the empty row shape rather than raising.
+    * Non-dict bundle rows (e.g. a bare list) collapse to the empty row
+      shape (matches the never-crash posture of every other bundle
+      helper).
+
+    Critically, ``retention_days=None`` here means *unset* -- NOT
+    *unlimited*. Same posture as :func:`min_tier_for_all` /
+    :func:`min_tier_batch` / :func:`lock_reasons_batch`: asking for the
+    unlimited-retention tier is the singular
+    :func:`min_tier_for_retention_window` (``days=None``) call's job
+    and would mis-route the aggregate to Enterprise otherwise.
+
+    Decoupled from the resolved entitlement: delegates per-bundle to
+    :func:`min_tier_for_all`, which walks the static per-tier caps, so
+    grace vs enforce yields byte-identical rows. Never raises:
+    per-bundle failures short-circuit to the empty row shape so the
+    batch keeps building.
+    """
+    try:
+        if bundles is None:
+            return []
+        items = list(bundles)
+    except TypeError:
+        return []
+    out: list[dict] = []
+    for bundle in items:
+        try:
+            out.append(_min_tier_for_all_bundle_row(bundle))
+        except Exception as exc:
+            logger.warning(
+                "entitlements: min_tier_for_all_batch row failed: %s", exc
+            )
+            out.append(
+                {
+                    "features": [],
+                    "runtimes": [],
+                    "channels": None,
+                    "retention_days": None,
+                    "nodes": None,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                    "free": False,
+                }
+            )
+    return out
+
+
+def min_tier_for_all_at_batch(
+    perspective_tier: str, bundles
+) -> list[dict] | None:
+    """Hypothetical-perspective sibling of :func:`min_tier_for_all_batch`:
+    per-bundle aggregate floor tier for N 5-axis bundles in one round-trip,
+    scoped by a caller-supplied ``perspective_tier``.
+
+    Same relationship to :func:`min_tier_for_all_batch` that
+    :func:`min_tier_for_all_at` has to :func:`min_tier_for_all` and
+    :func:`affordable_tiers_at_batch` has to :func:`affordable_tiers_batch`:
+    the ``perspective_tier`` argument tells the helper which resolver /
+    plan the caller is answering from so an ``_at`` endpoint URL can be
+    uniform across the whole ``_at`` family, even though the underlying
+    answer is perspective-independent (each row folds the static per-
+    tier caps). A parity test pins
+    ``min_tier_for_all_at_batch(p, bs) == min_tier_for_all_batch(bs)``
+    for every ``p`` in :data:`_TIER_ORDER` so the ``_at`` prefix cannot
+    silently drift into shaping rows.
+
+    Perspective is validated against :data:`_TIER_ORDER` (including
+    :data:`TIER_TRIAL`); returns ``None`` for empty / unknown
+    ``perspective_tier`` (caller renders "unknown tier" / 404). Never
+    raises: a delegation failure logs a warning and returns ``None``.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        return min_tier_for_all_batch(bundles)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: min_tier_for_all_at_batch failed: %s", exc
+        )
+        return None
+
+
 def affordable_tiers_at(
     perspective_tier: str,
     *,
