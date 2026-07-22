@@ -11,6 +11,7 @@ the per-PR gate is not blocked by intermittent failures.
 Watched workflows (WATCHED_WORKFLOWS constant):
   - oss-golden-path.yml -- uploads junit-c1c5-{run_id} (C1+C5 gate)
   - ci.yml              -- uploads junit-e2e-critical-{run_id} (e2e-critical job)
+  - cross-repo-handoff.yml -- uploads junit-c4-{run_id} (C4 gate)
 
 Usage
 -----
@@ -45,9 +46,7 @@ REPO = os.environ.get("REPO_NAME", "clawmetry")
 # Each entry: (workflow_filename, junit_artifact_name_prefix).
 # Artifact for run {run_id} is named "{prefix}-{run_id}".
 # C7 requirement: flaky tests in ANY required-check workflow must be
-# quarantined within 24h. Previously only oss-golden-path.yml was scanned;
-# adding ci.yml closes the gap for TestTabsLoad / TestAllTabsPostAuth
-# flakiness detected in the e2e-critical job (also a required check).
+# quarantined within 24h.
 WATCHED_WORKFLOWS: list[tuple[str, str]] = [
     # C1+C5 gate: uploads junit-c1c5-{run_id}.
     ("oss-golden-path.yml", "junit-c1c5"),
@@ -55,6 +54,11 @@ WATCHED_WORKFLOWS: list[tuple[str, str]] = [
     # Without this entry, flaky tests in TestTabsLoad / TestAllTabsPostAuth
     # would block PRs without ever reaching quarantine.txt (C7 coverage gap).
     ("ci.yml", "junit-e2e-critical"),
+    # C4 cross-repo handoff: uploads junit-c4-{run_id}.
+    # T1-T4 (landing signup, cloud boot, daemon pair, first sync event) depend
+    # on subprocess startup timing. Watching ensures any flakiness in the startup
+    # sequence is quarantined within 24h instead of silently blocking PRs.
+    ("cross-repo-handoff.yml", "junit-c4"),
 ]
 
 

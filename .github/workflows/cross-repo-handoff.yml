@@ -42,6 +42,15 @@ jobs:
             echo "::notice title=C4 cloud checkout unavailable::CLOUD_REPO_PAT is not set (fork PR or secret not configured). T2/T3/T4 will use inline stubs -- all four tiers still run."
           fi
 
+      # clawmetry-landing is a public repo -- no PAT needed. Checkout is
+      # unconditional so it succeeds even on fork PRs (the test step is still
+      # gated on cloud access via steps.access.outputs.available).
+      - name: Checkout clawmetry-landing
+        uses: actions/checkout@v7
+        with:
+          repository: vivekchand/clawmetry-landing
+          path: landing
+
       # Cloud repo provides run_cloud.py stub + DaemonSim wire-format simulator.
       - name: Checkout clawmetry-cloud
         if: steps.access.outputs.available == 'true'
@@ -91,22 +100,37 @@ jobs:
       - name: Run C4 cross-repo handoff
         env:
           CLAWMETRY_E2E_STUB_AUTH: "1"
+          LANDING_CHECKOUT_PATH: ${{ github.workspace }}/landing/clawmetry-landing
         run: |
           cd "${{ github.workspace }}"
           python -m pytest oss/tests/test_e2e_cross_repo_handoff.py \
-            -v --tb=short
+            -v --tb=short \
+            --junitxml=/tmp/junit-c4-${{ github.run_id }}.xml
+
+      - name: Upload JUnit results
+        if: always() && steps.access.outputs.available == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-c4-${{ github.run_id }}
+          path: /tmp/junit-c4-${{ github.run_id }}.xml
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Dump server logs on failure
         if: failure()
         run: |
           echo "=== cloud server log ==="
           cat /tmp/c4-cloud.log 2>/dev/null | tail -200 || true
+          echo "=== landing server log ==="
+          cat /tmp/c4-landing.log 2>/dev/null | tail -200 || true
 
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: c4-handoff-logs
-          path: /tmp/c4-cloud.log
+          path: |
+            /tmp/c4-cloud.log
+            /tmp/c4-landing.log
           if-no-files-found: warn
           retention-days: 7
