@@ -196,12 +196,14 @@ jobs:
   # ── Entitlement API test suite (~2700 hermetic tests) ─────────────────────────
   # Covers every helper in clawmetry/entitlements.py and every endpoint
   # under routes/entitlement.py via Flask test client. No live server, no
-  # gateway, no network. Runtime ~60s. HARD-FAIL: no continue-on-error.
+  # gateway, no network. Runtime ~8-10min on CI runners (suite has grown
+  # as stacked PRs added test files; timeout raised from 5 to 10 to stop
+  # mid-suite cancellations). HARD-FAIL: no continue-on-error.
   entitlement-tests:
     name: Entitlement API tests
     needs: lint
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
