@@ -26,7 +26,6 @@ mechanical move — zero behaviour change.
 
 import json
 import os
-import select
 import sqlite3
 import subprocess
 import time
@@ -889,22 +888,32 @@ def _generate_openclaw_json_logs(started_at, sse_max_seconds, release_fn):
     text output).  Callers must check ``shutil.which("openclaw")`` before
     calling; this generator assumes the binary is available.
     """
+    import shutil as _shutil
+
+    from clawmetry.process_control import PipeLineReader
+
+    # Resolve through which(): on Windows the openclaw CLI is an npm
+    # ``openclaw.cmd`` wrapper, and CreateProcess only launches it when
+    # given the full name with extension — a bare "openclaw" argv raised
+    # FileNotFoundError (WinError 2) mid-stream, after headers were sent.
     proc = subprocess.Popen(
-        ["openclaw", "logs", "--follow", "--json"],
+        [_shutil.which("openclaw") or "openclaw", "logs", "--follow", "--json"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
+    # select() on a pipe is POSIX-only; the reader thread is portable.
+    reader = PipeLineReader(proc.stdout)
     try:
         while True:
             if time.time() - started_at > sse_max_seconds:
                 yield 'event: done\ndata: {"reason":"max_duration_reached"}\n\n'
                 break
-            ready, _, _ = select.select([proc.stdout], [], [], 1.0)
-            if not ready:
-                continue
-            raw_line = proc.stdout.readline()
-            if not raw_line:
+            raw_line = reader.readline(1.0)
+            if raw_line is None:
+                if reader.eof:
+                    yield 'event: done\ndata: {"reason":"stream_ended"}\n\n'
+                    break
                 continue
             raw = raw_line.rstrip()
             try:
@@ -966,28 +975,32 @@ def api_logs_stream():
             yield 'data: {"line":"No log file found"}\n\n'
             release()
             return
-        proc = subprocess.Popen(
-            ["tail", "-f", "-n", "0", log_file],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+        # Pure-Python follow (tail -f -n 0 semantics: only new lines).
+        # ``tail`` does not exist on Windows and select() on a pipe is
+        # POSIX-only, so the subprocess approach broke this stream there;
+        # reading the file directly needs neither.
+        try:
+            fh = open(log_file, "r", encoding="utf-8", errors="replace")
+        except OSError:
+            yield 'data: {"line":"Cannot open log file"}\n\n'
+            release()
+            return
+        fh.seek(0, 2)
         try:
             while True:
                 if time.time() - started_at > _d.SSE_MAX_SECONDS:
                     yield 'event: done\ndata: {"reason":"max_duration_reached"}\n\n'
                     break
-                ready, _, _ = select.select([proc.stdout], [], [], 1.0)
-                if not ready:
+                line = fh.readline()
+                if not line:
+                    time.sleep(1.0)
                     continue
-                line = proc.stdout.readline()
-                if line:
-                    yield f"data: {json.dumps({'line': line.rstrip()})}\n\n"
+                yield f"data: {json.dumps({'line': line.rstrip()})}\n\n"
         except GeneratorExit:
             pass
         finally:
             try:
-                proc.kill()
+                fh.close()
             except Exception:
                 pass
             release()
