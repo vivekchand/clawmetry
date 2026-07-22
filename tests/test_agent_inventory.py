@@ -260,6 +260,43 @@ def test_query_agent_meta_not_nested_in_write_lock(app_and_store):
 # ── 6. snapshot wiring: both keys are emitted in the payload dict ───────────
 
 
+def test_api_inventory_empty_store_with_detected_runtimes(app_and_store, monkeypatch):
+    """When the local store is enabled but the roster is empty AND registry
+    detects runtimes, /api/inventory must return detectedRuntimes + daemonRunning
+    instead of the bare zero shape (issue #3917)."""
+    a, ls, inv_mod = app_and_store
+    from clawmetry.adapters.base import DetectResult
+
+    fake_detect = DetectResult(
+        name="openclaw",
+        display_name="OpenClaw",
+        detected=True,
+    )
+    monkeypatch.setattr(inv_mod, "_detected_runtimes", lambda: [fake_detect.to_dict()])
+    monkeypatch.setattr(inv_mod, "_daemon_running", lambda: False)
+
+    cli = a.test_client()
+    body = cli.get("/api/inventory").get_json()
+    assert body["agents"] == []
+    assert body["total"] == 0
+    assert body["daemonRunning"] is False
+    detected = body["detectedRuntimes"]
+    assert isinstance(detected, list) and len(detected) == 1
+    assert detected[0]["name"] == "openclaw"
+    assert detected[0]["displayName"] == "OpenClaw"
+
+
+def test_api_inventory_empty_store_no_detected_runtimes_still_zero(app_and_store, monkeypatch):
+    """When neither the store has agents nor any runtime is detected, the
+    response must be the bare zero shape (the cloud cold-fallthrough contract)."""
+    a, ls, inv_mod = app_and_store
+    monkeypatch.setattr(inv_mod, "_detected_runtimes", lambda: [])
+
+    cli = a.test_client()
+    body = cli.get("/api/inventory").get_json()
+    assert body == {"agents": [], "total": 0}
+
+
 def test_snapshot_emits_both_inventory_keys():
     """Mechanical guard that ``sync_system_snapshot`` ships both inventory keys
     (node-wide + byRuntime) built from the already-computed rollups. A full

@@ -9198,7 +9198,19 @@ async function renderInventory() {
     if (statsEl) statsEl.style.display = 'none';
     if (stripEl) stripEl.style.display = 'none';
     rosterEl.innerHTML = '';
-    if (emptyEl) emptyEl.style.display = '';
+    if (emptyEl) {
+      var bodyEl = document.getElementById('inv-empty-body');
+      var detected = (inv && inv.detectedRuntimes) || [];
+      if (detected.length && bodyEl) {
+        var rtNames = detected.map(function (r) { return r.displayName || r.name; }).join(', ');
+        var msg = inv.daemonRunning
+          ? rtNames + ' detected. Sync is starting up -- data will appear shortly.'
+          : rtNames + ' is running, but the sync daemon is not ingesting yet.'
+            + ' Run: <code>clawmetry connect</code> (or <code>clawmetry sync</code>).';
+        bodyEl.innerHTML = msg;
+      }
+      emptyEl.style.display = '';
+    }
     return;
   }
   if (emptyEl) emptyEl.style.display = 'none';

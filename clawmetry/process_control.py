@@ -269,6 +269,55 @@ def _start_tokens_equivalent(want: str, have: str, tol: int = 3) -> bool:
     return any(abs(x - y) <= tol for x in a for y in b)
 
 
+class PipeLineReader:
+    """Portable non-blocking line reader for a subprocess pipe.
+
+    ``select.select()`` on a pipe is POSIX-only — on Windows select works
+    on sockets exclusively and raises OSError, which crashed every
+    streaming reader (dashboard SSE log streams, daemon gateway-log
+    streamer, sandbox OCSF drain). A daemon reader thread pumping lines
+    into a queue gives the same wait-with-timeout semantics on every OS.
+    """
+
+    def __init__(self, stream) -> None:
+        import queue
+        import threading
+
+        self._q: "queue.Queue[str]" = queue.Queue()
+        self._eof = False
+
+        def _pump() -> None:
+            try:
+                for line in iter(stream.readline, ""):
+                    self._q.put(line)
+            except Exception:
+                pass
+            finally:
+                self._eof = True
+
+        threading.Thread(target=_pump, daemon=True).start()
+
+    def readline(self, timeout: float = 0) -> Optional[str]:
+        """Next line, or None when nothing arrived within ``timeout``.
+
+        ``timeout=0`` polls only lines already buffered (the select(..., 0)
+        drain idiom); a positive timeout blocks up to that long.
+        """
+        import queue
+
+        try:
+            if timeout and timeout > 0:
+                return self._q.get(timeout=timeout)
+            return self._q.get_nowait()
+        except queue.Empty:
+            return None
+
+    @property
+    def eof(self) -> bool:
+        """True once the stream ended AND every buffered line was consumed."""
+        return self._eof and self._q.empty()
+
+
 def is_alive(pid: int) -> bool:
     """True iff ``pid`` is a live process we can address. Never raises.
 
