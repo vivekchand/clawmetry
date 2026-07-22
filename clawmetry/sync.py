@@ -123,6 +123,9 @@ _shutdown_lock = threading.Lock()
 
 # sb_name → Popen handle for long-lived `openshell logs --tail` processes
 _ocsf_tail_procs: dict = {}
+# sb_name → PipeLineReader over that Popen's stdout. select() on a pipe is
+# POSIX-only, so the non-blocking drain goes through the portable reader.
+_ocsf_tail_readers: dict = {}
 _OCSF_TAIL_DRAIN_LIMIT = 200  # max lines drained per sync tick
 
 
@@ -135,6 +138,7 @@ def _ocsf_tail_shutdown() -> None:
         except Exception:
             pass
     _ocsf_tail_procs.clear()
+    _ocsf_tail_readers.clear()
 
 
 def _drain_local_store_now() -> tuple[int, float]:
@@ -2474,17 +2478,22 @@ def sync_sandbox_sessions_openshell(config: dict, state: dict) -> int:
                     proc = _openshell_sandbox_logs_tail(sb_name)
                     if proc is not None:
                         _ocsf_tail_procs[sb_name] = proc
+                        from clawmetry.process_control import PipeLineReader
+                        _ocsf_tail_readers[sb_name] = PipeLineReader(proc.stdout)
 
                 if proc is not None:
                     # Non-blocking drain: read only lines already buffered.
-                    import select as _select
+                    # (select() on a pipe is POSIX-only; the reader thread
+                    # gives the same timeout-0 poll on every OS.)
+                    reader = _ocsf_tail_readers.get(sb_name)
+                    if reader is None:
+                        from clawmetry.process_control import PipeLineReader
+                        reader = PipeLineReader(proc.stdout)
+                        _ocsf_tail_readers[sb_name] = reader
                     ingested = 0
                     for _ in range(_OCSF_TAIL_DRAIN_LIMIT):
-                        ready, _, _ = _select.select([proc.stdout], [], [], 0)
-                        if not ready:
-                            break
-                        line = proc.stdout.readline()
-                        if not line:
+                        line = reader.readline(0)
+                        if line is None:
                             break
                         line = line.strip()
                         if not line:
@@ -17214,44 +17223,47 @@ def start_log_streamer(config: dict, paths: dict) -> threading.Thread:
     def _stream_worker():
         log.info(f"Log streamer started — watching {log_dir}")
         current_file = None
-        proc = None
+        fh = None
         batch = []
         last_push = time.time()
 
         while True:
             try:
-                # Find/rotate to latest log file
+                # Find/rotate to latest log file. Pure-Python follow with
+                # tail -f -n 0 semantics: ``tail`` does not exist on Windows
+                # and select() on a pipe is POSIX-only, so the subprocess
+                # approach silently killed log streaming there.
                 latest = _find_latest_log()
                 if latest != current_file:
-                    if proc:
+                    if fh:
                         try:
-                            proc.kill()
+                            fh.close()
                         except Exception:
                             pass
+                        fh = None
                     current_file = latest
                     if not current_file:
                         time.sleep(5)
                         continue
-                    proc = subprocess.Popen(
-                        ["tail", "-f", "-n", "0", current_file],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                    )
-                    log.info(f"Tailing {current_file}")
+                    try:
+                        fh = open(
+                            current_file, "r", encoding="utf-8", errors="replace"
+                        )
+                        fh.seek(0, 2)
+                        log.info(f"Tailing {current_file}")
+                    except OSError:
+                        fh = None
 
-                if not proc or not proc.stdout:
+                if not fh:
                     time.sleep(2)
                     continue
 
-                # Non-blocking read with select
-                import select
-
-                ready, _, _ = select.select([proc.stdout], [], [], STREAM_INTERVAL)
-                if ready:
-                    line = proc.stdout.readline()
-                    if line:
-                        batch.append(line.rstrip())
+                line = fh.readline()
+                if line:
+                    batch.append(line.rstrip())
+                else:
+                    # Caught up — wait for new lines without spinning.
+                    time.sleep(min(STREAM_INTERVAL, 1.0))
 
                 # Push batch every STREAM_INTERVAL seconds
                 now = time.time()
@@ -17270,12 +17282,12 @@ def start_log_streamer(config: dict, paths: dict) -> threading.Thread:
             except Exception as e:
                 log.debug(f"Stream worker error: {e}")
                 time.sleep(5)
-                if proc:
+                if fh:
                     try:
-                        proc.kill()
+                        fh.close()
                     except Exception:
                         pass
-                    proc = None
+                    fh = None
                     current_file = None
 
     t = threading.Thread(target=_stream_worker, daemon=True, name="log-streamer")
