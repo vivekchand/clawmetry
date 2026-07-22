@@ -129,3 +129,80 @@ def test_plain_events_gain_no_spurious_retry_keys(isolated_store):
     assert "attempt_number" not in ex
     assert "is_error" not in ex
     assert "retry_response" not in ex
+
+
+# ---------------------------------------------------------------------------
+# Advisor output-state classification (#3840)
+# emitAnalysisError / emitCommitProse / emitRepairProse each produce a
+# distinct event type so the dashboard can distinguish the three advisor run
+# outcomes.
+# ---------------------------------------------------------------------------
+
+def test_analysis_error_surfaces_output_type(isolated_store):
+    """analysis_error events must expose output_type='analysis_error'."""
+    _seed(isolated_store, "sess-6", "analysis_error", {"outputType": "analysis_error"})
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.nemo import NemoClawAdapter
+    events = NemoClawAdapter().list_events("sess-6")
+    assert len(events) == 1
+    assert events[0].extra.get("output_type") == "analysis_error"
+
+
+def test_commit_prose_surfaces_output_type(isolated_store):
+    """commit_prose events must expose output_type='commit_prose'."""
+    _seed(isolated_store, "sess-7", "commit_prose", {"outputType": "commit_prose"})
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.nemo import NemoClawAdapter
+    events = NemoClawAdapter().list_events("sess-7")
+    assert len(events) == 1
+    assert events[0].extra.get("output_type") == "commit_prose"
+
+
+def test_repair_prose_surfaces_output_type(isolated_store):
+    """repair_prose events must expose output_type='repair_prose'."""
+    _seed(isolated_store, "sess-8", "repair_prose", {"outputType": "repair_prose"})
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.nemo import NemoClawAdapter
+    events = NemoClawAdapter().list_events("sess-8")
+    assert len(events) == 1
+    assert events[0].extra.get("output_type") == "repair_prose"
+
+
+def test_output_type_derived_from_event_type_when_field_absent(isolated_store):
+    """When outputType field is absent, output_type is derived from the event type."""
+    _seed(isolated_store, "sess-9", "analysis_error", {})
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.nemo import NemoClawAdapter
+    events = NemoClawAdapter().list_events("sess-9")
+    assert len(events) == 1
+    assert events[0].extra.get("output_type") == "analysis_error"
+
+
+def test_screaming_snake_alias_surfaces_output_type(isolated_store):
+    """ANALYSIS_ERROR (SCREAMING_SNAKE) alias must also surface output_type."""
+    _seed(isolated_store, "sess-10", "ANALYSIS_ERROR", {"outputType": "analysis_error"})
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.nemo import NemoClawAdapter
+    events = NemoClawAdapter().list_events("sess-10")
+    assert len(events) == 1
+    assert events[0].extra.get("output_type") == "analysis_error"
+
+
+def test_output_state_events_gain_no_spurious_retry_keys(isolated_store):
+    """Advisor output-state events must not gain attempt_number etc."""
+    _seed(isolated_store, "sess-11", "commit_prose", {"outputType": "commit_prose"})
+    _wait_flush(isolated_store)
+
+    from clawmetry.adapters.nemo import NemoClawAdapter
+    events = NemoClawAdapter().list_events("sess-11")
+    assert len(events) == 1
+    ex = events[0].extra
+    assert "attempt_number" not in ex
+    assert "is_error" not in ex
+    assert "retry_response" not in ex
+    assert ex.get("output_type") == "commit_prose"

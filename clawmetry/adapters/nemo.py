@@ -1136,6 +1136,22 @@ class NemoClawAdapter(AgentAdapter):
                                     if _val is not None:
                                         extra[_field] = _val
                                 extra["ocsf"] = True
+                            elif r[1] in (
+                                "analysis_error", "ANALYSIS_ERROR",
+                                "commit_prose",   "COMMIT_PROSE",
+                                "repair_prose",   "REPAIR_PROSE",
+                            ):
+                                # Advisor-session run output-state classification
+                                # (#3840): emitAnalysisError / emitCommitProse /
+                                # emitRepairProse each produce a distinct event
+                                # so the dashboard can tell apart the three
+                                # advisor outcomes.
+                                _ot = (
+                                    obj.get("outputType")
+                                    or obj.get("output_type")
+                                    or r[1].lower()
+                                )
+                                extra["output_type"] = str(_ot)
                             # Advisor-session tool-execution retry/exhaustion
                             # lifecycle (#3650): tool_execution_start /
                             # tool_execution_end events carry attempt number,
