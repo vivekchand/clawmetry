@@ -27,9 +27,9 @@ jobs:
 
       # CLOUD_REPO_PAT is NOT exposed to pull_request runs from a fork (GitHub
       # withholds repo secrets from fork PRs to prevent exfiltration). Without it
-      # the private clawmetry-cloud checkout below cannot authenticate. All four
-      # C4 tiers (T1-T4) still run via inline stubs; the cloud checkout provides
-      # higher-fidelity T3/T4 (real DaemonSim + run_cloud.py) when PAT is present.
+      # neither clawmetry-cloud nor clawmetry-landing (both private) can be
+      # checked out. All four C4 tiers (T1-T4) still run via inline stubs;
+      # the private checkouts provide higher-fidelity T3/T4 when PAT is present.
       - name: Detect cloud-repo access
         id: access
         env:
@@ -42,13 +42,15 @@ jobs:
             echo "::notice title=C4 cloud checkout unavailable::CLOUD_REPO_PAT is not set (fork PR or secret not configured). T2/T3/T4 will use inline stubs -- all four tiers still run."
           fi
 
-      # clawmetry-landing is a public repo -- no PAT needed. Checkout is
-      # unconditional so it succeeds even on fork PRs (the test step is still
-      # gated on cloud access via steps.access.outputs.available).
+      # clawmetry-landing is a private repo -- requires CLOUD_REPO_PAT (which
+      # covers all repos owned by vivekchand). Gated on access.available so fork
+      # PRs skip gracefully; the test falls back to its inline stub in that case.
       - name: Checkout clawmetry-landing
+        if: steps.access.outputs.available == 'true'
         uses: actions/checkout@v7
         with:
           repository: vivekchand/clawmetry-landing
+          token: ${{ secrets.CLOUD_REPO_PAT }}
           path: landing
 
       # Cloud repo provides run_cloud.py stub + DaemonSim wire-format simulator.
