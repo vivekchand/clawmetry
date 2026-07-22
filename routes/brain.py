@@ -200,6 +200,28 @@ def _v3_message_content_to_text(content) -> str:
     return ""
 
 
+def _text_only_message_content(content) -> str:
+    """Like ``_v3_message_content_to_text`` but excludes thinking/reasoning blocks.
+
+    Used as a stable dedup key for via-index assistant events so they collapse
+    with their session-file model.completed siblings in
+    ``_collapse_duplicate_brain_events``.  Via-index events include thinking
+    blocks in ``data.message.content``; session-file events only carry the reply
+    text (``completionText``), so extracting text-only makes both paths produce
+    the same grouping string (issue #3924)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                t = block.get("text") or ""
+                if t:
+                    parts.append(t)
+        return "\n".join(parts)
+    return ""
+
+
 def _extract_brain_detail(row: dict) -> str:
     """Pull a human-readable ``detail`` snippet from a DuckDB event row, then
     collapse any OpenClaw ``<task-notification>`` envelope to its summary so the
@@ -338,10 +360,13 @@ def _collapse_duplicate_brain_events(events):
 
     groups = {}
     for ev in events:
-        detail = (ev.get("detail") or "").strip()
+        # Use _dedup_detail (text-only, no thinking blocks) when present so
+        # via-index assistant events and session-file model.completed siblings
+        # collapse together despite different detail strings (issue #3924).
+        detail = (ev.get("_dedup_detail") or ev.get("detail") or "").strip()
         if len(detail) < MIN_DETAIL:
             continue
-        groups.setdefault((_src(ev), detail), []).append(ev)
+        groups.setdefault((_src(ev), detail[:200]), []).append(ev)
 
     drop = set()
     for evs in groups.values():
@@ -467,6 +492,19 @@ def _try_local_store_brain(limit, include_artifacts, since=None, until=None):
         # shapes (legacy, v3 mapper top-level, v3 mapper mirror).
         detail = _extract_brain_detail(r)
         evt_type = (r.get("event_type") or "").upper()
+        # Issue #3924: via-index assistant events include thinking blocks in
+        # data.message.content; session-file model.completed events don't.
+        # Pre-compute a text-only dedup key so _collapse_duplicate_brain_events
+        # can group them together and suppress the duplicate render.
+        _dedup_detail = None
+        if evt_type == "ASSISTANT":
+            _blob = r.get("data")
+            if isinstance(_blob, dict):
+                _msg = _blob.get("message")
+                if isinstance(_msg, dict):
+                    _text_only = _text_only_message_content(_msg.get("content"))
+                    if _text_only:
+                        _dedup_detail = _text_only[:200]
         row = {
             "time":       r.get("ts", ""),
             "type":       evt_type,
@@ -483,6 +521,8 @@ def _try_local_store_brain(limit, include_artifacts, since=None, until=None):
             # carries one extra short string per row.
             "eventId":    r.get("id") or "",
         }
+        if _dedup_detail is not None:
+            row["_dedup_detail"] = _dedup_detail
         # ── Channel-event enrichment (PR aca53ec8 / Telegram ingest) ─────
         # Channel turns land here as event_type=channel.in|channel.out with
         # the raw provider payload under ``data``. Surface a few flat fields
@@ -538,6 +578,8 @@ def _try_local_store_brain(limit, include_artifacts, since=None, until=None):
             pass
         out.append(row)
     out = _collapse_duplicate_brain_events(out)
+    for ev in out:
+        ev.pop("_dedup_detail", None)
     payload = {
         "events":        out,
         "count":         len(out),
