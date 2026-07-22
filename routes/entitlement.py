@@ -285,6 +285,23 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                          instead of walking ``/tier-path``
                                          and hydrating each rung
                                          individually.
+  GET  /api/entitlement/runtime-detection -- pair the
+                                         :mod:`clawmetry.runtime_probe`
+                                         presence probes with the resolved
+                                         entitlement so the dashboard can
+                                         render "runtimes on this machine +
+                                         which unlock at which tier" in one
+                                         round-trip. Each probe row carries
+                                         ``found`` (present on disk),
+                                         ``allowed`` (granted by the current
+                                         tier), and the paid ``required_tier``
+                                         to unlock it if it is not; the
+                                         envelope also carries
+                                         ``actionable_tier`` -- the single
+                                         cheapest tier that unlocks every
+                                         detected-but-locked runtime -- so
+                                         a paywall CTA does not need N
+                                         extra ``/required-tier`` calls.
 """
 
 from __future__ import annotations
@@ -23197,3 +23214,235 @@ def api_entitlement_tiers_for_runtimes_at_batch():
                 **env,
             }
         )
+
+
+# ── /api/entitlement/runtime-detection ──────────────────────────────────────
+# Presence-detect every supported runtime and decorate each row with the
+# resolved entitlement view (allowed/locked + required_tier). Lets the
+# dashboard render a single card answering "what's on this machine, what
+# would unlock" without shell-scraping the CLI. Grace-mode compatible: rows
+# always report the intrinsic locked-if-enforced picture so the paywall UI
+# stays honest, and the ``allowed`` bit reflects only the entitlement's
+# ``runtimes`` set -- the grace-vs-enforce toggle lives on the top-level
+# ``grace`` / ``enforced`` fields for the UI to interpret.
+#
+# Response shape::
+#
+#     {
+#       "current_tier": "oss",
+#       "current_tier_label": "OSS",
+#       "grace": true,
+#       "enforced": false,
+#       "probes": [
+#         {"id": "openclaw", "label": "OpenClaw", "free": true,
+#          "found": true, "allowed": true,
+#          "required_tier": "oss", "required_tier_label": "OSS"},
+#         {"id": "claude_code", "label": "Claude Code", "free": false,
+#          "found": true, "allowed": false,
+#          "required_tier": "cloud_starter",
+#          "required_tier_label": "Cloud Starter"},
+#         ...
+#       ],
+#       "counts": {
+#         "total": 14,
+#         "detected": 3,
+#         "detected_free": 1,
+#         "detected_locked": 2,
+#         "unlocked": 2,
+#         "locked": 12
+#       },
+#       "detected_locked": ["claude_code", "cursor"],
+#       "actionable_tier": "cloud_starter",
+#       "actionable_tier_label": "Cloud Starter"
+#     }
+#
+# Read-only. Never raises: on any failure at any stage the endpoint returns
+# a neutral empty envelope (``probes: []`` + zeroed counts) with the current
+# tier the resolver could still supply.
+_EMPTY_RUNTIME_DETECTION = {
+    "current_tier": "oss",
+    "current_tier_label": "OSS",
+    "grace": True,
+    "enforced": False,
+    "probes": [],
+    "counts": {
+        "total": 0,
+        "detected": 0,
+        "detected_free": 0,
+        "detected_locked": 0,
+        "unlocked": 0,
+        "locked": 0,
+    },
+    "detected_locked": [],
+    "actionable_tier": None,
+    "actionable_tier_label": None,
+}
+
+
+@bp_entitlement.route("/api/entitlement/runtime-detection")
+def api_entitlement_runtime_detection():
+    """``GET /api/entitlement/runtime-detection`` -- probe results merged with
+    the resolved entitlement so a paywall CTA card can render "runtimes on
+    this machine + which unlock at which tier" off a single round-trip.
+
+    Never 5xx: on any resolver / probe failure returns the neutral empty
+    envelope defined by :data:`_EMPTY_RUNTIME_DETECTION` so the frontend
+    card stays rendered.
+    """
+    try:
+        from clawmetry import runtime_probe as _probe
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_runtime_detection: probe import failed: %s", exc
+        )
+        return jsonify(dict(_EMPTY_RUNTIME_DETECTION))
+
+    try:
+        from clawmetry import entitlements as _ent
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_runtime_detection: entitlements import failed: %s",
+            exc,
+        )
+        # Still return whatever the probes found so the UI can at least list
+        # "these runtimes are on this machine" without tier decoration.
+        try:
+            raw = _probe.probe_runtimes() or []
+        except Exception:
+            raw = []
+        env = dict(_EMPTY_RUNTIME_DETECTION)
+        env["probes"] = [
+            {
+                "id": p.get("id"),
+                "label": p.get("label"),
+                "free": bool(p.get("free")),
+                "found": bool(p.get("found")),
+                "allowed": bool(p.get("free")),
+                "required_tier": None,
+                "required_tier_label": None,
+            }
+            for p in raw
+        ]
+        env["counts"] = _runtime_detection_counts(env["probes"])
+        env["detected_locked"] = [
+            r["id"] for r in env["probes"] if r["found"] and not r["allowed"]
+        ]
+        return jsonify(env)
+
+    try:
+        ent = _ent.get_entitlement()
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_runtime_detection: resolver failed: %s", exc
+        )
+        try:
+            ent = _ent._oss_free()
+        except Exception:
+            return jsonify(dict(_EMPTY_RUNTIME_DETECTION))
+
+    try:
+        raw = _probe.probe_runtimes() or []
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_runtime_detection: probe_runtimes failed: %s", exc
+        )
+        raw = []
+
+    allowed_runtimes = set()
+    try:
+        allowed_runtimes = set(getattr(ent, "runtimes", set()) or set())
+    except Exception:
+        allowed_runtimes = set()
+
+    probes_out = []
+    for p in raw:
+        rid = p.get("id") if isinstance(p, dict) else None
+        try:
+            req_t = _ent.min_tier_for_runtime(rid or "")
+        except Exception:
+            req_t = None
+        try:
+            req_lbl = _ent.tier_label(req_t) if req_t else None
+        except Exception:
+            req_lbl = None
+        probes_out.append(
+            {
+                "id": rid,
+                "label": p.get("label") if isinstance(p, dict) else None,
+                "free": bool(p.get("free")) if isinstance(p, dict) else False,
+                "found": bool(p.get("found")) if isinstance(p, dict) else False,
+                "allowed": bool(rid and rid in allowed_runtimes),
+                "required_tier": req_t,
+                "required_tier_label": req_lbl,
+            }
+        )
+
+    detected_locked = [
+        r["id"] for r in probes_out if r["found"] and not r["allowed"] and r["id"]
+    ]
+
+    actionable_tier = None
+    actionable_tier_label = None
+    if detected_locked:
+        try:
+            actionable_tier = _ent.min_tier_for_runtimes(detected_locked)
+        except Exception:
+            actionable_tier = None
+        if actionable_tier:
+            try:
+                actionable_tier_label = _ent.tier_label(actionable_tier)
+            except Exception:
+                actionable_tier_label = None
+
+    try:
+        current_tier = getattr(ent, "tier", None) or "oss"
+    except Exception:
+        current_tier = "oss"
+    try:
+        current_tier_label = _ent.tier_label(current_tier)
+    except Exception:
+        current_tier_label = "OSS"
+    try:
+        grace = bool(getattr(ent, "grace", True))
+    except Exception:
+        grace = True
+    try:
+        enforced = bool(_ent.is_enforced())
+    except Exception:
+        enforced = False
+
+    return jsonify(
+        {
+            "current_tier": current_tier,
+            "current_tier_label": current_tier_label,
+            "grace": grace,
+            "enforced": enforced,
+            "probes": probes_out,
+            "counts": _runtime_detection_counts(probes_out),
+            "detected_locked": detected_locked,
+            "actionable_tier": actionable_tier,
+            "actionable_tier_label": actionable_tier_label,
+        }
+    )
+
+
+def _runtime_detection_counts(probes: list) -> dict:
+    """Aggregate row for ``/api/entitlement/runtime-detection``. Pure fn."""
+    total = len(probes)
+    detected = sum(1 for r in probes if r.get("found"))
+    detected_free = sum(
+        1 for r in probes if r.get("found") and r.get("free")
+    )
+    detected_locked = sum(
+        1 for r in probes if r.get("found") and not r.get("allowed")
+    )
+    unlocked = sum(1 for r in probes if r.get("allowed"))
+    locked = total - unlocked
+    return {
+        "total": total,
+        "detected": detected,
+        "detected_free": detected_free,
+        "detected_locked": detected_locked,
+        "unlocked": unlocked,
+        "locked": locked,
+    }
