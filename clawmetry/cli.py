@@ -245,6 +245,102 @@ def _kill_dashboard_processes() -> int:
     return killed
 
 
+def _windows_clawmetry_pids() -> list:
+    """Enumerate ``(pid, cmdline)`` of clawmetry processes on Windows.
+
+    CIM via PowerShell (no psutil dependency), restricted to python /
+    clawmetry executables so an editor with a clawmetry file open can
+    never match. Skips the current process and its parent so
+    ``clawmetry uninstall`` (running from clawmetry.exe) never kills
+    itself mid-run. Returns [] on any failure and on non-Windows.
+    """
+    if os.name != "nt":
+        return []
+    import json as _json
+    import subprocess as _sp
+
+    _patterns = (
+        "-m clawmetry",
+        "clawmetry.exe",
+        "clawmetry\\sync.py",
+        "clawmetry/sync.py",
+        "clawmetry\\dashboard.py",
+        "clawmetry/dashboard.py",
+    )
+    skip = {os.getpid(), os.getppid()}
+    try:
+        r = _sp.run(
+            [
+                "powershell", "-NoProfile", "-Command",
+                "Get-CimInstance Win32_Process -Filter "
+                "\"Name='python.exe' OR Name='pythonw.exe' OR Name='clawmetry.exe'\" "
+                "| Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+            ],
+            capture_output=True, text=True, check=False, timeout=30,
+        )
+        if r.returncode != 0 or not (r.stdout or "").strip():
+            return []
+        data = _json.loads(r.stdout)
+        if isinstance(data, dict):
+            data = [data]
+        out = []
+        for entry in data:
+            try:
+                pid = int(entry.get("ProcessId") or 0)
+            except (TypeError, ValueError):
+                continue
+            cmd = entry.get("CommandLine") or ""
+            if pid and pid not in skip and any(p in cmd for p in _patterns):
+                out.append((pid, cmd))
+        return out
+    except Exception:
+        return []
+
+
+def _stop_windows_processes() -> int:
+    """Terminate clawmetry daemon/dashboard processes on Windows.
+
+    Windows cannot delete files a live process holds open (WinError 32),
+    so uninstall MUST take every clawmetry process down BEFORE purging
+    files; skipping this crashed uninstall mid-purge on sync.log (#3914).
+    Returns the number of processes terminated. Never raises.
+    """
+    import subprocess as _sp
+
+    killed = 0
+    for pid, _cmd in _windows_clawmetry_pids():
+        try:
+            r = _sp.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True, check=False, timeout=30,
+            )
+            if r.returncode == 0:
+                killed += 1
+        except Exception:
+            pass
+    return killed
+
+
+def _safe_unlink(path, retries: int = 3, delay: float = 0.5) -> bool:
+    """``unlink()`` that survives Windows file locks. True when the file is gone.
+
+    A file some process still holds open (WinError 32) must produce a
+    warning and let the purge continue; one locked file aborting the whole
+    uninstall midway is how #3914 left half-uninstalled nodes behind.
+    """
+    import time as _time
+
+    for attempt in range(retries):
+        try:
+            path.unlink(missing_ok=True)
+            return True
+        except OSError:
+            if attempt + 1 < retries:
+                _time.sleep(delay)
+    print(f"  ⚠️  Could not remove {path} (still in use). Remove it manually.")
+    return False
+
+
 def _stop_existing_daemon() -> None:
     """Stop any running sync daemon, deregister old node, clear stale state."""
     import subprocess
@@ -1662,9 +1758,18 @@ def _cmd_uninstall() -> None:
             except Exception:
                 pass
         print("  ✅  Stopped and removed sync daemon" + (f" + {_stray} stray process(es)" if _stray else ""))
+    elif system == "Windows":
+        # No service manager here (daemon runs as a plain process or a
+        # Scheduled Task child). Stop every clawmetry process BEFORE the
+        # purge: Windows cannot delete files a live process holds open, so
+        # a running daemon crashed uninstall on its own sync.log (#3914).
+        _stray_win = _stop_windows_processes()
+        if _stray_win:
+            print(f"  ✅  Stopped {_stray_win} clawmetry process(es)")
     # The bootout above kills launchd-managed processes; this sweeps up
-    # dashboards started by hand (clawmetry --port ...).
-    _stray_dash = _kill_dashboard_processes()
+    # dashboards started by hand (clawmetry --port ...). POSIX only; the
+    # Windows sweep above already covers dashboards.
+    _stray_dash = 0 if system == "Windows" else _kill_dashboard_processes()
     if _stray_dash:
         print(f"  ✅  Killed {_stray_dash} dashboard process(es)")
 
@@ -1677,16 +1782,48 @@ def _cmd_uninstall() -> None:
     )
     print("  ✅  Uninstalled clawmetry pip package")
 
-    # 3. Remove config directory (includes venv)
+    # 2b. Windows: pip cannot remove Scripts\clawmetry.exe while this very
+    # uninstall runs through it (a running exe is locked). Left alone it
+    # becomes a zombie launcher whose every later invocation dies with
+    # ModuleNotFoundError. A running exe CAN'T be overwritten but its file
+    # CAN be deleted after exit, so hand the delete to a detached cmd that
+    # fires once this process is gone.
+    if os.name == "nt":
+        for _cand in (
+            Path(sys.executable).parent / "Scripts" / "clawmetry.exe",
+            Path(sys.executable).parent / "clawmetry.exe",
+        ):
+            if _cand.exists():
+                try:
+                    subprocess.Popen(
+                        f'cmd /c ping -n 3 127.0.0.1 >nul & del /f /q "{_cand}"',
+                        creationflags=0x00000008 | 0x08000000,  # DETACHED | NO_WINDOW
+                    )
+                    print(f"  ✅  Scheduled removal of {_cand} (in use by this uninstall)")
+                except Exception:
+                    print(f"  ⚠️  Could not schedule removal of {_cand}. Remove it manually.")
+
+    # 3. Remove config directory (includes venv). ignore_errors hides
+    # locked-file failures, so verify and re-try instead of printing a
+    # false success over a directory that is still there (#3914).
     if clawmetry_dir.exists():
         shutil.rmtree(clawmetry_dir, ignore_errors=True)
-        print(f"  ✅  Removed {clawmetry_dir}")
+        if clawmetry_dir.exists():
+            import time as _time_u
 
-    # 4. Remove config/state/log files
+            _time_u.sleep(0.5)
+            shutil.rmtree(clawmetry_dir, ignore_errors=True)
+        if clawmetry_dir.exists():
+            print(f"  ⚠️  Could not fully remove {clawmetry_dir} (files in use). Remove it manually.")
+        else:
+            print(f"  ✅  Removed {clawmetry_dir}")
+
+    # 4. Remove config/state/log files. A locked file (e.g. sync.log under
+    # a daemon that survived the stop) warns and continues, never aborts.
     for f in [CONFIG_FILE, STATE_FILE, LOG_FILE]:
         if f.exists():
-            f.unlink(missing_ok=True)
-            print(f"  ✅  Removed {f}")
+            if _safe_unlink(f):
+                print(f"  ✅  Removed {f}")
 
     # 5. Remove venv installs
     for vp in venv_paths:
